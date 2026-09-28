@@ -49,7 +49,7 @@ export function freshnessLabel(freshness: FacetFreshness): string {
 
 /**
  * The frame every metadata tab shares: the five states of a remote view, and
- * how fresh what is shown is (docs/UX-SPEC.md, « États d'une vue »).
+ * how fresh what is shown is (docs/UX-SPEC.md, « States of a view »).
  *
  * « Stale » is said, not hidden: after a DDL sent from Oxyn the cache is
  * invalidated, and what is on screen is the read from before (ADR-0022). A
@@ -116,7 +116,7 @@ export function FacetFrame({
           </span>
         ) : null}
         {/* Refresh and Cancel keep their own place, as Run and Stop do
-            (docs/UX-SPEC.md, « Portée de Run »): one button whose meaning
+            (docs/UX-SPEC.md, « Scope of Run in a SQL console »): one button whose meaning
             flips is a missed click away from restarting what was to be
             stopped. The one with nothing to do is dimmed and inert. */}
         <div className="ml-auto flex shrink-0 items-center gap-2">

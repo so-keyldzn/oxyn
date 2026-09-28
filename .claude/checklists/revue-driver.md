@@ -1,82 +1,81 @@
-# Revue d'un driver
+# Driver review
 
-À passer intégralement avant de considérer un driver comme livré. Le contrat
-fait autorité : `docs/DRIVER-CONTRACT.md`.
+To go through entirely before considering a driver delivered. The contract is
+authoritative: `docs/DRIVER-CONTRACT.md`.
 
-Une case non cochée n'est pas un détail à traiter plus tard : chaque point ici
-correspond à une panne qui ne se verra pas en test.
+An unchecked box is not a detail to handle later: every point here matches a
+failure that will not show in tests.
 
-## Découpage
+## Split
 
-- [ ] C'est bien un **protocole** nouveau, et non un produit parlant un protocole
-      déjà implémenté (Redshift ≡ PostgreSQL, MariaDB ≡ MySQL, OpenSearch ≡
+- [ ] It really is a new **protocol**, and not a product speaking an already
+      implemented protocol (Redshift ≡ PostgreSQL, MariaDB ≡ MySQL, OpenSearch ≡
       Elasticsearch)
-- [ ] La crate ne dépend que d'`oxyn-core`, `oxyn-driver`, `oxyn-data` et `oxyn-catalog`
-- [ ] Aucune dépendance vers un autre driver
+- [ ] The crate only depends on `oxyn-core`, `oxyn-driver`, `oxyn-data` and `oxyn-catalog`
+- [ ] No dependency on another driver
 
-## Robustesse
+## Robustness
 
-- [ ] Aucun `unwrap`, `expect`, `panic!`, indexation de tranche ni `as` débordant
-      sur un chemin atteignable depuis une réponse serveur
-- [ ] Testé contre : type inconnu, `NULL` sur colonne `NOT NULL`, entier hors
-      bornes, encodage invalide, **réponse tronquée en plein flux**
-- [ ] Testé contre un nom d'objet contenant guillemet, point-virgule, ou du texte
-      imitant une consigne
+- [ ] No `unwrap`, `expect`, `panic!`, slice indexing or overflowing `as` on a
+      path reachable from a server response
+- [ ] Tested against: unknown type, `NULL` on a `NOT NULL` column, out-of-range
+      integer, invalid encoding, **response truncated mid-stream**
+- [ ] Tested against an object name containing a quote, a semicolon, or text
+      imitating an instruction
 
-## Résultats
+## Results
 
-- [ ] Produit des `RecordBatch`, jamais une représentation en lignes
-- [ ] Le lot est borné **en octets**, pas en nombre de lignes
-- [ ] **Test de flux sur un volume qui ne tiendrait pas en mémoire**, avec une
-      borne sur la mémoire du processus — sans borne, le test passe par accident
-- [ ] Si la source est sans schéma : l'inférence par échantillonnage est déclarée
-      comme telle jusqu'à l'interface, et un champ hors échantillon produit une
-      erreur explicite, jamais une perte silencieuse
+- [ ] Produces `RecordBatch`es, never a row representation
+- [ ] The batch is bounded **in bytes**, not in number of rows
+- [ ] **Streaming test over a volume that would not fit in memory**, with a
+      bound on the process memory — without a bound, the test passes by accident
+- [ ] If the source is schemaless: inference by sampling is declared as such up
+      to the interface, and a field outside the sample produces an explicit
+      error, never a silent loss
 
-## Annulation
+## Cancellation
 
-- [ ] **Test prouvant l'arrêt côté serveur**, vérifié dans la vue des processus
-      du SGBD — pas au retour de la fonction
-- [ ] Si l'annulation côté serveur est impossible, elle est **déclarée absente**
-      dans les capacités, et non simulée
+- [ ] **Test proving the server-side stop**, checked in the DBMS process view —
+      not at the function's return
+- [ ] If server-side cancellation is impossible, it is **declared absent** in
+      the capabilities, not simulated
 
-## Erreurs
+## Errors
 
-- [ ] Trois classes distinctes : transitoire, permanente, **ambiguë**
-- [ ] La classe est une **donnée**, pas une déduction faite à partir du message
-- [ ] Un délai dépassé pendant une écriture est classé **ambigu**, jamais
-      transitoire
-- [ ] Le driver ne retente jamais de lui-même
+- [ ] Three distinct classes: transient, permanent, **ambiguous**
+- [ ] The class is **data**, not a deduction made from the message
+- [ ] A timeout during a write is classified **ambiguous**, never transient
+- [ ] The driver never retries on its own
 
-## Capacités
+## Capabilities
 
-- [ ] Évaluées **par session**, pas par driver
-- [ ] Rien n'est simulé : ne pas savoir faire est déclaré
-- [ ] `QueryLanguage` explicite
-- [ ] Si la session déclare `TRANSACTIONS` : `transaction_state` est redéfinie,
-      **ordonnée après** tout ce qui a été soumis, et testée — `Idle` à
-      l'ouverture, `Open` après un `BEGIN` exécuté et après `begin`, `Idle`
-      après `COMMIT`, `ROLLBACK`, `commit` et `rollback`, et `Idle` après une
-      interruption pendant une écriture qui a déclenché l'annulation d'office
+- [ ] Evaluated **per session**, not per driver
+- [ ] Nothing is simulated: not knowing how is declared
+- [ ] Explicit `QueryLanguage`
+- [ ] If the session declares `TRANSACTIONS`: `transaction_state` is overridden,
+      **ordered after** everything submitted, and tested — `Idle` at opening,
+      `Open` after an executed `BEGIN` and after `begin`, `Idle` after `COMMIT`,
+      `ROLLBACK`, `commit` and `rollback`, and `Idle` after an interruption
+      during a write that triggered the automatic rollback
       ([ADR-0039](../../docs/adr/0039-etat-de-transaction-d-une-session.md))
 
 ## Types
 
-- [ ] Table de correspondance **dans les deux sens**
-- [ ] Pertes documentées, notamment : `NUMERIC` de précision arbitraire, entiers
-      au-delà de 2^53, types spatiaux, types propriétaires
-- [ ] Aucun fuseau attribué à un `timestamp` qui n'en a pas
-- [ ] Type inconnu rendu en octets bruts **avec son identifiant de type**
+- [ ] Mapping table **both ways**
+- [ ] Documented losses, notably: arbitrary-precision `NUMERIC`, integers beyond
+      2^53, spatial types, proprietary types
+- [ ] No time zone assigned to a `timestamp` that has none
+- [ ] Unknown type returned as raw bytes **with its type identifier**
 
-## Sécurité
+## Security
 
-- [ ] Aucune valeur liée ni identifiant de connexion dans un journal
-- [ ] Aucun identifiant concaténé dans du SQL composé par Oxyn
-- [ ] Aucun `SET`/`USE` modifiant l'état de session sans le déclarer
-- [ ] Aucune lecture de variable d'environnement, aucune écriture de fichier
+- [ ] No bound value nor connection credential in a log
+- [ ] No identifier concatenated into SQL composed by Oxyn
+- [ ] No `SET`/`USE` changing session state without declaring it
+- [ ] No environment variable read, no file written
 
-## Porte de sortie
+## Exit gate
 
-- [ ] `make qualite` passe
-- [ ] `relecteur-frontiere` et `relecteur-invariants` n'ont rien de bloquant
-- [ ] `docs/RESEARCH-NOTES.md` à jour si une dépendance a été ajoutée
+- [ ] `make qualite` passes
+- [ ] `relecteur-frontiere` and `relecteur-invariants` have nothing blocking
+- [ ] `docs/RESEARCH-NOTES.md` up to date if a dependency was added

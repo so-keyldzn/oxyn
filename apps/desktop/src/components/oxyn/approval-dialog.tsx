@@ -31,9 +31,9 @@ const LINE_PX = 20
 /**
  * The review of a write the policy held back.
  *
- * Built so it cannot be confirmed by reflex (docs/UX-SPEC.md, « Les opérations
- * destructrices ») : the action names the connection, `Cancel` takes the
- * initial focus and comes first at every width, Enter alone does not approve,
+ * Built so it cannot be confirmed by reflex (docs/UX-SPEC.md, « Destructive
+ * operations ») : the action names the connection, `Cancel` takes the initial
+ * focus and comes first at every width, Enter alone does not approve,
  * and Escape rejects.
  */
 export function ApprovalDialog({

@@ -1,5 +1,5 @@
-// The context menu of each surface, as UX-SPEC lists it (« Menus
-// contextuels »): which actions of the registry, in which order and groups
+// The context menu of each surface, as UX-SPEC lists it (« Context menus »):
+// which actions of the registry, in which order and groups
 // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 6).
 //
 // Nothing here is a label or a condition: an entry is an action's id, and

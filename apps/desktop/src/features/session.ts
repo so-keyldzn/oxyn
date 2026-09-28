@@ -25,7 +25,7 @@ export interface SessionState {
   /**
    * The SQL draft. Copied from the shown workspace into the first console of
    * the next new connection, without being run (docs/UX-SPEC.md,
-   * « Navigation du premier workspace »).
+   * « First workspace navigation »).
    */
   sqlDraft: string
   /** The connection the draft was copied from, named when the copy lands. */
@@ -34,7 +34,7 @@ export interface SessionState {
    * Working copies chosen on the recovery screen, waiting for the shown
    * workspace, which reopens them as **offline** consoles: nothing connects
    * and nothing runs until the user attaches one (ADR-0021, UX-SPEC
-   * § Restauration sélective au démarrage).
+   * § Selective restore at startup).
    */
   restored: Array<DocumentEntry>
   /**

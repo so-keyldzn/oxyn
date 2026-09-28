@@ -214,7 +214,8 @@ export function WorkspaceScreen({
   const sections = React.useRef(new Map<string, SectionChoice>())
 
   // The object tab shown last is kept for the next launch, and forgotten
-  // when the last one closes (UX-SPEC « L'état vit dans le workspace »).
+  // when the last one closes (UX-SPEC « State lives in the workspace, and it is
+  // readable »).
   const keepPlace = React.useCallback(
     (tab: ObjectTab | undefined) =>
       void saveObjectPlace(
@@ -331,7 +332,7 @@ export function WorkspaceScreen({
   const closeTab = async (key: string): Promise<boolean> => {
     if (key.startsWith("console:")) return work.requestClose(key)
     // Closing would unmount the export and cancel its write (UX-SPEC
-    // § Résultats conservés): the user ends or cancels it first.
+    // § Retained results): the user ends or cancels it first.
     if (exporting.has(key)) {
       activate(key)
       toast.add({
@@ -364,7 +365,7 @@ export function WorkspaceScreen({
 
   // `Close others`, `Close to the right`, `Close all`: one tab at a time,
   // each console asking as it would alone; Cancel ends the series there
-  // (UX-SPEC, « Menus contextuels », Onglet). One series at a time.
+  // (UX-SPEC, « Context menus », Onglet). One series at a time.
   const closing = React.useRef(false)
   const closeSeries = async (keys: ReadonlyArray<string>) => {
     if (closing.current) return
@@ -586,7 +587,7 @@ export function WorkspaceScreen({
     })),
   ]
   // The order the tabs were dragged into: display only, kept while the
-  // workspace is open (UX-SPEC « Souris et glisser »).
+  // workspace is open (UX-SPEC « Mouse and drag »).
   const tabs = inOrder(naturalTabs, (tab) => tab.key, tabOrder)
   const moveTab = (key: string, to: number) => {
     const keys = tabs.map((tab) => tab.key)
@@ -668,8 +669,8 @@ export function WorkspaceScreen({
         rename: () => {
           if (isConsole) setRenaming({ key, title: title ?? "" })
         },
-        // TODO(2026-12-31, débloqué par une sélection d'entrée exposée par
-        // la bibliothèque) — the library opens; it cannot yet be told which
+        // TODO(2026-12-31, unblocked by an entry selection exposed by the
+        // library) — the library opens; it cannot yet be told which
         // saved query to show.
         revealInLibrary: isConsole ? () => setLeftView("library") : undefined,
         openInNewWindow: () => void moveToWindow(key),

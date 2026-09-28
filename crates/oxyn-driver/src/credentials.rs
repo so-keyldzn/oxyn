@@ -1,38 +1,37 @@
-//! Les secrets d'une connexion, le temps de les remettre à un driver.
+//! A connection's secrets, for the time it takes to hand them to a driver.
 //!
-//! [`ConnectionConfig`](oxyn_core::ConnectionConfig) ne porte **aucun secret** :
-//! elle n'y range qu'une *référence*, résolue par `oxyn-secrets` auprès du
-//! trousseau du système. [`Credentials`] est ce que devient cette référence
-//! après résolution, et son seul usage est d'être passée à
+//! [`ConnectionConfig`](oxyn_core::ConnectionConfig) carries **no secret**: it
+//! stores only a *reference*, resolved by `oxyn-secrets` against the system
+//! keychain. [`Credentials`] is what that reference becomes once resolved, and
+//! its only use is to be passed to
 //! [`Driver::connect`](crate::traits::Driver::connect).
 //!
-//! # Pourquoi un type de plus
+//! # Why one more type
 //!
-//! `oxyn_secrets::CredentialBundle` fait le même travail, mais `oxyn-secrets`
-//! n'est pas au contrat de dépendances de cette crate — et l'y mettre
-//! renverserait le sens des dépendances : le trousseau du système est un détail
-//! de l'hôte, pas du contrat de driver. Un driver reçoit sa configuration ; il
-//! ne va jamais la chercher ([`DRIVER-CONTRACT`](../../../docs/DRIVER-CONTRACT.md)).
-//! La conversion tient en quelques lignes, du côté de l'appelant qui connaît les
-//! deux.
+//! `oxyn_secrets::CredentialBundle` does the same job, but `oxyn-secrets` is
+//! not in this crate's dependency contract — and putting it there would
+//! reverse the direction of dependencies: the system keychain is a detail of
+//! the host, not of the driver contract. A driver receives its configuration;
+//! it never goes looking for it ([`DRIVER-CONTRACT`](../../../docs/DRIVER-CONTRACT.md)).
+//! The conversion fits in a few lines, on the side of the caller that knows
+//! both.
 
 use std::fmt;
 
 use indexmap::IndexMap;
 use secrecy::SecretString;
 
-/// Les secrets d'une connexion, résolus depuis le trousseau du système.
+/// A connection's secrets, resolved from the system keychain.
 ///
-/// # Ce que le type garantit
+/// # What the type guarantees
 ///
-/// Pas de `Debug` dérivé, pas de `Display`, pas de `Serialize`, pas de `Clone` :
-/// les seuls chemins de sortie sont [`password`](Self::password),
-/// [`token`](Self::token) et [`extra`](Self::extra), qui rendent une
-/// [`SecretString`] — elle-même sans `Display`, au `Debug` masqué, et effacée à
-/// sa destruction.
+/// No derived `Debug`, no `Display`, no `Serialize`, no `Clone`: the only
+/// exit paths are [`password`](Self::password), [`token`](Self::token) and
+/// [`extra`](Self::extra), which return a [`SecretString`] — itself without
+/// `Display`, with a masked `Debug`, and zeroed when dropped.
 ///
-/// L'absence de `Clone` n'est pas un oubli : [`SecretString`] ne l'est pas non
-/// plus, parce qu'une copie de secret est une copie à effacer de plus.
+/// The lack of `Clone` is not an oversight: [`SecretString`] is not `Clone`
+/// either, because a copy of a secret is one more copy to zero.
 #[derive(Default)]
 pub struct Credentials {
     password: Option<SecretString>,
@@ -41,84 +40,83 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    /// Aucun identifiant. C'est le cas de SQLite et de DuckDB.
+    /// No credentials. That is the case of SQLite and DuckDB.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Attache un mot de passe.
+    /// Attaches a password.
     #[must_use]
     pub fn with_password(mut self, password: impl Into<SecretString>) -> Self {
         self.password = Some(password.into());
         self
     }
 
-    /// Attache un jeton — clé d'API, jeton de service, `AUTH` Redis.
+    /// Attaches a token — API key, service token, Redis `AUTH`.
     #[must_use]
     pub fn with_token(mut self, token: impl Into<SecretString>) -> Self {
         self.token = Some(token.into());
         self
     }
 
-    /// Attache un secret propre au driver : phrase de passe d'une clé cliente,
-    /// clé privée SSH…
+    /// Attaches a driver-specific secret: passphrase of a client key, SSH
+    /// private key…
     ///
-    /// La clé est un **nom de champ**, pas un secret : elle apparaît dans le
-    /// `Debug` du type.
+    /// The key is a **field name**, not a secret: it appears in the type's
+    /// `Debug`.
     #[must_use]
     pub fn with_extra(mut self, key: impl Into<String>, value: impl Into<SecretString>) -> Self {
         self.extras.insert(key.into(), value.into());
         self
     }
 
-    /// Le mot de passe, s'il y en a un.
+    /// The password, if there is one.
     #[must_use]
     pub fn password(&self) -> Option<&SecretString> {
         self.password.as_ref()
     }
 
-    /// Le jeton, s'il y en a un.
+    /// The token, if there is one.
     #[must_use]
     pub fn token(&self) -> Option<&SecretString> {
         self.token.as_ref()
     }
 
-    /// Un secret propre au driver.
+    /// A driver-specific secret.
     #[must_use]
     pub fn extra(&self, key: &str) -> Option<&SecretString> {
         self.extras.get(key)
     }
 
-    /// Aucun secret n'est porté.
+    /// No secret is carried.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.password.is_none() && self.token.is_none() && self.extras.is_empty()
     }
 
-    /// Les **noms** des secrets présents, jamais leurs valeurs.
+    /// The **names** of the secrets present, never their values.
     ///
-    /// C'est tout ce qu'un diagnostic a le droit de dire d'un porteur de
-    /// secrets, et c'est exactement ce que rend son `Debug`.
+    /// That is all a diagnostic may say about a secret carrier, and it is
+    /// exactly what its `Debug` returns.
     #[must_use]
     pub fn filled_fields(&self) -> Vec<&str> {
-        let mut noms = Vec::new();
+        let mut names = Vec::new();
         if self.password.is_some() {
-            noms.push("password");
+            names.push("password");
         }
         if self.token.is_some() {
-            noms.push("token");
+            names.push("token");
         }
-        noms.extend(self.extras.keys().map(String::as_str));
-        noms
+        names.extend(self.extras.keys().map(String::as_str));
+        names
     }
 }
 
 impl fmt::Debug for Credentials {
-    /// Écrit à la main : un `Debug` dérivé sur un porteur de secrets est le mode
-    /// de fuite le plus fréquent, parce qu'il est invisible à la relecture
-    /// (I-03). C'est le `tracing::debug!("{creds:?}")` ajouté six mois plus tard
-    /// qui fuit.
+    /// Written by hand: a derived `Debug` on a secret carrier is the most
+    /// frequent leak, because it is invisible in review (I-03). It is the
+    /// `tracing::debug!("{creds:?}")` added six months later that leaks.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Credentials(<redacted: {:?}>)", self.filled_fields())
     }
@@ -130,77 +128,77 @@ mod tests {
 
     use super::*;
 
-    const MOT_DE_PASSE: &str = "hunter2";
+    const PASSWORD: &str = "hunter2";
 
     #[test]
-    fn des_identifiants_vides_se_declarent_comme_tels() {
-        let identifiants = Credentials::new();
-        assert!(identifiants.is_empty());
-        assert!(identifiants.password().is_none());
-        assert!(identifiants.token().is_none());
-        assert!(identifiants.extra("ssh_passphrase").is_none());
-        assert!(identifiants.filled_fields().is_empty());
+    fn empty_credentials_declare_themselves_as_such() {
+        let credentials = Credentials::new();
+        assert!(credentials.is_empty());
+        assert!(credentials.password().is_none());
+        assert!(credentials.token().is_none());
+        assert!(credentials.extra("ssh_passphrase").is_none());
+        assert!(credentials.filled_fields().is_empty());
     }
 
     #[test]
-    fn chaque_secret_se_relit_par_son_accesseur() {
-        let identifiants = Credentials::new()
-            .with_password(MOT_DE_PASSE)
-            .with_token("jeton-de-service")
-            .with_extra("ssh_passphrase", "phrase-de-passe");
+    fn each_secret_reads_back_through_its_accessor() {
+        let credentials = Credentials::new()
+            .with_password(PASSWORD)
+            .with_token("service-token")
+            .with_extra("ssh_passphrase", "pass-phrase");
 
         assert_eq!(
-            identifiants.password().map(ExposeSecret::expose_secret),
-            Some(MOT_DE_PASSE)
+            credentials.password().map(ExposeSecret::expose_secret),
+            Some(PASSWORD)
         );
         assert_eq!(
-            identifiants.token().map(ExposeSecret::expose_secret),
-            Some("jeton-de-service")
+            credentials.token().map(ExposeSecret::expose_secret),
+            Some("service-token")
         );
         assert_eq!(
-            identifiants
+            credentials
                 .extra("ssh_passphrase")
                 .map(ExposeSecret::expose_secret),
-            Some("phrase-de-passe")
+            Some("pass-phrase")
         );
-        assert!(!identifiants.is_empty());
+        assert!(!credentials.is_empty());
     }
 
     #[test]
-    fn le_debug_ne_nomme_que_les_champs_remplis() {
-        // I-03, corollaire vérifiable : aucun `Debug` ne montre un secret.
-        let identifiants = Credentials::new()
-            .with_password(MOT_DE_PASSE)
-            .with_token("jeton-de-service")
-            .with_extra("ssh_passphrase", "phrase-de-passe");
+    fn debug_names_only_the_filled_fields() {
+        // I-03, checkable corollary: no `Debug` shows a secret.
+        let credentials = Credentials::new()
+            .with_password(PASSWORD)
+            .with_token("service-token")
+            .with_extra("ssh_passphrase", "pass-phrase");
 
-        let rendu = format!("{identifiants:?}");
+        let rendered = format!("{credentials:?}");
 
-        assert!(!rendu.contains(MOT_DE_PASSE), "fuite : {rendu}");
-        assert!(!rendu.contains("jeton-de-service"), "fuite : {rendu}");
-        assert!(!rendu.contains("phrase-de-passe"), "fuite : {rendu}");
+        assert!(!rendered.contains(PASSWORD), "leak: {rendered}");
+        assert!(!rendered.contains("service-token"), "leak: {rendered}");
+        assert!(!rendered.contains("pass-phrase"), "leak: {rendered}");
 
-        // Ce qui reste doit rester utile au diagnostic.
-        assert!(rendu.contains("password"), "{rendu}");
-        assert!(rendu.contains("token"), "{rendu}");
-        assert!(rendu.contains("ssh_passphrase"), "{rendu}");
+        // What remains must stay useful for diagnostics.
+        assert!(rendered.contains("password"), "{rendered}");
+        assert!(rendered.contains("token"), "{rendered}");
+        assert!(rendered.contains("ssh_passphrase"), "{rendered}");
     }
 
     #[test]
-    fn le_debug_d_identifiants_vides_ne_ment_pas() {
-        let rendu = format!("{:?}", Credentials::new());
-        assert_eq!(rendu, "Credentials(<redacted: []>)");
+    fn debug_of_empty_credentials_does_not_lie() {
+        let rendered = format!("{:?}", Credentials::new());
+        assert_eq!(rendered, "Credentials(<redacted: []>)");
     }
 
     #[test]
-    fn un_secret_reecrit_remplace_le_precedent() {
-        let identifiants = Credentials::new()
-            .with_password("ancien")
-            .with_password(MOT_DE_PASSE);
+    fn a_rewritten_secret_replaces_the_previous_one() {
+        let credentials = Credentials::new()
+            .with_password("old")
+            .with_password(PASSWORD);
         assert_eq!(
-            identifiants.password().map(ExposeSecret::expose_secret),
-            Some(MOT_DE_PASSE)
+            credentials.password().map(ExposeSecret::expose_secret),
+            Some(PASSWORD)
         );
-        assert_eq!(identifiants.filled_fields(), ["password"]);
+        assert_eq!(credentials.filled_fields(), ["password"]);
     }
 }

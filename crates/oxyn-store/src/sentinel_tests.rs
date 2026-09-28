@@ -1,23 +1,23 @@
-//! Le canal « fichier de workspace » d'[I-03](../../../CLAUDE.md#i-03), balayé
-//! par une valeur témoin.
+//! The "workspace file" channel of [I-03](../../../CLAUDE.md#i-03), swept with
+//! a witness value.
 //!
-//! # Pourquoi un test de sentinelle, alors qu'il en existe déjà sur les secrets
+//! # Why a sentinel test, when tests on secrets already exist
 //!
-//! Les tests existants vérifient un **chemin connu** : que `Debug` masque une
-//! référence, qu'une colonne nommée `api_key` n'existe pas, qu'une
-//! configuration ne porte pas de secret. Ils ont tous le même angle mort — ils
-//! ne voient que ce qu'on a pensé à regarder. Une colonne ajoutée dans six mois
-//! pour ranger « juste un jeton » ne ferait rougir aucun d'eux.
+//! The existing tests check a **known path**: that `Debug` masks a reference,
+//! that a column named `api_key` does not exist, that a configuration carries
+//! no secret. They all share the same blind spot — they only see what someone
+//! thought of looking at. A column added six months from now to store "just a
+//! token" would turn none of them red.
 //!
-//! Celui-ci prend le problème par l'autre bout : il écrit une valeur témoin
-//! unique par tous les chemins d'écriture du store, puis **balaie toutes les
-//! tables et toutes les colonnes** que `sqlite_master` déclare. Il n'a besoin de
-//! connaître ni les tables d'aujourd'hui ni celles de demain.
+//! This one takes the problem from the other end: it writes a unique witness
+//! value through every write path of the store, then **sweeps every table and
+//! every column** that `sqlite_master` declares. It needs to know neither
+//! today's tables nor tomorrow's.
 //!
-//! # Ce qu'il ne couvre pas
+//! # What it does not cover
 //!
-//! Un seul des six canaux d'I-03. Le journal, l'erreur affichée, le rapport de
-//! plantage, l'invite IA et le presse-papiers ont leurs propres gardes, ailleurs.
+//! Only one of I-03's six channels. The log, the displayed error, the crash
+//! report, the AI prompt and the clipboard have their own guards, elsewhere.
 
 use crate::{
     Conversation, Destination, Store, ToolCallRecord, ToolCallStatus, TurnRecord, TurnRole,
@@ -27,15 +27,15 @@ use oxyn_core::{
     PrivacyTier, ProviderId,
 };
 
-/// La valeur témoin. Improbable par construction : si elle apparaît quelque
-/// part, c'est qu'un chemin d'écriture l'y a mise.
-const SENTINELLE: &str = "oxyn-sentinelle-9f3a7c21-ne-doit-jamais-atteindre-le-disque";
+/// The witness value. Improbable by construction: if it shows up somewhere, a
+/// write path put it there.
+const SENTINEL: &str = "oxyn-sentinel-9f3a7c21-must-never-reach-the-disk";
 
-/// Toutes les valeurs textuelles de toutes les tables, sans en nommer aucune.
+/// Every text value of every table, without naming any.
 ///
-/// Passe par `sqlite_master` et `pragma_table_info` plutôt que par une liste :
-/// une table ajoutée demain est balayée sans que personne n'ait à y penser.
-fn tout_le_texte(store: &Store) -> Vec<(String, String, String)> {
+/// Goes through `sqlite_master` and `pragma_table_info` rather than a list: a
+/// table added tomorrow is swept without anyone having to think of it.
+fn whole_text(store: &Store) -> Vec<(String, String, String)> {
     store
         .with_connection(|conn| {
             let tables: Vec<String> = conn
@@ -43,134 +43,134 @@ fn tout_le_texte(store: &Store) -> Vec<(String, String, String)> {
                 .query_map([], |row| row.get(0))?
                 .collect::<rusqlite::Result<_>>()?;
 
-            let mut trouvailles = Vec::new();
+            let mut findings = Vec::new();
             for table in tables {
-                let colonnes: Vec<String> = conn
+                let columns: Vec<String> = conn
                     .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
                     .query_map([], |row| row.get(0))?
                     .collect::<rusqlite::Result<_>>()?;
-                for colonne in colonnes {
-                    // `CAST` plutôt que `get::<String>` : une colonne `STRICT`
-                    // peut porter un BLOB, et un secret rangé en binaire fuit
-                    // tout autant.
-                    let mut requete = conn.prepare(&format!(
-                        "SELECT CAST(\"{colonne}\" AS TEXT) FROM \"{table}\" \
-                         WHERE \"{colonne}\" IS NOT NULL"
+                for column in columns {
+                    // `CAST` rather than `get::<String>`: a `STRICT` column can
+                    // carry a BLOB, and a secret stored as binary leaks just
+                    // as much.
+                    let mut query = conn.prepare(&format!(
+                        "SELECT CAST(\"{column}\" AS TEXT) FROM \"{table}\" \
+                         WHERE \"{column}\" IS NOT NULL"
                     ))?;
-                    let valeurs = requete.query_map([], |row| row.get::<_, String>(0))?;
-                    for valeur in valeurs.flatten() {
-                        trouvailles.push((table.clone(), colonne.clone(), valeur));
+                    let values = query.query_map([], |row| row.get::<_, String>(0))?;
+                    for value in values.flatten() {
+                        findings.push((table.clone(), column.clone(), value));
                     }
                 }
             }
-            Ok(trouvailles)
+            Ok(findings)
         })
-        .expect("lecture du schéma")
+        .expect("read the schema")
 }
 
-/// Aucun chemin d'écriture ne range un secret dans l'état local.
+/// No write path stores a secret in the local state.
 ///
-/// La sentinelle est passée là où un secret **pourrait** se glisser : le nom
-/// d'une connexion, un paramètre, le libellé d'un fournisseur, le nom d'un agent
-/// et sa commande. Ce sont des champs légitimes — ce que le test vérifie, c'est
-/// qu'aucun d'eux n'est ensuite recopié dans une colonne prévue pour autre
-/// chose, et surtout qu'aucune référence de secret ne devient une valeur.
+/// The sentinel is passed where a secret **could** slip in: a connection's
+/// name, a parameter, a provider's label, an agent's name and its command.
+/// These are legitimate fields — what the test checks is that none of them is
+/// then copied into a column meant for something else, and above all that no
+/// secret reference becomes a value.
 #[test]
-fn aucune_sentinelle_natteint_le_fichier_de_workspace() {
-    let store = Store::open_in_memory().expect("ouverture");
+fn no_sentinel_reaches_the_workspace_file() {
+    let store = Store::open_in_memory().expect("open");
     let workspace = store
         .workspaces()
         .create("sentinelle")
         .expect("workspace")
         .id;
 
-    // Une connexion dont le secret n'est qu'une **référence** : c'est le
-    // contrat, et c'est lui qu'on éprouve.
-    let mut connexion = ConnectionConfig::new("Base témoin", DriverId::sqlite())
-        .with_environment(Environment::Local);
-    connexion.params.insert("path".into(), ":memory:".into());
-    connexion.secret_ref = Some(format!("keychain://oxyn/{SENTINELLE}"));
+    // A connection whose secret is only a **reference**: that is the
+    // contract, and that is what is being tested.
+    let mut connection =
+        ConnectionConfig::new("Canary db", DriverId::sqlite()).with_environment(Environment::Local);
+    connection.params.insert("path".into(), ":memory:".into());
+    connection.secret_ref = Some(format!("keychain://oxyn/{SENTINEL}"));
     store
         .connections()
-        .save(workspace, &connexion)
-        .expect("connexion enregistrée");
+        .save(workspace, &connection)
+        .expect("saved connection");
 
-    // Un fournisseur de modèles, même forme : une référence, jamais la clé.
-    let fournisseur = AiProviderConfig::new(
-        ProviderId::new("temoin").expect("identifiant"),
+    // A model provider, same shape: a reference, never the key.
+    let provider = AiProviderConfig::new(
+        ProviderId::new("temoin").expect("identifier"),
         AiProviderKind::OpenAiCompatible,
-        "Fournisseur témoin",
+        "Canary provider",
         "http://127.0.0.1:11434/v1",
-        "un-modele",
+        "a-model",
     )
-    .with_secret_ref(format!("keychain://oxyn/{SENTINELLE}"));
-    store.providers().save(&fournisseur).expect("fournisseur");
+    .with_secret_ref(format!("keychain://oxyn/{SENTINEL}"));
+    store.providers().save(&provider).expect("provider");
 
-    // Un agent externe : aucune clé du tout, par construction.
+    // An external agent: no key at all, by construction.
     let agent = ExternalAgentConfig::new(
-        ProviderId::new("agent-temoin").expect("identifiant"),
-        "Agent témoin",
+        ProviderId::new("agent-temoin").expect("identifier"),
+        "Canary agent",
         "claude",
     );
     store.external_agents().save(&agent).expect("agent");
 
-    // Une conversation, avec un appel d'outil : c'est le chemin d'écriture le
-    // plus récent, et celui où un tour d'agent pourrait le plus facilement
-    // recopier une valeur qu'il a vue passer.
-    let fil = Conversation::new(
+    // A conversation, with a tool call: it is the most recent write path, and
+    // the one where an agent turn could most easily copy a value it saw go
+    // by.
+    let thread = Conversation::new(
         workspace,
         Destination::provider(
-            ProviderId::new("temoin").expect("identifiant"),
-            "Fournisseur témoin",
-            "un-modele",
+            ProviderId::new("temoin").expect("identifier"),
+            "Canary provider",
+            "a-model",
         ),
-        "Fil témoin",
+        "Canary thread",
     )
-    .on_connection(connexion.id, "Base témoin");
-    let fil_id = fil.id;
-    store.conversations().save(&fil).expect("fil");
+    .on_connection(connection.id, "Canary db");
+    let thread_id = thread.id;
+    store.conversations().save(&thread).expect("thread");
     store
         .conversations()
         .append(
-            fil_id,
+            thread_id,
             &TurnRecord::new(
                 TurnRole::Assistant,
                 PrivacyTier::Metadata,
-                "J'ai regardé la table.",
+                "I looked at the table.",
             )
             .with_tool_calls(vec![
                 ToolCallRecord::new(
                     "call_1",
                     "execute",
-                    "Exécuter une lecture sur « Base témoin »",
+                    "Run a read on “Canary db”",
                     ToolCallStatus::Completed,
                 )
                 .with_statement("SELECT 1"),
             ]),
         )
-        .expect("tour");
+        .expect("turn");
 
-    let fuites: Vec<_> = tout_le_texte(&store)
+    let leaks: Vec<_> = whole_text(&store)
         .into_iter()
-        .filter(|(_, _, valeur)| valeur.contains(SENTINELLE))
+        .filter(|(_, _, value)| value.contains(SENTINEL))
         .collect();
 
-    // Une référence de trousseau **contient** la sentinelle et a le droit
-    // d'être là : c'est un pointeur, pas un secret. Ce qui est interdit, c'est
-    // qu'elle apparaisse ailleurs que dans une colonne de référence.
-    let interdites: Vec<_> = fuites
+    // A keychain reference **contains** the sentinel and is allowed to be
+    // there: it is a pointer, not a secret. What is forbidden is for it to
+    // appear anywhere other than in a reference column.
+    let forbidden_ones: Vec<_> = leaks
         .iter()
-        .filter(|(_, colonne, valeur)| {
-            !(colonne.contains("secret") && valeur.starts_with("keychain://"))
+        .filter(|(_, column, value)| {
+            !(column.contains("secret") && value.starts_with("keychain://"))
         })
         .collect();
 
     assert!(
-        interdites.is_empty(),
-        "la valeur témoin a atteint le disque hors d'une référence de trousseau : {interdites:#?}"
+        forbidden_ones.is_empty(),
+        "the witness value reached the disk outside a keychain reference: {forbidden_ones:#?}"
     );
     assert!(
-        !fuites.is_empty(),
-        "aucune trace du tout : le test ne prouve rien si les écritures n'ont pas eu lieu"
+        !leaks.is_empty(),
+        "no trace at all: the test proves nothing if the writes did not happen"
     );
 }

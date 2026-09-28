@@ -1,118 +1,120 @@
-# ADR-0045 — Sur une pull request, la CI saute les jobs dont la zone n'est pas touchée ; sur `main`, tout tourne
+# ADR-0045 — On a pull request, CI skips the jobs whose area is not touched; on `main`, everything runs
 
-**Statut :** accepté · **Date :** 2026-09-25
+**Status:** accepted · **Date:** 2026-09-25
 
-**Précise :** la règle de [CLAUDE.md](../../CLAUDE.md#ce-qui-est-exécuté) selon
-laquelle la CI appelle `make qualite` en jobs parallèles, sans rien ajouter, et
-dont `make socle` vérifie qu'elle n'oublie aucune cible. Cette règle reste
-vraie ; elle cesse de dire que **chaque** poussée exécute **toutes** les cibles.
+**Clarifies:** the rule of [CLAUDE.md](../../CLAUDE.md#what-is-executed) that
+CI calls `make qualite` in parallel jobs, adding nothing, and that `make socle`
+verifies it misses no target. This rule remains true; it stops saying that
+**every** push runs **all** targets.
 
-## Contexte
+## Context
 
-Chaque pull request lance aujourd'hui tous les jobs de
-[qualite.yml](../../.github/workflows/qualite.yml) : `controles`, deux tranches de
-`stories`, et `rust`, dont le délai est borné à 75 minutes. Une PR qui ne touche
-qu'un document recompile le workspace ; une PR qui ne touche que le front
-recompile tout le Rust, et une PR Rust rejoue les stories dans Chromium.
+Every pull request currently launches all the jobs of
+[qualite.yml](../../.github/workflows/qualite.yml): `controles`, two slices of
+`stories`, and `rust`, whose timeout is capped at 75 minutes. A PR that only
+touches a document recompiles the workspace; a PR that only touches the front
+end recompiles all the Rust, and a Rust PR replays the stories in Chromium.
 
-Deux coûts en découlent, constatés le 2026-09-24 et le 2026-09-25 :
+Two costs follow, observed on 2026-09-24 and 2026-09-25:
 
-* le quota de minutes du compte a été épuisé le 2026-09-24 (la matrice macOS a
-  été retirée des PR pour cette raison, voir le commentaire du workflow) ;
-* les agents qui travaillent en parallèle attendent le job `rust` pour un
-  changement qui n'y touche pas, et le flux des PR s'en trouve ralenti.
+* the account's minutes quota was exhausted on 2026-09-24 (the macOS matrix
+  was removed from PRs for that reason, see the workflow comment);
+* agents working in parallel wait for the `rust` job on a change that does not
+  touch it, and the PR flow is slowed down.
 
-L'utilisateur l'a tranché le 2026-09-25 : alléger la machine locale et
-accélérer le flux des agents, **sans sur-ingénierie**.
+The user settled it on 2026-09-25: lighten the local machine and speed up the
+agents' flow, **without over-engineering**.
 
-## Décision
+## Decision
 
-**Sur l'événement `pull_request` seulement**, un premier job `zones` exécute
-[`script/zones-ci`](../../script/zones-ci), qui compare le commit de fusion de
-la PR à son premier parent (`git diff --name-only HEAD^1 HEAD`, `fetch-depth: 2`)
-et range chaque fichier dans une zone :
+**On the `pull_request` event only**, a first `zones` job runs
+[`script/zones-ci`](../../script/zones-ci), which compares the PR's merge
+commit to its first parent (`git diff --name-only HEAD^1 HEAD`, `fetch-depth: 2`)
+and puts each file in an area:
 
-| Fichier | Zone |
+| File | Area |
 |---|---|
-| `Makefile`, `.github/`, `Cargo.toml` et `Cargo.lock` à la racine, `.cargo/`, `.config/`, `rust-toolchain.toml`, `clippy.toml`, `deny.toml`, `renovate.json5`, `.claude/`, `.agents/`, `script/` | **transversal** : toutes les zones |
+| `Makefile`, `.github/`, `Cargo.toml` and `Cargo.lock` at the root, `.cargo/`, `.config/`, `rust-toolchain.toml`, `clippy.toml`, `deny.toml`, `renovate.json5`, `.claude/`, `.agents/`, `script/` | **cross-cutting**: all areas |
 | `apps/desktop/` | `front` |
 | `crates/`, `drivers/` | `rust` |
-| `docs/`, tout autre `*.md` | `docs` |
-| tout autre fichier | **transversal** : un fichier que le script ne sait pas ranger déclenche tout |
+| `docs/`, any other `*.md` | `docs` |
+| any other file | **cross-cutting**: a file the script cannot classify triggers everything |
 
-Le script n'utilise aucune action externe : `git` et Python, déjà présents sur
-le runner.
+The script uses no external action: `git` and Python, already present on the
+runner.
 
-Les jobs en dépendent ainsi :
+The jobs depend on it as follows:
 
-| Job | Tourne sur une PR si | Ce qu'il saute sinon |
+| Job | Runs on a PR if | What it skips otherwise |
 |---|---|---|
-| `controles` | toujours | `make front-controles` et l'installation de Node, si `front` n'est pas touchée ; `make socle todo` tourne toujours |
-| `stories` | `front` | tout le job |
-| `rust` | `rust` ou `front` | `make rust` et son outillage si seule `front` est touchée ; `make front-build` tourne dès que l'une des deux l'est |
+| `controles` | always | `make front-controles` and the Node installation, if `front` is not touched; `make socle todo` always runs |
+| `stories` | `front` | the whole job |
+| `rust` | `rust` or `front` | `make rust` and its tooling if only `front` is touched; `make front-build` runs as soon as either is |
 
-`rust` tourne pour une PR front parce que c'est lui qui porte `front-build` :
-`oxyn-desktop` embarque `apps/desktop/dist` à la compilation, et le build du
-front n'a pas d'autre job. La zone `docs` ne commande aucun job : `controles`,
-qui vérifie les liens et l'index des ADR, tourne toujours. Elle est affichée
-dans le journal du job `zones`, pour qu'on lise ce qui a été décidé.
+`rust` runs for a front-end PR because it carries `front-build`:
+`oxyn-desktop` embeds `apps/desktop/dist` at compile time, and the front-end
+build has no other job. The `docs` area drives no job: `controles`, which
+checks the links and the ADR index, always runs. It is displayed in the
+`zones` job's log, so that one can read what was decided.
 
-Un job final **`qualite`** dépend de tous les autres (`if: always()`), et
-réussit si et seulement si `zones` a réussi et qu'aucun autre job n'a échoué ni
-été annulé — un job `skipped` compte comme réussi. **C'est ce job, et lui seul,
-que la protection de branche exigera** : un status check requis sur un job sauté
-resterait en attente pour toujours. Le 2026-09-25, la protection de branche est
-encore refusée à ce dépôt privé
-([RESEARCH-NOTES](../RESEARCH-NOTES.md#ci-et-livraison-github)) : d'ici là,
-`qualite` est le seul check à lire avant de fusionner.
+A final **`qualite`** job depends on all the others (`if: always()`), and
+succeeds if and only if `zones` succeeded and no other job failed or was
+cancelled — a `skipped` job counts as successful. **This job, and it alone, is
+what branch protection will require**: a required status check on a skipped
+job would stay pending forever. On 2026-09-25, branch protection is still
+refused to this private repository
+([RESEARCH-NOTES](../RESEARCH-NOTES.md#ci-and-github-delivery)): until then,
+`qualite` is the only check to read before merging.
 
-**Sur `push` vers `main` et sur `workflow_dispatch`, tout tourne toujours.**
-`script/zones-ci` renvoie toutes les zones hors de l'événement `pull_request`,
-et la matrice macOS s'y ajoute comme avant. C'est le filet : ce qu'une PR aurait
-sauté à tort est rattrapé à la fusion.
+**On `push` to `main` and on `workflow_dispatch`, everything always runs.**
+`script/zones-ci` returns all areas outside the `pull_request` event, and the
+macOS matrix is added as before. It is the safety net: what a PR wrongly
+skipped is caught at merge.
 
-`make socle` continue de vérifier que la réunion des `run: make …` du workflow
-couvre `make qualite`. Il vérifie en plus que tout job qui appelle `make` figure
-dans les `needs` du job `qualite` : sans quoi son échec ne bloquerait pas la
-fusion.
+`make socle` keeps verifying that the union of the workflow's `run: make …`
+covers `make qualite`. It additionally verifies that every job calling `make`
+appears in the `needs` of the `qualite` job: otherwise its failure would not
+block the merge.
 
-En local, [`make verif-rapide`](../../Makefile) applique la même idée au
-travail courant — ne vérifier que ce qui a changé depuis `origin/main` — sans
-changer ce qui fait foi : **`make qualite` reste la porte**.
+Locally, [`make verif-rapide`](../../Makefile) applies the same idea to
+day-to-day work — only check what changed since `origin/main` — without
+changing what is conclusive: **`make qualite` remains the gate**.
 
-## Conséquences
+## Consequences
 
-* **+** une PR de documentation ne lance ni Rust ni stories ; une PR front ne
-  lance ni clippy ni les tests Rust ; une PR Rust ne lance pas les stories.
-* **+** les status checks requis se réduisent à un seul nom, `qualite`, stable
-  quand la matrice ou le découpage des jobs change.
-* **+** la règle « la CI n'ajoute aucun contrôle » tient : chaque job appelle
-  encore des cibles de `make qualite`, et `make socle` le vérifie toujours.
-* **−** une PR peut être verte alors que `make qualite` échouerait sur la même
-  arborescence : une PR Rust qui casserait une story n'est pas vue avant `main`.
-  Le cas existe — une commande IPC renommée côté Rust sans que le front suive —
-  et c'est `main` qui devient rouge, après la fusion.
-* **−** le rangement des fichiers est une deuxième description du dépôt, à tenir
-  à jour quand un répertoire apparaît. Le repli (« inconnu ⇒ tout ») borne le
-  risque : un oubli coûte des minutes, pas un contrôle.
-* **−** le jour où la protection de branche devient disponible, elle doit
-  exiger `qualite` et aucun autre job : exiger `rust` bloquerait toute PR qui
-  ne touche pas au Rust, sur un check qui ne viendra pas.
+* **+** a documentation PR launches neither Rust nor stories; a front-end PR
+  launches neither clippy nor the Rust tests; a Rust PR does not launch the
+  stories.
+* **+** the required status checks come down to a single name, `qualite`,
+  stable when the matrix or the job split changes.
+* **+** the rule "CI adds no check" holds: every job still calls targets of
+  `make qualite`, and `make socle` still verifies it.
+* **−** a PR can be green while `make qualite` would fail on the same tree: a
+  Rust PR that would break a story is not seen before `main`. The case exists
+  — an IPC command renamed on the Rust side without the front end following —
+  and it is `main` that turns red, after the merge.
+* **−** the classification of files is a second description of the
+  repository, to keep up to date when a directory appears. The fallback
+  ("unknown ⇒ everything") bounds the risk: an omission costs minutes, not a
+  check.
+* **−** the day branch protection becomes available, it must require `qualite`
+  and no other job: requiring `rust` would block every PR that does not touch
+  Rust, on a check that will never come.
 
-**Coût de sortie :** faible. Retirer le job `zones`, les `if:` qui le lisent et
-le job `qualite` rend le workflow antérieur ; `script/zones-ci` et son test se
-suppriment. La protection de branche peut continuer d'exiger `qualite`.
+**Exit cost:** low. Removing the `zones` job, the `if:` that read it and the
+`qualite` job restores the previous workflow; `script/zones-ci` and its test
+are deleted. Branch protection can keep requiring `qualite`.
 
-**Reconsidérer si** `main` devient rouge après la fusion d'une PR verte plus
-d'une fois par mois à cause d'un job sauté — le rangement est alors trop
-optimiste, et il faut soit élargir une zone, soit revenir à tout exécuter.
+**Reconsider if** `main` turns red after merging a green PR more than once a
+month because of a skipped job — the classification is then too optimistic,
+and one must either widen an area or go back to running everything.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| `paths` / `paths-ignore` sur le déclencheur `pull_request` | filtre le workflow entier, pas un job ; un workflow non déclenché laisse un status check requis en attente pour toujours |
-| Une action tierce de filtrage par chemins | une dépendance externe de plus dans un workflow qui en épingle déjà cinq par empreinte, pour un calcul de trente lignes |
-| Calculer les crates dépendantes et ne tester qu'elles en CI | le graphe se calcule mal sans `cargo metadata`, et la CI est justement l'endroit où le workspace entier doit passer ; le gain réel est dans les jobs entiers sautés |
-| Filtrer aussi sur `main` | supprime le seul endroit où tout est vérifié ensemble ; la moindre erreur de rangement deviendrait invisible |
-| Laisser la CI telle quelle et n'alléger que le local | ne répond pas à l'épuisement du quota, ni à l'attente des agents sur le job `rust` |
+| `paths` / `paths-ignore` on the `pull_request` trigger | filters the whole workflow, not a job; a workflow not triggered leaves a required status check pending forever |
+| A third-party path-filtering action | one more external dependency in a workflow that already pins five by digest, for a thirty-line computation |
+| Compute the dependent crates and test only them in CI | the graph is hard to compute without `cargo metadata`, and CI is precisely the place where the whole workspace must pass; the real gain is in whole skipped jobs |
+| Also filter on `main` | removes the only place where everything is checked together; the slightest classification error would become invisible |
+| Leave CI as it is and only lighten local work | answers neither the quota exhaustion nor the agents waiting on the `rust` job |

@@ -1,26 +1,24 @@
 ---
 name: stories-instables-sous-charge
-description: "Sous charge (plusieurs agents), les stories qui lisent une frame d'animation Base UI échouent par intermittence : envelopper dans waitFor, et relancer avant de conclure à une régression"
+description: "Under load (several agents), stories that read a Base UI animation frame fail intermittently: wrap in waitFor, and rerun before concluding to a regression"
 metadata:
   type: feedback
 ---
 
-Une story qui lit l'état d'un dialogue ou d'un popup Base UI **juste après son
-ouverture** échoue par intermittence quand la machine est chargée. Envelopper
-l'assertion dans `waitFor`, et relancer le fichier seul avant de conclure à une
-régression.
+A story that reads the state of a Base UI dialog or popup **right after it
+opens** fails intermittently when the machine is loaded. Wrap the assertion in
+`waitFor`, and rerun the file alone before concluding to a regression.
 
-**Why:** les surfaces Base UI entrent en transition d'opacité. `toBeVisible()`
-lue sur la frame où l'élément est encore transparent échoue. Sous charge — la
-CI locale, ou plusieurs agents qui lancent chacun Vitest/Playwright — la frame
-lue change, donc l'échec apparaît en lot et disparaît en exécution isolée.
-Observé aussi : `Failed to fetch dynamically imported module` et
-`Port 63315 is already in use` quand deux exécutions se chevauchent, et une
-violation axe `aria-activedescendant` pointant un id d'un popup en cours de
-montage. Aucun de ces trois-là n'est un défaut du composant.
+**Why:** Base UI surfaces enter an opacity transition. `toBeVisible()` read on
+the frame where the element is still transparent fails. Under load — local CI,
+or several agents each running Vitest/Playwright — the frame read changes, so
+the failure shows up in a batch and disappears in an isolated run. Also
+observed: `Failed to fetch dynamically imported module` and
+`Port 63315 is already in use` when two runs overlap, and an axe
+`aria-activedescendant` violation pointing to an id of a popup being mounted.
+None of these three is a component defect.
 
-**How to apply:** avant de « corriger » un composant pour un échec de story,
-relancer `pnpm exec vitest run --project storybook <le fichier>` seul. S'il
-passe, corriger la **story** (ajouter `waitFor`) et non le composant. Ajouter
-`NO_COLOR=1` pour que les motifs de `grep` retrouvent les lignes `FAIL` dans la
-sortie.
+**How to apply:** before "fixing" a component for a story failure, rerun
+`pnpm exec vitest run --project storybook <the file>` alone. If it passes, fix
+the **story** (add `waitFor`) and not the component. Add `NO_COLOR=1` so that
+`grep` patterns find the `FAIL` lines in the output.

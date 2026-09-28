@@ -1,105 +1,102 @@
-//! Ce qu'on dit au modèle quand une commande a échoué — et ce qu'on lui tait.
+//! What we tell the model when a command failed — and what we keep from it.
 //!
-//! # Le défaut que ce module ferme
+//! # The defect this module closes
 //!
-//! Un message d'erreur de serveur **est** du contenu de la base. PostgreSQL
-//! répond `duplicate key value violates unique constraint "clients_email_key"
-//! DETAIL: Key (email)=(dupont@example.com) already exists.` : la valeur de
-//! ligne est dans le texte. Réinjecter ce message dans la conversation le fait
-//! partir chez le fournisseur au tour suivant, sous un niveau qui l'interdit
+//! A server error message **is** database content. PostgreSQL answers
+//! `duplicate key value violates unique constraint "clients_email_key"
+//! DETAIL: Key (email)=(dupont@example.com) already exists.`: the row value is
+//! in the text. Feeding this message back into the conversation sends it to
+//! the provider at the next turn, under a tier that forbids it
 //! ([I-04](../../../CLAUDE.md#i-04)).
 //!
-//! La protection posée à la frontière des drivers ne couvre pas ce cas :
-//! elle retient le message quand l'instruction portait des **valeurs liées**,
-//! or une instruction composée par un agent n'en porte aucune (`tools.rs`).
-//! Son message part donc entier.
+//! The protection set at the driver boundary does not cover this case: it
+//! withholds the message when the statement carried **bound values**, and a
+//! statement composed by an agent carries none (`tools.rs`). Its message
+//! therefore leaves whole.
 //!
-//! # Le filtre est à la construction, pas au rendu
+//! # The filter is at construction, not at rendering
 //!
-//! [`FailureReport`] ne **stocke** que ce que le niveau laisse sortir : sous
-//! `Local` et `Metadata`, le message du serveur n'entre jamais dans la
-//! structure. Un `Display` oublié, un `Debug` dérivé, un champ ajouté six mois
-//! plus tard à un journal ne peuvent donc pas le laisser fuir — il n'est plus
-//! là. Filtrer au rendu aurait supposé que tous les rendus futurs y pensent.
+//! [`FailureReport`] only **stores** what the tier lets out: under `Local` and
+//! `Metadata`, the server message never enters the structure. A forgotten
+//! `Display`, a derived `Debug`, a field added six months later to a log
+//! cannot therefore let it leak — it is no longer there. Filtering at
+//! rendering would have assumed that every future rendering thinks of it.
 //!
-//! # Pourquoi tout le message, et pas seulement la valeur
+//! # Why the whole message, and not just the value
 //!
-//! Sous `Metadata`, les noms d'objets sortent : on pourrait vouloir garder la
-//! partie « nom de contrainte » et retirer la partie « valeur ». On ne sait pas
-//! le faire. Le serveur compose un texte libre, un déclencheur y concatène ce
-//! qu'il veut, et chercher la valeur dans le texte aurait l'apparence d'une
-//! protection sans en être une. Le critère retenu est donc le même que partout
-//! ailleurs dans la crate :
+//! Under `Metadata`, object names leave: one might want to keep the
+//! "constraint name" part and remove the "value" part. We do not know how to
+//! do it. The server composes free text, a trigger concatenates whatever it
+//! wants into it, and looking for the value in the text would look like a
+//! protection without being one. The criterion kept is therefore the same as
+//! everywhere else in the crate:
 //! [`PrivacyTier::allows_row_values`](oxyn_core::PrivacyTier::allows_row_values).
 //!
-//! Sous `Local`, aucun fournisseur distant n'est accepté : rien ne quitterait
-//! la machine de toute façon. Le message est **quand même** retenu, pour que la
-//! règle n'ait pas d'exception — un niveau plus strict que `Metadata` qui en
-//! laisserait sortir davantage serait la sorte d'inversion que personne ne
-//! relit deux fois.
+//! Under `Local`, no remote provider is accepted: nothing would leave the
+//! machine anyway. The message is withheld **all the same**, so that the rule
+//! has no exception — a tier stricter than `Metadata` that let out more would
+//! be the kind of inversion nobody reads twice.
 //!
-//! # Ce qui survit au filtrage
+//! # What survives the filtering
 //!
-//! La **classe** de l'erreur, sa **retentabilité** — qui en découle, donc ne
-//! peut pas la contredire ([I-13](../../../CLAUDE.md#i-13)) — et le **code**
-//! identifiant quand le message en porte un de forme reconnaissable. Un code
-//! ne cite rien : c'est ce que les drivers gardent eux-mêmes quand ils
-//! retiennent un message.
+//! The error's **class**, its **retryability** — which derives from it, so it
+//! cannot contradict it ([I-13](../../../CLAUDE.md#i-13)) — and the
+//! identifying **code** when the message carries one of a recognizable shape. A
+//! code quotes nothing: it is what the drivers themselves keep when they
+//! withhold a message.
 
 use std::fmt;
 
 use oxyn_core::{ErrorClass, PrivacyTier};
 
-/// Marqueur d'un SQLSTATE dans un message. Les drivers PostgreSQL du dépôt
-/// l'écrivent sous cette forme quand ils retiennent le message du serveur.
+/// Marker of an SQLSTATE in a message. The repository's PostgreSQL drivers
+/// write it in this form when they withhold the server's message.
 const SQLSTATE_MARKER: &str = "SQLSTATE ";
 
-/// Longueur d'un SQLSTATE : cinq caractères, sans exception.
+/// Length of an SQLSTATE: five characters, without exception.
 const SQLSTATE_LEN: usize = 5;
 
-/// Marqueur d'un code de résultat SQLite. `rusqlite` rend « Error code 19:
-/// constraint failed » : le libellé est dérivé du **nombre**.
+/// Marker of an SQLite result code. `rusqlite` returns "Error code 19:
+/// constraint failed": the wording is derived from the **number**.
 const SQLITE_MARKER: &str = "Error code ";
 
-/// Nombre maximal de chiffres retenus pour un code de résultat SQLite. Les
-/// codes étendus tiennent sur quatre chiffres ; au-delà, ce n'est plus un code.
+/// Maximum number of digits kept for an SQLite result code. Extended codes fit
+/// in four digits; beyond that, it is no longer a code.
 const SQLITE_CODE_MAX_DIGITS: usize = 4;
 
-/// L'échec d'une commande, réduit à ce que le niveau de la connexion laisse
-/// sortir.
+/// A command's failure, reduced to what the connection's tier lets out.
 ///
-/// **Ne se construit pas hors de cette crate** : ses champs sont privés et son
-/// seul constructeur est `redact`, privé au module, qui exige un
-/// [`PrivacyTier`]. C'est ce qui fait du filtre une contrainte de type et non
-/// une convention qu'un appelant futur oublierait — la même propriété que celle
-/// qui tient déjà le point de passage du contexte
+/// **Cannot be built outside this crate**: its fields are private and its only
+/// constructor is `redact`, private to the module, which requires a
+/// [`PrivacyTier`]. That is what makes the filter a type constraint and not a
+/// convention a future caller would forget — the same property that already
+/// holds the context's gateway
 /// ([`AgentContext`](crate::context::AgentContext)).
 ///
-/// Le `Debug` est dérivé sans danger : la structure ne contient le message du
-/// serveur que sous un niveau qui l'autorise.
+/// The `Debug` is derived safely: the structure only contains the server's
+/// message under a tier that allows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailureReport {
-    /// Le niveau qui a été appliqué. Conservé pour que le modèle sache qu'un
-    /// message existe et pourquoi il ne l'a pas : sans cela, il comblerait le
-    /// vide en inventant la cause de l'échec.
+    /// The tier that was applied. Kept so that the model knows a message exists
+    /// and why it does not have it: without that, it would fill the gap by
+    /// inventing the cause of the failure.
     tier: PrivacyTier,
-    /// La famille de l'erreur, telle que le driver l'a classée.
+    /// The error's class, as the driver classified it.
     class: ErrorClass,
-    /// Le code identifiant, quand le message en portait un.
+    /// The identifying code, when the message carried one.
     code: Option<String>,
-    /// Le message du serveur. `Some` **seulement** sous un niveau qui autorise
-    /// les valeurs de lignes.
+    /// The server's message. `Some` **only** under a tier that allows row
+    /// values.
     detail: Option<String>,
 }
 
 impl FailureReport {
-    /// Réduit un échec à ce que ce niveau laisse sortir.
+    /// Reduces a failure to what this tier lets out.
     ///
-    /// `pub(crate)` : le seul appelant légitime est la conversion d'un
-    /// [`DispatchOutcome`](crate::runtime::DispatchOutcome), qui tient le
-    /// niveau de la session en cours. Un puits de commandes, lui, n'a aucune
-    /// raison de connaître le niveau — et donc aucun moyen de se tromper de
-    /// niveau.
+    /// `pub(crate)`: the only legitimate caller is the conversion of a
+    /// [`DispatchOutcome`](crate::runtime::DispatchOutcome), which holds the
+    /// tier of the current session. A command sink has no reason to know the
+    /// tier — and therefore no way to get the tier wrong.
     pub(crate) fn redact(tier: PrivacyTier, class: ErrorClass, message: &str) -> Self {
         Self {
             tier,
@@ -109,38 +106,39 @@ impl FailureReport {
         }
     }
 
-    /// La famille de l'erreur. Elle survit au filtrage : c'est une donnée, pas
-    /// une déduction faite sur un message.
+    /// The error's class. It survives the filtering: it is data, not a
+    /// deduction made from a message.
     #[must_use]
     pub const fn class(&self) -> ErrorClass {
         self.class
     }
 
-    /// L'opération est-elle rejouable telle quelle ?
+    /// Can the operation be replayed as is?
     ///
-    /// Dérivé de la classe, donc jamais en contradiction avec elle : une erreur
-    /// ambiguë ne se retente pas, filtrée ou non ([I-13](../../../CLAUDE.md#i-13)).
+    /// Derived from the class, hence never in contradiction with it: an
+    /// ambiguous error is not retried, filtered or not
+    /// ([I-13](../../../CLAUDE.md#i-13)).
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
         self.class.is_retryable()
     }
 
-    /// Le code identifiant retenu, quand il y en avait un.
+    /// The identifying code kept, when there was one.
     #[must_use]
     pub fn code(&self) -> Option<&str> {
         self.code.as_deref()
     }
 
-    /// Le message du serveur, quand le niveau l'autorise.
+    /// The server's message, when the tier allows it.
     ///
-    /// `None` n'est pas « il n'y avait pas de message » : c'est « le niveau ne
-    /// le laisse pas sortir ».
+    /// `None` is not "there was no message": it is "the tier does not let it
+    /// out".
     #[must_use]
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
     }
 
-    /// Le niveau appliqué à cet échec.
+    /// The tier applied to this failure.
     #[must_use]
     pub const fn tier(&self) -> PrivacyTier {
         self.tier
@@ -148,10 +146,10 @@ impl FailureReport {
 }
 
 impl fmt::Display for FailureReport {
-    /// Le corps destiné au modèle, **en anglais** : c'est une invite.
+    /// The body meant for the model, **in English**: it is a prompt.
     ///
-    /// Un seul rendu, ici : [`ToolOutcome::render`](crate::ToolOutcome::render)
-    /// s'appuie dessus plutôt que de composer un second texte qui divergerait.
+    /// A single rendering, here: [`ToolOutcome::render`](crate::ToolOutcome::render)
+    /// relies on it rather than composing a second text that would diverge.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "class: {}", class_label(self.class))?;
         writeln!(f, "retryable: {}", self.is_retryable())?;
@@ -160,8 +158,8 @@ impl fmt::Display for FailureReport {
         }
         match &self.detail {
             Some(message) => write!(f, "error: {message}"),
-            // Dire que le message existe et qu'il n'est pas disponible : un
-            // modèle à qui il manque une information la comble en l'inventant.
+            // Say that the message exists and is not available: a model missing
+            // a piece of information fills it by inventing it.
             None => write!(
                 f,
                 "error: withheld — this connection's privacy tier (`{}`) keeps server messages \
@@ -173,16 +171,15 @@ impl fmt::Display for FailureReport {
     }
 }
 
-/// Le nom d'une famille d'erreur, pour un modèle.
+/// The name of an error class, for a model.
 ///
-/// Distinct de [`ErrorClass::as_str`], qui est exhaustif par construction :
-/// ici le bras `_` rend `unknown`, parce que ce texte traverse la frontière IA
-/// et qu'une famille inconnue ne doit pas y être annoncée comme retentable.
+/// Distinct from [`ErrorClass::as_str`], which is exhaustive by construction:
+/// here the `_` arm returns `unknown`, because this text crosses the AI
+/// boundary and an unknown class must not be announced there as retryable.
 ///
-/// Le bras `_` n'est pas un relâchement : [`ErrorClass`] est
-/// `#[non_exhaustive]`, et une famille que cette crate ne connaît pas encore ne
-/// doit pas être annoncée retentable ou définitive par défaut — `unknown` est la
-/// seule réponse honnête.
+/// The `_` arm is not a loosening: [`ErrorClass`] is `#[non_exhaustive]`, and a
+/// class this crate does not know yet must not be announced retryable or final
+/// by default — `unknown` is the only honest answer.
 const fn class_label(class: ErrorClass) -> &'static str {
     match class {
         ErrorClass::Transient => "transient",
@@ -192,20 +189,19 @@ const fn class_label(class: ErrorClass) -> &'static str {
     }
 }
 
-/// Le code identifiant porté par un message, quand il est reconnaissable.
+/// The identifying code carried by a message, when it is recognizable.
 ///
-/// Deux formes seulement, toutes deux **marquées** dans le texte : un SQLSTATE
-/// PostgreSQL et un code de résultat SQLite. Chercher un motif non marqué —
-/// « cinq caractères majuscules quelque part » — rapporterait des noms de
-/// tables et des fragments de valeurs.
+/// Only two forms, both **marked** in the text: a PostgreSQL SQLSTATE and an
+/// SQLite result code. Looking for an unmarked pattern — "five uppercase
+/// characters somewhere" — would report table names and fragments of values.
 ///
-/// # La réserve à connaître
+/// # The caveat to know
 ///
-/// Un serveur hostile peut écrire `SQLSTATE ABCDE` dans son message et faire
-/// ainsi sortir cinq caractères de son choix par échec. C'est le prix de garder
-/// le seul identifiant qu'un professionnel utilise réellement pour diagnostiquer
-/// — et le canal est borné : cinq caractères d'un alphabet de trente-six, une
-/// fois par appel d'outil, dans un flux que l'utilisateur voit.
+/// A hostile server can write `SQLSTATE ABCDE` in its message and thus let
+/// five characters of its choice out per failure. It is the price of keeping
+/// the only identifier a professional really uses to diagnose — and the
+/// channel is bounded: five characters from a thirty-six-letter alphabet, once
+/// per tool call, in a stream the user sees.
 fn safe_code(message: &str) -> Option<String> {
     if let Some(code) = sqlstate(message) {
         return Some(format!("SQLSTATE {code}"));
@@ -213,7 +209,7 @@ fn safe_code(message: &str) -> Option<String> {
     sqlite_code(message).map(|code| format!("SQLite error code {code}"))
 }
 
-/// Le SQLSTATE qui suit le marqueur, s'il a exactement la forme attendue.
+/// The SQLSTATE following the marker, if it has exactly the expected shape.
 fn sqlstate(message: &str) -> Option<String> {
     let (_, rest) = message.split_once(SQLSTATE_MARKER)?;
     let code: String = rest
@@ -221,20 +217,20 @@ fn sqlstate(message: &str) -> Option<String> {
         .take(SQLSTATE_LEN)
         .filter(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
         .collect();
-    // `chars().count()` et non `len()` : le filtre a pu écarter des caractères,
-    // et un code amputé n'est pas un code.
+    // `chars().count()` and not `len()`: the filter may have dropped
+    // characters, and a truncated code is not a code.
     if code.chars().count() != SQLSTATE_LEN {
         return None;
     }
-    // Ce qui suit doit fermer le jeton : `SQLSTATE 42P01X` n'est pas un
-    // SQLSTATE, c'est le début d'autre chose.
+    // What follows must close the token: `SQLSTATE 42P01X` is not an SQLSTATE,
+    // it is the start of something else.
     match rest.chars().nth(SQLSTATE_LEN) {
-        Some(suivant) if suivant.is_ascii_alphanumeric() => None,
+        Some(next_char) if next_char.is_ascii_alphanumeric() => None,
         _ => Some(code),
     }
 }
 
-/// Le code de résultat SQLite qui suit le marqueur, s'il est numérique.
+/// The SQLite result code following the marker, if it is numeric.
 fn sqlite_code(message: &str) -> Option<String> {
     let (_, rest) = message.split_once(SQLITE_MARKER)?;
     let code: String = rest
@@ -249,89 +245,94 @@ fn sqlite_code(message: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Le message que PostgreSQL rend sur une violation de contrainte unique :
-    /// il recopie la valeur de la ligne.
+    /// The message PostgreSQL returns on a unique constraint violation: it
+    /// copies the row's value.
     const MESSAGE_HOSTILE: &str = "duplicate key value violates unique constraint \
                                    \"clients_email_key\" DETAIL: Key (email)=\
                                    (dupont@example.com) already exists. \
                                    (SQLSTATE 23505) iban=FR7630006000011234567890189";
 
     #[test]
-    fn sous_local_et_metadata_le_message_du_serveur_n_est_pas_meme_stocke() {
-        for niveau in [PrivacyTier::Local, PrivacyTier::Metadata] {
-            let rapport = FailureReport::redact(niveau, ErrorClass::Permanent, MESSAGE_HOSTILE);
-            assert_eq!(rapport.detail(), None, "{niveau}");
+    fn under_local_and_metadata_the_server_message_is_not_even_stored() {
+        for tier in [PrivacyTier::Local, PrivacyTier::Metadata] {
+            let report = FailureReport::redact(tier, ErrorClass::Permanent, MESSAGE_HOSTILE);
+            assert_eq!(report.detail(), None, "{tier}");
 
-            let affiche = rapport.to_string();
-            let debogue = format!("{rapport:?}");
-            for rendu in [&affiche, &debogue] {
-                assert!(!rendu.contains("dupont@example.com"), "{niveau} : {rendu}");
-                assert!(!rendu.contains("FR76"), "{niveau} : {rendu}");
-                assert!(!rendu.contains("clients_email_key"), "{niveau} : {rendu}");
+            let displayed = report.to_string();
+            let debug_rendering = format!("{report:?}");
+            for rendered in [&displayed, &debug_rendering] {
+                assert!(
+                    !rendered.contains("dupont@example.com"),
+                    "{tier}: {rendered}"
+                );
+                assert!(!rendered.contains("FR76"), "{tier}: {rendered}");
+                assert!(
+                    !rendered.contains("clients_email_key"),
+                    "{tier}: {rendered}"
+                );
             }
-            // Ce qui reste doit rester utile : sinon le modèle réessaie à
-            // l'aveugle la même instruction.
-            assert!(affiche.contains("SQLSTATE 23505"), "{affiche}");
-            assert!(affiche.contains("class: permanent"), "{affiche}");
-            assert!(affiche.contains("retryable: false"), "{affiche}");
+            // What remains must stay useful: otherwise the model blindly retries
+            // the same statement.
+            assert!(displayed.contains("SQLSTATE 23505"), "{displayed}");
+            assert!(displayed.contains("class: permanent"), "{displayed}");
+            assert!(displayed.contains("retryable: false"), "{displayed}");
         }
     }
 
     #[test]
-    fn sous_sampled_le_message_arrive_entier() {
-        // Le test négatif qui donne son sens au précédent : sans lui, tout
-        // pourrait être masqué en permanence sans que rien ne le signale.
-        let rapport =
+    fn under_sampled_the_message_arrives_whole() {
+        // The negative test that gives the previous one its meaning: without it,
+        // everything could be masked permanently without anything reporting it.
+        let report =
             FailureReport::redact(PrivacyTier::Sampled, ErrorClass::Permanent, MESSAGE_HOSTILE);
-        assert_eq!(rapport.detail(), Some(MESSAGE_HOSTILE));
-        assert!(rapport.to_string().contains("dupont@example.com"));
+        assert_eq!(report.detail(), Some(MESSAGE_HOSTILE));
+        assert!(report.to_string().contains("dupont@example.com"));
     }
 
     #[test]
-    fn la_classe_et_la_retentabilite_survivent_au_filtrage() {
-        // I-13 : une erreur ambiguë ne se retente jamais, filtrée ou non. La
-        // retentabilité est dérivée de la classe, donc elles ne peuvent pas
-        // diverger.
-        let transitoire = FailureReport::redact(
+    fn class_and_retryability_survive_the_filtering() {
+        // I-13: an ambiguous error is never retried, filtered or not. The
+        // retryability is derived from the class, so they cannot diverge.
+        let transient = FailureReport::redact(
             PrivacyTier::Metadata,
             ErrorClass::Transient,
             "server closed the connection unexpectedly",
         );
-        assert_eq!(transitoire.class(), ErrorClass::Transient);
-        assert!(transitoire.is_retryable());
-        assert!(transitoire.to_string().contains("retryable: true"));
+        assert_eq!(transient.class(), ErrorClass::Transient);
+        assert!(transient.is_retryable());
+        assert!(transient.to_string().contains("retryable: true"));
 
-        let ambigue = FailureReport::redact(
+        let ambiguous = FailureReport::redact(
             PrivacyTier::Metadata,
             ErrorClass::Ambiguous,
             "timed out after 30s",
         );
-        assert_eq!(ambigue.class(), ErrorClass::Ambiguous);
+        assert_eq!(ambiguous.class(), ErrorClass::Ambiguous);
         assert!(
-            !ambigue.is_retryable(),
-            "le serveur a peut-être appliqué l'écriture"
+            !ambiguous.is_retryable(),
+            "the server may have applied the write"
         );
-        assert!(ambigue.to_string().contains("class: ambiguous"));
+        assert!(ambiguous.to_string().contains("class: ambiguous"));
     }
 
     #[test]
-    fn un_niveau_qui_masque_le_dit_au_modele() {
-        let rapport = FailureReport::redact(
+    fn a_masking_tier_tells_the_model() {
+        let report = FailureReport::redact(
             PrivacyTier::Metadata,
             ErrorClass::Permanent,
             "boom (email=x)",
         );
-        let rendu = rapport.to_string();
-        assert!(rendu.contains("withheld"), "{rendu}");
-        assert!(rendu.contains("`metadata`"), "{rendu}");
+        let rendered = report.to_string();
+        assert!(rendered.contains("withheld"), "{rendered}");
+        assert!(rendered.contains("`metadata`"), "{rendered}");
         assert!(
-            rendu.contains("Do not guess"),
-            "un modèle privé d'information l'invente : {rendu}"
+            rendered.contains("Do not guess"),
+            "a model deprived of information invents it: {rendered}"
         );
     }
 
     #[test]
-    fn seuls_les_codes_marques_survivent() {
+    fn only_marked_codes_survive() {
         assert_eq!(
             safe_code("… (SQLSTATE 42P01)").as_deref(),
             Some("SQLSTATE 42P01")
@@ -340,31 +341,31 @@ mod tests {
             safe_code("Error code 19: constraint failed: UNIQUE constraint failed").as_deref(),
             Some("SQLite error code 19")
         );
-        // Un nom de table de cinq majuscules n'est pas un code : sans marqueur,
-        // rien n'est retenu.
+        // A five-uppercase table name is not a code: without a marker, nothing
+        // is kept.
         assert_eq!(safe_code("relation \"USERS\" does not exist"), None);
         assert_eq!(safe_code("Key (email)=(dupont@example.com)"), None);
     }
 
     #[test]
-    fn un_code_mal_forme_n_est_pas_repris() {
-        // Le marqueur ne suffit pas : ce qui le suit doit avoir la forme d'un
-        // code, sinon un serveur hostile ferait passer du texte pour un code.
-        assert_eq!(safe_code("SQLSTATE 42p0"), None, "trop court");
-        assert_eq!(safe_code("SQLSTATE 42P01X"), None, "jeton non fermé");
-        assert_eq!(safe_code("SQLSTATE dupont"), None, "minuscules");
-        assert_eq!(safe_code("Error code : none"), None, "pas de chiffre");
+    fn a_malformed_code_is_not_taken_over() {
+        // The marker is not enough: what follows must have the shape of a code,
+        // otherwise a hostile server would pass text off as a code.
+        assert_eq!(safe_code("SQLSTATE 42p0"), None, "too short");
+        assert_eq!(safe_code("SQLSTATE 42P01X"), None, "token not closed");
+        assert_eq!(safe_code("SQLSTATE dupont"), None, "lowercase");
+        assert_eq!(safe_code("Error code : none"), None, "no digit");
         assert_eq!(
             safe_code("Error code 12345678: x").as_deref(),
             Some("SQLite error code 1234"),
-            "borné à quatre chiffres"
+            "bounded to four digits"
         );
     }
 
     #[test]
-    fn un_message_vide_ne_produit_pas_de_code() {
-        let rapport = FailureReport::redact(PrivacyTier::Metadata, ErrorClass::Permanent, "");
-        assert_eq!(rapport.code(), None);
-        assert!(!rapport.to_string().contains("code:"));
+    fn an_empty_message_produces_no_code() {
+        let report = FailureReport::redact(PrivacyTier::Metadata, ErrorClass::Permanent, "");
+        assert_eq!(report.code(), None);
+        assert!(!report.to_string().contains("code:"));
     }
 }

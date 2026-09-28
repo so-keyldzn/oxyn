@@ -1,26 +1,26 @@
-//! La porte par laquelle les agents atteignent l'exécution — **la même que
-//! l'interface**.
+//! The door through which agents reach execution — **the same as the
+//! interface's**.
 //!
-//! Le runtime d'agents (`oxyn-ai`) confie ses commandes à un `CommandSink`.
-//! [`ExecutorSink`] est ce à quoi ce puits se branche : il n'appelle rien
-//! d'autre que [`Executor::dispatch`], la méthode que l'interface appelle
-//! elle-même. Il n'existe donc pas de seconde API « pour l'IA » à auditer
-//! séparément — c'est tout l'objet d'ADR-0004, et c'est ce qui rend la
-//! promesse tenable : un agent ne peut rien faire d'inaccessible à
-//! l'utilisateur, et tout ce qu'il fait apparaît dans le même journal.
+//! The agent runtime (`oxyn-ai`) hands its commands to a `CommandSink`.
+//! [`ExecutorSink`] is what this sink plugs into: it calls nothing but
+//! [`Executor::dispatch`], the method the interface calls itself. There is
+//! therefore no second API "for the AI" to audit separately — that is the
+//! whole point of ADR-0004, and it is what makes the promise tenable: an agent
+//! can do nothing the user cannot reach, and everything it does appears in the
+//! same log.
 //!
-//! # Pourquoi ce module n'implémente pas littéralement `CommandSink`
+//! # Why this module does not literally implement `CommandSink`
 //!
-//! `oxyn-ai` n'est **pas** au contrat de dépendances d'`oxyn-exec` (voir son
-//! `Cargo.toml`), et le contrat de dépendances est un choix d'architecture
-//! arrêté. Le trait ne peut donc pas être implémenté ici. Ce module fournit
-//! l'exécution complète et un [`DispatchReport`] dont la forme est celle de
-//! `DispatchOutcome`, pour que le câblage dans `oxyn-desktop` — qui dépend des
-//! deux — soit une traduction sans logique :
+//! `oxyn-ai` is **not** in `oxyn-exec`'s dependency contract (see its
+//! `Cargo.toml`), and the dependency contract is a settled architecture
+//! choice. The trait therefore cannot be implemented here. This module provides
+//! the complete execution and a [`DispatchReport`] shaped like
+//! `DispatchOutcome`, so that the wiring in `oxyn-desktop` — which depends on
+//! both — is a translation without logic:
 //!
 //! ```ignore
 //! #[async_trait]
-//! impl CommandSink for MonPuits {
+//! impl CommandSink for MySink {
 //!     async fn dispatch(&self, actor: Actor, command: Command, cancel: &CancelToken)
 //!         -> DispatchOutcome
 //!     {
@@ -43,25 +43,24 @@
 //! }
 //! ```
 //!
-//! Le puits rend des **faits**, jamais un texte déjà filtré : il ne mentionne ni
-//! `ToolOutcome` ni le niveau de confidentialité. C'est le runtime IA qui
-//! applique celui-ci, parce qu'il appartient à la connexion et que lui seul le
-//! connaît ([I-04](../../../CLAUDE.md#i-04)). Un puits qui filtrerait de son
-//! côté serait un second endroit où l'oublier.
+//! The sink returns **facts**, never an already filtered text: it mentions
+//! neither `ToolOutcome` nor the privacy tier. It is the AI runtime that
+//! applies the latter, because it belongs to the connection and only the
+//! runtime knows it ([I-04](../../../CLAUDE.md#i-04)). A sink that filtered on
+//! its side would be a second place to forget it.
 //!
-//! Les quatre règles du contrat de `CommandSink` sont tenues par
-//! [`Executor::dispatch`] lui-même : reclassification avant décision, `Actor`
-//! transmis sans modification, journalisation du refus compris, annulation
-//! propagée jusqu'au serveur.
+//! The four rules of the `CommandSink` contract are held by
+//! [`Executor::dispatch`] itself: reclassification before decision, `Actor`
+//! passed without modification, logging including denials, cancellation
+//! propagated down to the server.
 //!
-//! # Ce que ce puits ajoute
+//! # What this sink adds
 //!
-//! Une seule chose, et elle n'est pas cosmétique :
-//! [`ExecutorSink::for_agent`] **refuse** toute commande dont l'acteur n'est
-//! pas l'agent auquel le puits est attaché. Un puits d'agent qui laisserait
-//! passer `Actor::Human` offrirait à un agent le moyen de se faire passer pour
-//! l'utilisateur, et donc d'échapper à toute la moitié « agent » de la matrice
-//! de politique.
+//! One thing only, and it is not cosmetic:
+//! [`ExecutorSink::for_agent`] **refuses** any command whose actor is not the
+//! agent the sink is attached to. An agent sink that let `Actor::Human`
+//! through would offer an agent the means to impersonate the user, and
+//! therefore to escape the whole "agent" half of the policy matrix.
 
 use std::fmt;
 use std::sync::Arc;
@@ -73,104 +72,102 @@ use oxyn_core::{
 
 use crate::executor::{Executor, Outcome};
 
-/// Ce qu'il faut dire au modèle d'une commande qu'il a demandée.
+/// What to tell the model about a command it requested.
 ///
-/// Volontairement pauvre : le modèle apprend ce qui s'est passé, jamais les
-/// lignes. Les résultats vivent en `RecordBatch` dans le tampon et sont montrés
-/// à l'**utilisateur** ; les faire transiter par la conversation les enverrait
-/// chez le fournisseur, ce que le niveau de confidentialité de la connexion
-/// n'autorise pas nécessairement (I-04).
+/// Deliberately poor: the model learns what happened, never the rows. Results
+/// live as `RecordBatch`es in the buffer and are shown to the **user**;
+/// passing them through the conversation would send them to the provider,
+/// which the connection's privacy tier does not necessarily allow (I-04).
 ///
-/// Il n'y a **pas** de variante d'erreur qui interrompt la conversation : un
-/// échec d'exécution est une réponse à donner au modèle, pas un incident.
+/// There is **no** error variant that interrupts the conversation: an
+/// execution failure is an answer to give the model, not an incident.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DispatchReport {
-    /// La commande a produit un effet.
+    /// The command produced an effect.
     Completed {
-        /// La commande, pour corréler avec le journal.
+        /// The command, to correlate with the log.
         command: CommandId,
-        /// Ce qu'il faut en dire, **en anglais** : c'est une invite, pas un
-        /// message d'interface.
+        /// What to say about it, **in English**: it is a prompt, not an
+        /// interface message.
         summary: String,
-        /// Les mesures, quand la commande en produit — une exécution en
-        /// produit, une ouverture de document non.
+        /// The measurements, when the command produces some — an execution
+        /// produces some, opening a document does not.
         stats: Option<ExecStats>,
-        /// Le résultat retenu par l'ordonnanceur, quand la commande en produit
-        /// un : c'est ce qui permet de montrer les lignes **à l'utilisateur**,
-        /// par le même chemin que la grille d'une console.
+        /// The result retained by the executor, when the command produces one:
+        /// it is what lets the rows be shown **to the user**, through the same
+        /// path as a console's grid.
         ///
-        /// Il ne dit rien au modèle et ne doit jamais lui parvenir : le
-        /// câblage vers `DispatchOutcome` l'ignore, et c'est voulu
+        /// It tells the model nothing and must never reach it: the wiring to
+        /// `DispatchOutcome` ignores it, on purpose
         /// ([I-04](../../../CLAUDE.md#i-04)).
         result: Option<ResultId>,
     },
 
-    /// Le catalogue local a été lu : la poignée du cache, pas un rendu.
+    /// The local catalog was read: the cache handle, not a rendering.
     ///
-    /// Ce que le modèle en apprend est décidé par `oxyn-ai`, sous le niveau
-    /// de la connexion ([I-04](../../../CLAUDE.md#i-04)) : ce rapport porte
-    /// les faits, il ne rend rien.
+    /// What the model learns from it is decided by `oxyn-ai`, under the
+    /// connection's tier ([I-04](../../../CLAUDE.md#i-04)): this report carries
+    /// the facts, it renders nothing.
     CatalogRead {
-        /// La commande.
+        /// The command.
         command: CommandId,
-        /// Le cache de la connexion.
+        /// The connection's cache.
         catalog: oxyn_catalog::CatalogHandle,
     },
 
-    /// **Rien ne s'est exécuté.** L'utilisateur a été sollicité et n'a pas
-    /// encore répondu.
+    /// **Nothing was executed.** The user was asked and has not answered
+    /// yet.
     AwaitingApproval {
-        /// La commande mise de côté ; c'est sous cet identifiant que l'accord
-        /// se donnera.
+        /// The command set aside; it is under this identifier that the approval
+        /// will be given.
         command: CommandId,
-        /// Le motif, tel que le `PolicyGate` l'a rédigé.
+        /// The reason, as the `PolicyGate` wrote it.
         reason: String,
     },
 
-    /// **Rien ne s'est exécuté**, et aucune confirmation ne débloquera la
-    /// commande.
+    /// **Nothing was executed**, and no confirmation will unblock the
+    /// command.
     Denied {
-        /// La commande refusée.
+        /// The denied command.
         command: CommandId,
-        /// Le motif, tel que le `PolicyGate` l'a rédigé.
+        /// The reason, as the `PolicyGate` wrote it.
         reason: String,
     },
 
-    /// L'exécution a échoué.
+    /// The execution failed.
     Failed {
-        /// La commande.
+        /// The command.
         command: CommandId,
-        /// La famille de l'erreur, portée comme **donnée**.
+        /// The error's family, carried as **data**.
         ///
-        /// Sans elle, un appelant devrait la redeviner à partir du message —
-        /// ce que le contrat de driver interdit explicitement, parce qu'un
-        /// message change et qu'un appelant qui l'analysait casse en silence
+        /// Without it, a caller would have to guess it again from the message —
+        /// which the driver contract explicitly forbids, because a message
+        /// changes and a caller that parsed it breaks silently
         /// ([DRIVER-CONTRACT §4](../../../docs/DRIVER-CONTRACT.md)).
         class: ErrorClass,
-        /// Le message, tel qu'il sera montré **à l'utilisateur** : celui du
-        /// serveur, code compris.
+        /// The message, as it will be shown **to the user**: the server's,
+        /// code included.
         ///
-        /// Ce qu'un agent en voit est une autre question, et elle ne se décide
-        /// pas ici : le niveau de confidentialité appartient à la connexion, et
-        /// c'est le runtime IA qui l'applique ([I-04](../../../CLAUDE.md#i-04)).
-        /// Ce rapport porte les faits ; il ne filtre pas.
+        /// What an agent sees of it is another question, and it is not decided
+        /// here: the privacy tier belongs to the connection, and it is the AI
+        /// runtime that applies it ([I-04](../../../CLAUDE.md#i-04)). This
+        /// report carries the facts; it does not filter.
         error: String,
     },
 }
 
 impl DispatchReport {
-    /// La commande a-t-elle réellement produit un effet ?
+    /// Did the command really produce an effect?
     ///
-    /// `false` pour une approbation en attente. Le piège qu'elle ferme : un
-    /// modèle qui suppose que son `INSERT` a eu lieu et enchaîne sur cette
-    /// hypothèse.
+    /// `false` for a pending approval. The trap it closes: a model that assumes
+    /// its `INSERT` took place and builds on that assumption.
     #[must_use]
     pub const fn took_effect(&self) -> bool {
         matches!(self, Self::Completed { .. } | Self::CatalogRead { .. })
     }
 
-    /// La commande qui a produit ce rapport.
+    /// The command that produced this report.
     #[must_use]
     pub const fn command(&self) -> CommandId {
         match self {
@@ -182,23 +179,23 @@ impl DispatchReport {
         }
     }
 
-    /// Le rapport d'une commande que l'utilisateur a approuvée : ce que
-    /// [`Executor::approve`] a rendu, dit comme [`ExecutorSink::dispatch`]
-    /// l'aurait dit si elle était partie sans attendre.
+    /// The report of a command the user approved: what
+    /// [`Executor::approve`] returned, said as [`ExecutorSink::dispatch`]
+    /// would have said it had it gone without waiting.
     ///
-    /// Pour l'appel d'agent qui attendait cette décision : il rend au modèle
-    /// ce que la commande a réellement fait, sous la même forme que toute
-    /// autre. Une seconde traduction, écrite pour ce seul cas, dirait tôt ou
-    /// tard autre chose au modèle.
+    /// For the agent call that was waiting for this decision: it returns to the
+    /// model what the command really did, in the same form as any other. A
+    /// second translation, written for this case alone, would sooner or later
+    /// tell the model something else.
     #[must_use]
     pub fn decided(command: CommandId, decided: &oxyn_core::Result<Outcome>) -> Self {
         match decided {
             Ok(outcome) => Self::from_outcome(command, outcome),
-            Err(erreur) => Self::from_error(command, erreur),
+            Err(error) => Self::from_error(command, error),
         }
     }
 
-    /// Traduit une issue d'exécution.
+    /// Translates an execution outcome.
     #[must_use]
     fn from_outcome(command: CommandId, outcome: &Outcome) -> Self {
         match outcome {
@@ -211,9 +208,9 @@ impl DispatchReport {
                 let (result, stats) = (*result, *stats);
                 let mut summary = format!("{} rows, {} batches", stats.rows, stats.batches);
                 if stats.truncated || sink.is_truncated() {
-                    // Dit explicitement au modèle que ce n'est pas tout : un
-                    // résultat tronqué qui a l'air complet conduit à des
-                    // conclusions fausses sur des données réelles.
+                    // Tells the model explicitly that this is not everything: a
+                    // truncated result that looks complete leads to wrong
+                    // conclusions about real data.
                     summary.push_str(" (truncated; this is not the whole result)");
                 }
                 Self::Completed {
@@ -241,16 +238,16 @@ impl DispatchReport {
                 reason: reason.clone(),
             },
 
-            autre => Self::Completed {
+            other => Self::Completed {
                 command,
-                summary: summarize(autre),
+                summary: summarize(other),
                 stats: None,
                 result: None,
             },
         }
     }
 
-    /// Traduit une panne.
+    /// Translates a failure.
     #[must_use]
     fn from_error(command: CommandId, error: &OxynError) -> Self {
         Self::Failed {
@@ -261,7 +258,7 @@ impl DispatchReport {
     }
 }
 
-/// Résume une issue sans mesures, **en anglais** : c'est une invite.
+/// Summarizes an outcome without measurements, **in English**: it is a prompt.
 fn summarize(outcome: &Outcome) -> String {
     match outcome {
         Outcome::Connected { .. } => "session opened".to_owned(),
@@ -285,30 +282,30 @@ fn summarize(outcome: &Outcome) -> String {
                 "no such connection".to_owned()
             }
         }
-        // Les trois autres variantes sont traitées avant d'arriver ici ; le
-        // rendu générique évite un `unreachable!` sur un chemin qu'un ajout de
-        // variante pourrait rendre atteignable.
+        // The three other variants are handled before getting here; the
+        // generic rendering avoids an `unreachable!` on a path that adding a
+        // variant could make reachable.
         _ => "done".to_owned(),
     }
 }
 
-/// Le puits de commandes d'un agent.
+/// An agent's command sink.
 ///
-/// Ne fait **rien** d'autre que d'appeler [`Executor::dispatch`] et de traduire
-/// l'issue. C'est délibérément un objet sans logique : toute règle qui vivrait
-/// ici serait une règle que l'interface n'applique pas.
+/// Does **nothing** but call [`Executor::dispatch`] and translate the outcome.
+/// It is deliberately an object without logic: any rule living here would be
+/// a rule the interface does not apply.
 pub struct ExecutorSink {
     executor: Arc<Executor>,
-    /// L'agent auquel ce puits est attaché, s'il l'est. Une commande venue d'un
-    /// autre acteur est alors refusée.
+    /// The agent this sink is attached to, if it is. A command coming from
+    /// another actor is then refused.
     bound: Option<(AgentId, AgentSessionId)>,
 }
 
 impl ExecutorSink {
-    /// Puits ouvert : l'acteur reçu est transmis tel quel.
+    /// Open sink: the received actor is passed as is.
     ///
-    /// À réserver au câblage général — un puits attaché à un agent précis
-    /// ([`for_agent`](Self::for_agent)) refuse une usurpation, celui-ci non.
+    /// To be kept for general wiring — a sink attached to a specific agent
+    /// ([`for_agent`](Self::for_agent)) refuses impersonation, this one does not.
     #[must_use]
     pub fn new(executor: Arc<Executor>) -> Self {
         Self {
@@ -317,12 +314,12 @@ impl ExecutorSink {
         }
     }
 
-    /// Puits attaché à un agent et à sa conversation.
+    /// Sink attached to an agent and its conversation.
     ///
-    /// Toute commande portant un autre acteur — `Actor::Human` compris — est
-    /// **refusée sans atteindre l'ordonnanceur**. C'est la barrière qui empêche
-    /// un agent de se présenter comme l'utilisateur, et donc d'échapper à la
-    /// moitié « agent » de la matrice de politique.
+    /// Any command carrying another actor — `Actor::Human` included — is
+    /// **refused without reaching the executor**. It is the barrier that keeps
+    /// an agent from presenting itself as the user, and therefore from escaping
+    /// the "agent" half of the policy matrix.
     #[must_use]
     pub fn for_agent(executor: Arc<Executor>, agent: AgentId, session: AgentSessionId) -> Self {
         Self {
@@ -331,42 +328,42 @@ impl ExecutorSink {
         }
     }
 
-    /// L'ordonnanceur derrière ce puits.
+    /// The executor behind this sink.
     #[must_use]
     pub fn executor(&self) -> &Arc<Executor> {
         &self.executor
     }
 
-    /// Soumet une commande et rend ce qu'il faut en dire au modèle.
+    /// Submits a command and returns what to tell the model about it.
     ///
-    /// Ne rend pas de `Result` : un échec d'exécution **est** une réponse
-    /// ([`DispatchReport::Failed`]), pas un incident qui interrompt la
-    /// conversation. Ce qui l'interrompt vient du fournisseur, pas de la base.
+    /// Returns no `Result`: an execution failure **is** an answer
+    /// ([`DispatchReport::Failed`]), not an incident that interrupts the
+    /// conversation. What interrupts it comes from the provider, not the database.
     pub async fn dispatch(
         &self,
         actor: Actor,
         command: Command,
         cancel: &CancelToken,
     ) -> DispatchReport {
-        // L'identifiant est frappé ici pour que le rapport le porte, y compris
-        // quand rien n'atteint l'ordonnanceur : c'est la clé de corrélation
-        // avec le journal.
+        // The identifier is minted here so that the report carries it, including
+        // when nothing reaches the executor: it is the correlation key with the
+        // log.
         let id = CommandId::new();
-        if let Some(refus) = self.reject_impersonation(id, &actor) {
-            return refus;
+        if let Some(refusal) = self.reject_impersonation(id, &actor) {
+            return refusal;
         }
 
         match self.executor.dispatch_as(id, actor, command, cancel).await {
             Ok(outcome) => DispatchReport::from_outcome(id, &outcome),
-            Err(erreur) => DispatchReport::from_error(id, &erreur),
+            Err(error) => DispatchReport::from_error(id, &error),
         }
     }
 
-    /// Refuse une commande dont l'acteur n'est pas celui du puits.
+    /// Refuses a command whose actor is not the sink's.
     fn reject_impersonation(&self, id: CommandId, actor: &Actor) -> Option<DispatchReport> {
         let (agent, session) = self.bound?;
-        let attendu = Actor::agent(agent, session);
-        if *actor == attendu {
+        let expected = Actor::agent(agent, session);
+        if *actor == expected {
             return None;
         }
         Some(DispatchReport::Denied {
@@ -399,31 +396,31 @@ mod tests {
 
     use super::*;
 
-    fn banc(connexion: &ConnectionConfig) -> Arc<Executor> {
-        let store = Arc::new(Store::open_in_memory().expect("état local en mémoire"));
-        let atelier = store.workspaces().create("tests").expect("workspace");
+    fn harness(connection: &ConnectionConfig) -> Arc<Executor> {
+        let store = Arc::new(Store::open_in_memory().expect("in-memory local state"));
+        let setup = store.workspaces().create("tests").expect("workspace");
         store
             .connections()
-            .save(atelier.id, connexion)
-            .expect("connexion");
+            .save(setup.id, connection)
+            .expect("connection");
 
-        let politique = Arc::new(DefaultPolicy::new());
-        politique.register(connexion);
-        let politique: Arc<dyn PolicyGate> = politique;
+        let policy = Arc::new(DefaultPolicy::new());
+        policy.register(connection);
+        let policy: Arc<dyn PolicyGate> = policy;
 
-        let executeur = Executor::builder(store, politique)
-            .with_workspace(atelier.id)
+        let exec = Executor::builder(store, policy)
+            .with_workspace(setup.id)
             .build();
-        executeur.register_connection(connexion);
-        Arc::new(executeur)
+        exec.register_connection(connection);
+        Arc::new(exec)
     }
 
-    fn execution(connexion: ConnectionId, texte: &str) -> Command {
+    fn execution(conn: ConnectionId, text: &str) -> Command {
         Command::Execute {
-            connection: connexion,
+            connection: conn,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), texte).with_limits(
+                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), text).with_limits(
                     ExecLimits::default()
                         .writable()
                         .with_timeout(None::<Duration>),
@@ -433,90 +430,84 @@ mod tests {
     }
 
     #[test]
-    fn un_agent_ne_peut_pas_se_faire_passer_pour_l_utilisateur() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+    fn an_agent_cannot_impersonate_the_user() {
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let puits =
-            ExecutorSink::for_agent(banc(&connexion), AgentId::new(), AgentSessionId::new());
+        let sink =
+            ExecutorSink::for_agent(harness(&connection), AgentId::new(), AgentSessionId::new());
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::Human,
-            execution(connexion.id, "DELETE FROM clients"),
+            execution(connection.id, "DELETE FROM clients"),
             &CancelToken::new(),
         ));
 
         assert!(
-            matches!(rapport, DispatchReport::Denied { .. }),
-            "{rapport:?}"
+            matches!(report, DispatchReport::Denied { .. }),
+            "{report:?}"
         );
-        assert!(!rapport.took_effect());
-        // Et rien n'a atteint l'ordonnanceur : le journal est vide.
-        assert_eq!(
-            puits
-                .executor()
-                .store()
-                .journal()
-                .count()
-                .expect("comptage"),
-            0
-        );
+        assert!(!report.took_effect());
+        // And nothing reached the executor: the log is empty.
+        assert_eq!(sink.executor().store().journal().count().expect("count"), 0);
     }
 
     #[test]
-    fn le_puits_passe_par_le_meme_dispatch_que_l_interface() {
-        // La preuve : un agent qui demande un DELETE en production reçoit un
-        // refus rédigé par le `PolicyGate`, et le journal en garde la trace —
-        // exactement comme si l'interface avait soumis la commande.
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+    fn the_sink_goes_through_the_same_dispatch_as_the_interface() {
+        // The proof: an agent asking for a DELETE in production receives a
+        // denial written by the `PolicyGate`, and the log keeps its trace —
+        // exactly as if the interface had submitted the command.
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let executeur = banc(&connexion);
+        let exec = harness(&connection);
         let agent = AgentId::new();
         let session = AgentSessionId::new();
-        let puits = ExecutorSink::for_agent(Arc::clone(&executeur), agent, session);
+        let sink = ExecutorSink::for_agent(Arc::clone(&exec), agent, session);
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::agent(agent, session),
-            execution(connexion.id, "DELETE FROM clients"),
+            execution(connection.id, "DELETE FROM clients"),
             &CancelToken::new(),
         ));
 
-        let DispatchReport::Denied { reason, .. } = &rapport else {
-            panic!("{rapport:?}");
+        let DispatchReport::Denied { reason, .. } = &report else {
+            panic!("{report:?}");
         };
         assert!(reason.contains("production"), "{reason}");
-        assert_eq!(executeur.store().journal().count().expect("comptage"), 1);
+        assert_eq!(exec.store().journal().count().expect("count"), 1);
 
-        let trace = executeur
+        let trace = exec
             .store()
             .journal()
             .for_agent(agent, 1)
-            .expect("relecture")
+            .expect("read back")
             .pop()
-            .expect("une entrée imputée à l'agent");
+            .expect("an entry attributed to the agent");
         assert_eq!(trace.record.intent, StatementIntent::Write);
     }
 
     #[test]
-    fn une_ecriture_d_agent_hors_production_est_rendue_comme_une_attente() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::postgres())
+    fn an_agent_write_outside_production_is_returned_as_pending() {
+        let connection = ConnectionConfig::new("atelier", DriverId::postgres())
             .with_environment(Environment::Development);
         let agent = AgentId::new();
         let session = AgentSessionId::new();
-        let puits = ExecutorSink::for_agent(banc(&connexion), agent, session);
+        let sink = ExecutorSink::for_agent(harness(&connection), agent, session);
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::agent(agent, session),
-            execution(connexion.id, "UPDATE clients SET actif = true WHERE id = 1"),
+            execution(
+                connection.id,
+                "UPDATE clients SET active = true WHERE id = 1",
+            ),
             &CancelToken::new(),
         ));
 
-        let DispatchReport::AwaitingApproval { command, .. } = rapport else {
-            panic!("{rapport:?}");
+        let DispatchReport::AwaitingApproval { command, .. } = report else {
+            panic!("{report:?}");
         };
-        // L'identifiant rendu est celui sous lequel l'accord se donnera.
+        // The returned identifier is the one under which the approval will be given.
         assert!(
-            puits
-                .executor()
+            sink.executor()
                 .approvals()
                 .pending()
                 .iter()
@@ -525,45 +516,45 @@ mod tests {
     }
 
     #[test]
-    fn une_panne_est_une_reponse_au_modele_et_non_un_incident() {
-        // Aucune session n'est ouverte : l'exécution échoue après le gate.
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_failure_is_an_answer_to_the_model_not_an_incident() {
+        // No session is open: execution fails after the gate.
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
         let agent = AgentId::new();
         let session = AgentSessionId::new();
-        let puits = ExecutorSink::for_agent(banc(&connexion), agent, session);
+        let sink = ExecutorSink::for_agent(harness(&connection), agent, session);
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::agent(agent, session),
-            execution(connexion.id, "SELECT 1"),
+            execution(connection.id, "SELECT 1"),
             &CancelToken::new(),
         ));
 
-        let DispatchReport::Failed { class, .. } = rapport else {
-            panic!("{rapport:?}");
+        let DispatchReport::Failed { class, .. } = report else {
+            panic!("{report:?}");
         };
         assert!(
             class.is_retryable(),
-            "une session fermée se rouvre : {class:?}"
+            "a closed session is reopened: {class:?}"
         );
     }
 
     #[test]
-    fn un_puits_ouvert_transmet_l_acteur_tel_quel() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn an_open_sink_passes_the_actor_as_is() {
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let puits = ExecutorSink::new(banc(&connexion));
+        let sink = ExecutorSink::new(harness(&connection));
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::Human,
-            execution(connexion.id, "SELECT 1"),
+            execution(connection.id, "SELECT 1"),
             &CancelToken::new(),
         ));
-        // Le gate a autorisé (lecture, connexion locale) : l'échec vient de
-        // l'absence de session, pas d'un refus.
+        // The gate allowed it (read, local connection): the failure comes from
+        // the absence of a session, not from a denial.
         assert!(
-            matches!(rapport, DispatchReport::Failed { .. }),
-            "{rapport:?}"
+            matches!(report, DispatchReport::Failed { .. }),
+            "{report:?}"
         );
     }
 }

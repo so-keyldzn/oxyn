@@ -1,106 +1,107 @@
-# Ce que le graphe de dépendances a le droit de contenir.
+# What the dependency graph is allowed to contain.
 #
-# `docs/SECURITY.md` § Dépendances fait de ce contrôle une partie de la porte de
-# qualité. Il porte sur deux choses qu'aucune autre étape ne regarde : les avis
-# de sécurité publiés (RUSTSEC) et les licences.
+# `docs/SECURITY.md` § Dependencies makes this check part of the quality gate.
+# It covers two things no other step looks at: published security advisories
+# (RUSTSEC) and licenses.
 #
-# La cible `make deny` avertit sans bloquer quand `cargo-deny` n'est pas
-# installé. Une porte qui échoue sur un outil absent finit par être contournée,
-# et c'est alors tout le contrôle qui disparaît.
+# The `make deny` target warns without blocking when `cargo-deny` is not
+# installed. A gate that fails on a missing tool ends up bypassed, and then the
+# whole check disappears.
 
 [advisories]
-# Un avis publié sur une dépendance est une erreur : c'est l'objet du contrôle.
-# `unmaintained` avertit plutôt que de bloquer — une crate non maintenue sur une
-# frontière externe est « un risque à documenter, pas à ignorer » (SECURITY),
-# et la bloquer d'office ferait échouer la porte sur une décision qui demande un
-# arbitrage humain.
+# An advisory published on a dependency is an error: that is the point of the
+# check. `unmaintained` warns rather than blocks — an unmaintained crate on an
+# external boundary is "a risk to document, not to ignore" (SECURITY), and
+# blocking it outright would fail the gate on a decision that needs a human
+# call.
 yanked = "deny"
 unmaintained = "workspace"
-# Un avis d'« unsoundness » est informatif pour `cargo-deny`, et sa valeur par
-# défaut est `none` : sans cette ligne, RUSTSEC-2024-0429 traversait la porte
-# sans un mot, alors que GitHub l'affichait. `all` le fait voir, y compris sur
-# une dépendance transitive — c'est là qu'il se trouve.
+# An "unsoundness" advisory is informational for `cargo-deny`, and its default
+# is `none`: without this line, RUSTSEC-2024-0429 went through the gate without
+# a word, while GitHub displayed it. `all` makes it visible, including on a
+# transitive dependency — which is where it is.
 unsound = "all"
 
-# Chaque entrée porte sa raison : un avis ignoré sans motif écrit devient un
-# avis oublié. La revoir est le geste de `/versions`.
+# Every entry carries its reason: an advisory ignored without a written reason
+# becomes a forgotten advisory. Reviewing it is the job of `/versions`.
 ignore = [
-    # `glib::VariantStrIter` peut produire une référence pendante. La chaîne est
-    # `tauri` → `gtk 0.18` → `atk` → `glib 0.18`, uniquement sur Linux : la
-    # correction est dans `glib 0.20`, que `gtk 0.18` refuse. Rien à monter ici
-    # tant que Tauri n'a pas changé de GTK, et rien de compilé sur macOS, la
-    # seule cible livrée aujourd'hui. Oxyn n'appelle pas cet itérateur.
-    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 via gtk 0.18 de Tauri ; corrigé en 0.20, que gtk 0.18 refuse ; code Linux, non compilé sur la cible livrée" },
+    # `glib::VariantStrIter` can produce a dangling reference. The chain is
+    # `tauri` → `gtk 0.18` → `atk` → `glib 0.18`, on Linux only: the fix is in
+    # `glib 0.20`, which `gtk 0.18` refuses. Nothing to bump here until Tauri
+    # changes GTK, and nothing compiled on macOS, the only target shipped today.
+    # Oxyn does not call this iterator.
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 via Tauri's gtk 0.18; fixed in 0.20, which gtk 0.18 refuses; Linux code, not compiled for the shipped target" },
 ]
 
 [licenses]
-# Les licences permissives que ce dépôt accepte sans discussion. Toute autre
-# demande un arbitrage explicite : une dépendance sous copyleft fort change les
-# obligations du produit entier, et cela ne se découvre pas à la publication.
+# The permissive licenses this repository accepts without discussion. Any other
+# needs an explicit decision: a dependency under strong copyleft changes the
+# obligations of the whole product, and that is not something to discover at
+# release time.
 #
-# L'application est sous GPL-3.0-or-later (ADR-0044) : chaque licence de cette
-# liste doit donc être compatible avec la GPLv3. Le verdict vient de la liste
-# de la FSF, relue le 2026-09-25 (RESEARCH-NOTES § Licences). Il est écrit sur
-# chaque ligne pour qu'un ajout sans verdict se voie en revue.
+# The application is under GPL-3.0-or-later (ADR-0044): every license in this
+# list must therefore be compatible with the GPLv3. The verdict comes from the
+# FSF list, reread on 2026-09-25 (RESEARCH-NOTES § Licenses). It is written on
+# each line so that an addition without a verdict shows in review.
 #
-# `script/verifier-licences-npm` lit aussi cette liste : les dépendances npm
-# livrées obéissent à la même règle.
+# `script/licences-tierces` also reads this list: shipped npm dependencies obey
+# the same rule.
 allow = [
-    "Apache-2.0",                     # FSF : compatible avec la GPLv3, pas avec la GPLv2
-    "Apache-2.0 WITH LLVM-exception", # l'exception ne fait qu'ajouter des permissions
-    "MIT",                            # FSF, « Expat » : compatible
-    "MIT-0",                          # FSF, « Expat0 » : compatible
-    "BSD-2-Clause",                   # FSF, « FreeBSD » : compatible
-    "BSD-3-Clause",                   # FSF, « Modified BSD » : compatible
-    "ISC",                            # FSF : compatible
-    "Zlib",                           # FSF : compatible
-    "Unicode-3.0",                    # FSF, « Unicode License v3 » : compatible avec toutes les versions
-    "CC0-1.0",                        # FSF : compatible
-    # FSF : compatible par la section 3.3, sauf pour un fichier marqué
-    # « Incompatible With Secondary Licenses ». Aucune des crates sous MPL du
-    # graphe ne porte cette mention (relevé le 2026-09-25, RESEARCH-NOTES).
+    "Apache-2.0",                     # FSF: compatible with the GPLv3, not with the GPLv2
+    "Apache-2.0 WITH LLVM-exception", # the exception only adds permissions
+    "MIT",                            # FSF, "Expat": compatible
+    "MIT-0",                          # FSF, "Expat0": compatible
+    "BSD-2-Clause",                   # FSF, "FreeBSD": compatible
+    "BSD-3-Clause",                   # FSF, "Modified BSD": compatible
+    "ISC",                            # FSF: compatible
+    "Zlib",                           # FSF: compatible
+    "Unicode-3.0",                    # FSF, "Unicode License v3": compatible with all versions
+    "CC0-1.0",                        # FSF: compatible
+    # FSF: compatible through section 3.3, except for a file marked
+    # "Incompatible With Secondary Licenses". None of the MPL crates in the
+    # graph carries that notice (read on 2026-09-25, RESEARCH-NOTES).
     "MPL-2.0",
-    "BSL-1.0",                        # FSF, « Boost » : compatible
-    # `libfuzzer-sys`, sous la licence de l'université de l'Illinois. Permissive,
-    # approuvée OSI, et compatible avec la GPL selon la FSF.
+    "BSL-1.0",                        # FSF, "Boost": compatible
+    # `libfuzzer-sys`, under the University of Illinois license. Permissive,
+    # OSI-approved, and GPL-compatible according to the FSF.
     "NCSA",
-    # `webpki-root-certs` et `webpki-roots` : la liste des autorités de
-    # certification, publiée sous une licence de **données** permissive. La FSF
-    # ne la classe pas. Sa seule condition est de joindre son texte aux données
-    # partagées (§ 2.1), ce qu'une mention que la GPLv3 autorise (§ 7 b) couvre :
-    # les mentions tierces de l'application la reproduisent.
+    # `webpki-root-certs` and `webpki-roots`: the list of certificate
+    # authorities, published under a permissive **data** license. The FSF does
+    # not classify it. Its only condition is to include its text with the shared
+    # data (§ 2.1), which a notice the GPLv3 allows (§ 7 b) covers: the
+    # application's third-party notices reproduce it.
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 
-# Les crates du workspace sous GPL déclarent `publish = false` (Cargo.toml) :
-# `cargo deny` ne juge pas leur licence. C'est le mécanisme prévu pour les
-# crates privées, et il épargne d'ajouter `GPL-3.0-or-later` à `allow`, où elle
-# accepterait aussi, sans arbitrage, une dépendance tierce sous GPL. Les crates
-# sous Apache, publiables, restent contrôlées.
+# The GPL crates of the workspace declare `publish = false` (Cargo.toml):
+# `cargo deny` does not judge their license. That is the mechanism intended for
+# private crates, and it avoids adding `GPL-3.0-or-later` to `allow`, where it
+# would also accept, without a decision, a third-party GPL dependency. The
+# Apache crates, which are publishable, stay checked.
 [licenses.private]
 ignore = true
 
 [bans]
-# Deux versions d'une même crate dans le graphe sont tolérées — l'écosystème en
-# impose —, sauf là où ADR-0010 l'interdit explicitement.
+# Two versions of the same crate in the graph are tolerated — the ecosystem
+# forces some —, except where ADR-0010 explicitly forbids it.
 multiple-versions = "allow"
 
-# Ce que ce fichier **ne** vérifie **pas**, et où c'est vérifié :
-# l'unicité de `libsqlite3-sys` dans le graphe (ADR-0010). Deux versions y
-# feraient cohabiter deux bibliothèques SQLite natives, avec deux états globaux,
-# dans le même processus. `cargo-deny` ne sait l'exprimer que par un
-# `multiple-versions = "deny"` **global**, qui échouerait sur les doublons
-# ordinaires de l'écosystème ; et `[[bans.deny]]` interdirait la crate entière,
-# ce qui casserait le driver SQLite.
+# What this file does **not** check, and where it is checked: the uniqueness of
+# `libsqlite3-sys` in the graph (ADR-0010). Two versions would make two native
+# SQLite libraries, with two global states, live in the same process.
+# `cargo-deny` can only express it with a **global**
+# `multiple-versions = "deny"`, which would fail on the ecosystem's ordinary
+# duplicates; and `[[bans.deny]]` would forbid the whole crate, which would
+# break the SQLite driver.
 #
-# La contrainte est donc tenue ailleurs, et elle l'est : par la résolution de
-# versions du workspace (voir le commentaire de `Cargo.toml` sur `sqlx` et
-# `rusqlite`) et par le fait qu'`oxyn-store` et le driver déclarent la même.
+# The constraint is therefore held elsewhere, and it is: by the workspace's
+# version resolution (see the comment in `Cargo.toml` about `sqlx` and
+# `rusqlite`) and by `oxyn-store` and the driver declaring the same one.
 
 [sources]
-# Rien ne vient d'ailleurs que du registre public. Une dépendance git non
-# épinglée est une porte ouverte sur un dépôt tiers, et ADR-0009 a écarté cette
-# voie pour GPUI en connaissance de cause.
+# Nothing comes from anywhere but the public registry. An unpinned git
+# dependency is an open door onto a third-party repository, and ADR-0009 ruled
+# that path out for GPUI knowingly.
 unknown-registry = "deny"
 unknown-git = "deny"

@@ -1,32 +1,32 @@
-//! La table `connections` : **des métadonnées, jamais un secret**.
+//! The `connections` table: **metadata, never a secret**.
 //!
-//! Ce module est le dernier point du produit où l'on peut empêcher un mot de
-//! passe d'atteindre le disque en clair. Ce qui y est persisté, c'est ce que
-//! porte [`ConnectionConfig`] : un nom, un driver, un marquage d'environnement,
-//! des paramètres non secrets, et une **référence** de secret résolue ailleurs
-//! par `oxyn-secrets` auprès du trousseau du système (SECURITY, I-03).
+//! This module is the last point in the product where a password can be
+//! prevented from reaching the disk in clear. What is persisted here is what
+//! [`ConnectionConfig`] carries: a name, a driver, an environment marking,
+//! non-secret parameters, and a secret **reference** resolved elsewhere by
+//! `oxyn-secrets` against the system keychain (SECURITY, I-03).
 //!
-//! # Le garde-fou, et pourquoi il refuse au lieu d'avertir
+//! # The safeguard, and why it refuses instead of warning
 //!
-//! [`Connections::save`] **refuse** une configuration dont un paramètre porte un
-//! nom de secret — `password`, `sslpassword`, `api_key`, `client_secret`,
-//! `access_token`… Un commentaire dans le schéma disant « jamais de secret ici »
-//! n'empêche rien : c'est un driver écrit six mois plus tard qui rangera le mot
-//! de passe dans `params` parce que c'était le champ commode, et personne ne le
-//! verra jusqu'au jour où l'utilisateur ouvrira son fichier d'état.
+//! [`Connections::save`] **refuses** a configuration one of whose parameters
+//! carries a secret's name — `password`, `sslpassword`, `api_key`,
+//! `client_secret`, `access_token`… A comment in the schema saying "never a
+//! secret here" prevents nothing: a driver written six months later will store
+//! the password in `params` because it was the convenient field, and nobody
+//! will see it until the day the user opens their state file.
 //!
-//! Le refus porte sur la **clé**, jamais sur la valeur : décider en regardant la
-//! valeur supposerait de la lire, de la journaliser en cas d'erreur, et de
-//! laisser passer un mot de passe qui ressemble à un nom d'hôte. Un paramètre
-//! nommé `password` mais vide est refusé lui aussi — le nom est le signal.
+//! The refusal is on the **key**, never on the value: deciding by looking at
+//! the value would mean reading it, logging it on error, and letting through
+//! a password that looks like a host name. A parameter named `password` but
+//! empty is refused too — the name is the signal.
 //!
-//! Les noms de fichiers de certificat (`sslkey`, `sslcert`, `sslrootcert`) ne
-//! sont **pas** refusés : ce sont des chemins, et interdire `sslkey` rendrait
-//! impossible l'authentification par certificat client de PostgreSQL.
+//! Certificate file names (`sslkey`, `sslcert`, `sslrootcert`) are **not**
+//! refused: they are paths, and forbidding `sslkey` would make PostgreSQL
+//! client-certificate authentication impossible.
 //!
-//! À la **relecture**, une clé suspecte n'est pas une erreur — la ligne existe
-//! déjà — mais elle émet un `warn` nommant la connexion et la clé, jamais la
-//! valeur.
+//! On **reading back**, a suspicious key is not an error — the row already
+//! exists — but it emits a `warn` naming the connection and the key, never
+//! the value.
 
 use chrono::{DateTime, Utc};
 use oxyn_core::{ConnectionConfig, ConnectionId, DriverId, WorkspaceId};
@@ -36,13 +36,13 @@ use crate::encoding::{environment_from_text, parse_id, privacy_tier_from_column}
 use crate::error::{Result, StoreError};
 use crate::store::Store;
 
-/// Fragments qui, présents dans un nom de paramètre normalisé, le désignent
-/// comme secret.
+/// Fragments that, when present in a normalized parameter name, mark it as a
+/// secret.
 ///
-/// La liste vise les noms réellement rencontrés dans les chaînes de connexion
-/// des SGBD et des SDK cloud. Elle est délibérément courte : chaque entrée
-/// interdit un nom de paramètre légitime potentiel, et une liste trop large
-/// pousse à contourner le garde-fou.
+/// The list targets the names actually found in DBMS and cloud SDK connection
+/// strings. It is deliberately short: each entry forbids a potential
+/// legitimate parameter name, and a list that is too broad pushes people to
+/// work around the safeguard.
 const SECRET_KEY_MARKERS: &[&str] = &[
     "password",
     "passwd",
@@ -57,33 +57,33 @@ const SECRET_KEY_MARKERS: &[&str] = &[
     "privatekey",
 ];
 
-/// Accès typé à la table `connections`.
+/// Typed access to the `connections` table.
 #[derive(Debug)]
 pub struct Connections<'a> {
     store: &'a Store,
 }
 
 impl<'a> Connections<'a> {
-    /// Rattache l'accesseur à son `Store`.
+    /// Binds the accessor to its `Store`.
     pub(crate) fn new(store: &'a Store) -> Self {
         Self { store }
     }
 
-    /// Insère ou met à jour une connexion dans un workspace.
+    /// Inserts or updates a connection in a workspace.
     ///
-    /// `created_at` est préservé lors d'une mise à jour.
+    /// `created_at` is preserved on update.
     ///
-    /// # Erreurs
-    /// * [`StoreError::SecretInParams`] si un paramètre porte un nom de secret.
-    ///   **Rien n'est écrit** dans ce cas ;
-    /// * [`StoreError::Sqlite`] si le workspace n'existe pas — la clé étrangère
-    ///   le refuse — ou si l'écriture échoue ;
-    /// * [`StoreError::Json`] si les paramètres ne sont pas sérialisables.
+    /// # Errors
+    /// * [`StoreError::SecretInParams`] if a parameter carries a secret's
+    ///   name. **Nothing is written** in that case;
+    /// * [`StoreError::Sqlite`] if the workspace does not exist — the foreign
+    ///   key refuses it — or if the write fails;
+    /// * [`StoreError::Json`] if the parameters are not serializable.
     pub fn save(&self, workspace: WorkspaceId, config: &ConnectionConfig) -> Result<()> {
         refuse_secrets(config)?;
 
         let params_json = serde_json::to_string(&config.params)?;
-        let maintenant = Utc::now();
+        let now = Utc::now();
 
         self.store.with_connection(|conn| {
             conn.execute(
@@ -111,8 +111,8 @@ impl<'a> Connections<'a> {
                     params_json,
                     config.secret_ref,
                     config.read_only,
-                    maintenant,
-                    maintenant,
+                    now,
+                    now,
                     config.privacy_tier.as_str(),
                 ],
             )?;
@@ -120,10 +120,10 @@ impl<'a> Connections<'a> {
         })
     }
 
-    /// Relit une connexion par son identifiant.
+    /// Reads a connection back by its identifier.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`], [`StoreError::Corrupted`] ou
+    /// # Errors
+    /// [`StoreError::Sqlite`], [`StoreError::Corrupted`] or
     /// [`StoreError::Json`].
     pub fn get(&self, id: ConnectionId) -> Result<Option<ConnectionConfig>> {
         self.store.with_connection(|conn| {
@@ -132,53 +132,54 @@ impl<'a> Connections<'a> {
                         privacy_tier
                  FROM connections WHERE id = ?1",
                 params![id.to_string()],
-                |row| Ok(depuis_ligne(row)),
+                |row| Ok(from_row(row)),
             )
             .optional()?
             .transpose()
         })
     }
 
-    /// Liste les connexions d'un workspace, par nom.
+    /// Lists a workspace's connections, by name.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`], [`StoreError::Corrupted`] ou
+    /// # Errors
+    /// [`StoreError::Sqlite`], [`StoreError::Corrupted`] or
     /// [`StoreError::Json`].
     pub fn list(&self, workspace: WorkspaceId) -> Result<Vec<ConnectionConfig>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(
+            let mut query = conn.prepare(
                 "SELECT id, name, driver, environment, params, secret_ref, read_only,
                         privacy_tier
                  FROM connections WHERE workspace_id = ?1 ORDER BY name, id",
             )?;
-            let lignes = requete.query_and_then(params![workspace.to_string()], depuis_ligne)?;
-            lignes.collect()
+            let rows = query.query_and_then(params![workspace.to_string()], from_row)?;
+            rows.collect()
         })
     }
 
-    /// Le workspace auquel appartient une connexion.
+    /// The workspace a connection belongs to.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] ou [`StoreError::Corrupted`].
+    /// # Errors
+    /// [`StoreError::Sqlite`] or [`StoreError::Corrupted`].
     pub fn workspace_of(&self, id: ConnectionId) -> Result<Option<WorkspaceId>> {
         self.store.with_connection(|conn| {
-            let brut: Option<String> = conn
+            let stored: Option<String> = conn
                 .query_row(
                     "SELECT workspace_id FROM connections WHERE id = ?1",
                     params![id.to_string()],
                     |row| row.get(0),
                 )
                 .optional()?;
-            brut.as_deref()
+            stored
+                .as_deref()
                 .map(|raw| parse_id(raw, "connections.workspace_id"))
                 .transpose()
         })
     }
 
-    /// Date de la dernière écriture de cette connexion.
+    /// Date of this connection's last write.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] si la lecture échoue.
+    /// # Errors
+    /// [`StoreError::Sqlite`] if the read fails.
     pub fn updated_at(&self, id: ConnectionId) -> Result<Option<DateTime<Utc>>> {
         self.store.with_connection(|conn| {
             Ok(conn
@@ -191,28 +192,29 @@ impl<'a> Connections<'a> {
         })
     }
 
-    /// Supprime une connexion.
+    /// Deletes a connection.
     ///
-    /// Les documents qui la visaient restent, leur connexion passant à `NULL` ;
-    /// l'historique et le journal d'audit ne sont **pas** touchés.
+    /// The documents that targeted it remain, their connection becoming
+    /// `NULL`; the history and the audit journal are **not** touched.
     ///
-    /// Rend `true` si une ligne a été supprimée.
+    /// Returns `true` if a row was deleted.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] si la suppression échoue.
+    /// # Errors
+    /// [`StoreError::Sqlite`] if the deletion fails.
     pub fn delete(&self, id: ConnectionId) -> Result<bool> {
         self.store.with_connection(|conn| {
-            let touchees = conn.execute(
+            let touched = conn.execute(
                 "DELETE FROM connections WHERE id = ?1",
                 params![id.to_string()],
             )?;
-            Ok(touchees > 0)
+            Ok(touched > 0)
         })
     }
 }
 
-/// Normalise un nom de paramètre avant comparaison : minuscules, séparateurs
-/// ramenés au tiret bas. `Access-Token` et `ACCESS TOKEN` valent `access_token`.
+/// Normalizes a parameter name before comparison: lowercase, separators
+/// folded to an underscore. `Access-Token` and `ACCESS TOKEN` become
+/// `access_token`.
 fn normalise_key(key: &str) -> String {
     key.chars()
         .map(|c| match c {
@@ -222,30 +224,30 @@ fn normalise_key(key: &str) -> String {
         .collect()
 }
 
-/// Ce nom de paramètre désigne-t-il un secret ?
+/// Does this parameter name designate a secret?
 fn is_secret_key(key: &str) -> bool {
-    let normalise = normalise_key(key);
+    let normalised = normalise_key(key);
     SECRET_KEY_MARKERS
         .iter()
-        .any(|marqueur| normalise.contains(*marqueur))
+        .any(|marker| normalised.contains(*marker))
 }
 
-/// Refuse une configuration qui rangerait un secret dans ses paramètres.
+/// Refuses a configuration that would store a secret in its parameters.
 fn refuse_secrets(config: &ConnectionConfig) -> Result<()> {
-    for cle in config.params.keys() {
-        if is_secret_key(cle) {
-            return Err(StoreError::SecretInParams { key: cle.clone() });
+    for key in config.params.keys() {
+        if is_secret_key(key) {
+            return Err(StoreError::SecretInParams { key: key.clone() });
         }
     }
     Ok(())
 }
 
-/// Reconstruit une [`ConnectionConfig`] à partir d'une ligne.
+/// Rebuilds a [`ConnectionConfig`] from a row.
 ///
-/// Un environnement illisible retombe sur `production`
-/// ([`environment_from_text`]) : c'est la valeur la plus contraignante, et
-/// c'est ce que SECURITY exige d'un marquage absent ou douteux.
-fn depuis_ligne(row: &Row<'_>) -> Result<ConnectionConfig> {
+/// An unreadable environment falls back to `production`
+/// ([`environment_from_text`]): it is the most restrictive value, and it is
+/// what SECURITY requires of a missing or doubtful marking.
+fn from_row(row: &Row<'_>) -> Result<ConnectionConfig> {
     let id: String = row.get("id")?;
     let driver: String = row.get("driver")?;
     let environment: String = row.get("environment")?;
@@ -260,30 +262,30 @@ fn depuis_ligne(row: &Row<'_>) -> Result<ConnectionConfig> {
     let mut config = ConnectionConfig::new(name, driver);
     config.id = parse_id(&id, "connections.id")?;
     config.environment = environment_from_text(&environment);
-    // Le type de `params` est celui du champ : le déduire évite de nommer
-    // `IndexMap`, qui n'est pas une dépendance de cette crate. L'ordre de
-    // saisie est conservé par la sérialisation comme par la relecture.
+    // The type of `params` is the field's: inferring it avoids naming
+    // `IndexMap`, which is not a dependency of this crate. Entry order is
+    // preserved by serialization as well as by reading back.
     config.params = serde_json::from_str(&params_json)?;
     config.secret_ref = row.get("secret_ref")?;
     config.read_only = row.get("read_only")?;
-    let niveau: Option<String> = row.get("privacy_tier")?;
-    config.privacy_tier = privacy_tier_from_column(niveau.as_deref());
+    let tier: Option<String> = row.get("privacy_tier")?;
+    config.privacy_tier = privacy_tier_from_column(tier.as_deref());
 
-    signale_les_cles_suspectes(&config);
+    flags_suspicious_keys(&config);
     Ok(config)
 }
 
-/// Avertit si une ligne déjà écrite porte une clé de secret.
+/// Warns if an already written row carries a secret key.
 ///
-/// N'échoue pas : la ligne existe, la refuser rendrait la connexion
-/// inutilisable sans rien effacer. Le message nomme la connexion et la clé,
-/// jamais la valeur.
-fn signale_les_cles_suspectes(config: &ConnectionConfig) {
-    for cle in config.params.keys() {
-        if is_secret_key(cle) {
+/// Does not fail: the row exists, and refusing it would make the connection
+/// unusable without erasing anything. The message names the connection and
+/// the key, never the value.
+fn flags_suspicious_keys(config: &ConnectionConfig) {
+    for key in config.params.keys() {
+        if is_secret_key(key) {
             tracing::warn!(
                 connection = %config.name,
-                param = %cle,
+                param = %key,
                 "stored connection parameter looks like a secret; secrets belong in the OS keychain"
             );
         }
@@ -295,16 +297,16 @@ mod tests {
     use super::*;
     use oxyn_core::Environment;
 
-    fn store_avec_workspace() -> (Store, WorkspaceId) {
-        let store = Store::open_in_memory().expect("ouverture");
-        let workspace = store.workspaces().create("atelier").expect("workspace");
+    fn store_with_workspace() -> (Store, WorkspaceId) {
+        let store = Store::open_in_memory().expect("open");
+        let workspace = store.workspaces().create("workshop").expect("workspace");
         (store, workspace.id)
     }
 
     #[test]
-    fn aller_retour_d_une_connexion() {
-        let (store, workspace) = store_avec_workspace();
-        let config = ConnectionConfig::new("base client", DriverId::postgres())
+    fn a_connection_round_trips() {
+        let (store, workspace) = store_with_workspace();
+        let config = ConnectionConfig::new("customer db", DriverId::postgres())
             .with_environment(Environment::Staging)
             .with_param("host", "db.interne")
             .with_param("port", "5432")
@@ -312,57 +314,51 @@ mod tests {
             .with_secret_ref("keychain://oxyn/base-client")
             .read_only();
 
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
-        let relu = store
+        store.connections().save(workspace, &config).expect("write");
+        let read_back = store
             .connections()
             .get(config.id)
-            .expect("lecture")
-            .expect("la connexion existe");
+            .expect("read")
+            .expect("the connection exists");
 
-        assert_eq!(relu.id, config.id);
-        assert_eq!(relu.name, "base client");
-        assert_eq!(relu.driver, DriverId::postgres());
-        assert_eq!(relu.environment, Environment::Staging);
+        assert_eq!(read_back.id, config.id);
+        assert_eq!(read_back.name, "customer db");
+        assert_eq!(read_back.driver, DriverId::postgres());
+        assert_eq!(read_back.environment, Environment::Staging);
         assert_eq!(
-            relu.secret_ref.as_deref(),
+            read_back.secret_ref.as_deref(),
             Some("keychain://oxyn/base-client")
         );
-        assert!(relu.read_only);
-        assert_eq!(relu.params.len(), 3);
+        assert!(read_back.read_only);
+        assert_eq!(read_back.params.len(), 3);
     }
 
     #[test]
-    fn l_ordre_des_parametres_est_conserve() {
-        // Un fichier de configuration qui se réordonne tout seul produit des
-        // différences illisibles ; `ConnectionConfig` s'appuie sur cet ordre.
-        let (store, workspace) = store_avec_workspace();
+    fn parameter_order_is_preserved() {
+        // A configuration file that reorders itself produces unreadable
+        // diffs; `ConnectionConfig` relies on this order.
+        let (store, workspace) = store_with_workspace();
         let config = ConnectionConfig::new("ordre", DriverId::sqlite())
             .with_param("zeta", "1")
             .with_param("alpha", "2")
             .with_param("mu", "3");
 
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
-        let relu = store
+        store.connections().save(workspace, &config).expect("write");
+        let read_back = store
             .connections()
             .get(config.id)
-            .expect("lecture")
-            .expect("présente");
+            .expect("read")
+            .expect("present");
 
-        let cles: Vec<&str> = relu.params.keys().map(String::as_str).collect();
-        assert_eq!(cles, ["zeta", "alpha", "mu"]);
+        let keys: Vec<&str> = read_back.params.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["zeta", "alpha", "mu"]);
     }
 
     #[test]
-    fn un_parametre_qui_porte_un_nom_de_secret_est_refuse() {
-        let (store, workspace) = store_avec_workspace();
+    fn a_parameter_named_like_a_secret_is_refused() {
+        let (store, workspace) = store_with_workspace();
 
-        for cle in [
+        for key in [
             "password",
             "PASSWORD",
             "sslpassword",
@@ -379,46 +375,42 @@ mod tests {
         ] {
             let config = ConnectionConfig::new("essai", DriverId::postgres())
                 .with_param("host", "localhost")
-                .with_param(cle, "peu importe");
+                .with_param(key, "peu importe");
 
-            let erreur = store
+            let error = store
                 .connections()
                 .save(workspace, &config)
-                .expect_err("un paramètre au nom de secret doit être refusé");
+                .expect_err("a parameter named like a secret must be refused");
             assert!(
-                matches!(erreur, StoreError::SecretInParams { .. }),
-                "`{cle}` : {erreur}"
+                matches!(error, StoreError::SecretInParams { .. }),
+                "`{key}`: {error}"
             );
             assert!(
-                !erreur.to_string().contains("peu importe"),
-                "la valeur ne doit jamais apparaître"
+                !error.to_string().contains("peu importe"),
+                "the value must never appear"
             );
             assert!(
-                store
-                    .connections()
-                    .get(config.id)
-                    .expect("lecture")
-                    .is_none(),
-                "`{cle}` : rien ne doit avoir été écrit"
+                store.connections().get(config.id).expect("read").is_none(),
+                "`{key}`: nothing must have been written"
             );
         }
     }
 
     #[test]
-    fn un_parametre_vide_mais_nomme_comme_un_secret_est_refuse_aussi() {
-        // C'est le nom qui est le signal : regarder la valeur supposerait de la
-        // lire, et un mot de passe qui ressemble à un nom d'hôte passerait.
-        let (store, workspace) = store_avec_workspace();
+    fn an_empty_parameter_named_like_a_secret_is_refused_too() {
+        // The name is the signal: looking at the value would mean reading it,
+        // and a password that looks like a host name would get through.
+        let (store, workspace) = store_with_workspace();
         let config =
             ConnectionConfig::new("essai", DriverId::postgres()).with_param("password", "");
         assert!(store.connections().save(workspace, &config).is_err());
     }
 
     #[test]
-    fn les_chemins_de_certificat_restent_autorises() {
-        // Refuser `sslkey` rendrait impossible l'authentification par
-        // certificat client de PostgreSQL : ce sont des chemins, pas des clés.
-        let (store, workspace) = store_avec_workspace();
+    fn certificate_paths_stay_allowed() {
+        // Refusing `sslkey` would make PostgreSQL client-certificate
+        // authentication impossible: these are paths, not keys.
+        let (store, workspace) = store_with_workspace();
         let config = ConnectionConfig::new("tls", DriverId::postgres())
             .with_param("sslmode", "verify-full")
             .with_param("sslkey", "/etc/ssl/client.key")
@@ -430,203 +422,178 @@ mod tests {
         store
             .connections()
             .save(workspace, &config)
-            .expect("aucun de ces paramètres n'est un secret");
+            .expect("none of these parameters is a secret");
     }
 
     #[test]
-    fn une_connexion_sans_environnement_se_relit_en_production() {
-        let (store, workspace) = store_avec_workspace();
-        // Aucun `with_environment` : le défaut de `ConnectionConfig` s'applique.
-        let config = ConnectionConfig::new("ajoutée à la hâte", DriverId::postgres());
+    fn a_connection_without_environment_reads_back_as_production() {
+        let (store, workspace) = store_with_workspace();
+        // No `with_environment`: `ConnectionConfig`'s default applies.
+        let config = ConnectionConfig::new("added in a hurry", DriverId::postgres());
         assert!(config.is_production());
 
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
-        let relu = store
+        store.connections().save(workspace, &config).expect("write");
+        let read_back = store
             .connections()
             .get(config.id)
-            .expect("lecture")
-            .expect("présente");
-        assert!(relu.is_production());
+            .expect("read")
+            .expect("present");
+        assert!(read_back.is_production());
     }
 
     #[test]
-    fn un_environnement_illisible_se_relit_en_production() {
-        let (store, workspace) = store_avec_workspace();
-        let config = ConnectionConfig::new("trafiquée", DriverId::postgres())
+    fn an_unreadable_environment_reads_back_as_production() {
+        let (store, workspace) = store_with_workspace();
+        let config = ConnectionConfig::new("tampered", DriverId::postgres())
             .with_environment(Environment::Local);
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
+        store.connections().save(workspace, &config).expect("write");
 
-        // Quelqu'un ouvre le fichier avec `sqlite3` et écrit n'importe quoi.
+        // Someone opens the file with `sqlite3` and writes anything.
         store
             .with_connection(|conn| {
                 conn.execute(
-                    "UPDATE connections SET environment = 'presque-du-dev' WHERE id = ?1",
+                    "UPDATE connections SET environment = 'almost-dev' WHERE id = ?1",
                     params![config.id.to_string()],
                 )?;
                 Ok(())
             })
-            .expect("altération");
+            .expect("tampering");
 
-        let relu = store
+        let read_back = store
             .connections()
             .get(config.id)
-            .expect("lecture")
-            .expect("présente");
+            .expect("read")
+            .expect("present");
         assert!(
-            relu.is_production(),
-            "SECURITY : un marquage illisible vaut production"
+            read_back.is_production(),
+            "SECURITY: an unreadable marking counts as production"
         );
     }
 
     #[test]
-    fn une_connexion_sans_workspace_est_refusee() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_connection_without_workspace_is_refused() {
+        let store = Store::open_in_memory().expect("open");
         let config = ConnectionConfig::new("orpheline", DriverId::sqlite());
         assert!(
             store
                 .connections()
                 .save(WorkspaceId::new(), &config)
                 .is_err(),
-            "la clé étrangère doit refuser un workspace inexistant"
+            "the foreign key must refuse a nonexistent workspace"
         );
     }
 
     #[test]
-    fn la_liste_est_bornee_au_workspace() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_list_is_scoped_to_the_workspace() {
+        let store = Store::open_in_memory().expect("open");
         let a = store.workspaces().create("a").expect("workspace");
         let b = store.workspaces().create("b").expect("workspace");
 
         store
             .connections()
-            .save(a.id, &ConnectionConfig::new("dans a", DriverId::sqlite()))
-            .expect("écriture");
+            .save(a.id, &ConnectionConfig::new("in a", DriverId::sqlite()))
+            .expect("write");
         store
             .connections()
-            .save(b.id, &ConnectionConfig::new("dans b", DriverId::sqlite()))
-            .expect("écriture");
+            .save(b.id, &ConnectionConfig::new("in b", DriverId::sqlite()))
+            .expect("write");
 
-        let dans_a = store.connections().list(a.id).expect("liste");
-        assert_eq!(dans_a.len(), 1);
-        assert_eq!(dans_a[0].name, "dans a");
+        let in_a = store.connections().list(a.id).expect("list");
+        assert_eq!(in_a.len(), 1);
+        assert_eq!(in_a[0].name, "in a");
     }
 
     #[test]
-    fn supprimer_un_workspace_emporte_ses_connexions() {
-        let (store, workspace) = store_avec_workspace();
-        let config = ConnectionConfig::new("éphémère", DriverId::sqlite());
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
+    fn deleting_a_workspace_takes_its_connections() {
+        let (store, workspace) = store_with_workspace();
+        let config = ConnectionConfig::new("ephemeral", DriverId::sqlite());
+        store.connections().save(workspace, &config).expect("write");
 
-        assert!(store.workspaces().delete(workspace).expect("suppression"));
+        assert!(store.workspaces().delete(workspace).expect("deletion"));
         assert!(
-            store
-                .connections()
-                .get(config.id)
-                .expect("lecture")
-                .is_none(),
-            "la cascade doit s'appliquer : PRAGMA foreign_keys est actif"
+            store.connections().get(config.id).expect("read").is_none(),
+            "the cascade must apply: PRAGMA foreign_keys is on"
         );
     }
 
     #[test]
-    fn une_mise_a_jour_ne_cree_pas_de_doublon() {
-        let (store, workspace) = store_avec_workspace();
-        let mut config = ConnectionConfig::new("avant", DriverId::sqlite());
+    fn an_update_creates_no_duplicate() {
+        let (store, workspace) = store_with_workspace();
+        let mut config = ConnectionConfig::new("before", DriverId::sqlite());
+        store.connections().save(workspace, &config).expect("write");
+
+        config.name = "after".to_owned();
         store
             .connections()
             .save(workspace, &config)
-            .expect("écriture");
+            .expect("update");
 
-        config.name = "après".to_owned();
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("mise à jour");
-
-        let liste = store.connections().list(workspace).expect("liste");
-        assert_eq!(liste.len(), 1);
-        assert_eq!(liste[0].name, "après");
+        let list = store.connections().list(workspace).expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "after");
     }
 
     #[test]
-    fn le_debug_d_une_connexion_relue_masque_toujours_les_valeurs() {
-        // La garantie vient d'`oxyn-core`, mais elle doit tenir après un
-        // aller-retour par le disque : c'est le trajet réel.
-        let (store, workspace) = store_avec_workspace();
+    fn debug_of_a_read_back_connection_still_masks_values() {
+        // The guarantee comes from `oxyn-core`, but it must hold after a round
+        // trip through the disk: that is the real path.
+        let (store, workspace) = store_with_workspace();
         let config = ConnectionConfig::new("prod", DriverId::postgres())
             .with_param("host", "db-secret.interne")
             .with_secret_ref("keychain://oxyn/prod");
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
+        store.connections().save(workspace, &config).expect("write");
 
-        let relu = store
+        let read_back = store
             .connections()
             .get(config.id)
-            .expect("lecture")
-            .expect("présente");
-        let rendu = format!("{relu:?}");
-        assert!(!rendu.contains("db-secret.interne"), "{rendu}");
-        assert!(!rendu.contains("keychain://oxyn/prod"), "{rendu}");
+            .expect("read")
+            .expect("present");
+        let rendered = format!("{read_back:?}");
+        assert!(!rendered.contains("db-secret.interne"), "{rendered}");
+        assert!(!rendered.contains("keychain://oxyn/prod"), "{rendered}");
     }
 
-    /// ADR-0006 : le niveau appartient à la connexion, donc il lui survit.
+    /// ADR-0006: the tier belongs to the connection, so it survives it.
     ///
-    /// Le défaut que ce test ferme était silencieux et permissif : sans
-    /// colonne, toute connexion relue repartait à `Metadata`. Un utilisateur
-    /// réglant `Local` sur une base client, fermant Oxyn et la rouvrant voyait
-    /// le DDL et les noms de colonnes repartir chez un fournisseur distant,
-    /// sans message nulle part.
+    /// The defect this test closes was silent and permissive: without a
+    /// column, every connection read back went back to `Metadata`. A user
+    /// setting `Local` on a customer database, closing Oxyn and reopening it
+    /// saw the DDL and column names go to a remote provider again, with no
+    /// message anywhere.
     #[test]
-    fn le_niveau_de_confidentialite_survit_a_la_fermeture() {
-        let (store, workspace) = store_avec_workspace();
+    fn the_privacy_tier_survives_closing() {
+        let (store, workspace) = store_with_workspace();
         let mut config =
-            ConnectionConfig::new("base client", DriverId::new("postgres").expect("driver"));
+            ConnectionConfig::new("customer db", DriverId::new("postgres").expect("driver"));
         config.privacy_tier = oxyn_core::PrivacyTier::Local;
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
+        store.connections().save(workspace, &config).expect("write");
 
-        let relu = store
+        let read_back = store
             .connections()
             .get(config.id)
-            .expect("lecture")
-            .expect("présente");
+            .expect("read")
+            .expect("present");
         assert_eq!(
-            relu.privacy_tier,
+            read_back.privacy_tier,
             oxyn_core::PrivacyTier::Local,
-            "le niveau appartient à la connexion, pas à la session"
+            "the tier belongs to the connection, not to the session"
         );
     }
 
-    /// Une absence et une valeur illisible ne veulent pas dire la même chose.
+    /// An absence and an unreadable value do not mean the same thing.
     ///
-    /// Absente, la colonne dit « ce binaire est plus ancien que ce réglage » :
-    /// l'utilisateur n'en a jamais choisi, et le défaut d'ADR-0006 s'applique.
-    /// Illisible, elle dit « un réglage existait et son sens s'est perdu » : le
-    /// plus contraignant s'applique, parce qu'une base dont on ne sait plus ce
-    /// qu'elle autorisait n'obtient pas le bénéfice du doute.
+    /// Absent, the column says "this binary is older than this setting": the
+    /// user never chose one, and ADR-0006's default applies. Unreadable, it
+    /// says "a setting existed and its meaning was lost": the most restrictive
+    /// applies, because a database for which it is no longer known what it
+    /// allowed does not get the benefit of the doubt.
     #[test]
-    fn une_valeur_illisible_nest_pas_une_absence() {
-        let (store, workspace) = store_avec_workspace();
-        let config = ConnectionConfig::new("héritée", DriverId::new("sqlite").expect("driver"));
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("écriture");
+    fn an_unreadable_value_is_not_an_absence() {
+        let (store, workspace) = store_with_workspace();
+        let config = ConnectionConfig::new("inherited", DriverId::new("sqlite").expect("driver"));
+        store.connections().save(workspace, &config).expect("write");
 
-        // Le cas de la ligne antérieure à la migration.
+        // The case of the row older than the migration.
         store
             .with_connection(|conn| {
                 conn.execute(
@@ -635,19 +602,19 @@ mod tests {
                 )?;
                 Ok(())
             })
-            .expect("mise à zéro");
+            .expect("reset");
         assert_eq!(
             store
                 .connections()
                 .get(config.id)
-                .expect("lecture")
-                .expect("présente")
+                .expect("read")
+                .expect("present")
                 .privacy_tier,
             oxyn_core::PrivacyTier::Metadata,
-            "aucune valeur écrite : le défaut d'ADR-0006 s'applique"
+            "no value written: ADR-0006's default applies"
         );
 
-        // Le cas de la valeur qu'on ne sait plus lire.
+        // The case of the value that can no longer be read.
         store
             .with_connection(|conn| {
                 conn.execute(
@@ -656,16 +623,16 @@ mod tests {
                 )?;
                 Ok(())
             })
-            .expect("valeur inconnue");
+            .expect("unknown value");
         assert_eq!(
             store
                 .connections()
                 .get(config.id)
-                .expect("lecture")
-                .expect("présente")
+                .expect("read")
+                .expect("present")
                 .privacy_tier,
             oxyn_core::PrivacyTier::Local,
-            "un réglage dont le sens s'est perdu retombe sur le plus contraignant"
+            "a setting whose meaning was lost falls back to the most restrictive"
         );
     }
 }

@@ -1,43 +1,43 @@
-//! Les tampons de résultats d'Oxyn.
+//! Oxyn's result buffers.
 //!
-//! « Premier affichage sous 100 ms, mémoire stable sur 10 M de lignes » se tient
-//! ou se perd ici. Cette crate est la mise en œuvre d'[ADR-0002] : un driver
-//! produit des [`RecordBatch`](arrow::record_batch::RecordBatch) Arrow, et plus
-//! rien ne les reconvertit jusqu'à l'écran ou l'export.
+//! "First display under 100 ms, stable memory over 10 M rows" is held or lost
+//! here. This crate implements [ADR-0002]: a driver produces Arrow
+//! [`RecordBatch`](arrow::record_batch::RecordBatch)es, and nothing converts
+//! them again until the screen or the export.
 //!
-//! | Module | Sujet | Autorité |
+//! | Module | Subject | Authority |
 //! |---|---|---|
-//! | [`buffer`] | accumulation bornée, débordement disque, `locate` en O(log n) | ADR-0002, PERFORMANCE |
-//! | [`cell`] | rendu d'une cellule pour la grille | UX-SPEC |
-//! | [`sink`] | contre-pression entre un curseur et un tampon | ARCHITECTURE §9 |
-//! | [`mod@export`] | CSV, TSV, JSON, JSON par lignes, Arrow IPC | I-11 |
-//! | [`error`] | la frontière d'erreurs de la couche | rust.md |
+//! | [`buffer`] | bounded accumulation, spill to disk, `locate` in O(log n) | ADR-0002, PERFORMANCE |
+//! | [`cell`] | rendering a cell for the grid | UX-SPEC |
+//! | [`sink`] | back-pressure between a cursor and a buffer | ARCHITECTURE §9 |
+//! | [`mod@export`] | CSV, TSV, JSON, JSON lines, Arrow IPC | I-11 |
+//! | [`error`] | the layer's error boundary | rust.md |
 //!
-//! # Le chemin complet
+//! # The complete path
 //!
 //! ```no_run
 //! use std::sync::Arc;
 //! use oxyn_core::CancelToken;
 //! use oxyn_data::{BatchSink, BatchSource, ResultBuffer, format_cell, FormatOptions};
 //!
-//! # async fn exemple(mut curseur: Box<dyn BatchSource>) -> Result<(), Box<dyn std::error::Error>> {
-//! // Le tampon est créé dès que le schéma est connu : la grille dessine ses
-//! // colonnes avant qu'une seule ligne n'arrive.
-//! let tampon = Arc::new(ResultBuffer::new(curseur.schema(), 256 * 1024 * 1024));
-//! let puits = BatchSink::new(Arc::clone(&tampon));
-//! let annulation = CancelToken::new();
+//! # async fn example(mut cursor: Box<dyn BatchSource>) -> Result<(), Box<dyn std::error::Error>> {
+//! // The buffer is created as soon as the schema is known: the grid draws its
+//! // columns before a single row arrives.
+//! let buffer = Arc::new(ResultBuffer::new(cursor.schema(), 256 * 1024 * 1024));
+//! let sink = BatchSink::new(Arc::clone(&buffer));
+//! let cancel = CancelToken::new();
 //!
-//! // La tâche draine ; l'interface lit le même `Arc` sans jamais l'attendre.
-//! let issue = puits.drain(curseur.as_mut(), &annulation).await?;
+//! // The task drains; the interface reads the same `Arc` without ever waiting for it.
+//! let outcome = sink.drain(cursor.as_mut(), &cancel).await?;
 //!
 //! let options = FormatOptions::default();
-//! if let Some((position, decalage)) = tampon.locate(0) {
-//!     if let Some(lot) = tampon.batch(position)? {
-//!         let cellule = format_cell(&lot, decalage, 0, &options);
-//!         println!("{}", cellule.display_with(&options));
+//! if let Some((position, offset)) = buffer.locate(0) {
+//!     if let Some(batch) = buffer.batch(position)? {
+//!         let cell = format_cell(&batch, offset, 0, &options);
+//!         println!("{}", cell.display_with(&options));
 //!     }
 //! }
-//! # let _ = issue;
+//! # let _ = outcome;
 //! # Ok(())
 //! # }
 //! ```
@@ -74,7 +74,7 @@ pub use export_file::export_to_path;
 pub use find::{FindOutcome, find_rows};
 pub use sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};
 
-/// Ce qu'on importe d'un coup quand on travaille avec des résultats.
+/// What you import in one go when working with results.
 pub mod prelude {
     pub use crate::buffer::{BatchIndex, BufferLimits, Pressure, ResultBuffer};
     pub use crate::cell::{BinaryDisplay, CellValue, FormatOptions, NumberGrouping, format_cell};
@@ -99,32 +99,32 @@ mod tests {
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("nom", DataType::Utf8, true),
+            Field::new("name", DataType::Utf8, true),
         ]))
     }
 
-    fn lot(depart: i32, lignes: usize) -> RecordBatch {
-        let ids: Vec<i32> = (0..lignes)
-            .map(|i| depart.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
+    fn batch_of(start: i32, rows: usize) -> RecordBatch {
+        let ids: Vec<i32> = (0..rows)
+            .map(|i| start.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
             .collect();
-        let noms: Vec<Option<String>> = ids.iter().map(|i| Some(format!("n{i}"))).collect();
+        let names: Vec<Option<String>> = ids.iter().map(|i| Some(format!("n{i}"))).collect();
         RecordBatch::try_new(
             schema(),
             vec![
                 Arc::new(Int32Array::from(ids)),
-                Arc::new(StringArray::from(noms)),
+                Arc::new(StringArray::from(names)),
             ],
         )
-        .expect("les colonnes correspondent au schéma construit juste au-dessus")
+        .expect("the columns match the schema built just above")
     }
 
-    /// Curseur simulé : beaucoup de lots, aucun ne tenant dans le budget.
+    /// Simulated cursor: many batches, none of which fits in the budget.
     #[derive(Debug)]
-    struct Curseur {
-        restants: usize,
+    struct CountdownSource {
+        remaining: usize,
     }
 
-    impl BatchSource for Curseur {
+    impl BatchSource for CountdownSource {
         fn schema(&self) -> SchemaRef {
             schema()
         }
@@ -132,14 +132,14 @@ mod tests {
         fn next_batch(
             &mut self,
         ) -> BoxFuture<'_, std::result::Result<Option<RecordBatch>, OxynError>> {
-            let rang = self.restants;
-            self.restants = self.restants.saturating_sub(1);
+            let rank = self.remaining;
+            self.remaining = self.remaining.saturating_sub(1);
             Box::pin(async move {
-                if rang == 0 {
+                if rank == 0 {
                     return Ok(None);
                 }
-                let depart = i32::try_from(rang).unwrap_or(i32::MAX).saturating_mul(100);
-                Ok(Some(lot(depart, 50)))
+                let start = i32::try_from(rank).unwrap_or(i32::MAX).saturating_mul(100);
+                Ok(Some(batch_of(start, 50)))
             })
         }
 
@@ -148,61 +148,61 @@ mod tests {
         }
     }
 
-    /// Le trajet complet de la crate, avec un budget assez petit pour forcer le
-    /// débordement : drainage, localisation, rendu, export.
+    /// The crate's complete path, with a budget small enough to force a
+    /// spill: draining, locating, rendering, export.
     ///
-    /// C'est la version réduite du critère de sortie de la phase 0 : la mémoire
-    /// reste bornée, rien n'est perdu, et ce qui s'affiche est ce qui s'exporte.
+    /// It is the reduced version of phase 0's exit criterion: memory stays
+    /// bounded, nothing is lost, and what is displayed is what is exported.
     #[test]
-    fn le_trajet_complet_tient_dans_un_budget_minuscule() {
-        let tampon = Arc::new(ResultBuffer::with_limits(
+    fn the_complete_path_fits_in_a_tiny_budget() {
+        let buf = Arc::new(ResultBuffer::with_limits(
             schema(),
             BufferLimits::default().with_memory_budget(2_048),
         ));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut curseur = Curseur { restants: 40 };
-        let annulation = CancelToken::new();
+        let batch_sink = BatchSink::new(Arc::clone(&buf));
+        let mut cursor = CountdownSource { remaining: 40 };
+        let cancel = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut curseur, &annulation)).expect("drainage");
-        assert_eq!(issue, SinkOutcome::Exhausted);
-        assert!(issue.is_complete());
-        assert_eq!(tampon.row_count(), 40 * 50);
+        let outcome = block_on(batch_sink.drain(&mut cursor, &cancel)).expect("drain");
+        assert_eq!(outcome, SinkOutcome::Exhausted);
+        assert!(outcome.is_complete());
+        assert_eq!(buf.row_count(), 40 * 50);
         assert!(
-            tampon.spilled_batches() > 0,
-            "le budget doit avoir été dépassé"
+            buf.spilled_batches() > 0,
+            "the budget must have been exceeded"
         );
-        // L'invariant de mémoire, en une ligne : ce qui reste résident ne
-        // dépasse jamais le budget, quel que soit le volume traversé.
+        // The memory invariant, in one line: what stays resident never
+        // exceeds the budget, whatever the volume that went through.
         assert!(
-            tampon.resident_bytes() <= 2_048,
-            "{} octets résidents pour un budget de 2 048",
-            tampon.resident_bytes()
+            buf.resident_bytes() <= 2_048,
+            "{} resident bytes for a budget of 2,048",
+            buf.resident_bytes()
         );
 
-        // Une ligne prise loin dans le résultat se relit sans réexécution.
+        // A row taken far into the result is read again without re-execution.
         let options = FormatOptions::default();
-        let (position, decalage) = tampon.locate(1_999).expect("la ligne existe");
-        let lot = tampon.batch(position).expect("relecture").expect("le lot");
-        let cellule = format_cell(&lot, decalage, 1, &options);
+        let (position, offset) = buf.locate(1_999).expect("the row exists");
+        let rb = buf.batch(position).expect("read back").expect("the batch");
+        let value_cell = format_cell(&rb, offset, 1, &options);
         assert!(
-            cellule.text().is_some_and(|t| t.starts_with('n')),
-            "{cellule:?}"
+            value_cell.text().is_some_and(|t| t.starts_with('n')),
+            "{value_cell:?}"
         );
 
-        // Et ce qui s'affiche est ce qui s'exporte.
-        let mut sortie: Vec<u8> = Vec::new();
-        let resume = export(
-            &tampon,
+        // And what is displayed is what is exported.
+        let mut output: Vec<u8> = Vec::new();
+        let summary = export(
+            &buf,
             ExportFormat::Csv,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default(),
-            &annulation,
+            &cancel,
         )
         .expect("export");
-        assert_eq!(resume.rows, 2_000);
+        assert_eq!(summary.rows, 2_000);
 
-        let texte = String::from_utf8(sortie).expect("CSV en UTF-8");
-        let attendu = cellule.text().unwrap_or_default();
-        assert!(texte.contains(attendu), "{attendu} absent de l'export");
+        let txt = String::from_utf8(output).expect("CSV in UTF-8");
+        let expected = value_cell.text().unwrap_or_default();
+        assert!(txt.contains(expected), "{expected} missing from the export");
     }
 }

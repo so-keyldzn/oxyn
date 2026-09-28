@@ -229,7 +229,7 @@ export const unusualCatalog: Array<CatalogNode> = [
     catalogRelation("public", "العملاء", "table", "جدول العملاء"),
     catalogRelation("public", "הזמנות"),
     catalogRelation("public", "注文明細"),
-    catalogRelation("public", "émissions_CO₂"),
+    catalogRelation("public", "café_CO₂"),
     catalogRelation("public", "a.b", "view"),
   ]),
   catalogNamespace("مخطط", [catalogRelation("مخطط", "سجل")]),

@@ -294,7 +294,7 @@ export function RecoveryList({
             Skip for now
           </Button>
           {/* Disabled, not removed: the screen's one action stays where the
-              user looks for it (UX-SPEC « Restauration sélective »). */}
+              user looks for it (UX-SPEC « Selective restore at startup »). */}
           <Button onClick={onRestore} disabled={count === 0}>
             {count === 0
               ? "Restore selected items"

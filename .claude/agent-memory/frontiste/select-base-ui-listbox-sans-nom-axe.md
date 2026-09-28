@@ -1,18 +1,19 @@
 ---
 name: select-base-ui-listbox-sans-nom-axe
-description: Une story qui ouvre un Select Base UI échoue à axe (aria-input-field-name) si la liste est encore là à la fin du play
+description: A story that opens a Base UI Select fails axe (aria-input-field-name) if the list is still there at the end of the play
 metadata:
   type: feedback
 ---
 
-Base UI 1.x ne nomme pas le `role="listbox"` de `Select` (ni `aria-label`, ni
-`aria-labelledby`), et `SelectContent` ne transmet rien à `SelectPrimitive.List`.
-axe tourne **après** le `play` : si la liste est encore montée (animation de
-fermeture comprise), la story échoue en `aria-input-field-name`.
+Base UI 1.x does not name the `role="listbox"` of `Select` (neither `aria-label`
+nor `aria-labelledby`), and `SelectContent` passes nothing to
+`SelectPrimitive.List`. axe runs **after** the `play`: if the list is still
+mounted (closing animation included), the story fails with
+`aria-input-field-name`.
 
-**Why:** rencontré sur les stories du graphique de l'assistant, 2026-09-24 ; les
-stories d'`assistant-agent-settings` contournaient déjà ainsi.
+**Why:** encountered on the stories of the assistant's chart, 2026-09-24; the
+`assistant-agent-settings` stories already worked around it this way.
 
-**How to apply:** finir tout `play` qui ouvre un Select par
+**How to apply:** end every `play` that opens a Select with
 `await waitFor(() => expect(within(document.body).queryByRole("listbox")).toBeNull())`.
-Ne pas retoucher `src/components/ui/select.tsx` (généré).
+Do not touch `src/components/ui/select.tsx` (generated).

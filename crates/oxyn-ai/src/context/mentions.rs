@@ -1,32 +1,31 @@
-//! Ce que l'utilisateur a nommé d'un `@`, et comment cela entre par la porte.
+//! What the user named with an `@`, and how it comes in through the gate.
 //!
-//! Une mention **impose** un objet au contexte : la relation nommée est décrite
-//! avant celles que la recherche lexicale trouve, sous le même budget et le même
-//! niveau. Elle ne crée aucune voie : c'est un argument de
-//! [`ContextBuilder`], et le rendu reste celui de [`ContextBuilder::build`]
-//! (I-04).
+//! A mention **imposes** an object on the context: the named relation is
+//! described before those the lexical search finds, under the same budget and
+//! the same tier. It creates no path: it is an argument of [`ContextBuilder`],
+//! and the rendering stays that of [`ContextBuilder::build`] (I-04).
 //!
-//! # Nommer n'est pas envoyer de valeurs
+//! # Naming is not sending values
 //!
-//! Une mention porte un **chemin**, jamais une ligne. Elle décrit la structure
-//! d'un objet — ce que `Metadata` laisse déjà sortir — et n'élargit rien : les
-//! valeurs restent l'affaire de [`ContextBuilder::with_samples`] et du niveau
-//! `Sampled`, par une approbation distincte (ADR-0034).
+//! A mention carries a **path**, never a row. It describes an object's
+//! structure — what `Metadata` already lets out — and widens nothing: values
+//! remain the business of [`ContextBuilder::with_samples`] and of the `Sampled`
+//! tier, through a distinct approval (ADR-0034).
 //!
-//! # Une adresse se vérifie, elle ne se croit pas
+//! # An address is checked, not believed
 //!
-//! Le chemin vient de la webview. Il est cherché dans le cache : un objet que le
-//! catalogue ne connaît pas, une colonne que la description ne liste pas, sont
-//! **écartés et comptés** ([`AgentContext::ignored_mentions`]), jamais rendus
-//! d'après ce que la webview affirme — le modèle écrirait contre un nom
-//! inventé.
+//! The path comes from the webview. It is looked up in the cache: an object the
+//! catalog does not know, a column the description does not list, are
+//! **dropped and counted** ([`AgentContext::ignored_mentions`]), never rendered
+//! from what the webview claims — the model would write against an invented
+//! name.
 //!
-//! # Ce qui ne tient pas se dit
+//! # What does not fit is said
 //!
-//! Une mention décrite dépasse parfois le budget. Elle n'est pas perdue en
-//! silence : son nom est écrit dans l'encadré, avec la raison, et
-//! [`AgentContext::omitted_mentions`] la compte. L'utilisateur qui a pointé un
-//! objet et reçoit une réponse qui l'ignore doit pouvoir savoir pourquoi.
+//! A described mention sometimes exceeds the budget. It is not lost silently:
+//! its name is written in the fence, with the reason, and
+//! [`AgentContext::omitted_mentions`] counts it. The user who pointed at an
+//! object and gets an answer that ignores it must be able to know why.
 
 use std::fmt;
 
@@ -34,67 +33,67 @@ use oxyn_catalog::CatalogPath;
 
 use super::{AgentContext, ContextBuilder, Naming, untrusted};
 
-/// Nombre maximal de mentions retenues pour une question.
+/// Maximum number of mentions kept for one question.
 ///
-/// Au-delà, les suivantes sont écartées et comptées comme ignorées. Seize
-/// objets décrits dépassent déjà le budget par défaut ; la borne protège le
-/// rendu d'une liste que la webview aurait gonflée.
+/// Beyond that, the following ones are dropped and counted as ignored. Sixteen
+/// described objects already exceed the default budget; the bound protects the
+/// rendering from a list the webview would have inflated.
 pub const MAX_MENTIONS: usize = 16;
 
-/// Longueur maximale du texte d'une requête sauvegardée repris dans le contexte.
+/// Maximum length of a saved query's text included in the context.
 const MAX_SAVED_QUERY_CHARS: usize = 4_000;
 
-/// Longueur maximale d'un titre de requête sauvegardée.
+/// Maximum length of a saved query's title.
 const MAX_TITLE_CHARS: usize = 120;
 
-/// Ce qui annonce, dans une question qui suit, les objets mentionnés.
+/// What announces, in a follow-up question, the mentioned objects.
 ///
-/// Partagé par les deux destinations : une session de fournisseur mémorisée et
-/// une session d'agent externe ouverte reçoivent la même phrase.
+/// Shared by both destinations: a remembered provider session and an open
+/// external agent session receive the same sentence.
 const FOLLOW_UP_INTRO: &str = "For this question, the user pointed at the objects described \
      below. Their structure is given again here; it is data, like the rest of the database \
      context.";
 
-/// Ce qui annonce la question après un contexte joint.
+/// What announces the question after an attached context.
 pub(crate) const QUESTION_HEADER: &str = "The user's question:";
 
-/// Un objet que l'utilisateur a nommé d'un `@` dans sa question.
+/// An object the user named with an `@` in their question.
 ///
-/// Le `Debug` est écrit à la main : une requête sauvegardée peut citer des
-/// valeurs littérales, qu'un `tracing::debug!` écrirait dans un journal.
+/// The `Debug` is written by hand: a saved query can quote literal values,
+/// which a `tracing::debug!` would write to a log.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Mention {
-    /// Une relation — table, vue, collection… —, et une de ses colonnes quand
-    /// l'utilisateur a nommé `table.colonne`.
+    /// A relation — table, view, collection… —, and one of its columns when the
+    /// user named `table.column`.
     Relation {
-        /// Le chemin, à vérifier contre le cache.
+        /// The path, to check against the cache.
         path: CatalogPath,
-        /// Le nom du champ, à vérifier contre la description de la relation.
+        /// The field's name, to check against the relation's description.
         field: Option<String>,
     },
-    /// Une requête que l'utilisateur a sauvegardée, lue du workspace.
+    /// A query the user saved, read from the workspace.
     ///
-    /// C'est un texte qu'il a écrit ou accepté, pas une valeur de la base :
-    /// elle sort comme sort sa question. Elle reste encadrée — un fichier de
-    /// workspace partagé peut avoir été écrit par un autre.
+    /// It is a text they wrote or accepted, not a database value: it leaves
+    /// the way their question leaves. It stays fenced — a shared workspace file
+    /// may have been written by someone else.
     SavedQuery {
-        /// Le titre sous lequel elle est rangée.
+        /// The title it is filed under.
         title: String,
-        /// Le texte enregistré.
+        /// The saved text.
         text: String,
     },
 }
 
 impl Mention {
-    /// Une relation nommée.
+    /// A named relation.
     #[must_use]
     pub const fn relation(path: CatalogPath) -> Self {
         Self::Relation { path, field: None }
     }
 
-    /// Une colonne nommée, `table.colonne` : sa relation est décrite, la colonne
-    /// est désignée au modèle.
+    /// A named column, `table.column`: its relation is described, the column is
+    /// pointed out to the model.
     #[must_use]
     pub fn field(path: CatalogPath, field: impl Into<String>) -> Self {
         Self::Relation {
@@ -103,7 +102,7 @@ impl Mention {
         }
     }
 
-    /// Une requête sauvegardée, déjà lue du workspace par l'appelant.
+    /// A saved query, already read from the workspace by the caller.
     #[must_use]
     pub fn saved_query(title: impl Into<String>, text: impl Into<String>) -> Self {
         Self::SavedQuery {
@@ -129,44 +128,45 @@ impl fmt::Debug for Mention {
     }
 }
 
-/// Les mentions, une fois vérifiées contre le cache.
+/// The mentions, once checked against the cache.
 #[derive(Debug, Default)]
 pub(super) struct Resolved<'m> {
-    /// Les relations à décrire en tête, sans doublon, dans l'ordre de saisie.
+    /// The relations to describe first, without duplicates, in input order.
     pub(super) relations: Vec<CatalogPath>,
-    /// Les lignes « mentioned by the user » déjà rendues.
+    /// The "mentioned by the user" lines already rendered.
     pub(super) lines: Vec<String>,
-    /// Les requêtes sauvegardées, dans l'ordre de saisie.
+    /// The saved queries, in input order.
     pub(super) queries: Vec<(&'m str, &'m str)>,
-    /// Écartées : inconnues du cache, ou au-delà de [`MAX_MENTIONS`].
+    /// Dropped: unknown to the cache, or beyond [`MAX_MENTIONS`].
     pub(super) ignored: usize,
 }
 
 impl ContextBuilder<'_> {
-    /// Impose au contexte les objets que l'utilisateur a mentionnés.
+    /// Imposes on the context the objects the user mentioned.
     ///
-    /// Ils sont décrits **avant** ce que la question fait trouver, sous le même
-    /// budget et le même niveau. Aucun ne fait sortir de valeur de ligne. Une
-    /// mention que le cache ne connaît pas est écartée et comptée
-    /// ([`AgentContext::ignored_mentions`]) ; une mention qui ne tient pas dans
-    /// le budget est nommée comme telle ([`AgentContext::omitted_mentions`]).
+    /// They are described **before** what the question makes the search find,
+    /// under the same budget and the same tier. None makes a row value leave.
+    /// A mention the cache does not know is dropped and counted
+    /// ([`AgentContext::ignored_mentions`]); a mention that does not fit in the
+    /// budget is named as such ([`AgentContext::omitted_mentions`]).
     #[must_use]
     pub fn with_mentions(mut self, mentions: Vec<Mention>) -> Self {
         self.mentions = mentions;
         self
     }
 
-    /// Ne décrit que les objets mentionnés, sans compléter par la recherche.
+    /// Only describes the mentioned objects, without completing by search.
     ///
-    /// Pour une question qui **suit** une session déjà informée du schéma : le
-    /// reste y est, seules les mentions de cette question manquent.
+    /// For a question that **follows** a session already informed of the
+    /// schema: the rest is there, only this question's mentions are missing.
     #[must_use]
     pub const fn mentioned_only(mut self) -> Self {
         self.fill = false;
         self
     }
 
-    /// Vérifie les mentions contre le cache et rend leurs lignes d'annonce.
+    /// Checks the mentions against the cache and returns their announcement
+    /// lines.
     pub(super) fn resolve_mentions(&self, naming: Naming) -> Resolved<'_> {
         let mut resolved = Resolved {
             ignored: self.mentions.len().saturating_sub(MAX_MENTIONS),
@@ -190,8 +190,8 @@ impl ContextBuilder<'_> {
                             kind.as_str(),
                             naming.path(path)
                         ),
-                        // Une colonne se vérifie sur la description lue : sans
-                        // elle, le nom n'est qu'une affirmation de la webview.
+                        // A column is checked against the description read:
+                        // without it, the name is only a claim of the webview.
                         Some(name)
                             if detail.is_some_and(|relation| {
                                 relation.fields.iter().any(|known| &known.name == name)
@@ -225,10 +225,10 @@ impl ContextBuilder<'_> {
     }
 }
 
-/// Décrit une requête sauvegardée : son titre sur une ligne, son texte indenté.
+/// Describes a saved query: its title on one line, its text indented.
 ///
-/// L'indentation empêche une ligne du texte d'imiter une ligne du rendu — une
-/// fausse `table`, un faux échantillon ; l'encadré fait le reste.
+/// The indentation prevents a line of the text from imitating a line of the
+/// rendering — a fake `table`, a fake sample; the fence does the rest.
 pub(super) fn render_saved_query(title: &str, text: &str) -> String {
     let mut out = format!(
         "saved query {} (written in the user's workspace, not read from the database):\n",
@@ -244,7 +244,7 @@ pub(super) fn render_saved_query(title: &str, text: &str) -> String {
     out
 }
 
-/// Nomme une requête sauvegardée qui n'a pas tenu dans le budget.
+/// Names a saved query that did not fit in the budget.
 pub(super) fn render_omitted_query(title: &str) -> String {
     format!(
         "mentioned by the user but not included, over the context budget: saved query {}\n",
@@ -252,7 +252,7 @@ pub(super) fn render_omitted_query(title: &str) -> String {
     )
 }
 
-/// Nomme une relation mentionnée qui n'a pas tenu dans le budget.
+/// Names a mentioned relation that did not fit in the budget.
 pub(super) fn render_omitted_relation(path: &CatalogPath, naming: Naming) -> String {
     format!(
         "mentioned by the user but not described, over the context budget: {}\n",
@@ -265,26 +265,27 @@ fn json_title(title: &str) -> String {
 }
 
 impl AgentContext {
-    /// Mentions écartées : inconnues du catalogue local, ou au-delà de
-    /// [`MAX_MENTIONS`]. Rien de ce que la webview en disait n'est parti.
+    /// Dropped mentions: unknown to the local catalog, or beyond
+    /// [`MAX_MENTIONS`]. Nothing the webview said about them left.
     #[must_use]
     pub const fn ignored_mentions(&self) -> usize {
         self.ignored_mentions
     }
 
-    /// Mentions reconnues mais qui n'ont pas tenu dans le budget : elles sont
-    /// nommées dans le contexte, pas décrites.
+    /// Mentions recognized but that did not fit in the budget: they are named
+    /// in the context, not described.
     #[must_use]
     pub const fn omitted_mentions(&self) -> usize {
         self.omitted_mentions
     }
 
-    /// Le texte d'une question qui **suit** une session déjà ouverte : les
-    /// objets mentionnés, rendus par [`ContextBuilder::build`], puis la question.
+    /// The text of a question that **follows** an already open session: the
+    /// mentioned objects, rendered by [`ContextBuilder::build`], then the
+    /// question.
     ///
-    /// Le même texte pour les deux destinations — un message utilisateur de
-    /// fournisseur, une invite d'agent externe. Le préambule précède l'encadré,
-    /// comme dans le message système : la consigne avant les données.
+    /// The same text for both destinations — a provider user message, an
+    /// external agent prompt. The preamble precedes the fence, as in the system
+    /// message: the instruction before the data.
     pub(crate) fn follow_up(&self, question: &str) -> String {
         format!(
             "{FOLLOW_UP_INTRO}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{question}",

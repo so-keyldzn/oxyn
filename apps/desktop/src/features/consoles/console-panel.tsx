@@ -243,9 +243,9 @@ export function ConsolePanel({
         return
       }
       if (rowsGeneration.current !== generation) {
-        // The answer is about values no longer shown (UX-SPEC « Consoles
-        // indépendantes » : a stale answer does not act). Starting the run
-        // with the old snapshot would execute something other than what the
+        // The answer is about values no longer shown (UX-SPEC « Independent
+        // consoles »: a stale answer does not act). Starting the run with the
+        // old snapshot would execute something other than what the
         // person sees.
         return
       }
@@ -613,7 +613,7 @@ export function ConsolePanel({
   // The editor's context menu: the scopes of ⌘↵ made explicit, run by the
   // same function as the Run button, and the object a name opens — resolved
   // against the tree the sidebar already read, then opened as a click in the
-  // catalog would (UX-SPEC, « Menus contextuels »).
+  // catalog would (UX-SPEC, « Context menus »).
   const queryClient = useQueryClient()
   const editorMenu: SqlEditorMenu = {
     onRun: (runTarget) => void run(runTarget),

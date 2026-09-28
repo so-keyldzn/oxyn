@@ -1,59 +1,57 @@
-//! L'hôte de plugins d'Oxyn : manifestes, permissions, approbations.
+//! Oxyn's plugin host: manifests, permissions, approvals.
 //!
-//! Trois surfaces d'extension ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md)) :
-//! **drivers**, **agents** et **formats d'export ou visualisations**. Deux
-//! d'entre elles exécutent du code tiers et attendent la phase 4 ; la
-//! troisième — les agents — est **déclarative** et fonctionne dès aujourd'hui,
-//! sans WebAssembly et sans qu'aucune instruction étrangère ne tourne.
+//! Three extension surfaces ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md)):
+//! **drivers**, **agents** and **export formats or visualizations**. Two of
+//! them run third-party code and wait for phase 4; the third — agents — is
+//! **declarative** and works today, without WebAssembly and without any foreign
+//! instruction running.
 //!
-//! C'est la raison d'être du découpage de cette crate : le cas courant ne paie
-//! pas le prix du cas rare. `wasmtime` est derrière la feature `wasm-host`,
-//! désactivée par défaut, et rien de ce que fait un agent de plugin n'en
-//! dépend.
+//! It is the reason for this crate's split: the common case does not pay the
+//! price of the rare one. `wasmtime` is behind the `wasm-host` feature, off by
+//! default, and nothing a plugin agent does depends on it.
 //!
-//! # Ce qu'on y trouve
+//! # What it contains
 //!
-//! | Module | Sujet | Autorité |
+//! | Module | Subject | Authority |
 //! |---|---|---|
-//! | [`manifest`] | `plugin.toml` : identité, surface, permissions | ADR-0005, PLUGIN-CONTRACT |
-//! | [`registry`] | découverte, états, approbations persistées | ADR-0005 |
-//! | [`agent_plugin`] | les agents déclaratifs, **sans WASM** | ARCHITECTURE §7.3 |
-//! | [`error`] | [`PluginError`], et sa projection sur le domaine | — |
-//! | `host` *(feature `wasm-host`)* | moteur wasmtime, limites, magasin | PLUGIN-CONTRACT §2 |
+//! | [`manifest`] | `plugin.toml`: identity, surface, permissions | ADR-0005, PLUGIN-CONTRACT |
+//! | [`registry`] | discovery, states, persisted approvals | ADR-0005 |
+//! | [`agent_plugin`] | declarative agents, **without WASM** | ARCHITECTURE §7.3 |
+//! | [`error`] | [`PluginError`], and its projection onto the domain | — |
+//! | `host` *(feature `wasm-host`)* | wasmtime engine, limits, store | PLUGIN-CONTRACT §2 |
 //!
-//! # Les trois choix qui gouvernent cette crate
+//! # The three choices that govern this crate
 //!
-//! **Par défaut, rien n'est accordé.** Un manifeste sans section
-//! `[permissions]` ne donne ni réseau, ni fichier, ni accès aux connexions :
-//! c'est ce que porte le défaut de [`PluginPermissions`]. Déposer un répertoire
-//! n'accorde rien non plus : le plugin reste
-//! [`Installed`](PluginState::Installed) jusqu'à ce que l'utilisateur ait vu
-//! ce qu'il demande.
+//! **By default, nothing is granted.** A manifest without a `[permissions]`
+//! section gives neither network, nor file, nor access to connections: that is
+//! what the default of [`PluginPermissions`] carries. Dropping a directory
+//! grants nothing either: the plugin stays [`Installed`](PluginState::Installed)
+//! until the user has seen what it asks for.
 //!
-//! **Ce qui n'est pas compris est refusé.** Un `plugin.toml` est écrit par un
-//! tiers ([SECURITY](../../../docs/SECURITY.md)). Une permission mal
-//! orthographiée, un `entrypoint` qui remonte d'un cran, un identifiant qui ne
-//! correspond pas au répertoire, une version d'interface antérieure : chacun
-//! produit un refus nommé, jamais un chargement dégradé.
+//! **What is not understood is refused.** A `plugin.toml` is written by a third
+//! party ([SECURITY](../../../docs/SECURITY.md)). A misspelled permission, an
+//! `entrypoint` that climbs up one level, an identifier that does not match the
+//! directory, an older interface version: each produces a named refusal, never
+//! a degraded load.
 //!
-//! **Un plugin ne reçoit rien qu'il puisse détourner.** Pas de poignée de
-//! driver, pas de liste de connexions, pas de trousseau
-//! ([`PLUGIN-CONTRACT` §1](../../../docs/PLUGIN-CONTRACT.md)). Ce qu'un plugin
-//! obtient au mieux, c'est le droit d'**émettre des `Command`** — qui traversent
-//! le `PolicyGate` comme celles d'un humain (I-01,
+//! **A plugin receives nothing it could divert.** No driver handle, no list of
+//! connections, no keychain
+//! ([`PLUGIN-CONTRACT` §1](../../../docs/PLUGIN-CONTRACT.md)). What a plugin
+//! gets at best is the right to **emit `Command`s** — which go through the
+//! `PolicyGate` like a human's (I-01,
 //! [ADR-0004](../../../docs/adr/0004-command-bus.md)). `connections =
-//! "read_write"` ne veut donc pas dire que ses écritures passent ; il veut dire
-//! qu'il a le droit de les proposer.
+//! "read_write"` therefore does not mean its writes go through; it means it has
+//! the right to propose them.
 //!
-//! # Exemple : un agent fourni par plugin, sans une ligne de WebAssembly
+//! # Example: an agent provided by a plugin, without a line of WebAssembly
 //!
 //! ```
 //! use oxyn_plugin::{ConnectionAccess, DeclarativeAgent, PluginKind, PluginManifest};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let texte = r#"
+//! let text = r#"
 //! id          = "revue-schema"
-//! name        = "Revue de schéma"
+//! name        = "Schema review"
 //! version     = "1.0.0"
 //! api_version = "0.1.0"
 //! kind        = "agent"
@@ -67,13 +65,13 @@
 //! allowed_tools = ["refresh_catalog"]
 //! "#;
 //!
-//! let manifeste = PluginManifest::from_toml(texte)?;
-//! assert_eq!(manifeste.kind, PluginKind::Agent);
+//! let manifest_toml = PluginManifest::from_toml(text)?;
+//! assert_eq!(manifest_toml.kind, PluginKind::Agent);
 //!
-//! // Aucun code tiers ne tournera : la feature `wasm-host` n'est pas en jeu.
-//! assert!(!manifeste.requires_wasm());
+//! // No third-party code will run: the `wasm-host` feature is not involved.
+//! assert!(!manifest_toml.requires_wasm());
 //!
-//! let agent = DeclarativeAgent::from_manifest(&manifeste)?;
+//! let agent = DeclarativeAgent::from_manifest(&manifest_toml)?;
 //! assert_eq!(agent.connections(), ConnectionAccess::ReadOnly);
 //! assert!(agent.spec().allows("refresh_catalog"));
 //! assert!(!agent.spec().allows("execute_query"));
@@ -81,7 +79,7 @@
 //! # }
 //! ```
 //!
-//! Pour lire un agent directement depuis un répertoire :
+//! To read an agent directly from a directory:
 //! [`agent_plugin::load_from_dir`].
 
 pub mod agent_plugin;
@@ -114,72 +112,72 @@ mod tests {
 
     use super::*;
 
-    /// Le trajet complet de la crate, sur le scénario qui la met vraiment en
-    /// jeu : un agent fourni par plugin devient utilisable, et rien d'autre ne
-    /// le devient au passage.
+    /// The full path of the crate, on the scenario that really brings it into
+    /// play: an agent provided by a plugin becomes usable, and nothing else
+    /// does on the way.
     #[test]
-    fn le_trajet_d_un_agent_fourni_par_plugin() {
-        let racine = TempDir::new("trajet");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+    fn the_path_of_a_plugin_provided_agent() {
+        let root = TempDir::new("trajet");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        root.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("découverte");
+        let mut plugin_registry = PluginRegistry::new(root.path());
+        plugin_registry.discover().expect("discovery");
 
-        // 1. Deux plugins sont installés, aucun n'est autorisé.
-        assert_eq!(registre.len(), 2);
-        assert_eq!(registre.approved().count(), 0);
-        assert!(registre.declarative_agents().is_empty());
+        // 1. Two plugins are installed, none is authorized.
+        assert_eq!(plugin_registry.len(), 2);
+        assert_eq!(plugin_registry.approved().count(), 0);
+        assert!(plugin_registry.declarative_agents().is_empty());
 
-        // 2. Ce qu'on montre à l'utilisateur avant qu'il approuve.
-        let resume = registre
+        // 2. What is shown to the user before they approve.
+        let summary_lines = plugin_registry
             .require("csv")
-            .expect("plugin découvert")
+            .expect("discovered plugin")
             .manifest()
-            .expect("manifeste lisible")
+            .expect("readable manifest")
             .permissions
             .summary();
         assert!(
-            resume.iter().any(|l| l.contains("a.example:443")),
-            "{resume:?}"
+            summary_lines.iter().any(|l| l.contains("a.example:443")),
+            "{summary_lines:?}"
         );
 
-        // 3. L'utilisateur approuve le seul agent.
-        registre.approve("revue").expect("approbation");
-        registre.save().expect("écriture des approbations");
+        // 3. The user approves the agent only.
+        plugin_registry.approve("revue").expect("approval");
+        plugin_registry.save().expect("writing the approvals");
 
-        let agents = registre.declarative_agents();
+        let agents = plugin_registry.declarative_agents();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].plugin().as_str(), "revue");
         assert_eq!(agents[0].connections(), ConnectionAccess::ReadOnly);
 
-        // 4. L'agent approuvé ne fait pas tourner de code : la phase 4 n'est pas
-        //    une condition pour l'utiliser.
-        let revue = registre.require("revue").expect("plugin découvert");
-        assert!(!revue.manifest().expect("manifeste").requires_wasm());
+        // 4. The approved agent runs no code: phase 4 is not a condition for
+        //    using it.
+        let revue = plugin_registry.require("revue").expect("discovered plugin");
+        assert!(!revue.manifest().expect("manifest").requires_wasm());
 
-        // 5. Et l'autre plugin, lui, n'a rien obtenu.
-        let csv = registre.require("csv").expect("plugin découvert");
+        // 5. And the other plugin got nothing.
+        let csv = plugin_registry.require("csv").expect("discovered plugin");
         assert!(csv.effective_permissions().is_err());
         assert_eq!(*csv.state(), PluginState::Installed);
     }
 
-    /// Une erreur de plugin doit rester lisible après sa projection sur le
-    /// domaine : c'est ce que l'interface affiche.
+    /// A plugin error must stay readable after its projection onto the
+    /// domain: it is what the interface displays.
     #[test]
-    fn une_erreur_de_plugin_garde_son_sens_dans_le_domaine() {
-        let racine = TempDir::new("erreurs");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+    fn a_plugin_error_keeps_its_meaning_in_the_domain() {
+        let root = TempDir::new("errors");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("découverte");
+        let mut plugin_registry = PluginRegistry::new(root.path());
+        plugin_registry.discover().expect("discovery");
 
-        let plugin = registre.require("revue").expect("plugin découvert");
+        let plugin = plugin_registry.require("revue").expect("discovered plugin");
         let err = plugin
             .effective_permissions()
-            .expect_err("le plugin n'est pas approuvé");
-        let domaine = oxyn_core::OxynError::from(err);
-        assert!(domaine.is_user_error());
-        assert!(!domaine.is_retryable());
+            .expect_err("the plugin is not approved");
+        let domain = oxyn_core::OxynError::from(err);
+        assert!(domain.is_user_error());
+        assert!(!domain.is_retryable());
     }
 }

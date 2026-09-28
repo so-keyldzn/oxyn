@@ -99,7 +99,7 @@ export const InvalidValue: Story = {
 /**
  * The panel opens on the offending row: it is marked `aria-invalid`, brought
  * into view and handed the focus, so the person sees exactly what to fix
- * (UX-SPEC § Valeurs liées d'une console).
+ * (UX-SPEC § Bound values of a console).
  */
 export const FaultyRowFocused: Story = {
   args: {

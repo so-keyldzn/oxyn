@@ -152,7 +152,7 @@ const many: Array<WorkspaceTabItem> = Array.from(
     key: `console:${index + 1}`,
     title:
       index === 4
-        ? "تقرير الفواتير غير المدفوعة — un nom très long qui ne tient pas.sql"
+        ? "تقرير الفواتير غير المدفوعة — a very long name that does not fit.sql"
         : `console_${index + 1}.sql`,
     fromAgent: false,
     activity: "idle" as const,

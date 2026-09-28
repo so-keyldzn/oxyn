@@ -46,7 +46,7 @@ function heading(state: LibraryEntryState) {
 
 /**
  * The full text of a history entry or a saved query, read only (UX-SPEC
- * « Consultation locale des requêtes »). It opens beside the console and
+ * « Local query browsing »). It opens beside the console and
  * touches neither its draft nor its result: selection and copy work, typing
  * and ⌘↵ do nothing.
  *

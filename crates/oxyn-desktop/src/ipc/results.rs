@@ -141,7 +141,7 @@ impl ValuePageView {
 /// Every export format the domain names, and whether it can be written today.
 ///
 /// A format the product cannot write yet is shown **unavailable**, not absent
-/// ([UX-SPEC](../../../../docs/UX-SPEC.md#ce-qui-est-exporté-est-ce-qui-est-affiché)).
+/// ([UX-SPEC](../../../../docs/UX-SPEC.md#what-is-exported-is-what-is-displayed)).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportFormatChoice {
@@ -186,8 +186,8 @@ const MAX_SUGGESTED_NAME: usize = 120;
 /// Only a **name**: separators, control characters and leading dots are
 /// dropped, so that a suggestion built from a hostile object name cannot point
 /// the dialog elsewhere. The user still chooses the folder and the final name
-/// in the native dialog; the webview never sends a path (SECURITY, « Surface
-/// d'entrée »).
+/// in the native dialog; the webview never sends a path (SECURITY, « Input
+/// surface »).
 #[must_use]
 pub fn suggested_file_name(suggestion: &str, extension: &str) -> String {
     let cleaned: String = suggestion

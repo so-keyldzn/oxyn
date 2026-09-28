@@ -102,7 +102,7 @@ impl History<'_> {
                 AND (?3 IS NULL OR ts>=?3) AND (?4='' OR status=?4 OR (?4='ambiguous' AND error_class='ambiguous'))
                 AND (?5 IS NULL OR id<?5) AND (?7=0 OR result_id IS NOT NULL) ORDER BY id DESC LIMIT ?6")?;
             let mut entries = query.query_and_then(params![filter.connection.map(|id| id.to_string()), search, cutoff, filter.status.as_str(), filter.before, i64::from(filter.limit)+1, filter.results_only], |row| -> Result<HistorySummary> {
-                let entry = depuis_ligne(row)?;
+                let entry = from_row(row)?;
                 let reconcile = entry.record.requires_reconciliation();
                 let record = entry.record;
                 Ok(HistorySummary { id: entry.id, ts: record.ts, connection: record.connection, connection_name: record.connection_name,
@@ -196,8 +196,8 @@ impl History<'_> {
                     });
                 }
                 transaction
-                    .query_row(&format!("{SELECT_COLONNES} WHERE id=?1"), [id], |row| {
-                        Ok(depuis_ligne(row))
+                    .query_row(&format!("{SELECT_COLUMNS} WHERE id=?1"), [id], |row| {
+                        Ok(from_row(row))
                     })
                     .optional()?
                     .transpose()

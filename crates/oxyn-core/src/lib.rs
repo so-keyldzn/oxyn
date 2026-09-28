@@ -1,72 +1,72 @@
-//! Le vocabulaire du domaine d'Oxyn.
+//! Oxyn's domain vocabulary.
 //!
-//! `oxyn-core` **ne dépend d'aucune autre crate du workspace**, ni de `tauri`, ni
-//! d'un client de base de données. C'est la couche qui se teste sans machine :
-//! aucune entrée-sortie, aucun réseau, aucun fichier ouvert. Tout le reste du
-//! workspace importe ces types, donc leur nommage est un engagement.
+//! `oxyn-core` **depends on no other crate of the workspace**, nor on `tauri`, nor
+//! on a database client. It is the layer that is tested without a machine: no
+//! input-output, no network, no open file. The rest of the workspace imports
+//! these types, so their naming is a commitment.
 //!
-//! # Ce qu'on y trouve
+//! # What it contains
 //!
-//! | Module | Sujet | Autorité |
+//! | Module | Subject | Authority |
 //! |---|---|---|
-//! | [`ids`] | identifiants d'instance et de driver | — |
-//! | [`error`] | [`OxynError`], et la famille à laquelle une erreur appartient | DRIVER-CONTRACT §4 |
-//! | [`capabilities`] | ce qu'une session sait faire | ADR-0003 |
-//! | [`value`] | valeurs scalaires isolées | DRIVER-CONTRACT §7 |
-//! | [`query`] | langage, intention, risque, limites | ADR-0003 |
-//! | [`cancel`] | annulation coopérative et hiérarchique | DRIVER-CONTRACT §2 |
-//! | [`connection`] | configuration et marquage d'environnement | SECURITY |
+//! | [`ids`] | instance and driver identifiers | — |
+//! | [`error`] | [`OxynError`], and the family an error belongs to | DRIVER-CONTRACT §4 |
+//! | [`capabilities`] | what a session can do | ADR-0003 |
+//! | [`value`] | isolated scalar values | DRIVER-CONTRACT §7 |
+//! | [`query`] | language, intent, risk, limits | ADR-0003 |
+//! | [`cancel`] | cooperative, hierarchical cancellation | DRIVER-CONTRACT §2 |
+//! | [`connection`] | configuration and environment marking | SECURITY |
 //! | [`command`] | [`Command`], [`Actor`] | ADR-0004 |
 //! | [`policy`] | [`PolicyGate`], [`DefaultPolicy`] | ADR-0004, SECURITY |
-//! | [`ai`] | déclaration d'un fournisseur, provenance d'un texte | ADR-0023 |
-//! | [`stats`] | volumétrie et temps d'une exécution | — |
-//! | [`transaction`] | l'état de transaction qu'une session a constaté | ADR-0039 |
-//! | [`event`] | ce qui remonte vers l'interface | UX-SPEC |
+//! | [`ai`] | a provider's declaration, a text's provenance | ADR-0023 |
+//! | [`stats`] | volume and time of an execution | — |
+//! | [`transaction`] | the transaction state a session observed | ADR-0039 |
+//! | [`event`] | what goes up to the interface | UX-SPEC |
 //!
-//! # Les trois choix qui gouvernent cette crate
+//! # The three choices that govern this crate
 //!
-//! **Dans le doute, on protège.** [`StatementIntent::Unknown`] compte pour
-//! mutante, [`Environment`] vaut [`Production`](Environment::Production) par
-//! défaut, [`ExecLimits`] par défaut interdit l'écriture, et une commande
-//! mutante visant une connexion inconnue du `PolicyGate` est refusée. Chacun de
-//! ces défauts est le contraire du plus commode ; c'est délibéré.
+//! **When in doubt, protect.** [`StatementIntent::Unknown`] counts as
+//! mutating, [`Environment`] defaults to [`Production`](Environment::Production),
+//! the default [`ExecLimits`] forbid writing, and a mutating command aimed at a
+//! connection unknown to the `PolicyGate` is refused. Each of these defaults is
+//! the opposite of the most convenient one; that is deliberate.
 //!
-//! **Rien ne se devine.** Une capacité se déclare, une intention se déclare, une
-//! famille d'erreur se déclare. Classer sur un nom d'instruction serait faux :
-//! `EXPLAIN ANALYZE` exécute la requête qu'il analyse, `DELETE` compris.
+//! **Nothing is guessed.** A capability is declared, an intent is declared, an
+//! error family is declared. Classifying on a statement name would be wrong:
+//! `EXPLAIN ANALYZE` runs the query it analyzes, `DELETE` included.
 //!
-//! **Aucun secret, aucune valeur de la base dans un rendu.** Les `Debug` de
-//! [`ConnectionConfig`] et d'[`ExecRequest`] sont écrits à la main pour masquer
-//! les valeurs de paramètres et les valeurs liées : un `Debug` dérivé est le
-//! mode de fuite le plus fréquent parce qu'il est invisible à la relecture.
+//! **No secret, no database value in a rendering.** The `Debug` of
+//! [`ConnectionConfig`] and of [`ExecRequest`] are written by hand to mask
+//! parameter values and bound values: a derived `Debug` is the most frequent
+//! leak because it is invisible in review.
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```
 //! use oxyn_core::prelude::*;
 //!
-//! let politique = DefaultPolicy::new();
-//! let connexion = ConnectionConfig::new("caisse", DriverId::postgres())
+//! let policy = DefaultPolicy::new();
+//! let connection = ConnectionConfig::new("checkout", DriverId::postgres())
 //!     .with_environment(Environment::Production);
-//! politique.register(&connexion);
+//! policy.register(&connection);
 //!
-//! let commande = Command::Execute {
-//!     connection: connexion.id,
+//! let command = Command::Execute {
+//!     connection: connection.id,
 //!     session: SessionId::new(),
 //!     request: Box::new(
-//!         ExecRequest::new(QueryLanguage::SQL, "DELETE FROM commandes")
+//!         ExecRequest::new(QueryLanguage::SQL, "DELETE FROM orders")
 //!             .with_intent(StatementIntent::Write)
 //!             .with_risk(MutationRisk::UnboundedDelete),
 //!     ),
 //! };
 //!
-//! // Un humain doit confirmer, et la confirmation nomme la connexion.
-//! let decision = politique.authorize(&Actor::Human, &commande, Environment::Production);
+//! // A human must confirm, and the confirmation names the connection.
+//! let decision = policy.authorize(&Actor::Human, &command, Environment::Production);
 //! assert!(decision.requires_approval());
 //!
-//! // Pour un agent, la production est en lecture seule stricte : c'est un refus.
+//! // For an agent, production is strictly read-only: it is a refusal.
 //! let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
-//! let decision = politique.authorize(&agent, &commande, Environment::Production);
+//! let decision = policy.authorize(&agent, &command, Environment::Production);
 //! assert!(decision.is_denied());
 //! ```
 
@@ -120,10 +120,10 @@ pub use transaction::TransactionState;
 pub use value::{ParameterParseError, ParameterType, ScalarValue};
 pub use window_layout::{WindowGeometry, WindowLayout, WindowLayoutChange};
 
-/// Ce qu'on importe d'un coup quand on travaille avec le domaine.
+/// What one imports in one go when working with the domain.
 ///
-/// Volontairement large : ces types sont du vocabulaire, et un vocabulaire
-/// qu'il faut importer nom par nom finit par être contourné.
+/// Deliberately broad: these types are vocabulary, and a vocabulary that must
+/// be imported name by name ends up being bypassed.
 ///
 /// ```
 /// use oxyn_core::prelude::*;
@@ -152,51 +152,50 @@ pub mod prelude {
 mod tests {
     use crate::prelude::*;
 
-    /// Le trajet de la porte de sortie de la phase 0, réduit à ce que `core`
-    /// peut en éprouver : une commande de lecture émise par un test traverse le
-    /// `PolicyGate`.
+    /// The phase 0 exit-gate path, reduced to what `core` can exercise: a read
+    /// command emitted by a test goes through the `PolicyGate`.
     #[test]
-    fn une_lecture_traverse_le_gate() {
-        let politique = DefaultPolicy::new();
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_read_goes_through_the_gate() {
+        let policy = DefaultPolicy::new();
+        let connection = ConnectionConfig::new("workshop", DriverId::sqlite())
             .with_environment(Environment::Local);
-        politique.register(&connexion);
+        policy.register(&connection);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: connection.id,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "SELECT 1").with_intent(StatementIntent::Read),
             ),
         };
 
-        let decision = politique.authorize(&Actor::Human, &commande, Environment::Local);
+        let decision = policy.authorize(&Actor::Human, &command, Environment::Local);
         assert_eq!(decision, Decision::Allow);
     }
 
-    /// Le scénario de SECURITY : l'utilisateur ajoute une connexion à la hâte
-    /// sans remplir le champ d'environnement, puis lance un `UPDATE` sans
-    /// `WHERE`. Rien ne doit partir sans confirmation.
+    /// The SECURITY scenario: the user hastily adds a connection without
+    /// filling in the environment field, then runs an `UPDATE` without
+    /// `WHERE`. Nothing must leave without confirmation.
     #[test]
-    fn une_connexion_ajoutee_a_la_hate_est_traitee_comme_de_la_production() {
-        let politique = DefaultPolicy::new();
-        // Aucun `with_environment` : le défaut s'applique.
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres());
-        assert!(connexion.is_production());
-        politique.register(&connexion);
+    fn a_hastily_added_connection_is_treated_as_production() {
+        let policy = DefaultPolicy::new();
+        // No `with_environment`: the default applies.
+        let connection = ConnectionConfig::new("customer database", DriverId::postgres());
+        assert!(connection.is_production());
+        policy.register(&connection);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: connection.id,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::SQL, "UPDATE clients SET actif = false")
+                ExecRequest::new(QueryLanguage::SQL, "UPDATE customers SET active = false")
                     .with_intent(StatementIntent::Write)
                     .with_risk(MutationRisk::UnboundedUpdate),
             ),
         };
 
-        // Même en annonçant `Local`, l'appelant ne dégrade pas la protection.
-        let decision = politique.authorize(&Actor::Human, &commande, Environment::Local);
+        // Even by announcing `Local`, the caller does not lower the protection.
+        let decision = policy.authorize(&Actor::Human, &command, Environment::Local);
         assert!(decision.requires_approval(), "{decision:?}");
     }
 }

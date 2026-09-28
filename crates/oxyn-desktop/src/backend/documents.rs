@@ -547,7 +547,7 @@ mod tests {
     }
 
     /// **An offline console writes without a session, and attaching it keeps
-    /// the document** (UX-SPEC § Restauration sélective au démarrage). The
+    /// the document** (UX-SPEC § Selective restore at startup). The
     /// restored copy keeps writing under the connection it was written for,
     /// so attaching it there resumes the same document through the same
     /// write queue: the next revision follows, with no conflict and no copy.

@@ -1,66 +1,66 @@
-//! Volumétrie et temps d'une exécution.
+//! Volume and time of an execution.
 //!
-//! Ce type vit dans `oxyn-core` parce que `oxyn-data` le remplit au fil des lots
-//! et que `oxyn-driver` le renseigne côté serveur : le mettre dans l'une des
-//! deux ferait dépendre l'autre d'elle.
+//! This type lives in `oxyn-core` because `oxyn-data` fills it batch after
+//! batch and `oxyn-driver` fills in the server side: putting it in either one
+//! would make the other depend on it.
 //!
-//! [`ExecStats::bytes`] compte les octets **de données**, pas les lignes. La
-//! distinction n'est pas académique : mille lignes portant chacune un BLOB d'un
-//! mégaoctet font un gigaoctet, et c'est cette mesure — pas le compte de lignes
-//! — qui doit borner la taille d'un lot.
+//! [`ExecStats::bytes`] counts **data** bytes, not rows. The distinction is
+//! not academic: a thousand rows each carrying a one-megabyte BLOB make a
+//! gigabyte, and it is this measure — not the row count — that must bound the
+//! size of a batch.
 
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// Ce qu'a coûté une exécution.
+/// What an execution cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ExecStats {
-    /// Lignes produites, ou affectées pour une écriture.
+    /// Rows produced, or affected for a write.
     pub rows: u64,
-    /// Octets de données traversés.
+    /// Data bytes traversed.
     pub bytes: u64,
-    /// Temps mesuré **par le serveur**, quand il le rend. Distinct de
-    /// [`total_time`](Self::total_time) : leur écart est le coût du réseau et du
-    /// décodage, c'est-à-dire ce sur quoi Oxyn peut agir.
+    /// Time measured **by the server**, when it reports it. Distinct from
+    /// [`total_time`](Self::total_time): their difference is the cost of the
+    /// network and of decoding, that is, what Oxyn can act on.
     pub server_time: Option<Duration>,
-    /// Temps total, du départ de la requête à la fin du flux.
+    /// Total time, from sending the query to the end of the stream.
     pub total_time: Duration,
-    /// Nombre de lots produits.
+    /// Number of batches produced.
     pub batches: u64,
-    /// Le résultat a-t-il été tronqué par
-    /// [`ExecLimits`](crate::query::ExecLimits) ?
+    /// Was the result truncated by
+    /// [`ExecLimits`](crate::query::ExecLimits)?
     ///
-    /// Doit remonter jusqu'à l'écran : un résultat tronqué qui a l'air complet
-    /// conduit à des conclusions fausses sur des données réelles.
+    /// Must reach the screen: a truncated result that looks complete leads to
+    /// wrong conclusions about real data.
     pub truncated: bool,
 }
 
 impl ExecStats {
-    /// Enregistre un lot.
+    /// Records a batch.
     pub fn record_batch(&mut self, rows: u64, bytes: u64) {
         self.rows = self.rows.saturating_add(rows);
         self.bytes = self.bytes.saturating_add(bytes);
         self.batches = self.batches.saturating_add(1);
     }
 
-    /// Marque le résultat comme tronqué.
+    /// Marks the result as truncated.
     pub fn mark_truncated(&mut self) {
         self.truncated = true;
     }
 
-    /// Temps passé hors du serveur : réseau, décodage, conversion.
+    /// Time spent outside the server: network, decoding, conversion.
     ///
-    /// `None` si le serveur n'a pas rendu son propre temps. Une soustraction
-    /// qui passerait en négatif — horloges différentes — rend `None` plutôt
-    /// qu'une valeur absurde.
+    /// `None` if the server did not report its own time. A subtraction that
+    /// would go negative — different clocks — returns `None` rather than an
+    /// absurd value.
     #[must_use]
     pub fn client_time(&self) -> Option<Duration> {
         self.server_time
-            .and_then(|serveur| self.total_time.checked_sub(serveur))
+            .and_then(|server| self.total_time.checked_sub(server))
     }
 
-    /// Aucune ligne produite.
+    /// No row produced.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.rows == 0
@@ -72,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_lots_s_accumulent() {
+    fn batches_accumulate() {
         let mut stats = ExecStats::default();
         assert!(stats.is_empty());
 
@@ -87,9 +87,9 @@ mod tests {
     }
 
     #[test]
-    fn l_accumulation_ne_deborde_pas() {
-        // Un compteur qui déborde vaut mieux qu'une panique dans le chemin de
-        // décodage : l'entrée vient du serveur.
+    fn accumulation_does_not_overflow() {
+        // An overflowing counter is better than a panic in the decoding path:
+        // the input comes from the server.
         let mut stats = ExecStats {
             rows: u64::MAX,
             bytes: u64::MAX,
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn le_temps_client_est_l_ecart_avec_le_serveur() {
+    fn client_time_is_the_gap_with_the_server() {
         let stats = ExecStats {
             server_time: Some(Duration::from_millis(30)),
             total_time: Duration::from_millis(200),
@@ -111,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn un_temps_serveur_incoherent_ne_produit_pas_de_valeur_absurde() {
+    fn an_inconsistent_server_time_yields_no_absurd_value() {
         let stats = ExecStats {
             server_time: Some(Duration::from_secs(10)),
             total_time: Duration::from_millis(5),
@@ -119,18 +119,18 @@ mod tests {
         };
         assert_eq!(stats.client_time(), None);
 
-        let sans_serveur = ExecStats {
+        let without_server = ExecStats {
             total_time: Duration::from_millis(5),
             ..ExecStats::default()
         };
-        assert_eq!(sans_serveur.client_time(), None);
+        assert_eq!(without_server.client_time(), None);
     }
 
     #[test]
-    fn la_troncature_se_declare() {
+    fn truncation_is_declared() {
         let mut stats = ExecStats::default();
         stats.record_batch(10_000, 1);
         stats.mark_truncated();
-        assert!(stats.truncated, "un résultat tronqué doit se savoir");
+        assert!(stats.truncated, "a truncated result must be known");
     }
 }

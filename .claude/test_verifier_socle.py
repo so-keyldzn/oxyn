@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Fige le calcul des ancres du vérificateur de socle, et la CI sélective.
+"""Pins the anchor computation of the foundation verifier, and selective CI.
 
-Un slug calculé autrement que GitHub donne deux pannes opposées : un fragment
-juste refusé, et le contrôle finit désactivé ; un fragment mort accepté, et le
-contrôle redevient décoratif. Chaque cas ci-dessous est un titre réel du dépôt
-ou la forme qui a déjà trompé un rédacteur.
+A slug computed differently from GitHub gives two opposite failures: a correct
+fragment refused, and the check ends up disabled; a dead fragment accepted, and
+the check becomes decorative again. Each case below is a real heading of the
+repository (French ones survive in i18n/fr/) or the shape that has already
+fooled a writer.
 
-La CI sélective (ADR-0045) tient à deux choses que rien d'autre ne vérifie :
-`script/zones-ci` range tout fichier inconnu, et tout événement autre qu'une
-PR, du côté « tout tourne » ; le job `qualite` agrège chaque job qui passe la
-porte.
+Selective CI (ADR-0045) rests on two things nothing else checks:
+`script/zones-ci` puts every unknown file, and every event other than a PR, on
+the "everything runs" side; the `qualite` job aggregates every job that passes
+the gate.
 
     python3 .claude/test_verifier_socle.py
 """
@@ -24,19 +25,26 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from verifier_socle import MOTIF_TITRE, _ancres, _slug, erreurs_agregat  # noqa: E402
+from verifier_socle import (  # noqa: E402
+    HEADING_PATTERN,
+    _anchors,
+    _slug,
+    fingerprint,
+    aggregate_errors,
+    translation_errors,
+)
 
 
-def _charger_zones_ci():
-    chemin = Path(__file__).resolve().parents[1] / "script" / "zones-ci"
-    chargeur = importlib.machinery.SourceFileLoader("zones_ci", str(chemin))
-    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("zones_ci", chargeur))
-    chargeur.exec_module(module)
+def _load_zones_ci():
+    path_str = Path(__file__).resolve().parents[1] / "script" / "zones-ci"
+    loader = importlib.machinery.SourceFileLoader("zones_ci", str(path_str))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("zones_ci", loader))
+    loader.exec_module(module)
     return module
 
 
-zones_ci = _charger_zones_ci()
-TOUT = {"rust", "front", "docs"}
+zones_ci = _load_zones_ci()
+EVERYTHING = {"rust", "front", "docs"}
 
 ZONES: list[tuple[str, set[str]]] = [
     ("crates/oxyn-core/src/lib.rs", {"rust"}),
@@ -45,20 +53,20 @@ ZONES: list[tuple[str, set[str]]] = [
     ("apps/desktop/pnpm-lock.yaml", {"front"}),
     ("docs/adr/0045-ci-selective-sur-les-pull-requests.md", {"docs"}),
     ("CLAUDE.md", {"docs"}),
-    ("Cargo.lock", TOUT),
-    ("Cargo.toml", TOUT),
-    ("Makefile", TOUT),
-    (".github/workflows/qualite.yml", TOUT),
-    (".claude/verifier_socle.py", TOUT),
-    ("script/zones-ci", TOUT),
-    ("deny.toml", TOUT),
-    (".cargo/config.toml", TOUT),
-    # Inconnu : tout, jamais rien.
-    ("NOTICE", TOUT),
-    ("LICENSE", TOUT),
+    ("Cargo.lock", EVERYTHING),
+    ("Cargo.toml", EVERYTHING),
+    ("Makefile", EVERYTHING),
+    (".github/workflows/qualite.yml", EVERYTHING),
+    (".claude/verifier_socle.py", EVERYTHING),
+    ("script/zones-ci", EVERYTHING),
+    ("deny.toml", EVERYTHING),
+    (".cargo/config.toml", EVERYTHING),
+    # Unknown: everything, never nothing.
+    ("NOTICE", EVERYTHING),
+    ("LICENSE", EVERYTHING),
 ]
 
-WORKFLOW_AGREGE = """\
+AGGREGATED_WORKFLOW = """\
 jobs:
   zones:
     runs-on: x
@@ -84,8 +92,8 @@ SLUGS: list[tuple[str, str]] = [
     ("Le type `Vec<u8>`", "le-type-vecu8"),
 ]
 
-# Le `#` final n'est une clôture de titre que précédé d'une espace.
-TITRES: list[tuple[str, str]] = [
+# The final `#` only closes a heading when preceded by a space.
+HEADINGS: list[tuple[str, str]] = [
     ("## Le langage F#", "le-langage-f"),
     ("## Clôturé ##", "clôturé"),
 ]
@@ -101,55 +109,80 @@ DOCUMENT = """\
 """
 
 
-def echecs_ci() -> list[str]:
-    echecs = [
-        f"zones_de({chemin!r}) = {sorted(obtenues)}, attendu {sorted(attendu)}"
-        for chemin, attendu in ZONES
-        if (obtenues := zones_ci.zones_de(chemin)) != attendu
+def ci_failures() -> list[str]:
+    failures = [
+        f"zones_de({path_str!r}) = {sorted(actual_set)}, expected {sorted(expected)}"
+        for path_str, expected in ZONES
+        if (actual_set := zones_ci.zones_of(path_str)) != expected
     ]
-    if zones_ci.zones_touchees("pull_request", ["docs/README.md"]) != {"docs"}:
-        echecs.append("une PR de documentation seule touche d'autres zones")
-    for evenement in ("push", "workflow_dispatch"):
-        if zones_ci.zones_touchees(evenement, ["docs/README.md"]) != TOUT:
-            echecs.append(f"`{evenement}` ne fait pas tout tourner")
-    if erreurs_agregat(WORKFLOW_AGREGE):
-        echecs.append(f"agrégat complet refusé : {erreurs_agregat(WORKFLOW_AGREGE)}")
-    oubli = WORKFLOW_AGREGE.replace("needs: [zones, rust]", "needs: [zones]")
-    if not any("`rust`" in e for e in erreurs_agregat(oubli)):
-        echecs.append("un job `make` absent des needs de `qualite` n'est pas refusé")
-    sans_agregat = WORKFLOW_AGREGE.split("  qualite:")[0]
-    if not erreurs_agregat(sans_agregat):
-        echecs.append("un workflow sans job `qualite` n'est pas refusé")
-    return echecs
+    if zones_ci.touched_zones("pull_request", ["docs/README.md"]) != {"docs"}:
+        failures.append("a documentation-only PR touches other areas")
+    for event in ("push", "workflow_dispatch"):
+        if zones_ci.touched_zones(event, ["docs/README.md"]) != EVERYTHING:
+            failures.append(f"`{event}` does not run everything")
+    if aggregate_errors(AGGREGATED_WORKFLOW):
+        failures.append(f"complete aggregate refused: {aggregate_errors(AGGREGATED_WORKFLOW)}")
+    omission = AGGREGATED_WORKFLOW.replace("needs: [zones, rust]", "needs: [zones]")
+    if not any("`rust`" in e for e in aggregate_errors(omission)):
+        failures.append("a `make` job missing from the needs of `qualite` is not refused")
+    without_aggregate = AGGREGATED_WORKFLOW.split("  qualite:")[0]
+    if not aggregate_errors(without_aggregate):
+        failures.append("a workflow without a `qualite` job is not refused")
+    return failures
 
 
-def principal() -> int:
-    echecs = [
-        f"_slug({titre!r}) = {_slug(titre)!r}, attendu {attendu!r}"
-        for titre, attendu in SLUGS
-        if _slug(titre) != attendu
+def translation_failures() -> list[str]:
+    """A fresh mirror passes; an edited source or a missing header fails."""
+    failures = []
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        source = root / "CLAUDE.md"
+        source.write_text("# Oxyn\n", encoding="utf-8")
+        mirror = root / "i18n" / "fr" / "CLAUDE.md"
+        mirror.parent.mkdir(parents=True)
+        mirror.write_text(
+            f'<!-- oxyn-translation source="CLAUDE.md" sha256="{fingerprint(source)}" -->\n# Oxyn\n',
+            encoding="utf-8",
+        )
+        if translation_errors(root):
+            failures.append(f"fresh mirror refused: {translation_errors(root)}")
+        source.write_text("# Oxyn\n\nA new rule.\n", encoding="utf-8")
+        if not any("stale" in e for e in translation_errors(root)):
+            failures.append("a mirror older than its source is not refused")
+        mirror.write_text("# Oxyn\n", encoding="utf-8")
+        if not any("header" in e for e in translation_errors(root)):
+            failures.append("a mirror without a header is not refused")
+    return failures
+
+
+def main() -> int:
+    failures = [
+        f"_slug({heading!r}) = {_slug(heading)!r}, expected {expected!r}"
+        for heading, expected in SLUGS
+        if _slug(heading) != expected
     ]
-    for ligne, attendu in TITRES:
-        titre = MOTIF_TITRE.match(ligne)
-        obtenu = _slug(titre.group(1)) if titre else None
-        if obtenu != attendu:
-            echecs.append(f"titre {ligne!r} = {obtenu!r}, attendu {attendu!r}")
-    with tempfile.TemporaryDirectory() as dossier:
-        fichier = Path(dossier) / "a.md"
-        fichier.write_text(DOCUMENT, encoding="utf-8")
-        attendues = {"titre", "i-01", "doublon", "doublon-1"}
-        obtenues = _ancres(fichier)
-        if obtenues != attendues:
-            echecs.append(f"_ancres = {sorted(obtenues)}, attendu {sorted(attendues)}")
+    for line, expected in HEADINGS:
+        heading = HEADING_PATTERN.match(line)
+        actual = _slug(heading.group(1)) if heading else None
+        if actual != expected:
+            failures.append(f"heading {line!r} = {actual!r}, expected {expected!r}")
+    with tempfile.TemporaryDirectory() as folder:
+        file_path = Path(folder) / "a.md"
+        file_path.write_text(DOCUMENT, encoding="utf-8")
+        expected_set = {"titre", "i-01", "doublon", "doublon-1"}
+        actual_set = _anchors(file_path)
+        if actual_set != expected_set:
+            failures.append(f"_ancres = {sorted(actual_set)}, expected {sorted(expected_set)}")
 
-    echecs += echecs_ci()
+    failures += ci_failures()
+    failures += translation_failures()
 
-    for echec in echecs:
-        print(f"ÉCHEC  {echec}")
-    total = len(SLUGS) + len(TITRES) + 1 + len(ZONES) + 6
-    print(f"\n{total - len(echecs)}/{total} cas conformes")
-    return 1 if echecs else 0
+    for failure in failures:
+        print(f"FAIL  {failure}")
+    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3
+    print(f"\n{total - len(failures)}/{total} cases pass")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(principal())
+    sys.exit(main())

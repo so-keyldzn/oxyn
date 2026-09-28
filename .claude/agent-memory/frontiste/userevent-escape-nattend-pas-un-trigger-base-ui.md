@@ -1,24 +1,24 @@
 ---
 name: userevent-escape-nattend-pas-un-trigger-base-ui
-description: Dans un play Storybook, userEvent.keyboard("{Escape}") focus sur un Button qui est TooltipTrigger Base UI ne déclenche aucun onKeyDown React, alors qu'une vraie touche marche
+description: In a Storybook play, userEvent.keyboard("{Escape}") with focus on a Button that is a Base UI TooltipTrigger triggers no React onKeyDown, while a real key works
 metadata:
   type: feedback
 ---
 
-Un `play` qui fait `bouton.focus()` puis `userEvent.keyboard("{Escape}")` **ne
-déclenche aucun `onKeyDown` React** quand ce bouton est un `TooltipTrigger`
-Base UI (`<TooltipTrigger render={<Button …/>}>`). `toHaveFocus()` passe, aucun
-tooltip n'est ouvert, et pourtant le gestionnaire d'un ancêtre n'est jamais
-appelé. La même touche envoyée par le vrai clavier (Playwright
-`keyboard.press("Escape")` sur la même story) fonctionne.
+A `play` that does `button.focus()` then `userEvent.keyboard("{Escape}")` **does
+not trigger any React `onKeyDown`** when that button is a Base UI
+`TooltipTrigger` (`<TooltipTrigger render={<Button …/>}>`). `toHaveFocus()`
+passes, no tooltip is open, and yet an ancestor's handler is never called. The
+same key sent by the real keyboard (Playwright `keyboard.press("Escape")` on the
+same story) works.
 
-**Why:** deux heures perdues à croire à un bug de mon gestionnaire Escape sur le
-workspace Oxyn ; il fallait instrumenter le composant avec un `console.log` et
-comparer story-runner vs navigateur réel pour voir que l'événement ne partait
-pas. Depuis un `<input>` ou un `role=tab`, `userEvent.keyboard` marche très bien.
+**Why:** two hours lost believing in a bug of my Escape handler on the Oxyn
+workspace; the component had to be instrumented with a `console.log` and the
+story runner compared with a real browser to see that the event was not sent.
+From an `<input>` or a `role=tab`, `userEvent.keyboard` works just fine.
 
-**How to apply:** pour prouver un raccourci clavier global dans une story, poser
-le focus sur un élément **ordinaire** (champ, onglet) plutôt que sur un
-déclencheur Base UI enveloppé. Si la story doit vraiment partir d'un bouton à
-tooltip, vérifier d'abord dans un navigateur réel avant de conclure que le code
-est faux — et instrumenter le composant plutôt que le test.
+**How to apply:** to prove a global keyboard shortcut in a story, put the focus
+on an **ordinary** element (field, tab) rather than on a wrapped Base UI
+trigger. If the story really has to start from a button with a tooltip, check
+first in a real browser before concluding the code is wrong — and instrument the
+component rather than the test.

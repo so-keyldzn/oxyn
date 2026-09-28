@@ -1,67 +1,66 @@
-//! Ce qu'un driver dit de lui-même, et le formulaire de connexion qui en
-//! découle.
+//! What a driver says about itself, and the connection form that follows from
+//! it.
 //!
-//! **Aucun driver ne code son propre écran de connexion.** Il décrit ses champs
-//! ici, et l'interface les rend. Ce n'est pas une économie de code : c'est ce
-//! qui garantit qu'un champ de mot de passe reste un champ de mot de passe dans
-//! les quatorze drivers, qu'il ne se retrouve jamais dans un fichier de
-//! workspace, et qu'ajouter un driver ne demande pas de toucher à l'interface.
+//! **No driver codes its own connection screen.** It describes its fields
+//! here, and the interface renders them. It is not a saving of code: it is
+//! what guarantees that a password field stays a password field in all
+//! fourteen drivers, that it never ends up in a workspace file, and that adding
+//! a driver does not require touching the interface.
 //!
-//! # La règle que ce module fait respecter
+//! # The rule this module enforces
 //!
-//! Un champ de genre [`FieldKind::Password`] désigne une valeur qui vit dans le
-//! trousseau du système, jamais dans
+//! A field of kind [`FieldKind::Password`] designates a value that lives in the
+//! system keychain, never in
 //! [`ConnectionConfig::params`](oxyn_core::ConnectionConfig::params).
-//! [`DriverMetadata::validate`] **refuse** une configuration qui en porterait
-//! une : c'est le corollaire vérifiable d'I-03, et le fichier de workspace
-//! commité par erreur dans le dépôt de l'équipe est la panne qu'il évite.
+//! [`DriverMetadata::validate`] **refuses** a configuration that would carry
+//! one: it is the checkable corollary of I-03, and the workspace file committed
+//! by mistake into the team's repository is the failure it prevents.
 //!
-//! Le refus va plus loin que les champs déclarés : [`looks_like_secret`] reconnaît
-//! les clés qui *ressemblent* à un secret, y compris celles qu'aucun driver n'a
-//! déclarées. Un driver qui oublie de marquer son champ `Password` ne crée donc
-//! pas de fuite silencieuse.
+//! The refusal goes further than the declared fields: [`looks_like_secret`]
+//! recognizes keys that *look like* a secret, including those no driver has
+//! declared. A driver that forgets to mark its field `Password` therefore does
+//! not create a silent leak.
 
 use std::fmt;
 
 use oxyn_core::{ConnectionConfig, DriverId, OxynError, Result};
 use serde::{Deserialize, Serialize};
 
-/// Famille d'une source de données.
+/// Family of a data source.
 ///
-/// Sert à deux choses, et à deux choses seulement : grouper la liste des
-/// drivers dans l'interface (voir
-/// [`DriverRegistry::sorted`](crate::registry::DriverRegistry::sorted)), et
-/// donner un repère de lecture. **Une famille ne décide de rien** : ce qu'une
-/// session sait faire se lit dans
-/// [`Capabilities`](oxyn_core::Capabilities), jamais dans sa famille. Deux
-/// sources de la même famille n'ont pas les mêmes capacités, et c'est le sens
-/// même d'ADR-0003.
+/// Serves two purposes, and two only: grouping the list of drivers in the
+/// interface (see
+/// [`DriverRegistry::sorted`](crate::registry::DriverRegistry::sorted)), and
+/// giving a reading landmark. **A family decides nothing**: what a session can
+/// do is read in [`Capabilities`](oxyn_core::Capabilities), never in its
+/// family. Two sources of the same family do not have the same capabilities,
+/// and that is the very point of ADR-0003.
 ///
-/// L'ordre des variantes est celui de l'affichage.
+/// The order of the variants is the display order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum DriverFamily {
-    /// Relationnel transactionnel : PostgreSQL, MySQL, SQLite, SQL Server.
+    /// Transactional relational: PostgreSQL, MySQL, SQLite, SQL Server.
     Relational,
-    /// Analytique en colonnes : ClickHouse, DuckDB, BigQuery, Snowflake.
+    /// Columnar analytical: ClickHouse, DuckDB, BigQuery, Snowflake.
     Analytical,
-    /// Documentaire : MongoDB, Couchbase.
+    /// Document: MongoDB, Couchbase.
     Document,
-    /// Clé-valeur : Redis, DynamoDB.
+    /// Key-value: Redis, DynamoDB.
     KeyValue,
-    /// Vectoriel : Qdrant, pgvector en tant que tel.
+    /// Vector: Qdrant, pgvector as such.
     Vector,
-    /// Graphe : Neo4j, Memgraph.
+    /// Graph: Neo4j, Memgraph.
     Graph,
-    /// Séries temporelles : InfluxDB, TimescaleDB.
+    /// Time series: InfluxDB, TimescaleDB.
     TimeSeries,
-    /// Moteur de recherche : Elasticsearch, OpenSearch.
+    /// Search engine: Elasticsearch, OpenSearch.
     Search,
 }
 
 impl DriverFamily {
-    /// Toutes les familles, dans l'ordre d'affichage.
+    /// Every family, in display order.
     pub const ALL: [Self; 8] = [
         Self::Relational,
         Self::Analytical,
@@ -73,7 +72,7 @@ impl DriverFamily {
         Self::Search,
     ];
 
-    /// Nom stable, celui qui est écrit dans un fichier ou un journal.
+    /// Stable name, the one written to a file or a log.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -95,40 +94,41 @@ impl fmt::Display for DriverFamily {
     }
 }
 
-/// Genre d'un champ du formulaire de connexion.
+/// Kind of a connection form field.
 ///
-/// Le genre gouverne le rendu (un `Password` se saisit masqué) **et** le
-/// stockage : [`Password`](Self::Password) est le seul genre dont la valeur ne
-/// rejoint pas [`ConnectionConfig::params`](oxyn_core::ConnectionConfig::params).
+/// The kind governs the rendering (a `Password` is typed masked) **and** the
+/// storage: [`Password`](Self::Password) is the only kind whose value does not
+/// join [`ConnectionConfig::params`](oxyn_core::ConnectionConfig::params).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum FieldKind {
-    /// Texte libre sur une ligne : hôte, nom de base, schéma par défaut.
+    /// Free text on one line: host, database name, default schema.
     Text,
-    /// Secret. Saisi masqué, stocké dans le trousseau, **jamais** persisté avec
-    /// la configuration.
+    /// Secret. Typed masked, stored in the keychain, **never** persisted with
+    /// the configuration.
     Password,
-    /// Entier. Le rendu peut proposer un pas ; la validation reste au driver.
+    /// Integer. The rendering may offer a step; validation stays with the
+    /// driver.
     Number,
-    /// Case à cocher.
+    /// Checkbox.
     Bool,
-    /// Choix fermé. Les valeurs sont celles que le driver accepte, dans l'ordre
-    /// où il veut les proposer — `sslmode` en est l'exemple type.
+    /// Closed choice. The values are those the driver accepts, in the order it
+    /// wants to offer them — `sslmode` is the typical example.
     Choice(Vec<String>),
-    /// Chemin d'un fichier ou d'un répertoire local. L'interface ouvre un
-    /// sélecteur ; c'est ce dont SQLite et DuckDB ont besoin.
+    /// Path of a local file or directory. The interface opens a picker; it is
+    /// what SQLite and DuckDB need.
     Path,
 }
 
 impl FieldKind {
-    /// La valeur de ce champ est-elle un secret ?
+    /// Is this field's value a secret?
     #[must_use]
     pub const fn is_secret(&self) -> bool {
         matches!(self, Self::Password)
     }
 
-    /// Nom stable du genre.
+    /// Stable name of the kind.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -148,33 +148,33 @@ impl fmt::Display for FieldKind {
     }
 }
 
-/// Un champ du formulaire de connexion.
+/// A connection form field.
 ///
-/// La `key` est celle sous laquelle la valeur est rangée dans
-/// [`ConnectionConfig::params`](oxyn_core::ConnectionConfig::params) — sauf
-/// pour un champ secret, qui n'y est jamais rangé. Elle est aussi celle que
-/// [`DsnBuilder::from_config`](crate::dsn::DsnBuilder::from_config) reconnaît :
-/// un driver qui nomme son hôte `serveur` plutôt que `host` construira une
-/// option d'URL au lieu d'un hôte.
+/// The `key` is the one under which the value is stored in
+/// [`ConnectionConfig::params`](oxyn_core::ConnectionConfig::params) — except
+/// for a secret field, which is never stored there. It is also the one that
+/// [`DsnBuilder::from_config`](crate::dsn::DsnBuilder::from_config) recognizes:
+/// a driver that names its host `server` rather than `host` will build a URL
+/// option instead of a host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionField {
-    /// Clé technique, stable d'une version à l'autre.
+    /// Technical key, stable from one version to the next.
     pub key: String,
-    /// Libellé affiché.
+    /// Displayed label.
     pub label: String,
-    /// Genre, qui gouverne le rendu et le stockage.
+    /// Kind, which governs rendering and storage.
     pub kind: FieldKind,
-    /// Le champ doit-il être renseigné pour que la connexion soit tentable ?
+    /// Must the field be filled for the connection to be attemptable?
     pub required: bool,
-    /// Valeur proposée. **Interdite sur un champ secret** : une valeur par
-    /// défaut est écrite en clair dans le binaire et dans l'interface.
+    /// Proposed value. **Forbidden on a secret field**: a default value is
+    /// written in clear text in the binary and in the interface.
     pub default: Option<String>,
-    /// Aide contextuelle, en une phrase.
+    /// Contextual help, in one sentence.
     pub help: Option<String>,
 }
 
 impl ConnectionField {
-    /// Champ facultatif, sans valeur par défaut ni aide.
+    /// Optional field, without default value or help.
     #[must_use]
     pub fn new(key: impl Into<String>, label: impl Into<String>, kind: FieldKind) -> Self {
         Self {
@@ -187,58 +187,58 @@ impl ConnectionField {
         }
     }
 
-    /// Marque le champ obligatoire.
+    /// Marks the field required.
     #[must_use]
     pub fn required(mut self) -> Self {
         self.required = true;
         self
     }
 
-    /// Propose une valeur par défaut.
+    /// Proposes a default value.
     ///
-    /// Sans effet utile sur un champ secret : [`DriverMetadata::check`] refuse
-    /// une telle déclaration plutôt que de l'ignorer en silence.
+    /// Of no useful effect on a secret field: [`DriverMetadata::check`] refuses
+    /// such a declaration rather than silently ignoring it.
     #[must_use]
     pub fn with_default(mut self, default: impl Into<String>) -> Self {
         self.default = Some(default.into());
         self
     }
 
-    /// Attache une aide contextuelle.
+    /// Attaches contextual help.
     #[must_use]
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
     }
 
-    /// La valeur de ce champ est-elle un secret ?
+    /// Is this field's value a secret?
     #[must_use]
     pub const fn is_secret(&self) -> bool {
         self.kind.is_secret()
     }
 }
 
-/// Ce qu'un driver dit de lui-même.
+/// What a driver says about itself.
 ///
-/// Obtenu par [`Driver::metadata`](crate::traits::Driver::metadata), et
-/// construit une fois pour toutes : la valeur est empruntée, jamais recalculée.
+/// Obtained through [`Driver::metadata`](crate::traits::Driver::metadata), and
+/// built once and for all: the value is borrowed, never recomputed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DriverMetadata {
-    /// Identifiant du driver, par protocole (ADR-0003).
+    /// Driver identifier, per protocol (ADR-0003).
     pub id: DriverId,
-    /// Nom affiché : « PostgreSQL », pas « postgres ».
+    /// Displayed name: "PostgreSQL", not "postgres".
     pub display_name: String,
-    /// Famille, pour le groupement dans l'interface.
+    /// Family, for grouping in the interface.
     pub family: DriverFamily,
-    /// Port par défaut du protocole, quand il en a un. `None` pour une source
-    /// embarquée comme SQLite.
+    /// Default port of the protocol, when it has one. `None` for an embedded
+    /// source such as SQLite.
     pub default_port: Option<u16>,
-    /// Les champs du formulaire de connexion, dans l'ordre de saisie.
+    /// The connection form fields, in input order.
     pub connection_fields: Vec<ConnectionField>,
 }
 
 impl DriverMetadata {
-    /// Métadonnées minimales : ni port par défaut, ni champ de connexion.
+    /// Minimal metadata: neither default port nor connection field.
     #[must_use]
     pub fn new(id: DriverId, display_name: impl Into<String>, family: DriverFamily) -> Self {
         Self {
@@ -250,96 +250,96 @@ impl DriverMetadata {
         }
     }
 
-    /// Fixe le port par défaut du protocole.
+    /// Sets the protocol's default port.
     #[must_use]
     pub fn with_default_port(mut self, port: u16) -> Self {
         self.default_port = Some(port);
         self
     }
 
-    /// Ajoute un champ au formulaire.
+    /// Adds a field to the form.
     #[must_use]
     pub fn with_field(mut self, field: ConnectionField) -> Self {
         self.connection_fields.push(field);
         self
     }
 
-    /// Ajoute plusieurs champs, dans l'ordre.
+    /// Adds several fields, in order.
     #[must_use]
     pub fn with_fields(mut self, fields: impl IntoIterator<Item = ConnectionField>) -> Self {
         self.connection_fields.extend(fields);
         self
     }
 
-    /// Le champ portant cette clé.
+    /// The field carrying this key.
     #[must_use]
     pub fn field(&self, key: &str) -> Option<&ConnectionField> {
         self.connection_fields.iter().find(|f| f.key == key)
     }
 
-    /// Les champs dont la valeur est un secret.
+    /// The fields whose value is a secret.
     pub fn secret_fields(&self) -> impl Iterator<Item = &ConnectionField> {
         self.connection_fields.iter().filter(|f| f.is_secret())
     }
 
-    /// Clé de tri de l'interface : famille, puis nom affiché.
+    /// Interface sort key: family, then displayed name.
     #[must_use]
     pub fn sort_key(&self) -> (DriverFamily, &str) {
         (self.family, self.display_name.as_str())
     }
 
-    /// Vérifie la cohérence interne de la déclaration.
+    /// Checks the internal consistency of the declaration.
     ///
-    /// Appelée par [`DriverRegistry::register`](crate::registry::DriverRegistry::register) :
-    /// une déclaration incohérente est un bug du driver, et il vaut mieux le
-    /// découvrir à l'enregistrement qu'au premier formulaire affiché.
+    /// Called by [`DriverRegistry::register`](crate::registry::DriverRegistry::register):
+    /// an inconsistent declaration is a driver bug, and it is better found at
+    /// registration than on the first form displayed.
     ///
-    /// # Erreurs
-    /// [`OxynError::Config`] si une clé est vide, déclarée deux fois, ou si un
-    /// champ secret porte une valeur par défaut.
+    /// # Errors
+    /// [`OxynError::Config`] if a key is empty, declared twice, or if a secret
+    /// field carries a default value.
     pub fn check(&self) -> Result<()> {
-        let mut vues: Vec<&str> = Vec::with_capacity(self.connection_fields.len());
-        for champ in &self.connection_fields {
-            let cle = champ.key.trim();
-            if cle.is_empty() {
+        let mut seen: Vec<&str> = Vec::with_capacity(self.connection_fields.len());
+        for field in &self.connection_fields {
+            let key = field.key.trim();
+            if key.is_empty() {
                 return Err(OxynError::Config(format!(
                     "driver `{}`: a connection field has an empty key",
                     self.id
                 )));
             }
-            if vues.contains(&champ.key.as_str()) {
+            if seen.contains(&field.key.as_str()) {
                 return Err(OxynError::Config(format!(
                     "driver `{}`: connection field `{}` is declared twice",
-                    self.id, champ.key
+                    self.id, field.key
                 )));
             }
-            if champ.is_secret() && champ.default.is_some() {
+            if field.is_secret() && field.default.is_some() {
                 return Err(OxynError::Config(format!(
                     "driver `{}`: secret field `{}` carries a default value, \
                      which would be written in clear text",
-                    self.id, champ.key
+                    self.id, field.key
                 )));
             }
-            vues.push(&champ.key);
+            seen.push(&field.key);
         }
         Ok(())
     }
 
-    /// Vérifie qu'une configuration de connexion est utilisable par ce driver.
+    /// Checks that a connection configuration is usable by this driver.
     ///
-    /// Trois vérifications, dans cet ordre :
+    /// Three checks, in this order:
     ///
-    /// 1. la configuration désigne bien ce driver ;
-    /// 2. **aucun paramètre persisté ne porte un secret** — ni un champ déclaré
-    ///    [`FieldKind::Password`], ni une clé qui y ressemble
-    ///    ([`looks_like_secret`]). C'est I-03 rendu vérifiable ;
-    /// 3. chaque champ obligatoire sans valeur par défaut est renseigné.
+    /// 1. the configuration does designate this driver;
+    /// 2. **no persisted parameter carries a secret** — neither a field
+    ///    declared [`FieldKind::Password`], nor a key that looks like one
+    ///    ([`looks_like_secret`]). It is I-03 made checkable;
+    /// 3. every required field without a default value is filled.
     ///
-    /// Les messages d'erreur ne citent que des **clés**, jamais des valeurs.
+    /// Error messages cite only **keys**, never values.
     ///
-    /// # Erreurs
-    /// [`OxynError::Config`] en nommant ce qui manque ou ce qui n'aurait pas dû
-    /// être là.
+    /// # Errors
+    /// [`OxynError::Config`] naming what is missing or what should not have
+    /// been there.
     pub fn validate(&self, config: &ConnectionConfig) -> Result<()> {
         if config.driver != self.id {
             return Err(OxynError::Config(format!(
@@ -348,42 +348,42 @@ impl DriverMetadata {
             )));
         }
 
-        for cle in config.params.keys() {
-            if looks_like_secret(cle) {
+        for key in config.params.keys() {
+            if looks_like_secret(key) {
                 return Err(OxynError::Config(format!(
                     "parameter `{}` carries a secret: a secret lives in the system keychain \
                      and is not persisted with the connection (I-03)",
-                    sanitize_key(cle)
+                    sanitize_key(key)
                 )));
             }
         }
 
-        for champ in &self.connection_fields {
-            if champ.is_secret() {
-                // La boucle ci-dessus a déjà refusé les clés qui *ressemblent*
-                // à un secret ; celle-ci attrape un champ secret nommé de façon
-                // inattendue — `dsn`, `passphrase_fichier`…
-                if config.params.contains_key(&champ.key) {
+        for field in &self.connection_fields {
+            if field.is_secret() {
+                // The loop above already refused keys that *look like* a
+                // secret; this one catches a secret field named in an
+                // unexpected way — `dsn`, `file_passphrase`…
+                if config.params.contains_key(&field.key) {
                     return Err(OxynError::Config(format!(
                         "parameter `{}` is declared secret by driver `{}`: \
                          it is not persisted with the connection (I-03)",
-                        sanitize_key(&champ.key),
+                        sanitize_key(&field.key),
                         self.id
                     )));
                 }
                 continue;
             }
-            if !champ.required || champ.default.is_some() {
+            if !field.required || field.default.is_some() {
                 continue;
             }
-            let renseigne = config
+            let filled = config
                 .params
-                .get(&champ.key)
+                .get(&field.key)
                 .is_some_and(|v| !v.trim().is_empty());
-            if !renseigne {
+            if !filled {
                 return Err(OxynError::Config(format!(
                     "driver `{}`: parameter `{}` is required",
-                    self.id, champ.key
+                    self.id, field.key
                 )));
             }
         }
@@ -391,20 +391,20 @@ impl DriverMetadata {
     }
 }
 
-/// Cette clé de paramètre désigne-t-elle vraisemblablement un secret ?
+/// Does this parameter key likely designate a secret?
 ///
-/// Utilisée aux deux endroits où une valeur pourrait fuir : la validation d'une
-/// configuration ([`DriverMetadata::validate`]) et la construction d'une URL de
-/// connexion ([`DsnBuilder::from_config`](crate::dsn::DsnBuilder::from_config)).
+/// Used in the two places where a value could leak: the validation of a
+/// configuration ([`DriverMetadata::validate`]) and the construction of a
+/// connection URL ([`DsnBuilder::from_config`](crate::dsn::DsnBuilder::from_config)).
 ///
-/// La reconnaissance est **volontairement large et faillible dans le sens
-/// prudent** : elle refuse `sslpassword`, qui est bien un secret, et laisse
-/// passer `sslkey` et `authSource`, qui n'en sont pas. Se tromper en refusant
-/// coûte un message d'erreur ; se tromper en acceptant écrit un mot de passe
-/// dans un fichier de workspace.
+/// The recognition is **deliberately broad and fallible on the cautious
+/// side**: it refuses `sslpassword`, which is indeed a secret, and lets through
+/// `sslkey` and `authSource`, which are not. Being wrong by refusing costs an
+/// error message; being wrong by accepting writes a password into a workspace
+/// file.
 #[must_use]
 pub fn looks_like_secret(key: &str) -> bool {
-    /// Fragments dont la présence suffit.
+    /// Fragments whose presence is enough.
     const FRAGMENTS: [&str; 10] = [
         "password",
         "passwd",
@@ -417,22 +417,22 @@ pub fn looks_like_secret(key: &str) -> bool {
         "access_key",
         "private_key",
     ];
-    /// Clés dont seule la forme exacte compte : les prendre comme fragments
-    /// refuserait `sslkey` et `keyspace`, qui ne sont pas des secrets.
-    const EXACTES: [&str; 2] = ["pass", "key"];
+    /// Keys where only the exact form counts: taking them as fragments would
+    /// refuse `sslkey` and `keyspace`, which are not secrets.
+    const EXACT: [&str; 2] = ["pass", "key"];
 
-    let normalisee = key.trim().to_ascii_lowercase();
-    FRAGMENTS.iter().any(|f| normalisee.contains(f)) || EXACTES.iter().any(|e| normalisee == *e)
+    let normalized = key.trim().to_ascii_lowercase();
+    FRAGMENTS.iter().any(|f| normalized.contains(f)) || EXACT.iter().any(|e| normalized == *e)
 }
 
-/// Rend une clé montrable dans un message d'erreur.
+/// Makes a key fit to show in an error message.
 ///
-/// Une clé vient d'un fichier de workspace, c'est-à-dire d'une entrée non
-/// fiable (SECURITY, surface d'entrée n° 3) : rien n'interdit à un tiers d'y
-/// avoir rangé le secret **dans la clé**. Ce qui sort d'ici est donc borné en
-/// longueur et restreint à un alphabet inoffensif ; le reste est remplacé.
+/// A key comes from a workspace file, that is from untrusted input (SECURITY,
+/// input surface no. 3): nothing prevents a third party from having stored the
+/// secret **in the key**. What leaves here is therefore bounded in length and
+/// restricted to a harmless alphabet; the rest is replaced.
 pub(crate) fn sanitize_key(key: &str) -> String {
-    /// Au-delà, une clé n'est plus une clé.
+    /// Beyond this, a key is no longer a key.
     const MAX: usize = 64;
 
     let acceptable = key.len() <= MAX
@@ -453,20 +453,20 @@ mod tests {
 
     use super::*;
 
-    fn metadonnees_postgres() -> DriverMetadata {
+    fn postgres_metadata() -> DriverMetadata {
         DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)
             .with_default_port(5432)
             .with_fields([
-                ConnectionField::new("host", "Hôte", FieldKind::Text)
+                ConnectionField::new("host", "Host", FieldKind::Text)
                     .required()
                     .with_default("localhost"),
                 ConnectionField::new("port", "Port", FieldKind::Number).with_default("5432"),
-                ConnectionField::new("user", "Utilisateur", FieldKind::Text).required(),
-                ConnectionField::new("password", "Mot de passe", FieldKind::Password),
-                ConnectionField::new("database", "Base", FieldKind::Text).required(),
+                ConnectionField::new("user", "User", FieldKind::Text).required(),
+                ConnectionField::new("password", "Password", FieldKind::Password),
+                ConnectionField::new("database", "Database", FieldKind::Text).required(),
                 ConnectionField::new(
                     "sslmode",
-                    "Mode TLS",
+                    "TLS mode",
                     FieldKind::Choice(vec!["disable".into(), "require".into()]),
                 )
                 .with_default("require"),
@@ -474,123 +474,126 @@ mod tests {
     }
 
     #[test]
-    fn une_declaration_coherente_passe_le_controle() {
-        metadonnees_postgres()
+    fn a_consistent_declaration_passes_the_check() {
+        postgres_metadata()
             .check()
-            .expect("la déclaration de référence est cohérente");
+            .expect("the reference declaration is consistent");
     }
 
     #[test]
-    fn un_champ_secret_ne_peut_pas_porter_de_valeur_par_defaut() {
-        // Une valeur par défaut sur un champ secret finit en clair dans le
-        // binaire et dans l'interface.
-        let metadonnees =
+    fn a_secret_field_cannot_carry_a_default_value() {
+        // A default value on a secret field ends up in clear text in the
+        // binary and in the interface.
+        let metadata =
             DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)
                 .with_field(
-                    ConnectionField::new("password", "Mot de passe", FieldKind::Password)
+                    ConnectionField::new("password", "Password", FieldKind::Password)
                         .with_default("postgres"),
                 );
-        let err = metadonnees.check().expect_err("refus attendu");
+        let err = metadata.check().expect_err("refusal expected");
         assert!(err.to_string().contains("password"), "{err}");
     }
 
     #[test]
-    fn une_cle_declaree_deux_fois_est_refusee() {
-        let metadonnees = DriverMetadata::new(DriverId::mysql(), "MySQL", DriverFamily::Relational)
-            .with_field(ConnectionField::new("host", "Hôte", FieldKind::Text))
-            .with_field(ConnectionField::new("host", "Serveur", FieldKind::Text));
-        assert!(metadonnees.check().is_err());
+    fn a_key_declared_twice_is_refused() {
+        let metadata = DriverMetadata::new(DriverId::mysql(), "MySQL", DriverFamily::Relational)
+            .with_field(ConnectionField::new("host", "Host", FieldKind::Text))
+            .with_field(ConnectionField::new("host", "Server", FieldKind::Text));
+        assert!(metadata.check().is_err());
     }
 
     #[test]
-    fn un_mot_de_passe_dans_les_parametres_est_refuse() {
-        // I-03 rendu vérifiable : c'est exactement le fichier de workspace
-        // commité dans le dépôt de l'équipe.
-        let metadonnees = metadonnees_postgres();
+    fn a_password_in_the_parameters_is_refused() {
+        // I-03 made checkable: this is exactly the workspace file committed
+        // into the team's repository.
+        let metadata = postgres_metadata();
         let config = ConnectionConfig::new("prod-eu", DriverId::postgres())
-            .with_param("host", "db.interne.example")
+            .with_param("host", "db.internal.example")
             .with_param("user", "app")
-            .with_param("database", "caisse")
+            .with_param("database", "till")
             .with_param("password", "hunter2");
 
-        let err = metadonnees
+        let err = metadata
             .validate(&config)
-            .expect_err("un mot de passe persisté doit être refusé");
-        let rendu = err.to_string();
-        assert!(rendu.contains("password"), "la clé est nommée : {rendu}");
+            .expect_err("a persisted password must be refused");
+        let rendered = err.to_string();
         assert!(
-            !rendu.contains("hunter2"),
-            "la valeur ne doit jamais sortir : {rendu}"
+            rendered.contains("password"),
+            "the key is named: {rendered}"
+        );
+        assert!(
+            !rendered.contains("hunter2"),
+            "the value must never leave: {rendered}"
         );
     }
 
     #[test]
-    fn une_cle_qui_ressemble_a_un_secret_est_refusee_meme_non_declaree() {
-        let metadonnees = metadonnees_postgres();
-        for cle in ["sslpassword", "auth_token", "API_KEY", "pwd"] {
+    fn a_key_that_looks_like_a_secret_is_refused_even_undeclared() {
+        let metadata = postgres_metadata();
+        for key in ["sslpassword", "auth_token", "API_KEY", "pwd"] {
             let config = ConnectionConfig::new("x", DriverId::postgres())
                 .with_param("host", "h")
                 .with_param("user", "u")
                 .with_param("database", "d")
-                .with_param(cle, "valeur-sensible");
+                .with_param(key, "sensitive-value");
             assert!(
-                metadonnees.validate(&config).is_err(),
-                "`{cle}` ressemble à un secret et aurait dû être refusée"
+                metadata.validate(&config).is_err(),
+                "`{key}` looks like a secret and should have been refused"
             );
         }
     }
 
     #[test]
-    fn les_parametres_legitimes_ne_sont_pas_pris_pour_des_secrets() {
-        // Faux positifs qui casseraient de vrais drivers : `sslkey` est un
-        // chemin de fichier, `authSource` une base MongoDB.
-        for cle in ["sslkey", "sslcert", "authSource", "keyspace", "sslmode"] {
+    fn legitimate_parameters_are_not_taken_for_secrets() {
+        // False positives that would break real drivers: `sslkey` is a file
+        // path, `authSource` a MongoDB database.
+        for key in ["sslkey", "sslcert", "authSource", "keyspace", "sslmode"] {
             assert!(
-                !looks_like_secret(cle),
-                "`{cle}` n'est pas un secret et ne doit pas être refusée"
+                !looks_like_secret(key),
+                "`{key}` is not a secret and must not be refused"
             );
         }
-        for cle in ["password", "sslpassword", "PWD", "api_key", "token"] {
-            assert!(looks_like_secret(cle), "`{cle}` porte un secret");
+        for key in ["password", "sslpassword", "PWD", "api_key", "token"] {
+            assert!(looks_like_secret(key), "`{key}` carries a secret");
         }
     }
 
     #[test]
-    fn un_champ_obligatoire_manquant_est_signale() {
-        let metadonnees = metadonnees_postgres();
+    fn a_missing_required_field_is_reported() {
+        let metadata = postgres_metadata();
         let config = ConnectionConfig::new("x", DriverId::postgres())
             .with_param("host", "h")
             .with_param("user", "u");
-        let err = metadonnees
+        let err = metadata
             .validate(&config)
-            .expect_err("`database` est obligatoire");
+            .expect_err("`database` is required");
         assert!(err.to_string().contains("database"), "{err}");
     }
 
     #[test]
-    fn un_champ_obligatoire_avec_defaut_ne_reclame_rien() {
-        // `host` est obligatoire mais porte `localhost` : ne pas le saisir est
-        // légitime.
-        let metadonnees = metadonnees_postgres();
+    fn a_required_field_with_a_default_asks_for_nothing() {
+        // `host` is required but carries `localhost`: not typing it is
+        // legitimate.
+        let metadata = postgres_metadata();
         let config = ConnectionConfig::new("x", DriverId::postgres())
             .with_param("user", "u")
             .with_param("database", "d");
-        metadonnees
+        metadata
             .validate(&config)
-            .expect("le défaut couvre l'absence de saisie");
+            .expect("the default covers the missing input");
     }
 
     #[test]
-    fn une_configuration_pour_un_autre_driver_est_refusee() {
-        let metadonnees = metadonnees_postgres();
+    fn a_configuration_for_another_driver_is_refused() {
+        let metadata = postgres_metadata();
         let config = ConnectionConfig::new("x", DriverId::sqlite());
-        assert!(metadonnees.validate(&config).is_err());
+        assert!(metadata.validate(&config).is_err());
     }
 
     #[test]
-    fn une_cle_hostile_ne_ressort_pas_dans_le_message() {
-        // Une clé peut venir d'un fichier écrit par un tiers : elle peut porter
-        // des séquences de contrôle, ou le secret lui-même.
+    fn a_hostile_key_does_not_come_out_in_the_message() {
+        // A key may come from a file written by a third party: it may carry
+        // control sequences, or the secret itself.
         let hostile = "password\u{1b}[2Jhunter2";
         assert_eq!(sanitize_key(hostile), "<unrepresentable key>");
         assert_eq!(sanitize_key("sslmode"), "sslmode");
@@ -598,10 +601,10 @@ mod tests {
     }
 
     #[test]
-    fn le_tri_va_par_famille_puis_par_nom() {
-        let postgres = metadonnees_postgres();
+    fn sorting_goes_by_family_then_by_name() {
+        let postgres = postgres_metadata();
         let clickhouse = DriverMetadata::new(
-            DriverId::new("clickhouse").expect("identifiant valide"),
+            DriverId::new("clickhouse").expect("valid identifier"),
             "ClickHouse",
             DriverFamily::Analytical,
         );
@@ -609,13 +612,10 @@ mod tests {
     }
 
     #[test]
-    fn les_champs_secrets_se_retrouvent() {
-        let metadonnees = metadonnees_postgres();
-        let secrets: Vec<&str> = metadonnees
-            .secret_fields()
-            .map(|f| f.key.as_str())
-            .collect();
+    fn secret_fields_are_found() {
+        let metadata = postgres_metadata();
+        let secrets: Vec<&str> = metadata.secret_fields().map(|f| f.key.as_str()).collect();
         assert_eq!(secrets, ["password"]);
-        assert!(metadonnees.field("sslmode").is_some_and(|f| !f.is_secret()));
+        assert!(metadata.field("sslmode").is_some_and(|f| !f.is_secret()));
     }
 }

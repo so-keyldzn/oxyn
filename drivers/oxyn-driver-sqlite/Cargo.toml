@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-driver-sqlite"
-description = "Driver SQLite (embarqué)"
+description = "SQLite driver (embedded)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -29,8 +29,8 @@ tracing.workspace = true
 criterion.workspace = true
 tempfile.workspace = true
 
-# `harness = false` : criterion fournit son propre `main`. Sans cela, le harnais
-# de test de libtest s'installe et les arguments de criterion sont refusés.
+# `harness = false`: criterion provides its own `main`. Without it, libtest's
+# test harness takes over and criterion's arguments are refused.
 [[bench]]
 name    = "row_to_batch"
 harness = false

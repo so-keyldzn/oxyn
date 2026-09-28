@@ -120,7 +120,7 @@ export const Narrow: Story = {
 /**
  * The reserve on cancellation is part of the button, at every width: hidden on
  * a narrow window, Cancel would promise what this session cannot do
- * (docs/UX-SPEC.md, « Annulation »).
+ * (docs/UX-SPEC.md, « Cancellation »).
  */
 export const NarrowWithoutServerCancel: Story = {
   args: { state: { status: "running", rows: 12, serverCancel: false } },

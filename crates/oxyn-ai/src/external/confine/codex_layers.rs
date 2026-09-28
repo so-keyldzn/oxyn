@@ -3,8 +3,8 @@
 //!
 //! Codex merges `mcp_servers` and `plugins` across its layers, table by
 //! table: what `CODEX_CONFIG` writes turns off an entry of a weaker layer only
-//! if Oxyn knows its name (RESEARCH-NOTES, « Les couches de configuration que
-//! Codex charge »). Read here: the system file, the user's, and the managed
+//! if Oxyn knows its name (RESEARCH-NOTES, "The configuration layers Codex
+//! loads"). Read here: the system file, the user's, and the managed
 //! file, which ranks **above** `CODEX_CONFIG`. Not read, as ADR-0033 decides:
 //! macOS MDM and the organization's cloud fragments, which Oxyn cannot reach,
 //! and the project layer, which the agent's fresh directory does not have.

@@ -1,150 +1,149 @@
-# ADR-0025 — Une proposition de changement de schéma est du SQL à relire, jamais une écriture
+# ADR-0025 — A schema change proposal is SQL to review, never a write
 
-**Statut :** proposé · **Date :** 2026-09-13
+**Status:** proposed · **Date:** 2026-09-13
 
-**Précise :** [ADR-0018](0018-apercu-ddl.md), sur ce qu'on a le droit
-de faire du DDL une fois qu'il est lu.
+**Clarifies:** [ADR-0018](0018-apercu-ddl.md), on what one is allowed to do
+with DDL once it is read.
 
-## Contexte
+## Context
 
-La planche `229:7637` porte un contrôle `Propose change…` (`229:7663`, 164 px,
-dans la barre de structure, à droite de `Refresh structure` et `Copy DDL`). Le
-plan le classait jusqu'ici comme « décision de produit » en attente.
+Board `229:7637` carries a `Propose change…` control (`229:7663`, 164 px, in
+the structure bar, to the right of `Refresh structure` and `Copy DDL`). The
+plan had so far classified it as a pending "product decision".
 
-**Ce classement était faux, et la planche le dit elle-même.** Son panneau de
-définition (`229:7749`) porte, sous le DDL et au-dessus du bouton
-`Open DDL in console`, cette phrase :
+**That classification was wrong, and the board says so itself.** Its
+definition panel (`229:7749`) carries, under the DDL and above the
+`Open DDL in console` button, this sentence:
 
 > Changes require a SQL review naming commerce-prod before execution.
 
-C'est mot pour mot la garantie de [I-02](../../CLAUDE.md#i-02) : une revue qui
-**nomme la connexion**, **avant** exécution. La maquette ne demande donc pas
-d'arbitrer entre « appliquer » et « proposer ». Elle a déjà tranché : le contrôle
-propose, et l'exécution reste un geste séparé, relu.
+It is word for word the guarantee of [I-02](../../CLAUDE.md#i-02): a review that
+**names the connection**, **before** execution. The mockup therefore does not
+ask to choose between "apply" and "propose". It has already decided: the
+control proposes, and execution remains a separate, reviewed action.
 
-Trois décisions antérieures cadrent le reste, et aucune n'est à rouvrir :
+Three earlier decisions frame the rest, and none is to be reopened:
 
-* [ADR-0018](0018-apercu-ddl.md) sépare déjà la **lecture** du DDL
-  de son exécution, et `Open DDL in console` en est le précédent implémenté :
-  du texte part vers la console, rien ne s'exécute ;
-* [I-01](../../CLAUDE.md#i-01) interdit un second chemin d'exécution. Un contrôle
-  qui appliquerait un DDL directement en créerait un, et ce serait celui-là que
-  l'IA emprunterait ;
-* [I-10](../../CLAUDE.md#i-10) interdit de concaténer un identifiant **reçu**.
-  Un DDL de modification en est fait presque entièrement : nom de schéma, de
-  table, de colonne, de contrainte — tous viennent du catalogue, donc du serveur.
+* [ADR-0018](0018-apercu-ddl.md) already separates **reading** DDL
+  from executing it, and `Open DDL in console` is its implemented precedent:
+  text goes to the console, nothing executes;
+* [I-01](../../CLAUDE.md#i-01) forbids a second execution path. A control
+  that applied a DDL directly would create one, and that is the one the AI
+  would take;
+* [I-10](../../CLAUDE.md#i-10) forbids concatenating a **received** identifier.
+  A modification DDL is made almost entirely of them: schema, table, column,
+  constraint names — all come from the catalog, hence from the server.
 
-La contrainte chiffrée qui rend le dernier point concret : `public.customers`
-dans la maquette porte 8 colonnes, et une table nommée
-`"users"; DROP TABLE audit; --` est légale dans PostgreSQL.
+The numeric constraint that makes the last point concrete: `public.customers`
+in the mockup has 8 columns, and a table named
+`"users"; DROP TABLE audit; --` is legal in PostgreSQL.
 
-## Décision
+## Decision
 
-`Propose change…` **compose du texte et l'ouvre dans une console. Il n'exécute
-rien, et n'emprunte aucun chemin nouveau.**
+`Propose change…` **composes text and opens it in a console. It executes
+nothing, and takes no new path.**
 
-Le geste emprunte le chemin que `Open DDL in console` emprunte déjà —
-`open_library_query` avec `library::OpenQuery::Copy { text, title, origin,
-provenance }` (`workspace/definition.rs`, `open_definition_console`) — et rien d'autre. À partir de là,
-la proposition est du SQL utilisateur ordinaire : elle traverse `oxyn-query`
-pour sa classification, le `PolicyGate` pour son autorisation, et l'approbation
-de production existante si la connexion l'est. **Aucune variante de commande
-nouvelle**, aucun contournement du bus.
+The action takes the path `Open DDL in console` already takes —
+`open_library_query` with `library::OpenQuery::Copy { text, title, origin,
+provenance }` (`workspace/definition.rs`, `open_definition_console`) — and nothing else. From there,
+the proposal is ordinary user SQL: it goes through `oxyn-query` for its
+classification, the `PolicyGate` for its authorization, and the existing
+production approval if the connection is one. **No new command variant**, no
+bypass of the bus.
 
-Seul `origin` change : il dit que le texte est un modèle de changement à
-compléter, pas une définition lue.
+Only `origin` changes: it says the text is a change template to complete, not
+a definition that was read.
 
-`provenance` reste `None`, et cette version de l'ADR corrige une première
-rédaction qui affirmait le contraire. Le dépôt avait déjà tranché la question
-pour le cas jumeau — le modèle de requête liée de `metadata.rs` — avec la raison
-qui vaut ici mot pour mot : **un modèle composé par Oxyn n'est écrit ni par
-l'utilisateur ni par un agent.** La provenance marque qui a écrit un texte
-([ADR-0023](0023-fournisseurs-declares-et-provenance.md)) ; composer un squelette
-à compléter n'est pas écrire. Trancher autrement aurait introduit deux
-comportements différents pour deux modèles voisins, ce qui est précisément la
-sorte d'incohérence qu'un ADR doit éviter plutôt que créer.
+`provenance` stays `None`, and this version of the ADR corrects a first draft
+that claimed the opposite. The repository had already settled the question for
+the twin case — the bound query template of `metadata.rs` — with the reason
+that holds here word for word: **a template composed by Oxyn is written neither
+by the user nor by an agent.** Provenance marks who wrote a text
+([ADR-0023](0023-fournisseurs-declares-et-provenance.md)); composing a skeleton
+to complete is not writing. Deciding otherwise would have introduced two
+different behaviors for two neighboring templates, which is precisely the kind
+of inconsistency an ADR must avoid rather than create.
 
-Chaque identifiant que la proposition insère est cité par
-`oxyn_catalog::quote_identifier` avec `QuoteStyle::for_dialect`, jamais
-concaténé. Les **valeurs** — un défaut, une expression de contrainte — ne sont
-pas liables dans un DDL : elles sont donc reprises **verbatim depuis le
-catalogue**, sans reformatage. Réécrire une expression que le serveur a rendue,
-c'est en changer le sens sans le dire.
+Each identifier the proposal inserts is quoted by
+`oxyn_catalog::quote_identifier` with `QuoteStyle::for_dialect`, never
+concatenated. **Values** — a default, a constraint expression — cannot be bound
+in a DDL: they are therefore taken **verbatim from the catalog**, without
+reformatting. Rewriting an expression the server returned changes its meaning
+without saying so.
 
-Une première rédaction ajoutait « ou la proposition est refusée ». Ce refus
-n'existait pas dans le code, et il n'a plus lieu d'être : tout le modèle étant
-commenté (voir juste en dessous), une expression exotique est recopiée sans
-pouvoir rien déclencher.
+A first draft added "or the proposal is refused". That refusal did not exist in
+the code, and it no longer has a reason to: the whole template being commented
+out (see just below), an exotic expression is copied without being able to
+trigger anything.
 
-Pour un `Actor::Agent`, `Propose change…` est **indisponible**, pas
-« confirmable ». C'est [I-02](../../CLAUDE.md#i-02) au mot : pour un agent, c'est
-un refus, pas une confirmation renforcée. Un agent qui veut un changement de
-schéma écrit du SQL dans une console comme n'importe qui, et ce SQL est relu.
+For an `Actor::Agent`, `Propose change…` is **unavailable**, not
+"confirmable". It is [I-02](../../CLAUDE.md#i-02) to the letter: for an agent, it
+is a refusal, not a stronger confirmation. An agent that wants a schema change
+writes SQL in a console like anyone, and that SQL is reviewed.
 
-Cette indisponibilité tient par **absence de chemin** — aucun outil du registre
-n'atteint le geste —, ce qui est plus fort qu'un refus. Mais rien ne la
-maintenait vraie : `le_changement_de_schema_n_est_pas_un_outil`
-(`oxyn-ai/src/tools.rs`) s'en charge désormais, et échoue le jour où un outil de
-structure apparaît.
+This unavailability holds by **absence of a path** — no tool of the registry
+reaches the action —, which is stronger than a refusal. But nothing kept it
+true: `schema_change_is_not_a_tool`
+(`oxyn-ai/src/tools.rs`) now takes care of it, and fails the day a structure
+tool appears.
 
-**Tout le modèle est commenté, ligne par ligne** — pas seulement son en-tête.
-C'est la propriété qui rend le geste sûr, et elle mérite d'être dite ici :
-`--` ne commente que jusqu'au prochain saut de ligne, et un nom de colonne ou une
-expression de défaut peut en contenir. Le corps se compose donc nu, puis chaque
-ligne physique reçoit son préfixe. L'utilisateur **décommente** l'instruction
-qu'il veut ; rien ne part sur un `Run` distrait.
+**The whole template is commented out, line by line** — not only its header.
+It is the property that makes the action safe, and it deserves to be stated
+here: `--` only comments until the next line break, and a column name or a
+default expression can contain one. The body is therefore composed bare, then
+each physical line receives its prefix. The user **uncomments** the statement
+they want; nothing goes out on a distracted `Run`.
 
-Le texte composé porte **en plus** un commentaire SQL en tête, qui nomme la
-connexion et la relation d'origine. `origin` et `provenance` sont des métadonnées
-de l'onglet : elles ne survivent pas à un copier-coller vers un ticket ou un
-message, et c'est précisément là que la proposition sera relue trois jours plus
-tard, par quelqu'un d'autre.
+The composed text **also** carries a SQL comment at the top, naming the
+connection and the source relation. `origin` and `provenance` are metadata of
+the tab: they do not survive a copy-paste into a ticket or a message, and that
+is precisely where the proposal will be reviewed three days later, by someone
+else.
 
-La portée de la première version est celle que la planche montre et pas
-davantage : renommer une colonne, changer sa nullabilité, changer son défaut,
-retirer une contrainte nommée. **Pas** de `DROP TABLE`, pas de
-changement de type, pas de migration de données — un changement de type réécrit
-la table et peut échouer à mi-course sur des données réelles, ce qui est un
-sujet de migration, pas de panneau de structure.
+The scope of the first version is what the board shows and no more: rename a
+column, change its nullability, change its default, drop a named constraint.
+**No** `DROP TABLE`, no type change, no data migration — a type change rewrites
+the table and can fail midway on real data, which is a migration topic, not a
+structure panel one.
 
-## Conséquences
+## Consequences
 
-* **+** Aucun chemin d'exécution nouveau : la proposition est du SQL, et tout ce
-  qui protège le SQL la protège déjà. I-01 tenu par construction plutôt que par
+* **+** No new execution path: the proposal is SQL, and everything that
+  protects SQL already protects it. I-01 held by construction rather than by
   vigilance.
-* **+** La garantie que la maquette écrit — « a SQL review naming commerce-prod
-  before execution » — est tenue littéralement, puisque la revue est celle qui
-  existe.
-* **+** L'utilisateur voit le SQL exact avant qu'il ne parte. Un panneau qui
-  appliquerait un changement en montrant un résumé demanderait de faire
-  confiance à la traduction ; ici il n'y a pas de traduction à croire.
-* **−** Deux gestes au lieu d'un : proposer, puis exécuter. Sur un renommage de
-  colonne évident, cela paraîtra lourd, et cela le sera.
-* **−** Le SQL composé peut être **édité** avant exécution, y compris en quelque
-  chose que le panneau n'aurait jamais proposé. C'est la conséquence assumée de
-  le traiter comme du SQL utilisateur ; l'alternative — un texte verrouillé —
-  recréerait le second chemin qu'on refuse.
-* **−** La portée restreinte laissera de côté le changement de type, qui est
-  précisément ce qu'on demande le plus souvent après un renommage.
+* **+** The guarantee the mockup writes — "a SQL review naming commerce-prod
+  before execution" — is held literally, since the review is the one that
+  exists.
+* **+** The user sees the exact SQL before it goes out. A panel that applied a
+  change while showing a summary would require trusting the translation; here
+  there is no translation to believe.
+* **−** Two actions instead of one: propose, then execute. On an obvious column
+  rename, it will feel heavy, and it will be.
+* **−** The composed SQL can be **edited** before execution, including into
+  something the panel would never have proposed. It is the accepted consequence
+  of treating it as user SQL; the alternative — locked text — would recreate
+  the second path we refuse.
+* **−** The restricted scope will leave out the type change, which is precisely
+  what is most often asked for after a rename.
 
-**Coût de sortie :** faible tant que la décision tient. Le composeur est une
-fonction pure — `proposed_change(cache, path, tab, index, dialect, connection)`,
-qui **énumère** les opérations légales pour le dialecte plutôt que d'en recevoir
-une : c'est l'utilisateur qui choisit dans le texte. Testable sans base et sans
-interface ; en sortir demanderait d'ajouter une commande d'exécution, donc de
-rouvrir I-01 — ce qui est le vrai coût, et il est délibérément placé là.
+**Exit cost:** low as long as the decision holds. The composer is a pure
+function — `proposed_change(cache, path, tab, index, dialect, connection)`,
+which **enumerates** the legal operations for the dialect rather than receiving
+one: the user chooses in the text. Testable without a database and without an
+interface; leaving it would require adding an execution command, hence
+reopening I-01 — which is the real cost, and it is deliberately placed there.
 
-**Reconsidérer si** un utilisateur professionnel rapporte que la double étape le
-pousse à écrire son DDL à la main sans relire ce que le panneau proposait : la
-protection serait alors contournée par son propre poids, ce qui est pire que de
-ne pas l'avoir.
+**Reconsider if** a professional user reports that the double step pushes them
+to write their DDL by hand without reviewing what the panel proposed: the
+protection would then be bypassed by its own weight, which is worse than not
+having it.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Appliquer le changement depuis le panneau, derrière une confirmation | Crée le second chemin d'exécution qu'[I-01](../../CLAUDE.md#i-01) interdit, et une confirmation finit par être cliquée — c'est le raisonnement d'[I-02](../../CLAUDE.md#i-02) sur les agents, qui vaut aussi pour les humains pressés |
-| Ouvrir un formulaire de modification riche (type, contraintes, ordre des colonnes) | La portée réelle d'un tel formulaire est une migration. Elle échoue à mi-course sur des données réelles, et un panneau de structure n'a pas où le dire |
-| Composer le DDL côté driver plutôt que dans le cœur | Le driver cite déjà les identifiants ; lui confier aussi la **forme** du changement dupliquerait la logique dans chaque driver, et ADR-0003 veut un driver par protocole, pas un générateur de DDL par produit |
-| Verrouiller le SQL proposé pour empêcher son édition | Rendrait la console incohérente avec elle-même — un onglet dont le texte ne s'édite pas — et n'empêcherait rien : l'utilisateur retape le SQL à côté |
-| Laisser l'agent proposer, avec une confirmation humaine renforcée | [I-02](../../CLAUDE.md#i-02) est explicite : pour un `Actor::Agent`, c'est un refus. Une confirmation renforcée est exactement ce que l'invariant nomme comme insuffisant |
+| Apply the change from the panel, behind a confirmation | Creates the second execution path [I-01](../../CLAUDE.md#i-01) forbids, and a confirmation ends up being clicked — it is the reasoning of [I-02](../../CLAUDE.md#i-02) on agents, which also holds for humans in a hurry |
+| Open a rich modification form (type, constraints, column order) | The real scope of such a form is a migration. It fails midway on real data, and a structure panel has nowhere to say so |
+| Compose the DDL on the driver side rather than in the core | The driver already quotes identifiers; also entrusting it with the **shape** of the change would duplicate the logic in each driver, and ADR-0003 wants one driver per protocol, not one DDL generator per product |
+| Lock the proposed SQL to prevent editing it | Would make the console inconsistent with itself — a tab whose text cannot be edited — and would prevent nothing: the user retypes the SQL next to it |
+| Let the agent propose, with a stronger human confirmation | [I-02](../../CLAUDE.md#i-02) is explicit: for an `Actor::Agent`, it is a refusal. A stronger confirmation is exactly what the invariant names as insufficient |

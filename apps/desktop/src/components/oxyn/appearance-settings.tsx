@@ -23,7 +23,7 @@ const THEMES: ReadonlyArray<{ value: ThemeChoice; label: string }> = [
   { value: "system", label: "System" },
 ]
 
-/** The two reading presets (docs/UX-SPEC.md « Lisibilité et hauteur de grille »). */
+/** The two reading presets (docs/UX-SPEC.md « Readability and grid height »). */
 export const DENSITIES: ReadonlyArray<{
   value: DensityChoice
   label: string
@@ -39,8 +39,8 @@ export const DENSITIES: ReadonlyArray<{
 
 /**
  * Palette and reading comfort. Independent of each other and of the window
- * width, and neither reruns a query (docs/UX-SPEC.md « Lisibilité et hauteur
- * de grille »).
+ * width, and neither reruns a query (docs/UX-SPEC.md « Readability and grid
+ * height »).
  */
 export function AppearanceSettings({
   preferences,

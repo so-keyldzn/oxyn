@@ -91,7 +91,7 @@ function Pin({
       <AttachmentContent>
         {/* One line with an end ellipsis: the full name stays readable in the
             attached sources and in the outgoing-context review
-            (docs/UX-SPEC.md, « Lisibilité et hauteur de grille »). */}
+            (docs/UX-SPEC.md, « Readability and grid height »). */}
         <AttachmentTitle title={pin.label}>
           <bdi>{pin.label}</bdi>
         </AttachmentTitle>

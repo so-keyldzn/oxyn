@@ -1,18 +1,18 @@
 ---
 name: oxyn-versions
-description: "Re-vérifier les versions externes au registre et dater le résultat dans le projet Oxyn. À utiliser pour une demande correspondante dans ce dépôt."
+description: "Re-check external versions against the registry and date the result in the Oxyn project. Use for a matching request in this repository."
 ---
 
 # Oxyn — versions
 
-Lire les [consignes Codex du projet](../../../AGENTS.md), puis la
-[procédure commune versions](../../../.claude/commands/versions.md) et suivre
-ses étapes applicables à la demande. La procédure reste la source unique ;
-interpréter ses syntaxes Claude selon les adaptations de `AGENTS.md`.
+Read the [project's Codex instructions](../../../AGENTS.md), then the
+[shared versions procedure](../../../.claude/commands/versions.md) and follow
+its steps that apply to the request. The procedure stays the single source;
+interpret its Claude syntax according to the adaptations of `AGENTS.md`.
 
-Exécuter explicitement python3 .claude/hooks/verifier_versions.py depuis la racine. Vérifier les sources officielles et dater les constats. Une demande de vérification seule n’autorise pas une mise à niveau des dépendances.
+Run python3 .claude/hooks/verifier_versions.py explicitly from the root. Check the official sources and date the findings. A request to check alone does not authorize upgrading dependencies.
 
-Résoudre les liens de la procédure depuis son propre répertoire. Les chemins
-shell sont relatifs à la racine Oxyn. Utiliser les outils de la session ; les
-métadonnées Claude n’accordent aucune permission supplémentaire. Effectuer
-les relectures localement si aucune délégation n’est demandée ou disponible.
+Resolve the procedure's links from its own directory. Shell paths are
+relative to the Oxyn root. Use the session's tools; Claude metadata grants
+no additional permission. Do the reviews locally if no delegation is
+requested or available.

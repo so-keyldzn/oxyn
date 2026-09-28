@@ -25,7 +25,7 @@ export function newParameterRow(): ParameterRow {
 
 // The clipboard, drag-and-drop and the native context menu (Copy, Share,
 // Services) are channels by which a bound value would leave the window
-// (I-03, UX-SPEC § Valeurs liées d'une console). Typing, selecting and
+// (I-03, UX-SPEC § Bound values of a console). Typing, selecting and
 // pasting from the keyboard stay possible: only extraction is refused.
 //
 // The value field carries `data-select="none"` locally, which an unlayered
@@ -37,10 +37,10 @@ export function newParameterRow(): ParameterRow {
 // barrier is the four blocked events below: copy, cut, drag and the context
 // menu are what actually closes extraction, on every engine. The residual
 // risk of a selection read by WebKit's Look Up, Services, or accessibility
-// stays OPEN — it falls under the multi-engine verification noted "non
-// évaluée" in the risk table of docs/ARCHITECTURE.md (row "Trois moteurs
-// web") and "non faite" in docs/IMPLEMENTATION-PLAN.md § Migration vers
-// l'interface Tauri.
+// stays OPEN — it falls under the multi-engine verification noted "not
+// assessed" in the risk table of docs/ARCHITECTURE.md (row "Three web
+// engines") and "not done" in docs/IMPLEMENTATION-PLAN.md § Migration to the
+// Tauri interface.
 const refuseExtraction = (event: React.SyntheticEvent) => event.preventDefault()
 
 /**

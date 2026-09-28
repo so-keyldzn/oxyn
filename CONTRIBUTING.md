@@ -16,7 +16,7 @@ Boromée, keep offering the whole project under one set of terms. It also lets
 them relicense the project, and transfer these rights to the company that will
 maintain Oxyn. Without it, every contributor would have to agree to any such
 change, and a single one could block it. The reasons are recorded in
-[ADR-0044](docs/adr/0044-licence-gpl-et-contrat-apache.md), in French.
+[ADR-0044](docs/adr/0044-licence-gpl-et-contrat-apache.md).
 
 **What the CLA does not do.** You keep the copyright on your work. You remain
 free to use your contribution for anything else, under any license.
@@ -44,9 +44,13 @@ not ready for review.
 
 A few conventions that the gate cannot check:
 
-- code, identifiers, comments and error messages are in **English**;
-  documentation, ADRs and commit messages are in **French**;
-- commit messages follow Conventional Commits;
+- everything is in **English**: code, identifiers, comments, error messages,
+  documentation, ADRs, commit messages and pull requests
+  ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
+  [`i18n/fr/`](i18n/README.md) holds French mirrors of the English
+  documents; English is authoritative;
+- commit messages follow Conventional Commits: `type(scope): subject`, in
+  lowercase, imperative, no final period, 72 characters at most;
 - a new dependency is justified in the pull request: what it brings, and what
   doing without it would cost. Its license must be in the list accepted by
   `deny.toml`.

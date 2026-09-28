@@ -1,55 +1,54 @@
-//! Des classes de stockage SQLite vers des colonnes Arrow.
+//! From SQLite storage classes to Arrow columns.
 //!
-//! C'est le point difficile du driver, et il vient d'un fait que les autres
-//! bases n'ont pas : **en SQLite, le type appartient à la valeur, pas à la
-//! colonne.** Un `CREATE TABLE t(n INTEGER)` n'empêche pas
-//! `INSERT INTO t VALUES('abc')` de ranger du texte. Le type déclaré n'est
-//! qu'une *affinité*, c'est-à-dire une préférence de conversion.
+//! It is the hard part of the driver, and it comes from a fact other databases do
+//! not have: **in SQLite, the type belongs to the value, not to the column.** A
+//! `CREATE TABLE t(n INTEGER)` does not prevent `INSERT INTO t VALUES('abc')`
+//! from storing text. The declared type is only an *affinity*, that is, a
+//! conversion preference.
 //!
-//! Arrow, lui, exige un type par colonne, **connu avant le premier lot et
-//! stable pour toute la durée du flux**
-//! ([`Cursor::schema`](oxyn_driver::Cursor::schema)). Les deux modèles ne se
-//! recouvrent pas ; ce module est l'endroit où l'écart est payé, une fois, de
-//! façon explicite.
+//! Arrow, however, requires one type per column, **known before the first batch
+//! and stable for the whole duration of the stream**
+//! ([`Cursor::schema`](oxyn_driver::Cursor::schema)). The two models do not
+//! overlap; this module is where the gap is paid for, once, explicitly.
 //!
-//! # Comment le type d'une colonne est décidé
+//! # How a column's type is decided
 //!
-//! 1. **Ce que le premier lot a vu.** Le curseur met le premier lot de côté en
-//!    valeurs brutes et note, colonne par colonne, les classes de stockage
-//!    rencontrées. C'est la source la plus fiable : ce sont les données.
-//! 2. **L'affinité déclarée**, quand aucune valeur n'a été vue — colonne vide,
-//!    ou entièrement `NULL` dans le premier lot.
-//! 3. **`Utf8`** en dernier recours : c'est le rendu qui perd le moins.
+//! 1. **What the first batch saw.** The cursor sets the first batch aside as raw
+//!    values and notes, column by column, the storage classes encountered. It is
+//!    the most reliable source: it is the data.
+//! 2. **The declared affinity**, when no value was seen — an empty column, or
+//!    entirely `NULL` in the first batch.
+//! 3. **`Utf8`** as a last resort: it is the rendering that loses the least.
 //!
-//! Le treillis de fusion, quand plusieurs classes coexistent :
+//! The merge lattice, when several classes coexist:
 //!
-//! | Classes vues | Type retenu | Pourquoi |
+//! | Classes seen | Type chosen | Why |
 //! |---|---|---|
-//! | INTEGER seul | `Int64` | exact |
-//! | REAL seul | `Float64` | exact |
-//! | TEXT (ou n'importe quoi + TEXT) | `Utf8` | un entier et un flottant se rendent en texte sans perte |
-//! | INTEGER **et** REAL | `Utf8` | **aucun `f64` ne tient tous les `i64`** : au-delà de 2⁵³, la conversion corrompt |
-//! | n'importe quoi + BLOB | `Binary` | seuls les octets contiennent tout : un blob n'a pas de rendu textuel |
+//! | INTEGER alone | `Int64` | exact |
+//! | REAL alone | `Float64` | exact |
+//! | TEXT (or anything + TEXT) | `Utf8` | an integer and a float render as text without loss |
+//! | INTEGER **and** REAL | `Utf8` | **no `f64` holds every `i64`**: beyond 2⁵³, the conversion corrupts |
+//! | anything + BLOB | `Binary` | only bytes contain everything: a blob has no textual rendering |
 //!
-//! Le cas `INTEGER + REAL → Utf8` est celui qu'on rate : c'est exactement « un
-//! `u64` au-delà de 2⁵³ ne survit pas à un passage par un flottant »
+//! The `INTEGER + REAL → Utf8` case is the one that gets missed: it is exactly
+//! "a `u64` beyond 2⁵³ does not survive going through a float"
 //! ([drivers.md](../../../.claude/rules/drivers.md)).
 //!
-//! # Ce que la colonne dit d'elle-même
+//! # What the column says about itself
 //!
-//! Une colonne dont le type a été déduit, ou dont les classes étaient mêlées, le
-//! **déclare** dans les métadonnées de son `Field` Arrow — voir
-//! [`METADATA_INFERRED`] et [`METADATA_STORAGE_CLASSES`]. Présenter une
-//! inférence comme une vérité du serveur fait écrire des requêtes fausses en
-//! confiance ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)).
+//! A column whose type was inferred, or whose classes were mixed, **declares** it
+//! in the metadata of its Arrow `Field` — see [`METADATA_INFERRED`] and
+//! [`METADATA_STORAGE_CLASSES`]. Presenting an inference as a truth from the
+//! server makes people write wrong queries with confidence
+//! ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)).
 //!
-//! # Le cas résiduel
+//! # The residual case
 //!
-//! Une valeur qui apparaît **après** le premier lot peut ne pas tenir dans le
-//! type retenu : un BLOB au dix-millième rang d'une colonne vue comme textuelle.
-//! Le curseur rend alors [`SqliteError::ColumnConflict`], une erreur permanente
-//! qui nomme la colonne et les deux types. C'est bruyant — et c'est le point :
-//! l'alternative serait une valeur silencieusement fausse à l'écran.
+//! A value appearing **after** the first batch may not fit the chosen type: a
+//! BLOB at row ten thousand of a column seen as textual. The cursor then returns
+//! [`SqliteError::ColumnConflict`], a permanent error naming the column and the
+//! two types. It is noisy — and that is the point: the alternative would be a
+//! silently wrong value on screen.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -62,46 +61,46 @@ use rusqlite::types::ValueRef;
 
 use crate::error::SqliteError;
 
-/// Clé de métadonnée d'un `Field` Arrow : le type de la colonne a été **déduit**
-/// des valeurs, pas lu dans une déclaration du schéma.
+/// Metadata key of an Arrow `Field`: the column type was **inferred** from the
+/// values, not read from a declaration in the schema.
 pub const METADATA_INFERRED: &str = "oxyn.inferred";
 
-/// Clé de métadonnée d'un `Field` Arrow : le type tel que SQLite le déclare
-/// (`INTEGER`, `VARCHAR(255)`, `NUMERIC(10,2)`…), quand il en déclare un.
+/// Metadata key of an Arrow `Field`: the type as SQLite declares it
+/// (`INTEGER`, `VARCHAR(255)`, `NUMERIC(10,2)`…), when it declares one.
 pub const METADATA_DECLARED_TYPE: &str = "oxyn.sqlite.declared_type";
 
-/// Clé de métadonnée d'un `Field` Arrow : les classes de stockage réellement
-/// rencontrées, séparées par `|`, quand la colonne en mêle plusieurs.
+/// Metadata key of an Arrow `Field`: the storage classes actually encountered,
+/// separated by `|`, when the column mixes several.
 ///
-/// Sa présence est le signal qu'une colonne mélange les types et que le rendu
-/// retenu est un repli. L'interface doit pouvoir le montrer.
+/// Its presence signals that a column mixes types and that the chosen rendering
+/// is a fallback. The interface must be able to show it.
 pub const METADATA_STORAGE_CLASSES: &str = "oxyn.sqlite.storage_classes";
 
-/// Le plus grand entier que `f64` représente exactement : 2⁵³.
+/// The largest integer `f64` represents exactly: 2⁵³.
 const EXACT_IN_F64: u64 = 1 << 53;
 
-/// Le type Arrow retenu pour une colonne.
+/// The Arrow type chosen for a column.
 ///
-/// Quatre valeurs seulement, parce que SQLite n'a que cinq classes de stockage
-/// et que `NULL` n'en est pas un type. Ramener un `DATETIME` déclaré vers
-/// `Timestamp` serait une conversion, pas une lecture : SQLite y range du texte
-/// ou un nombre selon ce que l'application a écrit, et deviner décalerait la
-/// donnée ([`DRIVER-CONTRACT` §7](../../../docs/DRIVER-CONTRACT.md)). Le type
-/// déclaré reste lisible dans [`METADATA_DECLARED_TYPE`].
+/// Four values only, because SQLite has only five storage classes and `NULL` is
+/// not a type among them. Mapping a declared `DATETIME` to `Timestamp` would be a
+/// conversion, not a read: SQLite stores text or a number there depending on what
+/// the application wrote, and guessing would shift the data
+/// ([`DRIVER-CONTRACT` §7](../../../docs/DRIVER-CONTRACT.md)). The declared type
+/// stays readable in [`METADATA_DECLARED_TYPE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnKind {
-    /// Entier 64 bits signé.
+    /// Signed 64-bit integer.
     Int64,
-    /// Flottant double précision.
+    /// Double-precision float.
     Float64,
-    /// Texte UTF-8.
+    /// UTF-8 text.
     Utf8,
-    /// Octets opaques.
+    /// Opaque bytes.
     Binary,
 }
 
 impl ColumnKind {
-    /// Le type Arrow correspondant.
+    /// The matching Arrow type.
     #[must_use]
     pub fn data_type(self) -> DataType {
         match self {
@@ -112,7 +111,7 @@ impl ColumnKind {
         }
     }
 
-    /// Nom stable, celui qui apparaît dans un message d'erreur.
+    /// Stable name, the one appearing in an error message.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -130,16 +129,16 @@ impl fmt::Display for ColumnKind {
     }
 }
 
-/// L'affinité SQLite d'un type déclaré.
+/// The SQLite affinity of a declared type.
 ///
-/// Applique les cinq règles de détermination d'affinité de SQLite, **dans leur
-/// ordre**, y compris leurs conséquences surprenantes : `POINT` contient `INT`,
-/// il reçoit donc l'affinité INTEGER. Reproduire la règle est le seul choix
-/// juste — c'est ce que le moteur fera de la valeur.
+/// Applies SQLite's five affinity determination rules, **in their order**,
+/// including their surprising consequences: `POINT` contains `INT`, so it gets
+/// INTEGER affinity. Reproducing the rule is the only right choice — it is what
+/// the engine will do with the value.
 ///
-/// Rend `None` quand rien n'est déclaré : une colonne sans type déclaré n'a pas
-/// d'affinité, elle a l'affinité BLOB au sens de SQLite, mais nous préférons
-/// dire « je ne sais pas » et laisser les valeurs décider.
+/// Returns `None` when nothing is declared: a column without a declared type has
+/// no affinity, it has BLOB affinity in SQLite's sense, but we prefer to say
+/// "I don't know" and let the values decide.
 #[must_use]
 pub fn affinity(declared: Option<&str>) -> Option<ColumnKind> {
     let declared = declared?.trim();
@@ -159,16 +158,16 @@ pub fn affinity(declared: Option<&str>) -> Option<ColumnKind> {
     if upper.contains("REAL") || upper.contains("FLOA") || upper.contains("DOUB") {
         return Some(ColumnKind::Float64);
     }
-    // Affinité NUMERIC : SQLite range la valeur en entier, en flottant ou en
-    // texte selon ce qui est exact. Aucun type Arrow ne couvre les trois ; le
-    // texte est le seul rendu qui ne perd rien — c'est le cas de `DECIMAL(10,2)`.
+    // NUMERIC affinity: SQLite stores the value as integer, float or text
+    // depending on what is exact. No Arrow type covers all three; text is the only
+    // rendering that loses nothing — it is the case of `DECIMAL(10,2)`.
     Some(ColumnKind::Utf8)
 }
 
-/// Les classes de stockage rencontrées dans une colonne.
+/// The storage classes encountered in a column.
 ///
-/// `NULL` n'en est pas une : une colonne entièrement nulle n'a rien observé, et
-/// c'est une information différente de « elle mélange les types ».
+/// `NULL` is not one: an entirely null column observed nothing, and that is a
+/// different piece of information from "it mixes types".
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Observed(u8);
 
@@ -178,11 +177,11 @@ impl Observed {
     const TEXT: u8 = 1 << 2;
     const BLOB: u8 = 1 << 3;
 
-    /// Enregistre une valeur.
+    /// Records a value.
     ///
-    /// Un TEXT qui n'est pas de l'UTF-8 valide compte pour des **octets** : il
-    /// ne peut pas rejoindre une colonne `Utf8`, et le découvrir ici évite de
-    /// s'en apercevoir au milieu du flux.
+    /// A TEXT that is not valid UTF-8 counts as **bytes**: it cannot join a `Utf8`
+    /// column, and finding it out here avoids noticing it in the middle of the
+    /// stream.
     pub(crate) fn observe(&mut self, value: ValueRef<'_>) {
         self.0 |= match value {
             ValueRef::Null => 0,
@@ -194,58 +193,58 @@ impl Observed {
         };
     }
 
-    /// Aucune valeur non nulle n'a été vue.
+    /// No non-null value was seen.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
-    /// Plusieurs classes coexistent dans la colonne.
+    /// Several classes coexist in the column.
     #[must_use]
     pub const fn is_mixed(self) -> bool {
         self.0.count_ones() > 1
     }
 
-    /// Les classes vues, séparées par `|`, dans l'ordre du treillis.
+    /// The classes seen, separated by `|`, in lattice order.
     #[must_use]
     pub fn names(self) -> String {
-        let mut sortie = String::new();
-        for (bit, nom) in [
+        let mut joined = String::new();
+        for (bit, class_name) in [
             (Self::INTEGER, "integer"),
             (Self::REAL, "real"),
             (Self::TEXT, "text"),
             (Self::BLOB, "blob"),
         ] {
             if self.0 & bit != 0 {
-                if !sortie.is_empty() {
-                    sortie.push('|');
+                if !joined.is_empty() {
+                    joined.push('|');
                 }
-                sortie.push_str(nom);
+                joined.push_str(class_name);
             }
         }
-        sortie
+        joined
     }
 
-    /// Le type qui accueille toutes les classes vues sans perte.
+    /// The type that holds every class seen without loss.
     ///
-    /// Voir la table du module. `None` quand rien n'a été vu.
+    /// See the module table. `None` when nothing was seen.
     #[must_use]
     fn join(self) -> Option<ColumnKind> {
         if self.is_empty() {
             return None;
         }
         if self.0 & Self::BLOB != 0 {
-            // Seuls les octets contiennent tout : un blob n'a pas de rendu
-            // textuel, alors qu'un entier, un flottant et un texte ont tous une
-            // représentation en octets.
+            // Only bytes contain everything: a blob has no textual rendering,
+            // whereas an integer, a float and a text all have a byte
+            // representation.
             return Some(ColumnKind::Binary);
         }
         if self.0 & Self::TEXT != 0 {
             return Some(ColumnKind::Utf8);
         }
         if self.0 & Self::INTEGER != 0 && self.0 & Self::REAL != 0 {
-            // Le piège : aucun `f64` ne tient tous les `i64`. Une colonne qui
-            // mêle exacts et flottants se rend en texte, pas en `Float64`.
+            // The trap: no `f64` holds every `i64`. A column mixing exact values
+            // and floats renders as text, not as `Float64`.
             return Some(ColumnKind::Utf8);
         }
         if self.0 & Self::REAL != 0 {
@@ -255,49 +254,49 @@ impl Observed {
     }
 }
 
-/// Ce qui a été décidé pour une colonne du résultat.
+/// What was decided for a column of the result.
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnPlan {
-    /// Nom rendu par SQLite. **Entrée hostile** : alias arbitraire choisi par
-    /// l'utilisateur ou nom de colonne venu du schéma.
+    /// Name returned by SQLite. **Hostile input**: an arbitrary alias chosen by
+    /// the user or a column name from the schema.
     pub name: String,
-    /// Type déclaré, quand la colonne vient d'une table et non d'une expression.
+    /// Declared type, when the column comes from a table and not an expression.
     pub declared: Option<String>,
-    /// Type Arrow retenu.
+    /// Chosen Arrow type.
     pub kind: ColumnKind,
-    /// Classes de stockage vues dans le premier lot.
+    /// Storage classes seen in the first batch.
     pub observed: Observed,
-    /// Le type vient des valeurs, pas de la déclaration.
+    /// The type comes from the values, not from the declaration.
     pub inferred: bool,
 }
 
 impl ColumnPlan {
-    /// Décide du type d'une colonne à partir de ce que le premier lot a vu et
-    /// de ce que le schéma déclare.
+    /// Decides a column's type from what the first batch saw and what the
+    /// schema declares.
     pub(crate) fn resolve(name: String, declared: Option<String>, observed: Observed) -> Self {
         let declared_kind = affinity(declared.as_deref());
         let kind = observed
             .join()
             .or(declared_kind)
-            // Rien de vu, rien de déclaré : le texte perd le moins.
+            // Nothing seen, nothing declared: text loses the least.
             .unwrap_or(ColumnKind::Utf8);
         Self {
             name,
             declared,
             kind,
             observed,
-            // « Déduit » veut dire « le type retenu n'est pas celui que le
-            // schéma implique » — que le schéma se taise, ou qu'il dise autre
-            // chose que ce que les valeurs montrent.
+            // "Inferred" means "the chosen type is not the one the schema
+            // implies" — whether the schema is silent, or says something else than
+            // what the values show.
             inferred: declared_kind != Some(kind),
         }
     }
 
-    /// Le `Field` Arrow, métadonnées comprises.
+    /// The Arrow `Field`, metadata included.
     ///
-    /// Le champ est **toujours** déclaré nullable : SQLite rend `NULL` pour
-    /// n'importe quelle expression, et une colonne `NOT NULL` vue à travers une
-    /// jointure externe l'est tout autant.
+    /// The field is **always** declared nullable: SQLite returns `NULL` for any
+    /// expression, and a `NOT NULL` column seen through an outer join is just as
+    /// nullable.
     fn field(&self) -> Field {
         let mut metadata = HashMap::new();
         if let Some(declared) = &self.declared {
@@ -313,34 +312,34 @@ impl ColumnPlan {
     }
 }
 
-/// Le schéma Arrow d'un ensemble de colonnes résolues.
+/// The Arrow schema of a set of resolved columns.
 pub(crate) fn schema_of(plans: &[ColumnPlan]) -> SchemaRef {
     Arc::new(Schema::new(
         plans.iter().map(ColumnPlan::field).collect::<Vec<_>>(),
     ))
 }
 
-/// Une valeur mise de côté le temps de résoudre le type de sa colonne.
+/// A value set aside while its column's type is resolved.
 ///
-/// Ne peut pas être `rusqlite::types::Value` : celui-ci range le TEXT dans un
-/// `String`, donc perd — ou refuse — un texte qui n'est pas de l'UTF-8 valide.
-/// Ici les octets sont conservés tels quels.
+/// Cannot be `rusqlite::types::Value`: that one stores TEXT in a `String`, hence
+/// loses — or refuses — a text that is not valid UTF-8. Here the bytes are kept
+/// as they are.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ProbeValue {
-    /// Absence de valeur.
+    /// Absence of value.
     Null,
-    /// Entier 64 bits.
+    /// 64-bit integer.
     Integer(i64),
-    /// Flottant double précision.
+    /// Double-precision float.
     Real(f64),
-    /// Texte, **en octets** : rien ne garantit qu'il soit de l'UTF-8 valide.
+    /// Text, **as bytes**: nothing guarantees it is valid UTF-8.
     Text(Vec<u8>),
-    /// Octets opaques.
+    /// Opaque bytes.
     Blob(Vec<u8>),
 }
 
 impl ProbeValue {
-    /// Copie une valeur empruntée au moteur.
+    /// Copies a value borrowed from the engine.
     pub(crate) fn capture(value: ValueRef<'_>) -> Self {
         match value {
             ValueRef::Null => Self::Null,
@@ -351,7 +350,7 @@ impl ProbeValue {
         }
     }
 
-    /// Vue empruntée, telle que le moteur l'aurait rendue.
+    /// Borrowed view, as the engine would have returned it.
     pub(crate) fn borrow(&self) -> ValueRef<'_> {
         match self {
             Self::Null => ValueRef::Null,
@@ -363,9 +362,9 @@ impl ProbeValue {
     }
 }
 
-/// Les octets de données d'une valeur.
+/// The data bytes of a value.
 ///
-/// C'est **cette** mesure qui borne un lot, pas le nombre de lignes
+/// **This** measure bounds a batch, not the number of rows
 /// ([`BatchLimits`](crate::BatchLimits)).
 #[must_use]
 pub(crate) fn value_bytes(value: ValueRef<'_>) -> usize {
@@ -376,11 +375,11 @@ pub(crate) fn value_bytes(value: ValueRef<'_>) -> usize {
     }
 }
 
-/// Le constructeur d'une colonne Arrow, réutilisé d'un lot au suivant.
+/// The builder of an Arrow column, reused from one batch to the next.
 ///
-/// Porte un tampon de rendu partagé : convertir un entier en texte allouerait
-/// sinon une `String` par valeur, et la conversion vers `RecordBatch` est un
-/// chemin **par valeur** ([rust.md](../../../.claude/rules/rust.md)).
+/// Carries a shared rendering buffer: converting an integer to text would
+/// otherwise allocate a `String` per value, and the conversion to `RecordBatch`
+/// is a **per-value** path ([rust.md](../../../.claude/rules/rust.md)).
 #[derive(Debug)]
 pub(crate) struct ColumnBuilder {
     inner: Inner,
@@ -397,14 +396,14 @@ enum Inner {
 }
 
 impl ColumnBuilder {
-    /// Un constructeur pour le type retenu, dimensionné pour `rows` lignes.
+    /// A builder for the chosen type, sized for `rows` rows.
     pub(crate) fn new(kind: ColumnKind, index: usize, rows: usize) -> Self {
         let inner = match kind {
             ColumnKind::Int64 => Inner::Int64(Int64Builder::with_capacity(rows)),
             ColumnKind::Float64 => Inner::Float64(Float64Builder::with_capacity(rows)),
-            // La seconde capacité est celle du tampon d'octets : seize octets
-            // par ligne est une estimation basse qui évite les premières
-            // réallocations sans réserver à l'aveugle.
+            // The second capacity is the byte buffer's: sixteen bytes per row is a
+            // low estimate that avoids the first reallocations without reserving
+            // blindly.
             ColumnKind::Utf8 => {
                 Inner::Utf8(StringBuilder::with_capacity(rows, rows.saturating_mul(16)))
             }
@@ -419,7 +418,7 @@ impl ColumnBuilder {
         }
     }
 
-    /// Le type retenu.
+    /// The chosen type.
     pub(crate) fn kind(&self) -> ColumnKind {
         match self.inner {
             Inner::Int64(_) => ColumnKind::Int64,
@@ -429,34 +428,34 @@ impl ColumnBuilder {
         }
     }
 
-    /// Ajoute une valeur, ou refuse.
+    /// Appends a value, or refuses.
     ///
-    /// Toutes les conversions acceptées sont **sans perte**. Celles qui
-    /// perdraient — un flottant dans une colonne entière, un entier au-delà de
-    /// 2⁵³ dans une colonne flottante, un blob dans une colonne textuelle —
-    /// rendent [`SqliteError::ColumnConflict`] plutôt qu'une valeur fausse.
+    /// Every accepted conversion is **lossless**. Those that would lose — a float
+    /// in an integer column, an integer beyond 2⁵³ in a float column, a blob in a
+    /// textual column — return [`SqliteError::ColumnConflict`] rather than a wrong
+    /// value.
     ///
-    /// # Erreurs
-    /// [`SqliteError::ColumnConflict`] quand la valeur n'a pas de rendu sans
-    /// perte dans le type de la colonne.
+    /// # Errors
+    /// [`SqliteError::ColumnConflict`] when the value has no lossless rendering in
+    /// the column's type.
     pub(crate) fn append(&mut self, value: ValueRef<'_>) -> Result<(), SqliteError> {
-        // L'erreur est construite d'avance : elle ne coûte que trois mots, et
-        // la produire depuis un bras du `match` demanderait d'emprunter `self`
-        // pendant qu'il l'est déjà.
+        // The error is built in advance: it costs only three words, and producing
+        // it from a `match` arm would require borrowing `self` while it already
+        // is.
         let conflict = SqliteError::ColumnConflict {
             column: self.index,
             resolved: self.kind().as_str(),
             found: storage_class_name(value),
         };
-        // Le tampon de rendu sort du constructeur le temps de l'emprunt, puis
-        // regagne sa place : il est réutilisé d'une valeur à la suivante.
+        // The rendering buffer leaves the builder for the duration of the borrow,
+        // then goes back in place: it is reused from one value to the next.
         let mut scratch = std::mem::take(&mut self.scratch);
         let issue = append_into(&mut self.inner, &mut scratch, value, conflict);
         self.scratch = scratch;
         issue
     }
 
-    /// Ferme le lot et rend la colonne. Le constructeur redevient vide.
+    /// Closes the batch and returns the column. The builder becomes empty again.
     pub(crate) fn finish(&mut self) -> ArrayRef {
         match &mut self.inner {
             Inner::Int64(b) => Arc::new(b.finish()),
@@ -467,8 +466,8 @@ impl ColumnBuilder {
     }
 }
 
-/// Le corps de [`ColumnBuilder::append`], sorti pour que le constructeur et son
-/// tampon de rendu soient deux emprunts distincts.
+/// The body of [`ColumnBuilder::append`], taken out so that the builder and its
+/// rendering buffer are two distinct borrows.
 fn append_into(
     inner: &mut Inner,
     scratch: &mut String,
@@ -492,16 +491,16 @@ fn append_into(
             if i.unsigned_abs() > EXACT_IN_F64 {
                 return Err(conflict);
             }
-            // Borné juste au-dessus : `f64` représente exactement tout entier
-            // de valeur absolue ≤ 2⁵³, donc la conversion ne perd rien.
+            // Bounded just above: `f64` represents exactly every integer of
+            // absolute value ≤ 2⁵³, so the conversion loses nothing.
             #[allow(clippy::cast_precision_loss)]
             b.append_value(i as f64);
         }
         (Inner::Utf8(b), ValueRef::Text(bytes)) => {
-            let Ok(texte) = std::str::from_utf8(bytes) else {
+            let Ok(decoded) = std::str::from_utf8(bytes) else {
                 return Err(conflict);
             };
-            b.append_value(texte);
+            b.append_value(decoded);
         }
         (Inner::Utf8(b), ValueRef::Integer(_) | ValueRef::Real(_)) => {
             render(scratch, value);
@@ -517,13 +516,13 @@ fn append_into(
     Ok(())
 }
 
-/// Écrit le rendu textuel d'un nombre dans le tampon partagé.
+/// Writes the textual rendering of a number into the shared buffer.
 ///
-/// Le `Display` de `f64` produit la plus courte représentation qui se relit à
-/// l'identique : la conversion est réversible.
+/// `f64`'s `Display` produces the shortest representation that reads back
+/// identically: the conversion is reversible.
 fn render(scratch: &mut String, value: ValueRef<'_>) {
     scratch.clear();
-    // Écrire dans une `String` ne peut pas échouer.
+    // Writing into a `String` cannot fail.
     let _ = match value {
         ValueRef::Integer(i) => write!(scratch, "{i}"),
         ValueRef::Real(x) => write!(scratch, "{x}"),
@@ -531,7 +530,7 @@ fn render(scratch: &mut String, value: ValueRef<'_>) {
     };
 }
 
-/// Le nom de la classe de stockage d'une valeur, pour un message d'erreur.
+/// The name of a value's storage class, for an error message.
 const fn storage_class_name(value: ValueRef<'_>) -> &'static str {
     match value {
         ValueRef::Null => "null",
@@ -549,11 +548,11 @@ mod tests {
     use super::*;
 
     fn observed(values: &[ValueRef<'_>]) -> Observed {
-        let mut vues = Observed::default();
+        let mut seen_classes = Observed::default();
         for value in values {
-            vues.observe(*value);
+            seen_classes.observe(*value);
         }
-        vues
+        seen_classes
     }
 
     fn resolve(values: &[ValueRef<'_>], declared: Option<&str>) -> ColumnPlan {
@@ -565,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn les_regles_d_affinite_de_sqlite_sont_reproduites_telles_quelles() {
+    fn sqlite_affinity_rules_are_reproduced_as_they_are() {
         assert_eq!(affinity(Some("INTEGER")), Some(ColumnKind::Int64));
         assert_eq!(affinity(Some("BIGINT")), Some(ColumnKind::Int64));
         assert_eq!(affinity(Some("VARCHAR(255)")), Some(ColumnKind::Utf8));
@@ -576,18 +575,18 @@ mod tests {
             Some(ColumnKind::Float64)
         );
         assert_eq!(affinity(Some("REAL")), Some(ColumnKind::Float64));
-        // Affinité NUMERIC : ni entier ni flottant ne la couvrent.
+        // NUMERIC affinity: neither integer nor float covers it.
         assert_eq!(affinity(Some("DECIMAL(10,2)")), Some(ColumnKind::Utf8));
-        // La conséquence surprenante de la règle 1, et elle est correcte :
-        // SQLite donne bien l'affinité INTEGER à `POINT`.
+        // The surprising consequence of rule 1, and it is correct: SQLite does
+        // give INTEGER affinity to `POINT`.
         assert_eq!(affinity(Some("POINT")), Some(ColumnKind::Int64));
-        // Rien de déclaré : pas d'affinité, on laissera les valeurs décider.
+        // Nothing declared: no affinity, the values will decide.
         assert_eq!(affinity(None), None);
         assert_eq!(affinity(Some("   ")), None);
     }
 
     #[test]
-    fn une_colonne_homogene_garde_son_type_exact() {
+    fn a_homogeneous_column_keeps_its_exact_type() {
         assert_eq!(
             resolve(&[ValueRef::Integer(1), ValueRef::Integer(2)], None).kind,
             ColumnKind::Int64
@@ -607,9 +606,9 @@ mod tests {
     }
 
     #[test]
-    fn une_colonne_qui_mele_entiers_et_flottants_tombe_sur_le_texte() {
-        // Le piège : aucun `f64` ne tient tous les `i64`. Convertir
-        // 9_007_199_254_740_993 en flottant le change en 9_007_199_254_740_992.
+    fn a_column_mixing_integers_and_floats_falls_back_to_text() {
+        // The trap: no `f64` holds every `i64`. Converting
+        // 9_007_199_254_740_993 to a float changes it into 9_007_199_254_740_992.
         let plan = resolve(&[ValueRef::Integer(1), ValueRef::Real(1.5)], None);
         assert_eq!(plan.kind, ColumnKind::Utf8);
         assert!(plan.observed.is_mixed());
@@ -617,52 +616,52 @@ mod tests {
     }
 
     #[test]
-    fn un_blob_impose_les_octets_a_toute_la_colonne() {
-        for autre in [
+    fn a_blob_imposes_bytes_on_the_whole_column() {
+        for non_blob in [
             ValueRef::Integer(1),
             ValueRef::Real(1.0),
             ValueRef::Text(b"a"),
         ] {
-            let plan = resolve(&[autre, ValueRef::Blob(b"\x00")], None);
+            let plan = resolve(&[non_blob, ValueRef::Blob(b"\x00")], None);
             assert_eq!(
                 plan.kind,
                 ColumnKind::Binary,
-                "seuls les octets contiennent tout"
+                "only bytes contain everything"
             );
         }
     }
 
     #[test]
-    fn un_texte_qui_n_est_pas_de_l_utf8_compte_pour_des_octets() {
-        // Découvert ici plutôt qu'au milieu du flux : c'est tout l'intérêt de la
-        // sonde.
+    fn a_text_that_is_not_utf8_counts_as_bytes() {
+        // Found here rather than in the middle of the stream: that is the whole
+        // point of the probe.
         let plan = resolve(&[ValueRef::Text(b"\xff\xfe")], None);
         assert_eq!(plan.kind, ColumnKind::Binary);
     }
 
     #[test]
-    fn une_colonne_entierement_nulle_retombe_sur_la_declaration() {
+    fn an_entirely_null_column_falls_back_on_the_declaration() {
         let plan = resolve(&[ValueRef::Null, ValueRef::Null], Some("INTEGER"));
         assert_eq!(plan.kind, ColumnKind::Int64);
         assert!(
             !plan.inferred,
-            "le type vient de la déclaration : rien n'est déduit"
+            "the type comes from the declaration: nothing is inferred"
         );
         assert!(plan.observed.is_empty());
     }
 
     #[test]
-    fn sans_valeur_ni_declaration_le_texte_est_le_repli() {
+    fn without_value_or_declaration_text_is_the_fallback() {
         let plan = resolve(&[], None);
         assert_eq!(plan.kind, ColumnKind::Utf8);
-        assert!(plan.inferred, "rien ne l'a déclaré : c'est une déduction");
+        assert!(plan.inferred, "nothing declared it: it is an inference");
     }
 
     #[test]
-    fn une_colonne_dont_le_type_ne_suit_pas_sa_declaration_se_declare_deduite() {
-        // `CREATE TABLE t(n INTEGER)` puis `INSERT INTO t VALUES('abc')` :
-        // SQLite l'accepte, et l'interface doit pouvoir dire que le type affiché
-        // n'est pas celui du schéma.
+    fn a_column_whose_type_does_not_follow_its_declaration_declares_itself_inferred() {
+        // `CREATE TABLE t(n INTEGER)` then `INSERT INTO t VALUES('abc')`: SQLite
+        // accepts it, and the interface must be able to say that the displayed type
+        // is not the schema's.
         let plan = resolve(&[ValueRef::Text(b"abc")], Some("INTEGER"));
         assert_eq!(plan.kind, ColumnKind::Utf8);
         assert!(plan.inferred);
@@ -682,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn une_colonne_melangee_le_declare_dans_ses_metadonnees() {
+    fn a_mixed_column_declares_it_in_its_metadata() {
         let plan = resolve(&[ValueRef::Integer(1), ValueRef::Text(b"a")], None);
         let champ = plan.field();
         assert_eq!(
@@ -691,14 +690,14 @@ mod tests {
                 .get(METADATA_STORAGE_CLASSES)
                 .map(String::as_str),
             Some("integer|text"),
-            "l'interface doit pouvoir montrer que le rendu est un repli"
+            "the interface must be able to show that the rendering is a fallback"
         );
     }
 
     #[test]
-    fn tout_champ_est_nullable() {
-        // SQLite rend NULL pour n'importe quelle expression, et une colonne
-        // NOT NULL vue à travers une jointure externe l'est tout autant.
+    fn every_field_is_nullable() {
+        // SQLite returns NULL for any expression, and a NOT NULL column seen
+        // through an outer join is just as nullable.
         assert!(
             resolve(&[ValueRef::Integer(1)], Some("INTEGER"))
                 .field()
@@ -707,53 +706,52 @@ mod tests {
     }
 
     #[test]
-    fn les_conversions_acceptees_sont_sans_perte() {
+    fn accepted_conversions_are_lossless() {
         let mut b = ColumnBuilder::new(ColumnKind::Utf8, 0, 4);
-        b.append(ValueRef::Integer(-42)).expect("entier en texte");
-        b.append(ValueRef::Real(0.1)).expect("flottant en texte");
-        b.append(ValueRef::Text(b"caf\xc3\xa9")).expect("texte");
-        b.append(ValueRef::Null).expect("nul");
+        b.append(ValueRef::Integer(-42)).expect("integer as text");
+        b.append(ValueRef::Real(0.1)).expect("float as text");
+        b.append(ValueRef::Text(b"caf\xc3\xa9")).expect("text");
+        b.append(ValueRef::Null).expect("null");
 
-        let colonne = b.finish();
-        let colonne = colonne
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<StringArray>()
-            .expect("colonne Utf8");
-        assert_eq!(colonne.value(0), "-42");
+            .expect("Utf8 column");
+        assert_eq!(built_array.value(0), "-42");
         assert_eq!(
-            colonne.value(1),
+            built_array.value(1),
             "0.1",
-            "le Display de f64 rend la plus courte forme qui se relit à l'identique"
+            "f64's Display renders the shortest form that reads back identically"
         );
-        assert_eq!(colonne.value(2), "café");
-        assert!(colonne.is_null(3));
+        assert_eq!(built_array.value(2), "café");
+        assert!(built_array.is_null(3));
     }
 
     #[test]
-    fn un_entier_au_dela_de_deux_puissance_53_ne_passe_pas_par_un_flottant() {
-        // La corruption silencieuse que ce refus évite : 2⁵³+1 deviendrait 2⁵³.
+    fn an_integer_beyond_two_to_the_53_does_not_go_through_a_float() {
+        // The silent corruption this refusal avoids: 2⁵³+1 would become 2⁵³.
         let mut b = ColumnBuilder::new(ColumnKind::Float64, 2, 1);
-        b.append(ValueRef::Integer(1 << 53))
-            .expect("2^53 est exact");
+        b.append(ValueRef::Integer(1 << 53)).expect("2^53 is exact");
 
         let err = b
             .append(ValueRef::Integer((1_i64 << 53) + 1))
-            .expect_err("refus attendu");
+            .expect_err("expected refusal");
         let SqliteError::ColumnConflict {
             column, resolved, ..
         } = err
         else {
-            panic!("mauvaise variante : {err:?}");
+            panic!("wrong variant: {err:?}");
         };
         assert_eq!((column, resolved), (2, "float64"));
     }
 
     #[test]
-    fn un_blob_ne_se_glisse_pas_dans_une_colonne_textuelle() {
+    fn a_blob_does_not_slip_into_a_textual_column() {
         let mut b = ColumnBuilder::new(ColumnKind::Utf8, 1, 1);
         let err = b
             .append(ValueRef::Blob(b"\x00\xff"))
-            .expect_err("refus attendu");
+            .expect_err("expected refusal");
         assert!(
             matches!(
                 err,
@@ -768,80 +766,80 @@ mod tests {
     }
 
     #[test]
-    fn un_texte_invalide_ne_se_glisse_pas_dans_une_colonne_textuelle() {
+    fn an_invalid_text_does_not_slip_into_a_textual_column() {
         let mut b = ColumnBuilder::new(ColumnKind::Utf8, 0, 1);
         let err = b
             .append(ValueRef::Text(b"\xff"))
-            .expect_err("refus attendu");
+            .expect_err("expected refusal");
         assert!(matches!(err, SqliteError::ColumnConflict { .. }), "{err:?}");
     }
 
     #[test]
-    fn un_texte_ne_se_glisse_pas_dans_une_colonne_entiere() {
+    fn a_text_does_not_slip_into_an_integer_column() {
         let mut b = ColumnBuilder::new(ColumnKind::Int64, 0, 1);
         assert!(b.append(ValueRef::Text(b"12")).is_err());
         assert!(b.append(ValueRef::Real(1.0)).is_err());
         assert!(b.append(ValueRef::Blob(b"x")).is_err());
-        b.append(ValueRef::Integer(7)).expect("un entier passe");
-        let colonne = b.finish();
-        let colonne = colonne
+        b.append(ValueRef::Integer(7)).expect("an integer passes");
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<Int64Array>()
-            .expect("colonne Int64");
-        assert_eq!(colonne.value(0), 7);
+            .expect("Int64 column");
+        assert_eq!(built_array.value(0), 7);
     }
 
     #[test]
-    fn une_colonne_d_octets_accueille_tout_sans_perdre_le_contenu() {
+    fn a_bytes_column_holds_everything_without_losing_content() {
         let mut b = ColumnBuilder::new(ColumnKind::Binary, 0, 4);
-        b.append(ValueRef::Blob(b"\x00\xff")).expect("octets");
-        b.append(ValueRef::Text(b"abc")).expect("texte en octets");
-        b.append(ValueRef::Integer(12)).expect("entier en octets");
-        b.append(ValueRef::Null).expect("nul");
+        b.append(ValueRef::Blob(b"\x00\xff")).expect("bytes");
+        b.append(ValueRef::Text(b"abc")).expect("text as bytes");
+        b.append(ValueRef::Integer(12)).expect("integer as bytes");
+        b.append(ValueRef::Null).expect("null");
 
-        let colonne = b.finish();
-        let colonne = colonne
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<BinaryArray>()
-            .expect("colonne Binary");
-        assert_eq!(colonne.value(0), b"\x00\xff");
-        assert_eq!(colonne.value(1), b"abc");
-        assert_eq!(colonne.value(2), b"12");
-        assert!(colonne.is_null(3));
+            .expect("Binary column");
+        assert_eq!(built_array.value(0), b"\x00\xff");
+        assert_eq!(built_array.value(1), b"abc");
+        assert_eq!(built_array.value(2), b"12");
+        assert!(built_array.is_null(3));
     }
 
     #[test]
-    fn un_flottant_reste_un_flottant() {
+    fn a_float_stays_a_float() {
         let mut b = ColumnBuilder::new(ColumnKind::Float64, 0, 2);
-        b.append(ValueRef::Real(1.5)).expect("flottant");
-        b.append(ValueRef::Integer(3)).expect("entier exact");
-        let colonne = b.finish();
-        let colonne = colonne
+        b.append(ValueRef::Real(1.5)).expect("float");
+        b.append(ValueRef::Integer(3)).expect("exact integer");
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<Float64Array>()
-            .expect("colonne Float64");
-        assert!((colonne.value(0) - 1.5).abs() < f64::EPSILON);
-        assert!((colonne.value(1) - 3.0).abs() < f64::EPSILON);
+            .expect("Float64 column");
+        assert!((built_array.value(0) - 1.5).abs() < f64::EPSILON);
+        assert!((built_array.value(1) - 3.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn un_lot_se_mesure_en_octets_de_donnees() {
+    fn a_batch_is_measured_in_data_bytes() {
         assert_eq!(value_bytes(ValueRef::Null), 0);
         assert_eq!(value_bytes(ValueRef::Integer(1)), 8);
         assert_eq!(value_bytes(ValueRef::Blob(&[0; 1_048_576])), 1_048_576);
     }
 
     #[test]
-    fn une_valeur_mise_de_cote_se_relit_a_l_identique() {
-        for valeur in [
+    fn a_value_set_aside_reads_back_identically() {
+        for sample in [
             ValueRef::Null,
             ValueRef::Integer(-1),
             ValueRef::Real(2.5),
             ValueRef::Text(b"\xff non-utf8"),
             ValueRef::Blob(b"\x00"),
         ] {
-            let capturee = ProbeValue::capture(valeur);
-            assert_eq!(capturee.borrow(), valeur);
+            let captured = ProbeValue::capture(sample);
+            assert_eq!(captured.borrow(), sample);
         }
     }
 }

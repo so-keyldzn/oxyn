@@ -1,47 +1,47 @@
-# ADR-NNNN — <titre : la décision, pas le sujet>
+# ADR-NNNN — <title: the decision, not the subject>
 
-**Statut :** proposé · **Date :** AAAA-MM-JJ
+**Status:** proposed · **Date:** AAAA-MM-JJ
 
-<!-- Si cet ADR en remplace ou en précise un autre, le dire ici :
-**Remplace :** [ADR-XXXX](XXXX-titre.md)
-**Précise :** [ADR-XXXX](XXXX-titre.md), sur le point suivant : … -->
+<!-- If this ADR supersedes or refines another one, say so here:
+**Supersedes:** [ADR-XXXX](XXXX-title.md)
+**Refines:** [ADR-XXXX](XXXX-title.md), on the following point: … -->
 
-## Contexte
+## Context
 
-Le problème réel et ses contraintes **chiffrées**. Pas une dissertation sur
-l'état de l'art.
+The real problem and its **quantified** constraints. Not an essay on the state
+of the art.
 
-Tout fait externe porte sa source et sa date, et est reporté dans
-`docs/RESEARCH-NOTES.md` dans le même commit ([I-12](../../CLAUDE.md#i-12)).
+Every external fact carries its source and date, and is recorded in
+`docs/RESEARCH-NOTES.md` in the same commit ([I-12](../../CLAUDE.md#i-12)).
 
-Ce qui rend un contexte utile : le lecteur doit pouvoir dire, sans rien savoir
-d'autre, pourquoi la question se posait.
+What makes a context useful: the reader must be able to tell, knowing nothing
+else, why the question arose.
 
-## Décision
+## Decision
 
-Au présent, avec les noms concrets — types, crates, valeurs. « Nous envisageons
-d'utiliser » n'est pas une décision.
+In the present tense, with concrete names — types, crates, values. "We are
+considering using" is not a decision.
 
-## Conséquences
+## Consequences
 
 * **+** …
 * **+** …
-* **−** … *(les négatives sont obligatoires ; un ADR sans conséquence négative
-  n'a pas été réfléchi)*
+* **−** … *(negatives are mandatory; an ADR without a negative consequence
+  was not thought through)*
 * **−** …
 
-**Coût de sortie :** ce qu'il faudrait défaire, et à quel prix. Nommer ce qui
-borne ce coût, s'il y a quelque chose.
+**Exit cost:** what would have to be undone, and at what price. Name what
+bounds that cost, if anything does.
 
-**Reconsidérer si** … *(la condition concrète qui rouvrirait la question. Une
-décision sans critère de révision devient un dogme.)*
+**Reconsider if** … *(the concrete condition that would reopen the question. A
+decision without a revision criterion becomes dogma.)*
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
 | … | … |
 | … | … |
 
-Une alternative sans raison de rejet n'a pas été examinée : elle a été ignorée,
-et la différence se verra le jour où quelqu'un la reproposera.
+An alternative without a reason for rejection was not examined: it was ignored,
+and the difference will show the day someone proposes it again.

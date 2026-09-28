@@ -61,8 +61,8 @@ export function footerSummary(state: ResultFooterState): {
 
 /**
  * The bar under a result: what is shown, how long it took, whether it is the
- * whole result, and what can be done with it (docs/UX-SPEC.md, « Lisibilité
- * et hauteur de grille » — status and export scope sit under their area).
+ * whole result, and what can be done with it (docs/UX-SPEC.md, « Readability
+ * and grid height » — status and export scope sit under their area).
  *
  * Only the settled summary is a live region: a row counter announced at every
  * batch would drown a screen reader.
@@ -134,7 +134,7 @@ export function ResultFooter({
         {running && !state.serverCancel ? (
           // The reserve goes with the button at every width: hidden on a
           // narrow window, Cancel would promise what this session cannot do
-          // (docs/UX-SPEC.md, « Annulation »). It wraps, it never disappears.
+          // (docs/UX-SPEC.md, « Cancellation »). It wraps, it never disappears.
           <span className="min-w-0 text-muted-foreground">
             Cancel stops reading here; the server may keep running.
           </span>

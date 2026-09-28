@@ -1,23 +1,23 @@
-//! Le fichier de débordement d'un [`ResultBuffer`](crate::ResultBuffer).
+//! The spill file of a [`ResultBuffer`](crate::ResultBuffer).
 //!
-//! # Pourquoi un flux IPC par lot, et pas un fichier IPC
+//! # Why one IPC stream per batch, and not an IPC file
 //!
-//! Le format *fichier* d'Arrow IPC place son index de blocs dans un **pied de
-//! page**, écrit par `FileWriter::finish()`. Tant que la requête n'est pas
-//! terminée, ce pied n'existe pas : rien de ce qui a débordé ne serait
-//! relisible — c'est-à-dire précisément pendant que l'utilisateur fait défiler.
+//! Arrow IPC's *file* format places its block index in a **footer**, written
+//! by `FileWriter::finish()`. As long as the query is not over, that footer
+//! does not exist: nothing that spilled would be readable — that is,
+//! precisely while the user is scrolling.
 //!
-//! Chaque lot débordé est donc écrit comme un **flux IPC autonome** (message de
-//! schéma, message de données, marqueur de fin) à un décalage relevé. Relire le
-//! lot *i* est un `seek` puis une lecture de `len` octets, quel que soit l'état
-//! d'avancement de la requête. Le surcoût est le message de schéma répété — de
-//! l'ordre de la centaine d'octets face à un lot qui pèse des mégaoctets, faute
-//! de quoi il n'aurait pas débordé.
+//! Each spilled batch is therefore written as an **autonomous IPC stream**
+//! (schema message, data message, end marker) at a recorded offset. Reading
+//! batch *i* back is a `seek` then a read of `len` bytes, whatever the
+//! progress of the query. The overhead is the repeated schema message — on the
+//! order of a hundred bytes against a batch weighing megabytes, otherwise it
+//! would not have spilled.
 //!
-//! Le fichier est [`tempfile::NamedTempFile`] : il est supprimé à la destruction
-//! du tampon, y compris en cas de panique. Un handle de lecture **indépendant**
-//! est ouvert à la création pour que le défilement ne se sérialise pas derrière
-//! l'écriture du lot suivant.
+//! The file is a [`tempfile::NamedTempFile`]: it is deleted when the buffer is
+//! destroyed, including on panic. An **independent** read handle is opened at
+//! creation so that scrolling does not serialize behind the writing of the
+//! next batch.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -33,14 +33,14 @@ use tempfile::{Builder, NamedTempFile};
 
 use crate::error::{DataError, Result};
 
-/// Où se trouve un lot débordé dans le fichier temporaire.
+/// Where a spilled batch is in the temporary file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SpillRef {
-    /// Décalage du premier octet du flux IPC.
+    /// Offset of the first byte of the IPC stream.
     offset: u64,
-    /// Longueur du flux, marqueur de fin compris.
+    /// Length of the stream, end marker included.
     len: u64,
-    /// Lignes attendues à la relecture. Sert de contrôle de cohérence.
+    /// Rows expected on reading back. Serves as a consistency check.
     rows: usize,
     retained_bytes: usize,
 }
@@ -50,36 +50,36 @@ impl SpillRef {
         self.retained_bytes
     }
 
-    /// Octets occupés dans le fichier de débordement.
+    /// Bytes occupied in the spill file.
     pub(crate) const fn byte_len(self) -> u64 {
         self.len
     }
 }
 
-/// Côté écriture : un seul écrivain à la fois, position suivante mémorisée.
+/// Write side: a single writer at a time, next position remembered.
 #[derive(Debug)]
 struct WriteSide {
     file: NamedTempFile,
     next_offset: u64,
 }
 
-/// Le fichier de débordement, partagé par `Arc` entre l'écrivain (le puits) et
-/// les lecteurs (la grille).
+/// The spill file, shared through `Arc` between the writer (the sink) and the
+/// readers (the grid).
 #[derive(Debug)]
 pub(crate) struct SpillFile {
     write: Mutex<WriteSide>,
-    /// Handle distinct du précédent : deux descripteurs sur le même fichier
-    /// partagent le cache de pages, donc une écriture est visible d'une lecture
-    /// sans `fsync` — et une lecture n'attend pas la fin d'une écriture.
+    /// Handle distinct from the previous one: two descriptors on the same file
+    /// share the page cache, so a write is visible to a read without `fsync` —
+    /// and a read does not wait for the end of a write.
     read: Mutex<File>,
 }
 
 impl SpillFile {
-    /// Crée le fichier temporaire et son handle de lecture.
+    /// Creates the temporary file and its read handle.
     ///
-    /// Le préfixe rend le fichier identifiable dans un `lsof` : un fichier
-    /// temporaire anonyme de plusieurs gigaoctets qu'on ne sait pas attribuer
-    /// est un incident de support garanti.
+    /// The prefix makes the file identifiable in an `lsof`: an anonymous
+    /// temporary file of several gigabytes that nobody can attribute is a
+    /// guaranteed support incident.
     pub(crate) fn create() -> Result<Self> {
         let file = Builder::new()
             .prefix("oxyn-result-")
@@ -96,10 +96,10 @@ impl SpillFile {
         })
     }
 
-    /// Écrit un lot à la suite et rend sa localisation.
+    /// Appends a batch and returns its location.
     ///
-    /// Bloque le temps de l'écriture. **À n'appeler ni depuis le thread
-    /// d'interface, ni en tenant le verrou d'index du tampon**
+    /// Blocks for the duration of the write. **To be called neither from the UI
+    /// thread, nor while holding the buffer's index lock**
     /// ([I-05](../../../CLAUDE.md#i-05)).
     pub(crate) fn append(&self, schema: &SchemaRef, batch: &RecordBatch) -> Result<SpillRef> {
         let mut side = self.write.lock();
@@ -124,14 +124,14 @@ impl SpillFile {
         })
     }
 
-    /// Relit un lot débordé.
+    /// Reads back a spilled batch.
     ///
-    /// Une lecture, jamais une réexécution de la requête
-    /// ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-de-mémoire)).
+    /// A read, never a re-execution of the query
+    /// ([PERFORMANCE](../../../docs/PERFORMANCE.md#memory-budgets)).
     ///
-    /// Alloue un tampon de la taille du lot : `memmap2` l'éviterait, mais son
-    /// API est `unsafe` et le lint `unsafe_code = "deny"` du workspace
-    /// l'interdit. Voir la note en tête de [`crate`].
+    /// Allocates a buffer the size of the batch: `memmap2` would avoid it, but
+    /// its API is `unsafe` and the workspace's `unsafe_code = "deny"` lint
+    /// forbids it. See the note at the top of [`crate`].
     #[cfg(test)]
     pub(crate) fn read(&self, reference: SpillRef) -> Result<RecordBatch> {
         self.read_cancellable(reference, &CancelToken::new())
@@ -145,13 +145,13 @@ impl SpillFile {
         if cancel.is_cancelled() {
             return Err(DataError::Cancelled);
         }
-        let taille = usize::try_from(reference.len).map_err(|_| DataError::Spill(oversized()))?;
-        let mut octets = vec![0_u8; taille];
+        let size = usize::try_from(reference.len).map_err(|_| DataError::Spill(oversized()))?;
+        let mut bytes = vec![0_u8; size];
         {
             let mut file = self.read.lock();
             file.seek(SeekFrom::Start(reference.offset))
                 .map_err(DataError::Spill)?;
-            for chunk in octets.chunks_mut(64 * 1024) {
+            for chunk in bytes.chunks_mut(64 * 1024) {
                 if cancel.is_cancelled() {
                     return Err(DataError::Cancelled);
                 }
@@ -162,26 +162,25 @@ impl SpillFile {
         if cancel.is_cancelled() {
             return Err(DataError::Cancelled);
         }
-        let mut lecteur = StreamReader::try_new(octets.as_slice(), None)?;
-        let lot = lecteur
+        let mut reader = StreamReader::try_new(bytes.as_slice(), None)?;
+        let batch = reader
             .next()
             .transpose()?
             .ok_or_else(|| DataError::Spill(truncated()))?;
 
-        // Le fichier est le nôtre, mais un disque plein ou un système de
-        // fichiers menteur produit un flux tronqué qui se décode quand même :
-        // sans ce contrôle, la grille afficherait silencieusement moins de
-        // lignes qu'annoncé par `locate`.
-        if lot.num_rows() != reference.rows {
+        // The file is ours, but a full disk or a lying file system produces a
+        // truncated stream that decodes anyway: without this check, the grid
+        // would silently display fewer rows than announced by `locate`.
+        if batch.num_rows() != reference.rows {
             return Err(DataError::Spill(inconsistent(
                 reference.rows,
-                lot.num_rows(),
+                batch.num_rows(),
             )));
         }
         if cancel.is_cancelled() {
             return Err(DataError::Cancelled);
         }
-        Ok(lot)
+        Ok(batch)
     }
 }
 
@@ -193,14 +192,14 @@ fn truncated() -> std::io::Error {
     std::io::Error::other("spilled batch is missing from the temporary file")
 }
 
-fn inconsistent(attendu: usize, trouve: usize) -> std::io::Error {
+fn inconsistent(expected: usize, found: usize) -> std::io::Error {
     std::io::Error::other(format!(
-        "spilled batch has {trouve} rows, expected {attendu}"
+        "spilled batch has {found} rows, expected {expected}"
     ))
 }
 
-/// Petit cache de lots réhydratés, pour que faire défiler une page d'écran ne
-/// relise pas le même lot une fois par cellule.
+/// Small cache of rehydrated batches, so that scrolling a screen page does not
+/// read the same batch again once per cell.
 ///
 /// Entries follow usage order. The byte charge includes allocated queue capacity,
 /// so evicting small pages cannot leave an unaccounted backing allocation behind.
@@ -232,17 +231,17 @@ impl SpillCache {
         self.capacity_bytes
     }
 
-    /// Rend le lot `index` s'il est déjà réhydraté, en le marquant comme le
-    /// plus récemment utilisé.
+    /// Returns batch `index` if it is already rehydrated, marking it as the
+    /// most recently used.
     pub(crate) fn get(&mut self, index: usize) -> Option<RecordBatch> {
         let position = self.entries.iter().position(|(i, _)| *i == index)?;
-        let entree = self.entries.remove(position)?;
-        let lot = entree.1.clone();
-        self.entries.push_back(entree);
-        Some(lot)
+        let entry = self.entries.remove(position)?;
+        let batch = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(batch)
     }
 
-    /// Enregistre un lot réhydraté, en évinçant le plus ancien si besoin.
+    /// Records a rehydrated batch, evicting the oldest one if needed.
     pub(crate) fn insert(&mut self, index: usize, batch: RecordBatch) {
         let entry_bytes = std::mem::size_of::<(usize, RecordBatch)>();
         let bytes = retained_size(&batch).saturating_sub(entry_bytes);
@@ -292,109 +291,105 @@ mod tests {
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("nom", DataType::Utf8, true),
+            Field::new("name", DataType::Utf8, true),
         ]))
     }
 
-    fn lot(base: i32, lignes: usize) -> RecordBatch {
-        let ids: Vec<i32> = (0..lignes)
+    fn batch_of(base: i32, rows: usize) -> RecordBatch {
+        let ids: Vec<i32> = (0..rows)
             .map(|i| base.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
             .collect();
-        let noms: Vec<Option<String>> = ids.iter().map(|i| Some(format!("l{i}"))).collect();
+        let names: Vec<Option<String>> = ids.iter().map(|i| Some(format!("l{i}"))).collect();
         RecordBatch::try_new(
             schema(),
             vec![
                 Arc::new(Int32Array::from(ids)),
-                Arc::new(StringArray::from(noms)),
+                Arc::new(StringArray::from(names)),
             ],
         )
-        .expect("les colonnes correspondent au schéma construit juste au-dessus")
+        .expect("the columns match the schema built just above")
     }
 
     #[test]
-    fn un_lot_ecrit_se_relit_a_l_identique() {
-        let fichier = SpillFile::create().expect("le répertoire temporaire doit être accessible");
-        let original = lot(0, 128);
-        let reference = fichier
-            .append(&schema(), &original)
-            .expect("écriture du lot");
-        let relu = fichier.read(reference).expect("relecture du lot");
-        assert_eq!(relu, original);
+    fn a_written_batch_reads_back_identically() {
+        let file = SpillFile::create().expect("the temporary directory must be accessible");
+        let original = batch_of(0, 128);
+        let reference = file.append(&schema(), &original).expect("batch write");
+        let reread = file.read(reference).expect("reading the batch back");
+        assert_eq!(reread, original);
     }
 
-    /// Le cas qui casse une implémentation naïve : plusieurs lots dans le même
-    /// fichier, relus dans le désordre.
+    /// The case that breaks a naive implementation: several batches in the same
+    /// file, read back out of order.
     #[test]
-    fn les_lots_se_relisent_dans_le_desordre() {
-        let fichier = SpillFile::create().expect("le répertoire temporaire doit être accessible");
+    fn batches_read_back_out_of_order() {
+        let file = SpillFile::create().expect("the temporary directory must be accessible");
         let schema = schema();
 
-        let lots: Vec<RecordBatch> = (0..5_usize)
-            .map(|i| lot(i32::try_from(i).unwrap_or(0) * 100, 32 + i))
+        let batches: Vec<RecordBatch> = (0..5_usize)
+            .map(|i| batch_of(i32::try_from(i).unwrap_or(0) * 100, 32 + i))
             .collect();
-        let references: Vec<SpillRef> = lots
+        let references: Vec<SpillRef> = batches
             .iter()
-            .map(|l| fichier.append(&schema, l).expect("écriture"))
+            .map(|l| file.append(&schema, l).expect("write"))
             .collect();
 
         for position in [4_usize, 0, 3, 1, 2, 4] {
-            let attendu = lots.get(position).expect("indice construit ci-dessus");
-            let reference = *references
-                .get(position)
-                .expect("indice construit ci-dessus");
-            assert_eq!(&fichier.read(reference).expect("relecture"), attendu);
+            let expected = batches.get(position).expect("index built above");
+            let reference = *references.get(position).expect("index built above");
+            assert_eq!(&file.read(reference).expect("read back"), expected);
         }
     }
 
-    /// Écrire pendant qu'on relit : c'est le scénario réel — la requête coule
-    /// encore, l'utilisateur fait défiler.
+    /// Writing while reading back: it is the real scenario — the query is still
+    /// flowing, the user is scrolling.
     #[test]
-    fn une_ecriture_ne_perturbe_pas_les_relectures_precedentes() {
-        let fichier = SpillFile::create().expect("le répertoire temporaire doit être accessible");
+    fn a_write_does_not_disturb_previous_reads() {
+        let file = SpillFile::create().expect("the temporary directory must be accessible");
         let schema = schema();
 
-        let premier = lot(0, 16);
-        let r1 = fichier.append(&schema, &premier).expect("écriture");
-        assert_eq!(fichier.read(r1).expect("relecture"), premier);
+        let first = batch_of(0, 16);
+        let r1 = file.append(&schema, &first).expect("write");
+        assert_eq!(file.read(r1).expect("read back"), first);
 
-        let second = lot(1_000, 64);
-        let r2 = fichier.append(&schema, &second).expect("écriture");
+        let second = batch_of(1_000, 64);
+        let r2 = file.append(&schema, &second).expect("write");
 
-        assert_eq!(fichier.read(r1).expect("relecture"), premier);
-        assert_eq!(fichier.read(r2).expect("relecture"), second);
-        assert!(r2.byte_len() > r1.byte_len(), "un lot plus gros pèse plus");
+        assert_eq!(file.read(r1).expect("read back"), first);
+        assert_eq!(file.read(r2).expect("read back"), second);
+        assert!(r2.byte_len() > r1.byte_len(), "a bigger batch weighs more");
     }
 
     #[test]
-    fn le_cache_evince_le_plus_ancien() {
-        let mut cache = SpillCache::new(retained_size(&lot(0, 1)) * 2);
-        cache.insert(0, lot(0, 1));
-        cache.insert(1, lot(1, 1));
-        cache.insert(2, lot(2, 1));
+    fn the_cache_evicts_the_oldest() {
+        let mut cache = SpillCache::new(retained_size(&batch_of(0, 1)) * 2);
+        cache.insert(0, batch_of(0, 1));
+        cache.insert(1, batch_of(1, 1));
+        cache.insert(2, batch_of(2, 1));
 
-        assert!(cache.get(0).is_none(), "le plus ancien doit être évincé");
+        assert!(cache.get(0).is_none(), "the oldest must be evicted");
         assert!(cache.get(1).is_some());
         assert!(cache.get(2).is_some());
     }
 
-    /// Un accès rafraîchit l'entrée : sinon un défilement qui alterne entre deux
-    /// lots frontaliers évince en boucle celui dont il a besoin.
+    /// An access refreshes the entry: otherwise a scroll alternating between two
+    /// neighboring batches evicts, in a loop, the one it needs.
     #[test]
-    fn un_acces_protege_de_l_eviction() {
-        let mut cache = SpillCache::new(retained_size(&lot(0, 1)) * 2);
-        cache.insert(0, lot(0, 1));
-        cache.insert(1, lot(1, 1));
+    fn an_access_protects_from_eviction() {
+        let mut cache = SpillCache::new(retained_size(&batch_of(0, 1)) * 2);
+        cache.insert(0, batch_of(0, 1));
+        cache.insert(1, batch_of(1, 1));
         assert!(cache.get(0).is_some());
-        cache.insert(2, lot(2, 1));
+        cache.insert(2, batch_of(2, 1));
 
-        assert!(cache.get(0).is_some(), "l'entrée rafraîchie doit survivre");
+        assert!(cache.get(0).is_some(), "the refreshed entry must survive");
         assert!(cache.get(1).is_none());
     }
 
     #[test]
-    fn un_cache_de_capacite_nulle_ne_retient_rien() {
+    fn a_zero_capacity_cache_keeps_nothing() {
         let mut cache = SpillCache::new(0);
-        cache.insert(0, lot(0, 1));
+        cache.insert(0, batch_of(0, 1));
         assert!(cache.get(0).is_none());
     }
 }

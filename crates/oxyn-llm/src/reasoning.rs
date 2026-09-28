@@ -1,33 +1,33 @@
-//! Le raisonnement d'un modèle : ce qu'on lui demande, ce qu'il en rend.
+//! A model's reasoning: what is asked of it, what it returns.
 //!
-//! Sujet à part de [`crate::types`] parce qu'il a ses propres règles, et
-//! qu'elles ne ressemblent à rien d'autre dans cette crate :
+//! A subject apart from [`crate::types`] because it has its own rules, and
+//! they look like nothing else in this crate:
 //!
-//! 1. **Un bloc de raisonnement se renvoie tel quel.** Les protocoles le
-//!    signent ; le modifier, le réordonner ou en perdre un fait échouer le tour
-//!    suivant. Oxyn le transporte donc sans jamais le reconstruire.
-//! 2. **Un bloc chiffré ne s'affiche pas.** Il n'a pas de texte : seulement une
-//!    charge opaque, qui n'a de sens que pour le fournisseur qui l'a produite.
-//! 3. **L'effort n'est pas un budget.** L'un dit *combien de travail* le modèle
-//!    fournit pour toute sa réponse, l'autre *combien de jetons* il a le droit
-//!    de dépenser à réfléchir. Les deux existent, ils ne se remplacent pas, et
-//!    tous les fournisseurs n'ont pas les deux.
+//! 1. **A reasoning block is sent back as is.** The protocols sign it;
+//!    modifying it, reordering it or losing one makes the next turn fail. Oxyn
+//!    therefore carries it without ever rebuilding it.
+//! 2. **An encrypted block is not displayed.** It has no text: only an opaque
+//!    payload, meaningful only to the provider that produced it.
+//! 3. **Effort is not a budget.** One says *how much work* the model puts into
+//!    its whole response, the other *how many tokens* it may spend thinking.
+//!    Both exist, they do not replace each other, and not every provider has
+//!    both.
 //!
-//! # Deux types, deux maisons
+//! # Two types, two homes
 //!
-//! [`ReasoningBlock`] est **persisté** avec la conversation, et il vit donc dans
-//! `oxyn-core` ([`oxyn_core::ai`]) : c'est ce qui permet à la persistance de le
-//! lire sans tirer un client HTTP dans son arbre de dépendances. Il est
-//! ré-exporté ici, et n'a qu'une définition.
+//! [`ReasoningBlock`] is **persisted** with the conversation, so it lives in
+//! `oxyn-core` ([`oxyn_core::ai`]): that is what lets persistence read it
+//! without pulling an HTTP client into its dependency tree. It is re-exported
+//! here, and has a single definition.
 //!
-//! [`ReasoningEffort`] reste ici : c'est un réglage de **requête**, il ne
-//! traverse aucune frontière de persistance.
+//! [`ReasoningEffort`] stays here: it is a **request** setting, it crosses no
+//! persistence boundary.
 //!
-//! # Le vocabulaire est celui d'Oxyn, pas celui d'un fournisseur
+//! # The vocabulary is Oxyn's, not a provider's
 //!
-//! Chaque protocole nomme ces choses à sa façon — et les noms ne se
-//! correspondent pas champ pour champ. La traduction a lieu dans le module du
-//! fournisseur ; elle est datée et sourcée dans
+//! Each protocol names these things its own way — and the names do not match
+//! field for field. The translation happens in the provider's module; it is
+//! dated and sourced in
 //! [`RESEARCH-NOTES`](../../../docs/RESEARCH-NOTES.md) (I-12).
 
 use std::fmt;
@@ -36,37 +36,35 @@ use serde::{Deserialize, Serialize};
 
 pub use oxyn_core::ai::ReasoningBlock;
 
-/// Combien de travail on demande au modèle pour produire sa réponse.
+/// How much work the model is asked to put into producing its response.
 ///
-/// L'échelle est ordonnée, de la plus économe à la plus dépensière. Elle est
-/// `#[non_exhaustive]` : les fournisseurs en publient d'autres — un niveau
-/// « minimal » ici, un « aucun » là — et les ajouter ne doit pas être une
-/// rupture.
+/// The scale is ordered, from the most frugal to the most expensive. It is
+/// `#[non_exhaustive]`: providers publish others — a "minimal" level here, a
+/// "none" there — and adding them must not be a breaking change.
 ///
-/// **Ce n'est pas une promesse de coût.** Un niveau est un signal de
-/// comportement : le modèle réfléchit moins à niveau bas, il ne s'arrête pas à
-/// un plafond.
+/// **It is not a cost promise.** A level is a behavior signal: the model
+/// thinks less at a low level, it does not stop at a ceiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ReasoningEffort {
-    /// Le plus économe : réponses courtes, moins d'appels d'outils.
+    /// The most frugal: short answers, fewer tool calls.
     Low,
-    /// Compromis entre vitesse, coût et qualité.
+    /// A compromise between speed, cost and quality.
     Medium,
-    /// Le défaut de fait chez les fournisseurs qui exposent ce réglage.
+    /// The de facto default at providers that expose this setting.
     High,
-    /// Au-delà de `High`, pour le travail long. Écrit `xhigh` sur le fil.
+    /// Beyond `High`, for long work. Written `xhigh` on the wire.
     XHigh,
-    /// Aucune contrainte de dépense.
+    /// No spending constraint.
     Max,
 }
 
 impl ReasoningEffort {
-    /// Nom stable, celui qui part sur le fil.
+    /// Stable name, the one that goes on the wire.
     ///
-    /// Les deux protocoles qui exposent ce réglage emploient les mêmes chaînes ;
-    /// c'est ce qui permet une seule table ici plutôt qu'une par fournisseur.
+    /// The two protocols that expose this setting use the same strings; that
+    /// is what allows a single table here rather than one per provider.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -78,11 +76,11 @@ impl ReasoningEffort {
         }
     }
 
-    /// Lit un niveau venu d'un fournisseur.
+    /// Reads a level coming from a provider.
     ///
-    /// Rend `None` sur un niveau que cette version ne connaît pas, plutôt que
-    /// de le rabattre sur un voisin : demander `high` là où l'utilisateur
-    /// voulait `minimal` est une décision, pas un décodage.
+    /// Returns `None` on a level this version does not know, rather than
+    /// falling back to a neighbor: asking for `high` where the user wanted
+    /// `minimal` is a decision, not a decoding.
     #[must_use]
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
@@ -107,7 +105,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_niveaux_d_effort_sont_ordonnes_du_plus_econome_au_plus_depensier() {
+    fn effort_levels_are_ordered_from_most_frugal_to_most_expensive() {
         assert!(ReasoningEffort::Low < ReasoningEffort::Medium);
         assert!(ReasoningEffort::Medium < ReasoningEffort::High);
         assert!(ReasoningEffort::High < ReasoningEffort::XHigh);
@@ -115,7 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn les_noms_de_fil_sont_ceux_des_protocoles() {
+    fn wire_names_are_the_protocols_ones() {
         assert_eq!(ReasoningEffort::XHigh.as_str(), "xhigh");
         assert_eq!(ReasoningEffort::Max.to_string(), "max");
         for niveau in [
@@ -130,21 +128,21 @@ mod tests {
     }
 
     #[test]
-    fn un_niveau_inconnu_ne_se_rabat_pas_sur_un_voisin() {
-        // `minimal` et `none` existent chez un fournisseur et pas chez l'autre :
-        // les traduire en `low` changerait la demande de l'utilisateur.
+    fn an_unknown_level_does_not_fall_back_to_a_neighbor() {
+        // `minimal` and `none` exist at one provider and not at the other:
+        // translating them to `low` would change the user's request.
         assert_eq!(ReasoningEffort::parse("minimal"), None);
         assert_eq!(ReasoningEffort::parse("none"), None);
         assert_eq!(ReasoningEffort::parse(""), None);
     }
 
     #[test]
-    fn le_bloc_reexporte_est_celui_du_domaine() {
-        // Une seule définition dans le dépôt : si ce ré-export devenait une
-        // seconde définition, la persistance et le transport divergeraient
-        // sans qu'aucun des deux ne le voie.
-        let ici: ReasoningBlock = ReasoningBlock::redacted("x");
-        let domaine: oxyn_core::ai::ReasoningBlock = ici.clone();
-        assert_eq!(ici, domaine);
+    fn the_reexported_block_is_the_domain_one() {
+        // A single definition in the repository: if this re-export became a
+        // second definition, persistence and transport would diverge without
+        // either of them noticing.
+        let here: ReasoningBlock = ReasoningBlock::redacted("x");
+        let domain: oxyn_core::ai::ReasoningBlock = here.clone();
+        assert_eq!(here, domain);
     }
 }

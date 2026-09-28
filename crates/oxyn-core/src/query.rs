@@ -1,15 +1,15 @@
-//! Ce qu'on demande à une base : langage, intention, risque, limites.
+//! What is asked of a database: language, intent, risk, limits.
 //!
-//! Le SQL est **un cas parmi d'autres**, pas le défaut auquel les autres se
-//! ramènent (ADR-0003). Une requête porte donc toujours un [`QueryLanguage`]
-//! explicite ; un driver qui reçoit un langage qu'il ne déclare pas dans ses
-//! capacités refuse, il ne traduit pas.
+//! SQL is **one case among others**, not the default the others reduce to
+//! (ADR-0003). A query therefore always carries an explicit
+//! [`QueryLanguage`]; a driver that receives a language it does not declare in
+//! its capabilities refuses, it does not translate.
 //!
-//! [`StatementIntent`] et [`MutationRisk`] sont les deux entrées du `PolicyGate`.
-//! Ils sont **déclarés** par qui construit la requête — l'analyseur de
-//! `oxyn-query`, ou l'appelant — et le gate leur fait confiance. D'où la règle
-//! qui gouverne ce module : dans le doute, on déclare le plus contraignant.
-//! [`StatementIntent::Unknown`] compte pour mutant.
+//! [`StatementIntent`] and [`MutationRisk`] are the two inputs of the
+//! `PolicyGate`. They are **declared** by whoever builds the query — the
+//! `oxyn-query` analyzer, or the caller — and the gate trusts them. Hence the
+//! rule that governs this module: when in doubt, declare the most restrictive.
+//! [`StatementIntent::Unknown`] counts as mutating.
 
 use std::time::Duration;
 
@@ -17,29 +17,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::value::ScalarValue;
 
-/// Langage dans lequel une requête est écrite.
+/// Language a query is written in.
 ///
-/// L'énumération est fermée : ces valeurs sont du vocabulaire du domaine, et un
-/// langage se déclare aussi comme une capacité
+/// The enumeration is closed: these values are domain vocabulary, and a
+/// language is also declared as a capability
 /// ([`Capabilities`](crate::capabilities::Capabilities)).
 ///
-// TODO(phase 4) : les plugins WASM pourront apporter un langage absent de cette
-// liste (PLUGIN-CONTRACT). Ce sera une décision d'ADR, pas un `Other(String)`
-// ajouté au fil de l'eau : un langage sans capacité correspondante n'a aucun
-// moyen d'être refusé proprement.
+// TODO(phase 4): WASM plugins may bring a language absent from this list
+// (PLUGIN-CONTRACT). That will be an ADR decision, not an `Other(String)`
+// added along the way: a language without a matching capability has no way of
+// being refused cleanly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum QueryLanguage {
-    /// SQL, dans un dialecte donné.
+    /// SQL, in a given dialect.
     Sql(SqlDialect),
     /// Cypher (Neo4j, Memgraph).
     Cypher,
     /// Gremlin (TinkerPop).
     Gremlin,
-    /// Langage de requête documentaire (MongoDB).
+    /// Document query language (MongoDB).
     MongoQuery,
-    /// Commandes Redis.
+    /// Redis commands.
     RedisCommand,
     /// Query DSL (Elasticsearch, OpenSearch).
     SearchDsl,
@@ -54,10 +54,10 @@ pub enum QueryLanguage {
 }
 
 impl QueryLanguage {
-    /// SQL ANSI, sans dialecte particulier.
+    /// ANSI SQL, without a particular dialect.
     pub const SQL: Self = Self::Sql(SqlDialect::Ansi);
 
-    /// Nom stable, utilisable dans un journal ou une interface.
+    /// Stable name, usable in a log or an interface.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -74,7 +74,7 @@ impl QueryLanguage {
         }
     }
 
-    /// Le dialecte SQL, s'il s'agit de SQL.
+    /// The SQL dialect, if it is SQL.
     #[must_use]
     pub const fn sql_dialect(&self) -> Option<SqlDialect> {
         match self {
@@ -93,21 +93,21 @@ impl std::fmt::Display for QueryLanguage {
     }
 }
 
-/// Dialecte SQL.
+/// SQL dialect.
 ///
-/// Un dialecte n'est pas un produit : Redshift parle le protocole PostgreSQL
-/// mais n'accepte pas la même grammaire, d'où une valeur distincte ici alors
-/// qu'il n'y a **pas** de crate de driver distincte (ADR-0003).
+/// A dialect is not a product: Redshift speaks the PostgreSQL protocol but does
+/// not accept the same grammar, hence a distinct value here although there is
+/// **no** distinct driver crate (ADR-0003).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SqlDialect {
-    /// SQL standard, sans extension propriétaire.
+    /// Standard SQL, without proprietary extension.
     #[default]
     Ansi,
     /// PostgreSQL.
     Postgres,
-    /// MySQL et MariaDB.
+    /// MySQL and MariaDB.
     MySql,
     /// SQLite.
     Sqlite,
@@ -128,7 +128,7 @@ pub enum SqlDialect {
 }
 
 impl SqlDialect {
-    /// Nom stable du dialecte.
+    /// Stable name of the dialect.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -153,49 +153,49 @@ impl std::fmt::Display for SqlDialect {
     }
 }
 
-/// Ce que fait une instruction, du point de vue de la base.
+/// What a statement does, from the database's point of view.
 ///
-/// L'énumération est **fermée**, à dessein, alors que la convention du dépôt est
-/// de marquer les énumérations publiques `#[non_exhaustive]`. La matrice du
-/// `PolicyGate` se lit cellule par cellule sur ces cinq valeurs : ajouter une
-/// intention doit obliger chaque `match` à être revisité, donc être une rupture
-/// visible plutôt qu'un `_ =>` qui décide en silence.
+/// The enumeration is **closed**, on purpose, whereas the repository's
+/// convention is to mark public enumerations `#[non_exhaustive]`. The
+/// `PolicyGate` matrix reads cell by cell over these five values: adding an
+/// intent must force every `match` to be revisited, hence be a visible break
+/// rather than a `_ =>` that decides silently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StatementIntent {
-    /// Lecture seule : `SELECT`, `EXPLAIN`, introspection.
+    /// Read-only: `SELECT`, `EXPLAIN`, introspection.
     Read,
-    /// Écriture de données : `INSERT`, `UPDATE`, `DELETE`, `MERGE`.
+    /// Data write: `INSERT`, `UPDATE`, `DELETE`, `MERGE`.
     Write,
-    /// Modification de structure : `CREATE`, `ALTER`, `DROP`, `TRUNCATE`.
+    /// Structure change: `CREATE`, `ALTER`, `DROP`, `TRUNCATE`.
     Ddl,
-    /// Modification de droits : `GRANT`, `REVOKE`, gestion des rôles.
+    /// Privilege change: `GRANT`, `REVOKE`, role management.
     Grant,
-    /// Intention indéterminée. C'est la valeur par défaut, et elle compte pour
-    /// **mutante** : une instruction qu'aucun analyseur n'a su classer peut
-    /// écrire, et le seul choix sûr est de la traiter comme telle.
+    /// Undetermined intent. It is the default value, and it counts as
+    /// **mutating**: a statement no analyzer could classify may write, and the
+    /// only safe choice is to treat it as such.
     #[default]
     Unknown,
 }
 
 impl StatementIntent {
-    /// L'instruction peut-elle modifier quelque chose ?
+    /// Can the statement modify something?
     ///
-    /// [`Unknown`](Self::Unknown) répond `true`. Ce n'est pas une approximation
-    /// commode : c'est la seule réponse qui ne laisse pas passer une écriture
-    /// non reconnue (I-02).
+    /// [`Unknown`](Self::Unknown) answers `true`. It is not a convenient
+    /// approximation: it is the only answer that does not let an unrecognized
+    /// write through (I-02).
     #[must_use]
     pub const fn is_mutating(&self) -> bool {
         !matches!(self, Self::Read)
     }
 
-    /// L'instruction est-elle certainement en lecture seule ?
+    /// Is the statement certainly read-only?
     #[must_use]
     pub const fn is_read_only(&self) -> bool {
         matches!(self, Self::Read)
     }
 
-    /// Nom stable, pour l'audit.
+    /// Stable name, for the audit.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -214,36 +214,36 @@ impl std::fmt::Display for StatementIntent {
     }
 }
 
-/// Forme de mutation dont la portée n'est pas bornée par l'instruction.
+/// Mutation form whose scope is not bounded by the statement.
 ///
-/// Ce n'est pas une mesure de gravité au jugé : chaque variante correspond à une
-/// forme syntaxique reconnaissable dont l'effet ne se limite pas aux lignes que
-/// l'utilisateur croit viser.
+/// It is not a rough severity measure: each variant matches a recognizable
+/// syntactic form whose effect is not limited to the rows the user believes
+/// they target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum MutationRisk {
-    /// Rien de particulier : mutation bornée, ou lecture.
+    /// Nothing in particular: bounded mutation, or read.
     #[default]
     None,
-    /// `UPDATE` sans `WHERE` : toutes les lignes de la table.
+    /// `UPDATE` without `WHERE`: every row of the table.
     UnboundedUpdate,
-    /// `DELETE` sans `WHERE` : toutes les lignes de la table.
+    /// `DELETE` without `WHERE`: every row of the table.
     UnboundedDelete,
-    /// `TRUNCATE` : vidage, souvent non journalisé et non annulable.
+    /// `TRUNCATE`: emptying, often unlogged and not undoable.
     Truncate,
-    /// `DROP` d'un objet : la structure disparaît avec les données.
+    /// `DROP` of an object: the structure goes with the data.
     DropObject,
 }
 
 impl MutationRisk {
-    /// Y a-t-il un risque à signaler ?
+    /// Is there a risk to report?
     #[must_use]
     pub const fn is_some(&self) -> bool {
         !matches!(self, Self::None)
     }
 
-    /// Motif d'approbation, montrable tel quel à l'utilisateur.
+    /// Approval reason, showable as is to the user.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
@@ -262,28 +262,28 @@ impl std::fmt::Display for MutationRisk {
     }
 }
 
-/// Bornes imposées à une exécution.
+/// Bounds imposed on an execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecLimits {
-    /// Nombre de lignes au-delà duquel le résultat est tronqué. `None` = pas de
-    /// borne, ce qui n'est raisonnable que pour un export.
+    /// Number of rows beyond which the result is truncated. `None` = no bound,
+    /// which is only reasonable for an export.
     pub max_rows: Option<usize>,
-    /// Délai au bout duquel l'exécution est abandonnée **et annulée côté
-    /// serveur**. Un délai qui ne fait qu'abandonner le futur laisse la requête
-    /// tourner (DRIVER-CONTRACT §2).
+    /// Delay after which the execution is abandoned **and cancelled on the
+    /// server side**. A delay that only drops the future leaves the query
+    /// running (DRIVER-CONTRACT §2).
     pub timeout: Option<Duration>,
-    /// Interdit toute écriture pour cette exécution.
+    /// Forbids any write for this execution.
     pub read_only: bool,
 }
 
 impl ExecLimits {
-    /// Délai par défaut.
+    /// Default timeout.
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-    /// Nombre de lignes par défaut.
+    /// Default number of rows.
     pub const DEFAULT_MAX_ROWS: usize = 10_000;
 
-    /// Limites sans borne ni protection : à réserver aux exports et aux
-    /// traitements par lots, jamais à une exécution déclenchée par un clic.
+    /// Limits with no bound or protection: to be kept for exports and batch
+    /// processing, never for an execution triggered by a click.
     #[must_use]
     pub const fn unbounded() -> Self {
         Self {
@@ -293,21 +293,21 @@ impl ExecLimits {
         }
     }
 
-    /// Autorise l'écriture.
+    /// Allows writing.
     #[must_use]
     pub fn writable(mut self) -> Self {
         self.read_only = false;
         self
     }
 
-    /// Remplace le nombre maximal de lignes.
+    /// Replaces the maximum number of rows.
     #[must_use]
     pub fn with_max_rows(mut self, max_rows: impl Into<Option<usize>>) -> Self {
         self.max_rows = max_rows.into();
         self
     }
 
-    /// Remplace le délai.
+    /// Replaces the timeout.
     #[must_use]
     pub fn with_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.timeout = timeout.into();
@@ -316,12 +316,12 @@ impl ExecLimits {
 }
 
 impl Default for ExecLimits {
-    /// Le défaut est **prudent**, pas commode : borné en lignes, borné en
-    /// temps, et en lecture seule.
+    /// The default is **cautious**, not convenient: bounded in rows, bounded
+    /// in time, and read-only.
     ///
-    /// Comme pour le marquage des connexions (SECURITY), le défaut est la
-    /// valeur la plus contraignante. Une écriture est toujours quelque chose
-    /// que l'appelant a demandé explicitement.
+    /// As for connection marking (SECURITY), the default is the most
+    /// restrictive value. A write is always something the caller asked for
+    /// explicitly.
     fn default() -> Self {
         Self {
             max_rows: Some(Self::DEFAULT_MAX_ROWS),
@@ -331,36 +331,36 @@ impl Default for ExecLimits {
     }
 }
 
-/// Une demande d'exécution complète.
+/// A complete execution request.
 ///
-/// Le `Debug` **et** la sérialisation masquent les paramètres liés. Le texte de
-/// la requête est conservé — c'est sa *forme*, et l'observabilité l'autorise
-/// explicitement — mais les valeurs liées sont exactement ce que I-03 interdit
-/// de journaliser **et** d'écrire dans un fichier de workspace.
+/// The `Debug` **and** the serialization mask bound parameters. The query text
+/// is kept — it is its *shape*, and observability explicitly allows it — but
+/// bound values are exactly what I-03 forbids logging **and** writing to a
+/// workspace file.
 ///
-/// La protection porte sur les deux parce que la panne se produirait au premier
-/// qui persisterait une `Command` — reprise de session, file d'attente durable,
-/// pont de plugin — sans que l'asymétrie entre un `Debug` protégé et un
-/// `Serialize` dérivé se voie ni à la compilation ni en revue. Une demande
-/// relue depuis un fichier revient donc **sans ses valeurs** : le serveur la
-/// refusera, ce qui est le bon échec — bien plus sûr que de retrouver un mot de
-/// passe collé dans le mauvais champ écrit en clair sur le disque.
+/// The protection covers both because the failure would happen with the first
+/// one to persist a `Command` — session resumption, durable queue, plugin
+/// bridge — without the asymmetry between a protected `Debug` and a derived
+/// `Serialize` showing up at compile time or in review. A request read back
+/// from a file therefore comes back **without its values**: the server will
+/// refuse it, which is the right failure — much safer than finding a password
+/// pasted in the wrong field written in clear on disk.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecRequest {
-    /// Langage de la requête.
+    /// Language of the query.
     pub language: QueryLanguage,
-    /// Texte de la requête, tel que l'utilisateur ou l'appelant l'a écrit.
+    /// Text of the query, as the user or the caller wrote it.
     pub text: String,
-    /// Paramètres liés, dans l'ordre des emplacements.
+    /// Bound parameters, in placeholder order.
     ///
-    /// Jamais sérialisés : voir la documentation du type.
+    /// Never serialized: see the type's documentation.
     #[serde(skip)]
     pub params: Vec<ScalarValue>,
-    /// Intention déclarée.
+    /// Declared intent.
     pub intent: StatementIntent,
-    /// Risque déclaré.
+    /// Declared risk.
     pub risk: MutationRisk,
-    /// Bornes d'exécution.
+    /// Execution bounds.
     pub limits: ExecLimits,
     /// Whether the text begins, commits, rolls back or marks a transaction
     /// (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`…).
@@ -374,12 +374,11 @@ pub struct ExecRequest {
 }
 
 impl ExecRequest {
-    /// Construit une demande avec les défauts prudents : intention
-    /// [`Unknown`](StatementIntent::Unknown), aucun risque signalé, limites par
-    /// défaut.
+    /// Builds a request with the cautious defaults: intent
+    /// [`Unknown`](StatementIntent::Unknown), no risk reported, default limits.
     ///
-    /// L'intention par défaut étant mutante, une demande non qualifiée passe
-    /// par une approbation plutôt que de s'exécuter silencieusement.
+    /// Since the default intent is mutating, an unqualified request goes
+    /// through approval rather than executing silently.
     #[must_use]
     pub fn new(language: QueryLanguage, text: impl Into<String>) -> Self {
         Self {
@@ -393,46 +392,46 @@ impl ExecRequest {
         }
     }
 
-    /// Déclare l'intention.
+    /// Declares the intent.
     #[must_use]
     pub fn with_intent(mut self, intent: StatementIntent) -> Self {
         self.intent = intent;
         self
     }
 
-    /// Déclare le risque.
+    /// Declares the risk.
     #[must_use]
     pub fn with_risk(mut self, risk: MutationRisk) -> Self {
         self.risk = risk;
         self
     }
 
-    /// Fixe les paramètres liés.
+    /// Sets the bound parameters.
     #[must_use]
     pub fn with_params(mut self, params: Vec<ScalarValue>) -> Self {
         self.params = params;
         self
     }
 
-    /// Fixe les limites.
+    /// Sets the limits.
     #[must_use]
     pub fn with_limits(mut self, limits: ExecLimits) -> Self {
         self.limits = limits;
         self
     }
 
-    /// La demande peut-elle modifier quelque chose ?
+    /// Can the request modify something?
     ///
-    /// Vrai dès que l'intention est mutante **ou** qu'un risque est signalé :
-    /// une déclaration incohérente (intention `Read` et risque `Truncate`) est
-    /// tranchée du côté prudent.
+    /// True as soon as the intent is mutating **or** a risk is reported: an
+    /// inconsistent declaration (intent `Read` and risk `Truncate`) is settled
+    /// on the cautious side.
     #[must_use]
     pub const fn is_mutating(&self) -> bool {
         self.intent.is_mutating() || self.risk.is_some()
     }
 }
 
-/// Emballage d'affichage : rend un compte, jamais les valeurs.
+/// Display wrapper: renders a count, never the values.
 struct Masque(usize);
 
 impl std::fmt::Debug for Masque {
@@ -460,14 +459,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dans_le_doute_c_est_mutant() {
+    fn when_in_doubt_it_is_mutating() {
         assert!(StatementIntent::Unknown.is_mutating());
         assert!(!StatementIntent::Unknown.is_read_only());
         assert!(StatementIntent::default().is_mutating());
     }
 
     #[test]
-    fn seule_la_lecture_n_est_pas_mutante() {
+    fn only_read_is_not_mutating() {
         assert!(!StatementIntent::Read.is_mutating());
         for intent in [
             StatementIntent::Write,
@@ -475,23 +474,23 @@ mod tests {
             StatementIntent::Grant,
             StatementIntent::Unknown,
         ] {
-            assert!(intent.is_mutating(), "{intent} devrait être mutant");
+            assert!(intent.is_mutating(), "{intent} should be mutating");
         }
     }
 
     #[test]
-    fn les_limites_par_defaut_sont_prudentes() {
+    fn default_limits_are_cautious() {
         let limites = ExecLimits::default();
-        assert!(limites.read_only, "le défaut doit interdire l'écriture");
+        assert!(limites.read_only, "the default must forbid writing");
         assert!(
             limites.max_rows.is_some(),
-            "le défaut doit borner les lignes"
+            "the default must bound the rows"
         );
-        assert!(limites.timeout.is_some(), "le défaut doit borner le temps");
+        assert!(limites.timeout.is_some(), "the default must bound the time");
     }
 
     #[test]
-    fn les_limites_sans_borne_sont_explicites() {
+    fn unbounded_limits_are_explicit() {
         let limites = ExecLimits::unbounded();
         assert_eq!(limites.max_rows, None);
         assert_eq!(limites.timeout, None);
@@ -499,40 +498,43 @@ mod tests {
     }
 
     #[test]
-    fn une_demande_non_qualifiee_est_mutante() {
-        let demande = ExecRequest::new(QueryLanguage::SQL, "SELECT 1");
-        assert!(demande.is_mutating(), "sans intention déclarée, on protège");
+    fn an_unqualified_request_is_mutating() {
+        let request = ExecRequest::new(QueryLanguage::SQL, "SELECT 1");
+        assert!(
+            request.is_mutating(),
+            "without a declared intent, we protect"
+        );
     }
 
     #[test]
-    fn une_declaration_incoherente_est_tranchee_du_cote_prudent() {
-        let demande = ExecRequest::new(QueryLanguage::SQL, "TRUNCATE t")
+    fn an_inconsistent_declaration_is_settled_on_the_cautious_side() {
+        let request = ExecRequest::new(QueryLanguage::SQL, "TRUNCATE t")
             .with_intent(StatementIntent::Read)
             .with_risk(MutationRisk::Truncate);
         assert!(
-            demande.is_mutating(),
-            "un risque signalé l'emporte sur une intention de lecture"
+            request.is_mutating(),
+            "a reported risk prevails over a read intent"
         );
     }
 
     #[test]
-    fn le_debug_masque_les_valeurs_liees() {
-        let demande = ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM users WHERE ssn = $1")
+    fn the_debug_masks_bound_values() {
+        let request = ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM users WHERE ssn = $1")
             .with_params(vec![ScalarValue::Text("123-45-6789".into())]);
-        let rendu = format!("{demande:?}");
+        let rendered = format!("{request:?}");
         assert!(
-            !rendu.contains("123-45-6789"),
-            "une valeur liée a fuité dans le Debug : {rendu}"
+            !rendered.contains("123-45-6789"),
+            "a bound value leaked into the Debug: {rendered}"
         );
-        assert!(rendu.contains("1 redacted bound value(s)"));
+        assert!(rendered.contains("1 redacted bound value(s)"));
         assert!(
-            rendu.contains("SELECT * FROM users"),
-            "la forme de la requête reste journalisable"
+            rendered.contains("SELECT * FROM users"),
+            "the shape of the query stays loggable"
         );
     }
 
     #[test]
-    fn le_langage_se_rend_avec_son_dialecte() {
+    fn the_language_renders_with_its_dialect() {
         assert_eq!(
             QueryLanguage::Sql(SqlDialect::Postgres).to_string(),
             "sql/postgres"
@@ -546,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn chaque_risque_porte_un_motif_affichable() {
+    fn every_risk_carries_a_showable_reason() {
         for risque in [
             MutationRisk::UnboundedUpdate,
             MutationRisk::UnboundedDelete,
@@ -554,7 +556,7 @@ mod tests {
             MutationRisk::DropObject,
         ] {
             assert!(risque.is_some());
-            assert!(risque.reason().is_some(), "{risque:?} sans motif");
+            assert!(risque.reason().is_some(), "{risque:?} without a reason");
         }
         assert!(!MutationRisk::None.is_some());
         assert!(MutationRisk::None.reason().is_none());

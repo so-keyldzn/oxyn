@@ -1,39 +1,38 @@
-//! L'hôte WebAssembly — **squelette de la phase 4**.
+//! The WebAssembly host — **phase 4 skeleton**.
 //!
-//! Ce module n'existe que derrière la feature `wasm-host`. Les plugins WASM
-//! sont explicitement reportés en phase 4
+//! This module exists only behind the `wasm-host` feature. WASM plugins are
+//! explicitly deferred to phase 4
 //! ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md),
-//! [IMPLEMENTATION-PLAN](../../../docs/IMPLEMENTATION-PLAN.md)), après six
-//! implémentations natives ou plus : ouvrir une frontière d'extension sur des
-//! traits que trop peu d'implémentations ont éprouvés fige des erreurs qu'il
-//! faudra ensuite supporter indéfiniment.
+//! [IMPLEMENTATION-PLAN](../../../docs/IMPLEMENTATION-PLAN.md)), after six
+//! native implementations or more: opening an extension boundary on traits
+//! that too few implementations have tested freezes mistakes that must then be
+//! supported indefinitely.
 //!
-//! # Ce qui est vrai dès aujourd'hui
+//! # What is true today
 //!
-//! Tout ce qui **refuse** l'est. Un plugin non approuvé, une version
-//! d'interface incompatible, un agent déclaratif qui se présenterait à l'hôte,
-//! un point d'entrée absent : ce sont des erreurs rendues par
-//! [`WasmHost::prepare`], et elles sont testées. Le moteur, ses limites de
-//! ressources et son carburant sont configurés réellement — ce sont les
-//! réglages qui empêchent un plugin en boucle infinie de figer le workspace
-//! ([`PLUGIN-CONTRACT` §2](../../../docs/PLUGIN-CONTRACT.md)).
+//! Everything that **refuses** does. An unapproved plugin, an incompatible
+//! interface version, a declarative agent presented to the host, a missing
+//! entrypoint: these are errors returned by [`WasmHost::prepare`], and they are
+//! tested. The engine, its resource limits and its fuel are really configured —
+//! they are the settings that keep a plugin in an infinite loop from freezing
+//! the workspace ([`PLUGIN-CONTRACT` §2](../../../docs/PLUGIN-CONTRACT.md)).
 //!
-//! # Ce qui attend la phase 4
+//! # What waits for phase 4
 //!
-//! La liaison des interfaces WIT (`oxyn:driver`, `oxyn:export`,
-//! `oxyn:visualization`) et l'instanciation : [`WasmHost::linker`] et
-//! [`WasmHost::instantiate`] portent un `todo!` explicite. C'est assumé — un
-//! `Linker` vide qui instancierait « pour voir » produirait des composants sans
-//! import satisfait et des diagnostics illisibles.
+//! Binding the WIT interfaces (`oxyn:driver`, `oxyn:export`,
+//! `oxyn:visualization`) and instantiation: [`WasmHost::linker`] and
+//! [`WasmHost::instantiate`] carry an explicit `todo!`. It is deliberate — an
+//! empty `Linker` that instantiated "to see" would produce components with no
+//! satisfied import and unreadable diagnostics.
 //!
-//! # Le tempo, et pourquoi il ne suffit pas de le configurer
+//! # The tick, and why configuring it is not enough
 //!
-//! Le carburant borne le **travail** ; il ne borne pas le **temps**, parce
-//! qu'un composant bloqué dans un appel hôte n'en consomme pas. L'échéance
-//! d'époque borne le temps, mais seulement si quelqu'un fait avancer l'horloge :
-//! [`Engine::increment_epoch`] doit être appelé périodiquement depuis un fil
-//! dédié. `// TODO(phase 4)` : ce fil, sa période, et l'arrêt propre qui va
-//! avec. Sans lui, l'échéance posée ici ne se déclenche jamais.
+//! Fuel bounds **work**; it does not bound **time**, because a component
+//! blocked in a host call consumes none. The epoch deadline bounds time, but
+//! only if someone advances the clock: [`Engine::increment_epoch`] must be
+//! called periodically from a dedicated thread. `// TODO(phase 4)`: that
+//! thread, its period, and the clean shutdown that goes with it. Without it,
+//! the deadline set here never fires.
 
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -46,31 +45,31 @@ use crate::error::{PluginError, Result};
 use crate::manifest::{HOST_API_VERSION, PluginId, PluginKind, PluginPermissions};
 use crate::registry::InstalledPlugin;
 
-/// Les bornes imposées à tout composant de plugin.
+/// The bounds imposed on every plugin component.
 ///
-/// **Ces valeurs sont provisoires.** Elles sont choisies pour être largement
-/// suffisantes à un driver et largement insuffisantes à une fuite ; aucune n'est
-/// mesurée. `// TODO(phase 4)` : les établir par la mesure, comme
-/// [PERFORMANCE](../../../docs/PERFORMANCE.md) l'exige pour tout budget chiffré,
-/// et les rendre configurables par plugin dans l'écran d'approbation.
+/// **These values are provisional.** They are chosen to be amply sufficient
+/// for a driver and amply insufficient for a leak; none is measured.
+/// `// TODO(phase 4)`: establish them by measurement, as
+/// [PERFORMANCE](../../../docs/PERFORMANCE.md) requires for any numeric budget,
+/// and make them configurable per plugin in the approval screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostLimits {
-    /// Mémoire linéaire maximale, en octets.
+    /// Maximum linear memory, in bytes.
     pub memory_bytes: usize,
-    /// Nombre maximal d'éléments dans les tables du composant.
+    /// Maximum number of elements in the component's tables.
     pub table_elements: usize,
-    /// Nombre maximal d'instances par magasin.
+    /// Maximum number of instances per store.
     pub instances: usize,
-    /// Nombre maximal de tables par magasin.
+    /// Maximum number of tables per store.
     pub tables: usize,
-    /// Nombre maximal de mémoires par magasin.
+    /// Maximum number of memories per store.
     pub memories: usize,
-    /// Pile WebAssembly maximale, en octets. Réglée sur le moteur.
+    /// Maximum WebAssembly stack, in bytes. Set on the engine.
     pub stack_bytes: usize,
-    /// Carburant accordé à un appel. Borne le travail, pas le temps.
+    /// Fuel granted to a call. Bounds work, not time.
     pub fuel: u64,
-    /// Nombre de tops d'époque avant interruption. Borne le temps — à condition
-    /// que quelqu'un fasse avancer l'horloge, cf. la note du module.
+    /// Number of epoch ticks before interruption. Bounds time — provided
+    /// someone advances the clock, see the module note.
     pub epoch_ticks: u64,
 }
 
@@ -89,12 +88,11 @@ impl Default for HostLimits {
     }
 }
 
-/// Ce que l'hôte a vérifié avant d'accepter de faire tourner un composant.
+/// What the host checked before agreeing to run a component.
 ///
-/// Obtenir cette valeur est le seul chemin vers l'instanciation : elle est la
-/// preuve que l'approbation, la version d'interface et le point d'entrée ont
-/// été contrôlés. Un type qui porte une vérification vaut mieux qu'un
-/// commentaire qui la rappelle.
+/// Obtaining this value is the only path to instantiation: it is the proof
+/// that approval, interface version and entrypoint were checked. A type that
+/// carries a check is worth more than a comment that recalls it.
 #[derive(Debug, Clone)]
 pub struct PreparedPlugin {
     id: PluginId,
@@ -104,39 +102,39 @@ pub struct PreparedPlugin {
 }
 
 impl PreparedPlugin {
-    /// Le plugin concerné.
+    /// The plugin concerned.
     #[must_use]
     pub const fn id(&self) -> &PluginId {
         &self.id
     }
 
-    /// La surface occupée.
+    /// The surface occupied.
     #[must_use]
     pub const fn kind(&self) -> PluginKind {
         self.kind
     }
 
-    /// Le chemin du composant `.wasm`.
+    /// The path of the `.wasm` component.
     #[must_use]
     pub fn component_path(&self) -> &Path {
         &self.component
     }
 
-    /// Les permissions approuvées, celles que l'hôte fera respecter.
+    /// The approved permissions, those the host will enforce.
     #[must_use]
     pub const fn permissions(&self) -> &PluginPermissions {
         &self.permissions
     }
 }
 
-/// L'état que porte le magasin d'un composant.
+/// The state a component's store carries.
 ///
-/// Il tient deux choses, et rien d'autre : les limites de ressources, que
-/// wasmtime interroge, et les permissions approuvées, que les implémentations
-/// d'interfaces WIT interrogeront avant d'ouvrir quoi que ce soit. Aucun accès
-/// au trousseau, aucune poignée de driver, aucune liste de connexions — c'est
-/// [`PLUGIN-CONTRACT` §1](../../../docs/PLUGIN-CONTRACT.md) : « la protection
-/// est de ne pas les lui donner ».
+/// It holds two things, and nothing else: the resource limits, which wasmtime
+/// queries, and the approved permissions, which the WIT interface
+/// implementations will query before opening anything. No keychain access, no
+/// driver handle, no list of connections — it is
+/// [`PLUGIN-CONTRACT` §1](../../../docs/PLUGIN-CONTRACT.md): "the protection is
+/// not to give them to it".
 #[derive(Debug)]
 pub struct HostState {
     plugin: PluginId,
@@ -145,65 +143,65 @@ pub struct HostState {
 }
 
 impl HostState {
-    /// Le plugin auquel ce magasin appartient.
+    /// The plugin this store belongs to.
     #[must_use]
     pub const fn plugin(&self) -> &PluginId {
         &self.plugin
     }
 
-    /// Les permissions approuvées.
+    /// The approved permissions.
     #[must_use]
     pub const fn permissions(&self) -> &PluginPermissions {
         &self.permissions
     }
 
-    /// Autorise une destination réseau, ou refuse en le disant.
+    /// Authorizes a network destination, or refuses and says so.
     ///
-    /// Le bac à sable rend la tentative inoffensive ; ce refus la rend
-    /// **visible**, ce que le bac à sable seul ne fait pas.
+    /// The sandbox makes the attempt harmless; this refusal makes it
+    /// **visible**, which the sandbox alone does not.
     ///
-    /// # Erreurs
-    /// [`PluginError::PermissionDenied`] si la destination n'a pas été
-    /// accordée hôte par hôte, port par port.
+    /// # Errors
+    /// [`PluginError::PermissionDenied`] if the destination was not granted
+    /// host by host, port by port.
     pub fn authorize_host(&self, host: &str, port: u16) -> Result<()> {
         if self.permissions.allows_host(host, port) {
             return Ok(());
         }
         Err(PluginError::PermissionDenied {
             plugin: self.plugin.as_str().to_owned(),
-            detail: format!("hôte `{host}:{port}` non accordé au manifeste"),
+            detail: format!("host `{host}:{port}` not granted in the manifest"),
         })
     }
 
-    /// Autorise un chemin, ou refuse en le disant.
+    /// Authorizes a path, or refuses and says so.
     ///
-    /// # Erreurs
-    /// [`PluginError::PermissionDenied`] si le chemin n'est sous aucune racine
-    /// accordée, ou s'il remonte hors d'une racine accordée.
+    /// # Errors
+    /// [`PluginError::PermissionDenied`] if the path is under no granted root,
+    /// or if it climbs out of a granted root.
     pub fn authorize_path(&self, path: &Path) -> Result<()> {
         if self.permissions.allows_path(path) {
             return Ok(());
         }
         Err(PluginError::PermissionDenied {
             plugin: self.plugin.as_str().to_owned(),
-            detail: format!("chemin `{}` hors des racines accordées", path.display()),
+            detail: format!("path `{}` outside the granted roots", path.display()),
         })
     }
 }
 
-/// Le moteur wasmtime d'Oxyn, et ses limites.
+/// Oxyn's wasmtime engine, and its limits.
 ///
-/// Un seul moteur pour tous les plugins : il porte le cache de compilation et
-/// n'est pas un contexte d'exécution. L'isolation se fait par magasin — un
-/// [`Store`] par appel, avec son propre carburant et sa propre échéance.
+/// A single engine for all plugins: it carries the compilation cache and is not
+/// an execution context. Isolation happens per store — one [`Store`] per call,
+/// with its own fuel and its own deadline.
 pub struct WasmHost {
     engine: Engine,
     limits: HostLimits,
 }
 
 impl fmt::Debug for WasmHost {
-    /// Écrit à la main : `Engine` n'est pas `Debug`, et ce qu'un diagnostic
-    /// veut savoir, ce sont les bornes en vigueur.
+    /// Written by hand: `Engine` is not `Debug`, and what a diagnostic wants to
+    /// know is the bounds in force.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WasmHost")
             .field("limits", &self.limits)
@@ -212,31 +210,32 @@ impl fmt::Debug for WasmHost {
 }
 
 impl WasmHost {
-    /// Construit le moteur.
+    /// Builds the engine.
     ///
-    /// Trois réglages qui ne sont pas des détails :
+    /// Three settings that are not details:
     ///
-    /// * le **modèle de composants** est activé — c'est l'objet même
-    ///   d'[ADR-0005](../../../docs/adr/0005-wasm-plugins.md) ; un module
-    ///   WebAssembly nu ne franchit pas cette frontière ;
-    /// * le **carburant** est consommé, sans quoi une boucle infinie tourne
-    ///   jusqu'à l'arrêt du processus ;
-    /// * l'**interruption par époque** est instrumentée, seule façon de couper
-    ///   un composant qui ne consomme pas de carburant parce qu'il attend.
+    /// * the **component model** is enabled — it is the very subject of
+    ///   [ADR-0005](../../../docs/adr/0005-wasm-plugins.md); a bare WebAssembly
+    ///   module does not cross this boundary;
+    /// * **fuel** is consumed, otherwise an infinite loop runs until the
+    ///   process stops;
+    /// * **epoch interruption** is instrumented, the only way to cut off a
+    ///   component that consumes no fuel because it is waiting.
     ///
-    /// # Erreurs
-    /// [`PluginError::WasmHost`] si wasmtime refuse la configuration — un
-    /// réglage incompatible avec la cible de compilation, par exemple.
+    /// # Errors
+    /// [`PluginError::WasmHost`] if wasmtime refuses the configuration — a
+    /// setting incompatible with the compilation target, for example.
     pub fn new(limits: HostLimits) -> Result<Self> {
         let mut config = Config::new();
         config
             .wasm_component_model(true)
             .consume_fuel(true)
             .epoch_interruption(true)
-            // `wasm_backtrace_max_frames` remplace `wasm_backtrace`, déprécié :
-            // le réglage n'est plus un booléen mais une borne. `Some(20)` est le
-            // défaut de wasmtime, écrit explicitement — une trace non bornée est
-            // un vecteur de saturation pour un plugin qui échoue en boucle.
+            // `wasm_backtrace_max_frames` replaces the deprecated
+            // `wasm_backtrace`: the setting is no longer a boolean but a bound.
+            // `Some(20)` is the wasmtime default, written explicitly — an
+            // unbounded trace is a saturation vector for a plugin failing in a
+            // loop.
             .wasm_backtrace_max_frames(NonZeroUsize::new(20))
             .max_wasm_stack(limits.stack_bytes);
 
@@ -246,53 +245,52 @@ impl WasmHost {
         Ok(Self { engine, limits })
     }
 
-    /// Le moteur, pour qui doit faire avancer l'horloge d'époque.
+    /// The engine, for whoever must advance the epoch clock.
     #[must_use]
     pub const fn engine(&self) -> &Engine {
         &self.engine
     }
 
-    /// Les bornes en vigueur.
+    /// The bounds in force.
     #[must_use]
     pub const fn limits(&self) -> HostLimits {
         self.limits
     }
 
-    /// Vérifie qu'un plugin a le droit d'être chargé, et où se trouve son
-    /// composant.
+    /// Checks that a plugin is allowed to be loaded, and where its component
+    /// is.
     ///
-    /// Quatre refus, dans cet ordre — celui qui donne le message le plus utile
-    /// en premier :
+    /// Four refusals, in this order — the one giving the most useful message
+    /// first:
     ///
-    /// 1. **manifeste absent** — le plugin est en échec, il n'y a rien à
-    ///    charger ;
-    /// 2. **agent déclaratif** — il n'exécute pas de code, et le présenter à
-    ///    l'hôte est un défaut d'appelant, pas une situation à gérer ;
-    /// 3. **version d'interface incompatible** — refus explicite, jamais un
-    ///    chargement « pour voir »
-    ///    ([`PLUGIN-CONTRACT` §3](../../../docs/PLUGIN-CONTRACT.md)) ;
-    /// 4. **plugin non approuvé** — déposer un répertoire n'accorde rien.
+    /// 1. **missing manifest** — the plugin is failed, there is nothing to
+    ///    load;
+    /// 2. **declarative agent** — it runs no code, and presenting it to the
+    ///    host is a caller defect, not a situation to handle;
+    /// 3. **incompatible interface version** — explicit refusal, never a load
+    ///    "to see" ([`PLUGIN-CONTRACT` §3](../../../docs/PLUGIN-CONTRACT.md));
+    /// 4. **unapproved plugin** — dropping a directory grants nothing.
     ///
-    /// Le composant est ensuite localisé et son existence vérifiée : découvrir
-    /// un `.wasm` absent au moment de l'instanciation donnerait une erreur de
-    /// wasmtime là où une phrase suffit.
+    /// The component is then located and its existence checked: discovering a
+    /// missing `.wasm` at instantiation would give a wasmtime error where a
+    /// sentence suffices.
     ///
-    /// # Erreurs
+    /// # Errors
     /// [`PluginError::InvalidManifest`], [`PluginError::IncompatibleInterface`],
-    /// [`PluginError::NotApproved`] ou [`PluginError::Directory`] selon le
-    /// refus.
+    /// [`PluginError::NotApproved`] or [`PluginError::Directory`] depending on
+    /// the refusal.
     pub fn prepare(&self, plugin: &InstalledPlugin) -> Result<PreparedPlugin> {
         let slug = plugin.slug();
         let manifest = plugin.manifest().ok_or_else(|| {
-            PluginError::invalid_manifest(slug, "aucun manifeste lisible : rien à charger")
+            PluginError::invalid_manifest(slug, "no readable manifest: nothing to load")
         })?;
 
         if !manifest.requires_wasm() {
             return Err(PluginError::invalid_manifest(
                 slug,
                 format!(
-                    "un plugin `{}` est déclaratif : il ne s'exécute pas dans l'hôte \
-                     WebAssembly",
+                    "a `{}` plugin is declarative: it does not run in the WebAssembly \
+                     host",
                     manifest.kind
                 ),
             ));
@@ -305,15 +303,15 @@ impl WasmHost {
             });
         }
 
-        // Passe par `effective_permissions`, qui refuse tout ce qui n'est pas
-        // approuvé : c'est le même contrôle que celui du registre, et il ne se
-        // duplique pas ici.
+        // Goes through `effective_permissions`, which refuses anything not
+        // approved: it is the same check as the registry's, and it is not
+        // duplicated here.
         let permissions = plugin.effective_permissions()?.clone();
 
         let entrypoint = manifest
             .entrypoint
             .as_ref()
-            .ok_or_else(|| PluginError::invalid_manifest(slug, "aucun `entrypoint` à charger"))?;
+            .ok_or_else(|| PluginError::invalid_manifest(slug, "no `entrypoint` to load"))?;
         let component = entrypoint.resolve(plugin.directory());
         if !component.is_file() {
             return Err(PluginError::Directory {
@@ -330,39 +328,38 @@ impl WasmHost {
         })
     }
 
-    /// Compile le composant, et **refuse** ce qui n'en est pas un.
+    /// Compiles the component, and **refuses** what is not one.
     ///
-    /// C'est le contrôle de forme le plus utile qu'on puisse faire avant la
-    /// phase 4 : un module WebAssembly nu, un binaire tronqué ou un fichier qui
-    /// n'a de `.wasm` que le nom sont rejetés ici, avec le diagnostic de
-    /// wasmtime.
+    /// It is the most useful shape check that can be done before phase 4: a
+    /// bare WebAssembly module, a truncated binary or a file that is `.wasm` in
+    /// name only are rejected here, with the wasmtime diagnostic.
     ///
-    /// Compiler prend du temps — c'est du code natif engendré. Ne pas appeler
-    /// depuis le thread d'interface (I-05).
+    /// Compiling takes time — it is generated native code. Do not call from the
+    /// interface thread (I-05).
     ///
-    /// # Erreurs
-    /// [`PluginError::WasmHost`] si le fichier n'est pas un composant valide
-    /// pour ce moteur.
+    /// # Errors
+    /// [`PluginError::WasmHost`] if the file is not a valid component for this
+    /// engine.
     pub fn compile(&self, prepared: &PreparedPlugin) -> Result<Component> {
         Component::from_file(&self.engine, prepared.component_path()).map_err(|err| {
             PluginError::WasmHost {
                 detail: format!(
-                    "composant `{}` refusé : {err}",
+                    "component `{}` refused: {err}",
                     prepared.component_path().display()
                 ),
             }
         })
     }
 
-    /// Ouvre un magasin borné pour un appel.
+    /// Opens a bounded store for a call.
     ///
-    /// Un magasin par appel : le carburant et l'échéance d'époque sont des
-    /// budgets, et un budget partagé entre deux appels n'en est plus un.
+    /// One store per call: fuel and epoch deadline are budgets, and a budget
+    /// shared between two calls is no longer one.
     ///
-    /// # Erreurs
-    /// [`PluginError::WasmHost`] si l'allocation du magasin échoue, ou si le
-    /// moteur refuse le carburant — ce qui signalerait que
-    /// [`Config::consume_fuel`] n'a pas été activé.
+    /// # Errors
+    /// [`PluginError::WasmHost`] if the store allocation fails, or if the
+    /// engine refuses the fuel — which would signal that
+    /// [`Config::consume_fuel`] was not enabled.
     pub fn store(&self, prepared: &PreparedPlugin) -> Result<Store<HostState>> {
         let state = HostState {
             plugin: prepared.id.clone(),
@@ -386,40 +383,40 @@ impl WasmHost {
             .map_err(|err| PluginError::WasmHost {
                 detail: err.to_string(),
             })?;
-        // Sans cet appel, l'échéance vaut zéro et tout appel piège
-        // immédiatement : wasmtime l'exige dès que l'interruption par époque
-        // est instrumentée.
+        // Without this call, the deadline is zero and every call traps
+        // immediately: wasmtime requires it as soon as epoch interruption is
+        // instrumented.
         store.set_epoch_deadline(self.limits.epoch_ticks);
         Ok(store)
     }
 
-    /// Construit le `Linker` et y lie les interfaces WIT d'Oxyn.
+    /// Builds the `Linker` and binds Oxyn's WIT interfaces into it.
     ///
-    /// # Erreurs
-    /// Reportées en phase 4.
+    /// # Errors
+    /// Deferred to phase 4.
     ///
-    /// # Panique
-    /// Toujours, pour l'instant : la phase 4 n'est pas écrite.
+    /// # Panics
+    /// Always, for now: phase 4 is not written.
     pub fn linker(&self) -> Result<Linker<HostState>> {
         todo!(
-            "phase 4 : construire un `Linker<HostState>` sur `self.engine()` et y lier \
-             `oxyn:driver`, `oxyn:export` et `oxyn:visualization`, en vérifiant la version \
-             de chaque interface au chargement (PLUGIN-CONTRACT §3)"
+            "phase 4: build a `Linker<HostState>` on `self.engine()` and bind \
+             `oxyn:driver`, `oxyn:export` and `oxyn:visualization` into it, checking the \
+             version of each interface at load time (PLUGIN-CONTRACT §3)"
         )
     }
 
-    /// Instancie un composant préparé dans son magasin.
+    /// Instantiates a prepared component in its store.
     ///
-    /// # Erreurs
-    /// Reportées en phase 4.
+    /// # Errors
+    /// Deferred to phase 4.
     ///
-    /// # Panique
-    /// Toujours, pour l'instant : la phase 4 n'est pas écrite.
+    /// # Panics
+    /// Always, for now: phase 4 is not written.
     pub fn instantiate(&self, _component: &Component, _store: &mut Store<HostState>) -> Result<()> {
         todo!(
-            "phase 4 : instancier le composant via le `Linker`, puis exposer ses exports \
-             par-dessus les traits de `oxyn-driver` — les `RecordBatch` traversent en \
-             Arrow IPC, jamais champ à champ (PLUGIN-CONTRACT §4)"
+            "phase 4: instantiate the component through the `Linker`, then expose its exports \
+             on top of the `oxyn-driver` traits — `RecordBatch`es cross as Arrow IPC, never \
+             field by field (PLUGIN-CONTRACT §4)"
         )
     }
 }
@@ -431,85 +428,85 @@ mod tests {
 
     use super::*;
 
-    /// Un composant fictif : `prepare` ne vérifie que l'existence du fichier,
-    /// c'est `compile` qui le refuserait.
-    const FAUX_COMPOSANT: &[u8] = b"\0asm\x0d\x00\x01\x00";
+    /// A fake component: `prepare` only checks that the file exists, it is
+    /// `compile` that would refuse it.
+    const FAKE_COMPONENT: &[u8] = b"\0asm\x0d\x00\x01\x00";
 
-    fn hote() -> WasmHost {
-        WasmHost::new(HostLimits::default()).expect("le moteur wasmtime se configure")
+    fn wasm_host() -> WasmHost {
+        WasmHost::new(HostLimits::default()).expect("the wasmtime engine configures")
     }
 
-    fn registre(racine: &TempDir) -> PluginRegistry {
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("découverte");
-        registre
-    }
-
-    #[test]
-    fn le_moteur_se_configure_avec_carburant_et_epoques() {
-        let hote = hote();
-        assert_eq!(hote.limits(), HostLimits::default());
-        // `engine()` est ce dont a besoin le fil qui fera avancer l'horloge.
-        hote.engine().increment_epoch();
+    fn plugin_registry(root: &TempDir) -> PluginRegistry {
+        let mut plugin_registry = PluginRegistry::new(root.path());
+        plugin_registry.discover().expect("discovery");
+        plugin_registry
     }
 
     #[test]
-    fn un_plugin_non_approuve_ne_se_prepare_pas() {
-        // ADR-0005 : déposer un répertoire n'accorde rien, et le refus tombe
-        // avant que le moindre octet du composant ne soit lu.
-        let racine = TempDir::new("host-non-approuve");
-        racine.plugin("csv", &export_toml("csv", ""));
-        racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+    fn the_engine_configures_with_fuel_and_epochs() {
+        let wasm_host = wasm_host();
+        assert_eq!(wasm_host.limits(), HostLimits::default());
+        // `engine()` is what the thread advancing the clock needs.
+        wasm_host.engine().increment_epoch();
+    }
 
-        let registre = registre(&racine);
-        let plugin = registre.require("csv").expect("plugin découvert");
-        let err = hote().prepare(plugin).expect_err("refus attendu");
+    #[test]
+    fn an_unapproved_plugin_is_not_prepared() {
+        // ADR-0005: dropping a directory grants nothing, and the refusal falls
+        // before a single byte of the component is read.
+        let root = TempDir::new("host-unapproved");
+        root.plugin("csv", &export_toml("csv", ""));
+        root.file("csv", "csv.wasm", FAKE_COMPONENT);
+
+        let plugin_registry = plugin_registry(&root);
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let err = wasm_host().prepare(plugin).expect_err("refusal expected");
         assert!(matches!(err, PluginError::NotApproved { .. }), "{err}");
         assert!(err.needs_user_decision());
     }
 
     #[test]
-    fn un_agent_declaratif_ne_passe_jamais_par_l_hote() {
-        let racine = TempDir::new("host-agent");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+    fn a_declarative_agent_never_goes_through_the_host() {
+        let root = TempDir::new("host-agent");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let mut registre = registre(&racine);
-        registre.approve("revue").expect("approbation");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("revue").expect("approval");
 
-        let plugin = registre.require("revue").expect("plugin découvert");
-        let err = hote().prepare(plugin).expect_err("refus attendu");
-        assert!(err.to_string().contains("déclaratif"), "{err}");
+        let plugin = plugin_registry.require("revue").expect("discovered plugin");
+        let err = wasm_host().prepare(plugin).expect_err("refusal expected");
+        assert!(err.to_string().contains("declarative"), "{err}");
     }
 
     #[test]
-    fn un_composant_absent_se_dit_en_une_phrase() {
-        let racine = TempDir::new("host-sans-composant");
-        racine.plugin("csv", &export_toml("csv", ""));
+    fn a_missing_component_is_said_in_one_sentence() {
+        let root = TempDir::new("host-without-component");
+        root.plugin("csv", &export_toml("csv", ""));
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approbation");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let plugin = registre.require("csv").expect("plugin découvert");
-        let err = hote().prepare(plugin).expect_err("refus attendu");
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let err = wasm_host().prepare(plugin).expect_err("refusal expected");
         assert!(matches!(err, PluginError::Directory { .. }), "{err}");
         assert!(err.to_string().contains("csv.wasm"), "{err}");
     }
 
     #[test]
-    fn un_plugin_approuve_se_prepare_avec_ses_permissions() {
-        let racine = TempDir::new("host-approuve");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
-        let attendu = racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+    fn an_approved_plugin_is_prepared_with_its_permissions() {
+        let root = TempDir::new("host-approved");
+        root.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let wanted = root.file("csv", "csv.wasm", FAKE_COMPONENT);
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approbation");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let plugin = registre.require("csv").expect("plugin découvert");
-        let prepare = hote().prepare(plugin).expect("préparation");
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host().prepare(plugin).expect("preparation");
 
         assert_eq!(prepare.id().as_str(), "csv");
         assert_eq!(prepare.kind(), PluginKind::Export);
-        assert_eq!(prepare.component_path(), attendu);
+        assert_eq!(prepare.component_path(), wanted);
         assert!(prepare.permissions().allows_host("a.example", 443));
         assert!(
             !prepare
@@ -519,79 +516,81 @@ mod tests {
     }
 
     #[test]
-    fn le_magasin_porte_le_carburant_et_les_permissions() {
-        let racine = TempDir::new("host-magasin");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
-        racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+    fn the_store_carries_fuel_and_permissions() {
+        let root = TempDir::new("host-approval_store");
+        root.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        root.file("csv", "csv.wasm", FAKE_COMPONENT);
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approbation");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let hote = hote();
-        let plugin = registre.require("csv").expect("plugin découvert");
-        let prepare = hote.prepare(plugin).expect("préparation");
-        let store = hote.store(&prepare).expect("magasin");
+        let wasm_host = wasm_host();
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host.prepare(plugin).expect("preparation");
+        let store = wasm_host.store(&prepare).expect("store");
 
         assert_eq!(
-            store.get_fuel().expect("le carburant est activé"),
+            store.get_fuel().expect("fuel is enabled"),
             HostLimits::default().fuel
         );
-        let etat = store.data();
-        assert_eq!(etat.plugin().as_str(), "csv");
-        etat.authorize_host("a.example", 443)
-            .expect("hôte accordé au manifeste");
-        let err = etat
+        let state = store.data();
+        assert_eq!(state.plugin().as_str(), "csv");
+        state
+            .authorize_host("a.example", 443)
+            .expect("host granted in the manifest");
+        let err = state
             .authorize_host("exfiltration.example", 443)
-            .expect_err("refus attendu");
+            .expect_err("refusal expected");
         assert!(matches!(err, PluginError::PermissionDenied { .. }), "{err}");
     }
 
     #[test]
-    fn un_fichier_qui_n_est_pas_un_composant_est_refuse() {
-        // « refusé avec un message clair, jamais chargé pour voir. »
-        let racine = TempDir::new("host-compilation");
-        racine.plugin("csv", &export_toml("csv", ""));
-        racine.file("csv", "csv.wasm", b"ceci n'est pas du WebAssembly");
+    fn a_file_that_is_not_a_component_is_refused() {
+        // "refused with a clear message, never loaded to see."
+        let root = TempDir::new("host-compilation");
+        root.plugin("csv", &export_toml("csv", ""));
+        root.file("csv", "csv.wasm", b"this is not WebAssembly");
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approbation");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let hote = hote();
-        let plugin = registre.require("csv").expect("plugin découvert");
-        let prepare = hote.prepare(plugin).expect("préparation");
-        let err = hote.compile(&prepare).expect_err("refus attendu");
+        let wasm_host = wasm_host();
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host.prepare(plugin).expect("preparation");
+        let err = wasm_host.compile(&prepare).expect_err("refusal expected");
         assert!(matches!(err, PluginError::WasmHost { .. }), "{err}");
     }
 
     #[test]
-    fn un_chemin_hors_des_racines_accordees_est_refuse() {
-        let racine = TempDir::new("host-fichiers");
-        let manifeste = export_toml("csv", "").replace(
+    fn a_path_outside_the_granted_roots_is_refused() {
+        let root = TempDir::new("host-files");
+        let manifest_toml = export_toml("csv", "").replace(
             "network = []",
-            "network = []\nfilesystem = [\"/donnees/exports\"]",
+            "network = []\nfilesystem = [\"/data/exports\"]",
         );
-        racine.plugin("csv", &manifeste);
-        racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+        root.plugin("csv", &manifest_toml);
+        root.file("csv", "csv.wasm", FAKE_COMPONENT);
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approbation");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let hote = hote();
-        let plugin = registre.require("csv").expect("plugin découvert");
-        let prepare = hote.prepare(plugin).expect("préparation");
-        let store = hote.store(&prepare).expect("magasin");
-        let etat = store.data();
+        let wasm_host = wasm_host();
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host.prepare(plugin).expect("preparation");
+        let store = wasm_host.store(&prepare).expect("store");
+        let state = store.data();
 
-        etat.authorize_path(Path::new("/donnees/exports/rapport.csv"))
-            .expect("chemin sous une racine accordée");
+        state
+            .authorize_path(Path::new("/data/exports/report.csv"))
+            .expect("path under a granted root");
         for refuse in [
             "/etc/passwd",
-            "/donnees/exports/../../etc/passwd",
-            "/donnees/exports-voisin/x",
+            "/data/exports/../../etc/passwd",
+            "/data/exports-neighbor/x",
         ] {
             assert!(
-                etat.authorize_path(Path::new(refuse)).is_err(),
-                "{refuse} devrait être refusé"
+                state.authorize_path(Path::new(refuse)).is_err(),
+                "{refuse} should be refused"
             );
         }
     }

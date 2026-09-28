@@ -1,444 +1,439 @@
-# ADR-0030 — Un agent externe atteint la base par les outils d'Oxyn, servis en MCP, et par rien d'autre
+# ADR-0030 — An external agent reaches the database through Oxyn's tools, served over MCP, and through nothing else
 
-**Statut :** proposé · **Date :** 2026-09-16
+**Status:** proposed · **Date:** 2026-09-16
 
-**Précise :** [ADR-0026](0026-agents-externes-acp.md), qui déclarait un agent
-externe et lui parlait, sans jamais lui donner de quoi lire la base.
+**Clarifies:** [ADR-0026](0026-agents-externes-acp.md), which declared an
+external agent and talked to it, without ever giving it the means to read the
+database.
 
-## Contexte
+## Context
 
-[ADR-0026](0026-agents-externes-acp.md) a posé le mode agent : l'utilisateur
-lance Claude Code ou Codex depuis Oxyn, l'agent porte sa propre
-authentification, aucune clé ne nous est confiée. Ce que cet ADR n'a pas traité,
-parce qu'il regardait la frontière du protocole et non celle du produit :
-**l'agent ne peut pas interroger la base**.
+[ADR-0026](0026-agents-externes-acp.md) set up the agent mode: the user
+launches Claude Code or Codex from Oxyn, the agent carries its own
+authentication, no key is entrusted to us. What that ADR did not address,
+because it looked at the protocol's boundary and not the product's:
+**the agent cannot query the database**.
 
-Le résultat est un agent qui, dans un atelier de bases de données, ne peut rien
-dire de la base. Il répond sur le SQL en général, pas sur le schéma ouvert
-devant l'utilisateur. Le retour est sans appel : « le chat et les agents ne
-discutent pas avec les bases de données ».
+The result is an agent that, in a database workbench, can say nothing about
+the database. It answers about SQL in general, not about the schema open in
+front of the user. The feedback is unequivocal: "the chat and the agents do not
+talk with the databases".
 
-L'assistant interne, lui, y arrive : le modèle demande un outil, `oxyn-ai`
-traduit l'appel en `Command` portant `Actor::Agent`, le `PolicyGate` décide, le
-bus exécute, et le résultat revient au modèle **encadré**. Tout le mécanisme
-existe. Ce qui manque n'est pas une capacité : c'est un **transport** entre
-l'agent, qui vit dans un autre processus, et ce mécanisme.
+The internal assistant, for its part, manages it: the model asks for a tool,
+`oxyn-ai` translates the call into a `Command` carrying `Actor::Agent`, the
+`PolicyGate` decides, the bus executes, and the result goes back to the model
+**framed**. The whole mechanism exists. What is missing is not a capability: it
+is a **transport** between the agent, which lives in another process, and that
+mechanism.
 
-Le protocole en offre un, et c'est précisément celui que les agents savent déjà
-parler : **MCP**. `agent-client-protocol` 2.1.0 permet de déclarer des serveurs
-MCP à l'ouverture d'une session ACP. L'agent y voit des outils comme il en voit
-partout ailleurs ; Oxyn y voit son propre registre.
+The protocol offers one, and it is precisely the one agents already know how
+to speak: **MCP**. `agent-client-protocol` 2.1.0 makes it possible to declare
+MCP servers when opening an ACP session. The agent sees tools there as it sees
+them everywhere else; Oxyn sees its own registry there.
 
-Reste à choisir le transport, et c'est là que la mesure a corrigé l'intuition.
-La crate offre une variante `Acp` qui porte le serveur **en mémoire**, sans
-processus ni port — évidemment la plus désirable. Elle est inutilisable : elle
-dépend d'une capacité que **ni Claude Agent 0.78.0 ni Codex 1.12.0 n'annoncent**
-(Codex répond même `"acp": false`), et elle vit derrière une feature instable.
-Le relevé est daté dans
-[RESEARCH-NOTES](../RESEARCH-NOTES.md#exposer-les-outils-doxyn-à-un-agent-externe--vérification-du-2026-09-16).
-Les transports réellement disponibles sont `stdio` — obligatoire pour tout agent
-— et `http`, que les deux acceptent.
+The transport remains to be chosen, and that is where measurement corrected
+intuition. The crate offers an `Acp` variant that carries the server **in
+memory**, without a process or a port — obviously the most desirable. It is
+unusable: it depends on a capability that **neither Claude Agent 0.78.0 nor
+Codex 1.12.0 announce** (Codex even answers `"acp": false`), and it lives behind
+an unstable feature. The survey is dated in
+[RESEARCH-NOTES](../RESEARCH-NOTES.md#exposing-oxyns-tools-to-an-external-agent--check-of-2026-09-16).
+The transports actually available are `stdio` — mandatory for every agent
+— and `http`, which both accept.
 
-**Ce qui rend la décision coûteuse à défaire**, et donc ADR : servir des outils
-à un processus tiers crée une **seconde porte d'entrée** vers le bus de
-commandes. Une porte d'entrée, une fois ouverte, n'est jamais re-auditée comme
-la première — c'est exactement ce qu'[I-01](../../CLAUDE.md#i-01) décrit. La
-forme qu'on lui donne aujourd'hui est celle qu'on gardera.
+**What makes the decision expensive to undo**, and hence an ADR: serving tools
+to a third-party process creates a **second entrance** to the command bus. An
+entrance, once open, is never re-audited like the first — it is exactly what
+[I-01](../../CLAUDE.md#i-01) describes. The shape we give it today is the one we
+will keep.
 
-## Décision
+## Decision
 
-### 1. Le serveur MCP n'expose que le `ToolRegistry`, tel quel
+### 1. The MCP server only exposes the `ToolRegistry`, as is
 
-Les outils servis à l'agent externe sont **exactement** ceux que l'assistant
-interne reçoit du `ToolRegistry` d'`oxyn-ai` — aujourd'hui `execute_query`,
-`describe_schema` (§ 4 bis) et `request_sample` (§ 4 ter) —
-avec leurs schémas JSON d'arguments, produits par le même code.
+The tools served to the external agent are **exactly** those the internal
+assistant receives from `oxyn-ai`'s `ToolRegistry` — today `execute_query`,
+`describe_schema` (§ 4 bis) and `request_sample` (§ 4 ter) —
+with their JSON argument schemas, produced by the same code.
 
-**Aucun outil n'est écrit pour l'agent externe.** Un outil qui n'existerait que
-là serait, par construction, un chemin que l'assistant interne n'emprunte jamais
-et que personne ne relit. Ajouter un outil aux agents externes, c'est l'ajouter
-au registre, donc aux deux destinations, donc sous la même relecture.
+**No tool is written for the external agent.** A tool that existed only there
+would be, by construction, a path the internal assistant never takes and
+nobody reviews. Adding a tool to external agents means adding it to the
+registry, hence to both destinations, hence under the same review.
 
-Le revers : un outil ajouté pour l'assistant interne atteint aussi, d'office,
-tout agent externe. La liste annoncée est donc **figée par un test**, qui échoue
-le premier. Le mettre à jour appelle une relecture de sécurité du pont, pas une
-retouche de la liste attendue.
+The flip side: a tool added for the internal assistant also reaches, by
+default, every external agent. The announced list is therefore **frozen by a
+test**, which fails first. Updating it calls for a security review of the
+bridge, not a touch-up of the expected list.
 
-### 2. Chaque appel devient une `Command` portant `Actor::Agent`
+### 2. Each call becomes a `Command` carrying `Actor::Agent`
 
-Un appel d'outil MCP suit le chemin de l'assistant interne, sans variante :
-`ToolRegistry::translate` produit la `Command`, le sink la soumet avec
-`Actor::Agent`, le `PolicyGate` décide ([I-01](../../CLAUDE.md#i-01),
+An MCP tool call follows the internal assistant's path, without variant:
+`ToolRegistry::translate` produces the `Command`, the sink submits it with
+`Actor::Agent`, the `PolicyGate` decides ([I-01](../../CLAUDE.md#i-01),
 [I-07](../../CLAUDE.md#i-07)).
 
-Conséquences, qui ne sont pas des ajouts mais des propriétés héritées :
+Consequences, which are not additions but inherited properties:
 
-* une écriture sur une connexion `production` est un **refus**, pas une
-  confirmation renforcée ([I-02](../../CLAUDE.md#i-02)) ;
-* une écriture ailleurs demande l'**approbation humaine**, affichée avec le SQL
-  exact, le nom de la connexion, l'environnement et l'acteur ;
-* l'arrêt de la question en cours annule l'appel en cours.
+* a write on a `production` connection is a **refusal**, not a stronger
+  confirmation ([I-02](../../CLAUDE.md#i-02));
+* a write elsewhere requires **human approval**, displayed with the exact SQL,
+  the connection name, the environment and the actor;
+* stopping the current question cancels the current call.
 
-### 2 bis. Un appel répond à la question en cours, et à aucune autre
+### 2 bis. A call answers the current question, and no other
 
-La session d'un agent survit à une question : elle sert la suivante. Ce qui
-rattache un appel — le nœud du panneau où il s'affiche, le bouton « Arrêter »
-qui l'atteint, le nombre d'appels permis — ne lui survit **pas**. Chaque question
-**ouvre un tour**, et le fermer retire les outils :
+An agent's session outlives a question: it serves the next one. What ties a
+call — the panel node where it is displayed, the "Stop" button that reaches
+it, the number of calls allowed — does **not** outlive it. Each question
+**opens a turn**, and closing it removes the tools:
 
-* **hors question en cours, rien ne s'exécute.** L'utilisateur ne regarde pas ;
-  une confirmation demandée à qui ne regarde pas est cliquée par réflexe ;
-* **un plafond d'appels par question**, celui de la boucle interne
-  (`max_turns`) : « le même chemin » veut aussi dire les mêmes bornes ;
-* **une seule écriture soumise à approbation par question.** La suivante est
-  refusée jusqu'à la question d'après : dix demandes d'affilée, c'est ainsi que
-  la dixième est approuvée sans être lue.
+* **outside a current question, nothing executes.** The user is not watching;
+  a confirmation asked of someone who is not watching is clicked by reflex;
+* **a cap on calls per question**, the one of the internal loop
+  (`max_turns`): "the same path" also means the same bounds;
+* **a single write submitted for approval per question.** The next one is
+  refused until the following question: ten requests in a row is how the tenth
+  gets approved without being read.
 
-La première version liait ces trois choses à la question qui avait **lancé**
-l'agent. Une première question arrêtée laissait tous les appels suivants partir
-déjà annulés ; « Arrêter » sur une question suivante n'atteignait rien ; et entre
-deux questions, l'agent pouvait appeler les outils sans limite, hors de la vue de
-l'utilisateur. Rien n'échouait.
+The first version tied these three things to the question that had
+**launched** the agent. A stopped first question left all following calls going
+out already cancelled; "Stop" on a following question reached nothing; and
+between two questions, the agent could call the tools without limit, out of the
+user's sight. Nothing failed.
 
-### 3. Le périmètre vient de l'hôte, jamais de l'agent
+### 3. The scope comes from the host, never from the agent
 
-Le `ToolScope` — connexion, session, langage — est construit par Oxyn à
-l'ouverture de la conversation, à partir de ce que l'utilisateur a lui-même
-ouvert. L'agent ne le voit pas et ne peut pas le proposer.
+The `ToolScope` — connection, session, language — is built by Oxyn when the
+conversation opens, from what the user themselves opened. The agent does not
+see it and cannot propose it.
 
-Ce n'est pas une vérification ajoutée au pont : c'est la forme du schéma.
-`ExecuteQueryArgs` ne porte **que** `statement`. Il n'existe aucun champ où
-écrire une autre connexion, un « read_only: false », ou une intention déclarée.
-Un agent qui tenterait d'en ajouter un est refusé par `deny_unknown_fields`.
+It is not a check added to the bridge: it is the shape of the schema.
+`ExecuteQueryArgs` carries **only** `statement`. There is no field in which to
+write another connection, a "read_only: false", or a declared intent. An agent
+that tried to add one is refused by `deny_unknown_fields`.
 
-### 4. Le niveau de confidentialité gouverne par le résultat rendu, pas par une seconde règle
+### 4. The privacy tier governs through the rendered result, not through a second rule
 
-C'est le point sur lequel nous avons d'abord conclu de travers, et la correction
-mérite d'être écrite.
+This is the point on which we first concluded wrongly, and the correction
+deserves to be written.
 
-L'intuition de départ était : « `execute_query` rend des lignes, donc il faut le
-refuser à un agent distant sous `Metadata` ». Elle repose sur une prémisse
-fausse. Ce qu'un outil rend au modèle, **des deux côtés**, c'est
-`ToolOutcome::render()`, et pour une exécution réussie ce texte est la **forme**
-du résultat — `N rows, M batches` — jamais les valeurs. Les valeurs de lignes ne
-rejoignent une invite que par le contexte, que `ContextBuilder` gouverne déjà
-avec `PrivacyTier::allows_row_values` ([ADR-0006](0006-ai-privacy-tiers.md),
+The initial intuition was: "`execute_query` returns rows, so it must be
+refused to a remote agent under `Metadata`". It rests on a false premise. What
+a tool returns to the model, **on both sides**, is `ToolOutcome::render()`, and
+for a successful execution that text is the **shape** of the result —
+`N rows, M batches` — never the values. Row values only reach a prompt through
+the context, which `ContextBuilder` already governs with
+`PrivacyTier::allows_row_values` ([ADR-0006](0006-ai-privacy-tiers.md),
 [I-04](../../CLAUDE.md#i-04)).
 
-**Décision :** le pont MCP rend le **même** `ToolOutcome::render()` que la boucle
-interne — même résumé, même rapport d'échec expurgé selon le niveau, même
-encadrement `untrusted`. Il n'y a donc **pas** de règle de niveau propre aux
-agents externes :
+**Decision:** the MCP bridge returns the **same** `ToolOutcome::render()` as the
+internal loop — same summary, same failure report redacted according to the
+tier, same `untrusted` framing. There is therefore **no** tier rule specific to
+external agents:
 
-| Niveau | Agent externe | `execute_query` | `describe_schema` | `refresh_catalog` | `request_sample` |
+| Tier | External agent | `execute_query` | `describe_schema` | `refresh_catalog` | `request_sample` |
 |---|---|---|---|---|---|
-| `Local` | interdit | — | — | — | — |
-| `Metadata` | permis | permis, rend la forme | permis, rend la structure | permis | refusé avant tout écran |
-| `Sampled` | permis | permis, rend la forme | permis, rend la structure, aucune valeur | permis | les colonnes que l'utilisateur coche, après son accord (§ 4 ter) |
+| `Local` | forbidden | — | — | — | — |
+| `Metadata` | allowed | allowed, returns the shape | allowed, returns the structure | allowed | refused before any screen |
+| `Sampled` | allowed | allowed, returns the shape | allowed, returns the structure, no value | allowed | the columns the user ticks, after their consent (§ 4 ter) |
 
-`request_sample` n'est pas une règle de niveau propre aux agents externes : le
-refus hors `Sampled` est `allows_row_values`, appliqué dans le chemin commun des
-deux destinations, et les valeurs ne sortent que par `ContextBuilder::build`.
+`request_sample` is not a tier rule specific to external agents: the refusal
+outside `Sampled` is `allows_row_values`, applied in the common path of both
+destinations, and values only go out through `ContextBuilder::build`.
 
-`Local` interdit l'agent externe **avant le lancement du processus** : c'est
-ADR-0026, inchangé.
+`Local` forbids the external agent **before the process is launched**: that is
+ADR-0026, unchanged.
 
-**Le niveau est relu à chaque appel, pas copié au lancement.** Le processus d'un
-agent survit à la question qui l'a lancé ; le niveau, lui, est attaché à la
-connexion ([I-04](../../CLAUDE.md#i-04)). Chaque `tools/call` relit donc le niveau
-enregistré — la même source que `ai_ask` avant une question — et un appel sous
-`Local`, ou sur une connexion disparue, est refusé sans rien exécuter. En plus,
-les agents d'une connexion sont **relâchés** quand elle est modifiée, supprimée
-ou fermée, et quand une question sur elle est refusée : la question suivante
-relance l'agent sous ce qui vaut alors.
+**The tier is reread on every call, not copied at launch.** An agent's process
+outlives the question that launched it; the tier, for its part, is attached to
+the connection ([I-04](../../CLAUDE.md#i-04)). Each `tools/call` therefore
+rereads the saved tier — the same source as `ai_ask` before a question — and a
+call under `Local`, or on a connection that disappeared, is refused without
+executing anything. In addition, a connection's agents are **released** when it
+is modified, deleted or closed, and when a question on it is refused: the next
+question relaunches the agent under what then holds.
 
-Écrire une seconde règle aurait été la vraie faute : deux règles de niveau
-divergent le jour où l'une des deux change, et divergent en silence.
+Writing a second rule would have been the real mistake: two tier rules diverge
+the day one of them changes, and diverge silently.
 
-### 4 bis. La structure de la base : un outil pour toutes les destinations
+### 4 bis. The database structure: one tool for every destination
 
-*Ajouté le 2026-09-23, sur constat.* La première version de cet ADR affirmait
-que l'agent externe « lit le schéma ». C'était faux : il ne recevait que la
-question, et aucun outil ne lui rendait la structure. Sur une base SQLite, un
-agent à qui l'on demandait « les 10 dernières lignes » a lancé
-`SELECT name FROM sqlite_master`, reçu `11 rows` — la forme, jamais les valeurs,
-comme le veut le § 4 —, et proposé `SELECT * FROM your_table`. La description
-d'`execute_query` l'y invitait : elle disait « Reads return rows ».
+*Added on 2026-09-23, based on a finding.* The first version of this ADR
+claimed that the external agent "reads the schema". That was false: it only
+received the question, and no tool returned the structure to it. On a SQLite
+database, an agent asked for "the last 10 rows" ran
+`SELECT name FROM sqlite_master`, received `11 rows` — the shape, never the
+values, as § 4 wants —, and proposed `SELECT * FROM your_table`. The
+description of `execute_query` invited it to: it said "Reads return rows".
 
-La consigne qui a tranché : l'accès à la structure est **le même pour toute
-destination** — fournisseur intégré, Claude Code, Codex, tout agent à venir —,
-et ajouter une destination ne demande aucun code propre au schéma.
+The instruction that settled it: access to the structure is **the same for
+every destination** — built-in provider, Claude Code, Codex, any future agent —,
+and adding a destination requires no schema-specific code.
 
-**Décision :**
+**Decision:**
 
-* **Un outil du registre, `describe_schema`**, que la boucle interne et le pont
-  MCP exposent tous deux. Il se traduit en une `Command` nouvelle,
-  **`DescribeCatalog { connection, focus }`**, qui porte `Actor::Agent` et
-  traverse le `PolicyGate` comme toute autre (§ 2). C'est une lecture du cache
-  local : elle ne contacte aucun serveur, n'est pas mutante, et le `PolicyGate`
-  la permet partout, `production` comprise. `focus` porte les mots de recherche
-  de l'agent, bornés à 256 octets — des mots pour classer des noms, jamais du
-  texte de requête ([I-10](../../CLAUDE.md#i-10)).
-* **L'exécuteur rend le cache, pas un rendu.** Il remet la poignée du catalogue
-  (`CatalogHandle`) dans son rapport ; c'est `oxyn-ai` qui la rend, dans
-  `ToolOutcome::from_dispatch`, par **`ContextBuilder::build`** — la même
-  fonction que le contexte d'une invite, sous le niveau **relu à l'appel** (§ 4),
-  avec le même budget et le même encadré `untrusted`. Il n'existe pas de second
-  rendu du schéma ([I-04](../../CLAUDE.md#i-04)).
-* **Le rendu est le même pour toute base.** Il ne connaît que le modèle commun
-  d'`oxyn-catalog` : chemin, sorte d'objet (`table`, `collection`, `index`,
-  `key_pattern`, `node_label`…), champs et sous-champs avec leurs types **tels
-  que le driver les nomme**, champs inférés, index, clés étrangères. Il dit en
-  tête le langage de requête de la connexion. Les noms sont cités comme le
-  dialecte SQL les cite, ou, hors SQL, en littéraux JSON. Un driver qui remplit
-  le catalogue est couvert sans une ligne de plus dans `oxyn-ai`.
-* **Les deux destinations gardent aussi un contexte d'ouverture**, rendu par la
-  même fonction : l'assistant interne dans son message système, l'agent externe
-  dans l'invite qui ouvre sa session (`AgentPrompt::with_schema`). Trois raisons
-  le justifient : l'échantillon approuvé n'entre que par ce contexte, un petit
-  modèle local peine à appeler un outil, et la première réponse n'attend pas un
-  aller-retour. L'outil sert à ce que ce contexte a laissé hors budget.
-  *Corrigé le 2026-09-24 :* cette version disait que l'invite d'un agent externe
-  ne porte jamais d'échantillon, faute de pouvoir marquer un échange comme sans
-  mémoire. Elle en porte désormais un, épinglé et approuvé, par le même
-  `ContextBuilder` ; la mémoire est tenue en relâchant le processus après
-  l'échange (§ 4 ter).
-* **Ce qui dépend de la destination se dérive, ne se recopie pas.** Le nom du
-  serveur MCP est une constante (`mcp::SERVER_NAME`) dont découlent la
-  déclaration ACP, la règle de permission de Claude (`mcp__oxyn`, qui couvre
-  tous les outils du serveur) et l'approbation de Codex, posée sur le serveur
-  entier. Un test vérifie que chaque outil du registre passe les deux
-  confinements sans y être nommé.
-* la description d'`execute_query` dit désormais ce que l'outil rend : la forme
-  du résultat, jamais ses valeurs, et renvoie à `describe_schema`.
+* **A registry tool, `describe_schema`**, which both the internal loop and the
+  MCP bridge expose. It translates into a new `Command`,
+  **`DescribeCatalog { connection, focus }`**, which carries `Actor::Agent` and
+  goes through the `PolicyGate` like any other (§ 2). It is a read of the local
+  cache: it contacts no server, is not mutating, and the `PolicyGate` allows it
+  everywhere, `production` included. `focus` carries the agent's search words,
+  bounded to 256 bytes — words to rank names, never query text
+  ([I-10](../../CLAUDE.md#i-10)).
+* **The executor returns the cache, not a rendering.** It hands the catalog
+  handle (`CatalogHandle`) in its report; `oxyn-ai` renders it, in
+  `ToolOutcome::from_dispatch`, through **`ContextBuilder::build`** — the same
+  function as a prompt's context, under the tier **reread at the call** (§ 4),
+  with the same budget and the same `untrusted` frame. There is no second
+  rendering of the schema ([I-04](../../CLAUDE.md#i-04)).
+* **The rendering is the same for every database.** It only knows the common
+  model of `oxyn-catalog`: path, object kind (`table`, `collection`, `index`,
+  `key_pattern`, `node_label`…), fields and subfields with their types **as the
+  driver names them**, inferred fields, indexes, foreign keys. It states the
+  connection's query language at the top. Names are quoted as the SQL dialect
+  quotes them, or, outside SQL, as JSON literals. A driver that fills the
+  catalog is covered without one more line in `oxyn-ai`.
+* **Both destinations also keep an opening context**, rendered by the same
+  function: the internal assistant in its system message, the external agent in
+  the prompt that opens its session (`AgentPrompt::with_schema`). Three reasons
+  justify it: the approved sample only enters through that context, a small
+  local model struggles to call a tool, and the first answer does not wait for a
+  round trip. The tool serves what that context left out of budget.
+  *Corrected on 2026-09-24:* this version said an external agent's prompt never
+  carries a sample, for lack of a way to mark an exchange as memoryless. It now
+  carries one, pinned and approved, through the same `ContextBuilder`; memory is
+  handled by releasing the process after the exchange (§ 4 ter).
+* **What depends on the destination is derived, not copied.** The MCP server's
+  name is a constant (`mcp::SERVER_NAME`) from which derive the ACP declaration,
+  Claude's permission rule (`mcp__oxyn`, which covers all the server's tools)
+  and Codex's approval, set on the whole server. A test checks that each
+  registry tool passes both confinements without being named there.
+* the description of `execute_query` now says what the tool returns: the shape
+  of the result, never its values, and points to `describe_schema`.
 
-La liste figée par le test du § 1 passe à `execute_query` et `describe_schema`.
-Ce changement **appelle la relecture de sécurité du pont** que le § 1 exige.
+The list frozen by the test of § 1 becomes `execute_query` and `describe_schema`.
+This change **calls for the security review of the bridge** that § 1 requires.
 
-**Limite assumée.** Une réponse de `describe_schema` suit le budget du contexte :
-vingt-quatre relations, environ six mille jetons. L'agent parcourt un grand
-schéma par mots de recherche, pas par pages. Et le catalogue commun ne connaît ni
-les définitions de vues ni les valeurs de champs énumérés : ce qu'il ne sait pas
-reste absent.
+**Accepted limit.** A `describe_schema` response follows the context budget:
+twenty-four relations, about six thousand tokens. The agent browses a large
+schema by search words, not by pages. And the common catalog knows neither view
+definitions nor the values of enumerated fields: what it does not know stays
+absent.
 
-### 4 ter. Des valeurs approuvées, pour toute destination
+### 4 ter. Approved values, for every destination
 
-*Ajouté le 2026-09-24.* Sous `Sampled`, un agent — interne ou externe — reçoit
-les valeurs que l'utilisateur approuve colonne par colonne : épinglées avec la
-question, ou demandées par l'outil `request_sample`. La décision, ses bornes et
-ses limites sont dans [ADR-0034](0034-echantillon-pour-toute-destination.md) ;
-ce qui en regarde le pont :
+*Added on 2026-09-24.* Under `Sampled`, an agent — internal or external — receives
+the values the user approves column by column: pinned with the question, or
+requested through the `request_sample` tool. The decision, its bounds and its
+limits are in [ADR-0034](0034-echantillon-pour-toute-destination.md); what
+concerns the bridge:
 
-* l'outil vient du registre et passe par `run_tool_call`, comme les autres ;
-  aucune ligne du pont ne lui est propre ;
-* la demande passe la même garde qu'une commande (`WriteGate`) : une à la fois,
-  jamais pendant qu'une approbation de cet agent attend, seulement pour la
-  question ouverte — et une réponse arrivée après la fermeture de la question
-  est jetée ;
-* l'agent ne peut pas s'approuver : la réponse vient de la commande Tauri
-  `ai_answer_sample`, et l'identifiant de la demande ne traverse jamais le pont ;
-* un échange qui a porté des valeurs relâche le processus de l'agent ; la
-  question suivante en lance un autre.
+* the tool comes from the registry and goes through `run_tool_call`, like the
+  others; no line of the bridge is specific to it;
+* the request passes the same guard as a command (`WriteGate`): one at a time,
+  never while an approval of this agent is pending, only for the open
+  question — and an answer that arrives after the question is closed is
+  thrown away;
+* the agent cannot approve itself: the answer comes from the Tauri command
+  `ai_answer_sample`, and the request's identifier never crosses the bridge;
+* an exchange that carried values releases the agent's process; the next
+  question launches another.
 
-La liste figée par le test du § 1 passe à `execute_query`, `describe_schema` et
-`request_sample`. Ce changement **appelle la relecture de sécurité du pont** que
-le § 1 exige.
+The list frozen by the test of § 1 becomes `execute_query`, `describe_schema` and
+`request_sample`. This change **calls for the security review of the bridge** that
+§ 1 requires.
 
-### 5. Le transport est `http` sur la boucle locale, avec un jeton par conversation
+### 5. The transport is `http` on the loopback, with one token per conversation
 
-Puisque `Acp` n'existe pas chez les agents réels, il reste `stdio` et `http`.
+Since `Acp` does not exist in real agents, `stdio` and `http` remain.
 
-`stdio` place le serveur MCP dans un sous-processus lancé **par l'agent**, pas
-par nous. Ce sous-processus devrait rejoindre l'Oxyn en cours d'exécution — le
-seul qui tienne l'exécuteur, le `PolicyGate` et les approbations — par une IPC
-de notre invention. Nous écririons donc un second mode binaire et un protocole
-de relais pour obtenir la surface que `http` nous donne déjà.
+`stdio` places the MCP server in a subprocess launched **by the agent**, not by
+us. That subprocess would have to reach the running Oxyn — the only one that
+holds the executor, the `PolicyGate` and the approvals — through an IPC of our
+own invention. We would therefore write a second binary mode and a relay
+protocol to obtain the surface `http` already gives us.
 
-**Décision :** Oxyn sert MCP en **HTTP sur `127.0.0.1`**, et :
+**Decision:** Oxyn serves MCP over **HTTP on `127.0.0.1`**, and:
 
-* le port est **tiré au hasard**, jamais fixé, jamais écrit ;
-* l'écoute est liée à la boucle locale, **jamais** à une autre interface ;
-* chaque conversation reçoit un **jeton porteur** tiré à son ouverture, passé à
-  l'agent dans les `headers` de `McpServerHttp` ; une requête sans ce jeton
-  exact est refusée sans rien révéler ;
-* le jeton n'est **ni persisté, ni journalisé, ni affiché**
-  ([I-03](../../CLAUDE.md#i-03)) ;
-* l'écoute **naît avec la conversation et meurt avec elle**, et les connexions
-  déjà acceptées **avec elle** : hors conversation avec un agent externe, Oxyn
-  n'écoute rien et ne sert rien. Arrêter seulement l'écoute ne suffit pas — une
-  connexion maintenue ouverte (*keep-alive*) continuerait d'atteindre le bus
-  après la fin, pour un processus sorti du groupe de l'agent.
+* the port is **drawn at random**, never fixed, never written;
+* listening is bound to the loopback, **never** to another interface;
+* each conversation receives a **bearer token** drawn when it opens, passed to
+  the agent in the `headers` of `McpServerHttp`; a request without that exact
+  token is refused without revealing anything;
+* the token is **neither persisted, nor logged, nor displayed**
+  ([I-03](../../CLAUDE.md#i-03));
+* listening **is born with the conversation and dies with it**, and the
+  connections already accepted **with it**: outside a conversation with an
+  external agent, Oxyn listens to nothing and serves nothing. Stopping only the
+  listener is not enough — a connection kept open (*keep-alive*) would keep
+  reaching the bus after the end, for a process that left the agent's group.
 
-Et parce que c'est une surface réseau, quatre règles qui ne sont pas des
-options :
+And because it is a network surface, four rules that are not options:
 
-* **le jeton est exigé sur *toutes* les requêtes, `initialize` comprise.** Un
-  handshake laissé ouvert est un point d'énumération : il dit à qui frappe
-  qu'Oxyn écoute, et ce qu'il sert ;
-* **la comparaison est à temps constant.** Une comparaison qui s'arrête au
-  premier octet différent se mesure, et un jeton se devine octet par octet ;
-* **`Origin` et `Host` sont vérifiés**, et tout ce qui n'est pas la boucle
-  locale est refusé. Sans cela, une page ouverte dans le navigateur de
-  l'utilisateur peut faire résoudre un nom vers `127.0.0.1` et parler à ce port
-  — c'est le *DNS rebinding*, et le pare-feu n'y peut rien ;
-* **un refus ne dit rien, et c'est voulu.** Jeton absent, jeton faux, origine
-  étrangère, `Host` hors boucle locale, mauvais chemin, mauvaise méthode : **la
-  même réponse**, même statut, corps vide. Un message qui distingue les causes
-  apprend à l'appelant ce qu'il a presque réussi — « jeton invalide » confirme
-  que l'origine est acceptée.
+* **the token is required on *all* requests, `initialize` included.** A
+  handshake left open is an enumeration point: it tells whoever knocks that
+  Oxyn is listening, and what it serves;
+* **the comparison is constant-time.** A comparison that stops at the first
+  differing byte can be measured, and a token can be guessed byte by byte;
+* **`Origin` and `Host` are checked**, and anything that is not the loopback is
+  refused. Without that, a page opened in the user's browser can make a name
+  resolve to `127.0.0.1` and talk to this port — it is *DNS rebinding*, and the
+  firewall can do nothing about it;
+* **a refusal says nothing, and it is intended.** Missing token, wrong token,
+  foreign origin, `Host` outside the loopback, wrong path, wrong method: **the
+  same response**, same status, empty body. A message that distinguishes causes
+  teaches the caller what it almost achieved — "invalid token" confirms that
+  the origin is accepted.
 
-  Ce choix rend le débogage moins confortable, et c'est précisément pourquoi il
-  est écrit ici : **ne pas l'« améliorer » en précisant les messages.** Qui a
-  besoin de comprendre un refus lit les tests du serveur, pas la réponse HTTP.
+  This choice makes debugging less comfortable, and that is precisely why it
+  is written here: **do not "improve" it by making the messages more precise.**
+  Whoever needs to understand a refusal reads the server's tests, not the HTTP
+  response.
 
-Deux règles de plus, pour ce qu'un programme local peut faire **sans** le jeton :
+Two more rules, for what a local program can do **without** the token:
 
-* **tout est borné avant l'authentification** : quelques connexions à la fois
-  (au-delà, fermées dès l'acceptation), un délai sur les en-têtes — qui borne
-  aussi une connexion inactive —, un délai sur le corps. Sans ces bornes,
-  n'importe quel programme épuise les descripteurs d'Oxyn, et plus aucune base ne
-  se connecte, plus aucun brouillon ne s'enregistre.
+* **everything is bounded before authentication**: a few connections at a time
+  (beyond that, closed on accept), a timeout on the headers — which also bounds
+  an idle connection —, a timeout on the body. Without these bounds, any
+  program exhausts Oxyn's descriptors, and no database connects any more, no
+  draft is saved any more.
 
-  **Limite assumée.** Seize connexions à la fois, fermées dès l'acceptation
-  au-delà : un programme local peut priver l'agent de ses outils, mais plus
-  Oxyn de ses descripteurs. Nous l'acceptons : l'agent en panne d'outils se voit
-  dans le panneau, un Oxyn sans descripteurs perd le travail de l'utilisateur. Les valeurs sont fixées par un test : sans minuteur, `hyper`
-  ignore ses délais en silence ;
-* **le crate ACP est plafonné à `error` dans les journaux, quoi que dise
-  `OXYN_LOG`.** Il journalise chaque message entier en `debug` — le jeton de
-  `session/new`, les questions de `session/prompt` —, c'est-à-dire exactement ce
-  qu'on demande à un utilisateur d'activer pour un rapport de bogue ; et ses
-  lignes `warn` recopient ce que l'agent a envoyé, puisqu'une erreur serde
-  « invalid type » cite la chaîne fautive. Le plafond porte sur la **cible**, pas
-  sur un niveau : une montée de version qui déplace la même trace reste couverte.
-  Le diagnostic n'est pas perdu : là où Oxyn reçoit une erreur de protocole, il
-  écrit **sa propre** ligne `warn` — la méthode et le code, jamais le texte de
-  l'agent. Le jeton est aussi expurgé de ce que l'agent écrit en retour —
-  message d'erreur, `stderr`, avant la coupe de ce dernier.
+  **Accepted limit.** Sixteen connections at a time, closed on accept beyond
+  that: a local program can deprive the agent of its tools, but no longer
+  Oxyn of its descriptors. We accept it: an agent out of tools is visible in the
+  panel, an Oxyn without descriptors loses the user's work. The values are fixed by a test: without a timer, `hyper`
+  ignores its timeouts silently;
+* **the ACP crate is capped at `error` in the logs, whatever `OXYN_LOG` says.**
+  It logs every whole message at `debug` — the token of `session/new`, the
+  questions of `session/prompt` —, that is exactly what a user is asked to
+  enable for a bug report; and its `warn` lines copy what the agent sent, since
+  a serde "invalid type" error quotes the offending string. The cap applies to
+  the **target**, not to a level: a version upgrade that moves the same trace
+  stays covered. The diagnosis is not lost: where Oxyn receives a protocol
+  error, it writes **its own** `warn` line — the method and the code, never the
+  agent's text. The token is also redacted from what the agent writes back —
+  error message, `stderr`, before the latter is truncated.
 
-Nous l'écrivons comme une surface plutôt que comme un détail d'implémentation :
-elle appelle une relecture de sécurité à chaque changement du pont.
+We write it as a surface rather than as an implementation detail: it calls for
+a security review on every change of the bridge.
 
-### 6. L'agent est lancé par Oxyn, pas par la crate
+### 6. The agent is launched by Oxyn, not by the crate
 
-`AcpAgent` sait lancer l'agent, et nous ne l'employons pas. La raison tient en
-une ligne de ses sources : `agent_client_protocol/src/acp_agent.rs:263` fait
-`std_cmd.envs(&self.config.env)` — un **ajout**. Il n'y a ni `env_clear`, ni
-`current_dir`, et `AcpAgentConfig` garde ses trois champs privés. Par ce chemin,
-Claude Code démarre avec **tout** l'environnement d'Oxyn : les identifiants
-cloud de l'utilisateur, ses URL de bases, ce que son shell a exporté. C'est
-[I-03](../../CLAUDE.md#i-03), et un invariant ne se négocie pas contre les
-heures que coûte un lancement écrit à la main.
+`AcpAgent` can launch the agent, and we do not use it. The reason fits in one
+line of its sources: `agent_client_protocol/src/acp_agent.rs:263` does
+`std_cmd.envs(&self.config.env)` — an **addition**. There is neither
+`env_clear` nor `current_dir`, and `AcpAgentConfig` keeps its three fields
+private. Through that path, Claude Code starts with **all** of Oxyn's
+environment: the user's cloud credentials, their database URLs, what their
+shell exported. That is [I-03](../../CLAUDE.md#i-03), and an invariant is not
+traded against the hours a hand-written launch costs.
 
-**Décision :** Oxyn construit la commande lui-même, avec
+**Decision:** Oxyn builds the command itself, with
 
-* un environnement en **liste blanche** — ce que l'utilisateur a confirmé, plus
-  `PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, chacune justifiée là où elle est
-  écrite. Une liste noire oublie la variable ajoutée six mois plus tard ;
-* un **répertoire de travail explicite**, vide, créé pour cet agent et détruit
-  avec lui — jamais le workspace d'Oxyn, où vivent les fichiers qui décrivent
-  les connexions. Ce répertoire est aussi celui **annoncé à la session ACP**, et
-  pas le répertoire temporaire partagé : un agent y charge les consignes et les
-  serveurs MCP de son « projet », et tout programme de l'utilisateur peut écrire
-  dans `$TMPDIR`. Il est créé en `0o700`, sous un nom aléatoire, **jamais adopté
-  s'il existe déjà, et il n'existe aucun repli** : un repli sur `$TMPDIR` lui-même
-  a un temps fait effacer tout le répertoire temporaire de l'utilisateur à la fin
-  d'une conversation sur un disque plein ;
-* un garde qui tue le **groupe** de processus : un agent distribué derrière
-  `npx` se ré-attache sinon à pid 1 et survit à la fermeture de la fenêtre,
-  nos outils encore ouverts ;
-* un code de sortie et une queue de `stderr` en **données typées**, expurgées de
-  tout ce qu'Oxyn a passé à l'enfant : le `stderr` d'un processus est un canal
-  I-03 comme un autre, et un lanceur qui échoue imprime son environnement.
+* an **allowlist** environment — what the user confirmed, plus
+  `PATH`, `HOME`, `USER`, `LANG`, `TMPDIR`, each justified where it is
+  written. A denylist forgets the variable added six months later;
+* an **explicit working directory**, empty, created for this agent and
+  destroyed with it — never Oxyn's workspace, where the files that describe the
+  connections live. This directory is also the one **announced to the ACP
+  session**, and not the shared temporary directory: an agent loads there the
+  instructions and MCP servers of its "project", and any user program can write
+  to `$TMPDIR`. It is created with `0o700`, under a random name, **never adopted
+  if it already exists, and there is no fallback**: a fallback to `$TMPDIR`
+  itself once caused the user's whole temporary directory to be erased at the
+  end of a conversation on a full disk;
+* a guard that kills the process **group**: an agent distributed behind `npx`
+  otherwise reattaches to pid 1 and survives closing the window, our tools still
+  open;
+* an exit code and a tail of `stderr` as **typed data**, redacted of
+  everything Oxyn passed to the child: a process's `stderr` is an I-03 channel
+  like any other, and a launcher that fails prints its environment.
 
-Ce que la crate faisait gratuitement est donc réécrit ici. C'est le prix de
-l'invariant, et il est écrit pour que personne ne « simplifie » en revenant à
+What the crate did for free is therefore rewritten here. It is the price of the
+invariant, and it is written so that nobody "simplifies" by going back to
 `AcpAgentConfig`.
 
-**Et la liste blanche a son propre prix, qu'il faut écrire plutôt que le
-découvrir.** Une liste noire oublie ce qu'on ajoutera ; une liste blanche oublie
-ce qu'on ignorait. La différence est dans le mode de panne : **une variable
-manquante ne casse pas l'agent, elle le dégrade en silence**.
+**And the allowlist has its own price, which must be written rather than
+discovered.** A denylist forgets what will be added; an allowlist forgets what
+one did not know. The difference is in the failure mode: **a missing variable
+does not break the agent, it degrades it silently**.
 
-Le cas s'est produit avant même la première livraison. Sans `USER`, Claude Code
-se déclare « Not logged in » sur une machine où il est connecté — et
-`initialize` **réussit quand même**, avec `authMethods` vide. Le handshake paraît
-sain ; le refus tombe au premier prompt. L'utilisateur pose une question et se
-voit répondre « connecte-toi ». Rien n'a échoué, quelque chose a simplement
-cessé de fonctionner.
+The case happened even before the first delivery. Without `USER`, Claude Code
+declares itself "Not logged in" on a machine where it is logged in — and
+`initialize` **still succeeds**, with an empty `authMethods`. The handshake
+looks healthy; the refusal comes at the first prompt. The user asks a question
+and gets told "log in". Nothing failed, something simply stopped working.
 
-Nous gardons la liste blanche, parce que rendre tout l'environnement pour éviter
-ce mode de panne rendrait aussi les secrets. Mais la règle qui l'accompagne est
-une conséquence de ce prix : **chaque nom porte la mesure qui l'y a mis**, un nom
-ne s'ajoute jamais « au cas où », et un nom ne se retire pas sans refaire la
-mesure. La mesure elle-même est datée dans
+We keep the allowlist, because returning the whole environment to avoid this
+failure mode would also return the secrets. But the rule that goes with it is a
+consequence of that price: **each name carries the measurement that put it
+there**, a name is never added "just in case", and a name is not removed
+without redoing the measurement. The measurement itself is dated in
 [RESEARCH-NOTES](../RESEARCH-NOTES.md).
 
-### 7. Une absence de réponse vaut refus
+### 7. An absence of answer counts as a refusal
 
-Une demande de permission qu'Oxyn ne sait pas satisfaire n'est pas laissée en
-suspens : elle est **refusée**. Un client qui ne répond pas laisse l'agent
-attendre, et un agent qui attend paraît en panne ; pire, une refonte qui
-« corrigerait » l'attente en accordant par défaut inverserait la règle sans que
-rien n'échoue.
+A permission request Oxyn cannot satisfy is not left pending: it is
+**refused**. A client that does not answer leaves the agent waiting, and an
+agent that waits looks broken; worse, a rework that "fixed" the waiting by
+granting by default would reverse the rule without anything failing.
 
-Le défaut est donc écrit, et testé, des deux côtés : dans le code qui répond, et
-dans cet ADR pour que le jour où quelqu'un le trouve gênant, il sache que c'était
-voulu.
+The default is therefore written, and tested, on both sides: in the code that
+answers, and in this ADR so that the day someone finds it annoying, they know it
+was intended.
 
-### 8. Ce que ce choix ne ferme pas, et qu'il faut nommer
+### 8. What this choice does not close, and that must be named
 
-Le nombre de lignes est un canal. `SELECT 1 FROM clients WHERE email = '…'`
-rend `1 rows` ou `0 rows` : un bit sur une valeur précise, par tour.
+The row count is a channel. `SELECT 1 FROM clients WHERE email = '…'`
+returns `1 rows` or `0 rows`: one bit on a precise value, per turn.
 
-Nous l'écrivons plutôt que de le taire, et nous ne le traitons pas ici, pour
-trois raisons. Ce canal est **identique pour l'assistant interne** — ce n'est pas
-une ouverture du mode agent. Il est **borné** par le plafond d'appels par
-question, le même des deux côtés (§ 2 bis), et par le fait que l'utilisateur
-voit chaque instruction passer dans le panneau. Et le
-fermer demanderait de cacher au modèle si sa requête a rendu quelque chose,
-c'est-à-dire de lui retirer le seul retour qui lui permet de corriger une
-requête fausse.
+We write it rather than keep quiet about it, and we do not address it here, for
+three reasons. This channel is **identical for the internal assistant** — it is
+not an opening of the agent mode. It is **bounded** by the cap on calls per
+question, the same on both sides (§ 2 bis), and by the fact that the user sees
+each statement go by in the panel. And closing it would require hiding from the
+model whether its query returned anything, that is removing the only feedback
+that lets it correct a wrong query.
 
-Si nous décidons un jour de le fermer, ce sera pour les deux destinations à la
-fois, et ce sera un autre ADR.
+If we decide one day to close it, it will be for both destinations at once,
+and it will be another ADR.
 
-## Conséquences
+## Consequences
 
-* **+** L'agent externe devient utile dans un atelier de bases de données : il
-  lit la structure de la base par le même outil que l'assistant interne (§ 4 bis)
-  et interroge la base que l'utilisateur a ouverte.
-* **+** Aucune surface nouvelle vers le bus : le pont traduit vers le même
-  `ToolRegistry` et le même sink. Ce qui est relu une fois vaut pour les deux
+* **+** The external agent becomes useful in a database workbench: it reads the
+  database structure through the same tool as the internal assistant (§ 4 bis)
+  and queries the database the user opened.
+* **+** No new surface to the bus: the bridge translates to the same
+  `ToolRegistry` and the same sink. What is reviewed once holds for both
   destinations.
-* **+** L'utilisateur voit ce que l'agent fait dans le panneau de l'assistant —
-  appels, approbations, refus — avec les états déjà en place.
-* **−** Une seconde porte d'entrée existe désormais, même si elle débouche sur
-  le même couloir. Elle demande sa propre relecture de sécurité à chaque
-  changement du pont.
-* **−** L'agent apprend la **forme** des résultats, et donc un peu de la base,
-  même sous `Metadata`. C'est déjà vrai de l'assistant interne, et c'est le prix
-  d'un agent qui peut corriger sa requête.
-* **−** Le pont dépend de la façon dont `agent-client-protocol` déclare les
-  serveurs MCP. Un changement d'API de la crate se paiera ici.
+* **+** The user sees what the agent does in the assistant's panel —
+  calls, approvals, refusals — with the states already in place.
+* **−** A second entrance now exists, even if it leads to the same corridor. It
+  requires its own security review on every change of the bridge.
+* **−** The agent learns the **shape** of results, and hence a little of the
+  database, even under `Metadata`. It is already true of the internal
+  assistant, and it is the price of an agent that can correct its query.
+* **−** The bridge depends on how `agent-client-protocol` declares MCP servers.
+  An API change of the crate will be paid here.
 
-**Coût de sortie :** faible. Retirer le pont rend les agents externes muets sur
-la base, sans toucher à l'assistant interne ni au registre.
+**Exit cost:** low. Removing the bridge makes external agents mute about the
+database, without touching the internal assistant or the registry.
 
-**Reconsidérer si** un agent externe obtient un jour le droit de déclencher
-autre chose qu'un outil du registre — c'est la ligne d'ADR-0026, et elle vaut
-ici mot pour mot. **Reconsidérer aussi** le jour où les adaptateurs annoncent
-`mcpCapabilities.acp` : le serveur redeviendrait interne à la session, et la
-surface réseau disparaîtrait.
+**Reconsider if** an external agent one day obtains the right to trigger
+anything other than a registry tool — it is the line of ADR-0026, and it holds
+here word for word. **Also reconsider** the day the adapters announce
+`mcpCapabilities.acp`: the server would become internal to the session again,
+and the network surface would disappear.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Laisser les agents externes sans outils | C'est l'état d'aujourd'hui, et il rend le mode agent inutile : un agent qui ne peut pas lire la base ne sert à rien dans un atelier de bases de données |
-| Refuser `execute_query` sous `Metadata` pour un agent distant | Repose sur une prémisse fausse : l'outil rend la forme du résultat, pas les valeurs. La règle aurait interdit l'usage principal en croyant protéger quelque chose que le résumé n'expose pas |
-| Rendre à l'agent un résultat réduit « au compte de lignes et aux types » | C'est déjà ce que rend `ToolOutcome`. Le formuler comme une règle distincte aurait créé la seconde règle de niveau que cet ADR refuse |
-| Donner à l'agent un accès direct au driver, ou une connexion à lui | Contourne le bus, le `PolicyGate` et l'approbation humaine. C'est précisément ce qu'[I-01](../../CLAUDE.md#i-01) interdit, et le second chemin ne serait jamais audité comme le premier |
-| Écrire des outils MCP spécifiques aux agents externes, plus riches que le registre | Deux jeux d'outils divergent. Celui que personne ne relit est celui que l'agent empruntera |
-| Porter le serveur MCP en mémoire, par la variante `Acp` de la session | Le plus désirable, et mesuré inutilisable : ni Claude Agent 0.78.0 ni Codex 1.12.0 n'annoncent la capacité, Codex répond `"acp": false`. À reprendre le jour où ils l'annoncent |
-| Servir MCP en `stdio` | Le sous-processus est lancé par l'agent, pas par nous : il devrait rejoindre l'Oxyn vivant par une IPC de notre invention. Un second mode binaire et un protocole de relais, pour la même surface que `http` |
+| Leave external agents without tools | It is today's state, and it makes the agent mode useless: an agent that cannot read the database is of no use in a database workbench |
+| Refuse `execute_query` under `Metadata` for a remote agent | Rests on a false premise: the tool returns the shape of the result, not the values. The rule would have forbidden the main use while believing it protected something the summary does not expose |
+| Return to the agent a result reduced "to the row count and types" | It is already what `ToolOutcome` returns. Stating it as a distinct rule would have created the second tier rule this ADR refuses |
+| Give the agent direct access to the driver, or a connection of its own | Bypasses the bus, the `PolicyGate` and human approval. It is precisely what [I-01](../../CLAUDE.md#i-01) forbids, and the second path would never be audited like the first |
+| Write MCP tools specific to external agents, richer than the registry | Two tool sets diverge. The one nobody reviews is the one the agent will take |
+| Carry the MCP server in memory, through the session's `Acp` variant | The most desirable, and measured unusable: neither Claude Agent 0.78.0 nor Codex 1.12.0 announce the capability, Codex answers `"acp": false`. To revisit the day they announce it |
+| Serve MCP over `stdio` | The subprocess is launched by the agent, not by us: it would have to reach the live Oxyn through an IPC of our own invention. A second binary mode and a relay protocol, for the same surface as `http` |

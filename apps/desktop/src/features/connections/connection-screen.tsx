@@ -85,7 +85,7 @@ function openConsoleInWorkspace(show: () => void) {
  *
  * Opening is cancellable: the command id given to `connect`/`reconnect` is
  * kept, and Cancel sends it to `cancel`, which reaches the server (UX-SPEC
- * « Annulation »). An answer that arrives after the user cancelled is not
+ * « Cancellation »). An answer that arrives after the user cancelled is not
  * entered: a session it opened anyway is closed rather than shown.
  */
 export function ConnectionScreen() {

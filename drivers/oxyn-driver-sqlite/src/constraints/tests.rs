@@ -14,7 +14,7 @@ fn constraints_keep_names_original_sql_and_composite_column_order() {
         r#"
         CREATE TABLE parent (a INT, b INT, PRIMARY KEY (a,b));
         CREATE TABLE "odd"";--" (
-            "é😀" INTEGER CONSTRAINT "clé"";--" PRIMARY KEY ON CONFLICT REPLACE AUTOINCREMENT,
+            "é😀" INTEGER CONSTRAINT "naïve"";--" PRIMARY KEY ON CONFLICT REPLACE AUTOINCREMENT,
             value TEXT CONSTRAINT required NOT NULL ON CONFLICT FAIL
                 DEFAULT ('CHECK, UNIQUE') COLLATE NOCASE,
             a INT REFERENCES parent(a) ON UPDATE SET DEFAULT ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
@@ -31,11 +31,11 @@ fn constraints_keep_names_original_sql_and_composite_column_order() {
         .iter()
         .find(|c| c.kind == ConstraintKind::PrimaryKey)
         .expect("primary");
-    assert_eq!(primary.name, "clé\";--");
+    assert_eq!(primary.name, "naïve\";--");
     assert_eq!(primary.fields, ["é😀"]);
     assert_eq!(
         primary.expression.as_deref(),
-        Some("CONSTRAINT \"clé\"\";--\" PRIMARY KEY ON CONFLICT REPLACE AUTOINCREMENT")
+        Some("CONSTRAINT \"naïve\"\";--\" PRIMARY KEY ON CONFLICT REPLACE AUTOINCREMENT")
     );
     let not_null = constraints
         .iter()

@@ -95,7 +95,7 @@ export const CommandFFindsInTheEditor: Story = {
 
 /**
  * A read-only view of a stored query: selection and copy work, and nothing
- * changes its text (docs/UX-SPEC.md, « Consultation locale des requêtes »).
+ * changes its text (docs/UX-SPEC.md, « Local query browsing »).
  * ⌘↵ there is refused by the registry, which reads `data-read-only`.
  */
 export const ReadOnlyChangesNothing: Story = {
@@ -273,7 +273,7 @@ const QUOTED_HOSTILE = '"public"."users""; DROP TABLE audit; --"'
 /**
  * A relation dropped from the catalog: the editor under the pointer takes the
  * name the backend quoted, at the drop point, byte for byte — and runs
- * nothing (UX-SPEC « Souris et glisser »).
+ * nothing (UX-SPEC « Mouse and drag »).
  */
 export const NameDroppedFromTheCatalog: Story = {
   args: { value: "SELECT *\nFROM " },

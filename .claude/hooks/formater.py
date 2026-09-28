@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""PostToolUse : passe le formateur du projet sur le fichier qui vient d'être
-écrit.
+"""PostToolUse: run the project formatter on the file just written.
 
-C'est le seul hook où le champ `if:` de settings.json est acceptable : ne pas
-s'exécuter est sans conséquence — `make qualite` rattrapera. Sur un hook de
-refus, `if:` étant best-effort, il ouvrirait une faille silencieuse.
+This is the only hook where the `if:` field of settings.json is acceptable: not
+running has no consequence — `make qualite` will catch up. On a refusal hook,
+`if:` being best-effort, it would open a silent hole.
 """
 
 from __future__ import annotations
@@ -18,34 +17,34 @@ sys.path.insert(0, str(Path(__file__).parent))
 import protocole_hook as p  # noqa: E402
 
 
-def principal() -> None:
-    evenement = p.lire_evenement()
-    if evenement.get("tool_name") not in ("Write", "Edit", "MultiEdit"):
+def main() -> None:
+    event = p.read_event()
+    if event.get("tool_name") not in ("Write", "Edit", "MultiEdit"):
         p.laisser_passer()
 
-    chemin = p.chemin_outil(evenement)
-    if not chemin.endswith(".rs") or not Path(chemin).is_file():
+    path_str = p.tool_path(event)
+    if not path_str.endswith(".rs") or not Path(path_str).is_file():
         p.laisser_passer()
 
-    outil = shutil.which("rustfmt")
-    if not outil:
+    tool = shutil.which("rustfmt")
+    if not tool:
         p.laisser_passer()
 
     try:
         subprocess.run(
-            [outil, "--edition", "2024", chemin],
+            [tool, "--edition", "2024", path_str],
             capture_output=True,
             timeout=20,
             check=False,
         )
     except (subprocess.SubprocessError, OSError):
-        pass  # Un formateur indisponible n'interrompt pas le travail.
+        pass  # An unavailable formatter does not interrupt the work.
     p.laisser_passer()
 
 
 if __name__ == "__main__":
     try:
-        principal()
+        main()
     except SystemExit:
         raise
     except Exception:

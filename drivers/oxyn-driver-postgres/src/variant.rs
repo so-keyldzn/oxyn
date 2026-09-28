@@ -1,56 +1,55 @@
-//! La variante du serveur, et ce qu'elle change aux capacités.
+//! The server's variant, and what it changes in the capabilities.
 //!
-//! Un driver par **protocole**, pas par produit ([ADR-0003]) : Redshift,
-//! TimescaleDB, pgvector et Citus parlent tous le protocole PostgreSQL et
-//! passent tous par cette crate. Ce qui les distingue n'est pas une
-//! implémentation séparée, c'est un jeu de [`Capabilities`] différent — et c'est
-//! précisément l'usage pour lequel le modèle « capacités par session » existe.
+//! One driver per **protocol**, not per product ([ADR-0003]): Redshift,
+//! TimescaleDB, pgvector and Citus all speak the PostgreSQL protocol and all go
+//! through this crate. What sets them apart is not a separate implementation,
+//! it is a different set of [`Capabilities`] — and that is precisely the use the
+//! "capabilities per session" model exists for.
 //!
-//! La détection se fait **à la connexion**, une fois, à partir de `version()` et
-//! de `pg_extension`. Elle ne se devine pas depuis la configuration : deux
-//! connexions vers le même hôte peuvent viser deux bases dont l'une seule a
-//! `pgvector` installé.
+//! Detection happens **at connection time**, once, from `version()` and
+//! `pg_extension`. It is not guessed from the configuration: two connections to
+//! the same host can target two databases of which only one has `pgvector`
+//! installed.
 //!
-//! # Ce que la détection ne fait pas
+//! # What detection does not do
 //!
-//! Elle ne change **jamais** le comportement d'exécution — pas de réécriture de
-//! requête, pas de contournement silencieux. Elle ne fait que déclarer ce que la
-//! session sait faire, à charge pour l'interface et les agents de s'y conformer.
-//! Un panneau « Plan d'exécution » n'existe pas face à un Redshift qui n'a pas
-//! `EXPLAIN ANALYZE` ; il n'est pas grisé sans raison.
+//! It **never** changes execution behavior — no query rewriting, no silent
+//! workaround. It only declares what the session can do, leaving it to the
+//! interface and the agents to comply. An "Execution plan" panel does not exist
+//! in front of a Redshift that lacks `EXPLAIN ANALYZE`; it is not greyed out
+//! for no reason.
 //!
 //! [ADR-0003]: ../../../docs/adr/0003-driver-capabilities.md
 
 use oxyn_core::{Capabilities, SqlDialect};
 
-/// Nom de l'extension TimescaleDB dans `pg_extension`.
+/// Name of the TimescaleDB extension in `pg_extension`.
 pub const EXT_TIMESCALEDB: &str = "timescaledb";
-/// Nom de l'extension pgvector dans `pg_extension` — `vector`, pas `pgvector`.
+/// Name of the pgvector extension in `pg_extension` — `vector`, not `pgvector`.
 pub const EXT_VECTOR: &str = "vector";
-/// Nom de l'extension Citus.
+/// Name of the Citus extension.
 pub const EXT_CITUS: &str = "citus";
-/// Nom de l'extension PostGIS.
+/// Name of the PostGIS extension.
 pub const EXT_POSTGIS: &str = "postgis";
 
-/// Le produit derrière le protocole.
+/// The product behind the protocol.
 ///
-/// Volontairement court : une variante n'existe ici que si elle **change des
-/// capacités**. Un produit qui se comporte comme PostgreSQL n'a pas à être
-/// nommé, sans quoi cette énumération deviendrait la liste des produits que le
-/// découpage par protocole cherche justement à éviter.
+/// Deliberately short: a variant exists here only if it **changes
+/// capabilities**. A product that behaves like PostgreSQL does not need to be
+/// named, otherwise this enumeration would become the list of products that
+/// splitting by protocol precisely seeks to avoid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum PostgresFlavor {
-    /// PostgreSQL, ou un produit qui s'en distingue seulement par ses
-    /// extensions.
+    /// PostgreSQL, or a product that differs from it only by its extensions.
     #[default]
     Postgres,
-    /// Amazon Redshift : même protocole, grammaire et catalogue amputés.
+    /// Amazon Redshift: same protocol, truncated grammar and catalog.
     Redshift,
 }
 
 impl PostgresFlavor {
-    /// Nom stable, pour l'audit et l'affichage.
+    /// Stable name, for auditing and display.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -59,11 +58,11 @@ impl PostgresFlavor {
         }
     }
 
-    /// Le dialecte SQL à annoncer à `oxyn-query`.
+    /// The SQL dialect to announce to `oxyn-query`.
     ///
-    /// Redshift parle le protocole de PostgreSQL sans en accepter la grammaire :
-    /// c'est exactement la raison pour laquelle [`SqlDialect`] a une valeur
-    /// distincte alors qu'il n'y a pas de crate de driver distincte.
+    /// Redshift speaks PostgreSQL's protocol without accepting its grammar:
+    /// that is exactly why [`SqlDialect`] has a distinct value while there is no
+    /// distinct driver crate.
     #[must_use]
     pub const fn dialect(&self) -> SqlDialect {
         match self {
@@ -79,32 +78,32 @@ impl std::fmt::Display for PostgresFlavor {
     }
 }
 
-/// Ce qu'une session a appris de son serveur à la connexion.
+/// What a session learned from its server at connection time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PostgresVariant {
-    /// Le produit reconnu dans la bannière.
+    /// The product recognized in the banner.
     pub flavor: PostgresFlavor,
-    /// `version()`, tel quel. Sert au diagnostic ; ne jamais l'analyser ailleurs
-    /// qu'ici.
+    /// `version()`, as is. Used for diagnostics; never parse it anywhere but
+    /// here.
     pub banner: String,
-    /// `current_setting('server_version')` : `17.2`, `16.4 (Debian …)`.
+    /// `current_setting('server_version')`: `17.2`, `16.4 (Debian …)`.
     pub server_version: String,
-    /// Le numéro de version majeure, quand il se lit.
+    /// The major version number, when it can be read.
     pub major_version: Option<u32>,
-    /// Les extensions installées **dans la base courante**, en minuscules.
+    /// The extensions installed **in the current database**, lowercase.
     ///
-    /// Vide si `pg_extension` n'est pas lisible : c'est le cas de Redshift, et
-    /// d'un compte aux droits restreints. Une liste vide dit « je n'ai rien
-    /// trouvé », pas « il n'y a rien ».
+    /// Empty if `pg_extension` is not readable: that is the case of Redshift,
+    /// and of an account with restricted rights. An empty list says "I found
+    /// nothing", not "there is nothing".
     pub extensions: Vec<String>,
 }
 
 impl PostgresVariant {
-    /// Reconnaît la variante depuis la bannière du serveur et ses extensions.
+    /// Recognizes the variant from the server's banner and its extensions.
     ///
-    /// `extensions` est normalisé en minuscules et trié : la comparaison
-    /// devient stable, et le rendu de diagnostic aussi.
+    /// `extensions` is normalized to lowercase and sorted: the comparison
+    /// becomes stable, and so does the diagnostic rendering.
     #[must_use]
     pub fn detect(banner: &str, server_version: &str, extensions: Vec<String>) -> Self {
         let flavor = if banner.to_ascii_lowercase().contains("redshift") {
@@ -113,121 +112,121 @@ impl PostgresVariant {
             PostgresFlavor::Postgres
         };
 
-        let mut normalisees: Vec<String> = extensions
+        let mut normalized: Vec<String> = extensions
             .into_iter()
-            .map(|nom| nom.trim().to_ascii_lowercase())
-            .filter(|nom| !nom.is_empty())
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
             .collect();
-        normalisees.sort_unstable();
-        normalisees.dedup();
+        normalized.sort_unstable();
+        normalized.dedup();
 
         Self {
             flavor,
             banner: banner.to_owned(),
             server_version: server_version.to_owned(),
             major_version: parse_major(server_version),
-            extensions: normalisees,
+            extensions: normalized,
         }
     }
 
-    /// Cette extension est-elle installée ?
+    /// Is this extension installed?
     #[must_use]
     pub fn has_extension(&self, name: &str) -> bool {
-        let cherche = name.to_ascii_lowercase();
-        self.extensions.contains(&cherche)
+        let needle = name.to_ascii_lowercase();
+        self.extensions.contains(&needle)
     }
 
-    /// Le nom de produit à afficher : `PostgreSQL`, `PostgreSQL + TimescaleDB`…
+    /// The product name to display: `PostgreSQL`, `PostgreSQL + TimescaleDB`…
     ///
-    /// Les extensions qui changent des capacités sont nommées, les autres non :
-    /// l'utilisateur a besoin de savoir pourquoi une surface existe, pas de lire
-    /// la liste de ce qui est installé.
+    /// The extensions that change capabilities are named, the others are not:
+    /// the user needs to know why a surface exists, not to read the list of what
+    /// is installed.
     #[must_use]
     pub fn product(&self) -> String {
-        let mut nom = self.flavor.as_str().to_owned();
-        let mut marques = Vec::new();
+        let mut name = self.flavor.as_str().to_owned();
+        let mut marks = Vec::new();
         if self.has_extension(EXT_TIMESCALEDB) {
-            marques.push("TimescaleDB");
+            marks.push("TimescaleDB");
         }
         if self.has_extension(EXT_VECTOR) {
-            marques.push("pgvector");
+            marks.push("pgvector");
         }
         if self.has_extension(EXT_CITUS) {
-            marques.push("Citus");
+            marks.push("Citus");
         }
         if self.has_extension(EXT_POSTGIS) {
-            marques.push("PostGIS");
+            marks.push("PostGIS");
         }
-        if !marques.is_empty() {
-            nom.push_str(" + ");
-            nom.push_str(&marques.join(", "));
+        if !marks.is_empty() {
+            name.push_str(" + ");
+            name.push_str(&marks.join(", "));
         }
-        nom
+        name
     }
 
-    /// Le dialecte SQL de cette session.
+    /// The SQL dialect of this session.
     #[must_use]
     pub const fn dialect(&self) -> SqlDialect {
         self.flavor.dialect()
     }
 
-    /// Les capacités de cette session.
+    /// The capabilities of this session.
     ///
-    /// Part du socle PostgreSQL ([`base_capabilities`]), retire ce que la
-    /// variante n'a pas, ajoute ce que les extensions apportent. L'ordre compte :
-    /// une extension n'a jamais à réactiver ce que la variante a retiré.
+    /// Starts from the PostgreSQL base ([`base_capabilities`]), removes what
+    /// the variant lacks, adds what the extensions bring. The order matters: an
+    /// extension never has to re-enable what the variant removed.
     #[must_use]
     pub fn capabilities(&self) -> Capabilities {
-        let mut capacites = base_capabilities();
+        let mut capabilities = base_capabilities();
         if self.major_version.is_none_or(|version| version < 12) {
-            capacites.remove(Capabilities::OBJECT_DEFINITION);
+            capabilities.remove(Capabilities::OBJECT_DEFINITION);
         }
 
         if self.flavor == PostgresFlavor::Redshift {
-            capacites.remove(redshift_missing());
+            capabilities.remove(redshift_missing());
         }
 
         if self.has_extension(EXT_TIMESCALEDB) {
-            capacites.insert(Capabilities::TIME_SERIES);
+            capabilities.insert(Capabilities::TIME_SERIES);
         }
         if self.has_extension(EXT_VECTOR) {
-            capacites.insert(Capabilities::VECTOR_SEARCH);
+            capabilities.insert(Capabilities::VECTOR_SEARCH);
         }
 
-        capacites
+        capabilities
     }
 }
 
-/// Ce qu'une session PostgreSQL sait faire, avant toute variante.
+/// What a PostgreSQL session can do, before any variant.
 ///
-/// # Quatre absences délibérées
+/// # Four deliberate absences
 ///
-/// **`MULTIPLE_STATEMENTS`** : ce driver n'emploie que le protocole étendu, qui
-/// prépare **une** instruction par soumission. Le découpage d'un lot appartient
-/// à `oxyn-query`. Déclarer la capacité obligerait à basculer sur le protocole
-/// simple, où le schéma n'est connu qu'après la première ligne — donc à renoncer
-/// au premier affichage sous 100 ms.
+/// **`MULTIPLE_STATEMENTS`**: this driver uses only the extended protocol,
+/// which prepares **one** statement per submission. Splitting a batch belongs
+/// to `oxyn-query`. Declaring the capability would force switching to the
+/// simple protocol, where the schema is known only after the first row — hence
+/// giving up the first display under 100 ms.
 ///
-/// **`TRANSACTIONS`** et **`SAVEPOINTS`** : une transaction vit sur **une**
-/// connexion, or une session Oxyn s'appuie sur un bassin et en emprunte une par
-/// exécution. Déclarer la capacité sans épingler une connexion laisserait
-/// l'utilisateur croire qu'un `ROLLBACK` a annulé son écriture, ce que le
-/// contrat interdit explicitement. La transaction *interne* à une exécution en
-/// lecture seule, elle, existe bien : c'est [`Capabilities::READ_ONLY_SESSION`].
+/// **`TRANSACTIONS`** and **`SAVEPOINTS`**: a transaction lives on **one**
+/// connection, yet an Oxyn session relies on a pool and borrows one per
+/// execution. Declaring the capability without pinning a connection would let
+/// the user believe a `ROLLBACK` cancelled their write, which the contract
+/// explicitly forbids. The transaction *internal* to a read-only execution does
+/// exist: it is [`Capabilities::READ_ONLY_SESSION`].
 ///
-/// **`NAMED_CURSORS`** et **`BULK_LOAD`** : `DECLARE`/`FETCH` et `COPY` ne sont
-/// pas implémentés. Le flux passe par le portail du protocole étendu, qui suffit
-/// à [`Capabilities::STREAMING`].
+/// **`NAMED_CURSORS`** and **`BULK_LOAD`**: `DECLARE`/`FETCH` and `COPY` are not
+/// implemented. The stream goes through the extended protocol's portal, which
+/// is enough for [`Capabilities::STREAMING`].
 ///
-// TODO(phase 1) : épingler une connexion par session pour ouvrir TRANSACTIONS et
-// SAVEPOINTS, et implémenter `COPY` pour BULK_LOAD. Débloque : l'édition de
-// données avec prévisualisation du DML (IMPLEMENTATION-PLAN, phase 1).
-// Piège à l'épinglage : `oxyn-exec` borne toute lecture de production à la
-// lecture seule (issue #11). Dans une transaction déjà ouverte, `BEGIN READ
-// ONLY` n'est qu'un avertissement, et le `ROLLBACK` de clôture annulerait la
-// transaction de l'utilisateur. La borne doit y laisser la transaction intacte
-// — piste à éprouver : `SAVEPOINT` puis `SET TRANSACTION READ ONLY` —, sinon
-// l'exécution est refusée (DRIVER-CONTRACT §5).
+// TODO(phase 1): pin a connection per session to open TRANSACTIONS and
+// SAVEPOINTS, and implement `COPY` for BULK_LOAD. Unblocks: data editing with
+// DML preview (IMPLEMENTATION-PLAN, phase 1).
+// Trap when pinning: `oxyn-exec` bounds every production read to read-only
+// (issue #11). Inside an already open transaction, `BEGIN READ ONLY` is only a
+// warning, and the closing `ROLLBACK` would cancel the user's transaction. The
+// bound must leave the transaction intact there — lead to try: `SAVEPOINT` then
+// `SET TRANSACTION READ ONLY` —, otherwise the execution is refused
+// (DRIVER-CONTRACT §5).
 #[must_use]
 pub fn base_capabilities() -> Capabilities {
     Capabilities::SCHEMAS
@@ -257,11 +256,11 @@ pub fn base_capabilities() -> Capabilities {
         | Capabilities::GRANT_REVOKE
         | Capabilities::READ_ONLY_SESSION
         | Capabilities::SESSION_CONTEXT
-        // `ORDER BY` et `WHERE` sur un aperçu : le driver les compose, cite les
-        // colonnes de tri et transmet le prédicat tel quel (ADR-0020).
+        // `ORDER BY` and `WHERE` on a preview: the driver composes them, quotes
+        // the sort columns and passes the predicate through as is (ADR-0020).
         | Capabilities::PREVIEW_SORT
         | Capabilities::PREVIEW_FILTER
-        // Chacun prouvé contre le serveur par `ddl_tests` (ADR-0042).
+        // Each proven against the server by `ddl_tests` (ADR-0042).
         | Capabilities::TRUNCATE
         | Capabilities::TRANSACTIONAL_DDL
         | Capabilities::RESTRICT_DEPENDENTS
@@ -270,14 +269,14 @@ pub fn base_capabilities() -> Capabilities {
         | Capabilities::FULL_TEXT_SEARCH
 }
 
-/// Ce que Redshift n'a pas, malgré le protocole commun.
+/// What Redshift lacks, despite the common protocol.
 ///
-/// * pas de vues matérialisées exposées par `relkind = 'm'` ;
-/// * ni déclencheurs, ni séquences, ni types définis par l'utilisateur ;
-/// * `EXPLAIN` existe, `EXPLAIN ANALYZE` non — le plan n'est jamais exécuté ;
-/// * pas de `tsvector`, donc pas de recherche plein texte native ;
-/// * `TRUNCATE` valide la transaction qui l'entoure, et ignore les clés
-///   étrangères : ni DDL transactionnel, ni refus sur dépendances
+/// * no materialized views exposed through `relkind = 'm'`;
+/// * neither triggers, nor sequences, nor user-defined types;
+/// * `EXPLAIN` exists, `EXPLAIN ANALYZE` does not — the plan is never executed;
+/// * no `tsvector`, hence no native full-text search;
+/// * `TRUNCATE` commits the surrounding transaction, and ignores foreign keys:
+///   neither transactional DDL, nor refusal on dependents
 ///   ([ADR-0042](../../../docs/adr/0042-revue-sur-place-des-operations-destructrices.md)).
 #[must_use]
 fn redshift_missing() -> Capabilities {
@@ -295,55 +294,55 @@ fn redshift_missing() -> Capabilities {
         | Capabilities::RESTRICT_DEPENDENTS
 }
 
-/// Les capacités que le **driver** annonce avant toute connexion.
+/// The capabilities the **driver** announces before any connection.
 ///
-/// Un plafond indicatif, pas une promesse : ce qui fait foi est
-/// [`PostgresVariant::capabilities`], évalué une fois la session ouverte. On y
-/// met donc l'union de ce qu'une session peut offrir au mieux.
+/// An indicative ceiling, not a promise: what is authoritative is
+/// [`PostgresVariant::capabilities`], evaluated once the session is open. It
+/// therefore holds the union of what a session can offer at best.
 #[must_use]
 pub fn driver_capabilities() -> Capabilities {
     base_capabilities() | Capabilities::TIME_SERIES | Capabilities::VECTOR_SEARCH
 }
 
-/// Le numéro de version majeure d'une chaîne `server_version`.
+/// The major version number of a `server_version` string.
 ///
-/// PostgreSQL écrit `17.2`, `16.4 (Debian 16.4-1)`, parfois `9.6.24` — et
-/// Redshift annonce `8.0.2`. On ne lit que le premier nombre, et on ne suppose
-/// rien de la suite.
+/// PostgreSQL writes `17.2`, `16.4 (Debian 16.4-1)`, sometimes `9.6.24` — and
+/// Redshift announces `8.0.2`. Only the first number is read, and nothing is
+/// assumed about the rest.
 fn parse_major(server_version: &str) -> Option<u32> {
-    let tete: String = server_version
+    let head: String = server_version
         .trim_start()
         .chars()
         .take_while(char::is_ascii_digit)
         .collect();
-    tete.parse().ok()
+    head.parse().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BANNIERE_PG: &str =
+    const PG_BANNER: &str =
         "PostgreSQL 17.2 on aarch64-apple-darwin, compiled by Apple clang 16.0.0, 64-bit";
-    const BANNIERE_REDSHIFT: &str = "PostgreSQL 8.0.2 on i686-pc-linux-gnu, compiled by GCC gcc (GCC) 3.4.2, Redshift 1.0.75008";
+    const REDSHIFT_BANNER: &str = "PostgreSQL 8.0.2 on i686-pc-linux-gnu, compiled by GCC gcc (GCC) 3.4.2, Redshift 1.0.75008";
 
     #[test]
-    fn un_postgres_nu_declare_le_socle() {
-        let variante = PostgresVariant::detect(BANNIERE_PG, "17.2", Vec::new());
-        assert_eq!(variante.flavor, PostgresFlavor::Postgres);
-        assert_eq!(variante.major_version, Some(17));
-        assert_eq!(variante.dialect(), SqlDialect::Postgres);
-        assert_eq!(variante.product(), "PostgreSQL");
-        assert_eq!(variante.capabilities(), base_capabilities());
+    fn a_bare_postgres_declares_the_base() {
+        let variant = PostgresVariant::detect(PG_BANNER, "17.2", Vec::new());
+        assert_eq!(variant.flavor, PostgresFlavor::Postgres);
+        assert_eq!(variant.major_version, Some(17));
+        assert_eq!(variant.dialect(), SqlDialect::Postgres);
+        assert_eq!(variant.product(), "PostgreSQL");
+        assert_eq!(variant.capabilities(), base_capabilities());
     }
 
     #[test]
-    fn le_socle_ne_promet_pas_ce_que_le_driver_ne_fait_pas() {
-        // « Ne pas savoir faire est une réponse acceptable ; laisser croire ne
-        // l'est pas » : la session ne déclare ni transactions, ni multi-
-        // instructions, ni COPY, parce qu'elle ne les implémente pas.
-        let socle = base_capabilities();
-        for absente in [
+    fn the_base_does_not_promise_what_the_driver_does_not_do() {
+        // "Not knowing how is an acceptable answer; letting the user believe
+        // otherwise is not": the session declares neither transactions, nor
+        // multiple statements, nor COPY, because it does not implement them.
+        let base_caps = base_capabilities();
+        for missing in [
             Capabilities::TRANSACTIONS,
             Capabilities::SAVEPOINTS,
             Capabilities::MULTIPLE_STATEMENTS,
@@ -351,114 +350,121 @@ mod tests {
             Capabilities::BULK_LOAD,
         ] {
             assert!(
-                !socle.contains(absente),
-                "{absente} ne doit pas être déclarée"
+                !base_caps.contains(missing),
+                "{missing} must not be declared"
             );
         }
     }
 
     #[test]
-    fn l_annulation_cote_serveur_est_declaree_parce_qu_elle_existe() {
-        // `pg_cancel_backend` : sans ce drapeau, le bouton « Annuler » ne peut
-        // pas prétendre couper la requête (DRIVER-CONTRACT §2).
+    fn server_side_cancel_is_declared_because_it_exists() {
+        // `pg_cancel_backend`: without this flag, the "Cancel" button cannot
+        // claim to cut the query (DRIVER-CONTRACT §2).
         assert!(base_capabilities().contains(Capabilities::SERVER_SIDE_CANCEL));
         assert!(base_capabilities().contains(Capabilities::STREAMING));
     }
 
     #[test]
-    fn pgvector_ouvre_la_recherche_vectorielle_sur_la_session_qui_l_a() {
-        // Deux bases du même serveur peuvent différer : c'est tout l'objet du
-        // modèle « capacités par session » (ADR-0003).
-        let sans = PostgresVariant::detect(BANNIERE_PG, "17.2", Vec::new());
-        let avec = PostgresVariant::detect(BANNIERE_PG, "17.2", vec!["vector".to_owned()]);
+    fn pgvector_opens_vector_search_on_the_session_that_has_it() {
+        // Two databases of the same server can differ: that is the whole point
+        // of the "capabilities per session" model (ADR-0003).
+        let without_vector = PostgresVariant::detect(PG_BANNER, "17.2", Vec::new());
+        let with_vector = PostgresVariant::detect(PG_BANNER, "17.2", vec!["vector".to_owned()]);
 
-        assert!(!sans.capabilities().contains(Capabilities::VECTOR_SEARCH));
-        assert!(avec.capabilities().contains(Capabilities::VECTOR_SEARCH));
-        assert_eq!(avec.product(), "PostgreSQL + pgvector");
+        assert!(
+            !without_vector
+                .capabilities()
+                .contains(Capabilities::VECTOR_SEARCH)
+        );
+        assert!(
+            with_vector
+                .capabilities()
+                .contains(Capabilities::VECTOR_SEARCH)
+        );
+        assert_eq!(with_vector.product(), "PostgreSQL + pgvector");
     }
 
     #[test]
-    fn timescaledb_ouvre_les_series_temporelles() {
-        let variante = PostgresVariant::detect(
-            BANNIERE_PG,
+    fn timescaledb_opens_time_series() {
+        let variant = PostgresVariant::detect(
+            PG_BANNER,
             "16.4",
             vec!["TimescaleDB".to_owned(), "plpgsql".to_owned()],
         );
-        assert!(variante.has_extension(EXT_TIMESCALEDB), "casse insensible");
-        assert!(variante.capabilities().contains(Capabilities::TIME_SERIES));
-        assert_eq!(variante.product(), "PostgreSQL + TimescaleDB");
+        assert!(variant.has_extension(EXT_TIMESCALEDB), "case-insensitive");
+        assert!(variant.capabilities().contains(Capabilities::TIME_SERIES));
+        assert_eq!(variant.product(), "PostgreSQL + TimescaleDB");
     }
 
     #[test]
-    fn citus_se_nomme_sans_changer_de_capacite() {
-        // Citus distribue les tables ; il n'ajoute aucune surface qu'Oxyn sache
-        // exploiter aujourd'hui. Le dire est plus honnête que d'inventer un
-        // drapeau.
-        let variante = PostgresVariant::detect(BANNIERE_PG, "17.2", vec!["citus".to_owned()]);
-        assert_eq!(variante.capabilities(), base_capabilities());
-        assert_eq!(variante.product(), "PostgreSQL + Citus");
+    fn citus_is_named_without_changing_capabilities() {
+        // Citus distributes tables; it adds no surface Oxyn can use today.
+        // Saying so is more honest than inventing a flag.
+        let variant = PostgresVariant::detect(PG_BANNER, "17.2", vec!["citus".to_owned()]);
+        assert_eq!(variant.capabilities(), base_capabilities());
+        assert_eq!(variant.product(), "PostgreSQL + Citus");
     }
 
     #[test]
-    fn redshift_se_reconnait_a_sa_banniere_et_perd_ce_qu_il_n_a_pas() {
-        let variante = PostgresVariant::detect(BANNIERE_REDSHIFT, "8.0.2", Vec::new());
-        assert_eq!(variante.flavor, PostgresFlavor::Redshift);
-        assert_eq!(variante.dialect(), SqlDialect::Redshift);
-        assert_eq!(variante.product(), "Amazon Redshift");
+    fn redshift_is_recognized_by_its_banner_and_loses_what_it_lacks() {
+        let variant = PostgresVariant::detect(REDSHIFT_BANNER, "8.0.2", Vec::new());
+        assert_eq!(variant.flavor, PostgresFlavor::Redshift);
+        assert_eq!(variant.dialect(), SqlDialect::Redshift);
+        assert_eq!(variant.product(), "Amazon Redshift");
 
-        let capacites = variante.capabilities();
+        let capabilities = variant.capabilities();
         assert!(
-            !capacites.contains(Capabilities::EXPLAIN_ANALYZE),
-            "Redshift n'exécute pas le plan qu'il explique"
+            !capabilities.contains(Capabilities::EXPLAIN_ANALYZE),
+            "Redshift does not execute the plan it explains"
         );
-        assert!(!capacites.contains(Capabilities::TRIGGERS));
-        assert!(!capacites.contains(Capabilities::CONSTRAINTS));
-        assert!(!capacites.contains(Capabilities::FULL_TEXT_SEARCH));
+        assert!(!capabilities.contains(Capabilities::TRIGGERS));
+        assert!(!capabilities.contains(Capabilities::CONSTRAINTS));
+        assert!(!capabilities.contains(Capabilities::FULL_TEXT_SEARCH));
 
-        // Ce qu'il a, il le garde.
-        assert!(capacites.contains(Capabilities::SERVER_SIDE_CANCEL));
-        assert!(capacites.contains(Capabilities::SQL));
-        assert!(capacites.contains(Capabilities::TABLES));
-        // `ORDER BY`, `WHERE` et `LIMIT … OFFSET` sont de la grammaire commune :
-        // ce que Redshift ampute, c'est le catalogue de types, pas la sélection.
-        // Les retirer priverait l'utilisateur de contrôles qui fonctionnent.
-        assert!(capacites.contains(Capabilities::PREVIEW_SORT));
-        assert!(capacites.contains(Capabilities::PREVIEW_FILTER));
-        // `TRUNCATE` existe, mais valide la transaction et ignore les clés
-        // étrangères : la revue ne doit promettre ni retour arrière, ni refus.
-        assert!(capacites.contains(Capabilities::TRUNCATE));
-        assert!(!capacites.contains(Capabilities::TRANSACTIONAL_DDL));
-        assert!(!capacites.contains(Capabilities::RESTRICT_DEPENDENTS));
+        // What it has, it keeps.
+        assert!(capabilities.contains(Capabilities::SERVER_SIDE_CANCEL));
+        assert!(capabilities.contains(Capabilities::SQL));
+        assert!(capabilities.contains(Capabilities::TABLES));
+        // `ORDER BY`, `WHERE` and `LIMIT … OFFSET` are common grammar: what
+        // Redshift truncates is the type catalog, not selection. Removing them
+        // would deprive the user of controls that work.
+        assert!(capabilities.contains(Capabilities::PREVIEW_SORT));
+        assert!(capabilities.contains(Capabilities::PREVIEW_FILTER));
+        // `TRUNCATE` exists, but commits the transaction and ignores foreign
+        // keys: the review must promise neither rollback nor refusal.
+        assert!(capabilities.contains(Capabilities::TRUNCATE));
+        assert!(!capabilities.contains(Capabilities::TRANSACTIONAL_DDL));
+        assert!(!capabilities.contains(Capabilities::RESTRICT_DEPENDENTS));
     }
 
     #[test]
-    fn une_extension_n_annule_pas_une_absence_de_la_variante() {
-        // L'ordre du calcul compte : pgvector sur Redshift n'y remet pas
-        // `EXPLAIN ANALYZE`.
-        let variante = PostgresVariant::detect(
-            BANNIERE_REDSHIFT,
+    fn an_extension_does_not_cancel_an_absence_of_the_variant() {
+        // The order of the computation matters: pgvector on Redshift does not
+        // bring `EXPLAIN ANALYZE` back.
+        let variant = PostgresVariant::detect(
+            REDSHIFT_BANNER,
             "8.0.2",
             vec!["vector".to_owned(), "timescaledb".to_owned()],
         );
-        let capacites = variante.capabilities();
-        assert!(capacites.contains(Capabilities::VECTOR_SEARCH));
-        assert!(!capacites.contains(Capabilities::EXPLAIN_ANALYZE));
+        let capabilities = variant.capabilities();
+        assert!(capabilities.contains(Capabilities::VECTOR_SEARCH));
+        assert!(!capabilities.contains(Capabilities::EXPLAIN_ANALYZE));
     }
 
     #[test]
-    fn la_version_majeure_se_lit_sur_les_formes_reelles() {
+    fn the_major_version_is_read_on_real_forms() {
         assert_eq!(parse_major("17.2"), Some(17));
         assert_eq!(parse_major("16.4 (Debian 16.4-1.pgdg120+1)"), Some(16));
         assert_eq!(parse_major("9.6.24"), Some(9));
         assert_eq!(parse_major(" 15beta1"), Some(15));
-        assert_eq!(parse_major("inconnue"), None, "on ne devine pas");
+        assert_eq!(parse_major("unknown"), None, "nothing is guessed");
         assert_eq!(parse_major(""), None);
     }
 
     #[test]
-    fn les_extensions_sont_normalisees_et_dedupliquees() {
-        let variante = PostgresVariant::detect(
-            BANNIERE_PG,
+    fn extensions_are_normalized_and_deduplicated() {
+        let variant = PostgresVariant::detect(
+            PG_BANNER,
             "17.2",
             vec![
                 "Vector".to_owned(),
@@ -467,27 +473,28 @@ mod tests {
                 "PostGIS".to_owned(),
             ],
         );
-        assert_eq!(variante.extensions, ["postgis", "vector"]);
+        assert_eq!(variant.extensions, ["postgis", "vector"]);
     }
 
     #[test]
-    fn le_plafond_du_driver_couvre_toutes_les_sessions() {
-        // Le driver annonce au mieux ; la session fait foi. Aucune session ne
-        // doit pouvoir déclarer une capacité que le driver n'annonce pas, sans
-        // quoi une surface apparaîtrait sans avoir jamais été prévue.
-        let plafond = driver_capabilities();
-        for variante in [
-            PostgresVariant::detect(BANNIERE_PG, "17.2", Vec::new()),
-            PostgresVariant::detect(BANNIERE_PG, "17.2", vec!["vector".to_owned()]),
-            PostgresVariant::detect(BANNIERE_PG, "16.4", vec!["timescaledb".to_owned()]),
-            PostgresVariant::detect(BANNIERE_REDSHIFT, "8.0.2", Vec::new()),
+    fn the_driver_ceiling_covers_every_session() {
+        // The driver announces at best; the session is authoritative. No
+        // session must be able to declare a capability the driver does not
+        // announce, otherwise a surface would appear without ever having been
+        // planned.
+        let ceiling = driver_capabilities();
+        for variant in [
+            PostgresVariant::detect(PG_BANNER, "17.2", Vec::new()),
+            PostgresVariant::detect(PG_BANNER, "17.2", vec!["vector".to_owned()]),
+            PostgresVariant::detect(PG_BANNER, "16.4", vec!["timescaledb".to_owned()]),
+            PostgresVariant::detect(REDSHIFT_BANNER, "8.0.2", Vec::new()),
         ] {
-            let session = variante.capabilities();
+            let session = variant.capabilities();
             assert!(
-                plafond.contains(session),
-                "{} déclare {} hors du plafond",
-                variante.product(),
-                session.difference(plafond)
+                ceiling.contains(session),
+                "{} declares {} outside the ceiling",
+                variant.product(),
+                session.difference(ceiling)
             );
         }
     }

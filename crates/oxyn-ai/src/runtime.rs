@@ -1,58 +1,54 @@
-//! La boucle d'un agent : modèle → appels d'outils → command bus → réinjection.
+//! An agent's loop: model → tool calls → command bus → feeding back.
 //!
-//! # Le runtime n'a aucun chemin privilégié
+//! # The runtime has no privileged path
 //!
-//! Chaque appel d'outil devient une [`Command`] portant `Actor::Agent` et part
-//! dans le [`CommandSink`] fourni par l'appelant — implémenté par `oxyn-exec`,
-//! qui reclassifie le texte puis soumet au `PolicyGate` (I-01, I-07,
-//! ADR-0004). Ce module ne connaît ni driver, ni session de base de données, ni
-//! politique : il ne peut donc pas les contourner. C'est ce qui fait qu'une
-//! consigne cachée dans un commentaire de colonne produit au pire une demande
-//! d'approbation visible, jamais une exécution.
+//! Every tool call becomes a [`Command`] carrying `Actor::Agent` and goes into
+//! the [`CommandSink`] supplied by the caller — implemented by `oxyn-exec`,
+//! which reclassifies the text then submits it to the `PolicyGate` (I-01, I-07,
+//! ADR-0004). This module knows no driver, no database session, no policy: so
+//! it cannot bypass them. That is what makes an instruction hidden in a column
+//! comment produce, at worst, a visible approval request, never an execution.
 //!
-//! Le `PolicyGate` n'est pas appelé ici, et ce n'est pas un oubli : le faire
-//! serait le deuxième endroit qui décide, et deux endroits qui décident, c'est
-//! un endroit qui oubliera.
+//! The `PolicyGate` is not called here, and that is not an oversight: doing so
+//! would make a second place that decides, and two places that decide make one
+//! place that will forget.
 //!
-//! # Le contexte ne peut entrer que par la porte
+//! # Context can only come in through the door
 //!
-//! [`AgentSession::new`] exige un [`AgentContext`], qui ne se construit que par
-//! [`ContextBuilder::build`](crate::context::ContextBuilder::build). Le point de
-//! passage unique d'I-04 est donc une contrainte de type, pas une convention de
-//! relecture : il n'existe pas de constructeur qui accepte une invite toute
-//! faite.
+//! [`AgentSession::new`] requires an [`AgentContext`], which is only built by
+//! [`ContextBuilder::build`](crate::context::ContextBuilder::build). I-04's
+//! single gateway is therefore a type constraint, not a review convention:
+//! there is no constructor that accepts a ready-made prompt.
 //!
-//! Ce qui **revient** d'un appel d'outil a la même contrainte, et elle se rate
-//! plus facilement : un message d'erreur de serveur cite le contenu de la base.
-//! Un [`CommandSink`] rend donc un [`DispatchOutcome`] — des faits bruts — que
-//! seule `ToolOutcome::from_dispatch` transforme en texte d'invite, sous le
-//! niveau de la session. Voir [`crate::failure`].
+//! What **comes back** from a tool call has the same constraint, and it is
+//! easier to miss: a server error message quotes database content. A
+//! [`CommandSink`] therefore returns a [`DispatchOutcome`] — raw facts — that
+//! only `ToolOutcome::from_dispatch` turns into prompt text, under the
+//! session's tier. See [`crate::failure`].
 //!
-//! # Ce que la boucle borne
+//! # What the loop bounds
 //!
-//! * **les tours** — [`AgentSpec::max_turns`], plafonné par
-//!   [`MAX_TURNS_CEILING`](crate::spec::MAX_TURNS_CEILING). Un agent qui boucle
-//!   sur un fournisseur distant est une facture que l'utilisateur découvre après
-//!   coup ;
-//! * **l'annulation** — le [`CancelToken`] est relu avant chaque tour, entre
-//!   chaque appel d'outil et pendant la lecture du flux. Les appels d'outils
-//!   d'un tour annulé sont **abandonnés** : exécuter une commande après que
-//!   l'utilisateur a appuyé sur Échap serait précisément ce qu'il vient de
-//!   refuser ;
-//! * **la sortie** — rien n'est exécuté par ce module, y compris ce qui « ne
-//!   fait que lire ».
+//! * **turns** — [`AgentSpec::max_turns`], capped by
+//!   [`MAX_TURNS_CEILING`](crate::spec::MAX_TURNS_CEILING). An agent looping
+//!   on a remote provider is a bill the user discovers after the fact;
+//! * **cancellation** — the [`CancelToken`] is re-read before each turn,
+//!   between tool calls and while reading the stream. The tool calls of a
+//!   cancelled turn are **dropped**: running a command after the user pressed
+//!   Escape would be precisely what they just refused;
+//! * **output** — nothing is executed by this module, including what "only
+//!   reads".
 //!
-//! # La conversation se regarde pendant qu'elle se déroule
+//! # The conversation can be watched while it unfolds
 //!
-//! [`AgentRuntime::run`] rend un [`AgentOutcome`] à la fin, mais notifie un
-//! [`AgentObserver`] à chaque instant où quelque chose devient visible : un
-//! tour, un fragment de texte, une commande soumise, son rapport, la fin. Un
-//! appelant sans interface passe `&()`.
+//! [`AgentRuntime::run`] returns an [`AgentOutcome`] at the end, but notifies
+//! an [`AgentObserver`] at every moment something becomes visible: a turn, a
+//! text fragment, a submitted command, its report, the end. A caller without
+//! an interface passes `&()`.
 //!
-//! L'observateur reçoit les **faits entiers** — c'est ce que l'utilisateur a le
-//! droit de lire de sa propre base — là où l'invite ne reçoit que ce que le
-//! niveau laisse sortir. Ce sont deux destinataires, et un seul filtre :
-//! `ToolOutcome::from_dispatch`. Voir [`crate::observer`].
+//! The observer receives the **whole facts** — what the user has the right to
+//! read from their own database — whereas the prompt receives only what the
+//! tier lets out. Two recipients, and a single filter:
+//! `ToolOutcome::from_dispatch`. See [`crate::observer`].
 
 use std::fmt;
 use std::sync::Arc;
@@ -76,104 +72,103 @@ use crate::spec::AgentSpec;
 use crate::tools::{MAX_SAMPLE_ROWS, SampleAsk, ToolRegistry, ToolRequest, ToolScope};
 use crate::untrusted;
 
-/// Ce que l'exécution d'une commande a donné, **avant** que le niveau de
-/// confidentialité ne s'applique.
+/// What running a command produced, **before** the privacy tier applies.
 ///
-/// C'est ce qu'un [`CommandSink`] rend : des faits, dans les termes de celui qui
-/// a exécuté. Ce type ne rejoint **jamais** une invite tel quel — il faut
-/// d'abord le faire passer par `ToolOutcome::from_dispatch`, qui est
-/// l'unique voie et qui exige un [`PrivacyTier`]. Un puits n'a donc rien à
-/// savoir de la confidentialité, et rien à pouvoir s'y tromper.
+/// This is what a [`CommandSink`] returns: facts, in the terms of whoever
+/// executed. This type **never** joins a prompt as is — it must first go
+/// through `ToolOutcome::from_dispatch`, which is the only way and which
+/// requires a [`PrivacyTier`]. A sink therefore has nothing to know about
+/// privacy, and nothing to get wrong about it.
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DispatchOutcome {
-    /// La commande a été exécutée.
+    /// The command was executed.
     Completed {
-        /// Ce qu'il faut en dire au modèle : volumétrie, troncature.
+        /// What to tell the model about it: volume, truncation.
         summary: String,
     },
-    /// L'utilisateur a approuvé un échantillon demandé par l'agent, et il a
-    /// été lu. `sample` ne porte **que** les colonnes cochées : la lecture
-    /// (`PreviewRelation`) les projette, le serveur ne rend qu'elles, et le
-    /// puits les recopie avant de rendre ce variant.
+    /// The user approved a sample requested by the agent, and it was read.
+    /// `sample` carries **only** the ticked columns: the read
+    /// (`PreviewRelation`) projects them, the server returns only them, and
+    /// the sink copies them before returning this variant.
     ///
-    /// Des valeurs de lignes réelles. Ce que le modèle en reçoit est rendu par
-    /// `ContextBuilder::build`, sous le niveau de la connexion, dans
-    /// `ToolOutcome::from_dispatch` — la même fonction que pour un échantillon
-    /// épinglé par l'utilisateur ([I-04](../../../CLAUDE.md#i-04)).
+    /// Real row values. What the model receives of them is rendered by
+    /// `ContextBuilder::build`, under the connection's tier, in
+    /// `ToolOutcome::from_dispatch` — the same function as for a sample
+    /// pinned by the user ([I-04](../../../CLAUDE.md#i-04)).
     Sampled {
-        /// Le cache de la connexion, pour que le rendu nomme la relation
-        /// comme le contexte la nomme.
+        /// The connection's cache, so that the rendering names the relation
+        /// the way the context names it.
         catalog: CatalogHandle,
-        /// Les lignes approuvées.
+        /// The approved rows.
         sample: RowSample,
-        /// Ce que le puits fait quand l'échantillon part **réellement** :
-        /// inscrire la sortie, l'annoncer. Appelé par la boucle une fois le
-        /// rendu connu et retenu, jamais avant — voir [`SampleReceipt`].
+        /// What the sink does when the sample **actually** leaves: record the
+        /// release, announce it. Called by the loop once the rendering is
+        /// known and kept, never before — see [`SampleReceipt`].
         receipt: SampleReceipt,
     },
-    /// Le catalogue local a été lu : la poignée du cache, jamais un rendu.
+    /// The local catalog was read: the cache handle, never a rendering.
     ///
-    /// Ce que le modèle en apprend est rendu par `ContextBuilder::build`, sous
-    /// le niveau de la connexion, dans `ToolOutcome::from_dispatch`.
+    /// What the model learns from it is rendered by `ContextBuilder::build`,
+    /// under the connection's tier, in `ToolOutcome::from_dispatch`.
     CatalogRead {
-        /// Le cache de la connexion.
+        /// The connection's cache.
         catalog: CatalogHandle,
     },
-    /// La commande attend l'accord de l'utilisateur. **Rien ne s'est exécuté.**
+    /// The command awaits the user's approval. **Nothing ran.**
     AwaitingApproval {
-        /// Le motif tel que le `PolicyGate` l'a rédigé.
+        /// The reason as the `PolicyGate` worded it.
         reason: String,
     },
-    /// La commande est refusée. Aucune confirmation ne la débloquera.
+    /// The command is denied. No confirmation will unblock it.
     Denied {
-        /// Le motif tel que le `PolicyGate` l'a rédigé.
+        /// The reason as the `PolicyGate` worded it.
         reason: String,
     },
-    /// L'exécution a échoué.
+    /// Execution failed.
     Failed {
-        /// La famille de l'erreur, telle que le driver l'a classée. Transmise
-        /// et non redéduite : un appelant qui analyserait le message casserait
-        /// en silence le jour où le message change.
+        /// The error's family, as the driver classified it. Passed on, not
+        /// re-derived: a caller that parsed the message would silently break
+        /// the day the message changes.
         class: ErrorClass,
-        /// Le message du serveur, entier. Il peut citer une valeur de ligne :
-        /// c'est précisément pourquoi il ne peut pas rejoindre une invite sans
-        /// passer par `ToolOutcome::from_dispatch`.
+        /// The server's message, whole. It may quote a row value: that is
+        /// precisely why it cannot join a prompt without going through
+        /// `ToolOutcome::from_dispatch`.
         message: String,
     },
 }
 
-/// Ce qu'un puits fait d'un échantillon lu, une fois qu'il part pour de bon.
+/// What a sink does with a read sample, once it leaves for good.
 ///
-/// Le puits lit les lignes ; le rendu, lui, se fait après, dans
-/// `ToolOutcome::from_dispatch`, qui peut encore les écarter — budget dépassé,
-/// niveau abaissé. Inscrire la sortie dans le puits, avant ce rendu, inscrivait
-/// et annonçait comme envoyé un échantillon que le modèle ne recevait pas. Le
-/// puits confie donc ce geste à la boucle, qui ne l'accomplit qu'une fois le
-/// rendu retenu, **avant** de rendre le texte : si l'inscription échoue, rien
-/// ne part.
+/// The sink reads the rows; the rendering happens afterwards, in
+/// `ToolOutcome::from_dispatch`, which can still drop them — budget exceeded,
+/// tier lowered. Recording the release in the sink, before that rendering,
+/// recorded and announced as sent a sample the model did not receive. The
+/// sink therefore hands this gesture to the loop, which performs it only once
+/// the rendering is kept, **before** returning the text: if recording fails,
+/// nothing leaves.
 ///
-/// Une frontière : `oxyn-ai` décide quand, `oxyn-desktop` sait où inscrire.
+/// A boundary: `oxyn-ai` decides when, `oxyn-desktop` knows where to record.
 #[async_trait]
 pub trait SampleRelease: Send + Sync {
-    /// Inscrit la sortie de l'échantillon et l'annonce. Rend `false` si
-    /// l'inscription a échoué : l'échantillon ne part pas.
+    /// Records the sample's release and announces it. Returns `false` if
+    /// recording failed: the sample does not leave.
     ///
-    /// Appelé au plus une fois par la boucle ; une implémentation qui en
-    /// reçoit un second n'inscrit rien de plus.
+    /// Called at most once by the loop; an implementation that receives a
+    /// second call records nothing more.
     async fn release(&self) -> bool;
 }
 
-/// La poignée d'un [`SampleRelease`], portée par [`DispatchOutcome::Sampled`].
+/// The handle of a [`SampleRelease`], carried by [`DispatchOutcome::Sampled`].
 ///
-/// Deux reçus sont égaux s'ils désignent **le même** geste. Lâché sans être
-/// libéré — échantillon écarté, question close entre-temps —, il n'inscrit
-/// rien : c'est l'effet voulu.
+/// Two receipts are equal if they designate **the same** gesture. Dropped
+/// without being released — sample discarded, question closed in the
+/// meantime —, it records nothing: that is the intended effect.
 #[derive(Clone)]
 pub struct SampleReceipt(Arc<dyn SampleRelease>);
 
 impl SampleReceipt {
-    /// Enveloppe le geste du puits.
+    /// Wraps the sink's gesture.
     #[must_use]
     pub fn new(release: Arc<dyn SampleRelease>) -> Self {
         Self(release)
@@ -196,23 +191,23 @@ impl fmt::Debug for SampleReceipt {
     }
 }
 
-/// Dit au modèle, et montré, quand l'inscription d'un échantillon a échoué.
+/// Told to the model, and shown, when recording a sample failed.
 const SAMPLE_UNRECORDED: &str =
     "Oxyn could not record this sample in its audit trail, so nothing was sent";
 
-/// `Debug` écrit à la main, et c'est le corollaire d'I-03 qui l'impose.
+/// `Debug` written by hand, and I-03's corollary is what requires it.
 ///
-/// [`Failed`](DispatchOutcome::Failed) porte le message du serveur **entier** —
-/// c'est tout l'objet de ce type, et l'utilisateur a le droit de le lire. Mais
-/// un `Debug` dérivé le rendrait recopiable par un `tracing::debug!("{outcome:?}")`
-/// ajouté six mois plus tard pour diagnostiquer un panneau qui n'affiche rien,
-/// et `Key (email)=(dupont@example.com)` partirait sur disque en clair. C'est
-/// exactement le mode de fuite que le corollaire vérifiable d'I-03 nomme : la
-/// faute ne se voit ni à la compilation, ni aux tests, ni en revue.
+/// [`Failed`](DispatchOutcome::Failed) carries the server's message **whole**
+/// — that is the whole point of this type, and the user has the right to read
+/// it. But a derived `Debug` would make it copyable by a
+/// `tracing::debug!("{outcome:?}")` added six months later to diagnose a panel
+/// that shows nothing, and `Key (email)=(dupont@example.com)` would go to disk
+/// in clear. That is exactly the leak mode I-03's verifiable corollary names:
+/// the fault shows neither at compile time, nor in tests, nor in review.
 ///
-/// Ce qui reste : la classe de l'erreur et la **longueur** du message. De quoi
-/// diagnostiquer « le message est vide » ou « le message fait 4 ko », jamais de
-/// quoi lire une valeur de ligne.
+/// What remains: the error's class and the message's **length**. Enough to
+/// diagnose "the message is empty" or "the message is 4 KB", never enough to
+/// read a row value.
 impl fmt::Debug for DispatchOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -225,7 +220,7 @@ impl fmt::Debug for DispatchOutcome {
                 .field("reason", reason)
                 .finish(),
             Self::CatalogRead { .. } => f.debug_struct("CatalogRead").finish_non_exhaustive(),
-            // `RowSample` masque déjà ses valeurs ; seul le compte sort.
+            // `RowSample` already masks its values; only the count comes out.
             Self::Sampled { sample, .. } => {
                 f.debug_struct("Sampled").field("sample", sample).finish()
             }
@@ -240,7 +235,7 @@ impl fmt::Debug for DispatchOutcome {
 }
 
 impl DispatchOutcome {
-    /// Résume une exécution réussie à partir de ses statistiques.
+    /// Summarizes a successful execution from its statistics.
     #[must_use]
     pub fn completed(stats: &ExecStats) -> Self {
         let mut summary = format!("{} rows, {} batches", stats.rows, stats.batches);
@@ -250,16 +245,16 @@ impl DispatchOutcome {
         Self::Completed { summary }
     }
 
-    /// Traduit une décision du `PolicyGate`.
+    /// Translates a `PolicyGate` decision.
     ///
-    /// Rend `None` pour [`Decision::Allow`] : il n'y a alors rien à dire au
-    /// modèle tant que la commande n'a pas produit de résultat.
+    /// Returns `None` for [`Decision::Allow`]: there is then nothing to tell
+    /// the model until the command has produced a result.
     ///
-    /// La [`Preview`](oxyn_core::Preview) que porte une demande d'approbation
-    /// n'est **pas** reprise : elle est faite pour l'utilisateur, qui doit voir
-    /// le SQL exact et le nom de la connexion avant de trancher. Le modèle a
-    /// écrit l'instruction lui-même et n'a rien à apprendre du nom de la
-    /// connexion — le lui envoyer ne serait qu'une sortie de plus.
+    /// The [`Preview`](oxyn_core::Preview) an approval request carries is
+    /// **not** taken over: it is meant for the user, who must see the exact
+    /// SQL and the connection's name before deciding. The model wrote the
+    /// statement itself and has nothing to learn from the connection's name —
+    /// sending it would only be one more leak.
     #[must_use]
     pub fn from_decision(decision: &Decision) -> Option<Self> {
         match decision {
@@ -273,8 +268,8 @@ impl DispatchOutcome {
         }
     }
 
-    /// Traduit une erreur du domaine, en reportant sa classe plutôt qu'en la
-    /// laissant déduire d'un message.
+    /// Translates a domain error, carrying its class over rather than letting
+    /// it be inferred from a message.
     #[must_use]
     pub fn failed(error: &OxynError) -> Self {
         Self::Failed {
@@ -284,74 +279,72 @@ impl DispatchOutcome {
     }
 }
 
-/// Ce que l'exécution d'une commande a donné, dans les termes que le modèle a
-/// le droit de connaître.
+/// What running a command produced, in the terms the model is allowed to
+/// know.
 ///
-/// Volontairement pauvre : le modèle apprend ce qui s'est passé, pas les
-/// lignes. Les résultats vivent en `RecordBatch` dans le tampon de résultats
-/// (ADR-0002) et sont montrés à l'**utilisateur** ; les faire transiter par la
-/// conversation les enverrait chez le fournisseur, ce que le niveau de la
-/// connexion n'autorise pas nécessairement (I-04).
+/// Deliberately poor: the model learns what happened, not the rows. Results
+/// live as `RecordBatch` in the result buffer (ADR-0002) and are shown to the
+/// **user**; passing them through the conversation would send them to the
+/// provider, which the connection's tier does not necessarily allow (I-04).
 ///
-/// **Ne se construit pas hors de cette crate.** La variante
-/// [`Failed`](Self::Failed) porte un [`FailureReport`] dont les champs sont
-/// privés, et le seul chemin qui en produit un est
-/// `from_dispatch`, qui exige le niveau de la connexion.
-/// Le filtre n'est donc pas contournable par oubli.
+/// **Cannot be built outside this crate.** The [`Failed`](Self::Failed)
+/// variant carries a [`FailureReport`] whose fields are private, and the only
+/// path that produces one is `from_dispatch`, which requires the connection's
+/// tier. The filter therefore cannot be bypassed by oversight.
 ///
-/// Le `Debug` est écrit à la main, comme ceux d'[`AgentContext`] et
-/// d'`AgentPrompt` : [`Described`](Self::Described) porte le schéma rendu, et
-/// un `tracing::debug!("{outcome:?}")` l'écrirait dans un journal (I-03).
+/// `Debug` is written by hand, like those of [`AgentContext`] and
+/// `AgentPrompt`: [`Described`](Self::Described) carries the rendered schema,
+/// and a `tracing::debug!("{outcome:?}")` would write it to a log (I-03).
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ToolOutcome {
-    /// La commande a été exécutée.
+    /// The command was executed.
     Completed {
-        /// Ce qu'il faut en dire au modèle : volumétrie, durée, troncature.
+        /// What to tell the model about it: volume, duration, truncation.
         summary: String,
     },
-    /// La structure de la base, rendue par le point de passage.
+    /// The database's structure, rendered by the gateway.
     Described {
-        /// Le bloc que `ContextBuilder::build` a produit — **déjà encadré** :
-        /// c'est le même texte que le contexte d'une invite.
+        /// The block `ContextBuilder::build` produced — **already fenced**:
+        /// it is the same text as a prompt's context.
         block: String,
     },
-    /// Un échantillon approuvé, rendu par le point de passage.
+    /// An approved sample, rendered by the gateway.
     Sampled {
-        /// Le bloc que `ContextBuilder::build` a produit, **déjà encadré** —
-        /// des valeurs de lignes réelles.
+        /// The block `ContextBuilder::build` produced, **already fenced** —
+        /// real row values.
         block: String,
     },
-    /// La commande attend l'accord de l'utilisateur. **Rien ne s'est exécuté.**
+    /// The command awaits the user's approval. **Nothing ran.**
     AwaitingApproval {
-        /// Le motif tel que le `PolicyGate` l'a rédigé.
+        /// The reason as the `PolicyGate` worded it.
         reason: String,
     },
-    /// La commande est refusée. Aucune confirmation ne la débloquera.
+    /// The command is denied. No confirmation will unblock it.
     Denied {
-        /// Le motif tel que le `PolicyGate` l'a rédigé.
+        /// The reason as the `PolicyGate` worded it.
         reason: String,
     },
-    /// L'exécution a échoué, réduite à ce que le niveau laisse sortir.
+    /// Execution failed, reduced to what the tier lets out.
     Failed {
-        /// L'échec filtré. Voir [`FailureReport`].
+        /// The filtered failure. See [`FailureReport`].
         report: FailureReport,
     },
 }
 
 impl ToolOutcome {
-    /// Applique le niveau de la connexion à ce qu'un puits a rapporté.
+    /// Applies the connection's tier to what a sink reported.
     ///
-    /// **C'est ici que le niveau s'applique au chemin d'erreur**, comme
+    /// **This is where the tier applies to the error path**, as
     /// [`ContextBuilder::build`](crate::context::ContextBuilder::build)
-    /// l'applique au chemin de contexte. `pub(crate)` : le seul appelant est la
-    /// boucle, qui tient le niveau de la session — et la session tient celui de
-    /// la connexion, jamais un réglage global (I-04, ADR-0006).
+    /// applies it to the context path. `pub(crate)`: the only caller is the
+    /// loop, which holds the session's tier — and the session holds the
+    /// connection's, never a global setting (I-04, ADR-0006).
     ///
-    /// Un catalogue lu est rendu ici, par [`ContextBuilder::build`] — la même
-    /// fonction que le contexte d'une invite, sous le même niveau, avec le même
-    /// budget —, dans le langage de la connexion et orienté par les mots de
-    /// recherche de la commande. Il n'existe pas de second rendu du schéma.
+    /// A read catalog is rendered here, by [`ContextBuilder::build`] — the
+    /// same function as a prompt's context, under the same tier, with the same
+    /// budget —, in the connection's language and steered by the command's
+    /// search words. There is no second rendering of the schema.
     #[must_use]
     pub(crate) fn from_dispatch(
         tier: PrivacyTier,
@@ -382,15 +375,16 @@ impl ToolOutcome {
         }
     }
 
-    /// Rend un échantillon approuvé par [`ContextBuilder::build`], sous `tier`.
+    /// Renders an approved sample through [`ContextBuilder::build`], under
+    /// `tier`.
     ///
-    /// Aucune relation n'est décrite : l'agent a nommé celle qu'il voulait, et
-    /// la structure lui vient de `describe_schema`. Le budget sert donc tout
-    /// entier aux lignes, et le plafond de rendu est celui de la demande.
+    /// No relation is described: the agent named the one it wanted, and the
+    /// structure comes to it from `describe_schema`. The whole budget
+    /// therefore goes to the rows, and the rendering cap is the request's.
     ///
-    /// Un échantillon que le point de passage écarte — un niveau qui ne laisse
-    /// plus sortir de valeurs, un budget dépassé — devient un **refus** : le
-    /// modèle ne doit pas croire avoir reçu ce qui n'est pas parti.
+    /// A sample the gateway drops — a tier that no longer lets values out, a
+    /// budget exceeded — becomes a **refusal**: the model must not believe it
+    /// received what did not leave.
     fn from_sample(
         tier: PrivacyTier,
         catalog: &CatalogHandle,
@@ -429,29 +423,29 @@ impl ToolOutcome {
         }
     }
 
-    /// Ce texte-ci est-il plus pauvre que les faits dont il est tiré ?
+    /// Is this text poorer than the facts it was drawn from?
     ///
-    /// Autrement dit : le niveau a-t-il retenu quelque chose que l'utilisateur,
-    /// lui, verra ? UX-SPEC demande que le panneau le dise — « cacher l'écart
-    /// ferait passer une réponse mal informée pour une réponse fausse ».
+    /// In other words: did the tier hold back something the user, for their
+    /// part, will see? UX-SPEC asks the panel to say so — "hiding the gap
+    /// would pass off an ill-informed answer as a wrong answer".
     ///
-    /// L'écart est **constaté** en comparant les deux textes, jamais redéduit
-    /// en rejouant la règle de `from_dispatch` : une règle recopiée diverge le
-    /// jour où l'originale change, et diverge en silence.
+    /// The gap is **observed** by comparing the two texts, never re-derived by
+    /// replaying `from_dispatch`'s rule: a copied rule diverges the day the
+    /// original changes, and diverges silently.
     #[must_use]
     pub(crate) fn withholds_from(&self, facts: &DispatchOutcome) -> bool {
         match (self, facts) {
             (Self::Completed { summary }, DispatchOutcome::Completed { summary: facts }) => {
                 summary != facts
             }
-            // Le catalogue ne porte aucune valeur de ligne : le niveau n'en a
-            // rien retenu. Le budget, lui, se dit dans le bloc même.
+            // The catalog carries no row value: the tier held nothing back.
+            // The budget, for its part, is stated in the block itself.
             (Self::Described { .. }, DispatchOutcome::CatalogRead { .. }) => false,
-            // Ce qui a été approuvé est ce qui part : les colonnes non cochées
-            // ont été lues par l'aperçu, mais le puits ne les a pas recopiées —
-            // elles ne sont pas dans les faits, le niveau n'a donc rien à en
-            // retenir. Un échantillon écarté devient un refus, et tombe dans le
-            // cas désaccordé ci-dessous.
+            // What was approved is what leaves: the unticked columns were read
+            // by the preview, but the sink did not copy them — they are not in
+            // the facts, so the tier has nothing to hold back. A dropped
+            // sample becomes a refusal, and falls into the mismatched case
+            // below.
             (Self::Sampled { .. }, DispatchOutcome::Sampled { .. }) => false,
             (
                 Self::AwaitingApproval { reason },
@@ -463,19 +457,19 @@ impl ToolOutcome {
             (Self::Failed { report }, DispatchOutcome::Failed { message, .. }) => {
                 report.detail() != Some(message.as_str())
             }
-            // Variantes désaccordées : `from_dispatch` conserve la variante,
-            // donc ce cas n'existe pas aujourd'hui — mais les deux types sont
-            // `#[non_exhaustive]` et rien n'oblige à relire ici. Le doute ne
-            // profite pas au silence : on annonce un écart plutôt que de
-            // laisser croire que le modèle a tout su.
+            // Mismatched variants: `from_dispatch` keeps the variant, so this
+            // case does not exist today — but both types are
+            // `#[non_exhaustive]` and nothing forces a re-read here. Doubt
+            // does not favor silence: we announce a gap rather than let it be
+            // believed the model knew everything.
             _ => true,
         }
     }
 
-    /// La commande a-t-elle réellement produit un effet ?
+    /// Did the command actually have an effect?
     ///
-    /// `false` pour une approbation en attente : le piège est qu'un modèle
-    /// suppose qu'un `INSERT` a eu lieu et enchaîne sur cette hypothèse.
+    /// `false` for a pending approval: the trap is a model assuming an
+    /// `INSERT` took place and building on that assumption.
     #[must_use]
     pub const fn is_completed(&self) -> bool {
         matches!(
@@ -484,23 +478,23 @@ impl ToolOutcome {
         )
     }
 
-    /// Le texte renvoyé au modèle, **encadré comme contenu non fiable**.
+    /// The text sent back to the model, **fenced as untrusted content**.
     ///
-    /// Un message d'erreur de serveur contient du contenu de la base : le nom de
-    /// la table absente, la valeur qui viole une contrainte. Il rentre donc par
-    /// la même porte que le reste. L'encadrement est **uniforme** — y compris
-    /// pour les motifs rédigés par Oxyn — parce qu'une règle sans exception se
-    /// vérifie d'un coup d'œil.
+    /// A server error message contains database content: the name of the
+    /// missing table, the value that violates a constraint. So it comes in
+    /// through the same door as the rest. Fencing is **uniform** — including
+    /// for reasons worded by Oxyn — because a rule without exceptions can be
+    /// checked at a glance.
     ///
-    /// L'encadrement ne filtre rien : il empêche le contenu de sortir de son
-    /// encadré. Ce qui décide de ce qui *entre* dans l'encadré est le niveau,
-    /// appliqué en amont par `from_dispatch`.
+    /// Fencing filters nothing: it keeps the content from leaving its fence.
+    /// What decides what *enters* the fence is the tier, applied upstream by
+    /// `from_dispatch`.
     #[must_use]
     pub fn render(&self) -> String {
         match self {
-            // Le bloc sort du point de passage, qui l'a déjà encadré : le
-            // ré-encadrer neutraliserait ses balises et le rendrait différent du
-            // contexte d'une invite. Le statut, lui, est encadré comme les autres.
+            // The block comes out of the gateway, which already fenced it:
+            // fencing it again would neutralize its tags and make it differ
+            // from a prompt's context. The status is fenced like the others.
             Self::Described { block } | Self::Sampled { block } => {
                 format!("{}\n{block}", untrusted::fence("status: completed"))
             }
@@ -510,8 +504,8 @@ impl ToolOutcome {
 }
 
 impl fmt::Display for ToolOutcome {
-    /// Le corps destiné au modèle, **en anglais** : c'est une invite, pas un
-    /// message d'interface. Non encadré — voir [`ToolOutcome::render`].
+    /// The body meant for the model, **in English**: it is a prompt, not an
+    /// interface message. Not fenced — see [`ToolOutcome::render`].
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Completed { summary } => write!(f, "status: completed\n{summary}"),
@@ -535,8 +529,8 @@ impl fmt::Display for ToolOutcome {
     }
 }
 
-/// Voir le type : seul le schéma rendu est masqué, par sa longueur. Les autres
-/// variantes ne portent que ce qu'un dérivé montrait déjà.
+/// See the type: only the rendered schema is masked, by its length. The other
+/// variants carry only what a derived one already showed.
 impl fmt::Debug for ToolOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -562,29 +556,29 @@ impl fmt::Debug for ToolOutcome {
     }
 }
 
-/// Ce à quoi le runtime confie ses commandes.
+/// What the runtime hands its commands to.
 ///
-/// Implémenté par `oxyn-exec` : c'est **la** frontière entre le runtime
-/// d'agents et l'exécution. Le contrat de l'implémentation :
+/// Implemented by `oxyn-exec`: this is **the** boundary between the agent
+/// runtime and execution. The implementation's contract:
 ///
-/// 1. reclassifier le texte avant toute décision — l'intention portée par la
-///    commande vient d'un agent, donc d'un appelant (ARCHITECTURE §8) ;
-/// 2. soumettre au `PolicyGate` avec l'`Actor` reçu, sans le modifier ;
-/// 3. journaliser, y compris un refus ;
-/// 4. propager l'annulation jusqu'au serveur.
+/// 1. reclassify the text before any decision — the intent the command
+///    carries comes from an agent, hence from a caller (ARCHITECTURE §8);
+/// 2. submit to the `PolicyGate` with the `Actor` received, unchanged;
+/// 3. log, including a refusal;
+/// 4. propagate cancellation all the way to the server.
 ///
-/// La méthode ne rend pas de `Result` : un échec d'exécution **est** une
-/// réponse à donner au modèle ([`DispatchOutcome::Failed`]), et non un incident
-/// qui interrompt la conversation. Ce qui interrompt la conversation, c'est ce
-/// qui vient du fournisseur, pas de la base.
+/// The method returns no `Result`: an execution failure **is** an answer to
+/// give the model ([`DispatchOutcome::Failed`]), not an incident that
+/// interrupts the conversation. What interrupts the conversation is what
+/// comes from the provider, not from the database.
 ///
-/// Elle rend un [`DispatchOutcome`] et non un [`ToolOutcome`] : le niveau de
-/// confidentialité s'applique **après**, dans la boucle, au seul endroit où il
-/// est connu. Une implémentation ne peut donc pas faire entrer un message de
-/// serveur dans une invite, même en s'y appliquant.
+/// It returns a [`DispatchOutcome`] and not a [`ToolOutcome`]: the privacy
+/// tier applies **afterwards**, in the loop, at the only place where it is
+/// known. An implementation therefore cannot bring a server message into a
+/// prompt, even by trying.
 #[async_trait]
 pub trait CommandSink: Send + Sync {
-    /// Soumet une commande et rend ce qui s'est passé.
+    /// Submits a command and returns what happened.
     async fn dispatch(
         &self,
         actor: Actor,
@@ -592,26 +586,25 @@ pub trait CommandSink: Send + Sync {
         cancel: &CancelToken,
     ) -> DispatchOutcome;
 
-    /// Demande à l'utilisateur d'approuver un échantillon, puis le lit.
+    /// Asks the user to approve a sample, then reads it.
     ///
-    /// La lecture est la commande de `ask`, soumise **après** l'approbation,
-    /// avec `actor` et par le même chemin que [`CommandSink::dispatch`] : le
-    /// `PolicyGate` décide encore. Le contrat de l'implémentation, en plus des
-    /// quatre règles du trait :
+    /// The read is `ask`'s command, submitted **after** approval, with
+    /// `actor` and through the same path as [`CommandSink::dispatch`]: the
+    /// `PolicyGate` still decides. The implementation's contract, on top of
+    /// the trait's four rules:
     ///
-    /// 1. relire le niveau de la connexion **maintenant**, et refuser sans rien
-    ///    montrer hors de `Sampled` ;
-    /// 2. confronter la relation et les colonnes au catalogue avant de rien
-    ///    montrer ;
-    /// 3. ne rien lire avant la décision de l'utilisateur — prise par un geste
-    ///    de l'utilisateur, jamais par l'agent —, borner l'attente dans le
-    ///    temps et la lâcher à l'annulation ;
-    /// 4. ne recopier que les colonnes cochées, et rendre
-    ///    [`DispatchOutcome::Sampled`] — jamais les valeurs dans un autre
-    ///    variant.
+    /// 1. re-read the connection's tier **now**, and refuse without showing
+    ///    anything outside `Sampled`;
+    /// 2. check the relation and the columns against the catalog before
+    ///    showing anything;
+    /// 3. read nothing before the user's decision — made by a user gesture,
+    ///    never by the agent —, bound the wait in time and give it up on
+    ///    cancellation;
+    /// 4. copy only the ticked columns, and return
+    ///    [`DispatchOutcome::Sampled`] — never the values in another variant.
     ///
-    /// **Le défaut refuse**, et c'est voulu : un puits qui ne sait pas montrer
-    /// l'écran d'approbation n'a pas de chemin vers une valeur. Rien n'est lu.
+    /// **The default refuses**, and that is intended: a sink that cannot show
+    /// the approval screen has no path to a value. Nothing is read.
     async fn request_sample(
         &self,
         actor: Actor,
@@ -627,70 +620,71 @@ pub trait CommandSink: Send + Sync {
     }
 }
 
-/// Comment une conversation s'est terminée.
+/// How a conversation ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AgentOutcome {
-    /// Le modèle a répondu sans demander d'outil.
+    /// The model answered without asking for a tool.
     Answered {
-        /// Le texte produit. Il peut recopier du contenu de la base : le
-        /// journaliser revient à journaliser ce contenu.
+        /// The text produced. It may copy database content: logging it
+        /// amounts to logging that content.
         text: String,
-        /// Nombre de tours consommés.
+        /// Number of turns consumed.
         turns: usize,
-        /// La réponse est-elle coupée (plafond de jetons, filtrage) ? Une
-        /// réponse coupée qui ne le dit pas ressemble à une réponse fausse.
+        /// Is the answer cut (token cap, filtering)? A cut answer that does
+        /// not say so looks like a wrong answer.
         truncated: bool,
-        /// Pourquoi le tour s'est arrêté, tel que le fournisseur l'a dit.
+        /// Why the turn stopped, as the provider said.
         ///
-        /// Porté pour que l'interface nomme **la bonne** coupure : un
-        /// dépassement de la fenêtre de contexte présenté comme « plafond de
-        /// jetons » envoie l'utilisateur augmenter un réglage qui n'y peut rien.
+        /// Carried so the interface names **the right** cut: a context window
+        /// overflow presented as a "token cap" sends the user to raise a
+        /// setting that cannot help.
         stop: StopReason,
     },
-    /// L'utilisateur a annulé.
+    /// The user cancelled.
     Cancelled {
-        /// Nombre de tours consommés avant l'annulation.
+        /// Number of turns consumed before the cancellation.
         turns: usize,
     },
-    /// Le plafond de tours a été atteint sans réponse finale.
+    /// The turn ceiling was reached without a final answer.
     ///
-    /// Ce n'est pas une erreur : c'est la borne qui a joué son rôle. Ce qui a
-    /// été exécuté l'a été, et figure dans le journal.
+    /// This is not an error: it is the bound doing its job. What was executed
+    /// was executed, and appears in the log.
     TurnLimit {
-        /// Nombre de tours consommés, égal à `max_turns`.
+        /// Number of turns consumed, equal to `max_turns`.
         turns: usize,
     },
-    /// Le modèle a refusé de poursuivre.
+    /// The model refused to go on.
     ///
-    /// Distinct d'`Answered` : un refus lu comme une réponse passerait pour un
-    /// avis sur la base, et distinct d'une erreur : rien n'est en panne.
+    /// Distinct from `Answered`: a refusal read as an answer would pass for an
+    /// opinion about the database; and distinct from an error: nothing is
+    /// broken.
     Refused {
-        /// Ce qui a été produit avant le refus, possiblement vide.
+        /// What was produced before the refusal, possibly empty.
         text: String,
-        /// Nombre de tours consommés.
+        /// Number of turns consumed.
         turns: usize,
     },
-    /// Le fournisseur a suspendu le tour de son côté.
+    /// The provider paused the turn on its side.
     ///
-    /// La reprise est **manuelle** : relancer tout seul un tour suspendu serait
-    /// une dépense que l'utilisateur n'a pas demandée.
+    /// Resuming is **manual**: relaunching a paused turn on its own would be
+    /// an expense the user did not ask for.
     Paused {
-        /// Ce qui a été produit avant la pause.
+        /// What was produced before the pause.
         text: String,
-        /// Nombre de tours consommés.
+        /// Number of turns consumed.
         turns: usize,
     },
 }
 
-/// Une conversation avec un agent.
+/// A conversation with an agent.
 ///
-/// Ne se construit qu'à partir d'un [`AgentContext`] : c'est ce qui fait du
-/// point de passage unique une propriété du type (I-04).
+/// Built only from an [`AgentContext`]: that is what makes the single gateway
+/// a property of the type (I-04).
 ///
-/// `Clone` sert aux versions d'une réponse : régénérer ou éditer repart de
-/// l'état **avant** la question, recopié tel quel. Une copie n'ouvre aucune
-/// porte — elle ne contient que ce qui est déjà passé par le contexte.
+/// `Clone` serves an answer's versions: regenerating or editing starts again
+/// from the state **before** the question, copied as is. A copy opens no door
+/// — it only contains what already went through the context.
 #[derive(Debug, Clone)]
 pub struct AgentSession {
     id: AgentSessionId,
@@ -700,12 +694,12 @@ pub struct AgentSession {
 }
 
 impl AgentSession {
-    /// Ouvre une conversation sur un contexte assemblé.
+    /// Opens a conversation on an assembled context.
     ///
-    /// Le message système est composé dans cet ordre : l'invite de l'agent, le
-    /// préambule qui dit ce qu'est un encadré, puis le contexte encadré. Le
-    /// préambule vient **avant** le contenu qu'il qualifie, parce qu'un modèle
-    /// qui lit la consigne après les données a déjà lu les données.
+    /// The system message is composed in this order: the agent's prompt, the
+    /// preamble that says what a fence is, then the fenced context. The
+    /// preamble comes **before** the content it qualifies, because a model
+    /// that reads the instruction after the data has already read the data.
     #[must_use]
     pub fn new(spec: &AgentSpec, context: &AgentContext, scope: ToolScope) -> Self {
         let system = format!(
@@ -722,54 +716,52 @@ impl AgentSession {
         }
     }
 
-    /// L'identifiant de conversation. Avec l'`AgentId`, c'est la clé par
-    /// laquelle le journal d'audit rattache une commande à son agent.
+    /// The conversation identifier. With the `AgentId`, it is the key by which
+    /// the audit log ties a command to its agent.
     #[must_use]
     pub const fn id(&self) -> AgentSessionId {
         self.id
     }
 
-    /// Le niveau appliqué au contexte de cette conversation.
+    /// The tier applied to this conversation's context.
     #[must_use]
     pub const fn tier(&self) -> PrivacyTier {
         self.tier
     }
 
-    /// Le périmètre d'outils de cette conversation.
+    /// This conversation's tool scope.
     #[must_use]
     pub const fn scope(&self) -> &ToolScope {
         &self.scope
     }
 
-    /// Les messages échangés, dans l'ordre.
+    /// The messages exchanged, in order.
     #[must_use]
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
     }
 
-    /// Ajoute une question de l'utilisateur.
+    /// Adds a question from the user.
     ///
-    /// C'est du texte que l'utilisateur a tapé lui-même : il n'est pas encadré,
-    /// et c'est la seule catégorie de contenu qui ne le soit pas.
+    /// It is text the user typed themselves: it is not fenced, and it is the
+    /// only category of content that is not.
     pub fn ask(&mut self, question: impl Into<String>) {
         self.messages.push(ChatMessage::user(question));
     }
 
-    /// Ajoute une question qui nomme des objets, dans une conversation déjà
-    /// ouverte.
+    /// Adds a question that names objects, in an already open conversation.
     ///
-    /// Le message système ne se réécrit pas : les objets mentionnés précèdent
-    /// la question dans le message utilisateur, rendus par
-    /// [`ContextBuilder::build`] — le seul chemin qui fabrique un
-    /// [`AgentContext`], donc sous un niveau appliqué. Le texte est celui que
-    /// reçoit un agent externe dans le même cas
+    /// The system message is not rewritten: the mentioned objects precede the
+    /// question in the user message, rendered by [`ContextBuilder::build`] —
+    /// the only path that makes an [`AgentContext`], hence under an applied
+    /// tier. The text is the one an external agent receives in the same case
     /// ([`AgentPrompt::following`](crate::external::prompt::AgentPrompt::following)).
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// [`oxyn_core::OxynError::Config`], porté par
-    /// [`AiError::Core`], si `context` a été rendu sous un autre niveau que
-    /// celui de la conversation : rien n'est ajouté, pas même la question.
+    /// [`oxyn_core::OxynError::Config`], carried by [`AiError::Core`], if
+    /// `context` was rendered under a tier other than the conversation's:
+    /// nothing is added, not even the question.
     pub fn ask_about(
         &mut self,
         context: &AgentContext,
@@ -789,23 +781,23 @@ impl AgentSession {
     }
 }
 
-/// Ce qu'un tour a produit.
+/// What a turn produced.
 #[derive(Debug)]
 struct Turn {
     text: String,
     calls: Vec<ToolCall>,
-    /// Les blocs de raisonnement du tour, à replacer dans le message
-    /// d'assistant : un fournisseur qui signe ses blocs refuse le tour suivant
-    /// s'il en manque un.
+    /// The turn's reasoning blocks, to put back in the assistant message: a
+    /// provider that signs its blocks refuses the next turn if one is
+    /// missing.
     reasoning: Vec<ReasoningBlock>,
-    /// Ce que le modèle a dit pour refuser, s'il a refusé.
+    /// What the model said to refuse, if it refused.
     refusal: String,
     stop: StopReason,
     truncated: bool,
     cancelled: bool,
 }
 
-/// Comment se lit la fin d'un tour sans appel d'outil.
+/// How the end of a turn without tool calls reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stop {
     Answered,
@@ -816,20 +808,20 @@ enum Stop {
 impl Stop {
     fn of(reason: &StopReason) -> Self {
         match reason {
-            // Le fournisseur a retenu la suite : c'est un refus, pas une
-            // réponse courte.
+            // The provider held back the rest: it is a refusal, not a short
+            // answer.
             StopReason::ContentFilter | StopReason::Refusal => Self::Refused,
-            // Le tour est suspendu, pas terminé : la réponse est partielle et
-            // l'utilisateur décide de la reprise. Les fournisseurs le disent
-            // par une variante depuis que `StopReason` en a une — la lire dans
-            // `Other("pause_turn")` ne voyait plus aucune pause.
+            // The turn is paused, not finished: the answer is partial and the
+            // user decides whether to resume. Providers say so with a variant
+            // since `StopReason` has one — reading it in `Other("pause_turn")`
+            // no longer saw any pause.
             StopReason::Paused => Self::Paused,
             _ => Self::Answered,
         }
     }
 }
 
-/// La boucle d'un agent.
+/// An agent's loop.
 #[derive(Debug)]
 pub struct AgentRuntime {
     spec: AgentSpec,
@@ -837,22 +829,22 @@ pub struct AgentRuntime {
     reach: Reach,
     tools: ToolRegistry,
     model: String,
-    /// L'effort à demander, déjà vérifié contre le modèle. `None` : rien n'est
-    /// envoyé, et le fournisseur applique son défaut.
+    /// The effort to request, already checked against the model. `None`:
+    /// nothing is sent, and the provider applies its default.
     effort: Option<oxyn_llm::ReasoningEffort>,
 }
 
 impl AgentRuntime {
-    /// Prépare l'exécution d'un agent sur un fournisseur.
+    /// Prepares running an agent on a provider.
     ///
-    /// `reach` est le classement du point d'accès, calculé par l'appelant à
-    /// l'inscription du fournisseur : la résolution DNS est bloquante et n'a
-    /// rien à faire ici (I-05, [`oxyn_llm::reach`]).
+    /// `reach` is the endpoint's classification, computed by the caller when
+    /// the provider is registered: DNS resolution is blocking and has no
+    /// business here (I-05, [`oxyn_llm::reach`]).
     ///
-    /// # Erreurs
-    /// Ce que [`AgentSpec::validate`] refuse. Échouer ici plutôt qu'au premier
-    /// appel d'outil évite de payer des tours pour découvrir qu'un agent est
-    /// mal déclaré.
+    /// # Errors
+    /// What [`AgentSpec::validate`] refuses. Failing here rather than at the
+    /// first tool call avoids paying for turns to discover that an agent is
+    /// badly declared.
     pub fn new(
         spec: AgentSpec,
         provider: Arc<dyn LlmProvider>,
@@ -871,19 +863,19 @@ impl AgentRuntime {
         })
     }
 
-    /// Demande un niveau d'effort pour chaque tour de cette exécution.
+    /// Requests an effort level for every turn of this run.
     ///
-    /// `model` est la fiche du modèle choisi, telle que le fournisseur la
-    /// publie. Le niveau doit y figurer : une liste vide veut dire « non
-    /// déclaré », et rien de non déclaré n'est envoyé.
+    /// `model` is the chosen model's card, as the provider publishes it. The
+    /// level must appear in it: an empty list means "not declared", and
+    /// nothing undeclared is sent.
     ///
-    /// `High` est vérifié comme les autres, puis **omis** : c'est le défaut
-    /// des fournisseurs qui exposent ce réglage, et l'omettre laisse la
-    /// requête identique à celle d'un utilisateur qui n'a rien choisi.
+    /// `High` is checked like the others, then **omitted**: it is the default
+    /// of the providers that expose this setting, and omitting it leaves the
+    /// request identical to that of a user who chose nothing.
     ///
-    /// # Erreurs
-    /// [`AiError::ReasoningEffortNotOffered`] quand le modèle ne déclare pas
-    /// ce niveau.
+    /// # Errors
+    /// [`AiError::ReasoningEffortNotOffered`] when the model does not declare
+    /// this level.
     pub fn with_reasoning_effort(
         mut self,
         effort: oxyn_llm::ReasoningEffort,
@@ -899,50 +891,49 @@ impl AgentRuntime {
         Ok(self)
     }
 
-    /// La déclaration de l'agent.
+    /// The agent's declaration.
     #[must_use]
     pub const fn spec(&self) -> &AgentSpec {
         &self.spec
     }
 
-    /// Où part une requête vers ce fournisseur.
+    /// Where a request to this provider goes.
     #[must_use]
     pub const fn reach(&self) -> Reach {
         self.reach
     }
 
-    /// Ce fournisseur est-il utilisable sous ce niveau ?
+    /// Is this provider usable under this tier?
     ///
-    /// À interroger avant de proposer l'agent dans l'interface : proposer puis
-    /// refuser vaut moins bien que ne pas proposer.
+    /// To be asked before offering the agent in the interface: offering then
+    /// refusing is worse than not offering.
     #[must_use]
     pub const fn accepts_tier(&self, tier: PrivacyTier) -> bool {
         privacy::allows_endpoint(tier, self.reach)
     }
 
-    /// Déroule la conversation jusqu'à une réponse, une annulation ou le
-    /// plafond de tours, en rendant compte à `observer` au fil de l'eau.
+    /// Runs the conversation until an answer, a cancellation or the turn
+    /// ceiling, reporting to `observer` as it goes.
     ///
-    /// Le niveau est revérifié **ici**, sur celui de la session, et non à la
-    /// construction : le niveau appartient à la connexion, et une même
-    /// instance de runtime peut servir deux connexions de niveaux différents.
-    /// Le vérifier au seul endroit où il est connu est ce qui rend I-04 tenable.
+    /// The tier is re-checked **here**, against the session's, and not at
+    /// construction: the tier belongs to the connection, and one runtime
+    /// instance can serve two connections with different tiers. Checking it
+    /// at the only place where it is known is what makes I-04 tenable.
     ///
-    /// `observer` est ce qui rend la conversation regardable pendant qu'elle se
-    /// déroule ; un appelant qui n'a rien à afficher passe `&()`. Il n'existe
-    /// **pas** de variante non observée de cette méthode : deux façons de
-    /// mener une conversation, ce serait deux chemins à auditer là où I-04 en
-    /// demande un seul.
+    /// `observer` is what makes the conversation watchable while it unfolds;
+    /// a caller with nothing to display passes `&()`. There is **no**
+    /// unobserved variant of this method: two ways of running a conversation
+    /// would be two paths to audit where I-04 asks for one.
     ///
-    /// L'observateur reçoit les faits entiers ; l'invite ne reçoit que ce que
-    /// le niveau laisse sortir. Voir [`crate::observer`].
+    /// The observer receives the whole facts; the prompt receives only what
+    /// the tier lets out. See [`crate::observer`].
     ///
-    /// # Erreurs
-    /// [`AiError::RemoteProviderRefused`] si le niveau de la session interdit ce
-    /// point d'accès ; [`AiError::Provider`] ou [`AiError::Core`] si le
-    /// fournisseur échoue. Un refus du `PolicyGate`, lui, n'est pas une erreur :
-    /// il est renvoyé au modèle et la conversation continue. Une erreur n'émet
-    /// aucun [`AgentEvent::Finished`] : elle est rendue ici, à l'appelant.
+    /// # Errors
+    /// [`AiError::RemoteProviderRefused`] if the session's tier forbids this
+    /// endpoint; [`AiError::Provider`] or [`AiError::Core`] if the provider
+    /// fails. A `PolicyGate` refusal, on the other hand, is not an error: it is
+    /// sent back to the model and the conversation goes on. An error emits no
+    /// [`AgentEvent::Finished`]: it is returned here, to the caller.
     pub async fn run(
         &self,
         session: &mut AgentSession,
@@ -955,12 +946,12 @@ impl AgentRuntime {
         Ok(outcome)
     }
 
-    /// La boucle elle-même.
+    /// The loop itself.
     ///
-    /// Séparée de [`run`](Self::run) pour une seule raison : la fin de
-    /// conversation s'annonce à un endroit unique, quel que soit le chemin qui
-    /// y mène. Trois `return` et trois notifications à tenir en cohérence, ce
-    /// serait la quatrième qu'on oublie.
+    /// Separate from [`run`](Self::run) for a single reason: the end of the
+    /// conversation is announced at a single place, whatever path leads there.
+    /// Three `return`s and three notifications to keep consistent would make
+    /// the fourth one the one that gets forgotten.
     async fn converse(
         &self,
         session: &mut AgentSession,
@@ -991,17 +982,17 @@ impl AgentRuntime {
                 return Ok(AgentOutcome::Cancelled { turns });
             }
             if turn.calls.is_empty() {
-                // Gardée dans la session : la question suivante la lit, et
-                // « continuer » reprend là où elle s'est arrêtée. Un texte vide
-                // n'est pas un message — plusieurs fournisseurs le refusent.
+                // Kept in the session: the next question reads it, and
+                // "continue" picks up where it stopped. An empty text is not a
+                // message — several providers refuse it.
                 if !turn.text.is_empty() {
                     session.messages.push(
                         ChatMessage::assistant(turn.text.clone())
                             .with_reasoning(turn.reasoning.clone()),
                     );
                 }
-                // Un refus dit par le modèle vaut la raison d'arrêt : certains
-                // fournisseurs refusent en texte et terminent sur `EndTurn`.
+                // A refusal stated by the model counts as the stop reason:
+                // some providers refuse in text and end on `EndTurn`.
                 let ending = if turn.refusal.is_empty() {
                     Stop::of(&turn.stop)
                 } else {
@@ -1052,7 +1043,8 @@ impl AgentRuntime {
         Ok(AgentOutcome::TurnLimit { turns })
     }
 
-    /// Traduit un appel, le soumet au bus, et rend ce qu'il faut dire au modèle.
+    /// Translates a call, submits it to the bus, and returns what to tell the
+    /// model.
     async fn run_one_tool(
         &self,
         call: &ToolCall,
@@ -1077,15 +1069,15 @@ impl AgentRuntime {
     }
 }
 
-/// Le chemin **unique** d'un appel d'outil, quelle que soit sa provenance.
+/// The **single** path of a tool call, wherever it comes from.
 ///
-/// La boucle interne y passe pour un appel du modèle ; le pont MCP y passe
-/// pour un appel d'un agent externe ([ADR-0030](../../../docs/adr/0030-outils-oxyn-exposes-a-un-agent-externe.md)).
-/// Deux chemins auraient divergé, et c'est celui que personne ne relit que
-/// l'agent aurait emprunté ([I-01](../../../CLAUDE.md#i-01)).
+/// The inner loop goes through it for a model call; the MCP bridge goes
+/// through it for an external agent's call ([ADR-0030](../../../docs/adr/0030-outils-oxyn-exposes-a-un-agent-externe.md)).
+/// Two paths would have diverged, and the one nobody reviews is the one the
+/// agent would have taken ([I-01](../../../CLAUDE.md#i-01)).
 #[expect(
     clippy::too_many_arguments,
-    reason = "tout est imposé par l'hôte ; regrouper masquerait ce qui vient d'où"
+    reason = "everything is imposed by the host; grouping would hide what comes from where"
 )]
 pub(crate) async fn run_tool_call(
     tools: &ToolRegistry,
@@ -1101,10 +1093,10 @@ pub(crate) async fn run_tool_call(
     {
         let request = match tools.request(call, allowed, scope) {
             Ok(request) => request,
-            // Un nom d'outil inventé ou des arguments mal formés se corrigent
-            // au tour suivant : on le dit au modèle plutôt que d'interrompre.
+            // An invented tool name or malformed arguments can be fixed on the
+            // next turn: we tell the model rather than interrupt.
             Err(err) if err.is_recoverable_by_model() => {
-                tracing::debug!(tool = %call.name, "appel d'outil refusé à la traduction");
+                tracing::debug!(tool = %call.name, "tool call refused at translation");
                 observer.observe(AgentEvent::CallRejected {
                     tool: &call.name,
                     error: &err,
@@ -1119,11 +1111,11 @@ pub(crate) async fn run_tool_call(
             tool = %call.name,
             command = command.name(),
             mutating = command.is_mutating(),
-            "commande soumise au bus par un agent"
+            "command submitted to the bus by an agent"
         );
-        // Annoncé **avant** l'exécution : UX-SPEC demande que chaque commande
-        // se montre avant son résultat, et une commande annoncée après coup ne
-        // dit rien de l'attente qui vient de s'écouler.
+        // Announced **before** execution: UX-SPEC asks that every command show
+        // before its result, and a command announced after the fact says
+        // nothing about the wait that just went by.
         observer.observe(AgentEvent::CommandSubmitted {
             tool: &call.name,
             command: command.name(),
@@ -1131,17 +1123,17 @@ pub(crate) async fn run_tool_call(
             mutating: command.is_mutating(),
         });
 
-        // Les mots de recherche sont ceux que la commande porte — donc ceux que
-        // le journal retient —, pas ceux de l'appel : il n'y a qu'une vérité.
+        // The search words are those the command carries — hence those the
+        // log keeps —, not the call's: there is only one truth.
         let focus = match command {
             Command::DescribeCatalog { focus, .. } => focus.clone(),
             _ => None,
         };
         let dispatched = match request {
-            // Refusé ici, sous le niveau que la boucle tient, **avant** que
-            // l'utilisateur ne soit sollicité : une approbation demandée sous
-            // `Metadata` serait un écran qui ne peut que refuser. Le puits
-            // relit ensuite le niveau enregistré, qui peut avoir baissé depuis.
+            // Refused here, under the tier the loop holds, **before** the user
+            // is solicited: an approval asked under `Metadata` would be a
+            // screen that can only refuse. The sink then re-reads the recorded
+            // tier, which may have dropped since.
             ToolRequest::Sample(_) if !tier.allows_row_values() => DispatchOutcome::Denied {
                 reason: format!(
                     "row samples are shared only on a connection whose privacy tier is \
@@ -1152,15 +1144,15 @@ pub(crate) async fn run_tool_call(
             ToolRequest::Sample(ask) => sink.request_sample(actor, ask, cancel).await,
             ToolRequest::Dispatch(command) => sink.dispatch(actor, command, cancel).await,
         };
-        // Le niveau de la session est celui de la connexion. C'est le seul
-        // endroit du chemin d'erreur où il est connu, donc le seul où il peut
-        // s'appliquer (I-04).
+        // The session's tier is the connection's. It is the only place on the
+        // error path where it is known, hence the only place where it can
+        // apply (I-04).
         let outcome =
             ToolOutcome::from_dispatch(tier, dispatched.clone(), scope.language, focus.as_deref());
         let (outcome, dispatched) = settle_sample(outcome, dispatched).await;
-        // L'utilisateur voit les faits ; le modèle voit `outcome`. L'écart est
-        // porté par l'événement, constaté sur les deux valeurs qu'on tient ici
-        // — le seul endroit où elles coexistent.
+        // The user sees the facts; the model sees `outcome`. The gap is
+        // carried by the event, observed on the two values held here — the
+        // only place where they coexist.
         observer.observe(AgentEvent::CommandReported {
             tool: &call.name,
             outcome: &dispatched,
@@ -1170,12 +1162,12 @@ pub(crate) async fn run_tool_call(
     }
 }
 
-/// Libère un échantillon rendu, ou dit ce qui est réellement arrivé.
+/// Releases a rendered sample, or says what actually happened.
 ///
-/// Le rendu est connu : c'est maintenant, et seulement maintenant, que la
-/// sortie s'inscrit. Un échantillon que le rendu a écarté n'est pas libéré —
-/// rien ne s'inscrit, rien ne s'annonce —, et l'observateur apprend le refus
-/// que le modèle lit, pas « N lignes envoyées ».
+/// The rendering is known: it is now, and only now, that the release is
+/// recorded. A sample the rendering dropped is not released — nothing is
+/// recorded, nothing is announced —, and the observer learns the refusal the
+/// model reads, not "N rows sent".
 async fn settle_sample(
     outcome: ToolOutcome,
     dispatched: DispatchOutcome,
@@ -1203,13 +1195,13 @@ async fn settle_sample(
             },
             DispatchOutcome::Denied { reason },
         ),
-        // `from_sample` ne rend que ces deux-là ; une autre variante n'a rien
-        // envoyé, et ne libère rien.
+        // `from_sample` only returns those two; another variant sent nothing,
+        // and releases nothing.
         other => (other, dispatched),
     }
 }
 
-/// Un `io::Write` qui ne garde rien : il mesure une sérialisation.
+/// An `io::Write` that keeps nothing: it measures a serialization.
 struct ByteCount(usize);
 
 impl std::io::Write for ByteCount {
@@ -1223,37 +1215,38 @@ impl std::io::Write for ByteCount {
     }
 }
 
-/// Compte un événement du flux dans le budget de la génération.
+/// Counts a stream event against the generation budget.
 ///
-/// Seul ce que le tour retient compte : le texte, le refus, le raisonnement,
-/// et chaque appel ou bloc de raisonnement complet. Les fragments d'arguments
-/// comptent aussi, puisqu'ils sont montrés au fil du flux.
+/// Only what the turn keeps counts: the text, the refusal, the reasoning, and
+/// each complete call or reasoning block. Argument fragments count too, since
+/// they are shown as the stream goes.
 fn charge(
     budget: &mut oxyn_llm::GenerationBudget,
     event: &ChatEvent,
 ) -> Result<(), oxyn_llm::BudgetExceeded> {
     match event {
-        ChatEvent::TextDelta(texte) | ChatEvent::RefusalDelta(texte) => budget.charge(texte.len()),
+        ChatEvent::TextDelta(text) | ChatEvent::RefusalDelta(text) => budget.charge(text.len()),
         ChatEvent::ReasoningDelta { text, .. } => budget.charge(text.len()),
         ChatEvent::ToolCallDelta { arguments, .. } => budget.charge(arguments.len()),
-        // Le nom n'arrive qu'ici : sans ce compte, un fournisseur tiers
-        // pourrait l'allonger sans limite.
+        // The name only arrives here: without this count, a third-party
+        // provider could lengthen it without limit.
         ChatEvent::ToolCallStarted { index, name, .. } => {
             budget.charge_tool_name(*index, 0, name.len())
         }
         ChatEvent::ToolCallComplete(call) => {
-            // Mesuré sans être recopié : l'écriture ne fait que compter.
-            let mut compteur = ByteCount(0);
-            let taille = serde_json::to_writer(&mut compteur, &call.arguments)
-                .map_or(usize::MAX, |()| compteur.0);
+            // Measured without being copied: the write only counts.
+            let mut counter = ByteCount(0);
+            let size = serde_json::to_writer(&mut counter, &call.arguments)
+                .map_or(usize::MAX, |()| counter.0);
             let index = u32::try_from(budget.tool_calls()).unwrap_or(u32::MAX);
-            budget.check_tool_arguments(index, taille)?;
+            budget.check_tool_arguments(index, size)?;
             budget.open_tool_call()
         }
         ChatEvent::ReasoningComplete { block, .. } => {
             budget.open_block()?;
             match block {
-                // Un bloc chiffré arrive d'un coup, sans fragments comptés.
+                // An encrypted block arrives at once, without counted
+                // fragments.
                 ReasoningBlock::Redacted { data } => budget.charge(data.len()),
                 _ => Ok(()),
             }
@@ -1263,7 +1256,7 @@ fn charge(
 }
 
 impl AgentRuntime {
-    /// Un aller-retour avec le modèle.
+    /// One round trip with the model.
     async fn one_turn(
         &self,
         session: &AgentSession,
@@ -1284,30 +1277,29 @@ impl AgentRuntime {
         let mut refusal = String::new();
         let mut stop = StopReason::Unspecified;
         let mut failure: Option<String> = None;
-        // Les fournisseurs d'`oxyn-llm` bornent déjà leur flux ; ce compte-ci
-        // vaut pour tout `LlmProvider`, et c'est ici que le texte et les refus
-        // s'accumulent. Mêmes limites, même type : deux jeux de plafonds
-        // divergeraient.
+        // `oxyn-llm`'s providers already bound their stream; this count holds
+        // for any `LlmProvider`, and this is where text and refusals
+        // accumulate. Same limits, same type: two sets of caps would diverge.
         let mut budget = oxyn_llm::GenerationBudget::new();
 
-        // Pas de `select!` sur l'annulation : le futur abandonné pourrait l'être
-        // après avoir consommé des octets, laissant le décodeur désynchronisé.
-        // Le jeton est de toute façon cloné dans le flux du fournisseur, qui
-        // émet `Done { Cancelled }` — le relire ici ne fait que raccourcir
-        // l'attente.
+        // No `select!` on cancellation: the dropped future could be dropped
+        // after consuming bytes, leaving the decoder out of sync. The token is
+        // cloned into the provider's stream anyway, which emits
+        // `Done { Cancelled }` — re-reading it here only shortens the wait.
         while let Some(event) = stream.next().await {
-            // Compté avant d'être accumulé ou montré. Au dépassement, le flux
-            // est abandonné — la connexion se ferme — et le tour est une
-            // coupure : rien de ce qu'il a proposé ne s'exécute, et le
-            // fournisseur a peut-être facturé ce qu'on n'a pas lu (I-13).
-            if let Err(limite) = charge(&mut budget, &event) {
-                return Err(AiError::Interrupted(limite.to_string()));
+            // Counted before being accumulated or shown. On overflow, the
+            // stream is dropped — the connection closes — and the turn is a
+            // cut: nothing it proposed is executed, and the provider may have
+            // billed what we did not read (I-13).
+            if let Err(limit) = charge(&mut budget, &event) {
+                return Err(AiError::Interrupted(limit.to_string()));
             }
             match event {
                 ChatEvent::TextDelta(delta) => {
-                    // Notifié avant d'être accumulé : c'est ce qui fait que la
-                    // réponse s'écrit au fil du flux, et que l'annulation reste
-                    // cliquable pendant ce temps plutôt qu'entre deux tours.
+                    // Notified before being accumulated: that is what makes
+                    // the answer write itself as the stream goes, and keeps
+                    // cancellation clickable meanwhile rather than between two
+                    // turns.
                     observer.observe(AgentEvent::TextDelta { text: &delta });
                     text.push_str(&delta);
                 }
@@ -1315,8 +1307,9 @@ impl AgentRuntime {
                     observer.observe(AgentEvent::ToolCallDrafted { index, tool: &name });
                 }
                 ChatEvent::ToolCallDelta { index, arguments } => {
-                    // Le JSON partiel se montre tel qu'il arrive : c'est ce qui
-                    // dit, pendant un long appel, que le modèle écrit encore.
+                    // The partial JSON is shown as it arrives: that is what
+                    // says, during a long call, that the model is still
+                    // writing.
                     observer.observe(AgentEvent::ToolArgumentsDelta {
                         index,
                         fragment: &arguments,
@@ -1326,17 +1319,17 @@ impl AgentRuntime {
                     observer.observe(AgentEvent::ThinkingDelta { text: &fragment });
                 }
                 ChatEvent::ReasoningComplete { block, .. } => {
-                    // Un bloc chiffré n'a pas de texte : on dit qu'il a eu lieu
-                    // plutôt que de laisser croire que le modèle n'a pas pensé.
+                    // An encrypted block has no text: we say it took place
+                    // rather than let it be believed the model did not think.
                     if matches!(block, ReasoningBlock::Redacted { .. }) {
                         observer.observe(AgentEvent::ThinkingRedacted);
                     }
-                    // Conservé tel quel : les fournisseurs qui signent leurs
-                    // blocs refusent le tour suivant s'il en manque un.
+                    // Kept as is: providers that sign their blocks refuse the
+                    // next turn if one is missing.
                     reasoning.push(block);
                 }
-                // Un refus n'est pas du texte de réponse : le confondre ferait
-                // passer « je ne réponds pas » pour un avis sur la base.
+                // A refusal is not answer text: confusing them would pass
+                // "I am not answering" off as an opinion about the database.
                 ChatEvent::RefusalDelta(fragment) => refusal.push_str(&fragment),
                 ChatEvent::Usage {
                     prompt_tokens,
@@ -1352,18 +1345,18 @@ impl AgentRuntime {
                     reasoning: reasoning_tokens,
                 })),
                 ChatEvent::ToolCallComplete(call) => calls.push(call),
-                // Gardé, et la lecture continue : le `Done` qui suit dit si le
-                // fournisseur a annoncé son échec ou si le flux a été coupé.
-                // Sortir ici perdait `Interrupted`, et un tour peut-être facturé
-                // devenait une panne ordinaire, rejouable (I-13).
+                // Kept, and reading goes on: the `Done` that follows says
+                // whether the provider announced its failure or the stream was
+                // cut. Leaving here lost `Interrupted`, and a possibly billed
+                // turn became an ordinary, replayable failure (I-13).
                 ChatEvent::Error(message) => failure = Some(message),
                 ChatEvent::Done { stop_reason } => {
                     stop = stop_reason;
                     break;
                 }
-                // `ChatEvent` est `#[non_exhaustive]` : un événement que cette
-                // version ne connaît pas ne se montre pas plutôt que de
-                // s'inventer un sens.
+                // `ChatEvent` is `#[non_exhaustive]`: an event this version
+                // does not know is not shown rather than given an invented
+                // meaning.
                 _ => {}
             }
             if cancel.is_cancelled() {
@@ -1378,16 +1371,16 @@ impl AgentRuntime {
                     "the stream ended without the provider closing the turn".to_owned()
                 })));
             }
-            // Un échec annoncé par le fournisseur : il n'y a pas de doute sur ce
-            // qui s'est passé de son côté, et le tour peut être redemandé.
+            // A failure announced by the provider: there is no doubt about
+            // what happened on its side, and the turn can be asked again.
             if let Some(message) = failure {
                 return Err(AiError::Provider(message));
             }
         }
         Ok(Turn {
             text,
-            // Un tour annulé n'exécute rien : l'utilisateur vient précisément de
-            // demander que ça s'arrête.
+            // A cancelled turn executes nothing: the user just asked precisely
+            // for it to stop.
             calls: if cancelled { Vec::new() } else { calls },
             reasoning,
             refusal,
@@ -1400,9 +1393,9 @@ impl AgentRuntime {
 
 #[cfg(test)]
 mod tests {
-    /// `from_dispatch` pour une issue qui n'est pas un catalogue lu : le
-    /// langage et les mots de recherche n'y servent pas.
-    fn hors_catalogue(tier: PrivacyTier, outcome: DispatchOutcome) -> ToolOutcome {
+    /// `from_dispatch` for an outcome that is not a read catalog: the
+    /// language and search words play no part.
+    fn outside_catalog(tier: PrivacyTier, outcome: DispatchOutcome) -> ToolOutcome {
         ToolOutcome::from_dispatch(tier, outcome, oxyn_core::QueryLanguage::SQL, None)
     }
 
@@ -1422,95 +1415,97 @@ mod tests {
 
     use super::*;
 
-    /// I-03, corollaire vérifiable : le message du serveur ne sort pas par `Debug`.
+    /// I-03, verifiable corollary: the server's message does not leave through
+    /// `Debug`.
     ///
-    /// Le piège que ce test ferme est celui que le corollaire nomme : un
-    /// `tracing::debug!("{outcome:?}")` ajouté plus tard pour diagnostiquer
-    /// autre chose, et la valeur qui viole une contrainte part sur disque. Rien
-    /// n'échoue au moment de la faute — c'est pourquoi elle se teste.
+    /// The trap this test closes is the one the corollary names: a
+    /// `tracing::debug!("{outcome:?}")` added later to diagnose something
+    /// else, and the value violating a constraint goes to disk. Nothing fails
+    /// at the moment of the fault — which is why it is tested.
     #[test]
-    fn le_message_du_serveur_ne_sort_pas_par_debug() {
+    fn the_server_message_does_not_leave_through_debug() {
         let issue = DispatchOutcome::Failed {
             class: ErrorClass::Permanent,
             message: "Key (email)=(dupont@example.com) already exists".to_owned(),
         };
-        let rendu = format!("{issue:?}");
+        let rendered = format!("{issue:?}");
         assert!(
-            !rendu.contains("dupont@example.com"),
-            "aucune valeur de ligne dans un Debug : {rendu}"
+            !rendered.contains("dupont@example.com"),
+            "no row value in a Debug: {rendered}"
         );
         assert!(
-            rendu.contains("Permanent"),
-            "la classe reste lisible, elle ne cite rien : {rendu}"
+            rendered.contains("Permanent"),
+            "the class stays readable, it quotes nothing: {rendered}"
         );
         assert!(
-            rendu.contains("message_bytes"),
-            "et la longueur suffit à diagnostiquer : {rendu}"
+            rendered.contains("message_bytes"),
+            "and the length is enough to diagnose: {rendered}"
         );
     }
 
-    /// I-03, même piège côté catalogue : le schéma rendu pour l'agent ne sort
-    /// pas par `Debug`, comme il ne sort pas par celui d'`AgentContext`.
+    /// I-03, same trap on the catalog side: the schema rendered for the agent
+    /// does not leave through `Debug`, just as it does not through
+    /// `AgentContext`'s.
     #[test]
-    fn le_schema_decrit_ne_sort_pas_par_debug() {
+    fn the_described_schema_does_not_leave_through_debug() {
         let issue = ToolOutcome::Described {
             block: "table \"patients\"\n  \"hiv_status\" bool".to_owned(),
         };
-        let rendu = format!("{issue:?}");
-        assert!(!rendu.contains("patients"), "{rendu}");
-        assert!(!rendu.contains("hiv_status"), "{rendu}");
+        let rendered = format!("{issue:?}");
+        assert!(!rendered.contains("patients"), "{rendered}");
+        assert!(!rendered.contains("hiv_status"), "{rendered}");
         assert!(
-            rendu.contains("Described"),
-            "la variante reste lisible : {rendu}"
+            rendered.contains("Described"),
+            "the variant stays readable: {rendered}"
         );
         assert!(
-            rendu.contains("bytes"),
-            "la longueur suffit à diagnostiquer : {rendu}"
+            rendered.contains("bytes"),
+            "the length is enough to diagnose: {rendered}"
         );
     }
 
-    /// Fournisseur de test : rejoue une liste de tours, sans réseau.
+    /// Test provider: replays a list of turns, without network.
     #[derive(Debug)]
-    struct FournisseurScripte {
-        tours: Mutex<Vec<Vec<ChatEvent>>>,
-        appels: Mutex<usize>,
-        /// Ce qui est **réellement** parti au fournisseur, tour par tour.
+    struct ScriptedProvider {
+        turns: Mutex<Vec<Vec<ChatEvent>>>,
+        calls: Mutex<usize>,
+        /// What **actually** went to the provider, turn by turn.
         ///
-        /// Relire `session.messages()` dirait ce que la conversation contient à
-        /// la fin ; ceci dit ce qui a franchi la frontière, et c'est cela que
-        /// mesure I-04.
-        recues: Mutex<Vec<String>>,
-        /// L'effort de chaque requête, tel qu'il est parti.
+        /// Re-reading `session.messages()` would say what the conversation
+        /// contains at the end; this says what crossed the boundary, and that
+        /// is what I-04 measures.
+        received: Mutex<Vec<String>>,
+        /// Each request's effort, as it went out.
         efforts: Mutex<Vec<Option<oxyn_llm::ReasoningEffort>>>,
     }
 
-    impl FournisseurScripte {
-        fn new(tours: Vec<Vec<ChatEvent>>) -> Arc<Self> {
+    impl ScriptedProvider {
+        fn new(turns: Vec<Vec<ChatEvent>>) -> Arc<Self> {
             Arc::new(Self {
-                tours: Mutex::new(tours),
-                appels: Mutex::new(0),
-                recues: Mutex::new(Vec::new()),
+                turns: Mutex::new(turns),
+                calls: Mutex::new(0),
+                received: Mutex::new(Vec::new()),
                 efforts: Mutex::new(Vec::new()),
             })
         }
 
-        /// Un fournisseur qui redemande indéfiniment le même outil.
-        fn boucle() -> Arc<Self> {
+        /// A provider that asks for the same tool forever.
+        fn looping() -> Arc<Self> {
             Self::new(Vec::new())
         }
 
-        /// Nombre de requêtes reçues.
-        fn appels(&self) -> usize {
-            *self.appels.lock().expect("verrou de test")
+        /// Number of requests received.
+        fn calls(&self) -> usize {
+            *self.calls.lock().expect("test lock")
         }
 
-        /// Tout ce qui a franchi la frontière, en un seul texte.
-        fn envoye(&self) -> String {
-            self.recues.lock().expect("verrou de test").join("\n")
+        /// Everything that crossed the boundary, as a single text.
+        fn sent(&self) -> String {
+            self.received.lock().expect("test lock").join("\n")
         }
     }
 
-    fn appel_outil() -> ChatEvent {
+    fn tool_call() -> ChatEvent {
         ChatEvent::ToolCallComplete(ToolCall::new(
             "call_1",
             EXECUTE_QUERY,
@@ -1518,20 +1513,20 @@ mod tests {
         ))
     }
 
-    fn fin_outils() -> ChatEvent {
+    fn end_of_tool_calls() -> ChatEvent {
         ChatEvent::Done {
             stop_reason: StopReason::ToolCalls,
         }
     }
 
     #[async_trait]
-    impl LlmProvider for FournisseurScripte {
+    impl LlmProvider for ScriptedProvider {
         fn id(&self) -> oxyn_llm::ProviderId {
             oxyn_llm::ProviderId::ollama()
         }
 
         async fn models(&self) -> CoreResult<Vec<ModelInfo>> {
-            Ok(vec![ModelInfo::new("factice")])
+            Ok(vec![ModelInfo::new("dummy")])
         }
 
         async fn stream(
@@ -1539,12 +1534,12 @@ mod tests {
             request: ChatRequest,
             _cancel: &CancelToken,
         ) -> CoreResult<BoxStream<'static, ChatEvent>> {
-            *self.appels.lock().expect("verrou de test") += 1;
+            *self.calls.lock().expect("test lock") += 1;
             self.efforts
                 .lock()
-                .expect("verrou de test")
+                .expect("test lock")
                 .push(request.reasoning_effort);
-            self.recues.lock().expect("verrou de test").push(
+            self.received.lock().expect("test lock").push(
                 request
                     .messages
                     .iter()
@@ -1552,145 +1547,146 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
-            // Le verrou est relâché avant la construction du flux : un garde de
-            // `std::sync::Mutex` n'est pas `Send`, et le futur d'un `LlmProvider`
-            // doit l'être.
-            let evenements = {
-                let mut tours = self.tours.lock().expect("verrou de test");
-                if tours.is_empty() {
-                    // Comportement par défaut : redemander le même outil, pour
-                    // éprouver la borne de tours.
-                    vec![appel_outil(), fin_outils()]
+            // The lock is released before the stream is built: a
+            // `std::sync::Mutex` guard is not `Send`, and an `LlmProvider`'s
+            // future must be.
+            let events = {
+                let mut turns = self.turns.lock().expect("test lock");
+                if turns.is_empty() {
+                    // Default behavior: ask for the same tool again, to test
+                    // the turn bound.
+                    vec![tool_call(), end_of_tool_calls()]
                 } else {
-                    tours.remove(0)
+                    turns.remove(0)
                 }
             };
-            Ok(Box::pin(futures::stream::iter(evenements)))
+            Ok(Box::pin(futures::stream::iter(events)))
         }
     }
 
-    /// Bus de test : enregistre ce qu'on lui soumet, rend une réponse figée.
+    /// Test bus: records what is submitted to it, returns a fixed answer.
     #[derive(Debug)]
-    struct BusFactice {
-        recues: Mutex<Vec<(Actor, Command)>>,
-        reponse: DispatchOutcome,
+    struct FakeBus {
+        received: Mutex<Vec<(Actor, Command)>>,
+        answer: DispatchOutcome,
     }
 
-    impl BusFactice {
-        fn new(reponse: DispatchOutcome) -> Self {
+    impl FakeBus {
+        fn new(answer: DispatchOutcome) -> Self {
             Self {
-                recues: Mutex::new(Vec::new()),
-                reponse,
+                received: Mutex::new(Vec::new()),
+                answer,
             }
         }
 
-        fn succes() -> Self {
+        fn succeeding() -> Self {
             Self::new(DispatchOutcome::Completed {
                 summary: "1 rows, 1 batches".to_owned(),
             })
         }
 
-        /// Un bus qui échoue en recopiant le message du serveur, valeurs
-        /// comprises — c'est ce que fait un vrai serveur.
-        fn echec(message: &str) -> Self {
+        /// A bus that fails by copying the server's message, values included —
+        /// that is what a real server does.
+        fn failure(message: &str) -> Self {
             Self::new(DispatchOutcome::Failed {
                 class: ErrorClass::Permanent,
                 message: message.to_owned(),
             })
         }
 
-        fn commandes(&self) -> Vec<(Actor, Command)> {
-            self.recues.lock().expect("verrou de test").clone()
+        fn commands(&self) -> Vec<(Actor, Command)> {
+            self.received.lock().expect("test lock").clone()
         }
     }
 
     #[async_trait]
-    impl CommandSink for BusFactice {
+    impl CommandSink for FakeBus {
         async fn dispatch(
             &self,
             actor: Actor,
             command: Command,
             _cancel: &CancelToken,
         ) -> DispatchOutcome {
-            self.recues
+            self.received
                 .lock()
-                .expect("verrou de test")
+                .expect("test lock")
                 .push((actor, command));
-            self.reponse.clone()
+            self.answer.clone()
         }
     }
 
-    /// Ce qu'un observateur a vu, recopié sous une forme comparable.
+    /// What an observer saw, copied in a comparable form.
     ///
-    /// Un observateur réel pousse dans un canal ; celui-ci retient, parce qu'un
-    /// test doit pouvoir relire l'ordre autant que le contenu.
+    /// A real observer pushes into a channel; this one keeps, because a test
+    /// must be able to re-read the order as much as the content.
     #[derive(Debug, Clone, PartialEq)]
-    enum Vu {
-        Tour {
+    enum Seen {
+        Turn {
             turn: usize,
             max_turns: usize,
         },
-        Texte(String),
-        Soumise {
+        Text(String),
+        Submitted {
             tool: String,
             command: &'static str,
             connection: Option<ConnectionId>,
             mutating: bool,
         },
-        Rapport {
+        Report {
             tool: String,
             outcome: DispatchOutcome,
             withheld: bool,
         },
-        Refus {
+        Rejected {
             tool: String,
             message: String,
         },
-        Fin(AgentOutcome),
+        End(AgentOutcome),
     }
 
-    /// Observateur de test : retient tout, dans l'ordre.
+    /// Test observer: keeps everything, in order.
     #[derive(Debug, Default)]
-    struct Temoin {
-        vus: Mutex<Vec<Vu>>,
+    struct Witness {
+        seen: Mutex<Vec<Seen>>,
     }
 
-    impl Temoin {
-        fn vus(&self) -> Vec<Vu> {
-            self.vus.lock().expect("verrou de test").clone()
+    impl Witness {
+        fn seen(&self) -> Vec<Seen> {
+            self.seen.lock().expect("test lock").clone()
         }
 
-        /// L'unique rapport d'exécution vu, quand le scénario n'en produit
-        /// qu'un.
-        fn rapport(&self) -> Vu {
-            self.vus()
+        /// The single execution report seen, when the scenario produces only
+        /// one.
+        fn report(&self) -> Seen {
+            self.seen()
                 .into_iter()
-                .find(|vu| matches!(vu, Vu::Rapport { .. }))
-                .expect("un rapport d'exécution")
+                .find(|seen| matches!(seen, Seen::Report { .. }))
+                .expect("an execution report")
         }
 
-        fn position(&self, correspond: impl Fn(&Vu) -> bool) -> usize {
-            self.vus()
+        fn position(&self, predicate: impl Fn(&Seen) -> bool) -> usize {
+            self.seen()
                 .iter()
-                .position(correspond)
-                .expect("l'événement attendu")
+                .position(predicate)
+                .expect("the expected event")
         }
     }
 
-    impl AgentObserver for Temoin {
+    impl AgentObserver for Witness {
         fn observe(&self, event: AgentEvent<'_>) {
-            // Exhaustif, sans `_` : `AgentEvent` est `#[non_exhaustive]` mais
-            // l'attribut ne vaut qu'hors de la crate. Une variante ajoutée fait
-            // donc rougir ce test plutôt que d'être ignorée en silence.
-            let vu = match event {
-                AgentEvent::TurnStarted { turn, max_turns } => Vu::Tour { turn, max_turns },
-                AgentEvent::TextDelta { text } => Vu::Texte(text.to_owned()),
+            // Exhaustive, without `_`: `AgentEvent` is `#[non_exhaustive]` but
+            // the attribute only applies outside the crate. An added variant
+            // therefore turns this test red rather than being silently
+            // ignored.
+            let seen = match event {
+                AgentEvent::TurnStarted { turn, max_turns } => Seen::Turn { turn, max_turns },
+                AgentEvent::TextDelta { text } => Seen::Text(text.to_owned()),
                 AgentEvent::CommandSubmitted {
                     tool,
                     command,
                     connection,
                     mutating,
-                } => Vu::Soumise {
+                } => Seen::Submitted {
                     tool: tool.to_owned(),
                     command,
                     connection,
@@ -1700,16 +1696,16 @@ mod tests {
                     tool,
                     outcome,
                     withheld,
-                } => Vu::Rapport {
+                } => Seen::Report {
                     tool: tool.to_owned(),
                     outcome: outcome.clone(),
                     withheld,
                 },
-                AgentEvent::CallRejected { tool, error } => Vu::Refus {
+                AgentEvent::CallRejected { tool, error } => Seen::Rejected {
                     tool: tool.to_owned(),
                     message: error.to_string(),
                 },
-                AgentEvent::Finished { outcome } => Vu::Fin(outcome.clone()),
+                AgentEvent::Finished { outcome } => Seen::End(outcome.clone()),
                 // Named one by one, still without `_`: what streams alongside
                 // the answer is not what these tests compare.
                 AgentEvent::ThinkingDelta { .. }
@@ -1723,7 +1719,7 @@ mod tests {
                 | AgentEvent::ContextWindow { .. }
                 | AgentEvent::AgentSettings(_) => return,
             };
-            self.vus.lock().expect("verrou de test").push(vu);
+            self.seen.lock().expect("test lock").push(seen);
         }
     }
 
@@ -1733,43 +1729,37 @@ mod tests {
             .with_max_turns(3)
     }
 
-    fn perimetre() -> ToolScope {
+    fn granted_scope() -> ToolScope {
         ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL)
     }
 
     fn session(tier: PrivacyTier) -> AgentSession {
         let cache = CatalogCache::new();
-        let contexte = ContextBuilder::new(&cache, tier).build();
-        let mut session = AgentSession::new(&spec(), &contexte, perimetre());
-        session.ask("combien de clients ?");
+        let context = ContextBuilder::new(&cache, tier).build();
+        let mut session = AgentSession::new(&spec(), &context, granted_scope());
+        session.ask("how many clients?");
         session
     }
 
-    fn runtime(fournisseur: Arc<FournisseurScripte>, reach: Reach) -> AgentRuntime {
-        AgentRuntime::new(
-            spec(),
-            fournisseur,
-            reach,
-            ToolRegistry::builtin(),
-            "llama3.2",
-        )
-        .expect("déclaration valide")
+    fn runtime(provider: Arc<ScriptedProvider>, reach: Reach) -> AgentRuntime {
+        AgentRuntime::new(spec(), provider, reach, ToolRegistry::builtin(), "llama3.2")
+            .expect("valid declaration")
     }
 
     #[test]
-    fn une_reponse_sans_outil_termine_la_conversation() {
-        let fournisseur = FournisseurScripte::new(vec![vec![
+    fn an_answer_without_tools_ends_the_conversation() {
+        let provider = ScriptedProvider::new(vec![vec![
             ChatEvent::TextDelta("SELECT count(*) FROM clients;".to_owned()),
             ChatEvent::Done {
                 stop_reason: StopReason::EndTurn,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
-            .expect("conversation menée");
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect("conversation carried out");
         assert_eq!(
             issue,
             AgentOutcome::Answered {
@@ -1779,389 +1769,391 @@ mod tests {
                 stop: StopReason::EndTurn,
             }
         );
-        assert!(bus.commandes().is_empty(), "rien ne devait être exécuté");
+        assert!(bus.commands().is_empty(), "nothing was to be executed");
     }
 
-    /// Une réponse partielle rendue comme une réponse complète est un mensonge
-    /// muet : l'utilisateur agit sur une moitié d'analyse.
-    fn fin_de_tour(raison: StopReason) -> AgentOutcome {
-        let fournisseur = FournisseurScripte::new(vec![vec![
-            ChatEvent::TextDelta("je regarde les factures".to_owned()),
+    /// A partial answer returned as a complete one is a silent lie: the user
+    /// acts on half an analysis.
+    fn end_of_turn(reason: StopReason) -> AgentOutcome {
+        let provider = ScriptedProvider::new(vec![vec![
+            ChatEvent::TextDelta("looking at the invoices".to_owned()),
             ChatEvent::Done {
-                stop_reason: raison,
+                stop_reason: reason,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
-            .expect("conversation menée")
+        block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect("conversation carried out")
     }
 
     #[test]
-    fn un_refus_et_une_pause_ne_sont_pas_des_reponses() {
+    fn a_refusal_and_a_pause_are_not_answers() {
         assert_eq!(
-            fin_de_tour(StopReason::ContentFilter),
+            end_of_turn(StopReason::ContentFilter),
             AgentOutcome::Refused {
-                text: "je regarde les factures".to_owned(),
+                text: "looking at the invoices".to_owned(),
                 turns: 1,
             }
         );
-        // Le refus du modèle lui-même, distinct du filtrage du fournisseur,
-        // n'est pas davantage une réponse.
+        // The model's own refusal, distinct from the provider's filtering, is
+        // no more an answer.
         assert!(matches!(
-            fin_de_tour(StopReason::Refusal),
+            end_of_turn(StopReason::Refusal),
             AgentOutcome::Refused { .. }
         ));
-        // La pause a sa variante : le fournisseur ne l'écrit plus dans `Other`.
+        // The pause has its variant: the provider no longer writes it in
+        // `Other`.
         assert_eq!(
-            fin_de_tour(StopReason::Paused),
+            end_of_turn(StopReason::Paused),
             AgentOutcome::Paused {
-                text: "je regarde les factures".to_owned(),
+                text: "looking at the invoices".to_owned(),
                 turns: 1,
             }
         );
-        // Une raison inconnue reste une réponse : inventer une pause bloquerait
-        // une conversation terminée.
+        // An unknown reason stays an answer: inventing a pause would block a
+        // finished conversation.
         assert!(matches!(
-            fin_de_tour(StopReason::Other("filtre maison".to_owned())),
+            end_of_turn(StopReason::Other("in-house filter".to_owned())),
             AgentOutcome::Answered { .. }
         ));
     }
 
     #[test]
-    fn un_appel_d_outil_devient_une_commande_portant_actor_agent() {
-        // I-07 : aucune sortie de modèle ne s'exécute directement. Elle devient
-        // une Command portant Actor::Agent et part dans le bus de l'appelant.
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+    fn a_tool_call_becomes_a_command_carrying_actor_agent() {
+        // I-07: no model output is executed directly. It becomes a Command
+        // carrying Actor::Agent and goes into the caller's bus.
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
-                ChatEvent::TextDelta("il y a une ligne".to_owned()),
+                ChatEvent::TextDelta("there is one row".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
         let declaration = spec();
-        let moteur = AgentRuntime::new(
+        let engine = AgentRuntime::new(
             declaration.clone(),
-            fournisseur,
+            provider,
             Reach::Local,
             ToolRegistry::builtin(),
             "llama3.2",
         )
-        .expect("déclaration valide");
-        let bus = BusFactice::succes();
+        .expect("valid declaration");
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
         let conversation = session.id();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert!(
             matches!(issue, AgentOutcome::Answered { turns: 2, .. }),
             "{issue:?}"
         );
 
-        let commandes = bus.commandes();
-        assert_eq!(commandes.len(), 1);
-        let (acteur, commande) = &commandes[0];
-        assert_eq!(*acteur, Actor::agent(declaration.id, conversation));
-        assert!(acteur.is_agent());
-        assert_eq!(commande.name(), "Execute");
-        assert_eq!(commande.intent(), StatementIntent::Read);
+        let commands = bus.commands();
+        assert_eq!(commands.len(), 1);
+        let (actor, command) = &commands[0];
+        assert_eq!(*actor, Actor::agent(declaration.id, conversation));
+        assert!(actor.is_agent());
+        assert_eq!(command.name(), "Execute");
+        assert_eq!(command.intent(), StatementIntent::Read);
 
-        // Le résultat est réinjecté encadré : un message d'erreur de serveur
-        // contient du contenu de la base. Il n'est plus le dernier message :
-        // la réponse finale est gardée en mémoire pour la question suivante.
-        let outil = session
+        // The result is fed back fenced: a server error message contains
+        // database content. It is no longer the last message: the final
+        // answer is kept in memory for the next question.
+        let tool = session
             .messages()
             .iter()
             .rev()
             .find(|message| message.role == oxyn_llm::Role::Tool)
-            .expect("le résultat de l'outil est dans la conversation");
-        assert!(outil.content.contains(untrusted::FENCE_OPEN));
-        let dernier = session
+            .expect("the tool's result is in the conversation");
+        assert!(tool.content.contains(untrusted::FENCE_OPEN));
+        let last = session
             .messages()
             .last()
-            .expect("la conversation n'est pas vide");
-        assert_eq!(dernier.role, oxyn_llm::Role::Assistant);
-        assert_eq!(dernier.content, "il y a une ligne");
+            .expect("the conversation is not empty");
+        assert_eq!(last.role, oxyn_llm::Role::Assistant);
+        assert_eq!(last.content, "there is one row");
     }
 
     #[test]
-    fn la_limite_de_tours_arrete_la_boucle() {
-        // Un agent qui boucle sur un fournisseur distant est une facture que
-        // l'utilisateur découvre après coup.
-        let fournisseur = FournisseurScripte::boucle();
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local);
-        let bus = BusFactice::succes();
+    fn the_turn_limit_stops_the_loop() {
+        // An agent looping on a remote provider is a bill the user discovers
+        // after the fact.
+        let provider = ScriptedProvider::looping();
+        let engine = runtime(Arc::clone(&provider), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert_eq!(issue, AgentOutcome::TurnLimit { turns: 3 });
-        assert_eq!(bus.commandes().len(), 3, "un appel par tour, pas plus");
-        assert_eq!(fournisseur.appels(), 3, "pas un tour de modèle de plus");
+        assert_eq!(bus.commands().len(), 3, "one call per turn, no more");
+        assert_eq!(provider.calls(), 3, "not one more model turn");
     }
 
     #[test]
-    fn un_refus_du_gate_est_renvoye_au_modele_sans_arreter_la_conversation() {
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+    fn a_gate_refusal_is_sent_back_to_the_model_without_stopping_the_conversation() {
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
-                ChatEvent::TextDelta("compris, je ne réessaie pas".to_owned()),
+                ChatEvent::TextDelta("understood, I will not retry".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::new(DispatchOutcome::Denied {
-            reason: "un agent ne peut pas modifier les droits".to_owned(),
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::new(DispatchOutcome::Denied {
+            reason: "an agent cannot change privileges".to_owned(),
         });
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert!(matches!(issue, AgentOutcome::Answered { .. }), "{issue:?}");
-        let dernier_outil = session
+        let last_tool = session
             .messages()
             .iter()
             .rfind(|m| m.role == oxyn_llm::Role::Tool)
-            .expect("un résultat d'outil");
-        assert!(dernier_outil.content.contains("status: denied"));
-        assert!(dernier_outil.content.contains("Do not retry"));
+            .expect("a tool result");
+        assert!(last_tool.content.contains("status: denied"));
+        assert!(last_tool.content.contains("Do not retry"));
     }
 
     #[test]
-    fn une_annulation_n_execute_rien() {
-        // Échap doit tout arrêter, y compris les appels d'outils déjà reçus du
-        // modèle : c'est précisément ce que l'utilisateur vient de refuser.
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Local);
-        let bus = BusFactice::succes();
+    fn a_cancellation_executes_nothing() {
+        // Escape must stop everything, including tool calls already received
+        // from the model: that is precisely what the user just refused.
+        let engine = runtime(ScriptedProvider::looping(), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let jeton = CancelToken::new();
-        jeton.cancel();
+        let token = CancelToken::new();
+        token.cancel();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &jeton)).expect("conversation");
+        let issue = block_on(engine.run(&mut session, &bus, &(), &token)).expect("conversation");
         assert_eq!(issue, AgentOutcome::Cancelled { turns: 0 });
-        assert!(bus.commandes().is_empty());
+        assert!(bus.commands().is_empty());
     }
 
     #[test]
-    fn un_niveau_local_refuse_un_fournisseur_distant() {
-        // ADR-0006 : `Local` est une garantie. Le refus a lieu avant qu'aucun
-        // contexte ne parte.
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Remote);
-        assert!(!moteur.accepts_tier(PrivacyTier::Local));
-        assert!(moteur.accepts_tier(PrivacyTier::Metadata));
+    fn a_local_tier_refuses_a_remote_provider() {
+        // ADR-0006: `Local` is a guarantee. The refusal happens before any
+        // context leaves.
+        let engine = runtime(ScriptedProvider::looping(), Reach::Remote);
+        assert!(!engine.accepts_tier(PrivacyTier::Local));
+        assert!(engine.accepts_tier(PrivacyTier::Metadata));
 
-        let bus = BusFactice::succes();
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Local);
-        let refus = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
-            .expect_err("le niveau interdit ce point d'accès");
+        let refusal = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect_err("the tier forbids this endpoint");
         assert!(
-            matches!(refus, AiError::RemoteProviderRefused { .. }),
-            "{refus:?}"
+            matches!(refusal, AiError::RemoteProviderRefused { .. }),
+            "{refusal:?}"
         );
-        assert!(bus.commandes().is_empty());
+        assert!(bus.commands().is_empty());
     }
 
     #[test]
-    fn un_outil_hors_liste_blanche_ne_produit_aucune_commande() {
-        let fournisseur = FournisseurScripte::new(vec![
+    fn a_tool_outside_the_allowlist_produces_no_command() {
+        let provider = ScriptedProvider::new(vec![
             vec![
                 ChatEvent::ToolCallComplete(ToolCall::new("c1", "refresh_catalog", json!({}))),
-                fin_outils(),
+                end_of_tool_calls(),
             ],
             vec![
-                ChatEvent::TextDelta("d'accord".to_owned()),
+                ChatEvent::TextDelta("all right".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert!(matches!(issue, AgentOutcome::Answered { .. }), "{issue:?}");
         assert!(
-            bus.commandes().is_empty(),
-            "un outil non accordé ne doit produire aucune commande"
+            bus.commands().is_empty(),
+            "a tool not granted must produce no command"
         );
-        let resultat = session
+        let result = session
             .messages()
             .iter()
             .find(|m| m.role == oxyn_llm::Role::Tool)
-            .expect("un résultat d'outil");
-        assert!(resultat.content.contains("status: rejected"));
+            .expect("a tool result");
+        assert!(result.content.contains("status: rejected"));
     }
 
     #[test]
-    fn le_message_systeme_porte_le_preambule_avant_le_contexte() {
+    fn the_system_message_carries_the_preamble_before_the_context() {
         let session = session(PrivacyTier::Metadata);
-        let systeme = session
+        let system = session
             .messages()
             .first()
-            .expect("un message système")
+            .expect("a system message")
             .content
             .clone();
-        let preambule = systeme.find(untrusted::PREAMBLE).expect("le préambule");
-        // `rfind` : le préambule cite lui-même la balise pour l'expliquer au
-        // modèle, donc la première occurrence est la sienne.
-        let encadre = systeme.rfind(untrusted::FENCE_OPEN).expect("l'encadré");
+        let preamble = system.find(untrusted::PREAMBLE).expect("the preamble");
+        // `rfind`: the preamble itself quotes the tag to explain it to the
+        // model, so the first occurrence is its own.
+        let fenced = system.rfind(untrusted::FENCE_OPEN).expect("the fence");
         assert!(
-            preambule < encadre,
-            "un modèle qui lit la consigne après les données a déjà lu les données"
+            preamble < fenced,
+            "a model that reads the instruction after the data has already read the data"
         );
         assert!(
-            systeme.starts_with("You write SQL."),
-            "l'invite de l'agent vient en premier : {systeme}"
+            system.starts_with("You write SQL."),
+            "the agent's prompt comes first: {system}"
         );
     }
 
     #[test]
-    fn une_erreur_du_fournisseur_interrompt_la_conversation() {
-        let fournisseur =
-            FournisseurScripte::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+    fn a_provider_error_interrupts_the_conversation() {
+        let provider =
+            ScriptedProvider::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let echec = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
-            .expect_err("le fournisseur a échoué");
-        assert!(matches!(echec, AiError::Provider(_)), "{echec:?}");
+        let failure = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect_err("the provider failed");
+        assert!(matches!(failure, AiError::Provider(_)), "{failure:?}");
     }
 
-    /// Un flux qui annonce une erreur puis se termine par `raison`.
-    fn erreur_puis(raison: StopReason) -> AiError {
-        let fournisseur = FournisseurScripte::new(vec![vec![
-            ChatEvent::TextDelta("il y a".to_owned()),
+    /// A stream that announces an error then ends with `reason`.
+    fn error_then(reason: StopReason) -> AiError {
+        let provider = ScriptedProvider::new(vec![vec![
+            ChatEvent::TextDelta("there is".to_owned()),
             ChatEvent::Error("connection reset by peer".to_owned()),
             ChatEvent::Done {
-                stop_reason: raison,
+                stop_reason: reason,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
-            .expect_err("le tour a échoué")
+        block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect_err("the turn failed")
     }
 
     #[test]
-    fn une_coupure_est_ambigue_et_un_echec_annonce_ne_l_est_pas() {
-        // I-13 : sortir au premier `Error` perdait le `Done { Interrupted }` qui
-        // le suit, et un tour peut-être facturé devenait une panne rejouable.
-        let coupure = erreur_puis(StopReason::Interrupted);
-        assert!(matches!(coupure, AiError::Interrupted(_)), "{coupure:?}");
-        assert_eq!(coupure.class(), Some(oxyn_core::ErrorClass::Ambiguous));
+    fn a_cut_is_ambiguous_and_an_announced_failure_is_not() {
+        // I-13: leaving at the first `Error` lost the `Done { Interrupted }`
+        // that follows it, and a possibly billed turn became a replayable
+        // failure.
+        let interruption = error_then(StopReason::Interrupted);
         assert!(
-            coupure.to_string().contains("may have finished"),
-            "{coupure}"
+            matches!(interruption, AiError::Interrupted(_)),
+            "{interruption:?}"
         );
-        assert!(!OxynError::from(coupure).is_retryable());
+        assert_eq!(interruption.class(), Some(oxyn_core::ErrorClass::Ambiguous));
+        assert!(
+            interruption.to_string().contains("may have finished"),
+            "{interruption}"
+        );
+        assert!(!OxynError::from(interruption).is_retryable());
 
-        // Le fournisseur a dit son échec : pas de doute, la question peut être
-        // reposée.
-        let annonce = erreur_puis(StopReason::ProviderError);
-        assert!(matches!(annonce, AiError::Provider(_)), "{annonce:?}");
-        assert_eq!(annonce.class(), None);
+        // The provider stated its failure: no doubt, the question can be
+        // asked again.
+        let reported = error_then(StopReason::ProviderError);
+        assert!(matches!(reported, AiError::Provider(_)), "{reported:?}");
+        assert_eq!(reported.class(), None);
     }
 
     #[test]
-    fn une_coupure_sans_message_reste_ambigue() {
-        let fournisseur = FournisseurScripte::new(vec![vec![
-            ChatEvent::TextDelta("il y a".to_owned()),
+    fn a_cut_without_a_message_stays_ambiguous() {
+        let provider = ScriptedProvider::new(vec![vec![
+            ChatEvent::TextDelta("there is".to_owned()),
             ChatEvent::Done {
                 stop_reason: StopReason::Interrupted,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let echec = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
-            .expect_err("une coupure n'est pas une réponse");
-        assert_eq!(echec.class(), Some(oxyn_core::ErrorClass::Ambiguous));
+        let failure = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect_err("a cut is not an answer");
+        assert_eq!(failure.class(), Some(oxyn_core::ErrorClass::Ambiguous));
     }
 
-    fn repond() -> Vec<ChatEvent> {
+    fn answering() -> Vec<ChatEvent> {
         vec![
-            ChatEvent::TextDelta("fait".to_owned()),
+            ChatEvent::TextDelta("done".to_owned()),
             ChatEvent::Done {
                 stop_reason: StopReason::EndTurn,
             },
         ]
     }
 
-    fn fiche(efforts: Vec<oxyn_llm::ReasoningEffort>) -> ModelInfo {
-        ModelInfo::new("factice")
+    fn model_info(efforts: Vec<oxyn_llm::ReasoningEffort>) -> ModelInfo {
+        ModelInfo::new("dummy")
             .with_reasoning_support(oxyn_llm::Support::Yes)
             .with_reasoning_efforts(efforts)
     }
 
     #[test]
-    fn l_effort_declare_part_a_chaque_tour_et_high_est_omis() {
+    fn the_declared_effort_goes_out_every_turn_and_high_is_omitted() {
         use oxyn_llm::ReasoningEffort::{High, Low};
 
-        let fournisseur = FournisseurScripte::new(vec![repond()]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local)
-            .with_reasoning_effort(Low, &fiche(vec![Low, High]))
-            .expect("un niveau déclaré");
-        block_on(moteur.run(
+        let provider = ScriptedProvider::new(vec![answering()]);
+        let engine = runtime(Arc::clone(&provider), Reach::Local)
+            .with_reasoning_effort(Low, &model_info(vec![Low, High]))
+            .expect("a declared level");
+        block_on(engine.run(
             &mut session(PrivacyTier::Metadata),
-            &BusFactice::succes(),
+            &FakeBus::succeeding(),
             &(),
             &CancelToken::new(),
         ))
-        .expect("une réponse");
-        assert_eq!(
-            *fournisseur.efforts.lock().expect("verrou"),
-            vec![Some(Low)]
-        );
+        .expect("an answer");
+        assert_eq!(*provider.efforts.lock().expect("lock"), vec![Some(Low)]);
 
-        // `High`, le défaut : vérifié, puis omis.
-        let fournisseur = FournisseurScripte::new(vec![repond()]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local)
-            .with_reasoning_effort(High, &fiche(vec![Low, High]))
-            .expect("un niveau déclaré");
-        block_on(moteur.run(
+        // `High`, the default: checked, then omitted.
+        let provider = ScriptedProvider::new(vec![answering()]);
+        let engine = runtime(Arc::clone(&provider), Reach::Local)
+            .with_reasoning_effort(High, &model_info(vec![Low, High]))
+            .expect("a declared level");
+        block_on(engine.run(
             &mut session(PrivacyTier::Metadata),
-            &BusFactice::succes(),
+            &FakeBus::succeeding(),
             &(),
             &CancelToken::new(),
         ))
-        .expect("une réponse");
-        assert_eq!(*fournisseur.efforts.lock().expect("verrou"), vec![None]);
+        .expect("an answer");
+        assert_eq!(*provider.efforts.lock().expect("lock"), vec![None]);
 
-        // Rien de choisi : rien d'envoyé.
-        let fournisseur = FournisseurScripte::new(vec![repond()]);
-        block_on(runtime(Arc::clone(&fournisseur), Reach::Local).run(
+        // Nothing chosen: nothing sent.
+        let provider = ScriptedProvider::new(vec![answering()]);
+        block_on(runtime(Arc::clone(&provider), Reach::Local).run(
             &mut session(PrivacyTier::Metadata),
-            &BusFactice::succes(),
+            &FakeBus::succeeding(),
             &(),
             &CancelToken::new(),
         ))
-        .expect("une réponse");
-        assert_eq!(*fournisseur.efforts.lock().expect("verrou"), vec![None]);
+        .expect("an answer");
+        assert_eq!(*provider.efforts.lock().expect("lock"), vec![None]);
     }
 
     #[test]
-    fn un_effort_non_declare_est_refuse_avant_tout_envoi() {
+    fn an_undeclared_effort_is_refused_before_anything_is_sent() {
         use oxyn_llm::ReasoningEffort::{High, Low, Max};
         use oxyn_llm::Support;
 
-        let refus = |fiche: &ModelInfo, effort| {
-            runtime(FournisseurScripte::new(Vec::new()), Reach::Local)
-                .with_reasoning_effort(effort, fiche)
-                .expect_err("non déclaré")
+        let refusal = |model_info: &ModelInfo, effort| {
+            runtime(ScriptedProvider::new(Vec::new()), Reach::Local)
+                .with_reasoning_effort(effort, model_info)
+                .expect_err("not declared")
         };
 
-        // Absent d'une liste déclarée.
-        let absent = refus(&fiche(vec![Low, High]), Max);
+        // Missing from a declared list.
+        let absent = refusal(&model_info(vec![Low, High]), Max);
         assert!(
             matches!(
                 absent,
@@ -2169,34 +2161,37 @@ mod tests {
             ),
             "{absent:?}"
         );
-        // Liste vide : « non déclaré », pas « tout est permis » — et `High`
-        // n'y fait pas exception.
-        let inconnu = refus(&ModelInfo::new("factice"), High);
+        // Empty list: "not declared", not "anything goes" — and `High` is no
+        // exception.
+        let unknown = refusal(&ModelInfo::new("dummy"), High);
         assert!(
-            inconnu.to_string().contains("does not declare"),
-            "Unknown ne se dit pas « ne raisonne pas » : {inconnu}"
+            unknown.to_string().contains("does not declare"),
+            "Unknown does not read as \"does not reason\": {unknown}"
         );
-        let non = refus(
-            &ModelInfo::new("factice").with_reasoning_support(Support::No),
+        let declined = refusal(
+            &ModelInfo::new("dummy").with_reasoning_support(Support::No),
             Low,
         );
-        assert!(non.to_string().contains("does not reason"), "{non}");
+        assert!(
+            declined.to_string().contains("does not reason"),
+            "{declined}"
+        );
     }
 
     #[test]
-    fn une_approbation_en_attente_dit_que_rien_n_a_eu_lieu() {
-        // Le piège : un modèle suppose que l'INSERT a eu lieu et enchaîne.
-        let attente = ToolOutcome::AwaitingApproval {
-            reason: "an agent is requesting a write operation on \"caisse\"".to_owned(),
+    fn a_pending_approval_says_nothing_happened() {
+        // The trap: a model assumes the INSERT took place and moves on.
+        let awaiting = ToolOutcome::AwaitingApproval {
+            reason: "an agent is requesting a write operation on \"retail\"".to_owned(),
         };
-        assert!(!attente.is_completed());
-        let rendu = attente.render();
-        assert!(rendu.contains("Nothing ran"), "{rendu}");
-        assert!(rendu.contains(untrusted::FENCE_OPEN), "{rendu}");
+        assert!(!awaiting.is_completed());
+        let rendered = awaiting.render();
+        assert!(rendered.contains("Nothing ran"), "{rendered}");
+        assert!(rendered.contains(untrusted::FENCE_OPEN), "{rendered}");
     }
 
     #[test]
-    fn une_decision_du_gate_se_traduit_pour_le_modele() {
+    fn a_gate_decision_is_translated_for_the_model() {
         assert_eq!(DispatchOutcome::from_decision(&Decision::Allow), None);
         assert_eq!(
             DispatchOutcome::from_decision(&Decision::deny("denied")),
@@ -2213,14 +2208,14 @@ mod tests {
     }
 
     #[test]
-    fn un_message_de_serveur_hostile_reste_encadre() {
-        // Un message d'erreur de serveur contient du contenu de la base : le
-        // nom de la table absente, la valeur qui viole une contrainte.
+    fn a_hostile_server_message_stays_fenced() {
+        // A server error message contains database content: the name of the
+        // missing table, the value that violates a constraint.
         //
-        // Le niveau est `Sampled` **à dessein** : c'est le seul sous lequel le
-        // message traverse, donc le seul où l'encadrement a quelque chose à
-        // encadrer. Sous les autres, ce test ne prouverait rien.
-        let echec = hors_catalogue(
+        // The tier is `Sampled` **on purpose**: it is the only one under which
+        // the message crosses, hence the only one where fencing has something
+        // to fence. Under the others, this test would prove nothing.
+        let failure = outside_catalog(
             PrivacyTier::Sampled,
             DispatchOutcome::Failed {
                 class: ErrorClass::Permanent,
@@ -2228,432 +2223,453 @@ mod tests {
                     .to_owned(),
             },
         );
-        let rendu = echec.render();
-        assert!(rendu.contains("does not exist"), "{rendu}");
-        assert_eq!(rendu.matches(untrusted::FENCE_CLOSE).count(), 1, "{rendu}");
+        let rendered = failure.render();
+        assert!(rendered.contains("does not exist"), "{rendered}");
+        assert_eq!(
+            rendered.matches(untrusted::FENCE_CLOSE).count(),
+            1,
+            "{rendered}"
+        );
     }
 
-    /// Le message que PostgreSQL rend sur une violation de contrainte unique :
-    /// il recopie la valeur de la ligne dans son texte.
-    const ECHEC_SERVEUR: &str = "duplicate key value violates unique constraint \
+    /// The message PostgreSQL returns on a unique constraint violation: it
+    /// copies the row's value into its text.
+    const SERVER_FAILURE: &str = "duplicate key value violates unique constraint \
                                  \"clients_email_key\" DETAIL: Key (email)=\
                                  (dupont@example.com) already exists. (SQLSTATE 23505) \
                                  iban=FR7630006000011234567890189";
 
-    /// Mène une conversation où l'unique appel d'outil échoue, et rend les
-    /// messages de session tels qu'ils repartiraient au fournisseur.
-    fn conversation_en_echec(tier: PrivacyTier) -> Vec<ChatMessage> {
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+    /// Runs a conversation where the only tool call fails, and returns the
+    /// session messages as they would go back to the provider.
+    fn failed_conversation(tier: PrivacyTier) -> Vec<ChatMessage> {
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
-                ChatEvent::TextDelta("bien reçu".to_owned()),
+                ChatEvent::TextDelta("received".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
-        // `Reach::Local` : sous le niveau `Local`, un point d'accès distant
-        // serait refusé avant même le premier tour, et le test ne dirait rien
-        // du chemin d'erreur.
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::echec(ECHEC_SERVEUR);
+        // `Reach::Local`: under the `Local` tier, a remote endpoint would be
+        // refused before even the first turn, and the test would say nothing
+        // about the error path.
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::failure(SERVER_FAILURE);
         let mut session = session(tier);
 
-        block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new())).expect("conversation");
+        block_on(engine.run(&mut session, &bus, &(), &CancelToken::new())).expect("conversation");
         session.messages().to_vec()
     }
 
     #[test]
-    fn aucune_valeur_de_ligne_ne_sort_par_un_message_d_erreur() {
-        // LE test d'ADR-0006 sur le chemin d'erreur, en pendant de celui du
-        // contexte. Un message de serveur cite la valeur qui viole la
-        // contrainte : elle ne doit rejoindre ni le rendu, ni la conversation,
-        // qui repart entière au fournisseur au tour suivant (I-04).
-        for niveau in [PrivacyTier::Local, PrivacyTier::Metadata] {
-            let echec = hors_catalogue(
-                niveau,
+    fn no_row_value_leaves_through_an_error_message() {
+        // THE ADR-0006 test on the error path, counterpart of the context
+        // one. A server message quotes the value violating the constraint: it
+        // must join neither the rendering nor the conversation, which goes
+        // back whole to the provider on the next turn (I-04).
+        for tier in [PrivacyTier::Local, PrivacyTier::Metadata] {
+            let failure = outside_catalog(
+                tier,
                 DispatchOutcome::Failed {
                     class: ErrorClass::Permanent,
-                    message: ECHEC_SERVEUR.to_owned(),
+                    message: SERVER_FAILURE.to_owned(),
                 },
             );
 
-            let messages = conversation_en_echec(niveau);
+            let messages = failed_conversation(tier);
             let conversation = messages
                 .iter()
                 .map(|m| m.content.clone())
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            // `Display`, `Debug` et le rendu encadré : les trois canaux par
-            // lesquels le texte pourrait ressortir.
-            let canaux = [
-                echec.to_string(),
-                format!("{echec:?}"),
-                echec.render(),
+            // `Display`, `Debug` and the fenced rendering: the three channels
+            // through which the text could come out.
+            let channels = [
+                failure.to_string(),
+                format!("{failure:?}"),
+                failure.render(),
                 conversation,
                 format!("{messages:?}"),
             ];
-            for rendu in &canaux {
-                assert!(!rendu.contains("dupont@example.com"), "{niveau} : {rendu}");
-                assert!(!rendu.contains("FR76"), "{niveau} : {rendu}");
-                assert!(!rendu.contains("clients_email_key"), "{niveau} : {rendu}");
+            for rendered in &channels {
+                assert!(
+                    !rendered.contains("dupont@example.com"),
+                    "{tier}: {rendered}"
+                );
+                assert!(!rendered.contains("FR76"), "{tier}: {rendered}");
+                assert!(
+                    !rendered.contains("clients_email_key"),
+                    "{tier}: {rendered}"
+                );
             }
 
-            // Ce qui reste doit rester exploitable : le modèle doit savoir que
-            // c'est définitif, et le code lui dit quoi corriger.
-            let rendu = echec.render();
-            assert!(rendu.contains("status: failed"), "{rendu}");
-            assert!(rendu.contains("retryable: false"), "{rendu}");
-            assert!(rendu.contains("SQLSTATE 23505"), "{rendu}");
+            // What remains must stay usable: the model must know it is final,
+            // and the code tells it what to fix.
+            let rendered = failure.render();
+            assert!(rendered.contains("status: failed"), "{rendered}");
+            assert!(rendered.contains("retryable: false"), "{rendered}");
+            assert!(rendered.contains("SQLSTATE 23505"), "{rendered}");
         }
     }
 
     #[test]
-    fn sous_sampled_le_message_du_serveur_arrive_entier() {
-        // Le test négatif qui donne son sens au précédent : sans lui, tout
-        // pourrait être masqué en permanence sans que rien ne le signale.
-        let messages = conversation_en_echec(PrivacyTier::Sampled);
-        let resultat = messages
+    fn under_sampled_the_server_message_arrives_whole() {
+        // The negative test that gives the previous one its meaning: without
+        // it, everything could be masked permanently without anything
+        // flagging it.
+        let messages = failed_conversation(PrivacyTier::Sampled);
+        let result = messages
             .iter()
             .find(|m| m.role == oxyn_llm::Role::Tool)
-            .expect("un résultat d'outil");
+            .expect("a tool result");
         assert!(
-            resultat.content.contains("dupont@example.com"),
+            result.content.contains("dupont@example.com"),
             "{}",
-            resultat.content
+            result.content
         );
-        assert!(resultat.content.contains("clients_email_key"));
+        assert!(result.content.contains("clients_email_key"));
     }
 
     #[test]
-    fn une_erreur_ambigue_reste_non_retentable_apres_filtrage() {
-        // I-13 : un délai dépassé côté client pendant une écriture n'est pas
-        // transitoire — le serveur a peut-être appliqué. Le filtrage ne doit pas
-        // transformer cette incertitude en invitation à rejouer.
-        for (classe, retentable) in [
+    fn an_ambiguous_error_stays_non_retryable_after_filtering() {
+        // I-13: a client-side timeout during a write is not transient — the
+        // server may have applied it. Filtering must not turn that uncertainty
+        // into an invitation to replay.
+        for (class, retryable) in [
             (ErrorClass::Transient, true),
             (ErrorClass::Permanent, false),
             (ErrorClass::Ambiguous, false),
         ] {
-            let echec = hors_catalogue(
+            let failure = outside_catalog(
                 PrivacyTier::Metadata,
                 DispatchOutcome::Failed {
-                    class: classe,
+                    class,
                     message: "timed out after 30s while inserting".to_owned(),
                 },
             );
-            let ToolOutcome::Failed { report } = &echec else {
-                panic!("variante inattendue : {echec:?}");
+            let ToolOutcome::Failed { report } = &failure else {
+                panic!("unexpected variant: {failure:?}");
             };
-            assert_eq!(report.class(), classe);
-            assert_eq!(report.is_retryable(), retentable, "{classe}");
+            assert_eq!(report.class(), class);
+            assert_eq!(report.is_retryable(), retryable, "{class}");
             assert!(
-                echec
+                failure
                     .to_string()
-                    .contains(&format!("retryable: {retentable}")),
-                "{echec}"
+                    .contains(&format!("retryable: {retryable}")),
+                "{failure}"
             );
         }
     }
 
     #[test]
-    fn une_erreur_du_domaine_garde_sa_classe_jusqu_au_rapport() {
-        // La classe est une donnée portée par l'erreur, pas une déduction faite
-        // sur son message (DRIVER-CONTRACT §4).
+    fn a_domain_error_keeps_its_class_up_to_the_report() {
+        // The class is data carried by the error, not a deduction made from
+        // its message (DRIVER-CONTRACT §4).
         let expiration = OxynError::Timeout {
             after: std::time::Duration::from_secs(30),
         };
-        let brut = DispatchOutcome::failed(&expiration);
+        let raw = DispatchOutcome::failed(&expiration);
         assert_eq!(
-            brut,
+            raw,
             DispatchOutcome::Failed {
                 class: ErrorClass::Ambiguous,
                 message: expiration.to_string(),
             }
         );
 
-        let echec = hors_catalogue(PrivacyTier::Metadata, brut);
-        let ToolOutcome::Failed { report } = &echec else {
-            panic!("variante inattendue : {echec:?}");
+        let failure = outside_catalog(PrivacyTier::Metadata, raw);
+        let ToolOutcome::Failed { report } = &failure else {
+            panic!("unexpected variant: {failure:?}");
         };
         assert!(!report.is_retryable());
-        assert!(report.detail().is_none(), "le message reste sur la machine");
+        assert!(
+            report.detail().is_none(),
+            "the message stays on the machine"
+        );
     }
 
     #[test]
-    fn une_commande_se_montre_avant_son_resultat() {
-        // UX-SPEC : « un agent qui travaille en silence pendant huit tours est
-        // indistinguable d'un agent bloqué ». Ce que ce test tient, c'est
-        // l'ordre : le tour, puis le texte au fil du flux, puis la commande,
-        // puis seulement son rapport.
-        let fournisseur = FournisseurScripte::new(vec![
+    fn a_command_shows_before_its_result() {
+        // UX-SPEC: "an agent working silently for eight turns is
+        // indistinguishable from a stuck agent". What this test holds is the
+        // order: the turn, then the text as the stream goes, then the
+        // command, then only its report.
+        let provider = ScriptedProvider::new(vec![
             vec![
-                ChatEvent::TextDelta("je regarde".to_owned()),
-                appel_outil(),
-                fin_outils(),
+                ChatEvent::TextDelta("looking".to_owned()),
+                tool_call(),
+                end_of_tool_calls(),
             ],
             vec![
-                ChatEvent::TextDelta("il y a une ligne".to_owned()),
+                ChatEvent::TextDelta("there is one row".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let connexion = session.scope().connection;
-        let temoin = Temoin::default();
+        let connection = session.scope().connection;
+        let witness = Witness::default();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
-        let vus = temoin.vus();
+        let seen = witness.seen();
         assert_eq!(
-            vus.first(),
-            Some(&Vu::Tour {
+            seen.first(),
+            Some(&Seen::Turn {
                 turn: 1,
                 max_turns: 3
             }),
-            "{vus:?}"
+            "{seen:?}"
         );
         assert!(
-            vus.contains(&Vu::Texte("je regarde".to_owned())),
-            "le texte doit sortir au fil du flux : {vus:?}"
+            seen.contains(&Seen::Text("looking".to_owned())),
+            "the text must come out as the stream goes: {seen:?}"
         );
         assert_eq!(
-            vus.iter()
-                .filter(|vu| matches!(vu, Vu::Tour { .. }))
+            seen.iter()
+                .filter(|seen| matches!(seen, Seen::Turn { .. }))
                 .count(),
             2
         );
 
-        let soumise = temoin.position(|vu| matches!(vu, Vu::Soumise { .. }));
-        let rapport = temoin.position(|vu| matches!(vu, Vu::Rapport { .. }));
+        let submitted = witness.position(|seen| matches!(seen, Seen::Submitted { .. }));
+        let report = witness.position(|seen| matches!(seen, Seen::Report { .. }));
         assert!(
-            soumise < rapport,
-            "la commande se montre avant son résultat : {vus:?}"
+            submitted < report,
+            "the command shows before its result: {seen:?}"
         );
         assert_eq!(
-            vus.get(soumise),
-            Some(&Vu::Soumise {
+            seen.get(submitted),
+            Some(&Seen::Submitted {
                 tool: EXECUTE_QUERY.to_owned(),
                 command: "Execute",
-                connection: Some(connexion),
+                connection: Some(connection),
                 mutating: false,
             }),
-            "{vus:?}"
+            "{seen:?}"
         );
 
-        // La fin s'annonce, et elle s'annonce en dernier.
-        assert_eq!(vus.last(), Some(&Vu::Fin(issue)), "{vus:?}");
+        // The end is announced, and it is announced last.
+        assert_eq!(seen.last(), Some(&Seen::End(issue)), "{seen:?}");
     }
 
     #[test]
-    fn un_observateur_ne_peut_pas_faire_entrer_un_message_de_serveur_dans_une_invite() {
-        // LE test de ce lot. L'observateur reçoit les faits entiers — la base
-        // est celle de l'utilisateur, il a le droit de lire ce que son serveur
-        // répond — mais rien de ce qu'il voit ne peut rejoindre l'invite : la
-        // notification ne rend rien, et le seul texte qui repart au fournisseur
-        // est celui qu'a filtré `from_dispatch` (I-04).
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+    fn an_observer_cannot_bring_a_server_message_into_a_prompt() {
+        // THE test of this batch. The observer receives the whole facts — the
+        // database is the user's, they have the right to read what their
+        // server answers — but nothing it sees can join the prompt: the
+        // notification returns nothing, and the only text that goes back to
+        // the provider is the one `from_dispatch` filtered (I-04).
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
-                ChatEvent::TextDelta("bien reçu".to_owned()),
+                ChatEvent::TextDelta("received".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local);
-        let bus = BusFactice::echec(ECHEC_SERVEUR);
+        let engine = runtime(Arc::clone(&provider), Reach::Local);
+        let bus = FakeBus::failure(SERVER_FAILURE);
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
-        // Ce que l'utilisateur voit : les faits, entiers.
-        let Vu::Rapport {
+        // What the user sees: the facts, whole.
+        let Seen::Report {
             outcome, withheld, ..
-        } = temoin.rapport()
+        } = witness.report()
         else {
-            panic!("le rapport attendu");
+            panic!("the expected report");
         };
         assert_eq!(
             outcome,
             DispatchOutcome::Failed {
                 class: ErrorClass::Permanent,
-                message: ECHEC_SERVEUR.to_owned(),
+                message: SERVER_FAILURE.to_owned(),
             },
-            "l'observateur doit recevoir les faits, pas le texte filtré"
+            "the observer must receive the facts, not the filtered text"
         );
-        // Et le panneau doit pouvoir dire que le modèle en a su moins.
+        // And the panel must be able to say the model learned less.
         assert!(
             withheld,
-            "l'écart entre les deux destinataires doit se voir"
+            "the gap between the two recipients must be visible"
         );
 
-        // Ce qui a franchi la frontière : pas une valeur de ligne.
-        let envoye = fournisseur.envoye();
-        for interdit in ["dupont@example.com", "FR76", "clients_email_key"] {
+        // What crossed the boundary: not one row value.
+        let sent = provider.sent();
+        for forbidden in ["dupont@example.com", "FR76", "clients_email_key"] {
             assert!(
-                !envoye.contains(interdit),
-                "« {interdit} » est parti au fournisseur : {envoye}"
+                !sent.contains(forbidden),
+                "`{forbidden}` reached the provider: {sent}"
             );
         }
     }
 
     #[test]
-    fn sous_sampled_l_observateur_et_le_modele_apprennent_la_meme_chose() {
-        // Le test négatif qui donne son sens au précédent : sans lui, `withheld`
-        // pourrait être vrai en permanence — un panneau qui annonce un écart à
-        // chaque erreur n'annonce plus rien.
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+    fn under_sampled_the_observer_and_the_model_learn_the_same_thing() {
+        // The negative test that gives the previous one its meaning: without
+        // it, `withheld` could be permanently true — a panel that announces a
+        // gap on every error announces nothing anymore.
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
-                ChatEvent::TextDelta("bien reçu".to_owned()),
+                ChatEvent::TextDelta("received".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local);
-        let bus = BusFactice::echec(ECHEC_SERVEUR);
+        let engine = runtime(Arc::clone(&provider), Reach::Local);
+        let bus = FakeBus::failure(SERVER_FAILURE);
         let mut session = session(PrivacyTier::Sampled);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
-        let Vu::Rapport { withheld, .. } = temoin.rapport() else {
-            panic!("le rapport attendu");
+        let Seen::Report { withheld, .. } = witness.report() else {
+            panic!("the expected report");
         };
         assert!(
             !withheld,
-            "sous `Sampled` le message traverse : il n'y a pas d'écart à annoncer"
+            "under `Sampled` the message crosses: there is no gap to announce"
         );
-        assert!(fournisseur.envoye().contains("dupont@example.com"));
+        assert!(provider.sent().contains("dupont@example.com"));
     }
 
     #[test]
-    fn un_succes_n_annonce_aucun_ecart() {
-        // Le résumé d'une exécution réussie est écrit par Oxyn, pas par le
-        // serveur : il traverse le filtre inchangé, à tout niveau.
-        for niveau in [
+    fn a_success_announces_no_gap() {
+        // A successful execution's summary is written by Oxyn, not by the
+        // server: it crosses the filter unchanged, at every tier.
+        for tier in [
             PrivacyTier::Local,
             PrivacyTier::Metadata,
             PrivacyTier::Sampled,
         ] {
-            let faits = DispatchOutcome::Completed {
+            let completed = DispatchOutcome::Completed {
                 summary: "1 rows, 1 batches".to_owned(),
             };
-            let filtre = hors_catalogue(niveau, faits.clone());
-            assert!(!filtre.withholds_from(&faits), "{niveau}");
+            let filtered = outside_catalog(tier, completed.clone());
+            assert!(!filtered.withholds_from(&completed), "{tier}");
         }
     }
 
     #[test]
-    fn le_plafond_de_tours_s_annonce_avec_son_nombre() {
-        // UX-SPEC : « dit comme tel, avec le nombre de tours. Ce n'est ni un
-        // succès ni une panne. » Le nombre doit donc voyager avec l'événement.
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Local);
-        let bus = BusFactice::succes();
+    fn the_turn_ceiling_is_announced_with_its_count() {
+        // UX-SPEC: "said as such, with the number of turns. It is neither a
+        // success nor a failure." The number must therefore travel with the
+        // event.
+        let engine = runtime(ScriptedProvider::looping(), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
         assert_eq!(issue, AgentOutcome::TurnLimit { turns: 3 });
         assert_eq!(
-            temoin.vus().last(),
-            Some(&Vu::Fin(AgentOutcome::TurnLimit { turns: 3 })),
+            witness.seen().last(),
+            Some(&Seen::End(AgentOutcome::TurnLimit { turns: 3 })),
             "{:?}",
-            temoin.vus()
+            witness.seen()
         );
     }
 
     #[test]
-    fn une_annulation_s_annonce_comme_telle() {
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Local);
-        let bus = BusFactice::succes();
+    fn a_cancellation_is_announced_as_such() {
+        let engine = runtime(ScriptedProvider::looping(), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
-        let jeton = CancelToken::new();
-        jeton.cancel();
+        let witness = Witness::default();
+        let token = CancelToken::new();
+        token.cancel();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &jeton)).expect("conversation");
+        block_on(engine.run(&mut session, &bus, &witness, &token)).expect("conversation");
         assert_eq!(
-            temoin.vus(),
-            vec![Vu::Fin(AgentOutcome::Cancelled { turns: 0 })],
-            "une conversation annulée avant son premier tour n'a rien d'autre à montrer"
+            witness.seen(),
+            vec![Seen::End(AgentOutcome::Cancelled { turns: 0 })],
+            "a conversation cancelled before its first turn has nothing else to show"
         );
     }
 
     #[test]
-    fn une_panne_du_fournisseur_n_annonce_aucune_fin() {
-        // Une erreur est rendue à l'appelant, qui la montre lui-même. L'annoncer
-        // aussi ici donnerait deux affichages pour un seul incident — et le
-        // panneau afficherait « terminé » sur une conversation qui a échoué.
-        let fournisseur =
-            FournisseurScripte::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+    fn a_provider_failure_announces_no_end() {
+        // An error is returned to the caller, who shows it themselves.
+        // Announcing it here too would give two displays for a single
+        // incident — and the panel would show "finished" on a conversation
+        // that failed.
+        let provider =
+            ScriptedProvider::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        let echec = block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
-            .expect_err("le fournisseur a échoué");
-        assert!(matches!(echec, AiError::Provider(_)), "{echec:?}");
+        let failure = block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
+            .expect_err("the provider failed");
+        assert!(matches!(failure, AiError::Provider(_)), "{failure:?}");
         assert!(
-            !temoin.vus().iter().any(|vu| matches!(vu, Vu::Fin(_))),
+            !witness
+                .seen()
+                .iter()
+                .any(|seen| matches!(seen, Seen::End(_))),
             "{:?}",
-            temoin.vus()
+            witness.seen()
         );
     }
 
     #[test]
-    fn un_appel_refuse_a_la_traduction_se_voit_sans_commande_soumise() {
-        // Un tour qui ne produit rien doit rester visible : sans cet événement,
-        // le panneau montrerait un tour puis un silence.
-        let fournisseur = FournisseurScripte::new(vec![
+    fn a_call_refused_at_translation_shows_without_a_submitted_command() {
+        // A turn that produces nothing must stay visible: without this event,
+        // the panel would show a turn then a silence.
+        let provider = ScriptedProvider::new(vec![
             vec![
                 ChatEvent::ToolCallComplete(ToolCall::new("c1", "refresh_catalog", json!({}))),
-                fin_outils(),
+                end_of_tool_calls(),
             ],
             vec![
-                ChatEvent::TextDelta("d'accord".to_owned()),
+                ChatEvent::TextDelta("all right".to_owned()),
                 ChatEvent::Done {
                     stop_reason: StopReason::EndTurn,
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
-        let vus = temoin.vus();
+        let seen = witness.seen();
         assert!(
-            vus.iter().any(|vu| matches!(
-                vu,
-                Vu::Refus { tool, message }
+            seen.iter().any(|seen| matches!(
+                seen,
+                Seen::Rejected { tool, message }
                     if tool == "refresh_catalog" && message.contains("not allowed")
             )),
-            "{vus:?}"
+            "{seen:?}"
         );
         assert!(
-            !vus.iter().any(|vu| matches!(vu, Vu::Soumise { .. })),
-            "rien n'a été soumis, rien ne doit s'annoncer comme soumis : {vus:?}"
+            !seen
+                .iter()
+                .any(|seen| matches!(seen, Seen::Submitted { .. })),
+            "nothing was submitted, nothing must announce itself as submitted: {seen:?}"
         );
     }
 
-    /// Un fournisseur sur la boucle locale qui répond `reply` à la première
-    /// connexion, après avoir lu la requête entière.
+    /// A provider on the loopback that answers `reply` to the first
+    /// connection, after reading the whole request.
     async fn served_once(reply: String) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -2664,27 +2680,27 @@ mod tests {
             let Ok((mut socket, _)) = listener.accept().await else {
                 return;
             };
-            let mut lu = Vec::new();
-            let mut tampon = [0_u8; 4096];
-            while let Ok(n) = socket.read(&mut tampon).await {
+            let mut read_back = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            while let Ok(n) = socket.read(&mut buffer).await {
                 if n == 0 {
                     break;
                 }
-                lu.extend_from_slice(tampon.get(..n).unwrap_or_default());
-                let texte = String::from_utf8_lossy(&lu).into_owned();
-                let Some(fin) = texte.find("\r\n\r\n") else {
+                read_back.extend_from_slice(buffer.get(..n).unwrap_or_default());
+                let text = String::from_utf8_lossy(&read_back).into_owned();
+                let Some(header_end) = text.find("\r\n\r\n") else {
                     continue;
                 };
-                let attendu = texte
+                let expected = text
                     .lines()
-                    .find_map(|ligne| {
-                        let (nom, valeur) = ligne.split_once(':')?;
-                        nom.eq_ignore_ascii_case("content-length")
-                            .then(|| valeur.trim().parse::<usize>().ok())
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
                             .flatten()
                     })
                     .unwrap_or(0);
-                if lu.len() >= fin + 4 + attendu {
+                if read_back.len() >= header_end + 4 + expected {
                     break;
                 }
             }
@@ -2694,132 +2710,132 @@ mod tests {
         origin
     }
 
-    /// Clé factice : la chercher dans ce qui sort suffit à prouver qu'elle n'y
-    /// est pas. Jamais une clé réelle.
-    const SENTINELLE: &str = "sk-sentinel-3b9d-must-not-leak";
+    /// Dummy key: looking for it in what comes out is enough to prove it is
+    /// not there. Never a real key.
+    const SENTINEL: &str = "sk-sentinel-3b9d-must-not-leak";
 
-    /// Un `200` dont l'unique trame SSE est une erreur recopiant la clé.
-    fn flux_d_erreur(trame: &str) -> String {
+    /// A `200` whose only SSE frame is an error copying the key.
+    fn error_stream(frame: &str) -> String {
         format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{trame}",
-            trame.len()
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{frame}",
+            frame.len()
         )
     }
 
-    /// I-03, canal des erreurs affichées : une erreur diffusée après un `200`
-    /// devient `AiError::Provider`, dont ni le `Display` ni le `Debug` ne
-    /// doivent citer la clé.
-    async fn erreur_du_fournisseur(fournisseur: Arc<dyn LlmProvider>) {
-        let moteur = AgentRuntime::new(
+    /// I-03, displayed-errors channel: an error streamed after a `200`
+    /// becomes `AiError::Provider`, whose `Display` and `Debug` must not quote
+    /// the key.
+    async fn provider_error(provider: Arc<dyn LlmProvider>) {
+        let engine = AgentRuntime::new(
             spec(),
-            fournisseur,
+            provider,
             Reach::Local,
             ToolRegistry::builtin(),
-            "modele",
+            "model",
         )
-        .expect("déclaration valide");
-        let bus = BusFactice::succes();
+        .expect("valid declaration");
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let erreur = moteur
+        let error = engine
             .run(&mut session, &bus, &(), &CancelToken::new())
             .await
-            .expect_err("le fournisseur a signalé une erreur");
-        assert!(matches!(erreur, AiError::Provider(_)), "{erreur}");
-        for rendu in [erreur.to_string(), format!("{erreur:?}")] {
-            assert!(!rendu.contains(SENTINELLE), "{rendu}");
-            assert!(rendu.contains("<redacted API key>"), "{rendu}");
+            .expect_err("the provider reported an error");
+        assert!(matches!(error, AiError::Provider(_)), "{error}");
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains(SENTINEL), "{rendered}");
+            assert!(rendered.contains("<redacted API key>"), "{rendered}");
         }
-        let domaine = OxynError::from(erreur).to_string();
-        assert!(!domaine.contains(SENTINELLE), "{domaine}");
+        let domain = OxynError::from(error).to_string();
+        assert!(!domain.contains(SENTINEL), "{domain}");
     }
 
     #[tokio::test]
-    async fn une_erreur_diffusee_par_un_fournisseur_compatible_openai_ne_cite_pas_la_cle() {
-        let trame = format!("data: {{\"error\":{{\"message\":\"invalid key {SENTINELLE}\"}}}}\n\n");
-        let origine = served_once(flux_d_erreur(&trame)).await;
-        let fournisseur = oxyn_llm::OpenAiCompatibleProvider::new(
+    async fn an_error_streamed_by_an_openai_compatible_provider_does_not_quote_the_key() {
+        let frame = format!("data: {{\"error\":{{\"message\":\"invalid key {SENTINEL}\"}}}}\n\n");
+        let original = served_once(error_stream(&frame)).await;
+        let provider = oxyn_llm::OpenAiCompatibleProvider::new(
             oxyn_llm::ProviderId::openrouter(),
-            &format!("{origine}/v1"),
+            &format!("{original}/v1"),
         )
-        .expect("fournisseur")
-        .with_api_key(oxyn_llm::ApiKey::new(SENTINELLE));
-        erreur_du_fournisseur(Arc::new(fournisseur)).await;
+        .expect("provider")
+        .with_api_key(oxyn_llm::ApiKey::new(SENTINEL));
+        provider_error(Arc::new(provider)).await;
     }
 
     #[tokio::test]
-    async fn une_erreur_diffusee_par_anthropic_ne_cite_pas_la_cle() {
-        let trame = format!(
-            "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"echo {SENTINELLE}\"}}}}\n\n"
+    async fn an_error_streamed_by_anthropic_does_not_quote_the_key() {
+        let frame = format!(
+            "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"echo {SENTINEL}\"}}}}\n\n"
         );
-        let origine = served_once(flux_d_erreur(&trame)).await;
-        let fournisseur =
-            oxyn_llm::AnthropicProvider::with_base_url(SENTINELLE, &origine).expect("fournisseur");
-        erreur_du_fournisseur(Arc::new(fournisseur)).await;
+        let original = served_once(error_stream(&frame)).await;
+        let provider =
+            oxyn_llm::AnthropicProvider::with_base_url(SENTINEL, &original).expect("provider");
+        provider_error(Arc::new(provider)).await;
     }
 
-    /// Un tour dont le fournisseur dépasse un budget s'arrête en coupure, et
-    /// n'exécute rien de ce qu'il avait proposé avant.
-    fn depasse(tour: Vec<ChatEvent>, limite: usize) {
-        let fournisseur = FournisseurScripte::new(vec![tour]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+    /// A turn whose provider exceeds a budget stops as a cut, and executes
+    /// nothing of what it proposed before.
+    fn overflows(turn: Vec<ChatEvent>, limit: usize) {
+        let provider = ScriptedProvider::new(vec![turn]);
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let erreur = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
-            .expect_err("le budget arrête le tour");
+        let error = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect_err("the budget stops the turn");
         assert!(
-            matches!(&erreur, AiError::Interrupted(message) if message.contains(&limite.to_string())),
-            "{erreur}"
+            matches!(&error, AiError::Interrupted(message) if message.contains(&limit.to_string())),
+            "{error}"
         );
         assert!(
-            erreur.class() == Some(ErrorClass::Ambiguous),
-            "le fournisseur a peut-être facturé ce qui n'a pas été lu"
+            error.class() == Some(ErrorClass::Ambiguous),
+            "the provider may have billed what was not read"
         );
-        assert!(bus.commandes().is_empty(), "rien ne s'exécute");
+        assert!(bus.commands().is_empty(), "nothing is executed");
     }
 
     #[test]
-    fn un_texte_qui_depasse_le_budget_en_plusieurs_fragments_arrete_le_tour() {
-        let morceau = "x".repeat(1024 * 1024);
-        let mut tour = vec![appel_outil()];
-        tour.extend((0..9).map(|_| ChatEvent::TextDelta(morceau.clone())));
-        tour.push(fin_outils());
-        depasse(tour, oxyn_llm::budget::MAX_GENERATION_BYTES);
+    fn a_text_over_budget_in_several_fragments_stops_the_turn() {
+        let chunk = "x".repeat(1024 * 1024);
+        let mut turn = vec![tool_call()];
+        turn.extend((0..9).map(|_| ChatEvent::TextDelta(chunk.clone())));
+        turn.push(end_of_tool_calls());
+        overflows(turn, oxyn_llm::budget::MAX_GENERATION_BYTES);
     }
 
     #[test]
-    fn un_refus_qui_depasse_le_budget_arrete_le_tour() {
-        let morceau = "r".repeat(1024 * 1024);
-        let mut tour: Vec<ChatEvent> = (0..9)
-            .map(|_| ChatEvent::RefusalDelta(morceau.clone()))
+    fn a_refusal_over_budget_stops_the_turn() {
+        let chunk = "r".repeat(1024 * 1024);
+        let mut turn: Vec<ChatEvent> = (0..9)
+            .map(|_| ChatEvent::RefusalDelta(chunk.clone()))
             .collect();
-        tour.push(ChatEvent::Done {
+        turn.push(ChatEvent::Done {
             stop_reason: StopReason::Refusal,
         });
-        depasse(tour, oxyn_llm::budget::MAX_GENERATION_BYTES);
+        overflows(turn, oxyn_llm::budget::MAX_GENERATION_BYTES);
     }
 
     #[test]
-    fn trop_d_appels_d_outils_arretent_le_tour_sans_en_executer_aucun() {
-        let mut tour: Vec<ChatEvent> = (0..=oxyn_llm::budget::MAX_TOOL_CALLS)
-            .map(|_| appel_outil())
+    fn too_many_tool_calls_stop_the_turn_without_executing_any() {
+        let mut turn: Vec<ChatEvent> = (0..=oxyn_llm::budget::MAX_TOOL_CALLS)
+            .map(|_| tool_call())
             .collect();
-        tour.push(fin_outils());
-        depasse(tour, oxyn_llm::budget::MAX_TOOL_CALLS);
+        turn.push(end_of_tool_calls());
+        overflows(turn, oxyn_llm::budget::MAX_TOOL_CALLS);
     }
 
     #[test]
-    fn un_appel_livre_d_un_bloc_au_dela_de_son_budget_arrete_le_tour() {
-        // Un fournisseur tiers qui n'envoie aucun fragment : seul l'appel
-        // complet porte la taille.
-        let enorme = "x".repeat(oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
-        let tour = vec![
+    fn a_call_delivered_in_one_block_over_its_budget_stops_the_turn() {
+        // A third-party provider that sends no fragment: only the complete
+        // call carries the size.
+        let huge = "x".repeat(oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
+        let turn = vec![
             ChatEvent::ToolCallComplete(ToolCall::new(
                 "call_1",
                 EXECUTE_QUERY,
-                json!({ "statement": enorme }),
+                json!({ "statement": huge }),
             )),
-            fin_outils(),
+            end_of_tool_calls(),
         ];
-        depasse(tour, oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
+        overflows(turn, oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
     }
 }

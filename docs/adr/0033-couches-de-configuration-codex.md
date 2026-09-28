@@ -1,87 +1,87 @@
-# ADR-0033 — Oxyn coupe Codex dans toutes les couches de configuration qu'il peut lire, et laisse à l'organisation celles qu'il ne peut pas lire
+# ADR-0033 — Oxyn switches Codex off in every configuration layer it can read, and leaves to the organization those it cannot read
 
-**Statut :** accepté · **Date :** 2026-09-23
+**Status:** accepted · **Date:** 2026-09-23
 
-**Précise :** [ADR-0032](0032-agent-externe-confine-au-lancement.md) sur un
-point. L'ADR-0032 coupe par leur nom les serveurs MCP et les plugins déclarés
-dans `~/.codex/config.toml`. Or Codex en charge aussi depuis d'autres couches.
-Le reste de l'ADR-0032 reste en vigueur.
+**Clarifies:** [ADR-0032](0032-agent-externe-confine-au-lancement.md) on one
+point. ADR-0032 switches off by name the MCP servers and plugins declared in
+`~/.codex/config.toml`. But Codex also loads them from other layers. The rest
+of ADR-0032 remains in force.
 
-## Contexte
+## Context
 
-Codex 0.154.0, que lance `codex-acp` 1.12.0, fusionne sa configuration à partir
-de neuf couches. La fusion se fait table par table, si bien que `mcp_servers` et
-`plugins` réunissent les entrées de toutes les couches
-([RESEARCH-NOTES](../RESEARCH-NOTES.md#les-couches-de-configuration-que-codex-charge--relu-le-2026-09-23),
-relu au tag `rust-v0.154.0`). Ce qu'Oxyn écrit dans `CODEX_CONFIG` forme la
-couche `SessionFlags`, de rang 7 :
+Codex 0.154.0, launched by `codex-acp` 1.12.0, merges its configuration from
+nine layers. The merge happens table by table, so that `mcp_servers` and
+`plugins` gather the entries of all layers
+([RESEARCH-NOTES](../RESEARCH-NOTES.md#the-configuration-layers-codex-loads--re-read-on-2026-09-23),
+re-read at tag `rust-v0.154.0`). What Oxyn writes in `CODEX_CONFIG` forms the
+`SessionFlags` layer, of rank 7:
 
-| Couche | Rang | Déclare des serveurs | Oxyn la lit | Au-dessus d'Oxyn |
+| Layer | Rank | Declares servers | Oxyn reads it | Above Oxyn |
 |---|---|---|---|---|
-| `/etc/codex/config.toml` | 2 | oui | **oui**, depuis cet ADR | non |
-| Fragments cloud de l'espace de travail | 3 | oui | **non** : le serveur les livre à Codex | non |
-| `$CODEX_HOME/config.toml` | 4 | oui | oui (ADR-0032) | non |
-| `.codex/` de projet | 6 | oui | sans objet : le répertoire de l'agent est neuf, vide et privé | non |
-| `/etc/codex/managed_config.toml` | 8 | oui | **oui**, depuis cet ADR | **oui** |
-| MDM macOS `com.openai.codex` | 9 | oui | **non** | **oui** |
+| `/etc/codex/config.toml` | 2 | yes | **yes**, since this ADR | no |
+| Workspace cloud fragments | 3 | yes | **no**: the server delivers them to Codex | no |
+| `$CODEX_HOME/config.toml` | 4 | yes | yes (ADR-0032) | no |
+| Project `.codex/` | 6 | yes | not applicable: the agent's directory is new, empty and private | no |
+| `/etc/codex/managed_config.toml` | 8 | yes | **yes**, since this ADR | **yes** |
+| macOS MDM `com.openai.codex` | 9 | yes | **no** | **yes** |
 
-Chaque couche qu'Oxyn ne lit pas peut déclarer un serveur MCP que l'agent
-utilise sans rien demander, en contournant le `PolicyGate`. C'est l'écart que
-l'ADR-0032 visait à fermer.
+Each layer Oxyn does not read can declare an MCP server that the agent uses
+without asking anything, bypassing the `PolicyGate`. That is the gap ADR-0032
+aimed to close.
 
-## Décision
+## Decision
 
-1. **Oxyn lit les trois couches locales** : système, utilisateur et géré
-   (`oxyn_ai::external::confine::codex_config_layers`). Il ne garde que les
-   noms de `mcp_servers` et de `plugins`, et les coupe tous par
-   `enabled = false`. Les règles de l'ADR-0032 valent pour chaque couche : un
-   fichier illisible, spécial ou de plus de 1 Mio arrête le lancement. Au-delà
-   de 256 noms par table, toutes couches confondues, aussi. Enfin, un serveur
-   nommé `oxyn` est refusé.
-2. **Une couche gérée qui écrit `enabled = true` l'emporte sur Oxyn.** Codex
-   démarre quand même, puisque c'est la politique de l'organisation. En
-   revanche, l'agent n'est plus présenté comme confiné : il perd le badge
-   « Restricted by Oxyn » et l'écran l'avertit comme un agent qu'Oxyn ne
-   confine pas (`managed_turns_on`).
-3. **Oxyn ne lit ni la couche MDM ni les fragments cloud, et l'assume.** Lire
-   le MDM demanderait de lancer un processus (`defaults`), ce que le dépôt
-   refuse hors du seul point de lancement, ou de lier `CoreFoundation`. Les
-   fragments cloud, eux, ne sont lisibles nulle part en local. Ces couches
-   appartiennent à l'administrateur de l'organisation, pas à l'utilisateur, et
-   leurs serveurs sont ceux que l'organisation a choisis. Pour Codex, l'écran
-   ajoute : « except what your organization's managed configuration turns on ».
+1. **Oxyn reads the three local layers**: system, user and managed
+   (`oxyn_ai::external::confine::codex_config_layers`). It keeps only the
+   names of `mcp_servers` and `plugins`, and switches them all off with
+   `enabled = false`. The rules of ADR-0032 hold for each layer: an
+   unreadable, special or larger than 1 MiB file stops the launch. So do more
+   than 256 names per table, all layers combined. Finally, a server named
+   `oxyn` is refused.
+2. **A managed layer that writes `enabled = true` wins over Oxyn.** Codex
+   starts anyway, since it is the organization's policy. However, the agent is
+   no longer presented as confined: it loses the "Restricted by Oxyn" badge
+   and the screen warns about it like an agent Oxyn does not confine
+   (`managed_turns_on`).
+3. **Oxyn reads neither the MDM layer nor the cloud fragments, and accepts
+   it.** Reading the MDM would require launching a process (`defaults`), which
+   the repository refuses outside the single launch point, or linking
+   `CoreFoundation`. The cloud fragments, for their part, are readable nowhere
+   locally. These layers belong to the organization's administrator, not to
+   the user, and their servers are those the organization chose. For Codex,
+   the screen adds: "except what your organization's managed configuration
+   turns on".
 
-## Conséquences
+## Consequences
 
-* **+** Un serveur MCP déclaré dans `/etc/codex/config.toml` ou dans le
-  fichier géré est coupé comme ceux de `~/.codex`. L'écart de l'ADR-0032 se
-  réduit aux couches qui relèvent de l'organisation.
-* **+** Oxyn ne présente plus comme confiné un Codex qu'une politique gérée
-  ouvre. Le badge dit ce qui est vrai.
-* **−** Un serveur déclaré par MDM ou par le cloud de l'organisation reste
-  disponible à l'agent, **sans aucune indication**, puisque Oxyn ne le voit
-  pas. L'écran le dit en général, pas pour ce serveur-là.
-* **−** Lister les agents lit désormais deux fichiers de `/etc` pour chaque
-  Codex déclaré, sur le pool bloquant (I-05).
-* **−** Un `/etc/codex/config.toml` illisible pour l'utilisateur, avec des
-  droits `0600 root` par exemple, empêche Codex de démarrer depuis Oxyn, alors
-  qu'il démarrerait dans un terminal. Ce refus est voulu : un fichier illisible
-  ne permet pas de couper ce qu'il déclare.
+* **+** An MCP server declared in `/etc/codex/config.toml` or in the managed
+  file is switched off like those of `~/.codex`. The gap of ADR-0032 shrinks to
+  the layers that belong to the organization.
+* **+** Oxyn no longer presents as confined a Codex that a managed policy
+  opens. The badge says what is true.
+* **−** A server declared by MDM or by the organization's cloud stays
+  available to the agent, **without any indication**, since Oxyn does not see
+  it. The screen says so in general, not for that particular server.
+* **−** Listing agents now reads two files of `/etc` for each declared Codex,
+  on the blocking pool (I-05).
+* **−** An `/etc/codex/config.toml` unreadable by the user, with `0600 root`
+  permissions for example, prevents Codex from starting from Oxyn, whereas it
+  would start in a terminal. This refusal is intended: an unreadable file does
+  not allow switching off what it declares.
 
-**Coût de sortie :** faible. `codex_layers.rs` est un module d'environ deux
-cents lignes, et le champ `confined` existe déjà côté IPC.
+**Exit cost:** low. `codex_layers.rs` is a module of about two hundred lines,
+and the `confined` field already exists on the IPC side.
 
-**Reconsidérer si** une version épinglée de Codex ou de `codex-acp` offre un
-interrupteur qui coupe tous les serveurs MCP sauf ceux de la session. Il
-remplacerait toute cette lecture. À reconsidérer aussi si l'on constate que
-des organisations poussent par MDM des serveurs que leurs utilisateurs
-refusent.
+**Reconsider if** a pinned version of Codex or `codex-acp` offers a switch that
+turns off all MCP servers except those of the session. It would replace all of
+this reading. Reconsider also if organizations are found to push by MDM
+servers their users refuse.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Refuser de lancer Codex dès qu'une couche système ou gérée déclare un serveur | Cela punit l'utilisateur d'une politique qu'il ne contrôle pas, sans rien protéger de plus que la coupure par nom. |
-| Seulement documenter l'écart | Deux couches sont lisibles en quelques lignes. Laisser leurs serveurs actifs sous un badge « Restricted by Oxyn » ferait mentir le badge. |
-| Lire le MDM avec `defaults read com.openai.codex` | Cela lance un processus, que le dépôt interdit hors du seul point de lancement, parce qu'un enfant hérite de l'environnement (I-03). Lier `CoreFoundation` pour un seul appel serait une dépendance plateforme de plus pour une couche qui appartient de toute façon à l'organisation. |
-| Retirer le badge à tout Codex | Oxyn confine effectivement tout ce qu'il peut lire. Le retirer à tout Codex rendrait l'avertissement si fréquent qu'il ne signalerait plus rien. |
+| Refuse to launch Codex as soon as a system or managed layer declares a server | It punishes the user for a policy they do not control, without protecting anything more than switching off by name. |
+| Only document the gap | Two layers are readable in a few lines. Leaving their servers active under a "Restricted by Oxyn" badge would make the badge lie. |
+| Read the MDM with `defaults read com.openai.codex` | It launches a process, which the repository forbids outside the single launch point, because a child inherits the environment (I-03). Linking `CoreFoundation` for a single call would be one more platform dependency for a layer that belongs to the organization anyway. |
+| Remove the badge from every Codex | Oxyn does confine everything it can read. Removing it from every Codex would make the warning so frequent that it would no longer signal anything. |

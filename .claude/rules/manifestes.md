@@ -13,81 +13,80 @@ paths:
   - "script/*"
 ---
 
-# Manifestes et outillage — conventions
+# Manifests and tooling — conventions
 
-## Aucune version ne s'écrit de mémoire
+## No version is written from memory
 
-[I-12](../../CLAUDE.md#i-12). Une version plausible et fausse ne se voit ni à la
-compilation, ni aux tests, ni en revue — elle se voit quand quelqu'un essaie de
-construire le projet six mois plus tard.
+[I-12](../../CLAUDE.md#i-12). A plausible and wrong version shows up neither at
+compile time, nor in tests, nor in review — it shows up when someone tries to
+build the project six months later.
 
-Avant d'ajouter ou de modifier une dépendance : [`/versions`](../commands/versions.md).
-La valeur retenue est reportée dans
-[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) **dans le même commit**.
+Before adding or changing a dependency: [`/versions`](../commands/versions.md).
+The chosen value is recorded in
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) **in the same commit**.
 
-## Le workspace centralise
+## The workspace centralizes
 
-Les dépendances communes vont dans `[workspace.dependencies]`, les crates y font
-référence par `{ workspace = true }`. Deux versions du même crate dans le graphe,
-c'est deux fois le code compilé et des types incompatibles entre eux — le
-message d'erreur qui en résulte est célèbre pour son opacité.
+Shared dependencies go in `[workspace.dependencies]`, crates refer to them with
+`{ workspace = true }`. Two versions of the same crate in the graph means twice
+the compiled code and types incompatible with each other — the resulting error
+message is famous for its opacity.
 
 ## `rust-toolchain.toml`
 
-Version **exacte**, avec `rustfmt` et `clippy`
-([ADR-0008](../../docs/adr/0008-chaine-outils-rust.md)). Une montée de version
-est un commit délibéré, qui met à jour
-[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) en même temps.
+**Exact** version, with `rustfmt` and `clippy`
+([ADR-0008](../../docs/adr/0008-chaine-outils-rust.md)). A version bump is a
+deliberate commit, which updates
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) at the same time.
 
-## Nouvelle dépendance
+## New dependency
 
-Elle se justifie en revue : ce qu'elle apporte, et le coût de s'en passer
-([SECURITY](../../docs/SECURITY.md#dépendances)). Une crate utilisée à un seul
-endroit pour une seule fonction est un candidat à la réécriture, pas une
-évidence. Une crate non maintenue sur une frontière externe est un risque à
-documenter.
+It is justified in review: what it brings, and the cost of doing without it
+([SECURITY](../../docs/SECURITY.md#dependencies)). A crate used in one place for
+one function is a candidate for rewriting, not a given. An unmaintained crate
+on an external boundary is a risk to document.
 
 ## `make qualite`
 
-C'est la porte de qualité, et le seul point d'entrée. Si un contrôle n'y est pas,
-il ne tourne pas : la CI l'appelle
-([.github/workflows/qualite.yml](../../.github/workflows/qualite.yml)), le hook
-`Stop` le rappelle, la définition de « terminé » s'y adosse. Ajouter un contrôle
-ailleurs, c'est le rendre optionnel.
+It is the quality gate, and the only entry point. If a check is not in it, it
+does not run: CI calls it
+([.github/workflows/qualite.yml](../../.github/workflows/qualite.yml)), the
+`Stop` hook reminds of it, the definition of "done" relies on it. Adding a check
+elsewhere makes it optional.
 
-**La CI n'ajoute aucun contrôle.** Elle appelle les cibles de `make qualite`,
-réparties en jobs parallèles, et rien d'autre. Un contrôle qui n'existerait que
-dans le fichier de workflow serait irreproductible en local : on découvrirait son
-existence en le voyant échouer.
+**CI adds no check.** It calls the targets of `make qualite`, split into
+parallel jobs, and nothing else. A check that only existed in the workflow file
+would be irreproducible locally: one would discover it exists by seeing it fail.
 
-Le découpage a le risque inverse : une cible ajoutée à `qualite` et oubliée dans
-le workflow ne tournerait jamais en CI. `make socle` le refuse
-(`controler_couverture_ci`). Une nouvelle cible de la porte s'ajoute donc aux
-deux endroits dans le même commit.
+The split carries the opposite risk: a target added to `qualite` and forgotten
+in the workflow would never run in CI. `make socle` refuses it
+(`check_ci_coverage`). A new target of the gate is therefore added to both
+places in the same commit.
 
-Sur une pull request, les jobs d'une zone intacte sont sautés
-([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)) ; sur
-`main`, tout tourne. Un nouveau job qui appelle `make` s'ajoute aux `needs` du
-job agrégat `qualite` (`controler_agregat_ci`), et un nouveau répertoire de
-premier niveau se range dans `script/zones-ci` — sans quoi il déclenche tout.
+On a pull request, the jobs of an untouched area are skipped
+([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)); on
+`main`, everything runs. A new job that calls `make` is added to the `needs` of
+the aggregate `qualite` job (`check_ci_aggregate`), and a new top-level
+directory is classified in `script/zones-ci` — otherwise it triggers everything.
 
-## Où vivent les interdits mécanisables
+## Where the mechanizable prohibitions live
 
-| Fichier | Ce qu'il refuse |
+| File | What it refuses |
 |---|---|
-| [clippy.toml](../../clippy.toml) | les chemins d'appel interdits — `disallowed-methods`, avec la raison et le remplacement |
-| [.cargo/config.toml](../../.cargo/config.toml) | rien ; il impose les drapeaux qui doivent valoir pour tout le monde, dont la cible macOS |
-| [.config/nextest.toml](../../.config/nextest.toml) | un test qui pend, et deux tests qui se partagent un serveur |
-| [renovate.json5](../../renovate.json5) | une version recopiée de mémoire — c'est [I-12](../../CLAUDE.md#i-12) mécanisé |
+| [clippy.toml](../../clippy.toml) | forbidden call paths — `disallowed-methods`, with the reason and the replacement |
+| [.cargo/config.toml](../../.cargo/config.toml) | nothing; it imposes the flags that must hold for everyone, including the macOS target |
+| [.config/nextest.toml](../../.config/nextest.toml) | a hanging test, and two tests sharing a server |
+| [renovate.json5](../../renovate.json5) | a version copied from memory — it is [I-12](../../CLAUDE.md#i-12) mechanized |
 
-Un invariant qui se ramène à un chemin d'appel appartient à `clippy.toml`, pas à
-une relecture. `clippy.toml` vaut pour **tout** le workspace : un interdit qui ne
-doit valoir que pour une crate n'y a pas sa place.
+An invariant that boils down to a call path belongs in `clippy.toml`, not in a
+review. `clippy.toml` holds for the **whole** workspace: a prohibition that must
+only hold for one crate has no place there.
 
-## Une crate ne se crée pas à la main
+## A crate is not created by hand
 
-`script/nouvelle-crate <nom> "<description>"`. La raison est écrite dans
-[CLAUDE.md](../../CLAUDE.md) : une règle `paths:` se charge quand un fichier est
-**lu**, pas quand il est créé. Un manifeste écrit de mémoire oublie
-`[lints] workspace = true`, et la crate échappe alors à tous les lints du dépôt
-sans que rien n'échoue. `make socle` le rattrape après coup ; le script l'évite.
+`script/nouvelle-crate <name> "<description>"`. The reason is written in
+[CLAUDE.md](../../CLAUDE.md): a `paths:` rule loads when a file is **read**, not
+when it is created. A manifest written from memory forgets
+`[lints] workspace = true`, and the crate then escapes all the repository's
+lints without anything failing. `make socle` catches it afterwards; the script
+prevents it.

@@ -1,32 +1,32 @@
-//! Le curseur : un lot Arrow à la fois, et une annulation qui coupe vraiment.
+//! The cursor: one Arrow batch at a time, and a cancellation that really cuts.
 //!
-//! # L'annulation, ici, n'est pas décorative
+//! # Cancellation, here, is not decorative
 //!
-//! Le jeton est consulté **avant chaque demande de lot** et surveillé **pendant
-//! l'attente**. Quand il se déclenche, `sqlite3_interrupt` part vers le moteur :
-//! un `sqlite3_step` déjà lancé sur une agrégation de quatre minutes s'arrête,
-//! le thread porteur redevient disponible, et le curseur devient inutilisable.
+//! The token is checked **before each batch request** and watched **during the
+//! wait**. When it fires, `sqlite3_interrupt` goes to the engine: a
+//! `sqlite3_step` already launched on a four-minute aggregation stops, the
+//! worker thread becomes available again, and the cursor becomes unusable.
 //!
-//! Abandonner le futur ne suffirait pas — c'est exactement la panne que
-//! [`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md) décrit. C'est aussi
-//! pourquoi l'attente d'un lot interrompt sa tâche quand son futur est détruit
-//! (`WorkerHandle::await_reply`) : un curseur détruit pendant qu'il attend un
-//! lot interrompt ce qui tourne encore. Détruit au repos, il ferme seulement le
-//! canal, et le thread porteur sort de sa boucle de diffusion.
+//! Dropping the future would not be enough — it is exactly the failure that
+//! [`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md) describes. It is also
+//! why waiting for a batch interrupts its task when its future is destroyed
+//! (`WorkerHandle::await_reply`): a cursor destroyed while it waits for a batch
+//! interrupts what is still running. Destroyed at rest, it only closes the
+//! channel, and the worker thread leaves its streaming loop.
 //!
-//! # Ce que ce curseur ne prétend pas être
+//! # What this cursor does not claim to be
 //!
-//! `sqlite3_interrupt` est une annulation **locale** : SQLite n'a pas de
-//! serveur, il tourne dans le processus d'Oxyn. La session ne déclare donc pas
+//! `sqlite3_interrupt` is a **local** cancellation: SQLite has no server, it runs
+//! in Oxyn's process. The session therefore does not declare
 //! [`Capabilities::SERVER_SIDE_CANCEL`](oxyn_core::Capabilities::SERVER_SIDE_CANCEL),
-//! et [`SqliteSession::cancel`](crate::SqliteSession) refuse. La voie d'annulation
-//! est le [`CancelToken`], et c'est la seule.
+//! and [`SqliteSession::cancel`](crate::SqliteSession) refuses. The cancellation
+//! path is the [`CancelToken`], and it is the only one.
 //!
-//! # Après une annulation, le curseur ne reprend pas
+//! # After a cancellation, the cursor does not resume
 //!
-//! Une instruction interrompue laisse le moteur à un point que rien ne permet de
-//! reprendre proprement. Le curseur se marque terminé et refuse la suite : un
-//! point de reprise se conçoit, il ne s'improvise pas.
+//! An interrupted statement leaves the engine at a point nothing allows resuming
+//! cleanly. The cursor marks itself finished and refuses what follows: a resume
+//! point is designed, not improvised.
 
 use std::time::{Duration, Instant};
 
@@ -42,17 +42,17 @@ use crate::interrupt::WorkId;
 use crate::stream::{Pull, Pulled, StreamStart};
 use crate::worker::WorkerHandle;
 
-/// Un flux de `RecordBatch` alimenté par une instruction SQLite.
+/// A stream of `RecordBatch` fed by an SQLite statement.
 pub struct SqliteCursor {
     handle: StatementHandle,
     schema: SchemaRef,
-    /// Le premier lot, produit avant même que le curseur existe : résoudre le
-    /// type des colonnes a demandé de lire des lignes.
+    /// The first batch, produced before the cursor even exists: resolving the
+    /// column types required reading rows.
     pending: Option<RecordBatch>,
     pulls: mpsc::UnboundedSender<Pull>,
     worker: WorkerHandle,
-    /// La tâche du thread porteur qui diffuse ce flux : une interruption ne
-    /// vise qu'elle.
+    /// The worker thread task that streams this flow: an interruption targets
+    /// only it.
     work: WorkId,
     cancel: CancelToken,
     stats: ExecStats,
@@ -62,8 +62,8 @@ pub struct SqliteCursor {
 }
 
 impl std::fmt::Debug for SqliteCursor {
-    /// Ni le schéma ni les lots : un `Debug` de curseur sert à savoir où en est
-    /// le flux, pas à imprimer des données.
+    /// Neither the schema nor the batches: a cursor `Debug` is for knowing where
+    /// the stream stands, not for printing data.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqliteCursor")
             .field("handle", &self.handle)
@@ -75,7 +75,7 @@ impl std::fmt::Debug for SqliteCursor {
 }
 
 impl SqliteCursor {
-    /// Construit le curseur à partir de ce que le thread porteur a déjà produit.
+    /// Builds the cursor from what the worker thread has already produced.
     pub(crate) fn new(
         handle: StatementHandle,
         start: StreamStart,
@@ -87,8 +87,8 @@ impl SqliteCursor {
     ) -> Self {
         let mut stats = ExecStats::default();
         if start.schema.fields().is_empty() {
-            // Aucune colonne : ce que l'utilisateur attend, c'est le compte de
-            // lignes affectées. `ExecStats::rows` porte les deux sens.
+            // No column: what the user expects is the count of affected rows.
+            // `ExecStats::rows` carries both meanings.
             stats.rows = start.affected;
         }
 
@@ -116,7 +116,7 @@ impl SqliteCursor {
         cursor
     }
 
-    /// Enregistre un lot dans les statistiques.
+    /// Records a batch in the statistics.
     fn record(&mut self, batch: &RecordBatch) {
         self.stats.record_batch(
             u64::try_from(batch.num_rows()).unwrap_or(u64::MAX),
@@ -124,12 +124,12 @@ impl SqliteCursor {
         );
     }
 
-    /// Marque le flux terminé et fige la durée.
+    /// Marks the stream finished and freezes the duration.
     fn close(&mut self, truncated: bool) {
         self.finished = true;
         if truncated {
-            // Doit remonter jusqu'à l'écran : un résultat tronqué qui a l'air
-            // complet conduit à des conclusions fausses sur des données réelles.
+            // Must reach the screen: a truncated result that looks complete leads to
+            // wrong conclusions on real data.
             self.stats.mark_truncated();
         }
         if self.elapsed.is_none() {
@@ -137,12 +137,11 @@ impl SqliteCursor {
         }
     }
 
-    /// Rend l'annulation demandée avant qu'un lot n'ait été réclamé.
+    /// Returns the cancellation requested before any batch was claimed.
     ///
-    /// **Sans interrompre** : aucune demande n'est en vol, donc le thread
-    /// porteur n'est pas dans `sqlite3_step`. Poser le drapeau d'interruption
-    /// sur un moteur au repos n'annulerait rien et risquerait de retomber sur
-    /// l'instruction suivante.
+    /// **Without interrupting**: no request is in flight, so the worker thread is
+    /// not in `sqlite3_step`. Setting the interruption flag on an engine at rest
+    /// would cancel nothing and could land on the next statement.
     fn abort(&mut self) -> OxynError {
         self.close(true);
         OxynError::Cancelled
@@ -176,10 +175,10 @@ impl Cursor for SqliteCursor {
             return Err(error::closed());
         }
 
-        // Le jeton est cloné : `await_reply` l'emprunte, et `self` est déjà
-        // emprunté mutablement. À partir d'ici, le thread porteur peut être dans
-        // `sqlite3_step` : si ce futur est abandonné, `await_reply` interrompt
-        // la tâche du flux.
+        // The token is cloned: `await_reply` borrows it, and `self` is already
+        // mutably borrowed. From here on, the worker thread may be in
+        // `sqlite3_step`: if this future is abandoned, `await_reply` interrupts
+        // the stream's task.
         let cancel = self.cancel.clone();
         let pulled = self.worker.await_reply(answer, &cancel, self.work).await;
 
@@ -193,8 +192,8 @@ impl Cursor for SqliteCursor {
                 Ok(None)
             }
             Err(err) => {
-                // Y compris l'annulation : `await_reply` a déjà interrompu le
-                // moteur. Le curseur ne reprend pas.
+                // Including cancellation: `await_reply` has already interrupted the
+                // engine. The cursor does not resume.
                 self.close(true);
                 Err(err)
             }
@@ -204,10 +203,10 @@ impl Cursor for SqliteCursor {
     fn stats(&self) -> ExecStats {
         let mut stats = self.stats;
         stats.total_time = self.elapsed.unwrap_or_else(|| self.started.elapsed());
-        // `server_time` reste `None` : SQLite tourne dans le processus d'Oxyn,
-        // il n'y a pas d'horloge serveur à opposer à l'horloge cliente. La
-        // mesurer par instruction coûterait deux lectures d'horloge par ligne,
-        // sur le chemin le plus chaud du driver.
+        // `server_time` stays `None`: SQLite runs in Oxyn's process, there is no
+        // server clock to set against the client clock. Measuring it per
+        // statement would cost two clock reads per row, on the hottest path of
+        // the driver.
         stats
     }
 }

@@ -328,11 +328,11 @@ async fn preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events
         .expect("close");
 }
 
-/// **Un DDL réussi marque le catalogue de la connexion à relire.**
+/// **A successful DDL marks the connection's catalog to be read again.**
 ///
-/// C'est ce qui permet à l'interface de se rafraîchir sans clic Refresh
-/// (I-10 : la connexion entière est visée, jamais la seule table nommée dans
-/// le texte, puisque cet identifiant n'est jamais reconstruit depuis le SQL).
+/// It is what lets the interface refresh without a Refresh click (I-10: the
+/// whole connection is targeted, never only the table named in the text,
+/// since that identifier is never rebuilt from the SQL).
 #[tokio::test]
 async fn a_successful_ddl_invalidates_the_catalog_and_broadcasts_it() {
     let connection = ConnectionConfig::new("memory", DriverId::sqlite())
@@ -415,10 +415,10 @@ struct Probe {
     executed: Mutex<Vec<ExecRequest>>,
     cancelled: AtomicBool,
     mutating: bool,
-    /// La session déclare-t-elle savoir trier et filtrer un aperçu ?
+    /// Does the session declare it can sort and filter a preview?
     ///
-    /// Faux par défaut : c'est l'état d'un moteur qui ne sait pas le faire, et
-    /// c'est lui que le refus de capacité doit exercer.
+    /// False by default: it is the state of an engine that cannot do it, and it
+    /// is the one the capability refusal must exercise.
     shapes_previews: bool,
     waiting: bool,
     waiting_for_metadata: bool,
@@ -430,11 +430,11 @@ struct PreviewSession(Arc<Probe>);
 #[async_trait]
 impl Session for PreviewSession {
     fn capabilities(&self) -> Capabilities {
-        let mut capacites = Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL;
+        let mut caps = Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL;
         if self.0.shapes_previews {
-            capacites |= Capabilities::PREVIEW_SORT | Capabilities::PREVIEW_FILTER;
+            caps |= Capabilities::PREVIEW_SORT | Capabilities::PREVIEW_FILTER;
         }
-        capacites
+        caps
     }
     async fn preview_request(
         &self,
@@ -448,18 +448,18 @@ impl Session for PreviewSession {
             cancel.cancelled().await;
             return Err(OxynError::Cancelled);
         }
-        // Le prédicat est inséré comme le fait un vrai driver : c'est ce qui
-        // permet d'exercer la reclassification sur le texte final.
-        let texte = if self.0.mutating {
+        // The predicate is inserted as a real driver does: it is what lets the
+        // reclassification be exercised on the final text.
+        let text = if self.0.mutating {
             "DELETE FROM audit".to_owned()
-        } else if let Some(predicat) = shape.predicate() {
-            format!("SELECT * FROM t WHERE ({predicat}\n)")
+        } else if let Some(pred) = shape.predicate() {
+            format!("SELECT * FROM t WHERE ({pred}\n)")
         } else {
             "SELECT 1".to_owned()
         };
         // Deliberately wrong limits and intent test executor defenses.
         Ok(
-            ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), texte)
+            ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), text)
                 .with_intent(StatementIntent::Read)
                 .with_limits(ExecLimits::unbounded()),
         )
@@ -734,30 +734,30 @@ async fn preview_cancellation_uses_the_existing_statement_and_command_identity()
     }
 }
 
-/// Un tri ou un prédicat qu'une session ne déclare pas est refusé **avant** que
-/// le driver ne compose quoi que ce soit.
+/// A sort or a predicate a session does not declare is refused **before** the
+/// driver composes anything.
 ///
-/// La session factice de ce module ne déclare ni `PREVIEW_SORT` ni
-/// `PREVIEW_FILTER`. C'est le cas d'un moteur qui ne sait pas ordonner une
-/// lecture — le produit vise aussi les familles clé-valeur — et le refus doit
-/// arriver là, pas dans la composition du SQL, où la tentation serait
-/// d'abandonner la demande en silence : l'utilisateur croirait alors avoir
-/// exclu des lignes qui sont pourtant à l'écran (ADR-0003, ADR-0020).
+/// This module's fake session declares neither `PREVIEW_SORT` nor
+/// `PREVIEW_FILTER`. It is the case of an engine that cannot order a read —
+/// the product also targets key-value families — and the refusal must come
+/// there, not in the SQL composition, where the temptation would be to drop
+/// the request silently: the user would then believe they had excluded rows
+/// that are nonetheless on screen (ADR-0003, ADR-0020).
 #[test]
 fn preview_refuses_a_sort_or_predicate_the_session_does_not_declare() {
     let probe = Arc::new(Probe::default());
     let (executor, connection, session) = fake(probe.clone(), None);
 
-    let mut trie = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut trie {
+    let mut sorted = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut sorted {
         shape.sort = vec![oxyn_core::PreviewSort::ascending("id")];
     }
-    let mut filtre = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut filtre {
+    let mut filter = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut filter {
         shape.predicate = Some("id > 10".into());
     }
 
-    for command in [trie, filtre] {
+    for command in [sorted, filter] {
         assert!(matches!(
             block_on(executor.dispatch(Actor::Human, command, &CancelToken::new())),
             Err(OxynError::NotSupported { .. })
@@ -765,28 +765,27 @@ fn preview_refuses_a_sort_or_predicate_the_session_does_not_declare() {
     }
     assert!(
         probe.prepared.lock().is_empty(),
-        "le driver n'a même pas été sollicité"
+        "the driver was not even called"
     );
     assert!(probe.executed.lock().is_empty());
 
-    // Le test négatif, sans lequel le précédent passerait même si l'aperçu était
-    // refusé en toutes circonstances : un prédicat vide ne demande rien, donc
-    // rien n'est refusé.
-    let mut vide = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut vide {
+    // The negative test, without which the previous one would pass even if the
+    // preview were refused in all circumstances: an empty predicate asks for
+    // nothing, so nothing is refused.
+    let mut empty = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut empty {
         shape.predicate = Some("   ".into());
     }
-    assert!(block_on(executor.dispatch(Actor::Human, vide, &CancelToken::new())).is_ok());
+    assert!(block_on(executor.dispatch(Actor::Human, empty, &CancelToken::new())).is_ok());
     assert_eq!(probe.prepared.lock().len(), 1);
 }
 
-/// Un prédicat illisible et une écriture sont deux refus différents.
+/// An unreadable predicate and a write are two different refusals.
 ///
-/// Le classificateur compte pour mutant ce qu'il ne comprend pas, et c'est la
-/// bonne prudence. Mais le message doit dire ce qui s'est passé : sur un
-/// aperçu, la seule part écrite à la main est le prédicat, et « pas en lecture
-/// seule » enverrait l'utilisateur chercher un droit manquant alors qu'il a une
-/// faute de frappe.
+/// The classifier counts as mutating what it does not understand, and it is
+/// the right caution. But the message must say what happened: on a preview,
+/// the only part written by hand is the predicate, and "not read-only" would
+/// send the user looking for a missing right when they have a typo.
 #[test]
 fn preview_tells_an_unreadable_filter_apart_from_a_write() {
     let probe = Arc::new(Probe {
@@ -794,26 +793,26 @@ fn preview_tells_an_unreadable_filter_apart_from_a_write() {
         ..Probe::default()
     });
     let (executor, connection, session) = fake(probe.clone(), None);
-    let mut casse = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut casse {
+    let mut broken = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut broken {
         shape.predicate = Some("id >< 3".into());
     }
     let Err(OxynError::PolicyDenied { reason }) =
-        block_on(executor.dispatch(Actor::Human, casse, &CancelToken::new()))
+        block_on(executor.dispatch(Actor::Human, broken, &CancelToken::new()))
     else {
-        panic!("un prédicat illisible est refusé");
+        panic!("an unreadable predicate is refused");
     };
     assert!(
         reason.contains("syntax"),
-        "le refus parle du prédicat, pas d'un droit : {reason}"
+        "the refusal speaks of the predicate, not of a right: {reason}"
     );
     assert!(
         !reason.contains("read-only"),
-        "et ne renvoie pas vers la lecture seule : {reason}"
+        "and does not point to read-only: {reason}"
     );
 
-    // Le test négatif : un driver qui compose réellement une écriture garde son
-    // refus d'origine, celui qui dit la vérité pour ce cas-là.
+    // The negative test: a driver that really composes a write keeps its
+    // original refusal, the one that tells the truth for that case.
     let mutant = Arc::new(Probe {
         mutating: true,
         ..Probe::default()
@@ -824,7 +823,7 @@ fn preview_tells_an_unreadable_filter_apart_from_a_write() {
         preview(connection, session, 200),
         &CancelToken::new(),
     )) else {
-        panic!("une écriture composée par le driver est refusée");
+        panic!("a write composed by the driver is refused");
     };
     assert!(reason.contains("read-only"), "{reason}");
 }

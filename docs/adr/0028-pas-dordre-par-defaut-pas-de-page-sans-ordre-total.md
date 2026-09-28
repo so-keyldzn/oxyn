@@ -1,97 +1,96 @@
-# ADR-0028 — Un aperçu n'impose aucun ordre, et n'offre aucune page tant que l'ordre n'est pas total
+# ADR-0028 — A preview imposes no order, and offers no page as long as the order is not total
 
-**Statut :** accepté · **Date :** 2026-09-15
+**Status:** accepted · **Date:** 2026-09-15
 
-**Précise :** [ADR-0020](0020-apercu-trie-filtre-parcouru.md), dont la décision
-« sans tri demandé, le driver ordonne par la clé primaire seule » n'a pas été
-mise en œuvre — et pour une bonne raison, restée non consignée jusqu'ici.
+**Clarifies:** [ADR-0020](0020-apercu-trie-filtre-parcouru.md), whose decision
+"without a requested sort, the driver orders by the primary key alone" was not
+implemented — and for a good reason, left unrecorded until now.
 
-## Contexte
+## Context
 
-[ADR-0020](0020-apercu-trie-filtre-parcouru.md) pose un danger réel et le nomme
-correctement : un `OFFSET` appliqué à un ordre non garanti **duplique et omet des
-lignes en silence**. Deux pages consécutives peuvent montrer deux fois la même
-ligne et n'en montrer jamais une autre, sans qu'aucune erreur n'apparaisse. C'est
-le pire genre de défaut — les données affichées sont fausses et rien ne le dit.
+[ADR-0020](0020-apercu-trie-filtre-parcouru.md) states a real danger and names
+it correctly: an `OFFSET` applied to a non-guaranteed order **duplicates and
+omits rows silently**. Two consecutive pages can show the same row twice and
+never show another, without any error appearing. It is the worst kind of
+flaw — the displayed data is wrong and nothing says so.
 
-Sa réponse était d'**imposer un ordre par défaut** sur la clé primaire.
+Its answer was to **impose a default order** on the primary key.
 
-L'implémentation a pris un autre chemin, et le dépôt s'est retrouvé avec trois
-documents qui ne disaient pas la même chose :
+The implementation took another path, and the repository ended up with three
+documents that did not say the same thing:
 
-* ADR-0020 : « sans tri demandé, le driver ordonne par la clé primaire seule » ;
-* [UX-SPEC](../UX-SPEC.md) : « sans tri demandé, l'ordre des lignes n'est pas
-  garanti » ;
-* le code : les deux drivers ne composent **aucun** `ORDER BY` sans demande, ce
-  qu'ancre le test `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by`.
+* ADR-0020: "without a requested sort, the driver orders by the primary key alone";
+* [UX-SPEC](../UX-SPEC.md): "without a requested sort, the order of the rows is
+  not guaranteed";
+* the code: both drivers compose **no** `ORDER BY` without a request, which the
+  test `a_preview_without_request_composes_neither_where_nor_order_by` anchors.
 
-Cette contradiction a été relevée le 2026-09-15. Ce qui la rendait coûteuse
-n'est pas l'incohérence elle-même : c'est qu'ADR-0020 est le **seul** document
-qui explique *pourquoi* la pagination existe. Quelqu'un qui le lit conclut que
-l'aperçu est déterministe par défaut, donc que « page suivante » devrait toujours
-être offerte — et va « corriger » le code qui rend délibérément `NeedsOrder`.
-C'est-à-dire réintroduire exactement la panne silencieuse qu'ADR-0020 existe pour
-empêcher.
+This contradiction was found on 2026-09-15. What made it costly is not the
+inconsistency itself: it is that ADR-0020 is the **only** document that
+explains *why* pagination exists. Someone reading it concludes that the preview
+is deterministic by default, hence that "next page" should always be offered —
+and will "fix" the code that deliberately returns `NeedsOrder`. That is,
+reintroduce exactly the silent failure ADR-0020 exists to prevent.
 
-## Décision
+## Decision
 
-**L'argument d'ADR-0020 est retenu ; son remède est remplacé.**
+**ADR-0020's argument is kept; its remedy is replaced.**
 
-1. **Aucun ordre n'est imposé.** Un premier aperçu est un `SELECT` borné, sans
-   `ORDER BY`. L'ordre des lignes n'est pas garanti, et
-   [UX-SPEC](../UX-SPEC.md) le dit à l'utilisateur.
+1. **No order is imposed.** A first preview is a bounded `SELECT`, without
+   `ORDER BY`. The order of the rows is not guaranteed, and
+   [UX-SPEC](../UX-SPEC.md) tells the user so.
 
-2. **Aucune page n'est offerte tant que l'ordre n'est pas total.** Le contrôle
-   de page n'existe pas dans deux cas, et les distingue :
-   * `NeedsOrder` — rien n'a été trié, une « page suivante » serait la seconde
-     page d'un ordre que l'utilisateur n'a jamais vu ;
-   * `NoUniqueKey` — un tri est demandé, mais aucune clé unique n'est connue :
-     l'ordre ne peut pas être rendu total, donc `OFFSET` reste dangereux.
+2. **No page is offered as long as the order is not total.** The page control
+   does not exist in two cases, and distinguishes them:
+   * `NeedsOrder` — nothing was sorted, a "next page" would be the second
+     page of an order the user never saw;
+   * `NoUniqueKey` — a sort is requested, but no unique key is known:
+     the order cannot be made total, so `OFFSET` remains dangerous.
 
-3. **L'ordre est vérifié contre la forme dont les lignes affichées viennent**,
-   pas contre celle qu'on est en train de taper. Deux pages consécutives ne se
-   recouvrent que si les deux ont été composées depuis le même ordre total.
+3. **The order is checked against the shape the displayed rows come from**,
+   not against the one being typed. Two consecutive pages only overlap
+   correctly if both were composed from the same total order.
 
-### Pourquoi ce remède est meilleur que celui d'ADR-0020
+### Why this remedy is better than ADR-0020's
 
-| | Ordre imposé (ADR-0020) | Pas d'ordre, pas de page (retenu) |
+| | Imposed order (ADR-0020) | No order, no page (chosen) |
 |---|---|---|
-| Sûreté de l'`OFFSET` | tenue **si** une clé primaire existe — sinon l'ordre n'est pas total et le danger revient | tenue par construction : sans ordre total, le contrôle n'existe pas |
-| Coût | une lecture de métadonnées **à chaque aperçu**, pour découvrir la clé — voir `oxyn-core/src/preview.rs` | nul : rien n'est lu tant que rien n'est demandé |
-| Effet visible | « un changement visible » que l'ADR assume : l'ordre d'arrivée est remplacé par un ordre arbitraire | aucun : l'aperçu montre ce que le moteur rend, comme un `SELECT` sans `ORDER BY` |
-| Ce que l'utilisateur comprend | il croit voir un ordre stable, sans savoir lequel | il voit « page suivante » apparaître **quand il trie**, ce qui enseigne la règle |
+| Safety of `OFFSET` | held **if** a primary key exists — otherwise the order is not total and the danger returns | held by construction: without a total order, the control does not exist |
+| Cost | a metadata read **on every preview**, to discover the key — see `oxyn-core/src/preview.rs` | none: nothing is read as long as nothing is requested |
+| Visible effect | "a visible change" the ADR accepts: the arrival order is replaced by an arbitrary order | none: the preview shows what the engine returns, like a `SELECT` without `ORDER BY` |
+| What the user understands | they believe they see a stable order, without knowing which | they see "next page" appear **when they sort**, which teaches the rule |
 
-Le dernier point est celui qui emporte la décision : le contrôle de page qui
-apparaît au moment où l'on trie **explique** la contrainte au lieu de la cacher.
+The last point is the one that carries the decision: the page control that
+appears when one sorts **explains** the constraint instead of hiding it.
 
-## Conséquences
+## Consequences
 
-`ADR-0020` reste la référence sur le reste — prédicat écrit, tri composé,
-identifiants cités — et cet ADR ne touche qu'à son point 3. Les deux doivent se
-lire ensemble ; c'est pourquoi celui-ci le **précise** plutôt que de le
-remplacer.
+`ADR-0020` remains the reference on the rest — written predicate, composed
+sort, quoted identifiers — and this ADR only touches its point 3. The two must
+be read together; that is why this one **clarifies** it rather than
+superseding it.
 
-Rien à changer dans le code : il tient déjà cette décision. Ce qui change est
-qu'elle est désormais **écrite**, et qu'un lecteur d'ADR-0020 est renvoyé ici
-avant de « corriger » `pagination_from`.
+Nothing to change in the code: it already holds this decision. What changes is
+that it is now **written**, and that a reader of ADR-0020 is sent here before
+"fixing" `pagination_from`.
 
-## Coût de sortie
+## Exit cost
 
-**Faible, mais pas nul.** Revenir à l'ordre imposé demanderait : la lecture de la
-clé primaire à chaque aperçu dans les deux drivers, la composition de l'`ORDER
-BY` par défaut, et la révision des tests qui ancrent l'absence d'ordre
-(`un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` dans chaque driver,
-`a_page_is_offered_only_where_the_order_is_total` côté interface).
+**Low, but not zero.** Going back to the imposed order would require: reading
+the primary key on every preview in both drivers, composing the default
+`ORDER BY`, and revising the tests that anchor the absence of order
+(`a_preview_without_request_composes_neither_where_nor_order_by` in each driver,
+`a_page_is_offered_only_where_the_order_is_total` on the interface side).
 
-Ce qui coûterait davantage est invisible : les utilisateurs auraient pris
-l'habitude d'un contrôle de page toujours présent, et sa disparition
-conditionnelle se lirait comme une régression.
+What would cost more is invisible: users would have got used to an
+always-present page control, and its conditional disappearance would read as a
+regression.
 
-## Condition de reconsidération
+## Reconsideration condition
 
-* Un driver rend une clé primaire **sans coût de lecture supplémentaire** — le
-  principal argument contre l'ordre imposé tombe alors ;
-* les utilisateurs signalent que l'absence de contrôle de page sur un aperçu non
-  trié se lit comme un défaut plutôt que comme une règle ;
-* un moteur cible offre une pagination par curseur stable sans ordre déclaré,
-  auquel cas ni l'un ni l'autre remède ne s'applique.
+* A driver returns a primary key **with no additional read cost** — the main
+  argument against the imposed order then falls;
+* users report that the absence of a page control on an unsorted preview reads
+  as a flaw rather than as a rule;
+* a target engine offers stable cursor pagination without a declared order,
+  in which case neither remedy applies.

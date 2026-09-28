@@ -1,12 +1,12 @@
 ---
 name: piege-edit-sequence-u-decodee
-description: Edit/Write décodent une séquence `\uXXXX` écrite dans le texte — un `r#"… …"#` devient un vrai U+2028 dans le fichier
+description: Edit/Write decode a `\uXXXX` sequence written in the text — an `r#"… …"#` becomes a real U+2028 in the file
 metadata:
   type: feedback
 ---
 
-Une séquence `\u` suivie de quatre chiffres hexadécimaux, écrite dans `old_string`/`new_string`/`content`, arrive **décodée** dans le fichier : `r#""a b""#` devient une chaîne brute contenant le vrai caractère U+2028 (invisible, il ressemble à une espace). `\n`, `\"` passent tels quels ; seul `\u` est touché. Les formes `'\u{2028}'` (avec accolades) passent intactes.
+A `\u` sequence followed by four hexadecimal digits, written in `old_string`/`new_string`/`content`, arrives **decoded** in the file: `r#""a b""#` becomes a raw string containing the real U+2028 character (invisible, it looks like a space). `\n`, `\"` go through as is; only `\u` is affected. The `'\u{2028}'` forms (with braces) go through intact.
 
-**Why:** constaté en écrivant un test d'échappement de U+2028 dans `oxyn-ai` : l'assertion attendait ` ` échappé et comparait en fait au caractère brut. Rien ne l'a signalé, le test échouait sans raison visible.
+**Why:** observed while writing a U+2028 escaping test in `oxyn-ai`: the assertion expected an escaped ` ` and actually compared against the raw character. Nothing flagged it, the test failed for no visible reason.
 
-**How to apply:** pour attendre une séquence `\uXXXX` dans un test Rust, la construire par une fonction (`format!("\\u{code:04x}")`) plutôt que de l'écrire dans un littéral brut. Après une édition qui en contient, vérifier par un script Python qui cherche `' ' in ligne`, pas par `grep` (qui ne voit rien).
+**How to apply:** to expect a `\uXXXX` sequence in a Rust test, build it with a function (`format!("\\u{code:04x}")`) rather than writing it in a raw literal. After an edit that contains one, check with a Python script looking for `' ' in line`, not with `grep` (which sees nothing).

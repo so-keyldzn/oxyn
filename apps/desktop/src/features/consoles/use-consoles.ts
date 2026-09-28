@@ -328,7 +328,7 @@ export function useConsoles({
   /**
    * Closes the console `key`, asking first when work would be lost
    * (ADR-0015). Resolves whether it closed: a series of closes stops at the
-   * first that did not (UX-SPEC, « Menus contextuels », Onglet).
+   * first that did not (UX-SPEC, « Context menus », Onglet).
    */
   const requestClose = (key: string): Promise<boolean> => {
     const handle = handles.current.get(key)
@@ -387,8 +387,7 @@ export function useConsoles({
   }
 
   // Bumped by every decision: an answer to a decision since cancelled neither
-  // closes the console nor reopens the dialog (UX-SPEC « Sauvegarde d'une
-  // console »).
+  // closes the console nor reopens the dialog (UX-SPEC « Saving a console »).
   const decision = React.useRef(0)
   const decideClose = async (choice: "cancel" | "save" | "discard") => {
     const current = closing
@@ -437,7 +436,7 @@ export function useConsoles({
 
   /**
    * `Duplicate`: an independent console — its own session and document —
-   * with the same text, nothing run (UX-SPEC, « Menus contextuels »).
+   * with the same text, nothing run (UX-SPEC, « Context menus »).
    */
   const duplicate = (key: string) => {
     const entry = entriesRef.current.find((item) => item.key === key)

@@ -1,26 +1,25 @@
-//! Le manifeste d'un plugin : `plugin.toml`.
+//! A plugin's manifest: `plugin.toml`.
 //!
-//! Un manifeste est écrit par un tiers. Il est donc lu comme une **donnée
-//! hostile** ([`SECURITY` §surface d'entrée](../../../docs/SECURITY.md)) :
-//! chaque champ est validé, et ce qui n'est pas compris est refusé plutôt
-//! qu'ignoré.
+//! A manifest is written by a third party. It is therefore read as **hostile
+//! data** ([`SECURITY` §input surface](../../../docs/SECURITY.md)): every field
+//! is validated, and what is not understood is refused rather than ignored.
 //!
-//! # La règle qui gouverne ce module
+//! # The rule that governs this module
 //!
-//! **Par défaut, tout est refusé.** Un manifeste sans section `[permissions]`
-//! n'accorde rien : ni réseau, ni fichier, ni accès aux connexions
-//! ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md)). C'est
-//! le défaut de [`PluginPermissions`] qui le porte, et c'est testé — parce qu'un
-//! défaut permissif ne se voit ni à la compilation, ni à la relecture, mais
-//! seulement le jour où un plugin exfiltre.
+//! **By default, everything is refused.** A manifest without a `[permissions]`
+//! section grants nothing: neither network, nor file, nor access to connections
+//! ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md)). The default of
+//! [`PluginPermissions`] carries it, and it is tested — because a permissive
+//! default shows neither at compile time nor in review, but only the day a
+//! plugin exfiltrates.
 //!
-//! Corollaire moins évident : **une permission déclarée n'autorise rien par
-//! elle-même**. `connections = "read_write"` ne donne pas le droit d'écrire ;
-//! il donne le droit de *demander*, et la demande traverse le `PolicyGate`
-//! comme celle d'un humain ([ADR-0004](../../../docs/adr/0004-command-bus.md),
-//! I-01). Le manifeste ne sait que **restreindre**.
+//! A less obvious corollary: **a declared permission authorizes nothing by
+//! itself**. `connections = "read_write"` does not give the right to write; it
+//! gives the right to *ask*, and the request goes through the `PolicyGate` like
+//! a human's ([ADR-0004](../../../docs/adr/0004-command-bus.md), I-01). The
+//! manifest can only **restrict**.
 //!
-//! # Forme du fichier
+//! # File shape
 //!
 //! ```toml
 //! id          = "duckdb"
@@ -52,28 +51,27 @@ use serde::{Deserialize, Serialize};
 use crate::agent_plugin::PluginAgentSpec;
 use crate::error::{PluginError, Result};
 
-/// Nom du manifeste, dans le répertoire d'un plugin.
+/// Name of the manifest, in a plugin's directory.
 pub const MANIFEST_FILE: &str = "plugin.toml";
 
-/// Version du contrat d'hôte que cette compilation d'Oxyn fournit.
+/// Version of the host contract this build of Oxyn provides.
 ///
-/// Elle couvre la forme du manifeste **et** les interfaces WIT. Tant que le
-/// majeur vaut `0`, chaque incrément du mineur est une rupture : c'est la
-/// convention usuelle pour un contrat qui n'a pas encore d'implémentation
-/// tierce, et [`PluginVersion::is_compatible_with`] l'applique.
+/// It covers the manifest shape **and** the WIT interfaces. As long as the
+/// major is `0`, every minor increment is a break: it is the usual convention
+/// for a contract that has no third-party implementation yet, and
+/// [`PluginVersion::is_compatible_with`] applies it.
 pub const HOST_API_VERSION: PluginVersion = PluginVersion::new(0, 1, 0);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Version
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un numéro de version `majeur.mineur.correctif`.
+/// A `major.minor.patch` version number.
 ///
-/// Volontairement plus étroit que SemVer complet : ni pré-version, ni
-/// métadonnée de compilation. Un manifeste est un fichier de configuration, pas
-/// un dépôt de paquets, et accepter `1.0.0-rc.1+build.7` obligerait à décider
-/// de son ordre — décision qui n'apporte rien ici et qu'il faudrait ensuite
-/// tenir.
+/// Deliberately narrower than full SemVer: no pre-release, no build metadata. A
+/// manifest is a configuration file, not a package repository, and accepting
+/// `1.0.0-rc.1+build.7` would force deciding its ordering — a decision that
+/// brings nothing here and that would then have to be upheld.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct PluginVersion {
@@ -83,7 +81,7 @@ pub struct PluginVersion {
 }
 
 impl PluginVersion {
-    /// Construit une version.
+    /// Builds a version.
     #[must_use]
     pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
         Self {
@@ -93,37 +91,37 @@ impl PluginVersion {
         }
     }
 
-    /// Le majeur.
+    /// The major.
     #[must_use]
     pub const fn major(&self) -> u32 {
         self.major
     }
 
-    /// Le mineur.
+    /// The minor.
     #[must_use]
     pub const fn minor(&self) -> u32 {
         self.minor
     }
 
-    /// Le correctif.
+    /// The patch.
     #[must_use]
     pub const fn patch(&self) -> u32 {
         self.patch
     }
 
-    /// Un plugin visant `self` peut-il tourner sur un hôte fournissant `host` ?
+    /// Can a plugin targeting `self` run on a host providing `host`?
     ///
-    /// Deux régimes, et la différence est délibérée :
+    /// Two regimes, and the difference is deliberate:
     ///
-    /// * **majeur `0`** — le contrat est instable : le mineur doit être
-    ///   **identique**. Un plugin bâti sur `0.1` ne tourne pas sur `0.2` ;
-    /// * **majeur ≥ 1** — le majeur doit être identique et le mineur du plugin
-    ///   inférieur ou égal à celui de l'hôte. Un plugin bâti sur `1.2` tourne
-    ///   sur `1.4` ; l'inverse est refusé, parce que l'hôte ne fournit pas les
-    ///   interfaces que le plugin attend.
+    /// * **major `0`** — the contract is unstable: the minor must be
+    ///   **identical**. A plugin built on `0.1` does not run on `0.2`;
+    /// * **major ≥ 1** — the major must be identical and the plugin's minor
+    ///   lower than or equal to the host's. A plugin built on `1.2` runs on
+    ///   `1.4`; the reverse is refused, because the host does not provide the
+    ///   interfaces the plugin expects.
     ///
-    /// Le correctif n'entre jamais en compte : par définition il n'ajoute ni ne
-    /// retire d'interface.
+    /// The patch never counts: by definition it neither adds nor removes an
+    /// interface.
     #[must_use]
     pub const fn is_compatible_with(&self, host: &Self) -> bool {
         if self.major != host.major {
@@ -146,17 +144,17 @@ impl FromStr for PluginVersion {
     type Err = IdParseError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        // Seuls les chiffres décimaux sont acceptés : `u32::from_str`
-        // accepterait `+1`, ce qui ferait passer `+1.0.0` pour une version.
-        fn nombre(part: &str) -> std::result::Result<u32, IdParseError> {
+        // Only decimal digits are accepted: `u32::from_str` would accept `+1`,
+        // which would let `+1.0.0` pass for a version.
+        fn number(part: &str) -> std::result::Result<u32, IdParseError> {
             if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
                 return Err(IdParseError::new(
                     "PluginVersion",
-                    "attendu : trois nombres décimaux séparés par des points",
+                    "expected: three decimal numbers separated by dots",
                 ));
             }
             part.parse::<u32>().map_err(|_| {
-                IdParseError::new("PluginVersion", "un composant dépasse la capacité d'un u32")
+                IdParseError::new("PluginVersion", "a component exceeds the capacity of a u32")
             })
         }
 
@@ -166,10 +164,10 @@ impl FromStr for PluginVersion {
         else {
             return Err(IdParseError::new(
                 "PluginVersion",
-                "attendu : `majeur.mineur.correctif`",
+                "expected: `major.minor.patch`",
             ));
         };
-        Ok(Self::new(nombre(major)?, nombre(minor)?, nombre(patch)?))
+        Ok(Self::new(number(major)?, number(minor)?, number(patch)?))
     }
 }
 
@@ -188,45 +186,44 @@ impl From<PluginVersion> for String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Identifiant
+// Identifier
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Identifiant stable d'un plugin.
+/// Stable identifier of a plugin.
 ///
-/// Il nomme le **répertoire** du plugin et la clé de son approbation. Sa
-/// normalisation n'est donc pas cosmétique : un identifiant contenant `/`,
-/// `..` ou un octet de contrôle permettrait à un manifeste de désigner un
-/// répertoire qui n'est pas le sien, ou d'écraser l'approbation d'un autre
-/// plugin.
+/// It names the plugin's **directory** and the key of its approval. Its
+/// normalization is therefore not cosmetic: an identifier containing `/`, `..`
+/// or a control byte would let a manifest designate a directory that is not its
+/// own, or overwrite another plugin's approval.
 ///
-/// Même grammaire que [`DriverId`], en plus long : minuscules ASCII, chiffres,
-/// `-` et `_`, première lettre alphabétique, 64 caractères au plus.
+/// Same grammar as [`DriverId`], longer: ASCII lowercase, digits, `-` and `_`,
+/// first letter alphabetic, 64 characters at most.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct PluginId(Arc<str>);
 
 impl PluginId {
-    /// Longueur maximale, en octets.
+    /// Maximum length, in bytes.
     pub const MAX_LEN: usize = 64;
 
-    /// Construit un identifiant après validation.
+    /// Builds an identifier after validation.
     ///
-    /// # Erreurs
-    /// [`IdParseError`] si la chaîne est vide, trop longue, ne commence pas par
-    /// une lettre minuscule ASCII, ou contient un caractère hors `[a-z0-9_-]`.
-    /// La valeur fautive n'est jamais reprise dans l'erreur.
+    /// # Errors
+    /// [`IdParseError`] if the string is empty, too long, does not start with
+    /// an ASCII lowercase letter, or contains a character outside
+    /// `[a-z0-9_-]`. The faulty value is never repeated in the error.
     pub fn new(name: impl AsRef<str>) -> std::result::Result<Self, IdParseError> {
         let name = name.as_ref();
         if name.is_empty() {
-            return Err(IdParseError::new("PluginId", "la chaîne est vide"));
+            return Err(IdParseError::new("PluginId", "the string is empty"));
         }
         if name.len() > Self::MAX_LEN {
-            return Err(IdParseError::new("PluginId", "plus de 64 caractères"));
+            return Err(IdParseError::new("PluginId", "more than 64 characters"));
         }
         if !name.starts_with(|c: char| c.is_ascii_lowercase()) {
             return Err(IdParseError::new(
                 "PluginId",
-                "doit commencer par une lettre minuscule ASCII",
+                "must start with an ASCII lowercase letter",
             ));
         }
         if !name
@@ -235,13 +232,13 @@ impl PluginId {
         {
             return Err(IdParseError::new(
                 "PluginId",
-                "caractères autorisés : a-z, 0-9, `-`, `_`",
+                "allowed characters: a-z, 0-9, `-`, `_`",
             ));
         }
         Ok(Self(Arc::from(name)))
     }
 
-    /// Vue empruntée de l'identifiant.
+    /// Borrowed view of the identifier.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -289,82 +286,81 @@ impl From<PluginId> for String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Point d'entrée
+// Entrypoint
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Le composant WebAssembly d'un plugin, relatif à son répertoire.
+/// A plugin's WebAssembly component, relative to its directory.
 ///
-/// **Panne concrète évitée :** un manifeste déclarant
-/// `entrypoint = "../../../.ssh/id_rsa"` ou `/usr/lib/libc.so`. Le chemin est
-/// donc contraint à des composants ordinaires — ni racine, ni `..`, ni `.`, ni
-/// préfixe de volume — et à l'extension `.wasm`. La barre oblique inverse est
-/// refusée explicitement : sur Unix elle ne sépare rien, et un manifeste qui en
-/// contient une vise un autre système que celui qui le lit.
+/// **Concrete failure avoided:** a manifest declaring
+/// `entrypoint = "../../../.ssh/id_rsa"` or `/usr/lib/libc.so`. The path is
+/// therefore constrained to ordinary components — no root, no `..`, no `.`, no
+/// volume prefix — and to the `.wasm` extension. The backslash is explicitly
+/// refused: on Unix it separates nothing, and a manifest containing one targets
+/// another system than the one reading it.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Entrypoint(String);
 
 impl Entrypoint {
-    /// Construit un point d'entrée après validation.
+    /// Builds an entrypoint after validation.
     ///
-    /// # Erreurs
-    /// [`IdParseError`] si le chemin est vide, absolu, contient `.`, `..`, une
-    /// barre oblique inverse ou un caractère de contrôle, ou si son extension
-    /// n'est pas `.wasm`.
+    /// # Errors
+    /// [`IdParseError`] if the path is empty, absolute, contains `.`, `..`, a
+    /// backslash or a control character, or if its extension is not `.wasm`.
     pub fn new(path: impl Into<String>) -> std::result::Result<Self, IdParseError> {
         let path = path.into();
         if path.is_empty() {
-            return Err(IdParseError::new("Entrypoint", "le chemin est vide"));
+            return Err(IdParseError::new("Entrypoint", "the path is empty"));
         }
         if path.contains('\\') {
             return Err(IdParseError::new(
                 "Entrypoint",
-                "la barre oblique inverse n'est pas un séparateur ici",
+                "the backslash is not a separator here",
             ));
         }
         if path.chars().any(char::is_control) {
             return Err(IdParseError::new(
                 "Entrypoint",
-                "le chemin contient un caractère de contrôle",
+                "the path contains a control character",
             ));
         }
-        let candidat = Path::new(&path);
-        if candidat.is_absolute() || candidat.has_root() {
+        let candidate = Path::new(&path);
+        if candidate.is_absolute() || candidate.has_root() {
             return Err(IdParseError::new(
                 "Entrypoint",
-                "le chemin doit être relatif au répertoire du plugin",
+                "the path must be relative to the plugin directory",
             ));
         }
-        if !candidat
+        if !candidate
             .components()
             .all(|c| matches!(c, Component::Normal(_)))
         {
             return Err(IdParseError::new(
                 "Entrypoint",
-                "le chemin ne peut contenir ni `.` ni `..`",
+                "the path can contain neither `.` nor `..`",
             ));
         }
-        if candidat.extension().and_then(std::ffi::OsStr::to_str) != Some("wasm") {
+        if candidate.extension().and_then(std::ffi::OsStr::to_str) != Some("wasm") {
             return Err(IdParseError::new(
                 "Entrypoint",
-                "un point d'entrée est un composant `.wasm`",
+                "an entrypoint is a `.wasm` component",
             ));
         }
         Ok(Self(path))
     }
 
-    /// Le chemin déclaré, tel quel.
+    /// The declared path, as is.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Le chemin absolu du composant, dans le répertoire du plugin.
+    /// The absolute path of the component, in the plugin directory.
     ///
-    /// La validation garantit que le résultat reste **lexicalement** sous
-    /// `plugin_dir`. Elle ne dit rien des liens symboliques : c'est à l'hôte de
-    /// n'ouvrir le fichier que relativement à un répertoire pré-ouvert.
-    /// `// TODO(phase 4)` : ouverture relative, une fois wasmtime-wasi câblé.
+    /// Validation guarantees the result stays **lexically** under `plugin_dir`.
+    /// It says nothing about symbolic links: it is up to the host to open the
+    /// file only relative to a pre-opened directory.
+    /// `// TODO(phase 4)`: relative opening, once wasmtime-wasi is wired.
     #[must_use]
     pub fn resolve(&self, plugin_dir: &Path) -> PathBuf {
         plugin_dir.join(&self.0)
@@ -409,34 +405,34 @@ impl From<Entrypoint> for String {
 // Surfaces
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// La surface d'extension qu'un plugin occupe.
+/// The extension surface a plugin occupies.
 ///
-/// Les quatre valeurs sont exactement celles d'[ADR-0005](../../../docs/adr/0005-wasm-plugins.md).
-/// L'énumération est **fermée**, contrairement à l'usage du dépôt pour les
-/// énumérations publiques : ajouter une surface doit casser la compilation de
-/// l'écran d'approbation, qui énonce à l'utilisateur ce qu'un plugin peut
-/// faire. Une surface de plus silencieusement approuvée par un `_ =>` est
-/// exactement la panne que ce type existe pour éviter — c'est le même
-/// raisonnement que pour [`Command`](oxyn_core::Command).
+/// The four values are exactly those of [ADR-0005](../../../docs/adr/0005-wasm-plugins.md).
+/// The enumeration is **closed**, contrary to the repository's practice for
+/// public enumerations: adding a surface must break the compilation of the
+/// approval screen, which states to the user what a plugin can do. One more
+/// surface silently approved by a `_ =>` is exactly the failure this type
+/// exists to prevent — it is the same reasoning as for
+/// [`Command`](oxyn_core::Command).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginKind {
-    /// Un driver de base de données, derrière l'interface WIT `oxyn:driver`.
+    /// A database driver, behind the `oxyn:driver` WIT interface.
     Driver,
-    /// Un agent IA **déclaratif** : une invite, des outils, une politique de
-    /// contexte. Aucun code, et donc aucun bac à sable à faire tourner.
+    /// A **declarative** AI agent: a prompt, tools, a context policy. No code,
+    /// and therefore no sandbox to run.
     Agent,
-    /// Un format d'export.
+    /// An export format.
     Export,
-    /// Une visualisation de résultats.
+    /// A result visualization.
     Visualization,
 }
 
 impl PluginKind {
-    /// Toutes les surfaces, dans l'ordre d'affichage.
+    /// All surfaces, in display order.
     pub const ALL: [Self; 4] = [Self::Driver, Self::Agent, Self::Export, Self::Visualization];
 
-    /// Nom stable, celui qui est écrit dans le manifeste.
+    /// Stable name, the one written in the manifest.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -447,12 +443,11 @@ impl PluginKind {
         }
     }
 
-    /// Cette surface exécute-t-elle du code, et donc exige-t-elle l'hôte
-    /// WebAssembly ?
+    /// Does this surface run code, and therefore require the WebAssembly host?
     ///
-    /// C'est `false` pour [`Agent`](Self::Agent) — et c'est tout l'intérêt :
-    /// le cas courant des agents fournis par plugin fonctionne dès aujourd'hui,
-    /// sans la feature `wasm-host` et sans qu'aucun code tiers ne s'exécute.
+    /// It is `false` for [`Agent`](Self::Agent) — and that is the whole point:
+    /// the common case of plugin-provided agents works today, without the
+    /// `wasm-host` feature and without any third-party code running.
     #[must_use]
     pub const fn runs_code(&self) -> bool {
         !matches!(self, Self::Agent)
@@ -469,12 +464,12 @@ impl fmt::Display for PluginKind {
 // Permissions
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Un hôte réseau et son port, accordés ensemble.
+/// A network host and its port, granted together.
 ///
-/// [ADR-0005](../../../docs/adr/0005-wasm-plugins.md) : « accès réseau accordé
-/// **hôte par hôte, port par port** ». Il n'y a donc pas de joker : `*` et
-/// `0.0.0.0` sont refusés, et un port `0` aussi. Un accord qu'on ne sait pas
-/// énoncer à l'utilisateur n'est pas un accord éclairé.
+/// [ADR-0005](../../../docs/adr/0005-wasm-plugins.md): "network access granted
+/// **host by host, port by port**". There is therefore no wildcard: `*` and
+/// `0.0.0.0` are refused, and so is port `0`. A grant that cannot be stated to
+/// the user is not an informed grant.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct HostPort {
@@ -483,24 +478,24 @@ pub struct HostPort {
 }
 
 impl HostPort {
-    /// Analyse `hôte:port`, ou `[adresse-v6]:port`.
+    /// Parses `host:port`, or `[v6-address]:port`.
     ///
-    /// L'hôte est normalisé en minuscules : une comparaison de noms d'hôtes est
-    /// insensible à la casse, et laisser deux écritures du même hôte serait un
-    /// moyen commode de contourner la liste.
+    /// The host is normalized to lowercase: host name comparison is
+    /// case-insensitive, and allowing two spellings of the same host would be a
+    /// handy way around the list.
     ///
-    /// # Erreurs
-    /// [`IdParseError`] pour un port absent, nul ou hors bornes, un hôte vide,
-    /// un joker, un caractère non ASCII (les noms internationalisés se
-    /// déclarent en punycode), ou tout ce qui trahit une URL plutôt qu'un hôte :
-    /// `/`, `@`, un espace.
+    /// # Errors
+    /// [`IdParseError`] for a missing, zero or out-of-range port, an empty
+    /// host, a wildcard, a non-ASCII character (internationalized names are
+    /// declared in punycode), or anything betraying a URL rather than a host:
+    /// `/`, `@`, a space.
     pub fn new(text: impl AsRef<str>) -> std::result::Result<Self, IdParseError> {
         let text = text.as_ref();
-        let (host, port) = if let Some(reste) = text.strip_prefix('[') {
-            let Some((host, port)) = reste.split_once("]:") else {
+        let (host, port) = if let Some(rest) = text.strip_prefix('[') {
+            let Some((host, port)) = rest.split_once("]:") else {
                 return Err(IdParseError::new(
                     "HostPort",
-                    "adresse IPv6 mal formée : attendu `[adresse]:port`",
+                    "malformed IPv6 address: expected `[address]:port`",
                 ));
             };
             (host, port)
@@ -508,41 +503,41 @@ impl HostPort {
             let Some((host, port)) = text.rsplit_once(':') else {
                 return Err(IdParseError::new(
                     "HostPort",
-                    "attendu `hôte:port` — le port se déclare explicitement",
+                    "expected `host:port` — the port is declared explicitly",
                 ));
             };
             (host, port)
         };
 
         if host.is_empty() {
-            return Err(IdParseError::new("HostPort", "l'hôte est vide"));
+            return Err(IdParseError::new("HostPort", "the host is empty"));
         }
         if !host.is_ascii() {
             return Err(IdParseError::new(
                 "HostPort",
-                "un nom internationalisé se déclare en punycode",
+                "an internationalized name is declared in punycode",
             ));
         }
         if host.contains(['*', '/', '@', '?', '#', ' ']) {
             return Err(IdParseError::new(
                 "HostPort",
-                "un hôte se déclare nu, sans joker, sans schéma et sans chemin",
+                "a host is declared bare, without wildcard, scheme or path",
             ));
         }
         if host == "0.0.0.0" {
             return Err(IdParseError::new(
                 "HostPort",
-                "`0.0.0.0` désigne toutes les interfaces : ce n'est pas un hôte",
+                "`0.0.0.0` designates every interface: it is not a host",
             ));
         }
         if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(IdParseError::new("HostPort", "le port n'est pas un nombre"));
+            return Err(IdParseError::new("HostPort", "the port is not a number"));
         }
         let port: u16 = port
             .parse()
-            .map_err(|_| IdParseError::new("HostPort", "le port dépasse 65535"))?;
+            .map_err(|_| IdParseError::new("HostPort", "the port exceeds 65535"))?;
         if port == 0 {
-            return Err(IdParseError::new("HostPort", "le port `0` n'existe pas"));
+            return Err(IdParseError::new("HostPort", "port `0` does not exist"));
         }
 
         Ok(Self {
@@ -551,23 +546,22 @@ impl HostPort {
         })
     }
 
-    /// L'hôte, en minuscules.
+    /// The host, in lowercase.
     #[must_use]
     pub fn host(&self) -> &str {
         &self.host
     }
 
-    /// Le port.
+    /// The port.
     #[must_use]
     pub const fn port(&self) -> u16 {
         self.port
     }
 
-    /// Cet accord couvre-t-il cette destination ?
+    /// Does this grant cover this destination?
     ///
-    /// Comparaison exacte, insensible à la casse. Aucun sous-domaine n'est
-    /// impliqué : accorder `example.com:443` n'accorde pas
-    /// `exfiltration.example.com:443`.
+    /// Exact, case-insensitive comparison. No subdomain is implied: granting
+    /// `example.com:443` does not grant `exfiltration.example.com:443`.
     #[must_use]
     pub fn matches(&self, host: &str, port: u16) -> bool {
         self.port == port && self.host.eq_ignore_ascii_case(host)
@@ -606,34 +600,34 @@ impl From<HostPort> for String {
     }
 }
 
-/// Ce qu'un plugin peut demander aux bases de données de l'utilisateur.
+/// What a plugin can ask of the user's databases.
 ///
-/// L'ordre des variantes est celui du pouvoir croissant, et il est
-/// **signifiant** : [`PluginPermissions::is_subset_of`] s'en sert pour décider
-/// si une mise à jour élargit ce qui avait été approuvé.
+/// The order of the variants is that of increasing power, and it is
+/// **significant**: [`PluginPermissions::is_subset_of`] uses it to decide
+/// whether an update widens what had been approved.
 ///
-/// Aucune de ces valeurs n'autorise quoi que ce soit par elle-même. Un plugin
-/// n'obtient jamais de poignée vers un driver ni la liste des connexions
-/// ouvertes ([`PLUGIN-CONTRACT` §1](../../../docs/PLUGIN-CONTRACT.md)) : il
-/// émet des `Command`, et le `PolicyGate` décide. `ReadWrite` signifie donc
-/// « ce plugin peut *demander* une écriture », pas « ses écritures passent ».
+/// None of these values authorizes anything by itself. A plugin never gets a
+/// handle to a driver nor the list of open connections
+/// ([`PLUGIN-CONTRACT` §1](../../../docs/PLUGIN-CONTRACT.md)): it emits
+/// `Command`s, and the `PolicyGate` decides. `ReadWrite` therefore means "this
+/// plugin can *ask* for a write", not "its writes go through".
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectionAccess {
-    /// Aucun accès. **C'est le défaut.**
+    /// No access. **It is the default.**
     #[default]
     Denied,
-    /// Le plugin peut demander des lectures et de l'introspection.
+    /// The plugin can ask for reads and introspection.
     ReadOnly,
-    /// Le plugin peut demander des écritures — qui restent soumises à
-    /// l'approbation du `PolicyGate`.
+    /// The plugin can ask for writes — which remain subject to the
+    /// `PolicyGate`'s approval.
     ReadWrite,
 }
 
 impl ConnectionAccess {
-    /// Nom stable, celui du manifeste.
+    /// Stable name, the manifest's.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -643,7 +637,7 @@ impl ConnectionAccess {
         }
     }
 
-    /// Aucun accès n'est accordé.
+    /// No access is granted.
     #[must_use]
     pub const fn is_denied(&self) -> bool {
         matches!(self, Self::Denied)
@@ -656,64 +650,63 @@ impl fmt::Display for ConnectionAccess {
     }
 }
 
-/// Ce qu'un manifeste demande, et rien d'autre.
+/// What a manifest asks for, and nothing else.
 ///
-/// `deny_unknown_fields` est délibéré : une clé inconnue dans `[permissions]`
-/// est soit une faute de frappe — qui ferait échouer le plugin bien plus tard
-/// et sans explication —, soit une permission qu'une version ultérieure d'Oxyn
-/// connaît et que celle-ci ne sait pas accorder. Dans les deux cas, refuser le
-/// manifeste est la bonne réponse.
+/// `deny_unknown_fields` is deliberate: an unknown key in `[permissions]` is
+/// either a typo — which would make the plugin fail much later and without
+/// explanation — or a permission a later version of Oxyn knows and this one
+/// cannot grant. In both cases, refusing the manifest is the right answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginPermissions {
-    /// Les destinations réseau accordées, hôte par hôte et port par port.
+    /// The granted network destinations, host by host and port by port.
     #[serde(default)]
     pub network: Vec<HostPort>,
-    /// Les racines du système de fichiers accordées, en chemins absolus.
+    /// The granted file system roots, as absolute paths.
     #[serde(default)]
     pub filesystem: Vec<PathBuf>,
-    /// Ce que le plugin peut demander aux bases de données de l'utilisateur.
+    /// What the plugin can ask of the user's databases.
     #[serde(default)]
     pub connections: ConnectionAccess,
 }
 
 impl PluginPermissions {
-    /// Ce manifeste ne demande rien du tout.
+    /// This manifest asks for nothing at all.
     #[must_use]
     pub fn grants_nothing(&self) -> bool {
         self.network.is_empty() && self.filesystem.is_empty() && self.connections.is_denied()
     }
 
-    /// Vérifie la cohérence des racines déclarées.
+    /// Checks the consistency of the declared roots.
     ///
-    /// Une racine relative n'a pas de sens dans un manifeste — relative à quoi ?
-    /// — et une racine contenant `..` désigne autre chose que ce que
-    /// l'utilisateur lit dans l'écran d'approbation. Les deux sont refusées.
+    /// A relative root makes no sense in a manifest — relative to what? — and a
+    /// root containing `..` designates something other than what the user
+    /// reads in the approval screen. Both are refused.
     ///
-    /// # Erreurs
-    /// [`PluginError::InvalidManifest`] en nommant la racine fautive.
+    /// # Errors
+    /// [`PluginError::InvalidManifest`] naming the faulty root.
     pub fn validate(&self, plugin: &str) -> Result<()> {
-        for racine in &self.filesystem {
-            if !racine.is_absolute() {
+        for root_dir in &self.filesystem {
+            if !root_dir.is_absolute() {
                 return Err(PluginError::invalid_manifest(
                     plugin,
                     format!(
-                        "la racine de fichiers `{}` doit être absolue : \
-                         une racine relative n'est pas montrable à l'utilisateur",
-                        racine.display()
+                        "the file root `{}` must be absolute: \
+                         a relative root cannot be shown to the user",
+                        root_dir.display()
                     ),
                 ));
             }
-            if racine
+            if root_dir
                 .components()
                 .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
             {
                 return Err(PluginError::invalid_manifest(
                     plugin,
                     format!(
-                        "la racine de fichiers `{}` contient `.` ou `..` : \
-                         elle ne désigne pas ce qu'elle donne à lire",
-                        racine.display()
+                        "the file root `{}` contains `.` or `..`: \
+                         it does not designate what it shows",
+                        root_dir.display()
                     ),
                 ));
             }
@@ -721,17 +714,19 @@ impl PluginPermissions {
         Ok(())
     }
 
-    /// Cette destination réseau est-elle accordée ?
+    /// Is this network destination granted?
     #[must_use]
     pub fn allows_host(&self, host: &str, port: u16) -> bool {
-        self.network.iter().any(|accord| accord.matches(host, port))
+        self.network
+            .iter()
+            .any(|allowed| allowed.matches(host, port))
     }
 
-    /// Ce chemin est-il sous une racine accordée ?
+    /// Is this path under a granted root?
     ///
-    /// Le chemin demandé est refusé s'il contient `.` ou `..` : la containment
-    /// est **lexicale**, et `/data/../../etc/passwd` commence bien par `/data`.
-    /// C'est le contrôle que `starts_with` seul ne fait pas.
+    /// The requested path is refused if it contains `.` or `..`: containment is
+    /// **lexical**, and `/data/../../etc/passwd` does start with `/data`. It is
+    /// the check `starts_with` alone does not make.
     #[must_use]
     pub fn allows_path(&self, path: &Path) -> bool {
         if path
@@ -742,159 +737,152 @@ impl PluginPermissions {
         }
         self.filesystem
             .iter()
-            .any(|racine| path.starts_with(racine))
+            .any(|root_dir| path.starts_with(root_dir))
     }
 
-    /// Ce que `self` demande et que `approved` n'accordait pas, une ligne par
-    /// ajout.
+    /// What `self` asks for that `approved` did not grant, one line per
+    /// addition.
     ///
-    /// C'est ce que l'interface montre quand une mise à jour rend une
-    /// approbation caduque : « ça a changé » n'aide personne à décider, « cette
-    /// mise à jour veut aussi joindre `exfiltration.example:443` » si.
+    /// It is what the interface shows when an update voids an approval: "it
+    /// changed" helps nobody decide, "this update also wants to reach
+    /// `exfiltration.example:443`" does.
     #[must_use]
     pub fn additions_over(&self, approved: &Self) -> Vec<String> {
-        let mut ajouts = Vec::new();
-        for accord in &self.network {
-            if !approved.network.contains(accord) {
-                ajouts.push(format!("l'hôte `{accord}`"));
+        let mut additions = Vec::new();
+        for allowed in &self.network {
+            if !approved.network.contains(allowed) {
+                additions.push(format!("the host `{allowed}`"));
             }
         }
-        for racine in &self.filesystem {
+        for root_dir in &self.filesystem {
             if !approved
                 .filesystem
                 .iter()
-                .any(|accorde| racine.starts_with(accorde))
+                .any(|granted_perms| root_dir.starts_with(granted_perms))
             {
-                ajouts.push(format!("la racine `{}`", racine.display()));
+                additions.push(format!("the root `{}`", root_dir.display()));
             }
         }
         if self.connections > approved.connections {
-            ajouts.push(format!("l'accès aux connexions `{}`", self.connections));
+            additions.push(format!("the connection access `{}`", self.connections));
         }
-        ajouts
+        additions
     }
 
-    /// `self` ne demande-t-il rien de plus que `other` ?
+    /// Does `self` ask for nothing more than `other`?
     ///
-    /// C'est la question que pose une mise à jour de plugin : si la réponse est
-    /// oui, l'approbation existante couvre encore le manifeste et l'utilisateur
-    /// n'est pas dérangé. Sinon, elle est caduque.
+    /// It is the question a plugin update raises: if the answer is yes, the
+    /// existing approval still covers the manifest and the user is not
+    /// disturbed. Otherwise, it is void.
     ///
-    /// Défini par [`additions_over`](Self::additions_over), et non en parallèle
-    /// de lui : deux implémentations de la même règle divergent, et c'est alors
-    /// la plus laxiste qui décide. Alloue, donc — c'est un chemin de découverte,
-    /// pas un chemin par ligne.
+    /// Defined by [`additions_over`](Self::additions_over), and not alongside
+    /// it: two implementations of the same rule diverge, and the laxer one then
+    /// decides. It allocates, then — it is a discovery path, not a per-row
+    /// path.
     #[must_use]
     pub fn is_subset_of(&self, other: &Self) -> bool {
         self.additions_over(other).is_empty()
     }
 
-    /// Ce que l'écran d'approbation énonce à l'utilisateur, une ligne par
-    /// accord.
+    /// What the approval screen states to the user, one line per grant.
     ///
-    /// Alloue à chaque appel : c'est un chemin d'ouverture de dialogue, pas un
-    /// chemin par ligne.
+    /// Allocates on every call: it is a dialog-opening path, not a per-row
+    /// path.
     #[must_use]
     pub fn summary(&self) -> Vec<String> {
         if self.grants_nothing() {
-            return vec!["ne demande aucune permission".to_owned()];
+            return vec!["asks for no permission".to_owned()];
         }
-        let mut lignes = Vec::new();
-        for accord in &self.network {
-            lignes.push(format!("joindre le réseau : {accord}"));
+        let mut lines = Vec::new();
+        for allowed in &self.network {
+            lines.push(format!("reach the network: {allowed}"));
         }
-        for racine in &self.filesystem {
-            lignes.push(format!("lire et écrire sous : {}", racine.display()));
+        for root_dir in &self.filesystem {
+            lines.push(format!("read and write under: {}", root_dir.display()));
         }
         match self.connections {
             ConnectionAccess::Denied => {}
             ConnectionAccess::ReadOnly => {
-                lignes.push("demander des lectures sur vos connexions".to_owned());
+                lines.push("ask for reads on your connections".to_owned());
             }
             ConnectionAccess::ReadWrite => {
-                lignes.push(
-                    "demander des lectures et des écritures sur vos connexions \
-                     (chaque écriture reste soumise à votre approbation)"
+                lines.push(
+                    "ask for reads and writes on your connections \
+                     (each write remains subject to your approval)"
                         .to_owned(),
                 );
             }
         }
-        lignes
+        lines
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Le manifeste
+// The manifest
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ce qu'un plugin de type [`Driver`](PluginKind::Driver) déclare avant même
-/// d'être instancié.
+/// What a [`Driver`](PluginKind::Driver) plugin declares before even being
+/// instantiated.
 ///
-/// L'intérêt est concret : `oxyn-desktop` peut refuser un plugin qui revendique un
-/// identifiant de driver déjà pris **avant** de faire tourner la moindre
-/// instruction du composant — même refus que
-/// [`DriverRegistry::register`](oxyn_driver::DriverRegistry::register), pour la
-/// même raison : un plugin qui remplacerait `postgres` recevrait les
-/// identifiants de production que l'utilisateur croit donner au driver
-/// d'origine.
+/// The benefit is concrete: `oxyn-desktop` can refuse a plugin claiming an
+/// already taken driver identifier **before** running a single instruction of
+/// the component — same refusal as
+/// [`DriverRegistry::register`](oxyn_driver::DriverRegistry::register), for the
+/// same reason: a plugin replacing `postgres` would receive the production
+/// credentials the user believes they give to the original driver.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginDriverSpec {
-    /// L'identifiant de protocole revendiqué.
+    /// The claimed protocol identifier.
     pub id: DriverId,
-    /// Nom montrable dans le sélecteur de connexion.
+    /// Showable name in the connection picker.
     pub display_name: String,
-    /// Famille, pour le regroupement de la liste.
+    /// Family, for grouping the list.
     pub family: DriverFamily,
 }
 
-/// Un `plugin.toml`, analysé et validé.
+/// A `plugin.toml`, parsed and validated.
 ///
-/// `deny_unknown_fields` n'est **pas** posé ici, contrairement à
-/// [`PluginPermissions`] : un manifeste écrit pour une version ultérieure
-/// d'Oxyn doit pouvoir être analysé assez loin pour que
-/// [`api_version`](Self::api_version) soit lu et que le refus dise
-/// « interface {x} contre {y} » plutôt que « clé inconnue ligne 12 ». Un message
-/// exact vaut mieux qu'un refus précoce quand les deux refusent.
+/// `deny_unknown_fields` is **not** set here, contrary to
+/// [`PluginPermissions`]: a manifest written for a later version of Oxyn must
+/// parse far enough for [`api_version`](Self::api_version) to be read and for
+/// the refusal to say "interface {x} versus {y}" rather than "unknown key line
+/// 12". An exact message is better than an early refusal when both refuse.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginManifest {
-    /// Identifiant du plugin. Doit être le nom de son répertoire.
+    /// Plugin identifier. Must be the name of its directory.
     pub id: PluginId,
-    /// Nom montrable.
+    /// Showable name.
     pub name: String,
-    /// Version du plugin lui-même.
+    /// Version of the plugin itself.
     pub version: PluginVersion,
-    /// Version du contrat d'hôte visée. **Obligatoire** : un manifeste qui ne
-    /// dit pas contre quoi il a été bâti n'est pas supposé compatible, il est
-    /// refusé.
+    /// Targeted host contract version. **Mandatory**: a manifest that does not
+    /// say what it was built against is not assumed compatible, it is refused.
     pub api_version: PluginVersion,
-    /// La surface occupée.
+    /// The surface occupied.
     pub kind: PluginKind,
-    /// Ce que fait le plugin, pour l'utilisateur qui l'approuve.
+    /// What the plugin does, for the user approving it.
     #[serde(default)]
     pub description: String,
-    /// Le composant WebAssembly. Absent pour un agent déclaratif.
+    /// The WebAssembly component. Absent for a declarative agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<Entrypoint>,
-    /// Ce que le plugin demande. Absente, la section n'accorde **rien**.
+    /// What the plugin asks for. Absent, the section grants **nothing**.
     #[serde(default)]
     pub permissions: PluginPermissions,
-    /// La déclaration d'agent, pour un plugin de type
-    /// [`Agent`](PluginKind::Agent).
+    /// The agent declaration, for an [`Agent`](PluginKind::Agent) plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<PluginAgentSpec>,
-    /// La déclaration de driver, pour un plugin de type
-    /// [`Driver`](PluginKind::Driver).
+    /// The driver declaration, for a [`Driver`](PluginKind::Driver) plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub driver: Option<PluginDriverSpec>,
 }
 
 impl PluginManifest {
-    /// Analyse et valide le texte d'un `plugin.toml`.
+    /// Parses and validates the text of a `plugin.toml`.
     ///
-    /// # Erreurs
-    /// [`PluginError::UnreadableManifest`] si le texte n'est pas du TOML
-    /// conforme à la forme attendue ; les variantes de [`Self::validate`]
-    /// ensuite.
+    /// # Errors
+    /// [`PluginError::UnreadableManifest`] if the text is not TOML matching the
+    /// expected shape; the variants of [`Self::validate`] afterwards.
     pub fn from_toml(text: &str) -> Result<Self> {
         let manifest: Self =
             toml::from_str(text).map_err(|err| PluginError::UnreadableManifest {
@@ -904,58 +892,58 @@ impl PluginManifest {
         Ok(manifest)
     }
 
-    /// Rend le manifeste en TOML.
+    /// Renders the manifest as TOML.
     ///
-    /// Sert aux tests et à l'écriture d'un manifeste d'exemple. Le format reste
-    /// ouvert et relisible sans Oxyn (I-11).
+    /// Used by tests and to write an example manifest. The format stays open
+    /// and readable without Oxyn (I-11).
     ///
-    /// # Erreurs
-    /// [`PluginError::UnreadableManifest`] si un chemin de fichier n'est pas de
-    /// l'UTF-8 — seul cas où le rendu peut échouer.
+    /// # Errors
+    /// [`PluginError::UnreadableManifest`] if a file path is not UTF-8 — the
+    /// only case where rendering can fail.
     pub fn to_toml(&self) -> Result<String> {
         toml::to_string(self).map_err(|err| PluginError::UnreadableManifest {
             detail: err.to_string(),
         })
     }
 
-    /// Vérifie les règles que la seule forme du fichier ne garantit pas.
+    /// Checks the rules the file shape alone does not guarantee.
     ///
-    /// Cinq refus, tous destinés à faire échouer à la lecture ce qui échouerait
-    /// autrement au chargement, ou pire, silencieusement :
+    /// Five refusals, all meant to fail at read time what would otherwise fail
+    /// at load time, or worse, silently:
     ///
-    /// 1. le nom du plugin n'est pas vide ;
-    /// 2. une surface qui exécute du code **porte** un point d'entrée ;
-    /// 3. un agent déclaratif n'en porte **pas** — sinon `kind = "agent"`
-    ///    deviendrait un moyen de faire tourner du code sans que l'écran
-    ///    d'approbation ne le dise ;
-    /// 4. la section spécifique correspond au `kind` : pas de `[driver]` sur un
-    ///    agent, pas de `[agent]` sur un driver ;
-    /// 5. un agent qui déclare des outils déclare aussi un accès aux
-    ///    connexions, sans quoi ses outils sont inertes et l'utilisateur lit
-    ///    une panne là où il y a une déclaration incohérente.
+    /// 1. the plugin name is not empty;
+    /// 2. a surface that runs code **carries** an entrypoint;
+    /// 3. a declarative agent does **not** carry one — otherwise
+    ///    `kind = "agent"` would become a way to run code without the approval
+    ///    screen saying so;
+    /// 4. the specific section matches the `kind`: no `[driver]` on an agent,
+    ///    no `[agent]` on a driver;
+    /// 5. an agent that declares tools also declares a connection access,
+    ///    otherwise its tools are inert and the user reads a failure where
+    ///    there is an inconsistent declaration.
     ///
-    /// Les permissions sont validées par la même occasion.
+    /// The permissions are validated at the same time.
     ///
-    /// # Erreurs
-    /// [`PluginError::InvalidManifest`], en nommant la règle enfreinte.
+    /// # Errors
+    /// [`PluginError::InvalidManifest`], naming the broken rule.
     pub fn validate(&self) -> Result<()> {
         let plugin = self.id.as_str();
 
         if self.name.trim().is_empty() {
-            return Err(PluginError::invalid_manifest(plugin, "`name` est vide"));
+            return Err(PluginError::invalid_manifest(plugin, "`name` is empty"));
         }
 
         if self.kind.runs_code() && self.entrypoint.is_none() {
             return Err(PluginError::invalid_manifest(
                 plugin,
-                format!("un plugin `{}` doit déclarer un `entrypoint`", self.kind),
+                format!("a `{}` plugin must declare an `entrypoint`", self.kind),
             ));
         }
         if !self.kind.runs_code() && self.entrypoint.is_some() {
             return Err(PluginError::invalid_manifest(
                 plugin,
-                "un agent est déclaratif : il ne peut pas porter d'`entrypoint`, \
-                 sinon `kind = \"agent\"` ferait tourner du code sans le dire",
+                "an agent is declarative: it cannot carry an `entrypoint`, \
+                 otherwise `kind = \"agent\"` would run code without saying so",
             ));
         }
 
@@ -964,15 +952,15 @@ impl PluginManifest {
                 let Some(agent) = &self.agent else {
                     return Err(PluginError::invalid_manifest(
                         plugin,
-                        "un plugin `agent` doit porter une section `[agent]`",
+                        "an `agent` plugin must carry an `[agent]` section",
                     ));
                 };
                 agent.validate(plugin)?;
                 if !agent.allowed_tools.is_empty() && self.permissions.connections.is_denied() {
                     return Err(PluginError::invalid_manifest(
                         plugin,
-                        "cet agent déclare des outils mais aucun accès aux connexions : \
-                         ses outils seraient inertes, ce qui se lit comme une panne",
+                        "this agent declares tools but no connection access: \
+                         its tools would be inert, which reads as a failure",
                     ));
                 }
             }
@@ -980,7 +968,7 @@ impl PluginManifest {
                 if self.driver.is_none() {
                     return Err(PluginError::invalid_manifest(
                         plugin,
-                        "un plugin `driver` doit porter une section `[driver]`",
+                        "a `driver` plugin must carry a `[driver]` section",
                     ));
                 }
             }
@@ -990,26 +978,26 @@ impl PluginManifest {
         if self.agent.is_some() && self.kind != PluginKind::Agent {
             return Err(PluginError::invalid_manifest(
                 plugin,
-                "une section `[agent]` sur un plugin qui n'est pas un agent",
+                "an `[agent]` section on a plugin that is not an agent",
             ));
         }
         if self.driver.is_some() && self.kind != PluginKind::Driver {
             return Err(PluginError::invalid_manifest(
                 plugin,
-                "une section `[driver]` sur un plugin qui n'est pas un driver",
+                "a `[driver]` section on a plugin that is not a driver",
             ));
         }
 
         self.permissions.validate(plugin)
     }
 
-    /// Ce plugin exige-t-il l'hôte WebAssembly ?
+    /// Does this plugin require the WebAssembly host?
     #[must_use]
     pub const fn requires_wasm(&self) -> bool {
         self.kind.runs_code()
     }
 
-    /// Le plugin vise-t-il une interface que cet hôte fournit ?
+    /// Does the plugin target an interface this host provides?
     #[must_use]
     pub fn is_api_compatible(&self) -> bool {
         self.api_version.is_compatible_with(&HOST_API_VERSION)
@@ -1020,15 +1008,15 @@ impl PluginManifest {
 mod tests {
     use super::*;
 
-    /// Un manifeste d'agent déclaratif complet — le cas courant, celui qui doit
-    /// marcher sans la feature `wasm-host`.
+    /// A complete declarative agent manifest — the common case, the one that
+    /// must work without the `wasm-host` feature.
     const AGENT_TOML: &str = r#"
 id          = "revue-schema"
-name        = "Revue de schéma"
+name        = "Schema review"
 version     = "1.0.0"
 api_version = "0.1.0"
 kind        = "agent"
-description = "Relit un schéma et propose des index."
+description = "Reviews a schema and suggests indexes."
 
 [permissions]
 connections = "read_only"
@@ -1059,16 +1047,16 @@ family       = "analytical"
     // ── Versions ────────────────────────────────────────────────────────────
 
     #[test]
-    fn aller_retour_des_versions() {
-        for texte in ["0.0.0", "0.1.0", "1.2.3", "10.20.30"] {
-            let version: PluginVersion = texte.parse().expect("version valide");
-            assert_eq!(version.to_string(), texte);
+    fn versions_round_trip() {
+        for raw_text in ["0.0.0", "0.1.0", "1.2.3", "10.20.30"] {
+            let version: PluginVersion = raw_text.parse().expect("valid version");
+            assert_eq!(version.to_string(), raw_text);
         }
     }
 
     #[test]
-    fn une_version_hors_gabarit_est_refusee() {
-        for texte in [
+    fn an_off_template_version_is_refused() {
+        for raw_text in [
             "",
             "1",
             "1.2",
@@ -1081,46 +1069,46 @@ family       = "analytical"
             "1.2.3+build",
         ] {
             assert!(
-                texte.parse::<PluginVersion>().is_err(),
-                "{texte:?} devrait être refusé"
+                raw_text.parse::<PluginVersion>().is_err(),
+                "{raw_text:?} should be refused"
             );
         }
     }
 
     #[test]
-    fn en_zero_point_x_chaque_mineur_est_une_rupture() {
-        // Le contrat n'a pas d'implémentation tierce : un plugin bâti sur 0.1
-        // ne peut rien supposer de 0.2.
-        let hote = PluginVersion::new(0, 1, 0);
-        assert!(PluginVersion::new(0, 1, 0).is_compatible_with(&hote));
-        assert!(PluginVersion::new(0, 1, 7).is_compatible_with(&hote));
-        assert!(!PluginVersion::new(0, 2, 0).is_compatible_with(&hote));
-        assert!(!PluginVersion::new(0, 0, 9).is_compatible_with(&hote));
-        assert!(!PluginVersion::new(1, 1, 0).is_compatible_with(&hote));
+    fn at_zero_point_x_every_minor_is_a_break() {
+        // The contract has no third-party implementation: a plugin built on 0.1
+        // can assume nothing of 0.2.
+        let wasm_host = PluginVersion::new(0, 1, 0);
+        assert!(PluginVersion::new(0, 1, 0).is_compatible_with(&wasm_host));
+        assert!(PluginVersion::new(0, 1, 7).is_compatible_with(&wasm_host));
+        assert!(!PluginVersion::new(0, 2, 0).is_compatible_with(&wasm_host));
+        assert!(!PluginVersion::new(0, 0, 9).is_compatible_with(&wasm_host));
+        assert!(!PluginVersion::new(1, 1, 0).is_compatible_with(&wasm_host));
     }
 
     #[test]
-    fn apres_le_premier_majeur_l_hote_peut_etre_en_avance_mais_pas_en_retard() {
-        let hote = PluginVersion::new(1, 4, 2);
-        assert!(PluginVersion::new(1, 2, 0).is_compatible_with(&hote));
-        assert!(PluginVersion::new(1, 4, 9).is_compatible_with(&hote));
+    fn after_the_first_major_the_host_can_be_ahead_but_not_behind() {
+        let wasm_host = PluginVersion::new(1, 4, 2);
+        assert!(PluginVersion::new(1, 2, 0).is_compatible_with(&wasm_host));
+        assert!(PluginVersion::new(1, 4, 9).is_compatible_with(&wasm_host));
         assert!(
-            !PluginVersion::new(1, 5, 0).is_compatible_with(&hote),
-            "l'hôte ne fournit pas les interfaces que ce plugin attend"
+            !PluginVersion::new(1, 5, 0).is_compatible_with(&wasm_host),
+            "the host does not provide the interfaces this plugin expects"
         );
-        assert!(!PluginVersion::new(2, 0, 0).is_compatible_with(&hote));
+        assert!(!PluginVersion::new(2, 0, 0).is_compatible_with(&wasm_host));
     }
 
-    // ── Identifiants et chemins ─────────────────────────────────────────────
+    // ── Identifiers and paths ───────────────────────────────────────────────
 
     #[test]
-    fn un_identifiant_de_plugin_ne_peut_pas_designer_un_autre_repertoire() {
-        // C'est la règle qui compte : l'identifiant nomme un répertoire et une
-        // clé d'approbation.
-        for nom in [
+    fn a_plugin_identifier_cannot_designate_another_directory() {
+        // This is the rule that matters: the identifier names a directory and
+        // an approval key.
+        for ident in [
             "",
             "..",
-            "../voisin",
+            "../neighbor",
             "a/b",
             "a\\b",
             "Plugin",
@@ -1129,21 +1117,21 @@ family       = "analytical"
             "plug in",
             "plugin\0",
         ] {
-            assert!(PluginId::new(nom).is_err(), "{nom:?} devrait être refusé");
+            assert!(PluginId::new(ident).is_err(), "{ident:?} should be refused");
         }
         assert!(PluginId::new("a".repeat(65)).is_err());
 
-        for nom in ["duckdb", "revue-schema", "export_parquet", "mongo2"] {
-            assert!(PluginId::new(nom).is_ok(), "{nom} devrait être accepté");
+        for ident in ["duckdb", "revue-schema", "export_parquet", "mongo2"] {
+            assert!(PluginId::new(ident).is_ok(), "{ident} should be accepted");
         }
     }
 
     #[test]
-    fn un_point_d_entree_ne_sort_pas_du_repertoire_du_plugin() {
-        for chemin in [
+    fn an_entrypoint_does_not_leave_the_plugin_directory() {
+        for item_path in [
             "",
             "/usr/lib/evil.wasm",
-            "../voisin/evil.wasm",
+            "../neighbor/evil.wasm",
             "./evil.wasm",
             "sous/../../evil.wasm",
             "..\\evil.wasm",
@@ -1152,12 +1140,12 @@ family       = "analytical"
             "evil.wasm\n",
         ] {
             assert!(
-                Entrypoint::new(chemin).is_err(),
-                "{chemin:?} devrait être refusé"
+                Entrypoint::new(item_path).is_err(),
+                "{item_path:?} should be refused"
             );
         }
 
-        let entree = Entrypoint::new("build/plugin.wasm").expect("chemin relatif simple");
+        let entree = Entrypoint::new("build/plugin.wasm").expect("simple relative path");
         assert_eq!(
             entree.resolve(Path::new("/plugins/duckdb")),
             Path::new("/plugins/duckdb/build/plugin.wasm")
@@ -1167,45 +1155,52 @@ family       = "analytical"
     // ── Permissions ─────────────────────────────────────────────────────────
 
     #[test]
-    fn un_manifeste_sans_section_permissions_n_accorde_rien() {
-        // ADR-0005. C'est le test qui protège le défaut : un défaut permissif
-        // ne se voit ni à la compilation, ni à la relecture.
+    fn a_manifest_without_permissions_section_grants_nothing() {
+        // ADR-0005. It is the test that protects the default: a permissive
+        // default shows neither at compile time nor in review.
         let toml = r#"
-id          = "vide"
+id          = "empty"
 name        = "Sans permissions"
 version     = "1.0.0"
 api_version = "0.1.0"
 kind        = "export"
-entrypoint  = "vide.wasm"
+entrypoint  = "empty.wasm"
 "#;
-        let manifeste = PluginManifest::from_toml(toml).expect("manifeste valide");
-        assert!(manifeste.permissions.grants_nothing());
-        assert_eq!(manifeste.permissions.connections, ConnectionAccess::Denied);
-        assert!(!manifeste.permissions.allows_host("example.com", 443));
-        assert!(!manifeste.permissions.allows_path(Path::new("/etc/passwd")));
+        let manifest_toml = PluginManifest::from_toml(toml).expect("valid manifest");
+        assert!(manifest_toml.permissions.grants_nothing());
         assert_eq!(
-            manifeste.permissions.summary(),
-            ["ne demande aucune permission"]
+            manifest_toml.permissions.connections,
+            ConnectionAccess::Denied
         );
-    }
-
-    #[test]
-    fn le_reseau_s_accorde_hote_par_hote_et_port_par_port() {
-        let accord = HostPort::new("Db.Example.COM:5432").expect("hôte valide");
-        assert_eq!(accord.host(), "db.example.com");
-        assert_eq!(accord.port(), 5432);
-        assert!(accord.matches("DB.EXAMPLE.com", 5432));
-        assert!(!accord.matches("db.example.com", 5433));
+        assert!(!manifest_toml.permissions.allows_host("example.com", 443));
         assert!(
-            !accord.matches("evil.db.example.com", 5432),
-            "un accord ne couvre pas les sous-domaines"
+            !manifest_toml
+                .permissions
+                .allows_path(Path::new("/etc/passwd"))
+        );
+        assert_eq!(
+            manifest_toml.permissions.summary(),
+            ["asks for no permission"]
         );
     }
 
     #[test]
-    fn un_joker_reseau_est_refuse() {
-        // « accès réseau accordé hôte par hôte, port par port » (ADR-0005).
-        for texte in [
+    fn the_network_is_granted_host_by_host_and_port_by_port() {
+        let allowed = HostPort::new("Db.Example.COM:5432").expect("valid host");
+        assert_eq!(allowed.host(), "db.example.com");
+        assert_eq!(allowed.port(), 5432);
+        assert!(allowed.matches("DB.EXAMPLE.com", 5432));
+        assert!(!allowed.matches("db.example.com", 5433));
+        assert!(
+            !allowed.matches("evil.db.example.com", 5432),
+            "a grant does not cover subdomains"
+        );
+    }
+
+    #[test]
+    fn a_network_wildcard_is_refused() {
+        // "network access granted host by host, port by port" (ADR-0005).
+        for raw_text in [
             "*:443",
             "*.example.com:443",
             "0.0.0.0:443",
@@ -1217,101 +1212,100 @@ entrypoint  = "vide.wasm"
             "http://example.com:443",
             "user@example.com:443",
             "example.com/path:443",
-            "exemplé.fr:443",
-            "exemple.fr:44\u{200b}3",
+            "exämple.com:443",
+            "example.com:44\u{200b}3",
         ] {
             assert!(
-                HostPort::new(texte).is_err(),
-                "{texte:?} devrait être refusé"
+                HostPort::new(raw_text).is_err(),
+                "{raw_text:?} should be refused"
             );
         }
         assert!(HostPort::new("[::1]:6379").is_ok());
         assert_eq!(
-            HostPort::new("[::1]:6379").expect("adresse v6").to_string(),
+            HostPort::new("[::1]:6379").expect("v6 address").to_string(),
             "[::1]:6379"
         );
     }
 
     #[test]
-    fn une_permission_de_fichiers_relative_ou_avec_deux_points_est_refusee() {
+    fn a_relative_or_dotted_file_permission_is_refused() {
         let mut permissions = PluginPermissions {
-            filesystem: vec![PathBuf::from("donnees")],
+            filesystem: vec![PathBuf::from("data")],
             ..PluginPermissions::default()
         };
-        assert!(permissions.validate("x").is_err(), "racine relative");
+        assert!(permissions.validate("x").is_err(), "relative root");
 
         permissions.filesystem = vec![PathBuf::from("/home/x/../../etc")];
-        assert!(permissions.validate("x").is_err(), "racine avec `..`");
+        assert!(permissions.validate("x").is_err(), "root with `..`");
 
-        permissions.filesystem = vec![PathBuf::from("/home/x/donnees")];
-        permissions.validate("x").expect("racine absolue et nette");
+        permissions.filesystem = vec![PathBuf::from("/home/x/data")];
+        permissions.validate("x").expect("absolute and clean root");
     }
 
     #[test]
-    fn un_chemin_qui_remonte_n_est_jamais_sous_une_racine_accordee() {
-        // `starts_with` seul dirait oui : `/data/../../etc/passwd` commence bien
-        // par `/data`.
+    fn a_climbing_path_is_never_under_a_granted_root() {
+        // `starts_with` alone would say yes: `/data/../../etc/passwd` does start
+        // with `/data`.
         let permissions = PluginPermissions {
             filesystem: vec![PathBuf::from("/data")],
             ..PluginPermissions::default()
         };
-        assert!(permissions.allows_path(Path::new("/data/rapport.csv")));
+        assert!(permissions.allows_path(Path::new("/data/report.csv")));
         assert!(!permissions.allows_path(Path::new("/data/../../etc/passwd")));
         assert!(!permissions.allows_path(Path::new("/etc/passwd")));
         assert!(!permissions.allows_path(Path::new("/database/secret")));
     }
 
     #[test]
-    fn une_mise_a_jour_qui_elargit_rend_l_approbation_caduque() {
-        let approuve = PluginPermissions {
-            network: vec![HostPort::new("a.example:443").expect("hôte")],
+    fn widened_permissions_void_the_approval() {
+        let approved_perms = PluginPermissions {
+            network: vec![HostPort::new("a.example:443").expect("host")],
             filesystem: vec![PathBuf::from("/data")],
             connections: ConnectionAccess::ReadOnly,
         };
 
-        // Identique, ou plus étroit : l'approbation tient.
-        assert!(approuve.is_subset_of(&approuve));
-        let plus_etroit = PluginPermissions {
+        // Identical, or narrower: the approval holds.
+        assert!(approved_perms.is_subset_of(&approved_perms));
+        let narrower = PluginPermissions {
             network: Vec::new(),
             filesystem: vec![PathBuf::from("/data/sous-dossier")],
             connections: ConnectionAccess::Denied,
         };
-        assert!(plus_etroit.is_subset_of(&approuve));
+        assert!(narrower.is_subset_of(&approved_perms));
 
-        // Un hôte de plus, une racine de plus, l'écriture en plus : caduque.
-        for elargi in [
+        // One more host, one more root, write on top: void.
+        for widened in [
             PluginPermissions {
                 network: vec![
-                    HostPort::new("a.example:443").expect("hôte"),
-                    HostPort::new("exfiltration.example:443").expect("hôte"),
+                    HostPort::new("a.example:443").expect("host"),
+                    HostPort::new("exfiltration.example:443").expect("host"),
                 ],
-                ..approuve.clone()
+                ..approved_perms.clone()
             },
             PluginPermissions {
                 filesystem: vec![PathBuf::from("/data"), PathBuf::from("/home")],
-                ..approuve.clone()
+                ..approved_perms.clone()
             },
             PluginPermissions {
                 connections: ConnectionAccess::ReadWrite,
-                ..approuve.clone()
+                ..approved_perms.clone()
             },
             PluginPermissions {
-                network: vec![HostPort::new("a.example:8443").expect("hôte")],
-                ..approuve.clone()
+                network: vec![HostPort::new("a.example:8443").expect("host")],
+                ..approved_perms.clone()
             },
         ] {
             assert!(
-                !elargi.is_subset_of(&approuve),
-                "{elargi:?} élargit l'approbation"
+                !widened.is_subset_of(&approved_perms),
+                "{widened:?} widens the approval"
             );
         }
     }
 
     #[test]
-    fn une_permission_inconnue_est_refusee_pas_ignoree() {
-        // Faute de frappe, ou permission d'une version ultérieure : dans les
-        // deux cas, l'ignorer ferait échouer le plugin plus tard et sans
-        // explication.
+    fn an_unknown_permission_is_refused_not_ignored() {
+        // A typo, or a permission from a later version: in both cases, ignoring
+        // it would make the plugin fail later and without explanation.
         let toml = r#"
 id          = "x"
 name        = "X"
@@ -1323,7 +1317,7 @@ entrypoint  = "x.wasm"
 [permissions]
 netwrok = ["example.com:443"]
 "#;
-        let err = PluginManifest::from_toml(toml).expect_err("refus attendu");
+        let err = PluginManifest::from_toml(toml).expect_err("refusal expected");
         assert!(
             matches!(err, PluginError::UnreadableManifest { .. }),
             "{err}"
@@ -1331,93 +1325,96 @@ netwrok = ["example.com:443"]
     }
 
     #[test]
-    fn le_resume_enonce_chaque_accord() {
+    fn the_summary_states_every_grant() {
         let permissions = PluginPermissions {
-            network: vec![HostPort::new("a.example:443").expect("hôte")],
+            network: vec![HostPort::new("a.example:443").expect("host")],
             filesystem: vec![PathBuf::from("/data")],
             connections: ConnectionAccess::ReadWrite,
         };
-        let resume = permissions.summary();
-        assert_eq!(resume.len(), 3);
-        assert!(resume[0].contains("a.example:443"), "{resume:?}");
-        assert!(resume[1].contains("/data"), "{resume:?}");
-        assert!(resume[2].contains("approbation"), "{resume:?}");
+        let summary_lines = permissions.summary();
+        assert_eq!(summary_lines.len(), 3);
+        assert!(
+            summary_lines[0].contains("a.example:443"),
+            "{summary_lines:?}"
+        );
+        assert!(summary_lines[1].contains("/data"), "{summary_lines:?}");
+        assert!(summary_lines[2].contains("approval"), "{summary_lines:?}");
     }
 
-    // ── Manifeste ───────────────────────────────────────────────────────────
+    // ── Manifest ────────────────────────────────────────────────────────────
 
     #[test]
-    fn un_agent_declaratif_s_analyse_sans_hote_wasm() {
-        let manifeste = PluginManifest::from_toml(AGENT_TOML).expect("manifeste valide");
-        assert_eq!(manifeste.id.as_str(), "revue-schema");
-        assert_eq!(manifeste.kind, PluginKind::Agent);
-        assert!(!manifeste.requires_wasm());
-        assert!(manifeste.is_api_compatible());
-        assert!(manifeste.entrypoint.is_none());
+    fn a_declarative_agent_parses_without_wasm_host() {
+        let manifest_toml = PluginManifest::from_toml(AGENT_TOML).expect("valid manifest");
+        assert_eq!(manifest_toml.id.as_str(), "revue-schema");
+        assert_eq!(manifest_toml.kind, PluginKind::Agent);
+        assert!(!manifest_toml.requires_wasm());
+        assert!(manifest_toml.is_api_compatible());
+        assert!(manifest_toml.entrypoint.is_none());
 
-        let agent = manifeste.agent.as_ref().expect("section agent");
+        let agent = manifest_toml.agent.as_ref().expect("agent section");
         assert_eq!(agent.name, "Schema");
         assert!(agent.allows("refresh_catalog"));
         assert!(!agent.allows("execute_query"));
     }
 
     #[test]
-    fn un_agent_ne_peut_pas_porter_de_point_d_entree() {
-        // Sinon `kind = "agent"` deviendrait le moyen de faire tourner du code
-        // en se présentant comme déclaratif.
+    fn an_agent_cannot_carry_an_entrypoint() {
+        // Otherwise `kind = "agent"` would become the way to run code while
+        // presenting itself as declarative.
         let toml = AGENT_TOML.replace(
             "kind        = \"agent\"",
             "kind        = \"agent\"\nentrypoint  = \"agent.wasm\"",
         );
-        let err = PluginManifest::from_toml(&toml).expect_err("refus attendu");
-        assert!(err.to_string().contains("déclaratif"), "{err}");
+        let err = PluginManifest::from_toml(&toml).expect_err("refusal expected");
+        assert!(err.to_string().contains("declarative"), "{err}");
     }
 
     #[test]
-    fn un_agent_avec_des_outils_mais_sans_acces_aux_connexions_est_refuse() {
+    fn an_agent_with_tools_but_no_connection_access_is_refused() {
         let toml = AGENT_TOML.replace("connections = \"read_only\"", "");
-        let err = PluginManifest::from_toml(&toml).expect_err("refus attendu");
-        assert!(err.to_string().contains("inertes"), "{err}");
+        let err = PluginManifest::from_toml(&toml).expect_err("refusal expected");
+        assert!(err.to_string().contains("inert"), "{err}");
     }
 
     #[test]
-    fn une_surface_qui_execute_du_code_doit_declarer_son_point_d_entree() {
+    fn a_surface_that_runs_code_must_declare_its_entrypoint() {
         for kind in ["driver", "export", "visualization"] {
             let toml = format!(
                 "id = \"x\"\nname = \"X\"\nversion = \"1.0.0\"\n\
                  api_version = \"0.1.0\"\nkind = \"{kind}\"\n"
             );
-            let err = PluginManifest::from_toml(&toml).expect_err("refus attendu");
-            assert!(err.to_string().contains("entrypoint"), "{kind} : {err}");
+            let err = PluginManifest::from_toml(&toml).expect_err("refusal expected");
+            assert!(err.to_string().contains("entrypoint"), "{kind}: {err}");
         }
     }
 
     #[test]
-    fn une_section_specifique_doit_correspondre_a_la_surface() {
+    fn a_specific_section_must_match_the_surface() {
         let toml = DRIVER_TOML.replace("kind        = \"driver\"", "kind        = \"export\"");
-        let err = PluginManifest::from_toml(&toml).expect_err("refus attendu");
+        let err = PluginManifest::from_toml(&toml).expect_err("refusal expected");
         assert!(err.to_string().contains("`[driver]`"), "{err}");
     }
 
     #[test]
-    fn un_driver_declare_son_protocole_avant_toute_execution() {
-        let manifeste = PluginManifest::from_toml(DRIVER_TOML).expect("manifeste valide");
-        assert!(manifeste.requires_wasm());
-        let driver = manifeste.driver.as_ref().expect("section driver");
-        assert_eq!(driver.id, DriverId::new("duckdb").expect("identifiant"));
+    fn a_driver_declares_its_protocol_before_any_execution() {
+        let manifest_toml = PluginManifest::from_toml(DRIVER_TOML).expect("valid manifest");
+        assert!(manifest_toml.requires_wasm());
+        let driver = manifest_toml.driver.as_ref().expect("driver section");
+        assert_eq!(driver.id, DriverId::new("duckdb").expect("identifier"));
         assert_eq!(driver.family, DriverFamily::Analytical);
         assert!(
-            manifeste
+            manifest_toml
                 .permissions
                 .allows_host("catalog.example.com", 443)
         );
     }
 
     #[test]
-    fn un_manifeste_sans_version_d_interface_est_refuse() {
-        // Ne pas dire contre quoi on a été bâti ne vaut pas « compatible ».
+    fn a_manifest_without_interface_version_is_refused() {
+        // Not saying what it was built against is not "compatible".
         let toml = DRIVER_TOML.replace("api_version = \"0.1.0\"\n", "");
-        let err = PluginManifest::from_toml(&toml).expect_err("refus attendu");
+        let err = PluginManifest::from_toml(&toml).expect_err("refusal expected");
         assert!(
             matches!(err, PluginError::UnreadableManifest { .. }),
             "{err}"
@@ -1425,10 +1422,10 @@ netwrok = ["example.com:443"]
     }
 
     #[test]
-    fn aller_retour_toml() {
-        let manifeste = PluginManifest::from_toml(DRIVER_TOML).expect("manifeste valide");
-        let rendu = manifeste.to_toml().expect("rendu");
-        let relu = PluginManifest::from_toml(&rendu).expect("relecture");
-        assert_eq!(relu, manifeste);
+    fn toml_round_trip() {
+        let manifest_toml = PluginManifest::from_toml(DRIVER_TOML).expect("valid manifest");
+        let rendered = manifest_toml.to_toml().expect("render");
+        let reread = PluginManifest::from_toml(&rendered).expect("reread");
+        assert_eq!(reread, manifest_toml);
     }
 }

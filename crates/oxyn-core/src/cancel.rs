@@ -1,21 +1,22 @@
-//! Annulation coopérative et hiérarchique.
+//! Cooperative, hierarchical cancellation.
 //!
-//! Un jeton d'annulation se clone, se partage entre threads, et se décline en
-//! enfants : annuler un parent annule toute sa descendance, jamais l'inverse.
-//! C'est ce qui permet de fermer un onglet — donc d'annuler la session qui va
-//! avec — sans avoir à retrouver chaque requête qu'il a lancée.
+//! A cancellation token clones, is shared between threads, and branches into
+//! children: cancelling a parent cancels all its descendants, never the
+//! reverse. That is what makes it possible to close a tab — hence to cancel
+//! the session that goes with it — without having to find every query it
+//! launched.
 //!
-//! Ce jeton n'annule **rien tout seul**. Il signale. C'est au driver de
-//! transformer le signal en `pg_cancel_backend`, `KILL QUERY` ou
-//! `sqlite3_interrupt` : un bouton « Annuler » qui n'abandonne que le futur côté
-//! client laisse la requête tourner, la connexion prise et le verrou posé
+//! This token cancels **nothing by itself**. It signals. It is up to the driver
+//! to turn the signal into `pg_cancel_backend`, `KILL QUERY` or
+//! `sqlite3_interrupt`: a "Cancel" button that only drops the client-side
+//! future leaves the query running, the connection taken and the lock held
 //! ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md)).
 //!
-//! # Pourquoi pas `tokio-util`
+//! # Why not `tokio-util`
 //!
-//! `CancellationToken` de `tokio-util` fait exactement cela, mais `tokio-util`
-//! n'est pas au contrat de dépendances de cette crate. L'implémentation tient en
-//! un `AtomicBool` et un [`tokio::sync::Notify`].
+//! `tokio-util`'s `CancellationToken` does exactly this, but `tokio-util` is
+//! not in this crate's dependency contract. The implementation fits in an
+//! `AtomicBool` and a [`tokio::sync::Notify`].
 
 use std::fmt;
 use std::pin::pin;
@@ -25,12 +26,12 @@ use std::sync::{Arc, Weak};
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
-/// État partagé d'un jeton et de ses clones.
+/// Shared state of a token and its clones.
 struct Inner {
     cancelled: AtomicBool,
     notify: Notify,
-    /// Références **faibles** : un parent de longue vie ne doit pas maintenir
-    /// en vie les jetons de mille requêtes déjà terminées.
+    /// **Weak** references: a long-lived parent must not keep alive the tokens
+    /// of a thousand queries already finished.
     children: Mutex<Vec<Weak<Inner>>>,
 }
 
@@ -44,10 +45,10 @@ impl Inner {
     }
 }
 
-/// Jeton d'annulation clonable, partageable et hiérarchique.
+/// Clonable, shareable, hierarchical cancellation token.
 ///
-/// Cloner un jeton donne une **vue** du même état : annuler un clone annule
-/// l'original. Pour obtenir un jeton annulable indépendamment, utiliser
+/// Cloning a token gives a **view** of the same state: cancelling a clone
+/// cancels the original. To get an independently cancellable token, use
 /// [`CancelToken::child`].
 #[derive(Clone)]
 pub struct CancelToken {
@@ -55,7 +56,7 @@ pub struct CancelToken {
 }
 
 impl CancelToken {
-    /// Crée un jeton racine, non annulé.
+    /// Creates a root token, not cancelled.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -63,98 +64,98 @@ impl CancelToken {
         }
     }
 
-    /// Demande l'annulation, ici et pour toute la descendance.
+    /// Requests cancellation, here and for all descendants.
     ///
-    /// Idempotent : les appels suivants ne font rien. Ne remonte jamais vers le
-    /// parent.
+    /// Idempotent: subsequent calls do nothing. Never goes up to the parent.
     pub fn cancel(&self) {
         Self::cancel_inner(&self.inner);
     }
 
     fn cancel_inner(inner: &Arc<Inner>) {
-        // Le drapeau est posé **avant** de prendre le verrou des enfants ; c'est
-        // ce qui garantit qu'un enfant créé en concurrence naît annulé plutôt
-        // que d'échapper à l'annulation. Voir `child`.
+        // The flag is set **before** taking the children's lock; that is what
+        // guarantees that a child created concurrently is born cancelled rather
+        // than escaping the cancellation. See `child`.
         if inner.cancelled.swap(true, Ordering::SeqCst) {
             return;
         }
         inner.notify.notify_waiters();
 
-        // Le verrou est relâché avant de descendre : la récursion sous un verrou
-        // parent n'apporterait rien et fige l'arbre pendant la propagation.
-        let enfants = {
+        // The lock is released before going down: recursing under a parent
+        // lock would bring nothing and freezes the tree during propagation.
+        let children = {
             let mut guard = inner.children.lock();
             std::mem::take(&mut *guard)
         };
-        for faible in enfants {
-            if let Some(enfant) = faible.upgrade() {
-                Self::cancel_inner(&enfant);
+        for weak in children {
+            if let Some(child) = weak.upgrade() {
+                Self::cancel_inner(&child);
             }
         }
     }
 
-    /// L'annulation a-t-elle été demandée ?
+    /// Has cancellation been requested?
     ///
-    /// À interroger dans toute boucle de décodage un peu longue : c'est le seul
-    /// point où un driver bloquant peut rendre la main.
+    /// To be checked in any somewhat long decoding loop: it is the only point
+    /// where a blocking driver can yield.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.inner.cancelled.load(Ordering::SeqCst)
     }
 
-    /// Attend l'annulation.
+    /// Waits for cancellation.
     ///
-    /// Rend la main **immédiatement** si l'annulation a déjà eu lieu : c'est le
-    /// cas qui se rate, et il transforme une annulation en interblocage.
+    /// Returns **immediately** if cancellation already happened: that is the
+    /// case that gets missed, and it turns a cancellation into a deadlock.
     pub async fn cancelled(&self) {
         if self.is_cancelled() {
             return;
         }
         loop {
-            let mut attente = pin!(self.inner.notify.notified());
-            // L'inscription doit précéder la relecture du drapeau. Sans
-            // `enable()`, `notified()` ne s'inscrit qu'au premier sondage, et
-            // une annulation survenue entre la relecture et le sondage ne
-            // réveillerait personne.
-            attente.as_mut().enable();
+            let mut waiting = pin!(self.inner.notify.notified());
+            // Registration must come before re-reading the flag. Without
+            // `enable()`, `notified()` only registers on the first poll, and a
+            // cancellation occurring between the re-read and the poll would wake
+            // nobody.
+            waiting.as_mut().enable();
             if self.is_cancelled() {
                 return;
             }
-            attente.await;
+            waiting.await;
             if self.is_cancelled() {
                 return;
             }
-            // Réveil sans annulation : seul `cancel` notifie, donc ce cas ne
-            // devrait pas se produire. On reboucle plutôt que de rendre la main
-            // sur une annulation qui n'a pas eu lieu.
+            // Woken without cancellation: only `cancel` notifies, so this case
+            // should not happen. We loop again rather than return on a
+            // cancellation that did not take place.
         }
     }
 
-    /// Crée un jeton fils.
+    /// Creates a child token.
     ///
-    /// Annuler le parent annule le fils ; annuler le fils laisse le parent
-    /// intact. Si le parent est **déjà** annulé, le fils naît annulé.
+    /// Cancelling the parent cancels the child; cancelling the child leaves the
+    /// parent intact. If the parent is **already** cancelled, the child is born
+    /// cancelled.
     #[must_use]
     pub fn child(&self) -> Self {
-        let enfant = Arc::new(Inner::new());
+        let child = Arc::new(Inner::new());
 
         let mut guard = self.inner.children.lock();
-        // Purge des enfants terminés : sans cela, une session de longue durée
-        // accumulerait un `Weak` par requête exécutée.
-        guard.retain(|faible| faible.strong_count() > 0);
+        // Purge finished children: otherwise a long-running session would
+        // accumulate one `Weak` per executed query.
+        guard.retain(|weak| weak.strong_count() > 0);
 
         if self.inner.cancelled.load(Ordering::SeqCst) {
-            // Inutile de l'enregistrer : la propagation a déjà eu lieu.
-            enfant.cancelled.store(true, Ordering::SeqCst);
+            // No need to register it: propagation already happened.
+            child.cancelled.store(true, Ordering::SeqCst);
         } else {
-            guard.push(Arc::downgrade(&enfant));
+            guard.push(Arc::downgrade(&child));
         }
         drop(guard);
 
-        Self { inner: enfant }
+        Self { inner: child }
     }
 
-    /// Nombre d'enfants encore vivants. Réservé aux tests et au diagnostic.
+    /// Number of children still alive. For tests and diagnostics only.
     #[doc(hidden)]
     #[must_use]
     pub fn live_children(&self) -> usize {
@@ -162,7 +163,7 @@ impl CancelToken {
             .children
             .lock()
             .iter()
-            .filter(|faible| faible.strong_count() > 0)
+            .filter(|weak| weak.strong_count() > 0)
             .count()
     }
 }
@@ -188,157 +189,154 @@ mod tests {
     use std::pin::pin;
     use std::task::{Context, Poll, Waker};
 
-    /// Sonde un futur une fois, sans exécuteur.
+    /// Polls a future once, without an executor.
     ///
-    /// La crate ne dispose pas de la fonctionnalité `rt` de tokio : il n'y a
-    /// donc pas de `#[tokio::test]` ici. `Notify` est une primitive de
-    /// synchronisation ordinaire, elle n'exige aucun exécuteur.
-    fn sonder<F: Future>(mut futur: std::pin::Pin<&mut F>) -> Poll<F::Output> {
+    /// The crate does not have tokio's `rt` feature: hence no
+    /// `#[tokio::test]` here. `Notify` is an ordinary synchronization
+    /// primitive, it requires no executor.
+    fn poll_once<F: Future>(mut future: std::pin::Pin<&mut F>) -> Poll<F::Output> {
         let mut cx = Context::from_waker(Waker::noop());
-        futur.as_mut().poll(&mut cx)
+        future.as_mut().poll(&mut cx)
     }
 
     #[test]
-    fn un_jeton_neuf_n_est_pas_annule() {
-        let jeton = CancelToken::new();
-        assert!(!jeton.is_cancelled());
+    fn a_new_token_is_not_cancelled() {
+        let token = CancelToken::new();
+        assert!(!token.is_cancelled());
     }
 
     #[test]
-    fn annuler_est_visible_et_idempotent() {
-        let jeton = CancelToken::new();
-        jeton.cancel();
-        assert!(jeton.is_cancelled());
-        jeton.cancel();
-        assert!(jeton.is_cancelled());
+    fn cancelling_is_visible_and_idempotent() {
+        let token = CancelToken::new();
+        token.cancel();
+        assert!(token.is_cancelled());
+        token.cancel();
+        assert!(token.is_cancelled());
     }
 
     #[test]
-    fn un_clone_partage_l_etat() {
-        let jeton = CancelToken::new();
-        let clone = jeton.clone();
+    fn a_clone_shares_the_state() {
+        let token = CancelToken::new();
+        let clone = token.clone();
         clone.cancel();
-        assert!(jeton.is_cancelled(), "un clone est une vue, pas une copie");
+        assert!(token.is_cancelled(), "a clone is a view, not a copy");
     }
 
     #[test]
-    fn attendre_apres_une_annulation_deja_survenue_ne_bloque_pas() {
-        // Le cas qui transforme une annulation en interblocage : on attend un
-        // signal qui a déjà été émis.
-        let jeton = CancelToken::new();
-        jeton.cancel();
+    fn waiting_after_a_cancellation_already_happened_does_not_block() {
+        // The case that turns a cancellation into a deadlock: waiting for a
+        // signal that was already emitted.
+        let token = CancelToken::new();
+        token.cancel();
 
-        let attente = jeton.cancelled();
-        let mut attente = pin!(attente);
+        let waiting = token.cancelled();
+        let mut waiting = pin!(waiting);
         assert_eq!(
-            sonder(attente.as_mut()),
+            poll_once(waiting.as_mut()),
             Poll::Ready(()),
-            "cancelled() doit rendre la main immédiatement"
+            "cancelled() must return immediately"
         );
     }
 
     #[test]
-    fn attendre_avant_l_annulation_se_reveille() {
-        let jeton = CancelToken::new();
-        let attente = jeton.cancelled();
-        let mut attente = pin!(attente);
+    fn waiting_before_the_cancellation_wakes_up() {
+        let token = CancelToken::new();
+        let waiting = token.cancelled();
+        let mut waiting = pin!(waiting);
 
-        assert_eq!(sonder(attente.as_mut()), Poll::Pending);
-        jeton.cancel();
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Pending);
+        token.cancel();
         assert_eq!(
-            sonder(attente.as_mut()),
+            poll_once(waiting.as_mut()),
             Poll::Ready(()),
-            "l'annulation survenue pendant l'attente doit réveiller"
+            "a cancellation occurring during the wait must wake it"
         );
     }
 
     #[test]
-    fn une_annulation_entre_deux_sondages_n_est_pas_perdue() {
-        // La fenêtre visée : le futur est créé, l'annulation survient, puis
-        // seulement le premier sondage a lieu.
-        let jeton = CancelToken::new();
-        let attente = jeton.cancelled();
-        let mut attente = pin!(attente);
-        jeton.cancel();
-        assert_eq!(sonder(attente.as_mut()), Poll::Ready(()));
+    fn a_cancellation_between_two_polls_is_not_lost() {
+        // The targeted window: the future is created, the cancellation
+        // occurs, and only then does the first poll take place.
+        let token = CancelToken::new();
+        let waiting = token.cancelled();
+        let mut waiting = pin!(waiting);
+        token.cancel();
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Ready(()));
     }
 
     #[test]
-    fn annuler_le_parent_annule_l_enfant() {
+    fn cancelling_the_parent_cancels_the_child() {
         let parent = CancelToken::new();
-        let enfant = parent.child();
-        let petit_enfant = enfant.child();
+        let child = parent.child();
+        let grandchild = child.child();
 
         parent.cancel();
 
-        assert!(enfant.is_cancelled());
+        assert!(child.is_cancelled());
+        assert!(grandchild.is_cancelled(), "propagation must be deep");
+    }
+
+    #[test]
+    fn cancelling_the_child_leaves_the_parent_intact() {
+        let parent = CancelToken::new();
+        let child = parent.child();
+        let sibling = parent.child();
+
+        child.cancel();
+
+        assert!(child.is_cancelled());
+        assert!(!parent.is_cancelled(), "cancellation never goes up");
         assert!(
-            petit_enfant.is_cancelled(),
-            "la propagation doit être profonde"
+            !sibling.is_cancelled(),
+            "cancellation does not travel sideways"
         );
     }
 
     #[test]
-    fn annuler_l_enfant_laisse_le_parent_intact() {
-        let parent = CancelToken::new();
-        let enfant = parent.child();
-        let frere = parent.child();
-
-        enfant.cancel();
-
-        assert!(enfant.is_cancelled());
-        assert!(!parent.is_cancelled(), "l'annulation ne remonte jamais");
-        assert!(
-            !frere.is_cancelled(),
-            "l'annulation ne traverse pas latéralement"
-        );
-    }
-
-    #[test]
-    fn un_enfant_d_un_parent_deja_annule_nait_annule() {
+    fn a_child_of_an_already_cancelled_parent_is_born_cancelled() {
         let parent = CancelToken::new();
         parent.cancel();
-        let enfant = parent.child();
-        assert!(enfant.is_cancelled());
+        let child = parent.child();
+        assert!(child.is_cancelled());
 
-        let attente = enfant.cancelled();
-        let mut attente = pin!(attente);
-        assert_eq!(sonder(attente.as_mut()), Poll::Ready(()));
+        let waiting = child.cancelled();
+        let mut waiting = pin!(waiting);
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Ready(()));
     }
 
     #[test]
-    fn un_enfant_en_attente_est_reveille_par_le_parent() {
+    fn a_waiting_child_is_woken_by_the_parent() {
         let parent = CancelToken::new();
-        let enfant = parent.child();
+        let child = parent.child();
 
-        let attente = enfant.cancelled();
-        let mut attente = pin!(attente);
-        assert_eq!(sonder(attente.as_mut()), Poll::Pending);
+        let waiting = child.cancelled();
+        let mut waiting = pin!(waiting);
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Pending);
 
         parent.cancel();
-        assert_eq!(sonder(attente.as_mut()), Poll::Ready(()));
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Ready(()));
     }
 
     #[test]
-    fn les_enfants_termines_ne_s_accumulent_pas() {
+    fn finished_children_do_not_accumulate() {
         let parent = CancelToken::new();
         for _ in 0..100 {
-            let ephemere = parent.child();
-            assert!(!ephemere.is_cancelled());
-            // `ephemere` est libéré ici : sa référence faible devient morte.
+            let short_lived = parent.child();
+            assert!(!short_lived.is_cancelled());
+            // `short_lived` is dropped here: its weak reference becomes dead.
         }
         assert_eq!(
             parent.live_children(),
             0,
-            "les jetons de requêtes terminées doivent être purgés"
+            "tokens of finished queries must be purged"
         );
     }
 
     #[test]
-    fn le_debug_ne_montre_que_l_etat() {
-        let jeton = CancelToken::new();
-        let rendu = format!("{jeton:?}");
-        assert!(rendu.contains("cancelled"), "{rendu}");
-        assert!(rendu.contains("false"), "{rendu}");
+    fn the_debug_only_shows_the_state() {
+        let token = CancelToken::new();
+        let rendered = format!("{token:?}");
+        assert!(rendered.contains("cancelled"), "{rendered}");
+        assert!(rendered.contains("false"), "{rendered}");
     }
 }

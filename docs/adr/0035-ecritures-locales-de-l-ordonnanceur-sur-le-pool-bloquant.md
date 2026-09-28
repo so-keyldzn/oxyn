@@ -1,185 +1,183 @@
-# ADR-0035 — Les écritures locales de l'ordonnanceur passent par le pool bloquant, en opérations possédées
+# ADR-0035 — The scheduler's local writes go through the blocking pool, as owned operations
 
-**Statut :** accepté · **Date :** 2026-09-24
+**Status:** accepted · **Date:** 2026-09-24
 
-**Précise :** [ADR-0012](0012-lecture-pages-resultats.md), qui déplace la lecture
-de pages hors rendu par le même geste (`spawn_blocking`, pas de runtime propre) —
-cette décision l'étend aux écritures ; [ADR-0004](0004-command-bus.md), sur la
-séquence « journaliser avant et après », dont le déroulement change ici sans que
-la séquence elle-même soit remise en cause.
+**Clarifies:** [ADR-0012](0012-lecture-pages-resultats.md), which moves page
+reads off rendering with the same gesture (`spawn_blocking`, no runtime of its
+own) — this decision extends it to writes; [ADR-0004](0004-command-bus.md), on
+the "journal before and after" sequence, whose unfolding changes here without
+the sequence itself being called into question.
 
-## Contexte
+## Context
 
-`Executor::local_worker` (`crates/oxyn-exec/src/executor.rs:1541`) soumet déjà
-les lectures — pages de résultat, historique, connexions — au pool bloquant de
-Tokio de l'application : `tokio::runtime::Handle::try_current()`, jamais
-`Runtime::new`, puis `spawn_blocking(move || …).await`, l'échec de jointure
-mappé en `OxynError::Internal`. C'est le geste qu'[ADR-0012](0012-lecture-pages-resultats.md)
-a établi pour les lectures.
+`Executor::local_worker` (`crates/oxyn-exec/src/executor.rs:1541`) already
+submits reads — result pages, history, connections — to the application's Tokio
+blocking pool: `tokio::runtime::Handle::try_current()`, never `Runtime::new`,
+then `spawn_blocking(move || …).await`, the join failure mapped to
+`OxynError::Internal`. It is the gesture [ADR-0012](0012-lecture-pages-resultats.md)
+established for reads.
 
-Un TODO daté du 2026-09-10 (`executor.rs:43`) marquait ce qui restait à faire :
-les accès au Store *locaux* qui ne sont pas des lectures de page — sauvegarde et
-suppression d'une connexion, lecture de sa configuration avant connexion,
-résolution des identifiants dans le trousseau (`self.credentials.resolve`), et
-l'écriture d'export (`export_result`, qui fait `File::create` puis `export(...)`
-en synchrone) — ainsi que les écritures d'audit — décision de politique
-(`journal_decision`), issue d'exécution (`journal_result`), début et fin
-d'historique (`history_start`, `history_finish`) — tournaient toutes en ligne
-sur le worker qui exécute `Executor::dispatch`. C'est le worker partagé du
-runtime Tokio multi-thread décrit dans
-[ARCHITECTURE §9](../ARCHITECTURE.md#9-modèle-dexécution-et-de-threads) : le
-même qui porte les drivers, le réseau et les appels LLM. Une écriture
-synchrone qui y bloque retarde toute autre commande en vol sur ce fil, ce
-qu'[I-05](../../CLAUDE.md#i-05) interdit.
+A TODO dated 2026-09-10 (`executor.rs:43`) marked what remained to be done:
+the *local* Store accesses that are not page reads — saving and deleting a
+connection, reading its configuration before connecting, resolving credentials
+in the keychain (`self.credentials.resolve`), and the export write
+(`export_result`, which does `File::create` then `export(...)` synchronously) —
+as well as the audit writes — policy decision (`journal_decision`), execution
+outcome (`journal_result`), history start and finish (`history_start`,
+`history_finish`) — all ran inline on the worker that executes
+`Executor::dispatch`. It is the shared worker of the multi-thread Tokio runtime
+described in
+[ARCHITECTURE §9](../ARCHITECTURE.md#9-execution-and-threading-model): the
+same one that carries the drivers, the network and the LLM calls. A synchronous
+write that blocks there delays every other command in flight on that thread,
+which [I-05](../../CLAUDE.md#i-05) forbids.
 
-Le déplacement n'est pas mécanique pour les écritures d'audit. `Executor::run`
-(`executor.rs:552-574`) arme un `OutcomeGuard` (`crates/oxyn-exec/src/abandon.rs`)
-juste avant d'exécuter la commande et appelle `guard.settle()`
-(`executor.rs:569`) **avant** `journal_result` et `history_finish`
-(`executor.rs:571-572`). Le guard existe précisément pour qu'un futur abandonné
-entre l'exécution et l'écriture de son issue — fermeture de fenêtre, `select!`
-perdant, arrêt du runtime — laisse quand même une trace au journal, classée
-`Ambiguous` ([I-13](../../CLAUDE.md#i-13)) plutôt qu'un trou silencieux. Faire de
-`journal_result`/`history_finish` un simple `spawn_blocking(...).await` sans y
-penser aurait déplacé la fenêtre d'abandon *après* `settle()`, là où plus rien
-ne la couvre. La même question se pose, de façon moins grave, pour
-`journal_decision` sur une décision `Allow` : entre l'autorisation rendue par
-`self.policy.authorize` et l'écriture de la décision, un abandon ne doit
-laisser ni une commande exécutée sans trace, ni une trace pour une commande
-jamais exécutée.
+The move is not mechanical for audit writes. `Executor::run`
+(`executor.rs:552-574`) arms an `OutcomeGuard` (`crates/oxyn-exec/src/abandon.rs`)
+just before executing the command and calls `guard.settle()`
+(`executor.rs:569`) **before** `journal_result` and `history_finish`
+(`executor.rs:571-572`). The guard exists precisely so that a future abandoned
+between execution and the write of its outcome — window closing, losing
+`select!`, runtime shutdown — still leaves a trace in the journal, classified
+`Ambiguous` ([I-13](../../CLAUDE.md#i-13)) rather than a silent hole. Turning
+`journal_result`/`history_finish` into a plain `spawn_blocking(...).await`
+without thinking about it would have moved the abandonment window *after*
+`settle()`, where nothing covers it anymore. The same question arises, less
+seriously, for `journal_decision` on an `Allow` decision: between the
+authorization returned by `self.policy.authorize` and the write of the
+decision, an abandonment must leave neither an executed command without a
+trace, nor a trace for a command never executed.
 
-`Executor` ne construit pas de runtime : il n'utilise que le pool bloquant que
-`main.rs` confie à Tauri ([ARCHITECTURE §9](../ARCHITECTURE.md#9-modèle-dexécution-et-de-threads)).
-Un appel à `spawn_blocking` suppose donc un runtime Tokio courant — absent, par
-exemple, lors de l'arrêt de l'application. `journal_abandoned_off_runtime`
-(`executor.rs:1999-2020`) traite déjà ce cas : `Handle::try_current()` réussi
-part sur `spawn_blocking`, sinon l'écriture se fait en ligne, faute de fil de
-pool à qui la confier. C'est le précédent que les écritures d'audit reprennent.
+`Executor` does not build a runtime: it only uses the blocking pool that
+`main.rs` hands to Tauri ([ARCHITECTURE §9](../ARCHITECTURE.md#9-execution-and-threading-model)).
+A call to `spawn_blocking` therefore assumes a current Tokio runtime — absent,
+for example, during application shutdown. `journal_abandoned_off_runtime`
+(`executor.rs:1999-2020`) already handles this case: a successful
+`Handle::try_current()` goes to `spawn_blocking`, otherwise the write happens
+inline, for lack of a pool thread to hand it to. It is the precedent the audit
+writes follow.
 
-## Décision
+## Decision
 
-Chaque écriture locale que le worker de dispatch exécutait jusqu'ici en ligne
-devient une **opération possédée** : ses données sont construites en mémoire
-sur le worker — clonées ou déplacées, jamais empruntées à `&self` ni à la pile
-de `dispatch` — puis exécutées par `spawn_blocking(move || …).await`, avec le
-même mappage d'échec de jointure que `local_worker` déjà établi par
-[ADR-0012](0012-lecture-pages-resultats.md). Sont concernées : `save_connection`,
-`delete_connection`, `connection_config` (donc `connect`), `export_result`, et
-les quatre écritures d'audit — `journal_decision`, `journal_result`,
+Each local write that the dispatch worker used to execute inline becomes an
+**owned operation**: its data is built in memory on the worker — cloned or
+moved, never borrowed from `&self` or from `dispatch`'s stack — then executed by
+`spawn_blocking(move || …).await`, with the same join-failure mapping as
+`local_worker`, already established by
+[ADR-0012](0012-lecture-pages-resultats.md). Concerned: `save_connection`,
+`delete_connection`, `connection_config` (hence `connect`), `export_result`, and
+the four audit writes — `journal_decision`, `journal_result`,
 `history_start`, `history_finish`.
 
-**Le cache des connexions suit le disque dans la même opération.** Le registre
-`connections` de l'ordonnanceur fournit l'environnement soumis au `PolicyGate`
-([I-02](../../CLAUDE.md#i-02)). `save_connection`, `delete_connection` et
-`connection_config` le mettent donc à jour **dans la tâche du pool**, juste
-après l'écriture ou la lecture du Store, sous un verrou dédié
-(`connection_writes`) que prennent aussi `register_connection`,
-`forget_connection` et `load_connections`. Mis à jour au retour de l'`.await`,
-le cache pourrait garder `development` quand le disque dit `production` : deux
-mises à jour concurrentes y écrivent dans un autre ordre que sur le disque, et
-un futur abandonné après l'écriture ne le met jamais à jour. Les lecteurs du
-cache ne prennent pas ce verrou.
+**The connection cache follows the disk in the same operation.** The
+scheduler's `connections` registry provides the environment submitted to the
+`PolicyGate` ([I-02](../../CLAUDE.md#i-02)). `save_connection`,
+`delete_connection` and `connection_config` therefore update it **in the pool
+task**, right after the Store write or read, under a dedicated lock
+(`connection_writes`) that `register_connection`, `forget_connection` and
+`load_connections` also take. Updated on return from the `.await`, the cache
+could keep `development` when the disk says `production`: two concurrent
+updates write to it in a different order than on disk, and a future abandoned
+after the write never updates it. Cache readers do not take this lock.
 
-**Sans runtime Tokio courant**, une opération de commande (connexion, export)
-échoue par une erreur de configuration, comme `local_worker` le fait déjà ; une
-écriture d'audit s'exécute en ligne, comme `journal_abandoned_off_runtime` le
-fait déjà — l'audit ne doit jamais se perdre faute de pool, même à l'arrêt.
+**Without a current Tokio runtime**, a command operation (connection, export)
+fails with a configuration error, as `local_worker` already does; an audit
+write runs inline, as `journal_abandoned_off_runtime` already does — the audit
+must never be lost for lack of a pool, even at shutdown.
 
-Pour une décision `Allow`, l'`OutcomeGuard` est armé dès que
-`self.policy.authorize` rend `Allow`, **avant** l'écriture de la décision, sans
-`.await` entre les deux : aucun abandon ne peut donc survenir entre
-l'autorisation et l'armement du guard. La décision `Allow` et l'inscription « en
-cours » à l'historique forment une seule opération possédée, soumise au pool
-avant toute exécution.
+For an `Allow` decision, the `OutcomeGuard` is armed as soon as
+`self.policy.authorize` returns `Allow`, **before** the decision is written,
+with no `.await` in between: no abandonment can therefore occur between the
+authorization and the arming of the guard. The `Allow` decision and the
+"in progress" history entry form a single owned operation, submitted to the pool
+before any execution.
 
-Le refus (`Deny`) et l'inscription de son historique forment une opération.
-Les deux écritures qu'elle contient restent tentées indépendamment — l'échec de
-l'une n'empêche pas l'autre, comme aujourd'hui.
+The refusal (`Deny`) and its history entry form one operation. The two writes
+it contains are still attempted independently — the failure of one does not
+prevent the other, as today.
 
-La décision `RequireApproval` est une opération à part : `approvals.submit` et
-l'événement `Event::ApprovalRequested` ne partent qu'après son succès.
+The `RequireApproval` decision is a separate operation: `approvals.submit` and
+the `Event::ApprovalRequested` event only go out after it succeeds.
 
-L'issue d'une exécution — `journal_result` et `history_finish` — forme une
-seule opération, soumise au pool **immédiatement après** `guard.settle()`, sans
-`.await` intercalé : la fenêtre qu'`OutcomeGuard` couvre reste donc exactement
-celle qu'elle couvre aujourd'hui, entre le début de l'exécution et la mise en
-file de cette opération.
+The outcome of an execution — `journal_result` and `history_finish` — forms a
+single operation, submitted to the pool **immediately after** `guard.settle()`,
+with no interleaved `.await`: the window `OutcomeGuard` covers therefore stays
+exactly the one it covers today, between the start of execution and the
+queuing of this operation.
 
-Chaque écriture est soumise à `spawn_blocking` avant tout point de suspension
-qui la suit dans le code appelant. Aucune tâche n'est détachée : la poignée
-(`JoinHandle`) est toujours attendue par un `.await` du chemin normal.
+Each write is submitted to `spawn_blocking` before any suspension point that
+follows it in the calling code. No task is detached: the handle (`JoinHandle`)
+is always awaited by an `.await` on the normal path.
 
-La résolution des identifiants dans `connect()` (`self.credentials.resolve`,
-trousseau système) suit le même geste : `Arc::clone(&self.credentials)` et un
-clone possédé de la configuration de connexion partent dans la fermeture. Les
-`Credentials` qu'elle rend ne sont jamais journalisés, ni formatés en `Debug`
-([I-03](../../CLAUDE.md#i-03)) — le filtrage déjà en place avant l'écriture
-Store (`executor.rs:1634-1637`) reste inchangé par ce déplacement.
+Credential resolution in `connect()` (`self.credentials.resolve`, system
+keychain) follows the same gesture: `Arc::clone(&self.credentials)` and an owned
+clone of the connection configuration go into the closure. The `Credentials` it
+returns are never journaled, nor formatted with `Debug`
+([I-03](../../CLAUDE.md#i-03)) — the filtering already in place before the Store
+write (`executor.rs:1634-1637`) is unchanged by this move.
 
-## Conséquences
+## Consequences
 
-* **+** Le worker qui exécute `Executor::dispatch` ne bloque plus sur aucune
-  I/O locale : le TODO du 2026-09-10 est résolu dans son intégralité, y compris
-  les écritures d'audit qu'il ne nommait pas littéralement.
-* **+** Le geste est celui, déjà revu et en production, d'[ADR-0012](0012-lecture-pages-resultats.md) :
-  aucun nouveau patron à apprendre, aucune nouvelle classe d'erreur.
-* **+** Aucune tâche détachée : chaque opération garde sa poignée jusqu'à son
-  `.await`, conformément à [rust.md](../../.claude/rules/rust.md#async).
-* **−** (a) Un abandon pendant l'écriture de la décision `Allow` laisse une
-  issue « abandonnée, issue inconnue » (`Ambiguous`, jamais retentée), même si
-  rien n'a été exécuté. C'est la vérité vue de l'ordonnanceur — il ne peut pas
-  savoir, à cet instant, s'il a été abandonné avant ou après avoir atteint le
-  serveur — jamais un trou dans le journal.
-* **−** (b) Un abandon du futur de `dispatch_as` pendant l'écriture d'une
-  décision `RequireApproval` laisse au journal une ligne `RequireApproval` sans
-  demande en attente : `approvals.submit` n'est jamais atteint,
-  `Event::ApprovalRequested` n'est jamais publié, et personne ne peut
-  l'approuver. Rien n'est exécuté et rien n'est ambigu — I-13 n'est pas en jeu,
-  puisqu'aucune commande n'a pu atteindre le serveur sans une demande en
-  attente pour la porter. L'état visible est celui d'une demande rejetée
-  (`Executor::reject`) ou expirée (`PendingApprovals::sweep`), qu'aucune ligne
-  de journal ne suit déjà aujourd'hui. C'est une limite assumée, pas un trou
-  d'issue.
-* **−** (c) L'ordre d'insertion des lignes du journal peut différer de leur
-  `ts` : plusieurs fils du pool bloquant écrivent, sérialisés seulement par le
-  verrou interne du Store, pas par l'ordre d'émission.
-* **−** (d) Une opération du pool pas encore démarrée au moment où le runtime
-  s'arrête peut ne jamais tourner — situation déjà vraie de tout usage de
-  `spawn_blocking`, désormais plus fréquente puisque plus d'écritures l'empruntent.
-* **−** (e) Chaque commande fait deux allers au pool bloquant de plus (décision,
-  issue), sans chiffre de latence mesuré à ce jour. Toute optimisation future
-  qui regrouperait ces allers doit s'appuyer sur une mesure, pas une supposition
-  ([PERFORMANCE](../PERFORMANCE.md#la-règle-qui-empêche-loptimisation-gratuite)).
-* **−** Restent en ligne sur le worker, hors périmètre de cette décision :
-  l'éviction des résultats retenus après une exécution (`prune_results`, qui
-  supprime des fichiers de débordement) et `load_connections`, appelé à
-  l'assemblage du backend, avant que la fenêtre n'existe.
+* **+** The worker that executes `Executor::dispatch` no longer blocks on any
+  local I/O: the TODO of 2026-09-10 is resolved in full, including the audit
+  writes it did not literally name.
+* **+** The gesture is the one, already reviewed and in production, of
+  [ADR-0012](0012-lecture-pages-resultats.md): no new pattern to learn, no new
+  error class.
+* **+** No detached task: each operation keeps its handle until its `.await`,
+  in accordance with [rust.md](../../.claude/rules/rust.md#async).
+* **−** (a) An abandonment during the write of the `Allow` decision leaves an
+  "abandoned, outcome unknown" outcome (`Ambiguous`, never retried), even if
+  nothing was executed. It is the truth as seen by the scheduler — it cannot
+  know, at that moment, whether it was abandoned before or after reaching the
+  server — never a hole in the journal.
+* **−** (b) An abandonment of the `dispatch_as` future during the write of a
+  `RequireApproval` decision leaves in the journal a `RequireApproval` line with
+  no pending request: `approvals.submit` is never reached,
+  `Event::ApprovalRequested` is never published, and nobody can approve it.
+  Nothing is executed and nothing is ambiguous — I-13 is not at stake, since no
+  command could reach the server without a pending request to carry it. The
+  visible state is that of a rejected (`Executor::reject`) or expired
+  (`PendingApprovals::sweep`) request, which no journal line already follows
+  today. It is an accepted limit, not an outcome hole.
+* **−** (c) The insertion order of journal lines may differ from their `ts`:
+  several threads of the blocking pool write, serialized only by the Store's
+  internal lock, not by emission order.
+* **−** (d) A pool operation not yet started when the runtime stops may never
+  run — already true of any use of `spawn_blocking`, now more frequent since
+  more writes go through it.
+* **−** (e) Each command makes two more trips to the blocking pool (decision,
+  outcome), with no latency figure measured to date. Any future optimization
+  that would group these trips must rest on a measurement, not an assumption
+  ([PERFORMANCE](../PERFORMANCE.md#the-rule-that-prevents-gratuitous-optimization)).
+* **−** Out of the scope of this decision, still inline on the worker: the
+  eviction of retained results after an execution (`prune_results`, which
+  deletes spill files) and `load_connections`, called when the backend is
+  assembled, before the window exists.
 
-**Coût de sortie :** modéré, confiné à `crates/oxyn-exec/src/executor.rs` et
-`crates/oxyn-exec/src/abandon.rs` — aucun schéma, aucune nouvelle `Command`,
-aucun IPC touché. Revenir aux écritures en ligne rouvre I-05 sur l'ensemble des
-gestionnaires concernés.
+**Exit cost:** moderate, confined to `crates/oxyn-exec/src/executor.rs` and
+`crates/oxyn-exec/src/abandon.rs` — no schema, no new `Command`, no IPC
+touched. Going back to inline writes reopens I-05 on all the handlers
+concerned.
 
-**Reconsidérer si**
-* une mesure montre que les allers au pool dominent la latence des petites
-  commandes ;
-* l'ordre d'insertion du journal devient une exigence (nécessiterait un
-  écrivain d'audit dédié, à file ordonnée) ;
-* une demande d'accord perdue sur abandon (conséquence b) devient un problème
-  observé, appelant une réconciliation des décisions `RequireApproval` sans
-  suite ;
-* le Store cesse d'être synchrone ;
-* une écriture du cache des connexions apparaît hors du verrou
-  `connection_writes` : c'est la fenêtre d'I-02 qui se rouvre, pas une
-  simplification.
+**Reconsider if**
+* a measurement shows that pool trips dominate the latency of small commands;
+* the journal's insertion order becomes a requirement (would need a dedicated
+  audit writer, with an ordered queue);
+* an approval request lost on abandonment (consequence b) becomes an observed
+  problem, calling for a reconciliation of `RequireApproval` decisions with no
+  follow-up;
+* the Store stops being synchronous;
+* a write of the connection cache appears outside the `connection_writes`
+  lock: it is the I-02 window reopening, not a simplification.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Garder les écritures d'audit en ligne sur le worker de dispatch (option A) | Ne résout pas le TODO ni I-05 pour la partie la plus fréquente des écritures : chaque commande journalise au moins deux fois. |
-| Un fil écrivain dédié, alimenté par un canal | Résoudrait la conséquence (c) sur l'ordre, mais introduit une file, un protocole d'arrêt propre et une latence de livraison que rien ici ne justifie sans mesure préalable. |
-| `tokio::spawn` détaché pour les écritures | Personne ne tient la poignée : viole [rust.md §Async](../../.claude/rules/rust.md#async) et fait disparaître silencieusement une écriture si le runtime s'arrête avant qu'elle ne tourne. |
-| Un `spawn_blocking` par écriture élémentaire, y compris décision + historique séparés | Multiplie les allers au pool sans réduire la fenêtre d'abandon utile ; regrouper en une opération par étape logique (décision+historique « en cours », issue+historique « fin ») ne coûte rien de plus et réduit le nombre d'allers. |
-| Écrire la décision `RequireApproval` en ligne, pour garder une fenêtre d'abandon nulle à cet endroit | Rouvre I-05 sur ce seul cas, pour une fenêtre déjà couverte par un état visible et sans conséquence ambiguë (b). |
-| Mettre la demande d'approbation en attente *avant* d'écrire sa décision, en la retirant en cas d'échec d'écriture | Une approbation concurrente entre les deux ferait exécuter une commande dont la décision ne s'est jamais écrite au journal. |
+| Keep audit writes inline on the dispatch worker (option A) | Resolves neither the TODO nor I-05 for the most frequent part of writes: each command journals at least twice. |
+| A dedicated writer thread, fed by a channel | Would resolve consequence (c) on ordering, but introduces a queue, a clean shutdown protocol and a delivery latency that nothing here justifies without a prior measurement. |
+| Detached `tokio::spawn` for writes | Nobody holds the handle: violates [rust.md §Async](../../.claude/rules/rust.md#async) and silently drops a write if the runtime stops before it runs. |
+| One `spawn_blocking` per elementary write, including separate decision + history | Multiplies pool trips without reducing the useful abandonment window; grouping into one operation per logical step (decision + "in progress" history, outcome + "finished" history) costs nothing more and reduces the number of trips. |
+| Write the `RequireApproval` decision inline, to keep a zero abandonment window at that spot | Reopens I-05 for this one case, for a window already covered by a visible state and with no ambiguous consequence (b). |
+| Put the approval request on hold *before* writing its decision, withdrawing it if the write fails | A concurrent approval in between would execute a command whose decision was never written to the journal. |

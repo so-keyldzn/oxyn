@@ -1,35 +1,33 @@
 ---
 name: passe-visuelle-sans-serveur
-description: "Contrôle responsive et contraste clair/sombre : build Storybook statique + script Playwright qui sert et s'arrête ; les stories seules ne voient ni le clair ni les largeurs"
+description: "Responsive and light/dark contrast check: static Storybook build + a Playwright script that serves and stops; stories alone see neither light mode nor widths"
 metadata:
   type: feedback
 ---
 
-Pour vérifier les largeurs et le contraste dans les deux thèmes, ne pas lancer
-`storybook dev` : construire en statique et mesurer avec un script Playwright
-qui sert lui-même le build sur un port choisi par le système, puis ferme tout.
+To check widths and contrast in both themes, do not launch `storybook dev`:
+build statically and measure with a Playwright script that serves the build
+itself on a port chosen by the system, then closes everything.
 
-**Why:** des serveurs Storybook laissés par des agents sur 6006/6109 font
-échouer des suites de stories dans `make qualite` avec une erreur d'import qui
-ressemble à une régression. Et les stories ne couvrent pas ce que la passe
-trouve : `preview.tsx` rend en **sombre**, donc axe ne voit un contraste clair
-que dans les stories `globals: { theme: "light" }`. Constaté le 2026-09-16 :
-les onglets inactifs du `TabsTrigger` généré (`text-foreground/60`) tombaient à
-4,27:1 en clair dans *toutes* les listes d'onglets, sans qu'aucune story
-échoue. Voir aussi [[axe-ne-teste-pas-le-contraste-non-textuel]].
+**Why:** Storybook servers left by agents on 6006/6109 make story suites fail in
+`make qualite` with an import error that looks like a regression. And the
+stories do not cover what the pass finds: `preview.tsx` renders in **dark**, so
+axe only sees a light contrast in stories with `globals: { theme: "light" }`.
+Observed on 2026-09-16: the inactive tabs of the generated `TabsTrigger`
+(`text-foreground/60`) dropped to 4.27:1 in light in *every* tab list, without
+any story failing. See also [[axe-ne-teste-pas-le-contraste-non-textuel]].
 
 **How to apply:**
-- `pnpm exec storybook build -o <scratchpad>/sb --quiet`, puis un script
-  `node` qui résout `playwright` par `createRequire(apps/desktop/package.json)`
-  et injecte `axe.min.js` depuis `node_modules/.pnpm/axe-core@*/`.
-- Lire `index.json` du build pour la liste des stories, filtrer par
-  `importPath`. URL : `iframe.html?id=…&viewMode=story&globals=theme:light`.
-- Les décorateurs figent des largeurs (`w-[900px]`) : les libérer par une
-  feuille injectée, sinon aucune largeur de fenêtre n'a d'effet. Ils peuvent
-  être **empilés** (méta + story) : un `scrollWidth` égal pile à la largeur
-  d'un décorateur est un faux positif — vérifier avant de corriger.
-- Chaque défaut trouvé devient une story qui échoue sans le correctif :
-  prouver par mutation (neutraliser le correctif, voir la story échouer,
-  rétablir).
-- Avant de conclure, `lsof -nP -iTCP -sTCP:LISTEN` : ne tuer que ses propres
-  serveurs ; le 6006 peut appartenir à un autre projet de l'utilisateur.
+- `pnpm exec storybook build -o <scratchpad>/sb --quiet`, then a `node` script
+  that resolves `playwright` through `createRequire(apps/desktop/package.json)`
+  and injects `axe.min.js` from `node_modules/.pnpm/axe-core@*/`.
+- Read the build's `index.json` for the list of stories, filter by
+  `importPath`. URL: `iframe.html?id=…&viewMode=story&globals=theme:light`.
+- Decorators freeze widths (`w-[900px]`): release them with an injected
+  stylesheet, otherwise no window width has any effect. They can be **stacked**
+  (meta + story): a `scrollWidth` exactly equal to a decorator's width is a false
+  positive — check before fixing.
+- Each defect found becomes a story that fails without the fix: prove it by
+  mutation (neutralize the fix, see the story fail, restore).
+- Before concluding, `lsof -nP -iTCP -sTCP:LISTEN`: only kill your own servers;
+  6006 may belong to another project of the user.

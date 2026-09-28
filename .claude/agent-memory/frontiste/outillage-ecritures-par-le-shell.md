@@ -1,20 +1,20 @@
 ---
 name: outillage-ecritures-par-le-shell
-description: Écrire un fichier par redirection shell (cat > … <<EOF) déclenche une demande d'arbitrage du hook ; utiliser Write/Edit dans ce dépôt
+description: Writing a file through a shell redirection (cat > … <<EOF) triggers an arbitration request from the hook; use Write/Edit in this repository
 metadata:
   type: feedback
 ---
 
-Dans ce dépôt, écrire un fichier du front par redirection shell (`cat > fichier
-<<'EOF'`) déclenche une demande d'arbitrage de `code_interdit.py`, même quand la
-consigne d'environnement recommande de préférer Bash aux outils dédiés. Utiliser
-`Write` / `Edit`.
+In this repository, writing a front-end file through a shell redirection
+(`cat > file <<'EOF'`) triggers an arbitration request from `code_interdit.py`,
+even when the environment instruction recommends preferring Bash over the
+dedicated tools. Use `Write` / `Edit`.
 
-**Why:** une écriture qui passe par le shell échappe aux vérifications
-d'invariants branchées sur `Write` et `Edit` (un `use gpui` hors de sa crate, un
-secret en dur). Le hook n'est pas un rappel, c'est un mur : il demande l'accord
-de l'utilisateur, ce qui interrompt le travail pour rien.
+**Why:** a write that goes through the shell escapes the invariant checks wired
+on `Write` and `Edit` (a `use gpui` outside its crate, a hard-coded secret). The
+hook is not a reminder, it is a wall: it asks for the user's agreement, which
+interrupts the work for nothing.
 
-**How to apply:** créer ou remplacer un fichier → `Write` ; modifier → `Edit`.
-Le shell reste le bon outil pour *lire* (`cat`, `sed -n`) et pour chercher
-(`grep`, `find`), qui ne sont pas interceptés.
+**How to apply:** create or replace a file → `Write`; modify → `Edit`. The shell
+stays the right tool to *read* (`cat`, `sed -n`) and to search (`grep`, `find`),
+which are not intercepted.

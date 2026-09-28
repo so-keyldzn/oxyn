@@ -1,17 +1,17 @@
-//! Identifiants du domaine.
+//! Domain identifiers.
 //!
-//! Deux familles, et la différence est délibérée :
+//! Two families, and the difference is deliberate:
 //!
-//! * les identifiants **d'instance** (connexion, session, requête, document…) sont
-//!   des UUID v7. La version 7 est ordonnable temporellement : trier des `ResultId`
-//!   redonne l'ordre de création sans stocker d'horodatage à côté ;
-//! * l'identifiant **de driver** est une chaîne stable (`"postgres"`, `"sqlite"`).
-//!   Il apparaît dans les fichiers de workspace et dans les messages d'erreur ;
-//!   il doit rester lisible et identique d'une version à l'autre.
+//! * **instance** identifiers (connection, session, query, document…) are
+//!   UUID v7. Version 7 is time-ordered: sorting `ResultId`s gives back the
+//!   creation order without storing a timestamp alongside;
+//! * the **driver** identifier is a stable string (`"postgres"`, `"sqlite"`).
+//!   It appears in workspace files and in error messages; it must stay
+//!   readable and identical from one version to the next.
 //!
-//! Aucun de ces identifiants n'est un secret, mais un identifiant de connexion ne
-//! s'affiche pas dans un message destiné à l'utilisateur (I-03) : c'est le *nom*
-//! de la connexion qui est montré.
+//! None of these identifiers is a secret, but a connection identifier is not
+//! shown in a message meant for the user (I-03): it is the connection's *name*
+//! that is shown.
 
 use std::fmt;
 use std::str::FromStr;
@@ -20,11 +20,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Échec d'analyse d'un identifiant.
+/// Failure to parse an identifier.
 ///
-/// Le texte fautif n'est **jamais** repris dans le message : un identifiant de
-/// connexion mal formé reste un identifiant de connexion, et il n'a rien à faire
-/// dans un journal ou une boîte de dialogue (I-03).
+/// The faulty text is **never** repeated in the message: a malformed connection
+/// identifier is still a connection identifier, and it has no business in a log
+/// or a dialog box (I-03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("invalid `{kind}`: {detail}")]
 pub struct IdParseError {
@@ -33,29 +33,29 @@ pub struct IdParseError {
 }
 
 impl IdParseError {
-    /// Construit une erreur d'analyse.
+    /// Builds a parse error.
     #[must_use]
     pub const fn new(kind: &'static str, detail: &'static str) -> Self {
         Self { kind, detail }
     }
 
-    /// Nom du type d'identifiant attendu.
+    /// Name of the expected identifier type.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         self.kind
     }
 
-    /// Raison du rejet, sans reprendre la valeur fautive.
+    /// Reason for the rejection, without repeating the faulty value.
     #[must_use]
     pub const fn detail(&self) -> &'static str {
         self.detail
     }
 }
 
-/// Déclare un identifiant newtype adossé à un UUID v7.
+/// Declares a newtype identifier backed by a UUID v7.
 ///
-/// Cette macro n'est pas exportée : elle sert uniquement à éviter de recopier dix
-/// fois les mêmes vingt lignes dans ce module.
+/// This macro is not exported: it only avoids copying the same twenty lines
+/// ten times in this module.
 macro_rules! define_uuid_ids {
     ($( $(#[$meta:meta])* $name:ident ),* $(,)?) => {
         $(
@@ -68,27 +68,27 @@ macro_rules! define_uuid_ids {
             pub struct $name(Uuid);
 
             impl $name {
-                /// Crée un identifiant frais, ordonnable temporellement (UUID v7).
+                /// Creates a fresh, time-ordered identifier (UUID v7).
                 #[must_use]
                 pub fn new() -> Self {
                     Self(Uuid::now_v7())
                 }
 
-                /// Adopte un UUID existant, relu depuis un fichier de workspace
-                /// par exemple. Aucune version n'est imposée : les workspaces
-                /// écrits avant l'adoption de la v7 restent lisibles.
+                /// Adopts an existing UUID, read back from a workspace file
+                /// for instance. No version is imposed: workspaces written
+                /// before v7 was adopted stay readable.
                 #[must_use]
                 pub const fn from_uuid(uuid: Uuid) -> Self {
                     Self(uuid)
                 }
 
-                /// Emprunte l'UUID sous-jacent.
+                /// Borrows the underlying UUID.
                 #[must_use]
                 pub const fn as_uuid(&self) -> &Uuid {
                     &self.0
                 }
 
-                /// Rend l'UUID sous-jacent.
+                /// Returns the underlying UUID.
                 #[must_use]
                 pub const fn into_uuid(self) -> Uuid {
                     self.0
@@ -96,10 +96,10 @@ macro_rules! define_uuid_ids {
             }
 
             impl Default for $name {
-                /// Équivalent de [`Self::new`] : un identifiant **frais**.
+                /// Equivalent to [`Self::new`]: a **fresh** identifier.
                 ///
-                /// Ce n'est pas une valeur neutre — deux `default()` successifs
-                /// ne sont pas égaux.
+                /// It is not a neutral value — two successive `default()` are
+                /// not equal.
                 fn default() -> Self {
                     Self::new()
                 }
@@ -140,88 +140,87 @@ macro_rules! define_uuid_ids {
 }
 
 define_uuid_ids! {
-    /// Une connexion configurée, qu'elle soit ouverte ou non.
+    /// A configured connection, open or not.
     ///
-    /// Ne s'affiche pas dans l'interface : on montre
+    /// Not shown in the interface: we show
     /// [`ConnectionConfig::name`](crate::connection::ConnectionConfig::name).
     ConnectionId,
 
-    /// Une session ouverte sur une connexion. Les capacités s'évaluent à ce
-    /// niveau, pas à celui du driver (ADR-0003).
+    /// A session open on a connection. Capabilities are evaluated at this
+    /// level, not at the driver's (ADR-0003).
     SessionId,
 
-    /// Une exécution d'instruction en cours. C'est la poignée que l'annulation
-    /// vise, et elle doit rester valide jusqu'à la fin du flux de résultats.
+    /// A statement execution in progress. It is the handle cancellation
+    /// targets, and it must stay valid until the end of the result stream.
     StatementHandle,
 
-    /// Un jeu de résultats, c'est-à-dire un tampon de `RecordBatch` Arrow.
+    /// A result set, that is, a buffer of Arrow `RecordBatch`es.
     ResultId,
 
-    /// Un document du workspace : requête sauvegardée, note, brouillon.
+    /// A workspace document: saved query, note, draft.
     DocumentId,
 
-    /// Un workspace, c'est-à-dire l'unité de persistance de l'état utilisateur.
+    /// A workspace, that is, the unit of persistence of the user's state.
     WorkspaceId,
 
-    /// Un agent IA (le rôle : SQL, Schema, Performance…), stable d'une session
-    /// à l'autre.
+    /// An AI agent (the role: SQL, Schema, Performance…), stable from one
+    /// session to the next.
     AgentId,
 
-    /// Une conversation avec un agent. Ce qu'un agent a fait s'audite par ce
-    /// couple `AgentId` + `AgentSessionId`.
+    /// A conversation with an agent. What an agent did is audited through
+    /// this `AgentId` + `AgentSessionId` pair.
     AgentSessionId,
 
-    /// Une commande soumise au bus. Sert de clé de corrélation entre la demande
-    /// d'approbation, la décision et le journal d'audit.
+    /// A command submitted to the bus. Serves as a correlation key between the
+    /// approval request, the decision and the audit log.
     CommandId,
 
-    /// Un lancement de l'application. Sert à distinguer un arrêt propre d'un
-    /// plantage : la ligne qu'il identifie porte sa fermeture et son battement
-    /// ([ADR-0021](../../docs/adr/0021-marqueur-d-arret.md)).
+    /// A launch of the application. Serves to tell a clean shutdown from a
+    /// crash: the row it identifies carries its closing and its heartbeat
+    /// ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
     AppSessionId,
 
-    /// Un fil de conversation avec l'assistant, tel qu'il est persisté et
-    /// retrouvé d'un lancement à l'autre.
+    /// A conversation thread with the assistant, as persisted and found again
+    /// from one launch to the next.
     ///
-    /// Distinct d'[`AgentSessionId`], et la distinction porte : une session
-    /// d'agent est **une** exécution de tour, et un fil en enchaîne plusieurs —
-    /// une relance ou une reprise en ouvre une nouvelle sans changer de fil.
-    /// Confondre les deux ferait repartir l'historique à chaque relance.
+    /// Distinct from [`AgentSessionId`], and the distinction matters: an agent
+    /// session is **one** turn execution, and a thread chains several — a retry
+    /// or a resumption opens a new one without changing thread. Confusing the
+    /// two would restart the history at every retry.
     ConversationId,
 
-    /// Une fenêtre du workspace, choisie par l'application de bureau et
-    /// gardée d'un lancement à l'autre avec sa disposition
-    /// ([ADR-0043](../../docs/adr/0043-multi-fenetre.md)).
+    /// A workspace window, chosen by the desktop application and kept from one
+    /// launch to the next with its layout
+    /// ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
     WindowId,
 }
 
-/// Identifiant stable d'un driver, par **protocole** et non par produit.
+/// Stable identifier of a driver, per **protocol** and not per product.
 ///
-/// `"postgres"` couvre Redshift, TimescaleDB et pgvector ; `"mysql"` couvre
-/// MariaDB (ADR-0003). Créer un identifiant par produit serait le premier pas
-/// vers une crate par produit.
+/// `"postgres"` covers Redshift, TimescaleDB and pgvector; `"mysql"` covers
+/// MariaDB (ADR-0003). Creating one identifier per product would be the first
+/// step towards one crate per product.
 ///
-/// La valeur est normalisée : minuscules ASCII, chiffres, `-` et `_`, première
-/// lettre alphabétique, 32 caractères au plus. Cette contrainte n'est pas
-/// cosmétique — un identifiant de driver finit dans des noms de fichiers de
-/// cache et dans des clés de trousseau.
+/// The value is normalized: lowercase ASCII, digits, `-` and `_`, first
+/// character a letter, 32 characters at most. This constraint is not cosmetic —
+/// a driver identifier ends up in cache file names and in keychain keys.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct DriverId(Arc<str>);
 
 impl DriverId {
-    /// Driver PostgreSQL (et tout ce qui parle son protocole).
+    /// PostgreSQL driver (and everything that speaks its protocol).
     pub const POSTGRES: &'static str = "postgres";
-    /// Driver MySQL (et MariaDB).
+    /// MySQL driver (and MariaDB).
     pub const MYSQL: &'static str = "mysql";
-    /// Driver SQLite, en processus.
+    /// SQLite driver, in-process.
     pub const SQLITE: &'static str = "sqlite";
 
-    /// Construit un identifiant de driver après validation.
+    /// Builds a driver identifier after validation.
     ///
-    /// # Erreurs
-    /// Renvoie [`IdParseError`] si la chaîne est vide, trop longue, ne commence
-    /// pas par une lettre minuscule, ou contient un caractère hors
+    /// # Errors
+    /// Returns [`IdParseError`] if the string is empty, too long, does not
+    /// start with a lowercase letter, or contains a character outside
     /// `[a-z0-9_-]`.
     pub fn new(name: impl AsRef<str>) -> Result<Self, IdParseError> {
         let name = name.as_ref();
@@ -249,32 +248,32 @@ impl DriverId {
         Ok(Self(Arc::from(name)))
     }
 
-    /// Construit un identifiant dont la validité est garantie par le code
-    /// appelant. Réservé aux constantes de ce module.
+    /// Builds an identifier whose validity is guaranteed by the calling code.
+    /// Reserved for this module's constants.
     fn known(name: &'static str) -> Self {
         debug_assert!(Self::new(name).is_ok(), "invalid driver constant");
         Self(Arc::from(name))
     }
 
-    /// Identifiant du driver PostgreSQL.
+    /// PostgreSQL driver identifier.
     #[must_use]
     pub fn postgres() -> Self {
         Self::known(Self::POSTGRES)
     }
 
-    /// Identifiant du driver MySQL.
+    /// MySQL driver identifier.
     #[must_use]
     pub fn mysql() -> Self {
         Self::known(Self::MYSQL)
     }
 
-    /// Identifiant du driver SQLite.
+    /// SQLite driver identifier.
     #[must_use]
     pub fn sqlite() -> Self {
         Self::known(Self::SQLITE)
     }
 
-    /// Vue empruntée de l'identifiant.
+    /// Borrowed view of the identifier.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -326,53 +325,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_identifiants_frais_sont_distincts() {
+    fn fresh_identifiers_are_distinct() {
         assert_ne!(ConnectionId::new(), ConnectionId::new());
         assert_ne!(SessionId::default(), SessionId::default());
     }
 
     #[test]
-    fn la_v7_est_ordonnable_temporellement() {
-        let mut precedent = ResultId::new();
+    fn v7_is_time_ordered() {
+        let mut previous = ResultId::new();
         for _ in 0..64 {
-            let suivant = ResultId::new();
-            assert!(
-                precedent <= suivant,
-                "les UUID v7 doivent croître avec le temps"
-            );
-            precedent = suivant;
+            let next = ResultId::new();
+            assert!(previous <= next, "UUID v7 must grow with time");
+            previous = next;
         }
     }
 
     #[test]
-    fn aller_retour_texte() {
+    fn text_round_trip() {
         let id = CommandId::new();
-        let relu: CommandId = id.to_string().parse().expect("un UUID rendu se relit");
-        assert_eq!(id, relu);
+        let read_back: CommandId = id.to_string().parse().expect("a rendered UUID reads back");
+        assert_eq!(id, read_back);
     }
 
     #[test]
-    fn aller_retour_json_transparent() {
+    fn transparent_json_round_trip() {
         let id = DocumentId::new();
-        let json = serde_json::to_string(&id).expect("sérialisation");
+        let json = serde_json::to_string(&id).expect("serialization");
         assert_eq!(json, format!("\"{id}\""));
-        let relu: DocumentId = serde_json::from_str(&json).expect("désérialisation");
-        assert_eq!(id, relu);
+        let read_back: DocumentId = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(id, read_back);
     }
 
     #[test]
-    fn une_analyse_ratee_ne_recopie_pas_la_valeur() {
-        let erreur = "connexion-de-production-de-la-banque"
+    fn a_failed_parse_does_not_copy_the_value() {
+        let error = "production-connection-of-the-bank"
             .parse::<ConnectionId>()
-            .expect_err("ce n'est pas un UUID");
-        let message = erreur.to_string();
-        assert!(!message.contains("banque"), "la valeur fautive a fuité");
-        assert_eq!(erreur.kind(), "ConnectionId");
+            .expect_err("this is not a UUID");
+        let message = error.to_string();
+        assert!(!message.contains("bank"), "the faulty value leaked");
+        assert_eq!(error.kind(), "ConnectionId");
     }
 
     #[test]
-    fn driver_id_accepte_les_noms_de_protocole() {
-        for nom in [
+    fn driver_id_accepts_protocol_names() {
+        for name in [
             "postgres",
             "mysql",
             "sqlite",
@@ -380,13 +376,13 @@ mod tests {
             "mongo2",
             "sql-server",
         ] {
-            assert!(DriverId::new(nom).is_ok(), "{nom} devrait être accepté");
+            assert!(DriverId::new(name).is_ok(), "{name} should be accepted");
         }
     }
 
     #[test]
-    fn driver_id_refuse_ce_qui_n_est_pas_normalise() {
-        for nom in [
+    fn driver_id_refuses_what_is_not_normalized() {
+        for name in [
             "",
             "Postgres",
             "2fast",
@@ -394,26 +390,26 @@ mod tests {
             "post/gres",
             "post.gres",
         ] {
-            assert!(DriverId::new(nom).is_err(), "{nom:?} devrait être refusé");
+            assert!(DriverId::new(name).is_err(), "{name:?} should be refused");
         }
         assert!(DriverId::new("a".repeat(33)).is_err());
     }
 
     #[test]
-    fn driver_id_constantes() {
+    fn driver_id_constants() {
         assert_eq!(DriverId::postgres().as_str(), "postgres");
         assert_eq!(DriverId::sqlite().to_string(), "sqlite");
-        assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valide"));
+        assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valid"));
     }
 
     #[test]
-    fn driver_id_json_valide_a_la_relecture() {
+    fn driver_id_json_validates_on_read_back() {
         let id = DriverId::postgres();
-        let json = serde_json::to_string(&id).expect("sérialisation");
+        let json = serde_json::to_string(&id).expect("serialization");
         assert_eq!(json, "\"postgres\"");
         assert!(
             serde_json::from_str::<DriverId>("\"POSTGRES\"").is_err(),
-            "la validation doit s'appliquer aussi à la désérialisation"
+            "validation must also apply to deserialization"
         );
     }
 }

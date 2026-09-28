@@ -1,81 +1,79 @@
-//! La clé d'API, et ce qu'on fait pour qu'elle ne sorte nulle part.
+//! The API key, and what is done so that it goes out nowhere.
 //!
-//! Une clé de fournisseur est un secret au sens d'[`I-03`](../../../CLAUDE.md) :
-//! elle n'a rien à faire dans un journal, une erreur affichée, un rapport de
-//! plantage ni un fichier de workspace. Le corollaire vérifiable de l'invariant
-//! est qu'**aucun type portant un secret ne dérive `Debug`** — c'est le
-//! `tracing::debug!("{provider:?}")` ajouté six mois plus tard qui fuit.
+//! A provider key is a secret in the sense of [`I-03`](../../../CLAUDE.md): it
+//! has no business in a log, a displayed error, a crash report or a workspace
+//! file. The checkable corollary of the invariant is that **no type carrying a
+//! secret derives `Debug`** — it is the `tracing::debug!("{provider:?}")`
+//! added six months later that leaks.
 //!
-//! # Pourquoi pas `secrecy::SecretString`
+//! # Why not `secrecy::SecretString`
 //!
-//! `secrecy` et `zeroize` ne sont pas au contrat de dépendances de cette crate
-//! (voir son `Cargo.toml`, qui est figé). [`ApiKey`] est l'équivalent minimal :
-//! `Debug` écrit à la main, pas de `Display`, pas de `Serialize`, et un `Drop`
-//! qui écrase le tampon. Cet effacement est un **meilleur effort** : sans
-//! `zeroize`, rien n'empêche formellement le compilateur de considérer
-//! l'écriture comme morte. La protection qui compte vraiment ici est l'absence
-//! de tout chemin d'affichage.
+//! `secrecy` and `zeroize` are not in this crate's dependency contract (see its
+//! `Cargo.toml`, which is frozen). [`ApiKey`] is the minimal equivalent:
+//! hand-written `Debug`, no `Display`, no `Serialize`, and a `Drop` that
+//! overwrites the buffer. This erasure is **best effort**: without `zeroize`,
+//! nothing formally prevents the compiler from treating the write as dead. The
+//! protection that really matters here is the absence of any display path.
 
 use std::fmt;
 
-/// Clé d'API d'un fournisseur de modèles.
+/// API key of a model provider.
 ///
-/// Ne s'affiche jamais : `Debug` est masqué, `Display` n'existe pas, et le type
-/// n'est ni `Serialize` ni `Deserialize` — une clé se lit dans le trousseau ou
-/// dans l'environnement, elle ne se persiste pas depuis ici.
+/// Never displayed: `Debug` is masked, `Display` does not exist, and the type
+/// is neither `Serialize` nor `Deserialize` — a key is read from the keychain
+/// or from the environment, it is not persisted from here.
 ///
-/// L'égalité n'est volontairement pas implémentée : comparer deux clés n'a
-/// aucun usage légitime dans cette crate, et une comparaison naïve invite la
-/// mauvaise idée d'authentifier quelqu'un avec.
+/// Equality is deliberately not implemented: comparing two keys has no
+/// legitimate use in this crate, and a naive comparison invites the bad idea
+/// of authenticating someone with it.
 #[derive(Clone)]
 pub struct ApiKey(String);
 
 impl ApiKey {
-    /// Adopte une clé fournie par l'appelant.
+    /// Adopts a key provided by the caller.
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
-    /// Lit une clé depuis une variable d'environnement.
+    /// Reads a key from an environment variable.
     ///
-    /// Rend `None` si la variable est absente, vide, ou non représentable en
-    /// UTF-8. C'est le chemin des fournisseurs configurés hors interface
+    /// Returns `None` if the variable is missing, empty, or not representable
+    /// in UTF-8. It is the path of providers configured outside the interface
     /// (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`…).
     #[must_use]
     pub fn from_env(variable: &str) -> Option<Self> {
-        let brute = std::env::var(variable).ok()?;
-        let cle = Self::new(brute);
-        if cle.is_blank() { None } else { Some(cle) }
+        let raw = std::env::var(variable).ok()?;
+        let key = Self::new(raw);
+        if key.is_blank() { None } else { Some(key) }
     }
 
-    /// Expose la clé, pour la poser dans un en-tête HTTP et rien d'autre.
+    /// Exposes the key, to put it in an HTTP header and nothing else.
     ///
-    /// Le nom est délibérément désagréable : chaque appel est un endroit à
-    /// relire. Ne jamais mettre le résultat dans un message d'erreur, un
-    /// `format!` de journal, ni une URL — une clé en paramètre de requête finit
-    /// dans les journaux d'accès du fournisseur.
+    /// The name is deliberately unpleasant: every call is a place to review.
+    /// Never put the result in an error message, a log `format!`, or a URL — a
+    /// key as a query parameter ends up in the provider's access logs.
     #[must_use]
     pub fn expose(&self) -> &str {
         &self.0
     }
 
-    /// La clé est-elle vide ou uniquement composée d'espaces ?
+    /// Is the key empty or made only of whitespace?
     ///
-    /// Une clé blanche est une erreur de configuration, pas une absence de clé :
-    /// un fournisseur qui la reçoit répondra `401` plutôt que d'être clair.
+    /// A blank key is a configuration error, not a missing key: a provider
+    /// that receives it will answer `401` rather than be clear.
     #[must_use]
     pub fn is_blank(&self) -> bool {
         self.0.trim().is_empty()
     }
 
-    /// Longueur en octets, seule information qu'on accepte de divulguer.
+    /// Length in bytes, the only information we agree to disclose.
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Équivalent de [`is_blank`](Self::is_blank) au sens strict de la longueur.
+    /// Equivalent of [`is_blank`](Self::is_blank) in the strict sense of length.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -95,40 +93,40 @@ impl From<&str> for ApiKey {
 }
 
 impl fmt::Debug for ApiKey {
-    /// Ne montre que la longueur. Jamais un préfixe, jamais un suffixe : quatre
-    /// caractères d'une clé suffisent à la reconnaître dans une fuite.
+    /// Shows only the length. Never a prefix, never a suffix: four characters
+    /// of a key are enough to recognize it in a leak.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ApiKey(<masquée, {} octets>)", self.0.len())
+        write!(f, "ApiKey(<masked, {} bytes>)", self.0.len())
     }
 }
 
 impl Drop for ApiKey {
     fn drop(&mut self) {
-        // `String::into_bytes` réutilise l'allocation : on écrase donc bien le
-        // tampon qui portait la clé, et non une copie.
-        let mut octets = std::mem::take(&mut self.0).into_bytes();
-        octets.fill(0);
+        // `String::into_bytes` reuses the allocation: so it is indeed the
+        // buffer that carried the key that is overwritten, not a copy.
+        let mut bytes = std::mem::take(&mut self.0).into_bytes();
+        bytes.fill(0);
     }
 }
 
-/// Ce qui remplace la clé dans un texte expurgé.
+/// What replaces the key in a scrubbed text.
 ///
-/// En anglais : cette mention finit dans un message d'erreur affiché, et c'est
-/// la langue du code source (CLAUDE.md § Langue).
+/// In English: this mention ends up in a displayed error message, and that is
+/// the language of the source code (CLAUDE.md § Language).
 pub(crate) const REDACTED: &str = "<redacted API key>";
 
-/// Remplace toute occurrence littérale de la clé par une mention neutre.
+/// Replaces every literal occurrence of the key with a neutral mention.
 ///
-/// Certains fournisseurs recopient la clé reçue dans leur message d'erreur.
-/// Ce filtre est la dernière barrière avant qu'un corps de réponse ne devienne
-/// un message d'erreur d'Oxyn, donc un journal (I-03).
+/// Some providers copy the received key into their error message. This filter
+/// is the last barrier before a response body becomes an Oxyn error message,
+/// hence a log (I-03).
 ///
-/// Une clé vide ou blanche n'est pas cherchée : elle apparaîtrait partout.
+/// An empty or blank key is not searched for: it would appear everywhere.
 #[must_use]
-pub(crate) fn redact_key(texte: &str, cle: Option<&ApiKey>) -> String {
-    match cle {
-        Some(cle) if !cle.is_blank() => texte.replace(cle.expose(), REDACTED),
-        _ => texte.to_owned(),
+pub(crate) fn redact_key(text: &str, key: Option<&ApiKey>) -> String {
+    match key {
+        Some(key) if !key.is_blank() => text.replace(key.expose(), REDACTED),
+        _ => text.to_owned(),
     }
 }
 
@@ -137,49 +135,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn le_debug_ne_laisse_rien_filtrer() {
-        let cle = ApiKey::new("sk-proj-0123456789abcdef");
-        let rendu = format!("{cle:?}");
-        assert!(!rendu.contains("sk-proj"), "{rendu}");
-        assert!(!rendu.contains("0123"), "{rendu}");
-        assert!(rendu.contains("masquée"), "{rendu}");
+    fn debug_leaks_nothing() {
+        let key = ApiKey::new("sk-proj-0123456789abcdef");
+        let rendered = format!("{key:?}");
+        assert!(!rendered.contains("sk-proj"), "{rendered}");
+        assert!(!rendered.contains("0123"), "{rendered}");
+        assert!(rendered.contains("masked"), "{rendered}");
     }
 
     #[test]
-    fn le_debug_d_une_option_ne_laisse_rien_filtrer_non_plus() {
-        // Le cas réel : `#[derive(Debug)]` sur une structure qui porte
-        // `Option<ApiKey>` délègue au `Debug` de `ApiKey`.
-        let porte = Some(ApiKey::new("sk-secret"));
-        let rendu = format!("{porte:?}");
-        assert!(!rendu.contains("secret"), "{rendu}");
+    fn an_option_debug_leaks_nothing_either() {
+        // The real case: `#[derive(Debug)]` on a struct that carries
+        // `Option<ApiKey>` delegates to the `Debug` of `ApiKey`.
+        let wrapped = Some(ApiKey::new("sk-secret"));
+        let rendered = format!("{wrapped:?}");
+        assert!(!rendered.contains("secret"), "{rendered}");
     }
 
     #[test]
-    fn une_cle_blanche_est_reconnue() {
+    fn a_blank_key_is_recognized() {
         assert!(ApiKey::new("").is_blank());
         assert!(ApiKey::new("   \t\n").is_blank());
         assert!(!ApiKey::new("sk-x").is_blank());
     }
 
     #[test]
-    fn la_redaction_efface_la_cle_recopiee_par_le_fournisseur() {
-        let cle = ApiKey::new("sk-abcdef");
-        let corps = r#"{"error":{"message":"Incorrect API key provided: sk-abcdef"}}"#;
-        let filtre = redact_key(corps, Some(&cle));
-        assert!(!filtre.contains("sk-abcdef"), "{filtre}");
-        assert!(filtre.contains(REDACTED), "{filtre}");
+    fn redaction_erases_the_key_copied_by_the_provider() {
+        let key = ApiKey::new("sk-abcdef");
+        let body = r#"{"error":{"message":"Incorrect API key provided: sk-abcdef"}}"#;
+        let filter = redact_key(body, Some(&key));
+        assert!(!filter.contains("sk-abcdef"), "{filter}");
+        assert!(filter.contains(REDACTED), "{filter}");
     }
 
     #[test]
-    fn la_redaction_sans_cle_laisse_le_texte_intact() {
-        let corps = "model not found";
-        assert_eq!(redact_key(corps, None), corps);
+    fn redaction_without_a_key_leaves_the_text_intact() {
+        let body = "model not found";
+        assert_eq!(redact_key(body, None), body);
     }
 
     #[test]
-    fn une_cle_blanche_ne_sert_pas_de_motif_de_redaction() {
-        // Sinon `replace("", …)` insérerait la mention entre chaque caractère.
-        let cle = ApiKey::new("   ");
-        assert_eq!(redact_key("abc", Some(&cle)), "abc");
+    fn a_blank_key_is_not_used_as_a_redaction_pattern() {
+        // Otherwise `replace("", …)` would insert the mention between every character.
+        let key = ApiKey::new("   ");
+        assert_eq!(redact_key("abc", Some(&key)), "abc");
     }
 }

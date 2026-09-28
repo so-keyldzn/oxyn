@@ -1,42 +1,42 @@
-//! L'introspection : `sqlite_master` et les `PRAGMA`.
+//! Introspection: `sqlite_master` and the `PRAGMA`s.
 //!
-//! # Où SQLite se range dans la hiérarchie à cinq paliers
+//! # Where SQLite fits in the five-tier hierarchy
 //!
-//! [ARCHITECTURE §6](../../../docs/ARCHITECTURE.md) pose
-//! `Server → Catalog → Namespace → Relation → Field`, et **les paliers
-//! intermédiaires sont optionnels**. SQLite n'a pas de palier catalogue : il a
-//! des *bases attachées*, qui portent un nom et contiennent des tables. Elles
-//! occupent donc le palier **espace de noms** :
+//! [ARCHITECTURE §6](../../../docs/ARCHITECTURE.md) sets
+//! `Server → Catalog → Namespace → Relation → Field`, and **the intermediate
+//! tiers are optional**. SQLite has no catalog tier: it has *attached
+//! databases*, which carry a name and contain tables. They therefore occupy the
+//! **namespace** tier:
 //!
-//! | Palier | SQLite |
+//! | Tier | SQLite |
 //! |---|---|
 //! | Catalog | — |
-//! | Namespace | `main`, `temp`, et chaque base attachée par `ATTACH` |
-//! | Relation | table ou vue de `sqlite_master` |
+//! | Namespace | `main`, `temp`, and every database attached by `ATTACH` |
+//! | Relation | table or view of `sqlite_master` |
 //!
-//! Un chemin vide désigne `main` : c'est la base à laquelle la session est
-//! connectée.
+//! An empty path designates `main`: it is the database the session is connected
+//! to.
 //!
-//! # Le SQL composé ici cite ses identifiants
+//! # The SQL composed here quotes its identifiers
 //!
-//! Une base nommée `"x"; DROP TABLE audit; --` s'attache légalement. Le nom
-//! d'une base attachée traverse donc [`quote_identifier`], et les noms de
-//! relations passent en **valeurs liées** ou par la citation d'identifiant de
-//! `rusqlite` (`Connection::pragma`, qui cite le schéma et échappe la valeur).
-//! Aucun nom reçu du moteur n'est concaténé tel quel
+//! A database named `"x"; DROP TABLE audit; --` can legally be attached. The name
+//! of an attached database therefore goes through [`quote_identifier`], and
+//! relation names go as **bound values** or through `rusqlite`'s identifier
+//! quoting (`Connection::pragma`, which quotes the schema and escapes the value).
+//! No name received from the engine is concatenated as is
 //! ([I-10](../../../CLAUDE.md#i-10)).
 //!
-//! # Ce que SQLite ne sait pas dire, et qu'on n'invente pas
+//! # What SQLite cannot say, and what we do not invent
 //!
-//! * **Aucun commentaire d'objet.** SQLite n'a pas de `COMMENT ON`. Les champs
-//!   `comment` restent `None`, et la capacité `COMMENTS` n'est pas déclarée.
-//! * **Aucune estimation de volumétrie sans compter.** `estimated_rows` reste
-//!   `None` — jamais `Some(0)`, qui affirmerait une table vide. Lancer un
-//!   `COUNT(*)` scannerait la table à chaque rafraîchissement d'arborescence.
-//! * **Aucun nom de contrainte de clé étrangère.** `PRAGMA foreign_key_list`
-//!   exposes no declared name; foreign-key records keep an empty name.
-//! * **Les tables internes `sqlite_*` sont listées** comme les autres. Les
-//!   cacher demanderait de décider à la place de l'utilisateur ce qui existe.
+//! * **No object comment.** SQLite has no `COMMENT ON`. The `comment` fields stay
+//!   `None`, and the `COMMENTS` capability is not declared.
+//! * **No volume estimate without counting.** `estimated_rows` stays `None` —
+//!   never `Some(0)`, which would assert an empty table. Running a `COUNT(*)`
+//!   would scan the table on every tree refresh.
+//! * **No foreign key constraint name.** `PRAGMA foreign_key_list` exposes no
+//!   declared name; foreign-key records keep an empty name.
+//! * **The internal `sqlite_*` tables are listed** like the others. Hiding them
+//!   would mean deciding in the user's place what exists.
 
 use async_trait::async_trait;
 use oxyn_catalog::model::{
@@ -51,10 +51,10 @@ use rusqlite::Connection;
 use crate::error::{self, Effect};
 use crate::worker::WorkerHandle;
 
-/// L'espace de noms par défaut d'une session SQLite.
+/// The default namespace of an SQLite session.
 pub const MAIN: &str = "main";
 
-/// L'introspection d'une session SQLite.
+/// The introspection of an SQLite session.
 #[derive(Debug)]
 pub struct SqliteCatalog {
     worker: WorkerHandle,
@@ -63,30 +63,30 @@ pub struct SqliteCatalog {
 }
 
 impl SqliteCatalog {
-    /// Construit le catalogue d'une session.
+    /// Builds a session's catalog.
     pub(crate) fn new(worker: WorkerHandle, capabilities: Capabilities) -> Self {
         Self {
             worker,
             capabilities,
-            // La version du moteur **lié**, pas celle du fichier : c'est elle
-            // qui décide de ce que la session sait faire.
+            // The version of the **linked** engine, not the file's: it decides what
+            // the session can do.
             version: rusqlite::version(),
         }
     }
 
-    /// L'espace de noms visé par un chemin, `main` à défaut.
+    /// The namespace targeted by a path, `main` by default.
     fn database_of(path: &CatalogPath) -> &str {
         path.namespace().unwrap_or(MAIN)
     }
 
-    /// Le nom de relation d'un chemin.
+    /// The relation name of a path.
     fn relation_of(path: &CatalogPath) -> Result<&str> {
         path.relation()
             .ok_or_else(|| OxynError::Config("the path does not name a relation".to_owned()))
     }
 }
 
-/// Toute introspection est une lecture : une erreur n'y est jamais ambiguë.
+/// Every introspection is a read: an error there is never ambiguous.
 fn read(err: rusqlite::Error) -> OxynError {
     error::engine(err, Effect::ReadOnly)
 }
@@ -94,13 +94,13 @@ fn read(err: rusqlite::Error) -> OxynError {
 #[async_trait]
 impl CatalogProvider for SqliteCatalog {
     async fn server_info(&self, _cancel: &CancelToken) -> Result<ServerInfo> {
-        // Aucun aller-retour : la version du moteur est celle de la
-        // bibliothèque liée, connue sans interroger quoi que ce soit.
+        // No round trip: the engine version is that of the linked library, known
+        // without querying anything.
         Ok(ServerInfo::new("SQLite", self.version, self.capabilities))
     }
 
-    /// SQLite n'a pas de palier catalogue : la liste est **vide**, ce qui dit
-    /// « ce palier n'existe pas ici » et non « aucun catalogue accessible ».
+    /// SQLite has no catalog tier: the list is **empty**, which says "this tier
+    /// does not exist here" and not "no accessible catalog".
     async fn list_catalogs(&self, _cancel: &CancelToken) -> Result<Vec<CatalogRef>> {
         Ok(Vec::new())
     }
@@ -111,7 +111,7 @@ impl CatalogProvider for SqliteCatalog {
         cancel: &CancelToken,
     ) -> Result<Vec<NamespaceRef>> {
         if catalog.is_some() {
-            // Rien ne peut se trouver sous un palier qui n'existe pas.
+            // Nothing can be found under a tier that does not exist.
             return Ok(Vec::new());
         }
         let names: Vec<String> = self
@@ -131,8 +131,8 @@ impl CatalogProvider for SqliteCatalog {
         names
             .into_iter()
             .map(|name| {
-                // `temp` porte les objets temporaires de la session : réel, mais
-                // replié par défaut dans l'arborescence.
+                // `temp` carries the session's temporary objects: real, but
+                // collapsed by default in the tree.
                 let is_system = name == "temp";
                 let reference = NamespaceRef::new(CatalogPath::empty(), name)?;
                 Ok(if is_system {
@@ -158,7 +158,7 @@ impl CatalogProvider for SqliteCatalog {
                 let sql = format!(
                     "SELECT name, type FROM {}.sqlite_master \
                      WHERE type IN ('table', 'view') ORDER BY type, name",
-                    // I-10 : le nom d'une base attachée vient de l'utilisateur.
+                    // I-10: the name of an attached database comes from the user.
                     quote_identifier(&database, QuoteStyle::Double)
                 );
                 let mut statement = connection.prepare(&sql).map_err(read)?;
@@ -218,7 +218,7 @@ impl CatalogProvider for SqliteCatalog {
             .into_iter()
             .map(RawColumn::into_field)
             .collect();
-        // `estimated_rows` et `comment` restent absents : voir la note de module.
+        // `estimated_rows` and `comment` stay absent: see the module note.
         Ok(Relation::new(visible, described.kind).with_fields(fields))
     }
 
@@ -326,13 +326,13 @@ impl CatalogProvider for SqliteCatalog {
     }
 }
 
-/// Une relation telle que le moteur la décrit, avant traduction.
+/// A relation as the engine describes it, before translation.
 struct RawRelation {
     kind: RelationKind,
     columns: Vec<RawColumn>,
 }
 
-/// Une ligne de `PRAGMA table_info`.
+/// A row of `PRAGMA table_info`.
 struct RawColumn {
     cid: i64,
     name: String,
@@ -344,15 +344,15 @@ struct RawColumn {
 
 impl RawColumn {
     fn into_field(self) -> Field {
-        // Le type logique est calculé avant, pour que l'emprunt de `declared` se
-        // termine avant qu'il ne soit déplacé dans le champ `raw_type`.
+        // The logical type is computed first, so that the borrow of `declared`
+        // ends before it is moved into the `raw_type` field.
         let logical = logical_type(&self.declared);
         let position = u32::try_from(self.cid).unwrap_or(u32::MAX);
         let mut field = Field::new(self.name, position, logical, self.declared);
-        // Les champs sont renseignés directement plutôt que par
-        // `Field::primary_key()`, qui forcerait `nullable = false` : SQLite
-        // accepte un `NULL` dans une clé primaire de table `rowid`, et le modèle
-        // reprend ce que le serveur dit, il ne le recalcule pas.
+        // The fields are set directly rather than through
+        // `Field::primary_key()`, which would force `nullable = false`: SQLite
+        // accepts a `NULL` in a primary key of a `rowid` table, and the model
+        // repeats what the server says, it does not recompute it.
         field.nullable = !self.not_null;
         field.is_primary_key = self.primary_key;
         field.default = self.default;
@@ -360,7 +360,7 @@ impl RawColumn {
     }
 }
 
-/// Une ligne de `PRAGMA index_list`, avec ses colonnes.
+/// A row of `PRAGMA index_list`, with its columns.
 struct RawIndex {
     name: String,
     unique: bool,
@@ -372,14 +372,14 @@ impl RawIndex {
     fn into_index(self) -> Index {
         let mut index = Index::new(self.name, self.columns);
         index.unique = self.unique;
-        // SQLite n'a qu'une méthode d'accès : le b-tree.
+        // SQLite has only one access method: the b-tree.
         index.method = Some("btree".to_owned());
         index.predicate = self.predicate;
         index
     }
 }
 
-/// Les lignes de `PRAGMA foreign_key_list` d'une même contrainte.
+/// The rows of `PRAGMA foreign_key_list` of a same constraint.
 struct RawForeignKey {
     id: i64,
     table: String,
@@ -401,7 +401,7 @@ impl RawForeignKey {
     }
 }
 
-/// La nature d'une relation, d'après `sqlite_master`.
+/// The nature of a relation, according to `sqlite_master`.
 fn relation_kind(
     connection: &Connection,
     database: &str,
@@ -412,7 +412,7 @@ fn relation_kind(
         quote_identifier(database, QuoteStyle::Double)
     );
     let mut statement = connection.prepare(&sql).map_err(read)?;
-    // Le nom est **lié**, jamais concaténé.
+    // The name is **bound**, never concatenated.
     let mut rows = statement.query([name]).map_err(read)?;
     let Some(row) = rows.next().map_err(read)? else {
         return Ok(None);
@@ -424,7 +424,7 @@ fn relation_kind(
     }))
 }
 
-/// Les colonnes d'une relation.
+/// The columns of a relation.
 fn table_info(connection: &Connection, database: &str, name: &str) -> Result<Vec<RawColumn>> {
     let mut columns = Vec::new();
     connection
@@ -443,7 +443,7 @@ fn table_info(connection: &Connection, database: &str, name: &str) -> Result<Vec
     Ok(columns)
 }
 
-/// Les index d'une relation, colonnes et prédicat compris.
+/// The indexes of a relation, columns and predicate included.
 fn index_list(connection: &Connection, database: &str, name: &str) -> Result<Vec<RawIndex>> {
     struct Entry {
         name: String,
@@ -468,8 +468,8 @@ fn index_list(connection: &Connection, database: &str, name: &str) -> Result<Vec
         let mut columns = Vec::new();
         connection
             .pragma(Some(database), "index_info", entry.name.as_str(), |row| {
-                // `name` est NULL pour un index d'expression : la colonne n'a
-                // pas de nom, et en inventer un serait mentir.
+                // `name` is NULL for an expression index: the column has no
+                // name, and inventing one would be lying.
                 if let Some(column) = row.get::<_, Option<String>>("name")? {
                     columns.push(column);
                 }
@@ -495,10 +495,10 @@ fn index_list(connection: &Connection, database: &str, name: &str) -> Result<Vec
     Ok(indexes)
 }
 
-/// La DDL d'un index, quand `sqlite_master` en garde une.
+/// The DDL of an index, when `sqlite_master` keeps one.
 ///
-/// Elle est `NULL` pour les index créés implicitement par une contrainte
-/// (`sqlite_autoindex_*`), qui ne sont jamais partiels.
+/// It is `NULL` for indexes created implicitly by a constraint
+/// (`sqlite_autoindex_*`), which are never partial.
 fn index_sql(connection: &Connection, database: &str, name: &str) -> Result<Option<String>> {
     let sql = format!(
         "SELECT sql FROM {}.sqlite_master WHERE type = 'index' AND name = ?1",
@@ -512,7 +512,7 @@ fn index_sql(connection: &Connection, database: &str, name: &str) -> Result<Opti
     row.get::<_, Option<String>>(0).map_err(read)
 }
 
-/// Les clés étrangères d'une relation, regroupées par contrainte.
+/// The foreign keys of a relation, grouped by constraint.
 fn foreign_key_list(
     connection: &Connection,
     database: &str,
@@ -542,9 +542,9 @@ fn foreign_key_list(
 
     let mut keys: Vec<RawForeignKey> = Vec::new();
     for entry in entries {
-        // `to` est NULL quand la clé vise implicitement la clé primaire de la
-        // table cible. La résoudre est ce qui empêche de rendre une clé
-        // désaccordée, sur laquelle `ForeignKey::is_well_formed` répondrait faux.
+        // `to` is NULL when the key implicitly targets the primary key of the
+        // target table. Resolving it is what prevents returning a mismatched key,
+        // for which `ForeignKey::is_well_formed` would answer false.
         let target_field = match entry.to {
             Some(column) => Some(column),
             None => primary_key_column(
@@ -576,14 +576,14 @@ fn foreign_key_list(
     Ok(keys)
 }
 
-/// Le rang de la colonne courante dans la contrainte en cours de construction.
+/// The rank of the current column in the constraint being built.
 fn field_rank(keys: &[RawForeignKey], id: i64) -> usize {
     keys.iter()
         .find(|key| key.id == id)
         .map_or(0, |key| key.to.len())
 }
 
-/// La `position`-ième colonne de la clé primaire d'une table.
+/// The `position`-th column of a table's primary key.
 fn primary_key_column(
     connection: &Connection,
     database: &str,
@@ -604,33 +604,33 @@ fn primary_key_column(
     Ok(columns.into_iter().nth(position).map(|(_, name)| name))
 }
 
-/// L'action référentielle d'un `ON DELETE`, telle que SQLite la nomme.
+/// The referential action of an `ON DELETE`, as SQLite names it.
 fn referential_action(action: &str) -> ReferentialAction {
     match action.trim().to_ascii_uppercase().as_str() {
         "CASCADE" => ReferentialAction::Cascade,
         "SET NULL" => ReferentialAction::SetNull,
         "SET DEFAULT" => ReferentialAction::SetDefault,
         "RESTRICT" => ReferentialAction::Restrict,
-        // « NO ACTION », et tout ce que SQLite pourrait nommer autrement : le
-        // défaut de la norme, qui ne propage rien.
+        // "NO ACTION", and anything SQLite might name otherwise: the standard's
+        // default, which propagates nothing.
         _ => ReferentialAction::NoAction,
     }
 }
 
-/// Le type logique d'un type déclaré SQLite.
+/// The logical type of an SQLite declared type.
 ///
-/// Deux étages, dans cet ordre :
+/// Two stages, in this order:
 ///
-/// 1. **les noms conventionnels** que SQLite ne connaît pas mais que tout le
-///    monde écrit — `BOOLEAN`, `DATE`, `DATETIME`, `DECIMAL(p,s)`, `JSON` ;
-/// 2. **les règles d'affinité** de SQLite, y compris leurs surprises.
+/// 1. **the conventional names** SQLite does not know but everyone writes —
+///    `BOOLEAN`, `DATE`, `DATETIME`, `DECIMAL(p,s)`, `JSON`;
+/// 2. **SQLite's affinity rules**, surprises included.
 ///
-/// `DATETIME` devient un horodatage **sans fuseau** : SQLite n'en range aucun,
-/// et en inventer un décalerait la donnée de façon invisible et permanente
+/// `DATETIME` becomes a timestamp **without time zone**: SQLite stores none, and
+/// inventing one would shift the data invisibly and permanently
 /// ([`DRIVER-CONTRACT` §7](../../../docs/DRIVER-CONTRACT.md)).
 ///
-/// Une déclaration vide — le cas d'une colonne sans type, parfaitement légal —
-/// devient [`LogicalType::Unknown`], jamais un voisin plausible.
+/// An empty declaration — the case of a column without type, perfectly legal —
+/// becomes [`LogicalType::Unknown`], never a plausible neighbor.
 #[must_use]
 pub fn logical_type(declared: &str) -> LogicalType {
     let (base, args) = split_declared(declared);
@@ -662,14 +662,14 @@ pub fn logical_type(declared: &str) -> LogicalType {
     if upper.contains("REAL") || upper.contains("FLOA") || upper.contains("DOUB") {
         return LogicalType::FLOAT64;
     }
-    // Affinité NUMERIC : ni entier ni flottant ne la couvrent.
+    // NUMERIC affinity: neither integer nor float covers it.
     LogicalType::Decimal {
         precision: None,
         scale: None,
     }
 }
 
-/// Sépare `DECIMAL(10,2)` en `("DECIMAL", Some("10,2"))`.
+/// Splits `DECIMAL(10,2)` into `("DECIMAL", Some("10,2"))`.
 fn split_declared(declared: &str) -> (&str, Option<&str>) {
     match declared.split_once('(') {
         Some((base, rest)) => (base.trim(), rest.strip_suffix(')').map(str::trim)),
@@ -677,7 +677,7 @@ fn split_declared(declared: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// Précision et échelle d'un type décimal, quand elles sont écrites.
+/// Precision and scale of a decimal type, when they are written.
 fn decimal_arguments(args: Option<&str>) -> (Option<u16>, Option<i16>) {
     let Some(args) = args else {
         return (None, None);
@@ -688,16 +688,15 @@ fn decimal_arguments(args: Option<&str>) -> (Option<u16>, Option<i16>) {
     (precision, scale)
 }
 
-/// Le prédicat d'un index partiel, extrait de sa DDL.
+/// The predicate of a partial index, extracted from its DDL.
 ///
-/// SQLite n'expose pas le prédicat autrement que dans le texte de
-/// `CREATE INDEX`. L'analyse cherche le premier mot-clé `WHERE` **hors
-/// citation** — un nom de colonne peut s'appeler `where`, et une chaîne
-/// littérale peut en contenir le mot.
+/// SQLite exposes the predicate only in the text of `CREATE INDEX`. The analysis
+/// looks for the first `WHERE` keyword **outside quoting** — a column may be
+/// named `where`, and a string literal may contain the word.
 ///
-/// Rend `None` si rien n'est trouvé, auquel cas l'index est décrit sans
-/// prédicat. Le résiduel est assumé : un prédicat introuvable vaut mieux qu'un
-/// prédicat inventé.
+/// Returns `None` if nothing is found, in which case the index is described
+/// without predicate. The residual is accepted: a predicate not found is better
+/// than an invented predicate.
 #[must_use]
 pub fn partial_predicate(sql: &str) -> Option<String> {
     let mut quote: Option<char> = None;
@@ -725,10 +724,10 @@ pub fn partial_predicate(sql: &str) -> Option<String> {
                 let Some(start) = word.take() else {
                     continue;
                 };
-                let mot_cle = sql
+                let is_where_keyword = sql
                     .get(start..index)
                     .is_some_and(|found| found.eq_ignore_ascii_case("where"));
-                if mot_cle {
+                if is_where_keyword {
                     return sql
                         .get(index..)
                         .map(|rest| rest.trim().to_owned())
@@ -745,7 +744,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_noms_conventionnels_priment_sur_l_affinite() {
+    fn conventional_names_take_precedence_over_affinity() {
         assert_eq!(logical_type("BOOLEAN"), LogicalType::Boolean);
         assert_eq!(logical_type("DATE"), LogicalType::Date);
         assert_eq!(logical_type("JSON"), LogicalType::Json);
@@ -766,9 +765,9 @@ mod tests {
     }
 
     #[test]
-    fn un_datetime_sqlite_ne_recoit_pas_de_fuseau() {
-        // DRIVER-CONTRACT §7 : SQLite ne range aucun fuseau. En inventer un
-        // décalerait la donnée de façon invisible et permanente.
+    fn an_sqlite_datetime_gets_no_time_zone() {
+        // DRIVER-CONTRACT §7: SQLite stores no time zone. Inventing one would
+        // shift the data invisibly and permanently.
         assert_eq!(
             logical_type("DATETIME"),
             LogicalType::Timestamp { tz: false }
@@ -777,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn les_regles_d_affinite_prennent_le_relais() {
+    fn affinity_rules_take_over() {
         assert_eq!(logical_type("INTEGER"), LogicalType::INT64);
         assert_eq!(logical_type("VARCHAR(255)"), LogicalType::Text);
         assert_eq!(logical_type("BLOB"), LogicalType::Bytes);
@@ -785,15 +784,15 @@ mod tests {
     }
 
     #[test]
-    fn une_colonne_sans_type_declare_reste_inconnue() {
-        // Légal en SQLite : `CREATE TABLE t(x)`. Lui attribuer un voisin
-        // plausible afficherait une valeur fausse sans le dire.
+    fn a_column_without_declared_type_stays_unknown() {
+        // Legal in SQLite: `CREATE TABLE t(x)`. Giving it a plausible neighbor
+        // would display a wrong value without saying so.
         assert_eq!(logical_type(""), LogicalType::Unknown);
         assert_eq!(logical_type("   "), LogicalType::Unknown);
     }
 
     #[test]
-    fn le_predicat_d_un_index_partiel_se_retrouve() {
+    fn the_predicate_of_a_partial_index_is_found() {
         assert_eq!(
             partial_predicate("CREATE INDEX i ON t(a) WHERE a > 0"),
             Some("a > 0".to_owned())
@@ -805,9 +804,9 @@ mod tests {
     }
 
     #[test]
-    fn un_where_dans_une_chaine_ou_un_identifiant_ne_trompe_pas_l_analyse() {
-        // Un nom de colonne peut s'appeler `where`, une valeur par défaut peut
-        // contenir le mot.
+    fn a_where_in_a_string_or_an_identifier_does_not_fool_the_analysis() {
+        // A column may be named `where`, a default value may contain the
+        // word.
         assert_eq!(
             partial_predicate(r#"CREATE INDEX i ON t("where") WHERE a > 0"#),
             Some("a > 0".to_owned())
@@ -820,33 +819,33 @@ mod tests {
     }
 
     #[test]
-    fn les_actions_referentielles_sont_reconnues_et_le_defaut_ne_propage_rien() {
+    fn referential_actions_are_recognized_and_the_default_propagates_nothing() {
         assert_eq!(referential_action("CASCADE"), ReferentialAction::Cascade);
         assert_eq!(referential_action("SET NULL"), ReferentialAction::SetNull);
         assert_eq!(referential_action("NO ACTION"), ReferentialAction::NoAction);
         assert_eq!(
-            referential_action("quelque chose d'inattendu"),
+            referential_action("something unexpected"),
             ReferentialAction::NoAction,
-            "l'inconnu ne doit jamais propager une suppression"
+            "the unknown must never propagate a deletion"
         );
         assert!(!referential_action("RESTRICT").propagates_delete());
     }
 
     #[test]
-    fn un_chemin_vide_designe_la_base_principale() {
+    fn an_empty_path_designates_the_main_database() {
         assert_eq!(SqliteCatalog::database_of(&CatalogPath::empty()), MAIN);
-        let attachee = CatalogPath::for_namespace(None, "archives").expect("chemin valide");
-        assert_eq!(SqliteCatalog::database_of(&attachee), "archives");
+        let attached_db = CatalogPath::for_namespace(None, "archives").expect("valid path");
+        assert_eq!(SqliteCatalog::database_of(&attached_db), "archives");
     }
 
     #[test]
-    fn un_nom_de_base_hostile_est_cite_avant_de_rejoindre_une_requete() {
-        // I-10 : une base s'attache légalement sous ce nom.
-        let cite = quote_identifier(r#"x"; DROP TABLE audit; --"#, QuoteStyle::Double);
-        assert_eq!(cite, r#""x""; DROP TABLE audit; --""#);
+    fn a_hostile_database_name_is_quoted_before_joining_a_query() {
+        // I-10: a database can legally be attached under this name.
+        let quoted = quote_identifier(r#"x"; DROP TABLE audit; --"#, QuoteStyle::Double);
+        assert_eq!(quoted, r#""x""; DROP TABLE audit; --""#);
         assert!(
-            !cite.starts_with('x'),
-            "le nom ne doit jamais sortir nu : {cite}"
+            !quoted.starts_with('x'),
+            "the name must never come out bare: {quoted}"
         );
     }
 }

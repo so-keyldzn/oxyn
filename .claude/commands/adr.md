@@ -1,75 +1,79 @@
 ---
-description: Écrire un ADR pour une décision coûteuse à défaire
-argument-hint: "<la décision à trancher>"
+description: Write an ADR for a decision that is expensive to undo
+argument-hint: "<the decision to settle>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch
 ---
 
-Objet : écrire l'ADR qui tranche **$ARGUMENTS**.
+Purpose: write the ADR that settles **$ARGUMENTS**.
 
-## Est-ce que ça mérite un ADR ?
+## Does this deserve an ADR?
 
-Oui si **défaire la décision coûterait plus qu'une journée de travail**, ou si
-quelqu'un demandera « pourquoi ce choix » dans un an.
+Yes if **undoing the decision would cost more than a day of work**, or if
+someone will ask "why this choice" a year from now.
 
-Non si le choix est local, réversible, ou déjà tranché par un ADR existant. Un
-ADR pour un choix sans conséquence dilue les autres : la valeur du répertoire
-tient à ce qu'on puisse le lire en entier.
+No if the choice is local, reversible, or already settled by an existing ADR. An
+ADR for a choice without consequence dilutes the others: the directory is worth
+something because it can be read in full.
 
-## Avant d'écrire
+## Before writing
 
-1. `ls docs/adr/` — un ADR existant traite peut-être déjà la question, ou la
-   contraint.
-2. `docs/README.md` — l'index doit être mis à jour dans le même commit.
-3. Le gabarit : `.claude/templates/adr.md`.
+1. `ls docs/adr/` — an existing ADR may already address the question, or
+   constrain it.
+2. `docs/README.md` — the index must be updated in the same commit.
+3. The template: `.claude/templates/adr.md`.
 
-Le numéro est le suivant dans l'ordre, sans réutiliser un numéro libéré.
+The number is the next one in sequence, never reusing a freed number.
 
-## La règle qui gouverne les autres
+**An ADR is written in English**, and gets its French mirror in
+`i18n/fr/docs/adr/`
+([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
 
-**Un ADR accepté ne se réécrit pas.** On en écrit un nouveau qui le remplace ou
-le précise, et on le dit en tête — `docs/adr/0009-source-dependance-gpui.md` en
-est l'exemple : il précise l'ADR-0001 sur un point et laisse le reste en vigueur.
+## The rule that governs the others
 
-Réécrire un ADR efface la raison pour laquelle l'ancienne décision paraissait
-bonne. C'est précisément l'information qu'on cherchera plus tard, quand la même
-question reviendra sous un autre nom.
+**An accepted ADR is not rewritten.** A new one is written that supersedes or
+refines it, and says so at the top — `docs/adr/0009-source-dependance-gpui.md`
+is the example: it refines ADR-0001 on one point and leaves the rest in force.
 
-## Ce qui fait un bon ADR / un mauvais
+Rewriting an ADR erases the reason the old decision looked good. That is
+precisely the information someone will look for later, when the same question
+comes back under another name.
 
-| Bon | Mauvais |
+## What makes a good ADR / a bad one
+
+| Good | Bad |
 |---|---|
-| *Contexte* chiffré et sourcé | une dissertation sur l'état de l'art |
-| *Décision* au présent, avec les noms concrets des types et des crates | « nous envisageons d'utiliser » |
-| Conséquences **négatives** écrites honnêtement | une liste d'avantages |
-| **Coût de sortie** évalué | rien sur la réversibilité |
-| **Condition de reconsidération** explicite | une décision sans critère de révision, donc un dogme |
-| *Alternatives écartées*, chacune avec la raison du rejet | « nous avons choisi X » sans les autres |
+| *Context* quantified and sourced | an essay on the state of the art |
+| *Decision* in the present tense, with the concrete names of types and crates | "we are considering using" |
+| **Negative** consequences written honestly | a list of advantages |
+| **Exit cost** assessed | nothing on reversibility |
+| Explicit **reconsideration condition** | a decision without a review criterion, hence a dogma |
+| *Rejected alternatives*, each with the reason for rejection | "we chose X" without the others |
 
-Le coût de sortie et la condition de reconsidération sont ce qui distingue un
-ADR d'une justification a posteriori. Les deux se rédigent au moment où la
-décision est prise — après, personne ne saura plus ce qui la rendait révisable.
+The exit cost and the reconsideration condition are what distinguish an ADR
+from an after-the-fact justification. Both are written when the decision is
+made — afterwards, nobody will know any more what made it revisable.
 
-## Les faits externes
+## External facts
 
-Toute version, toute limite citée est **vérifiée au registre et datée**
-([I-12](../../CLAUDE.md#i-12)), et reportée dans `docs/RESEARCH-NOTES.md` dans le
-même commit. Un ADR qui s'appuie sur un chiffre de mémoire prend une décision
-sur du sable.
+Every version and every limit cited is **checked against the registry and
+dated** ([I-12](../../CLAUDE.md#i-12)), and recorded in `docs/RESEARCH-NOTES.md`
+in the same commit. An ADR that relies on a number from memory builds a
+decision on sand.
 
-## Vérifier
+## Verify
 
 ```bash
 make socle
 ```
 
-Ce contrôle attrape les liens morts et les ADR absents de l'index — les deux
-manières dont un ADR se retrouve écrit mais introuvable.
+This check catches dead links and ADRs missing from the index — the two ways an
+ADR ends up written but impossible to find.
 
-## Rappels
+## Reminders
 
-- statut `proposé` jusqu'au premier commit de code qui le met en œuvre
-  (convention de `docs/README.md`) ;
-- un ADR décrit ce qui **est décidé** ; le reste à faire va dans
-  `docs/IMPLEMENTATION-PLAN.md` ;
-- si l'ADR contredit un document d'autorité, c'est le document qu'il faut
-  corriger dans le même commit — pas laisser diverger.
+- status `proposed` until the first code commit that implements it
+  (convention of `docs/README.md`);
+- an ADR describes what **is decided**; the remaining work goes into
+  `docs/IMPLEMENTATION-PLAN.md`;
+- if the ADR contradicts an authoritative document, that document must be
+  fixed in the same commit — not left to diverge.

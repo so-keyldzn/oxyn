@@ -1,46 +1,45 @@
-//! Les agents fournis par plugin — **déclaratifs, et sans WebAssembly**.
+//! Agents provided by plugins — **declarative, and without WebAssembly**.
 //!
-//! C'est le cas courant, et il fonctionne dès aujourd'hui : un agent est « une
-//! configuration, pas une implémentation séparée »
-//! ([ARCHITECTURE §7.3](../../../docs/ARCHITECTURE.md)) — une invite système,
-//! un sous-ensemble d'outils, un schéma de sortie. Rien de tout cela n'exige
-//! d'exécuter du code tiers, donc rien de tout cela n'attend la phase 4 ni la
-//! feature `wasm-host`.
+//! It is the common case, and it works today: an agent is "a configuration,
+//! not a separate implementation"
+//! ([ARCHITECTURE §7.3](../../../docs/ARCHITECTURE.md)) — a system prompt, a
+//! subset of tools, an output schema. None of this requires running
+//! third-party code, so none of it waits for phase 4 or the `wasm-host`
+//! feature.
 //!
-//! # Ce qu'une déclaration ne peut pas contenir
+//! # What a declaration cannot contain
 //!
-//! La liste vaut autant que la structure, parce qu'elle est **appliquée** :
-//! [`PluginAgentSpec`] refuse toute clé qu'elle ne connaît pas, plutôt que de
-//! l'ignorer. Un manifeste qui écrirait `privacy = "sampled"` ou
-//! `api_key = "…"` est donc rejeté, pas silencieusement dépouillé.
+//! The list matters as much as the structure, because it is **enforced**:
+//! [`PluginAgentSpec`] refuses any key it does not know, rather than ignoring
+//! it. A manifest that wrote `privacy = "sampled"` or `api_key = "…"` is
+//! therefore rejected, not silently stripped.
 //!
-//! * **ni connexion, ni session** — elles viennent de ce que l'utilisateur a
-//!   ouvert, jamais du manifeste ;
-//! * **ni niveau de confidentialité** — il est attaché à la connexion et à rien
-//!   d'autre ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md), I-04). Un
-//!   agent qui déclarerait le sien rendrait le réglage de la connexion
-//!   inopérant ;
-//! * **ni point d'accès, ni clé** — un plugin n'obtient pas de canal réseau par
-//!   le biais d'un agent (I-03) ;
-//! * **ni identifiant d'agent** — il est attribué par l'hôte. Un
-//!   [`AgentId`](oxyn_core::AgentId) choisi par un tiers pourrait se confondre
-//!   avec celui d'un agent intégré, et c'est ce couple qui identifie l'auteur
-//!   d'une commande dans le journal d'audit.
+//! * **no connection, no session** — they come from what the user opened,
+//!   never from the manifest;
+//! * **no privacy tier** — it is attached to the connection and to nothing
+//!   else ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md), I-04). An
+//!   agent declaring its own would make the connection's setting inoperative;
+//! * **no endpoint, no key** — a plugin does not get a network channel by way
+//!   of an agent (I-03);
+//! * **no agent identifier** — it is assigned by the host. An
+//!   [`AgentId`](oxyn_core::AgentId) chosen by a third party could be confused
+//!   with that of a built-in agent, and it is this pair that identifies the
+//!   author of a command in the audit journal.
 //!
-//! # Ce qu'une déclaration ne peut pas accorder
+//! # What a declaration cannot grant
 //!
-//! `allowed_tools` **restreint**, il n'étend jamais : le registre d'outils de
-//! `oxyn-ai` reste l'autorité, et un outil qu'il ignore fait échouer la
-//! validation là-bas. Ici, on vérifie la **forme** — c'est-à-dire ce qui se
-//! vérifie sans connaître le registre.
+//! `allowed_tools` **restricts**, it never extends: the tool registry of
+//! `oxyn-ai` stays the authority, and a tool it does not know fails validation
+//! there. Here, the **form** is checked — that is, what can be checked without
+//! knowing the registry.
 //!
-//! # Pourquoi ce type n'est pas `oxyn_ai::AgentSpec`
+//! # Why this type is not `oxyn_ai::AgentSpec`
 //!
-//! `oxyn-plugin` ne dépend pas de `oxyn-ai`, et ne le doit pas : l'hôte de
-//! plugins n'a pas à savoir qu'un runtime d'agents existe. [`PluginAgentSpec`]
-//! est donc la **forme de fichier** ; la conversion vers `oxyn_ai::AgentSpec`,
-//! avec l'attribution de l'identifiant et la validation contre le registre
-//! d'outils réel, appartient à `oxyn-desktop`, qui connaît les deux.
+//! `oxyn-plugin` does not depend on `oxyn-ai`, and must not: the plugin host
+//! has no need to know an agent runtime exists. [`PluginAgentSpec`] is
+//! therefore the **file form**; the conversion to `oxyn_ai::AgentSpec`, with
+//! the assignment of the identifier and validation against the real tool
+//! registry, belongs to `oxyn-desktop`, which knows both.
 
 use std::fs;
 use std::path::Path;
@@ -50,54 +49,55 @@ use serde::{Deserialize, Serialize};
 use crate::error::{PluginError, Result};
 use crate::manifest::{ConnectionAccess, MANIFEST_FILE, PluginId, PluginKind, PluginManifest};
 
-/// La déclaration d'agent que porte un `plugin.toml`, section `[agent]`.
+/// The agent declaration a `plugin.toml` carries, `[agent]` section.
 ///
-/// `deny_unknown_fields` est ce qui fait tenir la liste du module : une clé
-/// inconnue est refusée, et il n'y a donc pas de champ qu'un manifeste puisse
-/// glisser en espérant qu'une version ultérieure l'honore.
+/// `deny_unknown_fields` is what makes the module's list hold: an unknown key
+/// is refused, so there is no field a manifest can slip in hoping a later
+/// version will honor it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginAgentSpec {
-    /// Nom montrable de l'agent, dans le sélecteur de conversation.
+    /// Displayable name of the agent, in the conversation picker.
     pub name: String,
 
-    /// Ce que fait l'agent, pour l'utilisateur qui le choisit.
+    /// What the agent does, for the user who picks it.
     ///
-    /// **N'est pas envoyé au modèle** : c'est
-    /// [`system_prompt`](Self::system_prompt) qui s'adresse à lui.
+    /// **Not sent to the model**: [`system_prompt`](Self::system_prompt) is
+    /// what addresses it.
     #[serde(default)]
     pub description: String,
 
-    /// L'invite système. En anglais : c'est du texte de code.
+    /// The system prompt. In English: it is code text.
     pub system_prompt: String,
 
-    /// Les outils demandés, par leur nom dans le registre de `oxyn-ai`.
+    /// The requested tools, by their name in the `oxyn-ai` registry.
     ///
-    /// Une liste vide est licite et signifie **aucun outil** : un agent qui ne
-    /// fait que commenter un schéma n'a rien à exécuter.
+    /// An empty list is legitimate and means **no tool**: an agent that only
+    /// comments on a schema has nothing to run.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
 
-    /// Nombre maximal d'allers-retours modèle → outils → modèle.
+    /// Maximum number of model → tools → model round trips.
     ///
-    /// Absent, c'est le défaut de `oxyn-ai` qui s'applique. Le **plafond** vit
-    /// là-bas aussi et n'est pas recopié ici : deux exemplaires d'une même
-    /// limite divergent, et c'est alors le plus permissif qui gagne.
+    /// Absent, the default of `oxyn-ai` applies. The **ceiling** lives there
+    /// too and is not copied here: two copies of the same limit diverge, and
+    /// the more permissive then wins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
 
-    /// Schéma JSON de la réponse attendue, quand l'agent doit produire une
-    /// structure et non de la prose.
+    /// JSON schema of the expected response, when the agent must produce a
+    /// structure rather than prose.
     ///
-    /// Transporté **opaque** : `oxyn-plugin` ne dépend pas d'un analyseur JSON,
-    /// et le valider ici obligerait à en ajouter un pour ne rien décider. C'est
-    /// `oxyn-ai` qui l'analyse, au moment où il sait aussi quoi en faire.
+    /// Carried **opaque**: `oxyn-plugin` does not depend on a JSON parser, and
+    /// validating it here would force adding one to decide nothing. It is
+    /// `oxyn-ai` that parses it, at the moment it also knows what to do with
+    /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<String>,
 }
 
 impl PluginAgentSpec {
-    /// Déclare un agent minimal : un nom, une invite, aucun outil.
+    /// Declares a minimal agent: a name, a prompt, no tool.
     #[must_use]
     pub fn new(name: impl Into<String>, system_prompt: impl Into<String>) -> Self {
         Self {
@@ -110,14 +110,14 @@ impl PluginAgentSpec {
         }
     }
 
-    /// Donne la description montrée à l'utilisateur.
+    /// Gives the description shown to the user.
     #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
     }
 
-    /// Demande des outils, par leur nom.
+    /// Requests tools, by name.
     #[must_use]
     pub fn with_tools<I, S>(mut self, tools: I) -> Self
     where
@@ -128,60 +128,65 @@ impl PluginAgentSpec {
         self
     }
 
-    /// Cet outil est-il demandé par cette déclaration ?
+    /// Is this tool requested by this declaration?
     ///
-    /// Répondre `true` ne veut pas dire que l'outil sera accordé : le registre
-    /// de `oxyn-ai` a le dernier mot.
+    /// Answering `true` does not mean the tool will be granted: the `oxyn-ai`
+    /// registry has the last word.
     #[must_use]
     pub fn allows(&self, tool: &str) -> bool {
         self.allowed_tools.iter().any(|name| name == tool)
     }
 
-    /// Vérifie ce qui se vérifie sans connaître le registre d'outils.
+    /// Checks what can be checked without knowing the tool registry.
     ///
-    /// Quatre refus :
+    /// Four refusals:
     ///
-    /// 1. un nom ou une invite vides — l'agent serait inutilisable et
-    ///    inaffichable ;
-    /// 2. un nom d'outil hors grammaire `[a-z][a-z0-9_]*` — un nom d'outil est
-    ///    une clé technique, et accepter n'importe quel octet inviterait à s'en
-    ///    servir comme d'un canal ;
-    /// 3. un outil déclaré deux fois — soit une faute, soit une tentative de
-    ///    rendre la liste illisible dans l'écran d'approbation ;
-    /// 4. `max_turns = 0` — l'agent ne pourrait jamais répondre.
+    /// 1. an empty name or prompt — the agent would be unusable and
+    ///    undisplayable;
+    /// 2. a tool name outside the `[a-z][a-z0-9_]*` grammar — a tool name is a
+    ///    technical key, and accepting any byte would invite using it as a
+    ///    channel;
+    /// 3. a tool declared twice — either a mistake, or an attempt to make the
+    ///    list unreadable in the approval screen;
+    /// 4. `max_turns = 0` — the agent could never answer.
     ///
-    /// # Erreurs
-    /// [`PluginError::InvalidManifest`], en nommant la règle enfreinte.
+    /// # Errors
+    /// [`PluginError::InvalidManifest`], naming the broken rule.
     pub fn validate(&self, plugin: &str) -> Result<()> {
         if self.name.trim().is_empty() {
             return Err(PluginError::invalid_manifest(
                 plugin,
-                "`agent.name` est vide",
+                "`agent.name` is empty",
             ));
         }
         if self.system_prompt.trim().is_empty() {
             return Err(PluginError::invalid_manifest(
                 plugin,
-                "`agent.system_prompt` est vide",
+                "`agent.system_prompt` is empty",
             ));
         }
         if self.max_turns == Some(0) {
             return Err(PluginError::invalid_manifest(
                 plugin,
-                "`agent.max_turns` vaut zéro : l'agent ne pourrait jamais répondre",
+                "`agent.max_turns` is zero: the agent could never answer",
             ));
         }
-        for (rang, outil) in self.allowed_tools.iter().enumerate() {
-            if !is_tool_name(outil) {
+        for (rank, tool_decl) in self.allowed_tools.iter().enumerate() {
+            if !is_tool_name(tool_decl) {
                 return Err(PluginError::invalid_manifest(
                     plugin,
-                    "un nom d'outil suit la grammaire `[a-z][a-z0-9_]*`",
+                    "a tool name follows the `[a-z][a-z0-9_]*` grammar",
                 ));
             }
-            if self.allowed_tools.iter().take(rang).any(|vu| vu == outil) {
+            if self
+                .allowed_tools
+                .iter()
+                .take(rank)
+                .any(|seen| seen == tool_decl)
+            {
                 return Err(PluginError::invalid_manifest(
                     plugin,
-                    format!("l'outil `{outil}` est déclaré deux fois"),
+                    format!("the tool `{tool_decl}` is declared twice"),
                 ));
             }
         }
@@ -189,7 +194,7 @@ impl PluginAgentSpec {
     }
 }
 
-/// Un nom d'outil est une clé technique, pas du texte libre.
+/// A tool name is a technical key, not free text.
 fn is_tool_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -199,13 +204,13 @@ fn is_tool_name(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Un agent déclaratif prêt à être remis au runtime, avec l'identité du plugin
-/// qui le fournit.
+/// A declarative agent ready to be handed to the runtime, with the identity of
+/// the plugin that provides it.
 ///
-/// L'identité voyage avec la déclaration parce que le journal d'audit en a
-/// besoin : « cet `UPDATE` vient de l'agent *Schema* fourni par le plugin
-/// *revue-schema* » est une phrase que l'utilisateur doit pouvoir lire après
-/// coup. Une `AgentSpec` nue ne la permettrait pas.
+/// The identity travels with the declaration because the audit journal needs
+/// it: "this `UPDATE` comes from the *Schema* agent provided by the
+/// *revue-schema* plugin" is a sentence the user must be able to read
+/// afterwards. A bare `AgentSpec` would not allow it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclarativeAgent {
     plugin: PluginId,
@@ -215,20 +220,20 @@ pub struct DeclarativeAgent {
 }
 
 impl DeclarativeAgent {
-    /// Extrait l'agent d'un manifeste déjà validé.
+    /// Extracts the agent from an already validated manifest.
     ///
-    /// # Erreurs
-    /// [`PluginError::InvalidManifest`] si le manifeste n'est pas de type
-    /// [`Agent`](PluginKind::Agent), ou s'il ne porte pas de section `[agent]`.
-    /// Ces deux cas sont déjà refusés par
-    /// [`PluginManifest::validate`] ; le contrôle est répété ici parce que rien
-    /// ne garantit qu'un appelant soit passé par là.
+    /// # Errors
+    /// [`PluginError::InvalidManifest`] if the manifest is not of type
+    /// [`Agent`](PluginKind::Agent), or if it carries no `[agent]` section.
+    /// Both cases are already refused by [`PluginManifest::validate`]; the
+    /// check is repeated here because nothing guarantees a caller went through
+    /// it.
     pub fn from_manifest(manifest: &PluginManifest) -> Result<Self> {
         if manifest.kind != PluginKind::Agent {
             return Err(PluginError::invalid_manifest(
                 manifest.id.as_str(),
                 format!(
-                    "ce plugin est de type `{}` : il ne fournit pas d'agent",
+                    "this plugin is of type `{}`: it does not provide an agent",
                     manifest.kind
                 ),
             ));
@@ -236,7 +241,7 @@ impl DeclarativeAgent {
         let Some(spec) = &manifest.agent else {
             return Err(PluginError::invalid_manifest(
                 manifest.id.as_str(),
-                "un plugin `agent` doit porter une section `[agent]`",
+                "an `agent` plugin must carry an `[agent]` section",
             ));
         };
         spec.validate(manifest.id.as_str())?;
@@ -249,58 +254,58 @@ impl DeclarativeAgent {
         })
     }
 
-    /// Le plugin qui fournit cet agent.
+    /// The plugin that provides this agent.
     #[must_use]
     pub const fn plugin(&self) -> &PluginId {
         &self.plugin
     }
 
-    /// Le nom du plugin, montrable.
+    /// The name of the plugin, displayable.
     #[must_use]
     pub fn plugin_name(&self) -> &str {
         &self.plugin_name
     }
 
-    /// La déclaration elle-même.
+    /// The declaration itself.
     #[must_use]
     pub const fn spec(&self) -> &PluginAgentSpec {
         &self.spec
     }
 
-    /// Ce que le plugin a le droit de **demander** aux bases de données.
+    /// What the plugin has the right to **ask** of databases.
     ///
-    /// Le `PolicyGate` reste seul à décider ce qui passe : cette valeur ne fait
-    /// que borner ce que l'agent peut proposer (I-01).
+    /// The `PolicyGate` alone decides what goes through: this value only bounds
+    /// what the agent can propose (I-01).
     #[must_use]
     pub const fn connections(&self) -> ConnectionAccess {
         self.connections
     }
 }
 
-/// Lit un agent déclaratif depuis le `plugin.toml` d'un répertoire.
+/// Reads a declarative agent from a directory's `plugin.toml`.
 ///
-/// Aucun code n'est exécuté et l'hôte WebAssembly n'est pas sollicité : c'est
-/// exactement ce que la phase 0 sait déjà faire du chemin plugin → agent.
+/// No code runs and the WebAssembly host is not called on: it is exactly what
+/// phase 0 already knows how to do of the plugin → agent path.
 ///
-/// **Synchrone, et prend des entrées-sorties.** Ne pas l'appeler depuis le
-/// thread d'interface (I-05).
+/// **Synchronous, and does I/O.** Do not call it from the interface thread
+/// (I-05).
 ///
-/// # Erreurs
-/// [`PluginError::Directory`] si le fichier est absent ou illisible ;
-/// [`PluginError::UnreadableManifest`] ou [`PluginError::InvalidManifest`]
-/// selon ce que le manifeste enfreint.
+/// # Errors
+/// [`PluginError::Directory`] if the file is missing or unreadable;
+/// [`PluginError::UnreadableManifest`] or [`PluginError::InvalidManifest`]
+/// depending on what the manifest breaks.
 pub fn load_from_dir(plugin_dir: &Path) -> Result<DeclarativeAgent> {
-    let chemin = plugin_dir.join(MANIFEST_FILE);
-    let texte = match fs::read_to_string(&chemin) {
-        Ok(texte) => texte,
+    let item_path = plugin_dir.join(MANIFEST_FILE);
+    let text = match fs::read_to_string(&item_path) {
+        Ok(text) => text,
         Err(source) => {
             return Err(PluginError::Directory {
-                path: chemin,
+                path: item_path,
                 source,
             });
         }
     };
-    let manifest = PluginManifest::from_toml(&texte)?;
+    let manifest = PluginManifest::from_toml(&text)?;
     DeclarativeAgent::from_manifest(&manifest)
 }
 
@@ -310,10 +315,10 @@ mod tests {
 
     use super::*;
 
-    fn manifeste(section_agent: &str) -> String {
+    fn manifest_toml(section_agent: &str) -> String {
         format!(
             "id          = \"revue-schema\"\n\
-             name        = \"Revue de schéma\"\n\
+             name        = \"Schema review\"\n\
              version     = \"1.0.0\"\n\
              api_version = \"0.1.0\"\n\
              kind        = \"agent\"\n\
@@ -327,37 +332,37 @@ mod tests {
     }
 
     #[test]
-    fn un_agent_se_lit_directement_depuis_un_repertoire() {
-        let racine = TempDir::new("agent-fichier");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+    fn an_agent_is_read_directly_from_a_directory() {
+        let root = TempDir::new("agent-file");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let agent = load_from_dir(&racine.path().join("revue")).expect("agent lu depuis le disque");
+        let agent = load_from_dir(&root.path().join("revue")).expect("agent read from disk");
         assert_eq!(agent.plugin().as_str(), "revue");
         assert_eq!(agent.spec().name, "Schema");
     }
 
     #[test]
-    fn un_repertoire_sans_manifeste_donne_une_erreur_de_fichier() {
-        let racine = TempDir::new("agent-absent");
-        let err = load_from_dir(&racine.path().join("nulle-part")).expect_err("refus attendu");
+    fn a_directory_without_manifest_gives_a_file_error() {
+        let root = TempDir::new("agent-absent");
+        let err = load_from_dir(&root.path().join("nulle-part")).expect_err("refusal expected");
         assert!(matches!(err, PluginError::Directory { .. }), "{err}");
     }
 
     #[test]
-    fn un_agent_declaratif_se_charge_sans_hote_wasm() {
-        let toml = manifeste(
+    fn a_declarative_agent_loads_without_wasm_host() {
+        let toml = manifest_toml(
             "name          = \"Schema\"\n\
-             description   = \"Relit un schéma.\"\n\
+             description   = \"Reviews a schema.\"\n\
              system_prompt = \"You review database schemas.\"\n\
              allowed_tools = [\"refresh_catalog\"]\n\
              max_turns     = 4\n",
         );
-        let manifest = PluginManifest::from_toml(&toml).expect("manifeste valide");
+        let manifest = PluginManifest::from_toml(&toml).expect("valid manifest");
         assert!(!manifest.requires_wasm());
 
-        let agent = DeclarativeAgent::from_manifest(&manifest).expect("agent déclaratif");
+        let agent = DeclarativeAgent::from_manifest(&manifest).expect("declarative agent");
         assert_eq!(agent.plugin().as_str(), "revue-schema");
-        assert_eq!(agent.plugin_name(), "Revue de schéma");
+        assert_eq!(agent.plugin_name(), "Schema review");
         assert_eq!(agent.connections(), ConnectionAccess::ReadOnly);
         assert_eq!(agent.spec().name, "Schema");
         assert_eq!(agent.spec().max_turns, Some(4));
@@ -365,15 +370,15 @@ mod tests {
     }
 
     #[test]
-    fn une_declaration_ne_peut_pas_choisir_son_niveau_de_confidentialite() {
-        // I-04 : le niveau est attaché à la connexion et à rien d'autre. Une
-        // clé qu'on ignorerait laisserait croire qu'elle a été honorée.
-        let toml = manifeste(
+    fn a_declaration_cannot_choose_its_privacy_tier() {
+        // I-04: the tier is attached to the connection and to nothing else. A
+        // key that was ignored would suggest it had been honored.
+        let toml = manifest_toml(
             "name          = \"Schema\"\n\
              system_prompt = \"You review database schemas.\"\n\
              privacy       = \"sampled\"\n",
         );
-        let err = PluginManifest::from_toml(&toml).expect_err("refus attendu");
+        let err = PluginManifest::from_toml(&toml).expect_err("refusal expected");
         assert!(
             matches!(err, PluginError::UnreadableManifest { .. }),
             "{err}"
@@ -381,41 +386,41 @@ mod tests {
     }
 
     #[test]
-    fn une_declaration_ne_peut_pas_porter_de_cle_ni_de_point_d_acces() {
-        // I-03 : un plugin n'obtient pas de canal réseau par le biais d'un
-        // agent, et surtout pas un secret écrit en clair dans un fichier.
-        for cle in [
+    fn a_declaration_cannot_carry_a_key_or_an_endpoint() {
+        // I-03: a plugin does not get a network channel by way of an agent, and
+        // above all not a secret written in clear in a file.
+        for key in [
             "api_key       = \"sk-abc\"",
             "endpoint      = \"https://exfiltration.example\"",
             "connection    = \"prod-eu\"",
             "id            = \"018f0000-0000-7000-8000-000000000000\"",
         ] {
-            let toml = manifeste(&format!(
+            let toml = manifest_toml(&format!(
                 "name          = \"Schema\"\n\
                  system_prompt = \"You review database schemas.\"\n\
-                 {cle}\n"
+                 {key}\n"
             ));
             assert!(
                 PluginManifest::from_toml(&toml).is_err(),
-                "{cle} devrait être refusé"
+                "{key} should be refused"
             );
         }
     }
 
     #[test]
-    fn un_agent_sans_outil_est_licite() {
-        let toml = manifeste(
+    fn an_agent_without_tools_is_legitimate() {
+        let toml = manifest_toml(
             "name          = \"Doc\"\n\
              system_prompt = \"You describe schemas.\"\n",
         );
-        let manifest = PluginManifest::from_toml(&toml).expect("manifeste valide");
-        let agent = DeclarativeAgent::from_manifest(&manifest).expect("agent déclaratif");
+        let manifest = PluginManifest::from_toml(&toml).expect("valid manifest");
+        let agent = DeclarativeAgent::from_manifest(&manifest).expect("declarative agent");
         assert!(agent.spec().allowed_tools.is_empty());
         assert!(!agent.spec().allows("execute_query"));
     }
 
     #[test]
-    fn une_invite_ou_un_nom_vide_est_refuse() {
+    fn an_empty_prompt_or_name_is_refused() {
         let spec = PluginAgentSpec::new("   ", "You review schemas.");
         assert!(spec.validate("x").is_err());
 
@@ -424,8 +429,8 @@ mod tests {
     }
 
     #[test]
-    fn un_nom_d_outil_est_une_cle_technique() {
-        for nom in [
+    fn a_tool_name_is_a_technical_key() {
+        for ident in [
             "",
             "Execute",
             "execute-query",
@@ -434,56 +439,56 @@ mod tests {
             "execute/query",
             "execute_query\u{0}",
         ] {
-            let spec = PluginAgentSpec::new("Schema", "prompt").with_tools([nom]);
-            assert!(spec.validate("x").is_err(), "{nom:?} devrait être refusé");
+            let spec = PluginAgentSpec::new("Schema", "prompt").with_tools([ident]);
+            assert!(spec.validate("x").is_err(), "{ident:?} should be refused");
         }
 
         let spec = PluginAgentSpec::new("Schema", "prompt")
             .with_tools(["execute_query", "refresh_catalog"]);
-        spec.validate("x").expect("noms d'outils valides");
+        spec.validate("x").expect("valid tool names");
     }
 
     #[test]
-    fn un_outil_declare_deux_fois_est_refuse() {
+    fn a_tool_declared_twice_is_refused() {
         let spec =
             PluginAgentSpec::new("Schema", "prompt").with_tools(["execute_query", "execute_query"]);
-        let err = spec.validate("x").expect_err("refus attendu");
-        assert!(err.to_string().contains("deux fois"), "{err}");
+        let err = spec.validate("x").expect_err("refusal expected");
+        assert!(err.to_string().contains("twice"), "{err}");
     }
 
     #[test]
-    fn zero_tour_est_refuse() {
+    fn zero_turns_is_refused() {
         let mut spec = PluginAgentSpec::new("Schema", "prompt");
         spec.max_turns = Some(0);
         assert!(spec.validate("x").is_err());
     }
 
     #[test]
-    fn un_plugin_qui_n_est_pas_un_agent_ne_fournit_pas_d_agent() {
+    fn a_plugin_that_is_not_an_agent_provides_no_agent() {
         let toml = "id          = \"duckdb\"\n\
                     name        = \"DuckDB\"\n\
                     version     = \"1.0.0\"\n\
                     api_version = \"0.1.0\"\n\
                     kind        = \"export\"\n\
                     entrypoint  = \"duckdb.wasm\"\n";
-        let manifest = PluginManifest::from_toml(toml).expect("manifeste valide");
-        let err = DeclarativeAgent::from_manifest(&manifest).expect_err("refus attendu");
+        let manifest = PluginManifest::from_toml(toml).expect("valid manifest");
+        let err = DeclarativeAgent::from_manifest(&manifest).expect_err("refusal expected");
         assert!(err.to_string().contains("export"), "{err}");
     }
 
     #[test]
-    fn le_schema_de_sortie_traverse_opaque() {
-        let toml = manifeste(
+    fn the_output_schema_goes_through_opaque() {
+        let toml = manifest_toml(
             "name          = \"Schema\"\n\
              system_prompt = \"You review database schemas.\"\n\
              output_schema = \"{\\\"type\\\":\\\"object\\\"}\"\n",
         );
-        let manifest = PluginManifest::from_toml(&toml).expect("manifeste valide");
-        let agent = DeclarativeAgent::from_manifest(&manifest).expect("agent déclaratif");
+        let manifest = PluginManifest::from_toml(&toml).expect("valid manifest");
+        let agent = DeclarativeAgent::from_manifest(&manifest).expect("declarative agent");
         assert_eq!(
             agent.spec().output_schema.as_deref(),
             Some("{\"type\":\"object\"}"),
-            "le schéma est transporté tel quel, sans être analysé ici"
+            "the schema is carried as is, without being parsed here"
         );
     }
 }

@@ -1,50 +1,50 @@
-//! Reconnaître, sans l'analyser, un texte qui ouvre une transaction.
+//! Recognizing, without parsing it, a text that opens a transaction.
 //!
-//! # Pourquoi le driver regarde le texte ici
+//! # Why the driver looks at the text here
 //!
-//! Une session Oxyn s'appuie sur un bassin : chaque exécution emprunte une
-//! connexion et la rend. Un `BEGIN` tapé dans une console laisse sa connexion
-//! **dans une transaction** ; rendue au bassin, elle serait héritée par
-//! l'emprunteur suivant — l'introspection, ou la requête suivante d'une autre
-//! console, qui écrirait alors dans une transaction que personne ne validera.
-//! La défaire par un `ROLLBACK` implicite annulerait en silence ce que
-//! l'utilisateur voulait garder. Le driver ferme donc la connexion.
+//! An Oxyn session relies on a pool: each execution borrows a connection and
+//! returns it. A `BEGIN` typed in a console leaves its connection **inside a
+//! transaction**; returned to the pool, it would be inherited by the next
+//! borrower — introspection, or the next query of another console, which would
+//! then write inside a transaction nobody will commit. Undoing it with an
+//! implicit `ROLLBACK` would silently cancel what the user wanted to keep. The
+//! driver therefore closes the connection.
 //!
-//! Il faut pour cela savoir que l'exécution a ouvert une transaction, et
-//! sqlx-postgres 0.9.0 ne l'expose pas : l'état porté par `ReadyForQuery` reste
-//! `pub(crate)` (`PgConnection::in_transaction`). Le texte, lui, suffit :
+//! That requires knowing that the execution opened a transaction, and
+//! sqlx-postgres 0.9.0 does not expose it: the state carried by `ReadyForQuery`
+//! stays `pub(crate)` (`PgConnection::in_transaction`). The text is enough:
 //!
-//! * le protocole étendu prépare **une** instruction par exécution, donc le
-//!   premier mot du texte est celui de l'instruction ;
-//! * en PostgreSQL, seules `BEGIN` et `START TRANSACTION` ouvrent un bloc de
-//!   transaction au niveau d'une instruction. Un `BEGIN` dans le corps d'un `DO`
-//!   ou d'une fonction est entre guillemets dollar, jamais en tête ; une
-//!   procédure qui valide ne laisse pas de bloc ouvert après elle.
+//! * the extended protocol prepares **one** statement per execution, so the
+//!   first word of the text is the statement's;
+//! * in PostgreSQL, only `BEGIN` and `START TRANSACTION` open a transaction
+//!   block at statement level. A `BEGIN` in the body of a `DO` or of a function
+//!   is dollar-quoted, never leading; a procedure that commits leaves no open
+//!   block behind it.
 //!
-//! Ce n'est **pas** un classifieur : `oxyn-query` décide si une instruction
-//! écrit. Ce module ne répond qu'à une question, et se trompe du côté prudent —
-//! un faux positif ferme une connexion de trop.
+//! This is **not** a classifier: `oxyn-query` decides whether a statement
+//! writes. This module answers a single question, and errs on the cautious
+//! side — a false positive closes one connection too many.
 
-/// Le texte est-il une instruction de contrôle de transaction ?
+/// Is the text a transaction control statement?
 ///
 /// `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`,
-/// `SAVEPOINT`, `RELEASE`, `PREPARE TRANSACTION` — lus sur le premier mot, comme
-/// [`opens_transaction`]. Une session sans
-/// [`Capabilities::TRANSACTIONS`](oxyn_core::Capabilities::TRANSACTIONS) les
-/// refuse **avant l'envoi** : sur un bassin, chacune partirait sur la connexion
-/// d'emprunt du moment, et un `ROLLBACK` sans transaction « réussit » côté
-/// serveur — un simple `WARNING` — pendant que l'écriture qu'il devait annuler
-/// reste validée. Ne pas savoir faire est acceptable ; laisser croire ne l'est
-/// pas ([DRIVER-CONTRACT §5](../../../docs/DRIVER-CONTRACT.md)).
+/// `SAVEPOINT`, `RELEASE`, `PREPARE TRANSACTION` — read on the first word, like
+/// [`opens_transaction`]. A session without
+/// [`Capabilities::TRANSACTIONS`](oxyn_core::Capabilities::TRANSACTIONS)
+/// refuses them **before sending**: on a pool, each would go out on whatever
+/// connection is borrowed at the time, and a `ROLLBACK` without a transaction
+/// "succeeds" on the server — a mere `WARNING` — while the write it was meant to
+/// cancel stays committed. Not knowing how is acceptable; letting the user
+/// believe otherwise is not ([DRIVER-CONTRACT §5](../../../docs/DRIVER-CONTRACT.md)).
 ///
-/// `PREPARE nom AS …` n'est **pas** concerné : seul `PREPARE TRANSACTION` l'est.
+/// `PREPARE name AS …` is **not** concerned: only `PREPARE TRANSACTION` is.
 #[must_use]
 pub(crate) fn controls_transaction(text: &str) -> bool {
-    let mut mots = Words::new(text);
-    let Some(premier) = mots.next() else {
+    let mut words = Words::new(text);
+    let Some(first) = words.next() else {
         return false;
     };
-    let est = |attendu: &str| premier.eq_ignore_ascii_case(attendu);
+    let is_word = |expected: &str| first.eq_ignore_ascii_case(expected);
     if [
         "begin",
         "commit",
@@ -55,39 +55,39 @@ pub(crate) fn controls_transaction(text: &str) -> bool {
         "release",
     ]
     .into_iter()
-    .any(est)
+    .any(is_word)
     {
         return true;
     }
-    if est("start") || est("prepare") {
-        return mots
+    if is_word("start") || is_word("prepare") {
+        return words
             .next()
-            .is_some_and(|suivant| suivant.eq_ignore_ascii_case("transaction"));
+            .is_some_and(|next_word| next_word.eq_ignore_ascii_case("transaction"));
     }
     false
 }
 
-/// Le texte ouvre-t-il un bloc de transaction ?
+/// Does the text open a transaction block?
 ///
-/// Saute les blancs et les commentaires de tête — `--` jusqu'à la fin de ligne,
-/// `/* */` imbriqués comme le serveur les imbrique —, puis lit le premier mot.
-/// Ne panique sur aucune entrée ([I-09](../../../CLAUDE.md#i-09)).
+/// Skips leading whitespace and comments — `--` to the end of the line, `/* */`
+/// nested as the server nests them —, then reads the first word. Panics on no
+/// input ([I-09](../../../CLAUDE.md#i-09)).
 #[must_use]
 pub(crate) fn opens_transaction(text: &str) -> bool {
-    let mut mots = Words::new(text);
-    match mots.next() {
-        Some(mot) if mot.eq_ignore_ascii_case("begin") => true,
-        Some(mot) if mot.eq_ignore_ascii_case("start") => mots
+    let mut words = Words::new(text);
+    match words.next() {
+        Some(word) if word.eq_ignore_ascii_case("begin") => true,
+        Some(word) if word.eq_ignore_ascii_case("start") => words
             .next()
-            .is_some_and(|suivant| suivant.eq_ignore_ascii_case("transaction")),
+            .is_some_and(|next_word| next_word.eq_ignore_ascii_case("transaction")),
         _ => false,
     }
 }
 
-/// Les mots de tête d'un texte SQL, commentaires et blancs sautés.
+/// The leading words of an SQL text, comments and whitespace skipped.
 ///
-/// S'arrête au premier caractère qui ne commence ni un mot, ni un blanc, ni un
-/// commentaire : au-delà, la structure ne sert plus à la question posée.
+/// Stops at the first character that starts neither a word, nor whitespace, nor
+/// a comment: beyond it, the structure no longer serves the question asked.
 struct Words<'a> {
     rest: &'a str,
 }
@@ -97,20 +97,20 @@ impl<'a> Words<'a> {
         Self { rest: text }
     }
 
-    /// Avance au-delà des blancs et des commentaires. Rend `false` si un
-    /// commentaire n'est pas terminé.
+    /// Advances past whitespace and comments. Returns `false` if a comment is
+    /// not terminated.
     fn skip_trivia(&mut self) -> bool {
         loop {
             let trimmed = self
                 .rest
                 .trim_start_matches([' ', '\t', '\n', '\r', '\u{000B}', '\u{000C}']);
-            if let Some(apres) = trimmed.strip_prefix("--") {
-                self.rest = apres
+            if let Some(after) = trimmed.strip_prefix("--") {
+                self.rest = after
                     .find(['\n', '\r'])
-                    .map_or("", |fin| apres.get(fin..).unwrap_or(""));
+                    .map_or("", |end| after.get(end..).unwrap_or(""));
             } else if trimmed.starts_with("/*") {
                 match block_comment_end(trimmed) {
-                    Some(apres) => self.rest = apres,
+                    Some(after) => self.rest = after,
                     None => {
                         self.rest = "";
                         return false;
@@ -131,41 +131,41 @@ impl<'a> Iterator for Words<'a> {
         if !self.skip_trivia() {
             return None;
         }
-        let mut caracteres = self.rest.char_indices();
-        let (_, premier) = caracteres.next()?;
-        if !(premier.is_alphabetic() || premier == '_') {
+        let mut characters = self.rest.char_indices();
+        let (_, first) = characters.next()?;
+        if !(first.is_alphabetic() || first == '_') {
             return None;
         }
-        let fin = caracteres
+        let end = characters
             .find(|(_, c)| !(c.is_alphanumeric() || *c == '_' || *c == '$'))
-            .map_or(self.rest.len(), |(indice, _)| indice);
-        let (mot, reste) = self.rest.split_at_checked(fin)?;
-        self.rest = reste;
-        Some(mot)
+            .map_or(self.rest.len(), |(index, _)| index);
+        let (word, rest) = self.rest.split_at_checked(end)?;
+        self.rest = rest;
+        Some(word)
     }
 }
 
-/// Ce qui suit un commentaire `/* … */` en tête de `text`, imbrication comprise.
+/// What follows a `/* … */` comment at the head of `text`, nesting included.
 fn block_comment_end(text: &str) -> Option<&str> {
-    let mut profondeur = 0_usize;
-    let mut reste = text;
+    let mut depth = 0_usize;
+    let mut rest = text;
     loop {
-        let ouverture = reste.find("/*");
-        let fermeture = reste.find("*/");
-        match (ouverture, fermeture) {
+        let opening = rest.find("/*");
+        let closing = rest.find("*/");
+        match (opening, closing) {
             (Some(o), Some(f)) if o < f => {
-                profondeur = profondeur.saturating_add(1);
-                reste = reste.get(o.saturating_add(2)..)?;
+                depth = depth.saturating_add(1);
+                rest = rest.get(o.saturating_add(2)..)?;
             }
             (Some(o), None) => {
-                profondeur = profondeur.saturating_add(1);
-                reste = reste.get(o.saturating_add(2)..)?;
+                depth = depth.saturating_add(1);
+                rest = rest.get(o.saturating_add(2)..)?;
             }
             (_, Some(f)) => {
-                profondeur = profondeur.checked_sub(1)?;
-                reste = reste.get(f.saturating_add(2)..)?;
-                if profondeur == 0 {
-                    return Some(reste);
+                depth = depth.checked_sub(1)?;
+                rest = rest.get(f.saturating_add(2)..)?;
+                if depth == 0 {
+                    return Some(rest);
                 }
             }
             (None, None) => return None,
@@ -178,8 +178,8 @@ mod tests {
     use super::{controls_transaction, opens_transaction};
 
     #[test]
-    fn le_controle_de_transaction_est_reconnu() {
-        for texte in [
+    fn transaction_control_is_recognized() {
+        for text in [
             "BEGIN",
             "start transaction",
             "COMMIT",
@@ -198,17 +198,17 @@ mod tests {
             "/* annuler */ ROLLBACK",
             "-- valider\r\ncommit;",
         ] {
-            assert!(controls_transaction(texte), "{texte:?}");
+            assert!(controls_transaction(text), "{text:?}");
         }
     }
 
     #[test]
-    fn les_faux_amis_du_controle_de_transaction_passent() {
-        for texte in [
+    fn transaction_control_false_friends_pass() {
+        for text in [
             "SELECT 'BEGIN'",
             "SELECT 'ROLLBACK'",
             "DO $$ BEGIN PERFORM 1; END $$",
-            "PREPARE lecture AS SELECT 1",
+            "PREPARE read_request AS SELECT 1",
             "START",
             "ENDING",
             "commit_log",
@@ -217,13 +217,13 @@ mod tests {
             "\"rollback\"",
             "",
         ] {
-            assert!(!controls_transaction(texte), "{texte:?}");
+            assert!(!controls_transaction(text), "{text:?}");
         }
     }
 
     #[test]
-    fn les_ouvertures_de_transaction_sont_reconnues() {
-        for texte in [
+    fn transaction_openings_are_recognized() {
+        for text in [
             "BEGIN",
             "begin;",
             "Begin Work",
@@ -231,20 +231,20 @@ mod tests {
             "START TRANSACTION",
             "start   transaction read write",
             "  \n\t BEGIN",
-            "-- ouvrir\nBEGIN",
-            "-- ouvrir\r\nSTART TRANSACTION",
-            "/* commentaire */ begin",
-            "/* a /* imbriqué */ toujours dedans */ BEGIN",
-            "START /* entre */ TRANSACTION",
-            "START\n-- ligne\nTRANSACTION",
+            "-- open\nBEGIN",
+            "-- open\r\nSTART TRANSACTION",
+            "/* comment */ begin",
+            "/* a /* nested */ still inside */ BEGIN",
+            "START /* between */ TRANSACTION",
+            "START\n-- line\nTRANSACTION",
         ] {
-            assert!(opens_transaction(texte), "{texte:?}");
+            assert!(opens_transaction(text), "{text:?}");
         }
     }
 
     #[test]
-    fn le_reste_n_est_pas_une_ouverture() {
-        for texte in [
+    fn everything_else_is_not_an_opening() {
+        for text in [
             "",
             "   ",
             "SELECT 'BEGIN'",
@@ -259,22 +259,22 @@ mod tests {
             "/* BEGIN */ SELECT 1",
             "-- BEGIN",
             "\"begin\"",
-            "/* jamais fermé BEGIN",
+            "/* never closed BEGIN",
             "/* a /* b */ BEGIN",
             "*/ BEGIN",
             "(BEGIN)",
-            "déjà BEGIN",
+            "café BEGIN",
         ] {
-            assert!(!opens_transaction(texte), "{texte:?}");
+            assert!(!opens_transaction(text), "{text:?}");
         }
     }
 
     #[test]
-    fn aucune_entree_ne_fait_paniquer() {
-        // I-09 : le texte vient de l'utilisateur ou d'un agent. Les coupures en
-        // plein caractère multi-octets et les marqueurs orphelins sont le
-        // corpus minimal.
-        for texte in [
+    fn no_input_makes_it_panic() {
+        // I-09: the text comes from the user or from an agent. Cuts in the
+        // middle of a multi-byte character and orphan markers are the minimal
+        // corpus.
+        for text in [
             "/",
             "-",
             "*",
@@ -291,7 +291,7 @@ mod tests {
             "/*/*/",
             "BEGIN\u{0}",
         ] {
-            let _ = opens_transaction(texte);
+            let _ = opens_transaction(text);
         }
     }
 }

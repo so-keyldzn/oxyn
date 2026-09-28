@@ -27,7 +27,7 @@ const CHECKED: Record<Environment, string> = {
 
 /**
  * The environment of a connection: one exclusive choice, so radios, each
- * card carrying the full ringed pill (docs/UX-SPEC.md « Repères permanents »).
+ * card carrying the full ringed pill (docs/UX-SPEC.md « Permanent landmarks »).
  *
  * The chosen card is marked three ways — its radio, its border and its tint —
  * and never by colour alone. Production comes first: it is the default, and

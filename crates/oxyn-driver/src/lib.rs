@@ -1,79 +1,79 @@
-//! Le contrat que les quatorze drivers d'Oxyn respectent.
+//! The contract that Oxyn's fourteen drivers honor.
 //!
-//! Cette crate ne parle à aucune base de données. Elle définit **ce qu'un driver
-//! doit être** — trois traits, ses métadonnées, son registre, sa chaîne de
-//! connexion — et rien d'autre. Chaque erreur commise ici se paie autant de fois
-//! qu'il y a de drivers : les ~30 systèmes de la vision se ramènent à ~14
-//! implémentations réelles, un driver par **protocole** et non par produit
+//! This crate talks to no database. It defines **what a driver must be** —
+//! three traits, its metadata, its registry, its connection string — and
+//! nothing else. Every mistake made here is paid as many times as there are
+//! drivers: the ~30 systems of the vision boil down to ~14 real
+//! implementations, one driver per **protocol** and not per product
 //! ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
 //!
-//! Le contrat de fond fait autorité dans
-//! [DRIVER-CONTRACT](../../../docs/DRIVER-CONTRACT.md) ; il n'est pas recopié
-//! ici.
+//! The substantive contract is authoritative in
+//! [DRIVER-CONTRACT](../../../docs/DRIVER-CONTRACT.md); it is not copied
+//! here.
 //!
-//! # Ce qu'on y trouve
+//! # What it contains
 //!
-//! | Module | Sujet | Autorité |
+//! | Module | Subject | Authority |
 //! |---|---|---|
 //! | [`traits`] | [`Driver`], [`Session`], [`Cursor`] | ARCHITECTURE §4.1 |
-//! | [`metadata`] | ce qu'un driver dit de lui-même, et son formulaire | UX-SPEC |
-//! | [`registry`] | [`DriverRegistry`] : enregistrer, retrouver, ordonner | ARCHITECTURE §4 |
-//! | [`credentials`] | [`Credentials`] : les secrets résolus, et rien d'autre | SECURITY, I-03 |
-//! | [`dsn`] | l'URL de connexion, et le mot de passe qui n'en sort jamais | SECURITY, I-03 |
+//! | [`metadata`] | what a driver says about itself, and its form | UX-SPEC |
+//! | [`registry`] | [`DriverRegistry`]: register, look up, order | ARCHITECTURE §4 |
+//! | [`credentials`] | [`Credentials`]: the resolved secrets, and nothing else | SECURITY, I-03 |
+//! | [`dsn`] | the connection URL, and the password that never leaves it | SECURITY, I-03 |
 //!
-//! # Les trois choix qui gouvernent cette crate
+//! # The three choices that govern this crate
 //!
-//! **Rien n'est simulé.** Une session déclare ses capacités et refuse ce qu'elle
-//! ne sait pas faire. [`Session::begin`] par défaut échoue de deux façons
-//! différentes selon que la session déclare ou non
-//! [`Capabilities::TRANSACTIONS`](oxyn_core::Capabilities::TRANSACTIONS) — mais
-//! elle ne réussit jamais sans rien ouvrir. Laisser croire qu'un `ROLLBACK` a
-//! annulé une écriture coûte plus cher que de ne pas savoir le faire.
+//! **Nothing is simulated.** A session declares its capabilities and refuses
+//! what it cannot do. The default [`Session::begin`] fails in two different
+//! ways depending on whether the session declares
+//! [`Capabilities::TRANSACTIONS`](oxyn_core::Capabilities::TRANSACTIONS) — but
+//! it never succeeds without opening anything. Letting the user believe a
+//! `ROLLBACK` undid a write costs more than not knowing how to do it.
 //!
-//! **Le secret ne traverse pas la configuration.** [`ConnectionConfig`](oxyn_core::ConnectionConfig)
-//! ne porte qu'une référence ; les identifiants arrivent au driver par
-//! [`Credentials`], et l'URL complète n'existe que le temps d'un appel à
-//! [`Dsn::expose`]. [`DriverMetadata::validate`] et [`DsnBuilder::from_config`]
-//! **refusent** un paramètre qui porterait un mot de passe, plutôt que de le
-//! transporter (I-03).
+//! **The secret does not travel through the configuration.** [`ConnectionConfig`](oxyn_core::ConnectionConfig)
+//! carries only a reference; credentials reach the driver through
+//! [`Credentials`], and the full URL exists only for the duration of a call to
+//! [`Dsn::expose`]. [`DriverMetadata::validate`] and [`DsnBuilder::from_config`]
+//! **refuse** a parameter that would carry a password, rather than carry it
+//! (I-03).
 //!
-//! **L'interface est engendrée, pas codée par driver.** Un driver décrit ses
-//! [`ConnectionField`] ; personne n'écrit un écran de connexion par protocole.
-//! C'est ce qui rend le quatorzième driver aussi peu coûteux que le troisième.
+//! **The interface is generated, not coded per driver.** A driver describes its
+//! [`ConnectionField`]s; nobody writes a connection screen per protocol. That
+//! is what makes the fourteenth driver as cheap as the third.
 //!
-//! # Exemple : du formulaire à l'URL
+//! # Example: from the form to the URL
 //!
 //! ```
 //! use oxyn_core::{ConnectionConfig, DriverId};
 //! use oxyn_driver::{ConnectionField, DriverFamily, DriverMetadata, DsnBuilder, FieldKind};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Ce que le driver déclare une fois pour toutes.
-//! let metadonnees =
+//! // What the driver declares once and for all.
+//! let metadata =
 //!     DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)
 //!         .with_default_port(5432)
 //!         .with_fields([
-//!             ConnectionField::new("host", "Hôte", FieldKind::Text).required(),
-//!             ConnectionField::new("user", "Utilisateur", FieldKind::Text).required(),
-//!             ConnectionField::new("database", "Base", FieldKind::Text).required(),
-//!             ConnectionField::new("password", "Mot de passe", FieldKind::Password),
+//!             ConnectionField::new("host", "Host", FieldKind::Text).required(),
+//!             ConnectionField::new("user", "User", FieldKind::Text).required(),
+//!             ConnectionField::new("database", "Database", FieldKind::Text).required(),
+//!             ConnectionField::new("password", "Password", FieldKind::Password),
 //!         ]);
 //!
-//! // Ce que l'utilisateur saisit — le mot de passe part au trousseau, pas ici.
-//! let connexion = ConnectionConfig::new("caisse", DriverId::postgres())
-//!     .with_param("host", "interne.example")
+//! // What the user types — the password goes to the keychain, not here.
+//! let connection = ConnectionConfig::new("till", DriverId::postgres())
+//!     .with_param("host", "internal.example")
 //!     .with_param("user", "app")
-//!     .with_param("database", "caisse");
-//! metadonnees.validate(&connexion)?;
+//!     .with_param("database", "till");
+//! metadata.validate(&connection)?;
 //!
-//! // Et l'URL, dont le mot de passe n'entre qu'à `expose`.
-//! let dsn = DsnBuilder::for_driver(&metadonnees, &connexion)?
-//!     .with_password("resolu-depuis-le-trousseau")
+//! // And the URL, whose password only enters at `expose`.
+//! let dsn = DsnBuilder::for_driver(&metadata, &connection)?
+//!     .with_password("resolved-from-the-keychain")
 //!     .build()?;
 //!
 //! assert!(dsn.has_password());
-//! assert!(!dsn.to_string().contains("resolu-depuis-le-trousseau"));
-//! assert!(dsn.to_string().ends_with(":5432/caisse"));
+//! assert!(!dsn.to_string().contains("resolved-from-the-keychain"));
+//! assert!(dsn.to_string().ends_with(":5432/till"));
 //! # Ok(())
 //! # }
 //! ```
@@ -92,22 +92,22 @@ pub use metadata::{ConnectionField, DriverFamily, DriverMetadata, FieldKind, loo
 pub use registry::DriverRegistry;
 pub use traits::{Cursor, Driver, Session};
 
-/// Réexports de `secrecy`, parce qu'ils font partie de la signature de
-/// [`Driver::connect`] et de [`Dsn::expose`].
+/// Re-exports of `secrecy`, because they are part of the signature of
+/// [`Driver::connect`] and of [`Dsn::expose`].
 ///
-/// Un driver doit pouvoir nommer [`SecretString`] et exposer son contenu au
-/// moment de le remettre à son client. Le lui faire faire en ajoutant `secrecy`
-/// à son propre `Cargo.toml` inviterait à une divergence de version entre deux
-/// crates du workspace — et deux types `SecretString` incompatibles se
-/// diagnostiquent très mal.
+/// A driver must be able to name [`SecretString`] and expose its content at
+/// the moment it hands it to its client. Making it do so by adding `secrecy`
+/// to its own `Cargo.toml` would invite a version divergence between two
+/// crates of the workspace — and two incompatible `SecretString` types are
+/// very hard to diagnose.
 pub use secrecy::{ExposeSecret, SecretString};
 
-/// Ce qu'on importe d'un coup quand on écrit un driver.
+/// What one imports in one go when writing a driver.
 ///
-/// Y compris le vocabulaire du domaine : un driver a besoin de
-/// [`Capabilities`](oxyn_core::Capabilities), de
-/// [`ExecRequest`](oxyn_core::ExecRequest) et d'[`OxynError`](oxyn_core::OxynError)
-/// à chaque fichier, et les importer un par un finit par être contourné.
+/// Including the domain vocabulary: a driver needs
+/// [`Capabilities`](oxyn_core::Capabilities),
+/// [`ExecRequest`](oxyn_core::ExecRequest) and [`OxynError`](oxyn_core::OxynError)
+/// in every file, and importing them one by one ends up being bypassed.
 ///
 /// ```
 /// use oxyn_driver::prelude::*;
@@ -136,64 +136,60 @@ mod tests {
         ParsedDsn,
     };
 
-    fn metadonnees() -> DriverMetadata {
+    fn metadata() -> DriverMetadata {
         DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)
             .with_default_port(5432)
             .with_fields([
-                ConnectionField::new("host", "Hôte", FieldKind::Text)
+                ConnectionField::new("host", "Host", FieldKind::Text)
                     .required()
                     .with_default("localhost"),
-                ConnectionField::new("user", "Utilisateur", FieldKind::Text).required(),
-                ConnectionField::new("database", "Base", FieldKind::Text).required(),
-                ConnectionField::new("password", "Mot de passe", FieldKind::Password),
+                ConnectionField::new("user", "User", FieldKind::Text).required(),
+                ConnectionField::new("database", "Database", FieldKind::Text).required(),
+                ConnectionField::new("password", "Password", FieldKind::Password),
                 ConnectionField::new(
                     "sslmode",
-                    "Mode TLS",
+                    "TLS mode",
                     FieldKind::Choice(vec!["disable".into(), "require".into()]),
                 )
                 .with_default("require"),
             ])
     }
 
-    /// Le trajet complet de la crate, sur le scénario qui la met vraiment en
-    /// jeu : l'utilisateur colle une URL, Oxyn en tire une connexion
-    /// persistable et un secret séparé, puis reconstruit l'URL pour se
-    /// connecter.
+    /// The crate's full path, on the scenario that really puts it to work:
+    /// the user pastes a URL, Oxyn derives from it a persistable connection
+    /// and a separate secret, then rebuilds the URL to connect.
     #[test]
-    fn le_trajet_complet_d_une_url_collee() {
-        let mot_de_passe = "hunter2";
-        let mut collee = String::from("postgres://app:");
-        collee.push_str(mot_de_passe);
-        collee.push_str("@interne.example:6432/caisse?sslmode=require");
+    fn the_full_path_of_a_pasted_url() {
+        let password = "hunter2";
+        let mut pasted = String::from("postgres://app:");
+        pasted.push_str(password);
+        pasted.push_str("@internal.example:6432/till?sslmode=require");
 
-        let relu = ParsedDsn::parse(&collee).expect("URL valide");
-        let (parts, identifiants) = relu.into_parts();
+        let parsed = ParsedDsn::parse(&pasted).expect("valid URL");
+        let (parts, credentials) = parsed.into_parts();
 
-        // 1. Ce qui est persisté ne porte aucun secret, et le driver l'accepte.
-        let connexion = parts.to_config("caisse", DriverId::postgres());
-        metadonnees()
-            .validate(&connexion)
-            .expect("la configuration relue est complète et sans secret");
-        for (cle, valeur) in &connexion.params {
-            assert!(
-                valeur != mot_de_passe,
-                "le paramètre `{cle}` porte le mot de passe"
-            );
+        // 1. What is persisted carries no secret, and the driver accepts it.
+        let connection = parts.to_config("till", DriverId::postgres());
+        metadata()
+            .validate(&connection)
+            .expect("the parsed configuration is complete and secret-free");
+        for (key, value) in &connection.params {
+            assert!(value != password, "parameter `{key}` carries the password");
         }
 
-        // 2. La connexion vaut production tant que personne n'a dit le
-        //    contraire : une URL ne dit rien de l'environnement.
-        assert!(connexion.is_production());
+        // 2. The connection counts as production until someone says
+        //    otherwise: a URL says nothing about the environment.
+        assert!(connection.is_production());
 
-        // 3. L'URL se reconstruit, mot de passe réinjecté au dernier moment.
-        let dsn = DsnBuilder::for_driver(&metadonnees(), &connexion)
-            .expect("aucun secret dans les paramètres")
-            .with_credentials(&identifiants)
+        // 3. The URL is rebuilt, password injected at the last moment.
+        let dsn = DsnBuilder::for_driver(&metadata(), &connection)
+            .expect("no secret in the parameters")
+            .with_credentials(&credentials)
             .build()
-            .expect("URL valide");
+            .expect("valid URL");
 
-        assert!(!dsn.to_string().contains(mot_de_passe), "{dsn}");
-        let complete = dsn.expose().expect("l'URL a une autorité");
-        assert_eq!(complete.expose_secret(), collee);
+        assert!(!dsn.to_string().contains(password), "{dsn}");
+        let complete = dsn.expose().expect("the URL has an authority");
+        assert_eq!(complete.expose_secret(), pasted);
     }
 }

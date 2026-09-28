@@ -452,8 +452,8 @@ struct ToolCallPayload {
 
 /// What a provider declared it spent on one turn, counted in tokens.
 ///
-/// Every field is `Option` and none defaults to `0`: « not declared » and
-/// « zero » are different facts, and showing « 0 read from cache » where the
+/// Every field is `Option` and none defaults to `0`: "not declared" and
+/// "zero" are different facts, and showing "0 read from cache" where the
 /// provider said nothing would look like a cache that does not work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TurnUsage {
@@ -1275,7 +1275,7 @@ fn decode_tool_calls(raw: Option<String>) -> Vec<ToolCallRecord> {
 
 /// Reads a token count.
 ///
-/// A value SQLite could hold but `u32` cannot reads as « not declared » rather
+/// A value SQLite could hold but `u32` cannot reads as "not declared" rather
 /// than as a wrong number.
 fn decode_token_count(raw: Option<i64>) -> Option<u32> {
     let raw = raw?;

@@ -1,43 +1,40 @@
 ---
 name: axe-ne-teste-pas-le-contraste-non-textuel
-description: Stories vertes ≠ contraste vérifié — axe ignore WCAG 1.4.11 et Storybook rend en sombre par défaut ; mesurer par canvas, jamais par regex sur rgba()
+description: Green stories ≠ checked contrast — axe ignores WCAG 1.4.11 and Storybook renders dark by default; measure through a canvas, never with a regex on rgba()
 metadata:
   type: feedback
 ---
 
-Une story qui passe axe en mode `error` ne prouve **que** le contraste du texte,
-et **que dans le thème rendu**. Deux angles morts :
+A story that passes axe in `error` mode proves **only** the text contrast, and
+**only in the rendered theme**. Two blind spots:
 
-1. **Le thème par défaut de Storybook ici est sombre** (`initialGlobals: {
-   theme: "dark" }` dans `.storybook/preview.tsx`). Sans story portant
-   `globals: { theme: "light" }`, le clair n'est jamais vérifié.
-2. **axe ne teste pas le contraste non textuel** (WCAG 1.4.11) : bordure d'une
-   case à cocher, contour d'un champ, piste d'un interrupteur, anneau de focus.
+1. **Storybook's default theme here is dark** (`initialGlobals: {
+   theme: "dark" }` in `.storybook/preview.tsx`). Without a story carrying
+   `globals: { theme: "light" }`, light mode is never checked.
+2. **axe does not test non-text contrast** (WCAG 1.4.11): a checkbox border, a
+   field outline, a switch track, a focus ring.
 
-**La garde existe désormais pour les jetons de thème** :
-`src/components/oxyn/theme-contrast.stories.tsx` mesure `--input` et `--ring`
-dans les deux thèmes (corrigés le 2026-09-16 après des mesures à 1,45:1). Un
-défaut de jeton s'écrit **là**, une fois, pas dans la story d'un écran. Elle ne
-couvre pas tout : l'interrupteur, par exemple, n'y est pas (piste à 2,96:1 en
-sombre, rattrapée par un curseur à 15,51:1).
+**The guard now exists for theme tokens**:
+`src/components/oxyn/theme-contrast.stories.tsx` measures `--input` and `--ring`
+in both themes (fixed on 2026-09-16 after measurements at 1.45:1). A token
+defect is written **there**, once, not in a screen's story. It does not cover
+everything: the switch, for example, is not in it (track at 2.96:1 in dark,
+saved by a thumb at 15.51:1).
 
-**Comment mesurer — la leçon qui coûte cher :** réutiliser la méthode `paint`
-de cette story (peindre la couleur sur un canvas 1×1 au-dessus du fond, relire
-le pixel). Elle lit nativement `oklab`, `color-mix` et l'alpha, et échoue
-bruyamment sur une couleur illisible. Un analyseur maison par regex s'est trompé
-deux fois : `rgba(0, 0, 0, 0)` lu comme **noir opaque** (faux succès sur fond
-clair, faux échec sur fond sombre), et `oklab(… / 0.8)` illisible. Et ne pas
-déduire une couleur de `styles.css` sans la mesurer : `--input` avait changé
-sous mes yeux.
+**How to measure — the expensive lesson:** reuse that story's `paint` method
+(paint the color on a 1×1 canvas above the background, read the pixel back). It
+natively reads `oklab`, `color-mix` and alpha, and fails loudly on an unreadable
+color. A homemade regex parser got it wrong twice: `rgba(0, 0, 0, 0)` read as
+**opaque black** (false success on a light background, false failure on a dark
+one), and `oklab(… / 0.8)` unreadable. And do not infer a color from
+`styles.css` without measuring it: `--input` had changed right under my eyes.
 
-Mesurer aussi **ce qui identifie réellement le contrôle** : pour un interrupteur
-décoché, la bordure, la piste **et** le curseur — sinon on signale un faux
-défaut.
+Also measure **what actually identifies the control**: for an unchecked switch,
+the border, the track **and** the thumb — otherwise a false defect is reported.
 
-**Why:** la question posée était « relis en sombre » ; les vraies lacunes étaient
-le clair et le non-textuel, et ma première mesure était fausse parce qu'elle
-ignorait l'alpha.
+**Why:** the question asked was "review in dark"; the real gaps were light mode
+and non-text, and my first measurement was wrong because it ignored alpha.
 
-**How to apply:** avant d'affirmer un contraste, le mesurer dans le navigateur
-par la méthode canvas, dans chaque thème, et éprouver le test par mutation. Voir
+**How to apply:** before asserting a contrast, measure it in the browser with
+the canvas method, in each theme, and test the test by mutation. See
 [[axe-region-defilante-sans-focus]], [[pieges-de-la-porte-front]].

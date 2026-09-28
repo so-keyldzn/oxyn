@@ -1,151 +1,150 @@
-//! Les erreurs de la persistance locale.
+//! Local persistence errors.
 //!
-//! Une seule énumération pour toute la frontière `oxyn-store`, conformément à la
-//! règle du dépôt : l'appelant doit pouvoir distinguer les cas sans relire une
-//! chaîne de caractères. Un schéma écrit par une version future
-//! ([`SchemaTooRecent`](StoreError::SchemaTooRecent)) et une base verrouillée
-//! ([`Sqlite`](StoreError::Sqlite)) n'appellent pas la même réaction.
+//! A single enum for the whole `oxyn-store` boundary, per the repository rule:
+//! the caller must be able to tell cases apart without re-reading a string. A
+//! schema written by a future version
+//! ([`SchemaTooRecent`](StoreError::SchemaTooRecent)) and a locked database
+//! ([`Sqlite`](StoreError::Sqlite)) do not call for the same reaction.
 //!
-//! Aucun message ne reprend une **valeur** stockée : les identifiants, les noms
-//! de colonnes et les noms de paramètres sont admis, jamais leur contenu (I-03).
+//! No message repeats a stored **value**: identifiers, column names and
+//! parameter names are allowed, never their content (I-03).
 
 use oxyn_core::OxynError;
 
-/// Alias de résultat de la crate.
+/// The crate's result alias.
 ///
-/// Distinct de [`oxyn_core::Result`] : ce qui échoue ici est l'état **local**,
-/// pas un serveur. La conversion vers `OxynError` existe pour le moment où
-/// l'erreur remonte au bus (`impl From<StoreError> for OxynError`).
+/// Distinct from [`oxyn_core::Result`]: what fails here is the **local**
+/// state, not a server. The conversion to `OxynError` exists for when the
+/// error goes up to the bus (`impl From<StoreError> for OxynError`).
 pub type Result<T> = std::result::Result<T, StoreError>;
 
-/// Ce qui peut échouer en lisant ou en écrivant l'état local.
+/// What can fail while reading or writing the local state.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
     /// The local operation stopped before completion at the caller's request.
     #[error("local operation cancelled")]
     Cancelled,
-    /// Le système n'expose pas de répertoire de données utilisateur exploitable.
+    /// The system exposes no usable user data directory.
     #[error("no usable system data directory")]
     DataDirUnavailable,
 
-    /// SQLite a refusé l'opération : base verrouillée, contrainte violée,
-    /// journal d'audit protégé par son déclencheur.
+    /// SQLite refused the operation: locked database, violated constraint,
+    /// audit journal protected by its trigger.
     #[error("local state: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    /// Échec d'entrée-sortie sur le fichier ou son répertoire.
+    /// I/O failure on the file or its directory.
     #[error("I/O on the local state: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Une migration n'a pas pu être appliquée. La transaction a été annulée :
-    /// le schéma est resté dans son état antérieur.
+    /// A migration could not be applied. The transaction was rolled back: the
+    /// schema stayed in its previous state.
     #[error("migration {version} (`{name}`): {source}")]
     Migration {
-        /// Numéro de la migration fautive.
+        /// Number of the failing migration.
         version: u32,
-        /// Nom de la migration, tel qu'il est écrit dans `schema_version`.
+        /// Name of the migration, as written in `schema_version`.
         name: &'static str,
-        /// La cause telle que SQLite l'a rendue.
+        /// The cause as SQLite returned it.
         #[source]
         source: rusqlite::Error,
     },
 
-    /// L'état local a été écrit par une version plus récente d'Oxyn.
+    /// The local state was written by a newer version of Oxyn.
     ///
-    /// On refuse d'ouvrir plutôt que de deviner : une version antérieure qui
-    /// écrirait dans un schéma qu'elle ne comprend pas corromprait la piste
-    /// d'audit.
+    /// Opening is refused rather than guessed: an older version writing into
+    /// a schema it does not understand would corrupt the audit trail.
     #[error("local state written by a newer version (schema {found}, supported up to {supported})")]
     SchemaTooRecent {
-        /// Version trouvée dans le fichier.
+        /// Version found in the file.
         found: u32,
-        /// Version la plus élevée que ce binaire sait appliquer.
+        /// Highest version this binary can apply.
         supported: u32,
     },
 
-    /// Une colonne contient une valeur que le domaine ne sait pas relire.
+    /// A column holds a value the domain cannot read back.
     ///
-    /// Le message nomme la colonne et la raison, **jamais** la valeur.
+    /// The message names the column and the reason, **never** the value.
     #[error("column `{field}` is unreadable: {detail}")]
     Corrupted {
-        /// Nom de la colonne.
+        /// Column name.
         field: &'static str,
-        /// Raison du rejet, sans reprendre la valeur.
+        /// Reason for the rejection, without repeating the value.
         detail: String,
     },
 
-    /// Un paramètre de connexion porte un nom de secret.
+    /// A connection parameter carries a secret's name.
     ///
-    /// Refus **à l'écriture** : c'est le dernier point où l'on peut empêcher un
-    /// mot de passe d'atteindre le disque en clair (I-03). Seule la clé est
-    /// nommée ; la valeur ne remonte nulle part.
+    /// Refused **on write**: it is the last point where a password can be
+    /// prevented from reaching the disk in clear (I-03). Only the key is
+    /// named; the value goes up nowhere.
     #[error(
         "parameter `{key}` is named like a secret: \
          only a secret reference (`secret_ref`) is persisted"
     )]
     SecretInParams {
-        /// Le nom du paramètre refusé.
+        /// The name of the refused parameter.
         key: String,
     },
 
-    /// Une écriture dépasse une borne de l'état local.
+    /// A write exceeds a local-state bound.
     ///
-    /// Refus **à l'écriture**, et jamais une troncature : ce qu'on écrirait à
-    /// moitié — un tour de conversation, un transcript — se relirait comme un
-    /// texte complet qui ment. L'appelant est le seul à pouvoir dire à
-    /// l'utilisateur qu'il faut ouvrir un nouveau fil, d'où l'erreur plutôt
-    /// qu'un `warn`.
+    /// Refused **on write**, and never truncated: what would be written by
+    /// half — a conversation turn, a transcript — would read back as a
+    /// complete text that lies. Only the caller can tell the user to open a
+    /// new thread, hence the error rather than a `warn`.
     ///
-    /// Le message nomme la colonne et la borne, jamais la valeur (I-03).
+    /// The message names the column and the bound, never the value (I-03).
     #[error("`{field}` exceeds its local-state limit of {limit}")]
     TooLarge {
-        /// Nom de la colonne ou de la borne dépassée.
+        /// Name of the exceeded column or bound.
         field: &'static str,
-        /// La borne, dans l'unité de la colonne — octets ou nombre d'éléments.
+        /// The bound, in the column's unit — bytes or number of items.
         limit: u64,
     },
 
-    /// Écriture d'une réponse, d'un raisonnement ou d'un appel d'outil pour un
-    /// échange qui a reçu un échantillon de lignes.
+    /// Writing an answer, a reasoning or a tool call for an exchange that
+    /// received a sample of rows.
     ///
-    /// Décision de l'utilisateur : un tel échange ne garde que sa question, ses
-    /// compteurs et son issue. Le refus est ici **et** dans un déclencheur du
-    /// fichier ; il n'y a rien à retenter, l'appelant ne devait pas écrire.
+    /// The user's decision: such an exchange only keeps its question, its
+    /// counters and its outcome. The refusal is here **and** in a trigger of
+    /// the file; there is nothing to retry, the caller was not supposed to
+    /// write.
     #[error("exchange {node} kept an approved sample: its answer is not stored")]
     SampleWithheld {
-        /// L'échange visé.
+        /// The exchange concerned.
         node: u32,
     },
 
-    /// Un encodage ou un décodage JSON a échoué (paramètres de connexion,
-    /// étiquette d'énumération, instantané de catalogue).
+    /// A JSON encoding or decoding failed (connection parameters, enum tag,
+    /// catalog snapshot).
     #[error("local state JSON: {0}")]
     Json(#[from] serde_json::Error),
 }
 
 impl From<StoreError> for OxynError {
-    /// Remonte l'erreur vers le vocabulaire du bus.
+    /// Maps the error to the bus vocabulary.
     ///
-    /// Le classement suit ce que l'appelant doit **faire** :
-    /// [`Config`](OxynError::Config) est ce que l'utilisateur peut corriger,
-    /// [`Serialization`](OxynError::Serialization) est une donnée qu'on ne sait
-    /// pas relire, [`Internal`](OxynError::Internal) est un défaut d'Oxyn.
+    /// The classification follows what the caller must **do**:
+    /// [`Config`](OxynError::Config) is what the user can correct,
+    /// [`Serialization`](OxynError::Serialization) is data that cannot be read
+    /// back, [`Internal`](OxynError::Internal) is a defect of Oxyn.
     fn from(err: StoreError) -> Self {
         let message = err.to_string();
         match err {
             StoreError::Cancelled => Self::Cancelled,
             StoreError::Io(io) => Self::Io(io),
-            // `TooLarge` est du côté de l'utilisateur : ce qu'il peut faire —
-            // ouvrir un nouveau fil, raccourcir une requête — est une action,
-            // pas un rapport de bogue. Retenter à l'identique ne change rien.
+            // `TooLarge` is on the user's side: what they can do — open a new
+            // thread, shorten a query — is an action, not a bug report.
+            // Retrying identically changes nothing.
             StoreError::DataDirUnavailable
             | StoreError::SchemaTooRecent { .. }
             | StoreError::SecretInParams { .. }
             | StoreError::TooLarge { .. } => Self::Config(message),
             StoreError::Corrupted { .. } | StoreError::Json(_) => Self::Serialization(message),
-            // Un appelant qui écrit la réponse d'un échange retenu a un défaut :
-            // l'utilisateur n'a rien à corriger.
+            // A caller that writes the answer of a withheld exchange has a
+            // defect: the user has nothing to correct.
             StoreError::Sqlite(_)
             | StoreError::Migration { .. }
             | StoreError::SampleWithheld { .. } => Self::Internal(message),
@@ -158,36 +157,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn un_refus_de_secret_ne_montre_que_la_cle() {
-        let erreur = StoreError::SecretInParams {
+    fn a_secret_refusal_only_shows_the_key() {
+        let error = StoreError::SecretInParams {
             key: "password".to_owned(),
         };
-        let message = erreur.to_string();
-        assert!(message.contains("password"), "la clé doit être nommée");
-        assert!(
-            !message.contains("hunter2"),
-            "aucune valeur ne doit pouvoir apparaître ici"
-        );
+        let message = error.to_string();
+        assert!(message.contains("password"), "the key must be named");
+        assert!(!message.contains("hunter2"), "no value may appear here");
     }
 
     #[test]
-    fn un_secret_dans_les_parametres_est_une_erreur_de_configuration() {
-        let erreur: OxynError = StoreError::SecretInParams {
+    fn a_secret_in_the_parameters_is_a_configuration_error() {
+        let error: OxynError = StoreError::SecretInParams {
             key: "api_key".to_owned(),
         }
         .into();
-        assert!(matches!(erreur, OxynError::Config(_)));
-        assert!(erreur.is_user_error(), "l'utilisateur peut la corriger");
-        assert!(!erreur.is_retryable(), "retenter ne change rien");
+        assert!(matches!(error, OxynError::Config(_)));
+        assert!(error.is_user_error(), "the user can correct it");
+        assert!(!error.is_retryable(), "retrying changes nothing");
     }
 
     #[test]
-    fn un_schema_trop_recent_ne_se_retente_pas() {
-        let erreur: OxynError = StoreError::SchemaTooRecent {
+    fn a_too_recent_schema_is_not_retried() {
+        let error: OxynError = StoreError::SchemaTooRecent {
             found: 9,
             supported: 1,
         }
         .into();
-        assert!(!erreur.is_retryable());
+        assert!(!error.is_retryable());
     }
 }

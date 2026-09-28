@@ -32,7 +32,7 @@ const environmentBadge = cva(
  * The environment marking, as a ringed pill.
  *
  * The label is always written out: colour alone never carries the marking
- * (docs/UX-SPEC.md, « Repères permanents »). Built on `Badge`, so the pill,
+ * (docs/UX-SPEC.md, « Permanent landmarks »). Built on `Badge`, so the pill,
  * its focus ring and its slot come from one place; `...props` lets a caller
  * add its own `aria-*` or `id`.
  */

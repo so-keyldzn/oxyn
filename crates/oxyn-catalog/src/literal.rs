@@ -3,7 +3,7 @@
 //! The counterpart of [`quote_identifier`](crate::quote_identifier) for
 //! **values**: a text Oxyn writes for the user to run — a copied `INSERT`, an
 //! `IN (…)` list — carries cells of the user's data, and a cell is as hostile
-//! as an object name ([I-10], SECURITY « Surface d'entrée »). A value
+//! as an object name ([I-10], SECURITY "Input surface"). A value
 //! `'); DROP TABLE x; --` must come out as one literal and nothing else.
 //!
 //! # Why the dialect, and not [`QuoteStyle`](crate::QuoteStyle)
@@ -16,8 +16,8 @@
 //! here that lets a value close its literal.
 //!
 //! The rules per dialect are sourced and dated in
-//! [RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md), « Littéraux de chaîne
-//! SQL » ([I-12]).
+//! [RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md), "SQL string literals"
+//! ([I-12]).
 //!
 //! # Control characters
 //!

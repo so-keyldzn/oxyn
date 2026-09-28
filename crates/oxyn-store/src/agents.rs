@@ -1,25 +1,25 @@
-//! La table `external_agents` : les agents externes déclarés.
+//! The `external_agents` table: the declared external agents.
 //!
-//! **Par machine, pas par workspace**, pour la raison d'`ai_providers` : un
-//! agent installé sur la machine sert tous les workspaces
+//! **Per machine, not per workspace**, for the same reason as `ai_providers`:
+//! an agent installed on the machine serves every workspace
 //! ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
 //!
-//! **Aucun secret n'est écrit ici, et il n'y a pas de colonne pour en écrire
-//! un.** Un agent externe porte sa propre authentification ; Oxyn n'en détient
-//! aucune. C'est la différence qui fonde ce mode : la seule façon certaine de ne
-//! pas divulguer une clé est de ne pas l'avoir ([I-03](../../../CLAUDE.md#i-03)).
+//! **No secret is written here, and there is no column to write one.** An
+//! external agent carries its own authentication; Oxyn holds none. That is the
+//! difference this mode rests on: the only sure way not to leak a key is not
+//! to have it ([I-03](../../../CLAUDE.md#i-03)).
 //!
-//! `env` n'est pas un endroit où ranger un jeton non plus — ce qui est là part
-//! dans l'environnement d'un processus, visible de la table des processus sur
-//! certains systèmes. Le domaine le dit dans la documentation du champ ; ce
-//! module n'a aucun moyen de le vérifier, et n'en invente pas.
+//! `env` is not a place to store a token either — what is there goes into a
+//! process environment, visible in the process table on some systems. The
+//! domain says so in the field's documentation; this module has no way to
+//! check it, and does not invent one.
 //!
-//! **Aucune portée n'est persistée**, et cette fois ce n'est pas parce qu'elle
-//! serait périmée comme pour un fournisseur : la portée d'un agent externe est
-//! **inconnaissable**. Il n'y a rien à écrire.
+//! **No reach is persisted**, and this time not because it would be stale as
+//! for a provider: an external agent's reach is **unknowable**. There is
+//! nothing to write.
 //!
-//! Toutes les méthodes peuvent bloquer : elles ne s'appellent jamais depuis le
-//! thread d'interface ([I-05](../../../CLAUDE.md#i-05)).
+//! Every method may block: they are never called from the UI thread
+//! ([I-05](../../../CLAUDE.md#i-05)).
 
 use chrono::Utc;
 use oxyn_core::{ExternalAgentConfig, ProviderId};
@@ -28,73 +28,73 @@ use rusqlite::{Row, params};
 use crate::error::{Result, StoreError};
 use crate::store::Store;
 
-/// Accès typé à la table `external_agents`.
+/// Typed access to the `external_agents` table.
 #[derive(Debug)]
 pub struct ExternalAgents<'a> {
     store: &'a Store,
 }
 
 impl<'a> ExternalAgents<'a> {
-    /// Rattache l'accesseur à son `Store`.
+    /// Binds the accessor to its `Store`.
     pub(crate) fn new(store: &'a Store) -> Self {
         Self { store }
     }
 
-    /// Les agents déclarés, par nom.
+    /// The declared agents, by name.
     ///
-    /// L'ordre est celui du nom donné par l'utilisateur, départagé par
-    /// l'identifiant : une liste de réglages qui se réordonne d'une ouverture à
-    /// l'autre se lit comme un défaut.
+    /// The order is that of the name given by the user, tie-broken by the
+    /// identifier: a settings list that reorders itself from one opening to
+    /// the next reads as a defect.
     ///
-    /// Une ligne que ce binaire ne sait pas relire est **écartée** avec un
-    /// `warn`, pas propagée en erreur — même parti que pour les fournisseurs :
-    /// un agent qu'on ne saurait pas lancer ne doit pas être proposé, et une
-    /// seule ligne étrange ne doit pas rendre l'écran inutilisable.
+    /// A row this binary cannot read back is **skipped** with a `warn`, not
+    /// propagated as an error — the same choice as for providers: an agent
+    /// that could not be launched must not be offered, and a single odd row
+    /// must not make the screen unusable.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] si la lecture échoue.
+    /// # Errors
+    /// [`StoreError::Sqlite`] if the read fails.
     pub fn list(&self) -> Result<Vec<ExternalAgentConfig>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(
+            let mut query = conn.prepare(
                 "SELECT id, label, command, args, env, created_at, updated_at
                  FROM external_agents ORDER BY label, id",
             )?;
-            let lignes = requete.query_map([], depuis_ligne)?;
+            let rows = query.query_map([], from_row)?;
             let mut agents = Vec::new();
-            for ligne in lignes {
-                match ligne? {
+            for row in rows {
+                match row? {
                     Ok(Some(agent)) => agents.push(agent),
                     Ok(None) => {}
-                    Err(erreur) => return Err(erreur),
+                    Err(error) => return Err(error),
                 }
             }
             Ok(agents)
         })
     }
 
-    /// Écrit ou remplace une déclaration.
+    /// Writes or replaces a declaration.
     ///
-    /// Valide **avant** le disque : c'est le dernier point où une commande
-    /// porteuse d'un caractère de contrôle peut être refusée avec un message.
+    /// Validates **before** the disk: it is the last point where a command
+    /// carrying a control character can be refused with a message.
     ///
-    /// # Erreurs
-    /// [`StoreError::Corrupted`] si la déclaration est invalide — le message
-    /// nomme la raison, jamais la valeur ; [`StoreError::Sqlite`] si l'écriture
-    /// échoue.
+    /// # Errors
+    /// [`StoreError::Corrupted`] if the declaration is invalid — the message
+    /// names the reason, never the value; [`StoreError::Sqlite`] if the write
+    /// fails.
     pub fn save(&self, agent: &ExternalAgentConfig) -> Result<()> {
-        agent.validate().map_err(|erreur| StoreError::Corrupted {
+        agent.validate().map_err(|error| StoreError::Corrupted {
             field: "external_agents",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })?;
-        let args = serde_json::to_string(&agent.args).map_err(|erreur| StoreError::Corrupted {
+        let args = serde_json::to_string(&agent.args).map_err(|error| StoreError::Corrupted {
             field: "external_agents.args",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })?;
-        let env = serde_json::to_string(&agent.env).map_err(|erreur| StoreError::Corrupted {
+        let env = serde_json::to_string(&agent.env).map_err(|error| StoreError::Corrupted {
             field: "external_agents.env",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })?;
-        let maintenant = Utc::now();
+        let now = Utc::now();
         self.store.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO external_agents
@@ -113,39 +113,38 @@ impl<'a> ExternalAgents<'a> {
                     args,
                     env,
                     agent.created_at,
-                    maintenant,
+                    now,
                 ],
             )?;
             Ok(())
         })
     }
 
-    /// Retire une déclaration. Rend `true` si une ligne a disparu.
+    /// Removes a declaration. Returns `true` if a row disappeared.
     ///
-    /// N'efface rien d'autre. Il n'y a pas de secret à révoquer ailleurs : c'est
-    /// le propre de ce mode.
+    /// Erases nothing else. There is no secret to revoke elsewhere: that is
+    /// the point of this mode.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] si la suppression échoue.
+    /// # Errors
+    /// [`StoreError::Sqlite`] if the deletion fails.
     pub fn remove(&self, id: &ProviderId) -> Result<bool> {
         self.store.with_connection(|conn| {
-            let effacees = conn.execute(
+            let erased = conn.execute(
                 "DELETE FROM external_agents WHERE id = ?1",
                 params![id.as_str()],
             )?;
-            Ok(effacees > 0)
+            Ok(erased > 0)
         })
     }
 }
 
-/// Reconstruit une déclaration à partir d'une ligne.
+/// Rebuilds a declaration from a row.
 ///
-/// Rend `Ok(None)` pour une ligne que le domaine ne sait pas relire : la
-/// distinction avec `Err` propage une vraie panne SQLite tout en écartant une
-/// ligne écrite par une version ultérieure. Aucun message ne recopie la valeur
-/// fautive (I-03).
-fn depuis_ligne(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig>>> {
-    let brut: String = row.get(0)?;
+/// Returns `Ok(None)` for a row the domain cannot read back: the distinction
+/// with `Err` propagates a real SQLite failure while skipping a row written
+/// by a later version. No message copies the faulty value (I-03).
+fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig>>> {
+    let raw: String = row.get(0)?;
     let label: String = row.get(1)?;
     let command: String = row.get(2)?;
     let args: String = row.get(3)?;
@@ -153,7 +152,7 @@ fn depuis_ligne(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentCo
     let created_at = row.get(5)?;
     let updated_at = row.get(6)?;
 
-    let Ok(id) = ProviderId::new(brut) else {
+    let Ok(id) = ProviderId::new(raw) else {
         tracing::warn!("external agent row skipped: unreadable identifier");
         return Ok(Ok(None));
     };
@@ -177,13 +176,13 @@ fn depuis_ligne(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentCo
         created_at,
         updated_at,
     };
-    // Une ligne qui ne passerait plus la validation du domaine — écrite par une
-    // version dont les bornes différaient — est écartée plutôt que rendue : la
-    // proposer ferait échouer son lancement plus tard, loin d'ici.
-    if let Err(erreur) = agent.validate() {
+    // A row that would no longer pass the domain's validation — written by a
+    // version whose bounds differed — is skipped rather than returned:
+    // offering it would make its launch fail later, far from here.
+    if let Err(error) = agent.validate() {
         tracing::warn!(
             agent = %agent.id.as_str(),
-            reason = %erreur,
+            reason = %error,
             "external agent row skipped: declaration is no longer valid"
         );
         return Ok(Ok(None));

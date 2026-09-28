@@ -6,7 +6,7 @@
 //! not run. Every expectation below was checked against the engine itself, not
 //! derived from this crate: PostgreSQL 17.11 through the extended protocol, and
 //! SQLite 3.50.2, the version `rusqlite` bundles (docs/RESEARCH-NOTES.md,
-//! « Fin d'un commentaire `--` »).
+//! « End of a `--` comment »).
 
 use oxyn_core::{MutationRisk, SqlDialect, StatementIntent};
 use oxyn_query::classify;

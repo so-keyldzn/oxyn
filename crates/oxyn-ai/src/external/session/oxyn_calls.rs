@@ -7,7 +7,7 @@
 //! twice, once as an anonymous « Agent step ».
 //!
 //! **What recognises a call**, per adapter, read in their sources (see
-//! [RESEARCH-NOTES](../../../../../docs/RESEARCH-NOTES.md#ce-que-les-adaptateurs-acp-disent-dun-appel-mcp--relu-le-2026-09-24)):
+//! [RESEARCH-NOTES](../../../../../docs/RESEARCH-NOTES.md#what-acp-adapters-say-about-an-mcp-call--re-read-on-2026-09-24)):
 //!
 //! * Claude's adapter puts the programmatic tool name in
 //!   `_meta.claudeCode.toolName` — `mcp__oxyn__<tool>` for one of ours;

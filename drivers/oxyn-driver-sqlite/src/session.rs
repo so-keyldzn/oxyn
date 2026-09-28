@@ -1,38 +1,36 @@
-//! La session : une connexion ouverte, et ce qu'elle sait faire.
+//! The session: an open connection, and what it can do.
 //!
-//! # L'annulation n'est pas côté serveur, parce qu'il n'y a pas de serveur
+//! # Cancellation is not server-side, because there is no server
 //!
-//! SQLite tourne **dans le processus d'Oxyn**. `sqlite3_interrupt` arrête une
-//! instruction en cours, mais c'est une annulation *locale* : aucune connexion
-//! distante n'est libérée, aucun verrou serveur n'est relâché, parce qu'il n'y
-//! en a pas.
+//! SQLite runs **in Oxyn's process**. `sqlite3_interrupt` stops a running
+//! statement, but it is a *local* cancellation: no remote connection is freed, no
+//! server lock is released, because there is none.
 //!
-//! La session ne déclare donc **pas**
+//! The session therefore does **not** declare
 //! [`Capabilities::SERVER_SIDE_CANCEL`](oxyn_core::Capabilities::SERVER_SIDE_CANCEL),
-//! et [`SqliteSession::cancel`] refuse. Ce n'est pas une lacune à combler : le
-//! drapeau sert à l'interface pour dire « le bouton Annuler coupe vraiment la
-//! requête sur le serveur », et l'afficher face à une base embarquée serait
-//! affirmer quelque chose qui n'a pas de sens.
+//! and [`SqliteSession::cancel`] refuses. It is not a gap to fill: the interface
+//! uses the flag to say "the Cancel button really cuts the query on the server",
+//! and showing it for an embedded database would assert something meaningless.
 //!
-//! **L'interruption existe quand même**, et elle est complète : elle passe par
-//! le [`CancelToken`] remis à [`execute`](SqliteSession::execute), que le
-//! curseur consulte entre deux lots et surveille pendant qu'il en attend un.
-//! Voir [`crate::SqliteCursor`].
+//! **Interruption exists all the same**, and it is complete: it goes through the
+//! [`CancelToken`] handed to [`execute`](SqliteSession::execute), which the cursor
+//! checks between two batches and watches while it waits for one. See
+//! [`crate::SqliteCursor`].
 //!
-//! # Une session fait une chose à la fois
+//! # A session does one thing at a time
 //!
-//! C'est la sémantique d'une connexion SQLite, pas une limitation du transport :
-//! une introspection demandée pendant qu'un curseur diffuse attend que le lot en
-//! cours soit produit. L'interruption, elle, ne fait pas la queue.
+//! It is the semantics of an SQLite connection, not a limitation of the
+//! transport: an introspection requested while a cursor streams waits for the
+//! current batch to be produced. Interruption, however, does not queue.
 //!
-//! # Ce que la session ne change pas dans son dos
+//! # What the session does not change behind its back
 //!
-//! Ni `PRAGMA foreign_keys`, ni `PRAGMA busy_timeout`, ni `PRAGMA journal_mode`.
-//! SQLite laisse l'application choisir, et un `PRAGMA` posé en silence changerait
-//! le sens des requêtes suivantes de l'utilisateur. Conséquence assumée : les
-//! clés étrangères ne sont **pas** vérifiées par défaut — c'est le comportement
-//! de SQLite — et un fichier verrouillé rend immédiatement `SQLITE_BUSY`, classé
-//! transitoire, que l'appelant peut retenter s'il le juge rejouable.
+//! Neither `PRAGMA foreign_keys`, nor `PRAGMA busy_timeout`, nor
+//! `PRAGMA journal_mode`. SQLite lets the application choose, and a `PRAGMA` set
+//! silently would change the meaning of the user's next queries. Accepted
+//! consequence: foreign keys are **not** checked by default — it is SQLite's
+//! behavior — and a locked file immediately returns `SQLITE_BUSY`, classified as
+//! transient, which the caller may retry if it deems it replayable.
 
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -53,15 +51,15 @@ use crate::options::BatchLimits;
 use crate::stream::StreamJob;
 use crate::worker::WorkerHandle;
 
-/// Une connexion SQLite ouverte.
+/// An open SQLite connection.
 #[derive(Debug)]
 pub struct SqliteSession {
     worker: WorkerHandle,
-    /// La poignée du thread porteur, gardée pour qu'il ne soit jamais orphelin.
+    /// The worker thread's handle, kept so that it is never orphaned.
     ///
-    /// Elle n'est pas attendue à la fermeture : le thread ferme la connexion
-    /// **avant** de répondre, si bien qu'attendre le déroulement de sa pile
-    /// bloquerait le runtime pour rien.
+    /// It is not joined on close: the thread closes the connection **before**
+    /// replying, so waiting for its stack to unwind would block the runtime for
+    /// nothing.
     thread: Option<JoinHandle<()>>,
     capabilities: Capabilities,
     catalog: SqliteCatalog,
@@ -69,7 +67,7 @@ pub struct SqliteSession {
 }
 
 impl SqliteSession {
-    /// Assemble une session autour d'un thread porteur déjà ouvert.
+    /// Assembles a session around an already open worker thread.
     pub(crate) fn new(
         worker: WorkerHandle,
         thread: JoinHandle<()>,
@@ -85,13 +83,13 @@ impl SqliteSession {
         }
     }
 
-    /// Les bornes d'un lot Arrow, pour cette session.
+    /// The bounds of an Arrow batch, for this session.
     #[must_use]
     pub const fn batch_limits(&self) -> BatchLimits {
         self.limits
     }
 
-    /// Émet une instruction de transaction.
+    /// Issues a transaction statement.
     async fn transaction(
         &self,
         cancel: &CancelToken,
@@ -115,24 +113,23 @@ impl Session for SqliteSession {
         self.capabilities
     }
 
-    /// Exécute une demande et rend un curseur sur ses lots.
+    /// Executes a request and returns a cursor over its batches.
     ///
-    /// Rend la main **dès que le schéma est connu** — c'est-à-dire dès que le
-    /// premier lot est prêt, puisqu'en SQLite le type d'une colonne se lit dans
-    /// les valeurs autant que dans la déclaration
-    /// ([`convert`](crate::convert)). Ce premier lot voyage avec le curseur : il
-    /// n'est pas relu.
+    /// Returns **as soon as the schema is known** — that is, as soon as the first
+    /// batch is ready, since in SQLite a column's type is read from the values as
+    /// much as from the declaration ([`convert`](crate::convert)). This first batch
+    /// travels with the cursor: it is not read again.
     ///
-    /// Le **dialecte** SQL n'est pas vérifié : il est « une nuance de grammaire,
-    /// pas une capacité distincte » (ADR-0003). Une requête écrite pour
-    /// PostgreSQL part donc telle quelle, et c'est l'analyseur de SQLite qui la
-    /// rejette — avec son propre message, que l'utilisateur reconnaît.
+    /// The SQL **dialect** is not checked: it is "a nuance of grammar, not a
+    /// distinct capability" (ADR-0003). A query written for PostgreSQL is therefore
+    /// sent as is, and SQLite's parser rejects it — with its own message, which the
+    /// user recognizes.
     ///
-    /// # Erreurs
-    /// [`OxynError::NotSupported`] si le langage n'est pas SQL,
-    /// [`OxynError::PolicyDenied`] si la demande se déclare en lecture seule et
-    /// qu'une instruction écrit, [`OxynError::Cancelled`] si le jeton se
-    /// déclenche, ou l'erreur du moteur.
+    /// # Errors
+    /// [`OxynError::NotSupported`] if the language is not SQL,
+    /// [`OxynError::PolicyDenied`] if the request declares itself read-only and a
+    /// statement writes, [`OxynError::Cancelled`] if the token fires, or the engine
+    /// error.
     async fn execute(
         &self,
         mut request: ExecRequest,
@@ -155,9 +152,9 @@ impl Session for SqliteSession {
             pulls: orders,
         }))?;
 
-        // C'est pendant cette attente que SQLite calcule le premier lot — tout
-        // un `count(*)`, par exemple. Abandonner ce futur interrompt la tâche :
-        // voir `WorkerHandle::await_reply`.
+        // It is during this wait that SQLite computes the first batch — a whole
+        // `count(*)`, for instance. Abandoning this future interrupts the task:
+        // see `WorkerHandle::await_reply`.
         let begun = self.worker.await_reply(opened, cancel, work).await?;
         Ok(Box::new(SqliteCursor::new(
             handle,
@@ -170,33 +167,31 @@ impl Session for SqliteSession {
         )))
     }
 
-    /// Refuse : SQLite n'a pas de serveur à qui demander une annulation.
+    /// Refuses: SQLite has no server to ask for a cancellation.
     ///
-    /// Voir la note de module. L'annulation existe, elle passe par le
-    /// [`CancelToken`] remis à [`execute`](Self::execute).
+    /// See the module note. Cancellation exists, it goes through the
+    /// [`CancelToken`] handed to [`execute`](Self::execute).
     ///
-    /// # Erreurs
-    /// Toujours [`OxynError::NotSupported`].
+    /// # Errors
+    /// Always [`OxynError::NotSupported`].
     async fn cancel(&self, _statement: StatementHandle) -> Result<()> {
         Err(OxynError::NotSupported {
             capability: "SERVER_SIDE_CANCEL".to_owned(),
         })
     }
 
-    /// Compose l'aperçu d'une relation, et lit ce que sa forme exige.
+    /// Composes the preview of a relation, and reads what its shape requires.
     ///
-    /// La description de la relation — ses colonnes et sa clé primaire — n'est
-    /// lue que si un tri ou une page demande un ordre, ou qu'une projection
-    /// nomme des colonnes à vérifier : un aperçu sans demande
-    /// ne paie pas un `PRAGMA table_info` pour une clause qu'il ne compose pas.
-    /// Cette lecture passe par le thread porteur et s'interrompt comme les
-    /// autres.
+    /// The description of the relation — its columns and its primary key — is read
+    /// only if a sort or a page requires an order, or if a projection names columns
+    /// to check: a preview without request does not pay a `PRAGMA table_info` for a
+    /// clause it does not compose. This read goes through the worker thread and is
+    /// interrupted like the others.
     ///
-    /// # Erreurs
-    /// [`OxynError::Cancelled`] si le jeton se déclenche, celles de la
-    /// composition — colonne de tri ou de projection inconnue, projection vide
-    /// ou démesurée, page sans clé unique —, et celles
-    /// du moteur pendant l'introspection.
+    /// # Errors
+    /// [`OxynError::Cancelled`] if the token fires, those of the composition —
+    /// unknown sort or projection column, empty or oversized projection, page
+    /// without unique key —, and those of the engine during introspection.
     async fn preview_request(
         &self,
         path: &oxyn_catalog::CatalogPath,
@@ -221,18 +216,18 @@ impl Session for SqliteSession {
         &self.catalog
     }
 
-    /// Vérifie que la connexion est vivante.
+    /// Checks that the connection is alive.
     ///
-    /// La durée mesurée est celle d'un aller-retour vers le thread porteur, pas
-    /// celle d'un réseau : elle dit surtout si le thread est libre ou occupé par
-    /// un flux en cours.
+    /// The measured duration is that of a round trip to the worker thread, not
+    /// that of a network: it mostly tells whether the thread is free or busy with
+    /// a running stream.
     ///
-    /// # Erreurs
-    /// L'erreur du moteur, ou une erreur de driver si le thread a disparu.
+    /// # Errors
+    /// The engine error, or a driver error if the thread has disappeared.
     async fn ping(&self) -> Result<Duration> {
         let started = Instant::now();
-        // `ping` n'a pas de jeton au contrat : un jeton neuf, jamais annulé,
-        // laisse l'appel se terminer.
+        // `ping` has no token in its contract: a fresh token, never cancelled,
+        // lets the call finish.
         let cancel = CancelToken::new();
         self.worker
             .call(&cancel, |connection: &Connection| {
@@ -245,29 +240,29 @@ impl Session for SqliteSession {
         Ok(started.elapsed())
     }
 
-    /// Ferme la connexion et libère le fichier.
+    /// Closes the connection and releases the file.
     ///
-    /// # Erreurs
-    /// L'erreur du moteur à la fermeture. Une session déjà fermée n'en est pas
-    /// une : les ressources locales sont libérées dans tous les cas.
+    /// # Errors
+    /// The engine error on close. An already closed session is not one: local
+    /// resources are released in every case.
     async fn close(self: Box<Self>) -> Result<()> {
         let Self { worker, thread, .. } = *self;
         let outcome = worker.close().await;
-        // Le canal se ferme ici : le thread sort de sa boucle même si la
-        // fermeture ci-dessus a échoué.
+        // The channel closes here: the thread leaves its loop even if the close
+        // above failed.
         drop(worker);
         drop(thread);
         outcome
     }
 
     async fn begin(&self, cancel: &CancelToken) -> Result<()> {
-        // `BEGIN` seul ne modifie rien : interrompu, il n'a rien laissé derrière.
+        // `BEGIN` alone modifies nothing: interrupted, it left nothing behind.
         self.transaction(cancel, "BEGIN", Effect::ReadOnly).await
     }
 
     async fn commit(&self, cancel: &CancelToken) -> Result<()> {
-        // Un `COMMIT` interrompu laisse l'effet inconnu : ambigu, donc jamais
-        // rejoué (I-13).
+        // An interrupted `COMMIT` leaves the effect unknown: ambiguous, hence never
+        // replayed (I-13).
         self.transaction(cancel, "COMMIT", Effect::Mutating).await
     }
 
@@ -306,160 +301,165 @@ mod tests {
     use super::*;
     use crate::worker::{self, OpenSpec, OpenTarget};
 
-    /// Un `count(*)` sur une suite sans fin : il ne rend jamais la main tout seul.
-    const SANS_FIN: &str =
+    /// A `count(*)` over an endless series: it never returns on its own.
+    const ENDLESS: &str =
         "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c";
 
     #[tokio::test]
-    async fn abandonner_execute_pendant_le_premier_lot_libere_le_moteur() {
-        // Le scénario : l'onglet se ferme pendant que SQLite calcule le premier
-        // lot d'une agrégation. Le curseur n'existe pas encore, donc personne
-        // d'autre ne peut interrompre. Sans interruption, la session reste
-        // occupée pour toute la durée du calcul — ici, pour toujours.
-        let jeton = CancelToken::new();
+    async fn abandoning_execute_during_the_first_batch_frees_the_engine() {
+        // The scenario: the tab closes while SQLite computes the first batch of an
+        // aggregation. The cursor does not exist yet, so nobody else can interrupt.
+        // Without interruption, the session stays busy for the whole duration of the
+        // computation — here, forever.
+        let cancel_token = CancelToken::new();
         let spec = OpenSpec {
             target: OpenTarget::Memory(ConnectionId::new()),
             read_only: false,
         };
-        let (handle, thread) = worker::spawn(spec, &jeton).await.expect("ouverture");
+        let (handle, thread) = worker::spawn(spec, &cancel_token).await.expect("open");
         let session = SqliteSession::new(handle, thread, Capabilities::SQL, BatchLimits::new());
 
         {
-            let demande = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), SANS_FIN);
-            let mut execution = pin!(session.execute(demande, &jeton));
+            let exec_request = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), ENDLESS);
+            let mut execution = pin!(session.execute(exec_request, &cancel_token));
             assert!(futures::poll!(execution.as_mut()).is_pending());
-            // Le thread porteur s'est saisi de l'exécution : on n'abandonne pas
-            // une tâche encore en file, ce qui prouverait autre chose.
+            // The worker thread has picked up the execution: we do not abandon a
+            // task still queued, which would prove something else.
             tokio::time::timeout(Duration::from_secs(10), async {
                 while session.worker.running().is_none() {
                     tokio::task::yield_now().await;
                 }
             })
             .await
-            .expect("le thread porteur prend l'exécution");
+            .expect("the worker thread picks up the execution");
         }
 
-        // La preuve côté moteur : il répond à un `SELECT 1`.
-        let reponse = tokio::time::timeout(Duration::from_secs(10), session.ping()).await;
-        let aller_retour = reponse
-            .expect("le moteur doit être libéré par l'abandon")
+        // The proof on the engine side: it answers a `SELECT 1`.
+        let response = tokio::time::timeout(Duration::from_secs(10), session.ping()).await;
+        let round_trip = response
+            .expect("the engine must be freed by the abandonment")
             .expect("ping");
         assert!(
-            aller_retour < Duration::from_secs(1),
-            "le moteur doit répondre vite : {aller_retour:?}"
+            round_trip < Duration::from_secs(1),
+            "the engine must answer quickly: {round_trip:?}"
         );
 
-        Box::new(session).close().await.expect("fermeture");
+        Box::new(session).close().await.expect("close");
     }
 
     /// A session opened through the driver, as the executor gets it.
-    async fn ouvrir(chemin: &str) -> Box<dyn Session> {
+    async fn open_session(db_file: &str) -> Box<dyn Session> {
         use oxyn_core::{ConnectionConfig, DriverId, Environment};
         use oxyn_driver::{Credentials, Driver};
 
-        let connexion = ConnectionConfig::new("transactions", DriverId::sqlite())
+        let conn_config = ConnectionConfig::new("transactions", DriverId::sqlite())
             .with_environment(Environment::Local)
-            .with_param(crate::SqliteDriver::PATH, chemin);
+            .with_param(crate::SqliteDriver::PATH, db_file);
         crate::SqliteDriver::new()
-            .connect(&connexion, &Credentials::new(), &CancelToken::new())
+            .connect(&conn_config, &Credentials::new(), &CancelToken::new())
             .await
-            .unwrap_or_else(|err| panic!("ouverture : {err}"))
+            .unwrap_or_else(|err| panic!("open: {err}"))
     }
 
     /// Runs a statement to its end, cursor released.
-    async fn executer(session: &dyn Session, sql: &str) {
-        let demande = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), sql)
+    async fn run_to_end(session: &dyn Session, sql: &str) {
+        let exec_request = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), sql)
             .with_limits(oxyn_core::ExecLimits::unbounded());
-        let mut curseur = match session.execute(demande, &CancelToken::new()).await {
-            Ok(curseur) => curseur,
-            Err(err) => panic!("exécution de `{sql}` : {err}"),
+        let mut batch_cursor = match session.execute(exec_request, &CancelToken::new()).await {
+            Ok(batch_cursor) => batch_cursor,
+            Err(err) => panic!("execution of `{sql}`: {err}"),
         };
-        while curseur.next_batch().await.expect("lot suivant").is_some() {}
+        while batch_cursor
+            .next_batch()
+            .await
+            .expect("next batch")
+            .is_some()
+        {}
     }
 
-    async fn etat(session: &dyn Session) -> TransactionState {
+    async fn state_of(session: &dyn Session) -> TransactionState {
         session.transaction_state(&CancelToken::new()).await
     }
 
     #[tokio::test]
-    async fn l_etat_suit_les_transactions_ecrites_et_celles_du_trait() {
+    async fn the_state_follows_written_transactions_and_those_of_the_trait() {
         // ADR-0039 §2, the contract of a session that declares TRANSACTIONS.
-        let session = ouvrir(crate::SqliteDriver::MEMORY).await;
+        let session = open_session(crate::SqliteDriver::MEMORY).await;
         assert!(session.capabilities().contains(Capabilities::TRANSACTIONS));
         assert_eq!(
-            etat(session.as_ref()).await,
+            state_of(session.as_ref()).await,
             TransactionState::Idle,
             "a fresh connection is in autocommit, and says so"
         );
-        executer(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
+        run_to_end(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
 
-        for fin in ["COMMIT", "ROLLBACK", "END"] {
-            executer(session.as_ref(), "BEGIN").await;
-            assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
-            executer(session.as_ref(), "INSERT INTO t(v) VALUES (1)").await;
-            assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
-            executer(session.as_ref(), fin).await;
+        for terminator in ["COMMIT", "ROLLBACK", "END"] {
+            run_to_end(session.as_ref(), "BEGIN").await;
+            assert_eq!(state_of(session.as_ref()).await, TransactionState::Open);
+            run_to_end(session.as_ref(), "INSERT INTO t(v) VALUES (1)").await;
+            assert_eq!(state_of(session.as_ref()).await, TransactionState::Open);
+            run_to_end(session.as_ref(), terminator).await;
             assert_eq!(
-                etat(session.as_ref()).await,
+                state_of(session.as_ref()).await,
                 TransactionState::Idle,
-                "{fin}"
+                "{terminator}"
             );
         }
 
-        let jeton = CancelToken::new();
-        session.begin(&jeton).await.expect("begin");
-        assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
-        session.commit(&jeton).await.expect("commit");
-        assert_eq!(etat(session.as_ref()).await, TransactionState::Idle);
+        let cancel_token = CancelToken::new();
+        session.begin(&cancel_token).await.expect("begin");
+        assert_eq!(state_of(session.as_ref()).await, TransactionState::Open);
+        session.commit(&cancel_token).await.expect("commit");
+        assert_eq!(state_of(session.as_ref()).await, TransactionState::Idle);
 
-        session.begin(&jeton).await.expect("begin");
-        assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
-        session.rollback(&jeton).await.expect("rollback");
-        assert_eq!(etat(session.as_ref()).await, TransactionState::Idle);
+        session.begin(&cancel_token).await.expect("begin");
+        assert_eq!(state_of(session.as_ref()).await, TransactionState::Open);
+        session.rollback(&cancel_token).await.expect("rollback");
+        assert_eq!(state_of(session.as_ref()).await, TransactionState::Idle);
 
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn un_jeton_deja_declenche_rend_inconnu_jamais_idle() {
-        let session = ouvrir(crate::SqliteDriver::MEMORY).await;
-        let jeton = CancelToken::new();
-        jeton.cancel();
+    async fn an_already_fired_token_returns_unknown_never_idle() {
+        let session = open_session(crate::SqliteDriver::MEMORY).await;
+        let cancel_token = CancelToken::new();
+        cancel_token.cancel();
         assert_eq!(
-            session.transaction_state(&jeton).await,
+            session.transaction_state(&cancel_token).await,
             TransactionState::Unknown
         );
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn l_annulation_d_office_apres_un_stop_est_constatee() {
+    async fn the_automatic_rollback_after_a_stop_is_observed() {
         // The scenario: `BEGIN`, a write, then Stop on an endless `INSERT`.
         // SQLite rolls the whole transaction back on `SQLITE_INTERRUPT`, while
         // `execute` returns `Cancelled` as soon as the token fires — before
         // the carrier thread is even out of `sqlite3_step`. A state read then
         // must come after that step, not before.
-        let dossier = tempfile::tempdir().expect("dossier temporaire");
-        let base = dossier.path().join("transactions.sqlite");
-        let journal = dossier.path().join("transactions.sqlite-journal");
-        let session = ouvrir(base.to_str().expect("chemin UTF-8")).await;
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let db_path = dir.path().join("transactions.sqlite");
+        let journal = dir.path().join("transactions.sqlite-journal");
+        let session = open_session(db_path.to_str().expect("UTF-8 path")).await;
 
-        executer(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
-        executer(session.as_ref(), "BEGIN").await;
+        run_to_end(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
+        run_to_end(session.as_ref(), "BEGIN").await;
         assert!(
             !journal.exists(),
             "a deferred BEGIN writes nothing: the journal marks the first write"
         );
 
-        let jeton = CancelToken::new();
-        let demande = ExecRequest::new(
+        let cancel_token = CancelToken::new();
+        let exec_request = ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Sqlite),
             "INSERT INTO t(v) SELECT x FROM \
              (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT x FROM c)",
         )
         .with_limits(oxyn_core::ExecLimits::unbounded());
-        let mut ecriture = Box::pin(session.execute(demande, &jeton));
-        assert!(futures::poll!(ecriture.as_mut()).is_pending());
+        let mut endless_write = Box::pin(session.execute(exec_request, &cancel_token));
+        assert!(futures::poll!(endless_write.as_mut()).is_pending());
         // The rollback journal appears on the first page written: the INSERT
         // is then inside `sqlite3_step`, past the point where an interrupt
         // could be lost. A condition, not a delay.
@@ -471,17 +471,17 @@ mod tests {
         .await
         .expect("the endless INSERT starts writing");
 
-        jeton.cancel();
-        match ecriture.await {
+        cancel_token.cancel();
+        match endless_write.await {
             Ok(_) => panic!("an endless INSERT only ends interrupted"),
             Err(err) => assert!(err.is_cancelled(), "{err:?}"),
         }
 
         assert_eq!(
-            etat(session.as_ref()).await,
+            state_of(session.as_ref()).await,
             TransactionState::Idle,
             "the interrupted write rolled the transaction back"
         );
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 }

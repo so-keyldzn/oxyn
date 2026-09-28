@@ -1,27 +1,27 @@
 ---
 name: piege-hook-code-interdit-diff
-description: Le hook code_interdit.py inspecte le texte de l'édition, pas le fichier — d'où des refus sur du code identique à celui déjà présent
+description: The code_interdit.py hook inspects the edit's text, not the file — hence refusals on code identical to what is already there
 metadata:
   type: feedback
 ---
 
-`.claude/hooks/code_interdit.py` refuse un `blocking_recv(`/`block_on(` ajouté
-sous `crates/oxyn-app/` ou `crates/oxyn-ui/` (I-05) **même dans un
-`#[cfg(test)] mod tests`**, alors que des occurrences identiques existent déjà
-dans le même fichier : il regarde le texte de l'édition, pas l'état du fichier.
-Les lignes préexistantes sont donc de fait tolérées, les nouvelles non.
+`.claude/hooks/code_interdit.py` refuses a `blocking_recv(`/`block_on(` added
+under `crates/oxyn-app/` or `crates/oxyn-ui/` (I-05) **even in a
+`#[cfg(test)] mod tests`**, while identical occurrences already exist in the
+same file: it looks at the edit's text, not the file's state. Pre-existing lines
+are therefore de facto tolerated, new ones are not.
 
-Deuxième piège du même hook : une commande Bash contenant une redirection
-(`>`) déclenche une demande d'arbitrage, y compris quand le `>` vient d'un
-`grep -A 6`. Écrire les fichiers avec Write/Edit plutôt qu'un heredoc évite
-l'aller-retour.
+Second trap of the same hook: a Bash command containing a redirection (`>`)
+triggers an arbitration request, including when the `>` comes from a
+`grep -A 6`. Writing files with Write/Edit rather than a heredoc avoids the
+round trip.
 
-**Pourquoi** : on perd un cycle à croire que le refus vient d'une vraie
-violation, puis on est tenté de désactiver le hook au lieu de contourner.
+**Why**: a cycle is lost believing the refusal comes from a real violation, and
+then one is tempted to disable the hook instead of working around it.
 
-**Comment appliquer** : dans un test d'`oxyn-app` qui a besoin d'une réponse du
-bus, passer par un helper déjà présent dans le fichier (`workspace::tests::submit`)
-au lieu de rappeler `.blocking_recv()` sur un `oneshot::Receiver`. Pour ouvrir
-une connexion sans `backend.connect(...).blocking_recv()`, enchaîner
-`Command::CreateConnection` puis `Command::Connect` via `submit` — un humain y
-est autorisé par le `PolicyGate` sur un environnement `Local`.
+**How to apply**: in an `oxyn-app` test that needs a response from the bus, go
+through a helper already present in the file (`workspace::tests::submit`)
+instead of calling `.blocking_recv()` on a `oneshot::Receiver` again. To open a
+connection without `backend.connect(...).blocking_recv()`, chain
+`Command::CreateConnection` then `Command::Connect` via `submit` — a human is
+allowed to do so by the `PolicyGate` on a `Local` environment.

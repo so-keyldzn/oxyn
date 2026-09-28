@@ -1,18 +1,18 @@
 ---
-description: Passe de conformité shadcn sur apps/desktop — relevé en parallèle, tri, correction par lots, vérification
-argument-hint: "[chemin sous apps/desktop/src, défaut : tout src hors components/ui] [--releve]"
+description: shadcn compliance pass on apps/desktop — parallel survey, triage, batched fixes, verification
+argument-hint: "[path under apps/desktop/src, default: all of src except components/ui] [--releve]"
 allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion
 ---
 
-Objet : mettre **$ARGUMENTS** (à défaut, tout `apps/desktop/src` hors
-`components/ui`) en conformité avec les conventions shadcn, sans changer de
-comportement. Avec `--releve`, s'arrêter après l'étape 3.
+Purpose: bring **$ARGUMENTS** (by default, all of `apps/desktop/src` except
+`components/ui`) into compliance with the shadcn conventions, without changing
+behavior. With `--releve`, stop after step 3.
 
-Le travail est fait par l'agent [`shadcniste`](../agents/shadcniste.md) ; cette
-commande l'orchestre. C'est ici que vit le parallélisme, parce qu'un sous-agent
-ne peut pas en lancer d'autres.
+The work is done by the [`shadcniste`](../agents/shadcniste.md) agent; this
+command orchestrates it. This is where the parallelism lives, because a
+subagent cannot launch others.
 
-## 1. Le contexte
+## 1. The context
 
 ```!
 cd apps/desktop && pnpm exec shadcn info --json 2>/dev/null | head -40
@@ -22,14 +22,14 @@ cd apps/desktop && pnpm exec shadcn info --json 2>/dev/null | head -40
 git status --short apps/desktop
 ```
 
-Un fichier déjà modifié dans l'arbre de travail appartient à quelqu'un :
-**l'exclure des lots** et le dire, plutôt que de mêler deux travaux dans un
-même diff.
+A file already modified in the working tree belongs to someone: **exclude it
+from the batches** and say so, rather than mixing two pieces of work in one
+diff.
 
-## 2. Le relevé mécanique
+## 2. The mechanical survey
 
-Ce que `rg` sait voir. C'est le point de départ, pas le verdict : chaque motif a
-ses faux positifs, que `shadcniste` connaît.
+What `rg` can see. It is the starting point, not the verdict: each pattern has
+its false positives, which `shadcniste` knows.
 
 ```!
 cd apps/desktop/src && for p in \
@@ -43,69 +43,68 @@ cd apps/desktop/src && for p in \
 done; true
 ```
 
-Le reste — `FieldGroup`, `Empty`, `Alert`, `Card` complète, `ToggleGroup`,
-items hors de leur groupe, `Dialog` sans titre, icônes sans `data-icon` — ne se
-voit qu'en lisant. C'est le travail de l'étape 3.
+The rest — `FieldGroup`, `Empty`, `Alert`, a complete `Card`, `ToggleGroup`,
+items outside their group, a `Dialog` without a title, icons without
+`data-icon` — can only be seen by reading. That is the work of step 3.
 
-## 3. Le relevé par lots, en parallèle
+## 3. The survey by batches, in parallel
 
-Découper le périmètre en **lots disjoints** d'une quinzaine de composants, story
-comprise avec son composant : `components/oxyn/assistant-*`, le reste de
-`components/oxyn` en deux ou trois lots, `features/`, `routes/`.
+Split the scope into **disjoint batches** of about fifteen components, each
+story together with its component: `components/oxyn/assistant-*`, the rest of
+`components/oxyn` in two or three batches, `features/`, `routes/`.
 
-Lancer un `shadcniste` **en mode relevé** par lot, tous dans le même message.
-Chaque prompt donne la liste exacte des fichiers, le mode, et les écarts de
-l'étape 2 qui tombent dans le lot.
+Launch one `shadcniste` **in survey mode** per batch, all in the same message.
+Each prompt gives the exact list of files, the mode, and the step-2 deviations
+that fall in the batch.
 
-Rassembler les tableaux, retirer les doublons, puis présenter à l'utilisateur :
+Gather the tables, remove duplicates, then present to the user:
 
-- le compte par règle et par risque (`mécanique`, `visuel`, `décision`) ;
-- **chaque `décision`**, une par une, avec `AskUserQuestion` quand elle a des
-  options nettes : registre à utiliser, jeton à ajouter, composant à installer,
-  composant de `ui/` à mettre à jour depuis l'amont.
+- the count per rule and per risk (`mécanique`, `visuel`, `décision`);
+- **each `décision`**, one by one, with `AskUserQuestion` when it has clear
+  options: registry to use, token to add, component to install, `ui/`
+  component to update from upstream.
 
-Avec `--releve`, la commande s'arrête ici.
+With `--releve`, the command stops here.
 
-## 4. La correction par lots
+## 4. Fixing by batches
 
-Mêmes lots, `shadcniste` **en mode correction**, en parallèle — **trois à la
-fois au plus** : chacun lance ses stories dans Chromium, et au-delà les échecs
-dus à la charge noient les vrais. Chaque prompt reprend les écarts retenus du
-lot et les décisions prises par l'utilisateur.
+Same batches, `shadcniste` **in fix mode**, in parallel — **three at a time at
+most**: each one runs its stories in Chromium, and beyond that, load-induced
+failures drown the real ones. Each prompt repeats the batch's retained
+deviations and the decisions taken by the user.
 
-Les lots sont disjoints, donc un seul arbre de travail suffit. Si un lot doit
-toucher un fichier partagé (`styles.css`, un fichier de `components/ui` mis à
-jour par la CLI), le sortir du parallélisme et le traiter **après**, seul.
+The batches are disjoint, so a single working tree is enough. If a batch must
+touch a shared file (`styles.css`, a `components/ui` file updated by the CLI),
+take it out of the parallelism and handle it **afterwards**, alone.
 
-## 5. La vérification
+## 5. Verification
 
-Elle ne se délègue pas à ceux qui ont écrit.
+It is not delegated to those who wrote.
 
 ```bash
 make front
 make qualite
 ```
 
-Puis relancer le relevé de l'étape 2 : les compteurs doivent avoir baissé, et
-tout ce qui reste doit figurer dans un rapport d'agent avec sa raison. Un écart
-qui a disparu sans être rapporté comme corrigé est à regarder.
+Then rerun the step-2 survey: the counters must have dropped, and everything
+that remains must appear in an agent report with its reason. A deviation that
+disappeared without being reported as fixed deserves a look.
 
-Enfin `relecteur-invariants` sur le diff : une correction de balisage peut
-toucher un `invoke`, un identifiant de connexion dans une story, un état vide.
+Finally `relecteur-invariants` on the diff: a markup fix can touch an `invoke`,
+a connection identifier in a story, an empty state.
 
-## Le rapport final
+## The final report
 
-1. Avant/après du relevé mécanique.
-2. Les corrections, groupées par règle, avec le nombre de fichiers.
-3. Ce qui n'a pas été corrigé, et pourquoi.
-4. Le résultat de `make qualite`, tel quel.
+1. Before/after of the mechanical survey.
+2. The fixes, grouped by rule, with the number of files.
+3. What was not fixed, and why.
+4. The result of `make qualite`, as is.
 
-Pas de commit : il appartient à l'utilisateur.
+No commit: it belongs to the user.
 
-## Avec l'outil Workflow
+## With the Workflow tool
 
-Si l'utilisateur demande explicitement un workflow, les étapes 3 à 5 s'y
-transposent directement : `parallel()` des relevés, tri en script, un
-`pipeline()` des corrections plafonné à trois, puis la vérification. Les
-décisions de l'étape 3 se prennent **avant** de lancer le script, parce qu'un
-workflow ne pose pas de question en cours de route.
+If the user explicitly asks for a workflow, steps 3 to 5 map onto it directly:
+`parallel()` for the surveys, triage in script, a `pipeline()` of fixes capped
+at three, then verification. The step-3 decisions are taken **before** launching
+the script, because a workflow asks no question along the way.

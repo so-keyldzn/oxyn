@@ -24,7 +24,7 @@ function noticeOf(provenance: AgentProvenance | null) {
  *
  * The assistant appears only when a provider or an agent is declared: without
  * one there is no AI entry anywhere, not even a greyed one
- * (docs/UX-SPEC.md, « Le workspace IA n'existe que s'il a été configuré »).
+ * (docs/UX-SPEC.md, « The AI workspace only exists if it has been configured »).
  */
 export function useAsidePanels(open: OpenConnection | null): Array<AsideItem> {
   // The hook runs for every render, open connection or not: the assistant's

@@ -21,19 +21,19 @@ fn setup() -> (Store, WorkspaceId, QueryDocumentUpdate) {
     (store, workspace, update)
 }
 
-/// La marque **remonte jusqu'à la liste**, sans ouvrir le corps du document.
+/// The mark **reaches the list**, without opening the document body.
 ///
-/// [UX-SPEC](../../../docs/UX-SPEC.md) la veut « sur l'onglet **et dans la
-/// bibliothèque ». Elle n'était que sur l'onglet : `DocumentSummary` ne portait
-/// aucun champ de provenance, donc la liste ne pouvait pas la montrer même en
-/// le voulant. Or c'est par la bibliothèque qu'on relit un texte l'an prochain,
-/// c'est-à-dire le cas exact qu'ADR-0023 décrit.
+/// [UX-SPEC](../../../../docs/UX-SPEC.md) wants it "on the tab **and in the
+/// library**". It was only on the tab: `DocumentSummary` carried no provenance
+/// field, so the list could not show it even if it wanted to. Yet the library
+/// is where a text is read again next year, which is exactly the case ADR-0023
+/// describes.
 #[test]
-fn la_liste_dit_ce_qu_un_agent_a_ecrit_sans_ouvrir_les_corps() {
+fn the_list_says_what_an_agent_wrote_without_opening_bodies() {
     let (store, workspace, mut update) = setup();
     let cancel = CancelToken::new();
 
-    update.title = "Écrit par un agent".into();
+    update.title = "Written by an agent".into();
     update.provenance = Some(oxyn_core::Provenance::new(
         oxyn_core::AgentId::new(),
         oxyn_core::AgentSessionId::new(),
@@ -43,98 +43,101 @@ fn la_liste_dit_ce_qu_un_agent_a_ecrit_sans_ouvrir_les_corps() {
     store
         .documents()
         .update_query(workspace, &update, &cancel)
-        .expect("écriture de la proposition");
+        .expect("write the proposal");
 
-    let mut a_la_main = setup().2;
-    a_la_main.title = "Écrit à la main".into();
+    let mut by_hand = setup().2;
+    by_hand.title = "Written by hand".into();
     store
         .documents()
-        .update_query(workspace, &a_la_main, &cancel)
-        .expect("écriture de l'utilisateur");
+        .update_query(workspace, &by_hand, &cancel)
+        .expect("write the user's document");
 
     let page = store
         .documents()
         .page(workspace, &DocumentFilter::default(), &cancel)
-        .expect("lecture de la page");
+        .expect("read the page");
 
-    let marque = page
+    let marked = page
         .entries
         .iter()
-        .find(|entree| entree.title == "Écrit par un agent")
-        .expect("le document d'agent est dans la page");
-    let sien = page
+        .find(|entry| entry.title == "Written by an agent")
+        .expect("the agent's document is in the page");
+    let its_own = page
         .entries
         .iter()
-        .find(|entree| entree.title == "Écrit à la main")
-        .expect("le document de l'utilisateur est dans la page");
+        .find(|entry| entry.title == "Written by hand")
+        .expect("the user's document is in the page");
 
-    assert!(marque.from_agent, "la liste doit pouvoir porter la marque");
+    assert!(marked.from_agent, "the list must be able to carry the mark");
     assert!(
-        !sien.from_agent,
-        "et ne jamais l'inventer : marquer par excès ferait passer pour écrit \
-         par un agent un texte que l'utilisateur avait tapé lui-même"
+        !its_own.from_agent,
+        "and never invent it: over-marking would pass off a text the user \
+         typed themselves as written by an agent"
     );
 }
 
-/// ADR-0023 : la marque apparaît dès qu'un agent écrit, et ne disparaît plus.
+/// ADR-0023: the mark appears as soon as an agent writes, and never goes away.
 ///
-/// Le test rougit dans les deux sens : si le `coalesce` de `update_query` se
-/// perd — la provenance ne serait jamais posée par le chemin versionné, celui
-/// qu'une console emprunte —, et s'il devient une affectation directe — une
-/// autosauvegarde ordinaire, qui n'en porte aucune, effacerait la marque.
+/// The test turns red both ways: if `update_query`'s `coalesce` is lost — the
+/// provenance would never be set by the versioned path, the one a console
+/// takes —, and if it becomes a direct assignment — an ordinary autosave,
+/// which carries none, would erase the mark.
 #[test]
-fn une_proposition_d_agent_se_marque_et_survit_a_l_autosauvegarde() {
+fn an_agent_proposal_is_marked_and_survives_autosave() {
     let (store, workspace, mut update) = setup();
     let cancel = CancelToken::new();
-    let origine = oxyn_core::Provenance::new(
+    let origin = oxyn_core::Provenance::new(
         oxyn_core::AgentId::new(),
         oxyn_core::AgentSessionId::new(),
         oxyn_core::AiProviderKind::Anthropic,
         "claude-sonnet-5",
     );
 
-    // L'agent propose, et la console enregistre par le chemin versionné.
-    update.text = "SELECT count(*) FROM clients".into();
-    update.provenance = Some(origine.clone());
+    // The agent proposes, and the console records through the versioned path.
+    update.text = "SELECT count(*) FROM customers".into();
+    update.provenance = Some(origin.clone());
     let document = store
         .documents()
         .update_query(workspace, &update, &cancel)
-        .expect("écriture de la proposition");
+        .expect("write the proposal");
     assert_eq!(
         document.provenance.as_ref(),
-        Some(&origine),
-        "un texte proposé par un agent porte sa marque dès son écriture"
+        Some(&origin),
+        "a text proposed by an agent carries its mark from its first write"
     );
 
-    // Puis l'utilisateur tape par-dessus : l'autosauvegarde ne porte aucune
-    // provenance, et elle ne doit pas effacer celle qui est là.
+    // Then the user types over it: the autosave carries no provenance, and
+    // it must not erase the one already there.
     update.revision = 2;
-    update.text = "SELECT count(*) FROM clients WHERE actif".into();
+    update.text = "SELECT count(*) FROM customers WHERE active".into();
     update.provenance = None;
     let document = store
         .documents()
         .update_query(workspace, &update, &cancel)
-        .expect("autosauvegarde");
-    assert_eq!(document.content, "SELECT count(*) FROM clients WHERE actif");
+        .expect("autosave");
+    assert_eq!(
+        document.content,
+        "SELECT count(*) FROM customers WHERE active"
+    );
     assert_eq!(
         document.provenance.as_ref(),
-        Some(&origine),
-        "une provenance absente veut dire « rien de neuf », pas « personne »"
+        Some(&origin),
+        "an absent provenance means \"nothing new\", not \"nobody\""
     );
 }
 
-/// Le cas majoritaire, et celui qu'on casse sans s'en apercevoir : un document
-/// écrit par l'utilisateur n'acquiert **jamais** de provenance tout seul.
+/// The common case, and the one broken without noticing: a document written
+/// by the user **never** acquires a provenance on its own.
 #[test]
-fn un_document_ecrit_par_l_utilisateur_reste_sans_marque() {
+fn a_document_written_by_the_user_stays_unmarked() {
     let (store, workspace, update) = setup();
     let document = store
         .documents()
         .update_query(workspace, &update, &CancelToken::new())
-        .expect("écriture");
+        .expect("write");
     assert!(
         document.provenance.is_none(),
-        "aucune marque ne s'invente : « absente » veut dire « écrit par l'utilisateur »"
+        "no mark is invented: \"absent\" means \"written by the user\""
     );
 }
 

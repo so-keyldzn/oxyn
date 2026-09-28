@@ -13,7 +13,7 @@ import {
  * At wide width the preference is the state: read from the snapshot, and each
  * toggle saved. Below 1200 px nothing is written — the panels keep their
  * wide-width preference, and widening the window gives it back (UX-SPEC,
- * « Largeur réduite »). The compact column starts closed and opens only on
+ * « Reduced width »). The compact column starts closed and opens only on
  * demand; the compact sidebar is the layout's own.
  */
 export function usePanelPreferences(compact: boolean) {

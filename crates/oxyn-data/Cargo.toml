@@ -1,10 +1,10 @@
 [package]
 name = "oxyn-data"
-description = "Buffers de résultats Arrow : streaming, contre-pression, débordement disque, export"
+description = "Arrow result buffers: streaming, backpressure, spill to disk, export"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-# Apache-2.0 et non la GPL du workspace : un driver tiers lie cette crate
+# Apache-2.0 and not the workspace's GPL: a third-party driver links this crate
 # (ADR-0044).
 license = "Apache-2.0"
 repository.workspace = true
@@ -26,8 +26,9 @@ tracing.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 rstest.workspace = true
-# Relit un `FormatOptions` écrit avant l'ajout d'un champ : la compatibilité de
-# lecture d'un format persisté (I-11) ne se prouve pas sans désérialiser.
+# Rereads a `FormatOptions` written before a field was added: read
+# compatibility of a persisted format (I-11) cannot be proven without
+# deserializing.
 serde_json.workspace = true
 
 [[bench]]

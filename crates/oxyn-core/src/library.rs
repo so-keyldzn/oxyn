@@ -35,7 +35,7 @@ pub struct QueryDocumentUpdate {
     /// document that has none, it leaves none — and a stored `NULL` does mean
     /// the user wrote it, because no other writer leaves the column empty. The
     /// mark says an agent wrote this text, and once said it is never unsaid
-    /// ([ADR-0023](../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+    /// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
     ///
     /// It carries no prompt, no model reply, no endpoint and no key: it dates
     /// an origin, it does not archive a conversation.

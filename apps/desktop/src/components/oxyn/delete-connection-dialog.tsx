@@ -20,7 +20,7 @@ import { TextInput } from "./text-field"
 
 /**
  * Deleting a saved connection, built not to be confirmed by reflex
- * (docs/UX-SPEC.md, « Les opérations destructrices »).
+ * (docs/UX-SPEC.md, « Destructive operations »).
  *
  * The dialog names the connection and the action only unlocks once that name
  * is typed; `Cancel` takes the initial focus and Enter alone deletes nothing.

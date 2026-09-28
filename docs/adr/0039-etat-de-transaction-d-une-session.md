@@ -1,86 +1,88 @@
-# ADR-0039 — Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là
+# ADR-0039 — A session returns the transaction state it observed, and the console shows only that one
 
-**Statut :** accepté · **Date :** 2026-09-25
+**Status:** accepted · **Date:** 2026-09-25
 
-**Précise :** [ADR-0003](0003-driver-capabilities.md), sur un point : une
-capacité dit ce qu'une session **sait faire** ; rien ne disait encore ce qu'elle
-**est en train de faire**. Cet ADR ajoute au trait `Session` une lecture d'état,
-la seule dont la console ait besoin : une transaction est-elle ouverte ?
+**Clarifies:** [ADR-0003](0003-driver-capabilities.md), on one point: a
+capability says what a session **can do**; nothing yet said what it **is
+doing**. This ADR adds a state read to the `Session` trait, the only one the
+console needs: is a transaction open?
 
-## Contexte
+## Context
 
-Aujourd'hui, un seul moteur peut garder une transaction ouverte dans une
-console : **SQLite**. Sa session déclare `Capabilities::TRANSACTIONS` et
-`MULTIPLE_STATEMENTS` (`drivers/oxyn-driver-sqlite/src/driver.rs`), et un
-`BEGIN` tapé dans la console part tel quel. **PostgreSQL** ne la déclare pas :
-une session s'appuie sur un bassin et emprunte une connexion par exécution, donc
-le driver refuse `BEGIN`, `COMMIT`, `ROLLBACK` et leurs synonymes **avant
-l'envoi** (`drivers/oxyn-driver-postgres/src/session.rs`, `TRANSACTIONS_REFUSED` ;
-`transaction_text.rs`), plutôt que de laisser un `ROLLBACK` « réussir » sur une
-autre connexion que celle de l'écriture. Les méthodes `Session::begin`, `commit`
-et `rollback` n'ont, elles, aucun appelant hors des tests.
+Today, a single engine can keep a transaction open in a console: **SQLite**.
+Its session declares `Capabilities::TRANSACTIONS` and `MULTIPLE_STATEMENTS`
+(`drivers/oxyn-driver-sqlite/src/driver.rs`), and a `BEGIN` typed in the
+console is sent as is. **PostgreSQL** does not declare it: a session relies on
+a pool and borrows a connection per execution, so the driver refuses `BEGIN`,
+`COMMIT`, `ROLLBACK` and their synonyms **before sending**
+(`drivers/oxyn-driver-postgres/src/session.rs`, `TRANSACTIONS_REFUSED`;
+`transaction_text.rs`), rather than letting a `ROLLBACK` "succeed" on another
+connection than the write's. The `Session::begin`, `commit` and `rollback`
+methods have no caller outside tests.
 
-Une transaction SQLite ouverte dans une console ne se voit nulle part. Trois
-conséquences, toutes silencieuses :
+A SQLite transaction open in a console is visible nowhere. Three consequences,
+all silent:
 
-1. **La fermeture annule.** « Si un objet `sqlite3` est détruit pendant qu'une
-   transaction est ouverte, la transaction est automatiquement annulée »
-   ([`sqlite3_close`](https://www.sqlite.org/c3ref/close.html), vérifié le
-   2026-09-25). Le dialogue de fermeture d'une console
-   ([UX-SPEC](../UX-SPEC.md#consoles-indépendantes)) ne se déclenche que pour du
-   SQL non sauvegardé ou une opération en cours : fermer un onglet dont le texte
-   est sauvegardé jette sans un mot les écritures non validées.
-2. **Le verrou reste posé.** Une transaction d'écriture ouverte garde le verrou
-   d'écriture du fichier ; une **écriture** de la console voisine, qui a sa
-   propre session ([ADR-0015](0015-consoles-independantes.md)), échoue sur
-   `database is locked` — immédiatement, aucun `busy_timeout` n'étant posé —,
-   sans que rien ne dise d'où vient le verrou.
-3. **La fin peut être implicite.** « Si certaines erreurs surviennent sur une
-   instruction d'une transaction multi-instructions (dont `SQLITE_FULL`,
-   `SQLITE_IOERR`, `SQLITE_NOMEM`, `SQLITE_BUSY` et `SQLITE_INTERRUPT`), la
-   transaction peut être annulée automatiquement. La seule façon de savoir si
-   SQLite l'a fait est d'appeler cette fonction »
+1. **Closing rolls back.** "If an `sqlite3` object is destroyed while a
+   transaction is open, the transaction is automatically rolled back"
+   ([`sqlite3_close`](https://www.sqlite.org/c3ref/close.html), checked on
+   2026-09-25). A console's closing dialog
+   ([UX-SPEC](../UX-SPEC.md#independent-consoles)) only triggers for unsaved
+   SQL or an operation in progress: closing a tab whose text is saved silently
+   throws away uncommitted writes.
+2. **The lock stays in place.** An open write transaction keeps the file's
+   write lock; a **write** from the neighboring console, which has its own
+   session ([ADR-0015](0015-consoles-independantes.md)), fails on
+   `database is locked` — immediately, since no `busy_timeout` is set —,
+   without anything saying where the lock comes from.
+3. **The end can be implicit.** "If certain kinds of errors occur on a
+   statement within a multi-statement transaction (errors including
+   `SQLITE_FULL`, `SQLITE_IOERR`, `SQLITE_NOMEM`, `SQLITE_BUSY`, and
+   `SQLITE_INTERRUPT`) then the transaction might be rolled back automatically.
+   The only way to find out whether SQLite automatically rolled back the
+   transaction after an error is to use this function"
    ([`sqlite3_get_autocommit`](https://www.sqlite.org/c3ref/get_autocommit.html),
-   vérifié le 2026-09-25). `SQLITE_INTERRUPT`, c'est le bouton **Stop**. Un
-   affichage déduit du texte soumis — « on a vu passer `BEGIN` » — mentirait
-   donc précisément après une annulation ou une erreur.
+   checked on 2026-09-25). `SQLITE_INTERRUPT` is the **Stop** button. A display
+   inferred from the submitted text — "we saw `BEGIN` go by" — would therefore
+   lie precisely after a cancellation or an error.
 
-Deux faits du code contraignent **où** et **quand** l'état se lit :
+Two facts of the code constrain **where** and **when** the state is read:
 
-* **Le thread de travail SQLite répond avant d'avoir fini.** Une tâche envoie sa
-  réponse de l'intérieur (`worker.rs`, `call` ; `stream.rs`, écriture sans
-  colonnes), puis le thread clôt la tâche (`Interrupter::end`). Sur Stop,
-  `await_reply` rend `Cancelled` dès que le jeton se déclenche, pendant que le
-  thread est encore dans `sqlite3_step` — c'est-à-dire **avant** l'annulation
-  d'office qu'il va provoquer. Une valeur rangée par le thread et lue par
-  l'exécuteur à ce moment-là est périmée ; pire, plus rien ne la republie. Le
-  thread traite en revanche ses tâches **dans l'ordre de soumission** : une
-  tâche soumise après une autre s'exécute après sa fin.
-* **Toutes les fins d'exécution ne produisent pas d'événement terminal.** Dans
-  `Executor` (`crates/oxyn-exec/src/executor.rs`), un échec de `slot.execute`
-  rend l'erreur à l'appelant sans publier `Event::Failed` ; seul le drainage
-  publie `Completed` ou `Failed`. Or une écriture SQLite s'exécute en entier
-  pendant `slot.execute` : ses erreurs, `SQLITE_BUSY` compris, et le Stop
-  pendant l'écriture passent par ce chemin. Enfin, un futur abandonné publie
-  `Cancelled` depuis `AbandonGuard::drop` (`abandon.rs`), qui n'a pas la session.
+* **The SQLite worker thread replies before it has finished.** A task sends its
+  reply from inside (`worker.rs`, `call`; `stream.rs`, write without columns),
+  then the thread closes the task (`Interrupter::end`). On Stop, `await_reply`
+  returns `Cancelled` as soon as the token fires, while the thread is still in
+  `sqlite3_step` — that is, **before** the automatic rollback it is about to
+  cause. A value stored by the thread and read by the executor at that moment
+  is stale; worse, nothing republishes it. The thread does, however, process
+  its tasks **in submission order**: a task submitted after another runs after
+  it ends.
+* **Not every end of execution produces a terminal event.** In `Executor`
+  (`crates/oxyn-exec/src/executor.rs`), a failure of `slot.execute` returns the
+  error to the caller without publishing `Event::Failed`; only draining
+  publishes `Completed` or `Failed`. Yet a SQLite write runs entirely during
+  `slot.execute`: its errors, `SQLITE_BUSY` included, and Stop during the write
+  go through this path. Finally, an abandoned future publishes `Cancelled` from
+  `AbandonGuard::drop` (`abandon.rs`), which does not have the session.
 
-`rusqlite` 0.37.0, la version de `Cargo.lock`, expose `Connection::is_autocommit`
-(`src/lib.rs`, lu dans les sources installées le 2026-09-25). Côté PostgreSQL,
-l'état est porté par chaque `ReadyForQuery` sous trois valeurs — `Idle`,
-`Transaction`, `Error` —, mais `sqlx-postgres` 0.9.0 n'en expose rien :
-`PgConnection::in_transaction` est `pub(crate)` et confond `Error` avec `Idle`
-(`src/connection/mod.rs`). La méthode publique `Connection::is_in_transaction`
-de `sqlx-core` 0.9.0 ne répond pas non plus : elle compte les transactions
-ouvertes **par sqlx** (`transaction_depth`), et un `BEGIN` tapé ne la change pas.
+`rusqlite` 0.37.0, the version in `Cargo.lock`, exposes
+`Connection::is_autocommit` (`src/lib.rs`, read in the installed sources on
+2026-09-25). On the PostgreSQL side, the state is carried by every
+`ReadyForQuery` under three values — `Idle`, `Transaction`, `Error` —, but
+`sqlx-postgres` 0.9.0 exposes none of it: `PgConnection::in_transaction` is
+`pub(crate)` and conflates `Error` with `Idle` (`src/connection/mod.rs`). The
+public method `Connection::is_in_transaction` of `sqlx-core` 0.9.0 does not
+answer either: it counts the transactions opened **by sqlx**
+(`transaction_depth`), and a typed `BEGIN` does not change it.
 
-La question vient du lot consoles (P30 de l'audit du 2026-09-24) ; l'utilisateur
-a demandé le 2026-09-25 qu'elle passe par un ADR avant tout code, parce qu'elle
-touche le trait de frontière `Session` — donc, à terme, l'interface WIT des
-drivers en plugin ([PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md#ce-que-ce-contrat-impose-aux-traits-daujourdhui)).
+The question comes from the consoles batch (P30 of the 2026-09-24 audit); the
+user asked on 2026-09-25 that it go through an ADR before any code, because it
+touches the `Session` boundary trait — hence, eventually, the WIT interface of
+plugin drivers ([PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md#what-this-contract-imposes-on-todays-traits)).
 
-## Décision
+## Decision
 
-### 1. Un type d'état dans `oxyn-core`
+### 1. A state type in `oxyn-core`
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,15 +98,15 @@ pub enum TransactionState {
 }
 ```
 
-Il vit dans `oxyn-core` parce qu'un `Event` le porte (§ 3) et qu'`oxyn-core` ne
-dépend pas d'`oxyn-driver`. Il ne porte aucune valeur de la base : le
-`derive(Debug)` ne contrevient pas à [I-03](../../CLAUDE.md#i-03).
+It lives in `oxyn-core` because an `Event` carries it (§ 3) and `oxyn-core`
+does not depend on `oxyn-driver`. It carries no database value: the
+`derive(Debug)` does not contravene [I-03](../../CLAUDE.md#i-03).
 
-`Unknown` n'est **jamais** présenté comme `Idle`. C'est la règle du contexte de
-session ([ADR-0019](0019-contexte-de-session.md)) : l'interface montre ce que
-la session a constaté, pas ce qu'on suppose.
+`Unknown` is **never** presented as `Idle`. It is the rule of the session
+context ([ADR-0019](0019-contexte-de-session.md)): the interface shows what the
+session observed, not what is assumed.
 
-### 2. Une méthode asynchrone du trait `Session`, avec défaut
+### 2. An asynchronous method of the `Session` trait, with a default
 
 ```rust
 /// The transaction state, once every operation already submitted on this
@@ -115,193 +117,189 @@ async fn transaction_state(&self, cancel: &CancelToken) -> TransactionState {
 }
 ```
 
-* **Ordonnée après ce qui précède.** La méthode rend l'état constaté **après**
-  la fin de toute opération déjà soumise à la session — exécution, `begin`,
-  `commit`, `rollback`, `set_context` —, qu'elle ait réussi, échoué ou été
-  interrompue. C'est ce qui rend la lecture juste après un Stop : l'annulation
-  d'office est constatée, pas devancée.
-* **Sans aller-retour réseau.** Elle attend la fin des opérations, elle
-  n'interroge pas le serveur. Si `cancel` se déclenche avant, ou si la session
-  ne peut plus répondre, elle rend `Unknown` : jamais une erreur, jamais `Idle`
-  par défaut.
-* **Appelée une fois le curseur lâché.** Le thread SQLite reste pris par un flux
-  tant que son curseur vit (`stream.rs`) : une lecture soumise pendant ce temps
-  attendrait sans borne. L'appelant draine ou lâche le curseur d'abord.
-* **Jamais déduite du texte soumis.** La troisième conséquence du contexte
-  l'interdit.
-* **SQLite** soumet à son thread de travail une tâche qui lit
-  `Connection::is_autocommit`. L'ordre de soumission du thread fait le reste :
-  la tâche ne s'exécute qu'une fois l'exécution précédente revenue de
-  `sqlite3_step`, interruption comprise. Le coût est un passage de fil local.
-* **PostgreSQL** garde le défaut `Unknown` tant qu'il ne déclare pas
-  `TRANSACTIONS`. Il n'y a pas de transaction manuelle à montrer, et le refus
-  d'un `BEGIN` dit déjà que chaque instruction est validée seule.
-* **Contrat.** Une session qui déclare `TRANSACTIONS` redéfinit la méthode.
-  Aucune suite de contrat commune n'existe dans `oxyn-driver` ; la mise en œuvre
-  ajoute donc à chaque driver qui déclare `TRANSACTIONS` — SQLite aujourd'hui —
-  des tests qui vérifient `Idle` à l'ouverture, `Open` après un `BEGIN` exécuté
-  et après `begin`, `Idle` après `COMMIT`, `ROLLBACK`, `commit` et `rollback`,
-  et `Idle` après une interruption pendant une écriture qui a déclenché
-  l'annulation d'office. [`revue-driver.md`](../../.claude/checklists/revue-driver.md)
-  en fait une exigence pour tout driver qui déclare la capacité. Même logique
-  que le garde de `begin` : ne pas savoir est acceptable, laisser croire ne l'est
-  pas ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-il-déclare-ses-capacités-par-session-et-ne-simule-rien)).
+* **Ordered after what precedes.** The method returns the state observed
+  **after** the end of every operation already submitted to the session —
+  execution, `begin`, `commit`, `rollback`, `set_context` —, whether it
+  succeeded, failed or was interrupted. That is what makes the read correct
+  right after a Stop: the automatic rollback is observed, not preempted.
+* **Without a network round trip.** It waits for the operations to end, it
+  does not query the server. If `cancel` fires before, or if the session can
+  no longer answer, it returns `Unknown`: never an error, never `Idle` by
+  default.
+* **Called once the cursor is released.** The SQLite thread stays taken by a
+  stream as long as its cursor lives (`stream.rs`): a read submitted meanwhile
+  would wait without bound. The caller drains or releases the cursor first.
+* **Never inferred from the submitted text.** The third consequence of the
+  context forbids it.
+* **SQLite** submits to its worker thread a task that reads
+  `Connection::is_autocommit`. The thread's submission order does the rest: the
+  task only runs once the previous execution has returned from `sqlite3_step`,
+  interruption included. The cost is a local thread hop.
+* **PostgreSQL** keeps the `Unknown` default as long as it does not declare
+  `TRANSACTIONS`. There is no manual transaction to show, and refusing a
+  `BEGIN` already says that each statement commits on its own.
+* **Contract.** A session that declares `TRANSACTIONS` overrides the method. No
+  common contract suite exists in `oxyn-driver`; the implementation therefore
+  adds, to each driver that declares `TRANSACTIONS` — SQLite today —, tests
+  that check `Idle` at opening, `Open` after an executed `BEGIN` and after
+  `begin`, `Idle` after `COMMIT`, `ROLLBACK`, `commit` and `rollback`, and
+  `Idle` after an interruption during a write that triggered the automatic
+  rollback. [`revue-driver.md`](../../.claude/checklists/revue-driver.md) makes
+  it a requirement for every driver that declares the capability. Same logic
+  as the `begin` guard: not knowing is acceptable, letting believe is not
+  ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-it-declares-its-capabilities-per-session-and-simulates-nothing)).
 
-### 3. L'exécuteur publie l'état sur toute fin d'exécution qu'il maîtrise
+### 3. The executor publishes the state on every end of execution it controls
 
-L'état appartient à la **session**, pas à la commande :
-`Event::TransactionState { session, state }`. Le front range, pour chaque
-session, la dernière valeur reçue ; il ne la déduit jamais de la réponse d'une
-commande.
+The state belongs to the **session**, not to the command:
+`Event::TransactionState { session, state }`. The front end stores, for each
+session, the last value received; it never infers it from a command's reply.
 
-* **Toutes les sorties.** Pour une session qui déclare `TRANSACTIONS`,
-  l'exécuteur appelle `transaction_state` à **chaque** sortie de l'exécution
-  d'une instruction — succès, échec du drainage, échec anticipé de
-  `slot.execute`, annulation —, en un point de sortie unique plutôt que branche
-  par branche, et publie l'événement. C'est l'échec et l'annulation qui
-  referment une transaction SQLite en silence : un seul chemin oublié, et c'est
-  celui-là.
-* **Avant le terminal.** Quand la sortie produit un événement terminal
-  (`Completed`, `Failed`, `Cancelled`), l'état est publié **avant** lui :
-  `Event::is_terminal` promet qu'après un terminal plus rien n'arrive pour cette
-  exécution.
-* **Avant `settle`, garde armée.** L'appel ajoute un `.await` sur le chemin de
-  sortie. Il se fait **avant** `guard.settle()` : un futur abandonné pendant
-  cette attente laisse alors `AbandonGuard` publier `Cancelled`. Placé après,
-  l'abandon ne publierait ni `Cancelled` ni l'événement normal, et la console
-  resterait « en cours ». La règle existante — aucun `.await` entre `settle` et
-  l'envoi du terminal — vaut ici comme au point de sortie de `dispatch`.
-* **Un jeton propre.** L'appel ne reçoit ni le jeton fils de l'exécution ni
-  celui de l'onglet : déjà déclenchés après un Stop ou un délai dépassé, ils
-  feraient rendre `Unknown` à chaque fois, et le dialogue de fermeture
-  s'ouvrirait après chaque Stop. Il reçoit un jeton borné par la fermeture de la
-  session.
-* **L'abandon.** `AbandonGuard::drop` ne peut pas lire la session. Un
-  `Cancelled` qui n'est précédé d'aucun `TransactionState` pour son exécution —
-  les événements d'une exécution arrivent dans l'ordre — fait passer la session
-  à `Unknown` côté front.
-* **Le pont.** `ExecutionEventKind::of` (`crates/oxyn-desktop/src/ipc.rs`) se
-  termine par un `_ => return None` qui jette en silence toute variante qu'il ne
-  nomme pas : la nouvelle variante y est nommée, et le schéma de validation du
-  front l'apprend dans le même commit
+* **Every exit.** For a session that declares `TRANSACTIONS`, the executor
+  calls `transaction_state` at **every** exit of a statement's execution —
+  success, draining failure, early failure of `slot.execute`, cancellation —,
+  at a single exit point rather than branch by branch, and publishes the event.
+  It is failure and cancellation that silently close a SQLite transaction: a
+  single forgotten path, and it is that one.
+* **Before the terminal.** When the exit produces a terminal event
+  (`Completed`, `Failed`, `Cancelled`), the state is published **before** it:
+  `Event::is_terminal` promises that after a terminal nothing more arrives for
+  this execution.
+* **Before `settle`, guard armed.** The call adds an `.await` on the exit path.
+  It happens **before** `guard.settle()`: a future abandoned during this wait
+  then lets `AbandonGuard` publish `Cancelled`. Placed after, abandonment would
+  publish neither `Cancelled` nor the normal event, and the console would stay
+  "running". The existing rule — no `.await` between `settle` and sending the
+  terminal — applies here as at the exit point of `dispatch`.
+* **A clean token.** The call receives neither the execution's child token nor
+  the tab's: already fired after a Stop or a timeout, they would make it return
+  `Unknown` every time, and the closing dialog would open after every Stop. It
+  receives a token bounded by the session's closing.
+* **Abandonment.** `AbandonGuard::drop` cannot read the session. A `Cancelled`
+  preceded by no `TransactionState` for its execution — an execution's events
+  arrive in order — switches the session to `Unknown` on the front-end side.
+* **The bridge.** `ExecutionEventKind::of` (`crates/oxyn-desktop/src/ipc.rs`)
+  ends with a `_ => return None` that silently throws away any variant it does
+  not name: the new variant is named there, and the front end's validation
+  schema learns it in the same commit
   ([ADR-0031](0031-validation-des-reponses-ipc.md)).
 
-### 4. L'état initial vient de l'ouverture
+### 4. The initial state comes from opening
 
-`ConsoleSession` (`crates/oxyn-desktop/src/backend/consoles.rs`) porte l'état
-lu par `transaction_state` à l'ouverture de la console. Une connexion SQLite
-neuve est en autocommit, et cela se **constate** : la console démarre à `Idle`,
-sans repère ni dialogue superflu.
+`ConsoleSession` (`crates/oxyn-desktop/src/backend/consoles.rs`) carries the
+state read by `transaction_state` when the console opens. A new SQLite
+connection is in autocommit, and this is **observed**: the console starts at
+`Idle`, without a marker or a superfluous dialog.
 
-L'état initial est lu **par l'exécuteur** pendant `Command::Connect`, et porté
-par `Outcome::Connected` : le pont n'appelle aucun driver hors du bus
-([I-01](../../CLAUDE.md#i-01)). `console_session` reste donc synchrone ; elle
-reçoit l'état de la réponse de connexion au lieu de le lire.
+The initial state is read **by the executor** during `Command::Connect`, and
+carried by `Outcome::Connected`: the bridge calls no driver outside the bus
+([I-01](../../CLAUDE.md#i-01)). `console_session` therefore stays synchronous;
+it receives the state from the connection reply instead of reading it.
 
-*Précision de mise en œuvre, 2026-09-25 :* le texte proposé faisait lire l'état
-par `console_session`, devenue asynchrone. La relecture des invariants a
-montré que c'était un appel au driver depuis `oxyn-desktop`, hors du bus ; la
-lecture est passée dans l'exécuteur.
+*Implementation note, 2026-09-25:* the proposed text had `console_session`,
+made asynchronous, read the state. The invariants review showed that it was a
+driver call from `oxyn-desktop`, outside the bus; the read moved into the
+executor.
 
-### 5. La console le montre à côté de son contexte
+### 5. The console shows it next to its context
 
-* **`Open`** : la barre de la console porte `Transaction open`, en texte, à côté
-  du sélecteur `<connexion> / <schéma>`. La couleur seule ne porte pas
-  l'information ([UX-SPEC, repères permanents](../UX-SPEC.md#repères-permanents)) ;
-  la pilule d'environnement reste où elle est, dans la barre supérieure.
-* **`Unknown`** sur une session qui déclare `TRANSACTIONS` : `Transaction state
-  unknown`. Rien ne dit « aucune transaction » sans que la session l'ait
-  constaté.
-* **`Idle`**, ou une session sans `TRANSACTIONS` : rien. Aucun repère éteint ne
-  laisse croire la transaction possible là où elle ne l'est pas — même règle que
-  le sélecteur de contexte.
-* **Rien d'optimiste.** L'affichage change à l'événement, jamais à la soumission
-  d'un `BEGIN` ou d'un `COMMIT`. Pendant une exécution, il garde la dernière
-  valeur constatée.
-* **Fermeture de la console.** Une console dont l'état est `Open`, ou `Unknown`
-  sur une session qui déclare `TRANSACTIONS`, ne se ferme pas sans le dialogue
-  existant. C'est un **changement** de ce dialogue : il nomme aujourd'hui la
-  console ; il nomme alors aussi la connexion, et dit que la transaction
-  ouverte sera **annulée**. Le focus reste sur `Cancel`.
+* **`Open`**: the console bar carries `Transaction open`, as text, next to the
+  `<connection> / <schema>` selector. Color alone does not carry the
+  information ([UX-SPEC, permanent markers](../UX-SPEC.md#permanent-landmarks));
+  the environment pill stays where it is, in the top bar.
+* **`Unknown`** on a session that declares `TRANSACTIONS`: `Transaction state
+  unknown`. Nothing says "no transaction" without the session having observed
+  it.
+* **`Idle`**, or a session without `TRANSACTIONS`: nothing. No greyed-out
+  marker suggests a transaction is possible where it is not — same rule as the
+  context selector.
+* **Nothing optimistic.** The display changes on the event, never on
+  submitting a `BEGIN` or a `COMMIT`. During an execution, it keeps the last
+  observed value.
+* **Closing the console.** A console whose state is `Open`, or `Unknown` on a
+  session that declares `TRANSACTIONS`, does not close without the existing
+  dialog. It is a **change** to that dialog: today it names the console; it
+  then also names the connection, and says that the open transaction will be
+  **rolled back**. Focus stays on `Cancel`.
 
-Cet ADR n'ajoute **aucun** bouton `Commit` ni `Rollback` : ce seraient des
-écritures émises par Oxyn, qui passeraient par le bus et le `PolicyGate`
-([I-01](../../CLAUDE.md#i-01), [I-02](../../CLAUDE.md#i-02)) et méritent leur
-propre décision. L'utilisateur valide ou annule en tapant `COMMIT` ou `ROLLBACK`,
-comme aujourd'hui.
+This ADR adds **no** `Commit` or `Rollback` button: they would be writes
+emitted by Oxyn, which would go through the bus and the `PolicyGate`
+([I-01](../../CLAUDE.md#i-01), [I-02](../../CLAUDE.md#i-02)) and deserve their
+own decision. The user commits or rolls back by typing `COMMIT` or `ROLLBACK`,
+as today.
 
-### 6. Ce que la mise en œuvre met à jour, dans le même commit
+### 6. What the implementation updates, in the same commit
 
-[ARCHITECTURE §4.1](../ARCHITECTURE.md) (la liste des méthodes du trait),
-[DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md) (la méthode et son contrat),
-[UX-SPEC](../UX-SPEC.md) (le § 5 ci-dessus, dans « Consoles indépendantes » et
-la barre de console) et `revue-driver.md`. Pas avant : tant que cet ADR est
-`proposé`, ces documents décrivent le code tel qu'il est.
+[ARCHITECTURE §4.1](../ARCHITECTURE.md) (the list of the trait's methods),
+[DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md) (the method and its contract),
+[UX-SPEC](../UX-SPEC.md) (§ 5 above, in "Independent consoles" and the console
+bar) and `revue-driver.md`. Not before: as long as this ADR is `proposed`,
+these documents describe the code as it is.
 
-## Conséquences
+## Consequences
 
-* **+** Une transaction SQLite ouverte se voit dans sa console, et **fermer la
-  console** ne la jette plus sans prévenir.
-* **+** L'état affiché est celui que le moteur rapporte après la fin effective
-  de l'opération, y compris après un Stop ou une erreur qui a refermé la
+* **+** An open SQLite transaction is visible in its console, and **closing
+  the console** no longer throws it away without warning.
+* **+** The displayed state is the one the engine reports after the actual end
+  of the operation, including after a Stop or an error that closed the
   transaction.
-* **+** Le trait reste traversable par WIT : une fonction qui rend une
-  énumération, sans rappel ni état partagé implicite
-  ([PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md#ce-que-ce-contrat-impose-aux-traits-daujourdhui)).
-  Elle est asynchrone, comme `execute` déjà.
-* **+** Le jour où PostgreSQL épingle une connexion par session et déclare
-  `TRANSACTIONS` (le `TODO(phase 1)` de `variant.rs`), l'écran est prêt : seul
-  le driver change.
-* **−** Les autres chemins de fermeture annulent encore sans prévenir :
-  `Command::Disconnect`, la libération d'un workspace de connexion, ⌘Q, et le
-  Quit du menu macOS, que rien ne peut retenir
-  ([ADR-0038](0038-un-plantage-s-annonce-une-fois.md)). Cet ADR ne couvre que la
-  fermeture d'une console.
-* **−** Une méthode de plus sur le trait de frontière, et un appel de plus à
-  chaque fin d'exécution sur une session transactionnelle — un passage de fil
-  pour SQLite. Un driver qui la redéfinit doit respecter l'ordre « après tout ce
-  qui a été soumis » ; une valeur simplement rangée par le driver et lue sans
-  attendre recréerait la course décrite au contexte.
-* **−** Après un Stop, la fin de l'exécution attend que le thread SQLite sorte
-  effectivement de `sqlite3_step` : le jeton de lecture n'est borné que par la
-  fermeture de la session. Une instruction qui ignorerait l'interruption
-  laisserait la console « en cours », sans borne, jusqu'à sa fermeture.
-* **−** L'état est celui de la **fin de la dernière opération**. Un futur driver
-  réseau dont la connexion est tuée côté serveur resterait affiché `Open`
-  jusqu'à l'exécution suivante.
-* **−** Aujourd'hui, l'effort ne sert qu'à SQLite ; pour PostgreSQL, la
-  fonctionnalité reste invisible jusqu'à l'épinglage.
-* **−** L'état d'échec de PostgreSQL (`Error` dans `ReadyForQuery` : toute
-  instruction est refusée jusqu'au `ROLLBACK`) n'a pas de variante. Il en
-  faudra une, `Aborted`, quand PostgreSQL déclarera `TRANSACTIONS` ; le
-  `#[non_exhaustive]` le permet côté Rust, mais `ipc.rs` et le schéma du front
-  devront l'apprendre dans le même commit.
+* **+** The trait stays traversable by WIT: a function that returns an
+  enumeration, with no callback or implicit shared state
+  ([PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md#what-this-contract-imposes-on-todays-traits)).
+  It is asynchronous, like `execute` already.
+* **+** The day PostgreSQL pins one connection per session and declares
+  `TRANSACTIONS` (the `TODO(phase 1)` of `variant.rs`), the screen is ready:
+  only the driver changes.
+* **−** The other closing paths still roll back without warning:
+  `Command::Disconnect`, releasing a connection workspace, ⌘Q, and the macOS
+  menu's Quit, which nothing can hold back
+  ([ADR-0038](0038-un-plantage-s-annonce-une-fois.md)). This ADR only covers
+  closing a console.
+* **−** One more method on the boundary trait, and one more call at every end
+  of execution on a transactional session — a thread hop for SQLite. A driver
+  that overrides it must respect the "after everything submitted" order; a
+  value simply stored by the driver and read without waiting would recreate
+  the race described in the context.
+* **−** After a Stop, the end of the execution waits for the SQLite thread to
+  actually leave `sqlite3_step`: the read token is bounded only by the
+  session's closing. A statement that ignored the interruption would leave the
+  console "running", without bound, until it is closed.
+* **−** The state is that of the **end of the last operation**. A future
+  network driver whose connection is killed on the server side would stay
+  displayed `Open` until the next execution.
+* **−** Today, the effort only serves SQLite; for PostgreSQL, the feature stays
+  invisible until pinning.
+* **−** PostgreSQL's failed state (`Error` in `ReadyForQuery`: every statement
+  is refused until `ROLLBACK`) has no variant. One will be needed, `Aborted`,
+  when PostgreSQL declares `TRANSACTIONS`; `#[non_exhaustive]` allows it on
+  the Rust side, but `ipc.rs` and the front end's schema will have to learn it
+  in the same commit.
 
-**Coût de sortie :** faible. Retirer la méthode, dont le défaut rend `Unknown`,
-ne casse aucun driver ; retirer l'événement, le champ de `ConsoleSession` et le
-repère touche `oxyn-exec`, `ipc.rs`, le schéma du front et un composant. Ce qui
-borne ce coût : l'état ne sert à **aucune** décision de sécurité — le
-`PolicyGate` ne le consulte pas.
+**Exit cost:** low. Removing the method, whose default returns `Unknown`,
+breaks no driver; removing the event, the `ConsoleSession` field and the
+marker touches `oxyn-exec`, `ipc.rs`, the front end's schema and one
+component. What bounds this cost: the state serves **no** security decision —
+the `PolicyGate` does not consult it.
 
-**Reconsidérer si** PostgreSQL épingle une connexion par session : il faudra
-alors ajouter `Aborted`, et vérifier que `sqlx` expose l'état de
-`ReadyForQuery` — sinon, le driver devra le reconstruire, et l'argument
-« jamais déduit du texte » se reposera. Reconsidérer aussi si le `PolicyGate`
-doit un jour tenir compte d'une transaction ouverte (par exemple pour refuser
-qu'un `Actor::Agent` écrive dans une transaction ouverte par l'utilisateur) :
-l'état deviendrait une donnée de sécurité, et une valeur publiée pour
-l'affichage ne suffirait plus. Reconsidérer enfin si les fermetures hors
-console (déconnexion, workspace, ⌘Q) doivent être retenues à leur tour.
+**Reconsider if** PostgreSQL pins one connection per session: `Aborted` will
+then have to be added, and one must check that `sqlx` exposes the state of
+`ReadyForQuery` — otherwise, the driver will have to rebuild it, and the
+"never inferred from text" argument will come up again. Reconsider also if the
+`PolicyGate` must one day take an open transaction into account (for example
+to refuse that an `Actor::Agent` write into a transaction opened by the user):
+the state would become security data, and a value published for display would
+no longer suffice. Reconsider finally if closings outside the console
+(disconnection, workspace, ⌘Q) must in turn be held back.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| **Méthode synchrone qui lit une valeur rangée par le driver** — la proposition initiale du lot consoles | Le thread SQLite répond avant de finir sa tâche, et Stop rend la main pendant `sqlite3_step` : la valeur lue à la fin d'une exécution est celle d'avant l'annulation d'office, et rien ne la republie. La rendre juste imposerait `Unknown` pendant toute tâche en cours, plus un second signal pour publier l'état final — la méthode asynchrone ordonnée obtient la même chose par la file du thread |
-| **État porté par la réponse d'exécution** — un champ d'`ExecStats` rempli par `Cursor::stats`, donc dans `Event::Completed` | Ne couvre que le succès. `Failed` et `Cancelled` ne portent pas de statistiques, l'échec anticipé de `slot.execute` ne publie aucun événement, et ce sont précisément l'erreur et le Stop qui referment une transaction SQLite. `begin`, `commit` et `rollback` ne produisent pas de curseur. Enfin, `ExecStats` décrit le coût d'une exécution, pas l'état d'une session : l'y mettre ferait voyager l'état de la console dans l'historique et les résultats retenus, où il serait périmé à la lecture |
-| **État porté par le résultat de la commande** — l'`Outcome` du succès et la réponse d'erreur IPC | L'erreur est une `OxynError` qui traverse toutes les crates : y joindre l'état d'une session mêle deux choses qu'un message d'erreur ne doit pas porter. L'abandon ne produit pas de résultat. Et l'état appartient à la session, qui survit à la commande : le lire dans la réponse d'une commande laisse la question de l'ordre entre réponses et événements, qui voyagent par deux canaux distincts |
-| **Ne rien exposer tant que PostgreSQL refuse les transactions manuelles** | SQLite garde déjà des transactions ouvertes, et la fermeture d'une console les annule sans rien dire. Attendre PostgreSQL laisse ce défaut en place pour le seul moteur qu'il concerne aujourd'hui |
-| **Déduire l'état du texte soumis**, côté front ou dans `oxyn-exec` | `sqlite3_get_autocommit` dit que seul l'appel au moteur révèle une annulation automatique après erreur ou interruption. L'affichage mentirait au moment où il compte |
-| **Interroger le serveur** (une requête qui renvoie l'état) | Un aller-retour réseau après chaque exécution. Pour PostgreSQL sur bassin, la réponse porterait sur une connexion d'emprunt, pas sur la session ; pour SQLite, il n'y a pas de serveur, et le moteur donne la réponse sans requête |
-| **Défaut `Idle` plutôt qu'`Unknown`** | Un driver qui n'a rien implémenté affirmerait qu'aucune transaction n'est ouverte. C'est le « faire semblant » que DRIVER-CONTRACT §5 interdit |
-| **Montrer l'état pour toute session, `Unknown` compris** | Un repère « état inconnu » sur chaque console PostgreSQL, où aucune transaction manuelle n'est possible, n'apprend rien et habitue à ignorer le repère — celui qui comptera sur SQLite |
+| **Synchronous method reading a value stored by the driver** — the consoles batch's initial proposal | The SQLite thread replies before finishing its task, and Stop returns control during `sqlite3_step`: the value read at the end of an execution is the one from before the automatic rollback, and nothing republishes it. Making it correct would impose `Unknown` during any task in progress, plus a second signal to publish the final state — the ordered asynchronous method gets the same through the thread's queue |
+| **State carried by the execution reply** — an `ExecStats` field filled by `Cursor::stats`, hence in `Event::Completed` | Only covers success. `Failed` and `Cancelled` carry no statistics, the early failure of `slot.execute` publishes no event, and it is precisely the error and the Stop that close a SQLite transaction. `begin`, `commit` and `rollback` produce no cursor. Finally, `ExecStats` describes the cost of an execution, not the state of a session: putting it there would carry the console's state into the history and the retained results, where it would be stale when read |
+| **State carried by the command's result** — the success `Outcome` and the IPC error reply | The error is an `OxynError` that crosses every crate: attaching a session's state to it mixes two things an error message must not carry. Abandonment produces no result. And the state belongs to the session, which outlives the command: reading it in a command's reply leaves the question of ordering between replies and events, which travel through two distinct channels |
+| **Expose nothing as long as PostgreSQL refuses manual transactions** | SQLite already keeps transactions open, and closing a console rolls them back without a word. Waiting for PostgreSQL leaves this defect in place for the only engine it concerns today |
+| **Infer the state from the submitted text**, on the front end or in `oxyn-exec` | `sqlite3_get_autocommit` says only the call to the engine reveals an automatic rollback after an error or an interruption. The display would lie at the moment it matters |
+| **Query the server** (a query that returns the state) | A network round trip after every execution. For pooled PostgreSQL, the answer would concern a borrowed connection, not the session; for SQLite, there is no server, and the engine gives the answer without a query |
+| **`Idle` default rather than `Unknown`** | A driver that implemented nothing would assert that no transaction is open. It is the "pretending" that DRIVER-CONTRACT §5 forbids |
+| **Show the state for every session, `Unknown` included** | An "unknown state" marker on every PostgreSQL console, where no manual transaction is possible, teaches nothing and trains users to ignore the marker — the one that will matter on SQLite |

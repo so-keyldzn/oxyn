@@ -1,22 +1,22 @@
 ---
 name: alert-porte-role-alert
-description: Le composant Alert généré pose role="alert" en dur ; migrer un encadré statique vers Alert en fait une région live annoncée, sauf à surcharger role
+description: The generated Alert component hard-codes role="alert"; migrating a static callout to Alert turns it into an announced live region, unless role is overridden
 metadata:
   type: feedback
 ---
 
-`ui/alert.tsx` rend `<div role="alert" … {...props}>` : tout `Alert` est une
-région live assertive. Le `role` est posé **avant** l'étalement des props, donc
-`<Alert role="note">` le remplace.
+`ui/alert.tsx` renders `<div role="alert" … {...props}>`: every `Alert` is an
+assertive live region. The `role` is set **before** the props spread, so
+`<Alert role="note">` replaces it.
 
-**Why:** la règle « Callouts use Alert » pousse à convertir un encadré
-d'avertissement maison (bordure pointillée, icône) en `Alert`. Si l'encadré est
-statique et monté à l'ouverture d'un dialogue, la conversion le fait lire par
-le lecteur d'écran avant le titre, et ajoute un `role="alert"` que les `play`
-qui comptent les alertes (`getByRole("alert")` pour une erreur) voient en
-double. Ni le typecheck ni axe ne signalent le changement.
+**Why:** the "Callouts use Alert" rule pushes to convert a homemade warning
+callout (dashed border, icon) into `Alert`. If the callout is static and mounted
+when a dialog opens, the conversion makes the screen reader read it before the
+title, and adds a `role="alert"` that the `play`s counting alerts
+(`getByRole("alert")` for an error) see twice. Neither the typecheck nor axe
+flag the change.
 
-**How to apply:** avant de migrer un encadré vers `Alert`, décider s'il doit
-être annoncé. Statique → passer `role="note"` (ou le rapporter en `décision`) ;
-erreur qui apparaît → garder le rôle par défaut. Vérifier les `play` qui
-cherchent `alert` dans le même écran.
+**How to apply:** before migrating a callout to `Alert`, decide whether it must
+be announced. Static → pass `role="note"` (or report it as `décision`); an
+error that appears → keep the default role. Check the `play`s that look for
+`alert` in the same screen.

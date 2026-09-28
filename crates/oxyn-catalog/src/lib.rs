@@ -1,48 +1,47 @@
-//! Le modèle de métadonnées unifié d'Oxyn, son cache et sa recherche.
+//! Oxyn's unified metadata model, its cache and its search.
 //!
-//! L'introspection d'une base est **coûteuse** : des minutes sur un schéma à
-//! 20 000 objets (ARCHITECTURE §6). Cette crate est ce qui permet de ne la payer
-//! qu'une fois — et ce qui rend possibles les deux choses qui en découlent :
-//! l'**exploration sans aller-retour serveur**, et le **contexte d'un agent** construit à
-//! partir du catalogue local plutôt que d'un aller-retour serveur à chaque
-//! question.
+//! Introspecting a database is **expensive**: minutes on a schema with 20,000
+//! objects (ARCHITECTURE §6). This crate is what lets it be paid only once —
+//! and what makes possible the two things that follow from it: **exploration
+//! without a server round trip**, and **an agent's context** built from the
+//! local catalog rather than from a server round trip for every question.
 //!
-//! # Ce qu'on y trouve
+//! # What it contains
 //!
-//! | Module | Sujet | Autorité |
+//! | Module | Subject | Authority |
 //! |---|---|---|
-//! | [`model`] | la hiérarchie à cinq paliers, ses relations et ses champs | ARCHITECTURE §6 |
-//! | [`path`] | le chemin qualifié, et la citation d'identifiant | DRIVER-CONTRACT §6, I-10 |
-//! | [`literal`] | le littéral de chaîne SQL composé à partir d'une valeur | I-10 |
-//! | [`provider`] | ce qu'une session sait dire de sa structure | DRIVER-CONTRACT §5 |
-//! | [`cache`] | l'arbre en mémoire, sa fraîcheur, son invalidation | ARCHITECTURE §6 |
-//! | [`mod@search`] | la sélection lexicale des relations pertinentes | ARCHITECTURE §7.4 |
+//! | [`model`] | the five-level hierarchy, its relations and its fields | ARCHITECTURE §6 |
+//! | [`path`] | the qualified path, and identifier quoting | DRIVER-CONTRACT §6, I-10 |
+//! | [`literal`] | the SQL string literal composed from a value | I-10 |
+//! | [`provider`] | what a session can tell about its structure | DRIVER-CONTRACT §5 |
+//! | [`cache`] | the in-memory tree, its freshness, its invalidation | ARCHITECTURE §6 |
+//! | [`mod@search`] | the lexical selection of relevant relations | ARCHITECTURE §7.4 |
 //!
-//! # Les quatre choix qui gouvernent cette crate
+//! # The four choices that govern this crate
 //!
-//! **Les paliers sont optionnels, et pas seulement les derniers.** MySQL n'a pas
-//! de catalogue, Neo4j pas d'espace de noms, Elasticsearch ni l'un ni l'autre.
-//! Rien n'est comblé par une valeur inventée : un palier absent est absent, et
-//! [`CatalogPath`] le rend tel quel — y compris à l'aller-retour par le disque.
+//! **Levels are optional, and not only the last ones.** MySQL has no catalog,
+//! Neo4j no namespace, Elasticsearch neither. Nothing is filled with an
+//! invented value: a missing level is missing, and [`CatalogPath`] returns it
+//! as is — including on the round trip through disk.
 //!
-//! **Un nom d'objet est une entrée hostile.** Une table nommée
-//! `"users"; DROP TABLE audit; --` est légale dans PostgreSQL.
-//! [`CatalogPath::qualify`] est le seul chemin par lequel un identifiant rejoint
-//! une requête composée par Oxyn (I-10), et [`fn@search`] classe des noms sans
-//! jamais composer d'invite.
+//! **An object name is hostile input.** A table named
+//! `"users"; DROP TABLE audit; --` is legal in PostgreSQL.
+//! [`CatalogPath::qualify`] is the only path through which an identifier joins
+//! a query composed by Oxyn (I-10), and [`fn@search`] ranks names without ever
+//! composing a prompt.
 //!
-//! **Une liste vide et « je ne sais pas » sont deux réponses différentes.** Un
-//! [`CatalogProvider`] qui ne sait pas introspecter les index refuse ; il ne
-//! rend pas une liste vide, qui affirmerait qu'il n'y en a pas
-//! ([`DRIVER-CONTRACT` §5](../../../docs/DRIVER-CONTRACT.md)). Le cache maintient
-//! la distinction : [`CatalogCache::indexes`] rend `None` pour « pas lu » et une
-//! tranche vide pour « aucun ».
+//! **An empty list and "I don't know" are two different answers.** A
+//! [`CatalogProvider`] that cannot introspect indexes refuses; it does not
+//! return an empty list, which would assert there are none
+//! ([`DRIVER-CONTRACT` §5](../../../docs/DRIVER-CONTRACT.md)). The cache keeps
+//! the distinction: [`CatalogCache::indexes`] returns `None` for "not read" and
+//! an empty slice for "none".
 //!
-//! **Un palier jamais lu n'est pas périmé.** [`CatalogCache::stale`] ne réclame
-//! que ce qui a déjà été lu au moins une fois — sinon un rafraîchissement de
-//! fond décrirait les 20 000 relations que personne n'a ouvertes.
+//! **A level never read is not stale.** [`CatalogCache::stale`] only claims
+//! what has already been read at least once — otherwise a background refresh
+//! would describe the 20,000 relations nobody opened.
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```
 //! use std::time::Duration;
@@ -52,14 +51,14 @@
 //!
 //! let mut cache = CatalogCache::new();
 //!
-//! // Une insertion partielle : on décrit une table sans avoir listé son schéma.
-//! let table = CatalogPath::for_relation(Some("caisse"), Some("public"), "clients")?;
+//! // A partial insertion: a table is described without its schema being listed.
+//! let table = CatalogPath::for_relation(Some("sales"), Some("public"), "clients")?;
 //! cache.set_relation(&table, Relation::new("clients", RelationKind::Table))?;
 //!
-//! // Le SQL composé par Oxyn cite toujours ses identifiants.
-//! assert_eq!(table.qualify(QuoteStyle::Double), r#""caisse"."public"."clients""#);
+//! // The SQL composed by Oxyn always quotes its identifiers.
+//! assert_eq!(table.qualify(QuoteStyle::Double), r#""sales"."public"."clients""#);
 //!
-//! // Après un DDL, le sous-arbre est marqué à relire — sans perdre ce qu'il sait.
+//! // After a DDL, the subtree is marked for rereading — without losing what it knows.
 //! cache.invalidate(&CatalogScope::Relation(table.clone()));
 //! assert!(cache.relation(&table).is_some());
 //! assert_eq!(cache.stale(Duration::from_secs(3600)), vec![CatalogScope::Relation(table)]);
@@ -96,10 +95,10 @@ mod tests {
     use crate::model::{Field, LogicalType, Relation, RelationKind, RelationRef, ServerInfo};
     use crate::{CatalogCache, CatalogPath, CatalogScope, SearchOptions, search};
 
-    /// Le trajet complet de la crate, sur le seul scénario qui les met tous en
-    /// jeu : lister, décrire, chercher, subir un DDL, relire ce qui est périmé.
+    /// The full path of the crate, on the one scenario that brings them all
+    /// into play: list, describe, search, undergo a DDL, reread what is stale.
     #[test]
-    fn le_trajet_complet_du_catalogue() {
+    fn the_full_catalog_path() {
         let mut cache = CatalogCache::new();
         cache.set_server_info(ServerInfo::new(
             "PostgreSQL",
@@ -107,42 +106,42 @@ mod tests {
             Capabilities::SQL | Capabilities::SCHEMAS | Capabilities::INDEXES,
         ));
 
-        let espace = CatalogPath::for_namespace(Some("caisse"), "public").expect("chemin valide");
+        let space = CatalogPath::for_namespace(Some("sales"), "public").expect("valid path");
         cache
             .set_relations(
-                &espace,
+                &space,
                 vec![
-                    RelationRef::new(espace.clone(), "commandes", RelationKind::Table)
-                        .expect("nom valide"),
-                    RelationRef::new(espace.clone(), "clients", RelationKind::Table)
-                        .expect("nom valide"),
+                    RelationRef::new(space.clone(), "orders", RelationKind::Table)
+                        .expect("valid name"),
+                    RelationRef::new(space.clone(), "clients", RelationKind::Table)
+                        .expect("valid name"),
                 ],
             )
-            .expect("un espace de noms");
+            .expect("a namespace");
 
-        let commandes = espace.with_relation("commandes").expect("chemin valide");
+        let orders = space.with_relation("orders").expect("valid path");
         cache
             .set_relation(
-                &commandes,
-                Relation::new("commandes", RelationKind::Table).with_fields(vec![
+                &orders,
+                Relation::new("orders", RelationKind::Table).with_fields(vec![
                     Field::new("id", 0, LogicalType::INT64, "int8").primary_key(),
                     Field::new("client_id", 1, LogicalType::INT64, "int8").not_null(),
                 ]),
             )
-            .expect("le chemin nomme une relation");
+            .expect("the path names a relation");
 
-        // La recherche trouve la table par son nom, et l'autre par son champ.
-        let resultats = search(&cache, "client", &SearchOptions::default());
-        let noms: Vec<Option<&str>> = resultats.iter().map(|hit| hit.path.relation()).collect();
-        assert_eq!(noms, [Some("clients"), Some("commandes")]);
+        // The search finds the table by its name, and the other by its field.
+        let results = search(&cache, "client", &SearchOptions::default());
+        let names: Vec<Option<&str>> = results.iter().map(|hit| hit.path.relation()).collect();
+        assert_eq!(names, [Some("clients"), Some("orders")]);
 
-        // Un ALTER TABLE émis depuis Oxyn : le sous-arbre est à relire, mais il
-        // reste consultable en attendant.
-        cache.invalidate(&CatalogScope::Relation(commandes.clone()));
-        assert!(cache.relation(&commandes).is_some());
+        // An ALTER TABLE issued from Oxyn: the subtree is to be reread, but it
+        // stays readable in the meantime.
+        cache.invalidate(&CatalogScope::Relation(orders.clone()));
+        assert!(cache.relation(&orders).is_some());
         assert_eq!(
             cache.stale(Duration::from_secs(3600)),
-            vec![CatalogScope::Relation(commandes)]
+            vec![CatalogScope::Relation(orders)]
         );
     }
 }

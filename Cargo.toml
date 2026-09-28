@@ -5,29 +5,29 @@ members = ["crates/*", "drivers/*"]
 [workspace.package]
 version       = "0.0.1"
 edition       = "2024"
-# 1.95 et non 1.94 : `sqlx 0.9.0` exige 1.94.0, mais `wasmtime 48.0.1` exige
-# 1.95.0. wasmtime est derrière la fonctionnalité `wasm-host` d'oxyn-plugin,
-# désactivée par défaut — cargo ne vérifie donc pas son rust-version dans une
-# construction ordinaire, et le plancher réel resterait invisible jusqu'au jour
-# où quelqu'un active la fonctionnalité. Voir ADR-0008 et RESEARCH-NOTES.
+# 1.95 and not 1.94: `sqlx 0.9.0` requires 1.94.0, but `wasmtime 48.0.1`
+# requires 1.95.0. wasmtime is behind oxyn-plugin's `wasm-host` feature, off by
+# default — cargo therefore does not check its rust-version in an ordinary
+# build, and the real floor would stay invisible until the day someone enables
+# the feature. See ADR-0008 and RESEARCH-NOTES.
 rust-version  = "1.95"
-# L'application est sous GPL ; les quatre crates qu'un driver tiers doit lier
-# écrivent `Apache-2.0` dans leur propre manifeste (ADR-0044, NOTICE).
+# The application is under GPL; the four crates a third-party driver must link
+# write `Apache-2.0` in their own manifest (ADR-0044, NOTICE).
 license       = "GPL-3.0-or-later"
-# Toute crate sous GPL hérite de `publish = false`. C'est ce qui l'exempte du
-# contrôle de licence de `cargo deny` (`[licenses.private]` dans deny.toml) sans
-# ajouter la GPL à la liste `allow`, où elle accepterait aussi une dépendance
-# tierce. Les crates sous Apache n'en héritent pas : elles restent publiables.
+# Every GPL crate inherits `publish = false`. That is what exempts it from the
+# license check of `cargo deny` (`[licenses.private]` in deny.toml) without
+# adding the GPL to the `allow` list, where it would also accept a third-party
+# dependency. The Apache crates do not inherit it: they stay publishable.
 publish       = false
 repository    = "https://github.com/so-keyldzn/oxyn"
 authors       = ["Oxyn contributors"]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Toutes les versions sont résolues et figées ici. Les crates n'écrivent jamais
-# un numéro de version : elles utilisent `dep.workspace = true`.
+# Every version is resolved and pinned here. Crates never write a version
+# number: they use `dep.workspace = true`.
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.dependencies]
-# --- crates internes ---------------------------------------------------------
+# --- internal crates ---------------------------------------------------------
 oxyn-core     = { path = "crates/oxyn-core" }
 oxyn-catalog  = { path = "crates/oxyn-catalog" }
 oxyn-data     = { path = "crates/oxyn-data" }
@@ -42,20 +42,20 @@ oxyn-plugin   = { path = "crates/oxyn-plugin" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 
-# --- socle -------------------------------------------------------------------
+# --- foundation --------------------------------------------------------------
 anyhow        = "1.0.104"
 async-trait   = "0.1.92"
 bitflags      = { version = "2.13.1", features = ["serde"] }
 bytes         = "1.12.1"
 chrono        = { version = "0.4.45", features = ["serde"] }
 async-process = "2.5.0"
-# Serveur MCP sur la boucle locale (ADR-0030). Déjà dans l'arbre par `reqwest`
-# et `tauri` : les déclarer n'y fait entrer aucune famille nouvelle.
+# MCP server on the loopback (ADR-0030). Already in the tree through `reqwest`
+# and `tauri`: declaring them brings no new family in.
 hyper         = { version = "1.11.1", features = ["server", "http1"] }
 hyper-util    = { version = "0.1.20", features = ["tokio"] }
 http-body-util = "0.1.5"
-# Alignée sur la version que tire déjà `agent-client-protocol` : une seconde
-# copie d'une crate d'appels système dans l'arbre n'apporterait rien.
+# Aligned on the version `agent-client-protocol` already pulls: a second copy
+# of a system-call crate in the tree would bring nothing.
 rustix        = { version = "0.38.44", features = ["process"] }
 futures       = "0.3.34"
 indexmap      = { version = "2.14.2", features = ["serde"] }
@@ -69,73 +69,74 @@ tracing       = "0.1.44"
 url           = { version = "2.5.8", features = ["serde"] }
 uuid          = { version = "1.26.0", features = ["v4", "v7", "serde"] }
 
-# --- données -----------------------------------------------------------------
+# --- data --------------------------------------------------------------------
 arrow         = { version = "59.3.0", features = ["chrono-tz"] }
 tempfile      = "3.27.0"
 
-# --- requêtes ----------------------------------------------------------------
+# --- queries -----------------------------------------------------------------
 sqlparser     = "0.62.0"
 
-# --- stockage & secrets ------------------------------------------------------
+# --- storage & secrets -------------------------------------------------------
 directories   = "6.0.0"
 keyring       = "4.2.0"
-# rusqlite est épinglé en 0.37 A DESSEIN : sqlx tire `sqlx-sqlite` dans le graphe de
-# résolution (même désactivé par feature), et les deux déclarent `links = "sqlite3"`.
-# Une seule version de libsqlite3-sys peut donc exister. sqlx 0.9 accepte >=0.30.1,<0.38 ;
-# rusqlite 0.37 demande ^0.35 — c'est l'intersection. À relever quand sqlx suivra.
+# rusqlite is pinned to 0.37 ON PURPOSE: sqlx pulls `sqlx-sqlite` into the
+# resolution graph (even when disabled by feature), and both declare
+# `links = "sqlite3"`. Only one version of libsqlite3-sys can therefore exist.
+# sqlx 0.9 accepts >=0.30.1,<0.38; rusqlite 0.37 requires ^0.35 — that is the
+# intersection. Raise it when sqlx follows.
 #
-# `column_decltype` expose `Statement::columns()` et `Column::decl_type()`. SQLite
-# n'a pas de type de colonne : le type déclaré au CREATE TABLE est la seule
-# indication disponible avant d'avoir lu une ligne, et le driver s'en sert pour
-# proposer un schéma Arrow qu'il corrige ensuite à la sonde. Sans cette
-# fonctionnalité, la méthode n'existe simplement pas — l'erreur est un E0599 sur
-# `columns`, qui ne nomme jamais la feature manquante.
+# `column_decltype` exposes `Statement::columns()` and `Column::decl_type()`.
+# SQLite has no column type: the type declared in CREATE TABLE is the only hint
+# available before reading a row, and the driver uses it to propose an Arrow
+# schema it then corrects on probing. Without this feature, the method simply
+# does not exist — the error is an E0599 on `columns`, which never names the
+# missing feature.
 rusqlite      = { version = "0.37.0", features = [
     "bundled", "chrono", "serde_json", "column_decltype" ] }
 secrecy       = { version = "0.10.3", features = ["serde"] }
 zeroize       = "1.9.0"
 
 # --- drivers -----------------------------------------------------------------
-# aws-lc-rs et non ring : reqwest 0.13 impose aws-lc-rs via sa feature `rustls`.
-# Unifier évite de compiler et d'embarquer deux fournisseurs cryptographiques.
+# aws-lc-rs and not ring: reqwest 0.13 imposes aws-lc-rs through its `rustls`
+# feature. Unifying avoids compiling and shipping two crypto providers.
 sqlx          = { version = "0.9.0", default-features = false, features = [
     "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "chrono", "uuid", "json",
 ] }
 
-# --- IA ----------------------------------------------------------------------
-# reqwest 0.13 a renommé la feature `rustls-tls` en `rustls`.
+# --- AI ----------------------------------------------------------------------
+# reqwest 0.13 renamed the `rustls-tls` feature to `rustls`.
 reqwest       = { version = "0.13.4", default-features = false, features = [
     "json", "stream", "rustls", "http2", "charset",
 ] }
 schemars      = "1.2.2"
-# Le protocole des agents externes (ADR-0026). Apache-2.0, donc compatible avec
-# la GPL d'Oxyn (ADR-0044). Le numéro de la crate ne dit **pas** celui du
-# protocole : la 2.1.0 porte un v1 stable et un v2 brouillon.
-# Vérifié le 2026-09-14, voir RESEARCH-NOTES.
+# The external agents protocol (ADR-0026). Apache-2.0, hence compatible with
+# Oxyn's GPL (ADR-0044). The crate's number does **not** give the protocol's:
+# 2.1.0 carries a stable v1 and a draft v2.
+# Checked on 2026-09-14, see RESEARCH-NOTES.
 agent-client-protocol = "2.1.0"
 
-# --- plugins (optionnel, feature `wasm-host`) --------------------------------
+# --- plugins (optional, `wasm-host` feature) ---------------------------------
 wasmtime      = "48.0.1"
 toml          = "0.9.8"
 
 # --- UI ----------------------------------------------------------------------
-# Tauri n'est une dépendance que d'oxyn-desktop : la règle d'isolation de
-# l'ADR-0001, transposée par l'ADR-0029. Versions relevées sur crates.io le
-# 2026-09-15, voir RESEARCH-NOTES.
+# Tauri is a dependency of oxyn-desktop only: the isolation rule of ADR-0001,
+# carried over by ADR-0029. Versions read on crates.io on 2026-09-15, see
+# RESEARCH-NOTES.
 tauri               = "2.11.5"
 tauri-build         = "2.6.3"
 tauri-plugin-dialog = "2.7.3"
-# Le dialogue d'échec de démarrage, affiché avant que l'application Tauri n'existe.
-# Même version que celle que tire `tauri-plugin-dialog` (Cargo.lock) : une seule
-# `rfd` dans le graphe. Voir RESEARCH-NOTES.
+# The startup failure dialog, shown before the Tauri application exists. Same
+# version as the one `tauri-plugin-dialog` pulls (Cargo.lock): a single `rfd`
+# in the graph. See RESEARCH-NOTES.
 rfd                 = { version = "0.16.0", default-features = false }
 
-# --- observabilité & binaire -------------------------------------------------
+# --- observability & binary --------------------------------------------------
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 # --- dev ---------------------------------------------------------------------
-# `criterion` n'est jamais une dépendance normale : il n'entre dans le graphe que
-# par les `[[bench]]` (RESEARCH-NOTES § bancs d'essai).
+# `criterion` is never a normal dependency: it only enters the graph through
+# the `[[bench]]`s (RESEARCH-NOTES § benchmarks).
 criterion     = "0.8.2"
 insta         = "1.48.0"
 rstest        = "0.26.1"
@@ -151,18 +152,18 @@ dbg_macro     = "warn"
 todo          = "allow"
 unwrap_used   = "warn"
 expect_used   = "allow"
-# `deny` explicite, et non hérité de `all` : c'est la liste de `clippy.toml` qui
-# porte les invariants ramenés à un chemin d'appel. La laisser dépendre du
-# regroupement de `all` reviendrait à ce qu'un changement de catégorie chez
-# clippy désarme un mur sans que rien ne le signale.
+# Explicit `deny`, not inherited from `all`: the `clippy.toml` list carries the
+# invariants reduced to a call path. Letting it depend on the grouping of `all`
+# would mean a category change in clippy could disarm a wall without anything
+# reporting it.
 disallowed_methods = "deny"
 disallowed_types   = "deny"
 
 [profile.dev]
-opt-level = 1              # opt-level 0 rend l'application trop lente pour s'en servir
+opt-level = 1              # opt-level 0 makes the application too slow to use
 
 [profile.dev.package."*"]
-opt-level = 2              # dépendances toujours optimisées
+opt-level = 2              # dependencies always optimized
 
 [profile.release]
 lto           = "thin"

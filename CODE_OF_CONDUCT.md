@@ -1,44 +1,42 @@
-# Code de conduite Oxyn
+# Oxyn code of conduct
 
-## Notre engagement
+## Our pledge
 
-Nous voulons une communauté accueillante, professionnelle et sûre pour toute
-personne qui contribue, demande de l'aide, écrit une revue ou participe à une
-discussion sur Oxyn.
+We want a welcoming, professional and safe community for everyone who
+contributes, asks for help, writes a review or takes part in a discussion
+about Oxyn.
 
-## Comportements attendus
+## Expected behavior
 
-- utiliser un langage respectueux et précis ;
-- accueillir les désaccords techniques comme des occasions d'améliorer le code ;
-- donner des exemples reproductibles et respecter les informations sensibles ;
-- accepter les corrections et reconnaître les contributions des autres ;
-- signaler rapidement un problème de sécurité au canal privé indiqué dans
-  [docs/SECURITY.md](docs/SECURITY.md), jamais dans une issue publique.
+- use respectful and precise language;
+- welcome technical disagreements as opportunities to improve the code;
+- give reproducible examples and respect sensitive information;
+- accept corrections and acknowledge other people's contributions;
+- report a security problem promptly through the private channel given in
+  [docs/SECURITY.md](docs/SECURITY.md), never in a public issue.
 
-## Comportements inacceptables
+## Unacceptable behavior
 
-Sont notamment inacceptables le harcèlement, les attaques personnelles, les
-propos discriminatoires, les menaces, la publication d'informations privées,
-la divulgation de secrets, le spam et toute tentative de contourner les
-contrôles de sécurité du projet.
+Unacceptable behavior includes harassment, personal attacks, discriminatory
+remarks, threats, publishing private information, disclosing secrets, spam and
+any attempt to bypass the project's security checks.
 
-## Application
+## Enforcement
 
-Un mainteneur peut modifier, masquer ou fermer une contribution qui enfreint
-ce code. Les récidives peuvent entraîner une exclusion temporaire ou définitive
-des espaces du projet. Une décision d'application doit rester proportionnée,
-expliquer la règle concernée et respecter la confidentialité des personnes
-concernées.
+A maintainer can edit, hide or close a contribution that breaks this code.
+Repeated breaches can lead to a temporary or permanent exclusion from the
+project's spaces. An enforcement decision must stay proportionate, explain the
+rule concerned and respect the privacy of the people involved.
 
-Pour signaler un problème de comportement, ouvrez une demande privée auprès du
-mainteneur via le profil GitHub du dépôt. Décrivez les faits, les liens vers les
-contenus concernés et le comportement attendu ; ne publiez pas d'information
-personnelle dans une issue.
+To report a behavior problem, open a private request with the maintainer
+through the repository's GitHub profile. Describe the facts, the links to the
+content concerned and the expected behavior; do not publish personal
+information in an issue.
 
-Pour une vulnérabilité technique, utilisez exclusivement le formulaire privé
-de [GitHub Security Advisories](https://github.com/so-keyldzn/oxyn/security/advisories/new)
-et consultez [docs/SECURITY.md](docs/SECURITY.md). Les issues publiques et les
-pull requests ne conviennent pas aux signalements de vulnérabilités.
+For a technical vulnerability, use only the private form of
+[GitHub Security Advisories](https://github.com/so-keyldzn/oxyn/security/advisories/new)
+and read [docs/SECURITY.md](docs/SECURITY.md). Public issues and pull requests
+are not suitable for vulnerability reports.
 
-Ce document s'inspire du [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/),
-adapté au fonctionnement privé actuel du projet.
+This document is inspired by the [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/),
+adapted to the project's current private operation.

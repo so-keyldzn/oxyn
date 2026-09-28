@@ -1,41 +1,42 @@
 ---
 name: lexical-dans-les-stories
-description: Tester un champ Lexical dans une story — userEvent.type marche, toHaveValue non, et le menu typeahead réécrit son ARIA à chaque frappe
+description: Testing a Lexical field in a story — userEvent.type works, toHaveValue does not, and the typeahead menu rewrites its ARIA at every keystroke
 metadata:
   type: feedback
 ---
 
-Un champ Lexical (`ContentEditable`) dans une story :
+A Lexical field (`ContentEditable`) in a story:
 
-* `userEvent.type` et `userEvent.keyboard` de `storybook/test` **fonctionnent**
-  (Lexical reçoit bien `beforeinput`) ; inutile de chercher un clavier réel ;
-* `toHaveValue` rend `undefined` sur un `contenteditable` : comparer
-  `field.textContent` ou `toHaveTextContent` ;
-* une composition IME se simule par
-  `fireEvent.keyDown(field, { key: "Enter", isComposing: true })` ;
-* le menu de `LexicalTypeaheadMenuPlugin` est **portalisé dans `document.body`**,
-  pas dans `canvasElement` : `within(document.body).findByRole("listbox", …)`.
+* `userEvent.type` and `userEvent.keyboard` from `storybook/test` **work**
+  (Lexical does receive `beforeinput`); no need to look for a real keyboard;
+* `toHaveValue` returns `undefined` on a `contenteditable`: compare
+  `field.textContent` or `toHaveTextContent`;
+* an IME composition is simulated with
+  `fireEvent.keyDown(field, { key: "Enter", isComposing: true })`;
+* the `LexicalTypeaheadMenuPlugin` menu is **portaled into `document.body`**,
+  not into `canvasElement`: `within(document.body).findByRole("listbox", …)`.
 
-Le piège qui coûte le plus : l'ancre du menu est détachée puis rattachée **à
-chaque frappe**, et Lexical y remet `aria-label="Typeahead menu"` dans un effet
-qui passe après ceux des enfants. Un `setAttribute` dans un effet ne tient donc
-qu'une frappe ; il faut un `MutationObserver` sur l'attribut. Pour la classe,
-la prop `anchorClassName` suffit. Il laisse aussi `aria-activedescendant` sur
-`typeahead-item-0` quand la liste se vide (axe `aria-valid-attr-value`), et une
-liste sans option échoue en `aria-required-children`.
+The most expensive trap: the menu's anchor is detached then reattached **at
+every keystroke**, and Lexical puts `aria-label="Typeahead menu"` back in an
+effect that runs after the children's. A `setAttribute` in an effect therefore
+only holds for one keystroke; a `MutationObserver` on the attribute is needed.
+For the class, the `anchorClassName` prop is enough. It also leaves
+`aria-activedescendant` on `typeahead-item-0` when the list empties (axe
+`aria-valid-attr-value`), and a list without options fails with
+`aria-required-children`.
 
-La forme qui passe axe en `error` : l'ancre de Lexical est forcée en
-`role="presentation"` (sans son `aria-label` ni son `id`), et c'est **le
-conteneur qui défile** qui porte `role="listbox"` et `tabIndex={0}`. Un
-`tabIndex={-1}` sur un div défilant *dans* la listbox fait échouer
-`aria-required-children`, et un `tabIndex={-1}` sur les options ne suffit pas à
-`scrollable-region-focusable`. Les lignes d'état (vide, recherche, erreur) sont
-des `role="option" aria-disabled`. Le détail sourcé est dans
-`docs/RESEARCH-NOTES.md`, section « Interface Tauri et front ».
+The shape that passes axe in `error`: Lexical's anchor is forced to
+`role="presentation"` (without its `aria-label` or its `id`), and it is **the
+scrolling container** that carries `role="listbox"` and `tabIndex={0}`. A
+`tabIndex={-1}` on a scrolling div *inside* the listbox makes
+`aria-required-children` fail, and a `tabIndex={-1}` on the options is not
+enough for `scrollable-region-focusable`. The status rows (empty, searching,
+error) are `role="option" aria-disabled`. The sourced detail is in
+`docs/RESEARCH-NOTES.md`, section "Interface Tauri et front".
 
-**Why:** chaque aller-retour `vitest --project storybook` coûte ~15 s, et
-l'échec « Unable to find role=listbox » ne dit pas que le nom a changé.
+**Why:** each `vitest --project storybook` round trip costs ~15 s, and the
+"Unable to find role=listbox" failure does not say that the name changed.
 
-**How to apply:** à tout composant qui monte un `LexicalComposer`, et à toute
-future liste typeahead (commandes `/`, par exemple). Voir
+**How to apply:** for any component that mounts a `LexicalComposer`, and any
+future typeahead list (`/` commands, for example). See
 [[pieges-de-la-porte-front]].

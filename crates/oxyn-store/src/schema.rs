@@ -1,69 +1,68 @@
-//! Le schéma de l'état local et ses migrations.
+//! The local state schema and its migrations.
 //!
-//! Les migrations sont des constantes SQL numérotées, appliquées **chacune dans
-//! sa transaction**, et enregistrées dans `schema_version`. Une migration qui
-//! échoue laisse le schéma exactement dans l'état où elle l'a trouvé : SQLite
-//! sait annuler du DDL, contrairement à la plupart de ses concurrents, et c'est
-//! ce qui rend cette stratégie tenable sans script de rattrapage.
+//! Migrations are numbered SQL constants, applied **each in its own
+//! transaction**, and recorded in `schema_version`. A migration that fails
+//! leaves the schema exactly as it found it: SQLite can roll back DDL, unlike
+//! most of its competitors, and that is what makes this strategy workable
+//! without a recovery script.
 //!
-//! **Une migration publiée ne se réécrit jamais.** Elle a déjà tourné chez
-//! quelqu'un ; la modifier fait diverger deux installations qui rapportent le
-//! même numéro de schéma. On en ajoute une.
+//! **A published migration is never rewritten.** It has already run on
+//! someone's machine; changing it makes two installations reporting the same
+//! schema number diverge. A new one is added instead.
 //!
-//! # Les tables
+//! # The tables
 //!
-//! | Table | Ce qu'elle porte | Effaçable |
+//! | Table | What it holds | Erasable |
 //! |---|---|---|
-//! | `workspaces` | l'unité de persistance de l'état utilisateur | oui |
-//! | `connections` | métadonnées de connexion — **jamais un secret** | oui |
-//! | `query_history` | ce que l'utilisateur a exécuté | oui, purge explicite |
-//! | `audit_journal` | la piste d'audit — **append-only** | **non** |
-//! | `documents` | onglets et requêtes sauvegardés | oui |
+//! | `workspaces` | the unit of persistence of user state | yes |
+//! | `connections` | connection metadata — **never a secret** | yes |
+//! | `query_history` | what the user ran | yes, explicit purge |
+//! | `audit_journal` | the audit trail — **append-only** | **no** |
+//! | `documents` | saved tabs and queries | yes |
 //! | `workspace_preferences` | versioned display preferences | yes |
-//! | `app_sessions` | ce qui distingue un arrêt propre d'un plantage | oui |
-//! | `ai_providers` | les fournisseurs déclarés — **par machine** | oui |
-//! | `external_agents` | les agents externes déclarés — **par machine**, sans secret | oui |
-//! | `ai_conversations` | les fils de l'assistant, par connexion | oui, élagage et suppression |
-//! | `ai_conversation_turns` | leur transcription, **jamais** une valeur de la base | oui, avec leur fil |
-//! | `ai_conversation_nodes` | l'arbre des échanges ; un échange retenu ne garde que sa question, et ses mentions en JSON — noms et adresses, jamais une valeur | oui, avec leur fil |
-//! | `ai_egress` | ce qui est parti vers un destinataire IA — noms, jamais valeurs — **append-only** | **non** |
+//! | `app_sessions` | what tells a clean shutdown from a crash | yes |
+//! | `ai_providers` | the declared providers — **per machine** | yes |
+//! | `external_agents` | the declared external agents — **per machine**, without a secret | yes |
+//! | `ai_conversations` | the assistant's threads, per connection | yes, pruning and deletion |
+//! | `ai_conversation_turns` | their transcript, **never** a database value | yes, with their thread |
+//! | `ai_conversation_nodes` | the exchange tree; a withheld exchange only keeps its question, and its mentions as JSON — names and addresses, never a value | yes, with their thread |
+//! | `ai_egress` | what left for an AI recipient — names, never values — **append-only** | **no** |
 //!
-//! # Pourquoi `STRICT`
+//! # Why `STRICT`
 //!
-//! Sans `STRICT`, SQLite range volontiers la chaîne `"demain"` dans une colonne
-//! `INTEGER` : l'affinité de type n'est qu'une préférence. Un journal d'audit
-//! dont les colonnes acceptent n'importe quoi n'est pas une piste d'audit.
-//! `STRICT` demande SQLite ≥ 3.37 ; la version embarquée par
-//! `libsqlite3-sys` 0.35 (feature `bundled`, ADR-0010) est 3.50.2.
+//! Without `STRICT`, SQLite happily stores the string `"demain"` in an
+//! `INTEGER` column: type affinity is only a preference. An audit journal
+//! whose columns accept anything is not an audit trail. `STRICT` requires
+//! SQLite ≥ 3.37; the version embedded by `libsqlite3-sys` 0.35 (`bundled`
+//! feature, ADR-0010) is 3.50.2.
 //!
-//! # Ce que le déclencheur d'inviolabilité couvre, et ce qu'il ne couvre pas
+//! # What the tamper-proofing trigger covers, and what it does not
 //!
-//! Deux déclencheurs `BEFORE UPDATE` et `BEFORE DELETE` sur `audit_journal`
-//! avortent toute tentative, **y compris depuis le `sqlite3` en ligne de
-//! commande** : la garantie tient au fichier, pas au code Rust. En revanche
-//! aucun déclencheur ne survit à un `DROP TABLE`, à un `PRAGMA writable_schema`
-//! ni à la réécriture du fichier avec un éditeur hexadécimal. La protection est
-//! contre l'erreur et contre un agent qui voudrait effacer sa trace par les
-//! moyens ordinaires du produit — pas contre un attaquant qui a déjà les droits
-//! d'écriture sur le disque de l'utilisateur.
+//! Two `BEFORE UPDATE` and `BEFORE DELETE` triggers on `audit_journal` abort
+//! any attempt, **including from the command-line `sqlite3`**: the guarantee
+//! holds in the file, not in the Rust code. On the other hand, no trigger
+//! survives a `DROP TABLE`, a `PRAGMA writable_schema` or rewriting the file
+//! with a hex editor. The protection is against mistakes and against an agent
+//! that would want to erase its trace through the product's ordinary means —
+//! not against an attacker who already has write access to the user's disk.
 
 use rusqlite::Connection;
 
 use crate::error::{Result, StoreError};
 
-/// Une migration, telle qu'elle est enregistrée dans `schema_version`.
+/// A migration, as recorded in `schema_version`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Migration {
-    /// Numéro, strictement croissant et jamais réutilisé.
+    /// Number, strictly increasing and never reused.
     pub(crate) version: u32,
-    /// Nom court, écrit dans `schema_version` pour rendre la table lisible.
+    /// Short name, written in `schema_version` to make the table readable.
     pub(crate) name: &'static str,
-    /// Le lot SQL. Peut contenir plusieurs instructions.
+    /// The SQL batch. May contain several statements.
     pub(crate) sql: &'static str,
 }
 
-/// Table de suivi des migrations. Créée hors migration : c'est elle qui dit
-/// quelles migrations restent à appliquer.
+/// Migration tracking table. Created outside any migration: it is what says
+/// which migrations remain to apply.
 const SCHEMA_VERSION_TABLE: &str = "\
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY NOT NULL,
@@ -71,7 +70,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at TEXT    NOT NULL
 ) STRICT;";
 
-/// Migration 1 — le schéma de la phase 0.
+/// Migration 1 — the phase 0 schema.
 const M0001_INITIAL: &str = "\
 CREATE TABLE workspaces (
     id         TEXT PRIMARY KEY NOT NULL,
@@ -80,8 +79,8 @@ CREATE TABLE workspaces (
     updated_at TEXT NOT NULL
 ) STRICT;
 
--- `params` est un objet JSON de valeurs NON secrètes ; `secret_ref` est une
--- référence au trousseau du système, jamais le secret (SECURITY, I-03).
+-- `params` is a JSON object of NON-secret values; `secret_ref` is a
+-- reference to the system keychain, never the secret (SECURITY, I-03).
 CREATE TABLE connections (
     id           TEXT PRIMARY KEY NOT NULL,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -97,9 +96,9 @@ CREATE TABLE connections (
 
 CREATE INDEX connections_by_workspace ON connections (workspace_id, name);
 
--- `connection_id` n'a volontairement PAS de clé étrangère : supprimer une
--- connexion n'efface pas ce que l'utilisateur a exécuté avec elle. Le nom est
--- recopié pour que l'historique reste lisible après cette suppression.
+-- `connection_id` deliberately has NO foreign key: deleting a connection
+-- does not erase what the user ran with it. The name is copied so that the
+-- history stays readable after that deletion.
 CREATE TABLE query_history (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ts              TEXT NOT NULL,
@@ -119,10 +118,10 @@ CREATE TABLE query_history (
 CREATE INDEX query_history_by_ts ON query_history (ts DESC);
 CREATE INDEX query_history_by_connection ON query_history (connection_id, ts DESC);
 
--- APPEND-ONLY. Aucune clé étrangère non plus : la piste d'audit survit à la
--- suppression de la connexion, du workspace et de l'agent qu'elle incrimine.
--- AUTOINCREMENT plutôt que le rowid nu : un identifiant réutilisé permettrait
--- à une ligne d'en usurper une autre dans une piste d'audit.
+-- APPEND-ONLY. No foreign key either: the audit trail survives the deletion
+-- of the connection, the workspace and the agent it implicates.
+-- AUTOINCREMENT rather than the bare rowid: a reused identifier would let one
+-- row impersonate another in an audit trail.
 CREATE TABLE audit_journal (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     ts               TEXT NOT NULL,
@@ -179,28 +178,28 @@ CREATE TABLE documents (
 CREATE INDEX documents_by_workspace ON documents (workspace_id, updated_at DESC);
 ";
 
-/// Migration 2 — la famille de l'erreur, à côté de son message.
+/// Migration 2 — the error's class, next to its message.
 ///
-/// Le message seul ne suffit pas : « délai dépassé après 30 s » ne dit pas que
-/// le serveur a peut-être appliqué l'écriture. Sans cette colonne, une interface
-/// qui veut refuser un bouton « relancer » n'a d'autre choix que d'analyser du
-/// texte français — ce que `.claude/rules/rust.md` interdit précisément parce
-/// qu'un message change et qu'un appelant qui l'analysait casse en silence
-/// (I-13).
+/// The message alone is not enough: "timed out after 30 s" does not say the
+/// server may have applied the write. Without this column, an interface that
+/// wants to withhold a "rerun" button has no choice but to parse text — which
+/// `.claude/rules/rust.md` forbids precisely because a message changes and a
+/// caller that parsed it silently breaks (I-13).
 ///
-/// `NULL` sur les lignes antérieures, et sur toute ligne qui n'a pas échoué.
+/// `NULL` on earlier rows, and on any row that did not fail.
 const M0002_HISTORY_ERROR_CLASS: &str = "\
 ALTER TABLE query_history ADD COLUMN error_class TEXT;";
 
-/// Migration 3 — la même famille d'erreur, dans la piste d'audit.
+/// Migration 3 — the same error class, in the audit trail.
 ///
-/// `query_history` la porte depuis la migration 2 ; l'absence dans
-/// `audit_journal` serait l'asymétrie prise à l'envers. C'est la table qu'on
-/// relit **après** incident, celle qui consigne les commandes que l'historique
-/// ignore, et celle qu'on ne peut pas corriger ensuite : elle est append-only.
+/// `query_history` has carried it since migration 2; its absence from
+/// `audit_journal` would be the asymmetry the wrong way round. It is the table
+/// read **after** an incident, the one that records the commands the history
+/// ignores, and the one that cannot be corrected afterwards: it is
+/// append-only.
 ///
-/// `ALTER TABLE ... ADD COLUMN` n'est pas un `UPDATE` : le déclencheur
-/// d'inviolabilité ne s'y oppose pas, et aucune ligne existante n'est réécrite.
+/// `ALTER TABLE ... ADD COLUMN` is not an `UPDATE`: the tamper-proofing
+/// trigger does not object, and no existing row is rewritten.
 const M0003_JOURNAL_ERROR_CLASS: &str = "\
 ALTER TABLE audit_journal ADD COLUMN error_class TEXT;";
 
@@ -224,17 +223,16 @@ ALTER TABLE query_history ADD COLUMN result_id TEXT;
 CREATE INDEX documents_by_open ON documents(workspace_id, is_open, id);
 ";
 
-/// Ce qui distingue un arrêt propre d'un arrêt anormal.
+/// What tells a clean shutdown from an abnormal one.
 ///
-/// `closed_at` n'est renseigné que par une fermeture ordinaire, **après** que
-/// les écritures locales ont été vidées ; `heartbeat_at` vieillit tant qu'une
-/// instance travaille. Une session sans fermeture dont le battement a vieilli
-/// est un plantage ; une session sans fermeture au battement récent est une
-/// autre instance, bien vivante
+/// `closed_at` is only set by an ordinary close, **after** local writes were
+/// flushed; `heartbeat_at` ages while an instance works. A session without a
+/// closing whose heartbeat has aged is a crash; a session without a closing
+/// but with a recent heartbeat is another instance, very much alive
 /// ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
 ///
-/// Le pid n'y figure pas : le vérifier demanderait ce que la politique `unsafe`
-/// du dépôt refuse, et un pid réutilisé ferait mentir le test.
+/// The pid is not there: checking it would require what the repository's
+/// `unsafe` policy refuses, and a reused pid would make the test lie.
 const M0006_APP_SESSIONS: &str = "CREATE TABLE app_sessions (
     id           TEXT PRIMARY KEY NOT NULL,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -245,32 +243,31 @@ const M0006_APP_SESSIONS: &str = "CREATE TABLE app_sessions (
 CREATE INDEX app_sessions_open ON app_sessions(workspace_id, closed_at, heartbeat_at);
 ";
 
-/// Un fournisseur de modèles se déclare **par machine**, et un texte écrit par
-/// un agent porte son origine.
+/// A model provider is declared **per machine**, and a text written by an
+/// agent carries its origin.
 ///
-/// `ai_providers` n'a **pas** de `workspace_id`, et c'est la décision, pas un
-/// oubli : un Ollama qui écoute sur la machine sert tous les workspaces, et le
-/// dupliquer par workspace créerait autant d'endroits où sa configuration peut
-/// diverger. Ce qui reste par connexion, c'est le niveau de confidentialité —
-/// un fournisseur commun ne fait pas un niveau commun
+/// `ai_providers` has **no** `workspace_id`, and that is the decision, not an
+/// oversight: an Ollama listening on the machine serves every workspace, and
+/// duplicating it per workspace would create as many places where its
+/// configuration can diverge. What stays per connection is the privacy tier —
+/// a shared provider does not make a shared tier
 /// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md),
 /// [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)).
 ///
-/// Conséquence directe : la table n'a aucune clé étrangère, donc supprimer un
-/// workspace ne fait pas disparaître les fournisseurs de l'utilisateur.
+/// Direct consequence: the table has no foreign key, so deleting a workspace
+/// does not make the user's providers disappear.
 ///
-/// Aucune clé n'y est écrite : `secret_ref` désigne une entrée du trousseau du
-/// système, comme pour `connections` (I-03). `reach` n'a **pas** de colonne :
-/// le classement local/distant se recalcule à chaque ouverture, parce qu'une
-/// valeur en base serait une réponse DNS d'hier appliquée à un envoi
-/// d'aujourd'hui.
+/// No key is written there: `secret_ref` designates an entry of the system
+/// keychain, as for `connections` (I-03). `reach` has **no** column: the
+/// local/remote classification is recomputed at every opening, because a
+/// stored value would be yesterday's DNS answer applied to today's send.
 ///
-/// `documents.provenance` est un JSON borné à 512 octets, `NULL` par défaut.
-/// `NULL` veut dire « écrit par l'utilisateur » — c'est le cas de toutes les
-/// lignes existantes, et c'est vrai. Le `CHECK` reprend la forme de
-/// `workspace_preferences.payload` : sans lui, cette métadonnée deviendrait
-/// l'endroit où l'on range « juste un peu de contexte », c'est-à-dire des
-/// invites et des réponses de modèle dans le fichier de workspace.
+/// `documents.provenance` is a JSON bounded to 512 bytes, `NULL` by default.
+/// `NULL` means "written by the user" — it is the case of every existing row,
+/// and it is true. The `CHECK` takes the shape of
+/// `workspace_preferences.payload`: without it, this metadata would become the
+/// place where "just a bit of context" gets stored, that is, model prompts
+/// and answers in the workspace file.
 const M0007_AI_PROVIDERS: &str = "CREATE TABLE ai_providers (
     id         TEXT PRIMARY KEY NOT NULL,
     kind       TEXT NOT NULL,
@@ -286,48 +283,47 @@ ALTER TABLE documents ADD COLUMN provenance TEXT
     CHECK(provenance IS NULL OR length(CAST(provenance AS BLOB)) <= 512);
 ";
 
-/// Migration 8 — le niveau de confidentialité, là où il appartient.
+/// Migration 8 — the privacy tier, where it belongs.
 ///
-/// [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md) attache le niveau à
-/// la **connexion**, et `ConnectionConfig` le porte depuis le début. Il n'était
-/// écrit nulle part : toute connexion relue repartait à la valeur par défaut,
-/// ce qui rendait `Local` inatteignable d'une session à l'autre — un réglage
-/// pris sur une base client était perdu à la fermeture, sans message.
+/// [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md) attaches the tier to
+/// the **connection**, and `ConnectionConfig` has carried it from the start.
+/// It was written nowhere: every connection read back reverted to the default
+/// value, which made `Local` unreachable from one session to the next — a
+/// setting made on a customer database was lost on close, without a message.
 ///
-/// `NULL` sur les lignes antérieures, et c'est **exact** : elles ont été
-/// écrites par un binaire qui ne connaissait pas ce réglage, donc l'utilisateur
-/// n'en a jamais choisi. La lecture y applique le défaut d'ADR-0006,
-/// `Metadata`. Une valeur **illisible**, elle, n'est pas une absence : la
-/// lecture retombe alors sur le niveau le plus contraignant, `Local`, parce
-/// qu'une base dont on ne sait plus ce qu'elle autorisait ne doit pas obtenir
-/// le bénéfice du doute.
+/// `NULL` on earlier rows, and that is **accurate**: they were written by a
+/// binary that did not know this setting, so the user never chose one.
+/// Reading applies ADR-0006's default, `Metadata`. An **unreadable** value,
+/// on the other hand, is not an absence: reading then falls back to the most
+/// restrictive tier, `Local`, because a database for which it is no longer
+/// known what it allowed must not get the benefit of the doubt.
 const M0008_CONNECTION_PRIVACY: &str = "ALTER TABLE connections ADD COLUMN privacy_tier TEXT;";
 
-/// Migration 9 — les agents externes déclarés.
+/// Migration 9 — the declared external agents.
 ///
-/// [ADR-0026](../../../docs/adr/0026-agents-externes-acp.md) ajoute un second
-/// mode de destination : un programme déjà installé chez l'utilisateur, lancé en
-/// sous-processus. Table séparée d'`ai_providers`, et non colonnes ajoutées :
-/// un agent n'a ni point d'accès, ni modèle, ni **référence de secret**, et les
-/// faire cohabiter aurait produit une table dont la moitié des colonnes ne veut
-/// rien dire selon la ligne.
+/// [ADR-0026](../../../docs/adr/0026-agents-externes-acp.md) adds a second
+/// destination mode: a program already installed on the user's machine,
+/// launched as a subprocess. A table separate from `ai_providers`, not added
+/// columns: an agent has neither endpoint, nor model, nor **secret
+/// reference**, and making them share would have produced a table half of
+/// whose columns mean nothing depending on the row.
 ///
-/// **Aucune colonne de secret, et c'est le sujet.** Un agent porte sa propre
-/// authentification ; Oxyn n'en détient aucune. La seule façon certaine de ne
-/// pas divulguer une clé est de ne pas l'avoir ([I-03](../../../CLAUDE.md#i-03)).
+/// **No secret column, and that is the point.** An agent carries its own
+/// authentication; Oxyn holds none. The only sure way not to leak a key is not
+/// to have it ([I-03](../../../CLAUDE.md#i-03)).
 ///
-/// Pas de `workspace_id` non plus, pour la raison d'`ai_providers` : un agent
-/// installé sur la machine sert tous les workspaces.
+/// No `workspace_id` either, for the same reason as `ai_providers`: an agent
+/// installed on the machine serves every workspace.
 ///
-/// `args` et `env` sont des JSON bornés — même forme de `CHECK` que
-/// `documents.provenance`. Sans la borne, un fichier d'état écrit par un tiers
-/// ferait allouer à l'ouverture ce qu'il veut. `env` **ne doit pas** porter de
-/// secret : ce qui est là part dans l'environnement d'un processus, visible de
-/// la table des processus sur certains systèmes.
+/// `args` and `env` are bounded JSON — the same `CHECK` shape as
+/// `documents.provenance`. Without the bound, a state file written by a third
+/// party would make the opening allocate whatever it wants. `env` **must
+/// not** carry a secret: what is there goes into a process environment,
+/// visible in the process table on some systems.
 ///
-/// Pas de colonne de portée, et cette fois ce n'est pas parce qu'elle serait
-/// périmée comme pour un fournisseur : la portée d'un agent externe est
-/// **inconnaissable**, donc il n'y a rien à écrire.
+/// No reach column, and this time not because it would be stale as for a
+/// provider: an external agent's reach is **unknowable**, so there is nothing
+/// to write.
 const M0009_EXTERNAL_AGENTS: &str = "CREATE TABLE external_agents (
     id         TEXT PRIMARY KEY NOT NULL,
     label      TEXT NOT NULL,
@@ -342,50 +338,50 @@ const M0009_EXTERNAL_AGENTS: &str = "CREATE TABLE external_agents (
 CREATE INDEX external_agents_by_label ON external_agents (label, id);
 ";
 
-/// Migration 10 — les conversations de l'assistant, et leurs tours.
+/// Migration 10 — the assistant's conversations, and their turns.
 ///
-/// Deux tables et non une : une conversation a une identité, un titre et une
-/// destination qui ne changent pas à chaque tour, et les recopier sur chaque
-/// ligne de transcription ferait d'un renommage une réécriture de tout le fil.
+/// Two tables and not one: a conversation has an identity, a title and a
+/// destination that do not change at each turn, and copying them onto each
+/// transcript row would turn a rename into a rewrite of the whole thread.
 ///
-/// # Ce qui n'a **pas** de clé étrangère, et ce qui en a une
+/// # What has **no** foreign key, and what has one
 ///
-/// `ai_conversation_turns.conversation_id` en a une, avec `ON DELETE CASCADE`,
-/// et c'est le mécanisme qui tient la promesse de l'élagage : supprimer une
-/// conversation emporte ses tours **dans la même transaction**, donc il n'existe
-/// pas d'état où la moitié d'un transcript subsiste. Une transcription tronquée
-/// par le milieu est un transcript qui ment.
+/// `ai_conversation_turns.conversation_id` has one, with `ON DELETE CASCADE`,
+/// and it is the mechanism that keeps pruning's promise: deleting a
+/// conversation takes its turns **in the same transaction**, so there is no
+/// state where half a transcript remains. A transcript truncated in the middle
+/// is a transcript that lies.
 ///
-/// `connection_id` et `destination_id` n'en ont pas, exactement comme
-/// `query_history.connection_id` : supprimer une connexion ou retirer un
-/// fournisseur n'efface pas ce que l'utilisateur a demandé avec lui. Le nom de
-/// connexion et le libellé de destination sont recopiés pour que le fil reste
-/// lisible après cette suppression.
+/// `connection_id` and `destination_id` have none, exactly like
+/// `query_history.connection_id`: deleting a connection or removing a provider
+/// does not erase what the user asked with it. The connection name and the
+/// destination label are copied so that the thread stays readable after that
+/// deletion.
 ///
-/// # Le niveau de confidentialité est sur le **tour**
+/// # The privacy tier is on the **turn**
 ///
-/// Pas sur la conversation : un utilisateur peut changer le niveau d'une
-/// connexion en cours de fil, et un niveau rangé en tête dirait alors faux de
-/// tous les tours antérieurs. Une relecture d'audit demande sous quel régime
-/// **ce tour-là** a eu lieu ([I-04](../../../CLAUDE.md#i-04),
+/// Not on the conversation: a user can change a connection's tier in the
+/// middle of a thread, and a tier stored at the top would then be wrong for
+/// every earlier turn. An audit reading asks under which regime **that turn**
+/// took place ([I-04](../../../CLAUDE.md#i-04),
 /// [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)).
 ///
-/// # Ce qui est borné dans le fichier, et pourquoi là
+/// # What is bounded in the file, and why there
 ///
-/// `text`, `reasoning` et `tool_calls` portent un `CHECK` de taille — même
-/// forme que `documents.provenance` et `workspace_preferences.payload`. Les
-/// deux derniers sont remplis par un **fournisseur** : sans borne, une charge
-/// de raisonnement emballée ferait allouer à l'ouverture ce qu'un tiers veut.
-/// La borne vit dans le fichier et non seulement dans le code, donc elle est
-/// opposable au `sqlite3` autant qu'à Oxyn.
+/// `text`, `reasoning` and `tool_calls` carry a size `CHECK` — the same shape
+/// as `documents.provenance` and `workspace_preferences.payload`. The last two
+/// are filled by a **provider**: without a bound, a runaway reasoning payload
+/// would make the opening allocate whatever a third party wants. The bound
+/// lives in the file and not only in the code, so it holds against `sqlite3`
+/// as much as against Oxyn.
 ///
-/// # Ce qu'il n'y a pas de colonne pour écrire
+/// # What there is no column to write
 ///
-/// Ni les arguments d'un appel d'outil, ni le résultat d'une requête, ni une
-/// valeur liée, ni une clé. `tool_calls` porte un **rendu** : nom de l'outil,
-/// instruction, issue. C'est la même méthode qu'`external_agents`, qui n'a pas
-/// de colonne de secret : la façon certaine de ne pas écrire une valeur est de
-/// ne pas avoir d'endroit où la mettre ([I-03](../../../CLAUDE.md#i-03)).
+/// Neither a tool call's arguments, nor a query's result, nor a bound value,
+/// nor a key. `tool_calls` carries a **rendering**: tool name, statement,
+/// outcome. It is the same method as `external_agents`, which has no secret
+/// column: the sure way not to write a value is not to have a place to put it
+/// ([I-03](../../../CLAUDE.md#i-03)).
 const M0010_AI_CONVERSATIONS: &str = "CREATE TABLE ai_conversations (
     id                TEXT PRIMARY KEY NOT NULL,
     workspace_id      TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -426,32 +422,32 @@ CREATE TABLE ai_conversation_turns (
 ) STRICT;
 ";
 
-/// Migration 11 — les deux bornes que la migration 10 n'avait pas mises dans le
-/// fichier : le nombre de tours d'un fil, et la taille de `stop_reason`.
+/// Migration 11 — the two bounds migration 10 had not put in the file: the
+/// number of turns in a thread, and the size of `stop_reason`.
 ///
-/// Sans elles, la relecture d'un fil n'était bornée que par le code qui écrit :
-/// un `StopReason::Other` de la taille d'une trame SSE, ou des tours écrits par
-/// `sqlite3` au-delà de la borne, et l'ouverture d'un fil allouait ce qu'un
-/// tiers voulait ([I-06](../../../CLAUDE.md#i-06)).
+/// Without them, reading a thread back was only bounded by the code that
+/// writes: a `StopReason::Other` the size of an SSE frame, or turns written by
+/// `sqlite3` beyond the bound, and opening a thread allocated whatever a third
+/// party wanted ([I-06](../../../CLAUDE.md#i-06)).
 ///
-/// # Des déclencheurs, et non un `CHECK`
+/// # Triggers, not a `CHECK`
 ///
-/// SQLite n'ajoute pas de `CHECK` à une table existante : il faudrait la
-/// reconstruire en recopiant ses lignes. Et une ligne déjà sur le disque qui
-/// dépasserait la nouvelle borne n'aurait alors que deux issues, toutes deux
-/// fausses : faire échouer la migration — donc l'ouverture de l'état local —,
-/// ou réécrire la donnée de l'utilisateur pendant la copie.
+/// SQLite does not add a `CHECK` to an existing table: it would have to be
+/// rebuilt by copying its rows. And a row already on disk that exceeded the
+/// new bound would then have only two outcomes, both wrong: failing the
+/// migration — hence the opening of the local state —, or rewriting the
+/// user's data during the copy.
 ///
-/// Un déclencheur `BEFORE INSERT` / `BEFORE UPDATE` borne les **écritures**,
-/// y compris celles d'un `sqlite3`, sans toucher à ce qui existe. Ce qui existe
-/// se relit selon la règle de `encoding.rs` : une valeur trop grande de
-/// `stop_reason` n'est jamais chargée et se relit `Unspecified`, et les tours
-/// en surnombre sont lus par pages bornées comme les autres. C'est la forme du
-/// déclencheur d'inviolabilité d'`audit_journal`, pour la même raison : la
-/// garantie tient au fichier, pas au code Rust.
+/// A `BEFORE INSERT` / `BEFORE UPDATE` trigger bounds **writes**, including
+/// those of a `sqlite3`, without touching what exists. What exists is read
+/// back following `encoding.rs`'s rule: a `stop_reason` value that is too
+/// large is never loaded and reads back as `Unspecified`, and surplus turns
+/// are read in bounded pages like the others. It is the shape of
+/// `audit_journal`'s tamper-proofing trigger, for the same reason: the
+/// guarantee holds in the file, not in the Rust code.
 ///
-/// Les deux nombres sont ceux de `MAX_TURNS_PER_CONVERSATION` et de
-/// `MAX_STOP_REASON_BYTES` ; un test vérifie qu'ils ne divergent pas.
+/// The two numbers are those of `MAX_TURNS_PER_CONVERSATION` and
+/// `MAX_STOP_REASON_BYTES`; a test checks they do not diverge.
 const M0011_AI_CONVERSATION_BOUNDS: &str = "CREATE TRIGGER ai_conversation_turns_bounds_insert
 BEFORE INSERT ON ai_conversation_turns
 WHEN NEW.ordinal < 0 OR NEW.ordinal >= 512
@@ -468,30 +464,29 @@ BEGIN
 END;
 ";
 
-/// Migration 12 — le journal des sorties de données vers un destinataire IA.
+/// Migration 12 — the log of data egress to an AI recipient.
 ///
-/// Une table à part, et non des colonnes ajoutées à `audit_journal` : ses
-/// colonnes — `command_kind`, la triade du `PolicyGate`, `statement`,
-/// `rows_affected` — ont un autre sens, et les détourner rendrait illisibles les
-/// deux questions. La lecture de l'échantillon reste journalisée là-bas comme le
-/// `PreviewRelation` qu'elle est ; `command_id` relie les deux.
+/// A separate table, not columns added to `audit_journal`: its columns —
+/// `command_kind`, the `PolicyGate` triad, `statement`, `rows_affected` —
+/// have another meaning, and repurposing them would make both questions
+/// unreadable. The sample read stays logged there as the `PreviewRelation` it
+/// is; `command_id` links the two.
 ///
-/// # La rétention du journal d'audit, c'est-à-dire aucune
+/// # The audit journal's retention, that is, none
 ///
-/// Mêmes déclencheurs d'inviolabilité qu'`audit_journal`, mêmes absences de clé
-/// étrangère : l'entrée survit à la suppression de la connexion, du fournisseur
-/// et de la conversation qu'elle nomme. Une sortie qu'on pourrait effacer
-/// répondrait « rien n'est sorti » à la seule question pour laquelle elle
-/// existe.
+/// The same tamper-proofing triggers as `audit_journal`, the same absence of
+/// foreign keys: the entry survives the deletion of the connection, the
+/// provider and the conversation it names. An egress that could be erased
+/// would answer "nothing left" to the only question it exists for.
 ///
-/// # Aucune valeur, et ce que le fichier refuse pour le garantir
+/// # No value, and what the file refuses to guarantee it
 ///
-/// Il n'y a pas de colonne pour une valeur. Ce qui pourrait en faire passer une
-/// est `columns`, une liste JSON de **noms** : le `CHECK` exige un tableau borné,
-/// et le déclencheur refuse tout élément qui n'est pas une chaîne, qui est vide
-/// ou qui dépasse la longueur d'un identifiant. Un nombre, un objet, une ligne
-/// collée ne s'y rangent pas. Les bornes sont celles de `oxyn-store::egress`,
-/// et un test vérifie qu'elles ne divergent pas.
+/// There is no column for a value. What could let one through is `columns`, a
+/// JSON list of **names**: the `CHECK` requires a bounded array, and the
+/// trigger refuses any element that is not a string, that is empty or that
+/// exceeds an identifier's length. A number, an object, a pasted row do not
+/// fit. The bounds are those of `oxyn-store::egress`, and a test checks they
+/// do not diverge.
 const M0012_AI_EGRESS: &str = "CREATE TABLE ai_egress (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ts              TEXT NOT NULL,
@@ -500,8 +495,8 @@ const M0012_AI_EGRESS: &str = "CREATE TABLE ai_egress (
     source          TEXT NOT NULL
         CHECK(length(CAST(source AS BLOB)) BETWEEN 1 AND 1024),
     columns         TEXT NOT NULL
-        -- json_array_length rend 0 pour tout ce qui n'est pas un tableau :
-        -- `BETWEEN 1` exige donc un tableau non vide, sans clause json_type.
+        -- json_array_length returns 0 for anything that is not an array:
+        -- `BETWEEN 1` therefore requires a non-empty array, with no json_type clause.
         CHECK(json_valid(columns)
               AND json_array_length(columns) BETWEEN 1 AND 256
               AND length(CAST(columns AS BLOB)) <= 131072),
@@ -535,51 +530,52 @@ BEGIN
 END;
 ";
 
-/// Migration 13 — l'arbre d'une conversation, et l'échange qui a reçu un
-/// échantillon.
+/// Migration 13 — a conversation's tree, and the exchange that received a
+/// sample.
 ///
-/// La migration 10 rangeait une transcription **linéaire**. Le panneau tient un
-/// **arbre** : une régénération ou une édition crée une version sœur, et
-/// l'utilisateur navigue entre elles. `ai_conversation_nodes` porte un échange
-/// — sa question, son destinataire, son issue — et les tours existants s'y
-/// rattachent par `node`.
+/// Migration 10 stored a **linear** transcript. The panel holds a **tree**: a
+/// regeneration or an edit creates a sibling version, and the user navigates
+/// between them. `ai_conversation_nodes` carries an exchange — its question,
+/// its recipient, its outcome — and existing turns attach to it through
+/// `node`.
 ///
-/// # Ce que le fichier rend impossible, plutôt que de le vérifier
+/// # What the file makes impossible, rather than checking it
 ///
-/// * **Un cycle.** `parent < node` : un parent est toujours plus ancien que son
-///   enfant, et l'identifiant est attribué par le store à l'ajout. Aucune suite
-///   de parents ne peut revenir sur elle-même, `sqlite3` compris.
-/// * **Un parent d'une autre conversation.** La clé étrangère est composite,
-///   `(conversation_id, parent)` : le parent se cherche **dans la même
-///   conversation**, et nulle part ailleurs.
-/// * **Changer la structure après coup.** Un déclencheur refuse la mise à jour
-///   de `conversation_id`, `node` ou `parent` : une version qui changerait de
-///   parent réécrirait l'histoire qu'on a montrée.
+/// * **A cycle.** `parent < node`: a parent is always older than its child,
+///   and the identifier is assigned by the store on insert. No chain of
+///   parents can loop back on itself, `sqlite3` included.
+/// * **A parent from another conversation.** The foreign key is composite,
+///   `(conversation_id, parent)`: the parent is looked up **in the same
+///   conversation**, and nowhere else.
+/// * **Changing the structure after the fact.** A trigger refuses updating
+///   `conversation_id`, `node` or `parent`: a version that changed parent
+///   would rewrite the history that was shown.
 ///
-/// # L'échange qui a reçu un échantillon ne garde que sa question
+/// # The exchange that received a sample only keeps its question
 ///
-/// Décision de l'utilisateur : un échange dont un échantillon de lignes a été
-/// envoyé garde sa question, ses **compteurs** — lignes et colonnes, jamais les
-/// noms — et son issue. Jamais la réponse, le raisonnement, un appel d'outil ni
-/// un message d'erreur : la réponse peut citer les valeurs de l'échantillon, et
-/// le fichier de workspace est l'un des six canaux d'I-03.
+/// The user's decision: an exchange for which a sample of rows was sent keeps
+/// its question, its **counters** — rows and columns, never the names — and
+/// its outcome. Never the answer, the reasoning, a tool call or an error
+/// message: the answer can quote the sample's values, and the workspace file
+/// is one of I-03's six channels.
 ///
-/// La règle tient au fichier, pas à l'appelant :
-/// * un déclencheur refuse tout tour rattaché à un échange retenu, à
-///   l'insertion comme à la mise à jour ;
-/// * poser le marqueur **efface** les tours déjà écrits pour cet échange ;
-/// * le marqueur ne se retire pas.
+/// The rule holds in the file, not in the caller:
+/// * a trigger refuses any turn attached to a withheld exchange, on insert as
+///   on update;
+/// * setting the marker **erases** the turns already written for that
+///   exchange;
+/// * the marker cannot be removed.
 ///
-/// L'effacement suppose `secure_delete`, que le store pose à l'ouverture : sans
-/// lui, SQLite laisse le texte supprimé dans ses pages libres, et le fichier le
-/// contiendrait encore. Un `sqlite3` lancé sans ce réglage peut poser le
-/// marqueur sans écraser les octets — la garantie « illisible sur le disque »
-/// vaut pour ce qu'Oxyn écrit.
+/// The erasure relies on `secure_delete`, which the store sets on opening:
+/// without it, SQLite leaves the deleted text in its free pages, and the file
+/// would still contain it. A `sqlite3` launched without this setting can set
+/// the marker without overwriting the bytes — the "unreadable on disk"
+/// guarantee holds for what Oxyn writes.
 ///
-/// # Anciennes lignes
+/// # Older rows
 ///
-/// Les tours de la migration 10 ont `node = NULL` et restent lisibles par
-/// `transcript_page`. Une conversation sans nœud n'a simplement pas de branche.
+/// Migration 10's turns have `node = NULL` and stay readable through
+/// `transcript_page`. A conversation without nodes simply has no branch.
 const M0013_AI_CONVERSATION_TREE: &str = "CREATE TABLE ai_conversation_nodes (
     conversation_id   TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
     node              INTEGER NOT NULL CHECK(node BETWEEN 0 AND 255),
@@ -664,13 +660,13 @@ BEGIN
 END;
 ";
 
-/// Migration 14 — ce qu'une question a nommé d'un `@`.
+/// Migration 14 — what a question named with an `@`.
 ///
-/// Une conversation relue montre ses questions comme elles ont été posées,
-/// puces comprises. La liste est un tableau **JSON** — lisible sans Oxyn
-/// ([I-11](../../../CLAUDE.md#i-11)) — que le fichier vérifie et borne ; `NULL`
-/// pour une question sans mention, et pour toute ligne antérieure : elle se
-/// relit sans puce. Jamais une valeur de ligne : une sorte, un nom, une adresse.
+/// A conversation read back shows its questions as they were asked, chips
+/// included. The list is a **JSON** array — readable without Oxyn
+/// ([I-11](../../../CLAUDE.md#i-11)) — that the file checks and bounds; `NULL`
+/// for a question without a mention, and for any earlier row: it reads back
+/// without a chip. Never a row value: a kind, a name, an address.
 const M0014_AI_EXCHANGE_MENTIONS: &str =
     "ALTER TABLE ai_conversation_nodes ADD COLUMN mentions TEXT
     CHECK(mentions IS NULL
@@ -678,58 +674,54 @@ const M0014_AI_EXCHANGE_MENTIONS: &str =
               AND length(CAST(mentions AS BLOB)) <= 32768));
 ";
 
-/// Migration 15 — le cache de catalogue persisté quitte le fichier.
+/// Migration 15 — the persisted catalog cache leaves the file.
 ///
-/// La table `catalog_cache` de la migration 1 n'a jamais eu d'appelant : le
-/// catalogue vit en mémoire dans `oxyn-exec`, se relit du serveur à chaque
-/// connexion, et Oxyn n'offre pas de consultation hors ligne
-/// ([ARCHITECTURE §6](../../../docs/ARCHITECTURE.md#6-le-catalogue)). Une
-/// table sans écrivain laisse croire à un lecteur du fichier qu'elle compte.
+/// Migration 1's `catalog_cache` table never had a caller: the catalog lives
+/// in memory in `oxyn-exec`, is read back from the server at each connection,
+/// and Oxyn offers no offline browsing
+/// ([ARCHITECTURE §6](../../../docs/ARCHITECTURE.md#6-the-catalog)). A table
+/// without a writer makes a reader of the file believe it matters.
 ///
-/// Rien de l'utilisateur ne se perd : ce qu'elle aurait pu contenir est une
-/// copie de ce que le serveur rend, jamais un travail saisi dans Oxyn
-/// ([I-11](../../../CLAUDE.md#i-11)). Revenir en arrière, c'est une migration
-/// qui recrée la table avec le DDL de la migration 1, restée lisible ci-dessus ;
-/// une persistance future passera d'abord par un ADR.
+/// Nothing of the user's is lost: what it could have contained is a copy of
+/// what the server returns, never work typed into Oxyn
+/// ([I-11](../../../CLAUDE.md#i-11)). Going back means a migration that
+/// recreates the table with migration 1's DDL, still readable above; a future
+/// persistence will first go through an ADR.
 ///
-/// `IF EXISTS` : un fichier dont la table a déjà été retirée au `sqlite3` doit
-/// s'ouvrir, pas échouer à la migration.
+/// `IF EXISTS`: a file whose table was already removed with `sqlite3` must
+/// open, not fail the migration.
 const M0015_DROP_CATALOG_CACHE: &str = "DROP TABLE IF EXISTS catalog_cache;";
 
-/// Migration 16 — quand l'utilisateur a vérifié sur le serveur une écriture à l'issue inconnue.
+/// Migration 16 — when the user checked on the server a write with an unknown outcome.
 ///
-/// Sans elle, une seule écriture expirée rappelait l'avertissement de reprise
-/// à chaque lancement, pour toujours — et un avertissement qu'on ne peut pas
-/// faire taire cesse d'être lu, y compris le jour où une autre écriture a
-/// réellement été interrompue. Un horodatage en texte ISO 8601 plutôt qu'un
-/// drapeau : lisible par `sqlite3` sans Oxyn ([I-11](../../../CLAUDE.md#i-11)),
-/// et il dit *quand* la vérification a été faite. `NULL` sur toute ligne
-/// antérieure : rien n'a été vérifié.
+/// Without it, a single expired write brought back the recovery warning at
+/// every launch, forever — and a warning that cannot be silenced stops being
+/// read, including the day another write was really interrupted. An ISO 8601
+/// text timestamp rather than a flag: readable by `sqlite3` without Oxyn
+/// ([I-11](../../../CLAUDE.md#i-11)), and it says *when* the check was made.
+/// `NULL` on any earlier row: nothing was checked.
 const M0016_HISTORY_RECONCILED: &str = "ALTER TABLE query_history ADD COLUMN reconciled_at TEXT;";
 
-/// Migration 17 — quand un lancement suivant a annoncé un arrêt anormal.
+/// Migration 17 — when a later launch announced an abnormal shutdown.
 ///
-/// Sans elle, une session abandonnée le restait pour toujours : un seul
-/// plantage montrait l'écran de reprise à chaque lancement, fermetures propres
-/// comprises. `closed_at` reste `NULL` — inscrire une fermeture ici mentirait
-/// sur la façon dont le lancement s'est terminé. Un horodatage plutôt qu'un
-/// drapeau, pour la même raison que la migration 16 : il se lit sans Oxyn
-/// ([I-11](../../../CLAUDE.md#i-11)). `NULL` sur toute ligne antérieure : les
-/// sessions déjà abandonnées sont annoncées une dernière fois.
+/// Without it, an abandoned session stayed so forever: a single crash showed
+/// the recovery screen at every launch, clean shutdowns included. `closed_at`
+/// stays `NULL` — recording a closing here would lie about how the launch
+/// ended. A timestamp rather than a flag, for the same reason as migration 16:
+/// it reads without Oxyn ([I-11](../../../CLAUDE.md#i-11)). `NULL` on any
+/// earlier row: already abandoned sessions are announced one last time.
 const M0017_APP_SESSIONS_REPORTED: &str = "ALTER TABLE app_sessions ADD COLUMN reported_at TEXT;";
 
-/// Migration 18 — la disposition des fenêtres
+/// Migration 18 — the window layout
 /// ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
 ///
-/// Des colonnes plutôt qu'un JSON : l'appartenance d'une console à une seule
-/// fenêtre est une contrainte que le fichier tient lui-même,
-/// `UNIQUE (document_id)`, et une écriture qui la violerait échoue au lieu de
-/// produire deux fenêtres rivales sur le même document. Lisible avec
-/// n'importe quel client SQLite ([I-11](../../../CLAUDE.md#i-11)).
-/// `app_session_id` nomme le dernier lancement qui a écrit la ligne : un
-/// lancement n'adopte que celles d'un lancement terminé, pas celles d'une
-/// autre instance vivante sur le même fichier. `object_location` a la forme
-/// qu'il avait dans les préférences.
+/// Columns rather than a JSON: a console belonging to a single window is a
+/// constraint the file holds itself, `UNIQUE (document_id)`, and a write that
+/// would violate it fails instead of producing two rival windows on the same
+/// document. Readable with any SQLite client ([I-11](../../../CLAUDE.md#i-11)).
+/// `app_session_id` names the last launch that wrote the row: a launch only
+/// adopts those of a finished launch, not those of another live instance on
+/// the same file. `object_location` has the shape it had in the preferences.
 const M0018_WORKSPACE_WINDOWS: &str = "CREATE TABLE workspace_windows (
     id               TEXT PRIMARY KEY NOT NULL,
     workspace_id     TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -755,7 +747,7 @@ CREATE TABLE workspace_window_consoles (
 CREATE INDEX workspace_windows_order ON workspace_windows(workspace_id, ordinal);
 ";
 
-/// Toutes les migrations, dans l'ordre d'application.
+/// Every migration, in application order.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -849,64 +841,64 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
 ];
 
-/// Version de schéma que ce binaire sait produire.
+/// Schema version this binary can produce.
 #[must_use]
 pub fn latest_version() -> u32 {
     match MIGRATIONS.last() {
-        Some(derniere) => derniere.version,
-        // Inatteignable tant que `MIGRATIONS` n'est pas vide, mais un `expect`
-        // ici paniquerait à l'ouverture de l'application.
+        Some(last) => last.version,
+        // Unreachable as long as `MIGRATIONS` is not empty, but an `expect`
+        // here would panic when the application opens.
         None => 0,
     }
 }
 
-/// Version de schéma actuellement inscrite dans le fichier.
+/// Schema version currently recorded in the file.
 ///
-/// Rend `0` sur une base neuve.
+/// Returns `0` on a new database.
 ///
-/// # Erreurs
-/// [`StoreError::Sqlite`] si la table de suivi est illisible.
+/// # Errors
+/// [`StoreError::Sqlite`] if the tracking table is unreadable.
 pub fn current_version(conn: &Connection) -> Result<u32> {
-    let suivi_present: i64 = conn.query_row(
+    let tracking_present: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'schema_version'",
         [],
         |row| row.get(0),
     )?;
-    if suivi_present == 0 {
+    if tracking_present == 0 {
         return Ok(0);
     }
 
-    // `MAX()` rend toujours une ligne, `NULL` sur une table vide.
-    let brut = conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+    // `MAX()` always returns a row, `NULL` on an empty table.
+    let raw = conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
         row.get::<_, Option<i64>>(0)
     })?;
-    Ok(brut.map_or(0, |v| u32::try_from(v).unwrap_or(u32::MAX)))
+    Ok(raw.map_or(0, |v| u32::try_from(v).unwrap_or(u32::MAX)))
 }
 
-/// Applique les migrations manquantes.
+/// Applies the missing migrations.
 ///
-/// Idempotent : appelé sur une base déjà à jour, il ne fait rien et ne modifie
-/// pas `schema_version`.
+/// Idempotent: called on an already up-to-date database, it does nothing and
+/// does not modify `schema_version`.
 ///
-/// # Erreurs
-/// * [`StoreError::SchemaTooRecent`] si le fichier vient d'une version
-///   ultérieure d'Oxyn — on refuse d'écrire dans un schéma qu'on ne comprend
-///   pas plutôt que de corrompre la piste d'audit ;
-/// * [`StoreError::Migration`] si un lot SQL est refusé. La transaction est
-///   alors annulée et le schéma reste dans son état antérieur.
+/// # Errors
+/// * [`StoreError::SchemaTooRecent`] if the file comes from a later Oxyn
+///   version — writing into a schema that is not understood is refused rather
+///   than corrupting the audit trail;
+/// * [`StoreError::Migration`] if an SQL batch is refused. The transaction is
+///   then rolled back and the schema stays in its previous state.
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(SCHEMA_VERSION_TABLE)?;
 
-    let actuelle = current_version(conn)?;
-    let cible = latest_version();
-    if actuelle > cible {
+    let current = current_version(conn)?;
+    let target = latest_version();
+    if current > target {
         return Err(StoreError::SchemaTooRecent {
-            found: actuelle,
-            supported: cible,
+            found: current,
+            supported: target,
         });
     }
 
-    for migration in MIGRATIONS.iter().filter(|m| m.version > actuelle) {
+    for migration in MIGRATIONS.iter().filter(|m| m.version > current) {
         let tx = conn.transaction()?;
         tx.execute_batch(migration.sql)
             .map_err(|source| StoreError::Migration {
@@ -973,110 +965,110 @@ pub(crate) fn file_at_version(path: &std::path::Path, version: u32) -> Connectio
 mod tests {
     use super::*;
 
-    fn base_migree() -> Connection {
-        let mut conn = Connection::open_in_memory().expect("une base en mémoire s'ouvre toujours");
-        migrate(&mut conn).expect("le schéma initial s'applique");
+    fn migrated_db() -> Connection {
+        let mut conn = Connection::open_in_memory().expect("an in-memory database always opens");
+        migrate(&mut conn).expect("the initial schema applies");
         conn
     }
 
     #[test]
-    fn les_numeros_de_migration_sont_uniques_et_croissants() {
-        let mut precedent = 0;
+    fn migration_numbers_are_unique_and_increasing() {
+        let mut previous = 0;
         for migration in MIGRATIONS {
             assert!(
-                migration.version > precedent,
-                "la migration `{}` casse l'ordre",
+                migration.version > previous,
+                "migration `{}` breaks the order",
                 migration.name
             );
-            precedent = migration.version;
+            previous = migration.version;
         }
-        assert_eq!(latest_version(), precedent);
+        assert_eq!(latest_version(), previous);
     }
 
     #[test]
-    fn migrer_est_idempotent() {
-        let mut conn = Connection::open_in_memory().expect("base en mémoire");
+    fn migrating_is_idempotent() {
+        let mut conn = Connection::open_in_memory().expect("in-memory database");
 
-        migrate(&mut conn).expect("première application");
-        let apres_une = current_version(&conn).expect("version lisible");
-        assert_eq!(apres_une, latest_version());
+        migrate(&mut conn).expect("first application");
+        let after_one = current_version(&conn).expect("readable version");
+        assert_eq!(after_one, latest_version());
 
-        migrate(&mut conn).expect("seconde application");
-        migrate(&mut conn).expect("troisième application");
-        assert_eq!(current_version(&conn).expect("version lisible"), apres_une);
+        migrate(&mut conn).expect("second application");
+        migrate(&mut conn).expect("third application");
+        assert_eq!(current_version(&conn).expect("readable version"), after_one);
 
-        let lignes: i64 = conn
+        let rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
-            .expect("comptage");
+            .expect("count");
         assert_eq!(
-            lignes,
+            rows,
             i64::from(latest_version()),
-            "une migration ne doit être inscrite qu'une fois"
+            "a migration must be recorded only once"
         );
     }
 
-    /// Une base **déjà en v1, avec des lignes**, monte sans les perdre.
+    /// A database **already at v1, with rows**, upgrades without losing them.
     ///
-    /// `migrer_est_idempotent` part de zéro et applique tout d'un bloc : il ne
-    /// prouve rien sur le seul cas qui existe chez un utilisateur, celui d'un
-    /// fichier écrit par une version précédente. Ce test traverse les deux
-    /// migrations incrémentales du dépôt, dont celle qui touche la table
-    /// **append-only** : un `ADD COLUMN` n'est pas un `UPDATE`, mais c'est
-    /// exactement le genre d'affirmation qui mérite un test plutôt qu'un
-    /// raisonnement.
+    /// `migrating_is_idempotent` starts from scratch and applies everything in
+    /// one go: it proves nothing about the only case that exists on a user's
+    /// machine, a file written by a previous version. This test goes through
+    /// the repository's two incremental migrations, including the one that
+    /// touches the **append-only** table: an `ADD COLUMN` is not an `UPDATE`,
+    /// but it is exactly the kind of claim that deserves a test rather than a
+    /// line of reasoning.
     #[test]
-    fn une_base_deja_en_v1_monte_sans_perdre_ses_lignes() {
-        let mut conn = Connection::open_in_memory().expect("base en mémoire");
-        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("suivi");
-        conn.execute_batch(M0001_INITIAL).expect("schéma de la v1");
+    fn a_v1_database_upgrades_without_losing_its_rows() {
+        let mut conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("tracking");
+        conn.execute_batch(M0001_INITIAL).expect("v1 schema");
         conn.execute(
             "INSERT INTO schema_version (version, name, applied_at) VALUES (1, 'initial', ?1)",
             rusqlite::params![chrono::Utc::now()],
         )
-        .expect("inscription de la v1");
+        .expect("record v1");
         conn.execute(
             "INSERT INTO query_history
                  (ts, actor_kind, language, statement, intent, status, error)
-             VALUES (?1, 'human', '\"sql\"', 'INSERT INTO commandes VALUES (1)', 'write',
-                     'failed', 'délai dépassé après 30s')",
+             VALUES (?1, 'human', '\"sql\"', 'INSERT INTO orders VALUES (1)', 'write',
+                     'failed', 'timed out after 30s')",
             rusqlite::params![chrono::Utc::now()],
         )
-        .expect("une ligne écrite par la version précédente");
+        .expect("a row written by the previous version");
         conn.execute(
             "INSERT INTO audit_journal
                  (ts, actor_kind, command_kind, intent, risk, policy_decision, error)
              VALUES (?1, 'agent', 'Execute', 'write', '\"none\"', 'allow',
-                     'délai dépassé après 30s')",
+                     'timed out after 30s')",
             rusqlite::params![chrono::Utc::now()],
         )
-        .expect("une entrée d'audit écrite par la version précédente");
+        .expect("an audit entry written by the previous version");
 
-        migrate(&mut conn).expect("montée jusqu'à la version courante");
+        migrate(&mut conn).expect("upgrade to the current version");
 
         assert_eq!(current_version(&conn).expect("version"), latest_version());
-        // La ligne survit, et sa famille est `NULL` : personne ne peut la
-        // deviner sans analyser son texte, ce que la colonne existe pour
-        // remplacer. `HistoryRecord::is_retryable` traite ce `NULL` comme
-        // « on ne sait pas », donc comme non rejouable (I-13).
+        // The row survives, and its class is `NULL`: nobody can guess it
+        // without parsing its text, which the column exists to replace.
+        // `HistoryRecord::is_retryable` treats this `NULL` as "unknown", hence
+        // as not replayable (I-13).
         let (statement, class): (String, Option<String>) = conn
             .query_row(
                 "SELECT statement, error_class FROM query_history",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .expect("la ligne antérieure a survécu");
+            .expect("the earlier row survived");
         assert!(statement.starts_with("INSERT"));
         assert_eq!(class, None);
 
-        // La piste d'audit aussi : ajouter une colonne ne réécrit aucune ligne,
-        // donc le déclencheur d'inviolabilité n'a rien à refuser.
+        // The audit trail too: adding a column rewrites no row, so the
+        // tamper-proofing trigger has nothing to refuse.
         let (kind, class): (String, Option<String>) = conn
             .query_row(
                 "SELECT command_kind, error_class FROM audit_journal",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .expect("l'entrée d'audit antérieure a survécu");
+            .expect("the earlier audit entry survived");
         assert_eq!(kind, "Execute");
         assert_eq!(class, None);
     }
@@ -1111,84 +1103,83 @@ mod tests {
         );
     }
 
-    /// Un document écrit avant la migration 7 n'a **pas** de provenance, et
-    /// c'est vrai : c'est l'utilisateur qui l'a écrit.
+    /// A document written before migration 7 has **no** provenance, and that
+    /// is true: the user wrote it.
     ///
-    /// Le test tient aussi la seconde moitié de la décision — la borne de 512
-    /// octets est dans le fichier, donc opposable à `sqlite3` autant qu'à
-    /// Oxyn : sans elle, la colonne deviendrait un endroit où archiver la
-    /// conversation.
+    /// The test also holds the second half of the decision — the 512-byte
+    /// bound is in the file, hence enforceable against `sqlite3` as much as
+    /// against Oxyn: without it, the column would become a place to archive
+    /// the conversation.
     #[test]
-    fn une_provenance_absente_veut_dire_ecrite_par_l_utilisateur() {
-        let mut conn = Connection::open_in_memory().expect("base en mémoire");
-        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("suivi");
+    fn a_missing_provenance_means_written_by_the_user() {
+        let mut conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("tracking");
         for migration in MIGRATIONS.iter().filter(|migration| migration.version < 7) {
-            conn.execute_batch(migration.sql).expect("schéma antérieur");
+            conn.execute_batch(migration.sql).expect("earlier schema");
             conn.execute(
                 "INSERT INTO schema_version(version,name,applied_at) VALUES(?1,?2,?3)",
                 rusqlite::params![migration.version, migration.name, chrono::Utc::now()],
             )
-            .expect("inscription");
+            .expect("record");
         }
         conn.execute_batch(
-            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+            "INSERT INTO workspaces VALUES('workspace','Workshop','2026-09-10','2026-09-10');
              INSERT INTO documents (id,workspace_id,title,language,content,created_at,updated_at)
              VALUES('document','workspace','Rapport','\"sql\"','SELECT 1','2026-09-10','2026-09-10');",
         )
-        .expect("document écrit par la version précédente");
+        .expect("document written by the previous version");
 
-        migrate(&mut conn).expect("montée jusqu'à la version courante");
+        migrate(&mut conn).expect("upgrade to the current version");
 
-        let (contenu, provenance): (String, Option<String>) = conn
+        let (content, provenance): (String, Option<String>) = conn
             .query_row("SELECT content, provenance FROM documents", [], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })
-            .expect("le document a survécu");
-        assert_eq!(contenu, "SELECT 1");
-        assert_eq!(
-            provenance, None,
-            "une ligne antérieure n'appartient à aucun agent"
-        );
+            .expect("the document survived");
+        assert_eq!(content, "SELECT 1");
+        assert_eq!(provenance, None, "an earlier row belongs to no agent");
 
-        let trop_gros = format!("{{\"model\":\"{}\"}}", "x".repeat(512));
-        let refus = conn.execute(
+        let too_big = format!("{{\"model\":\"{}\"}}", "x".repeat(512));
+        let refusal = conn.execute(
             "UPDATE documents SET provenance = ?1 WHERE id = 'document'",
-            rusqlite::params![trop_gros],
+            rusqlite::params![too_big],
         );
         assert!(
-            refus.is_err(),
-            "le budget de 512 octets doit tenir dans le fichier, pas seulement dans le code"
+            refusal.is_err(),
+            "the 512-byte budget must hold in the file, not only in the code"
         );
     }
 
-    /// Un état local écrit par la version précédente s'ouvre sans rien perdre.
+    /// A local state written by the previous version opens without losing
+    /// anything.
     ///
-    /// C'est le seul cas qui existe chez un utilisateur : `migrer_est_idempotent`
-    /// part de zéro et n'en prouve rien. Ce test pose un fichier **en v9 avec
-    /// des lignes** — un workspace, une connexion, un document, une entrée
-    /// d'historique, une trace d'audit —, applique la migration 10, et vérifie
-    /// que tout est encore là, les deux tables neuves comprises et vides.
+    /// It is the only case that exists on a user's machine:
+    /// `migrating_is_idempotent` starts from scratch and proves nothing about
+    /// it. This test sets up a file **at v9 with rows** — a workspace, a
+    /// connection, a document, a history entry, an audit trace —, applies
+    /// migration 10, and checks everything is still there, the two new tables
+    /// included and empty.
     ///
-    /// Vides, et c'est exact : personne n'a jamais eu de conversation persistée
-    /// avant cette migration. Une table neuve qui se peuplerait toute seule
-    /// inventerait de l'historique.
+    /// Empty, and that is accurate: nobody ever had a persisted conversation
+    /// before this migration. A new table that populated itself would invent
+    /// history.
     #[test]
-    fn un_etat_local_en_v9_s_ouvre_sans_perdre_ses_lignes() {
-        let mut conn = Connection::open_in_memory().expect("base en mémoire");
-        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("suivi");
+    fn a_v9_local_state_opens_without_losing_its_rows() {
+        let mut conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("tracking");
         for migration in MIGRATIONS.iter().filter(|migration| migration.version < 10) {
-            conn.execute_batch(migration.sql).expect("schéma antérieur");
+            conn.execute_batch(migration.sql).expect("earlier schema");
             conn.execute(
                 "INSERT INTO schema_version(version,name,applied_at) VALUES(?1,?2,?3)",
                 rusqlite::params![migration.version, migration.name, chrono::Utc::now()],
             )
-            .expect("inscription");
+            .expect("record");
         }
         conn.execute_batch(
-            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+            "INSERT INTO workspaces VALUES('workspace','Workshop','2026-09-10','2026-09-10');
              INSERT INTO connections (id,workspace_id,name,driver,environment,params,read_only,
                                       created_at,updated_at)
-             VALUES('connexion','workspace','base client','postgres','production','{}',0,
+             VALUES('connexion','workspace','customer db','postgres','production','{}',0,
                     '2026-09-10','2026-09-10');
              INSERT INTO documents (id,workspace_id,title,language,content,created_at,updated_at)
              VALUES('document','workspace','Rapport','\"sql\"','SELECT 1','2026-09-10','2026-09-10');
@@ -1197,59 +1188,59 @@ mod tests {
              INSERT INTO audit_journal (ts,actor_kind,command_kind,intent,risk,policy_decision)
              VALUES('2026-09-10','agent','Execute','read','\"none\"','allow');",
         )
-        .expect("des lignes écrites par la version précédente");
+        .expect("rows written by the previous version");
 
-        migrate(&mut conn).expect("montée jusqu'à la version courante");
+        migrate(&mut conn).expect("upgrade to the current version");
         assert_eq!(current_version(&conn).expect("version"), latest_version());
 
-        for (table, attendu) in [
+        for (table, expected) in [
             ("workspaces", 1),
             ("connections", 1),
             ("documents", 1),
             ("query_history", 1),
             ("audit_journal", 1),
-            // Neuves, donc vides : rien n'invente de conversation passée.
+            // New, hence empty: nothing invents a past conversation.
             ("ai_conversations", 0),
             ("ai_conversation_turns", 0),
         ] {
-            let lignes: i64 = conn
+            let rows: i64 = conn
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
                     row.get(0)
                 })
-                .expect("comptage");
-            assert_eq!(lignes, attendu, "table `{table}`");
+                .expect("count");
+            assert_eq!(rows, expected, "table `{table}`");
         }
 
-        // Et la table neuve est utilisable dans la foulée, clé étrangère vers le
-        // workspace existant comprise.
+        // And the new table is usable right away, foreign key to the existing
+        // workspace included.
         conn.execute(
             "INSERT INTO ai_conversations
                  (id, workspace_id, destination_kind, destination_label, title,
                   created_at, updated_at)
-             VALUES ('fil','workspace','provider','Anthropic','Un fil','2026-09-16','2026-09-16')",
+             VALUES ('thread','workspace','provider','Anthropic','A thread','2026-09-16','2026-09-16')",
             [],
         )
-        .expect("le fil s'écrit dans le schéma migré");
+        .expect("the thread is written in the migrated schema");
     }
 
-    /// Un fichier en v14 dont le cache de catalogue est rempli perd la table,
-    /// et rien d'autre : la connexion qu'elle référençait reste.
+    /// A v14 file whose catalog cache is filled loses the table, and nothing
+    /// else: the connection it referenced remains.
     #[test]
-    fn la_migration_15_retire_le_cache_de_catalogue_sans_toucher_aux_connexions() {
+    fn migration_15_removes_the_catalog_cache_without_touching_connections() {
         let dir = tempfile::tempdir().expect("temporary directory");
         let mut conn = file_at_version(&dir.path().join("v14.sqlite3"), 14);
         conn.execute_batch(
-            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+            "INSERT INTO workspaces VALUES('workspace','Workshop','2026-09-10','2026-09-10');
              INSERT INTO connections (id,workspace_id,name,driver,environment,params,read_only,
                                       created_at,updated_at)
-             VALUES('connexion','workspace','base client','postgres','production','{}',0,
+             VALUES('connexion','workspace','customer db','postgres','production','{}',0,
                     '2026-09-10','2026-09-10');
              INSERT INTO catalog_cache (connection_id,payload,refreshed_at)
              VALUES('connexion','{}','2026-09-10');",
         )
         .expect("a v14 file with a cached catalog");
 
-        migrate(&mut conn).expect("montée jusqu'à la version courante");
+        migrate(&mut conn).expect("upgrade to the current version");
 
         let table: i64 = conn
             .query_row(
@@ -1257,45 +1248,45 @@ mod tests {
                 [],
                 |row| row.get(0),
             )
-            .expect("interrogation du schéma");
-        assert_eq!(table, 0, "la table sans appelant a quitté le fichier");
-        let connexions: i64 = conn
+            .expect("query the schema");
+        assert_eq!(table, 0, "the table without a caller has left the file");
+        let connection_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM connections", [], |row| row.get(0))
-            .expect("comptage");
-        assert_eq!(connexions, 1);
+            .expect("count");
+        assert_eq!(connection_count, 1);
     }
 
-    /// `IF EXISTS` : une table déjà retirée à la main n'empêche pas l'ouverture.
+    /// `IF EXISTS`: a table already removed by hand does not prevent opening.
     #[test]
-    fn la_migration_15_tolere_une_table_deja_retiree() {
+    fn migration_15_tolerates_an_already_removed_table() {
         let dir = tempfile::tempdir().expect("temporary directory");
         let mut conn = file_at_version(&dir.path().join("v14.sqlite3"), 14);
         conn.execute_batch("DROP TABLE catalog_cache;")
             .expect("removed by hand");
 
-        migrate(&mut conn).expect("la migration s'applique quand même");
+        migrate(&mut conn).expect("the migration applies anyway");
         assert_eq!(current_version(&conn).expect("version"), latest_version());
     }
 
     #[test]
-    fn un_schema_venu_du_futur_est_refuse() {
-        let mut conn = base_migree();
+    fn a_schema_from_the_future_is_refused() {
+        let mut conn = migrated_db();
         conn.execute(
             "INSERT INTO schema_version (version, name, applied_at) VALUES (?1, ?2, ?3)",
-            rusqlite::params![9_999_i64, "venue-du-futur", chrono::Utc::now()],
+            rusqlite::params![9_999_i64, "from-the-future", chrono::Utc::now()],
         )
-        .expect("insertion");
+        .expect("insert");
 
-        let erreur = migrate(&mut conn).expect_err("le futur ne s'applique pas à l'envers");
+        let error = migrate(&mut conn).expect_err("the future does not apply backwards");
         assert!(matches!(
-            erreur,
+            error,
             StoreError::SchemaTooRecent { found: 9_999, .. }
         ));
     }
 
     #[test]
-    fn les_tables_attendues_existent() {
-        let conn = base_migree();
+    fn the_expected_tables_exist() {
+        let conn = migrated_db();
         for table in [
             "workspaces",
             "connections",
@@ -1311,21 +1302,21 @@ mod tests {
             "ai_conversation_nodes",
             "schema_version",
         ] {
-            let presente: i64 = conn
+            let present: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = ?1",
                     [table],
                     |row| row.get(0),
                 )
-                .expect("interrogation du schéma");
-            assert_eq!(presente, 1, "table `{table}` absente");
+                .expect("query the schema");
+            assert_eq!(present, 1, "table `{table}` missing");
         }
     }
 
     #[test]
-    fn les_tables_du_domaine_sont_strictes() {
-        // Sans STRICT, SQLite range une chaîne dans une colonne INTEGER.
-        let conn = base_migree();
+    fn the_domain_tables_are_strict() {
+        // Without STRICT, SQLite stores a string in an INTEGER column.
+        let conn = migrated_db();
         for table in [
             "workspaces",
             "connections",
@@ -1344,26 +1335,23 @@ mod tests {
                     [table],
                     |row| row.get(0),
                 )
-                .expect("définition de table");
-            assert!(
-                sql.contains("STRICT"),
-                "la table `{table}` n'est pas STRICT"
-            );
+                .expect("table definition");
+            assert!(sql.contains("STRICT"), "table `{table}` is not STRICT");
         }
     }
 
     #[test]
-    fn les_declencheurs_d_inviolabilite_existent() {
-        let conn = base_migree();
-        for declencheur in ["audit_journal_forbid_update", "audit_journal_forbid_delete"] {
+    fn the_tamper_proofing_triggers_exist() {
+        let conn = migrated_db();
+        for trigger in ["audit_journal_forbid_update", "audit_journal_forbid_delete"] {
             let present: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name = ?1",
-                    [declencheur],
+                    [trigger],
                     |row| row.get(0),
                 )
-                .expect("interrogation du schéma");
-            assert_eq!(present, 1, "déclencheur `{declencheur}` absent");
+                .expect("query the schema");
+            assert_eq!(present, 1, "trigger `{trigger}` missing");
         }
     }
 }

@@ -11,7 +11,7 @@ import type { OpenConnection } from "@/lib/ipc/types"
  *
  * `absent` — no provider and no agent declared, or not read yet — means no AI
  * entry at all anywhere: no button, no badge, no greyed invitation
- * (docs/UX-SPEC.md, « Le workspace IA n'existe que s'il a été configuré »).
+ * (docs/UX-SPEC.md, « The AI workspace only exists if it has been configured »).
  * The tier is read from the connection passed in: a screen that edits the
  * connection must pass the refreshed one (I-04).
  */

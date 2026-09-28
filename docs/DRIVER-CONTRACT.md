@@ -1,225 +1,224 @@
-# Contrat de driver
+# Driver contract
 
-> **Autorité** : ce que tout driver de base de données doit garantir, et ce
-> qu'il lui est interdit de faire. C'est la frontière externe la plus large
-> d'Oxyn — un SGBD est un système hostile par défaut : il peut être lent,
-> mentir sur ses types, fermer une connexion au milieu d'une réponse.
+> **Authority**: what every database driver must guarantee, and what it is
+> forbidden to do. It is Oxyn's widest external boundary — a DBMS is a hostile
+> system by default: it can be slow, lie about its types, close a connection in
+> the middle of a response.
 
-Dérive de [ADR-0002](adr/0002-arrow-result-model.md) (Arrow),
-[ADR-0003](adr/0003-driver-capabilities.md) (capacités) et
-[ADR-0007](adr/0007-driver-sidecar.md) (sidecar). Quand ce document paraît
-contredire un ADR, c'est ce document qui est faux.
+Derives from [ADR-0002](adr/0002-arrow-result-model.md) (Arrow),
+[ADR-0003](adr/0003-driver-capabilities.md) (capabilities) and
+[ADR-0007](adr/0007-driver-sidecar.md) (sidecar). When this document seems to
+contradict an ADR, this document is the one that is wrong.
 
-Invariants concernés : [I-02](../CLAUDE.md#i-02), [I-06](../CLAUDE.md#i-06),
+Invariants involved: [I-02](../CLAUDE.md#i-02), [I-06](../CLAUDE.md#i-06),
 [I-09](../CLAUDE.md#i-09), [I-10](../CLAUDE.md#i-10).
 
-## Ce qu'un driver garantit
+## What a driver guarantees
 
-### 1. Il ne panique jamais sur une entrée venue du serveur
+### 1. It never panics on input coming from the server
 
-Un driver traduit ; il ne suppose pas. Tout ce qui arrive du réseau est une
-donnée non fiable : un type inconnu, un `NULL` là où le schéma dit `NOT NULL`,
-un entier hors bornes, un encodage invalide.
+A driver translates; it does not assume. Everything that arrives from the
+network is untrusted data: an unknown type, a `NULL` where the schema says
+`NOT NULL`, an out-of-range integer, an invalid encoding.
 
-**Panne concrète :** un serveur MySQL configuré avec un type spatial renvoie un
-BLOB qu'un `unwrap()` sur le décodage fait paniquer. Le profil `release`
-compile avec `panic = "abort"` : rien n'attrape la panique, l'application meurt, et l'utilisateur perd ses
-onglets et ses requêtes non sauvegardées.
+**Concrete failure:** a MySQL server configured with a spatial type returns a
+BLOB that an `unwrap()` on decoding turns into a panic. The `release` profile
+compiles with `panic = "abort"`: nothing catches the panic, the application dies, and the user loses their
+tabs and unsaved queries.
 
-Interdits dans un chemin atteignable depuis une réponse serveur : `unwrap()`,
-`expect()`, `panic!()`, `unreachable!()`, `todo!()`, indexation de tranche par
-plage, `as` sur un entier qui peut déborder.
+Forbidden on a path reachable from a server response: `unwrap()`,
+`expect()`, `panic!()`, `unreachable!()`, `todo!()`, slice indexing by
+range, `as` on an integer that can overflow.
 
-### 2. Il expose l'annulation, et l'annulation coupe vraiment
+### 2. It exposes cancellation, and cancellation really cuts
 
-Toute méthode qui peut durer accepte d'être annulée, et l'annulation atteint la
-requête **côté serveur**, pas seulement le futur côté client.
+Every method that can take time accepts being cancelled, and cancellation reaches
+the query **on the server side**, not just the future on the client side.
 
-**Panne concrète :** l'utilisateur ferme l'onglet d'une agrégation de 4 minutes.
-Le futur est abandonné, mais la requête continue sur le serveur, occupe une
-connexion du pool et un verrou. Au dixième onglet fermé, la base refuse les
-connexions et l'utilisateur conclut qu'Oxyn a cassé sa production.
+**Concrete failure:** the user closes the tab of a 4-minute aggregation.
+The future is dropped, but the query keeps running on the server, holding a
+pool connection and a lock. By the tenth closed tab, the database refuses
+connections and the user concludes that Oxyn broke their production.
 
-Concrètement : PostgreSQL a `pg_cancel_backend`, MySQL a `KILL QUERY`, SQLite a
-`sqlite3_interrupt`. Un driver qui ne peut pas annuler côté serveur le **déclare**
-dans ses capacités, il ne fait pas semblant.
+In practice: PostgreSQL has `pg_cancel_backend`, MySQL has `KILL QUERY`, SQLite has
+`sqlite3_interrupt`. A driver that cannot cancel on the server side **declares** it
+in its capabilities; it does not pretend.
 
-### 3. Il produit des `RecordBatch` Arrow, en flux
+### 3. It produces Arrow `RecordBatch`es, streamed
 
-L'interface de résultat est un flux de `arrow::RecordBatch`
-([ADR-0002](adr/0002-arrow-result-model.md)). Aucun driver ne construit la
-totalité du résultat avant de rendre la main, et **aucun driver ne renvoie une
-représentation en lignes** : la conversion appartient au driver, pas à l'appelant.
+The result interface is a stream of `arrow::RecordBatch`
+([ADR-0002](adr/0002-arrow-result-model.md)). No driver builds the
+whole result before returning control, and **no driver returns a
+row representation**: the conversion belongs to the driver, not to the caller.
 
-**Panne concrète :** `SELECT * FROM events` sur une table de 50 millions de
-lignes. Un driver qui matérialise fait grimper la RSS jusqu'à l'OOM killer ; sur
-macOS le processus est tué sans trace. L'utilisateur n'a rien fait d'anormal :
-il a cliqué sur une table dans la barre latérale.
+**Concrete failure:** `SELECT * FROM events` on a table of 50 million
+rows. A driver that materializes makes the RSS climb up to the OOM killer; on
+macOS the process is killed without a trace. The user did nothing unusual:
+they clicked on a table in the sidebar.
 
-Deux conséquences que les drivers ratent le plus souvent :
+Two consequences drivers miss most often:
 
-* **Un driver ligne-à-ligne (`sqlx`, la plupart des pilotes SQL) doit accumuler
-  en lots**, et le lot a une taille bornée en octets, pas en nombre de lignes :
-  mille lignes portant chacune un BLOB d'un mégaoctet, c'est un gigaoctet.
-* **Une source sans schéma (MongoDB) infère son schéma par échantillonnage**, et
-  cette inférence est déclarée comme telle jusqu'à l'interface. Un champ absent
-  de l'échantillon mais présent plus loin doit produire une erreur explicite ou
-  un élargissement de schéma — jamais une valeur silencieusement perdue.
+* **A row-by-row driver (`sqlx`, most SQL clients) must accumulate
+  into batches**, and the batch has a size bounded in bytes, not in number of rows:
+  a thousand rows each carrying a one-megabyte BLOB is a gigabyte.
+* **A schemaless source (MongoDB) infers its schema by sampling**, and
+  that inference is declared as such all the way to the interface. A field absent
+  from the sample but present further on must produce an explicit error or
+  a schema widening — never a silently lost value.
 
-### 4. Il distingue trois familles d'erreurs, et il les classe
+### 4. It distinguishes three families of errors, and classifies them
 
-| Famille | Exemples | Ce que fait l'appelant |
+| Family | Examples | What the caller does |
 |---|---|---|
-| Transitoire | coupure réseau, `too many connections`, verrou expiré | peut retenter, avec recul exponentiel |
-| Permanente | erreur de syntaxe, table ou colonne absente, droits insuffisants | ne retente **jamais**, affiche |
-| Ambiguë | expiration côté client pendant une écriture | ne retente **jamais**, signale l'incertitude |
+| Transient | network drop, `too many connections`, lock timeout | may retry, with exponential backoff |
+| Permanent | syntax error, missing table or column, insufficient privileges | **never** retries, displays |
+| Ambiguous | client-side timeout during a write | **never** retries, reports the uncertainty |
 
-**Panne concrète :** un `INSERT` expire côté client alors que le serveur l'a
-appliqué. Classé « transitoire » et rejoué, il crée un doublon dans les données
-de l'utilisateur, sans aucun message d'erreur nulle part. C'est le cas qui coûte
-le plus cher et le plus tentant à traiter par une simple boucle de retry :
-l'ambiguïté ne se retente pas.
+**Concrete failure:** an `INSERT` times out on the client side while the server
+applied it. Classified as "transient" and replayed, it creates a duplicate in the
+user's data, without any error message anywhere. It is the most expensive case,
+and the most tempting to handle with a simple retry loop:
+ambiguity is not retried.
 
-**Une colonne inconnue est un refus permanent, même prononcé avant l'envoi.**
-Une colonne d'aperçu que la relation ne déclare pas — en projection comme en
-tri, voir [§6](#6-il-échappe-tout-identifiant-quil-compose) — se rend en
-`OxynError::Query`, comme le serveur l'aurait classée : retenter ne fera pas
-apparaître la colonne. `OxynError::CatalogUnavailable`, transitoire, dit un catalogue qui
-peut revenir — introspection en cours, cache vide. Confondre les deux ferait
-proposer « réessayer » à l'utilisateur pour une demande qui échouera toujours
-de la même façon.
+**An unknown column is a permanent refusal, even when pronounced before sending.**
+A preview column that the relation does not declare — in projection as in
+sort, see [§6](#6-it-escapes-every-identifier-it-composes) — is returned as
+`OxynError::Query`, as the server would have classified it: retrying will not make
+the column appear. `OxynError::CatalogUnavailable`, transient, means a catalog that
+may come back — introspection in progress, empty cache. Confusing the two would
+offer the user "retry" for a request that will always fail
+the same way.
 
-### 5. Il déclare ses capacités par session, et ne simule rien
+### 5. It declares its capabilities per session, and simulates nothing
 
-Un driver et chaque `Session` exposent un `Capabilities`
-([ADR-0003](adr/0003-driver-capabilities.md)) : transactions, annulation côté
-serveur, curseurs nommés, requêtes préparées, introspection des index, langages
-de requête acceptés.
+A driver and each `Session` expose a `Capabilities`
+([ADR-0003](adr/0003-driver-capabilities.md)): transactions, server-side
+cancellation, named cursors, prepared statements, index introspection, accepted
+query languages.
 
-**Les capacités s'évaluent par session, pas par driver.** La version du serveur,
-ses extensions et les droits du compte connecté changent ce qui est disponible :
-le même driver PostgreSQL parle à une base 12 sans `MERGE` et à une base 17 qui
-l'a, à une base avec `pg_stat_statements` et à une autre sans.
+**Capabilities are evaluated per session, not per driver.** The server version,
+its extensions and the privileges of the connected account change what is available:
+the same PostgreSQL driver talks to a version 12 database without `MERGE` and to a version 17 database that
+has it, to a database with `pg_stat_statements` and to another without.
 
-**Panne concrète :** un driver qui émule les transactions par un simple
-enchaînement de requêtes laisse l'utilisateur croire qu'un `ROLLBACK` a annulé
-son écriture. Ne pas savoir faire est une réponse acceptable ; laisser croire ne
-l'est pas.
+**Concrete failure:** a driver that emulates transactions by simply
+chaining queries lets the user believe that a `ROLLBACK` undid
+their write. Not knowing how is an acceptable answer; letting someone believe is
+not.
 
-**Une session qui déclare `TRANSACTIONS` dit si une transaction est ouverte**
-([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)). Elle redéfinit
-`Session::transaction_state`, qui rend `Idle`, `Open` ou `Unknown` :
+**A session that declares `TRANSACTIONS` says whether a transaction is open**
+([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)). It overrides
+`Session::transaction_state`, which returns `Idle`, `Open` or `Unknown`:
 
-* **après** la fin de toute opération déjà soumise à la session — exécution,
-  `begin`, `commit`, `rollback`, `set_context` —, qu'elle ait réussi, échoué ou
-  été interrompue. Une valeur simplement rangée par le driver et lue sans
-  attendre serait celle d'avant l'annulation d'office que SQLite fait sur un
-  Stop ;
-* **sans aller-retour** vers le serveur : elle attend, elle n'interroge pas ;
-* **jamais déduite du texte soumis** : seul le moteur sait qu'une erreur ou une
-  interruption a refermé la transaction ;
-* `Unknown` si le jeton se déclenche ou si la session ne peut plus répondre —
-  jamais une erreur, jamais `Idle` par défaut.
+* **after** the end of every operation already submitted to the session — execution,
+  `begin`, `commit`, `rollback`, `set_context` —, whether it succeeded, failed or
+  was interrupted. A value simply stored by the driver and read without
+  waiting would be the one from before the automatic rollback SQLite performs on a
+  Stop;
+* **without a round trip** to the server: it waits, it does not query;
+* **never inferred from the submitted text**: only the engine knows that an error or an
+  interruption closed the transaction;
+* `Unknown` if the token fires or if the session can no longer answer —
+  never an error, never `Idle` by default.
 
-L'appelant draine ou lâche le curseur avant de l'appeler. Le défaut du trait
-rend `Unknown` : c'est la réponse honnête d'une session qui ne sait pas.
+The caller drains or drops the cursor before calling it. The trait default
+returns `Unknown`: it is the honest answer of a session that does not know.
 
-**Panne concrète :** un affichage qui dit « aucune transaction » après un Stop
-alors que la transaction est encore ouverte — ou l'inverse — et la console se
-ferme sans prévenir en jetant des écritures non validées.
+**Concrete failure:** a display that says "no transaction" after a Stop
+while the transaction is still open — or the reverse — and the console
+closes without warning, discarding uncommitted writes.
 
-**Une session qui déclare `TRANSACTIONS` tient `limits.read_only` sans toucher à
-la transaction ouverte.** `oxyn-exec` borne toute lecture de production à la
-lecture seule ([SECURITY](SECURITY.md#marquage-des-connexions)). Hors
-transaction, une transaction `READ ONLY` ouverte et refermée par le driver
-suffit. Dans une transaction de l'utilisateur, elle ne vaut rien : PostgreSQL
-répond à un `BEGIN` imbriqué par un simple avertissement, et le `ROLLBACK` de
-clôture annulerait les écritures de l'utilisateur. La borne doit alors passer
-par un mécanisme qui laisse la transaction intacte — un point de sauvegarde et
-`SET TRANSACTION READ ONLY` sont la piste, à éprouver contre le serveur avant
-d'y compter — ou par un refus de l'exécution. SQLite la
-tient par `sqlite3_stmt_readonly`, qui ne touche pas à la transaction.
+**A session that declares `TRANSACTIONS` holds `limits.read_only` without touching
+the open transaction.** `oxyn-exec` bounds every production read to
+read-only ([SECURITY](SECURITY.md#connection-marking)). Outside a
+transaction, a `READ ONLY` transaction opened and closed by the driver
+is enough. Inside a user transaction, it is worthless: PostgreSQL
+answers a nested `BEGIN` with a mere warning, and the closing `ROLLBACK`
+would undo the user's writes. The bound must then go
+through a mechanism that leaves the transaction intact — a savepoint and
+`SET TRANSACTION READ ONLY` are the lead, to be tested against the server before
+relying on it — or through refusing the execution. SQLite
+holds it through `sqlite3_stmt_readonly`, which does not touch the transaction.
 
-**Panne concrète :** un `SELECT` dans une console de production où une
-transaction est ouverte, et les `INSERT` confirmés juste avant disparaissent
-sans message.
+**Concrete failure:** a `SELECT` in a production console where a
+transaction is open, and the `INSERT`s confirmed just before vanish
+without a message.
 
-Corollaire pour un driver non-SQL : une requête porte un `QueryLanguage`
-explicite. Le SQL est un cas parmi d'autres, pas le défaut auquel les autres se
-ramènent.
+Corollary for a non-SQL driver: a query carries an explicit `QueryLanguage`.
+SQL is one case among others, not the default the others reduce to.
 
-### 6. Il échappe tout identifiant qu'il compose
+### 6. It escapes every identifier it composes
 
-Le SQL que **l'utilisateur écrit** part tel quel : c'est un outil professionnel,
-et le SQL arbitraire est la fonctionnalité. Le SQL qu'**Oxyn compose**
-— introspection, aperçu de table, tri par colonne, filtre de la barre latérale,
-suggestion IA — ne concatène jamais un nom reçu : il passe par la fonction de
-citation d'identifiant du driver, et les valeurs sont liées.
+The SQL **the user writes** is sent as is: it is a professional tool,
+and arbitrary SQL is the feature. The SQL **Oxyn composes**
+— introspection, table preview, sort by column, sidebar filter,
+AI suggestion — never concatenates a received name: it goes through the driver's
+identifier-quoting function, and values are bound.
 
-**La projection d'un aperçu suit la même règle.** `PreviewShape::columns`
-nomme les seules colonnes à lire : le driver prend la liste par
-`PreviewShape::projection`, qui la déduplique et la borne à
-`MAX_PROJECTED_COLUMNS` noms, vérifie chaque nom contre la description de la
-relation, puis le cite comme la relation elle-même. Un nom que la relation ne
-déclare pas est refusé par `OxynError::Query`, erreur permanente
-([§4](#4-il-distingue-trois-familles-derreurs-et-il-les-classe)), avant
-d'atteindre le serveur, comme une colonne de tri inconnue ; une liste vide est refusée par
-`OxynError::Config` et ne vaut jamais `SELECT *`, qui lirait justement ce que
-personne n'a approuvé. Une projection ignorée n'est pas une dégradation
-acceptable : c'est elle qui borne un échantillon aux colonnes cochées
-([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)), et un driver qui
-ne sait pas la composer refuse l'aperçu.
+**The projection of a preview follows the same rule.** `PreviewShape::columns`
+names the only columns to read: the driver takes the list through
+`PreviewShape::projection`, which deduplicates it and bounds it to
+`MAX_PROJECTED_COLUMNS` names, checks each name against the description of the
+relation, then quotes it like the relation itself. A name the relation does not
+declare is refused with `OxynError::Query`, a permanent error
+([§4](#4-it-distinguishes-three-families-of-errors-and-classifies-them)), before
+reaching the server, like an unknown sort column; an empty list is refused with
+`OxynError::Config` and never means `SELECT *`, which would read precisely what
+nobody approved. An ignored projection is not an acceptable
+degradation: it is what bounds a sample to the checked columns
+([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)), and a driver that
+cannot compose it refuses the preview.
 
-**Une exception, et une seule** : le prédicat d'aperçu. L'utilisateur y écrit un
-fragment de `WHERE` que le driver insère dans un `SELECT` composé par Oxyn —
-donc du texte libre dans du SQL composé. C'est délibéré et argumenté dans
-[ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : ce champ **est** du SQL
-que l'utilisateur écrit, et le relevé Figma `190:1618` le montre comme tel.
-Quatre barrières le bornent — reclassification du texte avant toute décision,
-session serveur en lecture seule, borne de lignes, et parenthésage
-`WHERE (…\n)` qui transforme un commentaire non terminé en erreur de syntaxe
-plutôt qu'en `LIMIT` avalé. Cette exception est nommée ici parce que
-[I-10](../CLAUDE.md#i-10) renvoie à ce paragraphe : sans elle, une relecture du
-code des aperçus conclurait à une violation d'invariant.
+**One exception, and only one**: the preview predicate. The user writes there a
+`WHERE` fragment that the driver inserts into a `SELECT` composed by Oxyn —
+hence free text in composed SQL. This is deliberate and argued in
+[ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md): this field **is** SQL
+that the user writes, and Figma frame `190:1618` shows it as such.
+Four barriers bound it — reclassification of the text before any decision,
+read-only server session, row bound, and the parenthesization
+`WHERE (…\n)` that turns an unterminated comment into a syntax error
+rather than a swallowed `LIMIT`. This exception is named here because
+[I-10](../CLAUDE.md#i-10) points to this paragraph: without it, a review of the
+preview code would conclude an invariant is violated.
 
-**Panne concrète :** une table nommée `"users"; DROP TABLE audit; --` existe
-légalement dans PostgreSQL. Un aperçu construit par concaténation exécute la
-suppression au simple clic sur cette table dans l'arborescence. La distinction
-entre « SQL de l'utilisateur » et « SQL d'Oxyn » n'est pas un détail de style :
-c'est la ligne qui sépare un outil d'une arme.
+**Concrete failure:** a table named `"users"; DROP TABLE audit; --` exists
+legally in PostgreSQL. A preview built by concatenation runs the
+drop on a simple click on that table in the tree. The distinction
+between "the user's SQL" and "Oxyn's SQL" is not a matter of style:
+it is the line that separates a tool from a weapon.
 
-### 7. Il traite les fuseaux et les types temporels comme des données, pas comme du texte
+### 7. It treats time zones and temporal types as data, not as text
 
-Aucune conversion implicite vers le fuseau local à la lecture. Un `timestamptz`
-se transporte en UTC et se rend dans le fuseau que déclare le schéma Arrow de la
-colonne ; un `timestamp` sans fuseau se transporte **sans** en inventer un.
-**Aucun driver ne convertit pour l'affichage** : il n'existe pas de préférence
-de fuseau d'affichage — le fuseau qu'Oxyn annonce pour un résultat est déduit
-du schéma (`oxyn_data::timestamp_display`), ce n'est pas un réglage. Si une telle
-préférence venait à exister, elle ne toucherait que le rendu (`oxyn-data`,
-`cell.rs`), jamais le driver.
+No implicit conversion to the local time zone on read. A `timestamptz`
+is carried in UTC and returned in the time zone declared by the Arrow schema of the
+column; a `timestamp` without a time zone is carried **without** inventing one.
+**No driver converts for display**: there is no display time zone
+preference — the time zone Oxyn announces for a result is derived
+from the schema (`oxyn_data::timestamp_display`), it is not a setting. If such a
+preference ever came to exist, it would only affect rendering (`oxyn-data`,
+`cell.rs`), never the driver.
 
-**Panne concrète :** Oxyn affiche une valeur convertie dans le fuseau du poste,
-l'utilisateur la recopie dans un `UPDATE`, et décale la donnée de deux heures en
-base. La corruption est invisible et permanente.
+**Concrete failure:** Oxyn displays a value converted into the machine's time zone,
+the user copies it into an `UPDATE`, and shifts the data by two hours in
+the database. The corruption is invisible and permanent.
 
-## Ce qu'un driver n'a pas le droit de faire
+## What a driver is not allowed to do
 
-| Interdit | Pourquoi |
+| Forbidden | Why |
 |---|---|
-| Dépendre d'`oxyn-exec`, `oxyn-store`, `oxyn-desktop`, `oxyn-ai` ou d'un autre driver | inverse le sens des dépendances. `oxyn-core` **est** au contraire la dépendance attendue : c'est le vocabulaire commun — `ExecRequest`, `OxynError`, `PreviewShape` —, et les deux drivers livrés en dépendent ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
-| Exister en double pour deux produits parlant le même protocole | [ADR-0003](adr/0003-driver-capabilities.md) : Redshift ≡ PostgreSQL, MariaDB ≡ MySQL. La différence est une capacité, pas une crate |
-| Écrire dans un fichier, ouvrir une fenêtre, lire une variable d'environnement | un driver reçoit sa configuration, il ne va pas la chercher |
-| Journaliser une valeur de paramètre ou un identifiant de connexion | [I-03](../CLAUDE.md#i-03) |
-| Retenter tout seul | la politique de reprise appartient à l'appelant, qui seul sait si l'opération est rejouable |
-| Exécuter une écriture parce que l'appel « avait l'air » d'en être une | [I-02](../CLAUDE.md#i-02) |
-| Modifier l'état de session du serveur sans le déclarer | un `SET search_path` invisible change le sens des requêtes suivantes de l'utilisateur |
+| Depend on `oxyn-exec`, `oxyn-store`, `oxyn-desktop`, `oxyn-ai` or another driver | inverts the direction of dependencies. `oxyn-core` **is**, on the contrary, the expected dependency: it is the shared vocabulary — `ExecRequest`, `OxynError`, `PreviewShape` —, and both shipped drivers depend on it ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
+| Exist twice for two products speaking the same protocol | [ADR-0003](adr/0003-driver-capabilities.md): Redshift ≡ PostgreSQL, MariaDB ≡ MySQL. The difference is a capability, not a crate |
+| Write to a file, open a window, read an environment variable | a driver receives its configuration, it does not go and fetch it |
+| Log a parameter value or a connection identifier | [I-03](../CLAUDE.md#i-03) |
+| Retry on its own | the retry policy belongs to the caller, who alone knows whether the operation is replayable |
+| Execute a write because the call "looked like" one | [I-02](../CLAUDE.md#i-02) |
+| Change the server's session state without declaring it | an invisible `SET search_path` changes the meaning of the user's next queries |
 
-## Ce qu'un nouveau driver doit fournir pour être accepté
+## What a new driver must provide to be accepted
 
-La procédure est dans [`/driver`](../.claude/commands/driver.md) et la revue dans
-[la liste de contrôle](../.claude/checklists/revue-driver.md). En résumé : la
-déclaration de capacités, la table de correspondance des types **dans les deux
-sens** avec les cas de perte documentés, la classification d'erreurs, un test
-d'annulation qui prouve l'arrêt côté serveur, et un test de flux sur un volume
-qui ne tiendrait pas en mémoire.
+The procedure is in [`/driver`](../.claude/commands/driver.md) and the review in
+[the checklist](../.claude/checklists/revue-driver.md). In short: the
+capability declaration, the type mapping table **in both
+directions** with the documented loss cases, the error classification, a cancellation
+test that proves the stop on the server side, and a streaming test on a volume
+that would not fit in memory.

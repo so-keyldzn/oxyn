@@ -1,38 +1,37 @@
-//! L'interruption ciblée : n'arrêter que le travail visé, jamais le suivant.
+//! Targeted interruption: stop only the targeted work, never the next one.
 //!
-//! # Pourquoi `sqlite3_interrupt` seul ne suffit pas
+//! # Why `sqlite3_interrupt` alone is not enough
 //!
-//! `sqlite3_interrupt` vise la **connexion**, pas une instruction. Le moteur
-//! pose un drapeau que toute instruction en cours lit, et ne le remet à zéro
-//! qu'au démarrage d'une instruction quand aucune autre n'est active
-//! (`sqlite3_step` et `sqlite3RunParser`, SQLite 3.50.2). Deux conséquences :
+//! `sqlite3_interrupt` targets the **connection**, not a statement. The engine
+//! sets a flag that every running statement reads, and resets it only when a
+//! statement starts while no other is active (`sqlite3_step` and
+//! `sqlite3RunParser`, SQLite 3.50.2). Two consequences:
 //!
-//! * **une interruption tardive frappe le voisin.** Un onglet fermé au moment
-//!   exact où sa requête se termine : le thread porteur est déjà passé à la
-//!   requête suivante, et c'est elle qui meurt, sans que personne l'ait demandé ;
-//! * **une interruption précoce se perd.** Posée pendant une préparation ou
-//!   entre deux instructions d'un lot, elle est effacée au démarrage de
-//!   l'instruction suivante, qui tourne alors jusqu'au bout.
+//! * **a late interruption hits the neighbor.** A tab closed at the exact moment
+//!   its query finishes: the worker thread has already moved on to the next
+//!   query, and that one dies, without anyone asking for it;
+//! * **an early interruption is lost.** Set during a preparation or between two
+//!   statements of a batch, it is cleared when the next statement starts, which
+//!   then runs to the end.
 //!
-//! # Ce que ce module garantit
+//! # What this module guarantees
 //!
-//! Chaque tâche confiée au thread porteur reçoit un [`WorkId`]. Le thread
-//! déclare, **sous un verrou**, laquelle il exécute ; une interruption pour `id`
-//! ne part vers le moteur que si `id` est celle-là, vérifié sous le **même**
-//! verrou. Le thread ne peut donc pas passer au travail suivant pendant qu'une
-//! interruption pour le précédent est en vol.
+//! Each task handed to the worker thread receives a [`WorkId`]. The thread
+//! declares, **under a lock**, which one it is running; an interruption for `id`
+//! goes to the engine only if `id` is that one, checked under the **same** lock.
+//! The thread therefore cannot move on to the next work while an interruption
+//! for the previous one is in flight.
 //!
-//! Une interruption pour une tâche encore **en file** la marque abandonnée : le
-//! thread la saute au lieu de l'exécuter pour personne. Une interruption pour
-//! une tâche **terminée** ne fait rien.
+//! An interruption for a task still **queued** marks it abandoned: the thread
+//! skips it instead of running it for nobody. An interruption for a **finished**
+//! task does nothing.
 //!
-//! L'interruption précoce est rattrapée par un drapeau propre à la tâche,
-//! [`Interrupter::checkpoint`], que le flux consulte juste avant de lancer
-//! chaque instruction. Il reste une fenêtre de quelques instructions machine,
-//! entre ce contrôle et la remise à zéro faite par `sqlite3_step` : une
-//! interruption qui y tombe laisse l'instruction aller à son terme, et le
-//! résultat part vers un appelant qui n'écoute plus. Elle ne frappe jamais la
-//! tâche suivante.
+//! The early interruption is caught by a flag specific to the task,
+//! [`Interrupter::checkpoint`], which the stream consults just before launching
+//! each statement. A window of a few machine instructions remains, between this
+//! check and the reset done by `sqlite3_step`: an interruption landing there lets
+//! the statement run to its end, and the result goes to a caller that no longer
+//! listens. It never hits the next task.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -43,32 +42,32 @@ use rusqlite::InterruptHandle;
 
 use crate::error::{self, Bound, Effect};
 
-/// L'identité d'une tâche confiée au thread porteur.
+/// The identity of a task handed to the worker thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct WorkId(u64);
 
-/// Ce que le thread porteur fait, vu sous le verrou.
+/// What the worker thread is doing, seen under the lock.
 #[derive(Default)]
 struct Turn {
-    /// La tâche en cours d'exécution, s'il y en a une.
+    /// The task being executed, if there is one.
     running: Option<WorkId>,
-    /// Les tâches en file, et pour chacune : a-t-elle été abandonnée ?
+    /// The queued tasks, and for each: has it been abandoned?
     queued: HashMap<WorkId, bool>,
 }
 
-/// L'interrupteur d'une connexion, partagé entre le thread porteur et ceux qui
-/// lui confient du travail.
+/// A connection's interrupter, shared between the worker thread and those who
+/// hand it work.
 pub(crate) struct Interrupter {
     engine: InterruptHandle,
     turn: Mutex<Turn>,
-    /// Posé par une interruption visant la tâche en cours ; remis à zéro quand
-    /// une tâche démarre. Survit à la remise à zéro faite par le moteur.
+    /// Set by an interruption targeting the current task; reset when a task
+    /// starts. Survives the reset done by the engine.
     tripped: AtomicBool,
     next: AtomicU64,
 }
 
 impl Interrupter {
-    /// L'interrupteur de la connexion dont `engine` est la poignée.
+    /// The interrupter of the connection whose handle is `engine`.
     pub(crate) fn new(engine: InterruptHandle) -> Self {
         Self {
             engine,
@@ -78,26 +77,26 @@ impl Interrupter {
         }
     }
 
-    /// Réserve l'identité d'une tâche **avant** qu'elle parte dans la file.
+    /// Reserves a task's identity **before** it goes into the queue.
     ///
-    /// Avant, et non après : une interruption qui arriverait entre l'envoi et
-    /// l'enregistrement ne trouverait la tâche ni en cours ni en file, et la
-    /// croirait terminée.
+    /// Before, and not after: an interruption arriving between the send and the
+    /// registration would find the task neither running nor queued, and would
+    /// believe it finished.
     pub(crate) fn enqueue(&self) -> WorkId {
         let id = WorkId(self.next.fetch_add(1, Ordering::Relaxed));
         self.turn.lock().queued.insert(id, false);
         id
     }
 
-    /// Retire une tâche qui n'a pas pu partir dans la file.
+    /// Removes a task that could not go into the queue.
     pub(crate) fn withdraw(&self, id: WorkId) {
         self.turn.lock().queued.remove(&id);
     }
 
-    /// Le thread porteur prend la tâche `id`.
+    /// The worker thread takes task `id`.
     ///
-    /// Rend `false` si elle a été abandonnée pendant qu'elle attendait : il faut
-    /// alors la jeter sans l'exécuter.
+    /// Returns `false` if it was abandoned while it waited: it must then be
+    /// dropped without being executed.
     pub(crate) fn begin(&self, id: WorkId) -> bool {
         let mut turn = self.turn.lock();
         if turn.queued.remove(&id).unwrap_or(false) {
@@ -108,38 +107,38 @@ impl Interrupter {
         true
     }
 
-    /// Le thread porteur a fini la tâche en cours, **instructions comprises** :
-    /// aucune n'est plus active sur la connexion.
+    /// The worker thread has finished the current task, **statements included**:
+    /// none is active on the connection anymore.
     pub(crate) fn end(&self) {
         self.turn.lock().running = None;
     }
 
-    /// Interrompt la tâche `id`, et elle seule.
+    /// Interrupts task `id`, and it alone.
     ///
-    /// En cours : le moteur est interrompu. En file : elle ne sera pas exécutée.
-    /// Terminée : rien.
+    /// Running: the engine is interrupted. Queued: it will not be executed.
+    /// Finished: nothing.
     pub(crate) fn interrupt(&self, id: WorkId) {
         let mut turn = self.turn.lock();
         if turn.running == Some(id) {
             self.tripped.store(true, Ordering::SeqCst);
-            // Sous le verrou : c'est ce qui empêche `end` puis `begin` de faire
-            // démarrer la tâche suivante avant que le drapeau du moteur soit
-            // posé. Une fois posé pendant la tâche `id`, il est effacé par le
-            // moteur au démarrage de la suivante.
+            // Under the lock: that is what prevents `end` then `begin` from
+            // starting the next task before the engine flag is set. Once set
+            // during task `id`, it is cleared by the engine when the next one
+            // starts.
             self.engine.interrupt();
         } else if let Some(abandoned) = turn.queued.get_mut(&id) {
             *abandoned = true;
         }
     }
 
-    /// Refuse de lancer une instruction si la tâche en cours a été interrompue.
+    /// Refuses to launch a statement if the current task was interrupted.
     ///
-    /// À appeler **juste avant** de démarrer une instruction. L'erreur est celle
-    /// qu'aurait rendue le moteur interrompu pendant son premier pas, classée
-    /// selon ce que l'instruction pouvait faire.
+    /// To be called **just before** starting a statement. The error is the one the
+    /// interrupted engine would have returned during its first step, classified
+    /// according to what the statement could do.
     ///
-    /// # Erreurs
-    /// L'interruption, traduite comme [`error::engine_bound`] la traduit.
+    /// # Errors
+    /// The interruption, translated as [`error::engine_bound`] translates it.
     pub(crate) fn checkpoint(&self, effect: Effect, bound: Bound) -> Result<()> {
         if !self.tripped.load(Ordering::SeqCst) {
             return Ok(());
@@ -151,19 +150,19 @@ impl Interrupter {
         Err(error::engine_bound(interrupted, effect, bound))
     }
 
-    /// La tâche en cours, pour les tests qui attendent que le thread s'en saisisse.
+    /// The current task, for tests waiting for the thread to pick it up.
     #[cfg(test)]
     pub(crate) fn running(&self) -> Option<WorkId> {
         self.turn.lock().running
     }
 }
 
-/// Interrompt une tâche si on l'abandonne avant sa réponse.
+/// Interrupts a task if it is abandoned before its reply.
 ///
-/// C'est le futur d'une attente qui porte cette garde : un futur détruit ne
-/// peut pas `await`, mais il peut poser un drapeau. Sans elle, fermer un onglet
-/// pendant `execute` laisserait le moteur calculer le premier lot d'un
-/// `count(*)` de quatre minutes pour personne, la session bloquée derrière.
+/// The future of a wait is what carries this guard: a destroyed future cannot
+/// `await`, but it can set a flag. Without it, closing a tab during `execute`
+/// would leave the engine computing the first batch of a four-minute `count(*)`
+/// for nobody, with the session blocked behind it.
 pub(crate) struct AbandonGuard<'a> {
     interrupter: &'a Interrupter,
     id: WorkId,
@@ -171,7 +170,7 @@ pub(crate) struct AbandonGuard<'a> {
 }
 
 impl<'a> AbandonGuard<'a> {
-    /// Arme la garde pour la tâche `id`.
+    /// Arms the guard for task `id`.
     pub(crate) const fn new(interrupter: &'a Interrupter, id: WorkId) -> Self {
         Self {
             interrupter,
@@ -180,7 +179,7 @@ impl<'a> AbandonGuard<'a> {
         }
     }
 
-    /// La réponse est arrivée : plus rien à interrompre.
+    /// The reply has arrived: nothing left to interrupt.
     pub(crate) const fn disarm(&mut self) {
         self.armed = false;
     }

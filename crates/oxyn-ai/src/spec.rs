@@ -1,31 +1,30 @@
-//! La déclaration d'un agent — un fichier, pas du code.
+//! An agent's declaration — a file, not code.
 //!
-//! Les agents de la vision (SQL, Schema, Performance, Migration, Security,
-//! Documentation, Data Quality, Analytics, Visualization) sont **des
-//! configurations, pas des implémentations séparées** (ARCHITECTURE §7.3) : une
-//! invite système, un sous-ensemble d'outils, une politique de contexte, un
-//! schéma de sortie. Ajouter un agent ne demande pas de code Rust — c'est ce qui
-//! rend la liste tenable et ce qui ouvre la porte aux agents fournis par plugin
-//! (PLUGIN-CONTRACT, phase 4).
+//! The agents of the vision (SQL, Schema, Performance, Migration, Security,
+//! Documentation, Data Quality, Analytics, Visualization) are **configurations,
+//! not separate implementations** (ARCHITECTURE §7.3): a system prompt, a
+//! subset of tools, a context policy, an output schema. Adding an agent takes
+//! no Rust code — that is what keeps the list manageable and what opens the
+//! door to agents provided by plugins (PLUGIN-CONTRACT, phase 4).
 //!
-//! # Une déclaration est une entrée, pas une donnée de confiance
+//! # A declaration is input, not trusted data
 //!
-//! Un [`AgentSpec`] peut venir d'un manifeste écrit par un tiers. Il est donc
-//! validé avant usage ([`AgentSpec::validate`]) et il ne peut, par
-//! construction, rien accorder que le registre d'outils ne connaisse déjà :
-//! `allowed_tools` **restreint**, il n'étend jamais. Une déclaration qui nomme
-//! un outil inexistant est refusée, pas ignorée.
+//! An [`AgentSpec`] can come from a manifest written by a third party. It is
+//! therefore validated before use ([`AgentSpec::validate`]) and it can, by
+//! construction, grant nothing the tool registry does not already know:
+//! `allowed_tools` **restricts**, it never extends. A declaration that names a
+//! nonexistent tool is refused, not ignored.
 //!
-//! Ce que la déclaration ne peut pas contenir, et pourquoi :
+//! What the declaration cannot contain, and why:
 //!
-//! * **pas de connexion ni de session** — elles viennent du
-//!   [`ToolScope`](crate::tools::ToolScope), que l'utilisateur détermine en
-//!   ouvrant la conversation ;
-//! * **pas de niveau de confidentialité** — il est attaché à la connexion et
-//!   jamais à autre chose (ADR-0006, I-04). Un agent qui pourrait déclarer son
-//!   propre niveau rendrait le réglage de la connexion inopérant ;
-//! * **pas de point d'accès ni de clé** — un plugin n'obtient pas de canal
-//!   réseau par le biais d'un agent (I-03).
+//! * **no connection or session** — they come from the
+//!   [`ToolScope`](crate::tools::ToolScope), which the user determines by
+//!   opening the conversation;
+//! * **no privacy tier** — it is attached to the connection and never to
+//!   anything else (ADR-0006, I-04). An agent that could declare its own tier
+//!   would make the connection's setting inoperative;
+//! * **no endpoint or key** — a plugin does not get a network channel by way of
+//!   an agent (I-03).
 
 use serde::{Deserialize, Serialize};
 
@@ -35,79 +34,79 @@ use crate::context::ContextPolicy;
 use crate::error::AiError;
 use crate::tools::ToolRegistry;
 
-/// Nombre de tours par défaut.
+/// Default number of turns.
 ///
-/// Assez pour lire un schéma, écrire une requête, lire son résultat et se
-/// corriger une fois. Au-delà, une conversation qui n'aboutit pas coûte des
-/// jetons sans rien produire.
+/// Enough to read a schema, write a query, read its result and correct itself
+/// once. Beyond that, a conversation that does not succeed costs tokens
+/// without producing anything.
 pub const DEFAULT_MAX_TURNS: usize = 8;
 
-/// Plafond absolu du nombre de tours.
+/// Absolute ceiling on the number of turns.
 ///
-/// Une déclaration venue d'un plugin ne doit pas pouvoir demander une boucle
-/// quasi infinie : c'est une facture, et sur un fournisseur distant, une facture
-/// que l'utilisateur découvre après coup.
+/// A declaration coming from a plugin must not be able to ask for a quasi
+/// infinite loop: it is a bill, and on a remote provider, a bill the user
+/// discovers afterwards.
 pub const MAX_TURNS_CEILING: usize = 64;
 
-/// Ce qui définit un agent.
+/// What defines an agent.
 ///
-/// Sérialisable de bout en bout : un agent tient dans un fichier, et ce fichier
-/// est lisible sans Oxyn (I-11).
+/// Serializable end to end: an agent fits in a file, and that file is readable
+/// without Oxyn (I-11).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentSpec {
-    /// Le rôle, stable d'une session à l'autre. C'est ce que le journal d'audit
-    /// enregistre à côté de chaque commande émise par cet agent.
+    /// The role, stable from one session to the next. It is what the audit log
+    /// records next to every command this agent emits.
     pub id: AgentId,
 
-    /// Nom montrable.
+    /// Displayable name.
     pub name: String,
 
-    /// Ce que fait l'agent, pour l'utilisateur qui le choisit. **N'est pas
-    /// envoyé au modèle** : c'est [`system_prompt`](Self::system_prompt) qui
-    /// s'adresse à lui.
+    /// What the agent does, for the user who chooses it. **Not sent to the
+    /// model**: it is [`system_prompt`](Self::system_prompt) that addresses
+    /// it.
     #[serde(default)]
     pub description: String,
 
-    /// L'invite système. En anglais : c'est du texte de code.
+    /// The system prompt. In English: it is code text.
     pub system_prompt: String,
 
-    /// Les outils accordés, par leur nom dans le
+    /// The granted tools, by their name in the
     /// [`crate::tools::ToolRegistry`].
     ///
-    /// Une liste vide est licite et signifie **aucun outil** : un agent qui ne
-    /// fait que commenter un schéma n'a rien à exécuter, et lui accorder un
-    /// outil « au cas où » élargit la surface pour rien.
+    /// An empty list is legal and means **no tool**: an agent that only
+    /// comments on a schema has nothing to execute, and granting it a tool
+    /// "just in case" widens the surface for nothing.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
 
-    /// Combien de schéma cet agent a besoin de voir, et sous quelle forme.
+    /// How much schema this agent needs to see, and in what form.
     #[serde(default)]
     pub context: ContextPolicy,
 
-    /// Schéma JSON de la réponse attendue, quand l'agent doit produire une
-    /// structure et non de la prose.
+    /// JSON schema of the expected answer, when the agent must produce a
+    /// structure and not prose.
     ///
-    /// Purement déclaratif à ce stade : c'est l'appelant qui décide comment le
-    /// faire respecter, parce que tous les fournisseurs ne savent pas contraindre
-    /// une sortie. `// TODO(phase 4)` : le transmettre au fournisseur quand
-    /// `oxyn-llm` exposera un champ de format de réponse.
+    /// Purely declarative at this stage: it is the caller who decides how to
+    /// enforce it, because not all providers can constrain an output.
+    /// `// TODO(phase 4)`: pass it to the provider when `oxyn-llm` exposes a
+    /// response format field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<serde_json::Value>,
 
-    /// Nombre maximal d'allers-retours modèle → outils → modèle.
+    /// Maximum number of model → tools → model round trips.
     #[serde(default = "default_max_turns")]
     pub max_turns: usize,
 }
 
-/// Valeur par défaut de [`AgentSpec::max_turns`] à la désérialisation.
+/// Default value of [`AgentSpec::max_turns`] on deserialization.
 const fn default_max_turns() -> usize {
     DEFAULT_MAX_TURNS
 }
 
 impl AgentSpec {
-    /// Déclare un agent minimal : un identifiant, un nom, une invite.
+    /// Declares a minimal agent: an identifier, a name, a prompt.
     ///
-    /// Sans outil : les accorder est un geste explicite.
+    /// Without tools: granting them is an explicit act.
     #[must_use]
     pub fn new(id: AgentId, name: impl Into<String>, system_prompt: impl Into<String>) -> Self {
         Self {
@@ -122,14 +121,14 @@ impl AgentSpec {
         }
     }
 
-    /// Donne la description montrée à l'utilisateur.
+    /// Sets the description shown to the user.
     #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
     }
 
-    /// Accorde des outils, par leur nom.
+    /// Grants tools, by their name.
     #[must_use]
     pub fn with_tools<I, S>(mut self, tools: I) -> Self
     where
@@ -140,50 +139,50 @@ impl AgentSpec {
         self
     }
 
-    /// Fixe la politique de contexte.
+    /// Sets the context policy.
     #[must_use]
     pub fn with_context(mut self, context: ContextPolicy) -> Self {
         self.context = context;
         self
     }
 
-    /// Fixe le schéma de sortie attendu.
+    /// Sets the expected output schema.
     #[must_use]
     pub fn with_output_schema(mut self, schema: serde_json::Value) -> Self {
         self.output_schema = Some(schema);
         self
     }
 
-    /// Fixe le nombre maximal de tours.
+    /// Sets the maximum number of turns.
     #[must_use]
     pub fn with_max_turns(mut self, max_turns: usize) -> Self {
         self.max_turns = max_turns;
         self
     }
 
-    /// Lit une déclaration écrite hors d'Oxyn.
+    /// Reads a declaration written outside Oxyn.
     ///
-    /// Ne valide que la **forme** : appeler ensuite [`validate`](Self::validate)
-    /// avec le registre d'outils réel.
+    /// Only validates the **shape**: then call [`validate`](Self::validate)
+    /// with the real tool registry.
     ///
-    /// # Erreurs
-    /// [`AiError::InvalidSpec`] si le texte n'est pas un `AgentSpec` JSON.
+    /// # Errors
+    /// [`AiError::InvalidSpec`] if the text is not a JSON `AgentSpec`.
     pub fn from_json(text: &str) -> Result<Self, AiError> {
         serde_json::from_str(text).map_err(|err| AiError::InvalidSpec(err.to_string()))
     }
 
-    /// Vérifie que la déclaration est cohérente et que ses outils existent.
+    /// Checks that the declaration is consistent and that its tools exist.
     ///
-    /// Appelée par [`AgentRuntime::new`](crate::runtime::AgentRuntime::new) :
-    /// un agent invalide ne doit pas pouvoir démarrer une conversation, parce
-    /// que l'échec se manifesterait alors au premier appel d'outil, plusieurs
-    /// requêtes payantes plus tard.
+    /// Called by [`AgentRuntime::new`](crate::runtime::AgentRuntime::new): an
+    /// invalid agent must not be able to start a conversation, because the
+    /// failure would then show at the first tool call, several paid requests
+    /// later.
     ///
-    /// # Erreurs
-    /// [`AiError::InvalidSpec`] pour un nom ou une invite vide, un nombre de
-    /// tours nul ou au-delà de [`MAX_TURNS_CEILING`], un outil déclaré deux
-    /// fois, ou un schéma de sortie qui n'est pas un objet JSON.
-    /// [`AiError::UnknownTool`] pour un outil que le registre ignore.
+    /// # Errors
+    /// [`AiError::InvalidSpec`] for an empty name or prompt, a number of turns
+    /// that is zero or beyond [`MAX_TURNS_CEILING`], a tool declared twice, or
+    /// an output schema that is not a JSON object.
+    /// [`AiError::UnknownTool`] for a tool the registry does not know.
     pub fn validate(&self, registry: &ToolRegistry) -> Result<(), AiError> {
         if self.name.trim().is_empty() {
             return Err(AiError::InvalidSpec("`name` is empty".to_owned()));
@@ -226,7 +225,7 @@ impl AgentSpec {
         Ok(())
     }
 
-    /// Cet outil est-il accordé à cet agent ?
+    /// Is this tool granted to this agent?
     #[must_use]
     pub fn allows(&self, tool: &str) -> bool {
         self.allowed_tools.iter().any(|name| name == tool)
@@ -244,68 +243,71 @@ mod tests {
     }
 
     #[test]
-    fn un_agent_minimal_est_valide() {
-        let registre = ToolRegistry::builtin();
-        spec().validate(&registre).expect("déclaration valide");
+    fn a_minimal_agent_is_valid() {
+        let registry = ToolRegistry::builtin();
+        spec().validate(&registry).expect("valid declaration");
     }
 
     #[test]
-    fn un_agent_sans_outil_est_licite() {
-        let registre = ToolRegistry::builtin();
-        let sans_outil = AgentSpec::new(AgentId::new(), "Doc", "You describe schemas.");
-        sans_outil.validate(&registre).expect("aucun outil accordé");
-        assert!(!sans_outil.allows(EXECUTE_QUERY));
+    fn an_agent_without_tools_is_legal() {
+        let registry = ToolRegistry::builtin();
+        let without_tool = AgentSpec::new(AgentId::new(), "Doc", "You describe schemas.");
+        without_tool.validate(&registry).expect("no tool granted");
+        assert!(!without_tool.allows(EXECUTE_QUERY));
     }
 
     #[test]
-    fn une_declaration_ne_peut_pas_inventer_un_outil() {
-        // Une spécification vient parfois d'un plugin : elle restreint la liste
-        // du registre, elle ne l'étend jamais (PLUGIN-CONTRACT).
-        let registre = ToolRegistry::builtin();
+    fn a_declaration_cannot_invent_a_tool() {
+        // A specification sometimes comes from a plugin: it restricts the
+        // registry's list, it never extends it (PLUGIN-CONTRACT).
+        let registry = ToolRegistry::builtin();
         let hostile = spec().with_tools(["drop_all_tables"]);
-        let refus = hostile
-            .validate(&registre)
-            .expect_err("outil absent du registre");
-        assert!(matches!(refus, AiError::UnknownTool { .. }), "{refus:?}");
+        let refusal = hostile
+            .validate(&registry)
+            .expect_err("tool absent from the registry");
+        assert!(
+            matches!(refusal, AiError::UnknownTool { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
-    fn une_boucle_sans_fin_est_refusee() {
-        let registre = ToolRegistry::builtin();
-        let refus = spec()
+    fn an_endless_loop_is_refused() {
+        let registry = ToolRegistry::builtin();
+        let refusal = spec()
             .with_max_turns(MAX_TURNS_CEILING + 1)
-            .validate(&registre)
-            .expect_err("au-delà du plafond");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+            .validate(&registry)
+            .expect_err("beyond the ceiling");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
 
-        let refus = spec()
+        let refusal = spec()
             .with_max_turns(0)
-            .validate(&registre)
-            .expect_err("zéro tour");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+            .validate(&registry)
+            .expect_err("zero turns");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
     }
 
     #[test]
-    fn un_outil_declare_deux_fois_est_refuse() {
-        let registre = ToolRegistry::builtin();
-        let refus = spec()
+    fn a_tool_declared_twice_is_refused() {
+        let registry = ToolRegistry::builtin();
+        let refusal = spec()
             .with_tools([EXECUTE_QUERY, EXECUTE_QUERY])
-            .validate(&registre)
-            .expect_err("doublon");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+            .validate(&registry)
+            .expect_err("duplicate");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
     }
 
     #[test]
-    fn une_invite_vide_est_refusee() {
-        let registre = ToolRegistry::builtin();
-        let mut creux = spec();
-        creux.system_prompt = "   ".to_owned();
-        assert!(creux.validate(&registre).is_err());
+    fn an_empty_prompt_is_refused() {
+        let registry = ToolRegistry::builtin();
+        let mut blank = spec();
+        blank.system_prompt = "   ".to_owned();
+        assert!(blank.validate(&registry).is_err());
     }
 
     #[test]
-    fn un_agent_vient_d_un_fichier_sans_une_ligne_de_rust() {
-        // La propriété d'ARCHITECTURE §7.3 : un agent est une configuration.
+    fn an_agent_comes_from_a_file_without_a_line_of_rust() {
+        // The property of ARCHITECTURE §7.3: an agent is a configuration.
         let json = r#"{
             "id": "0199a3c0-0000-7000-8000-0000000000ff",
             "name": "Reviewer",
@@ -314,36 +316,37 @@ mod tests {
             "allowed_tools": ["execute_query", "refresh_catalog"],
             "max_turns": 4
         }"#;
-        let lu = AgentSpec::from_json(json).expect("déclaration lisible");
-        assert_eq!(lu.name, "Reviewer");
-        assert_eq!(lu.max_turns, 4);
-        assert!(lu.allows(REFRESH_CATALOG));
+        let read_back = AgentSpec::from_json(json).expect("readable declaration");
+        assert_eq!(read_back.name, "Reviewer");
+        assert_eq!(read_back.max_turns, 4);
+        assert!(read_back.allows(REFRESH_CATALOG));
         assert_eq!(
-            lu.context,
+            read_back.context,
             ContextPolicy::default(),
-            "les champs absents prennent le défaut prudent"
+            "missing fields take the cautious default"
         );
-        lu.validate(&ToolRegistry::builtin())
-            .expect("outils connus");
+        read_back
+            .validate(&ToolRegistry::builtin())
+            .expect("known tools");
     }
 
     #[test]
-    fn une_declaration_se_relit_apres_serialisation() {
-        let origine = spec()
-            .with_description("écrit du SQL")
+    fn a_declaration_reads_back_after_serialization() {
+        let original = spec()
+            .with_description("writes SQL")
             .with_output_schema(serde_json::json!({"type": "object"}));
-        let json = serde_json::to_string(&origine).expect("sérialisation");
-        let relue = AgentSpec::from_json(&json).expect("désérialisation");
-        assert_eq!(relue, origine);
+        let json = serde_json::to_string(&original).expect("serialization");
+        let reread = AgentSpec::from_json(&json).expect("deserialization");
+        assert_eq!(reread, original);
     }
 
     #[test]
-    fn un_schema_de_sortie_qui_n_est_pas_un_objet_est_refuse() {
-        let registre = ToolRegistry::builtin();
-        let refus = spec()
+    fn an_output_schema_that_is_not_an_object_is_refused() {
+        let registry = ToolRegistry::builtin();
+        let refusal = spec()
             .with_output_schema(serde_json::json!("string"))
-            .validate(&registre)
-            .expect_err("un schéma JSON est un objet");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+            .validate(&registry)
+            .expect_err("a JSON schema is an object");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
     }
 }

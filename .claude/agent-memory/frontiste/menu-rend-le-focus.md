@@ -1,16 +1,17 @@
 ---
 name: menu-rend-le-focus
-description: Un menu Base UI rend le focus à son déclencheur après l'animation de fermeture, par-dessus un focus donné par le handler d'une entrée
+description: A Base UI menu gives focus back to its trigger after the closing animation, overriding a focus given by an item's handler
 metadata:
   type: feedback
 ---
 
-Une entrée de menu (contextuel ou déroulant) dont le handler focalise un autre
-champ perd ce focus : à la fin de l'animation de fermeture, Base UI le rend au
-déclencheur. Un `setTimeout(0)` ne suffit pas.
+A menu item (context or dropdown) whose handler focuses another field loses that
+focus: at the end of the closing animation, Base UI gives it back to the
+trigger. A `setTimeout(0)` is not enough.
 
-**Why:** le retour du focus a lieu au démontage du popup, après l'animation, donc après le handler.
+**Why:** focus is returned when the popup unmounts, after the animation, so
+after the handler.
 
-**How to apply:** différer l'action jusqu'à `onOpenChangeComplete(false)` du
-`Root` (ref « pending » lue à la fermeture). Vérifier en story : `toHaveFocus()`
-encore vrai après ~300 ms.
+**How to apply:** defer the action until the `Root`'s
+`onOpenChangeComplete(false)` (a "pending" ref read on close). Check in a story:
+`toHaveFocus()` still true after ~300 ms.

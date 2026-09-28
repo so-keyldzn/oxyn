@@ -1,120 +1,118 @@
-# ADR-0021 — Savoir si Oxyn s'est arrêté normalement, et le dire sans le deviner
+# ADR-0021 — Knowing whether Oxyn stopped normally, and saying it without guessing
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10
 
-**Précise :** [ADR-0016](0016-autosauvegarde-bornee.md), sur ce que le workspace
-écrit en plus de ses brouillons.
+**Clarifies:** [ADR-0016](0016-autosauvegarde-bornee.md), on what the workspace
+writes besides its drafts.
 
-> **Précisé par [ADR-0038](0038-un-plantage-s-annonce-une-fois.md).** Une
-> session abandonnée n'est annoncée qu'une fois (`reported_at`), et ⌘Q passe
-> par l'arrêt ordonné. Sans ces deux points, la reprise s'affichait après chaque
-> fermeture de l'application installée.
+> **Clarified by [ADR-0038](0038-un-plantage-s-annonce-une-fois.md).** An
+> abandoned session is announced only once (`reported_at`), and ⌘Q goes
+> through the orderly shutdown. Without these two points, recovery showed up
+> after every closing of the installed application.
 
-## Contexte
+## Context
 
-[UX-SPEC](../UX-SPEC.md#restauration-après-un-arrêt-brutal) décrit l'écran de
-reprise comme celui qui s'affiche « au redémarrage **après un arrêt anormal** ».
-Le code ne sait pas faire cette distinction.
+[UX-SPEC](../UX-SPEC.md#restoring-after-an-abrupt-stop) describes the
+recovery screen as the one shown "on restart **after an abnormal stop**".
+The code cannot make that distinction.
 
-`Recovery::load_page` (`crates/oxyn-app/src/recovery.rs`) liste les documents
-dont la colonne `documents.is_open` vaut vrai. Ce drapeau ne dit qu'une chose :
-ce document n'a pas été fermé **explicitement** par l'utilisateur. Il est posé à
-chaque autosauvegarde et retiré par `close_query` seulement ; `QueryConsole::shutdown`
-n'y touche pas. Un `⌘Q` ordinaire laisse donc tous les onglets « ouverts », et
-le lancement suivant présente l'écran de reprise exactement comme après un
-plantage.
+`Recovery::load_page` (`crates/oxyn-app/src/recovery.rs`) lists the documents
+whose `documents.is_open` column is true. That flag says only one thing:
+the user did not close this document **explicitly**. It is set on every
+autosave and cleared by `close_query` only; `QueryConsole::shutdown` does not
+touch it. An ordinary `⌘Q` therefore leaves all tabs "open", and the next
+launch shows the recovery screen exactly as after a crash.
 
-C'est le défaut qui use le plus vite un tel écran : montré à chaque démarrage,
-il cesse d'être lu, et le jour où une écriture a réellement été interrompue,
-l'avertissement qui compte passe avec le bruit. Le message actuel est d'ailleurs
-prudent au point de ne rien affirmer — « des copies disponibles », sans prétendre
-avoir détecté quoi que ce soit —, ce qui est honnête mais ne rend pas le service
-attendu.
+It is the flaw that wears such a screen out the fastest: shown at every
+startup, it stops being read, and the day a write was really interrupted, the
+warning that matters goes by with the noise. The current message is actually
+cautious to the point of asserting nothing — "copies available", without
+claiming to have detected anything —, which is honest but does not deliver the
+expected service.
 
-Deux contraintes bornent la solution.
+Two constraints bound the solution.
 
-**Le dépôt refuse `unsafe`** ([SECURITY](../SECURITY.md#politique-unsafe),
-`unsafe_code = "deny"` au workspace). Vérifier qu'un processus identifié par son
-pid vit encore demande `kill(pid, 0)` ou une crate qui l'enveloppe ; et un pid
-se réutilise, donc le test mentirait tôt ou tard.
+**The repository refuses `unsafe`** ([SECURITY](../SECURITY.md#unsafe-policy),
+`unsafe_code = "deny"` at the workspace level). Checking that a process
+identified by its pid is still alive requires `kill(pid, 0)` or a crate that
+wraps it; and a pid gets reused, so the test would lie sooner or later.
 
-**Deux instances d'Oxyn peuvent tourner en même temps** sur le même store. Un
-marqueur binaire « une session est ouverte » ferait conclure à un arrêt anormal
-à la seconde instance démarrée, alors que la première travaille.
+**Two Oxyn instances can run at the same time** on the same store. A binary
+marker "a session is open" would make the second instance started conclude to
+an abnormal stop, while the first one is working.
 
-## Décision
+## Decision
 
-Le store porte une table `app_sessions` (migration 6) :
+The store carries an `app_sessions` table (migration 6):
 
-| Colonne | Sens |
+| Column | Meaning |
 |---|---|
-| `id` | l'identité de ce lancement |
-| `workspace_id` | le workspace ouvert, avec `ON DELETE CASCADE` |
-| `started_at` | quand ce lancement a commencé |
-| `heartbeat_at` | dernier signe de vie |
-| `closed_at` | renseigné **seulement** par un arrêt propre ; `NULL` sinon |
+| `id` | the identity of this launch |
+| `workspace_id` | the open workspace, with `ON DELETE CASCADE` |
+| `started_at` | when this launch started |
+| `heartbeat_at` | last sign of life |
+| `closed_at` | set **only** by a clean shutdown; `NULL` otherwise |
 
-**Un arrêt est anormal quand une session antérieure a `closed_at IS NULL` et un
-`heartbeat_at` plus vieux que le seuil d'abandon.** Les deux conditions sont
-nécessaires : la première distingue l'arrêt propre du reste, la seconde
-distingue une instance morte d'une instance vivante.
+**A stop is abnormal when an earlier session has `closed_at IS NULL` and a
+`heartbeat_at` older than the abandonment threshold.** Both conditions are
+necessary: the first distinguishes the clean shutdown from the rest, the second
+distinguishes a dead instance from a live one.
 
-Le battement est écrit toutes les **30 secondes**, et une session est réputée
-abandonnée après **2 minutes** sans battement. Le rapport de quatre laisse
-passer une machine en veille brève ou un système chargé sans conclure à un
-plantage. Ces deux valeurs sont des choix de produit, pas des mesures : elles
-s'amendent ici, et le battement ne s'écrit **jamais** depuis le thread
-d'interface ([I-05](../../CLAUDE.md#i-05)).
+The heartbeat is written every **30 seconds**, and a session is deemed
+abandoned after **2 minutes** without a heartbeat. The ratio of four lets
+through a machine in brief sleep or a loaded system without concluding to a
+crash. These two values are product choices, not measurements: they are
+amended here, and the heartbeat is **never** written from the interface thread
+([I-05](../../CLAUDE.md#i-05)).
 
-**L'arrêt propre renseigne `closed_at` par les mêmes chemins qui attendent déjà
-les écritures locales** — `on_app_quit` et `on_window_closed`
-(`crates/oxyn-app/src/main.rs`). C'est l'ordre qui compte : la fermeture est
-inscrite **après** que la file d'écriture des documents a été vidée. L'inverse
-marquerait un arrêt propre sur un travail non écrit.
+**The clean shutdown sets `closed_at` through the same paths that already wait
+for local writes** — `on_app_quit` and `on_window_closed`
+(`crates/oxyn-app/src/main.rs`). Order is what matters: the closing is recorded
+**after** the document write queue has been drained. The reverse would mark a
+clean shutdown over unwritten work.
 
-**Ce qu'Oxyn affiche est ce qu'il a constaté**, et rien de plus. Quand une
-session abandonnée est trouvée, l'écran le dit : Oxyn ne s'est pas fermé
-normalement. Sinon, l'écran de reprise **n'apparaît pas**, même s'il reste des
-copies de travail — celles-ci restent accessibles par la bibliothèque, qui est
-faite pour ça. Une écriture au résultat inconnu conserve son avertissement de
-réconciliation, qui ne dépend pas de ce marqueur et ne se retente jamais
-([I-13](../../CLAUDE.md#i-13)).
+**What Oxyn shows is what it observed**, and nothing more. When an abandoned
+session is found, the screen says so: Oxyn did not close normally. Otherwise,
+the recovery screen **does not appear**, even if working copies remain — those
+stay accessible through the library, which is made for that. A write with an
+unknown outcome keeps its reconciliation warning, which does not depend on this
+marker and is never retried ([I-13](../../CLAUDE.md#i-13)).
 
-**Le pid n'est pas retenu.** Il ne survivrait pas à sa propre réutilisation, et
-le vérifier demanderait ce que la politique `unsafe` du dépôt refuse. Le
-battement dit la même chose sans mentir : il vieillit.
+**The pid is not kept.** It would not survive its own reuse, and checking it
+would require what the repository's `unsafe` policy refuses. The heartbeat says
+the same thing without lying: it ages.
 
-## Conséquences
+## Consequences
 
-- **+** L'écran de reprise redevient un signal : il n'apparaît que lorsqu'il a
-  quelque chose à dire, donc il sera lu quand il le dira.
-- **+** Deux instances simultanées ne se déclarent pas mutuellement mortes.
-- **+** Le marqueur est une ligne de table lisible sans Oxyn
-  ([I-11](../../CLAUDE.md#i-11)) : `closed_at IS NULL` se lit à l'œil.
-- **−** Une écriture toutes les 30 secondes par instance, même au repos. C'est
-  une ligne mise à jour dans un SQLite local ; c'est aussi une écriture disque
-  périodique sur une machine portable, et elle n'existait pas avant.
-- **−** Un plantage suivi d'un relancement **dans les deux minutes** ne sera pas
-  reconnu comme tel : la session précédente paraît encore vivante. L'utilisateur
-  ne perd rien — ses copies sont dans la bibliothèque — mais l'écran ne
-  s'affichera pas. C'est le prix de ne pas accuser à tort une instance
-  concurrente, et c'est le sens choisi pour l'erreur.
-- **−** Une migration de plus, donc un format de plus à porter.
+- **+** The recovery screen becomes a signal again: it only appears when it
+  has something to say, so it will be read when it says it.
+- **+** Two simultaneous instances do not declare each other dead.
+- **+** The marker is a table row readable without Oxyn
+  ([I-11](../../CLAUDE.md#i-11)): `closed_at IS NULL` reads at a glance.
+- **−** One write every 30 seconds per instance, even when idle. It is one row
+  updated in a local SQLite; it is also a periodic disk write on a laptop, and
+  it did not exist before.
+- **−** A crash followed by a relaunch **within two minutes** will not be
+  recognized as such: the previous session still looks alive. The user loses
+  nothing — their copies are in the library — but the screen will not show.
+  It is the price of not wrongly accusing a concurrent instance, and it is the
+  direction chosen for the error.
+- **−** One more migration, hence one more format to carry.
 
-**Coût de sortie :** une table et deux points d'appel. Rien d'autre n'en dépend :
-les brouillons continuent d'être écrits comme aujourd'hui, et l'écran de reprise
-sait déjà fonctionner sans ce marqueur — c'est son état actuel.
+**Exit cost:** one table and two call sites. Nothing else depends on it: drafts
+keep being written as today, and the recovery screen already knows how to work
+without this marker — that is its current state.
 
-**Reconsidérer si** le battement se révèle coûteux à la mesure, ou si Oxyn
-acquiert un verrou d'instance pour une autre raison — auquel cas ce verrou dirait
-la même chose sans écriture périodique.
+**Reconsider if** the heartbeat proves costly when measured, or if Oxyn
+acquires an instance lock for another reason — in which case that lock would
+say the same thing without a periodic write.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Garder `documents.is_open` comme seul signal | Il dit « pas fermé explicitement », pas « plantage » : c'est l'état actuel, et il montre l'écran à chaque `⌘Q` |
-| Un drapeau booléen « une session tourne » | Deux instances simultanées se déclareraient mutuellement anormales |
-| Retenir le pid et vérifier qu'il vit | Demande `unsafe` ou une crate pour `kill(pid, 0)`, et un pid réutilisé fait mentir le test |
-| Un verrou de fichier posé au démarrage | Dit qui tourne **maintenant**, pas comment le lancement précédent s'est terminé — l'information cherchée ne survit pas à la libération du verrou |
-| Écrire le marqueur de fermeture avant de vider la file d'écriture | Marquerait un arrêt propre sur du travail non encore écrit : exactement le cas où la reprise doit se déclencher |
+| Keep `documents.is_open` as the only signal | It says "not closed explicitly", not "crash": it is the current state, and it shows the screen on every `⌘Q` |
+| A boolean flag "a session is running" | Two simultaneous instances would declare each other abnormal |
+| Keep the pid and check it is alive | Requires `unsafe` or a crate for `kill(pid, 0)`, and a reused pid makes the test lie |
+| A file lock taken at startup | Says who is running **now**, not how the previous launch ended — the information sought does not survive the release of the lock |
+| Write the closing marker before draining the write queue | Would mark a clean shutdown over work not yet written: exactly the case where recovery must trigger |

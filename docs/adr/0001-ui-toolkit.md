@@ -1,41 +1,41 @@
-# ADR-0001 — Toolkit UI : GPUI, avec isolation stricte
+# ADR-0001 — UI toolkit: GPUI, with strict isolation
 
-**Statut :** remplacé · **Date :** 2026-09-05
-**Remplacé par :** [ADR-0029](0029-interface-tauri-shadcn.md), le 2026-09-15. Ce
-qui suit est conservé tel qu'il a été décidé : c'est la raison pour laquelle GPUI
-paraissait le bon choix, et ce qui a changé depuis se lit dans l'ADR-0029.
+**Status:** superseded · **Date:** 2026-09-05
+**Superseded by:** [ADR-0029](0029-interface-tauri-shadcn.md), on 2026-09-15. What
+follows is kept as it was decided: it is the reason why GPUI looked like the right
+choice, and what changed since can be read in ADR-0029.
 
-## Contexte
-« Native first, blazing fast » exclut Electron et Tauri. En Rust pur, deux options
-crédibles : egui (immediate mode, stable, cross-platform) et GPUI (retenu, moteur d'un
-éditeur de code, excellent sur le texte). Les deux surfaces critiques d'Oxyn sont l'éditeur de
-requêtes et la grille de résultats.
+## Context
+"Native first, blazing fast" rules out Electron and Tauri. In pure Rust, two credible
+options: egui (immediate mode, stable, cross-platform) and GPUI (chosen, the engine of a
+code editor, excellent at text). Oxyn's two critical surfaces are the query editor and
+the results grid.
 
-## Décision
-Adopter **GPUI**. Interdire toute dépendance au toolkit hors de `oxyn-ui` et `oxyn-app`.
+## Decision
+Adopt **GPUI**. Forbid any dependency on the toolkit outside `oxyn-ui` and `oxyn-app`.
 
-> **Précisé par [ADR-0009](0009-source-dependance-gpui.md).** La rédaction initiale
-> parlait d'« épingler un commit précis », supposant qu'il faudrait vendorer le monorepo
-> amont. C'est faux : `gpui` est publié sur crates.io. La consommation depuis le registre,
-> en version exacte, est tranchée par l'ADR-0009.
+> **Clarified by [ADR-0009](0009-source-dependance-gpui.md).** The initial wording
+> spoke of "pinning a precise commit", assuming the upstream monorepo would have to be
+> vendored. That is wrong: `gpui` is published on crates.io. Consuming it from the
+> registry, at an exact version, is settled by ADR-0009.
 
-## Justification
-Le coût dominant du projet est l'éditeur de code de qualité professionnelle. GPUI fournit
-un moteur de texte et des primitives d'édition éprouvées ; egui obligerait à les
-reconstruire, ce qui dépasse le coût de l'instabilité d'API de GPUI.
+## Rationale
+The dominant cost of the project is a professional-grade code editor. GPUI provides a
+proven text engine and editing primitives; egui would force us to rebuild them, which
+exceeds the cost of GPUI's API instability.
 
-## Conséquences
-* **+** Rendu de texte et latence d'un éditeur de code natif ; layout flexbox familier.
-* **+** *Vérifié le 2026-09-05* : une fenêtre GPUI 0.2.2 utilisant `Application::new().run`,
-  `cx.open_window` et `impl Render` compile sur macOS 26.2 / arm64 / Rust 1.89 en 1 min 52.
-  Le doute sur la faisabilité même de la dépendance est levé.
-* **−** Documentation pauvre, lecture du code amont souvent nécessaire ; publications
-  espacées sur crates.io (cf. ADR-0009).
-* **−** Windows fragile → macOS et Linux d'abord, assumé.
-* La règle d'isolation garde la décision réversible : basculer vers egui reste une
-  réécriture de deux crates jusqu'à la fin de la phase 1.
+## Consequences
+* **+** Text rendering and latency of a native code editor; familiar flexbox layout.
+* **+** *Checked on 2026-09-05*: a GPUI 0.2.2 window using `Application::new().run`,
+  `cx.open_window` and `impl Render` compiles on macOS 26.2 / arm64 / Rust 1.89 in
+  1 min 52. The doubt about the very feasibility of the dependency is lifted.
+* **−** Poor documentation, reading upstream code often necessary; spaced-out
+  releases on crates.io (see ADR-0009).
+* **−** Windows is fragile → macOS and Linux first, deliberately.
+* The isolation rule keeps the decision reversible: switching to egui remains a
+  rewrite of two crates until the end of phase 1.
 
-## Alternatives écartées
-* **egui** — retenu comme plan de repli, pas comme cible.
-* **Iced** — bon modèle, moteur de texte insuffisant pour un éditeur de code.
-* **Slint / Dioxus** — DSL ou VDOM ; pas d'avantage décisif ici.
+## Rejected alternatives
+* **egui** — kept as a fallback plan, not as a target.
+* **Iced** — good model, text engine insufficient for a code editor.
+* **Slint / Dioxus** — DSL or VDOM; no decisive advantage here.

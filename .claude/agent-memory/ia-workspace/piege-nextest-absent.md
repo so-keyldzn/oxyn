@@ -1,14 +1,14 @@
 ---
 name: piege-nextest-absent
-description: cargo-nextest n'est pas installé sur la machine de dev ; l'étape tests de la porte retombe sur cargo test
+description: cargo-nextest is not installed on the dev machine; the gate's tests step falls back to cargo test
 metadata:
   type: reference
 ---
 
-`cargo nextest` répond « no such command » sur la machine de dev (constaté le
-2026-09-24). Le Makefile le détecte et retombe sur
-`cargo test --workspace --all-features`, qui exécute aussi les doctests.
+`cargo nextest` answers "no such command" on the dev machine (observed on
+2026-09-24). The Makefile detects it and falls back to
+`cargo test --workspace --all-features`, which also runs the doctests.
 
-**How to apply:** pour reproduire l'étape tests sur des crates ciblées, lancer
-`cargo test -p <crate> --all-features` (et `--bins` pour `oxyn-desktop`, voir
-[[piege-cargo-oxyn-desktop-sans-lib]]), pas `cargo nextest run`.
+**How to apply:** to reproduce the tests step on targeted crates, run
+`cargo test -p <crate> --all-features` (and `--bins` for `oxyn-desktop`, see
+[[piege-cargo-oxyn-desktop-sans-lib]]), not `cargo nextest run`.

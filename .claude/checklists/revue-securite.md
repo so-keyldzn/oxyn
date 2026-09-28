@@ -1,68 +1,67 @@
-# Revue de sécurité
+# Security review
 
-Modèle de menace dans `docs/SECURITY.md`. L'attaquant n'est pas un inconnu sur
-Internet : ce sont les données que l'utilisateur ouvre, et les erreurs qu'Oxyn
-lui laisse commettre.
+Threat model in `docs/SECURITY.md`. The attacker is not a stranger on the
+Internet: it is the data the user opens, and the mistakes Oxyn lets them make.
 
-## Les six canaux de fuite
+## The six leak channels
 
-Il suffit d'en oublier un.
+Forgetting one is enough.
 
-- [ ] Journaux `tracing` — aucun secret, aucune valeur liée
-- [ ] Messages d'erreur affichés — `sqlx` inclut parfois l'URL de connexion
-- [ ] Rapports de plantage — une trace de pile capture les variables locales
-- [ ] Fichiers de session et de workspace
-- [ ] Invites IA
-- [ ] Presse-papiers, export, capture d'écran
+- [ ] `tracing` logs — no secret, no bound value
+- [ ] Displayed error messages — `sqlx` sometimes includes the connection URL
+- [ ] Crash reports — a stack trace captures local variables
+- [ ] Session and workspace files
+- [ ] AI prompts
+- [ ] Clipboard, export, screenshot
 
-Contrôle mécanique le plus rentable :
+The most cost-effective mechanical check:
 
-- [ ] **Aucun `#[derive(` contenant `Debug` sur un type portant un secret.** La
-      fuite n'arrive pas aujourd'hui : elle arrive avec le `tracing::debug!`
-      qu'un autre ajoutera dans six mois
+- [ ] **No `#[derive(` containing `Debug` on a type carrying a secret.** The
+      leak does not happen today: it happens with the `tracing::debug!` someone
+      else will add in six months
 
 ## Secrets
 
-- [ ] Rien en clair sur le disque : ce qui est persisté est une **référence** au
+- [ ] Nothing in clear on disk: what is persisted is a **reference** to the
       secret
-- [ ] Aucune chaîne de connexion avec mot de passe dans le code, y compris dans
-      une fixture de test — elle sera commitée, et elle est souvent réelle
+- [ ] No connection string with a password in the code, including in a test
+      fixture — it will be committed, and it is often real
 
-## Connexions
+## Connections
 
-- [ ] Une connexion sans environnement renseigné vaut **`production`**
-- [ ] Toute écriture sur `production` exige une confirmation qui **nomme la
-      connexion** et affiche le SQL exact
-- [ ] Le bouton par défaut n'est jamais l'action destructrice
-- [ ] Pour un `Actor::Agent`, `production` est en **lecture seule stricte** —
-      un refus, pas une confirmation renforcée
+- [ ] A connection with no environment set counts as **`production`**
+- [ ] Every write on `production` requires a confirmation that **names the
+      connection** and shows the exact SQL
+- [ ] The default button is never the destructive action
+- [ ] For an `Actor::Agent`, `production` is **strictly read-only** — a refusal,
+      not a stronger confirmation
 
-## Surface d'entrée
+## Input surface
 
-- [ ] Réponses serveur traitées comme non fiables
-- [ ] **Noms d'objets du catalogue** : jamais interpolés sans citation, jamais
-      traités comme une instruction quand ils rejoignent une invite
-- [ ] Fichiers de workspace validés à la lecture
-- [ ] Réponses de modèles traitées comme des propositions
+- [ ] Server responses treated as untrusted
+- [ ] **Catalog object names**: never interpolated without quoting, never
+      treated as an instruction when they reach a prompt
+- [ ] Workspace files validated on read
+- [ ] Model responses treated as proposals
 
 ## `unsafe`
 
-- [ ] Chaque bloc porte un `// SAFETY:` qui énonce l'invariant **et qui le
-      maintient** — une paraphrase du code ne vaut rien
-- [ ] Tout `#[allow(unsafe_code)]` renvoie à l'ADR qui l'autorise
-      ([SECURITY](../../docs/SECURITY.md#politique-unsafe))
-- [ ] Relu par `relecteur-securite`
+- [ ] Every block carries a `// SAFETY:` that states the invariant **and who
+      maintains it** — a paraphrase of the code is worthless
+- [ ] Every `#[allow(unsafe_code)]` points to the ADR that authorizes it
+      ([SECURITY](../../docs/SECURITY.md#unsafe-policy))
+- [ ] Reviewed by `relecteur-securite`
 
-## Frontière IA
+## AI boundary
 
-- [ ] Le point de passage est **unique**
-- [ ] Le niveau est attaché à la **connexion**
-- [ ] Rien ne sort au-delà du niveau, identifiants et jetons jamais
-- [ ] Classement local/distant sur l'hôte **après résolution**
+- [ ] The gateway is **single**
+- [ ] The tier is attached to the **connection**
+- [ ] Nothing goes out beyond the tier, credentials and tokens never
+- [ ] Local/remote classification on the host **after resolution**
 
-## Dépendances
+## Dependencies
 
-- [ ] `cargo deny check` passe
-- [ ] Toute nouvelle dépendance directe est justifiée
-- [ ] Une crate non maintenue sur une frontière externe est **documentée** comme
-      risque, même s'il n'y a rien à corriger aujourd'hui
+- [ ] `cargo deny check` passes
+- [ ] Every new direct dependency is justified
+- [ ] An unmaintained crate on an external boundary is **documented** as a risk,
+      even if there is nothing to fix today

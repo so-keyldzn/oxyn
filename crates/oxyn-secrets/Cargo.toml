@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-secrets"
-description = "Trousseau OS et gestion des identifiants"
+description = "OS keychain and credential management"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

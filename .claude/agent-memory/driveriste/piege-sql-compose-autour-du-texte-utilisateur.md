@@ -1,44 +1,44 @@
 ---
 name: piege-sql-compose-autour-du-texte-utilisateur
-description: Les deux gardes à poser quand un driver compose du SQL autour d'un fragment écrit par l'utilisateur — saut de ligne contre le `--`, parenthèses contre le `/*` non fermé — et le `;` qui s'exécute vraiment en SQLite mais pas en PostgreSQL
+description: The two guards to put in place when a driver composes SQL around a fragment written by the user — newline against `--`, parentheses against an unclosed `/*` — and the `;` that really runs in SQLite but not in PostgreSQL
 metadata:
   type: reference
 ---
 
-Relevés le 2026-09-10 en composant `SELECT … WHERE <texte de l'utilisateur>
-ORDER BY … LIMIT n` (PostgreSQL 17, SQLite embarqué). Ils portent sur les
-moteurs, pas sur le produit.
+Found on 2026-09-10 while composing `SELECT … WHERE <user's text>
+ORDER BY … LIMIT n` (PostgreSQL 17, embedded SQLite). They concern the engines,
+not the product.
 
-## Deux gardes, et chacune rattrape ce que l'autre laisse passer
+## Two guards, and each catches what the other lets through
 
-Le fragment n'est ni analysé ni réécrit. Ce qui le rend sûr, c'est **la forme de
-ce qui l'entoure** :
+The fragment is neither parsed nor rewritten. What makes it safe is **the shape
+of what surrounds it**:
 
-* **un saut de ligne après le fragment**, parce qu'un `-- …` final commenterait
-  le reste de l'instruction — `ORDER BY` et `LIMIT` compris — et transformerait
-  une lecture bornée en balayage complet, sans erreur nulle part ;
-* **des parenthèses autour du fragment**, parce qu'aucun saut de ligne ne
-  termine un `/*` non fermé. Vérifié : `SELECT a FROM t WHERE a>0 /*⏎LIMIT 1`
-  rend **toutes** les lignes en SQLite (PostgreSQL, lui, refuse). Avec
-  `WHERE (a>0 /*⏎) LIMIT 1`, la parenthèse fermante est avalée, l'instruction
-  devient incomplète et le moteur la refuse. `WHERE (X)` vaut `WHERE X` pour
-  toute expression booléenne : rien de légitime ne change de sens, y compris un
-  fragment déjà parenthésé.
+* **a newline after the fragment**, because a trailing `-- …` would comment out
+  the rest of the statement — `ORDER BY` and `LIMIT` included — and turn a
+  bounded read into a full scan, with no error anywhere;
+* **parentheses around the fragment**, because no newline terminates an
+  unclosed `/*`. Checked: `SELECT a FROM t WHERE a>0 /*⏎LIMIT 1` returns **all**
+  rows in SQLite (PostgreSQL refuses it). With `WHERE (a>0 /*⏎) LIMIT 1`, the
+  closing parenthesis is swallowed, the statement becomes incomplete and the
+  engine refuses it. `WHERE (X)` equals `WHERE X` for any boolean expression:
+  nothing legitimate changes meaning, including an already parenthesized
+  fragment.
 
-L'ordre des deux compte : la parenthèse fermante doit être **sur la ligne
-suivante**, sinon elle tombe dans le `--`.
+The order of the two matters: the closing parenthesis must be **on the next
+line**, otherwise it falls into the `--`.
 
-## Un `;` dans le fragment ne se comporte pas pareil des deux côtés
+## A `;` in the fragment does not behave the same on both sides
 
-* **PostgreSQL, protocole étendu** : `prepare` refuse plusieurs instructions
-  (« cannot insert multiple commands into a prepared statement »). La seconde
-  n'atteint jamais l'exécution.
-* **SQLite** : le texte est un *lot*. Chaque instruction est réellement
-  préparée et exécutée l'une après l'autre ; ce qui arrête un `DROP` glissé
-  après un `;`, c'est le contrôle `sqlite3_stmt_readonly` avant exécution, pas
-  le découpage. Sans limites en lecture seule, il tournerait.
+* **PostgreSQL, extended protocol**: `prepare` refuses several statements
+  ("cannot insert multiple commands into a prepared statement"). The second one
+  never reaches execution.
+* **SQLite**: the text is a *batch*. Each statement is really prepared and
+  executed one after the other; what stops a `DROP` slipped in after a `;` is
+  the `sqlite3_stmt_readonly` check before execution, not the splitting. Without
+  read-only limits, it would run.
 
-Conséquence pour un test : sur SQLite, la preuve utile est une **table témoin
-qui existe encore à la fin**, pas seulement une erreur retournée.
+Consequence for a test: on SQLite, the useful proof is a **witness table that
+still exists at the end**, not just a returned error.
 
-Voir [[outil-cluster-postgres-jetable]] pour le serveur d'essai.
+See [[outil-cluster-postgres-jetable]] for the test server.

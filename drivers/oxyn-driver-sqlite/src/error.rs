@@ -1,77 +1,75 @@
-//! Les erreurs du driver, et la **famille** à laquelle il les rattache.
+//! The driver's errors, and the **family** it attaches them to.
 //!
-//! [`DRIVER-CONTRACT` §4](../../../docs/DRIVER-CONTRACT.md) exige qu'un driver
-//! classe ses erreurs : transitoire, permanente, ambiguë. La classe est une
-//! **donnée** portée par l'erreur, jamais une déduction faite par l'appelant à
-//! partir du message.
+//! [`DRIVER-CONTRACT` §4](../../../docs/DRIVER-CONTRACT.md) requires a driver to
+//! classify its errors: transient, permanent, ambiguous. The class is **data**
+//! carried by the error, never an inference the caller makes from the message.
 //!
-//! # Le cas qui coûte le plus cher
+//! # The most expensive case
 //!
-//! `sqlite3_interrupt` pendant une écriture. SQLite garantit l'atomicité au
-//! niveau de l'instruction, mais pas la restauration d'une transaction
-//! explicite : une instruction interrompue **hors** transaction est annulée, une
-//! transaction interrompue peut laisser les instructions déjà validées en place.
-//! Une interruption est donc rendue :
+//! `sqlite3_interrupt` during a write. SQLite guarantees atomicity at the
+//! statement level, but not the restoration of an explicit transaction: a
+//! statement interrupted **outside** a transaction is rolled back, an interrupted
+//! transaction may leave the already applied statements in place. An
+//! interruption is therefore returned as:
 //!
-//! * [`OxynError::Cancelled`] si l'instruction ne pouvait rien modifier
-//!   (`sqlite3_stmt_readonly`) — l'effet est connu : aucun ;
-//! * [`ErrorClass::Ambiguous`] sinon. L'ambiguïté ne se retente **jamais**
+//! * [`OxynError::Cancelled`] if the statement could modify nothing
+//!   (`sqlite3_stmt_readonly`) — the effect is known: none;
+//! * [`ErrorClass::Ambiguous`] otherwise. Ambiguity is **never** retried
 //!   ([I-13](../../../CLAUDE.md#i-13)).
 //!
-//! # Ce qui ne sort jamais d'ici
+//! # What never leaves this module
 //!
-//! Aucun message ne reprend une **valeur liée** ni le **chemin du fichier de
-//! base** : le chemin est une valeur de paramètre de connexion, et un driver
-//! n'a pas le droit de la journaliser ([I-03](../../../CLAUDE.md#i-03)). C'est
-//! la raison d'être de [`SqliteError::Path`], qui remplace
-//! `rusqlite::Error::InvalidPath` — la seule variante de `rusqlite` dont le
-//! `Display` contient le chemin.
+//! No message repeats a **bound value** or the **database file path**: the path
+//! is a connection parameter value, and a driver has no right to log it
+//! ([I-03](../../../CLAUDE.md#i-03)). That is the reason for
+//! [`SqliteError::Path`], which replaces `rusqlite::Error::InvalidPath` — the only
+//! `rusqlite` variant whose `Display` contains the path.
 //!
-//! Le message du moteur, lui, **cite ce qu'on vient de lier** : un déclencheur
-//! `RAISE(ABORT, 'solde : ' || NEW.montant)` ou une contrainte `CHECK` violée
-//! reprennent la valeur passée à `sqlite3_bind_*`. Ce message est affiché,
-//! journalisé et persisté par l'historique. Il n'est donc propagé que si
-//! l'instruction ne portait **aucune** valeur liée par l'appelant : sinon, le
-//! code de résultat étendu remplace le texte du moteur.
+//! The engine's message, however, **quotes what was just bound**: a trigger
+//! `RAISE(ABORT, 'balance: ' || NEW.amount)` or a violated `CHECK` constraint
+//! repeat the value passed to `sqlite3_bind_*`. This message is displayed, logged
+//! and persisted by the history. It is therefore propagated only if the
+//! statement carried **no** value bound by the caller: otherwise, the extended
+//! result code replaces the engine's text.
 
 use oxyn_core::{DriverId, ErrorClass, OxynError, ScalarValue};
 use rusqlite::ErrorCode;
 
-/// Ce que l'instruction concernée pouvait faire à la base.
+/// What the statement concerned could do to the database.
 ///
-/// Sert uniquement à décider si une interruption est une annulation propre ou
-/// une ambiguïté. La valeur vient de `sqlite3_stmt_readonly`, pas d'une analyse
-/// du texte : c'est le moteur qui répond, pas nous.
+/// Used only to decide whether an interruption is a clean cancellation or an
+/// ambiguity. The value comes from `sqlite3_stmt_readonly`, not from an analysis
+/// of the text: the engine answers, not us.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Effect {
-    /// L'instruction ne pouvait rien modifier.
+    /// The statement could modify nothing.
     ReadOnly,
-    /// L'instruction pouvait écrire.
+    /// The statement could write.
     Mutating,
 }
 
-/// D'où viennent les valeurs liées à l'instruction concernée.
+/// Where the values bound to the statement concerned come from.
 ///
-/// Le message du moteur peut citer une valeur liée ; il n'est donc propagé que
-/// lorsque rien de ce qu'il peut citer ne vient de l'appelant
+/// The engine's message may quote a bound value; it is therefore propagated only
+/// when nothing it can quote comes from the caller
 /// ([I-03](../../../CLAUDE.md#i-03)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Bound {
-    /// Aucune valeur venue d'une [`ExecRequest`](oxyn_core::ExecRequest). Une
-    /// requête d'introspection lie bien des identifiants — un nom de schéma, un
-    /// nom de table —, mais ceux-là viennent du catalogue déjà affiché, pas de
-    /// ce que l'utilisateur a saisi. La propriété tenue est donc « rien de ce
-    /// que le moteur peut citer ne vient de l'appelant », pas « rien n'était
-    /// lié » : l'écrire autrement rendrait l'audit faux au premier lecteur qui
-    /// ouvrirait `catalog.rs`.
+    /// No value from an [`ExecRequest`](oxyn_core::ExecRequest). An
+    /// introspection query does bind identifiers — a schema name, a table
+    /// name —, but those come from the catalog already displayed, not from what
+    /// the user typed. The property held is therefore "nothing the engine can
+    /// quote comes from the caller", not "nothing was bound": writing it
+    /// otherwise would make the audit wrong for the first reader who opened
+    /// `catalog.rs`.
     Internal,
-    /// Au moins une valeur de l'[`ExecRequest`](oxyn_core::ExecRequest) de
-    /// l'appelant était liée.
+    /// At least one value of the caller's
+    /// [`ExecRequest`](oxyn_core::ExecRequest) was bound.
     Caller,
 }
 
 impl Bound {
-    /// Ce que les paramètres d'une demande impliquent pour le message du moteur.
+    /// What a request's parameters imply for the engine's message.
     pub(crate) const fn of(params: &[ScalarValue]) -> Self {
         if params.is_empty() {
             Self::Internal
@@ -81,145 +79,142 @@ impl Bound {
     }
 }
 
-/// Le code de résultat d'un échec, seule part d'un message du moteur qui ne
-/// puisse pas citer une valeur.
+/// The result code of a failure, the only part of an engine message that cannot
+/// quote a value.
 ///
-/// `ffi::Error` rend « Error code 19: constraint failed » : le libellé est
-/// dérivé du **nombre**, pas du texte que SQLite a composé.
+/// `ffi::Error` renders "Error code 19: constraint failed": the label is
+/// derived from the **number**, not from the text SQLite composed.
 fn code_of(code: &Option<rusqlite::ffi::Error>) -> String {
     match code {
         Some(failure) => failure.to_string(),
-        // Les variantes de `rusqlite` qui ne viennent pas du moteur (index de
-        // colonne, conversion refusée) n'ont pas de code de résultat.
+        // The `rusqlite` variants that do not come from the engine (column
+        // index, refused conversion) have no result code.
         None => "SQLite driver error".to_owned(),
     }
 }
 
-/// Une erreur propre au driver SQLite.
+/// An error specific to the SQLite driver.
 ///
-/// Elle circule comme `source` d'[`OxynError::Driver`], qui porte la famille.
-/// Elle est publique parce qu'un appelant peut vouloir la retrouver par
-/// `downcast_ref` — pour distinguer un conflit de type d'une erreur du moteur,
-/// par exemple.
+/// It travels as the `source` of [`OxynError::Driver`], which carries the family.
+/// It is public because a caller may want to find it by `downcast_ref` — to tell
+/// a type conflict from an engine error, for instance.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SqliteError {
-    /// Erreur rendue par le moteur SQLite lui-même.
+    /// Error returned by the SQLite engine itself.
     ///
-    /// Le message étendu de SQLite y figure : il n'est produit que pour une
-    /// instruction sans valeur liée par l'appelant, où il ne peut citer que le
-    /// SQL soumis. Sinon, c'est [`Withheld`](Self::Withheld).
-    /// **Pas de `#[from]`** : un `?` sur un `rusqlite::Error` construirait cette
-    /// variante non rédigée sans jamais consulter l'origine des valeurs. Le
-    /// premier `?` ajouté dans `params.rs` — la fonction qui lie les valeurs —
-    /// sauterait ainsi la rédaction sans qu'aucun relecteur ne le voie. La
-    /// construction passe donc par les deux fonctions de traduction du module,
-    /// où le choix se pose à l'écriture.
+    /// SQLite's extended message is in it: it is produced only for a statement
+    /// without a value bound by the caller, where it can quote only the
+    /// submitted SQL. Otherwise, it is [`Withheld`](Self::Withheld).
+    /// **No `#[from]`**: a `?` on a `rusqlite::Error` would build this
+    /// unredacted variant without ever checking where the values come from. The
+    /// first `?` added in `params.rs` — the function that binds the values —
+    /// would thus skip the redaction without any reviewer seeing it.
+    /// Construction therefore goes through the module's two translation
+    /// functions, where the choice is made at writing time.
     #[error("{0}")]
     Engine(rusqlite::Error),
 
-    /// Le moteur a refusé une instruction qui portait des valeurs liées par
-    /// l'appelant : son message est retenu.
+    /// The engine refused a statement that carried values bound by the caller:
+    /// its message is withheld.
     ///
-    /// Retenu et non filtré : SQLite peut citer une valeur liée tronquée,
-    /// échappée ou transformée — un déclencheur `RAISE(ABORT, …)` la concatène,
-    /// une contrainte `CHECK` la reprend —, et chercher le texte de la valeur
-    /// dans le message aurait l'apparence d'une protection sans en être une
-    /// ([I-03](../../../CLAUDE.md#i-03)). L'erreur d'origine n'est pas non plus
-    /// conservée dans la variante : `#[derive(Debug)]` la ré-exposerait au
-    /// premier `tracing::debug!` venu.
+    /// Withheld and not filtered: SQLite may quote a bound value truncated,
+    /// escaped or transformed — a `RAISE(ABORT, …)` trigger concatenates it, a
+    /// `CHECK` constraint repeats it —, and searching for the value's text in
+    /// the message would look like protection without being one
+    /// ([I-03](../../../CLAUDE.md#i-03)). The original error is not kept in the
+    /// variant either: `#[derive(Debug)]` would re-expose it to the first
+    /// `tracing::debug!` that came along.
     ///
-    /// Ne survit que le code de résultat, qui est un nombre.
+    /// Only the result code survives, which is a number.
     #[error(
         "{}: the SQLite message is withheld because the statement carried \
          bound values",
         code_of(.code)
     )]
     Withheld {
-        /// Le code de résultat étendu, quand l'échec vient du moteur.
+        /// The extended result code, when the failure comes from the engine.
         code: Option<rusqlite::ffi::Error>,
     },
 
-    /// Le chemin du fichier de base est inutilisable.
+    /// The database file path is not usable.
     ///
-    /// Le chemin **n'est pas** repris dans le message : c'est une valeur de
-    /// paramètre de connexion (I-03).
+    /// The path **is not** repeated in the message: it is a connection parameter
+    /// value (I-03).
     #[error("the database path is not usable")]
     Path,
 
-    /// Le thread qui détient la connexion n'est plus là : la session est
-    /// fermée, ou son thread a terminé.
+    /// The thread holding the connection is gone: the session is closed, or its
+    /// thread has ended.
     #[error("the connection thread is gone: the session is closed")]
     Closed,
 
-    /// Une valeur n'a aucune représentation sans perte dans le type Arrow
-    /// retenu pour sa colonne.
+    /// A value has no lossless representation in the Arrow type chosen for its
+    /// column.
     ///
-    /// Le nom de la colonne n'est pas repris — il vient du serveur, et un
-    /// message d'erreur finit dans un journal. L'index suffit à retrouver le
-    /// champ dans le schéma du curseur.
+    /// The column name is not repeated — it comes from the server, and an error
+    /// message ends up in a log. The index is enough to find the field in the
+    /// cursor's schema.
     #[error(
         "column #{column} was typed as `{resolved}` from the first batch, \
          but a `{found}` value appeared further in the stream and cannot be \
          rendered there without loss"
     )]
     ColumnConflict {
-        /// Index de la colonne dans le schéma, à partir de zéro.
+        /// Index of the column in the schema, from zero.
         column: usize,
-        /// Type Arrow retenu pour la colonne.
+        /// Arrow type chosen for the column.
         resolved: &'static str,
-        /// Classe de stockage rencontrée.
+        /// Storage class encountered.
         found: &'static str,
     },
 
-    /// Un paramètre lié n'a pas de classe de stockage SQLite.
+    /// A bound parameter has no SQLite storage class.
     #[error("bound parameter #{index} is a `{type_name}`, which SQLite cannot store")]
     Parameter {
-        /// Position du paramètre, à partir de 1.
+        /// Position of the parameter, from 1.
         index: usize,
-        /// Nom du type scalaire, tel que `ScalarValue::type_name` le donne.
+        /// Name of the scalar type, as `ScalarValue::type_name` gives it.
         type_name: &'static str,
     },
 
-    /// Le nombre de paramètres liés ne correspond pas à l'instruction.
+    /// The number of bound parameters does not match the statement.
     #[error("the statement expects {expected} bound parameter(s), {given} given")]
     ParameterCount {
-        /// Ce que l'instruction attend.
+        /// What the statement expects.
         expected: usize,
-        /// Ce qui a été fourni.
+        /// What was provided.
         given: usize,
     },
 
-    /// Des paramètres liés accompagnent un lot de plusieurs instructions.
+    /// Bound parameters come with a batch of several statements.
     ///
-    /// Rien ne dit à quelle instruction ils se rapportent : le découpage
-    /// appartient à `oxyn-query`, et le driver refuse plutôt que de deviner.
+    /// Nothing says which statement they relate to: splitting belongs to
+    /// `oxyn-query`, and the driver refuses rather than guess.
     #[error("bound parameters cannot be used with a multi-statement batch: split it first")]
     ParametersWithBatch,
 
-    /// La construction du `RecordBatch` a échoué.
+    /// Building the `RecordBatch` failed.
     #[error("arrow: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
 }
 
-/// La famille d'une erreur du moteur.
+/// The family of an engine error.
 ///
-/// Seules quatre situations sont **transitoires** : le verrou de fichier tenu
-/// par un autre processus (`SQLITE_BUSY`), le verrou de table tenu par une autre
-/// connexion (`SQLITE_LOCKED`), l'échec de protocole de verrouillage, et le
-/// changement de schéma sous les pieds d'une instruction préparée. Tout le reste
-/// — syntaxe, contrainte violée, base illisible, disque plein — ne s'améliore
-/// pas en réessayant.
+/// Only four situations are **transient**: the file lock held by another process
+/// (`SQLITE_BUSY`), the table lock held by another connection (`SQLITE_LOCKED`),
+/// the locking protocol failure, and the schema change under the feet of a
+/// prepared statement. Everything else — syntax, violated constraint, unreadable
+/// database, full disk — does not improve by retrying.
 ///
-/// `SQLITE_INTERRUPT` n'apparaît pas ici : il est traité en amont par
-/// `engine` — nommée et non liée : la fonction est interne à la crate —,
-/// parce que sa famille dépend de ce que faisait l'instruction.
+/// `SQLITE_INTERRUPT` does not appear here: it is handled upstream by `engine`
+/// — named and not linked: the function is internal to the crate —, because
+/// its family depends on what the statement was doing.
 #[must_use]
 pub fn classify(error: &rusqlite::Error) -> ErrorClass {
     let rusqlite::Error::SqliteFailure(inner, _) = error else {
-        // Les autres variantes sont des erreurs d'usage de la bibliothèque
-        // (mauvais index de colonne, conversion refusée) : rejouer ne les
-        // corrige pas.
+        // The other variants are library usage errors (wrong column index,
+        // refused conversion): replaying does not fix them.
         return ErrorClass::Permanent;
     };
     match inner.code {
@@ -231,26 +226,25 @@ pub fn classify(error: &rusqlite::Error) -> ErrorClass {
     }
 }
 
-/// Traduit une erreur du moteur pour une instruction **composée par le driver**.
+/// Translates an engine error for a statement **composed by the driver**.
 ///
-/// Le message du moteur est propagé tel quel : une telle instruction ne lie que
-/// des littéraux que le driver a écrits, donc rien de ce que le moteur peut
-/// citer ne vient de l'appelant. Pour l'exécution d'une
-/// [`ExecRequest`](oxyn_core::ExecRequest), c'est [`engine_bound`] qu'il faut
-/// appeler : là, le moteur cite des valeurs liées
+/// The engine's message is propagated as is: such a statement binds only
+/// literals the driver wrote, so nothing the engine can quote comes from the
+/// caller. For the execution of an [`ExecRequest`](oxyn_core::ExecRequest),
+/// [`engine_bound`] is the one to call: there, the engine quotes bound values
 /// ([I-03](../../../CLAUDE.md#i-03)).
 pub(crate) fn engine(error: rusqlite::Error, effect: Effect) -> OxynError {
     engine_bound(error, effect, Bound::Internal)
 }
 
-/// Traduit une erreur du moteur dans le vocabulaire du domaine.
+/// Translates an engine error into the domain vocabulary.
 ///
-/// `effect` dit ce que l'instruction pouvait faire ; il ne sert qu'au cas de
-/// l'interruption, voir la documentation du module. `bound` décide du sort du
-/// message : retenu dès qu'une valeur de l'appelant était liée.
+/// `effect` says what the statement could do; it serves only the interruption
+/// case, see the module documentation. `bound` decides the fate of the message:
+/// withheld as soon as a caller's value was bound.
 ///
-/// La famille de l'erreur, elle, ne dépend **pas** de `bound` : elle se lit sur
-/// le code de résultat, relevé avant que l'erreur d'origine soit abandonnée.
+/// The error's family, however, does **not** depend on `bound`: it is read from
+/// the result code, taken before the original error is dropped.
 pub(crate) fn engine_bound(error: rusqlite::Error, effect: Effect, bound: Bound) -> OxynError {
     let code = match &error {
         rusqlite::Error::SqliteFailure(inner, _) => Some(*inner),
@@ -263,22 +257,22 @@ pub(crate) fn engine_bound(error: rusqlite::Error, effect: Effect, bound: Bound)
         };
     }
     if matches!(error, rusqlite::Error::InvalidPath(_)) {
-        // Le `Display` de cette variante contient le chemin (I-03).
+        // The `Display` of this variant contains the path (I-03).
         return driver(SqliteError::Path, ErrorClass::Permanent);
     }
     let class = classify(&error);
     driver(hide(error, code, bound), class)
 }
 
-/// L'erreur que le driver rend : celle du moteur, ou son code seul quand le
-/// message pourrait citer une valeur de l'appelant.
+/// The error the driver returns: the engine's, or its code alone when the
+/// message could quote a caller's value.
 ///
-/// Seul le texte venu de `sqlite3_errmsg` peut reprendre ce qui vient d'être
-/// lié — c'est lui que porte `SqliteFailure(_, Some(_))`. Les autres variantes
-/// de `rusqlite` sont composées par la bibliothèque à partir d'indices et de
-/// noms de types : les retenir ferait disparaître le diagnostic d'un **bug du
-/// driver** sans rien protéger, et personne ne saurait le reproduire. Le driver
-/// PostgreSQL fait la même distinction pour la même raison.
+/// Only the text from `sqlite3_errmsg` can repeat what was just bound — that is
+/// what `SqliteFailure(_, Some(_))` carries. The other `rusqlite` variants are
+/// composed by the library from indexes and type names: withholding them would
+/// make the diagnostic of a **driver bug** disappear without protecting
+/// anything, and nobody could reproduce it. The PostgreSQL driver makes the same
+/// distinction for the same reason.
 pub(crate) fn hide(
     error: rusqlite::Error,
     code: Option<rusqlite::ffi::Error>,
@@ -292,34 +286,33 @@ pub(crate) fn hide(
     }
 }
 
-/// Emballe une erreur du driver, en nommant sa famille.
+/// Wraps a driver error, naming its family.
 pub(crate) fn driver(error: SqliteError, class: ErrorClass) -> OxynError {
     OxynError::driver(DriverId::sqlite(), class, error)
 }
 
-/// L'erreur d'une session dont le thread porteur a disparu.
+/// The error of a session whose worker thread has disappeared.
 pub(crate) fn closed() -> OxynError {
     driver(SqliteError::Closed, ErrorClass::Permanent)
 }
 
-/// L'erreur d'ouverture d'une base, classée comme une erreur de connexion.
+/// The error of opening a database, classified as a connection error.
 ///
-/// Rendue par [`Driver::connect`](oxyn_driver::Driver::connect), qui a sa propre
-/// variante : l'appelant distingue « le serveur est injoignable » de « le
-/// serveur a rejeté l'instruction » sans lire de message. Le chemin n'y figure
-/// jamais.
+/// Returned by [`Driver::connect`](oxyn_driver::Driver::connect), which has its
+/// own variant: the caller tells "the server is unreachable" from "the server
+/// rejected the statement" without reading a message. The path never appears in
+/// it.
 pub(crate) fn open(error: rusqlite::Error) -> OxynError {
     OxynError::Connection(match &error {
         rusqlite::Error::InvalidPath(_) => "the database path is not usable".to_owned(),
-        // Le message détaillé de SQLite embarque le chemin du fichier
-        // (« unable to open database file: /home/… »). Un chemin est un
-        // paramètre de connexion : il n'a pas sa place dans un message qui peut
-        // finir dans un journal, un rapport de plantage ou une invite IA
-        // ([I-03](../../../CLAUDE.md#i-03)). Le `ffi::Error` seul rend
-        // « Error code 14: unable to open database file » — le code étendu et
-        // son libellé canonique, sans rien de l'installation de l'utilisateur.
-        // Le code reste une donnée exploitable, pas une déduction à faire sur le
-        // texte ([rust.md](../../../.claude/rules/rust.md)).
+        // SQLite's detailed message embeds the file path
+        // ("unable to open database file: /home/…"). A path is a connection
+        // parameter: it has no place in a message that may end up in a log, a
+        // crash report or an AI prompt ([I-03](../../../CLAUDE.md#i-03)). The
+        // `ffi::Error` alone renders "Error code 14: unable to open database
+        // file" — the extended code and its canonical label, with nothing of the
+        // user's installation. The code stays usable data, not an inference to
+        // make from the text ([rust.md](../../../.claude/rules/rust.md)).
         rusqlite::Error::SqliteFailure(code, _) => code.to_string(),
         other => other.to_string(),
     })
@@ -333,208 +326,220 @@ mod tests {
 
     use super::*;
 
-    fn echec(code: ErrorCode) -> rusqlite::Error {
+    fn failure_with(code: ErrorCode) -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(
             ffi::Error {
                 code,
                 extended_code: 0,
             },
-            Some("message du moteur".to_owned()),
+            Some("engine message".to_owned()),
         )
     }
 
-    /// Un échec du moteur dont le message cite une valeur liée, comme le fait
-    /// `RAISE(ABORT, 'solde : ' || NEW.montant)`.
-    fn echec_bavard() -> rusqlite::Error {
+    /// An engine failure whose message quotes a bound value, as
+    /// `RAISE(ABORT, 'balance: ' || NEW.amount)` does.
+    fn chatty_failure() -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(
             ffi::Error {
                 code: ErrorCode::ConstraintViolation,
                 // `SQLITE_CONSTRAINT_TRIGGER`.
                 extended_code: 1_811,
             },
-            Some("solde : S3NT1NELLE-42".to_owned()),
+            Some("balance: S3NT1N3L-42".to_owned()),
         )
     }
 
     #[test]
-    fn un_verrou_est_transitoire_une_syntaxe_ne_l_est_pas() {
+    fn a_lock_is_transient_a_syntax_error_is_not() {
         assert_eq!(
-            classify(&echec(ErrorCode::DatabaseBusy)),
+            classify(&failure_with(ErrorCode::DatabaseBusy)),
             ErrorClass::Transient
         );
         assert_eq!(
-            classify(&echec(ErrorCode::DatabaseLocked)),
+            classify(&failure_with(ErrorCode::DatabaseLocked)),
             ErrorClass::Transient
         );
-        assert_eq!(classify(&echec(ErrorCode::Unknown)), ErrorClass::Permanent);
         assert_eq!(
-            classify(&echec(ErrorCode::ConstraintViolation)),
+            classify(&failure_with(ErrorCode::Unknown)),
             ErrorClass::Permanent
         );
         assert_eq!(
-            classify(&echec(ErrorCode::DatabaseCorrupt)),
+            classify(&failure_with(ErrorCode::ConstraintViolation)),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            classify(&failure_with(ErrorCode::DatabaseCorrupt)),
             ErrorClass::Permanent,
-            "une base corrompue ne se répare pas en réessayant"
+            "a corrupted database is not repaired by retrying"
         );
     }
 
     #[test]
-    fn une_lecture_interrompue_est_une_annulation() {
-        let err = engine(echec(ErrorCode::OperationInterrupted), Effect::ReadOnly);
+    fn an_interrupted_read_is_a_cancellation() {
+        let err = engine(
+            failure_with(ErrorCode::OperationInterrupted),
+            Effect::ReadOnly,
+        );
         assert!(err.is_cancelled(), "{err:?}");
         assert!(!err.is_retryable());
     }
 
     #[test]
-    fn une_ecriture_interrompue_est_ambigue_et_ne_se_retente_pas() {
-        // I-13 : le serveur a peut-être appliqué. Rejouer crée un doublon
-        // silencieux dans les données de l'utilisateur.
-        let err = engine(echec(ErrorCode::OperationInterrupted), Effect::Mutating);
+    fn an_interrupted_write_is_ambiguous_and_is_not_retried() {
+        // I-13: the server may have applied it. Replaying creates a silent
+        // duplicate in the user's data.
+        let err = engine(
+            failure_with(ErrorCode::OperationInterrupted),
+            Effect::Mutating,
+        );
         assert_eq!(err.class(), ErrorClass::Ambiguous, "{err:?}");
         assert!(!err.is_retryable());
         assert!(
             !err.is_cancelled(),
-            "l'effet n'est pas connu : ce n'est pas une annulation propre"
+            "the effect is unknown: it is not a clean cancellation"
         );
     }
 
     #[test]
-    fn un_chemin_fautif_ne_ressort_jamais_dans_le_message() {
-        // I-03 : le chemin du fichier est une valeur de paramètre de connexion.
-        let secret = PathBuf::from("/Users/quelqu-un/bases/clients-2026.sqlite");
+    fn an_offending_path_never_comes_out_in_the_message() {
+        // I-03: the file path is a connection parameter value.
+        let secret = PathBuf::from("/Users/someone/databases/clients-2026.sqlite");
         let err = engine(
             rusqlite::Error::InvalidPath(secret.clone()),
             Effect::ReadOnly,
         );
-        let rendu = format!("{err}");
-        assert!(!rendu.contains("clients-2026"), "chemin fuité : {rendu}");
-        assert!(!rendu.contains("quelqu-un"), "chemin fuité : {rendu}");
+        let shown = format!("{err}");
+        assert!(!shown.contains("clients-2026"), "path leaked: {shown}");
+        assert!(!shown.contains("someone"), "path leaked: {shown}");
 
-        let rendu = format!("{}", open(rusqlite::Error::InvalidPath(secret)));
-        assert!(!rendu.contains("clients-2026"), "chemin fuité : {rendu}");
+        let shown = format!("{}", open(rusqlite::Error::InvalidPath(secret)));
+        assert!(!shown.contains("clients-2026"), "path leaked: {shown}");
     }
 
     #[test]
-    fn une_erreur_du_moteur_porte_le_nom_du_driver() {
-        let err = engine(echec(ErrorCode::Unknown), Effect::ReadOnly);
+    fn an_engine_error_carries_the_driver_name() {
+        let err = engine(failure_with(ErrorCode::Unknown), Effect::ReadOnly);
         assert!(err.to_string().contains("sqlite"), "{err}");
-        assert!(err.to_string().contains("message du moteur"), "{err}");
+        assert!(err.to_string().contains("engine message"), "{err}");
     }
 
     #[test]
-    fn un_conflit_de_colonne_ne_nomme_pas_la_colonne() {
-        // Un nom de colonne vient du serveur : il peut porter une séquence
-        // d'échappement de terminal, et un message d'erreur finit dans un
-        // journal.
+    fn a_column_conflict_does_not_name_the_column() {
+        // A column name comes from the server: it may carry a terminal escape
+        // sequence, and an error message ends up in a log.
         let err = SqliteError::ColumnConflict {
             column: 3,
             resolved: "int64",
             found: "blob",
         };
-        let rendu = err.to_string();
-        assert!(rendu.contains("#3"), "{rendu}");
-        assert!(rendu.contains("int64") && rendu.contains("blob"), "{rendu}");
+        let shown = err.to_string();
+        assert!(shown.contains("#3"), "{shown}");
+        assert!(shown.contains("int64") && shown.contains("blob"), "{shown}");
     }
 
     #[test]
-    fn le_message_du_moteur_est_retenu_des_qu_une_valeur_etait_liee() {
-        // I-03 : ce message est affiché, journalisé et persisté par
-        // l'historique. SQLite y recopie ce qu'on vient de lier.
-        let err = engine_bound(echec_bavard(), Effect::Mutating, Bound::Caller);
-        for rendu in [format!("{err}"), format!("{err:?}")] {
-            assert!(!rendu.contains("S3NT1NELLE-42"), "valeur liée : {rendu}");
-            assert!(!rendu.contains("solde"), "message du moteur : {rendu}");
+    fn the_engine_message_is_withheld_as_soon_as_a_value_was_bound() {
+        // I-03: this message is displayed, logged and persisted by the history.
+        // SQLite copies into it what was just bound.
+        let err = engine_bound(chatty_failure(), Effect::Mutating, Bound::Caller);
+        for shown in [format!("{err}"), format!("{err:?}")] {
+            assert!(!shown.contains("S3NT1N3L-42"), "bound value: {shown}");
+            assert!(!shown.contains("balance"), "engine message: {shown}");
         }
-        // Le retrait se dit, plutôt que de laisser croire à une erreur muette.
+        // The withdrawal is stated, rather than suggesting a silent error.
         assert!(err.to_string().contains("withheld"), "{err}");
-        // Le code de résultat étendu survit : c'est un nombre, il ne cite rien.
+        // The extended result code survives: it is a number, it quotes nothing.
         assert!(err.to_string().contains("1811"), "{err}");
     }
 
     #[test]
-    fn sans_valeur_liee_le_message_du_moteur_passe_inchange() {
-        // Le public d'Oxyn lit les messages de son moteur ; une paraphrase
-        // rassurante serait un défaut.
-        let err = engine_bound(echec_bavard(), Effect::Mutating, Bound::Internal);
-        assert!(err.to_string().contains("solde : S3NT1NELLE-42"), "{err}");
+    fn without_bound_value_the_engine_message_passes_unchanged() {
+        // Oxyn's audience reads its engine's messages; a reassuring paraphrase would
+        // be a defect.
+        let err = engine_bound(chatty_failure(), Effect::Mutating, Bound::Internal);
+        assert!(err.to_string().contains("balance: S3NT1N3L-42"), "{err}");
         assert_eq!(
             err.to_string(),
-            engine(echec_bavard(), Effect::Mutating).to_string(),
-            "`engine` est le cas sans valeur liée"
+            engine(chatty_failure(), Effect::Mutating).to_string(),
+            "`engine` is the case without bound value"
         );
     }
 
     #[test]
-    fn le_retrait_du_message_ne_change_ni_la_famille_ni_l_annulation() {
-        // La classe se lit sur le code de résultat, relevé avant d'abandonner
-        // l'erreur d'origine : la retenir ne doit rien déplacer.
-        for (code, attendue) in [
+    fn withholding_the_message_changes_neither_family_nor_cancellation() {
+        // The class is read from the result code, taken before dropping the
+        // original error: withholding it must move nothing.
+        for (code, expected_class) in [
             (ErrorCode::DatabaseBusy, ErrorClass::Transient),
             (ErrorCode::ConstraintViolation, ErrorClass::Permanent),
         ] {
-            let err = engine_bound(echec(code), Effect::Mutating, Bound::Caller);
-            assert_eq!(err.class(), attendue, "{err:?}");
+            let err = engine_bound(failure_with(code), Effect::Mutating, Bound::Caller);
+            assert_eq!(err.class(), expected_class, "{err:?}");
         }
 
-        let lecture = engine_bound(
-            echec(ErrorCode::OperationInterrupted),
+        let interrupted_read = engine_bound(
+            failure_with(ErrorCode::OperationInterrupted),
             Effect::ReadOnly,
             Bound::Caller,
         );
-        assert!(lecture.is_cancelled(), "{lecture:?}");
+        assert!(interrupted_read.is_cancelled(), "{interrupted_read:?}");
 
-        // I-13 : une écriture interrompue reste ambiguë, donc non rejouable.
-        let ecriture = engine_bound(
-            echec(ErrorCode::OperationInterrupted),
+        // I-13: an interrupted write stays ambiguous, hence not replayable.
+        let interrupted_write = engine_bound(
+            failure_with(ErrorCode::OperationInterrupted),
             Effect::Mutating,
             Bound::Caller,
         );
-        assert_eq!(ecriture.class(), ErrorClass::Ambiguous, "{ecriture:?}");
-        assert!(!ecriture.is_retryable());
-        assert!(!format!("{ecriture:?}").contains("message du moteur"));
+        assert_eq!(
+            interrupted_write.class(),
+            ErrorClass::Ambiguous,
+            "{interrupted_write:?}"
+        );
+        assert!(!interrupted_write.is_retryable());
+        assert!(!format!("{interrupted_write:?}").contains("engine message"));
     }
 
     #[test]
-    fn une_demande_sans_parametre_ne_retient_rien() {
+    fn a_request_without_parameter_withholds_nothing() {
         assert_eq!(Bound::of(&[]), Bound::Internal);
         assert_eq!(
-            Bound::of(&[ScalarValue::Text("S3NT1NELLE-42".to_owned())]),
+            Bound::of(&[ScalarValue::Text("S3NT1N3L-42".to_owned())]),
             Bound::Caller
         );
     }
 
     #[test]
-    fn une_session_fermee_est_une_erreur_permanente() {
+    fn a_closed_session_is_a_permanent_error() {
         let err = closed();
         assert_eq!(err.class(), ErrorClass::Permanent);
         assert!(!err.is_retryable());
     }
 
-    /// Retenir le message d'un défaut du driver ne protège rien et efface le
-    /// diagnostic : `InvalidColumnIndex` est composé par `rusqlite` à partir
-    /// d'un index, il ne peut citer aucune valeur liée.
+    /// Withholding the message of a driver defect protects nothing and erases the
+    /// diagnostic: `InvalidColumnIndex` is composed by `rusqlite` from an index, it
+    /// cannot quote any bound value.
     #[test]
-    fn seul_le_texte_du_moteur_est_retenu_quand_des_valeurs_sont_liees() {
+    fn only_the_engine_text_is_withheld_when_values_are_bound() {
         let usage = hide(rusqlite::Error::InvalidColumnIndex(3), None, Bound::Caller);
         assert!(
             matches!(usage, SqliteError::Engine(_)),
-            "une erreur d'usage garde son message : {usage}"
+            "a usage error keeps its message: {usage}"
         );
         assert!(usage.to_string().contains('3'));
 
-        let moteur = hide(
+        let engine_failure = hide(
             rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(19),
-                Some("CHECK constraint failed: S3NT1NELLE-42".to_owned()),
+                Some("CHECK constraint failed: S3NT1N3L-42".to_owned()),
             ),
             Some(rusqlite::ffi::Error::new(19)),
             Bound::Caller,
         );
-        let rendu = format!("{moteur} {moteur:?}");
+        let shown = format!("{engine_failure} {engine_failure:?}");
         assert!(
-            !rendu.contains("S3NT1NELLE"),
-            "le texte du moteur ne sort pas : {rendu}"
+            !shown.contains("S3NT1N3L"),
+            "the engine text does not come out: {shown}"
         );
-        assert!(rendu.contains("19"), "le code de résultat survit : {rendu}");
+        assert!(shown.contains("19"), "the result code survives: {shown}");
     }
 }

@@ -1,34 +1,33 @@
-//! Configuration d'une connexion : marquage de son environnement, et niveau de
-//! confidentialité de ce qui peut rejoindre une invite IA.
+//! Configuration of a connection: marking of its environment, and privacy
+//! tier of what may reach an AI prompt.
 //!
-//! Trois règles gouvernent ce module. Les deux premières viennent de
-//! [`SECURITY`](../../../docs/SECURITY.md) :
+//! Three rules govern this module. The first two come from
+//! [`SECURITY`](../../../docs/SECURITY.md):
 //!
-//! 1. **Aucun secret ici.** Mot de passe, chaîne de connexion complète, clé SSH,
-//!    certificat client : rien de tout cela n'entre dans [`ConnectionConfig`].
-//!    Ce qui est persisté, c'est une *référence* au secret
-//!    ([`secret_ref`](ConnectionConfig::secret_ref)), résolue par `oxyn-secrets`
-//!    auprès du trousseau du système. La panne évitée est concrète : un fichier
-//!    de workspace contenant un mot de passe de production, commité par
-//!    l'utilisateur dans le dépôt de son équipe.
-//! 2. **Le défaut est [`Environment::Production`]**, la valeur la plus
-//!    contraignante. Le défaut inverse est ce qui laisse partir un `UPDATE` sans
-//!    `WHERE` sur la base client parce que l'utilisateur a ajouté la connexion à
-//!    la hâte sans remplir le champ.
+//! 1. **No secret here.** Password, full connection string, SSH key, client
+//!    certificate: none of it enters [`ConnectionConfig`]. What is persisted
+//!    is a *reference* to the secret
+//!    ([`secret_ref`](ConnectionConfig::secret_ref)), resolved by
+//!    `oxyn-secrets` against the system keychain. The failure avoided is
+//!    concrete: a workspace file containing a production password, committed
+//!    by the user to their team's repository.
+//! 2. **The default is [`Environment::Production`]**, the most restrictive
+//!    value. The opposite default is what lets an `UPDATE` without `WHERE`
+//!    through on the customer database because the user hastily added the
+//!    connection without filling in the field.
 //!
-//! La troisième vient de [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md) :
+//! The third comes from [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md):
 //!
-//! 3. **Le [`PrivacyTier`] est porté par la connexion**, pas par la session, le
-//!    fournisseur ou l'application, et son défaut est
-//!    [`Metadata`](PrivacyTier::Metadata). Le type vit ici — et non dans
-//!    `oxyn-ai` — précisément parce que c'est cette structure qui le porte : un
-//!    niveau rangé ailleurs finit par être un réglage global, ce qu'ADR-0006
-//!    refuse.
+//! 3. **The [`PrivacyTier`] is carried by the connection**, not by the
+//!    session, the provider or the application, and its default is
+//!    [`Metadata`](PrivacyTier::Metadata). The type lives here — and not in
+//!    `oxyn-ai` — precisely because this structure is what carries it: a tier
+//!    stored elsewhere ends up being a global setting, which ADR-0006 refuses.
 //!
-//! Le `Debug` de [`ConnectionConfig`] est écrit à la main : les valeurs des
-//! paramètres sont masquées. Un `Debug` dérivé est le mode de fuite le plus
-//! fréquent, parce qu'il est invisible à la relecture — c'est le
-//! `tracing::debug!("{cfg:?}")` ajouté six mois plus tard qui fuit (I-03).
+//! The `Debug` of [`ConnectionConfig`] is written by hand: parameter values
+//! are masked. A derived `Debug` is the most frequent leak, because it is
+//! invisible in review — it is the `tracing::debug!("{cfg:?}")` added six
+//! months later that leaks (I-03).
 
 use std::fmt;
 use std::str::FromStr;
@@ -38,43 +37,42 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{ConnectionId, DriverId, IdParseError};
 
-/// Environnement d'une connexion.
+/// Environment of a connection.
 ///
-/// Les quatre valeurs sont exactement celles de
-/// [`SECURITY`](../../../docs/SECURITY.md) ; l'énumération est fermée pour la
-/// même raison que [`StatementIntent`](crate::query::StatementIntent) : un
-/// environnement de plus doit forcer la relecture de chaque décision qui en
-/// dépend.
+/// The four values are exactly those of
+/// [`SECURITY`](../../../docs/SECURITY.md); the enumeration is closed for the
+/// same reason as [`StatementIntent`](crate::query::StatementIntent): one more
+/// environment must force a re-read of every decision that depends on it.
 ///
-/// L'ordre des variantes est celui de la contrainte croissante, et il est
-/// **signifiant** : `Ord` sert à prendre le plus contraignant de deux
-/// environnements (voir `DefaultPolicy`).
+/// The order of the variants is that of increasing restriction, and it is
+/// **significant**: `Ord` serves to take the more restrictive of two
+/// environments (see `DefaultPolicy`).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Environment {
-    /// Base locale, jetable.
+    /// Local, disposable database.
     Local,
-    /// Environnement de développement partagé.
+    /// Shared development environment.
     Development,
-    /// Préproduction : ressemble à la production, mais les données ne comptent
-    /// pas de la même façon.
+    /// Staging: resembles production, but the data does not count the same
+    /// way.
     Staging,
-    /// Production. **C'est le défaut** quand l'environnement n'est pas
-    /// renseigné.
+    /// Production. **It is the default** when the environment is not filled
+    /// in.
     #[default]
     Production,
 }
 
 impl Environment {
-    /// S'agit-il de la production ?
+    /// Is it production?
     #[must_use]
     pub const fn is_production(&self) -> bool {
         matches!(self, Self::Production)
     }
 
-    /// Nom stable, celui qui est écrit dans les fichiers de workspace.
+    /// Stable name, the one written in workspace files.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -109,100 +107,96 @@ impl FromStr for Environment {
     }
 }
 
-/// Ce qui a le droit de quitter la machine pour une connexion donnée.
+/// What is allowed to leave the machine for a given connection.
 ///
-/// Autorité : [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md). Le tableau
-/// des niveaux y vit et n'est pas recopié ici.
+/// Authority: [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md). The
+/// table of tiers lives there and is not copied here.
 ///
-/// # Pourquoi par connexion, et jamais globalement
+/// # Why per connection, and never globally
 ///
-/// La panne visée par [AI-PROVIDERS](../../../docs/AI-PROVIDERS.md) :
-/// l'utilisateur règle le niveau sur `Sampled` pour sa base de bac à sable,
-/// l'oublie, puis ouvre trois jours plus tard la base client de son employeur.
-/// Si le niveau était global, des lignes réelles partiraient chez un
-/// fournisseur tiers. Techniquement rien n'a échoué ; contractuellement, c'est
-/// irréversible.
+/// The failure targeted by [AI-PROVIDERS](../../../docs/AI-PROVIDERS.md): the
+/// user sets the tier to `Sampled` for their sandbox database, forgets it,
+/// then three days later opens their employer's customer database. If the
+/// tier were global, real rows would go to a third-party provider. Technically
+/// nothing failed; contractually, it is irreversible.
 ///
-/// Conséquence de conception : ce type ne porte **aucun** constructeur qui le
-/// dérive d'un fournisseur, d'une session ou d'un réglage d'application. Il
-/// vient du champ [`ConnectionConfig::privacy_tier`] et de rien d'autre (I-04).
+/// Design consequence: this type carries **no** constructor that derives it
+/// from a provider, a session or an application setting. It comes from the
+/// [`ConnectionConfig::privacy_tier`] field and nothing else (I-04).
 ///
-/// # `Metadata` par défaut n'est pas « rien ne sort »
+/// # `Metadata` by default is not "nothing leaves"
 ///
-/// Le DDL, les noms, les types, les index et les cardinalités **sortent** dès
-/// qu'un fournisseur distant est configuré. Une table `patients` avec une
-/// colonne `hiv_status` révèle l'essentiel sans qu'une seule ligne ne sorte.
-/// C'est un compromis délibéré, et l'interface doit le montrer en permanence.
+/// DDL, names, types, indexes and cardinalities **leave** as soon as a remote
+/// provider is configured. A `patients` table with a `hiv_status` column
+/// reveals the essentials without a single row leaving. It is a deliberate
+/// trade-off, and the interface must show it permanently.
 ///
-/// # L'énumération est fermée
+/// # The enumeration is closed
 ///
-/// Contrairement à la convention du dépôt sur les énumérations publiques : la
-/// triade d'ADR-0006 est un contrat, et un quatrième niveau serait une décision
-/// d'ADR, pas une variante ajoutée au fil de l'eau. Un `_ =>` dans l'interface
-/// qui avalerait un niveau inconnu choisirait silencieusement le mauvais
-/// comportement.
+/// Unlike the repository's convention on public enumerations: ADR-0006's triad
+/// is a contract, and a fourth tier would be an ADR decision, not a variant
+/// added along the way. A `_ =>` in the interface that swallowed an unknown
+/// tier would silently choose the wrong behavior.
 ///
-/// L'ordre est celui de la **divulgation croissante** : `Local < Metadata <
-/// Sampled`. C'est ce qui rend [`most_restrictive`](Self::most_restrictive)
-/// écrivable, et donc composable quand deux niveaux s'appliquent au même envoi.
+/// The order is that of **increasing disclosure**: `Local < Metadata <
+/// Sampled`. That is what makes [`most_restrictive`](Self::most_restrictive)
+/// writable, and hence composable when two tiers apply to the same send.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum PrivacyTier {
-    /// Rien ne quitte la machine. Modèle local uniquement.
+    /// Nothing leaves the machine. Local model only.
     Local,
-    /// DDL, noms, types, index, cardinalités, plans d'exécution.
-    /// **Aucune valeur de ligne.** C'est le défaut.
+    /// DDL, names, types, indexes, cardinalities, execution plans.
+    /// **No row value.** It is the default.
     #[default]
     Metadata,
-    /// Idem, plus un échantillon de lignes explicitement approuvé, colonne par
-    /// colonne.
+    /// Same, plus a sample of rows explicitly approved, column by column.
     Sampled,
 }
 
 impl PrivacyTier {
-    /// Des valeurs de lignes peuvent-elles rejoindre une invite ?
+    /// Can row values reach a prompt?
     ///
-    /// Seul [`Sampled`](Self::Sampled) répond `true`, et même alors les valeurs
-    /// doivent avoir été approuvées colonne par colonne en amont : ce prédicat
-    /// est une condition nécessaire, pas suffisante.
+    /// Only [`Sampled`](Self::Sampled) answers `true`, and even then the values
+    /// must have been approved column by column upstream: this predicate is a
+    /// necessary condition, not a sufficient one.
     ///
-    /// C'est **le** prédicat qui gouverne tout contenu susceptible de citer une
-    /// ligne — un échantillon, mais aussi un message d'erreur de serveur, qui
-    /// recopie la valeur qui viole une contrainte.
+    /// It is **the** predicate that governs any content likely to quote a row
+    /// — a sample, but also a server error message, which copies the value
+    /// that violates a constraint.
     #[must_use]
     pub const fn allows_row_values(&self) -> bool {
         matches!(self, Self::Sampled)
     }
 
-    /// Un fournisseur dont les données quittent la machine est-il utilisable ?
+    /// Is a provider whose data leaves the machine usable?
     ///
-    /// `false` pour [`Local`](Self::Local). Ce n'est pas une valeur par défaut
-    /// qu'un réglage renverse : c'est la promesse du niveau.
+    /// `false` for [`Local`](Self::Local). It is not a default a setting
+    /// overturns: it is the tier's promise.
     ///
-    /// Le classement local/distant d'un point d'accès ne se fait **jamais** sur
-    /// la forme de son URL — un point d'accès compatible OpenAI en écoute sur
-    /// la boucle locale peut être un mandataire vers le nuage. Il se fait sur
-    /// l'hôte réel après résolution, ce qui est une opération bloquante : elle
-    /// vit dans `oxyn-llm`, avec le reste de ce qui parle au réseau.
+    /// The local/remote classification of an endpoint is **never** made on the
+    /// shape of its URL — an OpenAI-compatible endpoint listening on the
+    /// loopback can be a proxy to the cloud. It is made on the real host after
+    /// resolution, which is a blocking operation: it lives in `oxyn-llm`, with
+    /// the rest of what talks to the network.
     #[must_use]
     pub const fn allows_remote_provider(&self) -> bool {
         !matches!(self, Self::Local)
     }
 
-    /// Le plus contraignant des deux niveaux.
+    /// The more restrictive of the two tiers.
     ///
-    /// Sert partout où deux niveaux se rencontrent — une conversation qui
-    /// touche deux connexions, un contexte assemblé avant que l'utilisateur ne
-    /// change de connexion. Le résultat ne divulgue jamais plus que le plus
-    /// prudent des deux.
+    /// Used wherever two tiers meet — a conversation that touches two
+    /// connections, a context assembled before the user switches connection.
+    /// The result never discloses more than the more cautious of the two.
     #[must_use]
     pub fn most_restrictive(self, other: Self) -> Self {
         self.min(other)
     }
 
-    /// Nom stable, pour l'affichage, la persistance et l'audit.
+    /// Stable name, for display, persistence and audit.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -212,13 +206,12 @@ impl PrivacyTier {
         }
     }
 
-    /// Ce qui sort de la machine sous ce niveau, en une phrase montrable.
+    /// What leaves the machine under this tier, in one showable sentence.
     ///
-    /// En anglais : cette phrase rejoint une invite, c'est donc du texte de
-    /// code. L'interface doit afficher le niveau effectif **en permanence** et
-    /// non dans un panneau de réglages : un utilisateur qui ne peut pas dire
-    /// d'un coup d'œil où part sa requête ne donne pas un consentement éclairé
-    /// (AI-PROVIDERS).
+    /// In English: this sentence reaches a prompt, so it is code text. The
+    /// interface must show the effective tier **permanently** and not in a
+    /// settings panel: a user who cannot tell at a glance where their query
+    /// goes does not give informed consent (AI-PROVIDERS).
     #[must_use]
     pub const fn describe(&self) -> &'static str {
         match self {
@@ -251,57 +244,56 @@ impl FromStr for PrivacyTier {
     }
 }
 
-/// Configuration d'une connexion, telle qu'elle est persistée dans le
-/// workspace.
+/// Configuration of a connection, as persisted in the workspace.
 ///
-/// Les paramètres sont un [`IndexMap`] et non une `HashMap` : leur ordre est
-/// celui que l'utilisateur a saisi, et il est conservé à la réécriture du
-/// fichier. Un fichier de configuration qui se réordonne tout seul produit des
-/// différences illisibles dans un dépôt.
+/// The parameters are an [`IndexMap`] and not a `HashMap`: their order is the
+/// one the user entered, and it is kept when the file is rewritten. A
+/// configuration file that reorders itself produces unreadable diffs in a
+/// repository.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionConfig {
-    /// Identifiant interne. N'apparaît pas dans l'interface.
+    /// Internal identifier. Does not appear in the interface.
     pub id: ConnectionId,
-    /// Nom donné par l'utilisateur. C'est **lui** qui est montré, y compris
-    /// dans les demandes de confirmation.
+    /// Name given by the user. It is **this** that is shown, including in
+    /// confirmation requests.
     pub name: String,
-    /// Driver, par protocole (ADR-0003).
+    /// Driver, per protocol (ADR-0003).
     pub driver: DriverId,
-    /// Environnement. Absent du fichier, il vaut
+    /// Environment. Absent from the file, it is
     /// [`Environment::Production`].
     #[serde(default)]
     pub environment: Environment,
-    /// Ce qui a le droit de rejoindre une invite IA pour cette connexion.
+    /// What is allowed to reach an AI prompt for this connection.
     ///
-    /// Absent du fichier, il vaut [`PrivacyTier::Metadata`] : le défaut
-    /// d'ADR-0006, et jamais [`Sampled`](PrivacyTier::Sampled). Le sens de la
-    /// prudence est celui d'[`environment`](Self::environment) — un champ
-    /// manquant ne dégrade pas la protection.
+    /// Absent from the file, it is [`PrivacyTier::Metadata`]: ADR-0006's
+    /// default, and never [`Sampled`](PrivacyTier::Sampled). The direction of
+    /// caution is that of [`environment`](Self::environment) — a missing field
+    /// does not lower the protection.
     #[serde(default)]
     pub privacy_tier: PrivacyTier,
-    /// Paramètres non secrets : hôte, port, base, schéma, mode TLS…
+    /// Non-secret parameters: host, port, database, schema, TLS mode…
     ///
-    /// Un mot de passe n'a rien à faire ici. Voir
+    /// A password has no business here. See
     /// [`secret_ref`](Self::secret_ref).
     #[serde(default)]
     pub params: IndexMap<String, String>,
-    /// Référence au secret dans le trousseau du système. Jamais le secret
-    /// lui-même.
+    /// Reference to the secret in the system keychain. Never the secret
+    /// itself.
     #[serde(default)]
     pub secret_ref: Option<String>,
-    /// La connexion est déclarée en lecture seule par l'utilisateur.
+    /// The connection is declared read-only by the user.
     ///
-    /// Le `PolicyGate` en fait un **refus** de toute commande mutante, acteur
-    /// humain compris : marquer une connexion en lecture seule est une
-    /// déclaration d'intention, pas une préférence d'affichage.
+    /// The `PolicyGate` turns it into a **refusal** of any mutating command,
+    /// human actor included: marking a connection read-only is a declaration
+    /// of intent, not a display preference.
     #[serde(default)]
     pub read_only: bool,
 }
 
 impl ConnectionConfig {
-    /// Crée une configuration avec les défauts prudents : identifiant frais,
-    /// environnement [`Production`](Environment::Production), niveau
-    /// [`Metadata`](PrivacyTier::Metadata), aucun paramètre, aucun secret.
+    /// Creates a configuration with the cautious defaults: fresh identifier,
+    /// [`Production`](Environment::Production) environment,
+    /// [`Metadata`](PrivacyTier::Metadata) tier, no parameter, no secret.
     #[must_use]
     pub fn new(name: impl Into<String>, driver: DriverId) -> Self {
         Self {
@@ -316,46 +308,45 @@ impl ConnectionConfig {
         }
     }
 
-    /// Fixe l'environnement.
+    /// Sets the environment.
     #[must_use]
     pub fn with_environment(mut self, environment: Environment) -> Self {
         self.environment = environment;
         self
     }
 
-    /// Fixe le niveau de confidentialité de cette connexion.
+    /// Sets this connection's privacy tier.
     ///
-    /// C'est un acte de l'utilisateur sur **une** connexion : il n'existe
-    /// volontairement pas de chemin qui l'applique à plusieurs d'un coup
-    /// (ADR-0006).
+    /// It is a user act on **one** connection: there is deliberately no path
+    /// that applies it to several at once (ADR-0006).
     #[must_use]
     pub fn with_privacy_tier(mut self, tier: PrivacyTier) -> Self {
         self.privacy_tier = tier;
         self
     }
 
-    /// Ajoute un paramètre non secret.
+    /// Adds a non-secret parameter.
     #[must_use]
     pub fn with_param(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.insert(key.into(), value.into());
         self
     }
 
-    /// Rattache une référence de secret.
+    /// Attaches a secret reference.
     #[must_use]
     pub fn with_secret_ref(mut self, secret_ref: impl Into<String>) -> Self {
         self.secret_ref = Some(secret_ref.into());
         self
     }
 
-    /// Marque la connexion en lecture seule.
+    /// Marks the connection read-only.
     #[must_use]
     pub fn read_only(mut self) -> Self {
         self.read_only = true;
         self
     }
 
-    /// La connexion vise-t-elle la production ?
+    /// Does the connection target production?
     #[must_use]
     pub const fn is_production(&self) -> bool {
         self.environment.is_production()
@@ -363,13 +354,12 @@ impl ConnectionConfig {
 }
 
 impl fmt::Debug for ConnectionConfig {
-    /// Rendu volontairement partiel : les **valeurs** des paramètres et la
-    /// référence de secret ne sont pas imprimées. Seules les clés le sont —
-    /// savoir qu'un paramètre `host` existe est utile ; savoir lequel ne l'est
-    /// pas dans un journal.
+    /// Deliberately partial rendering: parameter **values** and the secret
+    /// reference are not printed. Only the keys are — knowing that a `host`
+    /// parameter exists is useful; knowing which one is not, in a log.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct ClesSeules<'a>(&'a IndexMap<String, String>);
-        impl fmt::Debug for ClesSeules<'_> {
+        struct KeysOnly<'a>(&'a IndexMap<String, String>);
+        impl fmt::Debug for KeysOnly<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_map()
                     .entries(self.0.keys().map(|k| (k, "<redacted>")))
@@ -381,10 +371,10 @@ impl fmt::Debug for ConnectionConfig {
             .field("name", &self.name)
             .field("driver", &self.driver)
             .field("environment", &self.environment)
-            // Le niveau est montrable, et il doit l'être : un incident se
-            // diagnostique en sachant sous quel niveau la connexion tournait.
+            // The tier is showable, and it must be: an incident is diagnosed
+            // by knowing under which tier the connection was running.
             .field("privacy_tier", &self.privacy_tier)
-            .field("params", &ClesSeules(&self.params))
+            .field("params", &KeysOnly(&self.params))
             .field(
                 "secret_ref",
                 &self.secret_ref.as_ref().map(|_| "<redacted reference>"),
@@ -399,75 +389,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn le_defaut_est_la_production() {
-        // SECURITY : le défaut est la valeur la plus contraignante, pas la plus
+    fn the_default_is_production() {
+        // SECURITY: the default is the most restrictive value, not the most
         // permissive.
         assert_eq!(Environment::default(), Environment::Production);
         assert!(Environment::default().is_production());
-        assert!(ConnectionConfig::new("sans environnement", DriverId::postgres()).is_production());
+        assert!(ConnectionConfig::new("no environment", DriverId::postgres()).is_production());
     }
 
     #[test]
-    fn un_environnement_absent_du_fichier_vaut_production() {
+    fn an_environment_missing_from_the_file_means_production() {
         let json = r#"{
             "id": "018f0000-0000-7000-8000-000000000000",
-            "name": "base client",
+            "name": "customer database",
             "driver": "postgres"
         }"#;
-        let cfg: ConnectionConfig = serde_json::from_str(json).expect("désérialisation");
+        let cfg: ConnectionConfig = serde_json::from_str(json).expect("deserialization");
         assert_eq!(
             cfg.environment,
             Environment::Production,
-            "un champ manquant ne doit jamais dégrader la protection"
+            "a missing field must never lower the protection"
         );
         assert!(!cfg.read_only);
         assert!(cfg.params.is_empty());
     }
 
     #[test]
-    fn une_connexion_sans_niveau_explicite_vaut_metadata() {
-        // ADR-0006 : le défaut est sûr. Une connexion dont le niveau n'est pas
-        // renseigné ne vaut **jamais** `Sampled` — c'est le sens de prudence
-        // d'I-02 appliqué à la frontière IA.
-        let cfg = ConnectionConfig::new("base client", DriverId::postgres());
+    fn a_connection_without_explicit_tier_means_metadata() {
+        // ADR-0006: the default is safe. A connection whose tier is not filled
+        // in is **never** `Sampled` — it is I-02's direction of caution applied
+        // to the AI boundary.
+        let cfg = ConnectionConfig::new("customer database", DriverId::postgres());
         assert_eq!(cfg.privacy_tier, PrivacyTier::Metadata);
         assert!(!cfg.privacy_tier.allows_row_values());
     }
 
     #[test]
-    fn un_niveau_absent_du_fichier_vaut_metadata() {
-        // Le champ manquant est le cas réel : un workspace écrit avant que le
-        // champ n'existe. Il ne doit pas se relire en `Sampled`.
+    fn a_tier_missing_from_the_file_means_metadata() {
+        // The missing field is the real case: a workspace written before the
+        // field existed. It must not be read back as `Sampled`.
         let json = r#"{
             "id": "018f0000-0000-7000-8000-000000000000",
-            "name": "base client",
+            "name": "customer database",
             "driver": "postgres"
         }"#;
-        let cfg: ConnectionConfig = serde_json::from_str(json).expect("désérialisation");
+        let cfg: ConnectionConfig = serde_json::from_str(json).expect("deserialization");
         assert_eq!(cfg.privacy_tier, PrivacyTier::Metadata);
     }
 
     #[test]
-    fn le_niveau_se_persiste_avec_la_connexion() {
-        // Le niveau appartient à la connexion : l'aller-retour doit être exact,
-        // sinon un workspace relu dégraderait — ou élargirait — la protection.
-        for niveau in [
+    fn the_tier_is_persisted_with_the_connection() {
+        // The tier belongs to the connection: the round trip must be exact,
+        // otherwise a workspace read back would lower — or widen — the protection.
+        for tier in [
             PrivacyTier::Local,
             PrivacyTier::Metadata,
             PrivacyTier::Sampled,
         ] {
-            let cfg =
-                ConnectionConfig::new("bac à sable", DriverId::sqlite()).with_privacy_tier(niveau);
-            let json = serde_json::to_string(&cfg).expect("sérialisation");
-            let relu: ConnectionConfig = serde_json::from_str(&json).expect("désérialisation");
-            assert_eq!(relu.privacy_tier, niveau, "{json}");
-            assert_eq!(niveau.as_str().parse::<PrivacyTier>(), Ok(niveau));
+            let cfg = ConnectionConfig::new("sandbox", DriverId::sqlite()).with_privacy_tier(tier);
+            let json = serde_json::to_string(&cfg).expect("serialization");
+            let read_back: ConnectionConfig = serde_json::from_str(&json).expect("deserialization");
+            assert_eq!(read_back.privacy_tier, tier, "{json}");
+            assert_eq!(tier.as_str().parse::<PrivacyTier>(), Ok(tier));
         }
-        assert!("confidentiel".parse::<PrivacyTier>().is_err());
+        assert!("confidential".parse::<PrivacyTier>().is_err());
     }
 
     #[test]
-    fn l_ordre_des_niveaux_va_du_moins_au_plus_divulgant() {
+    fn tiers_are_ordered_from_least_to_most_disclosing() {
         assert!(PrivacyTier::Local < PrivacyTier::Metadata);
         assert!(PrivacyTier::Metadata < PrivacyTier::Sampled);
         assert_eq!(
@@ -489,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn l_ordre_des_environnements_va_du_moins_au_plus_contraignant() {
+    fn environments_are_ordered_from_least_to_most_restrictive() {
         assert!(Environment::Local < Environment::Development);
         assert!(Environment::Development < Environment::Staging);
         assert!(Environment::Staging < Environment::Production);
@@ -500,95 +489,106 @@ mod tests {
     }
 
     #[test]
-    fn analyse_et_rendu_des_environnements() {
+    fn environment_parsing_and_rendering() {
         for env in [
             Environment::Local,
             Environment::Development,
             Environment::Staging,
             Environment::Production,
         ] {
-            let relu: Environment = env.as_str().parse().expect("aller-retour");
-            assert_eq!(env, relu);
+            let read_back: Environment = env.as_str().parse().expect("round trip");
+            assert_eq!(env, read_back);
         }
         assert_eq!(
-            "prod".parse::<Environment>().expect("abréviation acceptée"),
+            "prod"
+                .parse::<Environment>()
+                .expect("abbreviation accepted"),
             Environment::Production
         );
-        assert!("recette".parse::<Environment>().is_err());
+        assert!("uat".parse::<Environment>().is_err());
     }
 
     #[test]
-    fn le_debug_ne_laisse_fuir_aucune_valeur_de_parametre() {
+    fn the_debug_leaks_no_parameter_value() {
         let cfg = ConnectionConfig::new("prod-eu", DriverId::postgres())
-            .with_param("host", "db.interne.example")
+            .with_param("host", "db.internal.example")
             .with_param("sslmode", "require")
-            .with_secret_ref("oxyn/connexion/prod-eu");
+            .with_secret_ref("oxyn/connection/prod-eu");
 
-        let rendu = format!("{cfg:?}");
+        let rendered = format!("{cfg:?}");
 
         assert!(
-            !rendu.contains("db.interne.example"),
-            "hôte fuité : {rendu}"
+            !rendered.contains("db.internal.example"),
+            "host leaked: {rendered}"
         );
-        assert!(!rendu.contains("require"), "valeur fuitée : {rendu}");
+        assert!(!rendered.contains("require"), "value leaked: {rendered}");
         assert!(
-            !rendu.contains("oxyn/connexion/prod-eu"),
-            "référence de secret fuitée : {rendu}"
+            !rendered.contains("oxyn/connection/prod-eu"),
+            "secret reference leaked: {rendered}"
         );
         assert!(
-            !rendu.contains(&cfg.id.to_string()),
-            "identifiant fuité : {rendu}"
+            !rendered.contains(&cfg.id.to_string()),
+            "identifier leaked: {rendered}"
         );
 
-        // Ce qui reste doit rester utile au diagnostic.
-        assert!(rendu.contains("prod-eu"), "le nom est montrable : {rendu}");
-        assert!(rendu.contains("host"), "les clés sont montrables : {rendu}");
-        assert!(rendu.contains("postgres"));
-        // `Production` et non `production` : le `Debug` dérivé rend le nom de la
-        // variante Rust. La minuscule est la forme serde
-        // (`rename_all = "lowercase"`), qui ne vaut que pour ce qui est persisté.
+        // What remains must remain useful for diagnosis.
         assert!(
-            rendu.contains("Production"),
-            "l'environnement doit rester lisible : {rendu}"
+            rendered.contains("prod-eu"),
+            "the name is showable: {rendered}"
+        );
+        assert!(
+            rendered.contains("host"),
+            "the keys are showable: {rendered}"
+        );
+        assert!(rendered.contains("postgres"));
+        // `Production` and not `production`: the derived `Debug` renders the
+        // Rust variant name. Lowercase is the serde form
+        // (`rename_all = "lowercase"`), which only applies to what is persisted.
+        assert!(
+            rendered.contains("Production"),
+            "the environment must stay readable: {rendered}"
         );
     }
 
     #[test]
-    fn ce_qui_est_persiste_ne_contient_qu_une_reference_de_secret() {
-        // La seule voie pour un secret est `secret_ref`, et elle désigne une
-        // entrée du trousseau — jamais la valeur. C'est ce qui évite qu'un
-        // fichier de workspace commité dans un dépôt d'équipe emporte un mot de
-        // passe de production.
+    fn what_is_persisted_only_contains_a_secret_reference() {
+        // The only path for a secret is `secret_ref`, and it designates a
+        // keychain entry — never the value. That is what keeps a workspace file
+        // committed to a team repository from carrying away a production
+        // password.
         let cfg = ConnectionConfig::new("prod-eu", DriverId::postgres())
-            .with_param("host", "db.interne.example")
-            .with_secret_ref("oxyn/connexion/prod-eu");
+            .with_param("host", "db.internal.example")
+            .with_secret_ref("oxyn/connection/prod-eu");
 
-        let json = serde_json::to_string(&cfg).expect("sérialisation");
+        let json = serde_json::to_string(&cfg).expect("serialization");
 
-        assert!(!json.contains("password"), "champ suspect : {json}");
+        assert!(!json.contains("password"), "suspicious field: {json}");
         assert!(
-            json.contains("oxyn/connexion/prod-eu"),
-            "la référence est persistée"
+            json.contains("oxyn/connection/prod-eu"),
+            "the reference is persisted"
         );
 
-        let relu: ConnectionConfig = serde_json::from_str(&json).expect("désérialisation");
-        assert_eq!(relu, cfg, "l'aller-retour doit être fidèle");
-        assert_eq!(relu.secret_ref.as_deref(), Some("oxyn/connexion/prod-eu"));
+        let read_back: ConnectionConfig = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(read_back, cfg, "the round trip must be faithful");
+        assert_eq!(
+            read_back.secret_ref.as_deref(),
+            Some("oxyn/connection/prod-eu")
+        );
     }
 
     #[test]
-    fn l_ordre_des_parametres_est_conserve() {
+    fn parameter_order_is_kept() {
         let cfg = ConnectionConfig::new("x", DriverId::postgres())
             .with_param("host", "h")
             .with_param("port", "5432")
             .with_param("dbname", "d");
-        let cles: Vec<_> = cfg.params.keys().map(String::as_str).collect();
-        assert_eq!(cles, ["host", "port", "dbname"]);
+        let keys: Vec<_> = cfg.params.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["host", "port", "dbname"]);
     }
 
     #[test]
-    fn une_connexion_en_lecture_seule_se_declare() {
-        let cfg = ConnectionConfig::new("réplica", DriverId::postgres()).read_only();
+    fn a_read_only_connection_is_declared() {
+        let cfg = ConnectionConfig::new("replica", DriverId::postgres()).read_only();
         assert!(cfg.read_only);
     }
 }

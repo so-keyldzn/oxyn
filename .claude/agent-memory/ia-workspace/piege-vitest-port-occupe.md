@@ -1,12 +1,12 @@
 ---
 name: piege-vitest-port-occupe
-description: `make qualite` échoue à l'étage front sur « Port 63315 is already in use » quand un autre vitest tourne en parallèle — tous les tests passent pourtant
+description: `make qualite` fails at the front stage on "Port 63315 is already in use" when another vitest runs in parallel — all tests pass nonetheless
 metadata:
   type: feedback
 ---
 
-L'étage `front` de `make qualite` peut échouer avec `Error: Port 63315 is already in use` (vitest navigateur), alors que « Test Files 27 passed » s'affiche juste en dessous. Ce n'est pas une régression : un autre vitest (un coéquipier, ou un `make qualite` précédent pas encore sorti) tenait le port.
+The `front` stage of `make qualite` can fail with `Error: Port 63315 is already in use` (browser vitest), while "Test Files 27 passed" is displayed right below. It is not a regression: another vitest (a teammate, or a previous `make qualite` not yet exited) was holding the port.
 
-**Why:** constaté le 2026-09-23, en équipe, avec plusieurs agents qui lancent la porte ; `lsof -nP -iTCP:63315 -sTCP:LISTEN` était vide quelques secondes plus tard, et la relance est passée.
+**Why:** observed on 2026-09-23, in a team, with several agents running the gate; `lsof -nP -iTCP:63315 -sTCP:LISTEN` was empty a few seconds later, and the rerun passed.
 
-**How to apply:** avant de chercher une cause dans le front, lire l'erreur non gérée ; si c'est le port, vérifier avec `lsof` et relancer.
+**How to apply:** before looking for a cause in the front end, read the unhandled error; if it is the port, check with `lsof` and rerun.

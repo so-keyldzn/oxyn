@@ -118,7 +118,7 @@ const averages = read(
   [column("indicateur", "Utf8"), column("moyenne", "Float64")],
   [
     ["Montant moyen d'une commande", "187.4213"],
-    ["Points de fidélité moyens par client", `1${GROUP}245.5`],
+    ["Average loyalty points per customer", `1${GROUP}245.5`],
     ["Prix moyen d'un produit", "42.9"],
     ["Note moyenne des avis", "3.86"],
   ]
@@ -394,7 +394,7 @@ export const DonutLongLabelsNarrow: Story = {
     await marks(canvasElement, ".recharts-pie-sector")
     await legendApart(canvasElement)
     await expect(
-      canvas.getByText("Points de fidélité moyens par client")
+      canvas.getByText("Average loyalty points per customer")
     ).toBeVisible()
   },
 }

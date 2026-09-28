@@ -5,7 +5,7 @@
 // only while `dragDropEnabled` is on, and on Windows that setting disables
 // HTML5 drag and drop in the page. So a drag here is a press, a move past a
 // threshold, and a release — and every drag has a keyboard equivalent,
-// declared in the action manifest (UX-SPEC « Souris et glisser »).
+// declared in the action manifest (UX-SPEC « Mouse and drag »).
 
 import * as React from "react"
 

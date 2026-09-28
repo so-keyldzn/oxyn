@@ -1,80 +1,78 @@
-# Revue d'interface
+# Interface review
 
-Comportements dans `docs/UX-SPEC.md`, budgets dans `docs/PERFORMANCE.md`.
+Behaviors in `docs/UX-SPEC.md`, budgets in `docs/PERFORMANCE.md`.
 
-## Chemin d'exécution
+## Execution path
 
-- [ ] La vue produit des `Command` ; elle n'appelle aucun driver, même « en
-      attendant »
-- [ ] Aucun `block_on`, `blocking_*`, ni I/O sur le thread UI
+- [ ] The view produces `Command`s; it calls no driver, not even "for the time
+      being"
+- [ ] No `block_on`, `blocking_*`, nor I/O on the UI thread
 
-## Interface Tauri
+## Tauri interface
 
-Conventions dans [front.md](../rules/front.md), geste dans
+Conventions in [front.md](../rules/front.md), move in
 [`/ecran`](../commands/ecran.md).
 
-- [ ] `invoke` n'apparaît que dans `src/lib/ipc/client.ts`
-- [ ] Chaque commande Tauri nouvelle est `async` ou ne lit qu'un état en mémoire
-- [ ] Le miroir TypeScript a changé dans le même commit que `src/ipc`
-- [ ] Une story par état, et `make front` les passe, axe compris
-- [ ] Une commande Tauri ajoutée a été relue par `relecteur-securite`
+- [ ] `invoke` only appears in `src/lib/ipc/client.ts`
+- [ ] Every new Tauri command is `async` or only reads in-memory state
+- [ ] The TypeScript mirror changed in the same commit as `src/ipc`
+- [ ] One story per state, and `make front` passes them, axe included
+- [ ] An added Tauri command was reviewed by `relecteur-securite`
 
-## Les cinq états
+## The five states
 
-- [ ] Initial — explique quoi faire
-- [ ] En cours — progression **et moyen d'annuler**, jamais un simple gel
-- [ ] Peuplé
-- [ ] **Vide** — visiblement distinct d'une erreur. C'est celui qu'on oublie, et
-      le premier que voit un nouvel utilisateur
-- [ ] Erreur — ce qui a échoué, si c'est retentable, l'action suivante
+- [ ] Initial — explains what to do
+- [ ] In progress — progress **and a way to cancel**, never a mere freeze
+- [ ] Populated
+- [ ] **Empty** — visibly distinct from an error. It is the one people forget,
+      and the first one a new user sees
+- [ ] Error — what failed, whether it is retryable, the next action
 
-## Annulation
+## Cancellation
 
-- [ ] Toute opération dépassant 300 ms est annulable
-- [ ] L'annulation atteint le **serveur** — sinon le bouton ment et laisse une
-      connexion prise
+- [ ] Every operation exceeding 300 ms is cancellable
+- [ ] Cancellation reaches the **server** — otherwise the button lies and leaves
+      a connection taken
 
-## Capacités
+## Capabilities
 
-- [ ] Aucune surface ne suppose des tables, un schéma ou du SQL sans vérifier les
-      capacités de la session
-- [ ] Ce qui est indisponible est **expliqué**, pas masqué sans raison ni échoué
-      sans message
+- [ ] No surface assumes tables, a schema or SQL without checking the session's
+      capabilities
+- [ ] What is unavailable is **explained**, not hidden without reason nor failed
+      without a message
 
-## Écritures
+## Writes
 
-- [ ] Aucun affichage optimiste sur une opération qui écrit
-- [ ] Sur `production` : confirmation nommant la connexion, SQL exact, estimation
-      des lignes touchées
-- [ ] Le bouton par défaut n'est jamais l'action destructrice
+- [ ] No optimistic display on an operation that writes
+- [ ] On `production`: confirmation naming the connection, exact SQL, estimate
+      of affected rows
+- [ ] The default button is never the destructive action
 
-## Grille et résultats
+## Grid and results
 
-- [ ] Grille : pages bornées de `result_page`, pour la seule fenêtre visible,
-      jamais le résultat entier
-- [ ] Le défilement au-delà du budget mémoire lit une page disque et **ne relance
-      jamais la requête**
-- [ ] Aucun décodage de gros lot sur le thread UI
+- [ ] Grid: bounded pages from `result_page`, for the visible window only, never
+      the whole result
+- [ ] Scrolling beyond the memory budget reads a disk page and **never re-runs
+      the query**
+- [ ] No decoding of a large batch on the UI thread
 
-## Erreurs affichées
+## Displayed errors
 
-- [ ] Le message du serveur est montré, code compris — pas une paraphrase
-- [ ] Aucun identifiant de connexion, aucune valeur liée, y compris dans un
-      panneau de débogage
+- [ ] The server message is shown, code included — not a paraphrase
+- [ ] No connection credential, no bound value, including in a debug panel
 
-## Accessibilité — bloquant
+## Accessibility — blocking
 
-- [ ] Toute vue nouvelle est atteignable au clavier
-- [ ] Le focus est visible
-- [ ] L'ordre de tabulation suit l'ordre de lecture
-- [ ] Aucune information portée par la seule couleur
+- [ ] Every new view is keyboard-reachable
+- [ ] Focus is visible
+- [ ] Tab order follows reading order
+- [ ] No information carried by color alone
 
-Ce n'est pas une finition : Base UI fournit le clavier, le focus et l'ARIA d'un
-composant, mais pas ceux d'une grille, d'un arbre ou d'un éditeur écrits pour
-Oxyn. Rattraper après coup coûte une réécriture.
+It is not a finishing touch: Base UI provides the keyboard, focus and ARIA of a
+component, but not those of a grid, a tree or an editor written for Oxyn.
+Catching up afterwards costs a rewrite.
 
 ## Performance
 
-- [ ] Budgets mesurés avec les instruments du système, **pas** avec `criterion`
-- [ ] Un budget qui ne peut pas être tenu est amendé **par un ADR**, jamais en
-      silence
+- [ ] Budgets measured with the system's instruments, **not** with `criterion`
+- [ ] A budget that cannot be held is amended **by an ADR**, never silently

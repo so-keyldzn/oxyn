@@ -1,32 +1,33 @@
-//! L'annulation côté serveur, sans jamais frapper la requête d'à côté.
+//! Server-side cancellation, without ever hitting the neighboring query.
 //!
-//! # La fenêtre que ce module ferme
+//! # The window this module closes
 //!
-//! `pg_cancel_backend(pid)` vise un **processus serveur**, pas une requête.
-//! Envoyer l'annulation depuis [`Session::cancel`](oxyn_driver::Session::cancel)
-//! — lire le pid, ouvrir une seconde connexion, puis appeler la fonction —
-//! laisse une fenêtre de la durée d'une poignée de main : si la requête se
-//! termine entre-temps, la tâche de flux rend sa connexion au bassin, la
-//! requête suivante l'emprunte, et c'est elle que l'annulation interrompt. Il
-//! suffit d'appuyer sur Échap au moment où une requête finit.
+//! `pg_cancel_backend(pid)` targets a **server process**, not a query. Sending
+//! the cancellation from [`Session::cancel`](oxyn_driver::Session::cancel) —
+//! read the pid, open a second connection, then call the function — leaves a
+//! window as long as a handshake: if the query finishes meanwhile, the stream
+//! task returns its connection to the pool, the next query borrows it, and it is
+//! the one the cancellation interrupts. Pressing Esc at the moment a query
+//! finishes is enough.
 //!
-//! Relire le pid juste avant l'envoi n'y change rien : la requête suivante
-//! tourne sur **le même** processus, donc sous le même pid.
+//! Re-reading the pid just before sending changes nothing: the next query runs
+//! on **the same** process, hence under the same pid.
 //!
-//! # La règle
+//! # The rule
 //!
-//! **Seule la tâche de flux envoie `pg_cancel_backend`, et elle le fait en
-//! tenant sa connexion**, déjà marquée à fermer. `Session::cancel` ne fait que
-//! déclencher le jeton de l'exécution, puis attend le [`Verdict`] de la tâche.
-//! Deux issues seulement :
+//! **Only the stream task sends `pg_cancel_backend`, and it does so while
+//! holding its connection**, already marked to be closed. `Session::cancel` only
+//! fires the execution's token, then waits for the task's [`Verdict`]. Only two
+//! outcomes:
 //!
-//! * la tâche avait déjà constaté la fin du flux — le jeton arrive trop tard,
-//!   rien n'est envoyé, et la connexion repart au bassin sans annulation en vol ;
-//! * la tâche voit le jeton — elle envoie l'annulation **avant** de lâcher la
-//!   connexion, qui est ensuite fermée et ne sert plus jamais personne.
+//! * the task had already observed the end of the stream — the token arrives
+//!   too late, nothing is sent, and the connection goes back to the pool with
+//!   no cancellation in flight;
+//! * the task sees the token — it sends the cancellation **before** letting go
+//!   of the connection, which is then closed and never serves anyone again.
 //!
-//! Aucune requête ne peut donc démarrer sur ce processus pendant qu'une
-//! annulation le vise. C'est la connexion tenue qui le garantit, pas un délai.
+//! No query can therefore start on that process while a cancellation targets
+//! it. The held connection guarantees it, not a delay.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -38,52 +39,52 @@ use tokio::sync::watch;
 use crate::error::{map_connect_error, map_exec_error};
 use crate::options::ConnectSpec;
 
-/// Demande au serveur d'interrompre la requête d'un autre processus.
+/// Asks the server to interrupt another process's query.
 pub(crate) const SQL_CANCEL_BACKEND: &str = "SELECT pg_catalog.pg_cancel_backend($1)";
 
-/// Ce que la tâche de flux a fait de l'annulation qu'on lui a demandée.
+/// What the stream task did with the cancellation it was asked for.
 #[derive(Debug, Clone)]
 pub(crate) enum Verdict {
-    /// Le flux s'est terminé sans qu'il faille arrêter le serveur.
+    /// The stream ended without the server needing to be stopped.
     Finished,
-    /// `pg_cancel_backend` est parti pendant que la connexion était tenue.
+    /// `pg_cancel_backend` went out while the connection was held.
     Cancelled,
-    /// La demande d'annulation n'a pas abouti ; la requête tourne peut-être.
+    /// The cancellation request failed; the query may still be running.
     CancelFailed(Arc<OxynError>),
 }
 
-/// Par où la tâche de flux rend son [`Verdict`].
+/// Where the stream task returns its [`Verdict`].
 #[derive(Debug)]
 pub(crate) struct VerdictSender(watch::Sender<Option<Verdict>>);
 
 impl VerdictSender {
-    /// Publie le verdict. Ne peut pas échouer : un `Session::cancel` qui
-    /// arriverait après trouvera l'exécution absente du registre.
+    /// Publishes the verdict. Cannot fail: a `Session::cancel` arriving later
+    /// will find the execution missing from the registry.
     pub(crate) fn settle(&self, verdict: Verdict) {
         self.0.send_replace(Some(verdict));
     }
 }
 
-/// Une exécution en cours, telle que `Session::cancel` la voit.
+/// A running execution, as `Session::cancel` sees it.
 #[derive(Debug, Clone)]
 struct RunningExecution {
-    /// Le jeton **propre** à l'exécution : celui que surveille la tâche de flux.
+    /// The execution's **own** token: the one the stream task watches.
     token: CancelToken,
     verdict: watch::Receiver<Option<Verdict>>,
 }
 
-/// Associe chaque exécution au jeton qui l'arrête.
+/// Associates each execution with the token that stops it.
 ///
-/// Partagé entre la session — qui annule — et les tâches de flux — qui
-/// s'effacent en partant. Sans cet effacement, une session ouverte une journée
-/// accumulerait une entrée par requête exécutée.
+/// Shared between the session — which cancels — and the stream tasks — which
+/// remove themselves on leaving. Without that removal, a session open for a day
+/// would accumulate one entry per executed query.
 #[derive(Debug, Default)]
 pub(crate) struct StatementRegistry {
     entries: Mutex<HashMap<StatementHandle, RunningExecution>>,
 }
 
 impl StatementRegistry {
-    /// Retient une exécution qui démarre, et rend de quoi publier son verdict.
+    /// Records an execution that starts, and returns what publishes its verdict.
     pub(crate) fn register(&self, handle: StatementHandle, token: CancelToken) -> VerdictSender {
         let (sender, verdict) = watch::channel(None);
         self.lock()
@@ -91,26 +92,27 @@ impl StatementRegistry {
         VerdictSender(sender)
     }
 
-    /// Oublie une exécution terminée.
+    /// Forgets a finished execution.
     pub(crate) fn forget(&self, handle: StatementHandle) {
         self.lock().remove(&handle);
     }
 
-    /// Nombre d'exécutions en cours. Réservé au diagnostic et aux tests.
+    /// Number of running executions. Reserved for diagnostics and tests.
     #[doc(hidden)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.lock().len()
     }
 
-    /// Arrête une exécution côté serveur, par la tâche qui tient sa connexion.
+    /// Stops an execution on the server, through the task that holds its
+    /// connection.
     ///
-    /// Rend quand la tâche a statué. Annuler une exécution inconnue ou déjà
-    /// terminée n'est pas une erreur.
+    /// Returns once the task has ruled. Cancelling an unknown or already
+    /// finished execution is not an error.
     ///
-    /// # Erreurs
-    /// Celle de la demande d'annulation, telle que la tâche l'a reçue du
-    /// serveur, rattachée à sa famille d'origine.
+    /// # Errors
+    /// That of the cancellation request, as the task received it from the
+    /// server, attached to its original family.
     pub(crate) async fn cancel(&self, driver: &DriverId, handle: StatementHandle) -> Result<()> {
         let Some(RunningExecution { token, mut verdict }) = self.lock().get(&handle).cloned()
         else {
@@ -118,35 +120,35 @@ impl StatementRegistry {
         };
         token.cancel();
         let issue = match verdict.wait_for(Option::is_some).await {
-            Ok(rendu) => rendu.clone(),
-            // La tâche a disparu sans statuer : il n'y a plus rien à couper.
+            Ok(rendered) => rendered.clone(),
+            // The task disappeared without ruling: there is nothing left to cut.
             Err(_) => None,
         };
         match issue {
-            Some(Verdict::CancelFailed(erreur)) => {
-                Err(OxynError::driver(driver.clone(), erreur.class(), erreur))
+            Some(Verdict::CancelFailed(error)) => {
+                Err(OxynError::driver(driver.clone(), error.class(), error))
             }
             Some(Verdict::Finished | Verdict::Cancelled) | None => Ok(()),
         }
     }
 
-    /// Un verrou empoisonné ne doit pas propager la panique d'une autre tâche :
-    /// la table reste exploitable, et perdre une entrée coûte moins qu'une
-    /// session inutilisable ([I-09](../../../CLAUDE.md#i-09)).
+    /// A poisoned lock must not propagate another task's panic: the table stays
+    /// usable, and losing an entry costs less than an unusable session
+    /// ([I-09](../../../CLAUDE.md#i-09)).
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<StatementHandle, RunningExecution>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// De quoi demander au serveur d'arrêter une requête.
+/// What asks the server to stop a query.
 ///
-/// Porte les paramètres de connexion parce que l'annulation ouvre sa **propre**
-/// connexion : emprunter celle du bassin ferait attendre l'annulation derrière
-/// les requêtes qu'elle doit couper.
+/// Carries the connection parameters because the cancellation opens its **own**
+/// connection: borrowing the pool's would make the cancellation wait behind the
+/// queries it must cut.
 ///
-/// N'est appelé que par qui **tient** la connexion visée — la tâche de flux, ou
-/// l'introspection — et l'a marquée à fermer : c'est ce qui garantit que le pid
-/// ne sert aucune autre requête pendant l'envoi.
+/// Called only by whoever **holds** the targeted connection — the stream task,
+/// or introspection — and has marked it to be closed: that is what guarantees
+/// the pid serves no other query while sending.
 #[derive(Debug)]
 pub(crate) struct BackendCanceller {
     spec: ConnectSpec,
@@ -156,7 +158,7 @@ pub(crate) struct BackendCanceller {
 }
 
 impl BackendCanceller {
-    /// Prépare l'annulateur d'une session.
+    /// Prepares a session's canceller.
     pub(crate) fn new(spec: ConnectSpec, driver: DriverId) -> Self {
         Self {
             spec,
@@ -166,49 +168,49 @@ impl BackendCanceller {
         }
     }
 
-    /// Demande au serveur d'interrompre la requête du processus `backend_pid`.
+    /// Asks the server to interrupt the query of process `backend_pid`.
     ///
-    /// Interrompre une requête déjà terminée n'est **pas** une erreur : le
-    /// serveur rend `false` et on n'en fait rien. Ce qui compte est qu'aucune
-    /// requête ne survive à la fermeture d'un onglet.
+    /// Interrupting an already finished query is **not** an error: the server
+    /// returns `false` and nothing is made of it. What matters is that no query
+    /// survives a tab being closed.
     ///
-    /// # Erreurs
-    /// [`OxynError::Connection`] si la seconde connexion ne s'ouvre pas,
-    /// [`OxynError::Driver`] si le serveur refuse l'appel — typiquement faute de
-    /// droits sur un pid appartenant à un autre rôle.
+    /// # Errors
+    /// [`OxynError::Connection`] if the second connection does not open,
+    /// [`OxynError::Driver`] if the server refuses the call — typically for lack
+    /// of rights on a pid belonging to another role.
     pub(crate) async fn cancel_backend(&self, backend_pid: i32) -> Result<()> {
         #[cfg(test)]
         self.pass_gate(backend_pid).await;
 
-        let mut connexion = self
+        let mut connection = self
             .spec
             .options()
             .connect()
             .await
-            .map_err(|erreur| map_connect_error(&erreur))?;
+            .map_err(|error| map_connect_error(&error))?;
 
         let issue = sqlx::query(SQL_CANCEL_BACKEND)
             .bind(backend_pid)
-            .fetch_optional(&mut connexion)
+            .fetch_optional(&mut connection)
             .await;
 
-        // Fermée dans tous les cas : cette connexion n'a plus d'usage, et la
-        // laisser filer en ouvrirait une par annulation.
-        let _ = connexion.close().await;
+        // Closed in every case: this connection has no further use, and letting
+        // it go would open one per cancellation.
+        let _ = connection.close().await;
 
-        issue.map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))?;
+        issue.map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
         Ok(())
     }
 }
 
-/// La barrière qui rend la fenêtre d'annulation reproductible dans un test.
+/// The barrier that makes the cancellation window reproducible in a test.
 #[cfg(test)]
 pub(crate) mod tests_gate {
     use tokio::sync::oneshot;
 
     use super::BackendCanceller;
 
-    /// Retient la prochaine annulation juste avant qu'elle ouvre sa connexion.
+    /// Holds back the next cancellation just before it opens its connection.
     #[derive(Debug)]
     pub(crate) struct CancelGate {
         reached: oneshot::Sender<i32>,
@@ -216,17 +218,17 @@ pub(crate) mod tests_gate {
     }
 
     impl BackendCanceller {
-        /// Arme la barrière : la prochaine annulation signale le pid qu'elle
-        /// vise, puis attend le feu vert.
+        /// Arms the barrier: the next cancellation signals the pid it targets,
+        /// then waits for the green light.
         pub(crate) fn hold_next_cancel(&self) -> (oneshot::Receiver<i32>, oneshot::Sender<()>) {
-            let (reached, atteinte) = oneshot::channel();
-            let (feu_vert, proceed) = oneshot::channel();
+            let (reached, reached_rx) = oneshot::channel();
+            let (proceed_tx, proceed) = oneshot::channel();
             *self
                 .gate
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(CancelGate { reached, proceed });
-            (atteinte, feu_vert)
+            (reached_rx, proceed_tx)
         }
 
         pub(super) async fn pass_gate(&self, backend_pid: i32) {
@@ -248,73 +250,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn une_execution_terminee_ne_reste_pas_dans_le_registre() {
-        // Sans cet effacement, une session ouverte une journée accumule une
-        // entrée par requête exécutée.
-        let registre = StatementRegistry::default();
+    fn a_finished_execution_does_not_stay_in_the_registry() {
+        // Without that removal, a session open for a day accumulates one entry
+        // per executed query.
+        let registry = StatementRegistry::default();
         let handle = StatementHandle::new();
-        let _verdict = registre.register(handle, CancelToken::new());
-        assert_eq!(registre.len(), 1);
-        registre.forget(handle);
-        assert_eq!(registre.len(), 0);
+        let _verdict = registry.register(handle, CancelToken::new());
+        assert_eq!(registry.len(), 1);
+        registry.forget(handle);
+        assert_eq!(registry.len(), 0);
     }
 
     #[tokio::test]
-    async fn annuler_une_execution_inconnue_ne_doit_rien_couter() {
-        // « Annuler une instruction déjà terminée n'est pas une erreur. »
-        let registre = StatementRegistry::default();
-        registre
+    async fn cancelling_an_unknown_execution_must_cost_nothing() {
+        // "Cancelling an already finished statement is not an error."
+        let registry = StatementRegistry::default();
+        registry
             .cancel(&DriverId::postgres(), StatementHandle::new())
             .await
-            .expect("rien à annuler");
+            .expect("nothing to cancel");
     }
 
     #[tokio::test]
-    async fn annuler_declenche_le_jeton_de_l_execution_et_attend_son_verdict() {
-        // L'annulation ne part pas d'ici : c'est la tâche qui tient la connexion
-        // qui l'envoie. `cancel` doit donc la réveiller, puis rendre ce qu'elle
-        // a constaté — pas un succès supposé.
-        let registre = Arc::new(StatementRegistry::default());
-        let visee = StatementHandle::new();
-        let voisine = StatementHandle::new();
-        let jeton = CancelToken::new();
-        let jeton_voisin = CancelToken::new();
-        let verdict = registre.register(visee, jeton.clone());
-        let _verdict_voisin = registre.register(voisine, jeton_voisin.clone());
+    async fn cancelling_fires_the_execution_token_and_waits_for_its_verdict() {
+        // The cancellation does not go out from here: the task holding the
+        // connection sends it. `cancel` must therefore wake it, then return
+        // what it observed — not an assumed success.
+        let registry = Arc::new(StatementRegistry::default());
+        let target_handle = StatementHandle::new();
+        let neighbor = StatementHandle::new();
+        let token = CancelToken::new();
+        let neighbor_token = CancelToken::new();
+        let verdict = registry.register(target_handle, token.clone());
+        let _neighbor_verdict = registry.register(neighbor, neighbor_token.clone());
 
-        let tache = tokio::spawn({
-            let jeton = jeton.clone();
+        let task = tokio::spawn({
+            let token = token.clone();
             async move {
-                jeton.cancelled().await;
+                token.cancelled().await;
                 verdict.settle(Verdict::CancelFailed(Arc::new(OxynError::Connection(
                     "refused".to_owned(),
                 ))));
             }
         });
 
-        let issue = registre.cancel(&DriverId::postgres(), visee).await;
-        let erreur = match issue {
-            Ok(()) => panic!("l'échec de la tâche doit remonter"),
-            Err(erreur) => erreur,
+        let issue = registry.cancel(&DriverId::postgres(), target_handle).await;
+        let error = match issue {
+            Ok(()) => panic!("the task's failure must surface"),
+            Err(error) => error,
         };
-        assert_eq!(erreur.class(), oxyn_core::ErrorClass::Transient);
-        assert!(jeton.is_cancelled());
+        assert_eq!(error.class(), oxyn_core::ErrorClass::Transient);
+        assert!(token.is_cancelled());
         assert!(
-            !jeton_voisin.is_cancelled(),
-            "seule l'exécution visée est annulée"
+            !neighbor_token.is_cancelled(),
+            "only the targeted execution is cancelled"
         );
-        tache.await.expect("la tâche statue");
+        task.await.expect("the task rules");
     }
 
     #[tokio::test]
-    async fn une_tache_disparue_sans_verdict_ne_bloque_pas_l_annulation() {
-        let registre = StatementRegistry::default();
+    async fn a_task_gone_without_verdict_does_not_block_the_cancellation() {
+        let registry = StatementRegistry::default();
         let handle = StatementHandle::new();
-        let verdict = registre.register(handle, CancelToken::new());
+        let verdict = registry.register(handle, CancelToken::new());
         drop(verdict);
-        registre
+        registry
             .cancel(&DriverId::postgres(), handle)
             .await
-            .expect("plus rien à couper");
+            .expect("nothing left to cut");
     }
 }

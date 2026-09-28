@@ -1,5 +1,5 @@
 name: Bug
-description: Signaler un comportement incorrect ou une régression reproductible.
+description: Report incorrect behavior or a reproducible regression.
 title: "[Bug] "
 labels:
   - bug
@@ -7,59 +7,59 @@ body:
   - type: markdown
     attributes:
       value: |
-        Merci de vérifier qu'une issue ouverte ne décrit pas déjà le problème.
-        Ne mettez jamais de secret, de donnée client ou d'URL privée dans ce formulaire.
+        Please check that no open issue already describes the problem.
+        Never put a secret, customer data or a private URL in this form.
   - type: textarea
     id: summary
     attributes:
-      label: Résumé
-      description: Décrivez le comportement observé et le comportement attendu.
-      placeholder: Quand ..., Oxyn ..., alors que ...
+      label: Summary
+      description: Describe the observed behavior and the expected behavior.
+      placeholder: When ..., Oxyn ..., whereas ...
     validations:
       required: true
   - type: textarea
     id: reproduction
     attributes:
       label: Reproduction
-      description: Donnez les étapes minimales et un exemple synthétique reproductible.
+      description: Give the minimal steps and a reproducible synthetic example.
       placeholder: |
-        1. Ouvrir ...
-        2. Exécuter ...
-        3. Observer ...
+        1. Open ...
+        2. Run ...
+        3. Observe ...
     validations:
       required: true
   - type: textarea
     id: evidence
     attributes:
-      label: Preuves et journaux expurgés
-      description: Ajoutez les tests, logs ou captures utiles, après suppression des secrets.
+      label: Evidence and redacted logs
+      description: Add the useful tests, logs or screenshots, after removing secrets.
   - type: input
     id: version
     attributes:
-      label: Version ou commit
-      placeholder: v0.0.1 ou SHA court
+      label: Version or commit
+      placeholder: v0.0.1 or short SHA
     validations:
       required: true
   - type: dropdown
     id: area
     attributes:
-      label: Zone
+      label: Area
       options:
-        - Backend Rust
-        - Driver SQLite
-        - Driver PostgreSQL
-        - Interface Tauri
-        - IA ou fournisseur
-        - CI ou livraison
+        - Rust backend
+        - SQLite driver
+        - PostgreSQL driver
+        - Tauri interface
+        - AI or provider
+        - CI or delivery
         - Documentation
     validations:
       required: true
   - type: checkboxes
     id: checks
     attributes:
-      label: Vérifications
+      label: Checks
       options:
-        - label: J'ai recherché les issues existantes.
+        - label: I searched the existing issues.
           required: true
-        - label: Je n'ai pas inclus de secret ou de donnée sensible.
+        - label: I did not include any secret or sensitive data.
           required: true

@@ -16,8 +16,8 @@ export interface ActionBehaviour {
 
 /**
  * Whether a console action can run: the one condition the toolbar buttons
- * and every other trigger share (UX-SPEC, « Barre de menus » : « grisés dans
- * les mêmes cas que leurs boutons »).
+ * and every other trigger share (UX-SPEC, « Menu bar »: « greyed out in
+ * the same cases as their buttons »).
  */
 export function consoleAvailability(
   action: "run" | "cancel" | "save",

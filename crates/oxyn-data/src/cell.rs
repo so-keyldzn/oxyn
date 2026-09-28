@@ -1,31 +1,31 @@
-//! Rendu d'une cellule, appelé une fois par cellule visible et par trame.
+//! Rendering a cell, called once per visible cell and per frame.
 //!
-//! # Ce qui gouverne ce fichier
+//! # What governs this file
 //!
-//! **`NULL` n'est pas une chaîne.** [`CellValue::Null`] est une variante, jamais
-//! le texte `"NULL"` : une colonne texte contenant réellement la chaîne `NULL`
-//! doit se distinguer d'une absence de valeur. C'est l'interface qui décide de
-//! l'italique et du gris ([UX-SPEC](../../../docs/UX-SPEC.md)).
+//! **`NULL` is not a string.** [`CellValue::Null`] is a variant, never the
+//! text `"NULL"`: a text column really containing the string `NULL` must be
+//! distinguishable from an absent value. The interface decides on italics and
+//! grey ([UX-SPEC](../../../docs/UX-SPEC.md)).
 //!
-//! **Un défaut de rendu ne se déguise pas en `NULL`.** Un type qu'on ne sait pas
-//! afficher rend [`CellValue::Unrenderable`], pas une cellule vide : la seconde
-//! est un mensonge silencieux sur des données réelles.
+//! **A rendering failure does not disguise itself as `NULL`.** A type that
+//! cannot be displayed returns [`CellValue::Unrenderable`], not an empty
+//! cell: the latter is a silent lie about real data.
 //!
-//! **Le texte se prête, il ne se copie pas.** Une colonne `Utf8` — le cas le
-//! plus fréquent de très loin — rend un [`Cow::Borrowed`] sur le tampon Arrow.
-//! Aucune allocation entre le `RecordBatch` et l'écran.
+//! **Text is lent, not copied.** A `Utf8` column — by far the most frequent
+//! case — returns a [`Cow::Borrowed`] over the Arrow buffer. No allocation
+//! between the `RecordBatch` and the screen.
 //!
-//! # Ce qui est délégué à Arrow, et pourquoi
+//! # What is delegated to Arrow, and why
 //!
-//! Les dates, heures, horodatages (fuseau compris), listes, structures,
-//! dictionnaires et flottants passent par [`arrow::util::display::ArrayFormatter`].
-//! Deux raisons, aucune n'est la paresse : la conversion d'un horodatage avec
-//! fuseau est un travail de calendrier que `chrono` fait correctement et qui
-//! n'est pas au contrat de dépendances de cette crate ; et surtout **ce que la
-//! grille affiche doit être exactement ce que l'export CSV écrit**, or l'export
-//! passe par ces mêmes formateurs. Deux implémentations divergeraient en
-//! quelques mois, et l'utilisateur ne le découvrirait qu'en comparant un fichier
-//! exporté à son écran.
+//! Dates, times, timestamps (time zone included), lists, structs,
+//! dictionaries and floats go through [`arrow::util::display::ArrayFormatter`].
+//! Two reasons, neither of which is laziness: converting a timestamp with a
+//! time zone is calendar work that `chrono` does correctly and that is not in
+//! this crate's dependency contract; and above all **what the grid displays
+//! must be exactly what the CSV export writes**, and the export goes through
+//! these same formatters. Two implementations would diverge within a few
+//! months, and the user would only find out by comparing an exported file to
+//! their screen.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -39,85 +39,85 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::display::{ArrayFormatter, FormatOptions as ArrowFormatOptions};
 use serde::{Deserialize, Serialize};
 
-/// Longueur au-delà de laquelle une cellule est coupée à l'affichage.
+/// Length beyond which a cell is cut for display.
 ///
-/// Une cellule de grille fait quelques dizaines de caractères ; 512 laisse de la
-/// marge pour une infobulle sans jamais rendre un document JSON de 4 Mo.
+/// A grid cell is a few tens of characters; 512 leaves room for a tooltip
+/// without ever rendering a 4 MB JSON document.
 pub const DEFAULT_MAX_LEN: usize = 512;
 
-/// Ce qu'une cellule donne à afficher.
+/// What a cell gives to display.
 ///
-/// Emprunte au `RecordBatch` quand c'est possible, d'où la durée de vie.
+/// Borrows from the `RecordBatch` when possible, hence the lifetime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CellValue<'a> {
-    /// Absence de valeur. **Pas** la chaîne `"NULL"` : l'interface la dessine à
-    /// sa façon, et une colonne texte peut contenir littéralement `NULL`.
+    /// Absence of value. **Not** the string `"NULL"`: the interface draws it
+    /// its own way, and a text column can literally contain `NULL`.
     Null,
-    /// La valeur, en entier.
+    /// The whole value.
     Text(Cow<'a, str>),
-    /// La valeur, coupée pour l'affichage.
+    /// The value, cut for display.
     Truncated {
-        /// Le début de la valeur, coupé sur une frontière de caractère.
+        /// The beginning of the value, cut on a character boundary.
         text: Cow<'a, str>,
-        /// Taille de la valeur complète, **en octets**.
+        /// Size of the full value, **in bytes**.
         ///
-        /// En octets et non en caractères parce que c'est une information en
-        /// O(1) : compter les caractères d'un document de 10 Mo une fois par
-        /// cellule et par trame coûterait le budget d'affichage entier.
+        /// In bytes and not in characters because it is an O(1) piece of
+        /// information: counting the characters of a 10 MB document once per
+        /// cell and per frame would cost the whole display budget.
         full_bytes: usize,
     },
-    /// Le type de la colonne n'a pas pu être rendu.
+    /// The column's type could not be rendered.
     ///
-    /// L'interface doit le montrer comme tel — un badge, un point
-    /// d'interrogation — jamais comme une cellule vide.
+    /// The interface must show it as such — a badge, a question mark — never
+    /// as an empty cell.
     Unrenderable {
-        /// Ce qui a échoué, en une ligne, sans valeur de la base.
+        /// What failed, in one line, without a database value.
         reason: Cow<'static, str>,
     },
 }
 
 impl CellValue<'_> {
-    /// La cellule est-elle nulle ?
+    /// Is the cell null?
     #[must_use]
     pub const fn is_null(&self) -> bool {
         matches!(self, Self::Null)
     }
 
-    /// La valeur affichée est-elle coupée ?
+    /// Is the displayed value cut?
     #[must_use]
     pub const fn is_truncated(&self) -> bool {
         matches!(self, Self::Truncated { .. })
     }
 
-    /// Le texte à dessiner, s'il y en a un.
+    /// The text to draw, if there is one.
     #[must_use]
     pub fn text(&self) -> Option<&str> {
         match self {
-            Self::Text(texte) | Self::Truncated { text: texte, .. } => Some(texte),
+            Self::Text(txt) | Self::Truncated { text: txt, .. } => Some(txt),
             Self::Null | Self::Unrenderable { .. } => None,
         }
     }
 
-    /// Le texte à dessiner, avec le remplacement configuré pour `NULL`.
+    /// The text to draw, with the configured replacement for `NULL`.
     #[must_use]
     pub fn display_with<'b>(&'b self, opts: &'b FormatOptions) -> &'b str {
         match self {
-            Self::Text(texte) | Self::Truncated { text: texte, .. } => texte,
+            Self::Text(txt) | Self::Truncated { text: txt, .. } => txt,
             Self::Null => &opts.null_text,
             Self::Unrenderable { reason } => reason,
         }
     }
 
-    /// Détache la valeur du `RecordBatch` dont elle est issue.
+    /// Detaches the value from the `RecordBatch` it comes from.
     ///
-    /// Alloue si la valeur était empruntée : à réserver aux cas où la cellule
-    /// survit au lot — presse-papiers, contexte d'agent — jamais au rendu.
+    /// Allocates if the value was borrowed: to be kept for cases where the cell
+    /// outlives the batch — clipboard, agent context — never for rendering.
     #[must_use]
     pub fn into_owned(self) -> CellValue<'static> {
         match self {
             Self::Null => CellValue::Null,
-            Self::Text(texte) => CellValue::Text(Cow::Owned(texte.into_owned())),
+            Self::Text(txt) => CellValue::Text(Cow::Owned(txt.into_owned())),
             Self::Truncated { text, full_bytes } => CellValue::Truncated {
                 text: Cow::Owned(text.into_owned()),
                 full_bytes,
@@ -127,80 +127,80 @@ impl CellValue<'_> {
     }
 }
 
-/// Comment rendre une colonne binaire.
+/// How to render a binary column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum BinaryDisplay {
-    /// Hexadécimal minuscule, sans séparateur : `48656c6c6f`.
+    /// Lowercase hexadecimal, no separator: `48656c6c6f`.
     #[default]
     Hex,
-    /// Base64 standard avec remplissage : `SGVsbG8=`.
+    /// Standard Base64 with padding: `SGVsbG8=`.
     Base64,
-    /// Seulement la taille : `<5 B>`, `<1.2 MiB>`.
+    /// Only the size: `<5 B>`, `<1.2 MiB>`.
     ///
-    /// C'est le bon défaut pour une colonne de photos : afficher 4 Mo
-    /// d'hexadécimal ne renseigne personne et coûte une trame.
+    /// It is the right default for a column of photos: displaying 4 MB of
+    /// hexadecimal informs nobody and costs a frame.
     Size,
 }
 
-/// Comment grouper les chiffres d'un nombre.
+/// How to group the digits of a number.
 ///
-/// # Pourquoi ce réglage existe
+/// # Why this setting exists
 ///
-/// `4823917` et `102` alignés dans une colonne ne se comparent pas d'un coup
-/// d'œil : il faut compter les chiffres. C'est le seul travail que la grille
-/// puisse épargner à quelqu'un qui lit une colonne d'entiers.
+/// `4823917` and `102` aligned in a column cannot be compared at a glance:
+/// one has to count the digits. It is the only work the grid can spare
+/// someone reading a column of integers.
 ///
-/// # Pourquoi il vaut [`None`](Self::None) par défaut
+/// # Why it defaults to [`None`](Self::None)
 ///
-/// L'export construit ses propres options ([`crate::export::ExportOptions`]) et
-/// ne passe pas par ici, mais la règle de tête de module — *ce que la grille
-/// affiche doit être exactement ce que l'export écrit* — vaut comme garde-fou :
-/// un groupement actif par défaut ferait diverger l'écran du fichier sans que
-/// personne l'ait demandé. C'est un confort de lecture, donc c'est un choix
-/// explicite de l'utilisateur.
+/// The export builds its own options ([`crate::export::ExportOptions`]) and
+/// does not go through here, but the module-level rule — *what the grid
+/// displays must be exactly what the export writes* — holds as a safeguard:
+/// grouping active by default would make the screen diverge from the file
+/// without anyone asking for it. It is a reading comfort, so it is an explicit
+/// choice of the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum NumberGrouping {
-    /// Les chiffres à la suite : `4823917`. C'est ce qu'écrit le serveur.
+    /// The digits in a row: `4823917`. It is what the server writes.
     #[default]
     None,
-    /// Par tranches de trois, séparées d'une espace insécable : `4 823 917`.
+    /// In groups of three, separated by a no-break space: `4 823 917`.
     ///
-    /// Une espace insécable ([`GROUP_SEPARATOR`]) et non une virgule ni un
-    /// point : ces deux-là sont des séparateurs **décimaux** dans la moitié du
-    /// monde, et `1,234` lu par quelqu'un dont c'est la convention vaut un
-    /// millième de ce qui est affiché. Une espace ne se confond avec rien.
+    /// A no-break space ([`GROUP_SEPARATOR`]) and not a comma or a period:
+    /// those two are **decimal** separators in half the world, and `1,234`
+    /// read by someone whose convention it is means a thousandth of what is
+    /// displayed. A space cannot be mistaken for anything.
     Thousands,
 }
 
-/// Ce qui sépare deux tranches de trois chiffres : U+00A0, espace insécable.
+/// What separates two groups of three digits: U+00A0, no-break space.
 ///
-/// Insécable pour que le nombre ne se coupe pas en fin de cellule.
+/// No-break so that the number is not cut at the end of a cell.
 pub const GROUP_SEPARATOR: char = '\u{a0}';
 
-/// Réglages de rendu d'une cellule.
+/// Rendering settings of a cell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct FormatOptions {
-    /// Caractères au-delà desquels la valeur est coupée. `0` = pas de coupe.
+    /// Characters beyond which the value is cut. `0` = no cut.
     pub max_len: usize,
-    /// Ce que l'interface écrit à la place d'une valeur absente, quand elle
-    /// choisit d'écrire quelque chose.
+    /// What the interface writes in place of an absent value, when it chooses
+    /// to write something.
     pub null_text: Cow<'static, str>,
-    /// Motif de formatage des horodatages, au sens de `chrono`.
+    /// Timestamp formatting pattern, in the `chrono` sense.
     ///
-    /// `None` = RFC 3339, qui est aussi ce qu'écrit l'export : garder le défaut
-    /// est ce qui rend l'écran et le fichier comparables.
+    /// `None` = RFC 3339, which is also what the export writes: keeping the
+    /// default is what makes the screen and the file comparable.
     pub timestamp_format: Option<Cow<'static, str>>,
-    /// Rendu des colonnes binaires.
+    /// Rendering of binary columns.
     pub binary_display: BinaryDisplay,
-    /// Groupement des chiffres des entiers et des décimaux.
+    /// Digit grouping of integers and decimals.
     ///
-    /// `#[serde(default)]` : un document écrit avant l'existence de ce champ
-    /// reste lisible ([I-11](../../../CLAUDE.md#i-11)). Sans cette annotation,
-    /// ajouter un réglage d'affichage rendrait illisible un workspace
-    /// enregistré la veille.
+    /// `#[serde(default)]`: a document written before this field existed stays
+    /// readable ([I-11](../../../CLAUDE.md#i-11)). Without this annotation,
+    /// adding a display setting would make a workspace saved the day before
+    /// unreadable.
     #[serde(default)]
     pub number_grouping: NumberGrouping,
 }
@@ -218,69 +218,69 @@ impl Default for FormatOptions {
 }
 
 impl FormatOptions {
-    /// Change la longueur de coupe.
+    /// Changes the cut length.
     #[must_use]
     pub fn with_max_len(mut self, max_len: usize) -> Self {
         self.max_len = max_len;
         self
     }
 
-    /// Change le texte de remplacement des valeurs absentes.
+    /// Changes the replacement text of absent values.
     #[must_use]
-    pub fn with_null_text(mut self, texte: impl Into<Cow<'static, str>>) -> Self {
-        self.null_text = texte.into();
+    pub fn with_null_text(mut self, txt: impl Into<Cow<'static, str>>) -> Self {
+        self.null_text = txt.into();
         self
     }
 
-    /// Change le motif d'horodatage.
+    /// Changes the timestamp pattern.
     #[must_use]
-    pub fn with_timestamp_format(mut self, motif: impl Into<Option<Cow<'static, str>>>) -> Self {
-        self.timestamp_format = motif.into();
+    pub fn with_timestamp_format(mut self, pattern: impl Into<Option<Cow<'static, str>>>) -> Self {
+        self.timestamp_format = pattern.into();
         self
     }
 
-    /// Change le rendu des colonnes binaires.
+    /// Changes the rendering of binary columns.
     #[must_use]
     pub fn with_binary_display(mut self, mode: BinaryDisplay) -> Self {
         self.binary_display = mode;
         self
     }
 
-    /// Change le groupement des chiffres.
+    /// Changes the digit grouping.
     #[must_use]
     pub fn with_number_grouping(mut self, mode: NumberGrouping) -> Self {
         self.number_grouping = mode;
         self
     }
 
-    /// Traduit ces réglages pour les formateurs d'Arrow.
+    /// Translates these settings for Arrow's formatters.
     ///
-    /// `with_display_error(false)` : on veut qu'une erreur de formatage remonte
-    /// pour devenir [`CellValue::Unrenderable`], plutôt que d'être écrite dans la
-    /// cellule là où l'utilisateur attend une valeur.
+    /// `with_display_error(false)`: a formatting error must come up to become
+    /// [`CellValue::Unrenderable`], rather than be written in the cell where
+    /// the user expects a value.
     ///
-    /// `null_text` ne concerne ici que les valeurs absentes **imbriquées** —
-    /// celles d'une liste ou d'une structure. Une cellule nulle, elle, n'atteint
-    /// jamais ce chemin : elle rend [`CellValue::Null`].
+    /// `null_text` only concerns **nested** absent values here — those of a
+    /// list or a struct. A null cell never reaches this path: it returns
+    /// [`CellValue::Null`].
     fn arrow(&self) -> ArrowFormatOptions<'_> {
-        let motif = self.timestamp_format.as_deref();
+        let pattern = self.timestamp_format.as_deref();
         ArrowFormatOptions::new()
             .with_display_error(false)
             .with_null(&self.null_text)
-            .with_timestamp_format(motif)
-            .with_timestamp_tz_format(motif)
+            .with_timestamp_format(pattern)
+            .with_timestamp_tz_format(pattern)
     }
 }
 
-/// Rend la cellule `(row, col)` de `batch`.
+/// Renders the cell `(row, col)` of `batch`.
 ///
-/// Ne panique jamais : un indice hors borne, un type inattendu ou un échec de
-/// formatage rendent [`CellValue::Unrenderable`]
-/// ([I-09](../../../CLAUDE.md#i-09)). Une valeur absente rend
-/// [`CellValue::Null`], jamais du texte.
+/// Never panics: an out-of-bounds index, an unexpected type or a formatting
+/// failure return [`CellValue::Unrenderable`]
+/// ([I-09](../../../CLAUDE.md#i-09)). An absent value returns
+/// [`CellValue::Null`], never text.
 ///
-/// N'alloue pas pour les colonnes `Utf8`, `LargeUtf8` et `Utf8View`, qui sont
-/// l'essentiel de ce qu'une grille affiche.
+/// Does not allocate for `Utf8`, `LargeUtf8` and `Utf8View` columns, which
+/// are most of what a grid displays.
 #[must_use]
 pub fn format_cell<'a>(
     batch: &'a RecordBatch,
@@ -288,28 +288,28 @@ pub fn format_cell<'a>(
     col: usize,
     opts: &FormatOptions,
 ) -> CellValue<'a> {
-    let Some(colonne) = batch.columns().get(col) else {
+    let Some(column) = batch.columns().get(col) else {
         return unrenderable("column index out of range");
     };
-    if row >= colonne.len() {
+    if row >= column.len() {
         return unrenderable("row index out of range");
     }
-    if colonne.is_null(row) {
+    if column.is_null(row) {
         return CellValue::Null;
     }
-    format_value(&**colonne, row, opts)
+    format_value(&**column, row, opts)
 }
 
-/// Rend une valeur non nulle d'un tableau Arrow quelconque.
+/// Renders a non-null value of any Arrow array.
 ///
-/// Séparée de [`format_cell`] pour que l'export et les tests puissent formater
-/// une colonne sans construire un `RecordBatch`.
+/// Separate from [`format_cell`] so that the export and the tests can format a
+/// column without building a `RecordBatch`.
 ///
-/// # Préconditions
+/// # Preconditions
 ///
-/// `row < array.len()` et la valeur n'est pas nulle ; les deux sont vérifiés par
-/// [`format_cell`]. Appelée directement, elle rend `Unrenderable` plutôt que de
-/// paniquer.
+/// `row < array.len()` and the value is not null; both are checked by
+/// [`format_cell`]. Called directly, it returns `Unrenderable` rather than
+/// panicking.
 #[must_use]
 pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) -> CellValue<'a> {
     if row >= array.len() {
@@ -323,7 +323,7 @@ pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) 
         DataType::Null => CellValue::Null,
 
         DataType::Boolean => match array.as_boolean_opt() {
-            Some(valeurs) => CellValue::Text(Cow::Borrowed(if valeurs.value(row) {
+            Some(values) => CellValue::Text(Cow::Borrowed(if values.value(row) {
                 "true"
             } else {
                 "false"
@@ -331,9 +331,9 @@ pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) 
             None => delegate(array, row, opts),
         },
 
-        // Les entiers se formatent à la main : `Display` de Rust et le
-        // formateur d'Arrow produisent la même chaîne, et on évite une
-        // construction de formateur par cellule.
+        // Integers are formatted by hand: Rust's `Display` and Arrow's
+        // formatter produce the same string, and this avoids building a
+        // formatter per cell.
         DataType::Int8 => integer::<Int8Type>(array, row, opts),
         DataType::Int16 => integer::<Int16Type>(array, row, opts),
         DataType::Int32 => integer::<Int32Type>(array, row, opts),
@@ -344,287 +344,286 @@ pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) 
         DataType::UInt64 => integer::<UInt64Type>(array, row, opts),
 
         DataType::Utf8 => match array.as_string_opt::<i32>() {
-            Some(valeurs) => finish(Cow::Borrowed(valeurs.value(row)), opts.max_len),
+            Some(values) => finish(Cow::Borrowed(values.value(row)), opts.max_len),
             None => delegate(array, row, opts),
         },
         DataType::LargeUtf8 => match array.as_string_opt::<i64>() {
-            Some(valeurs) => finish(Cow::Borrowed(valeurs.value(row)), opts.max_len),
+            Some(values) => finish(Cow::Borrowed(values.value(row)), opts.max_len),
             None => delegate(array, row, opts),
         },
         DataType::Utf8View => match array.as_string_view_opt() {
-            Some(valeurs) => finish(Cow::Borrowed(valeurs.value(row)), opts.max_len),
+            Some(values) => finish(Cow::Borrowed(values.value(row)), opts.max_len),
             None => delegate(array, row, opts),
         },
 
         DataType::Binary => match array.as_binary_opt::<i32>() {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
         DataType::LargeBinary => match array.as_binary_opt::<i64>() {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
         DataType::BinaryView => match array.as_binary_view_opt() {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
         DataType::FixedSizeBinary(_) => match array
             .as_any()
             .downcast_ref::<arrow::array::FixedSizeBinaryArray>()
         {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
 
-        // `value_as_string` place la virgule décimale d'après l'échelle de la
-        // colonne. Formater l'entier sous-jacent afficherait 12345 pour 123,45.
+        // `value_as_string` places the decimal point according to the column's
+        // scale. Formatting the underlying integer would display 12345 for 123.45.
         DataType::Decimal128(_, _) => match array.as_primitive_opt::<Decimal128Type>() {
-            Some(valeurs) => finish(
-                Cow::Owned(group(valeurs.value_as_string(row), opts.number_grouping)),
+            Some(values) => finish(
+                Cow::Owned(group(values.value_as_string(row), opts.number_grouping)),
                 opts.max_len,
             ),
             None => delegate(array, row, opts),
         },
 
-        // Dates, heures, horodatages, durées, intervalles, listes, structures,
-        // cartes, dictionnaires, flottants : voir la note en tête de module.
+        // Dates, times, timestamps, durations, intervals, lists, structs,
+        // maps, dictionaries, floats: see the note at the top of the module.
         _ => delegate(array, row, opts),
     }
 }
 
-/// Rend un entier de largeur quelconque.
+/// Renders an integer of any width.
 fn integer<'a, T>(array: &'a dyn Array, row: usize, opts: &FormatOptions) -> CellValue<'a>
 where
     T: arrow::datatypes::ArrowPrimitiveType,
     T::Native: std::fmt::Display,
 {
     match array.as_primitive_opt::<T>() {
-        Some(valeurs) => {
-            let mut texte = String::new();
-            if write!(texte, "{}", valeurs.value(row)).is_err() {
+        Some(values) => {
+            let mut txt = String::new();
+            if write!(txt, "{}", values.value(row)).is_err() {
                 return unrenderable("integer formatting failed");
             }
-            finish(Cow::Owned(group(texte, opts.number_grouping)), opts.max_len)
+            finish(Cow::Owned(group(txt, opts.number_grouping)), opts.max_len)
         }
         None => delegate(array, row, opts),
     }
 }
 
-/// Insère les séparateurs de milliers dans un nombre déjà formaté.
+/// Inserts thousands separators into an already formatted number.
 ///
-/// Rend la chaîne **telle quelle** quand le groupement est au repos : c'est le
-/// défaut, donc le cas de très loin le plus fréquent, et il ne doit rien coûter.
-/// Cette fonction est appelée une fois par cellule numérique visible et par
-/// trame — le budget est de 8 ms pour la trame entière
-/// ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction)).
+/// Returns the string **as is** when grouping is off: it is the default, so
+/// by far the most frequent case, and it must cost nothing. This function is
+/// called once per visible numeric cell and per frame — the budget is 8 ms
+/// for the whole frame
+/// ([PERFORMANCE](../../../docs/PERFORMANCE.md#interaction-budgets)).
 ///
-/// Ne groupe que la partie entière, et laisse intacts le signe, la partie
-/// décimale et un éventuel exposant : `-1234.5678` devient `-1 234.5678`, jamais
-/// `-1 234.567 8`. Grouper après la virgule est une faute de typographie qui
-/// rend les décimales illisibles.
-fn group(texte: String, mode: NumberGrouping) -> String {
+/// Groups only the integer part, and leaves the sign, the decimal part and a
+/// possible exponent intact: `-1234.5678` becomes `-1 234.5678`, never
+/// `-1 234.567 8`. Grouping after the decimal point is a typographic mistake
+/// that makes the decimals unreadable.
+fn group(txt: String, mode: NumberGrouping) -> String {
     if matches!(mode, NumberGrouping::None) {
-        return texte;
+        return txt;
     }
-    // La partie entière s'arrête au premier caractère qui n'est pas un chiffre,
-    // en sautant un signe de tête. Un texte sans chiffre — qui ne devrait pas
-    // atteindre cette fonction — ressort inchangé plutôt que mutilé.
+    // The integer part stops at the first character that is not a digit,
+    // skipping a leading sign. A text without digits — which should not
+    // reach this function — comes out unchanged rather than mangled.
     //
-    // Tout est découpé avec `get`, jamais indexé : les bornes se déduisent du
-    // texte, et ce texte vient du formatage d'une valeur **serveur**. Un
-    // découpage prouvé juste aujourd'hui devient une panique au premier type
-    // dont le formateur d'Arrow rend autre chose que ce qu'on suppose ici
+    // Everything is sliced with `get`, never indexed: the bounds are derived
+    // from the text, and that text comes from formatting a **server** value. A
+    // slicing proven right today becomes a panic at the first type whose
+    // Arrow formatter returns something other than what is assumed here
     // ([I-09](../../../CLAUDE.md#i-09)).
-    let debut = usize::from(texte.starts_with(['-', '+']));
-    let Some(reste) = texte.get(debut..) else {
-        return texte;
+    let start = usize::from(txt.starts_with(['-', '+']));
+    let Some(rest) = txt.get(start..) else {
+        return txt;
     };
-    let chiffres = reste.bytes().take_while(u8::is_ascii_digit).count();
-    if chiffres <= 3 {
-        return texte;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits <= 3 {
+        return txt;
     }
-    let fin = debut.saturating_add(chiffres);
-    let (Some(signe), Some(entier), Some(suite)) =
-        (texte.get(..debut), texte.get(debut..fin), texte.get(fin..))
+    let end = start.saturating_add(digits);
+    let (Some(sign), Some(int_value), Some(suite)) =
+        (txt.get(..start), txt.get(start..end), txt.get(end..))
     else {
-        return texte;
+        return txt;
     };
 
-    let mut sortie =
-        String::with_capacity(texte.len() + (chiffres / 3) * GROUP_SEPARATOR.len_utf8());
-    sortie.push_str(signe);
-    for (rang, chiffre) in entier.chars().enumerate() {
-        // Une séparation tombe là où il reste un multiple de trois chiffres à
-        // écrire, jamais en tête du nombre.
-        if rang > 0 && (chiffres - rang).is_multiple_of(3) {
-            sortie.push(GROUP_SEPARATOR);
+    let mut output = String::with_capacity(txt.len() + (digits / 3) * GROUP_SEPARATOR.len_utf8());
+    output.push_str(sign);
+    for (rank, digit) in int_value.chars().enumerate() {
+        // A separator falls where a multiple of three digits remains to be
+        // written, never at the head of the number.
+        if rank > 0 && (digits - rank).is_multiple_of(3) {
+            output.push(GROUP_SEPARATOR);
         }
-        sortie.push(chiffre);
+        output.push(digit);
     }
-    sortie.push_str(suite);
-    sortie
+    output.push_str(suite);
+    output
 }
 
-/// Passe la main aux formateurs d'Arrow.
+/// Hands over to Arrow's formatters.
 fn delegate<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) -> CellValue<'a> {
     let options = opts.arrow();
-    let Ok(formateur) = ArrayFormatter::try_new(array, &options) else {
+    let Ok(formatter) = ArrayFormatter::try_new(array, &options) else {
         return unrenderable("unsupported column type");
     };
-    match formateur.value(row).try_to_string() {
-        Ok(texte) => finish(Cow::Owned(texte), opts.max_len),
+    match formatter.value(row).try_to_string() {
+        Ok(txt) => finish(Cow::Owned(txt), opts.max_len),
         Err(_) => unrenderable("value could not be formatted"),
     }
 }
 
-/// Rend une valeur binaire selon [`BinaryDisplay`].
+/// Renders a binary value according to [`BinaryDisplay`].
 ///
-/// N'encode que les octets qui seront montrés : convertir 4 Mo de BLOB en
-/// hexadécimal pour en afficher 512 caractères coûterait la trame entière.
-fn binary<'a>(octets: &[u8], opts: &FormatOptions) -> CellValue<'a> {
+/// Encodes only the bytes that will be shown: converting 4 MB of BLOB to
+/// hexadecimal to display 512 characters of it would cost the whole frame.
+fn binary<'a>(bytes: &[u8], opts: &FormatOptions) -> CellValue<'a> {
     if matches!(opts.binary_display, BinaryDisplay::Size) {
-        return CellValue::Text(Cow::Owned(human_size(octets.len())));
+        return CellValue::Text(Cow::Owned(human_size(bytes.len())));
     }
 
-    // Un peu plus que la limite, pour que `finish` **constate** le dépassement
-    // au lieu de le supposer.
-    let utiles = match opts.binary_display {
+    // A little more than the limit, so that `finish` **observes** the overflow
+    // instead of assuming it.
+    let useful = match opts.binary_display {
         BinaryDisplay::Base64 if opts.max_len > 0 => {
-            // Trois octets sources donnent quatre caractères ; rester sur un
-            // multiple de trois évite d'émettre un remplissage `=` au milieu
-            // d'une valeur qui continue.
-            octets.len().min((opts.max_len / 4 + 1) * 3)
+            // Three source bytes give four characters; staying on a multiple
+            // of three avoids emitting `=` padding in the middle of a value
+            // that continues.
+            bytes.len().min((opts.max_len / 4 + 1) * 3)
         }
-        BinaryDisplay::Hex if opts.max_len > 0 => octets.len().min(opts.max_len / 2 + 1),
-        _ => octets.len(),
+        BinaryDisplay::Hex if opts.max_len > 0 => bytes.len().min(opts.max_len / 2 + 1),
+        _ => bytes.len(),
     };
 
-    let Some(debut) = octets.get(..utiles) else {
+    let Some(start) = bytes.get(..useful) else {
         return unrenderable("binary slice out of range");
     };
 
-    let mut texte = String::with_capacity(utiles.saturating_mul(2));
+    let mut txt = String::with_capacity(useful.saturating_mul(2));
     match opts.binary_display {
-        BinaryDisplay::Base64 => push_base64(&mut texte, debut),
+        BinaryDisplay::Base64 => push_base64(&mut txt, start),
         _ => {
-            for octet in debut {
-                push_hex(&mut texte, *octet);
+            for byte in start {
+                push_hex(&mut txt, *byte);
             }
         }
     }
 
-    // `full_bytes` compte les octets de la valeur, pas les caractères de son
-    // encodage : c'est la taille du BLOB que l'utilisateur veut connaître.
-    let complet = octets.len();
-    match finish(Cow::Owned(texte), opts.max_len) {
+    // `full_bytes` counts the bytes of the value, not the characters of its
+    // encoding: it is the BLOB size the user wants to know.
+    let complete = bytes.len();
+    match finish(Cow::Owned(txt), opts.max_len) {
         CellValue::Truncated { text, .. } => CellValue::Truncated {
             text,
-            full_bytes: complet,
+            full_bytes: complete,
         },
-        CellValue::Text(text) if utiles < complet => CellValue::Truncated {
+        CellValue::Text(text) if useful < complete => CellValue::Truncated {
             text,
-            full_bytes: complet,
+            full_bytes: complete,
         },
-        autre => autre,
+        other => other,
     }
 }
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
-fn push_hex(sortie: &mut String, octet: u8) {
-    let haut = usize::from(octet >> 4);
-    let bas = usize::from(octet & 0x0f);
-    if let (Some(a), Some(b)) = (HEX.get(haut), HEX.get(bas)) {
-        sortie.push(char::from(*a));
-        sortie.push(char::from(*b));
+fn push_hex(output: &mut String, byte: u8) {
+    let high = usize::from(byte >> 4);
+    let low = usize::from(byte & 0x0f);
+    if let (Some(a), Some(b)) = (HEX.get(high), HEX.get(low)) {
+        output.push(char::from(*a));
+        output.push(char::from(*b));
     }
 }
 
 const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/// Base64 standard (RFC 4648), avec remplissage.
+/// Standard Base64 (RFC 4648), with padding.
 ///
-/// Écrite à la main : la seule alternative serait une dépendance directe pour
-/// vingt lignes, ce que la politique de dépendances décourage
-/// ([SECURITY](../../../docs/SECURITY.md#dépendances)).
-fn push_base64(sortie: &mut String, octets: &[u8]) {
-    for morceau in octets.chunks(3) {
-        let a = morceau.first().copied().unwrap_or(0);
-        let b = morceau.get(1).copied().unwrap_or(0);
-        let c = morceau.get(2).copied().unwrap_or(0);
-        let bloc = (u32::from(a) << 16) | (u32::from(b) << 8) | u32::from(c);
+/// Written by hand: the only alternative would be a direct dependency for
+/// twenty lines, which the dependency policy discourages
+/// ([SECURITY](../../../docs/SECURITY.md#dependencies)).
+fn push_base64(output: &mut String, bytes: &[u8]) {
+    for chunk in bytes.chunks(3) {
+        let a = chunk.first().copied().unwrap_or(0);
+        let b = chunk.get(1).copied().unwrap_or(0);
+        let c = chunk.get(2).copied().unwrap_or(0);
+        let block = (u32::from(a) << 16) | (u32::from(b) << 8) | u32::from(c);
 
-        // 1 octet source → 2 caractères puis « == » ; 2 octets → 3 puis « = ».
-        let significatifs = morceau.len().saturating_add(1).min(4);
-        for rang in 0..4_usize {
-            if rang < significatifs {
-                let index = usize::try_from((bloc >> (18 - rang * 6)) & 0x3f).unwrap_or(0);
-                if let Some(caractere) = BASE64.get(index) {
-                    sortie.push(char::from(*caractere));
+        // 1 source byte → 2 characters then "=="; 2 bytes → 3 then "=".
+        let significant = chunk.len().saturating_add(1).min(4);
+        for rank in 0..4_usize {
+            if rank < significant {
+                let index = usize::try_from((block >> (18 - rank * 6)) & 0x3f).unwrap_or(0);
+                if let Some(character) = BASE64.get(index) {
+                    output.push(char::from(*character));
                 }
             } else {
-                sortie.push('=');
+                output.push('=');
             }
         }
     }
 }
 
-/// Taille lisible : `<5 B>`, `<1.2 KiB>`, `<3.3 MiB>`.
+/// Readable size: `<5 B>`, `<1.2 KiB>`, `<3.3 MiB>`.
 ///
-/// Calculée en entiers : `usize as f64` perd de la précision au-delà de 2^53 et
-/// la règle du dépôt proscrit les conversions `as` silencieuses
+/// Computed in integers: `usize as f64` loses precision beyond 2^53 and the
+/// repository rule forbids silent `as` conversions
 /// ([rust.md](../../../.claude/rules/rust.md)).
-fn human_size(octets: usize) -> String {
-    const UNITES: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut valeur = octets;
-    let mut reste = 0_usize;
-    let mut rang = 0_usize;
-    while valeur >= 1024 && rang + 1 < UNITES.len() {
-        reste = valeur % 1024;
-        valeur /= 1024;
-        rang += 1;
+fn human_size(bytes: usize) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes;
+    let mut rest = 0_usize;
+    let mut rank = 0_usize;
+    while value >= 1024 && rank + 1 < UNITS.len() {
+        rest = value % 1024;
+        value /= 1024;
+        rank += 1;
     }
-    let unite = UNITES.get(rang).copied().unwrap_or("B");
-    if rang == 0 {
-        format!("<{valeur} {unite}>")
+    let unit = UNITS.get(rank).copied().unwrap_or("B");
+    if rank == 0 {
+        format!("<{value} {unit}>")
     } else {
-        let dixiemes = reste.saturating_mul(10) / 1024;
-        format!("<{valeur}.{dixiemes} {unite}>")
+        let tenths = rest.saturating_mul(10) / 1024;
+        format!("<{value}.{tenths} {unit}>")
     }
 }
 
-/// Coupe la valeur si elle dépasse `max_len` caractères.
-fn finish(texte: Cow<'_, str>, max_len: usize) -> CellValue<'_> {
-    // Chemin rapide en O(1) : moins d'octets que de caractères autorisés, donc
-    // à plus forte raison moins de caractères.
-    if max_len == 0 || texte.len() <= max_len {
-        return CellValue::Text(texte);
+/// Cuts the value if it exceeds `max_len` characters.
+fn finish(txt: Cow<'_, str>, max_len: usize) -> CellValue<'_> {
+    // O(1) fast path: fewer bytes than allowed characters, so a fortiori fewer
+    // characters.
+    if max_len == 0 || txt.len() <= max_len {
+        return CellValue::Text(txt);
     }
-    let Some((coupe, _)) = texte.char_indices().nth(max_len) else {
-        return CellValue::Text(texte);
+    let Some((cut, _)) = txt.char_indices().nth(max_len) else {
+        return CellValue::Text(txt);
     };
-    let full_bytes = texte.len();
-    match texte {
-        Cow::Borrowed(valeur) => match valeur.get(..coupe) {
-            Some(debut) => CellValue::Truncated {
-                text: Cow::Borrowed(debut),
+    let full_bytes = txt.len();
+    match txt {
+        Cow::Borrowed(value) => match value.get(..cut) {
+            Some(start) => CellValue::Truncated {
+                text: Cow::Borrowed(start),
                 full_bytes,
             },
             None => unrenderable("truncation landed inside a character"),
         },
-        Cow::Owned(mut valeur) => {
-            valeur.truncate(coupe);
+        Cow::Owned(mut value) => {
+            value.truncate(cut);
             CellValue::Truncated {
-                text: Cow::Owned(valeur),
+                text: Cow::Owned(value),
                 full_bytes,
             }
         }
     }
 }
 
-const fn unrenderable<'a>(raison: &'static str) -> CellValue<'a> {
+const fn unrenderable<'a>(why: &'static str) -> CellValue<'a> {
     CellValue::Unrenderable {
-        reason: Cow::Borrowed(raison),
+        reason: Cow::Borrowed(why),
     }
 }
 
@@ -657,47 +656,47 @@ pub enum TimestampDisplay {
 ///
 /// Scans fields once; a result has tens of columns, not thousands, and this is
 /// called when a result completes rather than per frame.
-/// Longueur maximale retenue pour un nom de fuseau venu du serveur.
+/// Maximum length kept for a time zone name coming from the server.
 ///
-/// Voir le corps de [`timestamp_display`] : ce nom est une entrée hostile, et il
-/// partage sa ligne avec la mention qui dit à quelle exécution appartiennent les
-/// lignes affichées.
+/// See the body of [`timestamp_display`]: this name is a hostile input, and it
+/// shares its line with the notice that says which execution the displayed
+/// rows belong to.
 const ZONE_MAX_CHARS: usize = 64;
 
 #[must_use]
 pub fn timestamp_display(schema: &Schema) -> TimestampDisplay {
-    let mut vu: Option<&str> = None;
-    for champ in schema.fields() {
+    let mut seen: Option<&str> = None;
+    for field in schema.fields() {
         // Only the top level: a zone buried in a struct or a list is not what
         // the footer is describing, and claiming it would overstate.
-        let DataType::Timestamp(_, Some(zone)) = champ.data_type() else {
+        let DataType::Timestamp(_, Some(zone)) = field.data_type() else {
             continue;
         };
-        match vu {
-            None => vu = Some(zone.as_ref()),
-            Some(deja) if deja == zone.as_ref() => {}
+        match seen {
+            None => seen = Some(zone.as_ref()),
+            Some(already) if already == zone.as_ref() => {}
             Some(_) => return TimestampDisplay::Mixed,
         }
     }
-    // Le nom de fuseau vient du schéma, donc du serveur : c'est une entrée
-    // hostile, y compris quand elle n'est « que » affichée. La phrase du pied se
-    // termine par « Results belong to this execution », la seule mention qui
-    // garantit que les lignes viennent de l'exécution en cours ; un nom très
-    // long, ou porteur d'une marque de direction, la repousserait hors du cadre
-    // ou en brouillerait la lecture. Un fuseau réel tient largement dans la
-    // borne — `America/Argentina/ComodRivadavia` fait 32 caractères.
-    vu.map_or(TimestampDisplay::Absent, |zone| {
-        let propre: String = zone
+    // The time zone name comes from the schema, hence from the server: it is a
+    // hostile input, including when it is "only" displayed. The footer sentence
+    // ends with "Results belong to this execution", the only notice that
+    // guarantees the rows come from the current execution; a very long name,
+    // or one carrying a direction mark, would push it out of the frame or
+    // scramble its reading. A real time zone fits well within the bound —
+    // `America/Argentina/ComodRivadavia` is 32 characters.
+    seen.map_or(TimestampDisplay::Absent, |zone| {
+        let clean: String = zone
             .chars()
-            .filter(|caractere| !caractere.is_control())
+            .filter(|character| !character.is_control())
             .take(ZONE_MAX_CHARS)
             .collect();
-        if propre.is_empty() {
-            // Rien de nommable : se taire plutôt qu'afficher une chaîne vide
-            // derrière « Display timezone ».
+        if clean.is_empty() {
+            // Nothing nameable: stay silent rather than display an empty string
+            // after "Display timezone".
             TimestampDisplay::Absent
         } else {
-            TimestampDisplay::Uniform(propre)
+            TimestampDisplay::Uniform(clean)
         }
     })
 }
@@ -715,102 +714,102 @@ mod tests {
 
     use super::*;
 
-    fn rendu(array: Arc<dyn Array>, opts: &FormatOptions) -> CellValue<'static> {
-        // `into_owned` détache la valeur du tableau, qui meurt à la fin de
-        // l'appel : c'est le prix d'un helper de test, pas du chemin de rendu.
+    fn render(array: Arc<dyn Array>, opts: &FormatOptions) -> CellValue<'static> {
+        // `into_owned` detaches the value from the array, which dies at the end
+        // of the call: it is the price of a test helper, not of the rendering path.
         format_value(array.as_ref(), 0, opts).into_owned()
     }
 
-    fn texte(array: Arc<dyn Array>) -> String {
+    fn as_text(array: Arc<dyn Array>) -> String {
         let opts = FormatOptions::default();
-        rendu(array, &opts)
+        render(array, &opts)
             .text()
             .map(str::to_owned)
-            .unwrap_or_else(|| "<non rendu>".to_owned())
+            .unwrap_or_else(|| "<not rendered>".to_owned())
     }
 
     #[test]
-    fn le_groupement_au_repos_ne_touche_a_rien() {
-        // C'est le défaut, donc le chemin chaud : ce que le serveur a envoyé
-        // ressort tel quel, quel que soit le nombre de chiffres.
-        for valeur in ["0", "-7", "1234567", "-1234567.89", "abc"] {
+    fn grouping_off_touches_nothing() {
+        // It is the default, hence the hot path: what the server sent comes out
+        // as is, whatever the number of digits.
+        for value in ["0", "-7", "1234567", "-1234567.89", "abc"] {
             assert_eq!(
-                group(valeur.to_owned(), NumberGrouping::None),
-                valeur,
-                "{valeur}"
+                group(value.to_owned(), NumberGrouping::None),
+                value,
+                "{value}"
             );
         }
     }
 
     #[test]
-    fn le_groupement_par_milliers_respecte_signe_et_decimales() {
-        let cas = [
+    fn thousands_grouping_respects_sign_and_decimals() {
+        let case = [
             ("0", "0"),
             ("999", "999"),
             ("1000", "1\u{a0}000"),
             ("-1000", "-1\u{a0}000"),
             ("+1000", "+1\u{a0}000"),
             ("4823917", "4\u{a0}823\u{a0}917"),
-            // La partie décimale ne se groupe jamais : « 1 234.567 8 » est
-            // illisible, et ce n'est pas ce que demande la typographie.
+            // The decimal part is never grouped: "1 234.567 8" is unreadable,
+            // and it is not what typography asks for.
             ("1234.5678", "1\u{a0}234.5678"),
             ("-1234567.89", "-1\u{a0}234\u{a0}567.89"),
-            // Rien à grouper : le texte ressort intact plutôt que mutilé.
+            // Nothing to group: the text comes out intact rather than mangled.
             ("", ""),
             ("-", "-"),
             ("NaN", "NaN"),
             ("inf", "inf"),
-            // Le formateur d'Arrow rend autre chose qu'un nombre pour bien des
-            // types. Aucun découpage ne doit tomber au milieu d'un caractère.
+            // Arrow's formatter returns something other than a number for many
+            // types. No slicing may fall in the middle of a character.
             ("—12345", "—12345"),
             ("1 234 €", "1 234 €"),
             ("日本語", "日本語"),
             ("+日本", "+日本"),
         ];
-        for (entree, attendu) in cas {
+        for (entry, expected) in case {
             assert_eq!(
-                group(entree.to_owned(), NumberGrouping::Thousands),
-                attendu,
-                "{entree}"
+                group(entry.to_owned(), NumberGrouping::Thousands),
+                expected,
+                "{entry}"
             );
         }
     }
 
     #[test]
-    fn les_entiers_et_les_decimaux_suivent_le_reglage() {
+    fn integers_and_decimals_follow_the_setting() {
         let opts = FormatOptions::default().with_number_grouping(NumberGrouping::Thousands);
-        let entiers = Arc::new(Int64Array::from(vec![Some(-4_823_917)])) as Arc<dyn Array>;
+        let integers = Arc::new(Int64Array::from(vec![Some(-4_823_917)])) as Arc<dyn Array>;
         assert_eq!(
-            rendu(entiers, &opts),
+            render(integers, &opts),
             CellValue::Text(Cow::Owned("-4\u{a0}823\u{a0}917".to_owned()))
         );
 
-        // `value_as_string` place la virgule décimale ; le groupement doit
-        // s'arrêter avant elle.
-        let decimaux = Decimal128Array::from(vec![Some(123_456_789_i128)])
+        // `value_as_string` places the decimal point; grouping must stop
+        // before it.
+        let decimals = Decimal128Array::from(vec![Some(123_456_789_i128)])
             .with_precision_and_scale(12, 2)
-            .expect("précision et échelle valides pour un littéral de test");
+            .expect("valid precision and scale for a test literal");
         assert_eq!(
-            rendu(Arc::new(decimaux), &opts),
+            render(Arc::new(decimals), &opts),
             CellValue::Text(Cow::Owned("1\u{a0}234\u{a0}567.89".to_owned()))
         );
     }
 
     #[test]
-    fn un_reglage_ecrit_avant_le_groupement_reste_lisible() {
-        // I-11 : un workspace enregistré avant l'ajout du champ ne doit pas
-        // devenir illisible. C'est ce que garantit `#[serde(default)]`, et
-        // c'est le genre de garantie qui se perd au premier champ ajouté sans
-        // y penser.
-        let ancien =
+    fn a_setting_written_before_grouping_stays_readable() {
+        // I-11: a workspace saved before the field was added must not become
+        // unreadable. That is what `#[serde(default)]` guarantees, and it is
+        // the kind of guarantee that is lost at the first field added without
+        // thinking about it.
+        let old =
             r#"{"max_len":512,"null_text":"NULL","timestamp_format":null,"binary_display":"Hex"}"#;
         let options: FormatOptions =
-            serde_json::from_str(ancien).expect("un document antérieur reste lisible");
+            serde_json::from_str(old).expect("an earlier document stays readable");
         assert_eq!(options.number_grouping, NumberGrouping::None);
     }
 
     #[test]
-    fn les_booleens_ne_sont_pas_alloues() {
+    fn booleans_are_not_allocated() {
         let array = BooleanArray::from(vec![Some(true), Some(false)]);
         let opts = FormatOptions::default();
         assert_eq!(
@@ -824,45 +823,45 @@ mod tests {
     }
 
     #[test]
-    fn les_entiers_de_toutes_largeurs_se_rendent() {
-        assert_eq!(texte(Arc::new(Int32Array::from(vec![-42]))), "-42");
+    fn integers_of_every_width_render() {
+        assert_eq!(as_text(Arc::new(Int32Array::from(vec![-42]))), "-42");
         assert_eq!(
-            texte(Arc::new(Int64Array::from(vec![i64::MIN]))),
+            as_text(Arc::new(Int64Array::from(vec![i64::MIN]))),
             i64::MIN.to_string()
         );
-        assert_eq!(texte(Arc::new(UInt8Array::from(vec![255_u8]))), "255");
+        assert_eq!(as_text(Arc::new(UInt8Array::from(vec![255_u8]))), "255");
     }
 
     #[test]
-    fn le_texte_est_emprunte_et_non_copie() {
-        let array = StringArray::from(vec![Some("bonjour")]);
+    fn text_is_borrowed_not_copied() {
+        let array = StringArray::from(vec![Some("hello")]);
         let opts = FormatOptions::default();
         match format_value(&array, 0, &opts) {
-            CellValue::Text(Cow::Borrowed(valeur)) => assert_eq!(valeur, "bonjour"),
-            autre => panic!("attendu un emprunt, obtenu {autre:?}"),
+            CellValue::Text(Cow::Borrowed(value)) => assert_eq!(value, "hello"),
+            other => panic!("expected a borrow, got {other:?}"),
         }
     }
 
     #[test]
-    fn une_absence_de_valeur_est_null_pas_du_texte() {
+    fn an_absent_value_is_null_not_text() {
         let array = StringArray::from(vec![None::<&str>]);
         let opts = FormatOptions::default();
         assert_eq!(format_value(&array, 0, &opts), CellValue::Null);
     }
 
-    /// Le piège : une colonne texte qui contient réellement `NULL`.
+    /// The trap: a text column that really contains `NULL`.
     #[test]
-    fn la_chaine_null_n_est_pas_une_absence_de_valeur() {
+    fn the_null_string_is_not_an_absent_value() {
         let array = StringArray::from(vec![Some("NULL")]);
         let opts = FormatOptions::default();
-        let valeur = format_value(&array, 0, &opts);
-        assert!(!valeur.is_null());
-        assert_eq!(valeur.text(), Some("NULL"));
+        let value = format_value(&array, 0, &opts);
+        assert!(!value.is_null());
+        assert_eq!(value.text(), Some("NULL"));
     }
 
     #[test]
-    fn une_valeur_trop_longue_est_coupee_sur_une_frontiere_de_caractere() {
-        // 10 caractères, 20 octets : la coupe naïve à l'octet 5 casserait l'UTF-8.
+    fn a_too_long_value_is_cut_on_a_character_boundary() {
+        // 10 characters, 20 bytes: the naive cut at byte 5 would break UTF-8.
         let array = StringArray::from(vec![Some("éàéàéàéàéà")]);
         let opts = FormatOptions::default().with_max_len(5);
         match format_value(&array, 0, &opts) {
@@ -870,106 +869,106 @@ mod tests {
                 assert_eq!(text, "éàéàé");
                 assert_eq!(full_bytes, 20);
             }
-            autre => panic!("attendu Truncated, obtenu {autre:?}"),
+            other => panic!("expected Truncated, got {other:?}"),
         }
     }
 
     #[test]
-    fn une_coupe_desactivee_laisse_la_valeur_entiere() {
+    fn a_disabled_cut_leaves_the_whole_value() {
         let long = "x".repeat(10_000);
         let array = StringArray::from(vec![Some(long.as_str())]);
         let opts = FormatOptions::default().with_max_len(0);
-        let valeur = format_value(&array, 0, &opts);
-        assert!(!valeur.is_truncated());
-        assert_eq!(valeur.text().map(str::len), Some(10_000));
+        let value = format_value(&array, 0, &opts);
+        assert!(!value.is_truncated());
+        assert_eq!(value.text().map(str::len), Some(10_000));
     }
 
     #[test]
-    fn le_binaire_se_rend_en_hexadecimal() {
+    fn binary_renders_as_hexadecimal() {
         let array = BinaryArray::from(vec![Some(b"Hello".as_slice())]);
         let opts = FormatOptions::default();
         assert_eq!(format_value(&array, 0, &opts).text(), Some("48656c6c6f"));
     }
 
     #[test]
-    fn le_binaire_se_rend_en_base64() {
+    fn binary_renders_as_base64() {
         let opts = FormatOptions::default().with_binary_display(BinaryDisplay::Base64);
-        // Les trois longueurs de reste, qui sont les trois cas de remplissage.
-        for (entree, attendu) in [
+        // The three remainder lengths, which are the three padding cases.
+        for (entry, expected) in [
             (b"Hello".as_slice(), "SGVsbG8="),
             (b"Hell".as_slice(), "SGVsbA=="),
             (b"Hel".as_slice(), "SGVs"),
         ] {
-            let array = BinaryArray::from(vec![Some(entree)]);
+            let array = BinaryArray::from(vec![Some(entry)]);
             assert_eq!(
                 format_value(&array, 0, &opts).text(),
-                Some(attendu),
-                "entrée de {} octets",
-                entree.len()
+                Some(expected),
+                "input of {} bytes",
+                entry.len()
             );
         }
     }
 
     #[test]
-    fn un_gros_binaire_se_rend_en_taille() {
-        let gros = vec![0_u8; 3_500_000];
-        let array = BinaryArray::from(vec![Some(gros.as_slice())]);
+    fn a_large_binary_renders_as_a_size() {
+        let large = vec![0_u8; 3_500_000];
+        let array = BinaryArray::from(vec![Some(large.as_slice())]);
         let opts = FormatOptions::default().with_binary_display(BinaryDisplay::Size);
         assert_eq!(format_value(&array, 0, &opts).text(), Some("<3.3 MiB>"));
     }
 
-    /// Le point qui coûte une trame s'il est raté : on ne convertit pas
-    /// 4 Mo de BLOB pour en afficher 32 caractères.
+    /// The point that costs a frame if missed: 4 MB of BLOB are not converted
+    /// to display 32 characters of it.
     #[test]
-    fn un_gros_binaire_hexadecimal_n_encode_que_ce_qui_est_montre() {
-        let gros = vec![0xab_u8; 1_000_000];
-        let array = BinaryArray::from(vec![Some(gros.as_slice())]);
+    fn a_large_hexadecimal_binary_encodes_only_what_is_shown() {
+        let large = vec![0xab_u8; 1_000_000];
+        let array = BinaryArray::from(vec![Some(large.as_slice())]);
         let opts = FormatOptions::default().with_max_len(32);
         match format_value(&array, 0, &opts) {
             CellValue::Truncated { text, full_bytes } => {
-                assert!(text.len() <= 40, "{} caractères produits", text.len());
+                assert!(text.len() <= 40, "{} characters produced", text.len());
                 assert_eq!(full_bytes, 1_000_000);
             }
-            autre => panic!("attendu Truncated, obtenu {autre:?}"),
+            other => panic!("expected Truncated, got {other:?}"),
         }
     }
 
     #[test]
-    fn un_decimal_porte_sa_virgule() {
+    fn a_decimal_carries_its_decimal_point() {
         let array = Decimal128Array::from(vec![Some(12_345_i128)])
             .with_precision_and_scale(10, 2)
-            .expect("précision et échelle valides pour 12345");
-        assert_eq!(texte(Arc::new(array)), "123.45");
+            .expect("valid precision and scale for 12345");
+        assert_eq!(as_text(Arc::new(array)), "123.45");
     }
 
     #[test]
-    fn les_flottants_suivent_la_convention_arrow() {
-        // `ryu`, comme l'export : 1.0 et non 1.
-        assert_eq!(texte(Arc::new(Float64Array::from(vec![1.0_f64]))), "1.0");
-        assert_eq!(texte(Arc::new(Float64Array::from(vec![0.5_f64]))), "0.5");
+    fn floats_follow_the_arrow_convention() {
+        // `ryu`, like the export: 1.0 and not 1.
+        assert_eq!(as_text(Arc::new(Float64Array::from(vec![1.0_f64]))), "1.0");
+        assert_eq!(as_text(Arc::new(Float64Array::from(vec![0.5_f64]))), "0.5");
     }
 
     #[test]
-    fn les_dates_et_heures_se_rendent() {
-        // 2021-01-01 = 18 628 jours après l'époque.
+    fn dates_and_times_render() {
+        // 2021-01-01 = 18,628 days after the epoch.
         assert_eq!(
-            texte(Arc::new(Date32Array::from(vec![18_628]))),
+            as_text(Arc::new(Date32Array::from(vec![18_628]))),
             "2021-01-01"
         );
-        let heure = Time64MicrosecondArray::from(vec![3_661_000_000_i64]);
-        let rendu = texte(Arc::new(heure));
-        assert!(rendu.starts_with("01:01:01"), "{rendu}");
+        let hour = Time64MicrosecondArray::from(vec![3_661_000_000_i64]);
+        let rendered = as_text(Arc::new(hour));
+        assert!(rendered.starts_with("01:01:01"), "{rendered}");
     }
 
-    /// Le fuseau n'est pas décoratif : la même valeur affichée sans décalage
-    /// donne une heure fausse d'autant, et personne ne s'en aperçoit.
+    /// The time zone is not decorative: the same value displayed without an
+    /// offset gives an hour off by as much, and nobody notices.
     #[test]
-    fn un_horodatage_avec_fuseau_porte_son_decalage() {
+    fn a_timestamp_with_a_time_zone_carries_its_offset() {
         let array =
             TimestampMillisecondArray::from(vec![1_609_459_200_000_i64]).with_timezone("+02:00");
-        let rendu = texte(Arc::new(array));
-        assert!(rendu.starts_with("2021-01-01T02:00:00"), "{rendu}");
-        assert!(rendu.contains("+02:00"), "{rendu}");
+        let rendered = as_text(Arc::new(array));
+        assert!(rendered.starts_with("2021-01-01T02:00:00"), "{rendered}");
+        assert!(rendered.contains("+02:00"), "{rendered}");
     }
 
     #[test]
@@ -986,57 +985,63 @@ mod tests {
     }
 
     #[test]
-    fn un_motif_d_horodatage_personnalise_est_respecte() {
+    fn a_custom_timestamp_pattern_is_respected() {
         let array = TimestampMillisecondArray::from(vec![1_609_459_200_000_i64]);
         let opts = FormatOptions::default().with_timestamp_format(Some(Cow::Borrowed("%Y/%m/%d")));
         assert_eq!(format_value(&array, 0, &opts).text(), Some("2021/01/01"));
     }
 
     #[test]
-    fn une_liste_se_rend() {
+    fn a_list_renders() {
         let array = ListArray::from_iter_primitive::<arrow::datatypes::Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(2), None]),
         ]);
-        // La forme exacte appartient à Arrow ; ce qui est vérifié ici, c'est que
-        // la colonne imbriquée est rendue plutôt que déclarée irrécupérable.
-        let rendu = texte(Arc::new(array));
-        assert!(rendu.starts_with('['), "{rendu}");
-        assert!(rendu.contains('1') && rendu.contains('2'), "{rendu}");
-        assert!(rendu.ends_with(']'), "{rendu}");
+        // The exact form belongs to Arrow; what is checked here is that the
+        // nested column is rendered rather than declared unrecoverable.
+        let rendered = as_text(Arc::new(array));
+        assert!(rendered.starts_with('['), "{rendered}");
+        assert!(
+            rendered.contains('1') && rendered.contains('2'),
+            "{rendered}"
+        );
+        assert!(rendered.ends_with(']'), "{rendered}");
     }
 
     #[test]
-    fn une_structure_se_rend() {
-        let champs = Fields::from(vec![
+    fn a_struct_renders() {
+        let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Utf8, false),
         ]);
         let array = StructArray::new(
-            champs,
+            fields,
             vec![
                 Arc::new(Int32Array::from(vec![7])),
                 Arc::new(StringArray::from(vec!["sept"])),
             ],
             None,
         );
-        let rendu = texte(Arc::new(array));
-        assert!(rendu.contains('7') && rendu.contains("sept"), "{rendu}");
+        let rendered = as_text(Arc::new(array));
+        assert!(
+            rendered.contains('7') && rendered.contains("sept"),
+            "{rendered}"
+        );
     }
 
     #[test]
-    fn une_colonne_entierement_nulle_se_rend_null() {
+    fn an_entirely_null_column_renders_null() {
         let array = arrow::array::NullArray::new(3);
         let opts = FormatOptions::default();
         assert_eq!(format_value(&array, 1, &opts), CellValue::Null);
     }
 
-    /// Un indice hors borne est un bug d'appelant, jamais une panique
+    /// An out-of-bounds index is a caller bug, never a panic
     /// ([I-09](../../../CLAUDE.md#i-09)).
     #[test]
-    fn un_indice_hors_borne_ne_panique_pas() {
+    fn an_out_of_bounds_index_does_not_panic() {
         let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int32, false)]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])
-            .expect("lot construit pour le test");
+            .expect("batch built for the test");
         let opts = FormatOptions::default();
 
         assert!(matches!(
@@ -1050,29 +1055,25 @@ mod tests {
     }
 
     #[test]
-    fn format_cell_traverse_le_lot() {
+    fn format_cell_goes_through_the_batch() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("nom", DataType::Utf8, true),
-            Field::new(
-                "quand",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         ]));
         let batch = RecordBatch::try_new(
             schema,
             vec![
                 Arc::new(Int32Array::from(vec![1, 2])),
-                Arc::new(StringArray::from(vec![Some("un"), None])),
+                Arc::new(StringArray::from(vec![Some("one"), None])),
                 Arc::new(TimestampMillisecondArray::from(vec![Some(0), None])),
             ],
         )
-        .expect("lot construit pour le test");
+        .expect("batch built for the test");
         let opts = FormatOptions::default();
 
         assert_eq!(format_cell(&batch, 0, 0, &opts).text(), Some("1"));
-        assert_eq!(format_cell(&batch, 0, 1, &opts).text(), Some("un"));
+        assert_eq!(format_cell(&batch, 0, 1, &opts).text(), Some("one"));
         assert!(format_cell(&batch, 1, 1, &opts).is_null());
         assert!(format_cell(&batch, 1, 2, &opts).is_null());
         assert_eq!(
@@ -1081,8 +1082,8 @@ mod tests {
         );
     }
 
-    /// Un schéma à une colonne horodatée, avec ou sans fuseau.
-    fn schema_horodate(zones: &[Option<&str>]) -> Schema {
+    /// A schema with one timestamp column, with or without a time zone.
+    fn timestamp_schema(zones: &[Option<&str>]) -> Schema {
         Schema::new(
             zones
                 .iter()
@@ -1099,44 +1100,44 @@ mod tests {
     }
 
     #[test]
-    fn le_fuseau_daffichage_se_deduit_du_schema() {
-        // Aucune colonne horodatée : rien à annoncer.
+    fn the_display_time_zone_is_derived_from_the_schema() {
+        // No timestamp column: nothing to announce.
         assert_eq!(
             timestamp_display(&Schema::new(vec![Field::new("id", DataType::Int32, false)])),
             TimestampDisplay::Absent
         );
-        // Le cas PostgreSQL courant : `timestamptz` arrive en UTC.
+        // The common PostgreSQL case: `timestamptz` arrives in UTC.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[Some("UTC"), Some("UTC")])),
+            timestamp_display(&timestamp_schema(&[Some("UTC"), Some("UTC")])),
             TimestampDisplay::Uniform("UTC".to_owned())
         );
-        // Deux zones différentes : en nommer une décrirait l'autre à tort.
+        // Two different zones: naming one would wrongly describe the other.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[Some("UTC"), Some("+02:00")])),
+            timestamp_display(&timestamp_schema(&[Some("UTC"), Some("+02:00")])),
             TimestampDisplay::Mixed
         );
     }
 
     #[test]
-    fn un_horodatage_sans_fuseau_nen_fait_pas_annoncer_un() {
-        // `timestamp without time zone` ne porte aucun fuseau. C'est le défaut
-        // que ce test tient fermé : annoncer « UTC » ici inventerait une
-        // information que le serveur n'a pas envoyée, et la valeur elle-même se
-        // rend sans `Z` ni décalage — les deux doivent rester cohérents.
+    fn a_timestamp_without_time_zone_does_not_announce_one() {
+        // `timestamp without time zone` carries no time zone. It is the flaw
+        // this test keeps closed: announcing "UTC" here would invent
+        // information the server did not send, and the value itself renders
+        // without `Z` or offset — the two must stay consistent.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[None, None])),
+            timestamp_display(&timestamp_schema(&[None, None])),
             TimestampDisplay::Absent
         );
-        // Mêlé à une colonne qui, elle, en porte un : seule celle-ci compte.
+        // Mixed with a column that does carry one: only that one counts.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[None, Some("UTC")])),
+            timestamp_display(&timestamp_schema(&[None, Some("UTC")])),
             TimestampDisplay::Uniform("UTC".to_owned())
         );
     }
 
     #[test]
-    fn le_texte_de_remplacement_des_nulls_est_configurable() {
-        let opts = FormatOptions::default().with_null_text("(vide)");
-        assert_eq!(CellValue::Null.display_with(&opts), "(vide)");
+    fn the_null_replacement_text_is_configurable() {
+        let opts = FormatOptions::default().with_null_text("(empty)");
+        assert_eq!(CellValue::Null.display_with(&opts), "(empty)");
     }
 }

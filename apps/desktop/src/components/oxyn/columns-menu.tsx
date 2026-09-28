@@ -26,8 +26,8 @@ export function columnsSummary(total: number, hidden: number) {
 }
 
 /**
- * Which columns of a result the grid draws (docs/UX-SPEC.md, « Colonnes et
- * inspection des valeurs »).
+ * Which columns of a result the grid draws (docs/UX-SPEC.md, « Columns and
+ * value inspection »).
  *
  * The choice is local to the view: it keeps every Arrow index, every row
  * received and the SQL as they are, and the export still writes every column —
@@ -52,7 +52,7 @@ export function ColumnsMenu(props: ColumnsMenuProps) {
 
 /**
  * The same choice as a submenu of `Actions`, below 1200 px, where the footer
- * has no room for its own button (docs/UX-SPEC.md, « Largeur réduite »).
+ * has no room for its own button (docs/UX-SPEC.md, « Reduced width »).
  */
 export function ColumnsSubmenu(props: ColumnsMenuProps) {
   return (

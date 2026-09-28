@@ -1,9 +1,9 @@
-//! Un serveur HTTP d'essai sur la boucle locale.
+//! A test HTTP server on the loopback.
 //!
-//! Assez pour rejouer ce qu'un fournisseur hostile peut faire — rediriger,
-//! répondre un corps qui ne finit pas, diffuser des trames —, et rien de
-//! plus : chaque connexion reçoit la réponse brute qu'on lui a donnée, et
-//! ce qui a été reçu reste consultable.
+//! Enough to replay what a hostile provider can do — redirect, answer a body
+//! that never ends, stream frames —, and nothing more: each connection
+//! receives the raw response it was given, and what was received remains
+//! available.
 
 use std::sync::{Arc, Mutex};
 
@@ -11,26 +11,26 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-/// Ce qu'une connexion a reçu : en-têtes et corps, en texte.
+/// What a connection received: headers and body, as text.
 pub(crate) type Received = Arc<Mutex<Vec<String>>>;
 
-/// Un serveur qui répond `reply` à chaque connexion.
+/// A server that answers `reply` to every connection.
 ///
-/// Tant que `hold` n'est pas relâché, la connexion reste ouverte après la
-/// réponse : c'est ce qui simule un corps qui ne se termine pas.
+/// As long as `hold` is not released, the connection stays open after the
+/// response: that is what simulates a body that never ends.
 pub(crate) struct Server {
-    /// `http://127.0.0.1:<port>`, sans barre finale.
+    /// `http://127.0.0.1:<port>`, without a trailing slash.
     pub(crate) origin: String,
-    /// Tout ce qui a été reçu, une entrée par requête.
+    /// Everything received, one entry per request.
     pub(crate) received: Received,
-    /// Relâché à la destruction du serveur : les connexions retenues se
-    /// ferment alors.
+    /// Released when the server is dropped: the held connections close
+    /// then.
     _release: oneshot::Sender<()>,
 }
 
 impl Server {
-    /// Démarre un serveur qui répond `reply`, puis ferme — ou retient la
-    /// connexion si `hold` est vrai.
+    /// Starts a server that answers `reply`, then closes — or holds the
+    /// connection if `hold` is true.
     pub(crate) async fn start(reply: impl Into<Vec<u8>>, hold: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -64,46 +64,47 @@ impl Server {
         }
     }
 
-    /// Toutes les requêtes reçues, en un seul texte.
+    /// Every request received, as a single text.
     pub(crate) fn seen(&self) -> String {
         self.received.lock().expect("test lock").join("\n")
     }
 
-    /// Nombre de requêtes reçues.
+    /// Number of requests received.
     pub(crate) fn hits(&self) -> usize {
         self.received.lock().expect("test lock").len()
     }
 }
 
-/// Lit les en-têtes, puis le corps annoncé par `content-length`.
+/// Reads the headers, then the body announced by `content-length`.
 async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
-    let mut lu = Vec::new();
-    let mut tampon = [0_u8; 4096];
-    while let Ok(n) = socket.read(&mut tampon).await {
+    let mut read = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    while let Ok(n) = socket.read(&mut buffer).await {
         if n == 0 {
             break;
         }
-        lu.extend_from_slice(tampon.get(..n).unwrap_or_default());
-        let texte = String::from_utf8_lossy(&lu).into_owned();
-        if let Some(fin) = texte.find("\r\n\r\n") {
-            let attendu = texte
+        read.extend_from_slice(buffer.get(..n).unwrap_or_default());
+        let text = String::from_utf8_lossy(&read).into_owned();
+        if let Some(end) = text.find("\r\n\r\n") {
+            let expected = text
                 .lines()
-                .find_map(|ligne| {
-                    let (nom, valeur) = ligne.split_once(':')?;
-                    nom.eq_ignore_ascii_case("content-length")
-                        .then(|| valeur.trim().parse::<usize>().ok())
+                .find_map(|line| {
+                    let (header_name, value) = line.split_once(':')?;
+                    header_name
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
                         .flatten()
                 })
                 .unwrap_or(0);
-            if lu.len() >= fin + 4 + attendu {
+            if read.len() >= end + 4 + expected {
                 break;
             }
         }
     }
-    String::from_utf8_lossy(&lu).into_owned()
+    String::from_utf8_lossy(&read).into_owned()
 }
 
-/// Une réponse de redirection vers `location`.
+/// A redirection response to `location`.
 pub(crate) fn redirect(status: u16, location: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 {status} Redirect\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"

@@ -1,103 +1,103 @@
-//! Le driver du **protocole** PostgreSQL — donc aussi de Redshift, TimescaleDB,
-//! pgvector et Citus.
+//! The driver for the PostgreSQL **protocol** — hence also for Redshift,
+//! TimescaleDB, pgvector and Citus.
 //!
-//! Il n'y a pas de crate `oxyn-driver-redshift`, et il n'y en aura pas. Redshift
-//! parle le protocole PostgreSQL ; ce qui l'en distingue est un jeu de
-//! capacités, pas un décodeur de plus. Les ~30 systèmes de la vision se ramènent
-//! ainsi à ~14 implémentations réelles
+//! There is no `oxyn-driver-redshift` crate, and there will not be one. Redshift
+//! speaks the PostgreSQL protocol; what sets it apart is a set of capabilities,
+//! not one more decoder. The ~30 systems of the vision thus come down to ~14
+//! real implementations
 //! ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
 //!
-//! # Ce qu'on y trouve
+//! # What is in it
 //!
-//! | Module | Sujet | Autorité |
+//! | Module | Subject | Authority |
 //! |---|---|---|
-//! | [`driver`] | [`PostgresDriver`] : formulaire de connexion, ouverture | DRIVER-CONTRACT |
-//! | [`session`] | [`PostgresSession`] : exécuter, annuler, sonder | ARCHITECTURE §4.1 |
-//! | [`cursor`] | [`PostgresCursor`] : le flux de lots et sa contre-pression | ADR-0002, I-06 |
-//! | [`catalog`] | [`PostgresCatalog`] : introspection par `pg_catalog` | ARCHITECTURE §6 |
-//! | [`variant`] | [`PostgresVariant`] : ce que la session sait faire | ADR-0003 |
-//! | [`types`] | la correspondance PostgreSQL → Arrow, et ses pertes | DRIVER-CONTRACT §7 |
-//! | [`decode`] | le binaire du serveur vers `RecordBatch` | I-09 |
-//! | `numeric` | le décodage exact d'un `NUMERIC` (interne) | DRIVER-CONTRACT §7 |
+//! | [`driver`] | [`PostgresDriver`]: connection form, opening | DRIVER-CONTRACT |
+//! | [`session`] | [`PostgresSession`]: execute, cancel, probe | ARCHITECTURE §4.1 |
+//! | [`cursor`] | [`PostgresCursor`]: the batch stream and its back-pressure | ADR-0002, I-06 |
+//! | [`catalog`] | [`PostgresCatalog`]: introspection through `pg_catalog` | ARCHITECTURE §6 |
+//! | [`variant`] | [`PostgresVariant`]: what the session can do | ADR-0003 |
+//! | [`types`] | the PostgreSQL → Arrow mapping, and its losses | DRIVER-CONTRACT §7 |
+//! | [`decode`] | the server's binary to `RecordBatch` | I-09 |
+//! | `numeric` | exact decoding of a `NUMERIC` (internal) | DRIVER-CONTRACT §7 |
 //!
-//! # Les cinq choix qui gouvernent cette crate
+//! # The five choices that govern this crate
 //!
-//! **Les capacités s'évaluent à la connexion.** `version()` et `pg_extension`
-//! sont interrogés une fois, et c'est là que `VECTOR_SEARCH` ou `TIME_SERIES`
-//! s'activent — ou que Redshift perd `EXPLAIN ANALYZE`. Une capacité absente
-//! signifie « je ne sais pas faire », jamais « je ferai semblant » : ce driver
-//! ne déclare ni `TRANSACTIONS`, ni `MULTIPLE_STATEMENTS`, ni `BULK_LOAD`, parce
-//! qu'il ne les implémente pas ([`variant::base_capabilities`] dit pourquoi).
+//! **Capabilities are evaluated at connection time.** `version()` and
+//! `pg_extension` are queried once, and that is where `VECTOR_SEARCH` or
+//! `TIME_SERIES` get enabled — or where Redshift loses `EXPLAIN ANALYZE`. A
+//! missing capability means "I cannot do it", never "I will pretend": this
+//! driver declares neither `TRANSACTIONS`, nor `MULTIPLE_STATEMENTS`, nor
+//! `BULK_LOAD`, because it does not implement them
+//! ([`variant::base_capabilities`] says why).
 //!
-//! **L'annulation atteint le serveur.** Fermer un onglet détruit le curseur, ce
-//! qui annule son jeton, ce qui fait émettre `pg_cancel_backend` depuis une
-//! **seconde** connexion — pas depuis le bassin, qui est justement saturé quand
-//! on veut annuler. Un futur abandonné ne libère ni la connexion ni le verrou
+//! **Cancellation reaches the server.** Closing a tab drops the cursor, which
+//! cancels its token, which issues `pg_cancel_backend` from a **second**
+//! connection — not from the pool, which is precisely saturated when one wants
+//! to cancel. An abandoned future releases neither the connection nor the lock
 //! ([DRIVER-CONTRACT §2](../../../docs/DRIVER-CONTRACT.md)).
 //!
-//! **Rien n'est matérialisé.** Le curseur pousse des lots dimensionnés **en
-//! octets** dans un canal d'une place : la tâche ne décode le lot suivant que si
-//! le précédent a été pris. Un `SELECT *` sur 500 Go ne fait donc pas gonfler la
-//! mémoire ([I-06](../../../CLAUDE.md#i-06)).
+//! **Nothing is materialized.** The cursor pushes batches sized **in bytes**
+//! into a one-slot channel: the task decodes the next batch only once the
+//! previous one has been taken. A `SELECT *` over 500 GB therefore does not
+//! inflate memory ([I-06](../../../CLAUDE.md#i-06)).
 //!
 //! **Unknown wire types keep their bytes and PostgreSQL type metadata.**
 //! The grid formats Arrow binary values explicitly, without guessing text from
 //! bytes that happen to be valid UTF-8. Preview composition requests server text
 //! for internal types and OID aliases; user SQL is never rewritten or retried.
 //!
-//! **Le SQL de l'utilisateur part tel quel ; celui d'Oxyn ne concatène rien.**
-//! Le texte d'une requête n'est ni analysé ni réécrit : c'est la fonctionnalité
-//! d'un outil professionnel. Les requêtes que le driver compose — introspection,
-//! annulation — sont des littéraux à paramètres liés
-//! ([I-10](../../../CLAUDE.md#i-10)).
+//! **The user's SQL is sent as is; Oxyn's concatenates nothing.** The text of a
+//! query is neither parsed nor rewritten: that is the feature of a professional
+//! tool. The queries the driver composes — introspection, cancellation — are
+//! literals with bound parameters ([I-10](../../../CLAUDE.md#i-10)).
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```no_run
 //! use oxyn_core::prelude::*;
 //! use oxyn_driver::{Credentials, Cursor as _, Driver as _, Session as _};
 //! use oxyn_driver_postgres::PostgresDriver;
 //!
-//! # async fn exemple() -> Result<()> {
+//! # async fn example() -> Result<()> {
 //! let driver = PostgresDriver::new();
 //!
-//! // Ce qui est persisté ne porte aucun secret.
-//! let connexion = ConnectionConfig::new("caisse", DriverId::postgres())
-//!     .with_param("host", "interne.example")
-//!     .with_param("database", "caisse")
-//!     .with_param("user", "lecture")
+//! // What is persisted carries no secret.
+//! let connection = ConnectionConfig::new("checkout", DriverId::postgres())
+//!     .with_param("host", "internal.example")
+//!     .with_param("database", "checkout")
+//!     .with_param("user", "reader")
 //!     .with_environment(Environment::Development);
 //!
-//! // Le mot de passe arrive du trousseau du système, à part.
-//! let identifiants = Credentials::new().with_password("résolu-au-dernier-moment");
+//! // The password comes from the system keychain, separately.
+//! let credentials = Credentials::new().with_password("resolved-at-the-last-moment");
 //!
-//! let jeton = CancelToken::new();
-//! let session = driver.connect(&connexion, &identifiants, &jeton).await?;
+//! let token = CancelToken::new();
+//! let session = driver.connect(&connection, &credentials, &token).await?;
 //!
-//! // Les capacités sont celles de *cette* session : pgvector installé ici ne
-//! // dit rien de la base voisine.
+//! // The capabilities are those of *this* session: pgvector installed here
+//! // says nothing about the neighboring database.
 //! if session.capabilities().contains(Capabilities::VECTOR_SEARCH) {
-//!     // … la surface de recherche vectorielle a lieu d'exister.
+//!     // … the vector search surface has a reason to exist.
 //! }
 //!
-//! let mut curseur = session
+//! let mut cursor = session
 //!     .execute(
 //!         ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), "SELECT 1")
 //!             .with_intent(StatementIntent::Read),
-//!         &jeton,
+//!         &token,
 //!     )
 //!     .await?;
 //!
-//! // Le schéma est connu avant la première ligne.
-//! assert_eq!(curseur.schema().fields().len(), 1);
-//! while let Some(_lot) = curseur.next_batch().await? {}
+//! // The schema is known before the first row.
+//! assert_eq!(cursor.schema().fields().len(), 1);
+//! while let Some(_batch) = cursor.next_batch().await? {}
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! # Tests d'intégration
+//! # Integration tests
 //!
-//! Tout ce qui demande un serveur est marqué `#[ignore]`. Pour les lancer :
+//! Everything that needs a server is marked `#[ignore]`. To run them:
 //!
 //! ```sh
 //! docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=oxyn --name oxyn-pg postgres:17
@@ -105,8 +105,8 @@
 //!   cargo test -p oxyn-driver-postgres -- --ignored --test-threads=1
 //! ```
 //!
-//! Les tests d'annulation demandent en plus un serveur qui accepte
-//! `pg_cancel_backend` sur ses propres processus, ce qui est le cas par défaut.
+//! The cancellation tests additionally need a server that accepts
+//! `pg_cancel_backend` on its own processes, which is the default.
 
 mod cancel;
 pub mod catalog;
@@ -124,17 +124,17 @@ pub(crate) mod error;
 pub(crate) mod numeric;
 pub(crate) mod options;
 
-/// Les tests de `Session::cancel` qui demandent un serveur. Tous `#[ignore]`.
+/// The `Session::cancel` tests that need a server. All `#[ignore]`.
 #[cfg(test)]
 mod cancel_tests;
-/// L'état de session qu'une connexion emporte au bassin. Tous `#[ignore]`.
+/// The session state a connection carries back to the pool. All `#[ignore]`.
 #[cfg(test)]
 mod context_tests;
 #[cfg(test)]
 mod ddl_tests;
 #[cfg(test)]
 mod definition_tests;
-/// Les tests qui demandent un serveur. Tous `#[ignore]`.
+/// The tests that need a server. All `#[ignore]`.
 #[cfg(test)]
 mod integration;
 
@@ -156,20 +156,20 @@ mod tests {
 
     use crate::PostgresDriver;
 
-    /// Le driver s'enregistre, se déclare, et sa déclaration tient debout.
+    /// The driver registers, declares itself, and its declaration holds up.
     ///
-    /// C'est le seul trajet de la crate qui ne demande pas de serveur, et c'est
-    /// celui qu'`oxyn-desktop` empruntera au démarrage.
+    /// It is the only path of the crate that needs no server, and it is the
+    /// one `oxyn-desktop` takes at startup.
     #[test]
-    fn le_driver_s_enregistre_et_annonce_ce_qu_il_sait_faire() {
-        let mut registre = DriverRegistry::new();
-        registre
+    fn the_driver_registers_and_announces_what_it_can_do() {
+        let mut registry = DriverRegistry::new();
+        registry
             .register(Arc::new(PostgresDriver::new()))
-            .expect("le driver est cohérent");
+            .expect("the driver is consistent");
 
-        let driver = registre
+        let driver = registry
             .require(&DriverId::postgres())
-            .expect("il vient d'être enregistré");
+            .expect("it has just been registered");
 
         assert_eq!(driver.metadata().display_name, "PostgreSQL");
         assert!(
@@ -181,14 +181,14 @@ mod tests {
             driver
                 .capabilities()
                 .contains(Capabilities::SERVER_SIDE_CANCEL),
-            "sans ce drapeau, le bouton « Annuler » ne peut rien promettre"
+            "without this flag, the \"Cancel\" button can promise nothing"
         );
     }
 
-    /// Redshift n'a pas de crate à lui : c'est le même driver, un dialecte
-    /// différent (ADR-0003).
+    /// Redshift has no crate of its own: it is the same driver, a different
+    /// dialect (ADR-0003).
     #[test]
-    fn redshift_passe_par_ce_driver_et_pas_par_un_autre() {
+    fn redshift_goes_through_this_driver_and_no_other() {
         use crate::PostgresVariant;
 
         let redshift = PostgresVariant::detect(
@@ -202,7 +202,7 @@ mod tests {
             !redshift
                 .capabilities()
                 .contains(Capabilities::EXPLAIN_ANALYZE),
-            "un panneau « Plan d'exécution » ne doit pas exister ici"
+            "an \"Execution plan\" panel must not exist here"
         );
     }
 }

@@ -1,16 +1,16 @@
-//! L'annulation demandée par `Session::cancel`, éprouvée contre un vrai serveur.
+//! Cancellation requested by `Session::cancel`, tested against a real server.
 //!
-//! Tous `#[ignore]`, comme [`crate::integration`] dont ils reprennent la
-//! configuration : voir sa documentation pour les lancer.
+//! All `#[ignore]`, like [`crate::integration`] whose configuration they reuse:
+//! see its documentation to run them.
 //!
-//! # Comment la fenêtre est rendue reproductible
+//! # How the window is made reproducible
 //!
-//! Aucune attente « assez longue » ne décide du déroulé. Les requêtes
-//! s'arrêtent sur des **verrous consultatifs** que tient une connexion de
-//! contrôle, et la barrière de `BackendCanceller` retient l'annulation juste
-//! avant qu'elle parte. Chaque étape attend un fait observé **sur le serveur**
-//! (`pg_locks`, `pg_stat_activity`), borné par un délai qui ne sert qu'à
-//! transformer un blocage en échec lisible.
+//! No "long enough" wait decides the course of events. The queries stop on
+//! **advisory locks** held by a control connection, and the barrier of
+//! `BackendCanceller` holds the cancellation back just before it goes out. Each
+//! step waits for a fact observed **on the server** (`pg_locks`,
+//! `pg_stat_activity`), bounded by a timeout whose only purpose is to turn a
+//! hang into a readable failure.
 
 use std::time::{Duration, Instant};
 
@@ -22,290 +22,283 @@ use sqlx::postgres::{PgConnection, PgPoolOptions};
 use sqlx::{ConnectOptions as _, Connection as _};
 
 use crate::driver::postgres_metadata;
-use crate::integration::cible;
+use crate::integration::target;
 use crate::options::ConnectSpec;
 use crate::session::PostgresSession;
 use crate::variant::PostgresVariant;
 
-/// Les clés des verrous consultatifs, propres à ces tests.
-const CLE_PRECEDENTE: i64 = 0x0A11_C001;
-const CLE_SUIVANTE: i64 = 0x0A11_C002;
-const CLE_SEULE: i64 = 0x0A11_C003;
+/// The advisory lock keys, specific to these tests.
+const PREVIOUS_KEY: i64 = 0x0A11_C001;
+const NEXT_KEY: i64 = 0x0A11_C002;
+const SINGLE_KEY: i64 = 0x0A11_C003;
 
-/// Au-delà, un fait attendu sur le serveur n'arrivera plus : c'est un échec.
-const DELAI_DE_BLOCAGE: Duration = Duration::from_secs(20);
+/// Beyond this, a fact expected on the server will not arrive: it is a failure.
+const BLOCKING_DELAY: Duration = Duration::from_secs(20);
 
-/// Une exécution qui rend son pid après avoir obtenu le verrou `cle`.
-fn bloquee_sur(cle: i64) -> ExecRequest {
+/// An execution that returns its pid after obtaining the lock `key`.
+fn blocked_on(key: i64) -> ExecRequest {
     ExecRequest::new(
         QueryLanguage::Sql(SqlDialect::Postgres),
         "SELECT pg_catalog.pg_backend_pid() AS pid, pg_catalog.pg_advisory_xact_lock($1) IS NULL AS verrou",
     )
-    .with_params(vec![ScalarValue::Int64(cle)])
+    .with_params(vec![ScalarValue::Int64(key)])
     .with_intent(StatementIntent::Read)
     .with_limits(ExecLimits::default().with_max_rows(None))
 }
 
-/// La session éprouvée, sur un bassin de deux connexions, et la connexion de
-/// contrôle qui tient les verrous.
+/// The session under test, on a two-connection pool, and the control
+/// connection that holds the locks.
 ///
-/// Deux connexions, pas quatre : avec une seule connexion inactive au bassin,
-/// l'exécution suivante la reprend **à coup sûr** si elle y est revenue. C'est
-/// ce qui rend la collision reproductible quand la correction manque.
-async fn banc() -> Option<(PostgresSession, sqlx::PgPool, PgConnection)> {
-    let Some((config, identifiants)) = cible() else {
-        eprintln!("OXYN_PG_TEST_URL n'est pas défini : test ignoré");
+/// Two connections, not four: with a single idle connection in the pool, the
+/// next execution picks it up **for sure** if it has returned there. That is
+/// what makes the collision reproducible when the fix is missing.
+async fn bench() -> Option<(PostgresSession, sqlx::PgPool, PgConnection)> {
+    let Some((config, credentials)) = target() else {
+        eprintln!("OXYN_PG_TEST_URL is not set: test skipped");
         return None;
     };
-    let spec = ConnectSpec::from_config(&postgres_metadata(), &config, &identifiants)
-        .expect("configuration d'essai complète");
-    let bassin = PgPoolOptions::new()
+    let spec = ConnectSpec::from_config(&postgres_metadata(), &config, &credentials)
+        .expect("complete test configuration");
+    let pool = PgPoolOptions::new()
         .max_connections(2)
         .min_connections(0)
         .test_before_acquire(true)
         .connect_with(spec.options().clone())
         .await
-        .expect("le serveur d'essai doit être joignable");
-    let controle = spec
-        .options()
-        .connect()
-        .await
-        .expect("connexion de contrôle");
+        .expect("the test server must be reachable");
+    let control = spec.options().connect().await.expect("control connection");
     let base = spec.database().to_owned();
     let session = PostgresSession::new(
         DriverId::postgres(),
-        bassin.clone(),
+        pool.clone(),
         spec,
         PostgresVariant::detect("PostgreSQL", "", Vec::new()),
         base,
     );
-    Some((session, bassin, controle))
+    Some((session, pool, control))
 }
 
-/// Attend qu'une requête soit bloquée sur le verrou `cle`, et rend son pid.
-async fn pid_bloque_sur(controle: &mut PgConnection, cle: i64) -> i32 {
-    attendre(
-        controle,
-        "une requête bloquée sur son verrou",
-        async |c| {
-            sqlx::query_scalar::<_, i32>(
-                "SELECT pid FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted \
+/// Waits until a query is blocked on the lock `key`, and returns its pid.
+async fn pid_blocked_on(control: &mut PgConnection, key: i64) -> i32 {
+    sleep_until_deadline(control, "a query blocked on its lock", async |c| {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT pid FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted \
              AND classid = 0 AND objid = ($1::bigint)::oid",
-            )
-            .bind(cle)
-            .fetch_optional(c)
-            .await
-            .expect("lecture de pg_locks")
-        },
-    )
+        )
+        .bind(key)
+        .fetch_optional(c)
+        .await
+        .expect("reading pg_locks")
+    })
     .await
 }
 
-/// Attend que le processus `pid` ne soit plus en train d'exécuter.
-async fn inactif(controle: &mut PgConnection, pid: i32) {
-    attendre(controle, "la fin de la requête", async |c| {
-        let actif: Option<bool> = sqlx::query_scalar(
+/// Waits until process `pid` is no longer executing.
+async fn idle(control: &mut PgConnection, pid: i32) {
+    sleep_until_deadline(control, "the end of the query", async |c| {
+        let active: Option<bool> = sqlx::query_scalar(
             "SELECT state = 'active' FROM pg_catalog.pg_stat_activity WHERE pid = $1",
         )
         .bind(pid)
         .fetch_optional(c)
         .await
-        .expect("lecture de pg_stat_activity");
-        (actif != Some(true)).then_some(())
+        .expect("reading pg_stat_activity");
+        (active != Some(true)).then_some(())
     })
     .await;
 }
 
-/// Attend que le processus `pid` ait disparu : sa connexion est fermée.
-async fn disparu(controle: &mut PgConnection, pid: i32) {
-    attendre(controle, "la fermeture du processus annulé", async |c| {
+/// Waits until process `pid` has disappeared: its connection is closed.
+async fn gone(control: &mut PgConnection, pid: i32) {
+    sleep_until_deadline(control, "the cancelled process closing", async |c| {
         let present: Option<i32> =
             sqlx::query_scalar("SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = $1")
                 .bind(pid)
                 .fetch_optional(c)
                 .await
-                .expect("lecture de pg_stat_activity");
+                .expect("reading pg_stat_activity");
         present.is_none().then_some(())
     })
     .await;
 }
 
-/// Répète une observation du serveur jusqu'à ce qu'elle rende quelque chose.
-async fn attendre<T>(
-    controle: &mut PgConnection,
-    quoi: &str,
+/// Repeats an observation of the server until it returns something.
+async fn sleep_until_deadline<T>(
+    control: &mut PgConnection,
+    what: &str,
     observer: impl AsyncFn(&mut PgConnection) -> Option<T>,
 ) -> T {
-    let limite = Instant::now() + DELAI_DE_BLOCAGE;
+    let limit = Instant::now() + BLOCKING_DELAY;
     loop {
-        if let Some(vu) = observer(controle).await {
-            return vu;
+        if let Some(seen) = observer(control).await {
+            return seen;
         }
-        assert!(Instant::now() < limite, "jamais observé : {quoi}");
+        assert!(Instant::now() < limit, "never observed: {what}");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
-/// Draine un curseur et rend le pid de sa première ligne.
-async fn pid_rendu(curseur: &mut Box<dyn Cursor>) -> oxyn_core::Result<Option<i32>> {
+/// Drains a cursor and returns the pid of its first row.
+async fn returned_pid(cursor: &mut Box<dyn Cursor>) -> oxyn_core::Result<Option<i32>> {
     let mut pid = None;
-    while let Some(lot) = curseur.next_batch().await? {
-        if pid.is_none() && lot.num_rows() > 0 {
-            let colonne = lot
+    while let Some(batch) = cursor.next_batch().await? {
+        if pid.is_none() && batch.num_rows() > 0 {
+            let column = batch
                 .column(0)
                 .as_any()
                 .downcast_ref::<Int32Array>()
-                .expect("pg_backend_pid() est un int4");
-            pid = Some(colonne.value(0));
+                .expect("pg_backend_pid() is an int4");
+            pid = Some(column.value(0));
         }
     }
     Ok(pid)
 }
 
 #[tokio::test]
-#[ignore = "demande un serveur PostgreSQL : voir la documentation de `integration`"]
-async fn une_annulation_en_vol_ne_frappe_pas_la_requete_suivante() {
-    // Le scénario : Échap pressé au moment exact où une requête se termine.
-    // L'annulation est retenue juste avant de partir ; pendant ce temps la
-    // requête finit, et la suivante démarre. Sans correction, la connexion est
-    // revenue au bassin, la suivante la reprend — même processus, même pid — et
-    // c'est elle que l'annulation tue.
-    let Some((session, bassin, mut controle)) = banc().await else {
+#[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
+async fn an_in_flight_cancellation_does_not_hit_the_next_query() {
+    // The scenario: Esc pressed at the exact moment a query finishes. The
+    // cancellation is held back just before going out; meanwhile the query
+    // finishes, and the next one starts. Without the fix, the connection has
+    // returned to the pool, the next query picks it up — same process, same
+    // pid — and it is the one the cancellation kills.
+    let Some((session, pool, mut control)) = bench().await else {
         return;
     };
-    for cle in [CLE_PRECEDENTE, CLE_SUIVANTE] {
+    for key in [PREVIOUS_KEY, NEXT_KEY] {
         sqlx::query("SELECT pg_catalog.pg_advisory_lock($1)")
-            .bind(cle)
-            .execute(&mut controle)
+            .bind(key)
+            .execute(&mut control)
             .await
-            .expect("verrou de contrôle");
+            .expect("control lock");
     }
 
-    let jeton = CancelToken::new();
-    let mut precedente = session
-        .execute(bloquee_sur(CLE_PRECEDENTE), &jeton)
+    let token = CancelToken::new();
+    let mut previous = session
+        .execute(blocked_on(PREVIOUS_KEY), &token)
         .await
-        .expect("exécution précédente");
-    let pid_precedent = pid_bloque_sur(&mut controle, CLE_PRECEDENTE).await;
+        .expect("previous execution");
+    let previous_pid = pid_blocked_on(&mut control, PREVIOUS_KEY).await;
 
-    let (atteinte, feu_vert) = session.canceller().hold_next_cancel();
-    let mut annulation = Box::pin(session.cancel(precedente.handle()));
-    let vise = tokio::select! {
-        issue = &mut annulation => panic!("l'annulation ne doit pas aboutir avant la barrière : {issue:?}"),
-        vise = atteinte => vise.expect("la barrière est atteinte"),
+    let (reached, green_light) = session.canceller().hold_next_cancel();
+    let mut cancellation = Box::pin(session.cancel(previous.handle()));
+    let targeted = tokio::select! {
+        issue = &mut cancellation => panic!("the cancellation must not complete before the barrier: {issue:?}"),
+        targeted = reached => targeted.expect("the barrier is reached"),
     };
     assert_eq!(
-        vise, pid_precedent,
-        "l'annulation vise la requête précédente"
+        targeted, previous_pid,
+        "the cancellation targets the previous query"
     );
 
-    // La requête précédente se termine pendant que l'annulation est en vol.
+    // The previous query finishes while the cancellation is in flight.
     sqlx::query("SELECT pg_catalog.pg_advisory_unlock($1)")
-        .bind(CLE_PRECEDENTE)
-        .execute(&mut controle)
+        .bind(PREVIOUS_KEY)
+        .execute(&mut control)
         .await
-        .expect("déverrouillage");
-    inactif(&mut controle, pid_precedent).await;
-    // Sans correction, la connexion revient au bassin en quelques
-    // millisecondes : on lui en laisse le temps, pour que la suivante la
-    // reprenne. Avec la correction elle n'y revient jamais, et ce délai expire
-    // sans rien décider : il ne peut que rendre la collision moins probable,
-    // jamais faire échouer le code correct.
-    let retour = Instant::now() + Duration::from_secs(1);
-    while bassin.num_idle() == 0 && Instant::now() < retour {
+        .expect("unlocking");
+    idle(&mut control, previous_pid).await;
+    // Without the fix, the connection returns to the pool within a few
+    // milliseconds: it is given the time to, so that the next query picks it
+    // up. With the fix it never returns, and this delay expires without
+    // deciding anything: it can only make the collision less likely, never
+    // make correct code fail.
+    let return_deadline = Instant::now() + Duration::from_secs(1);
+    while pool.num_idle() == 0 && Instant::now() < return_deadline {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    let mut suivante = session
-        .execute(bloquee_sur(CLE_SUIVANTE), &CancelToken::new())
+    let mut next = session
+        .execute(blocked_on(NEXT_KEY), &CancelToken::new())
         .await
-        .expect("exécution suivante");
-    let pid_suivant = pid_bloque_sur(&mut controle, CLE_SUIVANTE).await;
+        .expect("next execution");
+    let next_pid = pid_blocked_on(&mut control, NEXT_KEY).await;
 
-    feu_vert.send(()).expect("feu vert");
-    annulation
+    green_light.send(()).expect("green light");
+    cancellation
         .await
-        .expect("l'annulation est demandée au serveur");
+        .expect("the cancellation is requested from the server");
 
     sqlx::query("SELECT pg_catalog.pg_advisory_unlock($1)")
-        .bind(CLE_SUIVANTE)
-        .execute(&mut controle)
+        .bind(NEXT_KEY)
+        .execute(&mut control)
         .await
-        .expect("déverrouillage");
-    let rendu = pid_rendu(&mut suivante).await;
+        .expect("unlocking");
+    let rendered = returned_pid(&mut next).await;
     assert!(
-        matches!(rendu, Ok(Some(pid)) if pid == pid_suivant),
-        "la requête suivante ne doit pas être annulée : {rendu:?}"
+        matches!(rendered, Ok(Some(pid)) if pid == next_pid),
+        "the next query must not be cancelled: {rendered:?}"
     );
     assert_ne!(
-        pid_suivant, pid_precedent,
-        "la suivante ne peut pas tourner sur un processus visé par une annulation en vol"
+        next_pid, previous_pid,
+        "the next query cannot run on a process targeted by an in-flight cancellation"
     );
 
-    // Côté serveur : le processus visé ne sert plus personne. Sa connexion,
-    // tenue pendant l'envoi de l'annulation, est fermée ensuite.
-    disparu(&mut controle, pid_precedent).await;
+    // Server side: the targeted process no longer serves anyone. Its
+    // connection, held while the cancellation was sent, is closed afterwards.
+    gone(&mut control, previous_pid).await;
 
-    let issue = precedente.next_batch().await;
+    let issue = previous.next_batch().await;
     assert!(
         matches!(issue, Err(ref err) if err.is_cancelled()),
-        "le curseur annulé le dit : {issue:?}"
+        "the cancelled cursor says so: {issue:?}"
     );
 
-    drop(precedente);
-    drop(suivante);
-    let _ = controle.close().await;
-    Box::new(session).close().await.expect("fermeture");
+    drop(previous);
+    drop(next);
+    let _ = control.close().await;
+    Box::new(session).close().await.expect("closing");
 }
 
 #[tokio::test]
-#[ignore = "demande un serveur PostgreSQL : voir la documentation de `integration`"]
-async fn annuler_une_requete_en_cours_l_arrete_sur_le_serveur() {
-    // Le pendant du test précédent : la requête visée tourne encore quand
-    // l'annulation part. Elle doit s'arrêter côté serveur, sans que le verrou
-    // qui la bloque soit jamais relâché.
-    let Some((session, _bassin, mut controle)) = banc().await else {
+#[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
+async fn cancelling_a_running_query_stops_it_on_the_server() {
+    // The counterpart of the previous test: the targeted query is still
+    // running when the cancellation goes out. It must stop on the server,
+    // without the lock blocking it ever being released.
+    let Some((session, _pool, mut control)) = bench().await else {
         return;
     };
     sqlx::query("SELECT pg_catalog.pg_advisory_lock($1)")
-        .bind(CLE_SEULE)
-        .execute(&mut controle)
+        .bind(SINGLE_KEY)
+        .execute(&mut control)
         .await
-        .expect("verrou de contrôle");
+        .expect("control lock");
 
-    let mut curseur = session
-        .execute(bloquee_sur(CLE_SEULE), &CancelToken::new())
+    let mut cursor = session
+        .execute(blocked_on(SINGLE_KEY), &CancelToken::new())
         .await
-        .expect("exécution");
-    let pid = pid_bloque_sur(&mut controle, CLE_SEULE).await;
+        .expect("execution");
+    let pid = pid_blocked_on(&mut control, SINGLE_KEY).await;
 
     session
-        .cancel(curseur.handle())
+        .cancel(cursor.handle())
         .await
-        .expect("annulation demandée");
-    // La preuve côté serveur : le processus n'exécute plus rien, alors que le
-    // verrou qui bloquait la requête est toujours tenu.
-    inactif(&mut controle, pid).await;
-    let issue = curseur.next_batch().await;
+        .expect("cancellation requested");
+    // The server-side proof: the process no longer executes anything, while
+    // the lock that blocked the query is still held.
+    idle(&mut control, pid).await;
+    let issue = cursor.next_batch().await;
     assert!(
         matches!(issue, Err(ref err) if err.is_cancelled()),
         "{issue:?}"
     );
 
-    let _ = controle.close().await;
-    Box::new(session).close().await.expect("fermeture");
+    let _ = control.close().await;
+    Box::new(session).close().await.expect("closing");
 }
 
 #[tokio::test]
-#[ignore = "demande un serveur PostgreSQL : voir la documentation de `integration`"]
-async fn annuler_un_flux_que_personne_ne_lit_l_arrete_sur_le_serveur() {
-    // Une grille qui ne lit plus : la tâche de flux attend que le canal se
-    // vide. L'annulation doit la réveiller là aussi, sinon `Session::cancel`
-    // attendrait sans fin et la requête continuerait sur le serveur.
-    let Some((session, _bassin, mut controle)) = banc().await else {
+#[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
+async fn cancelling_a_stream_nobody_reads_stops_it_on_the_server() {
+    // A grid that no longer reads: the stream task waits for the channel to
+    // drain. The cancellation must wake it there too, otherwise
+    // `Session::cancel` would wait forever and the query would keep running on
+    // the server.
+    let Some((session, _pool, mut control)) = bench().await else {
         return;
     };
-    let mut curseur = session
+    let mut cursor = session
         .execute(
             ExecRequest::new(
                 QueryLanguage::Sql(SqlDialect::Postgres),
@@ -317,45 +310,41 @@ async fn annuler_un_flux_que_personne_ne_lit_l_arrete_sur_le_serveur() {
             &CancelToken::new(),
         )
         .await
-        .expect("exécution");
-    let premier = curseur
+        .expect("execution");
+    let first = cursor
         .next_batch()
         .await
-        .expect("premier lot")
-        .expect("des lignes");
-    let pid = premier
+        .expect("first batch")
+        .expect("rows");
+    let pid = first
         .column(0)
         .as_any()
         .downcast_ref::<Int32Array>()
         .expect("int4")
         .value(0);
 
-    // Le curseur ne lit plus. Le serveur finit par attendre que le client lise
-    // sa socket (`ClientWrite`) : c'est le signe que la tâche de flux ne la lit
-    // plus, donc qu'elle est bloquée sur le canal plein.
-    attendre(
-        &mut controle,
-        "un serveur bloqué en écriture",
-        async |c| {
-            sqlx::query_scalar::<_, i32>(
-                "SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = $1 \
+    // The cursor no longer reads. The server ends up waiting for the client to
+    // read its socket (`ClientWrite`): that is the sign that the stream task no
+    // longer reads it, hence that it is blocked on the full channel.
+    sleep_until_deadline(&mut control, "a server blocked writing", async |c| {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT pid FROM pg_catalog.pg_stat_activity WHERE pid = $1 \
              AND wait_event = 'ClientWrite'",
-            )
-            .bind(pid)
-            .fetch_optional(c)
-            .await
-            .expect("lecture de pg_stat_activity")
-        },
-    )
+        )
+        .bind(pid)
+        .fetch_optional(c)
+        .await
+        .expect("reading pg_stat_activity")
+    })
     .await;
 
-    tokio::time::timeout(DELAI_DE_BLOCAGE, session.cancel(curseur.handle()))
+    tokio::time::timeout(BLOCKING_DELAY, session.cancel(cursor.handle()))
         .await
-        .expect("l'annulation ne doit pas attendre qu'on lise")
-        .expect("annulation demandée");
-    inactif(&mut controle, pid).await;
+        .expect("the cancellation must not wait for reading")
+        .expect("cancellation requested");
+    idle(&mut control, pid).await;
 
-    drop(curseur);
-    let _ = controle.close().await;
-    Box::new(session).close().await.expect("fermeture");
+    drop(cursor);
+    let _ = control.close().await;
+    Box::new(session).close().await.expect("closing");
 }

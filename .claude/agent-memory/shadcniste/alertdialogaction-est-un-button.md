@@ -1,25 +1,24 @@
 ---
 name: alertdialogaction-est-un-button
-description: Dans base-nova, AlertDialogAction est un simple Button avec data-slot, pas un Close Base UI ; remplacer un Button par lui ne ferme pas le dialogue et reste mécanique
+description: In base-nova, AlertDialogAction is a plain Button with data-slot, not a Base UI Close; replacing a Button with it does not close the dialog and stays mécanique
 metadata:
   type: feedback
 ---
 
-Dans `alert-dialog.tsx` généré en base-nova, `AlertDialogAction` rend
-`<Button data-slot="alert-dialog-action" …>` : aucune primitive
-`AlertDialog.Close` derrière, contrairement à `AlertDialogCancel`. Un
-`<Button variant="destructive">` posé dans `AlertDialogFooter` se remplace
-donc par `<AlertDialogAction variant="destructive">` sans rien changer : même
-élément, mêmes variantes, et la fermeture reste celle que le `onClick` pilote.
+In the `alert-dialog.tsx` generated in base-nova, `AlertDialogAction` renders
+`<Button data-slot="alert-dialog-action" …>`: no `AlertDialog.Close` primitive
+behind it, unlike `AlertDialogCancel`. A `<Button variant="destructive">` placed
+in `AlertDialogFooter` can therefore be replaced by
+`<AlertDialogAction variant="destructive">` without changing anything: same
+element, same variants, and closing stays driven by the `onClick`.
 
-**Why:** constaté le 2026-09-23 ; on peut hésiter à faire la bascule par crainte
-qu'elle ferme le dialogue avant que le rappel ait tourné (comportement Radix).
+**Why:** observed on 2026-09-23; one may hesitate to make the switch for fear
+that it closes the dialog before the callback has run (Radix behavior).
 
-**How to apply:** relire `AlertDialogAction` dans `ui/alert-dialog.tsx` (une
-mise à jour du registre peut changer la chose), puis classer la bascule en
-`mécanique`.
+**How to apply:** re-read `AlertDialogAction` in `ui/alert-dialog.tsx` (a
+registry update can change this), then classify the switch as `mécanique`.
 
-Piège d'outillage voisin : `pnpm exec eslint` lancé depuis un sous-répertoire
-d'`apps/desktop` échoue en « couldn't find any tsconfig.json » sur chaque
-fichier ; le lancer depuis `apps/desktop`. Et sous zsh, une variable qui liste
-plusieurs chemins n'est pas découpée : les passer un par un.
+Neighboring tooling trap: `pnpm exec eslint` launched from a subdirectory of
+`apps/desktop` fails with "couldn't find any tsconfig.json" on every file; run it
+from `apps/desktop`. And under zsh, a variable listing several paths is not
+split: pass them one by one.

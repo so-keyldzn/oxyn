@@ -9,8 +9,8 @@
 //! from the application and refusing a new window — are only offered on the
 //! builder. Without the second, WebView2 answers `window.open` or a
 //! `target="_blank"` link with a browser popup
-//! ([UX-SPEC](../../../docs/UX-SPEC.md), « Ce qu'Oxyn ne fait pas, parce que
-//! ce n'est pas un navigateur »).
+//! ([UX-SPEC](../../../docs/UX-SPEC.md), « What Oxyn does not do, because it is
+//! not a browser »).
 //!
 //! The front never renders an external link; these are the last line, for
 //! the link or script that gets through anyway.

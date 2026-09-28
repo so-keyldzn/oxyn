@@ -1,40 +1,40 @@
-//! Le thread qui détient la connexion, et le canal qui y mène.
+//! The thread that holds the connection, and the channel leading to it.
 //!
-//! # Pourquoi un thread dédié, et pas `spawn_blocking`
+//! # Why a dedicated thread, and not `spawn_blocking`
 //!
-//! `rusqlite::Connection` est `Send` mais **pas** `Sync`, et surtout : un
-//! `Statement<'conn>` et les `Rows<'stmt>` qu'il produit **empruntent** la
-//! connexion. Diffuser un résultat lot par lot demande de garder ces emprunts
-//! vivants entre deux `await` — ce qu'un futur ne peut pas faire sans structure
-//! auto-référentielle, et donc sans `unsafe`, que le workspace refuse
-//! (`unsafe_code = "deny"`).
+//! `rusqlite::Connection` is `Send` but **not** `Sync`, and above all: a
+//! `Statement<'conn>` and the `Rows<'stmt>` it produces **borrow** the
+//! connection. Streaming a result batch by batch requires keeping these borrows
+//! alive between two `await`s — which a future cannot do without a
+//! self-referential structure, and thus without `unsafe`, which the workspace
+//! refuses (`unsafe_code = "deny"`).
 //!
-//! Un `spawn_blocking` par lot aurait le même problème : il faudrait rendre la
-//! connexion entre deux lots, donc refermer le curseur, donc **rejouer la
-//! requête** à chaque page. C'est exactement ce qu'[I-06](../../../CLAUDE.md#i-06)
-//! interdit.
+//! A `spawn_blocking` per batch would have the same problem: the connection
+//! would have to be returned between two batches, hence the cursor closed, hence
+//! **the query replayed** on every page. That is exactly what
+//! [I-06](../../../CLAUDE.md#i-06) forbids.
 //!
-//! La connexion vit donc sur un thread à elle, du début à la fin de la session.
-//! Les emprunts ne quittent jamais sa pile ; ce qui traverse le canal, ce sont
-//! des `RecordBatch` Arrow, c'est-à-dire des données déjà converties.
+//! The connection therefore lives on a thread of its own, from the beginning to
+//! the end of the session. The borrows never leave its stack; what crosses the
+//! channel are Arrow `RecordBatch`es, that is, already converted data.
 //!
-//! # Ce que le thread garantit, et ce qu'il ne garantit pas
+//! # What the thread guarantees, and what it does not
 //!
-//! * **Une session SQLite fait une chose à la fois.** Une introspection ou un
-//!   `ping` demandé pendant qu'un curseur diffuse attend son tour. C'est la
-//!   sémantique d'une connexion SQLite, pas une limitation du transport.
-//!   `Session::cancel` échappe à la file : il ne passe pas par le thread.
-//! * **L'interruption, elle, ne fait pas la queue.** `InterruptHandle` est
-//!   `Send + Sync` et vise le moteur directement : c'est ce qui permet à un
-//!   `Échap` d'atteindre un `sqlite3_step` déjà parti
-//!   ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md)). Elle vise une
-//!   **tâche**, pas la connexion : voir le module `interrupt`.
-//! * **Toute attente abandonnée interrompt sa tâche.** Détruire le futur de
-//!   `execute`, d'une introspection ou d'un lot arrête le moteur, ou retire la
-//!   tâche de la file si elle n'a pas commencé.
-//! * Le thread s'arrête quand son canal se ferme, même si personne n'appelle
-//!   [`Session::close`](oxyn_driver::Session::close) : une session oubliée ne
-//!   laisse pas de thread derrière elle.
+//! * **An SQLite session does one thing at a time.** An introspection or a
+//!   `ping` requested while a cursor streams waits its turn. It is the semantics
+//!   of an SQLite connection, not a limitation of the transport.
+//!   `Session::cancel` escapes the queue: it does not go through the thread.
+//! * **Interruption, however, does not queue.** `InterruptHandle` is
+//!   `Send + Sync` and targets the engine directly: that is what lets an `Esc`
+//!   reach a `sqlite3_step` already launched
+//!   ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md)). It targets a
+//!   **task**, not the connection: see the `interrupt` module.
+//! * **Every abandoned wait interrupts its task.** Destroying the future of
+//!   `execute`, of an introspection or of a batch stops the engine, or removes
+//!   the task from the queue if it has not started.
+//! * The thread stops when its channel closes, even if nobody calls
+//!   [`Session::close`](oxyn_driver::Session::close): a forgotten session leaves
+//!   no thread behind.
 
 use std::path::PathBuf;
 use std::pin::pin;
@@ -50,35 +50,35 @@ use crate::error;
 use crate::interrupt::{AbandonGuard, Interrupter, WorkId};
 use crate::stream::{self, StreamJob};
 
-/// Une tâche courte à exécuter sur le thread porteur.
+/// A short task to execute on the worker thread.
 ///
-/// La tâche emporte son propre canal de réponse : c'est ce qui permet à un seul
-/// type de commande de servir des réponses de types différents — l'introspection
-/// rend des relations, le `ping` ne rend rien.
+/// The task carries its own reply channel: that is what lets a single command
+/// type serve replies of different types — introspection returns relations,
+/// `ping` returns nothing.
 pub(crate) type Job = Box<dyn FnOnce(&Connection) + Send + 'static>;
 
-/// Ce qui est demandé au thread porteur de la connexion.
+/// What is requested of the connection's worker thread.
 pub(crate) enum WorkerCommand {
-    /// Une opération courte : `ping`, transaction, introspection.
+    /// A short operation: `ping`, transaction, introspection.
     Job(WorkId, Job),
-    /// Une exécution en flux. Le thread garde la main jusqu'à ce que le curseur
-    /// soit épuisé ou détruit.
+    /// A streamed execution. The thread keeps control until the cursor is
+    /// exhausted or destroyed.
     Stream(WorkId, Box<StreamJob>),
-    /// Ferme la connexion et termine le thread.
+    /// Closes the connection and ends the thread.
     Close(oneshot::Sender<Result<()>>),
 }
 
-/// Ce qu'il faut ouvrir.
+/// What to open.
 ///
-/// Le `Debug` est écrit à la main : un chemin de fichier est une **valeur de
-/// paramètre de connexion**, qu'un driver n'a pas le droit de journaliser
-/// ([I-03](../../../CLAUDE.md#i-03)). Un `Debug` dérivé est le mode de fuite le
-/// plus fréquent, parce qu'il est invisible à la relecture.
+/// The `Debug` is written by hand: a file path is a **connection parameter
+/// value**, which a driver has no right to log
+/// ([I-03](../../../CLAUDE.md#i-03)). A derived `Debug` is the most frequent
+/// leak, because it is invisible in review.
 #[derive(Clone)]
 pub(crate) struct OpenSpec {
-    /// La base visée.
+    /// The target database.
     pub target: OpenTarget,
-    /// Ouvrir en lecture seule, au niveau du moteur.
+    /// Open read-only, at the engine level.
     pub read_only: bool,
 }
 
@@ -91,12 +91,12 @@ impl std::fmt::Debug for OpenSpec {
     }
 }
 
-/// La base visée par une ouverture.
+/// The database targeted by an opening.
 #[derive(Clone)]
 pub(crate) enum OpenTarget {
     /// One named in-memory database per configured connection, shared by its sessions.
     Memory(oxyn_core::ConnectionId),
-    /// Un fichier. Son chemin ne sort jamais dans un rendu de diagnostic.
+    /// A file. Its path never comes out in a diagnostic rendering.
     File(PathBuf),
 }
 
@@ -109,9 +109,9 @@ impl std::fmt::Debug for OpenTarget {
     }
 }
 
-/// La poignée partagée vers le thread porteur.
+/// The shared handle to the worker thread.
 ///
-/// Clonée par la session, son catalogue et chacun de ses curseurs.
+/// Cloned by the session, its catalog and each of its cursors.
 #[derive(Clone)]
 pub(crate) struct WorkerHandle {
     commands: mpsc::UnboundedSender<WorkerCommand>,
@@ -119,8 +119,8 @@ pub(crate) struct WorkerHandle {
 }
 
 impl std::fmt::Debug for WorkerHandle {
-    /// `InterruptHandle` n'a pas de `Debug`, et un pointeur de connexion n'a
-    /// rien à faire dans un journal de toute façon.
+    /// `InterruptHandle` has no `Debug`, and a connection pointer has no
+    /// business in a log anyway.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkerHandle")
             .field("alive", &!self.commands.is_closed())
@@ -129,16 +129,16 @@ impl std::fmt::Debug for WorkerHandle {
 }
 
 impl WorkerHandle {
-    /// Exécute une tâche courte sur la connexion et rend son résultat.
+    /// Executes a short task on the connection and returns its result.
     ///
-    /// L'annulation est traitée **ici** : si le jeton se déclenche pendant
-    /// l'attente, ou si le futur est abandonné, la tâche est interrompue et
-    /// l'appel rend [`OxynError::Cancelled`]. Abandonner le futur sans
-    /// interrompre laisserait le thread bloqué dans `sqlite3_step`.
+    /// Cancellation is handled **here**: if the token fires during the wait, or
+    /// if the future is abandoned, the task is interrupted and the call returns
+    /// [`OxynError::Cancelled`]. Abandoning the future without interrupting
+    /// would leave the thread blocked in `sqlite3_step`.
     ///
-    /// # Erreurs
-    /// Celle de la tâche, [`OxynError::Cancelled`] si le jeton se déclenche, ou
-    /// une erreur de driver si le thread porteur a disparu.
+    /// # Errors
+    /// The task's, [`OxynError::Cancelled`] if the token fires, or a driver
+    /// error if the worker thread has disappeared.
     pub(crate) async fn call<T, F>(&self, cancel: &CancelToken, job: F) -> Result<T>
     where
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
@@ -149,25 +149,25 @@ impl WorkerHandle {
         }
         let (reply, answer) = oneshot::channel();
         let wrapped: Job = Box::new(move |conn| {
-            // L'échec d'envoi signifie que l'appelant a renoncé : rien à faire.
+            // A failed send means the caller gave up: nothing to do.
             let _ = reply.send(job(conn));
         });
         let id = self.submit(|id| WorkerCommand::Job(id, wrapped))?;
         self.await_reply(answer, cancel, id).await
     }
 
-    /// Démarre une exécution en flux, et rend l'identité de sa tâche.
+    /// Starts a streamed execution, and returns the identity of its task.
     ///
-    /// L'identité sert à toutes les attentes de ce flux : le premier lot, puis
-    /// chaque lot réclamé par le curseur.
+    /// The identity serves every wait of this stream: the first batch, then each
+    /// batch claimed by the cursor.
     ///
-    /// # Erreurs
-    /// Une erreur de driver si le thread porteur a disparu.
+    /// # Errors
+    /// A driver error if the worker thread has disappeared.
     pub(crate) fn start_stream(&self, job: Box<StreamJob>) -> Result<WorkId> {
         self.submit(|id| WorkerCommand::Stream(id, job))
     }
 
-    /// Enregistre une tâche, puis l'envoie au thread porteur.
+    /// Registers a task, then sends it to the worker thread.
     fn submit(&self, command: impl FnOnce(WorkId) -> WorkerCommand) -> Result<WorkId> {
         let id = self.interrupter.enqueue();
         if self.commands.send(command(id)).is_err() {
@@ -177,23 +177,22 @@ impl WorkerHandle {
         Ok(id)
     }
 
-    /// Attend la réponse de la tâche `id`, ou l'annulation.
+    /// Waits for the reply of task `id`, or the cancellation.
     ///
-    /// Le jeton qui se déclenche **et** le futur abandonné interrompent la
-    /// tâche `id` — elle seule : si elle est déjà terminée, la tâche suivante
-    /// n'est pas touchée.
+    /// The token firing **and** the future being abandoned interrupt task `id` —
+    /// it alone: if it is already finished, the next task is not touched.
     ///
-    /// # Erreurs
-    /// Celle de la tâche, [`OxynError::Cancelled`], ou une erreur de driver si
-    /// le thread a disparu avant de répondre.
+    /// # Errors
+    /// The task's, [`OxynError::Cancelled`], or a driver error if the thread
+    /// disappeared before replying.
     pub(crate) async fn await_reply<T>(
         &self,
         answer: oneshot::Receiver<Result<T>>,
         cancel: &CancelToken,
         id: WorkId,
     ) -> Result<T> {
-        // Armée avant la première suspension : c'est pendant l'attente qu'un
-        // onglet se ferme.
+        // Armed before the first suspension: it is during the wait that a tab
+        // closes.
         let mut abandon = AbandonGuard::new(&self.interrupter, id);
         let answer = pin!(answer);
         let cancelled = pin!(cancel.cancelled());
@@ -206,34 +205,34 @@ impl WorkerHandle {
                 abandon.disarm();
                 Err(error::closed())
             }
-            // Le jeton signale ; la garde, en tombant, en fait une interruption
-            // de la tâche.
+            // The token signals; the guard, when dropped, turns it into an
+            // interruption of the task.
             Either::Right(((), _)) => Err(OxynError::Cancelled),
         }
     }
 
-    /// La tâche que le thread porteur exécute, pour les tests.
+    /// The task the worker thread is executing, for tests.
     #[cfg(test)]
     pub(crate) fn running(&self) -> Option<WorkId> {
         self.interrupter.running()
     }
 
-    /// Interrompt la tâche `id`, pour les tests qui simulent une interruption
-    /// arrivée trop tard.
+    /// Interrupts task `id`, for tests that simulate an interruption arriving
+    /// too late.
     #[cfg(test)]
     pub(crate) fn interrupt(&self, id: WorkId) {
         self.interrupter.interrupt(id);
     }
 
-    /// Ferme la connexion et termine le thread.
+    /// Closes the connection and ends the thread.
     ///
-    /// # Erreurs
-    /// L'erreur du moteur à la fermeture. Une session déjà fermée n'est **pas**
-    /// une erreur : les ressources locales sont libérées dans tous les cas.
+    /// # Errors
+    /// The engine error on close. An already closed session is **not** an
+    /// error: local resources are released in every case.
     pub(crate) async fn close(&self) -> Result<()> {
         let (reply, answer) = oneshot::channel();
         if self.commands.send(WorkerCommand::Close(reply)).is_err() {
-            // Le thread est déjà parti : la connexion est fermée.
+            // The thread is already gone: the connection is closed.
             return Ok(());
         }
         match answer.await {
@@ -243,20 +242,20 @@ impl WorkerHandle {
     }
 }
 
-/// Ouvre la base sur un thread neuf et rend de quoi lui parler.
+/// Opens the database on a new thread and returns what to talk to it with.
 ///
-/// La connexion est ouverte **sur le thread porteur**, pas ici : c'est le seul
-/// endroit où elle vivra, et une ouverture est un appel bloquant qui n'a rien à
-/// faire sur le fil d'exécution asynchrone.
+/// The connection is opened **on the worker thread**, not here: it is the only
+/// place where it will live, and opening is a blocking call that has no
+/// business on the asynchronous execution thread.
 ///
-/// Le jeton est consulté **avant** de démarrer quoi que ce soit ; une fois
-/// l'ouverture lancée elle va à son terme, parce qu'ouvrir un fichier SQLite est
-/// une opération courte et qu'il n'y a rien à interrompre à mi-chemin.
+/// The token is checked **before** starting anything; once the opening is
+/// launched it runs to its end, because opening an SQLite file is a short
+/// operation and there is nothing to interrupt halfway.
 ///
-/// # Erreurs
-/// [`OxynError::Io`] si le thread ne peut pas démarrer, [`OxynError::Connection`]
-/// si la base ne s'ouvre pas, [`OxynError::Cancelled`] si le jeton est déjà
-/// déclenché.
+/// # Errors
+/// [`OxynError::Io`] if the thread cannot start, [`OxynError::Connection`] if
+/// the database does not open, [`OxynError::Cancelled`] if the token has
+/// already fired.
 pub(crate) async fn spawn(
     spec: OpenSpec,
     cancel: &CancelToken,
@@ -279,7 +278,7 @@ pub(crate) async fn spawn(
             };
             let interrupter = Arc::new(Interrupter::new(connection.get_interrupt_handle()));
             if ready.send(Ok(Arc::clone(&interrupter))).is_err() {
-                // L'appelant a renoncé pendant l'ouverture.
+                // The caller gave up during the opening.
                 let _ = connection.close();
                 return;
             }
@@ -305,12 +304,11 @@ pub(crate) async fn spawn(
     ))
 }
 
-/// Ouvre la connexion selon la spécification.
+/// Opens the connection according to the specification.
 fn open(spec: &OpenSpec) -> Result<Connection> {
-    // Les drapeaux par défaut de rusqlite, moins la création quand la session
-    // est en lecture seule : `SQLITE_OPEN_READ_ONLY` fait refuser l'écriture par
-    // le **moteur**, ce qui est une garantie autrement plus solide qu'un
-    // filtrage côté client.
+    // rusqlite's default flags, minus creation when the session is read-only:
+    // `SQLITE_OPEN_READ_ONLY` makes the **engine** refuse writing, which is a
+    // far stronger guarantee than client-side filtering.
     let flags = if spec.read_only {
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_URI
@@ -334,18 +332,17 @@ fn open(spec: &OpenSpec) -> Result<Connection> {
     Ok(connection)
 }
 
-/// La boucle du thread porteur.
+/// The worker thread's loop.
 ///
-/// Sortir de la boucle ferme la connexion **dans tous les cas** : sur un
-/// `Close`, mais aussi quand le canal se ferme parce que la session a été
-/// abandonnée. Sans cela, le fichier resterait verrouillé jusqu'à la fin du
-/// processus.
+/// Leaving the loop closes the connection **in every case**: on a `Close`, but
+/// also when the channel closes because the session was abandoned. Otherwise,
+/// the file would stay locked until the end of the process.
 ///
-/// Chaque tâche est encadrée par [`Interrupter::begin`] et
-/// [`Interrupter::end`] : `end` n'est appelé qu'une fois la tâche revenue, donc
-/// ses instructions finalisées, et c'est ce qui borne une interruption à la
-/// tâche qu'elle vise. Une tâche abandonnée pendant qu'elle attendait est
-/// détruite sans être exécutée ; son canal de réponse tombe avec elle.
+/// Each task is framed by [`Interrupter::begin`] and [`Interrupter::end`]:
+/// `end` is called only once the task has returned, hence its statements
+/// finalized, and that is what bounds an interruption to the task it targets.
+/// A task abandoned while it waited is destroyed without being executed; its
+/// reply channel falls with it.
 fn run(
     connection: Connection,
     interrupter: &Interrupter,
@@ -372,15 +369,15 @@ fn run(
             }
         }
     }
-    // La connexion est fermée **avant** la réponse : l'appelant qui attend
-    // celle-ci sait que le fichier est relâché.
+    // The connection is closed **before** the reply: the caller waiting for it
+    // knows the file is released.
     let outcome = shutdown(connection);
     if let Some(reply) = closing {
         let _ = reply.send(outcome);
     }
 }
 
-/// Ferme la connexion en rendant l'erreur du moteur, s'il y en a une.
+/// Closes the connection, returning the engine error if there is one.
 fn shutdown(connection: Connection) -> Result<()> {
     connection
         .close()
@@ -391,7 +388,7 @@ fn shutdown(connection: Connection) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn memoire() -> OpenSpec {
+    fn in_memory() -> OpenSpec {
         OpenSpec {
             target: OpenTarget::Memory(oxyn_core::ConnectionId::new()),
             read_only: false,
@@ -399,51 +396,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_tache_s_execute_sur_le_thread_porteur() {
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+    async fn a_task_runs_on_the_worker_thread() {
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let reponse: i64 = handle
-            .call(&jeton, |conn: &Connection| {
+        let response: i64 = handle
+            .call(&cancel_token, |conn: &Connection| {
                 conn.query_row("SELECT 40 + 2", [], |row| row.get(0))
                     .map_err(|err| error::engine(err, error::Effect::ReadOnly))
             })
             .await
-            .expect("appel");
-        assert_eq!(reponse, 42);
+            .expect("call");
+        assert_eq!(response, 42);
 
-        handle.close().await.expect("fermeture");
-        thread.join().expect("le thread se termine");
+        handle.close().await.expect("close");
+        thread.join().expect("the thread ends");
     }
 
     #[tokio::test]
-    async fn une_tache_sur_un_jeton_deja_annule_ne_part_pas() {
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+    async fn a_task_on_an_already_cancelled_token_does_not_start() {
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let enfant = jeton.child();
-        enfant.cancel();
-        let issue: oxyn_core::Result<i64> = handle.call(&enfant, |_: &Connection| Ok(1)).await;
+        let child_token = cancel_token.child();
+        child_token.cancel();
+        let issue: oxyn_core::Result<i64> = handle.call(&child_token, |_: &Connection| Ok(1)).await;
         assert!(
-            issue.expect_err("refus attendu").is_cancelled(),
-            "un jeton déjà annulé ne doit pas lancer de travail"
+            issue.expect_err("expected refusal").is_cancelled(),
+            "an already cancelled token must not launch work"
         );
 
-        handle.close().await.expect("fermeture");
-        thread.join().expect("le thread se termine");
+        handle.close().await.expect("close");
+        thread.join().expect("the thread ends");
     }
 
-    /// Une suite finie qui garde une instruction **active** entre deux pas.
-    const SUITE: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c \
+    /// A finite series that keeps a statement **active** between two steps.
+    const SERIES: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c \
                          WHERE x < 50000) SELECT x FROM c";
 
-    /// Soumet une tâche qui lit une ligne de [`SUITE`], signale qu'elle est au
-    /// milieu de son instruction, attend le feu vert, puis compte le reste.
+    /// Submits a task that reads one row of [`SERIES`], signals that it is in the
+    /// middle of its statement, waits for the go-ahead, then counts the rest.
     ///
-    /// Ce qui est garanti quand `active` répond : le thread porteur exécute
-    /// cette tâche et son instruction est active (`nVdbeActive > 0`). C'est
-    /// l'état exact où un `sqlite3_interrupt` frappe l'instruction en cours.
-    fn tache_suspendue(
+    /// What is guaranteed when `active` answers: the worker thread is executing
+    /// this task and its statement is active (`nVdbeActive > 0`). It is the exact
+    /// state in which an `sqlite3_interrupt` hits the running statement.
+    fn suspended_task(
         handle: &WorkerHandle,
     ) -> (
         WorkId,
@@ -451,50 +448,50 @@ mod tests {
         std::sync::mpsc::Sender<()>,
         oneshot::Receiver<Result<i64>>,
     ) {
-        let (active, actif) = oneshot::channel();
-        let (feu_vert, attente) = std::sync::mpsc::channel::<()>();
+        let (active, in_statement) = oneshot::channel();
+        let (go_ahead, wait_rx) = std::sync::mpsc::channel::<()>();
         let (reply, answer) = oneshot::channel();
         let job: Job = Box::new(move |conn: &Connection| {
             let issue = (|| {
                 let mut statement = conn
-                    .prepare(SUITE)
+                    .prepare(SERIES)
                     .map_err(|err| error::engine(err, error::Effect::ReadOnly))?;
                 let mut rows = statement.raw_query();
-                let mut lues = 0_i64;
+                let mut rows_read = 0_i64;
                 let step = |rows: &mut rusqlite::Rows<'_>| {
                     rows.next()
                         .map(|row| row.is_some())
                         .map_err(|err| error::engine(err, error::Effect::ReadOnly))
                 };
                 if step(&mut rows)? {
-                    lues += 1;
+                    rows_read += 1;
                 }
                 let _ = active.send(());
-                let _ = attente.recv();
+                let _ = wait_rx.recv();
                 while step(&mut rows)? {
-                    lues += 1;
+                    rows_read += 1;
                 }
-                Ok(lues)
+                Ok(rows_read)
             })();
             let _ = reply.send(issue);
         });
         let id = handle
             .submit(|id| WorkerCommand::Job(id, job))
-            .expect("soumission");
-        (id, actif, feu_vert, answer)
+            .expect("submission");
+        (id, in_statement, go_ahead, answer)
     }
 
     #[tokio::test]
-    async fn une_interruption_tardive_ne_frappe_pas_la_tache_suivante() {
-        // Le scénario : un onglet est fermé au moment exact où sa requête se
-        // termine, et le thread porteur est déjà dans la requête suivante.
-        // `sqlite3_interrupt` vise la connexion ; sans ciblage, c'est la
-        // requête suivante qui mourrait.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+    async fn a_late_interruption_does_not_hit_the_next_task() {
+        // The scenario: a tab is closed at the exact moment its query finishes,
+        // and the worker thread is already in the next query.
+        // `sqlite3_interrupt` targets the connection; without targeting, the next
+        // query would die.
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
         let (reply, answer) = oneshot::channel();
-        let precedente = handle
+        let earlier_task = handle
             .submit(|id| {
                 WorkerCommand::Job(
                     id,
@@ -503,143 +500,143 @@ mod tests {
                     }),
                 )
             })
-            .expect("soumission");
+            .expect("submission");
         handle
-            .await_reply(answer, &jeton, precedente)
+            .await_reply(answer, &cancel_token, earlier_task)
             .await
-            .expect("la tâche précédente se termine");
+            .expect("the previous task ends");
 
-        let (suivante, actif, feu_vert, reponse) = tache_suspendue(&handle);
-        actif
+        let (following, in_statement, go_ahead, response) = suspended_task(&handle);
+        in_statement
             .await
-            .expect("la tâche suivante est dans son instruction");
-        assert_eq!(handle.running(), Some(suivante));
+            .expect("the next task is in its statement");
+        assert_eq!(handle.running(), Some(following));
 
-        // L'interruption de la tâche précédente arrive trop tard.
-        handle.interrupt(precedente);
-        feu_vert.send(()).expect("feu vert");
+        // The previous task's interruption arrives too late.
+        handle.interrupt(earlier_task);
+        go_ahead.send(()).expect("go-ahead");
 
-        let lues = handle
-            .await_reply(reponse, &jeton, suivante)
+        let rows_read = handle
+            .await_reply(response, &cancel_token, following)
             .await
-            .expect("la tâche suivante ne doit pas être interrompue");
-        assert_eq!(lues, 50_000);
+            .expect("the next task must not be interrupted");
+        assert_eq!(rows_read, 50_000);
 
-        handle.close().await.expect("fermeture");
-        thread.join().expect("le thread se termine");
+        handle.close().await.expect("close");
+        thread.join().expect("the thread ends");
     }
 
     #[tokio::test]
-    async fn l_interruption_de_la_tache_en_cours_l_arrete() {
-        // Le pendant du test précédent : le ciblage ne doit pas désarmer
-        // l'interruption légitime.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+    async fn interrupting_the_running_task_stops_it() {
+        // The counterpart of the previous test: targeting must not disarm the
+        // legitimate interruption.
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let (en_cours, actif, feu_vert, reponse) = tache_suspendue(&handle);
-        actif.await.expect("la tâche est dans son instruction");
+        let (current, in_statement, go_ahead, response) = suspended_task(&handle);
+        in_statement.await.expect("the task is in its statement");
 
-        handle.interrupt(en_cours);
-        feu_vert.send(()).expect("feu vert");
+        handle.interrupt(current);
+        go_ahead.send(()).expect("go-ahead");
 
-        let issue = handle.await_reply(reponse, &jeton, en_cours).await;
+        let issue = handle.await_reply(response, &cancel_token, current).await;
         assert!(
             matches!(issue, Err(ref err) if err.is_cancelled()),
-            "la tâche visée doit être interrompue : {issue:?}"
+            "the targeted task must be interrupted: {issue:?}"
         );
 
-        handle.close().await.expect("fermeture");
-        thread.join().expect("le thread se termine");
+        handle.close().await.expect("close");
+        thread.join().expect("the thread ends");
     }
 
     #[tokio::test]
-    async fn une_tache_abandonnee_en_file_n_est_pas_executee() {
-        // Un onglet fermé pendant que sa requête attend son tour : l'exécuter
-        // ensuite occuperait la session pour personne.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+    async fn a_task_abandoned_in_the_queue_is_not_executed() {
+        // A tab closed while its query waits its turn: executing it afterwards
+        // would occupy the session for nobody.
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let (bloquante, actif, feu_vert, reponse) = tache_suspendue(&handle);
-        actif.await.expect("le thread porteur est occupé");
+        let (blocker, in_statement, go_ahead, response) = suspended_task(&handle);
+        in_statement.await.expect("the worker thread is busy");
 
-        let executee = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let temoin = Arc::clone(&executee);
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let witness = Arc::clone(&ran);
         let (reply, answer) = oneshot::channel::<Result<()>>();
-        let en_file = handle
+        let queued = handle
             .submit(|id| {
                 WorkerCommand::Job(
                     id,
                     Box::new(move |_: &Connection| {
-                        temoin.store(true, std::sync::atomic::Ordering::SeqCst);
+                        witness.store(true, std::sync::atomic::Ordering::SeqCst);
                         let _ = reply.send(Ok(()));
                     }),
                 )
             })
-            .expect("soumission");
+            .expect("submission");
         {
-            // Le futur de l'attente est détruit avant d'avoir abouti.
-            let mut attente = pin!(handle.await_reply(answer, &jeton, en_file));
-            assert!(futures::poll!(attente.as_mut()).is_pending());
+            // The future of the wait is destroyed before completing.
+            let mut wait_rx = pin!(handle.await_reply(answer, &cancel_token, queued));
+            assert!(futures::poll!(wait_rx.as_mut()).is_pending());
         }
 
-        feu_vert.send(()).expect("feu vert");
+        go_ahead.send(()).expect("go-ahead");
         handle
-            .await_reply(reponse, &jeton, bloquante)
+            .await_reply(response, &cancel_token, blocker)
             .await
-            .expect("la tâche bloquante se termine");
-        let apres: i64 = handle
-            .call(&jeton, |conn: &Connection| {
+            .expect("the blocking task ends");
+        let after: i64 = handle
+            .call(&cancel_token, |conn: &Connection| {
                 conn.query_row("SELECT 1", [], |row| row.get(0))
                     .map_err(|err| error::engine(err, error::Effect::ReadOnly))
             })
             .await
-            .expect("la session répond");
-        assert_eq!(apres, 1);
+            .expect("the session answers");
+        assert_eq!(after, 1);
         assert!(
-            !executee.load(std::sync::atomic::Ordering::SeqCst),
-            "une tâche abandonnée en file ne doit pas s'exécuter"
+            !ran.load(std::sync::atomic::Ordering::SeqCst),
+            "a task abandoned in the queue must not run"
         );
 
-        handle.close().await.expect("fermeture");
-        thread.join().expect("le thread se termine");
+        handle.close().await.expect("close");
+        thread.join().expect("the thread ends");
     }
 
     #[tokio::test]
-    async fn le_thread_s_arrete_quand_la_session_est_abandonnee() {
-        // Une session oubliée ne doit pas laisser un thread et un verrou de
-        // fichier derrière elle.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+    async fn the_thread_stops_when_the_session_is_abandoned() {
+        // A forgotten session must not leave a thread and a file lock behind
+        // it.
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
         drop(handle);
-        thread.join().expect("le thread se termine de lui-même");
+        thread.join().expect("the thread ends on its own");
     }
 
     #[tokio::test]
-    async fn fermer_deux_fois_n_est_pas_une_erreur() {
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
-        handle.close().await.expect("première fermeture");
+    async fn closing_twice_is_not_an_error() {
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
+        handle.close().await.expect("first close");
         handle
             .close()
             .await
-            .expect("une session déjà fermée se referme sans erreur");
-        thread.join().expect("le thread se termine");
+            .expect("an already closed session closes again without error");
+        thread.join().expect("the thread ends");
     }
 
     #[tokio::test]
-    async fn une_base_absente_en_lecture_seule_est_une_erreur_de_connexion() {
-        let jeton = CancelToken::new();
+    async fn a_missing_database_in_read_only_is_a_connection_error() {
+        let cancel_token = CancelToken::new();
         let spec = OpenSpec {
             target: OpenTarget::File(PathBuf::from(
-                "/oxyn-inexistant/base-qui-n-existe-pas.sqlite",
+                "/oxyn-missing/database-that-does-not-exist.sqlite",
             )),
             read_only: true,
         };
-        let err = spawn(spec, &jeton).await.expect_err("ouverture impossible");
+        let err = spawn(spec, &cancel_token).await.expect_err("opening fails");
         assert!(matches!(err, OxynError::Connection(_)), "{err:?}");
         assert!(
-            !err.to_string().contains("base-qui-n-existe-pas"),
-            "le chemin ne doit pas ressortir : {err}"
+            !err.to_string().contains("database-that-does-not-exist"),
+            "the path must not come out: {err}"
         );
     }
 }

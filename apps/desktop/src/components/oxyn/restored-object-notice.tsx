@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 
 /**
  * What an object tab brought back from the last session says above its views
- * (docs/UX-SPEC.md, « Restauration après un arrêt brutal »).
+ * (docs/UX-SPEC.md, « Restoring after an abrupt stop »).
  *
  * `held`: the place came back and nothing was read — not the rows, not the
  * metadata — until the user asks. `vanished`: read again, the object was not

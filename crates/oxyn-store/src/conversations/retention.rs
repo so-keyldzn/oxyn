@@ -37,7 +37,7 @@ use crate::error::Result;
 pub struct RetentionPolicy {
     /// Conversations kept per workspace, most recently active first.
     ///
-    /// `0` keeps none: that is how « do not keep any assistant history » is
+    /// `0` keeps none: that is how "do not keep any assistant history" is
     /// expressed, and it is the only value for which the current thread is not
     /// protected.
     pub max_conversations: u32,
@@ -62,7 +62,7 @@ impl Default for RetentionPolicy {
     ///
     /// # Where the numbers come from
     ///
-    /// `une_conversation_moyenne_coute_ce_que_la_politique_suppose` writes a
+    /// `an_average_conversation_costs_what_the_policy_assumes` writes a
     /// twelve-exchange thread — a working session on a schema, with reasoning
     /// and a redacted block on every answer — and weighs it: **64 KiB of
     /// transcript, 72 KiB of file**. That ratio is the whole reason the byte
@@ -135,7 +135,7 @@ impl Conversations<'_> {
     /// nothing and reports [`PruneReport::is_empty`].
     ///
     /// Blocking, like everything in this crate: call it from the blocking pool,
-    /// not the interface thread ([I-05](../../../CLAUDE.md#i-05)).
+    /// not the interface thread ([I-05](../../../../CLAUDE.md#i-05)).
     ///
     /// # Errors
     /// [`crate::StoreError::Sqlite`] if the read or the delete fails;

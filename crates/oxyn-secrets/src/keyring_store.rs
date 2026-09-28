@@ -1,23 +1,22 @@
-//! Le trousseau du système d'exploitation.
+//! The operating system's keychain.
 //!
-//! C'est l'implémentation de production de [`SecretStore`] : Keychain sur
-//! macOS, Secret Service sur Linux, Credential Manager sur Windows. Le choix du
-//! magasin est fait par le crate `keyring` selon la plateforme ; Oxyn n'écrit
-//! aucun code spécifique par système.
+//! It is the production implementation of [`SecretStore`]: Keychain on macOS,
+//! Secret Service on Linux, Credential Manager on Windows. The `keyring` crate
+//! picks the store according to the platform; Oxyn writes no code specific to a
+//! system.
 //!
-//! # La règle qui gouverne ce module
+//! # The rule that governs this module
 //!
-//! **Une erreur de `keyring` ne se propage jamais telle quelle.** Deux de ses
-//! variantes transportent les octets fautifs (`BadEncoding(Vec<u8>)`,
-//! `BadDataFormat(Vec<u8>, _)`) : les imprimer avec `{:?}`, ou les recopier dans
-//! un message, écrit un mot de passe dans le journal. Tout passe par
-//! `map_keyring`, qui traduit **par variante** et ne rend jamais le contenu
-//! stocké (I-03).
+//! **A `keyring` error is never propagated as it is.** Two of its variants carry
+//! the offending bytes (`BadEncoding(Vec<u8>)`, `BadDataFormat(Vec<u8>, _)`):
+//! printing them with `{:?}`, or copying them into a message, writes a password
+//! into the log. Everything goes through `map_keyring`, which translates **per
+//! variant** and never returns the stored content (I-03).
 //!
-//! La même prudence s'applique à la variante inconnue : `keyring::Error` est
-//! `#[non_exhaustive]`, et rien ne dit qu'une variante future ne portera pas,
-//! elle aussi, des octets stockés. Le cas par défaut rend donc un message
-//! **constant**, jamais le `Display` de l'erreur reçue.
+//! The same caution applies to the unknown variant: `keyring::Error` is
+//! `#[non_exhaustive]`, and nothing says that a future variant will not carry
+//! stored bytes too. The default case therefore returns a **constant** message,
+//! never the `Display` of the received error.
 
 use std::fmt;
 
@@ -27,43 +26,41 @@ use zeroize::Zeroize;
 use crate::error::{Result, SecretError};
 use crate::store::{SecretRef, SecretStore};
 
-/// Le trousseau du système, adressé par un nom de service.
+/// The system keychain, addressed by a service name.
 ///
-/// Le nom de service est ce que l'utilisateur voit dans Keychain Access ou dans
-/// `seahorse` en face des entrées écrites par Oxyn. Il n'est pas un secret et
-/// n'a pas à l'être.
+/// The service name is what the user sees in Keychain Access or in `seahorse`
+/// next to the entries written by Oxyn. It is not a secret and does not need to
+/// be.
 ///
-/// La structure ne conserve **aucune** valeur : chaque opération ouvre l'entrée
-/// correspondante, l'utilise et la referme. Il n'y a donc pas de cache de mots
-/// de passe en mémoire, et rien à effacer à la destruction.
+/// The structure keeps **no** value: each operation opens the matching entry,
+/// uses it and closes it. There is thus no password cache in memory, and nothing
+/// to erase on destruction.
 #[derive(Clone)]
 pub struct KeyringSecretStore {
     service: String,
 }
 
 impl KeyringSecretStore {
-    /// Nom de service employé par Oxyn.
+    /// Service name used by Oxyn.
     ///
-    /// Il est stable : le changer rendrait invisibles tous les identifiants
-    /// déjà enregistrés par les utilisateurs.
+    /// It is stable: changing it would make invisible every credential users have
+    /// already saved.
     pub const DEFAULT_SERVICE: &'static str = "oxyn";
 
-    /// Ouvre le trousseau du système sous le nom de service d'Oxyn.
+    /// Opens the system keychain under Oxyn's service name.
     ///
-    /// La construction ne touche pas encore au trousseau : c'est la première
-    /// opération qui déclenche l'initialisation de la plateforme, et donc, le
-    /// cas échéant, l'invite d'autorisation. Pour vérifier la disponibilité
-    /// sans écrire, voir [`availability`](Self::availability).
+    /// Construction does not touch the keychain yet: the first operation triggers
+    /// the platform's initialization, and thus, if any, the authorization prompt. To
+    /// check availability without writing, see [`availability`](Self::availability).
     #[must_use]
     pub fn new() -> Self {
         Self::with_service(Self::DEFAULT_SERVICE)
     }
 
-    /// Ouvre le trousseau sous un nom de service choisi.
+    /// Opens the keychain under a chosen service name.
     ///
-    /// Sert aux tests d'intégration, qui doivent pouvoir écrire dans le
-    /// trousseau de la machine de développement sans écraser les identifiants
-    /// réels de l'utilisateur.
+    /// Used by integration tests, which must be able to write to the development
+    /// machine's keychain without overwriting the user's real credentials.
     #[must_use]
     pub fn with_service(service: impl Into<String>) -> Self {
         Self {
@@ -71,22 +68,22 @@ impl KeyringSecretStore {
         }
     }
 
-    /// Nom de service employé par cette instance.
+    /// Service name used by this instance.
     #[must_use]
     pub fn service(&self) -> &str {
         &self.service
     }
 
-    /// Le trousseau est-il utilisable sur cette machine ?
+    /// Is the keychain usable on this machine?
     ///
-    /// L'appel **initialise** le magasin de la plateforme s'il ne l'était pas
-    /// encore. Sur Linux sans session graphique ni Secret Service, il rend
-    /// [`SecretError::Unavailable`] : c'est une capacité absente de
-    /// l'environnement, que l'interface doit annoncer plutôt que de laisser
-    /// échouer chaque connexion l'une après l'autre.
+    /// The call **initializes** the platform store if it was not yet. On Linux
+    /// without a graphical session or Secret Service, it returns
+    /// [`SecretError::Unavailable`]: a capability missing from the environment,
+    /// which the interface must announce rather than let each connection fail one
+    /// after the other.
     ///
-    /// # Erreurs
-    /// Voir [`SecretError`].
+    /// # Errors
+    /// See [`SecretError`].
     pub fn availability() -> Result<()> {
         match keyring::Entry::store_status() {
             Ok(()) => Ok(()),
@@ -94,7 +91,7 @@ impl KeyringSecretStore {
         }
     }
 
-    /// Ouvre l'entrée du trousseau correspondant à une référence.
+    /// Opens the keychain entry matching a reference.
     fn entry(&self, reference: &SecretRef) -> Result<keyring::Entry> {
         keyring::Entry::new(&self.service, reference.as_str()).map_err(|err| map_keyring(&err))
     }
@@ -107,11 +104,11 @@ impl Default for KeyringSecretStore {
 }
 
 impl fmt::Debug for KeyringSecretStore {
-    /// Écrit à la main, comme tout ce qui touche aux secrets dans cette crate.
+    /// Written by hand, like everything touching secrets in this crate.
     ///
-    /// Il n'y a ici qu'un nom de service à montrer — mais un `Debug` dérivé sur
-    /// un type de ce module deviendrait faux le jour où on y ajouterait un
-    /// cache, et personne ne le remarquerait (I-03).
+    /// There is only a service name to show here — but a derived `Debug` on a type
+    /// of this module would become wrong the day a cache was added to it, and
+    /// nobody would notice (I-03).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeyringSecretStore")
             .field("service", &self.service)
@@ -124,21 +121,21 @@ impl SecretStore for KeyringSecretStore {
         self.entry(reference)?
             .set_password(secret.expose_secret())
             .map_err(|err| map_keyring(&err))?;
-        // La référence est publique ; la valeur ne l'est pas et n'apparaît pas
-        // ici. C'est toute la raison d'être de la séparation des deux.
+        // The reference is public; the value is not and does not appear here. That is
+        // the whole point of separating the two.
         tracing::debug!(secret_ref = %reference, "secret written to the keychain");
         Ok(())
     }
 
     fn get(&self, reference: &SecretRef) -> Result<Option<SecretString>> {
         match self.entry(reference)?.get_password() {
-            Ok(mut clair) => {
-                // `keyring` rend une `String` dont on ne maîtrise ni la
-                // capacité ni le tampon. On recopie dans une allocation exacte
-                // — que `SecretString` effacera à la destruction — puis on
-                // efface l'originale, qui sinon resterait lisible dans le tas.
-                let secret = SecretString::from(clair.as_str());
-                clair.zeroize();
+            Ok(mut plaintext) => {
+                // `keyring` returns a `String` whose capacity and buffer we do not
+                // control. We copy it into an exact allocation — which `SecretString`
+                // will erase on destruction — then erase the original, which would
+                // otherwise stay readable in the heap.
+                let secret = SecretString::from(plaintext.as_str());
+                plaintext.zeroize();
                 Ok(Some(secret))
             }
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -148,9 +145,9 @@ impl SecretStore for KeyringSecretStore {
 
     fn delete(&self, reference: &SecretRef) -> Result<()> {
         match self.entry(reference)?.delete_credential() {
-            // Supprimer ce qui n'existe pas donne l'état recherché : c'est un
-            // succès. Sans cela, supprimer une connexion sans mot de passe
-            // ferait remonter une erreur à l'utilisateur pour rien.
+            // Deleting what does not exist gives the desired state: it is a
+            // success. Otherwise, deleting a connection without a password would
+            // surface an error to the user for nothing.
             Ok(()) | Err(keyring::Error::NoEntry) => {
                 tracing::debug!(secret_ref = %reference, "secret removed from the keychain");
                 Ok(())
@@ -160,19 +157,18 @@ impl SecretStore for KeyringSecretStore {
     }
 }
 
-/// Traduit une erreur de `keyring` **par variante**.
+/// Translates a `keyring` error **per variant**.
 ///
-/// Aucune branche ne recopie le contenu stocké :
+/// No branch copies the stored content:
 ///
-/// * `BadEncoding` et `BadDataFormat` portent les octets fautifs — ils sont
-///   abandonnés, et le détail rendu est une constante ;
-/// * `NoStorageAccess` et `PlatformFailure` portent un diagnostic de plateforme
-///   (code d'erreur du système) : celui-là est utile et sûr ;
-/// * la branche par défaut existe parce que `keyring::Error` est
-///   `#[non_exhaustive]`. Elle rend un message **constant** : une variante
-///   ajoutée demain pourrait, comme deux d'aujourd'hui, transporter des octets
-///   stockés, et `err.to_string()` les publierait sans que personne le
-///   remarque.
+/// * `BadEncoding` and `BadDataFormat` carry the offending bytes — they are
+///   dropped, and the returned detail is a constant;
+/// * `NoStorageAccess` and `PlatformFailure` carry a platform diagnostic (a
+///   system error code): that one is useful and safe;
+/// * the default branch exists because `keyring::Error` is
+///   `#[non_exhaustive]`. It returns a **constant** message: a variant added
+///   tomorrow could, like two of today's, carry stored bytes, and
+///   `err.to_string()` would publish them without anyone noticing.
 fn map_keyring(err: &keyring::Error) -> SecretError {
     use keyring::Error as K;
 
@@ -201,12 +197,12 @@ fn map_keyring(err: &keyring::Error) -> SecretError {
         K::BadDataFormat(_, _) => SecretError::Malformed {
             detail: "the keychain could not decode what it stores",
         },
-        K::BadStoreFormat(raison) => SecretError::Backend {
-            detail: format!("unreadable credential store: {raison}"),
+        K::BadStoreFormat(reason) => SecretError::Backend {
+            detail: format!("unreadable credential store: {reason}"),
         },
-        K::TooLong(attribute, limite) => SecretError::TooLarge {
+        K::TooLong(attribute, limit) => SecretError::TooLarge {
             attribute: attribute.clone(),
-            limit: *limite,
+            limit: *limit,
         },
         K::Ambiguous(_) => SecretError::Backend {
             detail: "several keychain entries match this reference".into(),
@@ -221,53 +217,59 @@ fn map_keyring(err: &keyring::Error) -> SecretError {
 mod tests {
     use super::*;
 
-    /// Aucun test de cette crate ne touche au trousseau réel de la machine :
-    /// ce serait déclencher une invite d'autorisation pendant `make qualite`
-    /// et polluer le trousseau du développeur. Le comportement d'écriture est
-    /// couvert par `MemorySecretStore` ; ce qui est testé ici est la traduction
-    /// des erreurs, qui est la partie sensible.
-    const SECRET_TEMOIN: &str = "hunter2";
+    /// No test of this crate touches the machine's real keychain: that would
+    /// trigger an authorization prompt during `make qualite` and pollute the
+    /// developer's keychain. Write behavior is covered by `MemorySecretStore`;
+    /// what is tested here is the translation of errors, which is the sensitive
+    /// part.
+    const WITNESS_SECRET: &str = "hunter2";
 
     #[test]
-    fn les_octets_fautifs_ne_sortent_jamais_de_la_traduction() {
-        // C'est le scénario de fuite : le trousseau rend des octets non UTF-8,
-        // et l'erreur qui en résulte transporte le contenu stocké.
-        let brut = SECRET_TEMOIN.as_bytes().to_vec();
-        let cas = [
-            keyring::Error::BadEncoding(brut.clone()),
-            keyring::Error::BadDataFormat(brut, Box::new(std::fmt::Error)),
+    fn offending_bytes_never_leave_the_translation() {
+        // This is the leak scenario: the keychain returns non-UTF-8 bytes, and the
+        // resulting error carries the stored content.
+        let raw = WITNESS_SECRET.as_bytes().to_vec();
+        let cases = [
+            keyring::Error::BadEncoding(raw.clone()),
+            keyring::Error::BadDataFormat(raw, Box::new(std::fmt::Error)),
         ];
 
-        for erreur in &cas {
-            let traduite = map_keyring(erreur);
-            assert!(matches!(traduite, SecretError::Malformed { .. }));
+        for case in &cases {
+            let translated = map_keyring(case);
+            assert!(matches!(translated, SecretError::Malformed { .. }));
 
-            let rendu = traduite.to_string();
-            let debug = format!("{traduite:?}");
-            assert!(!rendu.contains(SECRET_TEMOIN), "secret fuité : {rendu}");
-            assert!(!debug.contains(SECRET_TEMOIN), "secret fuité : {debug}");
+            let rendered = translated.to_string();
+            let debug = format!("{translated:?}");
+            assert!(
+                !rendered.contains(WITNESS_SECRET),
+                "secret leaked: {rendered}"
+            );
+            assert!(!debug.contains(WITNESS_SECRET), "secret leaked: {debug}");
         }
     }
 
     #[test]
-    fn une_plateforme_sans_trousseau_est_une_capacite_absente() {
-        let sans_magasin = map_keyring(&keyring::Error::NoDefaultStore);
-        assert!(matches!(sans_magasin, SecretError::Unavailable { .. }));
+    fn a_platform_without_keychain_is_a_missing_capability() {
+        let no_store = map_keyring(&keyring::Error::NoDefaultStore);
+        assert!(matches!(no_store, SecretError::Unavailable { .. }));
 
-        let hors_plateforme = map_keyring(&keyring::Error::Invalid(
+        let unsupported_platform = map_keyring(&keyring::Error::Invalid(
             "platform".into(),
             "must be macOS, Windows or *nix".into(),
         ));
-        assert!(matches!(hors_plateforme, SecretError::Unavailable { .. }));
+        assert!(matches!(
+            unsupported_platform,
+            SecretError::Unavailable { .. }
+        ));
     }
 
     #[test]
-    fn un_refus_d_acces_se_distingue_d_une_panne() {
-        let verrouille = map_keyring(&keyring::Error::NoStorageAccess(Box::new(
+    fn an_access_refusal_differs_from_a_failure() {
+        let locked = map_keyring(&keyring::Error::NoStorageAccess(Box::new(
             std::io::Error::other("keychain is locked"),
         )));
-        assert!(matches!(verrouille, SecretError::AccessDenied { .. }));
-        assert!(verrouille.to_string().contains("keychain is locked"));
+        assert!(matches!(locked, SecretError::AccessDenied { .. }));
+        assert!(locked.to_string().contains("keychain is locked"));
 
         let panne = map_keyring(&keyring::Error::PlatformFailure(Box::new(
             std::io::Error::other("OSStatus -25300"),
@@ -276,33 +278,36 @@ mod tests {
     }
 
     #[test]
-    fn une_valeur_trop_grande_se_nomme_comme_telle() {
-        // Cas réel : une clé privée SSH face à la limite d'une plateforme.
-        let trop_grand = map_keyring(&keyring::Error::TooLong("password".into(), 2560));
-        match trop_grand {
+    fn a_value_too_large_is_named_as_such() {
+        // Real case: an SSH private key against a platform limit.
+        let too_large = map_keyring(&keyring::Error::TooLong("password".into(), 2560));
+        match too_large {
             SecretError::TooLarge { attribute, limit } => {
                 assert_eq!(attribute, "password");
                 assert_eq!(limit, 2560);
             }
-            autre => panic!("attendu TooLarge, obtenu {autre:?}"),
+            other => panic!("expected TooLarge, got {other:?}"),
         }
     }
 
     #[test]
-    fn un_parametre_refuse_ne_publie_que_son_nom() {
-        // Le second membre d'`Invalid` est une explication de la plateforme :
-        // rien ne garantit qu'elle ne cite pas la valeur refusée.
-        let refuse = map_keyring(&keyring::Error::Invalid(
+    fn a_refused_parameter_publishes_only_its_name() {
+        // The second member of `Invalid` is an explanation from the platform:
+        // nothing guarantees it does not quote the refused value.
+        let refused = map_keyring(&keyring::Error::Invalid(
             "password".into(),
-            format!("`{SECRET_TEMOIN}` is not acceptable"),
+            format!("`{WITNESS_SECRET}` is not acceptable"),
         ));
-        let rendu = refuse.to_string();
-        assert!(rendu.contains("password"));
-        assert!(!rendu.contains(SECRET_TEMOIN), "valeur fuitée : {rendu}");
+        let rendered = refused.to_string();
+        assert!(rendered.contains("password"));
+        assert!(
+            !rendered.contains(WITNESS_SECRET),
+            "value leaked: {rendered}"
+        );
     }
 
     #[test]
-    fn le_nom_de_service_est_stable() {
+    fn the_service_name_is_stable() {
         assert_eq!(KeyringSecretStore::DEFAULT_SERVICE, "oxyn");
         assert_eq!(KeyringSecretStore::new().service(), "oxyn");
         assert_eq!(
@@ -312,10 +317,10 @@ mod tests {
     }
 
     #[test]
-    fn le_debug_du_magasin_ne_montre_qu_un_nom_de_service() {
-        let magasin = KeyringSecretStore::new();
-        let rendu = format!("{magasin:?}");
-        assert!(rendu.contains("oxyn"));
-        assert!(!rendu.contains("password"));
+    fn the_store_debug_shows_only_a_service_name() {
+        let store = KeyringSecretStore::new();
+        let rendered = format!("{store:?}");
+        assert!(rendered.contains("oxyn"));
+        assert!(!rendered.contains("password"));
     }
 }

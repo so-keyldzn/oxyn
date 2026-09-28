@@ -1,16 +1,16 @@
 ---
 name: eprouver-un-schema-hors-du-depot
-description: Un script Node dans le scratchpad ne résout pas `zod` — pnpm isole node_modules ; importer par chemin absolu depuis .pnpm
+description: A Node script in the scratchpad does not resolve `zod` — pnpm isolates node_modules; import by absolute path from .pnpm
 metadata:
   type: feedback
 ---
 
-Pour éprouver un schéma zod à l'exécution sans créer de fichier dans
-`apps/desktop`, un `.mjs` posé dans le scratchpad échoue en
-`ERR_MODULE_NOT_FOUND: zod` : Node résout les imports nus depuis le répertoire du
-fichier importateur, et pnpm n'expose rien hors de `apps/desktop/node_modules`.
+To test a zod schema at runtime without creating a file in `apps/desktop`, an
+`.mjs` placed in the scratchpad fails with `ERR_MODULE_NOT_FOUND: zod`: Node
+resolves bare imports from the importing file's directory, and pnpm exposes
+nothing outside `apps/desktop/node_modules`.
 
-Ce qui marche :
+What works:
 
 ```bash
 node --input-type=module -e '
@@ -18,16 +18,16 @@ const { z } = await import("<abs>/apps/desktop/node_modules/.pnpm/zod@<v>/node_m
 …'
 ```
 
-Le chemin se trouve par `node -e "console.log(require.resolve(\"zod\"))"` lancé
-**depuis `apps/desktop`** (il rend le `.cjs` ; prendre `index.js` à côté pour
-l'ESM). La version dans le chemin change à chaque montée : la relire, ne pas la
-recopier.
+The path is found with `node -e "console.log(require.resolve(\"zod\"))"` run
+**from `apps/desktop`** (it returns the `.cjs`; take `index.js` next to it for
+ESM). The version in the path changes at every upgrade: read it again, do not
+copy it.
 
-**Why:** `make front` et `vitest` ne se lancent pas quand plusieurs agents
-convertissent des fichiers en parallèle, et `tsc` ne dit rien du comportement
-d'exécution d'un schéma (ce qu'il accepte, ce qu'il refuse, le chemin nommé dans
-l'erreur). Cette sonde donne la réponse sans rien écrire dans le dépôt.
+**Why:** `make front` and `vitest` cannot run while several agents convert files
+in parallel, and `tsc` says nothing about a schema's runtime behavior (what it
+accepts, what it refuses, the path named in the error). This probe gives the
+answer without writing anything in the repository.
 
-**How to apply:** quand un doute porte sur ce que zod *fait* (un `z.custom` qui
-rendrait une clé facultative, une `discriminatedUnion` sur le mauvais tag, un
-`.int()` qui refuserait un `u64`), sonder avant de livrer plutôt que raisonner.
+**How to apply:** when a doubt is about what zod *does* (a `z.custom` that would
+make a key optional, a `discriminatedUnion` on the wrong tag, an `.int()` that
+would refuse a `u64`), probe before shipping rather than reasoning.

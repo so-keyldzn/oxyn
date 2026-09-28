@@ -9,9 +9,9 @@ import { Textarea } from "@/components/ui/textarea"
 
 /**
  * What every text field of Oxyn carries: no spelling correction, no automatic
- * capital, no typographic quotes (ADR-0041 § 8; UX-SPEC, « Ce qu'Oxyn ne fait
- * pas, parce que ce n'est pas un navigateur »). A table name corrected in
- * silence is a wrong name, and `’` in a connection string or a SQL literal is
+ * capital, no typographic quotes (ADR-0041 § 8; UX-SPEC, « What Oxyn does not
+ * do, because it is not a browser »). A table name corrected in silence is a
+ * wrong name, and `’` in a connection string or a SQL literal is
  * not `'`.
  *
  * `components/ui` is generated and not edited by hand: the fields below wrap

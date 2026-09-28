@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-store"
-description = "État local persistant : workspaces, historique, journal d'audit (SQLite)"
+description = "Persistent local state: workspaces, history, audit log (SQLite)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,19 +11,19 @@ repository.workspace = true
 [lints]
 workspace = true
 
-# Ce que les crates voisines allument pour leurs tests seulement : de quoi
-# vieillir un battement de session sans attendre le seuil d'abandon. Absent
-# d'une compilation ordinaire, donc absent du binaire livré.
+# What neighboring crates switch on for their tests only: a way to age a
+# session heartbeat without waiting for the abandonment threshold. Absent from
+# an ordinary build, hence absent from the shipped binary.
 [features]
 test-support = []
 
 [dependencies]
-# `ReasoningBlock` et `StopReason` sont persistés **tels quels**, et ils viennent
-# d'ici, pas d'`oxyn-llm` : un fournisseur exige de les recevoir à l'identique au
-# tour suivant, donc les recopier ferait deux définitions, et leur
-# `#[non_exhaustive]` obligerait la conversion à un bras `_ =>` qui perdrait en
-# silence un bloc ajouté plus tard. Les déclarer dans `oxyn-core` évite les deux,
-# sans faire entrer un client HTTP dans `oxyn-store` ni dans `oxyn-exec`.
+# `ReasoningBlock` and `StopReason` are persisted **as is**, and they come from
+# here, not from `oxyn-llm`: a provider requires receiving them identically on
+# the next turn, so copying them would make two definitions, and their
+# `#[non_exhaustive]` would force the conversion into a `_ =>` arm that would
+# silently lose a block added later. Declaring them in `oxyn-core` avoids both,
+# without bringing an HTTP client into `oxyn-store` or `oxyn-exec`.
 oxyn-core.workspace = true
 chrono.workspace = true
 directories.workspace = true

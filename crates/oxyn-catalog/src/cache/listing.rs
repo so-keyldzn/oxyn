@@ -9,7 +9,7 @@
 
 use oxyn_core::Capabilities;
 
-use super::{CatalogCache, CatalogScope, Freshness, depuis_cle};
+use super::{CatalogCache, CatalogScope, Freshness, from_key};
 use crate::path::CatalogPath;
 
 impl CatalogCache {
@@ -53,7 +53,7 @@ impl CatalogCache {
             if session_marked && catalog.info.as_ref().is_some_and(|info| !info.is_default) {
                 continue;
             }
-            let catalog_name = depuis_cle(catalog_key);
+            let catalog_name = from_key(catalog_key);
             if !schemas {
                 scopes.push(CatalogScope::Namespace(CatalogPath::from_validated(
                     catalog_name,
@@ -73,7 +73,7 @@ impl CatalogCache {
                 }
                 scopes.push(CatalogScope::Namespace(CatalogPath::from_validated(
                     catalog_name.clone(),
-                    depuis_cle(namespace_key),
+                    from_key(namespace_key),
                     None,
                 )));
             }

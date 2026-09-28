@@ -2,7 +2,7 @@
 //
 // shiki can return HTML (`codeToHtml`); Oxyn asks for tokens instead and draws
 // each one as a React `<span>`, so the text of a block stays text whatever the
-// model wrote (docs/SECURITY.md, « Surface d'entrée »). The regex engine is
+// model wrote (docs/SECURITY.md, « Input surface »). The regex engine is
 // shiki's JavaScript one: the Oniguruma engine is WebAssembly, which the
 // production CSP (`script-src 'self'`, no `wasm-unsafe-eval`) refuses.
 //

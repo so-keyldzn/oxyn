@@ -32,7 +32,7 @@ pub enum Appearance {
 /// Spelled here rather than borrowed from `oxyn-data`, which depends on this
 /// crate. An unknown name reads as [`Hex`](Self::Hex) instead of failing: the
 /// payload is read at startup, and a variant written by a newer Oxyn must not
-/// stop an older one from launching ([ADR-0013](../../docs/adr/0013-preferences-workspace.md)).
+/// stop an older one from launching ([ADR-0013](../../../docs/adr/0013-preferences-workspace.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -73,7 +73,7 @@ pub enum ObjectSection {
 /// Where browsing stopped, so a restart can show it again without reading it.
 ///
 /// The path is the textual rendering of a catalog path, the one form that stays
-/// readable without Oxyn ([I-11](../../CLAUDE.md#i-11)); this crate stores it
+/// readable without Oxyn ([I-11](../../../CLAUDE.md#i-11)); this crate stores it
 /// rather than a typed path because the catalog crate depends on this one, not
 /// the reverse. The connection travels with it: a location points at one
 /// server's object, and replaying it on another connection would name a table
@@ -94,7 +94,7 @@ pub struct ObjectLocation {
 
 // Written by hand: an object name is not a secret, but nothing requires
 // putting a customer's table into a log to know that a location was saved
-// ([I-03](../../CLAUDE.md#i-03)).
+// ([I-03](../../../CLAUDE.md#i-03)).
 impl std::fmt::Debug for ObjectLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ObjectLocation")
@@ -182,7 +182,7 @@ pub struct WorkspacePreferences {
     ///
     /// Never unbounded: a page carries up to two thousand rows, and an uncut
     /// JSON document per cell would turn one page into megabytes
-    /// ([I-06](../../CLAUDE.md#i-06)). The full value stays reachable through
+    /// ([I-06](../../../CLAUDE.md#i-06)). The full value stays reachable through
     /// the value inspector.
     pub cell_max_chars: u32,
     /// Object browsed last, restored as a location and never as data.
@@ -398,31 +398,30 @@ mod tests {
         assert!(payload.contains(r#""binary_display":"hex""#), "{payload}");
     }
 
-    /// Un binaire ancien doit pouvoir lire ce qu'un binaire récent a écrit.
+    /// An older binary must be able to read what a newer binary wrote.
     ///
-    /// C'est le sens du refus de `deny_unknown_fields` sur ce type : la lecture
-    /// des préférences échoue au **démarrage** de l'application, donc un champ
-    /// ajouté par une version plus récente empêcherait un retour en arrière de
-    /// lancer Oxyn. Ce qui garde la compatibilité, c'est `version`, contrôlé
-    /// explicitement.
+    /// That is why this type refuses `deny_unknown_fields`: reading the
+    /// preferences fails at application **startup**, so a field added by a
+    /// newer version would prevent a rollback from launching Oxyn. What keeps
+    /// compatibility is `version`, checked explicitly.
     #[test]
-    fn un_champ_venu_d_une_version_plus_recente_est_ignore_pas_refuse() {
+    fn a_field_from_a_newer_version_is_ignored_not_refused() {
         let payload = r#"{
             "version": 1,
             "appearance": "dark",
             "sidebar_collapsed": true,
-            "un_reglage_du_futur": {"forme": "inconnue"}
+            "a_future_setting": {"shape": "unknown"}
         }"#;
-        let relues: WorkspacePreferences =
-            serde_json::from_str(payload).expect("un champ inconnu ne bloque pas la lecture");
-        assert_eq!(relues.appearance, Appearance::Dark);
-        assert!(relues.sidebar_collapsed, "les champs connus sont bien lus");
-        assert!(relues.validate().is_ok());
+        let read_back: WorkspacePreferences =
+            serde_json::from_str(payload).expect("an unknown field does not block reading");
+        assert_eq!(read_back.appearance, Appearance::Dark);
+        assert!(read_back.sidebar_collapsed, "known fields are read");
+        assert!(read_back.validate().is_ok());
 
-        // Une version de format réellement différente, elle, est refusée : c'est
-        // le numéro qui porte l'incompatibilité, pas la présence d'un champ.
-        let futur = r#"{"version": 99}"#;
-        let futures: WorkspacePreferences = serde_json::from_str(futur).expect("lecture");
-        assert!(futures.validate().is_err());
+        // A really different format version is refused, though: the number
+        // carries the incompatibility, not the presence of a field.
+        let future = r#"{"version": 99}"#;
+        let from_the_future: WorkspacePreferences = serde_json::from_str(future).expect("read");
+        assert!(from_the_future.validate().is_err());
     }
 }

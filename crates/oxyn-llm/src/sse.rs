@@ -1,57 +1,56 @@
-//! Décodage d'un flux `text/event-stream`.
+//! Decoding a `text/event-stream` stream.
 //!
-//! Les trois familles de fournisseurs diffusent en SSE ; seul le contenu des
-//! trames diffère. Ce module ne connaît donc **aucun** fournisseur : il rend des
-//! trames, et c'est l'appelant qui les interprète.
+//! The three provider families stream in SSE; only the content of the frames
+//! differs. This module therefore knows **no** provider: it returns frames, and
+//! it is the caller that interprets them.
 //!
-//! # Ce que le décodage doit tenir
+//! # What decoding must hold
 //!
-//! Un flux HTTP arrive en morceaux qui n'ont aucun rapport avec les lignes :
-//! une trame peut être coupée en son milieu, un caractère multi-octet aussi.
-//! Le décodeur accumule donc jusqu'à la fin de ligne avant d'interpréter quoi
-//! que ce soit — c'est ce qui évite un `from_utf8_lossy` qui remplacerait un `é`
-//! coupé en deux par un caractère de remplacement.
+//! An HTTP stream arrives in chunks that have nothing to do with lines: a frame
+//! can be cut in its middle, a multi-byte character too. The decoder therefore
+//! accumulates up to the end of line before interpreting anything — that is
+//! what avoids a `from_utf8_lossy` that would replace an `é` cut in two with a
+//! replacement character.
 //!
-//! # La borne
+//! # The bound
 //!
-//! Le tampon est **borné**. Un serveur défaillant, ou hostile, qui émettrait des
-//! octets sans jamais envoyer de fin de ligne ferait sinon gonfler la mémoire
-//! sans limite. Dépasser la borne est une erreur de décodage, pas une panique.
+//! The buffer is **bounded**. A faulty, or hostile, server that emitted bytes
+//! without ever sending an end of line would otherwise make memory swell
+//! without limit. Exceeding the bound is a decoding error, not a panic.
 
 use bytes::BytesMut;
 
-/// Borne du tampon d'accumulation, en octets.
+/// Bound of the accumulation buffer, in bytes.
 ///
-/// Une trame de flux de complétion pèse quelques centaines d'octets ; huit
-/// mébioctets laissent une marge considérable tout en gardant la mémoire
-/// bornée.
+/// A completion stream frame weighs a few hundred bytes; eight mebibytes
+/// leave a considerable margin while keeping memory bounded.
 pub(crate) const DEFAULT_BUFFER_LIMIT: usize = 8 * 1024 * 1024;
 
-/// Une trame SSE complète.
+/// A complete SSE frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SseFrame {
-    /// Contenu du champ `event`, quand le serveur en envoie un. Les protocoles
-    /// compatibles OpenAI n'en envoient pas ; Anthropic si.
+    /// Content of the `event` field, when the server sends one. OpenAI-compatible
+    /// protocols do not send any; Anthropic does.
     pub(crate) event: Option<String>,
-    /// Champs `data` concaténés, séparés par des sauts de ligne, comme le veut
-    /// la spécification.
+    /// Concatenated `data` fields, separated by line breaks, as the
+    /// specification requires.
     pub(crate) data: String,
 }
 
-/// Le tampon a dépassé sa borne sans qu'une trame se termine.
+/// The buffer exceeded its bound without a frame ending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("SSE frame exceeded {limit} bytes without a line break")]
 pub(crate) struct SseOverflow {
-    /// Borne dépassée, en octets.
+    /// Exceeded bound, in bytes.
     pub(crate) limit: usize,
 }
 
-/// Accumulateur de flux SSE.
+/// SSE stream accumulator.
 ///
-/// Usage : [`push`](Self::push) à chaque morceau reçu, puis
-/// [`next_frame`](Self::next_frame) en boucle jusqu'à `None`. À la fermeture du
-/// flux, [`finish`](Self::finish) puis une dernière boucle : certains serveurs
-/// ferment sans envoyer la ligne vide finale.
+/// Usage: [`push`](Self::push) at each received chunk, then
+/// [`next_frame`](Self::next_frame) in a loop until `None`. When the stream
+/// closes, [`finish`](Self::finish) then a last loop: some servers close
+/// without sending the final empty line.
 #[derive(Debug)]
 pub(crate) struct SseDecoder {
     buffer: BytesMut,
@@ -62,12 +61,12 @@ pub(crate) struct SseDecoder {
 }
 
 impl SseDecoder {
-    /// Décodeur avec la borne par défaut.
+    /// Decoder with the default bound.
     pub(crate) fn new() -> Self {
         Self::with_limit(DEFAULT_BUFFER_LIMIT)
     }
 
-    /// Décodeur avec une borne choisie. Réservé aux tests.
+    /// Decoder with a chosen bound. Reserved for tests.
     pub(crate) fn with_limit(limit: usize) -> Self {
         Self {
             buffer: BytesMut::new(),
@@ -78,43 +77,43 @@ impl SseDecoder {
         }
     }
 
-    /// Ajoute un morceau reçu du réseau.
+    /// Adds a chunk received from the network.
     ///
-    /// # Erreurs
-    /// [`SseOverflow`] si l'accumulation — tampon de lignes incomplètes plus
-    /// données déjà rassemblées — dépasse la borne.
+    /// # Errors
+    /// [`SseOverflow`] if the accumulation — buffer of incomplete lines plus
+    /// data already gathered — exceeds the bound.
     pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<(), SseOverflow> {
         self.buffer.extend_from_slice(chunk);
-        let accumule = self.buffer.len().saturating_add(self.data.len());
-        if accumule > self.limit {
+        let accumulated = self.buffer.len().saturating_add(self.data.len());
+        if accumulated > self.limit {
             return Err(SseOverflow { limit: self.limit });
         }
         Ok(())
     }
 
-    /// Signale la fermeture du flux.
+    /// Signals the closing of the stream.
     ///
-    /// Injecte la fin de trame que le serveur n'a peut-être pas envoyée, pour
-    /// qu'un dernier `next_frame` rende ce qui était en cours. Ne passe pas par
-    /// la vérification de borne : deux octets ne mettent rien en danger.
+    /// Injects the end of frame the server may not have sent, so that a last
+    /// `next_frame` returns what was in progress. Does not go through the bound
+    /// check: two bytes put nothing at risk.
     pub(crate) fn finish(&mut self) {
         self.buffer.extend_from_slice(b"\n\n");
     }
 
-    /// Extrait une ligne complète, sans son `\n` ni un éventuel `\r`.
+    /// Extracts a complete line, without its `\n` nor a possible `\r`.
     fn take_line(&mut self) -> Option<Vec<u8>> {
-        let position = self.buffer.iter().position(|octet| *octet == b'\n')?;
-        let mut ligne = self.buffer.split_to(position + 1);
-        // Retire le `\n` terminal.
-        let _ = ligne.split_off(position);
-        let mut ligne = ligne.to_vec();
-        if ligne.last() == Some(&b'\r') {
-            ligne.pop();
+        let position = self.buffer.iter().position(|byte| *byte == b'\n')?;
+        let mut line = self.buffer.split_to(position + 1);
+        // Removes the trailing `\n`.
+        let _ = line.split_off(position);
+        let mut line = line.to_vec();
+        if line.last() == Some(&b'\r') {
+            line.pop();
         }
-        Some(ligne)
+        Some(line)
     }
 
-    /// Rend la trame en cours et réinitialise l'accumulation.
+    /// Returns the current frame and resets the accumulation.
     fn take_frame(&mut self) -> SseFrame {
         self.has_data = false;
         SseFrame {
@@ -123,51 +122,51 @@ impl SseDecoder {
         }
     }
 
-    /// Rend la prochaine trame complète, ou `None` s'il faut plus d'octets.
+    /// Returns the next complete frame, or `None` if more bytes are needed.
     pub(crate) fn next_frame(&mut self) -> Option<SseFrame> {
-        while let Some(ligne) = self.take_line() {
-            // Ligne vide : fin de trame. Une trame sans champ `data` est un
-            // battement de cœur, pas un événement.
-            if ligne.is_empty() {
+        while let Some(line) = self.take_line() {
+            // Empty line: end of frame. A frame without a `data` field is a
+            // heartbeat, not an event.
+            if line.is_empty() {
                 if self.has_data || self.event.is_some() {
                     return Some(self.take_frame());
                 }
                 continue;
             }
-            // Ligne commençant par `:` : commentaire, souvent un maintien de
-            // connexion.
-            if ligne.first() == Some(&b':') {
+            // Line starting with `:`: a comment, often a connection
+            // keep-alive.
+            if line.first() == Some(&b':') {
                 continue;
             }
 
-            // À ce stade la ligne est complète : l'UTF-8 ne peut plus être coupé
-            // par une frontière de morceau, et `from_utf8_lossy` ne remplace que
-            // ce qui est réellement invalide.
-            let texte = String::from_utf8_lossy(&ligne);
-            let texte: &str = &texte;
-            let (champ, valeur) = match texte.find(':') {
+            // At this point the line is complete: UTF-8 can no longer be cut by
+            // a chunk boundary, and `from_utf8_lossy` only replaces what is
+            // really invalid.
+            let text = String::from_utf8_lossy(&line);
+            let text: &str = &text;
+            let (field, value) = match text.find(':') {
                 Some(i) => {
-                    let (champ, reste) = texte.split_at(i);
-                    // Un unique espace après le deux-points appartient à la
-                    // syntaxe, pas à la valeur ; les suivants en font partie.
-                    let brut = reste.get(1..).unwrap_or_default();
-                    (champ, brut.strip_prefix(' ').unwrap_or(brut))
+                    let (field, rest) = text.split_at(i);
+                    // A single space after the colon belongs to the syntax,
+                    // not to the value; the following ones are part of it.
+                    let raw = rest.get(1..).unwrap_or_default();
+                    (field, raw.strip_prefix(' ').unwrap_or(raw))
                 }
-                None => (texte, ""),
+                None => (text, ""),
             };
 
-            match champ {
+            match field {
                 "data" => {
                     if self.has_data {
                         self.data.push('\n');
                     }
-                    self.data.push_str(valeur);
+                    self.data.push_str(value);
                     self.has_data = true;
                 }
-                "event" => self.event = Some(valeur.to_owned()),
-                // `id` et `retry` ne servent qu'à la reprise de connexion, que
-                // cette crate ne fait pas : une génération ne se reprend pas au
-                // milieu, elle se relance.
+                "event" => self.event = Some(value.to_owned()),
+                // `id` and `retry` only serve connection resumption, which this
+                // crate does not do: a generation is not resumed in the middle,
+                // it is restarted.
                 _ => {}
             }
         }
@@ -179,147 +178,147 @@ impl SseDecoder {
 mod tests {
     use super::*;
 
-    /// Pousse un morceau et rassemble toutes les trames disponibles.
-    fn trames(decodeur: &mut SseDecoder, morceau: &[u8]) -> Vec<SseFrame> {
-        decodeur.push(morceau).expect("pas de dépassement attendu");
-        let mut sorties = Vec::new();
-        while let Some(trame) = decodeur.next_frame() {
-            sorties.push(trame);
+    /// Pushes a chunk and gathers all available frames.
+    fn frames(decoder: &mut SseDecoder, chunk: &[u8]) -> Vec<SseFrame> {
+        decoder.push(chunk).expect("no overflow expected");
+        let mut outputs = Vec::new();
+        while let Some(frame) = decoder.next_frame() {
+            outputs.push(frame);
         }
-        sorties
+        outputs
     }
 
     #[test]
-    fn une_trame_simple_se_lit() {
+    fn a_simple_frame_is_read() {
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"data: bonjour\n\n");
-        assert_eq!(sorties.len(), 1);
-        assert_eq!(sorties[0].data, "bonjour");
-        assert_eq!(sorties[0].event, None);
+        let outputs = frames(&mut d, b"data: hello\n\n");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].data, "hello");
+        assert_eq!(outputs[0].event, None);
     }
 
     #[test]
-    fn une_trame_coupee_par_le_reseau_se_recolle() {
-        // Le cas nominal : les morceaux HTTP n'ont aucun rapport avec les lignes.
+    fn a_frame_cut_by_the_network_is_reassembled() {
+        // The nominal case: HTTP chunks have nothing to do with lines.
         let mut d = SseDecoder::new();
-        assert!(trames(&mut d, b"data: {\"cho").is_empty());
-        assert!(trames(&mut d, b"ices\":[]}").is_empty());
-        let sorties = trames(&mut d, b"\n\n");
-        assert_eq!(sorties.len(), 1);
-        assert_eq!(sorties[0].data, r#"{"choices":[]}"#);
+        assert!(frames(&mut d, b"data: {\"cho").is_empty());
+        assert!(frames(&mut d, b"ices\":[]}").is_empty());
+        let outputs = frames(&mut d, b"\n\n");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].data, r#"{"choices":[]}"#);
     }
 
     #[test]
-    fn un_caractere_multioctet_coupe_ne_se_corrompt_pas() {
-        // « é » est 0xC3 0xA9. Coupé entre les deux, un décodage immédiat
-        // produirait un caractère de remplacement.
+    fn a_cut_multibyte_character_is_not_corrupted() {
+        // "é" is 0xC3 0xA9. Cut between the two, an immediate decoding would
+        // produce a replacement character.
         let mut d = SseDecoder::new();
-        assert!(trames(&mut d, b"data: caf\xc3").is_empty());
-        let sorties = trames(&mut d, b"\xa9\n\n");
-        assert_eq!(sorties.len(), 1);
-        assert_eq!(sorties[0].data, "café");
+        assert!(frames(&mut d, b"data: caf\xc3").is_empty());
+        let outputs = frames(&mut d, b"\xa9\n\n");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].data, "café");
     }
 
     #[test]
-    fn les_fins_de_ligne_windows_sont_acceptees() {
+    fn windows_line_endings_are_accepted() {
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"data: a\r\n\r\n");
-        assert_eq!(sorties.len(), 1);
-        assert_eq!(sorties[0].data, "a");
+        let outputs = frames(&mut d, b"data: a\r\n\r\n");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].data, "a");
     }
 
     #[test]
-    fn les_commentaires_de_maintien_sont_ignores() {
+    fn keep_alive_comments_are_ignored() {
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b": ping\n\ndata: utile\n\n");
-        assert_eq!(sorties.len(), 1, "{sorties:?}");
-        assert_eq!(sorties[0].data, "utile");
+        let outputs = frames(&mut d, b": ping\n\ndata: utile\n\n");
+        assert_eq!(outputs.len(), 1, "{outputs:?}");
+        assert_eq!(outputs[0].data, "utile");
     }
 
     #[test]
-    fn plusieurs_champs_data_se_concatenent_avec_un_saut_de_ligne() {
+    fn several_data_fields_concatenate_with_a_line_break() {
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"data: une\ndata: deux\n\n");
-        assert_eq!(sorties.len(), 1);
-        assert_eq!(sorties[0].data, "une\ndeux");
+        let outputs = frames(&mut d, b"data: one\ndata: two\n\n");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].data, "one\ntwo");
     }
 
     #[test]
-    fn le_champ_event_est_conserve() {
-        // Anthropic nomme ses trames ; le décodage doit le rendre.
+    fn the_event_field_is_kept() {
+        // Anthropic names its frames; decoding must return the name.
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"event: content_block_delta\ndata: {}\n\n");
-        assert_eq!(sorties.len(), 1);
-        assert_eq!(sorties[0].event.as_deref(), Some("content_block_delta"));
-        assert_eq!(sorties[0].data, "{}");
+        let outputs = frames(&mut d, b"event: content_block_delta\ndata: {}\n\n");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].event.as_deref(), Some("content_block_delta"));
+        assert_eq!(outputs[0].data, "{}");
     }
 
     #[test]
-    fn la_sentinelle_de_fin_est_une_donnee_comme_une_autre() {
-        // C'est à l'appelant de reconnaître `[DONE]`, pas au décodeur SSE.
+    fn the_end_sentinel_is_data_like_any_other() {
+        // It is up to the caller to recognize `[DONE]`, not the SSE decoder.
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"data: [DONE]\n\n");
-        assert_eq!(sorties[0].data, "[DONE]");
+        let outputs = frames(&mut d, b"data: [DONE]\n\n");
+        assert_eq!(outputs[0].data, "[DONE]");
     }
 
     #[test]
-    fn plusieurs_trames_dans_un_seul_morceau() {
+    fn several_frames_in_a_single_chunk() {
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"data: a\n\ndata: b\n\ndata: c\n\n");
-        let contenus: Vec<&str> = sorties.iter().map(|t| t.data.as_str()).collect();
-        assert_eq!(contenus, ["a", "b", "c"]);
+        let outputs = frames(&mut d, b"data: a\n\ndata: b\n\ndata: c\n\n");
+        let contents: Vec<&str> = outputs.iter().map(|t| t.data.as_str()).collect();
+        assert_eq!(contents, ["a", "b", "c"]);
     }
 
     #[test]
-    fn un_champ_sans_espace_apres_les_deux_points_se_lit_aussi() {
+    fn a_field_without_space_after_the_colon_is_read_too() {
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"data:{\"a\":1}\n\n");
-        assert_eq!(sorties[0].data, r#"{"a":1}"#);
+        let outputs = frames(&mut d, b"data:{\"a\":1}\n\n");
+        assert_eq!(outputs[0].data, r#"{"a":1}"#);
     }
 
     #[test]
-    fn un_seul_espace_est_retire_les_suivants_non() {
+    fn a_single_space_is_removed_the_following_ones_are_not() {
         let mut d = SseDecoder::new();
-        let sorties = trames(&mut d, b"data:   trois espaces\n\n");
-        assert_eq!(sorties[0].data, "  trois espaces");
+        let outputs = frames(&mut d, b"data:   three spaces\n\n");
+        assert_eq!(outputs[0].data, "  three spaces");
     }
 
     #[test]
-    fn une_fermeture_sans_ligne_vide_finale_rend_la_derniere_trame() {
-        // Plusieurs serveurs locaux ferment ainsi.
+    fn a_close_without_final_empty_line_returns_the_last_frame() {
+        // Several local servers close this way.
         let mut d = SseDecoder::new();
-        assert!(trames(&mut d, b"data: dernier\n").is_empty());
+        assert!(frames(&mut d, b"data: dernier\n").is_empty());
         d.finish();
-        let trame = d.next_frame().expect("la trame en cours doit être rendue");
-        assert_eq!(trame.data, "dernier");
+        let frame = d.next_frame().expect("the current frame must be returned");
+        assert_eq!(frame.data, "dernier");
         assert!(d.next_frame().is_none());
     }
 
     #[test]
-    fn une_fermeture_sur_un_flux_propre_ne_fabrique_pas_de_trame() {
+    fn a_close_on_a_clean_stream_makes_no_frame() {
         let mut d = SseDecoder::new();
-        let _ = trames(&mut d, b"data: a\n\n");
+        let _ = frames(&mut d, b"data: a\n\n");
         d.finish();
         assert_eq!(d.next_frame(), None);
     }
 
     #[test]
-    fn un_flux_sans_fin_de_ligne_est_borne() {
-        // Sans borne, un serveur défaillant fait gonfler la mémoire sans limite.
+    fn a_stream_without_line_ending_is_bounded() {
+        // Without a bound, a faulty server makes memory swell without limit.
         let mut d = SseDecoder::with_limit(64);
-        let erreur = d.push(&[b'x'; 128]).expect_err("dépassement attendu");
-        assert_eq!(erreur.limit, 64);
+        let error = d.push(&[b'x'; 128]).expect_err("overflow expected");
+        assert_eq!(error.limit, 64);
     }
 
     #[test]
-    fn la_borne_compte_aussi_les_donnees_deja_rassemblees() {
+    fn the_bound_also_counts_the_data_already_gathered() {
         let mut d = SseDecoder::with_limit(64);
-        d.push(b"data: ").expect("sous la borne");
-        d.push(&[b'y'; 40]).expect("sous la borne");
-        d.push(b"\n").expect("sous la borne");
-        // Les 40 octets sont passés du tampon vers `data`.
+        d.push(b"data: ").expect("under the bound");
+        d.push(&[b'y'; 40]).expect("under the bound");
+        d.push(b"\n").expect("under the bound");
+        // The 40 bytes moved from the buffer to `data`.
         assert!(d.next_frame().is_none());
-        let erreur = d.push(&[b'z'; 40]).expect_err("dépassement attendu");
-        assert_eq!(erreur.limit, 64);
+        let error = d.push(&[b'z'; 40]).expect_err("overflow expected");
+        assert_eq!(error.limit, 64);
     }
 }

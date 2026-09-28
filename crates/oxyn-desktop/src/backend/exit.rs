@@ -1,7 +1,7 @@
 //! The step before the ordered shutdown: a transaction still open on a console
 //! holds the exit until the user commits, rolls back or cancels
-//! ([ADR-0043](../../../../docs/adr/0043-multi-fenetre.md), « Transaction
-//! ouverte à la sortie »).
+//! ([ADR-0043](../../../../docs/adr/0043-multi-fenetre.md), « Open transaction
+//! on exit »).
 //!
 //! Nothing here reads a session. The state listed is the last one the executor
 //! observed and published — at the console's opening, then at the end of each

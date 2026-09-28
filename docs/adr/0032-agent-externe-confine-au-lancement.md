@@ -1,180 +1,174 @@
-# ADR-0032 — Un agent externe connu est confiné au lancement, et n'a d'outils que ceux d'Oxyn
+# ADR-0032 — A known external agent is confined at launch, and has only Oxyn's tools
 
-**Statut :** accepté · **Date :** 2026-09-23
+**Status:** accepted · **Date:** 2026-09-23
 
-**Précise :** [ADR-0026](0026-agents-externes-acp.md), sur un point :
-l'ADR supposait que refuser les demandes d'autorisation d'un agent suffisait à
-l'empêcher d'agir sur la machine. C'est faux, et la mesure le montre.
-Le reste de l'ADR-0026 reste en vigueur, ainsi que
+**Clarifies:** [ADR-0026](0026-agents-externes-acp.md), on one point:
+the ADR assumed that refusing an agent's permission requests was enough to
+prevent it from acting on the machine. That is false, and the measurement shows
+it. The rest of ADR-0026 remains in force, as does
 [ADR-0030](0030-outils-oxyn-exposes-a-un-agent-externe.md).
 
-## Contexte
+## Context
 
-L'ADR-0026 range tout accès d'un agent externe à la machine (fichiers,
-commandes, réseau) dans `oxyn_ai::external::permission_for`, avec un refus par
-défaut. Or ce refus ne s'applique qu'à ce que l'agent **demande**, et un agent
-ne demande que ce que son mode l'oblige à demander.
+ADR-0026 puts every access of an external agent to the machine (files,
+commands, network) in `oxyn_ai::external::permission_for`, with a default
+refusal. But that refusal only applies to what the agent **asks for**, and an
+agent only asks for what its mode forces it to ask for.
 
-Mesure du 2026-09-23 sur les adaptateurs épinglés, avec un client qui refuse
-tout, comme Oxyn, et une consigne demandant de lancer `touch` sur un fichier
-témoin ([RESEARCH-NOTES](../RESEARCH-NOTES.md#confinement-des-adaptateurs-acp--mesure-du-2026-09-23)) :
+Measurement of 2026-09-23 on the pinned adapters, with a client that refuses
+everything, like Oxyn, and an instruction asking to run `touch` on a witness
+file ([RESEARCH-NOTES](../RESEARCH-NOTES.md#confinement-of-acp-adapters--measurement-of-2026-09-23)):
 
-* **Claude Agent**, dans son mode initial `auto` (lu dans les réglages de
-  l'utilisateur), exécute la commande **sans aucune demande**. Le fichier est
-  créé ;
-* **Codex**, dans son mode initial `agent`, fait de même. En `read-only`, il
-  exécute encore sans demander tout ce que son bac à sable permet : lecture
-  partout, écriture dans `/tmp` ;
-* le sélecteur de modes d'Oxyn proposait en outre « Bypass permissions » et
-  « Full access ».
+* **Claude Agent**, in its initial `auto` mode (read from the user's settings),
+  runs the command **without any request**. The file is created;
+* **Codex**, in its initial `agent` mode, does the same. In `read-only`, it
+  still runs without asking everything its sandbox allows: reading everywhere,
+  writing to `/tmp`;
+* Oxyn's mode selector moreover offered "Bypass permissions" and
+  "Full access".
 
-Le contenu d'une base est une entrée hostile ([ia.md](../../.claude/rules/ia.md)).
-Un nom de table rédigé comme une consigne suffisait donc à faire lancer une
-commande sur la machine de l'utilisateur, derrière une fenêtre de base de
-données. C'est précisément ce que l'ADR-0026 voulait empêcher.
+The content of a database is a hostile input ([ia.md](../../.claude/rules/ia.md)).
+A table name written as an instruction was therefore enough to get a command
+run on the user's machine, behind a database window. That is precisely what
+ADR-0026 wanted to prevent.
 
-Deux faits aggravent le problème :
+Two facts make the problem worse:
 
-* en mode strict, un agent demande aussi l'autorisation avant d'appeler les
-  outils **d'Oxyn**. Codex la présente sous le genre `execute`, sans nom
-  d'outil ; `permission_for` la refuse. Les agents externes ne pouvaient donc
-  pas lire la base, ce qui est le défaut signalé par l'utilisateur ;
-* Codex charge les serveurs MCP, les plugins et les hooks du `~/.codex` de
-  l'utilisateur. Sur la machine de mesure, cela comprend un serveur exposant
-  `execute_sql` sur une base distante, ainsi que des plugins de pilotage du
-  navigateur et de l'ordinateur.
+* in strict mode, an agent also asks for permission before calling **Oxyn's**
+  tools. Codex presents it under the `execute` kind, without a tool name;
+  `permission_for` refuses it. External agents therefore could not read the
+  database, which is the defect the user reported;
+* Codex loads the MCP servers, plugins and hooks of the user's `~/.codex`. On
+  the measurement machine, that includes a server exposing `execute_sql` on a
+  remote database, as well as browser- and computer-control plugins.
 
-## Décision
+## Decision
 
-**Un agent dont Oxyn connaît l'adaptateur est confiné au lancement, par les
-interrupteurs que cet adaptateur documente. Il est ensuite maintenu dans son
-mode le plus strict jusqu'à la fin de la session.** Le type
-`oxyn_ai::external::confine::Confinement` porte ce confinement.
+**An agent whose adapter Oxyn knows is confined at launch, through the switches
+that adapter documents. It is then kept in its strictest mode until the end of
+the session.** The type `oxyn_ai::external::confine::Confinement` carries this
+confinement.
 
-**« Connu » veut dire : la version épinglée et mesurée, avec exactement les
-arguments qu'Oxyn propose** (`presets::pinned_preset_of`). Une autre version
-peut ignorer les interrupteurs. Un argument de plus peut les surcharger. Tout
-le reste est traité comme un agent inconnu, avertissement compris. Monter la
-version d'un préréglage exige donc de refaire la mesure.
+**"Known" means: the pinned and measured version, with exactly the arguments
+Oxyn offers** (`presets::pinned_preset_of`). Another version may ignore the
+switches. One extra argument may override them. Everything else is treated as
+an unknown agent, warning included. Bumping a preset's version therefore
+requires redoing the measurement.
 
-**Un agent connu ne démarre pas à moitié confiné.** Si le confinement ne peut
-pas être appliqué tel que mesuré, l'agent n'est pas lancé
-(`ExternalError::Unconfinable`). Trois cas le déclenchent : une configuration
-Codex présente mais illisible en entier (taille, droits, syntaxe, fichier non
-ordinaire), plus de 256 entrées à couper, ou un serveur de l'utilisateur déjà
-nommé `oxyn`.
+**A known agent does not start half confined.** If the confinement cannot be
+applied as measured, the agent is not launched
+(`ExternalError::Unconfinable`). Three cases trigger it: a Codex configuration
+that is present but not fully readable (size, permissions, syntax, non-regular
+file), more than 256 entries to switch off, or a user server already named
+`oxyn`.
 
-### Claude Agent : les outils d'Oxyn, et aucun autre
+### Claude Agent: Oxyn's tools, and no others
 
-Les options du SDK passent par `_meta.claudeCode.options` de `session/new` :
+The SDK options go through `_meta.claudeCode.options` of `session/new`:
 
-* `tools: []` retire tous les outils intégrés (shell, fichiers, web) ;
-* `strictMcpConfig: true` ne garde que le serveur MCP déclaré par Oxyn ;
-* `settingSources: []` ne charge ni les règles d'autorisation, ni les hooks,
-  ni les serveurs MCP de l'utilisateur ;
-* `allowDangerouslySkipPermissions: false` retire le mode `bypassPermissions`
-  du catalogue ;
-* `allowedTools: ["mcp__oxyn"]` préautorise les outils d'Oxyn **côté agent**.
-  Leur contrôle est le `PolicyGate`, avec `Actor::Agent`
-  ([ADR-0030](0030-outils-oxyn-exposes-a-un-agent-externe.md)). Une demande
-  d'autorisation qu'Oxyn devrait refuser ne protégerait rien de plus : elle
-  rendrait seulement la base illisible.
+* `tools: []` removes all built-in tools (shell, files, web);
+* `strictMcpConfig: true` keeps only the MCP server declared by Oxyn;
+* `settingSources: []` loads neither the permission rules, nor the hooks, nor
+  the user's MCP servers;
+* `allowDangerouslySkipPermissions: false` removes the `bypassPermissions` mode
+  from the catalog;
+* `allowedTools: ["mcp__oxyn"]` pre-authorizes Oxyn's tools **on the agent
+  side**. Their control is the `PolicyGate`, with `Actor::Agent`
+  ([ADR-0030](0030-outils-oxyn-exposes-a-un-agent-externe.md)). A permission
+  request that Oxyn would have to refuse would protect nothing more: it would
+  only make the database unreadable.
 
-Le mode est ensuite fixé à `default` (« Manual »).
+The mode is then set to `default` ("Manual").
 
-### Codex : ni shell ni web, `read-only`, outils personnels coupés par nom
+### Codex: no shell, no web, `read-only`, personal tools switched off by name
 
-Deux variables d'environnement, documentées par l'adaptateur, portent le
-confinement :
+Two environment variables, documented by the adapter, carry the confinement:
 
-* **`INITIAL_AGENT_MODE=read-only`** ;
-* **`CODEX_CONFIG`**, qui contient :
-  * `features.shell_tool`, `features.unified_exec`, `features.hooks` et
-    `features.apps` à `false`, et `web_search = "disabled"` ;
-  * le serveur d'Oxyn, **déclaré dans cette configuration** plutôt que par
-    ACP, avec `default_tools_approval_mode = "approve"`. Le jeton passe par
-    `OXYN_TOOL_TOKEN`, et le rapport de sortie du processus l'expurge comme
-    toute variable transmise. La mesure montre que ce réglage ne s'applique pas
-    à un serveur déclaré par ACP ;
-  * chaque serveur MCP et chaque plugin du `config.toml` de l'utilisateur, avec
-    `enabled = false`. Seuls **les noms** sont lus, et le fichier est borné à
-    1 Mio. Aucune valeur n'est retenue, et certaines portent des jetons
-    ([I-03](../../CLAUDE.md#i-03)). Le fichier lu est celui que **le
-    processus de Codex** chargera : le `CODEX_HOME` déclaré pour l'agent, sinon
-    le `.codex` du `HOME` que reçoit l'agent. Jamais le `CODEX_HOME` d'Oxyn,
-    que l'enfant ne reçoit pas.
+* **`INITIAL_AGENT_MODE=read-only`**;
+* **`CODEX_CONFIG`**, which contains:
+  * `features.shell_tool`, `features.unified_exec`, `features.hooks` and
+    `features.apps` set to `false`, and `web_search = "disabled"`;
+  * Oxyn's server, **declared in this configuration** rather than through
+    ACP, with `default_tools_approval_mode = "approve"`. The token goes through
+    `OXYN_TOOL_TOKEN`, and the process exit report redacts it like any
+    forwarded variable. The measurement shows that this setting does not apply
+    to a server declared through ACP;
+  * every MCP server and every plugin of the user's `config.toml`, with
+    `enabled = false`. Only **the names** are read, and the file is bounded to
+    1 MiB. No value is kept, and some carry tokens
+    ([I-03](../../CLAUDE.md#i-03)). The file read is the one that **the Codex
+    process** will load: the `CODEX_HOME` declared for the agent, otherwise
+    the `.codex` of the `HOME` the agent receives. Never Oxyn's `CODEX_HOME`,
+    which the child does not receive.
 
-Le mode est ensuite refixé à `read-only`.
+The mode is then set again to `read-only`.
 
-### Le mode tient toute la session
+### The mode holds for the whole session
 
-* Le mode est fixé **après** `session/new` et **avant** la première question.
-  Si l'agent refuse de le prendre, il ne lit aucune question, et la session
-  échoue avec `ExternalError::Unconfined`.
-* `AgentSettings::modes_locked` retire les modes, ainsi que les options de
-  catégorie `mode`, de tout ce qui est affiché ou accepté. Le sélecteur
-  disparaît, et un changement de mode est refusé par `check` avant tout envoi.
-* `SwitchMode`, que `permission_for` accorde à un agent non confiné, est refusé
-  à un agent confiné.
-* Si l'agent annonce un autre mode que celui fixé, `ModeWatch` le retient.
-  Le tour en cours est annulé aussitôt (`session/cancel`) et se termine par
-  `Unconfined` ; toute question suivante est refusée. On ne revient pas en
-  arrière : un agent qui a changé de mode une fois n'est plus présumé stable.
-* Deux écarts faibles sont assumés. Une annonce de mode arrivée entre la
-  réponse à `session/set_mode` et l'armement n'est pas vue ; l'agent n'a alors
-  encore reçu aucune question. Une option de mode que l'adaptateur ne classe pas
-  dans la catégorie `mode` reste proposée ; aucun des deux adaptateurs mesurés
-  n'en déclare.
+* The mode is set **after** `session/new` and **before** the first question.
+  If the agent refuses to take it, it reads no question, and the session
+  fails with `ExternalError::Unconfined`.
+* `AgentSettings::modes_locked` removes the modes, as well as options of
+  category `mode`, from everything displayed or accepted. The selector
+  disappears, and a mode change is refused by `check` before anything is sent.
+* `SwitchMode`, which `permission_for` grants to an unconfined agent, is
+  refused to a confined agent.
+* If the agent announces a mode other than the one set, `ModeWatch` records it.
+  The current turn is cancelled immediately (`session/cancel`) and ends with
+  `Unconfined`; any following question is refused. There is no going back: an
+  agent that has changed mode once is no longer presumed stable.
+* Two weak gaps are accepted. A mode announcement arriving between the response
+  to `session/set_mode` and the arming is not seen; the agent has not yet
+  received any question at that point. A mode option that the adapter does not
+  classify in the `mode` category stays offered; neither of the two measured
+  adapters declares one.
 
-### Un agent inconnu reste utilisable, et l'écran le dit
+### An unknown agent stays usable, and the screen says so
 
-Oxyn ne connaît pas les interrupteurs d'un agent déclaré à la main. Il le lance
-donc comme avant, mais le formulaire de déclaration et le panneau disent
-qu'**Oxyn ne peut pas l'empêcher d'agir seul sur la machine**. C'est
-l'utilisateur qui a désigné ce programme, et la déclaration exige déjà une
-double confirmation (ADR-0026).
+Oxyn does not know the switches of a hand-declared agent. It therefore launches
+it as before, but the declaration form and the panel say that **Oxyn cannot
+prevent it from acting on its own on the machine**. The user is the one who
+designated this program, and the declaration already requires a double
+confirmation (ADR-0026).
 
-## Conséquences
+## Consequences
 
-* **+** Pour Claude Agent, le confinement est structurel : l'agent n'a aucun
-  outil de la machine, donc rien à demander. Il ne dépend plus d'un refus qui
-  doit être sollicité.
-* **+** Les agents externes lisent enfin la base par les outils d'Oxyn. Cela
-  était l'objet même de l'ADR-0030, et les refus de `permission_for` le
-  rendaient impossible.
-* **+** Le choix d'un mode dangereux n'est plus proposé à l'écran.
-* **−** **Codex reste confiné par liste noire.** Un plugin actif par défaut et
-  absent du `config.toml` de l'utilisateur échappe au confinement. La
-  référence de Codex ne documente aucun moyen de couper tous les plugins, ni
-  d'ignorer ce fichier. Codex garde aussi l'édition de fichiers : elle demande
-  l'autorisation, et Oxyn la refuse.
-* **−** Oxyn lit un fichier de configuration d'un autre programme. Il n'en garde
-  que des noms, mais il dépend désormais de son format.
-* **−** Le confinement repose sur des options **propres à chaque adaptateur**
-  (`_meta.claudeCode`, `CODEX_CONFIG`), hors du protocole ACP. Une montée de
-  version d'un adaptateur peut les ignorer sans rien casser de visible. Chaque
-  montée doit donc refaire la mesure de RESEARCH-NOTES.
-* **−** L'utilisateur perd dans Oxyn ses réglages personnels de Claude Code :
-  modèle par défaut, instructions, serveurs MCP. C'est voulu, mais visible.
-* **−** Un agent déclaré à la main n'est pas confiné. Seul un avertissement
-  l'accompagne.
+* **+** For Claude Agent, confinement is structural: the agent has no machine
+  tool, hence nothing to ask for. It no longer depends on a refusal that must
+  be solicited.
+* **+** External agents finally read the database through Oxyn's tools. That
+  was the very purpose of ADR-0030, and the refusals of `permission_for` made
+  it impossible.
+* **+** Choosing a dangerous mode is no longer offered on screen.
+* **−** **Codex stays confined by blocklist.** A plugin active by default and
+  absent from the user's `config.toml` escapes confinement. Codex's reference
+  documents no way to switch off all plugins, nor to ignore that file. Codex
+  also keeps file editing: it asks for permission, and Oxyn refuses it.
+* **−** Oxyn reads a configuration file of another program. It keeps only
+  names from it, but it now depends on its format.
+* **−** Confinement relies on options **specific to each adapter**
+  (`_meta.claudeCode`, `CODEX_CONFIG`), outside the ACP protocol. An adapter
+  version bump may ignore them without breaking anything visible. Every bump
+  must therefore redo the RESEARCH-NOTES measurement.
+* **−** The user loses in Oxyn their personal Claude Code settings: default
+  model, instructions, MCP servers. That is intended, but visible.
+* **−** A hand-declared agent is not confined. Only a warning goes with it.
 
-**Coût de sortie :** faible. Tout tient dans `confine.rs`, `ModeWatch` et le
-champ `modes_locked` ; retirer le confinement revient à renvoyer `None`. Ce qui
-coûterait cher, c'est de le retirer **sans** retirer aussi les agents externes.
+**Exit cost:** low. Everything lives in `confine.rs`, `ModeWatch` and the
+`modes_locked` field; removing confinement amounts to returning `None`. What
+would be expensive is removing it **without** also removing external agents.
 
-**Reconsidérer si** ACP normalise une manière, pour un client, de restreindre
-les outils d'un agent ou d'en fixer le mode, ce qui dispenserait des options
-propres à chaque adaptateur. Également si Codex documente un interrupteur qui
-coupe en bloc les serveurs MCP et plugins de l'utilisateur : la liste noire
-deviendrait inutile.
+**Reconsider if** ACP standardizes a way for a client to restrict an agent's
+tools or set its mode, which would make adapter-specific options unnecessary.
+Also if Codex documents a switch that turns off the user's MCP servers and
+plugins wholesale: the blocklist would become unnecessary.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Garder le seul refus de `permission_for` | Mesuré : l'agent n'a rien demandé et la commande a été exécutée. Un refus qu'on ne sollicite pas ne protège rien |
-| Accorder les demandes d'autorisation dont le titre désigne un outil d'Oxyn | Chez Codex, la demande ne porte ni titre ni nom d'outil, seulement un identifiant `exec-…`. Et un titre est un texte produit par l'agent : accorder sur son contenu, c'est accorder sur ce que dit l'agent |
-| Lancer Codex avec un `CODEX_HOME` privé | Son jeton de connexion vit dans ce répertoire. Le recopier ferait détenir à Oxyn un secret de l'utilisateur, ce que l'ADR-0026 refuse. Un lien symbolique serait remplacé par un fichier à la première rotation du jeton |
-| Suspendre Codex tant qu'il n'est pas confinable en entier | Écarté par l'utilisateur au profit de la liste noire, dont l'écart est écrit ici |
-| Refuser tout agent qu'Oxyn ne sait pas confiner | Écarté par l'utilisateur : c'est lui qui désigne le programme, et un avertissement explicite dit ce qu'Oxyn ne peut pas garantir |
+| Keep only the refusal of `permission_for` | Measured: the agent asked for nothing and the command was run. A refusal that is never solicited protects nothing |
+| Grant permission requests whose title designates an Oxyn tool | With Codex, the request carries neither a title nor a tool name, only an `exec-…` identifier. And a title is text produced by the agent: granting on its content is granting on what the agent says |
+| Launch Codex with a private `CODEX_HOME` | Its login token lives in that directory. Copying it would make Oxyn hold a user secret, which ADR-0026 refuses. A symbolic link would be replaced by a file at the first token rotation |
+| Suspend Codex as long as it cannot be fully confined | Rejected by the user in favor of the blocklist, whose gap is written here |
+| Refuse any agent Oxyn cannot confine | Rejected by the user: they are the one who designates the program, and an explicit warning says what Oxyn cannot guarantee |

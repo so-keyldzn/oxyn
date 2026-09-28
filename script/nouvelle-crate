@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Crée une crate déjà conforme, plutôt que de compter sur la mémoire.
+"""Creates an already compliant crate, rather than relying on memory.
 
-CLAUDE.md nomme le piège : une règle `paths:` se charge quand Claude *lit* un
-fichier correspondant, **pas quand il en crée un**. Le premier fichier d'un
-répertoire neuf s'écrit donc sans sa règle — et un manifeste sans
-`[lints] workspace = true` ne fait rien échouer : la crate compile, clippy s'y
-tait, et personne ne le remarque avant des mois.
+CLAUDE.md names the trap: a `paths:` rule loads when Claude *reads* a matching
+file, **not when it creates one**. The first file of a new directory is
+therefore written without its rule — and a manifest without
+`[lints] workspace = true` makes nothing fail: the crate compiles, clippy stays
+silent on it, and nobody notices for months.
 
-Ce script écrit ce que le manifeste doit contenir, et rattache la crate au
-workspace. Ce qui reste à faire ensuite est affiché, parce que cette partie-là
-demande un choix.
+This script writes what the manifest must contain, and attaches the crate to
+the workspace. What remains to do afterwards is printed, because that part
+needs a choice.
 
-    script/nouvelle-crate oxyn-machin "Ce dont cette crate est le sujet"
+    script/nouvelle-crate oxyn-thing "What this crate is about"
 """
 
 from __future__ import annotations
@@ -20,17 +20,17 @@ import re
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-MANIFESTE_WORKSPACE = RACINE / "Cargo.toml"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_MANIFEST = REPO_ROOT / "Cargo.toml"
 
-MOTIF_NOM = re.compile(r"^oxyn-[a-z0-9]+(?:-[a-z0-9]+)*$")
+NAME_PATTERN = re.compile(r"^oxyn-[a-z0-9]+(?:-[a-z0-9]+)*$")
 
-# Les noms que le découpage interdit. Ce n'est pas une question de goût : une
-# crate fourre-tout finit dépendance de toutes les autres, et le graphe qu'on a
-# passé du temps à orienter cesse de vouloir dire quelque chose.
-FOURRE_TOUT = {"utils", "util", "common", "commons", "helpers", "misc", "core-utils"}
+# The names the split forbids. It is not a matter of taste: a catch-all crate
+# ends up a dependency of all the others, and the graph we spent time directing
+# stops meaning anything.
+CATCH_ALL = {"utils", "util", "common", "commons", "helpers", "misc", "core-utils"}
 
-GABARIT_MANIFESTE = """[package]
+MANIFEST_TEMPLATE = """[package]
 name = "{nom}"
 description = "{description}"
 version.workspace = true
@@ -51,132 +51,130 @@ thiserror.workspace = true
 rstest.workspace = true
 """
 
-# Le `//!` est en anglais, comme tout ce qui est lu depuis le code (CLAUDE.md).
-# La marque est assemblée pour que ce script ne se signale pas lui-même à
-# `script/verifier-todo` : ce n'est pas un travail restant, c'est un gabarit.
-GABARIT_LIB = (
+# The marker is assembled so that this script does not flag itself to
+# `script/verifier-todo`: it is not remaining work, it is a template.
+LIB_TEMPLATE = (
     "//! TO"
     + "DO(phase 0) : state what this crate is about, in one sentence,\n"
     + "//! before the first public item.\n"
 )
 
 
-def erreur(message: str) -> None:
-    print(f"ERREUR  {message}", file=sys.stderr)
+def problem(message: str) -> None:
+    print(f"ERROR  {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
-def destination(nom: str) -> Path:
-    """`drivers/` pour une implémentation de protocole, `crates/` sinon.
+def destination(item_name: str) -> Path:
+    """`drivers/` for a protocol implementation, `crates/` otherwise.
 
-    Le rangement n'est pas cosmétique : `drivers/*` est ce qui permet de dire
-    « un driver par protocole » et de le vérifier d'un coup d'œil."""
-    if nom.startswith("oxyn-driver-"):
-        return RACINE / "drivers" / nom
-    return RACINE / "crates" / nom
+    The placement is not cosmetic: `drivers/*` is what lets one say "one driver
+    per protocol" and check it at a glance."""
+    if item_name.startswith("oxyn-driver-"):
+        return REPO_ROOT / "drivers" / item_name
+    return REPO_ROOT / "crates" / item_name
 
 
-def rattacher_au_workspace(nom: str, chemin_relatif: str) -> bool:
-    """Ajoute la crate à `[workspace.dependencies]`.
+def attach_to_workspace(item_name: str, relative_path: str) -> bool:
+    """Adds the crate to `[workspace.dependencies]`.
 
-    `members = ["crates/*", "drivers/*"]` la prend déjà comme membre ; ce qui
-    manque, c'est l'entrée qui permet aux autres crates d'écrire
-    `{nom}.workspace = true`. Sans elle, la première dépendance interne
-    s'écrirait avec un `path` en dur, et le workspace cesserait d'être la source
-    unique des versions."""
-    texte = MANIFESTE_WORKSPACE.read_text(encoding="utf-8")
-    if re.search(rf"^{re.escape(nom)}\s*=", texte, re.MULTILINE):
+    `members = ["crates/*", "drivers/*"]` already takes it as a member; what is
+    missing is the entry that lets other crates write `{nom}.workspace = true`.
+    Without it, the first internal dependency would be written with a hard-coded
+    `path`, and the workspace would stop being the single source of versions."""
+    body = WORKSPACE_MANIFEST.read_text(encoding="utf-8")
+    if re.search(rf"^{re.escape(item_name)}\s*=", body, re.MULTILINE):
         return False
 
-    lignes = texte.splitlines(keepends=True)
-    motif = re.compile(r'^(oxyn-[a-z0-9-]+)\s*= \{ path = "([^"]+)"')
-    # L'entrée se range derrière la dernière du même répertoire : le bloc liste
-    # `crates/` puis `drivers/`, et un driver glissé au milieu des crates du
-    # cœur ferait mentir la seule vue d'ensemble du workspace qu'on ait.
-    repertoire = chemin_relatif.split("/", 1)[0]
-    correspondances = [
+    lines = body.splitlines(keepends=True)
+    pattern = re.compile(r'^(oxyn-[a-z0-9-]+)\s*= \{ path = "([^"]+)"')
+    # The entry goes after the last one of the same directory: the block lists
+    # `crates/` then `drivers/`, and a driver slipped among the core crates
+    # would make the only overview of the workspace we have lie.
+    directory = relative_path.split("/", 1)[0]
+    matches = [
         i
-        for i, ligne in enumerate(lignes)
-        if (m := motif.match(ligne)) and m.group(2).startswith(f"{repertoire}/")
+        for i, line in enumerate(lines)
+        if (m := pattern.match(line)) and m.group(2).startswith(f"{directory}/")
     ]
-    derniere = max(correspondances, default=None)
-    if derniere is None:
-        erreur(
-            "impossible de situer le bloc des crates internes dans Cargo.toml : "
-            f"ajouter à la main `{nom} = {{ path = \"{chemin_relatif}\" }}`"
+    last_one = max(matches, default=None)
+    if last_one is None:
+        problem(
+            "cannot locate the internal crates block in Cargo.toml: "
+            f"add `{item_name} = {{ path = \"{relative_path}\" }}` by hand"
         )
 
-    # L'alignement des `=` du bloc est tenu à la main dans ce manifeste ; le
-    # reproduire évite un diff de mise en forme au commit suivant.
-    largeur = max(
-        len(motif.match(ligne).group(1)) for ligne in lignes if motif.match(ligne)
+    # The alignment of the block's `=` is kept by hand in this manifest;
+    # reproducing it avoids a formatting diff on the next commit.
+    width = max(
+        len(pattern.match(line).group(1)) for line in lines if pattern.match(line)
     )
-    lignes.insert(
-        derniere + 1,
-        f"{nom.ljust(largeur)} = {{ path = \"{chemin_relatif}\" }}\n",
+    lines.insert(
+        last_one + 1,
+        f"{item_name.ljust(width)} = {{ path = \"{relative_path}\" }}\n",
     )
-    MANIFESTE_WORKSPACE.write_text("".join(lignes), encoding="utf-8")
+    WORKSPACE_MANIFEST.write_text("".join(lines), encoding="utf-8")
     return True
 
 
-def principal(arguments: list[str]) -> int:
+def main(arguments: list[str]) -> int:
     if len(arguments) != 2:
         print(__doc__)
         return 1
 
-    nom, description = arguments
-    if not MOTIF_NOM.match(nom):
-        erreur(
-            f"« {nom} » : le nom doit être `oxyn-<sujet>`, en minuscules, "
-            "avec des tirets."
+    item_name, description = arguments
+    if not NAME_PATTERN.match(item_name):
+        problem(
+            f"\"{item_name}\": the name must be `oxyn-<subject>`, lowercase, "
+            "with hyphens."
         )
-    sujet = nom.removeprefix("oxyn-")
-    if sujet in FOURRE_TOUT:
-        erreur(
-            f"« {sujet} » est un nom fourre-tout. Un nom qu'on ne sait pas "
-            "choisir est un découpage qu'on n'a pas su faire : nommer la crate "
-            "par son sujet, ou ranger le code dans une crate existante."
+    subject = item_name.removeprefix("oxyn-")
+    if subject in CATCH_ALL:
+        problem(
+            f"\"{subject}\" is a catch-all name. A name one cannot choose is a "
+            "split one could not make: name the crate after its subject, or "
+            "put the code in an existing crate."
         )
     if not description.strip():
-        erreur(
-            "la description est obligatoire : c'est elle qui dit, dans "
-            "`cargo metadata` et dans docs/ARCHITECTURE.md, pourquoi cette "
-            "crate existe à part."
+        problem(
+            "the description is mandatory: it is what says, in "
+            "`cargo metadata` and in docs/ARCHITECTURE.md, why this crate "
+            "exists on its own."
         )
 
-    racine_crate = destination(nom)
-    if racine_crate.exists():
-        erreur(f"{racine_crate.relative_to(RACINE)} existe déjà.")
+    crate_root = destination(item_name)
+    if crate_root.exists():
+        problem(f"{crate_root.relative_to(REPO_ROOT)} already exists.")
 
-    (racine_crate / "src").mkdir(parents=True)
-    (racine_crate / "Cargo.toml").write_text(
-        GABARIT_MANIFESTE.format(nom=nom, description=description.strip()),
+    (crate_root / "src").mkdir(parents=True)
+    (crate_root / "Cargo.toml").write_text(
+        MANIFEST_TEMPLATE.format(item_name=item_name, description=description.strip()),
         encoding="utf-8",
     )
-    (racine_crate / "src" / "lib.rs").write_text(GABARIT_LIB, encoding="utf-8")
+    (crate_root / "src" / "lib.rs").write_text(LIB_TEMPLATE, encoding="utf-8")
 
-    relatif = racine_crate.relative_to(RACINE).as_posix()
-    rattachee = rattacher_au_workspace(nom, relatif)
+    relative = crate_root.relative_to(REPO_ROOT).as_posix()
+    attached = attach_to_workspace(item_name, relative)
 
-    print(f"Crate créée : {relatif}/")
-    print("  Cargo.toml     hérite des lints et des versions du workspace")
-    print("  src/lib.rs     à remplir")
-    if rattachee:
-        print(f"  Cargo.toml     `{nom}` ajouté à [workspace.dependencies]")
+    print(f"Crate created: {relative}/")
+    print("  Cargo.toml     inherits the workspace lints and versions")
+    print("  src/lib.rs     to fill in")
+    if attached:
+        print(f"  Cargo.toml     `{item_name}` added to [workspace.dependencies]")
 
     print()
-    print("Ce qui reste, et qui demande un choix :")
-    print("  1. docs/ARCHITECTURE.md — l'arborescence des crates y fait autorité ;")
-    print("     une crate absente du document est une divergence, pas un oubli.")
-    if nom.startswith("oxyn-driver-"):
-        print("  2. /driver — le contrat de driver charge la procédure explicitement.")
+    print("What remains, and needs a choice:")
+    print("  1. docs/ARCHITECTURE.md — the crate tree is authoritative there;")
+    print("     a crate missing from the document is a divergence, not an oversight.")
+    if item_name.startswith("oxyn-driver-"):
+        print("  2. /driver — the driver contract loads the procedure explicitly.")
     else:
-        print("  2. /implementer — les règles `paths:` ne se chargent pas à la")
-        print("     création d'un fichier ; la commande charge la procédure.")
-    print("  3. Toute dépendance externe passe par /versions et RESEARCH-NOTES,")
-    print("     dans le même commit (I-12).")
+        print("  2. /implementer — `paths:` rules do not load when a file is")
+        print("     created; the command loads the procedure.")
+    print("  3. Every external dependency goes through /versions and RESEARCH-NOTES,")
+    print("     in the same commit (I-12).")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(principal(sys.argv[1:]))
+    raise SystemExit(main(sys.argv[1:]))

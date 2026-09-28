@@ -1,11 +1,11 @@
-//! Ce que la table des agents externes doit garantir.
+//! What the external agents table must guarantee.
 
 use super::*;
 use oxyn_core::ExternalAgentConfig;
 
 fn agent(id: &str, label: &str) -> ExternalAgentConfig {
     ExternalAgentConfig::new(
-        ProviderId::new(id).expect("un identifiant valide"),
+        ProviderId::new(id).expect("a valid identifier"),
         label,
         "claude",
     )
@@ -13,112 +13,112 @@ fn agent(id: &str, label: &str) -> ExternalAgentConfig {
 }
 
 #[test]
-fn une_declaration_se_relit_a_lidentique() {
-    let store = Store::open_in_memory().expect("ouverture");
-    let ecrit = agent("claude-code", "Claude Code");
-    store.external_agents().save(&ecrit).expect("écriture");
+fn a_declaration_reads_back_identically() {
+    let store = Store::open_in_memory().expect("open");
+    let written = agent("claude-code", "Claude Code");
+    store.external_agents().save(&written).expect("write");
 
-    let relus = store.external_agents().list().expect("lecture");
-    assert_eq!(relus.len(), 1);
-    assert_eq!(relus[0].id, ecrit.id);
-    assert_eq!(relus[0].command, "claude");
+    let read_back = store.external_agents().list().expect("read");
+    assert_eq!(read_back.len(), 1);
+    assert_eq!(read_back[0].id, written.id);
+    assert_eq!(read_back[0].command, "claude");
     assert_eq!(
-        relus[0].args,
+        read_back[0].args,
         ["--acp"],
-        "les arguments survivent au disque"
+        "the arguments survive the disk"
     );
 }
 
-/// La table n'a **aucune** colonne où ranger un secret.
+/// The table has **no** column where a secret could be stored.
 ///
-/// C'est la garantie qui fonde ce mode : un agent porte sa propre
-/// authentification. Le test lit le schéma plutôt que la documentation, parce
-/// qu'une colonne ajoutée plus tard « juste pour un jeton » ne ferait rougir
-/// aucun autre test.
+/// This is the guarantee this mode rests on: an agent carries its own
+/// authentication. The test reads the schema rather than the documentation,
+/// because a column added later "just for a token" would turn no other test
+/// red.
 #[test]
-fn la_table_na_aucune_colonne_de_secret() {
-    let store = Store::open_in_memory().expect("ouverture");
-    let colonnes: Vec<String> = store
+fn the_table_has_no_secret_column() {
+    let store = Store::open_in_memory().expect("open");
+    let columns: Vec<String> = store
         .with_connection(|conn| {
-            let mut requete =
+            let mut query =
                 conn.prepare("SELECT name FROM pragma_table_info('external_agents')")?;
-            let noms = requete.query_map([], |row| row.get(0))?;
-            Ok(noms.collect::<rusqlite::Result<Vec<String>>>()?)
+            let names = query.query_map([], |row| row.get(0))?;
+            Ok(names.collect::<rusqlite::Result<Vec<String>>>()?)
         })
-        .expect("lecture du schéma");
+        .expect("read the schema");
 
-    for interdite in ["secret_ref", "secret", "api_key", "token", "password"] {
+    for forbidden in ["secret_ref", "secret", "api_key", "token", "password"] {
         assert!(
-            !colonnes.iter().any(|nom| nom == interdite),
-            "`{interdite}` n'a rien à faire ici : un agent externe ne confie aucune clé"
+            !columns.iter().any(|name| name == forbidden),
+            "`{forbidden}` has no business here: an external agent entrusts no key"
         );
     }
 }
 
-/// Une déclaration invalide n'atteint pas le disque.
+/// An invalid declaration does not reach the disk.
 #[test]
-fn une_commande_hostile_est_refusee_avant_le_disque() {
-    let store = Store::open_in_memory().expect("ouverture");
+fn a_hostile_command_is_refused_before_the_disk() {
+    let store = Store::open_in_memory().expect("open");
     let mut hostile = agent("hostile", "Hostile");
     hostile.command = "claude\n--evil".to_owned();
 
     assert!(
         store.external_agents().save(&hostile).is_err(),
-        "un saut de ligne dans la commande n'a aucun usage légitime"
+        "a line break in the command has no legitimate use"
     );
     assert!(
-        store.external_agents().list().expect("lecture").is_empty(),
-        "rien ne doit avoir été écrit"
+        store.external_agents().list().expect("read").is_empty(),
+        "nothing must have been written"
     );
 }
 
-/// Une ligne devenue illisible est écartée, pas propagée en erreur.
+/// A row that became unreadable is skipped, not propagated as an error.
 ///
-/// Un `args` corrompu par un éditeur SQLite ne doit pas rendre l'écran de
-/// configuration inutilisable : l'agent disparaît de la liste, avec une trace.
+/// An `args` corrupted by an SQLite editor must not make the configuration
+/// screen unusable: the agent disappears from the list, with a trace.
 #[test]
-fn une_ligne_illisible_est_ecartee_sans_casser_la_liste() {
-    let store = Store::open_in_memory().expect("ouverture");
+fn an_unreadable_row_is_skipped_without_breaking_the_list() {
+    let store = Store::open_in_memory().expect("open");
     store
         .external_agents()
-        .save(&agent("bon", "Bon agent"))
-        .expect("écriture");
+        .save(&agent("good", "Good agent"))
+        .expect("write");
     store
         .with_connection(|conn| {
             conn.execute(
                 "INSERT INTO external_agents (id, label, command, args, env, created_at, updated_at)
-                 VALUES ('casse', 'Cassé', 'claude', 'pas du json', '[]', ?1, ?1)",
+                 VALUES ('broken', 'Broken', 'claude', 'not json', '[]', ?1, ?1)",
                 params![Utc::now()],
             )?;
             Ok(())
         })
-        .expect("insertion directe");
+        .expect("direct insert");
 
-    let relus = store.external_agents().list().expect("lecture");
-    assert_eq!(relus.len(), 1, "la ligne saine reste servie");
-    assert_eq!(relus[0].label, "Bon agent");
+    let read_back = store.external_agents().list().expect("read");
+    assert_eq!(read_back.len(), 1, "the healthy row is still served");
+    assert_eq!(read_back[0].label, "Good agent");
 }
 
 #[test]
-fn retirer_une_declaration_ne_touche_pas_les_autres() {
-    let store = Store::open_in_memory().expect("ouverture");
+fn removing_a_declaration_leaves_the_others_alone() {
+    let store = Store::open_in_memory().expect("open");
     store
         .external_agents()
-        .save(&agent("un", "Un"))
-        .expect("écriture");
+        .save(&agent("one", "One"))
+        .expect("write");
     store
         .external_agents()
-        .save(&agent("deux", "Deux"))
-        .expect("écriture");
+        .save(&agent("two", "Two"))
+        .expect("write");
 
-    let cible = ProviderId::new("un").expect("identifiant");
-    assert!(store.external_agents().remove(&cible).expect("suppression"));
+    let target = ProviderId::new("one").expect("identifier");
+    assert!(store.external_agents().remove(&target).expect("removal"));
     assert!(
-        !store.external_agents().remove(&cible).expect("suppression"),
-        "retirer deux fois ne ment pas sur le second passage"
+        !store.external_agents().remove(&target).expect("removal"),
+        "removing twice does not lie on the second pass"
     );
 
-    let restants = store.external_agents().list().expect("lecture");
-    assert_eq!(restants.len(), 1);
-    assert_eq!(restants[0].label, "Deux");
+    let remaining = store.external_agents().list().expect("read");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].label, "Two");
 }

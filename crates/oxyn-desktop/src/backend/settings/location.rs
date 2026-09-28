@@ -8,7 +8,7 @@
 //!
 //! Reading it touches no session and no catalog: a restored tab comes back
 //! as a place, and nothing is read from a server until the user asks
-//! (docs/UX-SPEC.md, « Restauration après un arrêt brutal »). Neither does
+//! (docs/UX-SPEC.md, « Restoring after an abrupt stop »). Neither does
 //! it check that the object still exists — an object that vanished is the
 //! object view's to explain, and its location is never erased for it.
 

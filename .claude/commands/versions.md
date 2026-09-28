@@ -1,63 +1,60 @@
 ---
-description: Re-vérifier les versions externes au registre et dater le résultat
-argument-hint: "[crate à vérifier, ou vide pour tout]"
+description: Re-check external versions against the registry and date the result
+argument-hint: "[crate to check, or empty for everything]"
 allowed-tools: Bash, Read, Edit, WebFetch
 ---
 
-Objet : re-vérifier les versions externes — **$ARGUMENTS**.
+Purpose: re-check the external versions — **$ARGUMENTS**.
 
-## Pourquoi ce geste existe
+## Why this move exists
 
-[I-12](../../CLAUDE.md#i-12). Une version recopiée de mémoire est **plausible**
-et fausse : elle ne se voit ni à la compilation, ni aux tests, ni en revue. Elle
-se voit quand quelqu'un essaie de construire le projet six mois plus tard, ou
-quand une limite d'API supposée s'avère différente en production.
+[I-12](../../CLAUDE.md#i-12). A version copied from memory is **plausible** and
+wrong: it shows up neither at compile time, nor in tests, nor in review. It
+shows up when someone tries to build the project six months later, or when an
+assumed API limit turns out to be different in production.
 
-Une valeur non datée est une valeur périmée qu'on n'a pas encore repérée.
+An undated value is an outdated value that has not been spotted yet.
 
-## L'état actuel
+## The current state
 
 ```!
 python3 .claude/hooks/verifier_versions.py
 ```
 
-## Ce qu'il faut en faire
+## What to do with it
 
-Le script **ne modifie rien** : décider d'une montée de version appartient à un
-humain, et un écart n'est pas nécessairement une erreur — une version peut être
-délibérément figée ([ADR-0009](../../docs/adr/0009-source-dependance-gpui.md) en
-est un cas).
+The script **modifies nothing**: deciding on a version bump belongs to a human,
+and a gap is not necessarily an error — a version can be deliberately pinned
+([ADR-0009](../../docs/adr/0009-source-dependance-gpui.md) is a case).
 
-Pour chaque écart :
+For each gap:
 
-1. **Est-il délibéré ?** Si oui, écrire la raison à côté de la valeur dans
-   `docs/RESEARCH-NOTES.md` et remettre la date du jour — la vérification a bien
-   eu lieu.
-2. **Sinon, la montée est-elle sans risque ?** Vérifier le journal des
-   changements avant, pas après. `duckdb` versionne en suivant la version amont
-   de DuckDB, pas en semver Rust : ne pas déduire une rupture d'un saut de
-   majeure.
-3. **Reporter la nouvelle valeur et la date du jour** dans
-   `docs/RESEARCH-NOTES.md`, dans le même commit que la modification du
-   `Cargo.toml`. Séparer les deux, c'est garantir que l'un des deux sera oublié.
+1. **Is it deliberate?** If so, write the reason next to the value in
+   `docs/RESEARCH-NOTES.md` and set today's date — the check did take place.
+2. **Otherwise, is the bump risk-free?** Check the changelog before, not
+   after. `duckdb` versions follow DuckDB's upstream version, not Rust semver:
+   do not infer a break from a major jump.
+3. **Record the new value and today's date** in `docs/RESEARCH-NOTES.md`, in
+   the same commit as the `Cargo.toml` change. Separating the two guarantees
+   that one of them will be forgotten.
 
-## Les avis écartés
+## The dismissed advisories
 
-Les exceptions de `[advisories] ignore` dans `deny.toml` se relisent ici : un
-avis écarté parce que l'amont ne proposait rien reste écarté longtemps après que
-l'amont a corrigé. Pour chacun, vérifier si la version corrigée est devenue
-atteignable ; si oui, la monter et retirer l'exception.
+The `[advisories] ignore` exceptions in `deny.toml` are reviewed here: an
+advisory dismissed because upstream offered nothing stays dismissed long after
+upstream has fixed it. For each one, check whether the fixed version has become
+reachable; if so, bump it and remove the exception.
 
-## Vérifier
+## Verify
 
 ```bash
 make socle
 ```
 
-## Rappels
+## Reminders
 
-- toute valeur externe porte **sa source et sa date** ;
-- le hook `SessionStart` signale les vérifications de plus de 90 jours : c'est un
-  rappel, pas une garantie — lui seul ne re-vérifie rien ;
-- ce qui n'est pas dans `docs/RESEARCH-NOTES.md` n'est pas suivi par le
-  vérificateur. Ajouter une dépendance, c'est aussi l'y ajouter.
+- every external value carries **its source and its date**;
+- the `SessionStart` hook flags checks older than 90 days: it is a reminder,
+  not a guarantee — it re-checks nothing by itself;
+- what is not in `docs/RESEARCH-NOTES.md` is not tracked by the checker. Adding
+  a dependency means adding it there too.

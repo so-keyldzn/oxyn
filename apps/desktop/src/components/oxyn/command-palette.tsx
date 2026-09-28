@@ -42,9 +42,9 @@ function Entry({
     <CommandItem
       value={entry.id}
       // Not cmdk's `disabled`: a disabled item is skipped by the arrows, and
-      // its reason would never be read by keyboard (UX-SPEC, « Une action,
-      // un libellé, un raccourci »). It is read with the entry instead, and
-      // choosing it does nothing.
+      // its reason would never be read by keyboard (UX-SPEC, « One action, one
+      // label, one shortcut »). It is read with the entry instead, and choosing
+      // it does nothing.
       data-unavailable={reason !== null || undefined}
       data-checked={entry.checked ?? undefined}
       onSelect={() => {

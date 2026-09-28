@@ -1,8 +1,8 @@
 // Whether the assistant exists for a connection, and who may answer there.
 //
 // A pure function of what the backend declared and of the connection's tier,
-// so the rule of docs/UX-SPEC.md « Le workspace IA n'existe que s'il a été
-// configuré » is a unit test, not a hope. It is an affordance and never a
+// so the rule of docs/UX-SPEC.md « The AI workspace only exists if it has been
+// configured » is a unit test, not a hope. It is an affordance and never a
 // gate: the backend re-checks the tier against a reach it measures itself at
 // the moment of the question (I-04).
 

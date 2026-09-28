@@ -462,7 +462,7 @@ export const ManyChoices: Story = {
   },
 }
 
-const LONG = "réflexion-très-approfondie-".repeat(19).slice(0, 512)
+const LONG = "extended-naïve-déjà-vu-run-".repeat(19).slice(0, 512)
 
 export const LongNames: Story = {
   args: {

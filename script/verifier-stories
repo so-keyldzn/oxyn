@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Refuse un composant Oxyn qu'aucune story ne rend.
+"""Refuses an Oxyn component that no story renders.
 
-`.claude/rules/front.md` le dit : un composant de `src/components/oxyn` a ses
-stories, et ses stories sont ses tests — `make front` les rend dans Chromium,
-axe compris. Un composant sans story n'échoue nulle part : il échappe
-simplement à axe et à tout `play`, et personne ne le remarque.
+`.claude/rules/front.md` says it: a component of `src/components/oxyn` has its
+stories, and its stories are its tests — `make front` renders them in
+Chromium, axe included. A component without a story fails nowhere: it simply
+escapes axe and every `play`, and nobody notices.
 
-Ce qu'est un composant, ce qui le couvre et ce qui l'exempte est écrit une
-fois, dans `.claude/rules/front.md` § « Chaque composant Oxyn a ses stories » :
-ce script l'applique, il ne la redéfinit pas.
+What a component is, what covers it and what exempts it is written once, in
+`.claude/rules/front.md` § "Every Oxyn component has its stories": this script
+applies it, it does not redefine it.
 
-Appelé par `make front-controles`, donc par `make front` et `make qualite`.
+Called by `make front-controles`, hence by `make front` and `make qualite`.
 """
 
 from __future__ import annotations
@@ -19,71 +19,71 @@ import re
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-COMPOSANTS = RACINE / "apps" / "desktop" / "src" / "components" / "oxyn"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPONENTS = REPO_ROOT / "apps" / "desktop" / "src" / "components" / "oxyn"
 
-# Des pièces qui n'ont de sens qu'à l'intérieur de leur parent : elles sont
-# rendues, axe compris, par les stories de celui-ci. Chaque entrée nomme cette
-# story ; une entrée sans elle serait un trou, pas une exemption.
-EXEMPTS = {
-    "assistant-code-block": "rendu par assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
-    "assistant-mermaid": "rendu par assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
-    "assistant-mention-menu": "greffon Lexical, rendu par assistant-composer.stories.tsx",
-    "assistant-mention-node": "nœud Lexical, rendu par assistant-composer.stories.tsx",
-    "result-chart-cartesian": "rendu par result-chart.stories.tsx, via ResultChartView",
-    "result-chart-polar": "rendu par result-chart.stories.tsx, via ResultChartView",
-    "result-chart-picker": "rendu par result-chart.stories.tsx, via ResultChartView",
-    # TODO(2026-10-15, débloqué par la fusion du lot qui modifie assistant-exchange.tsx) :
-    # écrire assistant-exchange.stories.tsx pour ExchangeView, rendu en attendant
-    # par assistant-view.stories.tsx.
-    "assistant-exchange": "rendu par assistant-view.stories.tsx, en attendant les siennes",
+# Pieces that only make sense inside their parent: they are rendered, axe
+# included, by the parent's stories. Each entry names that story; an entry
+# without it would be a hole, not an exemption.
+EXEMPT = {
+    "assistant-code-block": "rendered by assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
+    "assistant-mermaid": "rendered by assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
+    "assistant-mention-menu": "Lexical plugin, rendered by assistant-composer.stories.tsx",
+    "assistant-mention-node": "Lexical node, rendered by assistant-composer.stories.tsx",
+    "result-chart-cartesian": "rendered by result-chart.stories.tsx, via ResultChartView",
+    "result-chart-polar": "rendered by result-chart.stories.tsx, via ResultChartView",
+    "result-chart-picker": "rendered by result-chart.stories.tsx, via ResultChartView",
+    # TODO(2026-10-15, unblocked by merging the batch that modifies assistant-exchange.tsx):
+    # write assistant-exchange.stories.tsx for ExchangeView, rendered meanwhile
+    # by assistant-view.stories.tsx.
+    "assistant-exchange": "rendered by assistant-view.stories.tsx, until it has its own",
 }
 
-MOTIF_IMPORT = re.compile(
+IMPORT_PATTERN = re.compile(
     r"""from\s+["'](?:\./|@/components/oxyn/)([\w.-]+)["']"""
 )
 
 
-def composants() -> list[str]:
+def components() -> list[str]:
     return sorted(
         f.stem
-        for f in COMPOSANTS.glob("*.tsx")
+        for f in COMPONENTS.glob("*.tsx")
         if not f.name.endswith((".stories.tsx", ".test.tsx"))
     )
 
 
-def importes_par_une_story() -> set[str]:
-    importes: set[str] = set()
-    for story in COMPOSANTS.glob("*.stories.tsx"):
-        importes.update(MOTIF_IMPORT.findall(story.read_text(encoding="utf-8")))
-    return importes
+def imported_by_a_story() -> set[str]:
+    imported: set[str] = set()
+    for story in COMPONENTS.glob("*.stories.tsx"):
+        imported.update(IMPORT_PATTERN.findall(story.read_text(encoding="utf-8")))
+    return imported
 
 
-def principal() -> int:
-    noms = composants()
-    couverts = importes_par_une_story()
-    erreurs = [
-        f"{nom}.tsx : aucune story ne l'importe — écrire {nom}.stories.tsx"
-        for nom in noms
-        if nom not in couverts and nom not in EXEMPTS
+def main() -> int:
+    name_list = components()
+    covered_targets = imported_by_a_story()
+    problems = [
+        f"{item_name}.tsx: no story imports it — write {item_name}.stories.tsx"
+        for item_name in name_list
+        if item_name not in covered_targets and item_name not in EXEMPT
     ]
-    # Une exemption qui ne sert plus se retire : sinon elle couvrira un jour,
-    # sans que personne ne l'ait décidé, un composant qui n'a rien à voir.
-    erreurs += [
-        f"{nom} : exemption périmée — le fichier n'existe plus ou une story l'importe"
-        for nom in EXEMPTS
-        if nom not in noms or nom in couverts
+    # An exemption that no longer serves is removed: otherwise it will one day
+    # cover, without anyone deciding it, an unrelated component.
+    problems += [
+        f"{item_name}: stale exemption — the file no longer exists or a story imports it"
+        for item_name in EXEMPT
+        if item_name not in name_list or item_name in covered_targets
     ]
 
-    for message in erreurs:
-        print(f"ERREUR         {message}")
+    for message in problems:
+        print(f"ERROR          {message}")
 
-    if erreurs:
-        print(f"\nStories : {len(erreurs)} composant(s) sans story.")
+    if problems:
+        print(f"\nStories: {len(problems)} component(s) without a story.")
         return 1
-    print(f"Stories : {len(noms)} composants, chacun rendu par une story.")
+    print(f"Stories: {len(name_list)} components, each rendered by a story.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(principal())
+    sys.exit(main())

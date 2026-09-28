@@ -1,39 +1,39 @@
 ---
 name: non-argumente-plutot-que-composant-de-plus
-description: Sur une liste de manques d'interface, un « celui-là ne sert à rien ici » chiffré est préféré à un composant de plus
+description: On a list of interface gaps, a quantified "that one is useless here" is preferred to one more component
 metadata:
   type: feedback
 ---
 
-Quand on me donne une liste de composants à écrire, rendre un **refus argumenté**
-pour ceux que le dépôt couvre déjà ou que la donnée ne permet pas, plutôt que
-de livrer la liste entière.
+When I am given a list of components to write, return a **reasoned refusal**
+for those the repository already covers or that the data does not allow, rather
+than delivering the whole list.
 
-**Why:** demandé explicitement — « je préfère un “celui-là ne sert à rien ici”
-argumenté qu'un composant de plus ». Le dépôt paie chaque composant en stories,
-en axe et en relecture ; un doublon de geste crée en plus deux chemins pour une
-seule action, dont un seul sera relu.
+**Why:** explicitly requested — "I prefer a reasoned 'that one is useless here'
+to one more component". The repository pays for each component in stories, axe
+and review; a duplicated gesture also creates two paths for a single action, of
+which only one will be reviewed.
 
-**How to apply:** avant d'écrire, lire les composants voisins et chercher si le
-**geste** existe déjà sous un autre nom. Le refus doit nommer le fichier qui
-couvre déjà le besoin, ou la donnée backend qui manque — jamais « ça me semble
-redondant ». Corollaire : si un composant demande une donnée que le backend ne
-rend pas, l'exposer en prop et dire laquelle, au lieu de la calculer dans la
-webview (ce que [front.md] interdit de toute façon).
+**How to apply:** before writing, read the neighboring components and look for
+whether the **gesture** already exists under another name. The refusal must name
+the file that already covers the need, or the missing backend data — never "it
+seems redundant to me". Corollary: if a component asks for data the backend does
+not return, expose it as a prop and say which one, instead of computing it in
+the webview (which [front.md] forbids anyway).
 
-**Le corollaire le plus coûteux : ne pas dessiner une prop sans source
-vérifiée.** Réclamer la forme réelle (fichier et lignes) *avant* d'écrire les
-types. Vécu : j'ai dessiné un plan d'agent avec des états « échoué » et
-« abandonné », un `detail` d'erreur, un identifiant d'étape et un compteur de
-révisions — aucun n'existe dans le protocole, et le compteur aurait **menti**,
-comptant des avancements ordinaires comme des remplacements. Une surface sans
-source finit vide ou remplie par une invention côté front.
+**The most expensive corollary: do not design a prop without a checked
+source.** Ask for the real shape (file and lines) *before* writing the types.
+Lived: I designed an agent plan with "failed" and "abandoned" states, an error
+`detail`, a step identifier and a revision counter — none of them exist in the
+protocol, and the counter would have **lied**, counting ordinary progress as
+replacements. A surface without a source ends up empty or filled with a
+front-end invention.
 
-Et quand une surface n'aura **jamais** de source, la supprimer et l'écrire dans
-le rapport comme « écarté faute de source » : c'est une information utile, pas
-un échec.
+And when a surface will **never** have a source, delete it and write it in the
+report as "dropped for lack of a source": it is useful information, not a
+failure.
 
-Deux règles de collaboration qui vont avec, dans ce dépôt à plusieurs agents :
-ne pas modifier un fichier possédé par un autre agent, et **signaler** une
-contradiction entre une consigne et un ADR au lieu de trancher (CLAUDE.md :
-« signaler, ne pas trancher seul »).
+Two collaboration rules that go with it, in this multi-agent repository: do not
+modify a file owned by another agent, and **report** a contradiction between an
+instruction and an ADR instead of settling it (CLAUDE.md: "report it, do not
+settle it alone").

@@ -69,9 +69,9 @@ function sourceLabel(address: CatalogAddress) {
  * (docs/adr/0042-revue-sur-place-des-operations-destructrices.md).
  *
  * The statement is the backend's, shown whole: what is shown is what is sent.
- * Built not to be confirmed by reflex (docs/UX-SPEC.md, « Les opérations
- * destructrices »): `Cancel` takes the initial focus, Enter alone does
- * nothing, the default button is never the action. On production, or once
+ * Built not to be confirmed by reflex (docs/UX-SPEC.md, « Destructive
+ * operations »): `Cancel` takes the initial focus, Enter alone does nothing,
+ * the default button is never the action. On production, or once
  * `CASCADE` is ticked, the action waits for the object's name to be typed —
  * a guard against the wrong row of the tree, not a guarantee: on production
  * the host's own dialog decides after the gate.

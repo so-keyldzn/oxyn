@@ -1,69 +1,66 @@
-# ADR-0014 — Séparer les brouillons, les requêtes sauvegardées et l'historique
+# ADR-0014 — Separate drafts, saved queries and history
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10
 
-## Contexte
+## Context
 
-La planche Figma `47:7638` présente History, Saved queries et Recent results.
-Les tables locales existent, mais leurs listes chargent le SQL complet et
-les documents ne distinguent pas un brouillon d'une sauvegarde explicite.
-Ajouter une sauvegarde automatique sans cette distinction modifierait une
-requête enregistrée pendant que l'utilisateur travaille sur un brouillon.
+Figma board `47:7638` presents History, Saved queries and Recent results. The
+local tables exist, but their lists load the full SQL and documents do not
+distinguish a draft from an explicit save. Adding autosave without this
+distinction would modify a saved query while the user works on a draft.
 
-## Décision
+## Decision
 
-- La migration 5 conserve les documents existants comme requêtes sauvegardées.
-  Elle ajoute l'état ouvert/supprimé, la révision du brouillon, la révision de
-  sauvegarde et les texte/titre explicitement sauvegardés. Le format reste
-  constitué de colonnes SQLite lisibles, sans type GPUI.
-- Les révisions de brouillon et de sauvegarde sont indépendantes. Un brouillon
-  récent ne doit pas annuler une sauvegarde explicite antérieure qui termine
-  plus tard ; cette dernière ne remplace pas le brouillon récent.
-- La fermeture avec abandon rétablit la copie sauvegardée, ou vide un brouillon
-  sans copie sauvegardée. Un marqueur de révision empêche une ancienne écriture
-  de rouvrir ou de recréer le document. La suppression explicite retire aussi
-  les textes, tout en conservant ce marqueur minimal.
-- Les listes passent par le bus et restent paginées : au plus 200 entrées par
-  page, résumés SQL limités à 256 caractères. Un document ou une entrée
-  sélectionnée est lu séparément. Le SQL éditable est borné à 1 Mio et les titres
-  à 256 octets ; un dépassement produit une erreur explicite, jamais une coupe
-  silencieuse du texte ouvert ou sauvegardé.
-- L'historique conserve sa portée existante : les connexions locales de
-  l'utilisateur, y compris celles supprimées. Il n'est pas présenté comme une
-  liste appartenant nécessairement au seul workspace actif. Les filtres de
-  connexion, texte, date et statut sont explicites. La pagination suit l'ordre
-  d'enregistrement décroissant, avec une borne d'identifiant stable.
-- Une entrée d'historique peut référencer un résultat encore retenu. Cette
-  référence ne restaure aucune session et n'exécute aucune requête. Une
-  référence expirée produit une indisponibilité explicite.
-- Ouvrir un document ou du SQL historique crée un contexte d'édition sans
-  exécution. Une copie vers une autre connexion est annoncée et conserve
-  l'original. L'historique d'une écriture ambiguë offre l'inspection, pas une
-  action de rejeu.
+- Migration 5 keeps existing documents as saved queries. It adds the
+  open/deleted state, the draft revision, the save revision and the explicitly
+  saved text/title. The format remains made of readable SQLite columns, with no
+  GPUI type.
+- Draft and save revisions are independent. A recent draft must not cancel an
+  earlier explicit save that completes later; the latter does not replace the
+  recent draft.
+- Closing with discard restores the saved copy, or empties a draft with no saved
+  copy. A revision marker prevents an old write from reopening or recreating the
+  document. Explicit deletion also removes the texts, while keeping this minimal
+  marker.
+- Lists go through the bus and remain paginated: at most 200 entries per page,
+  SQL summaries limited to 256 characters. A selected document or entry is read
+  separately. Editable SQL is bounded to 1 MiB and titles to 256 bytes; exceeding
+  them produces an explicit error, never a silent truncation of the opened or
+  saved text.
+- History keeps its existing scope: the user's local connections, including
+  deleted ones. It is not presented as a list necessarily belonging to the active
+  workspace alone. Connection, text, date and status filters are explicit.
+  Pagination follows descending recording order, with a stable identifier bound.
+- A history entry can reference a result still retained. This reference restores
+  no session and runs no query. An expired reference produces an explicit
+  unavailability.
+- Opening a document or historical SQL creates an editing context without
+  execution. A copy to another connection is announced and keeps the original.
+  The history of an ambiguous write offers inspection, not a replay action.
 
-## Conséquences
+## Consequences
 
-- **+** Les brouillons récupérables ne modifient pas la bibliothèque sauvegardée.
-- **+** Les écritures asynchrones ne peuvent pas rétablir un document fermé.
-- **+** Les listes ne matérialisent pas tout le SQL local en mémoire.
-- **−** Chaque document conserve deux états de texte et deux révisions.
-- **−** Les petits marqueurs de suppression restent dans le store pour protéger
-  des réponses tardives ; ils ne figurent pas dans les listes utilisateur.
-- **−** Les fichiers SQL dépassant la borne d'édition nécessitent un traitement
-  distinct et ne sont pas ouverts partiellement sous leur nom d'origine.
+- **+** Recoverable drafts do not modify the saved library.
+- **+** Asynchronous writes cannot restore a closed document.
+- **+** Lists do not materialize all the local SQL in memory.
+- **−** Each document keeps two text states and two revisions.
+- **−** Small deletion markers remain in the store to protect against late
+  responses; they do not appear in user lists.
+- **−** SQL files exceeding the editing bound need separate handling and are not
+  opened partially under their original name.
 
-**Coût de sortie :** migrer les colonnes de documents et les commandes de
-sauvegarde/fermeture. Les drivers et le contenu SQL restent indépendants.
+**Exit cost:** migrate the document columns and the save/close commands. Drivers
+and SQL content remain independent.
 
-**Reconsidérer si** l'édition collaborative exige une fusion de contenu, si les
-gros scripts deviennent un usage courant, ou si la rétention des marqueurs
-nécessite une politique d'expiration liée aux sessions locales.
+**Reconsider if** collaborative editing requires content merging, if large
+scripts become common use, or if marker retention needs an expiry policy tied to
+local sessions.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Un seul texte pour brouillon et sauvegarde | Toute frappe modifie la copie enregistrée |
-| Supprimer immédiatement la ligne d'un document fermé | Une réponse tardive peut la recréer |
-| Charger toutes les requêtes dans la liste | Mémoire proportionnelle à tout l'historique |
-| Rejouer pour rouvrir un résultat | Change les données observées et peut répéter une écriture |
+| A single text for draft and save | Every keystroke modifies the saved copy |
+| Immediately delete the row of a closed document | A late response can recreate it |
+| Load all queries into the list | Memory proportional to the whole history |
+| Replay to reopen a result | Changes the observed data and may repeat a write |

@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils"
 export type ExecutionSummary =
   | { status: "idle" }
   | { status: "running"; rows: number }
-  /** Cancel was sent; the server has not confirmed yet (UX-SPEC « Annulation »). */
+  /** Cancel was sent; the server has not confirmed yet (UX-SPEC « Cancellation »). */
   | { status: "cancelling"; rows: number }
   | { status: "done"; rows: number; elapsedMs: number }
   | { status: "failed"; message?: string; retryable?: boolean }
@@ -136,7 +136,7 @@ function SessionDetails({ capabilities }: { capabilities: Array<string> }) {
  * Only the execution status is a live region, and what it announces changes
  * at most once a second: a row counter read aloud on every batch drowns the
  * user. At reduced width the driver, the tier and the labels fold away; the
- * connection name and the execution state stay (« Largeur réduite »).
+ * connection name and the execution state stay (« Reduced width »).
  *
  * The AI privacy tier is not here: it sits next to `Ask AI` in the connection
  * bar, under the same condition as the entry, so the two read together and a

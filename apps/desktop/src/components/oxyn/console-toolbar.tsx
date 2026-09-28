@@ -78,8 +78,9 @@ function Shortcut({
  * explain, bound values, name and save.
  *
  * Run, Stop and Explain are three distinct buttons at fixed places; the one
- * with nothing to do is dimmed and inert (docs/UX-SPEC.md, « Portée de Run »),
- * so a missed click never restarts what the user meant to stop. The hint says
+ * with nothing to do is dimmed and inert (docs/UX-SPEC.md, « Scope of Run in a
+ * SQL console »), so a missed click never restarts what the user meant to stop.
+ * The hint says
  * what ⌘↵ will send before it is sent.
  */
 export function ConsoleToolbar({
@@ -131,7 +132,7 @@ export function ConsoleToolbar({
   onSaveAsNew: () => void
   /**
    * The console is closing its document: the name stays readable but no
-   * longer editable (docs/UX-SPEC.md, « Sauvegarde d'une console »).
+   * longer editable (docs/UX-SPEC.md, « Saving a console »).
    */
   closing?: boolean
   /** Cancels the named save or close under way. */
@@ -148,7 +149,7 @@ export function ConsoleToolbar({
   const noticeId = React.useId()
   const writing = save.status === "saving" || closing
   // The registry's conditions, the same for these buttons as for the menu
-  // bar and the keyboard (UX-SPEC, « Barre de menus »).
+  // bar and the keyboard (UX-SPEC, « Menu bar »).
   const state = { canRun, running, cancelling, writing }
   const idle = consoleAvailability("run", state) === true
   const stoppable = consoleAvailability("cancel", state) === true

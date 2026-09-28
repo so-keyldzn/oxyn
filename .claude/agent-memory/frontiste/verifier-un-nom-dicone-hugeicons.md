@@ -1,25 +1,24 @@
 ---
 name: verifier-un-nom-dicone-hugeicons
-description: Un nom d'icône Hugeicons ne se vérifie pas par require() — grep le .d.ts de dist/types
+description: A Hugeicons icon name is not checked with require() — grep the .d.ts of dist/types
 metadata:
   type: feedback
 ---
 
-Pour savoir si `FooIcon` existe dans `@hugeicons/core-free-icons`, grepper le
-fichier de types :
+To know whether `FooIcon` exists in `@hugeicons/core-free-icons`, grep the types
+file:
 
 ```bash
 grep -oE "\b[A-Za-z0-9_]+Icon\b" \
   node_modules/@hugeicons/core-free-icons/dist/types/index.d.ts | sort -u
 ```
 
-**Why:** `node -e 'require("@hugeicons/core-free-icons")'` rend un objet où
-**aucun** nom n'est présent (le paquet est ESM), donc tout nom testé ainsi
-paraît manquant — y compris ceux qu'emploie déjà le dépôt. On perd du temps à
-chercher un remplaçant à une icône qui existe. Le paquet expose ~6 700 noms, et
-les familles numérotées sont piégeuses : `CircleIcon` existe, `Circle01Icon`
-non.
+**Why:** `node -e 'require("@hugeicons/core-free-icons")'` returns an object
+where **no** name is present (the package is ESM), so every name tested this way
+looks missing — including those the repository already uses. Time is lost looking
+for a replacement for an icon that exists. The package exposes ~6,700 names, and
+the numbered families are tricky: `CircleIcon` exists, `Circle01Icon` does not.
 
-**How to apply:** avant d'écrire un `import { … } from
-"@hugeicons/core-free-icons"` avec un nom qu'on n'a pas vu ailleurs dans
-`src/`. `lucide-react` est interdit par [front.md], donc il n'y a pas de repli.
+**How to apply:** before writing an `import { … } from
+"@hugeicons/core-free-icons"` with a name not seen elsewhere in `src/`.
+`lucide-react` is forbidden by [front.md], so there is no fallback.

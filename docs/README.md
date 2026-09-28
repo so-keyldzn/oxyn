@@ -1,128 +1,133 @@
-# Documentation Oxyn
+# Oxyn documentation
 
-Ces documents **font autorité**. En cas de contradiction entre le code et l'un
-d'eux, c'est un bug : le signaler, ne pas trancher seul.
+These documents **are authoritative**. When the code and one of them contradict
+each other, it is a bug: report it, do not settle it alone.
 
-## Documents d'autorité
+They are written in English, and each has a French mirror in
+[`i18n/fr/docs/`](../i18n/README.md); English is authoritative
+([ADR-0047](adr/0047-english-as-the-repository-language.md)).
 
-| Document | Fait autorité sur |
+## Authoritative documents
+
+| Document | Authoritative on |
 |---|---|
-| [VISION.md](VISION.md) | le périmètre du produit et ses principes fondateurs |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | crates, sens des dépendances, command bus, threads, observabilité |
-| [DRIVER-CONTRACT.md](DRIVER-CONTRACT.md) | ce que tout driver garantit et ce qui lui est interdit |
-| [AI-PROVIDERS.md](AI-PROVIDERS.md) | ce qui traverse la frontière IA, et ce qu'on fait des réponses |
-| [PLUGIN-CONTRACT.md](PLUGIN-CONTRACT.md) | ce qu'un plugin peut faire, et ce que le bac à sable ne garantit pas |
-| [SECURITY.md](SECURITY.md) | secrets, marquage des connexions, surface d'entrée, politique `unsafe` |
-| [PERFORMANCE.md](PERFORMANCE.md) | les seuils chiffrés au-delà desquels un comportement est un défaut |
-| [UX-SPEC.md](UX-SPEC.md) | les comportements d'interface qui se décident, pas se devinent |
-| [MCP.md](MCP.md) | les serveurs MCP déclarés, et ceux qui sont écartés |
-| [RESEARCH-NOTES.md](RESEARCH-NOTES.md) | toute version et valeur externe, avec sa source et sa date |
-| [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | l'ordre des phases et leurs portes de sortie — le seul document du reste à faire |
+| [VISION.md](VISION.md) | the product scope and its founding principles |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | crates, direction of dependencies, command bus, threads, observability |
+| [DRIVER-CONTRACT.md](DRIVER-CONTRACT.md) | what every driver guarantees and what it is forbidden to do |
+| [AI-PROVIDERS.md](AI-PROVIDERS.md) | what crosses the AI boundary, and what is done with the responses |
+| [PLUGIN-CONTRACT.md](PLUGIN-CONTRACT.md) | what a plugin can do, and what the sandbox does not guarantee |
+| [SECURITY.md](SECURITY.md) | secrets, connection marking, input surface, `unsafe` policy |
+| [PERFORMANCE.md](PERFORMANCE.md) | the numeric thresholds beyond which a behavior is a defect |
+| [UX-SPEC.md](UX-SPEC.md) | the interface behaviors that are decided, not guessed |
+| [MCP.md](MCP.md) | the declared MCP servers, and those that are ruled out |
+| [RESEARCH-NOTES.md](RESEARCH-NOTES.md) | every external version and value, with its source and its date |
+| [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | the order of the phases and their exit gates — the only document of the remaining work |
 
-## Décisions d'architecture (ADR)
+## Architecture decisions (ADRs)
 
-Pour localiser les planches et leurs états avant implémentation, consulter
-[FIGMA-HANDOFF](FIGMA-HANDOFF.md). Les comportements restent définis dans
+To locate the boards and their states before implementation, see
+[FIGMA-HANDOFF](FIGMA-HANDOFF.md). Behaviors remain defined in
 [UX-SPEC](UX-SPEC.md).
 
-| # | Décision | Statut |
+| # | Decision | Status |
 |---|---|---|
-| [0001](adr/0001-ui-toolkit.md) | Toolkit UI : GPUI, avec isolation stricte | remplacé |
-| [0002](adr/0002-arrow-result-model.md) | Apache Arrow comme représentation universelle des résultats | accepté |
-| [0003](adr/0003-driver-capabilities.md) | Modèle de capacités plutôt que dénominateur commun | accepté |
-| [0004](adr/0004-command-bus.md) | Command bus unique et Policy gate | accepté |
-| [0005](adr/0005-wasm-plugins.md) | Plugins WebAssembly, pas de bibliothèques natives | proposé |
-| [0006](adr/0006-ai-privacy-tiers.md) | Niveaux de confidentialité IA, par connexion | accepté |
-| [0007](adr/0007-driver-sidecar.md) | Processus sidecar pour les drivers à dépendances natives | proposé |
-| [0008](adr/0008-chaine-outils-rust.md) | Chaîne d'outils Rust épinglée dans le dépôt | accepté |
-| [0009](adr/0009-source-dependance-gpui.md) | GPUI consommé depuis crates.io, non depuis son dépôt amont | remplacé |
-| [0010](adr/0010-contraintes-natives-sqlite.md) | Une seule version de libsqlite3-sys dans le graphe | accepté |
-| [0011](adr/0011-structure-commune-workspace.md) | Workbench dense comme structure commune du workspace | accepté |
-| [0012](adr/0012-lecture-pages-resultats.md) | Lecture de pages hors rendu et cache borné en octets | accepté |
-| [0013](adr/0013-preferences-workspace.md) | Préférences de lecture persistées et écritures ordonnées | accepté |
-| [0014](adr/0014-documents-et-historique.md) | Brouillons, sauvegardes explicites et historique paginé | accepté |
-| [0015](adr/0015-consoles-independantes.md) | Contrôleur et session propres à chaque console | accepté |
-| [0016](adr/0016-autosauvegarde-bornee.md) | File bornée et contrôle de concurrence des documents | accepté |
-| [0017](adr/0017-retention-resultats.md) | Rétention bornée des résultats sans lecteur | accepté |
-| [0018](adr/0018-apercu-ddl.md) | DDL inspecté comme métadonnée, préparé sans exécution | accepté |
-| [0019](adr/0019-contexte-de-session.md) | Contexte de session déclaré, jamais posé en silence | accepté |
-| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | Aperçu : tri composé, prédicat écrit, page déterministe | proposé |
-| [0021](adr/0021-marqueur-d-arret.md) | Arrêt propre ou anormal constaté, jamais deviné | accepté |
-| [0022](adr/0022-rafraichissement-automatique.md) | Ce qui se rafraîchit tout seul, et ce qui ne le fera jamais | proposé |
-| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | Fournisseurs déclarés par machine, reclassés à chaque ouverture, provenance persistée | accepté |
-| [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | Le brouillon s'écrit quand la frappe s'arrête, pas à chaque touche | proposé |
-| [0025](adr/0025-proposition-de-changement-de-schema.md) | Une proposition de changement de schéma est du SQL à relire, jamais une écriture | proposé |
-| [0026](adr/0026-agents-externes-acp.md) | Un agent externe parle ACP, ne confie aucune clé, et reste hors de portée d'une connexion `Local` | accepté |
-| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | La porte d'I-04 vaut pour les **deux** destinations, ou elle ne vaut pour aucune | accepté |
-| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | Un aperçu n'impose aucun ordre, et n'offre aucune page tant que l'ordre n'est pas total | accepté |
-| [0029](adr/0029-interface-tauri-shadcn.md) | Interface web dans Tauri : TanStack Start, shadcn/ui sur Base UI | accepté |
-| [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | Un agent externe atteint la base par les outils d'Oxyn, servis en MCP, et par rien d'autre | proposé |
-| [0031](adr/0031-validation-des-reponses-ipc.md) | Toute réponse du backend est validée à l'entrée du front | accepté |
-| [0032](adr/0032-agent-externe-confine-au-lancement.md) | Un agent externe connu est confiné au lancement, et n'a d'outils que ceux d'Oxyn | accepté |
-| [0033](adr/0033-couches-de-configuration-codex.md) | Oxyn coupe Codex dans toutes les couches de configuration qu'il peut lire, et laisse à l'organisation celles qu'il ne peut pas lire | accepté |
-| [0034](adr/0034-echantillon-pour-toute-destination.md) | Un échantillon approuvé atteint toute destination par la même porte, et un agent peut en demander un sans jamais l'approuver | proposé |
-| [0035](adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md) | Les écritures locales de l'ordonnanceur passent par le pool bloquant, en opérations possédées | accepté |
-| [0036](adr/0036-l-assistant-complete-le-catalogue.md) | L'assistant complète lui-même le catalogue, par le bus et sous des bornes | proposé |
-| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview | proposé |
-| [0038](adr/0038-un-plantage-s-annonce-une-fois.md) | Un plantage s'annonce une fois, et ⌘Q passe par l'arrêt ordonné | accepté |
-| [0039](adr/0039-etat-de-transaction-d-une-session.md) | Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là | accepté |
-| [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | Une sortie que macOS ne laisse pas retenir inscrit sa fermeture | accepté |
-| [0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) | Un registre d'actions unique alimente la barre de menus, les menus contextuels, la palette et les raccourcis | proposé |
-| [0042](adr/0042-revue-sur-place-des-operations-destructrices.md) | `Drop…`, `Truncate…` et `Rename…` s'exécutent depuis une revue sur place, comme du SQL utilisateur | proposé |
-| [0043](adr/0043-multi-fenetre.md) | Plusieurs fenêtres dans un seul processus, chacune propriétaire de ses consoles et de ses sessions | proposé |
-| [0044](adr/0044-licence-gpl-et-contrat-apache.md) | L'application est sous GPL-3.0-or-later, le contrat des drivers sous Apache-2.0, et ce qui se paie est un service de compte | accepté |
-| [0045](adr/0045-ci-selective-sur-les-pull-requests.md) | Sur une pull request, la CI saute les jobs dont la zone n'est pas touchée ; sur `main`, tout tourne | accepté |
-| [0046](adr/0046-workspaces-retenus-restent-connectes.md) | Un workspace de connexion retenu garde ses sessions ouvertes, dans la limite de huit par fenêtre | accepté |
+| [0001](adr/0001-ui-toolkit.md) | UI toolkit: GPUI, with strict isolation | superseded |
+| [0002](adr/0002-arrow-result-model.md) | Apache Arrow as the universal representation of results | accepted |
+| [0003](adr/0003-driver-capabilities.md) | A capability model rather than a common denominator | accepted |
+| [0004](adr/0004-command-bus.md) | A single command bus and a Policy gate | accepted |
+| [0005](adr/0005-wasm-plugins.md) | WebAssembly plugins, no native libraries | proposed |
+| [0006](adr/0006-ai-privacy-tiers.md) | AI privacy tiers, per connection | accepted |
+| [0007](adr/0007-driver-sidecar.md) | A sidecar process for drivers with native dependencies | proposed |
+| [0008](adr/0008-chaine-outils-rust.md) | Rust toolchain pinned in the repository | accepted |
+| [0009](adr/0009-source-dependance-gpui.md) | GPUI consumed from crates.io, not from its upstream repository | superseded |
+| [0010](adr/0010-contraintes-natives-sqlite.md) | A single version of libsqlite3-sys in the graph | accepted |
+| [0011](adr/0011-structure-commune-workspace.md) | A dense workbench as the common structure of the workspace | accepted |
+| [0012](adr/0012-lecture-pages-resultats.md) | Read result pages outside rendering and bound their cache in bytes | accepted |
+| [0013](adr/0013-preferences-workspace.md) | Persist reading preferences in the workspace | accepted |
+| [0014](adr/0014-documents-et-historique.md) | Separate drafts, saved queries and history | accepted |
+| [0015](adr/0015-consoles-independantes.md) | Give each console its own controller and session | accepted |
+| [0016](adr/0016-autosauvegarde-bornee.md) | Serialize a document's writes in a bounded queue | accepted |
+| [0017](adr/0017-retention-resultats.md) | Bound retained results that no longer have a reader | accepted |
+| [0018](adr/0018-apercu-ddl.md) | Inspected DDL remains metadata, prepared separately from its execution | accepted |
+| [0019](adr/0019-contexte-de-session.md) | A declared session context, never set silently | accepted |
+| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | Preview: a sort Oxyn composes, a predicate the user writes, a deterministic page | proposed |
+| [0021](adr/0021-marqueur-d-arret.md) | Knowing whether Oxyn stopped normally, and saying it without guessing | accepted |
+| [0022](adr/0022-rafraichissement-automatique.md) | What refreshes on its own, and what never will | proposed |
+| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | A provider is declared per machine, reclassified on every opening, and signs what it proposes | accepted |
+| [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | The draft is written when typing stops, not on every keystroke | proposed |
+| [0025](adr/0025-proposition-de-changement-de-schema.md) | A schema change proposal is SQL to review, never a write | proposed |
+| [0026](adr/0026-agents-externes-acp.md) | An external agent speaks ACP, entrusts no key, and stays out of reach of a `Local` connection | accepted |
+| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | The I-04 gateway holds for **both** destinations, or it holds for neither | accepted |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | A preview imposes no order, and offers no page as long as the order is not total | accepted |
+| [0029](adr/0029-interface-tauri-shadcn.md) | Web interface in Tauri: TanStack Start, shadcn/ui on Base UI | accepted |
+| [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | An external agent reaches the database through Oxyn's tools, served over MCP, and through nothing else | proposed |
+| [0031](adr/0031-validation-des-reponses-ipc.md) | Every backend response is validated at the front end's entry | accepted |
+| [0032](adr/0032-agent-externe-confine-au-lancement.md) | A known external agent is confined at launch, and has only Oxyn's tools | accepted |
+| [0033](adr/0033-couches-de-configuration-codex.md) | Oxyn switches Codex off in every configuration layer it can read, and leaves to the organization those it cannot read | accepted |
+| [0034](adr/0034-echantillon-pour-toute-destination.md) | An approved sample reaches any destination through the same gateway, and an agent can request one without ever approving it | proposed |
+| [0035](adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md) | The scheduler's local writes go through the blocking pool, as owned operations | accepted |
+| [0036](adr/0036-l-assistant-complete-le-catalogue.md) | The assistant completes the catalog itself, through the bus and within bounds | proposed |
+| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | A critical decision is confirmed in a native dialog of the host, never in the webview | proposed |
+| [0038](adr/0038-un-plantage-s-annonce-une-fois.md) | A crash is announced once, and ⌘Q goes through the orderly shutdown | accepted |
+| [0039](adr/0039-etat-de-transaction-d-une-session.md) | A session returns the transaction state it observed, and the console shows only that one | accepted |
+| [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | An exit that macOS does not let us hold back records its closing | accepted |
+| [0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) | A single action registry feeds menus, shortcuts and palette | proposed |
+| [0042](adr/0042-revue-sur-place-des-operations-destructrices.md) | Drop, Truncate and Rename run from an in-place review, like ordinary user SQL | proposed |
+| [0043](adr/0043-multi-fenetre.md) | Several windows in a single process, each owning its consoles and its sessions | proposed |
+| [0044](adr/0044-licence-gpl-et-contrat-apache.md) | The application is under GPL-3.0-or-later, the driver contract under Apache-2.0, and what is paid for is an account service | accepted |
+| [0045](adr/0045-ci-selective-sur-les-pull-requests.md) | On a pull request, CI skips the jobs whose area is not touched; on `main`, everything runs | accepted |
+| [0046](adr/0046-workspaces-retenus-restent-connectes.md) | A retained connection workspace keeps its sessions open, up to eight per window | accepted |
+| [0047](adr/0047-english-as-the-repository-language.md) | English is the repository language; French lives in authoritative-English mirrors | accepted |
 
-Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
+ADRs stay `proposed` until the first code commit that implements them.
 
-> **Revue des statuts du 2026-09-15.** Vingt ADR sur vingt-six portaient
-> `proposé`, dont la moitié était mise en œuvre de longue date — et
-> [documentation.md](../.claude/rules/documentation.md) fait reposer sur ce
-> statut la protection « un ADR **accepté** ne se réécrit pas ». Tant que tout
-> restait `proposé`, cette protection ne s'appliquait nulle part : c'est par
-> réécriture qu'ADR-0026 s'est retrouvé avec deux paragraphes contradictoires.
+> **Status review of 2026-09-15.** Twenty ADRs out of twenty-six carried
+> `proposé`, half of which had long been implemented — and
+> [documentation.md](../.claude/rules/documentation.md) rests the protection
+> "an **accepted** ADR is not rewritten" on that status. As long as everything
+> stayed `proposé`, this protection applied nowhere: it is through rewriting
+> that ADR-0026 ended up with two contradictory paragraphs.
 >
-> Le critère appliqué est celui de la phrase ci-dessus, à la lettre : **le code
-> est-il dans `HEAD` ?** Onze ADR y répondaient oui et sont passés `accepté`.
-> Ceux dont la mise en œuvre vit dans un travail non encore commité — 0020
-> à 0028 — restent `proposé`, et le resteront jusqu'à ce
-> commit. Ceux qui ne sont pas implémentés du tout — 0005 et 0007, reportés en
-> phase 4 — aussi.
+> The criterion applied is the sentence above, to the letter: **is the code in
+> `HEAD`?** Eleven ADRs answered yes and moved to `accepté`. Those whose
+> implementation lives in not-yet-committed work — 0020 to 0028 — stay
+> `proposé`, and will until that commit. Those not implemented at all — 0005
+> and 0007, postponed to phase 4 — too.
 >
-> **Revue du 2026-09-24.** Le critère a été resserré : un ADR passe `accepté`
-> quand sa décision, telle qu'écrite, est implémentée **et tenue par un test**.
-> Neuf y répondent — 0021, 0023, 0026 à 0029, 0031 à 0033 ; huit restent
-> `proposé`, et ADR-0036, écrit le jour même, n'a pas été revu. Le détail, test cité par ADR, est dans
-> [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#3-le-statut-des-adr--revue-du-2026-09-24).
+> **Review of 2026-09-24.** The criterion was tightened: an ADR moves to
+> `accepté` when its decision, as written, is implemented **and held by a
+> test**. Nine meet it — 0021, 0023, 0026 to 0029, 0031 to 0033; eight stay
+> `proposé`, and ADR-0036, written that same day, was not reviewed. The
+> details, with the test cited for each ADR, are in
+> [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#3-the-status-of-adrs-review-of-2026-09-24).
 >
-> L'index ci-dessus est **déduit** des fichiers, jamais saisi : la revue a
-> d'ailleurs trouvé deux lignes qui avaient divergé de l'ADR qu'elles
-> annonçaient.
+> The index above is **derived** from the files, never typed in: the review
+> actually found two lines that had diverged from the ADR they announced.
 
-> [ADR-0029](adr/0029-interface-tauri-shadcn.md) **remplace**
-> [ADR-0001](adr/0001-ui-toolkit.md) : l'interface passe de GPUI à une
-> application web servie par Tauri. La règle d'isolation reste, transposée.
-> L'ADR-0009 a cessé de s'appliquer le 2026-09-18, avec la suppression
-> d'`oxyn-ui`, d'`oxyn-app` et de la dépendance `gpui` ; son fichier porte
-> `remplacé` depuis le 2026-09-24.
+> [ADR-0029](adr/0029-interface-tauri-shadcn.md) **supersedes**
+> [ADR-0001](adr/0001-ui-toolkit.md): the interface moves from GPUI to a web
+> application served by Tauri. The isolation rule remains, transposed.
+> ADR-0009 stopped applying on 2026-09-18, with the removal of `oxyn-ui`,
+> `oxyn-app` and the `gpui` dependency; its file has carried `remplacé`
+> (superseded) since 2026-09-24.
 
-> [ADR-0009](adr/0009-source-dependance-gpui.md) **précisait**
-> [ADR-0001](adr/0001-ui-toolkit.md) sur un point : l'ADR-0001 mentionnait un
-> « commit précis » de GPUI ; la source retenue était crates.io. Les deux sont
-> désormais remplacés par l'ADR-0029.
+> [ADR-0009](adr/0009-source-dependance-gpui.md) **clarified**
+> [ADR-0001](adr/0001-ui-toolkit.md) on one point: ADR-0001 mentioned a
+> "specific commit" of GPUI; the source chosen was crates.io. Both are now
+> superseded by ADR-0029.
 >
 > [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)
-> **précise** [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : son argument
-> — un `OFFSET` sur un ordre non garanti duplique et omet des lignes — est
-> retenu, son remède ne l'est pas. Aucun ordre n'est imposé ; aucune page n'est
-> offerte tant que l'ordre n'est pas total.
+> **clarifies** [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md): its
+> argument — an `OFFSET` over an unguaranteed order duplicates and omits rows —
+> is kept, its remedy is not. No order is imposed; no page is offered until the
+> order is total.
 
-Nouvelle décision : [`/adr`](../.claude/commands/adr.md), à partir du
-[gabarit](../.claude/templates/adr.md).
+New decision: [`/adr`](../.claude/commands/adr.md), from the
+[template](../.claude/templates/adr.md).
 
-## Le socle de pilotage Claude
+## The Claude steering foundation
 
-`docs/` fait autorité sur le domaine ; `.claude/` porte la manière de travailler.
-La répartition est expliquée dans [.claude/README.md](../.claude/README.md), et
-la carte du dépôt dans [CLAUDE.md](../CLAUDE.md).
+`docs/` is authoritative on the domain; `.claude/` carries the way of working.
+The split is explained in [.claude/README.md](../.claude/README.md), and the
+map of the repository in [CLAUDE.md](../CLAUDE.md). French mirrors of the
+English documents live in [i18n/fr/](../i18n/README.md).

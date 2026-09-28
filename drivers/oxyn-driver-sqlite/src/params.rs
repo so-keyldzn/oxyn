@@ -1,38 +1,36 @@
-//! Les paramètres liés : `ScalarValue` → classe de stockage SQLite.
+//! Bound parameters: `ScalarValue` → SQLite storage class.
 //!
-//! **Les valeurs se lient, elles ne se concatènent pas**
-//! ([`DRIVER-CONTRACT` §6](../../../docs/DRIVER-CONTRACT.md)). Rien dans ce
-//! module ne produit du texte de requête : chaque valeur passe par
-//! `sqlite3_bind_*`.
+//! **Values are bound, not concatenated**
+//! ([`DRIVER-CONTRACT` §6](../../../docs/DRIVER-CONTRACT.md)). Nothing in this
+//! module produces query text: every value goes through `sqlite3_bind_*`.
 //!
-//! # La table de correspondance, et ce qu'elle perd
+//! # The mapping table, and what it loses
 //!
-//! SQLite n'a que cinq classes de stockage — NULL, INTEGER, REAL, TEXT, BLOB.
-//! Tout le reste est une **convention d'encodage**, et une convention se
-//! documente :
+//! SQLite has only five storage classes — NULL, INTEGER, REAL, TEXT, BLOB.
+//! Everything else is an **encoding convention**, and a convention is
+//! documented:
 //!
-//! | `ScalarValue` | Classe SQLite | Ce qui se perd |
+//! | `ScalarValue` | SQLite class | What is lost |
 //! |---|---|---|
-//! | `Null` | NULL | rien |
-//! | `Bool` | INTEGER `0`/`1` | le type : `1` et `true` sont indiscernables à la relecture |
-//! | `Int64` | INTEGER | rien |
-//! | `Float64` | REAL | rien |
-//! | `Decimal` | TEXT | l'ordre : la comparaison devient lexicographique. La **valeur** est exacte, ce qui est le point : aucun flottant ne représente `0.10` |
-//! | `Text` | TEXT | rien |
-//! | `Bytes` | BLOB | rien |
-//! | `Uuid` | TEXT canonique à tirets | le type ; c'est la convention SQLite usuelle |
-//! | `Date` | TEXT `AAAA-MM-JJ` | le type ; format des fonctions `date()` de SQLite |
-//! | `Time` | TEXT `HH:MM:SS[.fff]` | le type |
-//! | `Timestamp` | TEXT RFC 3339 **en UTC** | le type ; le fuseau est conservé, jamais converti au fuseau du poste |
-//! | `TimestampNaive` | TEXT `AAAA-MM-JJ HH:MM:SS` | le type ; **aucun fuseau n'est inventé** |
-//! | `Json` | TEXT | le type ; c'est ce qu'attend l'extension `json1` |
-//! | `Interval` | **refusé** | — |
-//! | `Array` | **refusé** | — |
+//! | `Null` | NULL | nothing |
+//! | `Bool` | INTEGER `0`/`1` | the type: `1` and `true` are indistinguishable when read back |
+//! | `Int64` | INTEGER | nothing |
+//! | `Float64` | REAL | nothing |
+//! | `Decimal` | TEXT | ordering: comparison becomes lexicographic. The **value** is exact, which is the point: no float represents `0.10` |
+//! | `Text` | TEXT | nothing |
+//! | `Bytes` | BLOB | nothing |
+//! | `Uuid` | canonical hyphenated TEXT | the type; it is the usual SQLite convention |
+//! | `Date` | TEXT `YYYY-MM-DD` | the type; format of SQLite's `date()` functions |
+//! | `Time` | TEXT `HH:MM:SS[.fff]` | the type |
+//! | `Timestamp` | TEXT RFC 3339 **in UTC** | the type; the time zone is kept, never converted to the machine's |
+//! | `TimestampNaive` | TEXT `YYYY-MM-DD HH:MM:SS` | the type; **no time zone is invented** |
+//! | `Json` | TEXT | the type; it is what the `json1` extension expects |
+//! | `Interval` | **refused** | — |
+//! | `Array` | **refused** | — |
 //!
-//! Les deux refus ne sont pas des trous à combler : SQLite n'a ni intervalle ni
-//! tableau, et les encoder en texte produirait une valeur qu'aucune requête ne
-//! saurait relire. Ne pas savoir faire est une réponse acceptable ; laisser
-//! croire ne l'est pas.
+//! The two refusals are not gaps to fill: SQLite has neither interval nor array,
+//! and encoding them as text would produce a value no query could read back. Not
+//! knowing how is an acceptable answer; pretending is not.
 
 use oxyn_core::ScalarValue;
 use rusqlite::Statement;
@@ -40,15 +38,14 @@ use rusqlite::types::Value;
 
 use crate::error::{Bound, SqliteError};
 
-/// Lie les paramètres positionnels d'une instruction préparée.
+/// Binds the positional parameters of a prepared statement.
 ///
-/// Les emplacements SQLite sont numérotés **à partir de 1** ; `params[0]`
-/// alimente donc `?1`.
+/// SQLite slots are numbered **from 1**; `params[0]` therefore feeds `?1`.
 ///
-/// # Erreurs
-/// [`SqliteError::ParameterCount`] si le compte ne correspond pas à ce
-/// qu'attend l'instruction, [`SqliteError::Parameter`] pour une valeur que
-/// SQLite ne sait pas ranger, ou l'erreur du moteur si la liaison échoue.
+/// # Errors
+/// [`SqliteError::ParameterCount`] if the count does not match what the
+/// statement expects, [`SqliteError::Parameter`] for a value SQLite cannot
+/// store, or the engine error if binding fails.
 pub(crate) fn bind(
     statement: &mut Statement<'_>,
     params: &[ScalarValue],
@@ -61,12 +58,12 @@ pub(crate) fn bind(
         });
     }
     for (position, value) in params.iter().enumerate() {
-        // Le compte est vérifié ci-dessus, et `enumerate` ne déborde pas :
-        // `position + 1` tient dans un `usize` puisque `position < len`.
+        // The count is checked above, and `enumerate` does not overflow:
+        // `position + 1` fits in a `usize` since `position < len`.
         let index = position.saturating_add(1);
-        // Le choix se pose ici plutôt que d'être avalé par un `?` : c'est la
-        // fonction qui lie les valeurs de l'appelant, donc le seul endroit du
-        // driver où le moteur pourrait en citer une (I-03).
+        // The choice is made here rather than swallowed by a `?`: this is the
+        // function that binds the caller's values, hence the only place in the
+        // driver where the engine could quote one (I-03).
         statement
             .raw_bind_parameter(index, to_storage(value, index)?)
             .map_err(|error| {
@@ -80,12 +77,12 @@ pub(crate) fn bind(
     Ok(())
 }
 
-/// Convertit une valeur du domaine en classe de stockage SQLite.
+/// Converts a domain value into an SQLite storage class.
 ///
-/// Le `match` est **exhaustif à dessein** : [`ScalarValue`] est une énumération
-/// fermée précisément pour qu'ajouter un type scalaire fasse échouer la
-/// compilation de chaque driver, et pose la question « et celui-là, je le rends
-/// comment ? » plutôt qu'un `_ =>` qui déciderait en silence.
+/// The `match` is **exhaustive on purpose**: [`ScalarValue`] is a closed
+/// enumeration precisely so that adding a scalar type fails the compilation of
+/// every driver, and asks "and this one, how do I return it?" rather than a
+/// `_ =>` that would decide silently.
 fn to_storage(value: &ScalarValue, index: usize) -> Result<Value, SqliteError> {
     let refuse = || SqliteError::Parameter {
         index,
@@ -96,23 +93,23 @@ fn to_storage(value: &ScalarValue, index: usize) -> Result<Value, SqliteError> {
         ScalarValue::Bool(b) => Value::Integer(i64::from(*b)),
         ScalarValue::Int64(i) => Value::Integer(*i),
         ScalarValue::Float64(x) => Value::Real(*x),
-        // Le texte, et non un flottant : aucun `f64` ne représente `0.10`, et une
-        // valeur monétaire arrondie au passage est une corruption silencieuse.
+        // Text, not a float: no `f64` represents `0.10`, and a monetary value
+        // rounded along the way is silent corruption.
         ScalarValue::Decimal(d) => Value::Text(d.clone()),
         ScalarValue::Text(t) => Value::Text(t.clone()),
         ScalarValue::Bytes(b) => Value::Blob(b.clone()),
         ScalarValue::Uuid(u) => Value::Text(u.to_string()),
         ScalarValue::Date(d) => Value::Text(d.to_string()),
         ScalarValue::Time(t) => Value::Text(t.to_string()),
-        // RFC 3339, en UTC. Convertir vers le fuseau du poste décalerait la
-        // donnée de façon invisible et permanente (DRIVER-CONTRACT §7).
+        // RFC 3339, in UTC. Converting to the machine's time zone would shift the
+        // data invisibly and permanently (DRIVER-CONTRACT §7).
         ScalarValue::Timestamp(ts) => Value::Text(ts.to_rfc3339()),
-        // `AAAA-MM-JJ HH:MM:SS`, la forme que rendent les fonctions `datetime()`
-        // de SQLite. Aucun fuseau n'y est ajouté.
+        // `YYYY-MM-DD HH:MM:SS`, the form SQLite's `datetime()` functions return.
+        // No time zone is added.
         ScalarValue::TimestampNaive(ts) => Value::Text(ts.to_string()),
         ScalarValue::Json(v) => Value::Text(v.to_string()),
-        // SQLite n'a ni intervalle ni tableau. Les encoder en texte produirait
-        // une valeur qu'aucune requête SQLite ne saurait relire.
+        // SQLite has neither interval nor array. Encoding them as text would
+        // produce a value no SQLite query could read back.
         ScalarValue::Interval { .. } | ScalarValue::Array(_) => return Err(refuse()),
     })
 }
@@ -123,45 +120,45 @@ mod tests {
 
     use super::*;
 
-    fn stocke(value: &ScalarValue) -> Result<Value, SqliteError> {
+    fn stored(value: &ScalarValue) -> Result<Value, SqliteError> {
         to_storage(value, 1)
     }
 
     #[test]
-    fn un_booleen_devient_un_entier() {
-        // SQLite n'a pas de type booléen : `0` et `1` sont la convention.
+    fn a_boolean_becomes_an_integer() {
+        // SQLite has no boolean type: `0` and `1` are the convention.
         assert_eq!(
-            stocke(&ScalarValue::Bool(true)).expect("lié"),
+            stored(&ScalarValue::Bool(true)).expect("bound"),
             Value::Integer(1)
         );
         assert_eq!(
-            stocke(&ScalarValue::Bool(false)).expect("lié"),
+            stored(&ScalarValue::Bool(false)).expect("bound"),
             Value::Integer(0)
         );
     }
 
     #[test]
-    fn une_decimale_ne_passe_pas_par_un_flottant() {
-        let value = stocke(&ScalarValue::Decimal("0.10".to_owned())).expect("lié");
+    fn a_decimal_does_not_go_through_a_float() {
+        let value = stored(&ScalarValue::Decimal("0.10".to_owned())).expect("bound");
         assert_eq!(
             value,
             Value::Text("0.10".to_owned()),
-            "les zéros de queue sont signifiants, et aucun f64 ne tient 0.10"
+            "trailing zeros are significant, and no f64 holds 0.10"
         );
     }
 
     #[test]
-    fn les_octets_restent_des_octets() {
-        // Un BLOB ne se rend pas en texte « au mieux » : il reste opaque.
-        let value = stocke(&ScalarValue::Bytes(vec![0x00, 0xff, 0x80])).expect("lié");
+    fn bytes_stay_bytes() {
+        // A BLOB is not rendered as text "at best": it stays opaque.
+        let value = stored(&ScalarValue::Bytes(vec![0x00, 0xff, 0x80])).expect("bound");
         assert_eq!(value, Value::Blob(vec![0x00, 0xff, 0x80]));
     }
 
     #[test]
-    fn un_intervalle_et_un_tableau_sont_refuses_pas_encodes() {
-        // SQLite n'a ni l'un ni l'autre ; les encoder produirait une valeur
-        // qu'aucune requête ne saurait relire.
-        for valeur in [
+    fn an_interval_and_an_array_are_refused_not_encoded() {
+        // SQLite has neither; encoding them would produce a value no query could
+        // read back.
+        for sample in [
             ScalarValue::Interval {
                 months: 1,
                 days: 0,
@@ -169,57 +166,57 @@ mod tests {
             },
             ScalarValue::Array(vec![ScalarValue::Int64(1)]),
         ] {
-            let err = stocke(&valeur).expect_err("refus attendu");
+            let err = stored(&sample).expect_err("expected refusal");
             assert!(
                 matches!(err, SqliteError::Parameter { .. }),
-                "{err:?} pour {}",
-                valeur.type_name()
+                "{err:?} for {}",
+                sample.type_name()
             );
         }
     }
 
     #[test]
-    fn un_compte_de_parametres_faux_est_refuse_avant_toute_execution() {
-        let conn = Connection::open_in_memory().expect("base en mémoire");
-        let mut stmt = conn.prepare("SELECT ?1, ?2").expect("préparation");
+    fn a_wrong_parameter_count_is_refused_before_any_execution() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        let mut stmt = conn.prepare("SELECT ?1, ?2").expect("preparation");
 
-        let err = bind(&mut stmt, &[ScalarValue::Int64(1)]).expect_err("refus attendu");
+        let err = bind(&mut stmt, &[ScalarValue::Int64(1)]).expect_err("expected refusal");
         let SqliteError::ParameterCount { expected, given } = err else {
-            panic!("mauvaise variante : {err:?}");
+            panic!("wrong variant: {err:?}");
         };
         assert_eq!((expected, given), (2, 1));
     }
 
     #[test]
-    fn une_valeur_liee_ne_traverse_jamais_le_texte_de_la_requete() {
-        // Le test qui compte : une valeur hostile liée reste une valeur.
-        let conn = Connection::open_in_memory().expect("base en mémoire");
+    fn a_bound_value_never_crosses_the_query_text() {
+        // The test that matters: a hostile bound value stays a value.
+        let conn = Connection::open_in_memory().expect("in-memory database");
         conn.execute_batch("CREATE TABLE audit(note TEXT); CREATE TABLE t(v TEXT);")
-            .expect("schéma");
+            .expect("schema");
 
         let mut stmt = conn
             .prepare("INSERT INTO t(v) VALUES (?1)")
-            .expect("préparation");
+            .expect("preparation");
         bind(
             &mut stmt,
             &[ScalarValue::Text("'); DROP TABLE audit; --".to_owned())],
         )
-        .expect("liaison");
+        .expect("binding");
         stmt.raw_execute().expect("insertion");
 
-        let reste: i64 = conn
+        let remaining: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name = 'audit'",
                 [],
                 |row| row.get(0),
             )
-            .expect("compte");
-        assert_eq!(reste, 1, "la table d'audit a été supprimée");
+            .expect("count");
+        assert_eq!(remaining, 1, "the audit table was dropped");
     }
 
-    // Les variantes temporelles, `Uuid` et `Json` de `ScalarValue` ne sont pas
-    // couvertes ici : les construire demanderait `chrono`, `uuid` et
-    // `serde_json`, qui ne sont pas au contrat de dépendances de cette crate.
-    // Leur rendu est décrit dans la table du module et n'utilise que le
-    // `Display` de chaque type — donc rien qui puisse diverger en silence.
+    // The temporal variants, `Uuid` and `Json` of `ScalarValue` are not covered
+    // here: building them would require `chrono`, `uuid` and `serde_json`, which
+    // are not in this crate's dependency contract. Their rendering is described
+    // in the module table and uses only each type's `Display` — so nothing that
+    // could diverge silently.
 }

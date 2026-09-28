@@ -1,28 +1,28 @@
 ---
 name: piege-pg-jetable-scratchpad
-description: Lancer un PostgreSQL jetable pour vérifier un comportement du serveur — socket Unix trop long dans le scratchpad, psql inutilisable pour tester le protocole étendu sur plusieurs commandes
+description: Launching a disposable PostgreSQL to check a server behavior — Unix socket path too long in the scratchpad, psql unusable to test the extended protocol on several commands
 metadata:
   type: feedback
 ---
 
-Pour vérifier un comportement réel du serveur, Postgres.app fournit `initdb` et
-`pg_ctl`, dans `/Applications/Postgres.app/Contents/Versions/latest/bin`.
+To check a real server behavior, Postgres.app provides `initdb` and `pg_ctl`,
+in `/Applications/Postgres.app/Contents/Versions/latest/bin`.
 
-**Premier piège : le socket Unix.** Le chemin du scratchpad de session dépasse
-103 octets, et `pg_ctl start` meurt avec « Unix-domain socket path is too long ».
-Il faut lancer le serveur en TCP seul :
+**First trap: the Unix socket.** The session scratchpad path exceeds 103 bytes,
+and `pg_ctl start` dies with "Unix-domain socket path is too long". The server
+must be started with TCP only:
 `-o "-p 5499 -k '' -c listen_addresses=127.0.0.1"`.
 
-**Second piège : `psql` ne sait pas tester le protocole étendu sur un texte à
-plusieurs commandes.** Son lexer, `psqlscan.l`, découpe au `;` avant l'envoi.
-`\bind \g` ne voit donc jamais `SELECT 1; DROP …` en un seul message Parse.
-Un client filaire minimal en Python (`socket` et `struct` ; Startup, puis
-Parse/Bind/Execute/Sync en authentification `trust`) fait l'affaire en une
-cinquantaine de lignes.
+**Second trap: `psql` cannot test the extended protocol on a multi-command
+text.** Its lexer, `psqlscan.l`, splits on `;` before sending. `\bind \g`
+therefore never sees `SELECT 1; DROP …` as a single Parse message. A minimal
+wire client in Python (`socket` and `struct`; Startup, then
+Parse/Bind/Execute/Sync with `trust` authentication) does the job in about fifty
+lines.
 
-**Why:** ces deux pièges m'ont coûté deux essais pendant la vérification de la
-fin de commentaire `--` au `\r`.
+**Why:** these two traps cost me two attempts while checking the end of a `--`
+comment at `\r`.
 
-**How to apply:** dès qu'une question porte sur ce que le serveur exécute
-réellement, notamment la différence entre protocole simple et étendu. Penser à
-arrêter le serveur avec `pg_ctl stop -m fast`.
+**How to apply:** as soon as a question is about what the server really runs,
+notably the difference between simple and extended protocol. Remember to stop
+the server with `pg_ctl stop -m fast`.

@@ -78,7 +78,7 @@ function useConsoleFloors() {
 /**
  * The layout of one console: toolbar, notice line, bound values, editor over
  * results. Export and the run status live in the result footer, under the
- * rows they describe (docs/UX-SPEC.md, « Lisibilité et hauteur de grille »).
+ * rows they describe (docs/UX-SPEC.md, « Readability and grid height »).
  * Presentational: every part arrives by props, so the whole console is
  * described in stories without a backend.
  *
@@ -112,7 +112,7 @@ export function ConsoleView({
       {toolbar}
       {offline}
       {/* Wraps rather than hides: « unsaved » is the one word a narrow window
-          must not drop (docs/UX-SPEC.md, « Autosauvegarde des brouillons »). */}
+          must not drop (docs/UX-SPEC.md, « Draft autosave »). */}
       <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-x-3 border-b px-3 py-1 text-xs text-muted-foreground">
         <span
           role="status"

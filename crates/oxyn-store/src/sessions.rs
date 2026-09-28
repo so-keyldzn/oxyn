@@ -1,37 +1,36 @@
-//! Ce qui distingue un arrêt propre d'un plantage, constaté et non deviné.
+//! What tells a clean shutdown from a crash, observed and not guessed.
 //!
-//! Un lancement s'inscrit à l'ouverture, bat pendant qu'il travaille, et note sa
-//! fermeture quand elle est ordinaire. Au lancement suivant, une session laissée
-//! sans fermeture **et** dont le battement a vieilli est un arrêt anormal ; la
-//! même sans fermeture au battement récent est une autre instance, bien vivante
-//! ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
+//! A launch registers at opening, beats while it works, and records its
+//! closing when it is ordinary. At the next launch, a session left without a
+//! closing **and** whose heartbeat has aged is an abnormal shutdown; the same
+//! without a closing but with a recent heartbeat is another instance, very
+//! much alive ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
 //!
-//! # Pourquoi deux conditions et pas une
+//! # Why two conditions and not one
 //!
-//! Le drapeau `documents.is_open` ne dit que « ce document n'a pas été fermé
-//! explicitement » : il vaut vrai après un `⌘Q` ordinaire, et l'écran de reprise
-//! s'affichait donc à chaque démarrage. Un écran montré tout le temps cesse
-//! d'être lu, et c'est le jour où une écriture a été interrompue qu'il faut
-//! qu'il le soit.
+//! The `documents.is_open` flag only says "this document was not explicitly
+//! closed": it is true after an ordinary `⌘Q`, so the recovery screen showed
+//! at every startup. A screen shown all the time stops being read, and it is
+//! on the day a write was interrupted that it must be.
 //!
-//! Un simple drapeau « une session est ouverte » ne suffirait pas non plus :
-//! deux instances d'Oxyn sur le même store se déclareraient mutuellement
-//! anormales. C'est le battement qui les sépare.
+//! A simple "a session is open" flag would not be enough either: two Oxyn
+//! instances on the same store would declare each other abnormal. The
+//! heartbeat is what separates them.
 //!
-//! # Un plantage s'annonce une fois
+//! # A crash is announced once
 //!
-//! Le lancement qui constate une session abandonnée la marque `reported_at`.
-//! Sans ce marquage, elle restait abandonnée pour toujours, et chaque lancement
-//! suivant — fermetures propres comprises — rouvrait l'écran de reprise.
+//! The launch that notices an abandoned session marks it `reported_at`.
+//! Without this marking, it stayed abandoned forever, and every later launch —
+//! clean shutdowns included — reopened the recovery screen.
 //!
-//! # Ce que ce module ne fait pas
+//! # What this module does not do
 //!
-//! Il ne retient pas le pid. Le vérifier demanderait ce que la politique
-//! `unsafe` du dépôt refuse, et un pid réutilisé ferait mentir le test. Le
-//! battement dit la même chose sans mentir : il vieillit.
+//! It does not keep the pid. Checking it would require what the repository's
+//! `unsafe` policy refuses, and a reused pid would make the test lie. The
+//! heartbeat says the same thing without lying: it ages.
 //!
-//! Toutes les méthodes peuvent bloquer : elles ne s'appellent jamais depuis le
-//! thread d'interface ([I-05](../../../CLAUDE.md#i-05)).
+//! Every method may block: they are never called from the UI thread
+//! ([I-05](../../../CLAUDE.md#i-05)).
 
 use chrono::{DateTime, Duration, Utc};
 use oxyn_core::{AppSessionId, WorkspaceId};
@@ -39,40 +38,40 @@ use rusqlite::params;
 
 use crate::{Result, Store};
 
-/// Intervalle entre deux battements.
+/// Interval between two heartbeats.
 ///
-/// Choix de produit, pas mesure : assez espacé pour qu'une écriture périodique
-/// reste négligeable sur une machine portable, assez court pour que le seuil
-/// d'abandon ne fasse pas attendre l'utilisateur.
+/// A product choice, not a measurement: spaced enough for a periodic write to
+/// stay negligible on a laptop, short enough for the abandonment threshold not
+/// to keep the user waiting.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::seconds(30);
 
-/// Au-delà, une session sans fermeture est réputée abandonnée.
+/// Beyond this, a session without a closing is deemed abandoned.
 ///
-/// Quatre battements manqués : une veille brève ou un système chargé ne suffit
-/// pas à conclure au plantage.
+/// Four missed heartbeats: a brief sleep or a loaded system is not enough to
+/// conclude a crash.
 pub const ABANDONED_AFTER: Duration = Duration::seconds(120);
 
-/// Comment le lancement précédent s'est terminé.
+/// How the previous launch ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PreviousShutdown {
-    /// Aucune session antérieure : première ouverture de ce workspace.
+    /// No earlier session: first opening of this workspace.
     Never,
-    /// La dernière session s'est fermée normalement.
+    /// The last session closed normally.
     Clean,
-    /// Une session est restée ouverte et son battement a vieilli.
+    /// A session stayed open and its heartbeat has aged.
     Abnormal,
 }
 
 impl PreviousShutdown {
-    /// L'écran de reprise a-t-il quelque chose à annoncer ?
+    /// Does the recovery screen have something to announce?
     #[must_use]
     pub const fn needs_recovery(self) -> bool {
         matches!(self, Self::Abnormal)
     }
 }
 
-/// Accès typé aux sessions d'application. Toutes les méthodes peuvent bloquer.
+/// Typed access to application sessions. Every method may block.
 #[derive(Debug)]
 pub struct Sessions<'a> {
     store: &'a Store,
@@ -83,16 +82,15 @@ impl<'a> Sessions<'a> {
         Self { store }
     }
 
-    /// Constate comment le lancement précédent s'est terminé, puis inscrit
-    /// celui-ci.
+    /// Observes how the previous launch ended, then registers this one.
     ///
-    /// L'ordre importe : le constat est fait **avant** que la nouvelle ligne
-    /// existe, sinon elle se compterait elle-même comme une session ouverte.
-    /// Les deux tiennent dans une transaction, pour que deux lancements
-    /// simultanés ne lisent pas le même état à moitié écrit.
+    /// The order matters: the observation is made **before** the new row
+    /// exists, otherwise it would count itself as an open session. Both fit in
+    /// one transaction, so that two simultaneous launches do not read the same
+    /// half-written state.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage. Le workspace doit exister.
+    /// # Errors
+    /// Storage errors. The workspace must exist.
     pub fn begin(&self, workspace: WorkspaceId) -> Result<(AppSessionId, PreviousShutdown)> {
         let now = Utc::now();
         let cutoff = now - ABANDONED_AFTER;
@@ -110,13 +108,13 @@ impl<'a> Sessions<'a> {
         })
     }
 
-    /// Renouvelle le battement de cette session.
+    /// Renews this session's heartbeat.
     ///
-    /// Silencieux si la ligne a disparu — le workspace a pu être supprimé
-    /// pendant l'exécution, et cesser de battre est alors la bonne réponse.
+    /// Silent if the row disappeared — the workspace may have been deleted
+    /// while running, and stopping to beat is then the right answer.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage.
+    /// # Errors
+    /// Storage errors.
     pub fn heartbeat(&self, session: AppSessionId) -> Result<()> {
         self.store.with_connection(|connection| {
             connection.execute(
@@ -127,14 +125,14 @@ impl<'a> Sessions<'a> {
         })
     }
 
-    /// Inscrit la fermeture ordinaire de cette session.
+    /// Records this session's ordinary closing.
     ///
-    /// À n'appeler qu'**après** avoir vidé les écritures locales en attente :
-    /// inscrite avant, elle marquerait un arrêt propre sur du travail non écrit,
-    /// c'est-à-dire précisément le cas où la reprise doit se déclencher.
+    /// Only call it **after** flushing pending local writes: recorded before,
+    /// it would mark a clean shutdown over unwritten work, which is precisely
+    /// the case where recovery must trigger.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage.
+    /// # Errors
+    /// Storage errors.
     pub fn close(&self, session: AppSessionId) -> Result<()> {
         self.store.with_connection(|connection| {
             connection.execute(
@@ -145,34 +143,34 @@ impl<'a> Sessions<'a> {
         })
     }
 
-    /// Oublie les sessions closes plus anciennes que `keep`.
+    /// Forgets closed sessions older than `keep`.
     ///
-    /// Sans cet entretien, la table grandit d'une ligne par lancement pour
-    /// toujours. Les sessions **non** closes ne sont jamais effacées : ce sont
-    /// elles qui portent le constat.
+    /// Without this maintenance, the table grows by one row per launch
+    /// forever. **Unclosed** sessions are never erased: they are what carries
+    /// the observation.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage.
+    /// # Errors
+    /// Storage errors.
     pub fn forget_closed_before(&self, keep: DateTime<Utc>) -> Result<usize> {
         self.store.with_connection(|connection| {
-            let effacees = connection.execute(
+            let erased = connection.execute(
                 "DELETE FROM app_sessions WHERE closed_at IS NOT NULL AND closed_at < ?1",
                 params![keep],
             )?;
-            Ok(effacees)
+            Ok(erased)
         })
     }
 }
 
 impl Store {
-    /// Vieillit le battement d'une session, pour les tests des crates voisines.
+    /// Ages a session's heartbeat, for the tests of neighboring crates.
     ///
-    /// Le seuil d'abandon est de deux minutes : un test qui les attendrait ne
-    /// serait plus un test. Réservé aux tests, et absent d'une compilation
-    /// ordinaire.
+    /// The abandonment threshold is two minutes: a test that waited for them
+    /// would no longer be a test. Reserved for tests, and absent from an
+    /// ordinary build.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage.
+    /// # Errors
+    /// Storage errors.
     #[cfg(any(test, feature = "test-support"))]
     pub fn mark_session_stale_for_tests(&self, session: AppSessionId) -> Result<()> {
         self.with_connection(|connection| {
@@ -185,33 +183,33 @@ impl Store {
     }
 }
 
-/// Ce que les sessions déjà inscrites disent du lancement précédent.
+/// What the already registered sessions say about the previous launch.
 ///
-/// Une session abandonnée n'est annoncée **qu'une fois** : le constat la marque
-/// `reported_at`, dans la transaction de `begin`. Sans cela, un plantage
-/// unique rendait anormaux tous les lancements suivants, et l'écran de reprise
-/// ne distinguait plus rien.
+/// An abandoned session is announced **only once**: the observation marks it
+/// `reported_at`, in `begin`'s transaction. Without this, a single crash made
+/// every later launch abnormal, and the recovery screen no longer told
+/// anything apart.
 fn previous(
     connection: &rusqlite::Connection,
     workspace: WorkspaceId,
     cutoff: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<PreviousShutdown> {
-    let annoncees = connection.execute(
+    let announced_ones = connection.execute(
         "UPDATE app_sessions SET reported_at = ?3
          WHERE workspace_id = ?1 AND closed_at IS NULL AND reported_at IS NULL
            AND heartbeat_at < ?2",
         params![workspace.to_string(), cutoff, now],
     )?;
-    if annoncees > 0 {
+    if announced_ones > 0 {
         return Ok(PreviousShutdown::Abnormal);
     }
-    let connues: i64 = connection.query_row(
+    let known: i64 = connection.query_row(
         "SELECT COUNT(*) FROM app_sessions WHERE workspace_id = ?1",
         params![workspace.to_string()],
         |row| row.get(0),
     )?;
-    if connues > 0 {
+    if known > 0 {
         Ok(PreviousShutdown::Clean)
     } else {
         Ok(PreviousShutdown::Never)
@@ -222,15 +220,15 @@ fn previous(
 mod tests {
     use super::*;
 
-    fn atelier() -> (Store, WorkspaceId) {
-        let store = Store::open_in_memory().expect("store en mémoire");
-        let workspace = store.workspaces().create("atelier").expect("workspace").id;
+    fn workshop() -> (Store, WorkspaceId) {
+        let store = Store::open_in_memory().expect("in-memory store");
+        let workspace = store.workspaces().create("workshop").expect("workspace").id;
         (store, workspace)
     }
 
-    /// Vieillit le battement d'une session, pour simuler le temps qui passe sans
-    /// attendre deux minutes dans un test.
-    fn vieillir(store: &Store, session: AppSessionId, de: Duration) {
+    /// Ages a session's heartbeat, to simulate time passing without waiting
+    /// two minutes in a test.
+    fn age_session(store: &Store, session: AppSessionId, de: Duration) {
         store
             .with_connection(|connection| {
                 connection.execute(
@@ -239,137 +237,128 @@ mod tests {
                 )?;
                 Ok(())
             })
-            .expect("vieillissement");
+            .expect("ageing");
     }
 
     #[test]
-    fn une_premiere_ouverture_ne_signale_aucun_arret_anormal() {
-        let (store, atelier) = atelier();
-        let (_, verdict) = store.sessions().begin(atelier).expect("ouverture");
+    fn a_first_opening_reports_no_abnormal_shutdown() {
+        let (store, workshop) = workshop();
+        let (_, verdict) = store.sessions().begin(workshop).expect("open");
         assert_eq!(verdict, PreviousShutdown::Never);
         assert!(!verdict.needs_recovery());
     }
 
-    /// Le défaut que ce module corrige : un `⌘Q` ordinaire ne doit pas ressembler
-    /// à un plantage.
+    /// The defect this module fixes: an ordinary `⌘Q` must not look like a
+    /// crash.
     #[test]
-    fn une_fermeture_ordinaire_ne_declenche_pas_la_reprise() {
-        let (store, atelier) = atelier();
-        let (session, _) = store.sessions().begin(atelier).expect("ouverture");
-        store.sessions().close(session).expect("fermeture");
+    fn an_ordinary_close_does_not_trigger_recovery() {
+        let (store, workshop) = workshop();
+        let (session, _) = store.sessions().begin(workshop).expect("open");
+        store.sessions().close(session).expect("close");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relance");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Clean);
         assert!(!verdict.needs_recovery());
     }
 
     #[test]
-    fn une_session_laissee_ouverte_et_muette_est_un_arret_anormal() {
-        let (store, atelier) = atelier();
-        let (session, _) = store.sessions().begin(atelier).expect("ouverture");
-        // Ni `close`, ni battement : le processus est mort sans rien dire.
-        vieillir(&store, session, ABANDONED_AFTER + Duration::seconds(1));
+    fn a_session_left_open_and_silent_is_an_abnormal_shutdown() {
+        let (store, workshop) = workshop();
+        let (session, _) = store.sessions().begin(workshop).expect("open");
+        // Neither `close` nor heartbeat: the process died without a word.
+        age_session(&store, session, ABANDONED_AFTER + Duration::seconds(1));
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relance");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Abnormal);
         assert!(verdict.needs_recovery());
     }
 
-    /// Le test qui empêche d'accuser une instance qui travaille.
+    /// The test that prevents blaming an instance that is working.
     #[test]
-    fn une_instance_qui_bat_encore_n_est_pas_un_plantage() {
-        let (store, atelier) = atelier();
-        let (vivante, _) = store.sessions().begin(atelier).expect("première instance");
-        vieillir(&store, vivante, ABANDONED_AFTER + Duration::seconds(1));
-        // Elle donne signe de vie juste avant que la seconde démarre.
-        store.sessions().heartbeat(vivante).expect("battement");
+    fn an_instance_still_beating_is_not_a_crash() {
+        let (store, workshop) = workshop();
+        let (alive_one, _) = store.sessions().begin(workshop).expect("first instance");
+        age_session(&store, alive_one, ABANDONED_AFTER + Duration::seconds(1));
+        // It shows signs of life just before the second one starts.
+        store.sessions().heartbeat(alive_one).expect("heartbeat");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("seconde instance");
+        let (_, verdict) = store.sessions().begin(workshop).expect("second instance");
         assert_eq!(
             verdict,
             PreviousShutdown::Clean,
-            "une session au battement récent est vivante, pas plantée"
+            "a session with a recent heartbeat is alive, not crashed"
         );
     }
 
-    /// Le défaut observé : un plantage ancien rendait la reprise permanente.
+    /// The observed defect: an old crash made recovery permanent.
     #[test]
-    fn un_arret_anormal_n_est_annonce_qu_une_fois() {
-        let (store, atelier) = atelier();
-        let (plantee, _) = store.sessions().begin(atelier).expect("ouverture");
-        vieillir(&store, plantee, ABANDONED_AFTER + Duration::seconds(1));
+    fn an_abnormal_shutdown_is_announced_only_once() {
+        let (store, workshop) = workshop();
+        let (crashed, _) = store.sessions().begin(workshop).expect("open");
+        age_session(&store, crashed, ABANDONED_AFTER + Duration::seconds(1));
 
-        let (relance, verdict) = store.sessions().begin(atelier).expect("relance");
+        let (relaunch, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Abnormal);
-        store
-            .sessions()
-            .close(relance)
-            .expect("fermeture ordinaire");
+        store.sessions().close(relaunch).expect("ordinary close");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("seconde relance");
+        let (_, verdict) = store.sessions().begin(workshop).expect("second relaunch");
         assert_eq!(
             verdict,
             PreviousShutdown::Clean,
-            "le plantage a déjà été annoncé, et la dernière session s'est fermée"
+            "the crash was already announced, and the last session closed"
         );
     }
 
     #[test]
-    fn une_session_annoncee_garde_sa_fermeture_absente() {
-        let (store, atelier) = atelier();
-        let (plantee, _) = store.sessions().begin(atelier).expect("ouverture");
-        vieillir(&store, plantee, ABANDONED_AFTER + Duration::seconds(1));
-        store.sessions().begin(atelier).expect("relance");
+    fn an_announced_session_keeps_its_missing_closing() {
+        let (store, workshop) = workshop();
+        let (crashed, _) = store.sessions().begin(workshop).expect("open");
+        age_session(&store, crashed, ABANDONED_AFTER + Duration::seconds(1));
+        store.sessions().begin(workshop).expect("relaunch");
 
-        let (fermee, annoncee): (Option<String>, Option<String>) = store
+        let (closed, announced): (Option<String>, Option<String>) = store
             .with_connection(|connection| {
                 Ok(connection.query_row(
                     "SELECT closed_at, reported_at FROM app_sessions WHERE id = ?1",
-                    params![plantee.to_string()],
+                    params![crashed.to_string()],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?)
             })
-            .expect("lecture");
-        assert!(
-            fermee.is_none(),
-            "un plantage ne devient pas un arrêt propre"
-        );
-        assert!(annoncee.is_some());
+            .expect("read");
+        assert!(closed.is_none(), "a crash does not become a clean shutdown");
+        assert!(announced.is_some());
     }
 
     #[test]
-    fn un_battement_ne_ressuscite_pas_une_session_fermee() {
-        let (store, atelier) = atelier();
-        let (session, _) = store.sessions().begin(atelier).expect("ouverture");
-        store.sessions().close(session).expect("fermeture");
-        store
-            .sessions()
-            .heartbeat(session)
-            .expect("battement tardif");
+    fn a_heartbeat_does_not_revive_a_closed_session() {
+        let (store, workshop) = workshop();
+        let (session, _) = store.sessions().begin(workshop).expect("open");
+        store.sessions().close(session).expect("close");
+        store.sessions().heartbeat(session).expect("late heartbeat");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relance");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Clean);
     }
 
     #[test]
-    fn l_entretien_efface_les_sessions_closes_sans_toucher_au_constat() {
-        let (store, atelier) = atelier();
-        let (close, _) = store.sessions().begin(atelier).expect("ouverture");
-        store.sessions().close(close).expect("fermeture");
-        let (abandonnee, _) = store.sessions().begin(atelier).expect("seconde");
-        vieillir(&store, abandonnee, ABANDONED_AFTER + Duration::seconds(1));
+    fn maintenance_erases_closed_sessions_without_touching_the_observation() {
+        let (store, workshop) = workshop();
+        let (close, _) = store.sessions().begin(workshop).expect("open");
+        store.sessions().close(close).expect("close");
+        let (abandoned, _) = store.sessions().begin(workshop).expect("second");
+        age_session(&store, abandoned, ABANDONED_AFTER + Duration::seconds(1));
 
-        let efface = store
+        let erased = store
             .sessions()
             .forget_closed_before(Utc::now() + Duration::seconds(1))
-            .expect("entretien");
-        assert_eq!(efface, 1, "seule la session close est oubliée");
+            .expect("maintenance");
+        assert_eq!(erased, 1, "only the closed session is forgotten");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relance");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(
             verdict,
             PreviousShutdown::Abnormal,
-            "l'entretien n'efface pas ce qui porte le constat"
+            "maintenance does not erase what carries the observation"
         );
     }
 }

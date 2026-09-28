@@ -1,24 +1,24 @@
-# ADR-0003 — Modèle de capacités plutôt que dénominateur commun
+# ADR-0003 — A capability model rather than a common denominator
 
-**Statut :** accepté · **Date :** 2026-09-05
+**Status:** accepted · **Date:** 2026-09-05
 
-## Contexte
-Redis n'a pas de schéma, Neo4j pas de tables, Elasticsearch pas de SQL, DynamoDB pas de
-jointures. Une abstraction nivelante réduirait chaque base à sa plus pauvre expression.
+## Context
+Redis has no schema, Neo4j no tables, Elasticsearch no SQL, DynamoDB no joins. A
+levelling abstraction would reduce each database to its poorest expression.
 
-## Décision
-Chaque `Driver` et chaque `Session` déclarent un `Capabilities: u64` (bitflags). L'UI et
-les agents interrogent ces drapeaux pour décider quelles surfaces exister. Les requêtes
-portent un `QueryLanguage` explicite ; le SQL n'est qu'un cas parmi d'autres.
+## Decision
+Every `Driver` and every `Session` declares a `Capabilities: u64` (bitflags). The UI and
+the agents query these flags to decide which surfaces exist. Queries carry an explicit
+`QueryLanguage`; SQL is only one case among others.
 
-## Conséquences
-* **+** Chaque base est exposée avec ses forces propres, rien n'est simulé.
-* **+** Les agents ne proposent pas d'actions impossibles (pas d'index pour DynamoDB).
-* **−** L'UI doit être conditionnelle partout : discipline à tenir dès la phase 0.
-* Les capacités sont évaluées **par session**, pas par driver : la version du serveur
-  change ce qui est disponible.
+## Consequences
+* **+** Each database is exposed with its own strengths, nothing is simulated.
+* **+** Agents do not propose impossible actions (no index for DynamoDB).
+* **−** The UI must be conditional everywhere: a discipline to hold from phase 0.
+* Capabilities are evaluated **per session**, not per driver: the server version
+  changes what is available.
 
-## Corollaire
-Un driver par **protocole**, pas par produit : Redshift ≡ PostgreSQL, MariaDB ≡ MySQL,
-OpenSearch ≡ Elasticsearch, Memgraph ≡ Bolt, pgvector et TimescaleDB ≡ extensions
-PostgreSQL. Les ~30 systèmes de la vision se ramènent à ~14 implémentations.
+## Corollary
+One driver per **protocol**, not per product: Redshift ≡ PostgreSQL, MariaDB ≡ MySQL,
+OpenSearch ≡ Elasticsearch, Memgraph ≡ Bolt, pgvector and TimescaleDB ≡ PostgreSQL
+extensions. The ~30 systems of the vision come down to ~14 implementations.

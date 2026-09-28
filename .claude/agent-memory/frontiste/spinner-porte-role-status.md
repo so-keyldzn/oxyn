@@ -1,20 +1,20 @@
 ---
 name: spinner-porte-role-status
-description: le Spinner de components/ui porte role="status" + aria-label="Loading" — chaque spinner visible est une région live de plus
+description: the Spinner of components/ui carries role="status" + aria-label="Loading" — every visible spinner is one more live region
 metadata:
   type: feedback
 ---
 
-`Spinner` (`src/components/ui/spinner.tsx`, généré) rend `role="status"` et
-`aria-label="Loading"`. Un panneau qui veut **une seule** région live (le
-panneau de l'assistant) en compte autant de plus qu'il y a de spinners visibles.
-Et un `getAllByRole("status")` compte aussi ceux-là.
+`Spinner` (`src/components/ui/spinner.tsx`, generated) renders `role="status"`
+and `aria-label="Loading"`. A panel that wants **a single** live region (the
+assistant's panel) counts as many more as there are visible spinners. And a
+`getAllByRole("status")` counts those too.
 
-**Why:** découvert en ramenant le panneau de l'assistant à une seule région
-`status`. Les spinners dans un `MarkerIcon` sont déjà masqués (`aria-hidden`
-sur le parent), mais pas ceux d'un `Badge`.
+**Why:** discovered while bringing the assistant's panel back to a single
+`status` region. Spinners in a `MarkerIcon` are already hidden (`aria-hidden`
+on the parent), but not those of a `Badge`.
 
-**How to apply:** à côté d'un libellé qui dit déjà l'état, passer
-`aria-hidden` au `Spinner`. Dans une story, viser la région par un
-`data-slot` plutôt que de compter les `status`. Voir aussi
+**How to apply:** next to a label that already states the state, pass
+`aria-hidden` to the `Spinner`. In a story, target the region through a
+`data-slot` rather than counting the `status`es. See also
 [[spinner-change-le-nom-du-bouton]].

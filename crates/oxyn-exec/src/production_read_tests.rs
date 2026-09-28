@@ -444,8 +444,8 @@ mod server {
             .await
     }
 
-    fn refused(issue: &Result<Outcome>) -> bool {
-        match issue {
+    fn refused(outcome: &Result<Outcome>) -> bool {
+        match outcome {
             Err(OxynError::Query(message)) => message.contains("read-only"),
             _ => false,
         }

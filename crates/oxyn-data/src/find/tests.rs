@@ -1,4 +1,4 @@
-//! Ce qu'une recherche doit trouver, et surtout ce qu'elle doit avouer.
+//! What a search must find, and above all what it must admit.
 
 use std::sync::Arc;
 
@@ -11,182 +11,182 @@ use crate::buffer::DEFAULT_MEMORY_BUDGET;
 
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
-        Field::new("nom", DataType::Utf8, true),
-        Field::new("ville", DataType::Utf8, true),
+        Field::new("name", DataType::Utf8, true),
+        Field::new("city", DataType::Utf8, true),
     ]))
 }
 
-fn lot(valeurs: &[(Option<&str>, Option<&str>)]) -> RecordBatch {
-    let noms = StringArray::from(valeurs.iter().map(|(n, _)| *n).collect::<Vec<_>>());
-    let villes = StringArray::from(valeurs.iter().map(|(_, v)| *v).collect::<Vec<_>>());
-    RecordBatch::try_new(schema(), vec![Arc::new(noms), Arc::new(villes)])
-        .expect("les colonnes correspondent au schéma")
+fn batch_of(values: &[(Option<&str>, Option<&str>)]) -> RecordBatch {
+    let names = StringArray::from(values.iter().map(|(n, _)| *n).collect::<Vec<_>>());
+    let cities = StringArray::from(values.iter().map(|(_, v)| *v).collect::<Vec<_>>());
+    RecordBatch::try_new(schema(), vec![Arc::new(names), Arc::new(cities)])
+        .expect("the columns match the schema")
 }
 
-fn tampon(lots: &[&[(Option<&str>, Option<&str>)]]) -> ResultBuffer {
-    let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-    for valeurs in lots {
-        tampon.push(lot(valeurs)).expect("lot accepté");
+fn buffer_of(batches: &[&[(Option<&str>, Option<&str>)]]) -> ResultBuffer {
+    let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+    for values in batches {
+        buffer.push(batch_of(values)).expect("batch accepted");
     }
-    tampon
+    buffer
 }
 
 #[test]
-fn les_correspondances_sont_absolues_et_traversent_les_lots() {
-    let tampon = tampon(&[
+fn matches_are_absolute_and_cross_batches() {
+    let buffer = buffer_of(&[
         &[(Some("Ada"), Some("Paris")), (Some("Bob"), Some("Lyon"))],
         &[(Some("Cyd"), Some("Paris")), (Some("Dan"), Some("Nice"))],
     ]);
-    let trouve = find_rows(&tampon, "paris", &FormatOptions::default());
+    let found = find_rows(&buffer, "paris", &FormatOptions::default());
 
-    // Lignes 0 et 2 : l'indice est celui du **tampon**, pas celui du lot. Une
-    // numérotation par lot ferait sauter la grille au mauvais endroit.
-    assert_eq!(trouve.rows, vec![0, 2]);
-    assert_eq!(trouve.skipped_batches, 0);
+    // Rows 0 and 2: the index is the **buffer**'s, not the batch's. Numbering
+    // per batch would make the grid jump to the wrong place.
+    assert_eq!(found.rows, vec![0, 2]);
+    assert_eq!(found.skipped_batches, 0);
 }
 
 #[test]
-fn la_recherche_ignore_la_casse_et_toutes_les_colonnes_comptent() {
-    let tampon = tampon(&[&[(Some("Ada"), Some("Paris")), (Some("paris"), Some("Lyon"))]]);
-    let trouve = find_rows(&tampon, "PARIS", &FormatOptions::default());
+fn search_ignores_case_and_every_column_counts() {
+    let buffer = buffer_of(&[&[(Some("Ada"), Some("Paris")), (Some("paris"), Some("Lyon"))]]);
+    let found = find_rows(&buffer, "PARIS", &FormatOptions::default());
     assert_eq!(
-        trouve.rows,
+        found.rows,
         vec![0, 1],
-        "la correspondance est cherchée dans toute la ligne"
+        "the match is searched in the whole row"
     );
 }
 
-/// Chercher « null » ne doit pas trouver toutes les absences de valeur.
+/// Searching "null" must not find every absent value.
 ///
-/// `NULL` n'est pas la chaîne « NULL » — c'est la règle qui gouverne le rendu
-/// d'une cellule. La recherche la respecte : sinon un mot anodin balaierait le
-/// résultat entier, et l'utilisateur qui cherche une colonne nommée `nullable`
-/// n'aurait aucun moyen de s'en sortir.
+/// `NULL` is not the string "NULL" — that is the rule governing the rendering
+/// of a cell. The search respects it: otherwise an innocuous word would sweep
+/// the whole result, and a user looking for a column named `nullable` would
+/// have no way out.
 #[test]
-fn un_null_ne_correspond_a_aucune_recherche() {
-    let tampon = tampon(&[&[(None, None), (Some("nullable"), Some("Lyon"))]]);
-    let trouve = find_rows(&tampon, "null", &FormatOptions::default());
-    assert_eq!(trouve.rows, vec![1], "seule la vraie chaîne correspond");
+fn a_null_matches_no_search() {
+    let buffer = buffer_of(&[&[(None, None), (Some("nullable"), Some("Lyon"))]]);
+    let found = find_rows(&buffer, "null", &FormatOptions::default());
+    assert_eq!(found.rows, vec![1], "only the real string matches");
 }
 
 #[test]
-fn une_aiguille_vide_ne_trouve_rien_plutot_que_tout() {
-    let tampon = tampon(&[&[(Some("Ada"), Some("Paris"))]]);
-    for vide in ["", "   ", "\t"] {
+fn an_empty_needle_finds_nothing_rather_than_everything() {
+    let buffer = buffer_of(&[&[(Some("Ada"), Some("Paris"))]]);
+    for empty in ["", "   ", "\t"] {
         assert!(
-            find_rows(&tampon, vide, &FormatOptions::default())
+            find_rows(&buffer, empty, &FormatOptions::default())
                 .rows
                 .is_empty(),
-            "« {vide} » ne cherche rien"
+            "\"{empty}\" searches nothing"
         );
     }
 }
 
-/// Un lot débordé n'est pas parcouru, et **le résultat le dit**.
+/// A spilled batch is not scanned, and **the result says so**.
 ///
-/// C'est la garantie qui compte : sans le compte, « aucune correspondance »
-/// voudrait dire « aucune dans ce que j'ai bien voulu lire », et l'utilisateur
-/// conclurait que la valeur n'est pas dans son résultat.
+/// That is the guarantee that matters: without the count, "no match" would
+/// mean "none in what I cared to read", and the user would conclude that the
+/// value is not in their result.
 #[test]
-fn un_lot_deborde_est_compte_et_jamais_lu_depuis_le_disque() {
-    // Un budget d'un octet force le débordement dès le second lot.
-    let tampon = ResultBuffer::new(schema(), 1);
-    tampon
-        .push(lot(&[(Some("Ada"), Some("Paris"))]))
-        .expect("premier lot");
-    tampon
-        .push(lot(&[(Some("Cyd"), Some("Paris"))]))
-        .expect("second lot");
+fn a_spilled_batch_is_counted_and_never_read_from_disk() {
+    // A one-byte budget forces spilling from the second batch on.
+    let buffer = ResultBuffer::new(schema(), 1);
+    buffer
+        .push(batch_of(&[(Some("Ada"), Some("Paris"))]))
+        .expect("first batch");
+    buffer
+        .push(batch_of(&[(Some("Cyd"), Some("Paris"))]))
+        .expect("second batch");
 
-    let trouve = find_rows(&tampon, "paris", &FormatOptions::default());
-    let absents: Vec<usize> = (0..tampon.batch_count())
-        .filter(|position| !tampon.is_resident(BatchIndex::new(*position)))
+    let found = find_rows(&buffer, "paris", &FormatOptions::default());
+    let missing: Vec<usize> = (0..buffer.batch_count())
+        .filter(|position| !buffer.is_resident(BatchIndex::new(*position)))
         .collect();
 
     assert!(
-        !absents.is_empty(),
-        "avec un budget d'un octet, au moins un lot doit avoir débordé"
+        !missing.is_empty(),
+        "with a one-byte budget, at least one batch must have spilled"
     );
-    // Le compte annoncé est exactement celui des lots non résidents : ni
-    // arrondi, ni oublié.
-    assert_eq!(trouve.skipped_batches, absents.len());
+    // The announced count is exactly that of non-resident batches: neither
+    // rounded nor forgotten.
+    assert_eq!(found.skipped_batches, missing.len());
 
-    // Et aucune ligne d'un lot débordé n'apparaît : c'est ce qui prouve que le
-    // disque n'a pas été lu, alors même que ces lignes correspondent.
-    for position in absents {
+    // And no row of a spilled batch appears: that is what proves the disk was
+    // not read, even though those rows match.
+    for position in missing {
         let index = BatchIndex::new(position);
-        let depart = tampon.batch_start(index).expect("un lot connu");
-        let lignes = tampon.batch_rows(index).expect("un lot connu");
-        for ligne in depart..depart + lignes {
+        let start = buffer.batch_start(index).expect("a known batch");
+        let row_count = buffer.batch_rows(index).expect("a known batch");
+        for row in start..start + row_count {
             assert!(
-                !trouve.rows.contains(&ligne),
-                "la ligne {ligne} vient d'un lot débordé : la lire violerait I-05"
+                !found.rows.contains(&row),
+                "row {row} comes from a spilled batch: reading it would violate I-05"
             );
         }
     }
 }
 
-/// La coupe d'affichage ne doit pas devenir une coupe de recherche.
+/// The display cut must not become a search cut.
 ///
-/// Une valeur `jsonb` de plusieurs kilooctets s'affiche tronquée à 512
-/// caractères. Chercher dessus rendrait « aucune correspondance » pour un
-/// identifiant présent au-delà — la même faute que taire un lot débordé, sur un
-/// autre axe.
+/// A `jsonb` value of several kilobytes is displayed truncated to 512
+/// characters. Searching on that would return "no match" for an identifier
+/// present beyond — the same fault as keeping quiet about a spilled batch, on
+/// another axis.
 #[test]
-fn la_recherche_voit_au_dela_de_la_coupe_daffichage() {
-    let loin = format!("{}CIBLE", "x".repeat(2_000));
-    let tampon = tampon(&[&[(Some(loin.as_str()), Some("Paris"))]]);
-    let trouve = find_rows(&tampon, "cible", &FormatOptions::default());
+fn search_sees_beyond_the_display_cut() {
+    let far = format!("{}TARGET", "x".repeat(2_000));
+    let buffer = buffer_of(&[&[(Some(far.as_str()), Some("Paris"))]]);
+    let found = find_rows(&buffer, "target", &FormatOptions::default());
     assert_eq!(
-        trouve.rows,
+        found.rows,
         vec![0],
-        "la valeur entière est parcourue, pas son affichage coupé"
+        "the whole value is scanned, not its cut display"
     );
 }
 
-/// Le plafond borne l'allocation, et il s'avoue.
+/// The ceiling bounds the allocation, and it admits it.
 #[test]
-fn au_dela_du_plafond_la_recherche_le_dit() {
-    // Une aiguille qui correspond à toutes les lignes, au-delà du plafond.
-    let lignes: Vec<(Option<&str>, Option<&str>)> =
-        std::iter::repeat_n((Some("commun"), Some("Paris")), MATCH_LIMIT + 10).collect();
-    let nombreux = tampon(&[&lignes]);
-    let trouve = find_rows(&nombreux, "commun", &FormatOptions::default());
+fn beyond_the_ceiling_the_search_says_so() {
+    // A needle that matches every row, beyond the ceiling.
+    let row_count: Vec<(Option<&str>, Option<&str>)> =
+        std::iter::repeat_n((Some("common"), Some("Paris")), MATCH_LIMIT + 10).collect();
+    let many = buffer_of(&[&row_count]);
+    let found = find_rows(&many, "common", &FormatOptions::default());
 
     assert_eq!(
-        trouve.rows.len(),
+        found.rows.len(),
         MATCH_LIMIT,
-        "l'allocation est bornée par le plafond, pas par les données du serveur"
+        "the allocation is bounded by the ceiling, not by the server's data"
     );
     assert!(
-        trouve.capped,
-        "un compte plafonné annoncé comme exact serait un mensonge"
+        found.capped,
+        "a capped count announced as exact would be a lie"
     );
 
-    // En deçà du plafond, rien n'est avoué : la réserve ne doit pas devenir du
-    // bruit permanent.
-    let petit = tampon(&[&[(Some("commun"), None)]]);
-    assert!(!find_rows(&petit, "commun", &FormatOptions::default()).capped);
+    // Below the ceiling, nothing is admitted: the caveat must not become
+    // permanent noise.
+    let small = buffer_of(&[&[(Some("common"), None)]]);
+    assert!(!find_rows(&small, "common", &FormatOptions::default()).capped);
 }
 
 #[test]
-fn la_navigation_reboucle_dans_les_deux_sens() {
-    let trouve = FindOutcome {
+fn navigation_wraps_around_both_ways() {
+    let found = FindOutcome {
         rows: vec![2, 7, 9],
         ..FindOutcome::default()
     };
 
-    assert_eq!(trouve.next_from(0), Some(2));
-    assert_eq!(trouve.next_from(7), Some(7), "la ligne courante compte");
-    assert_eq!(trouve.next_from(8), Some(9));
-    // Au-delà de la dernière, on revient au début plutôt que de s'arrêter :
-    // aucun éditeur n'oblige à remonter à la main.
-    assert_eq!(trouve.next_from(10), Some(2));
+    assert_eq!(found.next_from(0), Some(2));
+    assert_eq!(found.next_from(7), Some(7), "the current row counts");
+    assert_eq!(found.next_from(8), Some(9));
+    // Past the last one, we come back to the start rather than stop: no editor
+    // forces scrolling back up by hand.
+    assert_eq!(found.next_from(10), Some(2));
 
-    assert_eq!(trouve.previous_from(9), Some(7));
-    assert_eq!(trouve.previous_from(2), Some(9), "rebouclage vers le bas");
+    assert_eq!(found.previous_from(9), Some(7));
+    assert_eq!(found.previous_from(2), Some(9), "wrapping around downwards");
 
-    let aucune = FindOutcome::default();
-    assert_eq!(aucune.next_from(0), None);
-    assert_eq!(aucune.previous_from(0), None);
+    let none = FindOutcome::default();
+    assert_eq!(none.next_from(0), None);
+    assert_eq!(none.previous_from(0), None);
 }

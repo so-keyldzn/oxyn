@@ -364,7 +364,7 @@ export function setZoneHandle(element: Element, handle: ZoneHandle | null) {
 
 /**
  * What the focused item offers the actions that are otherwise a drag (UX-SPEC
- * « Souris et glisser »): a tab or the grid's active column moves, a catalog
+ * « Mouse and drag »): a tab or the grid's active column moves, a catalog
  * row puts its name in the console. Attached to the focusable element that
  * carries `data-item-handle`.
  */

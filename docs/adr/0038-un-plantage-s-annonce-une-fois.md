@@ -1,89 +1,87 @@
-# ADR-0038 — Un plantage s'annonce une fois, et ⌘Q passe par l'arrêt ordonné
+# ADR-0038 — A crash is announced once, and ⌘Q goes through the orderly shutdown
 
-**Statut :** accepté · **Date :** 2026-09-25
+**Status:** accepted · **Date:** 2026-09-25
 
-**Précise :** [ADR-0021](0021-marqueur-d-arret.md), sur ce qu'il advient d'une
-session abandonnée une fois constatée, et sur les chemins de fermeture qui
-inscrivent `closed_at`.
+**Clarifies:** [ADR-0021](0021-marqueur-d-arret.md), on what happens to an
+abandoned session once it has been noticed, and on the closing paths that
+record `closed_at`.
 
-**Précisé par :** [ADR-0040](0040-inscrire-la-fermeture-d-une-sortie-forcee.md),
-qui inscrit la fermeture du Quit du Dock et de la fermeture de session dans
-`RunEvent::Exit`, et reprend l'alternative écartée ici.
+**Clarified by:** [ADR-0040](0040-inscrire-la-fermeture-d-une-sortie-forcee.md),
+which records the closing of the Dock Quit and of session logout in
+`RunEvent::Exit`, and takes up the alternative rejected here.
 
-## Contexte
+## Context
 
-L'application installée affichait l'écran de reprise — « Oxyn did not close
-normally » — après **chaque** fermeture ordinaire : exactement le défaut
-qu'[ADR-0021](0021-marqueur-d-arret.md) devait supprimer. La base d'un
-workspace réel, lue le 2026-09-25, portait 17 sessions dont 16 sans
-`closed_at`. Deux causes, indépendantes.
+The installed application displayed the recovery screen — "Oxyn did not close
+normally" — after **every** ordinary close: exactly the defect
+[ADR-0021](0021-marqueur-d-arret.md) was meant to remove. The database of a
+real workspace, read on 2026-09-25, carried 17 sessions, 16 of them without
+`closed_at`. Two causes, independent.
 
-**Une session abandonnée l'était pour toujours.** ADR-0021 définit l'arrêt
-anormal comme « une session antérieure sans fermeture au battement vieilli »,
-sans dire ce qu'elle devient après avoir été annoncée. Rien ne la soldait : un
-seul plantage — ici un lancement du 2026-09-10 — rendait anormaux tous les
-lancements suivants, fermetures propres comprises.
+**An abandoned session was abandoned forever.** ADR-0021 defines an abnormal
+shutdown as "a previous session without closing, with a stale heartbeat",
+without saying what becomes of it after it has been announced. Nothing settled
+it: a single crash — here a launch of 2026-09-10 — made every following launch
+abnormal, clean closes included.
 
-**⌘Q et le menu Quit n'inscrivaient jamais la fermeture.** L'élément Quit
-prédéfini de Tauri envoie `terminate:` à l'application. tao 0.35.3 traite
-`applicationWillTerminate` mais pas `applicationShouldTerminate` : macOS
-termine la boucle d'événements par un `RunEvent::Exit`, sans `ExitRequested`,
-et rien ne peut retenir la sortie le temps de vider les brouillons et
-d'inscrire la fermeture. Seul le bouton de fermeture de la fenêtre, qui passe
-par `CloseRequested`, l'inscrivait : c'est la seule session close de la base.
+**⌘Q and the Quit menu never recorded the close.** Tauri's predefined Quit item
+sends `terminate:` to the application. tao 0.35.3 handles
+`applicationWillTerminate` but not `applicationShouldTerminate`: macOS ends the
+event loop with a `RunEvent::Exit`, without `ExitRequested`, and nothing can
+hold the exit long enough to flush the drafts and record the close. Only the
+window's close button, which goes through `CloseRequested`, recorded it: it is
+the only closed session in the database.
 
-## Décision
+## Decision
 
-**Le lancement qui constate un abandon le marque annoncé.** La migration 17
-ajoute `app_sessions.reported_at`. `Sessions::begin` le renseigne sur les
-sessions abandonnées et non encore annoncées, dans la transaction qui inscrit
-le nouveau lancement ; seule une session abandonnée **et non annoncée** fait
-conclure à un arrêt anormal. `closed_at` reste `NULL` : la ligne dit toujours
-que ce lancement ne s'est pas fermé proprement. Si le lancement qui annonce
-plante à son tour, il devient lui-même une session abandonnée non annoncée, et
-le suivant propose de nouveau la reprise.
+**The launch that notices an abandonment marks it announced.** Migration 17
+adds `app_sessions.reported_at`. `Sessions::begin` fills it on the abandoned
+sessions not yet announced, in the transaction that records the new launch;
+only an abandoned **and unannounced** session leads to concluding an abnormal
+shutdown. `closed_at` stays `NULL`: the row still says that this launch did not
+close cleanly. If the announcing launch crashes in turn, it itself becomes an
+unannounced abandoned session, and the next one offers recovery again.
 
-**Sur macOS, Oxyn remplace le Quit prédéfini par le sien.** Le menu par défaut
-de Tauri est reconstruit à l'identique, sauf le dernier élément du menu de
-l'application : un élément `oxyn-quit` (`CmdOrCtrl+Q`) qui déclenche l'arrêt
-ordonné du bouton de fermeture (`crates/oxyn-desktop/src/commands/recovery.rs`).
-Ailleurs, Tauri ne pose pas de menu, et la fermeture de la fenêtre reste la
-sortie.
+**On macOS, Oxyn replaces the predefined Quit with its own.** Tauri's default
+menu is rebuilt identically, except the last item of the application menu: an
+`oxyn-quit` item (`CmdOrCtrl+Q`) that triggers the close button's orderly
+shutdown (`crates/oxyn-desktop/src/commands/recovery.rs`). Elsewhere, Tauri
+sets no menu, and closing the window remains the exit.
 
-**Chaque abandon laisse une ligne de journal.** `info` quand la fermeture est
-inscrite ; `warn` quand aucune webview n'est abonnée, quand le vidage des
-brouillons n'est pas confirmé, quand la fermeture n'est pas inscrite et quand
-l'application sort sans l'arrêt ordonné. Le journal est vidé sur disque avant
-la sortie, dans une attente bornée à une seconde.
+**Each abandonment leaves a log line.** `info` when the close is recorded;
+`warn` when no webview is subscribed, when the draft flush is not confirmed,
+when the close is not recorded and when the application exits without the
+orderly shutdown. The log is flushed to disk before exiting, in a wait bounded
+to one second.
 
-## Conséquences
+## Consequences
 
-* **+** L'écran de reprise redevient un signal : il ne suit plus une fermeture
-  par ⌘Q, par le menu ou par le bouton de la fenêtre.
-* **+** Le plantage reste lisible sans Oxyn ([I-11](../../CLAUDE.md#i-11)) :
-  `closed_at IS NULL` le dit, `reported_at` dit quand il a été annoncé.
-* **+** Un prochain diagnostic part d'un journal qui dit comment la fermeture
-  s'est passée, et non d'un journal muet.
-* **−** Le Quit du Dock et la fermeture de session macOS passent encore par
-  `terminate:` : la fermeture n'y est pas inscrite, et le lancement suivant
-  propose la reprise. C'est le sens prudent, et le journal le dit.
-* **−** Oxyn porte une copie du menu d'application de Tauri : une évolution du
-  menu par défaut ne lui parviendra pas d'elle-même.
-* **−** Une migration de plus. Au premier lancement qui l'applique, les
-  sessions déjà abandonnées sont annoncées une dernière fois.
+* **+** The recovery screen becomes a signal again: it no longer follows a close
+  by ⌘Q, by the menu or by the window button.
+* **+** The crash stays readable without Oxyn ([I-11](../../CLAUDE.md#i-11)):
+  `closed_at IS NULL` says it, `reported_at` says when it was announced.
+* **+** A future diagnosis starts from a log that says how the close went, not
+  from a silent log.
+* **−** The Dock Quit and macOS session logout still go through `terminate:`:
+  the close is not recorded there, and the next launch offers recovery. It is
+  the cautious direction, and the log says so.
+* **−** Oxyn carries a copy of Tauri's application menu: an evolution of the
+  default menu will not reach it by itself.
+* **−** One more migration. At the first launch that applies it, the sessions
+  already abandoned are announced one last time.
 
-**Coût de sortie :** une colonne, une clause de requête et un menu. Retirer le
-menu rend ⌘Q à `terminate:` ; retirer `reported_at` rend la reprise
-permanente après un plantage.
+**Exit cost:** a column, a query clause and a menu. Removing the menu gives ⌘Q
+back to `terminate:`; removing `reported_at` makes recovery permanent after a
+crash.
 
-**Reconsidérer si** tao expose `applicationShouldTerminate` : la sortie par
-`terminate:` deviendrait alors retenable, pour le Dock comme pour le menu, et
-le Quit propre à Oxyn n'aurait plus de raison d'être.
+**Reconsider if** tao exposes `applicationShouldTerminate`: exiting through
+`terminate:` would then become holdable, for the Dock as for the menu, and
+Oxyn's own Quit would no longer have a reason to exist.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Solder une session abandonnée en renseignant son `closed_at` | Récrirait un plantage en arrêt propre, dans la table même qui doit les distinguer |
-| Effacer une session abandonnée une fois annoncée | Efface la seule trace lisible sans Oxyn qu'un plantage a eu lieu |
-| Inscrire la fermeture de façon synchrone dans `RunEvent::Exit` | Les brouillons ne peuvent plus y être vidés (la webview répond par le thread principal qu'on bloquerait) : ce serait marquer un arrêt propre sur un travail peut-être non écrit |
+| Settle an abandoned session by filling its `closed_at` | Would rewrite a crash as a clean shutdown, in the very table that must tell them apart |
+| Delete an abandoned session once announced | Deletes the only trace, readable without Oxyn, that a crash happened |
+| Record the close synchronously in `RunEvent::Exit` | Drafts can no longer be flushed there (the webview answers through the main thread we would block): it would mark a clean shutdown on work possibly not written |

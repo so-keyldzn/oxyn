@@ -1,5 +1,5 @@
 //! `Open in new window`: a tab moves to a window built for it
-//! ([ADR-0043](../../../../../docs/adr/0043-multi-fenetre.md), « Déplacer une
+//! ([ADR-0043](../../../../../docs/adr/0043-multi-fenetre.md), « Moving a
 //! console »).
 //!
 //! A console moves with its session, neither closed nor reopened: its open

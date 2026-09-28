@@ -1,0 +1,92 @@
+<!-- oxyn-translation source=".agents/README.md" sha256="4e38139c17d2" -->
+
+> Traduction française de [.agents/README.md](../../../.agents/README.md). **La version anglaise fait foi.**
+
+# Codex dans Oxyn
+
+Cette adaptation est locale au dépôt : [AGENTS.md](../AGENTS.md) est le point
+d’entrée et `skills/` contient les compétences de projet. Les réglages du
+modèle, les serveurs MCP et les profils de sous-agents sont décrits dans
+[.codex/README.md](../codex/README.md). Aucun réglage global n’est installé.
+
+## Utilisation
+
+Ouvrir une nouvelle session Codex dans Oxyn pour charger `AGENTS.md`.
+Les compétences peuvent être choisies automatiquement selon la demande ou
+invoquées explicitement, par exemple `$oxyn-driver ajouter un driver` ou
+`$oxyn-relire le travail en cours`. Si elles ne figurent pas dans le sélecteur,
+redémarrer la session dans le dépôt.
+
+| Commande Claude | Compétence Codex |
+|---|---|
+| `/plan` | [$oxyn-plan](skills/oxyn-plan/SKILL.md) |
+| `/implementer` | [$oxyn-implementer](skills/oxyn-implementer/SKILL.md) |
+| `/driver` | [$oxyn-driver](skills/oxyn-driver/SKILL.md) |
+| `/commande` | [$oxyn-commande](skills/oxyn-commande/SKILL.md) |
+| `/adr` | [$oxyn-adr](skills/oxyn-adr/SKILL.md) |
+| `/versions` | [$oxyn-versions](skills/oxyn-versions/SKILL.md) |
+| `/benchmark` | [$oxyn-benchmark](skills/oxyn-benchmark/SKILL.md) |
+| `/relire` | [$oxyn-relire](skills/oxyn-relire/SKILL.md) |
+| `/securite` | [$oxyn-securite](skills/oxyn-securite/SKILL.md) |
+
+## Correspondance et limites
+
+Pour auditer le dépôt entier et préparer des issues GitHub, lire la procédure
+commune [`/audit`](../claude/commands/audit.md). Codex suit son
+[workflow multi-agents](../claude/workflows/audit-multi-agents.md) avec les
+outils de collaboration de la session ; le fichier JavaScript voisin requiert
+le moteur de workflows Claude. La publication avec `gh` suit la demande de
+l'utilisateur et ne vaut pas autorisation de corriger ou de commiter le produit.
+
+| Élément existant | Traitement dans Codex |
+|---|---|
+| `CLAUDE.md` | Lecture demandée par `AGENTS.md`, invariants conservés à leur source |
+| `.claude/rules/` | Lecture explicite selon les chemins, avant modification ou création |
+| `.claude/commands/` | Procédures partagées appelées par les dix compétences |
+| `.claude/agents/` | Guides de spécialité lus par les profils de `.codex/agents/`, sans transposition des métadonnées Claude |
+| Checklists, templates, workflows | Réutilisés avec les adaptations de syntaxe de `AGENTS.md` |
+| `SessionStart` | Inspection explicite de Git, des manifestes et du plan |
+| `PreToolUse` et permissions | Aucun branchement Codex ; consignes et permissions effectives de la session |
+| `PostToolUse` formatage | `cargo fmt --all` explicite après modification Rust |
+| `Stop` | `make qualite` et rapport de validation explicites |
+| Vérification des versions | Script existant exécuté explicitement par `$oxyn-versions` |
+
+Le filtrage bloquant avant écriture de Claude n’est **pas reproduit** ici.
+Les interdictions formulées dans `AGENTS.md` sont des consignes, pas une barrière
+technique. Les tests des hooks ne prouvent pas leur exécution dans Codex.
+Un contrôle bloquant équivalent demanderait une intégration spécifique aux
+outils de l’environnement ; copier `settings.json` ne suffit pas.
+
+Les profils restent consultables selon la tâche :
+
+- Écriture : [architecte](../claude/agents/architecte.md),
+  [rustacien](../claude/agents/rustacien.md),
+  [driveriste](../claude/agents/driveriste.md),
+  [frontiste](../claude/agents/frontiste.md),
+  [shadcniste](../claude/agents/shadcniste.md),
+  [ia-workspace](../claude/agents/ia-workspace.md),
+  [documentaliste](../claude/agents/documentaliste.md),
+  [performance](../claude/agents/performance.md).
+- Relecture : [invariants](../claude/agents/relecteur-invariants.md),
+  [sécurité](../claude/agents/relecteur-securite.md),
+  [frontières](../claude/agents/relecteur-frontiere.md),
+  [divergence](../claude/agents/detecteur-divergence.md).
+
+Une demande de revue reste une revue. Les profils Codex des relecteurs déclarent
+un défaut de lecture seule, soumis aux permissions effectives de la session.
+Les guides Claude seuls ne créent aucune isolation technique. Les profils
+ne déclenchent pas de sous-agent automatiquement.
+
+## Maintenance
+
+Modifier les règles et procédures communes dans `.claude/` ; réserver les
+compétences aux points d’entrée et aux adaptations Codex. Les anciennes notes
+sur l’absence de code ne remplacent pas l’inspection du dépôt.
+
+`make socle` vérifie aussi les liens de `AGENTS.md` et `.agents/**/*.md`.
+`make qualite` conserve la porte de validation commune (socle, format, clippy,
+tests et documentation). Aucune commande de revue ne vaut autorisation de commit.
+
+Formats vérifiés dans la documentation officielle le 2026-09-06 :
+[consignes AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
+et [compétences locales](https://learn.chatgpt.com/docs/build-skills).

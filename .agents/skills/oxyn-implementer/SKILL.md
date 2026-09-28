@@ -1,18 +1,18 @@
 ---
 name: oxyn-implementer
-description: "Implémenter un changement en respectant les invariants dans le projet Oxyn. À utiliser pour une demande correspondante dans ce dépôt."
+description: "Implement a change while respecting the invariants in the Oxyn project. Use for a matching request in this repository."
 ---
 
 # Oxyn — implementer
 
-Lire les [consignes Codex du projet](../../../AGENTS.md), puis la
-[procédure commune implementer](../../../.claude/commands/implementer.md) et suivre
-ses étapes applicables à la demande. La procédure reste la source unique ;
-interpréter ses syntaxes Claude selon les adaptations de `AGENTS.md`.
+Read the [project's Codex instructions](../../../AGENTS.md), then the
+[shared implementer procedure](../../../.claude/commands/implementer.md) and follow
+its steps that apply to the request. The procedure stays the single source;
+interpret its Claude syntax according to the adaptations of `AGENTS.md`.
 
-Choisir la procédure spécialisée pour un driver, une commande ou une vue. Lire le profil rustacien pour le cœur, ia-workspace pour le workspace IA.
+Choose the specialized procedure for a driver, a command or a view. Read the rustacien profile for the core, ia-workspace for the AI workspace.
 
-Résoudre les liens de la procédure depuis son propre répertoire. Les chemins
-shell sont relatifs à la racine Oxyn. Utiliser les outils de la session ; les
-métadonnées Claude n’accordent aucune permission supplémentaire. Effectuer
-les relectures localement si aucune délégation n’est demandée ou disponible.
+Resolve the procedure's links from its own directory. Shell paths are
+relative to the Oxyn root. Use the session's tools; Claude metadata grants
+no additional permission. Do the reviews locally if no delegation is
+requested or available.

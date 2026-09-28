@@ -1,53 +1,53 @@
-//! La correspondance des types PostgreSQL vers Arrow, **et ses pertes**.
+//! The mapping of PostgreSQL types to Arrow, **and its losses**.
 //!
-//! Le contrat exige que cette table aille dans les deux sens et documente ce
-//! qu'elle perd ([DRIVER-CONTRACT §7](../../../docs/DRIVER-CONTRACT.md)). Le sens
-//! « lecture » est ici ; le sens « écriture » — lier un
-//! [`ScalarValue`](oxyn_core::ScalarValue) en paramètre — est dans
-//! [`crate::session`], parce qu'il dépend de l'encodeur de `sqlx` et non du
-//! décodeur.
+//! The contract requires this table to go both ways and to document what it
+//! loses ([DRIVER-CONTRACT §7](../../../docs/DRIVER-CONTRACT.md)). The "read"
+//! direction is here; the "write" direction — binding a
+//! [`ScalarValue`](oxyn_core::ScalarValue) as a parameter — is in
+//! [`crate::session`], because it depends on `sqlx`'s encoder and not on the
+//! decoder.
 //!
-//! # Les trois règles qui gouvernent ce module
+//! # The three rules that govern this module
 //!
 //! **Unknown binary types retain their bytes.** [`PgDecoding::Opaque`] produces
 //! Arrow `Binary`, with the PostgreSQL type name in `oxyn:pg_type` metadata.
 //! Valid UTF-8 bytes are not evidence of a textual wire format: an OID can look
 //! like a printable character. Known enums are decoded as text explicitly.
 //!
-//! **`NUMERIC` ne devient jamais un flottant.** Un `NUMERIC` sans précision ne
-//! tient dans aucun `f64` ; le convertir corrompt des montants. Il devient une
-//! chaîne décimale **exacte**, reconstruite depuis le format binaire du serveur
-//! (module interne `numeric`).
+//! **`NUMERIC` never becomes a float.** A `NUMERIC` without precision fits in
+//! no `f64`; converting it corrupts amounts. It becomes an **exact** decimal
+//! string, rebuilt from the server's binary format (internal `numeric`
+//! module).
 //!
-//! **Un `timestamp` sans fuseau n'en reçoit pas un.** `timestamp` devient
-//! `Timestamp(Microsecond, None)` et `timestamptz` devient
-//! `Timestamp(Microsecond, Some("UTC"))`. Aucune conversion vers le fuseau du
-//! poste n'a lieu ici, ni ailleurs dans le driver.
+//! **A `timestamp` without a time zone does not get one.** `timestamp` becomes
+//! `Timestamp(Microsecond, None)` and `timestamptz` becomes
+//! `Timestamp(Microsecond, Some("UTC"))`. No conversion to the machine's time
+//! zone happens here, nor anywhere else in the driver.
 //!
-//! # Ce que la table perd, explicitement
+//! # What the table loses, explicitly
 //!
-//! | Type PostgreSQL | Arrow | Perte |
+//! | PostgreSQL type | Arrow | Loss |
 //! |---|---|---|
-//! | `numeric` | `Utf8` | aucune sur la valeur ; la précision et l'échelle déclarées ne sont pas portées par le protocole (voir plus bas) |
-//! | `uuid` | `Utf8` | aucune : rendu canonique en minuscules avec tirets |
-//! | `timetz` | `Utf8` | aucune : heure et décalage rendus tels quels |
-//! | `interval` | `Interval(MonthDayNano)` | au-delà de ±292 ans de composante microseconde, la conversion en nanosecondes déborde : le décodage **échoue** au lieu de tronquer |
+//! | `numeric` | `Utf8` | none on the value; the declared precision and scale are not carried by the protocol (see below) |
+//! | `uuid` | `Utf8` | none: canonical lowercase rendering with hyphens |
+//! | `timetz` | `Utf8` | none: time and offset rendered as is |
+//! | `interval` | `Interval(MonthDayNano)` | beyond ±292 years of microsecond component, the conversion to nanoseconds overflows: decoding **fails** instead of truncating |
 //! | `money` | `Binary` | raw representation retained; the currency depends on `lc_monetary`, which is not transmitted |
-//! | tableaux à plus d'une dimension | — | non représentables par une liste Arrow : le décodage **échoue** plutôt que d'aplatir en silence |
-//! | `record`, types composites | `Binary` (opaque) | la structure n'est pas éclatée en `Struct` Arrow |
+//! | arrays with more than one dimension | — | not representable by an Arrow list: decoding **fails** rather than silently flattening |
+//! | `record`, composite types | `Binary` (opaque) | the structure is not split into an Arrow `Struct` |
 //!
-//! # Pourquoi `numeric` n'est pas un `Decimal128`
+//! # Why `numeric` is not a `Decimal128`
 //!
-//! `Decimal128(p, s)` exige une précision et une échelle **fixées avant la
-//! première ligne**. Le `RowDescription` du protocole PostgreSQL porte bien un
-//! `atttypmod`, mais `sqlx` 0.9 ne l'expose pas sur [`PgColumn`] — et un
-//! `numeric` sans contrainte de colonne n'en a de toute façon pas. Choisir une
-//! échelle au jugé arrondirait des montants ; `Utf8` exact ne perd rien.
+//! `Decimal128(p, s)` requires a precision and a scale **fixed before the first
+//! row**. The PostgreSQL protocol's `RowDescription` does carry an
+//! `atttypmod`, but `sqlx` 0.9 does not expose it on [`PgColumn`] — and a
+//! `numeric` without a column constraint has none anyway. Choosing a scale by
+//! guesswork would round amounts; exact `Utf8` loses nothing.
 //!
-// TODO(phase 1) : basculer sur `Decimal128(p, s)` pour les colonnes dont le
-// catalogue donne une précision et une échelle — le chemin existe déjà via
-// `PostgresCatalog::describe_relation`, il manque le lien entre la colonne du
-// résultat et la colonne de table (`PgColumn::relation_id`).
+// TODO(phase 1): switch to `Decimal128(p, s)` for columns whose catalog gives a
+// precision and a scale — the path already exists through
+// `PostgresCatalog::describe_relation`, what is missing is the link between the
+// result column and the table column (`PgColumn::relation_id`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,18 +57,18 @@ use sqlx::Column as _;
 use sqlx::TypeInfo as _;
 use sqlx::postgres::{PgColumn, PgTypeInfo, PgTypeKind};
 
-/// Les OID des types intégrés de PostgreSQL.
+/// The OIDs of PostgreSQL's built-in types.
 ///
-/// Ceux du catalogue `pg_type` par défaut sont **stables** d'une version à
-/// l'autre — contrairement aux OID attribués par `CREATE EXTENSION`, qui
-/// dépendent de l'ordre d'installation. C'est pourquoi la reconnaissance se
-/// fait par OID pour les types intégrés et par **nom** pour les autres.
+/// Those of the default `pg_type` catalog are **stable** from one version to
+/// the next — unlike the OIDs assigned by `CREATE EXTENSION`, which depend on
+/// the installation order. That is why recognition goes by OID for built-in
+/// types and by **name** for the others.
 pub(crate) mod oid {
     /// `bool`
     pub const BOOL: u32 = 16;
     /// `bytea`
     pub const BYTEA: u32 = 17;
-    /// `"char"` (un octet, pas `char(n)`)
+    /// `"char"` (one byte, not `char(n)`)
     pub const CHAR: u32 = 18;
     /// `name`
     pub const NAME: u32 = 19;
@@ -90,7 +90,7 @@ pub(crate) mod oid {
     pub const FLOAT4: u32 = 700;
     /// `float8`
     pub const FLOAT8: u32 = 701;
-    /// `unknown` : littéral non typé
+    /// `unknown`: untyped literal
     pub const UNKNOWN: u32 = 705;
     /// `money`
     pub const MONEY: u32 = 790;
@@ -128,23 +128,23 @@ pub(crate) mod oid {
     pub const VOID: u32 = 2278;
 }
 
-/// Clé de métadonnée portant le nom du type PostgreSQL d'origine.
+/// Metadata key carrying the name of the original PostgreSQL type.
 pub const META_PG_TYPE: &str = "oxyn:pg_type";
-/// Clé de métadonnée portant le mode de repli employé pour un type inconnu.
+/// Metadata key carrying the fallback mode used for an unknown type.
 ///
 /// Contains `opaque` for an unknown wire format preserved as binary.
 /// Absent for recognized types.
 pub const META_FALLBACK: &str = "oxyn:fallback";
 
-/// Comment décoder une valeur PostgreSQL vers son tableau Arrow.
+/// How to decode a PostgreSQL value into its Arrow array.
 ///
-/// Une variante par **format de fil**, pas par type SQL : `text`, `varchar`,
-/// `name` et `xml` partagent [`PgDecoding::Text`] parce que leur représentation
-/// binaire est la même suite d'octets UTF-8.
+/// One variant per **wire format**, not per SQL type: `text`, `varchar`,
+/// `name` and `xml` share [`PgDecoding::Text`] because their binary
+/// representation is the same sequence of UTF-8 bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PgDecoding {
-    /// `bool` : un octet.
+    /// `bool`: one byte.
     Bool,
     /// `int2`.
     Int16,
@@ -152,47 +152,47 @@ pub enum PgDecoding {
     Int32,
     /// `int8`.
     Int64,
-    /// `oid` : entier non signé sur 32 bits.
+    /// `oid`: unsigned 32-bit integer.
     UInt32,
     /// `float4`.
     Float32,
     /// `float8`.
     Float64,
-    /// Types dont la représentation binaire est déjà de l'UTF-8 : `text`,
+    /// Types whose binary representation is already UTF-8: `text`,
     /// `varchar`, `bpchar`, `name`, `"char"`, `xml`, `json`, `inet`…
     Text,
-    /// `jsonb` : un octet de version (valant 1) puis de l'UTF-8.
+    /// `jsonb`: a version byte (equal to 1) then UTF-8.
     Jsonb,
-    /// `numeric` : format binaire propre, rendu en décimal exact.
+    /// `numeric`: its own binary format, rendered as exact decimal.
     Numeric,
-    /// `uuid` : seize octets, rendus sous forme canonique.
+    /// `uuid`: sixteen bytes, rendered in canonical form.
     Uuid,
-    /// `timetz` : microsecondes depuis minuit, puis décalage en secondes.
+    /// `timetz`: microseconds since midnight, then offset in seconds.
     TimeTz,
-    /// `bytea` et tout ce qui reste des octets.
+    /// `bytea` and everything that remains bytes.
     Bytes,
-    /// `date` : jours depuis le 1<sup>er</sup> janvier 2000.
+    /// `date`: days since January 1<sup>st</sup>, 2000.
     Date,
-    /// `time` : microsecondes depuis minuit.
+    /// `time`: microseconds since midnight.
     Time,
-    /// `timestamp` : microsecondes depuis le 1<sup>er</sup> janvier 2000, **sans
-    /// fuseau**.
+    /// `timestamp`: microseconds since January 1<sup>st</sup>, 2000, **without
+    /// time zone**.
     Timestamp,
-    /// `timestamptz` : idem, en UTC.
+    /// `timestamptz`: same, in UTC.
     TimestampTz,
-    /// `interval` : microsecondes, jours, mois.
+    /// `interval`: microseconds, days, months.
     Interval,
-    /// Tableau à une dimension d'un type décodable.
+    /// One-dimensional array of a decodable type.
     List(Box<PgDecoding>),
     /// Unknown wire format, preserved as raw bytes with type metadata.
     Opaque,
 }
 
 impl PgDecoding {
-    /// Le type Arrow correspondant.
+    /// The corresponding Arrow type.
     ///
-    /// Stable pour toute la durée d'un flux : c'est ce que
-    /// [`Cursor::schema`](oxyn_driver::Cursor::schema) promet.
+    /// Stable for the whole lifetime of a stream: that is what
+    /// [`Cursor::schema`](oxyn_driver::Cursor::schema) promises.
     #[must_use]
     pub fn arrow_type(&self) -> DataType {
         match self {
@@ -208,9 +208,9 @@ impl PgDecoding {
             Self::Date => DataType::Date32,
             Self::Time => DataType::Time64(TimeUnit::Microsecond),
             Self::Timestamp => DataType::Timestamp(TimeUnit::Microsecond, None),
-            // Le fuseau porté par le type Arrow dit « ces microsecondes sont
-            // comptées en UTC », pas « affiche-les en UTC » : le rendu reste une
-            // décision de l'interface (DRIVER-CONTRACT §7).
+            // The time zone carried by the Arrow type says "these microseconds
+            // are counted in UTC", not "display them in UTC": rendering stays an
+            // interface decision (DRIVER-CONTRACT §7).
             Self::TimestampTz => DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
             Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::List(element) => {
@@ -219,42 +219,41 @@ impl PgDecoding {
         }
     }
 
-    /// Le type est-il rendu par un repli faute d'être reconnu ?
+    /// Is the type rendered through a fallback for lack of being recognized?
     #[must_use]
     pub fn is_opaque(&self) -> bool {
         matches!(self, Self::Opaque)
     }
 }
 
-/// Choisit le décodage d'un type PostgreSQL.
+/// Chooses the decoding of a PostgreSQL type.
 ///
-/// L'ordre des tentatives n'est pas indifférent : l'OID d'abord, parce qu'il est
-/// stable pour les types intégrés ; puis la *sorte* du type, pour suivre un
-/// domaine jusqu'à son type de base et un tableau jusqu'à son élément ; puis le
-/// nom, seul moyen de reconnaître un type d'extension dont l'OID varie d'une
-/// installation à l'autre.
+/// The order of attempts matters: the OID first, because it is stable for
+/// built-in types; then the type's *kind*, to follow a domain to its base type
+/// and an array to its element; then the name, the only way to recognize an
+/// extension type whose OID varies from one installation to another.
 #[must_use]
 pub fn decoding_for(ty: &PgTypeInfo) -> PgDecoding {
-    if let Some(brut) = ty.oid()
-        && let Some(decodage) = decoding_for_oid(brut.0)
+    if let Some(raw_type) = ty.oid()
+        && let Some(decoding) = decoding_for_oid(raw_type.0)
     {
-        return decodage;
+        return decoding;
     }
 
     match ty.kind() {
-        // Un domaine est un type de base plus une contrainte ; la contrainte ne
-        // change pas la représentation sur le fil.
+        // A domain is a base type plus a constraint; the constraint does not
+        // change the representation on the wire.
         PgTypeKind::Domain(base) => decoding_for(base),
         PgTypeKind::Array(element) => PgDecoding::List(Box::new(decoding_for(element))),
-        // La représentation binaire d'un `enum` est son étiquette en UTF-8.
+        // The binary representation of an `enum` is its label in UTF-8.
         PgTypeKind::Enum(_) => PgDecoding::Text,
         _ => decoding_for_name(ty.name()),
     }
 }
 
-/// Décodage d'un type intégré, reconnu par son OID.
-fn decoding_for_oid(brut: u32) -> Option<PgDecoding> {
-    let decodage = match brut {
+/// Decoding of a built-in type, recognized by its OID.
+fn decoding_for_oid(raw_type: u32) -> Option<PgDecoding> {
+    let decoding = match raw_type {
         oid::BOOL => PgDecoding::Bool,
         oid::INT2 => PgDecoding::Int16,
         oid::INT4 => PgDecoding::Int32,
@@ -284,66 +283,64 @@ fn decoding_for_oid(brut: u32) -> Option<PgDecoding> {
         oid::TIMESTAMP => PgDecoding::Timestamp,
         oid::TIMESTAMPTZ => PgDecoding::TimestampTz,
         oid::INTERVAL => PgDecoding::Interval,
-        // `money` est un entier sur 64 bits d'unités de base, mais l'unité
-        // dépend de `lc_monetary`, que le protocole ne transmet pas. Le rendre
-        // en `Int64` inviterait à additionner des euros et des yens.
+        // `money` is a 64-bit integer of base units, but the unit depends on
+        // `lc_monetary`, which the protocol does not transmit. Rendering it as
+        // `Int64` would invite adding up euros and yen.
         oid::MONEY => PgDecoding::Opaque,
         oid::VOID => PgDecoding::Opaque,
         _ => return None,
     };
-    Some(decodage)
+    Some(decoding)
 }
 
-/// Décodage d'un type d'extension, reconnu par son nom.
+/// Decoding of an extension type, recognized by its name.
 ///
-/// La liste est courte à dessein : elle ne contient que des types dont la
-/// représentation binaire est **connue et stable**. Tout le reste tombe sur
-/// [`PgDecoding::Opaque`], ce qui n'est pas un échec mais le comportement
-/// documenté.
+/// The list is short on purpose: it contains only types whose binary
+/// representation is **known and stable**. Everything else falls on
+/// [`PgDecoding::Opaque`], which is not a failure but the documented behavior.
 fn decoding_for_name(name: &str) -> PgDecoding {
     match name.to_ascii_lowercase().as_str() {
-        // `citext` est un `text` insensible à la casse : mêmes octets.
+        // `citext` is a case-insensitive `text`: same bytes.
         "citext" => PgDecoding::Text,
         _ => PgDecoding::Opaque,
     }
 }
 
-/// Construit le schéma Arrow d'un résultat, et le plan de décodage qui va avec.
+/// Builds the Arrow schema of a result, and the decoding plan that goes with
+/// it.
 ///
-/// Les deux sont rendus ensemble parce qu'ils doivent rester alignés : un
-/// décodage qui ne correspondrait pas au type déclaré ferait échouer
-/// [`RecordBatch::try_new`](arrow::record_batch::RecordBatch::try_new) au
-/// premier lot, c'est-à-dire au pire moment.
+/// Both are returned together because they must stay aligned: a decoding that
+/// did not match the declared type would make
+/// [`RecordBatch::try_new`](arrow::record_batch::RecordBatch::try_new) fail on
+/// the first batch, that is, at the worst moment.
 ///
-/// Chaque champ porte le nom du type PostgreSQL d'origine dans ses métadonnées
-/// ([`META_PG_TYPE`]) : c'est ce qui permet à l'interface de distinguer un
-/// `jsonb` d'un `text` alors que les deux sont des colonnes `Utf8`.
+/// Each field carries the name of the original PostgreSQL type in its metadata
+/// ([`META_PG_TYPE`]): that is what lets the interface tell a `jsonb` from a
+/// `text` even though both are `Utf8` columns.
 #[must_use]
 pub fn schema_for(columns: &[PgColumn]) -> (SchemaRef, Vec<PgDecoding>) {
-    let mut champs = Vec::with_capacity(columns.len());
-    let mut decodages = Vec::with_capacity(columns.len());
+    let mut fields = Vec::with_capacity(columns.len());
+    let mut decodings = Vec::with_capacity(columns.len());
 
-    for colonne in columns {
-        let type_info = colonne.type_info();
-        let decodage = decoding_for(type_info);
+    for column in columns {
+        let type_info = column.type_info();
+        let decoding = decoding_for(type_info);
 
-        let mut metadonnees = HashMap::with_capacity(2);
-        metadonnees.insert(META_PG_TYPE.to_owned(), type_info.name().to_owned());
-        if decodage.is_opaque() {
+        let mut metadata = HashMap::with_capacity(2);
+        metadata.insert(META_PG_TYPE.to_owned(), type_info.name().to_owned());
+        if decoding.is_opaque() {
             // Keep the original type attached to the raw binary payload.
-            metadonnees.insert(META_FALLBACK.to_owned(), "opaque".to_owned());
+            metadata.insert(META_FALLBACK.to_owned(), "opaque".to_owned());
         }
 
-        // Toute colonne est déclarée nullable : le serveur peut rendre `NULL`
-        // dans une colonne `NOT NULL` dès qu'une jointure externe entre en jeu,
-        // et un schéma qui l'interdirait ferait échouer la construction du lot.
-        champs.push(
-            Field::new(colonne.name(), decodage.arrow_type(), true).with_metadata(metadonnees),
-        );
-        decodages.push(decodage);
+        // Every column is declared nullable: the server can return `NULL` in a
+        // `NOT NULL` column as soon as an outer join comes into play, and a
+        // schema that forbade it would make building the batch fail.
+        fields.push(Field::new(column.name(), decoding.arrow_type(), true).with_metadata(metadata));
+        decodings.push(decoding);
     }
 
-    (Arc::new(Schema::new(champs)), decodages)
+    (Arc::new(Schema::new(fields)), decodings)
 }
 
 #[cfg(test)]
@@ -351,9 +348,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_entiers_gardent_leur_largeur() {
-        // Un `int8` promu en `Int32` tronquerait un identifiant de 5 milliards
-        // en 705 032 704, sans erreur nulle part.
+    fn integers_keep_their_width() {
+        // An `int8` promoted to `Int32` would truncate an identifier of 5
+        // billion to 705,032,704, with no error anywhere.
         assert_eq!(decoding_for_oid(oid::INT2), Some(PgDecoding::Int16));
         assert_eq!(decoding_for_oid(oid::INT4), Some(PgDecoding::Int32));
         assert_eq!(decoding_for_oid(oid::INT8), Some(PgDecoding::Int64));
@@ -361,17 +358,17 @@ mod tests {
     }
 
     #[test]
-    fn numeric_ne_devient_jamais_un_flottant() {
-        // La perte serait silencieuse et porterait sur des montants.
-        let decodage = decoding_for_oid(oid::NUMERIC).expect("numeric est un type intégré");
-        assert_eq!(decodage, PgDecoding::Numeric);
-        assert_eq!(decodage.arrow_type(), DataType::Utf8);
-        assert_ne!(decodage.arrow_type(), DataType::Float64);
+    fn numeric_never_becomes_a_float() {
+        // The loss would be silent and would affect amounts.
+        let decoding = decoding_for_oid(oid::NUMERIC).expect("numeric is a built-in type");
+        assert_eq!(decoding, PgDecoding::Numeric);
+        assert_eq!(decoding.arrow_type(), DataType::Utf8);
+        assert_ne!(decoding.arrow_type(), DataType::Float64);
     }
 
     #[test]
-    fn un_timestamp_sans_fuseau_n_en_recoit_pas_un() {
-        // DRIVER-CONTRACT §7 : la corruption serait invisible et permanente.
+    fn a_timestamp_without_time_zone_does_not_get_one() {
+        // DRIVER-CONTRACT §7: the corruption would be invisible and permanent.
         assert_eq!(
             PgDecoding::Timestamp.arrow_type(),
             DataType::Timestamp(TimeUnit::Microsecond, None)
@@ -383,38 +380,38 @@ mod tests {
     }
 
     #[test]
-    fn un_oid_inconnu_tombe_sur_un_repli_pas_sur_une_erreur() {
-        // 16 000 est au-delà des types intégrés : c'est un type utilisateur.
+    fn an_unknown_oid_falls_on_a_fallback_not_on_an_error() {
+        // 16,000 is beyond the built-in types: it is a user type.
         assert_eq!(decoding_for_oid(16_000), None);
         assert_eq!(decoding_for_name("geometry"), PgDecoding::Opaque);
         assert_eq!(PgDecoding::Opaque.arrow_type(), DataType::Binary);
     }
 
     #[test]
-    fn un_tableau_devient_une_liste_du_meme_element() {
-        let liste = PgDecoding::List(Box::new(PgDecoding::Int32));
+    fn an_array_becomes_a_list_of_the_same_element() {
+        let list = PgDecoding::List(Box::new(PgDecoding::Int32));
         assert_eq!(
-            liste.arrow_type(),
+            list.arrow_type(),
             DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
         );
     }
 
     #[test]
-    fn le_type_du_champ_liste_est_celui_que_construit_le_decodeur() {
-        // Le nom `item` n'est pas décoratif : `RecordBatch::try_new` compare le
-        // champ du schéma à celui du tableau construit, et rejette l'écart.
-        let DataType::List(champ) = PgDecoding::List(Box::new(PgDecoding::Text)).arrow_type()
+    fn the_list_field_type_is_the_one_the_decoder_builds() {
+        // The name `item` is not decorative: `RecordBatch::try_new` compares
+        // the schema field to that of the built array, and rejects the gap.
+        let DataType::List(field) = PgDecoding::List(Box::new(PgDecoding::Text)).arrow_type()
         else {
-            panic!("une liste doit produire un DataType::List");
+            panic!("a list must produce a DataType::List");
         };
-        assert_eq!(champ.name(), "item");
-        assert!(champ.is_nullable(), "un élément de tableau peut être NULL");
+        assert_eq!(field.name(), "item");
+        assert!(field.is_nullable(), "an array element can be NULL");
     }
 
     #[test]
-    fn money_reste_opaque_faute_de_connaitre_son_unite() {
-        // Le rendre en Int64 inviterait à sommer des montants de devises
-        // différentes sans jamais afficher laquelle.
+    fn money_stays_opaque_for_lack_of_knowing_its_unit() {
+        // Rendering it as Int64 would invite summing amounts of different
+        // currencies without ever showing which.
         assert_eq!(decoding_for_oid(oid::MONEY), Some(PgDecoding::Opaque));
     }
 }

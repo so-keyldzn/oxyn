@@ -1,30 +1,29 @@
-//! Représentation des types du domaine dans les colonnes SQLite.
+//! Representation of domain types in SQLite columns.
 //!
-//! Un seul endroit décide comment un identifiant, une intention ou un risque
-//! s'écrit dans une colonne. Disperser ces conversions dans les six modules de
-//! tables garantirait qu'un jour deux d'entre eux ne s'accordent plus, et
-//! l'endroit où cela se verrait est la piste d'audit.
+//! A single place decides how an identifier, an intent or a risk is written
+//! into a column. Scattering these conversions across the six table modules
+//! would guarantee that two of them one day stop agreeing, and the place where
+//! it would show is the audit trail.
 //!
-//! # Deux encodages, et pourquoi il y en a deux
+//! # Two encodings, and why there are two
 //!
-//! * **Nom stable** pour les énumérations **fermées** du domaine
-//!   ([`StatementIntent`], [`Environment`]) : elles portent déjà un `as_str()`
-//!   qui fait partie de leur contrat, et une valeur de plus y est une rupture
-//!   visible à la compilation.
-//! * **Étiquette JSON** (via `serde`) pour les énumérations `#[non_exhaustive]`
-//!   (`MutationRisk`, `QueryLanguage`). Un `match` exhaustif y est
-//!   impossible, et une branche `_ => "unknown"` étiquetterait silencieusement
-//!   de la même façon deux risques différents — dans le journal d'audit,
-//!   précisément. `serde` garde le nom aligné sur le type sans intervention.
+//! * **Stable name** for the domain's **closed** enums ([`StatementIntent`],
+//!   [`Environment`]): they already carry an `as_str()` that is part of their
+//!   contract, and one more value is a break visible at compile time.
+//! * **JSON tag** (via `serde`) for `#[non_exhaustive]` enums
+//!   (`MutationRisk`, `QueryLanguage`). An exhaustive `match` is impossible
+//!   there, and a `_ => "unknown"` arm would silently label two different
+//!   risks the same way — in the audit journal, precisely. `serde` keeps the
+//!   name aligned with the type without intervention.
 //!
-//! # Relire est plus permissif qu'écrire
+//! # Reading back is more permissive than writing
 //!
-//! Une valeur inattendue **en lecture** ne fait pas échouer la lecture : elle
-//! retombe sur la valeur la plus contraignante et émet un `warn`. Un journal
-//! d'audit qu'on ne peut plus ouvrir parce qu'une ligne est étrange ne protège
-//! personne, et « le plus contraignant » est le défaut de tout `oxyn-core` :
-//! [`StatementIntent::Unknown`] compte pour mutant,
-//! [`Environment::Production`] est le défaut.
+//! An unexpected value **on read** does not fail the read: it falls back to
+//! the most restrictive value and emits a `warn`. An audit journal that can
+//! no longer be opened because one row is odd protects no one, and "the most
+//! restrictive" is the default throughout `oxyn-core`:
+//! [`StatementIntent::Unknown`] counts as mutating, [`Environment::Production`]
+//! is the default.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -35,11 +34,11 @@ use serde::de::DeserializeOwned;
 
 use crate::error::{Result, StoreError};
 
-/// Relit un identifiant UUID écrit en TEXT.
+/// Reads back a UUID identifier written as TEXT.
 ///
-/// # Erreurs
-/// [`StoreError::Corrupted`] si la colonne ne contient pas un UUID. Le message
-/// nomme la colonne, jamais la valeur (I-03).
+/// # Errors
+/// [`StoreError::Corrupted`] if the column does not hold a UUID. The message
+/// names the column, never the value (I-03).
 pub(crate) fn parse_id<T>(raw: &str, field: &'static str) -> Result<T>
 where
     T: FromStr<Err = IdParseError>,
@@ -50,10 +49,10 @@ where
     })
 }
 
-/// Variante optionnelle de [`parse_id`] : une colonne `NULL` rend `None`.
+/// Optional variant of [`parse_id`]: a `NULL` column returns `None`.
 ///
-/// # Erreurs
-/// Voir [`parse_id`].
+/// # Errors
+/// See [`parse_id`].
 pub(crate) fn parse_id_opt<T>(raw: Option<String>, field: &'static str) -> Result<Option<T>>
 where
     T: FromStr<Err = IdParseError>,
@@ -61,23 +60,23 @@ where
     raw.as_deref().map(|s| parse_id(s, field)).transpose()
 }
 
-/// Encode une valeur `serde` en étiquette JSON destinée à une colonne TEXT.
+/// Encodes a `serde` value as a JSON tag meant for a TEXT column.
 ///
-/// Pour une énumération à variantes unitaires, cela produit `"truncate"` —
-/// guillemets compris. C'est volontaire : la colonne reste lisible par un
-/// humain **et** relisible sans ambiguïté par `serde` (I-11).
+/// For an enum with unit variants, this produces `"truncate"` — quotes
+/// included. That is deliberate: the column stays readable by a human **and**
+/// readable back without ambiguity by `serde` (I-11).
 ///
-/// # Erreurs
-/// [`StoreError::Json`] si la valeur n'est pas sérialisable.
+/// # Errors
+/// [`StoreError::Json`] if the value is not serializable.
 pub(crate) fn tag_to_json<T: Serialize>(value: &T) -> Result<String> {
     Ok(serde_json::to_string(value)?)
 }
 
-/// Relit une étiquette écrite par [`tag_to_json`].
+/// Reads back a tag written by [`tag_to_json`].
 ///
-/// # Erreurs
-/// [`StoreError::Corrupted`] si l'étiquette ne correspond à aucune variante
-/// connue — cas d'un état local écrit par une version plus récente.
+/// # Errors
+/// [`StoreError::Corrupted`] if the tag matches no known variant — the case of
+/// a local state written by a newer version.
 pub(crate) fn tag_from_json<T: DeserializeOwned>(raw: &str, field: &'static str) -> Result<T> {
     serde_json::from_str(raw).map_err(|err| StoreError::Corrupted {
         field,
@@ -85,11 +84,11 @@ pub(crate) fn tag_from_json<T: DeserializeOwned>(raw: &str, field: &'static str)
     })
 }
 
-/// Relit une intention d'instruction.
+/// Reads back a statement intent.
 ///
-/// Une étiquette inconnue rend [`StatementIntent::Unknown`], qui compte pour
-/// **mutant** : c'est la seule retombée qui ne fait pas passer une écriture
-/// pour une lecture dans la piste d'audit.
+/// An unknown tag returns [`StatementIntent::Unknown`], which counts as
+/// **mutating**: it is the only fallback that does not pass a write off as a
+/// read in the audit trail.
 pub(crate) fn intent_from_text(raw: &str) -> StatementIntent {
     match raw {
         "read" => StatementIntent::Read,
@@ -107,17 +106,16 @@ pub(crate) fn intent_from_text(raw: &str) -> StatementIntent {
     }
 }
 
-/// Relit une famille d'erreur.
+/// Reads back an error class.
 ///
-/// Une valeur inconnue rend [`ErrorClass::Ambiguous`], et c'est le sens de
-/// I-13 appliqué jusqu'à la relecture : une erreur dont on ne sait plus dire
-/// si le serveur a appliqué l'écriture ne se retente pas.
+/// An unknown value returns [`ErrorClass::Ambiguous`], and that is I-13
+/// applied down to reading back: an error for which it can no longer be said
+/// whether the server applied the write is not retried.
 ///
-/// Les trois codes français sont ceux qu'écrivaient les versions antérieures
-/// au 2026-09-16. Ils sont relus tels quels : sans eux, une piste d'audit déjà
-/// sur le disque verrait ses erreurs permanentes et transitoires retomber
-/// toutes les trois sur « ambiguë », c'est-à-dire perdre l'information que la
-/// colonne existe pour porter.
+/// The three French codes are those written by versions before 2026-09-16.
+/// They are read back as is: without them, an audit trail already on disk
+/// would see its permanent and transient errors all fall back to "ambiguous",
+/// that is, lose the information the column exists to carry.
 pub(crate) fn error_class_from_text(raw: &str) -> ErrorClass {
     match raw {
         "transient" | "transitoire" => ErrorClass::Transient,
@@ -133,11 +131,11 @@ pub(crate) fn error_class_from_text(raw: &str) -> ErrorClass {
     }
 }
 
-/// Relit un marquage d'environnement.
+/// Reads back an environment marking.
 ///
-/// Une étiquette inconnue rend [`Environment::Production`]. C'est la règle de
-/// SECURITY appliquée jusque dans la relecture : un environnement qu'on ne sait
-/// pas lire n'est pas un environnement de développement.
+/// An unknown tag returns [`Environment::Production`]. That is the SECURITY
+/// rule applied down to reading back: an environment that cannot be read is
+/// not a development environment.
 pub(crate) fn environment_from_text(raw: &str) -> Environment {
     Environment::from_str(raw).unwrap_or_else(|_| {
         tracing::warn!(
@@ -148,20 +146,20 @@ pub(crate) fn environment_from_text(raw: &str) -> Environment {
     })
 }
 
-/// Relit le niveau de confidentialité d'une connexion.
+/// Reads back a connection's privacy tier.
 ///
-/// Deux replis, et la distinction est la décision :
+/// Two fallbacks, and the distinction is the decision:
 ///
-/// * **`None`** — la ligne a été écrite avant la migration 8, par un binaire
-///   qui ne connaissait pas ce réglage. L'utilisateur n'en a donc jamais
-///   choisi, et le défaut d'[ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md),
-///   `Metadata`, est la bonne réponse ;
-/// * **valeur illisible** — quelqu'un a écrit quelque chose que ce binaire ne
-///   sait pas lire. Ce n'est **pas** une absence : c'est un réglage dont on a
-///   perdu le sens, et il retombe sur le plus contraignant, `Local`. Une base
-///   dont on ne sait plus ce qu'elle autorisait n'obtient pas le bénéfice du
-///   doute — c'est la même logique qui fait valoir `production` à une connexion
-///   sans environnement renseigné ([I-02](../../../CLAUDE.md#i-02)).
+/// * **`None`** — the row was written before migration 8, by a binary that
+///   did not know this setting. The user therefore never chose one, and
+///   [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)'s default,
+///   `Metadata`, is the right answer;
+/// * **unreadable value** — someone wrote something this binary cannot read.
+///   It is **not** an absence: it is a setting whose meaning was lost, and it
+///   falls back to the most restrictive, `Local`. A database for which it is
+///   no longer known what it allowed does not get the benefit of the doubt —
+///   the same logic that makes a connection with no environment set count as
+///   `production` ([I-02](../../../CLAUDE.md#i-02)).
 pub(crate) fn privacy_tier_from_column(raw: Option<&str>) -> PrivacyTier {
     let Some(raw) = raw else {
         return PrivacyTier::default();
@@ -175,41 +173,40 @@ pub(crate) fn privacy_tier_from_column(raw: Option<&str>) -> PrivacyTier {
     })
 }
 
-/// Convertit une durée en millisecondes stockables.
+/// Converts a duration into storable milliseconds.
 ///
-/// Sature plutôt que de déborder : une durée absurde dans le journal vaut mieux
-/// qu'une panique ou qu'un `as` qui tronquerait en silence.
+/// Saturates rather than overflows: an absurd duration in the journal is
+/// better than a panic or an `as` that would silently truncate.
 pub(crate) fn duration_to_ms(duration: Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
-/// Convertit un compte du domaine (`u64`) vers l'entier signé de SQLite.
+/// Converts a domain count (`u64`) to SQLite's signed integer.
 ///
-/// Sature à [`i64::MAX`] : SQLite n'a pas d'entier non signé, et aucun compte
-/// de lignes réel n'approche cette borne.
+/// Saturates at [`i64::MAX`]: SQLite has no unsigned integer, and no real row
+/// count comes near this bound.
 pub(crate) fn count_to_i64(count: u64) -> i64 {
     i64::try_from(count).unwrap_or(i64::MAX)
 }
 
-/// Convertit un compte relu depuis SQLite vers le domaine.
+/// Converts a count read back from SQLite to the domain.
 ///
-/// Une valeur négative — impossible par construction, donc signe d'une
-/// modification hors d'Oxyn — rend `0` plutôt qu'un nombre gigantesque.
+/// A negative value — impossible by construction, hence the sign of a
+/// modification outside Oxyn — returns `0` rather than a gigantic number.
 pub(crate) fn count_from_i64(count: i64) -> u64 {
     u64::try_from(count).unwrap_or(0)
 }
 
-/// Convertit une limite de requête vers l'entier de SQLite.
+/// Converts a query limit to SQLite's integer.
 pub(crate) fn limit_to_i64(limit: usize) -> i64 {
     i64::try_from(limit).unwrap_or(i64::MAX)
 }
 
-/// Échappe un motif `LIKE` saisi par l'utilisateur.
+/// Escapes a `LIKE` pattern typed by the user.
 ///
-/// `%`, `_` et `\` y sont des métacaractères. Chercher `100%` dans
-/// l'historique doit trouver `100%`, pas toutes les lignes. Le motif est
-/// ensuite **lié** comme paramètre, jamais concaténé (I-10) ; la clause doit
-/// porter `ESCAPE '\'`.
+/// `%`, `_` and `\` are metacharacters there. Searching `100%` in the history
+/// must find `100%`, not every row. The pattern is then **bound** as a
+/// parameter, never concatenated (I-10); the clause must carry `ESCAPE '\'`.
 pub(crate) fn escape_like(needle: &str) -> String {
     let mut out = String::with_capacity(needle.len() + 2);
     for c in needle.chars() {
@@ -227,90 +224,90 @@ mod tests {
     use oxyn_core::{ConnectionId, MutationRisk, QueryLanguage, SqlDialect};
 
     #[test]
-    fn un_identifiant_illisible_nomme_la_colonne_pas_la_valeur() {
-        let erreur = parse_id::<ConnectionId>("base-de-production-banque", "connection_id")
-            .expect_err("ce n'est pas un UUID");
-        let message = erreur.to_string();
+    fn an_unreadable_identifier_names_the_column_not_the_value() {
+        let error = parse_id::<ConnectionId>("bank-production-db", "connection_id")
+            .expect_err("this is not a UUID");
+        let message = error.to_string();
         assert!(message.contains("connection_id"));
-        assert!(!message.contains("banque"), "la valeur a fuité : {message}");
+        assert!(!message.contains("banque"), "the value leaked: {message}");
     }
 
     #[test]
-    fn aller_retour_des_etiquettes_non_exhaustives() {
-        // MutationRisk et QueryLanguage sont `#[non_exhaustive]` : leur nom
-        // stable vient de serde, pas d'un `match` que l'on oublierait d'étendre.
-        for risque in [
+    fn non_exhaustive_tags_round_trip() {
+        // MutationRisk and QueryLanguage are `#[non_exhaustive]`: their stable
+        // name comes from serde, not from a `match` one would forget to extend.
+        for risk in [
             MutationRisk::None,
             MutationRisk::UnboundedUpdate,
             MutationRisk::UnboundedDelete,
             MutationRisk::Truncate,
             MutationRisk::DropObject,
         ] {
-            let brut = tag_to_json(&risque).expect("sérialisation");
-            let relu: MutationRisk = tag_from_json(&brut, "risk").expect("désérialisation");
-            assert_eq!(risque, relu);
+            let raw = tag_to_json(&risk).expect("serialization");
+            let read_back: MutationRisk = tag_from_json(&raw, "risk").expect("deserialization");
+            assert_eq!(risk, read_back);
         }
 
-        let langage = QueryLanguage::Sql(SqlDialect::Postgres);
-        let brut = tag_to_json(&langage).expect("sérialisation");
-        let relu: QueryLanguage = tag_from_json(&brut, "language").expect("désérialisation");
+        let language = QueryLanguage::Sql(SqlDialect::Postgres);
+        let raw = tag_to_json(&language).expect("serialization");
+        let read_back: QueryLanguage = tag_from_json(&raw, "language").expect("deserialization");
         assert_eq!(
-            langage, relu,
-            "le dialecte ne doit pas être perdu par l'encodage"
+            language, read_back,
+            "the dialect must not be lost by the encoding"
         );
     }
 
     #[test]
-    fn une_intention_inconnue_compte_pour_mutante() {
+    fn an_unknown_intent_counts_as_mutating() {
         assert_eq!(intent_from_text("read"), StatementIntent::Read);
         assert_eq!(intent_from_text("grant"), StatementIntent::Grant);
 
-        let inconnue = intent_from_text("vaporize");
-        assert_eq!(inconnue, StatementIntent::Unknown);
+        let unknown = intent_from_text("vaporize");
+        assert_eq!(unknown, StatementIntent::Unknown);
         assert!(
-            inconnue.is_mutating(),
-            "une intention illisible ne doit jamais passer pour une lecture"
+            unknown.is_mutating(),
+            "an unreadable intent must never pass for a read"
         );
     }
 
     #[test]
-    fn une_famille_derreur_se_relit_dans_les_deux_langues() {
-        // Ce qu'écrit la version courante.
-        for famille in [
+    fn an_error_class_reads_back_in_both_languages() {
+        // What the current version writes.
+        for family in [
             ErrorClass::Transient,
             ErrorClass::Permanent,
             ErrorClass::Ambiguous,
         ] {
-            assert_eq!(error_class_from_text(famille.as_str()), famille);
+            assert_eq!(error_class_from_text(family.as_str()), family);
         }
 
-        // Ce qu'ont écrit les versions antérieures au 2026-09-16. Sans ces
-        // trois bras, une piste d'audit déjà sur le disque perdrait la
-        // distinction que la colonne existe pour porter.
+        // What versions before 2026-09-16 wrote. Without these three arms, an
+        // audit trail already on disk would lose the distinction the column
+        // exists to carry.
         assert_eq!(error_class_from_text("transitoire"), ErrorClass::Transient);
         assert_eq!(error_class_from_text("permanente"), ErrorClass::Permanent);
         assert_eq!(error_class_from_text("ambiguë"), ErrorClass::Ambiguous);
 
         assert_eq!(
-            error_class_from_text("vaporisée"),
+            error_class_from_text("vaporised"),
             ErrorClass::Ambiguous,
-            "I-13 jusqu'à la relecture : ce qu'on ne sait pas lire ne se retente pas"
+            "I-13 down to reading back: what cannot be read is not retried"
         );
-        assert!(!error_class_from_text("vaporisée").is_retryable());
+        assert!(!error_class_from_text("vaporised").is_retryable());
     }
 
     #[test]
-    fn un_environnement_inconnu_vaut_production() {
+    fn an_unknown_environment_counts_as_production() {
         assert_eq!(environment_from_text("local"), Environment::Local);
         assert_eq!(environment_from_text("staging"), Environment::Staging);
         assert!(
             environment_from_text("preprod-bis").is_production(),
-            "SECURITY : ce qu'on ne sait pas lire est de la production"
+            "SECURITY: what cannot be read is production"
         );
     }
 
     #[test]
-    fn les_metacaracteres_like_sont_echappes() {
+    fn like_metacharacters_are_escaped() {
         assert_eq!(escape_like("100%"), "100\\%");
         assert_eq!(escape_like("a_b"), "a\\_b");
         assert_eq!(escape_like("c:\\tmp"), "c:\\\\tmp");
@@ -318,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn les_comptes_saturent_au_lieu_de_deborder() {
+    fn counts_saturate_instead_of_overflowing() {
         assert_eq!(count_to_i64(42), 42);
         assert_eq!(count_to_i64(u64::MAX), i64::MAX);
         assert_eq!(count_from_i64(-1), 0);

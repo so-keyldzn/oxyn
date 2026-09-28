@@ -6,63 +6,63 @@ paths:
 
 # Drivers — conventions
 
-Le contrat fait autorité : [DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md). Il
-n'est pas résumé ici. Cette règle porte ce qui se rate à l'écriture.
+The contract is authoritative: [DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md).
+It is not summarized here. This rule carries what gets missed while writing.
 
-## Avant d'écrire une ligne
+## Before writing a line
 
-Passer par [`/driver`](../commands/driver.md). La commande charge le contrat, la
-liste de contrôle et la question qui vient avant toutes les autres : **est-ce un
-nouveau protocole, ou un produit qui parle un protocole déjà implémenté ?**
+Go through [`/driver`](../commands/driver.md). The command loads the contract,
+the checklist and the question that comes before all the others: **is it a new
+protocol, or a product that speaks an already implemented protocol?**
 Redshift ≡ PostgreSQL, MariaDB ≡ MySQL, OpenSearch ≡ Elasticsearch
-([ADR-0003](../../docs/adr/0003-driver-capabilities.md)). Une crate en trop, ce
-sont deux décodeurs de protocole à maintenir pour un dialecte.
+([ADR-0003](../../docs/adr/0003-driver-capabilities.md)). One crate too many
+means two protocol decoders to maintain for one dialect.
 
-## Les quatre pièges
+## The four traps
 
-**Le lot se dimensionne en octets, pas en lignes.** Mille lignes portant chacune
-un BLOB d'un mégaoctet font un gigaoctet. Un `batch_size` en nombre de lignes
-marche sur les tables de démonstration et déclenche l'OOM sur les vraies.
+**A batch is sized in bytes, not in rows.** A thousand rows each carrying a
+one-megabyte BLOB make a gigabyte. A `batch_size` counted in rows works on demo
+tables and triggers the OOM on real ones.
 
-**L'annulation doit atteindre le serveur.** `pg_cancel_backend`, `KILL QUERY`,
-`sqlite3_interrupt`. Abandonner le futur ne libère ni la connexion ni le verrou :
-au dixième onglet fermé, la base refuse les connexions et l'utilisateur conclut
-qu'Oxyn a cassé sa production. Un driver qui ne sait pas annuler côté serveur le
-**déclare** dans ses capacités.
+**Cancellation must reach the server.** `pg_cancel_backend`, `KILL QUERY`,
+`sqlite3_interrupt`. Dropping the future frees neither the connection nor the
+lock: by the tenth closed tab, the database refuses connections and the user
+concludes that Oxyn broke their production. A driver that cannot cancel
+server-side **declares** it in its capabilities.
 
-**Les capacités s'évaluent par session, pas par driver.** La version du serveur,
-ses extensions et les droits du compte changent ce qui est disponible. Le même
-driver PostgreSQL parle à une base 12 et à une base 17.
+**Capabilities are evaluated per session, not per driver.** The server version,
+its extensions and the account's privileges change what is available. The same
+PostgreSQL driver talks to a version 12 database and to a version 17 one.
 
-**L'erreur ambiguë ne se retente pas** ([I-13](../../CLAUDE.md#i-13)). Un délai
-dépassé pendant une écriture n'est pas transitoire. C'est le cas le plus tentant
-à traiter par une boucle de retry, et celui qui crée des doublons invisibles.
+**An ambiguous error is not retried** ([I-13](../../CLAUDE.md#i-13)). A timeout
+during a write is not transient. It is the case most tempting to handle with a
+retry loop, and the one that creates invisible duplicates.
 
 ## Types
 
-La table de correspondance va **dans les deux sens** et documente ses pertes.
-Ce qui se perd le plus souvent, et le plus silencieusement :
+The mapping table goes **both ways** and documents its losses. What gets lost
+most often, and most silently:
 
-- un `NUMERIC` PostgreSQL sans précision ne tient dans aucun type flottant ;
-  le convertir en `f64` corrompt des montants ;
-- un `timestamp` sans fuseau ne se voit **jamais** attribuer un fuseau à la
-  lecture ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#7-il-traite-les-fuseaux-et-les-types-temporels-comme-des-données-pas-comme-du-texte)) ;
-- un `u64` MySQL au-delà de 2^53 ne survit pas à un passage par un flottant ;
-- un type inconnu se rend en octets bruts **avec son identifiant de type**,
-  jamais en chaîne « best effort ».
+- a PostgreSQL `NUMERIC` without precision fits in no floating-point type;
+  converting it to `f64` corrupts amounts;
+- a `timestamp` without time zone is **never** assigned a time zone on read
+  ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#7-it-treats-time-zones-and-temporal-types-as-data-not-as-text));
+- a MySQL `u64` beyond 2^53 does not survive a trip through a float;
+- an unknown type is returned as raw bytes **with its type identifier**, never
+  as a "best effort" string.
 
-## Interdits
+## Forbidden
 
-| Interdit | Pourquoi |
+| Forbidden | Why |
 |---|---|
-| Dépendre d'`oxyn-desktop`, d'`oxyn-ai`, ou d'un autre driver | inverse le sens des dépendances. **`oxyn-core` est au contraire la dépendance attendue** — c'est le vocabulaire commun, et les deux drivers livrés en dépendent ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md)) |
-| Lire une variable d'environnement, écrire un fichier | un driver reçoit sa configuration |
-| Retenter tout seul | la politique de reprise appartient à l'appelant, seul à savoir si l'opération est rejouable |
-| `SET`/`USE` non déclaré | change en silence le sens des requêtes suivantes de l'utilisateur |
-| Journaliser une valeur liée | [I-03](../../CLAUDE.md#i-03) |
+| Depending on `oxyn-desktop`, `oxyn-ai`, or another driver | reverses the direction of dependencies. **`oxyn-core`, on the contrary, is the expected dependency** — it is the shared vocabulary, and both shipped drivers depend on it ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md)) |
+| Reading an environment variable, writing a file | a driver receives its configuration |
+| Retrying on its own | the retry policy belongs to the caller, the only one who knows whether the operation can be replayed |
+| Undeclared `SET`/`USE` | silently changes the meaning of the user's next queries |
+| Logging a bound value | [I-03](../../CLAUDE.md#i-03) |
 
-## Vérifier
+## Verify
 
-[Liste de contrôle](../checklists/revue-driver.md), puis `make qualite`.
-Les deux tests qui ne se contournent pas : **l'annulation qui prouve l'arrêt
-côté serveur**, et **le flux sur un volume qui ne tiendrait pas en mémoire**.
+[Checklist](../checklists/revue-driver.md), then `make qualite`. The two tests
+that cannot be skipped: **cancellation that proves the server-side stop**, and
+**streaming over a volume that would not fit in memory**.

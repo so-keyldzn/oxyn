@@ -1,12 +1,12 @@
-//! Échafaudage partagé par les tests de la crate.
+//! Scaffolding shared by the crate's tests.
 //!
-//! Compilé uniquement sous `cfg(test)`. Il vit dans son propre module parce que
-//! les tests du registre et ceux de l'hôte WebAssembly ont besoin du même
-//! répertoire jetable et des mêmes manifestes : deux copies divergeraient, et
-//! c'est alors la plus laxiste qui servirait de référence.
+//! Compiled only under `cfg(test)`. It lives in its own module because the
+//! registry tests and those of the WebAssembly host need the same throwaway
+//! directory and the same manifests: two copies would diverge, and the laxer
+//! one would then serve as the reference.
 //!
-//! `tempfile` n'est pas au contrat de dépendances de cette crate ; la
-//! bibliothèque standard suffit à ce que ces tests demandent.
+//! `tempfile` is not in this crate's dependency contract; the standard library
+//! is enough for what these tests ask.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,57 +15,57 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::manifest::MANIFEST_FILE;
 
-/// Un répertoire temporaire dont la durée de vie est celle du test.
+/// A temporary directory whose lifetime is the test's.
 #[derive(Debug)]
 pub struct TempDir(PathBuf);
 
 impl TempDir {
-    /// Crée un répertoire unique dans le répertoire temporaire du système.
+    /// Creates a unique directory in the system's temporary directory.
     pub fn new(etiquette: &str) -> Self {
-        static COMPTEUR: AtomicU32 = AtomicU32::new(0);
-        let rang = COMPTEUR.fetch_add(1, Ordering::Relaxed);
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let rank = COUNTER.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |ecart| ecart.as_nanos());
-        let chemin = std::env::temp_dir().join(format!(
-            "oxyn-plugin-{etiquette}-{}-{rang}-{nanos}",
+            .map_or(0, |gap| gap.as_nanos());
+        let item_path = std::env::temp_dir().join(format!(
+            "oxyn-plugin-{etiquette}-{}-{rank}-{nanos}",
             std::process::id()
         ));
-        fs::create_dir_all(&chemin).expect("création du répertoire temporaire de test");
-        Self(chemin)
+        fs::create_dir_all(&item_path).expect("creating the temporary test directory");
+        Self(item_path)
     }
 
-    /// La racine du répertoire.
+    /// The root of the directory.
     pub fn path(&self) -> &Path {
         &self.0
     }
 
-    /// Dépose un plugin : un sous-répertoire et son `plugin.toml`.
-    pub fn plugin(&self, slug: &str, manifeste: &str) {
+    /// Drops a plugin: a subdirectory and its `plugin.toml`.
+    pub fn plugin(&self, slug: &str, manifest_toml: &str) {
         let dossier = self.0.join(slug);
-        fs::create_dir_all(&dossier).expect("création du répertoire de plugin");
-        fs::write(dossier.join(MANIFEST_FILE), manifeste).expect("écriture du manifeste");
+        fs::create_dir_all(&dossier).expect("creating the plugin directory");
+        fs::write(dossier.join(MANIFEST_FILE), manifest_toml).expect("writing the manifest");
     }
 
-    /// Dépose un fichier quelconque dans le répertoire d'un plugin.
-    pub fn file(&self, slug: &str, nom: &str, contenu: &[u8]) -> PathBuf {
+    /// Drops any file into a plugin's directory.
+    pub fn file(&self, slug: &str, ident: &str, content: &[u8]) -> PathBuf {
         let dossier = self.0.join(slug);
-        fs::create_dir_all(&dossier).expect("création du répertoire de plugin");
-        let chemin = dossier.join(nom);
-        fs::write(&chemin, contenu).expect("écriture du fichier");
-        chemin
+        fs::create_dir_all(&dossier).expect("creating the plugin directory");
+        let item_path = dossier.join(ident);
+        fs::write(&item_path, content).expect("writing the file");
+        item_path
     }
 }
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        // Un échec de nettoyage ne doit pas masquer l'échec du test lui-même.
+        // A cleanup failure must not hide the failure of the test itself.
         let _ = fs::remove_dir_all(&self.0);
     }
 }
 
-/// Un manifeste d'agent déclaratif, avec la liste d'outils donnée telle quelle.
-pub fn agent_toml(slug: &str, outils: &str) -> String {
+/// A declarative agent manifest, with the tool list given as is.
+pub fn agent_toml(slug: &str, tools: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\
          name        = \"Agent {slug}\"\n\
@@ -79,12 +79,12 @@ pub fn agent_toml(slug: &str, outils: &str) -> String {
          [agent]\n\
          name          = \"Schema\"\n\
          system_prompt = \"You review database schemas.\"\n\
-         allowed_tools = [{outils}]\n"
+         allowed_tools = [{tools}]\n"
     )
 }
 
-/// Un manifeste de format d'export, avec la liste d'hôtes donnée telle quelle.
-pub fn export_toml(slug: &str, reseau: &str) -> String {
+/// An export format manifest, with the host list given as is.
+pub fn export_toml(slug: &str, net: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\
          name        = \"Export {slug}\"\n\
@@ -94,11 +94,11 @@ pub fn export_toml(slug: &str, reseau: &str) -> String {
          entrypoint  = \"{slug}.wasm\"\n\
          \n\
          [permissions]\n\
-         network = [{reseau}]\n"
+         network = [{net}]\n"
     )
 }
 
-/// Un manifeste de driver, qui revendique le protocole `slug`.
+/// A driver manifest, which claims the `slug` protocol.
 pub fn driver_toml(slug: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\

@@ -1,35 +1,35 @@
-//! Le contrat d'un fournisseur de modèles, et le registre qui les tient.
+//! The contract of a model provider, and the registry that holds them.
 //!
-//! # Aucun fournisseur n'est requis
+//! # No provider is required
 //!
-//! [`ProviderRegistry::default`] est **vide**, et c'est l'état nominal : sans
-//! configuration, le workspace IA est absent de l'interface et Oxyn reste un
-//! client de base de données complet
-//! ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)). Aucun chemin de
-//! cette crate ne construit un fournisseur tout seul, ne lit une variable
-//! d'environnement au démarrage, ni ne « détecte » un Ollama qui tournerait sur
-//! la machine. Un fournisseur existe parce que l'utilisateur l'a inscrit.
+//! [`ProviderRegistry::default`] is **empty**, and it is the nominal state:
+//! without configuration, the AI workspace is absent from the interface and
+//! Oxyn remains a complete database client
+//! ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)). No path of this
+//! crate builds a provider on its own, reads an environment variable at
+//! startup, or "detects" an Ollama that would be running on the machine. A
+//! provider exists because the user registered it.
 //!
-//! # `ProviderId` vit dans `oxyn-core`, et c'est le sujet
+//! # `ProviderId` lives in `oxyn-core`, and that is the point
 //!
-//! [`ProviderId`] est défini dans [`oxyn_core::ai`] et ré-exporté ici. Il n'y a
-//! **qu'une** définition dans le dépôt, pour la même raison que
-//! [`PrivacyTier`](oxyn_core::PrivacyTier) : une
-//! [`Command`](oxyn_core::Command) porte l'identité d'un fournisseur — c'est le
-//! bus qui le déclare, le liste et le retire —, et `oxyn-core` ne peut pas
-//! dépendre d'`oxyn-llm`
+//! [`ProviderId`] is defined in [`oxyn_core::ai`] and re-exported here. There
+//! is **only one** definition in the repository, for the same reason as
+//! [`PrivacyTier`](oxyn_core::PrivacyTier): a
+//! [`Command`](oxyn_core::Command) carries the identity of a provider — it is
+//! the bus that declares it, lists it and removes it —, and `oxyn-core` cannot
+//! depend on `oxyn-llm`
 //! ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
 //!
-//! Ce module ne garde donc que ce qui a besoin d'un transport : le trait, le
-//! registre, et la fabrique qui traduit une
-//! [`oxyn_core::AiProviderKind`] en implémentation concrète.
+//! This module therefore only keeps what needs a transport: the trait, the
+//! registry, and the factory that translates an
+//! [`oxyn_core::AiProviderKind`] into a concrete implementation.
 //!
-//! # Pourquoi un trait
+//! # Why a trait
 //!
-//! Trois familles de protocoles incompatibles (compatible OpenAI, Anthropic,
-//! Gemini), plus les fournisseurs à venir par plugin : c'est une **frontière**,
-//! pas une indirection à un seul appelant. Le trait est objet-sûr — il est
-//! utilisé derrière `Arc<dyn LlmProvider>` — et cette contrainte est dure.
+//! Three incompatible protocol families (OpenAI-compatible, Anthropic,
+//! Gemini), plus the providers to come through plugins: it is a **boundary**,
+//! not an indirection with a single caller. The trait is object-safe — it is
+//! used behind `Arc<dyn LlmProvider>` — and this constraint is hard.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -46,92 +46,90 @@ use crate::types::{ChatEvent, ChatRequest, ModelInfo};
 
 pub use oxyn_core::ai::ProviderId;
 
-/// Normalise une URL de base pour que [`Url::join`] **ajoute** au lieu de
-/// remplacer.
+/// Normalizes a base URL so that [`Url::join`] **appends** instead of
+/// replacing.
 ///
-/// Sans `/` final, `Url::join` remplace le dernier segment du chemin :
-/// `http://hôte/v1` joint à `chat/completions` donne `http://hôte/chat/completions`
-/// et la requête part à côté. Le piège ne se voit qu'en exécution, contre un
-/// point d'accès configuré à la main.
+/// Without a final `/`, `Url::join` replaces the last segment of the path:
+/// `http://host/v1` joined with `chat/completions` gives
+/// `http://host/chat/completions` and the request goes astray. The trap only
+/// shows at run time, against an endpoint configured by hand.
 #[must_use]
 pub(crate) fn normalize_base_url(mut url: Url) -> Url {
     if !url.path().ends_with('/') {
-        let chemin = format!("{}/", url.path());
-        url.set_path(&chemin);
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
     }
     url
 }
 
-/// Ce qu'un fournisseur de modèles doit savoir faire.
+/// What a model provider must be able to do.
 ///
-/// Le trait est objet-sûr : il vit derrière `Arc<dyn LlmProvider>` dans le
-/// [`ProviderRegistry`]. `fmt::Debug` est une super-borne délibérée — un
-/// fournisseur qui porte une clé doit **écrire** son `Debug` à la main plutôt
-/// que d'être exempté de l'obligation d'en avoir un (I-03).
+/// The trait is object-safe: it lives behind `Arc<dyn LlmProvider>` in the
+/// [`ProviderRegistry`]. `fmt::Debug` is a deliberate supertrait bound — a
+/// provider that carries a key must **write** its `Debug` by hand rather than
+/// be exempted from having one (I-03).
 #[async_trait]
 pub trait LlmProvider: fmt::Debug + Send + Sync {
-    /// Identifiant sous lequel ce fournisseur est inscrit.
+    /// Identifier under which this provider is registered.
     fn id(&self) -> ProviderId;
 
-    /// Point d'accès réseau, quand le fournisseur en a un.
+    /// Network endpoint, when the provider has one.
     ///
-    /// Sert à classer l'envoi comme local ou distant
-    /// ([`crate::reach`]) : c'est ce qui permet à l'interface de dire en
-    /// permanence où part une requête, comme
-    /// [`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md) l'exige. Le défaut rend
-    /// `None`, pour un fournisseur qui n'a pas d'URL — un modèle chargé en
-    /// processus, par exemple.
+    /// Used to classify the sending as local or remote ([`crate::reach`]):
+    /// that is what lets the interface say at all times where a request goes,
+    /// as [`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md) requires. The default
+    /// returns `None`, for a provider that has no URL — an in-process model,
+    /// for example.
     fn endpoint(&self) -> Option<&Url> {
         None
     }
 
-    /// Liste les modèles offerts.
+    /// Lists the models offered.
     ///
-    /// # Erreurs
-    /// Toute erreur d'échange avec le fournisseur : réseau, statut d'échec,
-    /// réponse illisible. Un fournisseur local éteint produit une erreur
-    /// transitoire, et c'est ce qui permet à l'interface de proposer « réessayer »
-    /// plutôt que « reconfigurer ».
+    /// # Errors
+    /// Any error exchanging with the provider: network, failure status,
+    /// unreadable response. A local provider that is switched off produces a
+    /// transient error, and that is what lets the interface offer "retry"
+    /// rather than "reconfigure".
     async fn models(&self) -> Result<Vec<ModelInfo>>;
 
-    /// Compte les jetons d'entrée d'une requête, si le fournisseur sait le
-    /// faire.
+    /// Counts the input tokens of a request, if the provider knows how.
     ///
-    /// Rend `Ok(None)` par défaut, et c'est la réponse de la plupart des
-    /// fournisseurs : **aucun** point d'accès compatible OpenAI n'expose ce
-    /// service. `None` signifie « je ne sais pas compter », jamais « zéro » —
-    /// un appelant qui traiterait les deux pareil afficherait une invite vide.
+    /// Returns `Ok(None)` by default, and that is the answer of most providers:
+    /// **no** OpenAI-compatible endpoint exposes this service. `None` means "I
+    /// cannot count", never "zero" — a caller that treated both the same would
+    /// display an empty prompt.
     ///
-    /// Le compte est une **estimation** du fournisseur, pas une facture : il
-    /// peut différer de ce qui sera réellement décompté, et il dépend du
-    /// modèle visé.
+    /// The count is an **estimate** by the provider, not an invoice: it can
+    /// differ from what will actually be counted, and it depends on the target
+    /// model.
     ///
-    /// # Erreurs
-    /// Les mêmes qu'un échange ordinaire : réseau, statut d'échec, réponse
-    /// illisible. Un fournisseur qui ne sait pas compter ne produit **pas**
-    /// d'erreur — il rend `None`.
+    /// # Errors
+    /// The same as an ordinary exchange: network, failure status, unreadable
+    /// response. A provider that cannot count produces **no** error — it
+    /// returns `None`.
     async fn count_tokens(&self, request: &ChatRequest) -> Result<Option<u32>> {
         let _ = request;
         Ok(None)
     }
 
-    /// Lance une génération et rend le flux d'événements.
+    /// Starts a generation and returns the stream of events.
     ///
-    /// Le flux rendu est `'static` : il ne retient pas le fournisseur, ce qui
-    /// permet de le transmettre à une tâche. Il émet exactement un
-    /// [`ChatEvent::Done`], en dernier.
+    /// The returned stream is `'static`: it does not hold the provider, which
+    /// allows handing it to a task. It emits exactly one [`ChatEvent::Done`],
+    /// last.
     ///
-    /// # Annulation
-    /// Le jeton est **cloné dans le flux** : l'annuler interrompt la lecture,
-    /// émet `Done { stop_reason: Cancelled }` et ferme la connexion HTTP.
-    /// Abandonner le flux sans annuler le jeton ferme aussi la connexion, mais
-    /// n'informe personne — préférer l'annulation explicite.
+    /// # Cancellation
+    /// The token is **cloned into the stream**: cancelling it interrupts the
+    /// reading, emits `Done { stop_reason: Cancelled }` and closes the HTTP
+    /// connection. Dropping the stream without cancelling the token also closes
+    /// the connection, but informs no one — prefer explicit cancellation.
     ///
-    /// # Erreurs
-    /// Les échecs **avant** le premier octet (configuration, authentification,
-    /// statut d'échec) sont rendus ici. Ceux qui surviennent en cours de flux
-    /// deviennent des [`ChatEvent::Error`] : une erreur ne peut plus être une
-    /// valeur de retour une fois que du texte a été montré à l'utilisateur.
+    /// # Errors
+    /// Failures **before** the first byte (configuration, authentication,
+    /// failure status) are returned here. Those that happen mid-stream become
+    /// [`ChatEvent::Error`]s: an error can no longer be a return value once
+    /// text has been shown to the user.
     async fn stream(
         &self,
         request: ChatRequest,
@@ -139,146 +137,144 @@ pub trait LlmProvider: fmt::Debug + Send + Sync {
     ) -> Result<BoxStream<'static, ChatEvent>>;
 }
 
-/// Les fournisseurs inscrits par l'utilisateur.
+/// The providers registered by the user.
 ///
-/// **Vide par défaut**, et un registre vide n'est pas une panne : c'est
-/// l'installation par défaut d'Oxyn.
+/// **Empty by default**, and an empty registry is not a failure: it is Oxyn's
+/// default installation.
 ///
-/// Le registre est partageable et modifiable à chaud (l'utilisateur ajoute un
-/// fournisseur dans les réglages sans redémarrer), d'où le verrou interne. Il
-/// est ordonné par identifiant : la liste montrée à l'utilisateur ne doit pas
-/// se réordonner d'une ouverture à l'autre.
+/// The registry is shareable and can be modified live (the user adds a
+/// provider in the settings without restarting), hence the internal lock. It
+/// is ordered by identifier: the list shown to the user must not reorder from
+/// one opening to the next.
 #[derive(Debug, Default)]
 pub struct ProviderRegistry {
     providers: RwLock<BTreeMap<ProviderId, Arc<dyn LlmProvider>>>,
 }
 
 impl ProviderRegistry {
-    /// Crée un registre vide.
+    /// Creates an empty registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Lit la table, en ignorant un éventuel empoisonnement du verrou.
+    /// Reads the table, ignoring a possible poisoning of the lock.
     ///
-    /// Un empoisonnement signifie qu'un fil a paniqué en tenant le verrou. La
-    /// table reste cohérente — ses opérations sont des insertions et des
-    /// suppressions atomiques —, et refuser de servir la liste des fournisseurs
-    /// à cause d'une panique survenue ailleurs n'aiderait personne.
+    /// A poisoning means a thread panicked while holding the lock. The table
+    /// stays consistent — its operations are atomic insertions and removals —,
+    /// and refusing to serve the list of providers because of a panic that
+    /// happened elsewhere would help no one.
     fn read(&self) -> RwLockReadGuard<'_, BTreeMap<ProviderId, Arc<dyn LlmProvider>>> {
         self.providers
             .read()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Écrit dans la table, même règle qu'en lecture.
+    /// Writes into the table, same rule as for reading.
     fn write(&self) -> RwLockWriteGuard<'_, BTreeMap<ProviderId, Arc<dyn LlmProvider>>> {
         self.providers
             .write()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Inscrit un fournisseur, ou remplace celui qui portait déjà son
-    /// identifiant.
+    /// Registers a provider, or replaces the one that already carried its
+    /// identifier.
     ///
-    /// Rend le fournisseur remplacé, s'il y en avait un : l'appelant peut ainsi
-    /// savoir qu'une reconfiguration a eu lieu — ce qui, selon
-    /// [`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md), doit déclencher une
-    /// nouvelle classification local/distant du point d'accès.
+    /// Returns the replaced provider, if there was one: the caller can thus
+    /// know that a reconfiguration took place — which, according to
+    /// [`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md), must trigger a new
+    /// local/remote classification of the endpoint.
     pub fn register(&self, provider: Arc<dyn LlmProvider>) -> Option<Arc<dyn LlmProvider>> {
         let id = provider.id();
         self.write().insert(id, provider)
     }
 
-    /// Retire un fournisseur.
+    /// Removes a provider.
     pub fn remove(&self, id: &ProviderId) -> Option<Arc<dyn LlmProvider>> {
         self.write().remove(id)
     }
 
-    /// Rend un fournisseur inscrit.
+    /// Returns a registered provider.
     #[must_use]
     pub fn get(&self, id: &ProviderId) -> Option<Arc<dyn LlmProvider>> {
         self.read().get(id).map(Arc::clone)
     }
 
-    /// Identifiants inscrits, par ordre stable.
+    /// Registered identifiers, in stable order.
     #[must_use]
     pub fn ids(&self) -> Vec<ProviderId> {
         self.read().keys().cloned().collect()
     }
 
-    /// Tous les fournisseurs inscrits, par ordre stable.
+    /// All registered providers, in a stable order.
     #[must_use]
     pub fn providers(&self) -> Vec<Arc<dyn LlmProvider>> {
         self.read().values().map(Arc::clone).collect()
     }
 
-    /// Nombre de fournisseurs inscrits.
+    /// Number of registered providers.
     #[must_use]
     pub fn len(&self) -> usize {
         self.read().len()
     }
 
-    /// Aucun fournisseur n'est inscrit.
+    /// No provider is registered.
     ///
-    /// C'est ce que l'interface interroge pour décider si le workspace IA
-    /// existe. Répondre `true` n'est pas un état dégradé.
+    /// It is what the interface asks to decide whether the AI workspace exists.
+    /// Answering `true` is not a degraded state.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.read().is_empty()
     }
 
-    /// Vide le registre.
+    /// Empties the registry.
     pub fn clear(&self) {
         self.write().clear();
     }
 }
 
-/// Construit le transport d'une déclaration de fournisseur.
+/// Builds the transport of a provider declaration.
 ///
-/// C'est le seul endroit du dépôt qui traduit une
-/// [`AiProviderKind`] en implémentation concrète : `oxyn-llm` est la seule
-/// crate qui connaît [`AnthropicProvider`](crate::AnthropicProvider),
-/// [`GeminiProvider`](crate::GeminiProvider) et
-/// [`OpenAiCompatibleProvider`](crate::OpenAiCompatibleProvider), et ranger
-/// cette traduction dans le câblage y
-/// ferait descendre une règle de domaine.
+/// It is the only place in the repository that translates an
+/// [`AiProviderKind`] into a concrete implementation: `oxyn-llm` is the only
+/// crate that knows [`AnthropicProvider`](crate::AnthropicProvider),
+/// [`GeminiProvider`](crate::GeminiProvider) and
+/// [`OpenAiCompatibleProvider`](crate::OpenAiCompatibleProvider), and putting
+/// this translation in the wiring would push a domain rule down into it.
 ///
-/// # Une clé absente n'est pas toujours une erreur
+/// # A missing key is not always an error
 ///
-/// Ollama, LM Studio et `llama.cpp` n'en demandent pas : sous
-/// [`OpenAiCompatible`](AiProviderKind::OpenAiCompatible), `key` peut être
-/// `None` et la requête part sans en-tête d'authentification. Les trois autres
-/// familles l'exigent, et le manque est signalé **ici**, localement, plutôt que
-/// par un `401` que l'utilisateur lirait comme un problème de compte
+/// Ollama, LM Studio and `llama.cpp` do not require one: under
+/// [`OpenAiCompatible`](AiProviderKind::OpenAiCompatible), `key` can be `None`
+/// and the request goes out without an authentication header. The three other
+/// families require it, and the lack is reported **here**, locally, rather
+/// than through a `401` the user would read as an account problem
 /// ([`LlmError::MissingApiKey`]).
 ///
-/// # Elle ne classe rien
+/// # It classifies nothing
 ///
-/// Aucune résolution DNS, aucun appel à [`resolve_reach`](crate::reach::resolve_reach) :
-/// le classement local/distant se recalcule ailleurs, à chaque ouverture de
-/// runtime, et ne se persiste jamais
+/// No DNS resolution, no call to [`resolve_reach`](crate::reach::resolve_reach):
+/// the local/remote classification is recomputed elsewhere, at each runtime
+/// opening, and is never persisted
 /// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
-/// [`OpenAiCompatible`](AiProviderKind::OpenAiCompatible) couvre aussi bien un
-/// Ollama sur la boucle locale qu'une passerelle dans le nuage ; la fabrique ne
-/// peut pas les distinguer et n'essaie pas.
+/// [`OpenAiCompatible`](AiProviderKind::OpenAiCompatible) covers an Ollama on
+/// the loopback as well as a gateway in the cloud; the factory cannot tell
+/// them apart and does not try.
 ///
-/// # Identité du fournisseur construit
+/// # Identity of the built provider
 ///
-/// [`LlmProvider::id`] rend l'identifiant **de la famille**, pas celui de la
-/// déclaration : deux déclarations d'une même famille inscrites dans un même
-/// [`ProviderRegistry`] se remplacent donc. Le chemin nominal n'en passe pas
-/// par là — un [`AgentRuntime`](../../oxyn_ai/runtime/struct.AgentRuntime.html)
-/// reçoit **un** `Arc<dyn LlmProvider>`, celui que l'utilisateur a choisi.
+/// [`LlmProvider::id`] returns the identifier **of the family**, not that of
+/// the declaration: two declarations of the same family registered in the same
+/// [`ProviderRegistry`] therefore replace each other. The nominal path does not
+/// go through there — an [`AgentRuntime`](../../oxyn_ai/runtime/struct.AgentRuntime.html)
+/// receives **one** `Arc<dyn LlmProvider>`, the one the user chose.
 ///
-/// # Erreurs
-/// [`LlmError::MissingApiKey`] si la famille exige une clé et n'en reçoit pas ;
-/// [`LlmError::Config`] si l'URL de base est illisible ou si le client HTTP ne
-/// se construit pas ; [`LlmError::Unsupported`] pour une famille que ce binaire
-/// ne sait pas instancier — le `match` porte sur une énumération
-/// `#[non_exhaustive]`, et refuser vaut mieux qu'instancier un transport
-/// approchant.
+/// # Errors
+/// [`LlmError::MissingApiKey`] if the family requires a key and receives none;
+/// [`LlmError::Config`] if the base URL is unreadable or the HTTP client does
+/// not build; [`LlmError::Unsupported`] for a family this binary cannot
+/// instantiate — the `match` is on a `#[non_exhaustive]` enumeration, and
+/// refusing is better than instantiating an approximate transport.
 pub fn build_provider(
     kind: AiProviderKind,
     base_url: &str,
@@ -309,26 +305,26 @@ pub fn build_provider(
             ))
         }
         AiProviderKind::OpenAiCompatible => {
-            let fournisseur = crate::openai_compatible::OpenAiCompatibleProvider::new(
+            let provider = crate::openai_compatible::OpenAiCompatibleProvider::new(
                 ProviderId::openai_compatible(),
                 base_url,
             )?;
-            // Une clé donnée est présentée ; son absence n'est pas exigible —
-            // c'est le cas d'un modèle local.
+            // A given key is presented; its absence cannot be required — that
+            // is the case of a local model.
             Ok(Arc::new(match key {
-                Some(key) => fournisseur.with_api_key(key),
-                None => fournisseur,
+                Some(key) => provider.with_api_key(key),
+                None => provider,
             }))
         }
-        autre => Err(LlmError::Unsupported {
+        other => Err(LlmError::Unsupported {
             provider: ProviderId::openai_compatible(),
-            capability: format!("provider family `{autre}`"),
+            capability: format!("provider family `{other}`"),
         }
         .into()),
     }
 }
 
-/// Exige la clé d'une famille qui ne fonctionne pas sans.
+/// Requires the key of a family that does not work without one.
 fn require_key(id: &ProviderId, key: Option<ApiKey>) -> Result<ApiKey> {
     key.ok_or_else(|| {
         LlmError::MissingApiKey {
@@ -342,12 +338,12 @@ fn require_key(id: &ProviderId, key: Option<ApiKey>) -> Result<ApiKey> {
 mod tests {
     use super::*;
 
-    /// Fournisseur de test : n'ouvre aucune connexion.
+    /// Test provider: opens no connection.
     #[derive(Debug)]
-    struct FournisseurFactice(ProviderId);
+    struct FakeProvider(ProviderId);
 
     #[async_trait]
-    impl LlmProvider for FournisseurFactice {
+    impl LlmProvider for FakeProvider {
         fn id(&self) -> ProviderId {
             self.0.clone()
         }
@@ -365,86 +361,86 @@ mod tests {
         }
     }
 
-    fn factice(id: &str) -> Arc<dyn LlmProvider> {
-        Arc::new(FournisseurFactice(
-            ProviderId::new(id).expect("identifiant de test valide"),
+    fn fake(id: &str) -> Arc<dyn LlmProvider> {
+        Arc::new(FakeProvider(
+            ProviderId::new(id).expect("valid test identifier"),
         ))
     }
 
     #[test]
-    fn un_registre_neuf_est_vide() {
-        // ADR-0006 : c'est l'installation par défaut, pas une panne.
-        let registre = ProviderRegistry::default();
-        assert!(registre.is_empty());
-        assert_eq!(registre.len(), 0);
-        assert!(registre.ids().is_empty());
-        assert!(registre.get(&ProviderId::openai()).is_none());
+    fn a_new_registry_is_empty() {
+        // ADR-0006: this is the default installation, not a failure.
+        let registry = ProviderRegistry::default();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+        assert!(registry.ids().is_empty());
+        assert!(registry.get(&ProviderId::openai()).is_none());
     }
 
     #[test]
-    fn un_fournisseur_inscrit_se_retrouve() {
-        let registre = ProviderRegistry::new();
-        assert!(registre.register(factice("ollama")).is_none());
-        assert!(!registre.is_empty());
-        assert!(registre.get(&ProviderId::ollama()).is_some());
-        assert_eq!(registre.ids(), vec![ProviderId::ollama()]);
+    fn a_registered_provider_is_found_again() {
+        let registry = ProviderRegistry::new();
+        assert!(registry.register(fake("ollama")).is_none());
+        assert!(!registry.is_empty());
+        assert!(registry.get(&ProviderId::ollama()).is_some());
+        assert_eq!(registry.ids(), vec![ProviderId::ollama()]);
     }
 
     #[test]
-    fn reinscrire_rend_le_precedent() {
-        let registre = ProviderRegistry::new();
-        registre.register(factice("openai"));
-        let remplace = registre.register(factice("openai"));
+    fn registering_again_returns_the_previous_one() {
+        let registry = ProviderRegistry::new();
+        registry.register(fake("openai"));
+        let replaced = registry.register(fake("openai"));
         assert!(
-            remplace.is_some(),
-            "une reconfiguration doit être visible de l'appelant"
+            replaced.is_some(),
+            "a reconfiguration must be visible to the caller"
         );
-        assert_eq!(registre.len(), 1);
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]
-    fn l_ordre_des_identifiants_est_stable() {
-        let registre = ProviderRegistry::new();
+    fn the_order_of_identifiers_is_stable() {
+        let registry = ProviderRegistry::new();
         for id in ["openrouter", "ollama", "azure-openai", "openai"] {
-            registre.register(factice(id));
+            registry.register(fake(id));
         }
-        let ids: Vec<String> = registre.ids().iter().map(ProviderId::to_string).collect();
+        let ids: Vec<String> = registry.ids().iter().map(ProviderId::to_string).collect();
         assert_eq!(ids, ["azure-openai", "ollama", "openai", "openrouter"]);
     }
 
     #[test]
-    fn retirer_puis_vider() {
-        let registre = ProviderRegistry::new();
-        registre.register(factice("ollama"));
-        registre.register(factice("openai"));
-        assert!(registre.remove(&ProviderId::ollama()).is_some());
-        assert!(registre.remove(&ProviderId::ollama()).is_none());
-        registre.clear();
-        assert!(registre.is_empty());
+    fn remove_then_clear() {
+        let registry = ProviderRegistry::new();
+        registry.register(fake("ollama"));
+        registry.register(fake("openai"));
+        assert!(registry.remove(&ProviderId::ollama()).is_some());
+        assert!(registry.remove(&ProviderId::ollama()).is_none());
+        registry.clear();
+        assert!(registry.is_empty());
     }
 
     #[test]
-    fn une_famille_locale_se_construit_sans_cle() {
-        // Ollama, LM Studio, `llama.cpp` : une clé absente est l'état nominal,
-        // pas une panne de configuration.
-        let fournisseur = build_provider(
+    fn a_local_family_builds_without_key() {
+        // Ollama, LM Studio, `llama.cpp`: a missing key is the nominal state,
+        // not a configuration failure.
+        let provider = build_provider(
             AiProviderKind::OpenAiCompatible,
             "http://localhost:11434/v1",
             None,
         )
-        .expect("un point d'accès local se construit sans clé");
-        assert_eq!(fournisseur.id(), ProviderId::openai_compatible());
+        .expect("a local endpoint builds without a key");
+        assert_eq!(provider.id(), ProviderId::openai_compatible());
         assert_eq!(
-            fournisseur.endpoint().map(reqwest::Url::as_str),
+            provider.endpoint().map(reqwest::Url::as_str),
             Some("http://localhost:11434/v1/"),
-            "l'URL est normalisée, et rien n'a été résolu"
+            "the URL is normalized, and nothing was resolved"
         );
     }
 
     #[test]
-    fn une_famille_distante_sans_cle_est_refusee_localement() {
-        // Le manque se dit ici, pas par un `401` que l'utilisateur lirait comme
-        // un problème de compte.
+    fn a_remote_family_without_key_is_refused_locally() {
+        // The lack is stated here, not through a `401` the user would read as
+        // an account problem.
         for (kind, base_url) in [
             (AiProviderKind::Anthropic, "https://api.anthropic.com"),
             (AiProviderKind::OpenAi, "https://api.openai.com/v1"),
@@ -453,28 +449,28 @@ mod tests {
                 "https://generativelanguage.googleapis.com",
             ),
         ] {
-            let erreur = build_provider(kind, base_url, None)
-                .expect_err("une famille distante exige une clé");
+            let error =
+                build_provider(kind, base_url, None).expect_err("a remote family requires a key");
             assert!(
-                matches!(erreur, oxyn_core::OxynError::Authentication(_)),
-                "{kind} : {erreur:?}"
+                matches!(error, oxyn_core::OxynError::Authentication(_)),
+                "{kind} : {error:?}"
             );
-            let message = erreur.to_string();
+            let message = error.to_string();
             assert!(message.contains("API key"), "{message}");
 
-            // Avec une clé, la même déclaration se construit.
-            let fournisseur = build_provider(kind, base_url, Some(ApiKey::new("sk-test")))
-                .expect("une famille distante se construit avec sa clé");
-            let rendu = format!("{fournisseur:?}");
-            assert!(!rendu.contains("sk-test"), "clé fuitée : {rendu}");
+            // With a key, the same declaration builds.
+            let provider = build_provider(kind, base_url, Some(ApiKey::new("sk-test")))
+                .expect("a remote family builds with its key");
+            let rendered = format!("{provider:?}");
+            assert!(!rendered.contains("sk-test"), "leaked key: {rendered}");
         }
     }
 
     #[test]
-    fn la_fabrique_ne_classe_pas_le_point_d_acces() {
-        // ADR-0023 : le classement se recalcule ailleurs. Un nom qui contient
-        // `localhost` ne prouve rien, et la fabrique ne résout rien — elle
-        // accepte donc les deux sans les distinguer.
+    fn the_factory_does_not_classify_the_endpoint() {
+        // ADR-0023: the classification is recomputed elsewhere. A name that
+        // contains `localhost` proves nothing, and the factory resolves
+        // nothing — so it accepts both without telling them apart.
         for base_url in [
             "http://localhost:11434/v1",
             "https://localhost.mon-nuage.example/v1",
@@ -487,20 +483,17 @@ mod tests {
     }
 
     #[test]
-    fn une_url_illisible_est_refusee_par_la_fabrique() {
-        let erreur = build_provider(AiProviderKind::OpenAiCompatible, "pas une url", None)
-            .expect_err("URL illisible");
-        assert!(
-            matches!(erreur, oxyn_core::OxynError::Config(_)),
-            "{erreur}"
-        );
+    fn an_unreadable_url_is_refused_by_the_factory() {
+        let error = build_provider(AiProviderKind::OpenAiCompatible, "not a url", None)
+            .expect_err("unreadable URL");
+        assert!(matches!(error, oxyn_core::OxynError::Config(_)), "{error}");
     }
 
     #[test]
-    fn la_validation_de_l_identifiant_reste_celle_du_domaine() {
-        // Le type vit dans `oxyn-core` et y est éprouvé ; ce test ne garde que
-        // le lien : le ré-export ne doit pas devenir une seconde définition
-        // plus permissive.
+    fn identifier_validation_remains_the_domain_one() {
+        // The type lives in `oxyn-core` and is tested there; this test only
+        // guards the link: the re-export must not become a second, more
+        // permissive definition.
         assert!(ProviderId::new("OpenAI").is_err(), "majuscules");
         assert!(ProviderId::new("lm-studio").is_ok());
         assert_eq!(ProviderId::ollama().as_str(), ProviderId::OLLAMA);

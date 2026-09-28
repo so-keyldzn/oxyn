@@ -202,7 +202,7 @@ export const backend = {
 
   // An export lives in `lib/ipc/results.ts`: the destination is chosen by the
   // save dialog Rust opens, and no path crosses the boundary any more
-  // (docs/SECURITY.md, « Surface d'entrée »).
+  // (docs/SECURITY.md, « Input surface »).
 
   subscribeEvents: (onEvent: (event: ExecutionEvent) => void) => {
     // The channel registers a callback in Tauri's internals: constructing it

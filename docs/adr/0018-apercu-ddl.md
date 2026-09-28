@@ -1,73 +1,72 @@
-# ADR-0018 — Le DDL inspecté reste une métadonnée, préparée séparément de son exécution
+# ADR-0018 — Inspected DDL remains metadata, prepared separately from its execution
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10
 
-## Contexte
+## Context
 
-La maquette `193:2433` montre un panneau DDL de 424 px, les index associés,
-Copy DDL et Open DDL in console. Un texte de création n'est ni une lecture de
-données ni une autorisation de l'appliquer. SQLite conserve ses déclarations ;
-PostgreSQL expose principalement leurs composants et des fonctions de rendu.
-Une définition peut aussi dépasser la limite de 1 Mio des documents éditables.
+Mockup `193:2433` shows a 424 px DDL panel, the associated indexes, Copy DDL and
+Open DDL in console. A creation text is neither a data read nor an authorization
+to apply it. SQLite keeps its declarations; PostgreSQL mainly exposes their
+components and rendering functions. A definition can also exceed the 1 MiB limit
+of editable documents.
 
-## Décision
+## Decision
 
-`CatalogProvider::relation_definition` est une lecture annulable, conditionnée
-à `OBJECT_DEFINITION`. Elle passe par `CatalogRefreshScope::Definition`.
-`RelationDefinition` porte SQL, provenance et notes de portée. Le driver et le
-bus valident la taille avant publication atomique ; une erreur ou une
-annulation conserve le cache précédent. Le rendu Debug omet le SQL.
+`CatalogProvider::relation_definition` is a cancellable read, conditioned on
+`OBJECT_DEFINITION`. It goes through `CatalogRefreshScope::Definition`.
+`RelationDefinition` carries SQL, provenance and scope notes. The driver and the
+bus validate the size before atomic publication; an error or a cancellation keeps
+the previous cache. The Debug rendering omits the SQL.
 
-SQLite lit objet, index et triggers dans un même curseur de `sqlite_schema` et
-qualifie leurs noms de déclaration. PostgreSQL reconstruit les statements à
-partir d'une lecture de catalogue cohérente. Les objets non reconstructibles
-sont refusés explicitement ; aucun exemple Figma ne remplace une réponse réelle.
-La portée est la création de l'objet et de ses éléments associés, sans données,
-privilèges ni dépendances externes. La provenance et les limites restent visibles.
+SQLite reads object, indexes and triggers in a single cursor over `sqlite_schema`
+and qualifies their declaration names. PostgreSQL rebuilds the statements from a
+consistent catalog read. Objects that cannot be rebuilt are explicitly refused; no
+Figma example replaces a real response. The scope is the creation of the object
+and its associated elements, without data, privileges or external dependencies.
+Provenance and limits remain visible.
 
-L'aperçu utilise un éditeur en lecture seule, remplacé à chaque nouvelle
-définition pour ne pas accumuler d'anciens textes dans l'historique d'annulation.
-Son chargement a une identité et une annulation indépendantes des autres
-onglets de métadonnées. Les retours d'un objet quitté sont ignorés.
+The preview uses a read-only editor, replaced on every new definition so as not
+to accumulate old texts in the undo history. Its loading has an identity and a
+cancellation independent of the other metadata tabs. Responses for an object
+that was left are ignored.
 
-Copy DDL copie le texte affiché. Open DDL in console crée une nouvelle console
-via le trajet existant de copie de document ; il préserve les consoles
-existantes et n'exécute rien. Toute exécution ultérieure traverse la politique
-normale et ses confirmations. Après un échec de rafraîchissement, le texte
-précédent est marqué comme potentiellement périmé.
+Copy DDL copies the displayed text. Open DDL in console creates a new console
+through the existing document copy path; it preserves existing consoles and
+executes nothing. Any later execution goes through the normal policy and its
+confirmations. After a failed refresh, the previous text is marked as possibly
+stale.
 
-L'aperçu est borné à 1 Mio, ses notes à 32 entrées et 64 Kio. Le cache de chaque
-connexion conserve au plus 16 définitions et 16 Mio cumulés de SQL et notes.
-Les anciennes définitions, y compris invalidées, sont évincées sans toucher
-aux autres métadonnées ; la définition nouvellement publiée est conservée. La poignée de 8 px
-redimensionne le panneau entre 320 et 640 px ; Début restaure 424 px. La largeur
-est conservée dans le workspace ouvert. Le mode compact donne accès au DDL
-par son sous-onglet, sans nouvelle lecture lors du seul redimensionnement.
+The preview is bounded to 1 MiB, its notes to 32 entries and 64 KiB. Each
+connection's cache keeps at most 16 definitions and 16 MiB cumulated of SQL and
+notes. Old definitions, invalidated ones included, are evicted without touching
+the other metadata; the newly published definition is kept. The 8 px handle
+resizes the panel between 320 and 640 px; Home restores 424 px. The width is
+kept in the open workspace. Compact mode gives access to the DDL through its
+sub-tab, with no new read on a mere resize.
 
-## Conséquences
+## Consequences
 
-- La consultation et la préparation du SQL n'introduisent aucun chemin
-  d'exécution parallèle au bus.
-- Un texte trop grand est refusé au lieu d'être copié partiellement.
-- La reconstruction PostgreSQL exige des validations contre le moteur ; elle
-  ne constitue pas un export intégral de base.
-- La largeur du panneau n'est pas encore un réglage persisté entre lancements.
+- Viewing and preparing the SQL introduce no execution path parallel to the
+  bus.
+- A text that is too large is refused instead of being partially copied.
+- The PostgreSQL rebuild requires validations against the engine; it does not
+  constitute a complete database export.
+- The panel width is not yet a setting persisted between launches.
 
-**Coût de sortie :** changer le format public impose une évolution du contrat,
-du cache et du lecteur ; le SQL reste récupérable comme texte. L'éditeur et la
-géométrie sont confinés à `oxyn-app`/`oxyn-ui`.
+**Exit cost:** changing the public format requires an evolution of the contract,
+the cache and the reader; the SQL remains recoverable as text. The editor and the
+geometry are confined to `oxyn-app`/`oxyn-ui`.
 
-**Reconsidérer si** la génération devient un export de schéma complet, si une
-définition doit être modifiée sur place, ou si le plafond du document évolue.
+**Reconsider if** generation becomes a complete schema export, if a definition
+must be modified in place, or if the document cap changes.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Copier le SQL d'exemple de la maquette | Ne décrit pas la base connectée |
-| Remplacer l'éditeur actif | Risque de perdre le brouillon de l'utilisateur |
-| Exécuter à l'ouverture de la console | Confond préparation et autorisation |
-| Donner une reconstruction partielle sans indication | Présente une omission comme une définition complète |
+| Copy the mockup's example SQL | Does not describe the connected database |
+| Replace the active editor | Risk of losing the user's draft |
+| Execute when the console opens | Confuses preparation and authorization |
+| Give a partial rebuild without saying so | Presents an omission as a complete definition |
 
-Les sources et vérifications externes figurent dans
-[RESEARCH-NOTES](../RESEARCH-NOTES.md).
+The external sources and checks are in [RESEARCH-NOTES](../RESEARCH-NOTES.md).

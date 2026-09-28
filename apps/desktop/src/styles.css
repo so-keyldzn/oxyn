@@ -33,7 +33,7 @@
  * carry the hue, hovers tinted with it, and a light verdigris under dark text
  * in the dark theme. It replaced on 2026-09-23 the warm stone and clay orange
  * of the Figma file `Yviemi4brBczzdRdBp1ONv` (docs/RESEARCH-NOTES.md,
- * « Jetons de la maquette Figma »), and the Oxyn mark changed with it: its
+ * « Figma mockup tokens »), and the Oxyn mark changed with it: its
  * accent is this verdigris and its tile this slate (assets/brand/README.md).
  * `--success` leans yellow-green, so a status never reads as the brand.
  * Surfaces climb one lightness step per elevation, so depth reads from tone
@@ -109,7 +109,7 @@
   --color-env-local: var(--env-local);
 
   /*
-   * Reading density (UX-SPEC « Lisibilité et hauteur de grille »).
+   * Reading density (UX-SPEC « Readability and grid height »).
    *
    * In a `className`, write the size as `text-[length:var(--reading-text)]`
    * rather than `text-reading`: `cn` does not know this theme key, reads
@@ -314,7 +314,7 @@
 
 /*
  * A bound parameter's value field refuses selection (I-03; UX-SPEC §
- * Valeurs liées d'une console) — the clipboard, drag and the context menu
+ * Bound values of a console) — the clipboard, drag and the context menu
  * on this field are already refused in `parameter-editor.tsx`, and
  * `user-select: none` backs that up on the engines where it keeps a
  * selection from starting at all. Unlayered, like the rules above: it beats

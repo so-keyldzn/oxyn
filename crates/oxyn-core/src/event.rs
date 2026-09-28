@@ -1,17 +1,16 @@
-//! Ce qui remonte vers l'interface pendant l'exécution d'une commande.
+//! What goes up to the interface while a command runs.
 //!
-//! Ces événements sont le pendant des cinq états d'une vue
-//! ([`UX-SPEC`](../../../docs/UX-SPEC.md)) : ils permettent d'afficher une
-//! progression réelle et un moyen d'annuler, plutôt qu'un gel suivi d'un
-//! résultat.
+//! These events are the counterpart of the five states of a view
+//! ([`UX-SPEC`](../../../docs/UX-SPEC.md)): they make it possible to show real
+//! progress and a way to cancel, rather than a freeze followed by a result.
 //!
-//! Deux règles de fond :
+//! Two ground rules:
 //!
-//! * **rien d'optimiste.** Aucun événement n'annonce un succès avant que le
-//!   serveur ne l'ait confirmé : [`Completed`](Event::Completed) arrive après la
-//!   fin du flux, pas à la soumission ;
-//! * **aucune valeur de la base ici.** Les lignes voyagent en `RecordBatch`
-//!   (ADR-0002) ; un événement ne porte que des compteurs et des identifiants.
+//! * **nothing optimistic.** No event announces a success before the server
+//!   has confirmed it: [`Completed`](Event::Completed) arrives after the end of
+//!   the stream, not on submission;
+//! * **no database value here.** Rows travel as `RecordBatch` (ADR-0002); an
+//!   event only carries counters and identifiers.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,104 +21,104 @@ use crate::query::StatementIntent;
 use crate::stats::ExecStats;
 use crate::transaction::TransactionState;
 
-/// Un événement d'exécution destiné à l'interface.
+/// An execution event meant for the interface.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "event")]
 #[non_exhaustive]
 pub enum Event {
-    /// Le schéma du résultat est connu : les colonnes peuvent être dessinées
-    /// avant qu'une seule ligne n'arrive.
+    /// The result's schema is known: the columns can be drawn before a single
+    /// row arrives.
     SchemaReady {
-        /// Le résultat concerné.
+        /// The result concerned.
         result: ResultId,
     },
 
-    /// Un lot est disponible dans le tampon de résultats.
+    /// A batch is available in the result buffer.
     BatchReady {
-        /// Le résultat concerné.
+        /// The result concerned.
         result: ResultId,
-        /// Lignes contenues dans ce lot.
+        /// Rows contained in this batch.
         rows: usize,
     },
 
-    /// Progression, pour les exécutions sans schéma ni lot immédiat.
+    /// Progress, for executions without an immediate schema or batch.
     Progress {
-        /// Lignes traitées jusqu'ici.
+        /// Rows processed so far.
         rows: u64,
     },
 
-    /// L'exécution est terminée avec succès.
+    /// The execution finished successfully.
     Completed {
-        /// Le résultat produit.
+        /// The result produced.
         result: ResultId,
-        /// Ce qu'elle a coûté.
+        /// What it cost.
         stats: ExecStats,
-        /// Ce que l'instruction faisait, **tel que le classificateur l'a lu**
-        /// après reclassification — pas ce que l'appelant avait déclaré.
+        /// What the statement did, **as the classifier read it** after
+        /// reclassification — not what the caller had declared.
         ///
-        /// C'est ce qui permet à une vue de savoir qu'un rafraîchissement a du
-        /// sens : une écriture ou un DDL périme ce qui est affiché, une lecture
-        /// non ([ADR-0022](../../docs/adr/0022-rafraichissement-automatique.md)).
-        /// L'événement ne dit pas **quel objet** a changé : le classificateur ne
-        /// nomme pas les tables, et prétendre le contraire produirait des
-        /// invalidations fausses dans les deux sens.
+        /// This is what lets a view know that a refresh makes sense: a write or
+        /// a DDL makes what is shown stale, a read does not
+        /// ([ADR-0022](../../../docs/adr/0022-rafraichissement-automatique.md)).
+        /// The event does not say **which object** changed: the classifier does
+        /// not name tables, and claiming otherwise would produce wrong
+        /// invalidations in both directions.
         intent: StatementIntent,
     },
 
-    /// L'exécution a échoué.
+    /// The execution failed.
     Failed {
-        /// Le message, tel qu'il sera montré : celui du serveur, code compris,
-        /// et non une paraphrase rassurante.
+        /// The message, as it will be shown: the server's, code included, and
+        /// not a reassuring paraphrase.
         error: String,
-        /// L'opération est-elle rejouable telle quelle ?
+        /// Can the operation be replayed as is?
         ///
-        /// L'interface doit pouvoir répondre « est-ce retentable » sans analyser
-        /// le message (UX-SPEC, DRIVER-CONTRACT §4).
+        /// The interface must be able to answer "is it retryable" without
+        /// parsing the message (UX-SPEC, DRIVER-CONTRACT §4).
         retryable: bool,
     },
 
-    /// Le `PolicyGate` demande un accord avant d'exécuter.
+    /// The `PolicyGate` asks for approval before executing.
     ApprovalRequested {
-        /// La commande en attente.
+        /// The pending command.
         command: CommandId,
-        /// Ce sur quoi l'utilisateur doit se prononcer.
+        /// What the user must decide on.
         reason: String,
-        /// De quoi juger sans aller lire ailleurs.
+        /// What is needed to judge without reading elsewhere.
         preview: Option<Preview>,
     },
 
-    /// L'exécution a été interrompue.
+    /// The execution was interrupted.
     Cancelled,
 
-    /// Le catalogue a changé : l'arborescence doit être relue.
+    /// The catalog changed: the tree must be read again.
     CatalogUpdated,
 
-    /// L'état de transaction de la session, constaté à la fin d'une exécution
-    /// ([ADR-0039](../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
+    /// The session's transaction state, observed at the end of an execution
+    /// ([ADR-0039](../../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
     ///
-    /// Il appartient à la **session**, pas à la commande : l'interface range la
-    /// dernière valeur reçue par session et ne la déduit jamais du texte
-    /// soumis. Quand l'exécution produit un événement terminal, celui-ci arrive
-    /// **après**, jamais avant.
+    /// It belongs to the **session**, not to the command: the interface stores
+    /// the last value received per session and never deduces it from the
+    /// submitted text. When the execution produces a terminal event, that one
+    /// arrives **after**, never before.
     TransactionState {
-        /// La session concernée.
+        /// The session concerned.
         session: SessionId,
-        /// Ce que la session a constaté.
+        /// What the session observed.
         state: TransactionState,
     },
 
-    /// Une exécution réussie est inscrite à l'historique : une vue qui le
-    /// montre peut le relire.
+    /// A successful execution is recorded in the history: a view that shows it
+    /// can read it again.
     ///
-    /// Distinct de [`Completed`](Event::Completed), qui arrive **avant**
-    /// l'écriture de l'issue : relire l'historique sur `Completed` montrerait
-    /// encore la ligne « en cours ». Rien après un échec ni une annulation.
+    /// Distinct from [`Completed`](Event::Completed), which arrives **before**
+    /// the outcome is written: reading the history again on `Completed` would
+    /// still show the "running" row. Nothing after a failure or a cancellation.
     HistoryRecorded,
 }
 
 impl Event {
-    /// Construit un événement d'échec à partir d'une erreur, en reportant sa
-    /// classe plutôt qu'en la laissant déduire.
+    /// Builds a failure event from an error, carrying over its class rather
+    /// than leaving it to be deduced.
     #[must_use]
     pub fn failed(error: &OxynError) -> Self {
         Self::Failed {
@@ -128,13 +127,13 @@ impl Event {
         }
     }
 
-    /// L'événement clôt-il l'exécution ?
+    /// Does the event close the execution?
     ///
-    /// Après un événement terminal, plus rien de l'exécution elle-même
-    /// n'arrive : c'est le signal qui autorise l'interface à quitter l'état
-    /// « en cours ». Seul [`HistoryRecorded`](Event::HistoryRecorded) peut
-    /// suivre `Completed` sous la même commande : il annonce l'écriture locale
-    /// de l'issue, pas une étape de l'exécution.
+    /// After a terminal event, nothing more of the execution itself arrives:
+    /// it is the signal that allows the interface to leave the "running"
+    /// state. Only [`HistoryRecorded`](Event::HistoryRecorded) can follow
+    /// `Completed` under the same command: it announces the local write of the
+    /// outcome, not a step of the execution.
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         matches!(
@@ -143,7 +142,7 @@ impl Event {
         )
     }
 
-    /// Le résultat concerné, quand il y en a un.
+    /// The result concerned, when there is one.
     #[must_use]
     pub const fn result(&self) -> Option<ResultId> {
         match self {
@@ -161,11 +160,11 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn les_evenements_terminaux_sont_les_trois_attendus() {
-        let resultat = ResultId::new();
+    fn the_terminal_events_are_the_three_expected() {
+        let result_id = ResultId::new();
         assert!(
             Event::Completed {
-                result: resultat,
+                result: result_id,
                 stats: ExecStats::default(),
                 intent: StatementIntent::Read,
             }
@@ -173,14 +172,14 @@ mod tests {
         );
         assert!(
             Event::Failed {
-                error: "boum".into(),
+                error: "boom".into(),
                 retryable: false,
             }
             .is_terminal()
         );
         assert!(Event::Cancelled.is_terminal());
 
-        assert!(!Event::SchemaReady { result: resultat }.is_terminal());
+        assert!(!Event::SchemaReady { result: result_id }.is_terminal());
         assert!(!Event::Progress { rows: 10 }.is_terminal());
         assert!(!Event::CatalogUpdated.is_terminal());
         assert!(
@@ -189,86 +188,86 @@ mod tests {
                 state: TransactionState::Open,
             }
             .is_terminal(),
-            "l'état de transaction précède le terminal, il ne le remplace pas"
+            "the transaction state precedes the terminal event, it does not replace it"
         );
     }
 
     #[test]
-    fn un_echec_reporte_la_classe_de_l_erreur() {
-        let transitoire = Event::failed(&OxynError::Connection("réseau coupé".into()));
-        let Event::Failed { retryable, error } = transitoire else {
-            panic!("mauvaise variante");
+    fn a_failure_carries_the_error_class() {
+        let transient = Event::failed(&OxynError::Connection("network down".into()));
+        let Event::Failed { retryable, error } = transient else {
+            panic!("wrong variant");
         };
-        assert!(retryable, "une coupure réseau est retentable");
+        assert!(retryable, "a network outage is retryable");
         assert!(
-            error.contains("réseau coupé"),
-            "le message du serveur est montré"
+            error.contains("network down"),
+            "the server's message is shown"
         );
 
-        let ambigu = Event::failed(&OxynError::Timeout {
+        let ambiguous = Event::failed(&OxynError::Timeout {
             after: Duration::from_secs(30),
         });
-        let Event::Failed { retryable, .. } = ambigu else {
-            panic!("mauvaise variante");
+        let Event::Failed { retryable, .. } = ambiguous else {
+            panic!("wrong variant");
         };
         assert!(
             !retryable,
-            "une expiration est ambiguë : l'interface ne doit pas proposer de rejouer"
+            "a timeout is ambiguous: the interface must not offer to replay"
         );
     }
 
     #[test]
-    fn le_resultat_concerne_est_retrouvable() {
-        let resultat = ResultId::new();
+    fn the_concerned_result_can_be_found() {
+        let result_id = ResultId::new();
         assert_eq!(
             Event::BatchReady {
-                result: resultat,
+                result: result_id,
                 rows: 1_024,
             }
             .result(),
-            Some(resultat)
+            Some(result_id)
         );
         assert_eq!(Event::Cancelled.result(), None);
     }
 
     #[test]
-    fn une_demande_d_approbation_porte_de_quoi_juger() {
+    fn an_approval_request_carries_what_is_needed_to_judge() {
         let evt = Event::ApprovalRequested {
             command: CommandId::new(),
-            reason: "TRUNCATE : vidage complet de la table".into(),
-            preview: Some(Preview::new("TRUNCATE audit", "caisse")),
+            reason: "TRUNCATE: empties the whole table".into(),
+            preview: Some(Preview::new("TRUNCATE audit", "checkout")),
         };
         let Event::ApprovalRequested { preview, .. } = &evt else {
-            panic!("mauvaise variante");
+            panic!("wrong variant");
         };
-        let preview = preview.as_ref().expect("prévisualisation attendue");
-        assert_eq!(preview.connection, "caisse");
+        let preview = preview.as_ref().expect("preview expected");
+        assert_eq!(preview.connection, "checkout");
         assert!(
             !evt.is_terminal(),
-            "l'exécution n'est pas close, elle attend"
+            "the execution is not closed, it is waiting"
         );
     }
 
     #[test]
-    fn l_etat_de_transaction_nomme_sa_session() {
+    fn the_transaction_state_names_its_session() {
         let session = SessionId::new();
         let evt = Event::TransactionState {
             session,
             state: TransactionState::Unknown,
         };
-        let json = serde_json::to_value(&evt).expect("sérialisation");
+        let json = serde_json::to_value(&evt).expect("serialization");
         assert_eq!(json["event"], "transaction_state");
         assert_eq!(json["state"], "unknown");
         assert_eq!(json["session"], session.to_string());
-        let relu: Event = serde_json::from_value(json).expect("désérialisation");
-        assert_eq!(relu, evt);
+        let read_back: Event = serde_json::from_value(json).expect("deserialization");
+        assert_eq!(read_back, evt);
     }
 
     #[test]
-    fn aller_retour_json() {
+    fn json_round_trip() {
         let evt = Event::Completed {
-            // Une écriture, pour que l'aller-retour porte sur autre chose que
-            // la valeur par défaut de l'intention.
+            // A write, so that the round trip covers something other than the
+            // intent's default value.
             intent: StatementIntent::Write,
             result: ResultId::new(),
             stats: ExecStats {
@@ -280,8 +279,8 @@ mod tests {
                 truncated: false,
             },
         };
-        let json = serde_json::to_string(&evt).expect("sérialisation");
-        let relu: Event = serde_json::from_str(&json).expect("désérialisation");
-        assert_eq!(evt, relu);
+        let json = serde_json::to_string(&evt).expect("serialization");
+        let read_back: Event = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(evt, read_back);
     }
 }

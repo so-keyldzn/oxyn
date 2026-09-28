@@ -1,86 +1,85 @@
-# Configuration Codex du projet
+# The project's Codex configuration
 
-[config.toml](config.toml) définit le modèle, l'effort de raisonnement et le
-contexte étendu pour Oxyn. Les limites vérifiées et le choix du seuil de
-compactage sont documentés dans
-[RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--contexte-étendu).
+[config.toml](config.toml) sets the model, the reasoning effort and the
+extended context for Oxyn. The checked limits and the choice of the compaction
+threshold are documented in
+[RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--extended-context).
 
-Relancer Codex depuis ce dépôt et ouvrir une nouvelle conversation pour charger
-ces réglages. Le projet doit être approuvé dans Codex pour que sa configuration
-locale soit chargée. Les options de lancement ou les réglages imposés par le
-client peuvent prendre priorité ; vérifier la fenêtre effective dans la nouvelle
-session. Le fichier ne modifie pas une conversation déjà ouverte.
+Restart Codex from this repository and open a new conversation to load these
+settings. The project must be trusted in Codex for its local configuration to
+load. Launch options or settings imposed by the client can take precedence;
+check the effective window in the new session. The file does not change a
+conversation that is already open.
 
-Les consignes métier restent dans [AGENTS.md](../AGENTS.md). Les permissions,
-les identifiants et les connexions restent gérés par l'environnement de session.
-Cette configuration ne remplace pas les contrôles de fin de tâche du dépôt.
+The domain instructions stay in [AGENTS.md](../AGENTS.md). Permissions,
+credentials and connections stay managed by the session environment.
+This configuration does not replace the repository's end-of-task checks.
 
-## Réglages retenus
+## Settings chosen
 
-- Raisonnement élevé et contexte étendu pour les tâches Rust complexes.
-- Seuil de compactage conservé à sa valeur locale actuelle ; voir les chiffres
-  dans [RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--contexte-étendu).
-- Recherche web en direct pour vérifier les versions et documentations amont.
-- Barre du terminal : modèle et raisonnement, contexte restant, branche Git.
-  Ce réglage d'affichage concerne la CLI, pas l'interface de l'application.
+- High reasoning and extended context for complex Rust tasks.
+- Compaction threshold kept at its current local value; see the figures
+  in [RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--extended-context).
+- Live web search to check upstream versions and documentation.
+- Terminal bar: model and reasoning, remaining context, Git branch.
+  This display setting concerns the CLI, not the application's interface.
 
-## Cache de prompts
+## Prompt cache
 
-Le cache est géré par le service. Il n'y a pas de clé `prompt_cache` à ajouter
-au fichier Codex documenté. Les options API `prompt_cache_key` et
-`prompt_cache_retention` ne sont pas des options de premier niveau de ce fichier.
-Les sources et la date de vérification sont dans
-[RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--contexte-étendu).
+The cache is managed by the service. There is no `prompt_cache` key to add
+to the documented Codex file. The API options `prompt_cache_key` and
+`prompt_cache_retention` are not top-level options of this file.
+The sources and the date of the check are in
+[RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--extended-context).
 
-Pour favoriser la réutilisation, conserver des instructions stables et poursuivre
-une même tâche dans sa conversation. Le cache ne garantit pas un succès à chaque
-requête et n'agrandit pas la fenêtre de contexte. Le mode `cached` de la recherche
-web désigne un index de recherche, pas le cache de prompts.
+To favor reuse, keep instructions stable and continue a task in its own
+conversation. The cache does not guarantee a hit on every request and does not
+enlarge the context window. The `cached` mode of web search refers to a search
+index, not the prompt cache.
 
-## Agents de spécialité
+## Specialty agents
 
-Les onze fichiers [agents/](agents/) définissent les rôles locaux : architecte,
-rustacien, driveriste, interfacier, ia-workspace, documentaliste, performance,
-relecteur-invariants, relecteur-frontiere, relecteur-securite et
-detecteur-divergence. Chaque profil renvoie au guide correspondant dans
-[.claude/agents/](../.claude/agents/) et applique les adaptations d'AGENTS.md.
-Les règles métier restent à leur source, sans copie dans les profils TOML.
+The eleven files of [agents/](agents/) define the local roles: architecte,
+rustacien, driveriste, frontiste, ia-workspace, documentaliste, performance,
+relecteur-invariants, relecteur-frontiere, relecteur-securite and
+detecteur-divergence. Each profile points to the matching guide in
+[.claude/agents/](../.claude/agents/) and applies the adaptations of AGENTS.md.
+The domain rules stay at their source, not copied into the TOML profiles.
 
-Codex découvre ces fichiers automatiquement dans un projet approuvé ; aucune
-table d'enregistrement par rôle n'est nécessaire dans `config.toml`. Le modèle
-et l'effort ne sont pas surchargés dans les profils. Le projet limite à trois
-les sous-agents simultanés, en plus de l'agent principal. Leur présence
-n'autorise pas une délégation automatique : suivre AGENTS.md et la demande.
+Codex discovers these files automatically in a trusted project; no
+per-role registration table is needed in `config.toml`. The model and the
+effort are not overridden in the profiles. The project limits simultaneous
+subagents to three, in addition to the main agent. Their presence does not
+authorize automatic delegation: follow AGENTS.md and the request.
 
-Les quatre rôles de relecture déclarent `sandbox_mode = "read-only"` et
-interdisent les corrections dans leurs instructions. Les réglages imposés par
-la session peuvent toutefois primer sur ce défaut ; vérifier les permissions
-effectives avant de considérer cette lecture seule comme une barrière technique.
+The four review roles declare `sandbox_mode = "read-only"` and forbid fixes in
+their instructions. Settings imposed by the session can nevertheless take
+precedence over this default; check the effective permissions before treating
+this read-only mode as a technical barrier.
 
 ## Figma
 
-Deux serveurs MCP sont déclarés : `figma` pour le service distant et
-`figma-desktop` pour l'application locale. Ils sont facultatifs au démarrage
-(`required = false`). Aucun identifiant n'est stocké dans ces fichiers.
-Leur déclaration ne prouve ni leur disponibilité ni une authentification.
+Two MCP servers are declared: `figma` for the remote service and
+`figma-desktop` for the local application. They are optional at startup
+(`required = false`). No credential is stored in these files.
+Declaring them proves neither their availability nor an authentication.
 
-Si le service distant demande une connexion, lancer `codex mcp login figma`
-depuis le dépôt. Pour le serveur local, ouvrir Figma Desktop avec son serveur
-MCP activé. Utiliser le serveur correspondant au contexte de travail.
+If the remote service asks for a sign-in, run `codex mcp login figma`
+from the repository. For the local server, open Figma Desktop with its MCP
+server enabled. Use the server that matches the working context.
 
-Les formats et leurs sources sont datés dans
-[RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--agents-locaux-et-mcp).
+The formats and their sources are dated in
+[RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--local-agents-and-mcp).
 
-## Vérification
+## Verification
 
-Depuis la racine, `python3 .codex/verifier.py` vérifie les TOML, les guides
-référencés et les liens de ce dossier. `make socle` vérifie le socle commun ;
-`make qualite` ajoute les contrôles Rust. Aucun de ces contrôles n'appelle
-Figma ni ne lance de sous-agent.
+From the root, `python3 .codex/verifier.py` checks the TOML files, the
+referenced guides and the links of this directory. `make socle` checks the
+shared foundation; `make qualite` adds the Rust checks. None of these checks
+calls Figma or starts a subagent.
 
-Le vérificateur local contrôle la structure du dossier ; il ne remplace pas
-le parseur du client. Pour contrôler aussi les clés de la configuration avec
-la CLI installée :
+The local verifier checks the directory's structure; it does not replace the
+client's parser. To also check the configuration keys with the installed CLI:
 
 ```bash
 codex --strict-config app-server --stdio </dev/null

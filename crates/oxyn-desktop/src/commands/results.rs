@@ -80,7 +80,7 @@ pub async fn export_formats(
 ///
 /// The dialog is opened **here**, not by the webview: the path goes from the
 /// dialog to the writer without crossing the bridge, so a script in the
-/// webview cannot choose where Oxyn writes (SECURITY, « Surface d'entrée »).
+/// webview cannot choose where Oxyn writes (SECURITY, « Input surface »).
 /// The webview only suggests a file name. `null` when the user dismissed the
 /// dialog: nothing was written and nothing ran.
 #[tauri::command]

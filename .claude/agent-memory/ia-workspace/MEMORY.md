@@ -1,11 +1,11 @@
-- [Piège rustdoc : liens explicites redondants](piege-rustdoc-liens-explicites-redondants.md) — seul l'étage doc de `make qualite` le voit ; `cargo test` et `clippy` se taisent
-- [Piège rustdoc : lien vers un item privé](piege-rustdoc-lien-vers-item-prive.md) — un item `pub` qui lie un helper privé casse `cargo doc -D warnings` seul ; vu sur `oxyn-core/src/ai.rs:482`
-- [Piège hook : `derive(Debug)` refusé sur un nom de type](piege-hook-derive-debug-nom-de-type.md) — le critère est le *nom* ; `TokenDetails` est un faux positif classique
-- [Piège cargo : oxyn-desktop sans cible lib](piege-cargo-oxyn-desktop-sans-lib.md) — tests ciblés avec `--bins`, pas `--lib`
-- [Piège vitest : port 63315 occupé](piege-vitest-port-occupe.md) — échec front passager quand un autre vitest tourne ; vérifier et relancer
-- [Piège Edit : `\uXXXX` décodé](piege-edit-sequence-u-decodee.md) — une séquence ` ` écrite via Edit devient le vrai caractère ; la construire par `format!`
-- [Piège reqwest : délai de connexion](piege-reqwest-delai-de-connexion.md) — `is_connect()` et `is_timeout()` tous deux vrais ; tester la connexion d'abord
-- [Piège Base UI : `initialFocus` à l'ouverture seulement](piege-base-ui-initialfocus-a-l-ouverture.md) — un corps remonté sous un dialogue ouvert perd le focus
-- [Piège : cargo-nextest absent](piege-nextest-absent.md) — la porte retombe sur `cargo test` ; cibler avec `-p`, pas `nextest run`
-- [Piège clippy : `thread::sleep` dans un test](piege-clippy-sleep-dans-les-tests.md) — refusé aussi en test ; et `ExecRequest` de test en lecture seule par défaut
-- [Piège trait : méthode par défaut non relayée](piege-methode-par-defaut-non-relayee.md) — une enveloppe hérite du défaut au lieu de déléguer ; le compilateur se tait
+- [rustdoc trap: redundant explicit links](piege-rustdoc-liens-explicites-redondants.md) — only the doc stage of `make qualite` sees it; `cargo test` and `clippy` stay silent
+- [rustdoc trap: link to a private item](piege-rustdoc-lien-vers-item-prive.md) — a `pub` item linking a private helper breaks `cargo doc -D warnings` alone; seen at `oxyn-core/src/ai.rs:482`
+- [Hook trap: `derive(Debug)` refused on a type name](piege-hook-derive-debug-nom-de-type.md) — the criterion is the *name*; `TokenDetails` is a classic false positive
+- [cargo trap: oxyn-desktop without a lib target](piege-cargo-oxyn-desktop-sans-lib.md) — targeted tests with `--bins`, not `--lib`
+- [vitest trap: port 63315 in use](piege-vitest-port-occupe.md) — transient front failure when another vitest runs; check and rerun
+- [Edit trap: `\uXXXX` decoded](piege-edit-sequence-u-decodee.md) — a ` ` sequence written via Edit becomes the real character; build it with `format!`
+- [reqwest trap: connect timeout](piege-reqwest-delai-de-connexion.md) — `is_connect()` and `is_timeout()` both true; test the connection first
+- [Base UI trap: `initialFocus` on opening only](piege-base-ui-initialfocus-a-l-ouverture.md) — a body remounted under an open dialog loses focus
+- [Trap: cargo-nextest missing](piege-nextest-absent.md) — the gate falls back to `cargo test`; target with `-p`, not `nextest run`
+- [clippy trap: `thread::sleep` in a test](piege-clippy-sleep-dans-les-tests.md) — refused in tests too; and a test `ExecRequest` is read-only by default
+- [Trait trap: default method not forwarded](piege-methode-par-defaut-non-relayee.md) — a wrapper inherits the default instead of delegating; the compiler stays silent

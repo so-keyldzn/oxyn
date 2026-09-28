@@ -7,7 +7,7 @@ import { ResultPanel } from "./result-panel"
 import type { ResultState } from "./result-panel"
 import { Button } from "@/components/ui/button"
 
-// The five states of docs/UX-SPEC.md, « États d'une vue ». Each is a story, so
+// The five states of docs/UX-SPEC.md, « States of a view ». Each is a story, so
 // each is rendered and checked by axe in `make qualite`.
 const meta = {
   title: "Oxyn/ResultPanel",
@@ -44,7 +44,8 @@ export const Running: Story = {
 export const RunningWithoutServerCancel: Story = {
   args: { state: { status: "running", rows: 0, serverCancel: false } },
   play: async ({ canvas }) => {
-    // The button stays; the promise is withdrawn (docs/UX-SPEC.md, « Annulation »).
+    // The button stays; the promise is withdrawn (docs/UX-SPEC.md, «
+    // Cancellation »).
     await expect(canvas.getByRole("button", { name: "Cancel" })).toBeVisible()
     await expect(canvas.getByText(/cannot send a cancel request/)).toBeVisible()
   },
@@ -147,7 +148,7 @@ export const HideAColumn: Story = {
 
 /**
  * `Hide` in a header's context menu is the same choice as `Columns`
- * (docs/UX-SPEC.md, « Menus contextuels »): the header goes, and the footer
+ * (docs/UX-SPEC.md, « Context menus »): the header goes, and the footer
  * counts it.
  */
 export const HideFromTheHeaderMenu: Story = {
@@ -372,7 +373,7 @@ export const WithFooter: Story = {
 /**
  * The text size from the result bar: the same two presets as the settings.
  * Choosing one asks for no page and reruns nothing (docs/UX-SPEC.md,
- * « Lisibilité et hauteur de grille »).
+ * « Readability and grid height »).
  */
 export const TextSize: Story = {
   args: {

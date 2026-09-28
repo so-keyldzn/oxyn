@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Stop : rappelle la porte de qualité, une seule fois par session.
+"""Stop: remind the quality gate, once per session.
 
-Répété à chaque tour, un rappel devient invisible — et un rappel invisible est
-pire qu'aucun rappel, parce qu'il donne l'illusion d'un garde-fou. Le marqueur
-par session est donc la partie essentielle de ce hook.
+Repeated every turn, a reminder becomes invisible — and an invisible reminder
+is worse than none, because it gives the illusion of a safeguard. The
+per-session marker is therefore the essential part of this hook.
 
-Le message passe par `systemMessage`, champ de premier niveau que `Stop` ne
-jette pas. `additionalContext` relancerait le travail au lieu d'informer.
+The message goes through `systemMessage`, a top-level field that `Stop` does
+not drop. `additionalContext` would restart the work instead of informing.
 """
 
 from __future__ import annotations
@@ -20,37 +20,37 @@ sys.path.insert(0, str(Path(__file__).parent))
 import protocole_hook as p  # noqa: E402
 
 MESSAGE = (
-    "Rappel : rien n'est terminé tant que `make qualite` n'est pas passé — "
-    "format, clippy, tests, doc. Une tâche annoncée comme faite sans cette "
-    "commande est une tâche non vérifiée."
+    "Reminder: nothing is done until `make qualite` has passed — format, "
+    "clippy, tests, doc. A task announced as done without this command is an "
+    "unverified task."
 )
 
 
-def _marqueur(identifiant: str) -> Path:
-    sur = re.sub(r"[^A-Za-z0-9_.-]", "_", identifiant)[:80] or "session"
-    return Path(tempfile.gettempdir()) / f"oxyn-rappel-qualite-{sur}"
+def _marker(identifier: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", identifier)[:80] or "session"
+    return Path(tempfile.gettempdir()) / f"oxyn-rappel-qualite-{safe_id}"
 
 
-def principal() -> None:
-    evenement = p.lire_evenement()
-    identifiant = str(evenement.get("session_id") or "")
-    if not identifiant:
+def main() -> None:
+    event = p.read_event()
+    identifier = str(event.get("session_id") or "")
+    if not identifier:
         p.laisser_passer()
 
-    marqueur = _marqueur(identifiant)
-    if marqueur.exists():
+    marker = _marker(identifier)
+    if marker.exists():
         p.laisser_passer()
     try:
-        marqueur.touch()
+        marker.touch()
     except OSError:
         p.laisser_passer()
 
-    p.message_systeme(MESSAGE)
+    p.system_message(MESSAGE)
 
 
 if __name__ == "__main__":
     try:
-        principal()
+        main()
     except SystemExit:
         raise
     except Exception:

@@ -504,7 +504,7 @@ fn the_agent_receives_the_structure_of_the_database_and_no_value() {
 
     let received = Arc::new(Mutex::new(Vec::<String>::new()));
     let kept = Arc::clone(&received);
-    let invite = AgentPrompt::with_schema(
+    let launch_request = AgentPrompt::with_schema(
         PrivacyTier::Sampled,
         "the last 10 rows",
         &cache,
@@ -548,7 +548,7 @@ fn the_agent_receives_the_structure_of_the_database_and_no_value() {
         },
         async move |session| {
             session
-                .prompt(&invite, Arc::new(()), &CancelToken::new())
+                .prompt(&launch_request, Arc::new(()), &CancelToken::new())
                 .await
         },
     );
@@ -851,7 +851,7 @@ fn oxyn_asks_for_nothing_on_the_machine_and_believes_only_what_the_agent_declare
                                             McpCapabilities::new().http(true).sse(true),
                                         ),
                                 )
-                                .agent_info(Implementation::new("Agent facti", "9.9.9")),
+                                .agent_info(Implementation::new("Fake agent", "9.9.9")),
                         )
                     },
                     agent_client_protocol::on_receive_request!(),
@@ -887,7 +887,7 @@ fn oxyn_asks_for_nothing_on_the_machine_and_believes_only_what_the_agent_declare
     );
 
     // And what the agent says about itself is read, not guessed.
-    assert_eq!(ready.name.as_deref(), Some("Agent facti"));
+    assert_eq!(ready.name.as_deref(), Some("Fake agent"));
     assert_eq!(ready.version.as_deref(), Some("9.9.9"));
     assert!(ready.can.mcp_http, "this agent accepts MCP over HTTP");
     assert!(ready.can.load_session);
@@ -1024,7 +1024,7 @@ fn journal_while(capped: bool, scenario: impl FnOnce()) -> String {
 }
 
 const TOKEN: &str = "oxyn-test-token-4f1d9c0b7e";
-const QUESTION: &str = "how many invoices did Dupont SARL leave unpaid";
+const QUESTION: &str = "how many invoices did Dupont Ltd leave unpaid";
 
 /// A whole conversation — tools declared, one question — under a journal open
 /// at `trace`, with or without the host's cap. Returns what was written.
@@ -1484,20 +1484,20 @@ mod setting_changes {
         AnsweredThenNotified,
     }
 
-    /// An agent with two modes and one option. `refuse` answers every change
+    /// An agent with two modes and one option. `rejected` answers every change
     /// with an error quoting a secret; `held` fires when a prompt arrives,
     /// which is then held until its receiver fires.
     fn agent(
         sent: Sent,
-        refuse: bool,
+        rejected: bool,
         held: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
     ) -> impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>> {
-        scripted(sent, refuse, held, Said::Answer)
+        scripted(sent, rejected, held, Said::Answer)
     }
 
     fn scripted(
         sent: Sent,
-        refuse: bool,
+        rejected: bool,
         held: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
         said: Said,
     ) -> impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>> {
@@ -1534,7 +1534,7 @@ mod setting_changes {
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
                             .push(format!("mode:{}", request.mode_id));
-                        if refuse {
+                        if rejected {
                             responder.respond_with_error(Error::new(-32000, "no: SECRET-ROW"))
                         } else {
                             responder.respond(SetSessionModeResponse::new())

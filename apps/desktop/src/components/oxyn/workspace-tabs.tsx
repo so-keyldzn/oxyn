@@ -81,10 +81,10 @@ export function tabPanelValue(key: string) {
  *
  * A right click on a tab — or ⇧F10 and the menu key on the focused one —
  * opens the registry's `tab` menu for **that** tab, given by `menuFor`
- * (UX-SPEC, « Menus contextuels »). The strip around the tabs has no menu.
+ * (UX-SPEC, « Context menus »). The strip around the tabs has no menu.
  *
  * Tabs reorder by dragging, or with ⌥⇧← and ⌥⇧→ on the focused tab — the
- * keyboard's side of the drag (UX-SPEC « Souris et glisser »). The order is
+ * keyboard's side of the drag (UX-SPEC « Mouse and drag »). The order is
  * the screen's to keep: nothing else changes with it. Only the primary
  * button drags, so a right click opens the menu and moves nothing.
  */

@@ -1,99 +1,98 @@
-# ADR-0008 — Chaîne d'outils Rust épinglée dans le dépôt
+# ADR-0008 — Rust toolchain pinned in the repository
 
-**Statut :** accepté · **Date :** 2026-09-05
+**Status:** accepted · **Date:** 2026-09-05
 
-## Contexte
+## Context
 
-Fait vérifié le 2026-09-05 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#chaîne-doutils-rust)) :
+Fact checked on 2026-09-05 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#rust-toolchain)):
 
-- Rust stable est en `1.98.1` ;
-- la machine de développement du mainteneur est en `1.89.0`, soit **neuf
-  versions mineures de retard** ;
-- `gpui 0.2.2` est en **édition 2024**, qui exige au minimum Rust `1.85` ;
-- `gpui` ne déclare **aucun MSRV** (`rust_version` absent de ses métadonnées),
-  donc rien ne garantit qu'une future version restera compatible avec une
-  toolchain ancienne.
+- Rust stable is at `1.98.1`;
+- the maintainer's development machine is at `1.89.0`, that is **nine minor
+  versions behind**;
+- `gpui 0.2.2` uses **edition 2024**, which requires at least Rust `1.85`;
+- `gpui` declares **no MSRV** (`rust_version` absent from its metadata), so
+  nothing guarantees that a future version will remain compatible with an old
+  toolchain.
 
-`1.89.0` compile l'édition 2024. Mais sans épinglage, la machine de
-développement et l'intégration continue utilisent deux compilateurs différents.
-Le mode de panne est silencieux dans le sens qui coûte le plus cher : le code
-compile en local, et `clippy` en CI signale des diagnostics ajoutés entre 1.89
-et 1.98 que le développeur n'a jamais vus. À l'inverse, du code utilisant une
-API stabilisée après 1.89 passe en CI et ne compile pas chez lui.
+`1.89.0` compiles edition 2024. But without pinning, the development machine and
+continuous integration use two different compilers. The failure mode is silent
+in the most expensive direction: the code compiles locally, and `clippy` in CI
+reports diagnostics added between 1.89 and 1.98 that the developer has never
+seen. Conversely, code using an API stabilized after 1.89 passes CI and does not
+compile on their machine.
 
-## Décision
+## Decision
 
-Un fichier `rust-toolchain.toml` à la racine épingle une version **exacte** de
-la chaîne d'outils, avec les composants `rustfmt` et `clippy`.
+A `rust-toolchain.toml` file at the root pins an **exact** version of the
+toolchain, with the `rustfmt` and `clippy` components.
 
-La version épinglée est la même partout : poste de développement, intégration
-continue, publication. Une montée de version est un changement délibéré, avec
-son propre commit, et met à jour
-[RESEARCH-NOTES](../RESEARCH-NOTES.md#chaîne-doutils-rust) dans le même commit.
+The pinned version is the same everywhere: development machine, continuous
+integration, release. An upgrade is a deliberate change, with its own commit,
+and updates [RESEARCH-NOTES](../RESEARCH-NOTES.md#rust-toolchain) in the
+same commit.
 
-La valeur initiale est à fixer au premier commit de code. Le choix se fait entre
-deux options, et il se documente ici :
+The initial value is to be set at the first code commit. The choice is between
+two options, and it is documented here:
 
-- `1.98.1`, la stable du jour : impose au mainteneur de mettre à jour sa
-  machine ;
-- `1.89.0`, la toolchain existante : fige le projet sur un compilateur d'un an,
-  sans bénéfice.
+- `1.98.1`, today's stable: requires the maintainer to update their machine;
+- `1.89.0`, the existing toolchain: freezes the project on a year-old compiler,
+  with no benefit.
 
-La recommandation est `1.98.1` — un projet neuf n'a aucune raison de naître avec
-un an de dette d'outillage.
+The recommendation is `1.98.1` — a new project has no reason to be born with a
+year of tooling debt.
 
-### Valeur retenue : `1.98.1`
+### Chosen value: `1.98.1`
 
-Fixée le 2026-09-05, à la première compilation du workspace. Le `1.89.0` qui
-figurait dans `rust-toolchain.toml` était la valeur que cet ADR écarte : le
-fichier avait été écrit avant que la décision soit prise, et il contredisait
-donc le document censé le fonder.
+Set on 2026-09-05, at the first compilation of the workspace. The `1.89.0` that
+appeared in `rust-toolchain.toml` was the value this ADR rules out: the file had
+been written before the decision was made, and it therefore contradicted the
+document meant to ground it.
 
-Le premier `cargo check --workspace` a rendu l'arbitrage sans appel :
+The first `cargo check --workspace` settled the matter beyond appeal:
 
 ```
 error: rustc 1.89.0 is not supported by the following packages:
   sqlx@0.9.0 requires rustc 1.94.0
 ```
 
-Le plancher n'est pas `1.94.0` mais **`1.95.0`**, imposé par `wasmtime 48.0.1`
-([RESEARCH-NOTES](../RESEARCH-NOTES.md#msrv-imposés-par-les-dépendances)). Il ne
-se voit pas aujourd'hui, parce que `wasmtime` est derrière la fonctionnalité
-`wasm-host` d'`oxyn-plugin`, désactivée par défaut : la construction par défaut
-ne le compile pas, donc `cargo` ne vérifie pas son `rust-version`. C'est le mode
-de panne que cet ADR décrit — silencieux jusqu'au jour où quelqu'un active la
-fonctionnalité, et incompréhensible à ce moment-là.
+The floor is not `1.94.0` but **`1.95.0`**, imposed by `wasmtime 48.0.1`
+([RESEARCH-NOTES](../RESEARCH-NOTES.md#msrvs-imposed-by-dependencies)). It
+does not show today, because `wasmtime` sits behind the `wasm-host` feature of
+`oxyn-plugin`, disabled by default: the default build does not compile it, so
+`cargo` does not check its `rust-version`. This is the failure mode this ADR
+describes — silent until the day someone enables the feature, and
+incomprehensible at that moment.
 
-D'où deux valeurs distinctes, et non une seule :
+Hence two distinct values, not one:
 
-| Fichier | Valeur | Ce qu'elle exprime |
+| File | Value | What it expresses |
 |---|---|---|
-| `rust-toolchain.toml` | `1.98.1` | le compilateur **utilisé**, identique partout |
-| `Cargo.toml`, `rust-version` | `1.95` | le minimum **supporté**, `wasm-host` comprise |
+| `rust-toolchain.toml` | `1.98.1` | the compiler **used**, identical everywhere |
+| `Cargo.toml`, `rust-version` | `1.95` | the minimum **supported**, `wasm-host` included |
 
-Les deux sont complémentaires, comme le dit déjà la table des alternatives
-écartées ci-dessous.
+The two are complementary, as the table of rejected alternatives below already
+says.
 
-## Conséquences
+## Consequences
 
-* **+** Un seul jeu de diagnostics `clippy` : la porte de qualité veut dire la même
-  chose sur le poste et en CI.
-* **+** L'édition et le MSRV cessent d'être implicites.
-* **+** `rustup` installe la bonne version au premier `cargo` lancé dans le dépôt :
-  aucune procédure à documenter.
-* **−** Un contributeur hors ligne, ou derrière un miroir restreint, doit disposer de
-  la version épinglée.
-* **−** L'épinglage se maintient : un fichier oublié deux ans est une dette qui
-  grossit seule.
+* **+** A single set of `clippy` diagnostics: the quality gate means the same thing
+  on the workstation and in CI.
+* **+** The edition and the MSRV stop being implicit.
+* **+** `rustup` installs the right version on the first `cargo` run in the
+  repository: no procedure to document.
+* **−** A contributor who is offline, or behind a restricted mirror, must have the
+  pinned version.
+* **−** Pinning needs upkeep: a file forgotten for two years is a debt that grows on
+  its own.
 
-**Coût de sortie :** nul, supprimer le fichier suffit. **Reconsidérer si** le projet
-accueille des contributeurs dont la distribution impose une toolchain système :
-l'épinglage exact devrait alors devenir un minimum.
+**Exit cost:** none, deleting the file is enough. **Reconsider if** the project
+welcomes contributors whose distribution imposes a system toolchain: the exact
+pin should then become a minimum.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Ne rien épingler | c'est l'état actuel, et il produit exactement la divergence silencieuse décrite ci-dessus |
-| Épingler `stable` sans version | ne fige rien : « stable » désigne un compilateur différent chaque semaine |
-| Déclarer seulement un `rust-version` dans `Cargo.toml` | exprime un minimum, n'impose pas la version utilisée ; les deux sont complémentaires, pas substituables |
+| Pin nothing | this is the current state, and it produces exactly the silent divergence described above |
+| Pin `stable` without a version | freezes nothing: "stable" means a different compiler every week |
+| Only declare a `rust-version` in `Cargo.toml` | expresses a minimum, does not impose the version used; the two are complementary, not substitutable |

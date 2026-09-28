@@ -1,51 +1,51 @@
-//! Le canal par lequel l'exécution parle à l'interface.
+//! The channel through which execution speaks to the interface.
 //!
-//! Le thread d'interface ne fait aucune entrée-sortie et n'attend jamais un
-//! verrou tenu par une tâche (I-05, ARCHITECTURE §9). Tout ce qu'il apprend de
-//! l'exécution arrive donc par ce canal, sous forme d'[`Event`] — des compteurs
-//! et des identifiants, jamais une valeur de la base : les lignes voyagent en
-//! `RecordBatch` dans un [`ResultBuffer`](oxyn_data::ResultBuffer) partagé.
+//! The UI thread does no I/O and never waits for a lock held by a task (I-05,
+//! ARCHITECTURE §9). Everything it learns about execution therefore arrives
+//! through this channel, as [`Event`]s — counters and identifiers, never a
+//! database value: rows travel as `RecordBatch`es in a shared
+//! [`ResultBuffer`](oxyn_data::ResultBuffer).
 //!
-//! # Pourquoi une diffusion et non un `mpsc`
+//! # Why a broadcast and not an `mpsc`
 //!
-//! Une exécution a plus d'un spectateur légitime : la grille qui dessine, la
-//! barre d'état qui compte, et — quand un agent est en cours de conversation —
-//! le runtime qui doit savoir qu'une approbation est en attente. Un canal à
-//! consommateur unique obligerait à réémettre depuis un point central, donc à
-//! écrire deux fois la même liste de destinataires.
+//! An execution has more than one legitimate spectator: the grid that draws,
+//! the status bar that counts, and — when an agent is in conversation — the
+//! runtime that must know an approval is pending. A single-consumer channel
+//! would force re-emitting from a central point, hence writing the same list
+//! of recipients twice.
 //!
-//! # Ce qui se perd, et pourquoi ce n'est pas grave
+//! # What gets lost, and why it does not matter
 //!
-//! [`tokio::sync::broadcast`] écarte les messages les plus anciens quand un
-//! abonné prend du retard. C'est le bon compromis **ici** : un abonné en retard
-//! de mille lots n'a aucun usage des neuf cent quatre-vingt-dix-neuf premiers,
-//! il n'a besoin que de l'état courant, qu'il relit dans le tampon. Le
-//! contre-exemple serait un journal — et le journal, lui, ne passe pas par ce
-//! canal mais par `oxyn-store`, en ajout seul.
+//! [`tokio::sync::broadcast`] drops the oldest messages when a subscriber falls
+//! behind. It is the right trade-off **here**: a subscriber a thousand batches
+//! behind has no use for the first nine hundred and ninety-nine, it only needs
+//! the current state, which it reads back from the buffer. The counterexample
+//! would be a log — and the log does not go through this channel but through
+//! `oxyn-store`, append-only.
 
 use std::fmt;
 
 use oxyn_core::{CommandId, ConnectionId, Event};
 use tokio::sync::broadcast;
 
-/// Un événement d'exécution, rattaché à la commande qui l'a produit.
+/// An execution event, attached to the command that produced it.
 ///
-/// [`Event`] seul ne dit pas de quelle commande il parle — sauf
-/// [`Event::ApprovalRequested`], qui porte déjà son [`CommandId`]. L'interface
-/// affiche plusieurs onglets à la fois : sans cette enveloppe, elle ne saurait
-/// pas lequel mettre à jour.
+/// [`Event`] alone does not say which command it is about — except
+/// [`Event::ApprovalRequested`], which already carries its [`CommandId`]. The
+/// interface displays several tabs at once: without this envelope, it would
+/// not know which one to update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecEvent {
-    /// La commande à l'origine de l'événement.
+    /// The command at the origin of the event.
     pub command: CommandId,
-    /// La connexion visée, quand la commande en vise une.
+    /// The target connection, when the command targets one.
     pub connection: Option<ConnectionId>,
-    /// Ce qui s'est passé.
+    /// What happened.
     pub event: Event,
 }
 
 impl ExecEvent {
-    /// Rattache un événement à sa commande.
+    /// Attaches an event to its command.
     #[must_use]
     pub const fn new(command: CommandId, connection: Option<ConnectionId>, event: Event) -> Self {
         Self {
@@ -55,62 +55,62 @@ impl ExecEvent {
         }
     }
 
-    /// L'événement clôt-il l'exécution de sa commande ?
+    /// Does the event end its command's execution?
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         self.event.is_terminal()
     }
 }
 
-/// La diffusion des événements d'exécution.
+/// The broadcast of execution events.
 ///
-/// Se clone par `Arc` avec l'[`Executor`](crate::Executor) qui la porte ;
-/// [`subscribe`](Self::subscribe) rend un récepteur indépendant par abonné.
+/// Cloned through `Arc` with the [`Executor`](crate::Executor) that carries it;
+/// [`subscribe`](Self::subscribe) returns an independent receiver per subscriber.
 pub struct EventBus {
     sender: broadcast::Sender<ExecEvent>,
 }
 
 impl EventBus {
-    /// Profondeur du canal par défaut.
+    /// Default channel depth.
     ///
-    /// Dimensionnée pour que la grille puisse prendre un retard d'affichage de
-    /// quelques images sans rien perdre d'utile : au-delà, ce qui compte est
-    /// dans le tampon de résultats, pas dans l'historique des événements.
+    /// Sized so that the grid can fall a few frames behind in display without
+    /// losing anything useful: beyond that, what matters is in the result
+    /// buffer, not in the event history.
     pub const DEFAULT_CAPACITY: usize = 256;
 
-    /// Ouvre une diffusion de profondeur [`DEFAULT_CAPACITY`](Self::DEFAULT_CAPACITY).
+    /// Opens a broadcast of depth [`DEFAULT_CAPACITY`](Self::DEFAULT_CAPACITY).
     #[must_use]
     pub fn new() -> Self {
         Self::with_capacity(Self::DEFAULT_CAPACITY)
     }
 
-    /// Ouvre une diffusion de profondeur donnée.
+    /// Opens a broadcast of the given depth.
     ///
-    /// Une profondeur nulle est ramenée à 1 : `broadcast::channel(0)` panique,
-    /// et un paramètre de configuration ne doit pas pouvoir tuer le processus.
+    /// A zero depth is raised to 1: `broadcast::channel(0)` panics, and a
+    /// configuration parameter must not be able to kill the process.
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity.max(1));
         Self { sender }
     }
 
-    /// Ouvre un abonnement. Ne reçoit que ce qui est émis **après** l'appel.
+    /// Opens a subscription. Only receives what is emitted **after** the call.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<ExecEvent> {
         self.sender.subscribe()
     }
 
-    /// Nombre d'abonnés actifs.
+    /// Number of active subscribers.
     #[must_use]
     pub fn subscribers(&self) -> usize {
         self.sender.receiver_count()
     }
 
-    /// Émet un événement.
+    /// Emits an event.
     ///
-    /// L'absence d'abonné **n'est pas une erreur** : un traitement par lots ou
-    /// un test n'écoute rien, et une exécution ne doit pas échouer parce que
-    /// personne ne regarde. Le résultat dit combien d'abonnés l'ont reçu.
+    /// The absence of subscribers **is not an error**: a batch job or a test
+    /// listens to nothing, and an execution must not fail because nobody is
+    /// watching. The result says how many subscribers received it.
     pub fn publish(
         &self,
         command: CommandId,
@@ -120,7 +120,7 @@ impl EventBus {
         self.emit(ExecEvent::new(command, connection, event))
     }
 
-    /// Émet un événement déjà composé.
+    /// Emits an already composed event.
     pub fn emit(&self, event: ExecEvent) -> usize {
         self.sender.send(event).unwrap_or(0)
     }
@@ -133,8 +133,8 @@ impl Default for EventBus {
 }
 
 impl fmt::Debug for EventBus {
-    /// Ne rend que le nombre d'abonnés : le contenu du canal est du transitoire
-    /// que personne ne relit dans une trace.
+    /// Returns only the number of subscribers: the channel's content is
+    /// transient data nobody reads back in a trace.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EventBus")
             .field("subscribers", &self.subscribers())
@@ -148,52 +148,51 @@ mod tests {
     use oxyn_core::ResultId;
 
     #[test]
-    fn un_evenement_atteint_tous_les_abonnes() {
+    fn an_event_reaches_every_subscriber() {
         let bus = EventBus::new();
-        let mut grille = bus.subscribe();
-        let mut barre = bus.subscribe();
+        let mut grid = bus.subscribe();
+        let mut bar = bus.subscribe();
         assert_eq!(bus.subscribers(), 2);
 
-        let commande = CommandId::new();
-        let resultat = ResultId::new();
-        let recus = bus.publish(commande, None, Event::SchemaReady { result: resultat });
-        assert_eq!(recus, 2);
+        let cmd = CommandId::new();
+        let res = ResultId::new();
+        let received = bus.publish(cmd, None, Event::SchemaReady { result: res });
+        assert_eq!(received, 2);
 
-        for canal in [&mut grille, &mut barre] {
-            let recu = canal.try_recv().expect("l'événement a été diffusé");
-            assert_eq!(recu.command, commande);
-            assert_eq!(recu.event, Event::SchemaReady { result: resultat });
+        for channel in [&mut grid, &mut bar] {
+            let got = channel.try_recv().expect("the event was broadcast");
+            assert_eq!(got.command, cmd);
+            assert_eq!(got.event, Event::SchemaReady { result: res });
         }
     }
 
     #[test]
-    fn emettre_sans_abonne_n_est_pas_une_erreur() {
-        // Un traitement par lots n'écoute rien ; il ne doit pas échouer pour
-        // autant.
+    fn emitting_without_a_subscriber_is_not_an_error() {
+        // A batch job listens to nothing; it must not fail for all that.
         let bus = EventBus::new();
         assert_eq!(bus.publish(CommandId::new(), None, Event::Cancelled), 0);
     }
 
     #[test]
-    fn une_profondeur_nulle_ne_tue_pas_le_processus() {
-        // `broadcast::channel(0)` panique : un réglage de configuration ne doit
-        // pas pouvoir arriver jusque-là.
+    fn a_zero_depth_does_not_kill_the_process() {
+        // `broadcast::channel(0)` panics: a configuration setting must not be
+        // able to get that far.
         let bus = EventBus::with_capacity(0);
-        let mut abonne = bus.subscribe();
+        let mut subscriber = bus.subscribe();
         bus.publish(CommandId::new(), None, Event::CatalogUpdated);
-        assert!(abonne.try_recv().is_ok());
+        assert!(subscriber.try_recv().is_ok());
     }
 
     #[test]
-    fn un_evenement_terminal_se_reconnait_a_travers_l_enveloppe() {
-        let enveloppe = ExecEvent::new(
+    fn a_terminal_event_is_recognized_through_the_envelope() {
+        let envelope = ExecEvent::new(
             CommandId::new(),
             None,
             Event::Failed {
-                error: "boum".into(),
+                error: "boom".into(),
                 retryable: false,
             },
         );
-        assert!(enveloppe.is_terminal());
+        assert!(envelope.is_terminal());
     }
 }

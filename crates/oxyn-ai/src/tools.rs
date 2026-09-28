@@ -1,56 +1,55 @@
-//! Les outils offerts aux agents — c'est-à-dire les `Command` du noyau.
+//! The tools offered to agents — that is, the core's `Command`s.
 //!
-//! **Point d'architecture non négociable** (ADR-0004, I-01) : il n'existe pas de
-//! seconde API « pour l'IA ». Un outil est une traduction d'un appel du modèle
-//! vers une [`Command`] existante, et rien d'autre. Un outil qui ne s'exprime
-//! pas en `Command` n'est pas un outil manquant : c'est une commande manquante,
-//! et cela se règle dans `oxyn-core`, pas ici.
+//! **Non-negotiable architecture point** (ADR-0004, I-01): there is no second
+//! API "for the AI". A tool is a translation of a model call into an existing
+//! [`Command`], and nothing else. A tool that cannot be expressed as a
+//! `Command` is not a missing tool: it is a missing command, and that is
+//! settled in `oxyn-core`, not here.
 //!
-//! # Ce que le modèle ne peut pas dire
+//! # What the model cannot say
 //!
-//! Les arguments d'un outil ne portent **que** ce que le modèle a le droit de
-//! choisir. Tout le reste vient du [`ToolScope`], que l'appelant construit :
+//! A tool's arguments carry **only** what the model has the right to choose.
+//! Everything else comes from the [`ToolScope`], which the caller builds:
 //!
-//! | Ce que le modèle écrit | Ce que le scope impose |
+//! | What the model writes | What the scope imposes |
 //! |---|---|
-//! | le texte de l'instruction | la connexion, la session, le langage |
-//! | | l'intention et le risque, **classés par `oxyn-query`** |
-//! | | les [`ExecLimits`], dérivées de cette classification |
+//! | the statement's text | the connection, the session, the language |
+//! | | the intent and the risk, **classified by `oxyn-query`** |
+//! | | the [`ExecLimits`], derived from that classification |
 //!
-//! Conséquences directes : un agent ne peut pas viser une autre connexion que
-//! celle sur laquelle l'utilisateur l'a ouvert — donc pas d'exfiltration vers
-//! une base tierce — et il ne peut pas se déclarer en lecture seule pour
-//! contourner le `PolicyGate`, puisqu'il n'écrit jamais ce champ. Les schémas
-//! JSON portent `additionalProperties: false` (`deny_unknown_fields`) : un
-//! argument inventé fait échouer la traduction au lieu d'être ignoré en
-//! silence.
+//! Direct consequences: an agent cannot target a connection other than the one
+//! the user opened it on — hence no exfiltration to a third-party database —
+//! and it cannot declare itself read-only to bypass the `PolicyGate`, since it
+//! never writes that field. The JSON schemas carry
+//! `additionalProperties: false` (`deny_unknown_fields`): an invented argument
+//! makes the translation fail instead of being silently ignored.
 //!
-//! # Ce qui n'est délibérément pas exposé
+//! # What is deliberately not exposed
 //!
 //! * [`Command::CreateConnection`], [`Command::UpdateConnection`],
-//!   [`Command::DeleteConnection`] — un agent qui pourrait créer une connexion
-//!   vers l'hôte de son choix disposerait d'un canal d'exfiltration. Le
-//!   `PolicyGate` les soumettrait à approbation ; ici elles n'existent pas du
-//!   tout, ce qui est plus fort qu'un refus.
-//! * [`Command::Export`] — l'agent choisirait un chemin de fichier, donc
-//!   écrirait où il veut sur le disque de l'utilisateur.
-//! * [`Command::Cancel`] — annuler est un geste de l'utilisateur ; et la
-//!   poignée d'exécution n'est jamais dans la conversation.
-//! * [`Command::PreviewRelation`] **en direct** — un agent qui lirait des
-//!   lignes les verrait arriver dans la grille, jamais dans sa conversation ;
-//!   il n'y gagnerait rien. Il ne la déclenche que par [`REQUEST_SAMPLE`], qui
-//!   la fait précéder de l'approbation de l'utilisateur, colonne par colonne
+//!   [`Command::DeleteConnection`] — an agent that could create a connection
+//!   to the host of its choice would have an exfiltration channel. The
+//!   `PolicyGate` would submit them to approval; here they do not exist at
+//!   all, which is stronger than a refusal.
+//! * [`Command::Export`] — the agent would choose a file path, hence write
+//!   wherever it wants on the user's disk.
+//! * [`Command::Cancel`] — cancelling is a user act; and the execution handle
+//!   is never in the conversation.
+//! * [`Command::PreviewRelation`] **directly** — an agent that read rows would
+//!   see them arrive in the grid, never in its conversation; it would gain
+//!   nothing. It only triggers it through [`REQUEST_SAMPLE`], which has it
+//!   preceded by the user's approval, column by column
 //!   ([ADR-0034](../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
-//! * [`Command::OpenDocument`] et [`Command::WriteDocument`] —
-//!   `// TODO(phase 4)` : elles demandent un `DocumentId` que le scope devrait
-//!   porter, ce qui n'a de sens qu'une fois les documents de workspace écrits.
+//! * [`Command::OpenDocument`] and [`Command::WriteDocument`] —
+//!   `// TODO(phase 4)`: they need a `DocumentId` the scope would have to
+//!   carry, which only makes sense once workspace documents are written.
 //!
-//! # La classification faite ici n'est pas celle qui protège
+//! # The classification made here is not the one that protects
 //!
-//! `oxyn-exec` **reclassifie** systématiquement le texte avant de soumettre au
-//! `PolicyGate` (ARCHITECTURE §8) : l'intention portée par une `Command` vient
-//! de l'appelant, et un agent est un appelant. Ce que ce module classe sert à
-//! poser des limites honnêtes et à alimenter la prévisualisation, pas à décider.
+//! `oxyn-exec` systematically **reclassifies** the text before submitting to
+//! the `PolicyGate` (ARCHITECTURE §8): the intent carried by a `Command` comes
+//! from the caller, and an agent is a caller. What this module classifies
+//! serves to set honest limits and to feed the preview, not to decide.
 
 use std::fmt;
 
@@ -65,23 +64,24 @@ use serde::de::DeserializeOwned;
 
 use crate::error::AiError;
 
-/// Nom de l'outil qui exécute une instruction.
+/// Name of the tool that runs a statement.
 pub const EXECUTE_QUERY: &str = "execute_query";
 
-/// Nom de l'outil qui relit le catalogue depuis le serveur.
+/// Name of the tool that re-reads the catalog from the server.
 pub const REFRESH_CATALOG: &str = "refresh_catalog";
 
-/// Nom de l'outil qui décrit la structure de la base, depuis le catalogue local.
+/// Name of the tool that describes the database's structure, from the local
+/// catalog.
 pub const DESCRIBE_SCHEMA: &str = "describe_schema";
 
-/// La consigne qui dit au modèle comment faire dessiner un schéma
-/// entité-relation par Oxyn.
+/// The instruction that tells the model how to have Oxyn draw an
+/// entity-relationship diagram.
 ///
-/// Une macro et non une constante : `concat!` ne prend que des littéraux, et
-/// les descriptions d'outils comme les invites des agents intégrés sont des
-/// littéraux. C'est ce qui garde **une** phrase pour les invites système, la
-/// description de [`DESCRIBE_SCHEMA`] et l'invite d'un agent externe ; deux
-/// copies finiraient par dire deux formats, et le panneau n'en dessine qu'un.
+/// A macro and not a constant: `concat!` only takes literals, and tool
+/// descriptions as well as built-in agent prompts are literals. It is what
+/// keeps **one** sentence for the system prompts, the description of
+/// [`DESCRIBE_SCHEMA`] and an external agent's prompt; two copies would end up
+/// stating two formats, and the panel only draws one.
 macro_rules! erd_hint {
     () => {
         "To show an entity-relationship diagram, write a fenced code block whose language \
@@ -91,55 +91,55 @@ macro_rules! erd_hint {
 }
 pub(crate) use erd_hint;
 
-/// La consigne de `erd_hint!`, pour qui compose une invite à l'exécution : la
-/// même phrase que celle des invites système et de [`DESCRIBE_SCHEMA`].
+/// The instruction of `erd_hint!`, for whoever composes a prompt at runtime:
+/// the same sentence as that of the system prompts and of [`DESCRIBE_SCHEMA`].
 pub const ERD_HINT: &str = erd_hint!();
 
-/// Nom de l'outil par lequel un agent **demande** un échantillon de lignes.
+/// Name of the tool through which an agent **requests** a sample of rows.
 ///
-/// Demander n'est pas lire : rien n'est lu ni envoyé avant que l'utilisateur
-/// ait coché, dans le panneau, les colonnes qui partent
+/// Requesting is not reading: nothing is read or sent before the user has
+/// checked, in the panel, the columns that leave
 /// ([ADR-0034](../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
 pub const REQUEST_SAMPLE: &str = "request_sample";
 
-/// Lignes demandées quand l'agent n'en dit rien : celles d'un échantillon que
-/// l'utilisateur épingle lui-même. De quoi illustrer une forme de données.
+/// Rows requested when the agent says nothing: those of a sample the user pins
+/// themselves. Enough to illustrate a shape of data.
 pub const DEFAULT_SAMPLE_ROWS: u32 = 5;
 
-/// Le plus de lignes qu'un échantillon demandé porte, quoi que l'agent écrive.
+/// The most rows a requested sample carries, whatever the agent writes.
 ///
-/// Borne de produit : un échantillon illustre des valeurs, il ne sert pas à
-/// extraire une table. Chaque ligne est une ligne qui sort de la machine.
+/// A product bound: a sample illustrates values, it does not serve to extract a
+/// table. Every row is a row that leaves the machine.
 pub const MAX_SAMPLE_ROWS: u32 = 20;
 
-/// Le plus de colonnes qu'une demande peut nommer. Au-delà, l'agent demande
-/// toute la relation en omettant `columns`, et l'utilisateur coche.
+/// The most columns a request can name. Beyond that, the agent requests the
+/// whole relation by omitting `columns`, and the user checks.
 pub const MAX_SAMPLE_COLUMNS: usize = 64;
 
-/// La plus longue désignation acceptée — un nom de relation, d'espace de noms
-/// ou de colonne —, en octets. Des noms, jamais du texte de requête.
+/// The longest designation accepted — a relation, namespace or column name —,
+/// in bytes. Names, never query text.
 pub const MAX_SAMPLE_NAME_BYTES: usize = 256;
 
-/// Ce que l'appelant impose, et que le modèle ne choisit pas.
+/// What the caller imposes, and the model does not choose.
 ///
-/// Construit par l'appelant à l'ouverture d'une conversation, à partir de la
-/// connexion et de la session que l'utilisateur a lui-même ouvertes. C'est le
-/// **principe de moindre autorité** appliqué à la lettre : un agent n'atteint
-/// que ce que ce type nomme.
+/// Built by the caller when a conversation opens, from the connection and the
+/// session the user opened themselves. It is the **principle of least
+/// authority** applied to the letter: an agent only reaches what this type
+/// names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolScope {
-    /// La connexion sur laquelle l'agent travaille.
+    /// The connection the agent works on.
     pub connection: ConnectionId,
-    /// La session ouverte sur cette connexion.
+    /// The session open on that connection.
     pub session: SessionId,
-    /// Le langage de requête de cette session. Détermine aussi quel analyseur
-    /// classe le texte : un langage non SQL n'est pas analysé, donc `Unknown`,
-    /// donc mutant.
+    /// This session's query language. Also determines which analyzer
+    /// classifies the text: a non-SQL language is not analyzed, hence
+    /// `Unknown`, hence mutating.
     pub language: QueryLanguage,
 }
 
 impl ToolScope {
-    /// Construit un périmètre d'outils.
+    /// Builds a tool scope.
     #[must_use]
     pub const fn new(
         connection: ConnectionId,
@@ -154,17 +154,17 @@ impl ToolScope {
     }
 }
 
-/// Arguments d'[`EXECUTE_QUERY`].
+/// Arguments of [`EXECUTE_QUERY`].
 ///
-/// Un seul champ, et c'est le point : tout ce qui pourrait affaiblir la
-/// politique — connexion, lecture seule, intention déclarée — est absent du
-/// schéma, donc inaccessible au modèle.
+/// A single field, and that is the point: everything that could weaken the
+/// policy — connection, read-only, declared intent — is absent from the
+/// schema, hence out of the model's reach.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecuteQueryArgs {
-    /// La description part vers le modèle : elle est en anglais, comme tout
-    /// texte de code (CLAUDE.md). L'attribut prime sur ce commentaire, qui
-    /// s'adresse aux relecteurs.
+    /// The description goes to the model: it is in English, like all code text
+    /// (CLAUDE.md). The attribute takes precedence over this comment, which is
+    /// meant for reviewers.
     #[schemars(
         description = "The statement to run, exactly as it should reach the database. \
                        Write one statement. Reads run immediately; writes and DDL are \
@@ -173,18 +173,18 @@ pub struct ExecuteQueryArgs {
     pub statement: String,
 }
 
-/// Arguments de [`DESCRIBE_SCHEMA`].
+/// Arguments of [`DESCRIBE_SCHEMA`].
 ///
-/// Un seul champ, facultatif : des mots de recherche. La connexion vient du
-/// [`ToolScope`], et rien ici ne compose de requête — les mots servent à classer
-/// des noms du catalogue local.
+/// A single, optional field: search words. The connection comes from the
+/// [`ToolScope`], and nothing here composes a query — the words serve to rank
+/// names of the local catalog.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DescribeSchemaArgs {
-    /// La description part vers le modèle : elle est en anglais. Elle écrit la
-    /// borne en octets, parce que `maxLength` compte des caractères et ne dirait
-    /// pas la même chose que le refus de la traduction et de l'exécuteur
-    /// ([`MAX_CATALOG_FOCUS_BYTES`]) ; un test tient le chiffre aligné.
+    /// The description goes to the model: it is in English. It writes the bound
+    /// in bytes, because `maxLength` counts characters and would not say the
+    /// same thing as the refusal of the translation and of the executor
+    /// ([`MAX_CATALOG_FOCUS_BYTES`]); a test keeps the figure aligned.
     #[schemars(
         description = "Optional search words — a table, collection or column name, or a \
                        topic — to describe the most relevant objects first. Omit it to \
@@ -194,20 +194,20 @@ pub struct DescribeSchemaArgs {
     pub search: Option<String>,
 }
 
-/// Arguments de [`REQUEST_SAMPLE`].
+/// Arguments of [`REQUEST_SAMPLE`].
 ///
-/// Des **noms**, jamais du texte de requête : la relation et les colonnes sont
-/// cherchées dans le catalogue local, et la lecture est composée par le driver,
-/// qui cite chaque identifiant ([I-10](../../../CLAUDE.md#i-10)). La connexion
-/// vient du [`ToolScope`].
+/// **Names**, never query text: the relation and the columns are looked up in
+/// the local catalog, and the read is composed by the driver, which quotes
+/// every identifier ([I-10](../../../CLAUDE.md#i-10)). The connection comes
+/// from the [`ToolScope`].
 ///
-/// Le schéma annonce les bornes que la traduction applique : un agent qui ne
-/// les voit pas les dépasse, se fait refuser, et ne sait pas de combien
-/// corriger. Les chiffres des attributs sont des littéraux — `schemars` n'accepte
-/// pas une constante dans une description —, et un test les tient alignés sur
-/// [`MAX_SAMPLE_ROWS`], [`MAX_SAMPLE_COLUMNS`] et [`MAX_SAMPLE_NAME_BYTES`]. La
-/// borne des noms s'écrit en octets dans la description : `maxLength` compte
-/// des caractères, et ne dirait pas la même chose que le refus.
+/// The schema announces the bounds the translation applies: an agent that does
+/// not see them exceeds them, gets refused, and does not know by how much to
+/// correct. The attributes' figures are literals — `schemars` does not accept a
+/// constant in a description —, and a test keeps them aligned with
+/// [`MAX_SAMPLE_ROWS`], [`MAX_SAMPLE_COLUMNS`] and [`MAX_SAMPLE_NAME_BYTES`].
+/// The names' bound is written in bytes in the description: `maxLength` counts
+/// characters, and would not say the same thing as the refusal.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequestSampleArgs {
@@ -238,33 +238,33 @@ pub struct RequestSampleArgs {
     pub rows: Option<u32>,
 }
 
-/// Arguments de [`REFRESH_CATALOG`] : aucun.
+/// Arguments of [`REFRESH_CATALOG`]: none.
 ///
-/// La connexion vient du [`ToolScope`]. Un objet vide plutôt qu'une absence de
-/// schéma : plusieurs fournisseurs refusent un outil sans objet `parameters`.
+/// The connection comes from the [`ToolScope`]. An empty object rather than no
+/// schema: several providers refuse a tool without a `parameters` object.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshCatalogArgs {}
 
-/// Traduit des arguments validés en demande.
+/// Translates validated arguments into a request.
 type Translate = fn(&serde_json::Value, &ToolScope) -> Result<ToolRequest, AiError>;
 
-/// Ce qu'un appel d'outil demande au puits, une fois traduit.
+/// What a tool call asks of the sink, once translated.
 ///
-/// Deux formes, et **une seule commande** au bout de chacune : il n'existe pas
-/// de demande qui n'en porte pas ([I-01](../../../CLAUDE.md#i-01)).
+/// Two forms, and **a single command** at the end of each: there is no request
+/// that does not carry one ([I-01](../../../CLAUDE.md#i-01)).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ToolRequest {
-    /// Une commande à soumettre telle quelle.
+    /// A command to submit as is.
     Dispatch(Command),
-    /// Un échantillon à faire approuver, puis lire.
+    /// A sample to have approved, then read.
     Sample(SampleAsk),
 }
 
 impl ToolRequest {
-    /// La commande que la demande porte — pour un échantillon, la lecture qui
-    /// ne partira qu'après l'approbation.
+    /// The command the request carries — for a sample, the read that will only
+    /// leave after the approval.
     #[must_use]
     pub const fn command(&self) -> &Command {
         match self {
@@ -274,27 +274,27 @@ impl ToolRequest {
     }
 }
 
-/// Un échantillon demandé par un agent : la lecture, et les colonnes voulues.
+/// A sample requested by an agent: the read, and the wanted columns.
 ///
-/// La lecture est une [`Command::PreviewRelation`] bornée — la commande même
-/// qu'emprunte l'échantillon épinglé par l'utilisateur. Elle ne s'exécute
-/// **qu'après** l'approbation, que le puits obtient de l'utilisateur ; les
-/// colonnes nommées ici ne sont qu'une demande, que l'approbation restreint.
+/// The read is a bounded [`Command::PreviewRelation`] — the very command the
+/// sample pinned by the user takes. It only runs **after** the approval, which
+/// the sink obtains from the user; the columns named here are only a request,
+/// which the approval restricts.
 ///
-/// Les noms sont écrits par le modèle : ils n'ont pas encore été confrontés au
-/// catalogue. C'est le puits qui le fait, avant de rien montrer
+/// The names are written by the model: they have not been checked against the
+/// catalog yet. It is the sink that does it, before showing anything
 /// ([ADR-0034](../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
 #[derive(Clone, PartialEq)]
 pub struct SampleAsk {
-    /// La lecture : `PreviewRelation`, bornée à [`MAX_SAMPLE_ROWS`].
+    /// The read: `PreviewRelation`, bounded to [`MAX_SAMPLE_ROWS`].
     pub command: Command,
-    /// Les colonnes voulues, dans l'ordre de l'agent ; vide pour « toutes,
-    /// au choix de l'utilisateur ».
+    /// The wanted columns, in the agent's order; empty for "all, at the user's
+    /// choice".
     pub columns: Vec<String>,
 }
 
-// Des noms de colonnes : des métadonnées, mais tenues hors des journaux quand
-// même — un nom de colonne peut être la donnée (`hiv_status`).
+// Column names: metadata, but kept out of the logs all the same — a column
+// name can be the data (`hiv_status`).
 impl fmt::Debug for SampleAsk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SampleAsk")
@@ -305,7 +305,7 @@ impl fmt::Debug for SampleAsk {
 }
 
 impl SampleAsk {
-    /// Le nombre de lignes demandé, déjà borné par la traduction.
+    /// The number of rows requested, already bounded by the translation.
     #[must_use]
     pub const fn rows(&self) -> u32 {
         match &self.command {
@@ -315,42 +315,42 @@ impl SampleAsk {
     }
 }
 
-/// Produit le schéma JSON des arguments d'un outil.
+/// Produces the JSON schema of a tool's arguments.
 type Schema = fn() -> serde_json::Value;
 
-/// Un outil, c'est-à-dire une `Command` rendue appelable par un modèle.
+/// A tool, that is, a `Command` made callable by a model.
 #[derive(Clone)]
 pub struct ToolDefinition {
     name: &'static str,
     description: &'static str,
-    /// Nom de la variante de [`Command`] produite. Sert au journal d'audit et à
-    /// la relecture : la correspondance outil → commande doit être lisible sans
-    /// dérouler la fonction de traduction.
+    /// Name of the [`Command`] variant produced. Serves the audit log and
+    /// review: the tool → command mapping must be readable without unrolling
+    /// the translation function.
     command: &'static str,
     schema: Schema,
     translate: Translate,
 }
 
 impl ToolDefinition {
-    /// Nom sous lequel le modèle appelle cet outil.
+    /// Name under which the model calls this tool.
     #[must_use]
     pub const fn name(&self) -> &'static str {
         self.name
     }
 
-    /// Ce que fait l'outil, en une phrase destinée au modèle.
+    /// What the tool does, in one sentence meant for the model.
     #[must_use]
     pub const fn description(&self) -> &'static str {
         self.description
     }
 
-    /// La variante de [`Command`] que cet outil produit.
+    /// The [`Command`] variant this tool produces.
     #[must_use]
     pub const fn command(&self) -> &'static str {
         self.command
     }
 
-    /// La déclaration à transmettre au fournisseur.
+    /// The declaration to pass to the provider.
     #[must_use]
     pub fn spec(&self) -> ToolSpec {
         ToolSpec::new(self.name, self.description, (self.schema)())
@@ -358,8 +358,8 @@ impl ToolDefinition {
 }
 
 impl fmt::Debug for ToolDefinition {
-    /// Écrit à la main : un pointeur de fonction dans un `Debug` dérivé est une
-    /// adresse, qui n'apprend rien. Le nom de la commande produite, si.
+    /// Written by hand: a function pointer in a derived `Debug` is an address,
+    /// which teaches nothing. The name of the produced command does.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ToolDefinition")
             .field("name", &self.name)
@@ -368,31 +368,31 @@ impl fmt::Debug for ToolDefinition {
     }
 }
 
-/// Les outils qu'Oxyn sait traduire.
+/// The tools Oxyn can translate.
 ///
-/// Le registre est **fermé au contenu, ouvert à la déclaration** : les
-/// traductions sont du code Rust — elles construisent des `Command`, donc elles
-/// ne peuvent pas venir d'un plugin —, tandis que le choix des outils accordés à
-/// un agent est déclaratif ([`AgentSpec::allowed_tools`](crate::spec::AgentSpec)).
-/// C'est ce qui permet à un agent de venir d'un plugin sans ouvrir une seconde
-/// voie vers les drivers.
+/// The registry is **closed to content, open to declaration**: the
+/// translations are Rust code — they build `Command`s, so they cannot come
+/// from a plugin —, while the choice of the tools granted to an agent is
+/// declarative ([`AgentSpec::allowed_tools`](crate::spec::AgentSpec)). That is
+/// what lets an agent come from a plugin without opening a second path to the
+/// drivers.
 #[derive(Debug, Clone)]
 pub struct ToolRegistry {
     tools: Vec<ToolDefinition>,
 }
 
 impl ToolRegistry {
-    /// Le registre livré avec Oxyn.
+    /// The registry shipped with Oxyn.
     #[must_use]
     pub fn builtin() -> Self {
         Self {
             tools: vec![
                 ToolDefinition {
                     name: EXECUTE_QUERY,
-                    // « Reads return rows » disait le contraire de ce que
-                    // rend l'outil : un agent qui attendait des lignes de
-                    // `sqlite_master` a conclu qu'il ne pouvait pas lire la
-                    // base. Le schéma est dans le contexte, pas ici.
+                    // "Reads return rows" said the opposite of what the tool
+                    // returns: an agent that expected rows from `sqlite_master`
+                    // concluded it could not read the database. The schema is
+                    // in the context, not here.
                     description: "Run one statement against the database the user opened. \
                                   Write it against the structure described to you. \
                                   Reads run immediately: the rows go to the user's result \
@@ -458,34 +458,34 @@ impl ToolRegistry {
         }
     }
 
-    /// Les noms connus, dans l'ordre de déclaration.
+    /// The known names, in declaration order.
     #[must_use]
     pub fn names(&self) -> Vec<&'static str> {
         self.tools.iter().map(ToolDefinition::name).collect()
     }
 
-    /// La définition portant ce nom.
+    /// The definition carrying this name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&ToolDefinition> {
         self.tools.iter().find(|tool| tool.name == name)
     }
 
-    /// Cet outil existe-t-il ?
+    /// Does this tool exist?
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.get(name).is_some()
     }
 
-    /// Les déclarations à transmettre au fournisseur pour cet agent.
+    /// The declarations to pass to the provider for this agent.
     ///
-    /// L'ordre suit la liste blanche de l'agent : ce qu'il déclare en premier
-    /// est présenté en premier.
+    /// The order follows the agent's allowlist: what it declares first is
+    /// presented first.
     ///
-    /// # Erreurs
-    /// [`AiError::UnknownTool`] si la liste blanche nomme un outil que le
-    /// registre ne connaît pas. Échouer ici plutôt qu'ignorer l'entrée est
-    /// délibéré : un agent qui croit disposer d'un outil absent produit des
-    /// tours de conversation perdus, sans que rien ne le signale.
+    /// # Errors
+    /// [`AiError::UnknownTool`] if the allowlist names a tool the registry does
+    /// not know. Failing here rather than ignoring the entry is deliberate: an
+    /// agent that believes it has a missing tool produces lost conversation
+    /// turns, with nothing to signal it.
     pub fn specs_for(&self, allowed: &[String]) -> Result<Vec<ToolSpec>, AiError> {
         allowed
             .iter()
@@ -497,26 +497,26 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// Traduit un appel du modèle en commande du noyau.
+    /// Translates a model call into a core command.
     ///
-    /// Trois refus possibles, dans cet ordre : l'outil n'existe pas, il n'est
-    /// pas accordé à cet agent, ses arguments ne correspondent pas au schéma.
-    /// L'ordre compte pour le message rendu au modèle — « inconnu » et « non
-    /// accordé » ne demandent pas la même correction.
+    /// Three possible refusals, in this order: the tool does not exist, it is
+    /// not granted to this agent, its arguments do not match the schema. The
+    /// order matters for the message returned to the model — "unknown" and
+    /// "not granted" do not call for the same correction.
     ///
-    /// La commande rendue n'a **rien exécuté** : elle doit encore traverser le
-    /// `PolicyGate` en portant `Actor::Agent` (I-07).
+    /// The returned command **has executed nothing**: it must still go through
+    /// the `PolicyGate` carrying `Actor::Agent` (I-07).
     ///
-    /// **[`REQUEST_SAMPLE`] est refusé ici.** Sa lecture n'existe qu'après
-    /// l'approbation de l'utilisateur, que seul
+    /// **[`REQUEST_SAMPLE`] is refused here.** Its read only exists after the
+    /// user's approval, which only
     /// [`CommandSink::request_sample`](crate::runtime::CommandSink::request_sample)
-    /// obtient : la rendre nue ferait de cette fonction publique un second
-    /// chemin vers une lecture de valeurs sans consentement. Un appelant qui
-    /// doit servir cet outil passe par [`ToolRegistry::request`].
+    /// obtains: returning it bare would make this public function a second path
+    /// to a read of values without consent. A caller that must serve this tool
+    /// goes through [`ToolRegistry::request`].
     ///
-    /// # Erreurs
-    /// [`AiError::UnknownTool`], [`AiError::ToolNotAllowed`] — y compris pour
-    /// [`REQUEST_SAMPLE`] — ou [`AiError::InvalidArguments`].
+    /// # Errors
+    /// [`AiError::UnknownTool`], [`AiError::ToolNotAllowed`] — including for
+    /// [`REQUEST_SAMPLE`] — or [`AiError::InvalidArguments`].
     pub fn translate(
         &self,
         call: &ToolCall,
@@ -531,13 +531,13 @@ impl ToolRegistry {
         }
     }
 
-    /// Traduit un appel du modèle en demande au puits : une commande, ou un
-    /// échantillon à faire approuver.
+    /// Translates a model call into a request to the sink: a command, or a
+    /// sample to have approved.
     ///
-    /// Les mêmes refus, dans le même ordre, que [`ToolRegistry::translate`].
+    /// The same refusals, in the same order, as [`ToolRegistry::translate`].
     ///
-    /// # Erreurs
-    /// [`AiError::UnknownTool`], [`AiError::ToolNotAllowed`] ou
+    /// # Errors
+    /// [`AiError::UnknownTool`], [`AiError::ToolNotAllowed`] or
     /// [`AiError::InvalidArguments`].
     pub fn request(
         &self,
@@ -560,26 +560,25 @@ impl ToolRegistry {
 }
 
 impl Default for ToolRegistry {
-    /// Le registre livré avec Oxyn. Un registre vide n'aurait aucun usage.
+    /// The registry shipped with Oxyn. An empty registry would have no use.
     fn default() -> Self {
         Self::builtin()
     }
 }
 
-/// Produit le schéma JSON des arguments d'un type.
+/// Produces the JSON schema of a type's arguments.
 ///
-/// Quatre réglages, chacun pour une raison :
+/// Four settings, each for a reason:
 ///
-/// * `meta_schema: None` — le champ `$schema` fait échouer la validation stricte
-///   de plusieurs fournisseurs ;
-/// * `inline_subschemas: true` — pas de `$ref` ni de `$defs`, que tous les
-///   fournisseurs ne savent pas suivre ;
-/// * `title` retiré — c'est le nom du type Rust, qui n'apprend rien au modèle et
-///   fait fuiter un détail d'implémentation dans l'invite ;
-/// * `description` racine retirée — `schemars` la tire du `///` du type, qui est
-///   en français et s'adresse aux relecteurs. Ce que le modèle doit lire est
-///   dans [`ToolDefinition::description`] et dans les attributs `schemars` des
-///   champs, en anglais.
+/// * `meta_schema: None` — the `$schema` field makes the strict validation of
+///   several providers fail;
+/// * `inline_subschemas: true` — no `$ref` or `$defs`, which not all providers
+///   can follow;
+/// * `title` removed — it is the Rust type's name, which teaches the model
+///   nothing and leaks an implementation detail into the prompt;
+/// * root `description` removed — `schemars` takes it from the type's `///`,
+///   which is meant for reviewers. What the model must read is in
+///   [`ToolDefinition::description`] and in the fields' `schemars` attributes.
 fn schema_of<T: JsonSchema>() -> serde_json::Value {
     let mut settings = SchemaSettings::draft2020_12();
     settings.meta_schema = None;
@@ -590,10 +589,10 @@ fn schema_of<T: JsonSchema>() -> serde_json::Value {
     schema.to_value()
 }
 
-/// Décode des arguments, en tolérant l'absence d'objet.
+/// Decodes arguments, tolerating the absence of an object.
 ///
-/// Plusieurs fournisseurs transmettent `null` plutôt qu'un objet vide pour un
-/// outil sans argument. Refuser cela ferait échouer un appel correct.
+/// Several providers pass `null` rather than an empty object for a tool with
+/// no argument. Refusing that would make a correct call fail.
 fn parse_args<T: DeserializeOwned>(
     name: &'static str,
     raw: &serde_json::Value,
@@ -623,15 +622,15 @@ fn translate_execute_query(
         });
     }
 
-    // L'intention et le risque viennent de l'analyse du texte, jamais d'un
-    // champ que le modèle aurait rempli. `oxyn-exec` refera ce travail avant le
-    // `PolicyGate` : ici, il sert à ne pas mentir dans la prévisualisation et à
-    // poser des limites cohérentes.
+    // The intent and the risk come from analyzing the text, never from a field
+    // the model would have filled. `oxyn-exec` will redo this work before the
+    // `PolicyGate`: here, it serves not to lie in the preview and to set
+    // consistent limits.
     let analysis = oxyn_query::classify_language(scope.language, statement);
 
-    // Les limites par défaut interdisent l'écriture. On ne les desserre que
-    // lorsque l'analyse dit que le texte écrit — et une écriture d'agent est de
-    // toute façon soumise à approbation.
+    // The default limits forbid writing. They are only loosened when the
+    // analysis says the text writes — and an agent's write is submitted to
+    // approval anyway.
     let limits = if analysis.is_mutating() {
         ExecLimits::default().writable()
     } else {
@@ -652,9 +651,8 @@ fn translate_execute_query(
 
 /// [`DESCRIBE_SCHEMA`] → [`Command::DescribeCatalog`].
 ///
-/// Les mots de recherche sont bornés ici, avant la commande : un agent qui en
-/// écrirait un mégaoctet se voit répondre de raccourcir, et l'exécuteur refait
-/// la vérification.
+/// The search words are bounded here, before the command: an agent that wrote
+/// a megabyte of them is told to shorten, and the executor redoes the check.
 fn translate_describe_schema(
     raw: &serde_json::Value,
     scope: &ToolScope,
@@ -692,9 +690,9 @@ fn translate_refresh_catalog(
     }))
 }
 
-/// Un nom écrit par le modèle, borné et non vide. Aucun caractère n'est
-/// refusé : un nom légal pour le serveur doit rester demandable, et c'est la
-/// citation par le driver qui le rend inoffensif, pas un filtre ici.
+/// A name written by the model, bounded and not empty. No character is
+/// refused: a name legal for the server must remain requestable, and it is the
+/// driver's quoting that makes it harmless, not a filter here.
 fn sample_name(field: &str, raw: &str) -> Result<String, AiError> {
     let invalid = |detail: String| AiError::InvalidArguments {
         name: REQUEST_SAMPLE.to_owned(),
@@ -711,12 +709,12 @@ fn sample_name(field: &str, raw: &str) -> Result<String, AiError> {
     Ok(raw.to_owned())
 }
 
-/// [`REQUEST_SAMPLE`] → une [`SampleAsk`] portant [`Command::PreviewRelation`].
+/// [`REQUEST_SAMPLE`] → a [`SampleAsk`] carrying [`Command::PreviewRelation`].
 ///
-/// Les noms restent des **données** : la relation voyage en champ, jamais dans
-/// un texte d'instruction, et le driver la cite quand il compose la lecture
-/// ([I-10](../../../CLAUDE.md#i-10)). Les colonnes ne rejoignent aucune
-/// instruction : elles désignent ce qu'on recopie du résultat.
+/// The names remain **data**: the relation travels as a field, never in a
+/// statement text, and the driver quotes it when it composes the read
+/// ([I-10](../../../CLAUDE.md#i-10)). The columns join no statement: they
+/// designate what is copied from the result.
 fn translate_request_sample(
     raw: &serde_json::Value,
     scope: &ToolScope,
@@ -780,11 +778,11 @@ mod tests {
         ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL)
     }
 
-    fn appel(nom: &str, args: serde_json::Value) -> ToolCall {
-        ToolCall::new("call_1", nom, args)
+    fn make_call(name: &str, args: serde_json::Value) -> ToolCall {
+        ToolCall::new("call_1", name, args)
     }
 
-    fn tous() -> Vec<String> {
+    fn all_command_names() -> Vec<String> {
         ToolRegistry::builtin()
             .names()
             .into_iter()
@@ -793,10 +791,10 @@ mod tests {
     }
 
     #[test]
-    fn chaque_outil_produit_une_commande_du_noyau() {
-        // I-01 : il n'existe pas de seconde API pour l'IA. Chaque outil nomme
-        // la variante de `Command` qu'il produit, et cette variante existe.
-        let noms_de_commandes = [
+    fn every_tool_produces_a_core_command() {
+        // I-01: there is no second API for the AI. Each tool names the
+        // `Command` variant it produces, and that variant exists.
+        let command_names = [
             "Connect",
             "Disconnect",
             "Execute",
@@ -811,75 +809,75 @@ mod tests {
             "UpdateConnection",
             "DeleteConnection",
         ];
-        for outil in &ToolRegistry::builtin().tools {
+        for tool in &ToolRegistry::builtin().tools {
             assert!(
-                noms_de_commandes.contains(&outil.command()),
-                "l'outil « {} » prétend produire « {} », qui n'est pas une Command",
-                outil.name(),
-                outil.command()
+                command_names.contains(&tool.command()),
+                "the tool \"{}\" claims to produce \"{}\", which is not a Command",
+                tool.name(),
+                tool.command()
             );
         }
     }
 
     #[test]
-    fn la_gestion_des_connexions_n_est_pas_un_outil() {
-        // Un agent qui pourrait créer une connexion vers l'hôte de son choix
-        // disposerait d'un canal d'exfiltration. Ces commandes n'ont pas
-        // d'outil : c'est plus fort qu'un refus du PolicyGate.
-        let registre = ToolRegistry::builtin();
-        for interdit in [
+    fn connection_management_is_not_a_tool() {
+        // An agent that could create a connection to the host of its choice
+        // would have an exfiltration channel. These commands have no tool:
+        // that is stronger than a PolicyGate refusal.
+        let registry = ToolRegistry::builtin();
+        for forbidden in [
             "create_connection",
             "update_connection",
             "delete_connection",
             "export",
             "cancel",
         ] {
-            assert!(!registre.contains(interdit), "{interdit}");
+            assert!(!registry.contains(forbidden), "{forbidden}");
         }
-        for outil in &registre.tools {
+        for tool in &registry.tools {
             assert!(
-                !outil.command().contains("Connection"),
-                "{} produit {}",
-                outil.name(),
-                outil.command()
+                !tool.command().contains("Connection"),
+                "{} produces {}",
+                tool.name(),
+                tool.command()
             );
-            assert_ne!(outil.command(), "Export");
+            assert_ne!(tool.command(), "Export");
         }
     }
 
-    /// Le changement de schéma n'est pas un outil, et ne doit pas le devenir.
+    /// Schema change is not a tool, and must not become one.
     ///
     /// [ADR-0025](../../../docs/adr/0025-proposition-de-changement-de-schema.md)
-    /// écrit que `Propose change…` est **indisponible** pour un `Actor::Agent`,
-    /// et non « confirmable » — c'est [I-02](../../../CLAUDE.md#i-02) au mot,
-    /// qui nomme la confirmation renforcée comme insuffisante.
+    /// writes that `Propose change…` is **unavailable** to an `Actor::Agent`,
+    /// and not "confirmable" — that is [I-02](../../../CLAUDE.md#i-02) to the
+    /// word, which names the stronger confirmation as insufficient.
     ///
-    /// Cette garantie tenait par **absence de chemin** : aucun outil n'atteint
-    /// le geste. C'est plus fort qu'un refus, mais rien ne l'aurait maintenue
-    /// vraie — un relevé de divergences l'a signalé le 2026-09-14. Ce test la
-    /// tient : le jour où quelqu'un expose un outil de structure, il échoue et
-    /// oblige à rouvrir l'ADR plutôt qu'à le contredire en silence.
+    /// This guarantee held by **absence of path**: no tool reaches the act.
+    /// That is stronger than a refusal, but nothing would have kept it true — a
+    /// divergence survey reported it on 2026-09-14. This test holds it: the day
+    /// someone exposes a structure tool, it fails and forces reopening the ADR
+    /// rather than contradicting it silently.
     #[test]
-    fn le_changement_de_schema_n_est_pas_un_outil() {
-        let registre = ToolRegistry::builtin();
-        for interdit in [
+    fn schema_change_is_not_a_tool() {
+        let registry = ToolRegistry::builtin();
+        for forbidden in [
             "propose_change",
             "alter_table",
             "create_table",
             "drop_table",
             "apply_ddl",
         ] {
-            assert!(!registre.contains(interdit), "{interdit}");
+            assert!(!registry.contains(forbidden), "{forbidden}");
         }
-        // Et par la commande produite, pour que renommer l'outil ne suffise pas
-        // à passer au travers.
-        for outil in &registre.tools {
-            for marque in ["Ddl", "Alter", "Schema", "Propose"] {
+        // And by the produced command, so that renaming the tool is not enough
+        // to slip through.
+        for tool in &registry.tools {
+            for marker in ["Ddl", "Alter", "Schema", "Propose"] {
                 assert!(
-                    !outil.command().contains(marque),
-                    "{} produit {}, qui touche au schéma",
-                    outil.name(),
-                    outil.command()
+                    !tool.command().contains(marker),
+                    "{} produces {}, which touches the schema",
+                    tool.name(),
+                    tool.command()
                 );
             }
         }
@@ -890,8 +888,8 @@ mod tests {
     /// the gate refuses it on production; no tool reaches the review.
     #[test]
     fn object_operations_are_not_tools() {
-        let registre = ToolRegistry::builtin();
-        for interdit in [
+        let registry = ToolRegistry::builtin();
+        for forbidden in [
             "review_object_operation",
             "run_object_operation",
             "drop_object",
@@ -899,370 +897,395 @@ mod tests {
             "rename_object",
             "rename_table",
         ] {
-            assert!(!registre.contains(interdit), "{interdit}");
+            assert!(!registry.contains(forbidden), "{forbidden}");
         }
-        for outil in &registre.tools {
-            for marque in ["Drop", "Truncate", "Rename", "ObjectOperation"] {
+        for tool in &registry.tools {
+            for marker in ["Drop", "Truncate", "Rename", "ObjectOperation"] {
                 assert!(
-                    !outil.name().to_lowercase().contains(&marque.to_lowercase())
-                        && !outil.command().contains(marque),
+                    !tool.name().to_lowercase().contains(&marker.to_lowercase())
+                        && !tool.command().contains(marker),
                     "{} reaches {}, an object operation",
-                    outil.name(),
-                    outil.command()
+                    tool.name(),
+                    tool.command()
                 );
             }
         }
     }
 
     #[test]
-    fn un_outil_hors_liste_blanche_est_refuse() {
-        let registre = ToolRegistry::builtin();
-        let call = appel(REFRESH_CATALOG, json!({}));
-        let refus = registre
+    fn a_tool_outside_the_allowlist_is_refused() {
+        let registry = ToolRegistry::builtin();
+        let call = make_call(REFRESH_CATALOG, json!({}));
+        let refusal = registry
             .translate(&call, &[EXECUTE_QUERY.to_owned()], &scope())
-            .expect_err("l'outil n'est pas accordé");
-        assert!(matches!(refus, AiError::ToolNotAllowed { .. }), "{refus:?}");
+            .expect_err("the tool is not granted");
+        assert!(
+            matches!(refusal, AiError::ToolNotAllowed { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
-    fn un_outil_inconnu_est_refuse_avant_la_liste_blanche() {
-        let registre = ToolRegistry::builtin();
-        let call = appel("drop_everything", json!({"target": "*"}));
-        let refus = registre
-            .translate(&call, &tous(), &scope())
-            .expect_err("l'outil n'existe pas");
-        assert!(matches!(refus, AiError::UnknownTool { .. }), "{refus:?}");
+    fn an_unknown_tool_is_refused_before_the_allowlist() {
+        let registry = ToolRegistry::builtin();
+        let call = make_call("drop_everything", json!({"target": "*"}));
+        let refusal = registry
+            .translate(&call, &all_command_names(), &scope())
+            .expect_err("the tool does not exist");
+        assert!(
+            matches!(refusal, AiError::UnknownTool { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
-    fn le_modele_ne_choisit_ni_la_connexion_ni_la_session() {
-        // La panne visée : un modèle qui vise une autre connexion que celle
-        // ouverte par l'utilisateur, et exfiltre d'une base vers une autre.
-        let registre = ToolRegistry::builtin();
-        let perimetre = scope();
-        let call = appel(
+    fn the_model_chooses_neither_the_connection_nor_the_session() {
+        // The failure aimed at: a model that targets a connection other than
+        // the one opened by the user, and exfiltrates from one database to
+        // another.
+        let registry = ToolRegistry::builtin();
+        let granted_scope = scope();
+        let call = make_call(
             EXECUTE_QUERY,
             json!({
                 "statement": "SELECT 1",
                 "connection": "00000000-0000-0000-0000-000000000000",
             }),
         );
-        let refus = registre
-            .translate(&call, &tous(), &perimetre)
-            .expect_err("`connection` n'est pas dans le schéma");
+        let refusal = registry
+            .translate(&call, &all_command_names(), &granted_scope)
+            .expect_err("`connection` is not in the schema");
         assert!(
-            matches!(refus, AiError::InvalidArguments { .. }),
-            "{refus:?}"
+            matches!(refusal, AiError::InvalidArguments { .. }),
+            "{refusal:?}"
         );
 
-        // Et l'appel légitime vise bien le périmètre imposé.
-        let call = appel(EXECUTE_QUERY, json!({"statement": "SELECT 1"}));
-        let commande = registre
-            .translate(&call, &tous(), &perimetre)
-            .expect("appel valide");
-        assert_eq!(commande.target_connection(), Some(perimetre.connection));
+        // And the legitimate call does target the imposed scope.
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "SELECT 1"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &granted_scope)
+            .expect("valid call");
+        assert_eq!(command.target_connection(), Some(granted_scope.connection));
     }
 
     #[test]
-    fn le_modele_ne_peut_pas_se_declarer_en_lecture_seule() {
-        // La panne visée : un modèle qui joint `read_only: true` à un DELETE
-        // pour se faire passer pour une lecture devant le PolicyGate.
-        let registre = ToolRegistry::builtin();
-        let call = appel(
+    fn the_model_cannot_declare_itself_read_only() {
+        // The failure aimed at: a model that attaches `read_only: true` to a
+        // DELETE to pass itself off as a read before the PolicyGate.
+        let registry = ToolRegistry::builtin();
+        let call = make_call(
             EXECUTE_QUERY,
-            json!({"statement": "DELETE FROM commandes", "read_only": true}),
+            json!({"statement": "DELETE FROM purchases", "read_only": true}),
         );
-        assert!(registre.translate(&call, &tous(), &scope()).is_err());
+        assert!(
+            registry
+                .translate(&call, &all_command_names(), &scope())
+                .is_err()
+        );
 
-        // Sans le champ, la classification tranche seule — et elle voit un
-        // DELETE sans WHERE.
-        let call = appel(EXECUTE_QUERY, json!({"statement": "DELETE FROM commandes"}));
-        let commande = registre
-            .translate(&call, &tous(), &scope())
-            .expect("appel valide");
-        assert_eq!(commande.intent(), StatementIntent::Write);
-        assert_eq!(commande.mutation_risk(), MutationRisk::UnboundedDelete);
-        assert!(commande.is_mutating());
+        // Without the field, the classification decides alone — and it sees a
+        // DELETE without WHERE.
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "DELETE FROM purchases"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
+            .expect("valid call");
+        assert_eq!(command.intent(), StatementIntent::Write);
+        assert_eq!(command.mutation_risk(), MutationRisk::UnboundedDelete);
+        assert!(command.is_mutating());
     }
 
     #[test]
-    fn une_lecture_reste_bornee_en_lecture_seule() {
-        let registre = ToolRegistry::builtin();
-        let call = appel(EXECUTE_QUERY, json!({"statement": "SELECT * FROM clients"}));
-        let commande = registre
-            .translate(&call, &tous(), &scope())
-            .expect("appel valide");
-        let Command::Execute { request, .. } = commande else {
-            panic!("execute_query doit produire Command::Execute");
+    fn a_read_stays_bounded_as_read_only() {
+        let registry = ToolRegistry::builtin();
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "SELECT * FROM clients"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
+            .expect("valid call");
+        let Command::Execute { request, .. } = command else {
+            panic!("execute_query must produce Command::Execute");
         };
         assert!(request.limits.read_only);
         assert_eq!(request.intent, StatementIntent::Read);
-        assert!(request.params.is_empty(), "le modèle ne lie pas de valeurs");
+        assert!(request.params.is_empty(), "the model binds no values");
     }
 
     #[test]
-    fn un_texte_illisible_est_traite_comme_mutant() {
-        // « Dans le doute, on protège » : ce qui ne s'analyse pas est `Unknown`,
-        // qui compte pour mutant, donc soumis à approbation.
-        let registre = ToolRegistry::builtin();
-        let call = appel(EXECUTE_QUERY, json!({"statement": "SELEKT * FORM t"}));
-        let commande = registre
-            .translate(&call, &tous(), &scope())
-            .expect("appel valide");
-        assert_eq!(commande.intent(), StatementIntent::Unknown);
-        assert!(commande.is_mutating());
+    fn an_unreadable_text_is_treated_as_mutating() {
+        // "When in doubt, protect": what cannot be analyzed is `Unknown`, which
+        // counts as mutating, hence submitted to approval.
+        let registry = ToolRegistry::builtin();
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "SELEKT * FORM t"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
+            .expect("valid call");
+        assert_eq!(command.intent(), StatementIntent::Unknown);
+        assert!(command.is_mutating());
     }
 
     #[test]
-    fn une_instruction_vide_est_refusee() {
-        let registre = ToolRegistry::builtin();
-        let call = appel(EXECUTE_QUERY, json!({"statement": "   \n  "}));
-        let refus = registre
-            .translate(&call, &tous(), &scope())
-            .expect_err("instruction vide");
+    fn an_empty_statement_is_refused() {
+        let registry = ToolRegistry::builtin();
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "   \n  "}));
+        let refusal = registry
+            .translate(&call, &all_command_names(), &scope())
+            .expect_err("empty statement");
         assert!(
-            matches!(refus, AiError::InvalidArguments { .. }),
-            "{refus:?}"
+            matches!(refusal, AiError::InvalidArguments { .. }),
+            "{refusal:?}"
         );
     }
 
     #[test]
-    fn un_outil_sans_argument_accepte_null() {
-        // Plusieurs fournisseurs transmettent `null` au lieu de `{}`.
-        let registre = ToolRegistry::builtin();
-        let call = appel(REFRESH_CATALOG, serde_json::Value::Null);
-        let commande = registre
-            .translate(&call, &tous(), &scope())
-            .expect("appel valide");
-        assert_eq!(commande.name(), "RefreshCatalog");
+    fn a_tool_without_arguments_accepts_null() {
+        // Several providers pass `null` instead of `{}`.
+        let registry = ToolRegistry::builtin();
+        let call = make_call(REFRESH_CATALOG, serde_json::Value::Null);
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
+            .expect("valid call");
+        assert_eq!(command.name(), "RefreshCatalog");
     }
 
     #[test]
-    fn les_schemas_sont_transmissibles_a_un_fournisseur() {
-        let registre = ToolRegistry::builtin();
-        let specs = registre.specs_for(&tous()).expect("outils connus");
+    fn schemas_can_be_passed_to_a_provider() {
+        let registry = ToolRegistry::builtin();
+        let specs = registry
+            .specs_for(&all_command_names())
+            .expect("known tools");
         assert_eq!(specs.len(), 4);
         for spec in &specs {
             let params = &spec.parameters;
             assert_eq!(params.get("type").and_then(|v| v.as_str()), Some("object"));
             assert!(
                 params.get("$schema").is_none(),
-                "`$schema` fait échouer la validation stricte de certains fournisseurs"
+                "`$schema` makes the strict validation of some providers fail"
             );
-            assert!(
-                params.get("$defs").is_none(),
-                "les sous-schémas doivent être inlinés"
-            );
+            assert!(params.get("$defs").is_none(), "subschemas must be inlined");
             assert!(
                 params.get("title").is_none(),
-                "le nom du type Rust n'a rien à faire dans une invite"
+                "the Rust type's name has no business in a prompt"
             );
             assert!(
                 params.get("description").is_none(),
-                "la description racine vient du `///` français : elle n'a rien à faire \
-                 dans une invite"
+                "the root description comes from the type's `///`: it has no business \
+                 in a prompt"
             );
             assert_eq!(
                 params.get("additionalProperties"),
                 Some(&serde_json::Value::Bool(false)),
-                "un argument inventé doit faire échouer la traduction, pas être ignoré"
+                "an invented argument must make the translation fail, not be ignored"
             );
             assert!(!spec.description.is_empty());
         }
     }
 
     #[test]
-    fn la_borne_de_la_recherche_est_annoncee_au_modele() {
-        // La panne visée : un agent qui ne voit pas la borne la dépasse, se
-        // fait refuser, et ne sait pas de combien raccourcir.
-        let registre = ToolRegistry::builtin();
-        let specs = registre
+    fn the_search_bound_is_announced_to_the_model() {
+        // The failure aimed at: an agent that does not see the bound exceeds
+        // it, gets refused, and does not know by how much to shorten.
+        let registry = ToolRegistry::builtin();
+        let specs = registry
             .specs_for(&[DESCRIBE_SCHEMA.to_owned()])
-            .expect("outil connu");
+            .expect("known tool");
         let description = specs
             .first()
             .and_then(|spec| spec.parameters.pointer("/properties/search/description"))
             .and_then(serde_json::Value::as_str)
-            .expect("`search` est décrit");
+            .expect("`search` is described");
         assert!(
             description.contains(&format!("At most {MAX_CATALOG_FOCUS_BYTES} bytes")),
             "{description}"
         );
 
-        // Et la borne annoncée est celle qui refuse.
-        let juste = "a".repeat(MAX_CATALOG_FOCUS_BYTES);
-        let call = appel(DESCRIBE_SCHEMA, json!({ "search": juste }));
-        assert!(registre.translate(&call, &tous(), &scope()).is_ok());
-        let trop = "é".repeat(MAX_CATALOG_FOCUS_BYTES / 2 + 1);
-        let call = appel(DESCRIBE_SCHEMA, json!({ "search": trop }));
-        assert!(registre.translate(&call, &tous(), &scope()).is_err());
+        // And the announced bound is the one that refuses.
+        let exact_fit = "a".repeat(MAX_CATALOG_FOCUS_BYTES);
+        let call = make_call(DESCRIBE_SCHEMA, json!({ "search": exact_fit }));
+        assert!(
+            registry
+                .translate(&call, &all_command_names(), &scope())
+                .is_ok()
+        );
+        let too_long = "é".repeat(MAX_CATALOG_FOCUS_BYTES / 2 + 1);
+        let call = make_call(DESCRIBE_SCHEMA, json!({ "search": too_long }));
+        assert!(
+            registry
+                .translate(&call, &all_command_names(), &scope())
+                .is_err()
+        );
     }
 
     #[test]
-    fn les_bornes_d_un_echantillon_sont_annoncees_au_modele() {
-        // Même panne que pour la recherche : une borne que le schéma tait est
-        // une borne que l'agent dépasse. Les chiffres des attributs sont des
-        // littéraux ; ce test les tient alignés sur les constantes qui refusent.
+    fn a_samples_bounds_are_announced_to_the_model() {
+        // Same failure as for the search: a bound the schema keeps quiet is a
+        // bound the agent exceeds. The attributes' figures are literals; this
+        // test keeps them aligned with the constants that refuse.
         let specs = ToolRegistry::builtin()
             .specs_for(&[REQUEST_SAMPLE.to_owned()])
-            .expect("outil connu");
-        let schema = &specs.first().expect("un outil").parameters;
-        let pointe = |pointer: &str| schema.pointer(pointer).cloned();
+            .expect("known tool");
+        let schema = &specs.first().expect("a tool").parameters;
+        let at_pointer = |pointer: &str| schema.pointer(pointer).cloned();
         assert_eq!(
-            pointe("/properties/rows/minimum"),
+            at_pointer("/properties/rows/minimum"),
             Some(json!(1)),
             "{schema}"
         );
         assert_eq!(
-            pointe("/properties/rows/maximum"),
+            at_pointer("/properties/rows/maximum"),
             Some(json!(MAX_SAMPLE_ROWS)),
             "{schema}"
         );
         assert_eq!(
-            pointe("/properties/columns/maxItems"),
+            at_pointer("/properties/columns/maxItems"),
             Some(json!(MAX_SAMPLE_COLUMNS)),
             "{schema}"
         );
-        let decrit = |champ: &str| {
+        let description_of = |field: &str| {
             schema
-                .pointer(&format!("/properties/{champ}/description"))
+                .pointer(&format!("/properties/{field}/description"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned()
         };
-        for champ in ["relation", "namespace", "columns"] {
+        for field in ["relation", "namespace", "columns"] {
             assert!(
-                decrit(champ).contains(&format!("at most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8"))
-                    || decrit(champ)
+                description_of(field)
+                    .contains(&format!("at most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8"))
+                    || description_of(field)
                         .contains(&format!("At most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8")),
-                "{champ} : {}",
-                decrit(champ)
+                "{field}: {}",
+                description_of(field)
             );
         }
         assert!(
-            decrit("columns").contains(&format!("At most {MAX_SAMPLE_COLUMNS} columns")),
+            description_of("columns").contains(&format!("At most {MAX_SAMPLE_COLUMNS} columns")),
             "{}",
-            decrit("columns")
+            description_of("columns")
         );
         assert!(
-            decrit("rows").contains(&format!(
+            description_of("rows").contains(&format!(
                 "{DEFAULT_SAMPLE_ROWS} when omitted, from 1 to {MAX_SAMPLE_ROWS}"
             )),
             "{}",
-            decrit("rows")
+            description_of("rows")
         );
 
-        // Et les bornes annoncées sont celles qui refusent.
-        assert!(demande(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS })).is_ok());
-        assert!(demande(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS + 1 })).is_err());
-        assert!(demande(json!({ "relation": "t", "rows": 0 })).is_err());
-        let colonnes = |n: usize| (0..n).map(|i| format!("c{i}")).collect::<Vec<_>>();
+        // And the announced bounds are the ones that refuse.
+        assert!(sample_request(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS })).is_ok());
+        assert!(sample_request(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS + 1 })).is_err());
+        assert!(sample_request(json!({ "relation": "t", "rows": 0 })).is_err());
+        let columns = |n: usize| (0..n).map(|i| format!("c{i}")).collect::<Vec<_>>();
         assert!(
-            demande(json!({ "relation": "t", "columns": colonnes(MAX_SAMPLE_COLUMNS) })).is_ok()
+            sample_request(json!({ "relation": "t", "columns": columns(MAX_SAMPLE_COLUMNS) }))
+                .is_ok()
         );
         assert!(
-            demande(json!({ "relation": "t", "columns": colonnes(MAX_SAMPLE_COLUMNS + 1) }))
+            sample_request(json!({ "relation": "t", "columns": columns(MAX_SAMPLE_COLUMNS + 1) }))
                 .is_err()
         );
-        assert!(demande(json!({ "relation": "a".repeat(MAX_SAMPLE_NAME_BYTES) })).is_ok());
-        assert!(demande(json!({ "relation": "é".repeat(MAX_SAMPLE_NAME_BYTES / 2 + 1) })).is_err());
+        assert!(sample_request(json!({ "relation": "a".repeat(MAX_SAMPLE_NAME_BYTES) })).is_ok());
+        assert!(
+            sample_request(json!({ "relation": "é".repeat(MAX_SAMPLE_NAME_BYTES / 2 + 1) }))
+                .is_err()
+        );
     }
 
     #[test]
-    fn translate_ne_rend_jamais_la_lecture_d_un_echantillon() {
-        // L'API publique qui rend une `Command` nue ne doit pas rendre la
-        // lecture d'un échantillon : ce serait une lecture de valeurs sans
-        // l'écran d'approbation, à portée de tout appelant de la crate.
-        let call = appel(REQUEST_SAMPLE, json!({ "relation": "customers" }));
-        let refus = ToolRegistry::builtin()
-            .translate(&call, &tous(), &scope())
-            .expect_err("aucune commande pour un échantillon");
+    fn translate_never_returns_a_samples_read() {
+        // The public API that returns a bare `Command` must not return a
+        // sample's read: that would be a read of values without the approval
+        // screen, within reach of any caller of the crate.
+        let call = make_call(REQUEST_SAMPLE, json!({ "relation": "customers" }));
+        let refusal = ToolRegistry::builtin()
+            .translate(&call, &all_command_names(), &scope())
+            .expect_err("no command for a sample");
         assert!(
-            matches!(&refus, AiError::ToolNotAllowed { name } if name == REQUEST_SAMPLE),
-            "{refus:?}"
+            matches!(&refusal, AiError::ToolNotAllowed { name } if name == REQUEST_SAMPLE),
+            "{refusal:?}"
         );
-        // `request`, lui, rend la demande à faire approuver.
-        assert!(demande(json!({ "relation": "customers" })).is_ok());
+        // `request`, on the other hand, returns the request to have approved.
+        assert!(sample_request(json!({ "relation": "customers" })).is_ok());
     }
 
-    fn demande(args: serde_json::Value) -> Result<SampleAsk, AiError> {
-        let call = appel(REQUEST_SAMPLE, args);
-        match ToolRegistry::builtin().request(&call, &tous(), &scope())? {
+    fn sample_request(args: serde_json::Value) -> Result<SampleAsk, AiError> {
+        let call = make_call(REQUEST_SAMPLE, args);
+        match ToolRegistry::builtin().request(&call, &all_command_names(), &scope())? {
             ToolRequest::Sample(ask) => Ok(ask),
             ToolRequest::Dispatch(command) => {
-                panic!("request_sample doit demander une approbation, pas {command:?}")
+                panic!("request_sample must ask for an approval, not {command:?}")
             }
         }
     }
 
     #[test]
-    fn un_echantillon_demande_est_une_lecture_bornee_a_faire_approuver() {
-        let ask = demande(json!({"relation": "clients"})).expect("appel valide");
-        assert_eq!(ask.rows(), DEFAULT_SAMPLE_ROWS, "la valeur par défaut");
-        assert!(ask.columns.is_empty(), "toutes, au choix de l'utilisateur");
+    fn a_requested_sample_is_a_bounded_read_to_approve() {
+        let ask = sample_request(json!({"relation": "clients"})).expect("valid call");
+        assert_eq!(ask.rows(), DEFAULT_SAMPLE_ROWS, "the default value");
+        assert!(ask.columns.is_empty(), "all, at the user's choice");
         assert!(!ask.command.is_mutating());
         let Command::PreviewRelation { shape, .. } = &ask.command else {
-            panic!("la lecture est un aperçu : {:?}", ask.command);
+            panic!("the read is a preview: {:?}", ask.command);
         };
         assert_eq!(
             *shape,
             PreviewShape::unordered(),
-            "ni filtre ni ordre : l'agent n'écrit aucun prédicat"
+            "neither filter nor order: the agent writes no predicate"
         );
 
-        let ask = demande(json!({"relation": "clients", "rows": MAX_SAMPLE_ROWS}))
-            .expect("le plafond est permis");
+        let ask = sample_request(json!({"relation": "clients", "rows": MAX_SAMPLE_ROWS}))
+            .expect("the ceiling is allowed");
         assert_eq!(ask.rows(), MAX_SAMPLE_ROWS);
-        for trop in [0, MAX_SAMPLE_ROWS + 1] {
-            let refus =
-                demande(json!({"relation": "clients", "rows": trop})).expect_err("hors bornes");
-            assert!(matches!(refus, AiError::InvalidArguments { .. }), "{trop}");
+        for too_long in [0, MAX_SAMPLE_ROWS + 1] {
+            let refusal = sample_request(json!({"relation": "clients", "rows": too_long}))
+                .expect_err("out of bounds");
+            assert!(
+                matches!(refusal, AiError::InvalidArguments { .. }),
+                "{too_long}"
+            );
         }
     }
 
     #[test]
-    fn le_modele_ne_choisit_ni_la_connexion_ni_un_filtre_pour_un_echantillon() {
-        for invente in [
+    fn the_model_chooses_neither_the_connection_nor_a_filter_for_a_sample() {
+        for invented in [
             json!({"relation": "clients", "connection": "00000000-0000-0000-0000-000000000000"}),
             json!({"relation": "clients", "predicate": "1=1"}),
             json!({"relation": "clients", "approved": true}),
         ] {
-            let refus = demande(invente.clone()).expect_err("champ hors schéma");
+            let refusal = sample_request(invented.clone()).expect_err("field outside the schema");
             assert!(
-                matches!(refus, AiError::InvalidArguments { .. }),
-                "{invente}"
+                matches!(refusal, AiError::InvalidArguments { .. }),
+                "{invented}"
             );
         }
-        let perimetre = scope();
-        let call = appel(REQUEST_SAMPLE, json!({"relation": "clients"}));
+        let granted_scope = scope();
+        let call = make_call(REQUEST_SAMPLE, json!({"relation": "clients"}));
         let Ok(ToolRequest::Sample(ask)) =
-            ToolRegistry::builtin().request(&call, &tous(), &perimetre)
+            ToolRegistry::builtin().request(&call, &all_command_names(), &granted_scope)
         else {
-            panic!("appel valide");
+            panic!("valid call");
         };
-        assert_eq!(ask.command.target_connection(), Some(perimetre.connection));
+        assert_eq!(
+            ask.command.target_connection(),
+            Some(granted_scope.connection)
+        );
     }
 
-    /// I-10 : un nom hostile reste une **donnée**. Il voyage dans le champ
-    /// `relation` de la commande, tel quel, et aucun texte d'instruction n'est
-    /// composé ici — c'est le driver qui le citera.
+    /// I-10: a hostile name stays **data**. It travels in the command's
+    /// `relation` field, as is, and no statement text is composed here — it is
+    /// the driver that will quote it.
     #[test]
-    fn un_nom_hostile_reste_un_champ_et_n_entre_dans_aucune_instruction() {
+    fn a_hostile_name_stays_a_field_and_enters_no_statement() {
         let hostile = r#"users"; DROP TABLE audit; --"#;
-        let ask = demande(json!({
+        let ask = sample_request(json!({
             "relation": hostile,
             "namespace": hostile,
             "columns": [hostile, "email", "email"],
         }))
-        .expect("un nom légal pour le serveur reste demandable");
-        assert_eq!(
-            ask.columns,
-            [hostile, "email"],
-            "dédoublonnées, dans l'ordre"
-        );
+        .expect("a name legal for the server remains requestable");
+        assert_eq!(ask.columns, [hostile, "email"], "deduplicated, in order");
         assert!(
             ask.command.statement_text().is_none(),
-            "aucune instruction n'est composée à la traduction"
+            "no statement is composed at translation"
         );
         let Command::PreviewRelation {
             relation,
@@ -1270,14 +1293,14 @@ mod tests {
             ..
         } = &ask.command
         else {
-            panic!("la lecture est un aperçu");
+            panic!("the read is a preview");
         };
         assert_eq!(relation, hostile);
         assert_eq!(namespace.as_deref(), Some(hostile));
     }
 
     #[test]
-    fn les_noms_d_un_echantillon_sont_bornes() {
+    fn a_samples_names_are_bounded() {
         let long = "n".repeat(MAX_SAMPLE_NAME_BYTES + 1);
         for args in [
             json!({"relation": ""}),
@@ -1287,34 +1310,37 @@ mod tests {
             json!({"relation": "clients", "columns": [""]}),
             json!({"relation": "clients", "columns": vec!["c"; MAX_SAMPLE_COLUMNS + 1]}),
         ] {
-            assert!(demande(args.clone()).is_err(), "{args}");
+            assert!(sample_request(args.clone()).is_err(), "{args}");
         }
     }
 
     #[test]
-    fn un_outil_inconnu_de_la_liste_blanche_echoue_a_la_declaration() {
-        let registre = ToolRegistry::builtin();
-        let refus = registre
+    fn a_tool_unknown_to_the_allowlist_fails_at_declaration() {
+        let registry = ToolRegistry::builtin();
+        let refusal = registry
             .specs_for(&["drop_everything".to_owned()])
-            .expect_err("outil absent du registre");
-        assert!(matches!(refus, AiError::UnknownTool { .. }), "{refus:?}");
+            .expect_err("tool absent from the registry");
+        assert!(
+            matches!(refusal, AiError::UnknownTool { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
-    fn un_langage_non_analyse_est_mutant() {
-        // Mongo n'est pas analysé par oxyn-query : la classification rend
-        // `Unknown`, donc mutant, donc approbation. C'est le comportement voulu
-        // tant qu'aucun analyseur n'existe pour ce langage.
-        let registre = ToolRegistry::builtin();
-        let perimetre = ToolScope::new(
+    fn an_unanalyzed_language_is_mutating() {
+        // Mongo is not analyzed by oxyn-query: the classification returns
+        // `Unknown`, hence mutating, hence approval. It is the intended
+        // behavior as long as no analyzer exists for that language.
+        let registry = ToolRegistry::builtin();
+        let granted_scope = ToolScope::new(
             ConnectionId::new(),
             SessionId::new(),
             QueryLanguage::MongoQuery,
         );
-        let call = appel(EXECUTE_QUERY, json!({"statement": "db.clients.find({})"}));
-        let commande = registre
-            .translate(&call, &tous(), &perimetre)
-            .expect("appel valide");
-        assert!(commande.is_mutating());
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "db.clients.find({})"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &granted_scope)
+            .expect("valid call");
+        assert!(command.is_mutating());
     }
 }

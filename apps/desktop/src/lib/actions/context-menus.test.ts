@@ -215,7 +215,7 @@ describe("context menus", () => {
     ) as Record<string, () => void>
     // The same targets, handlers given or not: a surface that forgets one
     // greys the entry with a reason, and two targets of the same kind keep
-    // the same menu (UX-SPEC, « Une action, un libellé, un raccourci »).
+    // the same menu (UX-SPEC, « One action, one label, one shortcut »).
     const workspace = (actions: Record<string, () => void>) => ({
       state: {
         activeTab: "console:1",

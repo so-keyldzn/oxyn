@@ -1,23 +1,23 @@
 ---
 name: axe-region-defilante-sans-focus
-description: Un conteneur qui défile sans contrôle focalisable dedans fait échouer axe en mode error (scrollable-region-focusable) — ajouter tabIndex={0}
+description: A scrolling container with no focusable control inside makes axe fail in error mode (scrollable-region-focusable) — add tabIndex={0}
 metadata:
   type: feedback
 ---
 
-Tout élément avec `overflow-y-auto` / `overflow-x-auto` qui ne contient **aucun
-élément focalisable** échoue la règle axe `scrollable-region-focusable`, et
-comme `a11y.test` vaut `error` dans `.storybook/preview.ts`, c'est la porte
-`make front` qui tombe. Le correctif est `tabIndex={0}` sur le conteneur, plus
-`outline-none focus-visible:ring-2 focus-visible:ring-ring/60` pour que le focus
-se voie.
+Any element with `overflow-y-auto` / `overflow-x-auto` that contains **no
+focusable element** fails the axe rule `scrollable-region-focusable`, and since
+`a11y.test` is `error` in `.storybook/preview.ts`, it is the `make front` gate
+that falls. The fix is `tabIndex={0}` on the container, plus
+`outline-none focus-visible:ring-2 focus-visible:ring-ring/60` so that the focus
+shows.
 
-**Why:** un `<ol>` ou un `<ul>` borné par `max-h-*` n'est atteignable qu'à la
-souris sans cela ; un utilisateur au clavier ne peut pas lire ce qui dépasse.
-Rencontré sur une liste d'étapes de 40 éléments, puis sur une liste de sources.
+**Why:** an `<ol>` or a `<ul>` bounded by `max-h-*` is only reachable with the
+mouse without it; a keyboard user cannot read what overflows. Encountered on a
+40-element step list, then on a source list.
 
-**How to apply:** dès qu'on borne une hauteur ou une largeur avec `overflow-*`
-dans `src/components/oxyn`. Un conteneur qui contient déjà des boutons — par
-exemple `AttachmentGroup` — satisfait la règle tout seul et n'a pas besoin de
-`tabIndex`. Ne pas confondre : c'est le **contenu focalisable** qui exempte, pas
-le rôle ni le `aria-label`.
+**How to apply:** as soon as a height or width is bounded with `overflow-*` in
+`src/components/oxyn`. A container that already contains buttons — for example
+`AttachmentGroup` — satisfies the rule on its own and does not need `tabIndex`.
+Do not confuse: it is the **focusable content** that exempts, not the role nor
+the `aria-label`.

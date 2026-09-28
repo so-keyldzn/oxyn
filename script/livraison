@@ -1,38 +1,37 @@
 #!/usr/bin/env python3
-"""Les deux gestes du workflow de livraison qui touchent une release GitHub.
+"""The two steps of the release workflow that touch a GitHub release.
 
-`.github/workflows/livraison.yml` promet deux choses en tête : les paquets ne
-vont que dans une release en BROUILLON, et le tag porte la version de
-`crates/oxyn-desktop/tauri.conf.json`. Écrites en shell dans le workflow, ni
-l'une ni l'autre n'était vérifiée, et rien ne pouvait le tester sans pousser un
-tag. Elles vivent donc ici, testées par `script/test_livraison.py`.
+`.github/workflows/livraison.yml` promises two things up front: packages only
+go into a DRAFT release, and the tag carries the version of
+`crates/oxyn-desktop/tauri.conf.json`. Written in shell in the workflow,
+neither was checked, and nothing could test it without pushing a tag. They
+therefore live here, tested by `script/test_livraison.py`.
 
-    livraison brouillon <tag> <dépôt>            vérifie le tag, puis crée ou
-                                                 retrouve le brouillon
-    livraison deposer <tag> <dépôt> <fichier>…   dépose chaque fichier dans le
-                                                 brouillon, un par un
+    livraison brouillon <tag> <repo>             checks the tag, then creates or
+                                                 finds the draft
+    livraison deposer <tag> <repo> <file>…       uploads each file to the draft,
+                                                 one by one
 
-**Le tag.** Il vaut exactement `v` suivi de la version configurée, suffixe de
-préversion compris : `0.1.0-rc.1` ⇔ `v0.1.0-rc.1`. Rien n'est corrigé en
-silence — ni le tag, ni la version : un écart est une erreur humaine, et c'est
-à l'humain de dire lequel des deux est juste. Une version à suffixe crée un
-brouillon marqué préversion.
+**The tag.** It is exactly `v` followed by the configured version, prerelease
+suffix included: `0.1.0-rc.1` ⇔ `v0.1.0-rc.1`. Nothing is silently corrected —
+neither the tag nor the version: a mismatch is a human error, and it is for the
+human to say which of the two is right. A suffixed version creates a draft
+marked as a prerelease.
 
-**Le brouillon.** Une release déjà publiée est refusée, au premier job comme
-avant chaque fichier : un humain peut la publier pendant les builds, qui durent
-une heure. Le statut est relu juste avant chaque envoi, et encore après. `gh`
-n'offre pas d'envoi conditionnel : une publication tombée pendant l'envoi
-lui-même reçoit ce seul fichier en plus — aucun n'est retiré ni remplacé — et
-le job échoue en le disant, sans rien déposer d'autre.
+**The draft.** An already published release is refused, in the first job as
+before each file: a human may publish it during the builds, which take an
+hour. The status is reread just before each upload, and again after. `gh`
+offers no conditional upload: a publication that lands during the upload
+itself receives that one extra file — none is removed or replaced — and the job
+fails saying so, without uploading anything else.
 
-**Un fichier déjà présent** fait échouer le dépôt, sans rien toucher. Aucun
-`--clobber` : il supprime l'ancien fichier avant d'envoyer le nouveau, et un
-envoi qui échoue — ou une publication tombée entre la vérification et l'envoi —
-laisse une release publique sans son paquet. Remplacer un paquet d'un brouillon
-est une décision : la supprimer du brouillon à la main, puis relancer le job.
+**A file already present** fails the upload, without touching anything. No
+`--clobber`: it deletes the old file before sending the new one, and an upload
+that fails — or a publication landing between the check and the upload —
+leaves a public release without its package. Replacing a package of a draft is
+a decision: delete it from the draft by hand, then rerun the job.
 
-`gh` est lu dans `$GH` s'il est défini — c'est ce qui permet aux tests de le
-simuler.
+`gh` is read from `$GH` if set — that is what lets the tests simulate it.
 """
 
 from __future__ import annotations
@@ -43,133 +42,133 @@ import subprocess
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-CONFIG_TAURI = RACINE / "crates" / "oxyn-desktop" / "tauri.conf.json"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_TAURI = REPO_ROOT / "crates" / "oxyn-desktop" / "tauri.conf.json"
 
 
-class Refus(Exception):
-    """Une condition du contrat n'est pas remplie : le job doit échouer."""
+class Refusal(Exception):
+    """A condition of the contract is not met: the job must fail."""
 
 
 def gh(*args: str) -> subprocess.CompletedProcess[str]:
-    commande = [os.environ.get("GH", "gh"), *args]
-    return subprocess.run(commande, capture_output=True, text=True, check=False)
+    command = [os.environ.get("GH", "gh"), *args]
+    return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
-def version_configuree(config: Path) -> str:
+def configured_version(config: Path) -> str:
     try:
         version = json.loads(config.read_text(encoding="utf-8")).get("version")
-    except (OSError, ValueError) as erreur:
-        raise Refus(f"{config} illisible : {erreur}") from erreur
+    except (OSError, ValueError) as problem:
+        raise Refusal(f"{config} unreadable: {problem}") from problem
     if not isinstance(version, str) or not version:
-        raise Refus(f"{config} : pas de champ `version`")
-    # Tauri accepte aussi un chemin vers un package.json : le tag se comparerait
-    # alors à un nom de fichier.
+        raise Refusal(f"{config}: no `version` field")
+    # Tauri also accepts a path to a package.json: the tag would then be
+    # compared with a file name.
     if version.endswith(".json"):
-        raise Refus(f"{config} : `version` renvoie à {version}, non pris en charge ici")
+        raise Refusal(f"{config}: `version` points to {version}, not supported here")
     return version
 
 
-def verifier_tag(tag: str, config: Path) -> bool:
-    """Refuse un tag qui n'est pas `v<version>` ; dit si c'est une préversion."""
-    version = version_configuree(config)
-    attendu = f"v{version}"
-    if tag != attendu:
-        raise Refus(
-            f"le tag {tag} ne correspond pas à la version {version} de {config.name} : "
-            f"attendu {attendu}. Rien n'est créé ; corriger le tag ou la version."
+def verify_tag(tag: str, config: Path) -> bool:
+    """Refuses a tag that is not `v<version>`; says whether it is a prerelease."""
+    version = configured_version(config)
+    expected = f"v{version}"
+    if tag != expected:
+        raise Refusal(
+            f"tag {tag} does not match version {version} of {config.name}: "
+            f"expected {expected}. Nothing is created; fix the tag or the version."
         )
-    # Le suffixe de préversion précède `+` ; un tiret dans les métadonnées de
-    # build (`1.0.0+build-1`) ne fait pas une préversion.
+    # The prerelease suffix comes before `+`; a hyphen in the build metadata
+    # (`1.0.0+build-1`) does not make a prerelease.
     return "-" in version.split("+", 1)[0]
 
 
-def lire_release(tag: str, depot: str) -> dict | None:
-    """La release du tag, ou None si elle n'existe pas encore."""
-    vue = gh("release", "view", tag, "--repo", depot, "--json", "isDraft,assets")
-    if vue.returncode != 0:
-        if "release not found" in vue.stderr:
+def read_release(tag: str, repo: str) -> dict | None:
+    """The tag's release, or None if it does not exist yet."""
+    view = gh("release", "view", tag, "--repo", repo, "--json", "isDraft,assets")
+    if view.returncode != 0:
+        if "release not found" in view.stderr:
             return None
-        raise Refus(f"lecture de la release {tag} impossible : {vue.stderr.strip()}")
+        raise Refusal(f"cannot read release {tag}: {view.stderr.strip()}")
     try:
-        release = json.loads(vue.stdout)
-    except ValueError as erreur:
-        raise Refus(f"réponse illisible de gh release view : {erreur}") from erreur
+        release = json.loads(view.stdout)
+    except ValueError as problem:
+        raise Refusal(f"unreadable response from gh release view: {problem}") from problem
     if not isinstance(release, dict) or not isinstance(release.get("isDraft"), bool):
-        raise Refus("gh release view ne dit pas si la release est un brouillon")
+        raise Refusal("gh release view does not say whether the release is a draft")
     return release
 
 
-def exiger_brouillon(tag: str, depot: str) -> dict:
-    release = lire_release(tag, depot)
+def require_draft(tag: str, repo: str) -> dict:
+    release = read_release(tag, repo)
     if release is None:
-        raise Refus(f"aucune release {tag} : le job brouillon ne l'a pas créée")
+        raise Refusal(f"no release {tag}: the draft job did not create it")
     if not release["isDraft"]:
-        raise Refus(
-            f"la release {tag} est publiée : aucun paquet n'y est déposé. "
-            "Une release publiée ne se complète pas par ce workflow."
+        raise Refusal(
+            f"release {tag} is published: no package is uploaded to it. "
+            "A published release is not completed by this workflow."
         )
     return release
 
 
-def exiger_brouillon_apres_envoi(tag: str, depot: str) -> bool:
-    release = lire_release(tag, depot)
+def require_draft_after_upload(tag: str, repo: str) -> bool:
+    release = read_release(tag, repo)
     return release is not None and release["isDraft"]
 
 
-def brouillon(tag: str, depot: str, config: Path) -> None:
-    preversion = verifier_tag(tag, config)
-    if lire_release(tag, depot) is None:
-        # `--verify-tag` : la release ne s'attache qu'à un tag qui existe déjà
-        # sur le dépôt, jamais à un tag que gh créerait lui-même.
+def draft(tag: str, repo: str, config: Path) -> None:
+    prerelease = verify_tag(tag, config)
+    if read_release(tag, repo) is None:
+        # `--verify-tag`: the release only attaches to a tag that already
+        # exists on the repository, never to a tag gh would create itself.
         options = ["--draft", "--verify-tag", "--generate-notes", "--title", f"Oxyn {tag}"]
-        if preversion:
+        if prerelease:
             options.append("--prerelease")
-        creation = gh("release", "create", tag, "--repo", depot, *options)
+        creation = gh("release", "create", tag, "--repo", repo, *options)
         if creation.returncode != 0:
-            raise Refus(f"création du brouillon {tag} impossible : {creation.stderr.strip()}")
-    exiger_brouillon(tag, depot)
-    print(f"Brouillon {tag} prêt.")
+            raise Refusal(f"cannot create draft {tag}: {creation.stderr.strip()}")
+    require_draft(tag, repo)
+    print(f"Draft {tag} ready.")
 
 
-def deposer(tag: str, depot: str, fichiers: list[Path], config: Path) -> None:
-    verifier_tag(tag, config)
-    if not fichiers:
-        raise Refus("aucun fichier à déposer")
-    for fichier in fichiers:
-        release = exiger_brouillon(tag, depot)
-        presents = {a.get("name") for a in release.get("assets") or [] if isinstance(a, dict)}
-        if fichier.name in presents:
-            raise Refus(
-                f"{fichier.name} est déjà dans le brouillon {tag} : il n'est pas remplacé. "
-                "Le supprimer du brouillon, puis relancer le job."
+def upload(tag: str, repo: str, file_list: list[Path], config: Path) -> None:
+    verify_tag(tag, config)
+    if not file_list:
+        raise Refusal("no file to upload")
+    for file_path in file_list:
+        release = require_draft(tag, repo)
+        present = {a.get("name") for a in release.get("assets") or [] if isinstance(a, dict)}
+        if file_path.name in present:
+            raise Refusal(
+                f"{file_path.name} is already in draft {tag}: it is not replaced. "
+                "Delete it from the draft, then rerun the job."
             )
-        envoi = gh("release", "upload", tag, str(fichier), "--repo", depot)
-        if envoi.returncode != 0:
-            raise Refus(f"envoi de {fichier.name} impossible : {envoi.stderr.strip()}")
-        # Retirer le fichier serait une écriture de plus sur une release
-        # publique : on s'arrête et on le dit.
-        if not exiger_brouillon_apres_envoi(tag, depot):
-            raise Refus(
-                f"la release {tag} a été publiée pendant l'envoi de {fichier.name}, "
-                "qui y a été ajouté ; rien d'autre n'est déposé. Vérifier la release."
+        upload_op = gh("release", "upload", tag, str(file_path), "--repo", repo)
+        if upload_op.returncode != 0:
+            raise Refusal(f"cannot upload {file_path.name}: {upload_op.stderr.strip()}")
+        # Removing the file would be one more write on a public release: we
+        # stop and say so.
+        if not require_draft_after_upload(tag, repo):
+            raise Refusal(
+                f"release {tag} was published while uploading {file_path.name}, "
+                "which was added to it; nothing else is uploaded. Check the release."
             )
-        print(f"{fichier.name} déposé dans le brouillon {tag}.")
+        print(f"{file_path.name} uploaded to draft {tag}.")
 
 
 def main(args: list[str]) -> int:
     config = Path(os.environ.get("OXYN_CONFIG_TAURI", CONFIG_TAURI))
     try:
         match args:
-            case ["brouillon", tag, depot]:
-                brouillon(tag, depot, config)
-            case ["deposer", tag, depot, *fichiers]:
-                deposer(tag, depot, [Path(f) for f in fichiers], config)
+            case ["brouillon", tag, repo]:
+                draft(tag, repo, config)
+            case ["deposer", tag, repo, *file_list]:
+                upload(tag, repo, [Path(f) for f in file_list], config)
             case _:
                 print(__doc__, file=sys.stderr)
                 return 2
-    except Refus as refus:
-        print(f"livraison : {refus}", file=sys.stderr)
+    except Refusal as refusal:
+        print(f"livraison: {refusal}", file=sys.stderr)
         return 1
     return 0
 

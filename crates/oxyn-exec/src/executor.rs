@@ -1,41 +1,40 @@
-//! L'ordonnanceur : le point de passage **obligé** de toute commande.
+//! The executor: the **mandatory** passage point of every command.
 //!
-//! Si un chemin permet d'atteindre un driver sans passer par
-//! [`Executor::dispatch`], l'architecture de sûreté du produit est cassée : le
-//! second chemin ne sera pas audité comme le premier, et c'est celui-là que l'IA
-//! empruntera ([I-01](../../../CLAUDE.md#i-01), ADR-0004).
+//! If a path reaches a driver without going through
+//! [`Executor::dispatch`], the product's safety architecture is broken: the
+//! second path will not be audited like the first, and it is that one the AI
+//! will take ([I-01](../../../CLAUDE.md#i-01), ADR-0004).
 //!
-//! # La séquence, dans cet ordre et sans raccourci
+//! # The sequence, in this order and without shortcut
 //!
-//! 1. **Reclassifier.** L'intention portée par la commande vient de l'appelant,
-//!    et un agent est un appelant. `oxyn-query` relit le texte ; c'est le
-//!    résultat de cette relecture qui est soumis, journalisé et exécuté — jamais
-//!    ce que l'appelant a déclaré (ARCHITECTURE §8, I-07).
-//! 2. **Soumettre au `PolicyGate`**, avec l'environnement de la connexion visée
-//!    et non celui que l'appelant annonce.
-//! 3. **Sur `RequireApproval`, ne rien exécuter.** La commande est mise de côté
-//!    ([`crate::approval`]) et l'interface reçoit
-//!    [`Event::ApprovalRequested`]. L'exécution ne reprend que par
-//!    [`Executor::approve`], sur l'identifiant exact de la commande.
-//! 4. **Journaliser avant et après.** La décision de politique est écrite
-//!    *avant* toute exécution, le résultat *après*. Une commande refusée figure
-//!    au journal comme les autres : un journal qui ne consigne que ce qui a
-//!    marché ne dit rien de ce qu'un agent a tenté.
-//! 5. **Exécuter en flux**, en alimentant un
-//!    [`oxyn_data::ResultBuffer`] par un
-//!    [`oxyn_data::BatchSink`] — donc avec contre-pression et
-//!    débordement disque (I-06).
-//! 6. **Émettre les événements** vers l'interface par [`EventBus`].
+//! 1. **Reclassify.** The intent carried by the command comes from the caller,
+//!    and an agent is a caller. `oxyn-query` reads the text again; it is the
+//!    result of that reading that is submitted, logged and executed — never
+//!    what the caller declared (ARCHITECTURE §8, I-07).
+//! 2. **Submit to the `PolicyGate`**, with the environment of the target
+//!    connection and not the one the caller announces.
+//! 3. **On `RequireApproval`, execute nothing.** The command is set aside
+//!    ([`crate::approval`]) and the interface receives
+//!    [`Event::ApprovalRequested`]. Execution only resumes through
+//!    [`Executor::approve`], on the command's exact identifier.
+//! 4. **Log before and after.** The policy decision is written *before* any
+//!    execution, the result *after*. A denied command appears in the log like
+//!    the others: a log that records only what worked says nothing about what
+//!    an agent attempted.
+//! 5. **Execute as a stream**, feeding an
+//!    [`oxyn_data::ResultBuffer`] through an
+//!    [`oxyn_data::BatchSink`] — hence with back-pressure and spill to disk
+//!    (I-06).
+//! 6. **Emit events** to the interface through [`EventBus`].
 //!
-//! # Ce qui bloque une exécution, et ce qui ne la bloque pas
+//! # What blocks an execution, and what does not
 //!
-//! Un échec d'écriture du journal **avant** exécution empêche l'exécution : la
-//! piste d'audit est la promesse, pas un effet de bord. Un échec d'écriture du
-//! journal **après** exécution ne l'annule pas — la commande a eu lieu, et
-//! renvoyer une erreur laisserait croire le contraire ; il est crié au niveau
-//! `error`.
+//! A log write failure **before** execution prevents execution: the audit
+//! trail is the promise, not a side effect. A log write failure **after**
+//! execution does not undo it — the command took place, and returning an error
+//! would suggest otherwise; it is shouted at `error` level.
 //!
-//! # Ce que cette version ne fait pas
+//! # What this version does not do
 //!
 //! Page and value reads, preferences, the query library, connections (save,
 //! delete, read), credential resolution, exports, and every write to the
@@ -83,26 +82,26 @@ use crate::cancel::{CancelRegistry, CancelReport, RunningStatement};
 use crate::events::EventBus;
 use crate::sessions::{CredentialResolver, NoCredentials, SessionRegistry, SessionSlot};
 
-/// Ce qu'une commande a produit.
+/// What a command produced.
 ///
-/// `#[non_exhaustive]` : de nouvelles issues apparaîtront avec de nouvelles
-/// commandes, et un appelant ne doit pas casser pour autant. C'est l'inverse du
-/// choix fait sur [`Command`], dont l'exhaustivité **doit** casser le dispatch.
+/// `#[non_exhaustive]`: new outcomes will appear with new commands, and a
+/// caller must not break for that. It is the opposite of the choice made on
+/// [`Command`], whose exhaustiveness **must** break the dispatch.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Outcome {
-    /// Une session a été ouverte.
+    /// A session was opened.
     Connected {
-        /// La connexion.
+        /// The connection.
         connection: ConnectionId,
-        /// La session ouverte.
+        /// The open session.
         session: SessionId,
         /// What the new session reports about its transaction, read here so
         /// that nothing above the bus calls the driver for it (ADR-0039 §4).
         transaction_state: oxyn_core::TransactionState,
     },
 
-    /// Les sessions d'une connexion ont été fermées.
+    /// The sessions of a connection were closed.
     /// One session was closed; sibling sessions and the catalog remain available.
     SessionClosed { session: SessionId },
 
@@ -118,9 +117,9 @@ pub enum Outcome {
         context: Option<oxyn_driver::SessionContext>,
     },
     Disconnected {
-        /// La connexion.
+        /// The connection.
         connection: ConnectionId,
-        /// Combien de sessions ont été fermées.
+        /// How many sessions were closed.
         closed: usize,
     },
 
@@ -143,19 +142,19 @@ pub enum Outcome {
         catalog: oxyn_catalog::CatalogHandle,
     },
 
-    /// Une instruction a été exécutée et son résultat est disponible.
+    /// A statement was executed and its result is available.
     Executed {
-        /// Le résultat, tel que l'interface le désignera ensuite.
+        /// The result, as the interface will designate it afterwards.
         result: ResultId,
-        /// La poignée de l'exécution, cible d'une annulation.
+        /// The execution's handle, target of a cancellation.
         statement: StatementHandle,
-        /// Le tampon, partagé avec l'interface **sans copie** : c'est ce que la
-        /// grille lit pendant que les lots continuent d'arriver.
+        /// The buffer, shared with the interface **without copy**: it is what
+        /// the grid reads while batches keep arriving.
         buffer: Arc<ResultBuffer>,
-        /// Ce que l'exécution a coûté.
+        /// What the execution cost.
         stats: ExecStats,
-        /// Pourquoi le flux s'est arrêté. Seul
-        /// [`Exhausted`](SinkOutcome::Exhausted) décrit un résultat entier.
+        /// Why the stream stopped. Only
+        /// [`Exhausted`](SinkOutcome::Exhausted) describes a whole result.
         sink: SinkOutcome,
     },
 
@@ -207,31 +206,31 @@ pub enum Outcome {
         buffer: Arc<ResultBuffer>,
     },
 
-    /// Une annulation a été demandée.
+    /// A cancellation was requested.
     Cancelled {
-        /// Ce qui a effectivement été fait, client et serveur.
+        /// What was actually done, client and server.
         report: CancelReport,
     },
 
-    /// Un résultat a été écrit dans un fichier.
+    /// A result was written to a file.
     Exported {
-        /// Le résultat exporté.
+        /// The exported result.
         result: ResultId,
-        /// Lignes écrites.
+        /// Rows written.
         rows: usize,
-        /// Octets écrits.
+        /// Bytes written.
         bytes: u64,
     },
 
-    /// Un document du workspace a été relu.
+    /// A workspace document was read back.
     DocumentOpened {
-        /// Le document. Encadré : c'est la plus grosse variante de loin.
+        /// The document. Boxed: it is by far the largest variant.
         document: Box<Document>,
     },
 
-    /// Un document du workspace a été écrit.
+    /// A workspace document was written.
     DocumentWritten {
-        /// Le document.
+        /// The document.
         document: DocumentId,
     },
 
@@ -244,9 +243,9 @@ pub enum Outcome {
         connection: ConnectionId,
     },
 
-    /// Une connexion a été enregistrée ou modifiée.
+    /// A connection was saved or modified.
     ConnectionSaved {
-        /// La connexion.
+        /// The connection.
         connection: ConnectionId,
     },
 
@@ -303,59 +302,59 @@ pub enum Outcome {
         existed: bool,
     },
 
-    /// Une connexion a été supprimée du workspace.
+    /// A connection was deleted from the workspace.
     ConnectionDeleted {
-        /// La connexion.
+        /// The connection.
         connection: ConnectionId,
-        /// Existait-elle ?
+        /// Did it exist?
         existed: bool,
     },
 
-    /// **Rien n'a été exécuté.** La commande attend un accord explicite.
+    /// **Nothing was executed.** The command awaits an explicit approval.
     NeedsApproval {
-        /// L'identifiant sous lequel l'accord se donne
+        /// The identifier under which the approval is given
         /// ([`Executor::approve`]).
         command: CommandId,
-        /// Ce sur quoi l'utilisateur doit se prononcer.
+        /// What the user must decide on.
         reason: String,
-        /// De quoi juger sans aller lire ailleurs.
+        /// What is needed to judge without reading elsewhere.
         preview: Option<Preview>,
     },
 
-    /// **Rien n'a été exécuté**, et aucun accord ne débloquera la commande.
+    /// **Nothing was executed**, and no approval will unblock the command.
     Denied {
-        /// La commande refusée, telle qu'elle figure au journal.
+        /// The denied command, as it appears in the log.
         command: CommandId,
-        /// Le motif, montrable tel quel.
+        /// The reason, showable as is.
         reason: String,
     },
 }
 
 impl Outcome {
-    /// La commande a-t-elle été refusée ?
+    /// Was the command denied?
     #[must_use]
     pub const fn is_denied(&self) -> bool {
         matches!(self, Self::Denied { .. })
     }
 
-    /// La commande attend-elle un accord ?
+    /// Is the command awaiting an approval?
     #[must_use]
     pub const fn needs_approval(&self) -> bool {
         matches!(self, Self::NeedsApproval { .. })
     }
 
-    /// La commande a-t-elle produit un effet ?
+    /// Did the command produce an effect?
     ///
-    /// `false` pour [`NeedsApproval`](Self::NeedsApproval) et
-    /// [`Denied`](Self::Denied). Le piège qu'elle ferme : un appelant — un agent
-    /// en particulier — qui suppose qu'un `INSERT` a eu lieu et enchaîne sur
-    /// cette hypothèse.
+    /// `false` for [`NeedsApproval`](Self::NeedsApproval) and
+    /// [`Denied`](Self::Denied). The trap it closes: a caller — an agent in
+    /// particular — that assumes an `INSERT` took place and builds on that
+    /// assumption.
     #[must_use]
     pub const fn took_effect(&self) -> bool {
         !matches!(self, Self::NeedsApproval { .. } | Self::Denied { .. })
     }
 
-    /// Les lignes produites ou affectées, quand la notion a un sens.
+    /// The rows produced or affected, when the notion makes sense.
     #[must_use]
     pub fn rows(&self) -> Option<u64> {
         match self {
@@ -371,10 +370,10 @@ pub(crate) struct StoredResult {
     pub(crate) buffer: Arc<ResultBuffer>,
 }
 
-/// L'ordonnanceur.
+/// The executor.
 ///
-/// Se partage par `Arc` entre l'interface, le runtime d'agents
-/// ([`crate::ExecutorSink`]) et les tâches de fond. Toutes ses méthodes prennent
+/// Shared through `Arc` between the interface, the agent runtime
+/// ([`crate::ExecutorSink`]) and background tasks. All its methods take
 /// `&self`.
 pub struct Executor {
     drivers: Arc<DriverRegistry>,
@@ -407,30 +406,30 @@ pub struct Executor {
 }
 
 impl Executor {
-    /// Commence le câblage d'un ordonnanceur.
+    /// Starts wiring an executor.
     ///
-    /// Le `Store` et le `PolicyGate` sont exigés dès l'appel : un ordonnanceur
-    /// sans journal ou sans politique n'a pas de forme dégradée acceptable.
+    /// The `Store` and the `PolicyGate` are required from the call: an executor
+    /// without a log or without a policy has no acceptable degraded form.
     #[must_use]
     pub fn builder(store: Arc<Store>, policy: Arc<dyn PolicyGate>) -> ExecutorBuilder {
         ExecutorBuilder::new(store, policy)
     }
 
-    // ── Le point de passage ─────────────────────────────────────────────────
+    // ── The passage point ───────────────────────────────────────────────────
 
-    /// Soumet une commande.
+    /// Submits a command.
     ///
-    /// C'est **la** méthode : l'interface, les agents et les plugins passent
-    /// tous par là, avec le même code derrière.
+    /// It is **the** method: the interface, agents and plugins all go through
+    /// it, with the same code behind.
     ///
-    /// Un refus et une demande d'approbation ne sont **pas** des erreurs : ce
-    /// sont des [`Outcome`]. Une `Err` décrit une panne — un serveur
-    /// injoignable, un délai dépassé, un journal illisible.
+    /// A denial and an approval request are **not** errors: they are
+    /// [`Outcome`]s. An `Err` describes a failure — an unreachable server, a
+    /// timeout, an unreadable log.
     ///
-    /// # Erreurs
-    /// Toute erreur du driver, du tampon ou de l'état local ; et
-    /// [`OxynError::Internal`] si la décision de politique n'a pas pu être
-    /// journalisée avant exécution — auquel cas **rien n'est exécuté**.
+    /// # Errors
+    /// Any error of the driver, the buffer or the local state; and
+    /// [`OxynError::Internal`] if the policy decision could not be logged
+    /// before execution — in which case **nothing is executed**.
     pub async fn dispatch(
         &self,
         actor: Actor,
@@ -441,15 +440,15 @@ impl Executor {
             .await
     }
 
-    /// [`dispatch`](Self::dispatch), sous un identifiant fourni par l'appelant.
+    /// [`dispatch`](Self::dispatch), under an identifier supplied by the caller.
     ///
-    /// Sert à corréler **avant** que la réponse n'arrive : un puits d'agent
-    /// rend l'identifiant dans son rapport, une interface l'affiche dans sa
-    /// barre d'état. `id` doit être frais — le réutiliser mélangerait deux
-    /// commandes dans le journal d'audit, où il est la clé de corrélation.
+    /// Serves to correlate **before** the answer arrives: an agent sink returns
+    /// the identifier in its report, an interface displays it in its status
+    /// bar. `id` must be fresh — reusing it would mix two commands in the audit
+    /// log, where it is the correlation key.
     ///
-    /// # Erreurs
-    /// Celles de [`dispatch`](Self::dispatch).
+    /// # Errors
+    /// Those of [`dispatch`](Self::dispatch).
     pub async fn dispatch_as(
         &self,
         id: CommandId,
@@ -457,20 +456,20 @@ impl Executor {
         command: Command,
         cancel: &CancelToken,
     ) -> Result<Outcome> {
-        // 1. Ce que le texte fait, pas ce que l'appelant en dit.
+        // 1. What the text does, not what the caller says about it.
         let command = reclassified(command);
         let connection = command.target_connection();
 
-        // 2. L'environnement de la connexion visée, pas celui qu'on annonce.
+        // 2. The environment of the target connection, not the announced one.
         let env = self.environment_of(&command);
         let retained = self.policy.retained_environment(&command, env);
         let command = bounded_to(command, retained);
 
-        // 3. Le point de passage unique.
+        // 3. The single passage point.
         let decision = self.policy.authorize(&actor, &command, env);
 
-        // 4. Journal AVANT, dans chaque branche : voir ADR-0035. Une décision
-        // qui ne s'écrit pas ne s'exécute pas.
+        // 4. Log BEFORE, in every branch: see ADR-0035. A decision that cannot
+        // be written is not executed.
         match &decision {
             Decision::Deny { reason } => {
                 let reason = reason.clone();
@@ -483,13 +482,13 @@ impl Executor {
                 // vice versa — unchanged by this move to the blocking pool.
                 if self
                     .write_audit(move |store| {
-                        if let Err(erreur) = store.journal().append(&record) {
-                            tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
+                        if let Err(err) = store.journal().append(&record) {
+                            tracing::error!(error = %err, command = %id, "policy decision could not be journaled");
                         }
                         if let Some(entry) = denied
-                            && let Err(erreur) = store.history().record(&entry)
+                            && let Err(err) = store.history().record(&entry)
                         {
-                            tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
+                            tracing::error!(error = %err, "a denied statement could not be recorded in the query history");
                         }
                     })
                     .await
@@ -521,31 +520,31 @@ impl Executor {
                     })
                     .await
                     .and_then(|inner| inner);
-                if let Err(erreur) = write {
-                    tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
-                    return Err(erreur);
+                if let Err(err) = write {
+                    tracing::error!(error = %err, command = %id, "policy decision could not be journaled");
+                    return Err(err);
                 }
                 // If the caller drops this future right here, the decision
                 // stays in the journal with no approval request pending:
                 // nothing is queued and nothing runs — the same outcome as a
                 // request later rejected or expired (see ADR-0035).
                 //
-                // Rien n'est exécuté. La commande mise de côté est celle que le
-                // gate a vue — reclassifiée — pas le texte d'origine.
-                let attente = self.approvals.submit(id, actor, command, reason, preview)?;
+                // Nothing is executed. The command set aside is the one the
+                // gate saw — reclassified — not the original text.
+                let pending = self.approvals.submit(id, actor, command, reason, preview)?;
                 self.events.publish(
                     id,
                     connection,
                     Event::ApprovalRequested {
                         command: id,
-                        reason: attente.reason.clone(),
-                        preview: attente.preview.clone(),
+                        reason: pending.reason.clone(),
+                        preview: pending.preview.clone(),
                     },
                 );
                 Ok(Outcome::NeedsApproval {
                     command: id,
-                    reason: attente.reason,
-                    preview: attente.preview,
+                    reason: pending.reason,
+                    preview: pending.preview,
                 })
             }
 
@@ -556,57 +555,56 @@ impl Executor {
         }
     }
 
-    /// Donne l'accord attendu par une commande, et l'exécute.
+    /// Gives the approval a command is waiting for, and executes it.
     ///
-    /// `approved_by` est **qui** a approuvé : le journal le consigne. Il n'y a
-    /// pas d'`Actor` en paramètre à dessein — cette méthode est appelée depuis
-    /// l'interface, par un humain. Un agent n'a aucun moyen de l'atteindre : les
-    /// outils exposés aux agents sont exactement les [`Command`], et il n'existe
-    /// pas de commande d'approbation.
+    /// `approved_by` is **who** approved: the log records it. There is no
+    /// `Actor` parameter on purpose — this method is called from the
+    /// interface, by a human. An agent has no way to reach it: the tools exposed
+    /// to agents are exactly the [`Command`]s, and there is no approval command.
     ///
-    /// La commande **repasse par le `PolicyGate`** avant de partir : la
-    /// connexion a pu être marquée production ou lecture seule pendant
-    /// l'attente, et un refus l'emporte alors sur l'accord donné.
+    /// The command **goes through the `PolicyGate` again** before leaving: the
+    /// connection may have been marked production or read-only during the
+    /// wait, and a denial then wins over the approval given.
     ///
-    /// # Erreurs
-    /// [`OxynError::PolicyDenied`] si aucune commande n'attend sous cet
-    /// identifiant ou si la demande a expiré — dans les deux cas **rien n'est
-    /// exécuté** ; sinon les erreurs de [`dispatch`](Self::dispatch).
+    /// # Errors
+    /// [`OxynError::PolicyDenied`] if no command is waiting under this
+    /// identifier or if the request expired — in both cases **nothing is
+    /// executed**; otherwise the errors of [`dispatch`](Self::dispatch).
     pub async fn approve(
         &self,
         approved_by: &str,
         command: CommandId,
         cancel: &CancelToken,
     ) -> Result<Outcome> {
-        let mut attente = self.approvals.take(command)?;
-        let connection = attente.command.target_connection();
+        let mut pending = self.approvals.take(command)?;
+        let connection = pending.command.target_connection();
 
         // The connection may have been marked production while waiting.
-        let env = self.environment_of(&attente.command);
-        let retained = self.policy.retained_environment(&attente.command, env);
-        attente.command = bounded_to(attente.command, retained);
-        let decision = self.policy.authorize(&attente.actor, &attente.command, env);
+        let env = self.environment_of(&pending.command);
+        let retained = self.policy.retained_environment(&pending.command, env);
+        pending.command = bounded_to(pending.command, retained);
+        let decision = self.policy.authorize(&pending.actor, &pending.command, env);
 
         if let Decision::Deny { reason } = &decision {
             let reason = reason.clone();
             let record =
-                decision_record(command, &attente.actor, &attente.command, &decision, None);
+                decision_record(command, &pending.actor, &pending.command, &decision, None);
             let denied = self
-                .history_record(&attente.actor, &attente.command)
+                .history_record(&pending.actor, &pending.command)
                 .map(|entry| entry.denied(reason.clone()));
-            // Le refus tardif est journalisé lui aussi : c'est même la trace la
-            // plus intéressante de toutes, puisqu'un accord avait été donné.
+            // The late denial is logged too: it is even the most interesting
+            // trace of all, since an approval had been given.
             // Both writes are attempted independently, same as an ordinary
             // denial in `dispatch_as`.
             if self
                 .write_audit(move |store| {
-                    if let Err(erreur) = store.journal().append(&record) {
-                        tracing::error!(error = %erreur, command = %command, "late denial could not be journaled");
+                    if let Err(err) = store.journal().append(&record) {
+                        tracing::error!(error = %err, command = %command, "late denial could not be journaled");
                     }
                     if let Some(entry) = denied
-                        && let Err(erreur) = store.history().record(&entry)
+                        && let Err(err) = store.history().record(&entry)
                     {
-                        tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
+                        tracing::error!(error = %err, "a denied statement could not be recorded in the query history");
                     }
                 })
                 .await
@@ -624,12 +622,12 @@ impl Executor {
             return Ok(Outcome::Denied { command, reason });
         }
 
-        // Plus de destructuration de `attente` avant l'exécution : `run` écrit
-        // lui-même la décision, comme première opération de sa fenêtre.
+        // No more destructuring of `pending` before execution: `run` writes
+        // the decision itself, as the first operation of its window.
         self.run(
             command,
-            &attente.actor,
-            &attente.command,
+            &pending.actor,
+            &pending.command,
             &decision,
             cancel,
             Some(approved_by),
@@ -637,27 +635,26 @@ impl Executor {
         .await
     }
 
-    /// Retire une demande à laquelle l'utilisateur a répondu « non ».
+    /// Removes a request the user answered "no" to.
     ///
-    /// Rien n'est exécuté, et la commande ne pourra plus l'être : il faudra la
-    /// réémettre, donc repasser par le gate.
+    /// Nothing is executed, and the command can no longer be: it will have to
+    /// be re-emitted, hence go through the gate again.
     pub fn reject(&self, command: CommandId) -> Option<PendingCommand> {
         self.approvals.reject(command)
     }
 
-    // ── Exécution ───────────────────────────────────────────────────────────
+    // ── Execution ───────────────────────────────────────────────────────────
 
-    /// Exécute une commande déjà autorisée, et journalise sa décision et son
-    /// issue autour de l'exécution.
+    /// Executes an already authorized command, and logs its decision and its
+    /// outcome around the execution.
     ///
-    /// `decision` est ce que `PolicyGate::authorize` a rendu à l'appelant —
-    /// jamais `Deny`, que les deux appelants traitent avant d'atteindre cette
-    /// méthode.
+    /// `decision` is what `PolicyGate::authorize` returned to the caller —
+    /// never `Deny`, which both callers handle before reaching this method.
     ///
-    /// # Erreurs
-    /// Celles d'[`execute_command`](Self::execute_command), et
-    /// [`OxynError::Internal`] si la décision n'a pas pu être journalisée —
-    /// auquel cas **rien n'est exécuté**.
+    /// # Errors
+    /// Those of [`execute_command`](Self::execute_command), and
+    /// [`OxynError::Internal`] if the decision could not be logged — in which
+    /// case **nothing is executed**.
     async fn run(
         &self,
         id: CommandId,
@@ -674,10 +671,10 @@ impl Executor {
         let guard = OutcomeGuard::new(&self.abandoned, id, actor, command, approved_by);
 
         // One operation: the decision, then — only if it was written — the
-        // "in progress" entry in the query history. L'historique s'inscrit
-        // ici et pas au dispatch : une commande mise en attente d'accord puis
-        // rejetée laisserait sinon une ligne « en cours » éternelle, alors
-        // qu'elle n'a jamais été soumise au serveur.
+        // "in progress" entry in the query history. The history is written
+        // here and not at dispatch: a command put on hold for approval then
+        // rejected would otherwise leave an eternal "in progress" row, although
+        // it was never submitted to the server.
         let record = decision_record(id, actor, command, decision, approved_by);
         let starting = self.history_record(actor, command);
         let write = self
@@ -686,9 +683,9 @@ impl Executor {
                 Ok(
                     starting.and_then(|record| match store.history().record(&record) {
                         Ok(history_id) => Some((history_id, record)),
-                        Err(erreur) => {
+                        Err(err) => {
                             tracing::error!(
-                                error = %erreur,
+                                error = %err,
                                 "a submitted statement could not be recorded in the query history"
                             );
                             None
@@ -699,34 +696,34 @@ impl Executor {
             .await
             .and_then(|inner| inner);
 
-        let en_cours = match write {
-            Ok(en_cours) => en_cours,
-            Err(erreur) => {
-                tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
+        let in_progress = match write {
+            Ok(in_progress) => in_progress,
+            Err(err) => {
+                tracing::error!(error = %err, command = %id, "policy decision could not be journaled");
                 // Nothing ran: there is no outcome to write, and no hole in
                 // the audit trail to leave behind.
                 guard.settle();
-                return Err(erreur);
+                return Err(err);
             }
         };
 
-        let debut = Instant::now();
-        let issue = self.execute_command(id, command, cancel).await;
+        let start = Instant::now();
+        let result_outcome = self.execute_command(id, command, cancel).await;
         guard.settle();
-        let duree = debut.elapsed();
+        let duration = start.elapsed();
 
         let mut outcome = outcome_record(
             id,
             actor,
             command,
-            duree,
-            issue.as_ref().ok().and_then(Outcome::rows),
+            duration,
+            result_outcome.as_ref().ok().and_then(Outcome::rows),
             approved_by,
         );
-        if let Err(erreur) = &issue {
-            outcome = outcome.failed(erreur);
+        if let Err(err) = &result_outcome {
+            outcome = outcome.failed(err);
         }
-        let finishing = finished_history_record(en_cours, &issue, duree);
+        let finishing = finished_history_record(in_progress, &result_outcome, duration);
 
         // Submitted right away, with no `.await` between `guard.settle()`
         // above and this call: the window `OutcomeGuard` covers stays
@@ -734,9 +731,9 @@ impl Executor {
         // and the moment this operation is queued.
         let written = self
             .write_audit(move |store| {
-                if let Err(erreur) = store.journal().append(&outcome) {
+                if let Err(err) = store.journal().append(&outcome) {
                     tracing::error!(
-                        error = %erreur,
+                        error = %err,
                         command = %id,
                         "failed to journal the outcome of a command that already ran"
                     );
@@ -745,8 +742,8 @@ impl Executor {
                 match store.history().finish(history_id, &record) {
                     Ok(true) => Some(record.status),
                     Ok(false) => None,
-                    Err(erreur) => {
-                        tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
+                    Err(err) => {
+                        tracing::error!(error = %err, "the outcome of a statement could not be written to the query history");
                         None
                     }
                 }
@@ -765,15 +762,15 @@ impl Executor {
             }
         }
 
-        issue
+        result_outcome
     }
 
-    /// Le dispatch proprement dit.
+    /// The dispatch proper.
     ///
-    /// Le `match` est **exhaustif** et sans `_ =>` : [`Command`] est une
-    /// énumération fermée précisément pour qu'ajouter une commande fasse échouer
-    /// la compilation ici. Un `_ =>` avalerait en silence une commande que le
-    /// `PolicyGate` vient pourtant d'autoriser.
+    /// The `match` is **exhaustive** and without `_ =>`: [`Command`] is a
+    /// closed enum precisely so that adding a command makes compilation fail
+    /// here. A `_ =>` would silently swallow a command the `PolicyGate` has
+    /// just authorized.
     async fn execute_command(
         &self,
         id: CommandId,
@@ -851,10 +848,10 @@ impl Executor {
                         "preview session belongs to another connection".into(),
                     ));
                 }
-                // Refusé ici plutôt que laissé au driver : la capacité est ce
-                // que **cette session** déclare, et une demande qu'elle ne sait
-                // pas honorer ne doit pas atteindre la composition du SQL, où
-                // la tentation serait de l'ignorer (ADR-0003, ADR-0020).
+                // Refused here rather than left to the driver: the capability is
+                // what **this session** declares, and a request it cannot honor
+                // must not reach the SQL composition, where the temptation
+                // would be to ignore it (ADR-0003, ADR-0020).
                 let capabilities = slot.capabilities();
                 if !shape.sort.is_empty()
                     && !capabilities.contains(oxyn_core::Capabilities::PREVIEW_SORT)
@@ -873,14 +870,14 @@ impl Executor {
                 let request = slot.preview_request(&path, *limit, shape, cancel).await?;
                 let mut request = oxyn_query::reclassify(&request).qualify(request);
                 if request.is_mutating() {
-                    // Deux refus distincts, parce qu'ils demandent deux gestes
-                    // différents. `Unknown` veut dire « ce texte n'a pas pu être
-                    // classé », et sur un aperçu la seule part écrite à la main
-                    // est le prédicat : le dire « pas en lecture seule »
-                    // enverrait l'utilisateur chercher un droit manquant alors
-                    // qu'il a une faute de frappe. Le refus reste dans les deux
-                    // cas — un texte que le classificateur ne comprend pas
-                    // compte pour mutant, et c'est cette prudence qui protège.
+                    // Two distinct refusals, because they call for two different
+                    // actions. `Unknown` means "this text could not be
+                    // classified", and on a preview the only part written by
+                    // hand is the predicate: calling it "not read-only" would
+                    // send the user looking for a missing right when they have
+                    // a typo. The refusal stays in both cases — a text the
+                    // classifier does not understand counts as mutating, and it
+                    // is that caution that protects.
                     let reason = if request.intent == oxyn_core::StatementIntent::Unknown {
                         "this preview filter could not be read as a condition; \
                          check its syntax"
@@ -1025,7 +1022,7 @@ impl Executor {
                 let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
                     OxynError::Config("export requires the application runtime".into())
                 })?;
-                let resume = runtime
+                let summary = runtime
                     .spawn_blocking(move || -> Result<_> {
                         // Never `File::create`: it would truncate the file already
                         // there before knowing whether the export succeeds.
@@ -1041,8 +1038,8 @@ impl Executor {
                     .map_err(|_| OxynError::Internal("export worker stopped".into()))??;
                 Ok(Outcome::Exported {
                     result: *result,
-                    rows: resume.rows,
-                    bytes: resume.bytes,
+                    rows: summary.rows,
+                    bytes: summary.bytes,
                 })
             }
 
@@ -1281,11 +1278,11 @@ impl Executor {
                 self.delete_connection(*connection, cancel).await
             }
 
-            // Les trois commandes de fournisseur restent locales : rien ici ne
-            // résout un nom ni n'ouvre de connexion vers un modèle. Le
-            // classement local/distant se recalcule à l'ouverture d'un runtime
-            // (ADR-0023), et une résolution DNS faite ici la ferait vieillir en
-            // base sous un autre nom.
+            // The three provider commands stay local: nothing here resolves a
+            // name or opens a connection to a model. The local/remote
+            // classification is recomputed when a runtime opens (ADR-0023), and
+            // a DNS resolution done here would make it age in the database
+            // under another name.
             Command::ListAiProviders => {
                 let store = self.store.clone();
                 let providers = self
@@ -1294,8 +1291,8 @@ impl Executor {
                 Ok(Outcome::AiProvidersListed { providers })
             }
             Command::SaveAiProvider { config } => {
-                // Validée avant d'atteindre le pool : une URL portant des
-                // identifiants ne doit pas voyager plus loin que nécessaire.
+                // Validated before reaching the pool: a URL carrying credentials
+                // must not travel further than necessary.
                 config.validate()?;
                 let store = self.store.clone();
                 let config = (**config).clone();
@@ -1307,18 +1304,18 @@ impl Executor {
             Command::RemoveAiProvider { id } => {
                 let store = self.store.clone();
                 let provider = id.clone();
-                let cible = id.clone();
+                let dest = id.clone();
                 let existed = self
-                    .local_worker(cancel, move |_cancel| store.providers().remove(&cible))
+                    .local_worker(cancel, move |_cancel| store.providers().remove(&dest))
                     .await?;
                 Ok(Outcome::AiProviderRemoved { provider, existed })
             }
 
-            // Les trois mêmes gestes pour un agent externe. Aucune validation
-            // d'URL ici : il n'y en a pas. La validation de la déclaration est
-            // faite avant le pool, pour la raison qui vaut aussi pour les
-            // fournisseurs — une commande porteuse d'un caractère de contrôle ne
-            // doit pas voyager plus loin que nécessaire.
+            // The same three actions for an external agent. No URL validation
+            // here: there is none. The declaration is validated before the
+            // pool, for the reason that also holds for providers — a command
+            // carrying a control character must not travel further than
+            // necessary.
             Command::ListExternalAgents => {
                 let store = self.store.clone();
                 let agents = self
@@ -1330,28 +1327,26 @@ impl Executor {
                 agent.validate()?;
                 let store = self.store.clone();
                 let declaration = (**agent).clone();
-                let identite = declaration.id.clone();
+                let identity = declaration.id.clone();
                 self.local_worker(cancel, move |_cancel| {
                     store.external_agents().save(&declaration)
                 })
                 .await?;
-                Ok(Outcome::ExternalAgentSaved { agent: identite })
+                Ok(Outcome::ExternalAgentSaved { agent: identity })
             }
             Command::RemoveExternalAgent { id } => {
                 let store = self.store.clone();
                 let agent = id.clone();
-                let cible = id.clone();
+                let dest = id.clone();
                 let existed = self
-                    .local_worker(cancel, move |_cancel| {
-                        store.external_agents().remove(&cible)
-                    })
+                    .local_worker(cancel, move |_cancel| store.external_agents().remove(&dest))
                     .await?;
                 Ok(Outcome::ExternalAgentRemoved { agent, existed })
             }
         }
     }
 
-    /// Ouvre une session.
+    /// Opens a session.
     async fn connect(&self, connection: ConnectionId, cancel: &CancelToken) -> Result<Outcome> {
         let config = self.connection_config(connection, cancel).await?;
         let session = self.open_driver_session(&config, cancel).await?;
@@ -1393,10 +1388,10 @@ impl Executor {
         cancel: &CancelToken,
     ) -> Result<Outcome> {
         let session = self.open_driver_session(config, cancel).await?;
-        if let Err(erreur) = session.close().await {
+        if let Err(err) = session.close().await {
             // The opening succeeded, which is what was asked; a refused close
             // frees the local resources all the same.
-            tracing::warn!(error = %erreur, "the server refused a clean close of a test session");
+            tracing::warn!(error = %err, "the server refused a clean close of a test session");
         }
         Ok(Outcome::ConnectionTested {
             connection: config.id,
@@ -1423,10 +1418,10 @@ impl Executor {
         driver.connect(config, &credentials, cancel).await
     }
 
-    /// Ferme les sessions d'une connexion, après avoir annulé ce qui y tourne.
+    /// Closes the sessions of a connection, after cancelling what runs on them.
     async fn disconnect(&self, connection: ConnectionId) -> Result<Outcome> {
-        // L'annulation d'abord : fermer sans annuler laisse les requêtes tourner
-        // côté serveur, connexion prise et verrou posé.
+        // Cancellation first: closing without cancelling leaves the queries
+        // running server-side, connection taken and lock held.
         self.running
             .cancel_connection(&self.sessions, connection)
             .await;
@@ -1436,10 +1431,10 @@ impl Executor {
         }
         let mut closed = 0;
         for slot in self.sessions.drain_connection(connection) {
-            if let Err(erreur) = slot.close().await {
-                // Les ressources locales sont libérées dans tous les cas ; une
-                // fermeture refusée par le serveur ne se rattrape pas.
-                tracing::warn!(error = %erreur, "the server refused a clean session close");
+            if let Err(err) = slot.close().await {
+                // Local resources are released in every case; a closing refused
+                // by the server cannot be made up for.
+                tracing::warn!(error = %err, "the server refused a clean session close");
             }
             closed += 1;
         }
@@ -1622,7 +1617,7 @@ impl Executor {
         })
     }
 
-    /// Exécute une instruction et draine son curseur dans un tampon.
+    /// Executes a statement and drains its cursor into a buffer.
     async fn execute_statement(
         &self,
         id: CommandId,
@@ -1632,10 +1627,10 @@ impl Executor {
         cancel: &CancelToken,
         preview_limit: Option<usize>,
     ) -> Result<Outcome> {
-        // `ExecLimits` par défaut interdit l'écriture : une demande mutante qui
-        // n'a pas explicitement levé cette borne est incohérente, et
-        // l'incohérence se tranche du côté prudent. C'est la dernière barrière
-        // avant le driver.
+        // Default `ExecLimits` forbids writing: a mutating request that did not
+        // explicitly lift that bound is inconsistent, and inconsistency is
+        // settled on the cautious side. It is the last barrier before the
+        // driver.
         if request.is_mutating() && request.limits.read_only {
             return Err(OxynError::PolicyDenied {
                 reason: "this execution is bounded to read-only: \
@@ -1655,11 +1650,11 @@ impl Executor {
             ));
         }
 
-        // Capturé avant que `request` ne soit déplacé dans `slot.execute` :
-        // c'est le seul signal qu'on garde du texte exécuté (I-10).
+        // Captured before `request` is moved into `slot.execute`: it is the
+        // only signal kept from the executed text (I-10).
         let intent = request.intent;
-        // Un jeton **fils** : annuler cette exécution n'annule pas l'onglet qui
-        // l'a lancée, alors qu'annuler l'onglet l'annule bien.
+        // A **child** token: cancelling this execution does not cancel the tab
+        // that started it, whereas cancelling the tab does cancel it.
         let ct = cancel.child();
 
         let operation = async {
@@ -1737,12 +1732,12 @@ impl Executor {
         );
         guard.track(statement, Arc::clone(&buffer));
 
-        // Le schéma est connu avant la première ligne : la grille dessine ses
-        // colonnes pendant que les données arrivent.
+        // The schema is known before the first row: the grid draws its columns
+        // while the data arrives.
         self.events
             .publish(id, Some(connection), Event::SchemaReady { result });
 
-        let issue = self
+        let outcome = self
             .drain(
                 Coordinates {
                     command: id,
@@ -1757,17 +1752,17 @@ impl Executor {
             )
             .await;
 
-        // Un abandon — expiration ou annulation — doit atteindre le serveur.
-        let interrompue = matches!(issue, Ok(SinkOutcome::Cancelled))
-            || matches!(issue, Err(OxynError::Timeout { .. }));
-        if interrompue {
+        // An abandonment — timeout or cancellation — must reach the server.
+        let interrupted = matches!(outcome, Ok(SinkOutcome::Cancelled))
+            || matches!(outcome, Err(OxynError::Timeout { .. }));
+        if interrupted {
             self.running.cancel(&self.sessions, statement).await;
         }
         Ok(Drained {
             result,
             statement,
             buffer,
-            issue,
+            outcome,
         })
     }
 
@@ -1837,16 +1832,16 @@ impl Executor {
             result,
             statement,
             buffer,
-            issue,
+            outcome,
         } = run?;
         self.prune_results();
 
-        match issue {
+        match outcome {
             Ok(sink) => {
                 let stats = buffer.stats();
                 if sink != SinkOutcome::Cancelled && intent == oxyn_core::StatementIntent::Ddl {
-                    // Après un DDL confirmé par le serveur, pas avant : un
-                    // sink annulé peut n'avoir rien changé.
+                    // After a DDL confirmed by the server, not before: a
+                    // cancelled sink may have changed nothing.
                     self.invalidate_catalog(connection);
                     self.events
                         .publish(id, Some(connection), Event::CatalogUpdated);
@@ -1869,21 +1864,21 @@ impl Executor {
                     sink,
                 })
             }
-            Err(erreur) => {
+            Err(error) => {
                 self.events
-                    .publish(id, Some(connection), Event::failed(&erreur));
-                Err(erreur)
+                    .publish(id, Some(connection), Event::failed(&error));
+                Err(error)
             }
         }
     }
 
-    /// Draine un curseur, sous contre-pression et jusqu'à l'échéance.
+    /// Drains a cursor, under back-pressure and until the deadline.
     ///
-    /// L'échéance est appliquée **ici** et non dans `oxyn-data` : c'est
-    /// l'ordonnanceur qui possède le journal et le droit d'émettre l'annulation
-    /// côté serveur. Un délai posé plus bas n'abandonnerait que le futur. C'est
-    /// celle de toute l'exécution, armée avant `execute` : le drainage n'a que
-    /// ce qu'il en reste.
+    /// The deadline is applied **here** and not in `oxyn-data`: it is the
+    /// executor that owns the log and the right to issue the server-side
+    /// cancellation. A timeout set lower would only abandon the future. It is
+    /// the deadline of the whole execution, armed before `execute`: draining
+    /// only has what is left of it.
     async fn drain(
         &self,
         coords: Coordinates,
@@ -1902,8 +1897,8 @@ impl Executor {
         let mut source = cursor;
         let events = &self.events;
 
-        // Émettre sur un canal, oui ; dessiner, non : ce crochet s'exécute
-        // *dans* la boucle de drainage et retarde le lot suivant.
+        // Emitting on a channel, yes; drawing, no: this hook runs *inside* the
+        // draining loop and delays the next batch.
         let on_batch = |progress: BatchProgress| {
             events.publish(
                 coords.command,
@@ -1921,12 +1916,12 @@ impl Executor {
 
         match tokio::time::timeout_at(deadline.at, sink.drain_with(&mut source, ct, on_batch)).await
         {
-            Ok(issue) => issue,
+            Ok(outcome) => outcome,
             Err(_) => {
-                // Le futur de drainage vient d'être abandonné, peut-être après
-                // avoir consommé des octets du flux : le curseur est brûlé. Le
-                // tampon est clos pour que l'interface cesse d'attendre — ce qui
-                // est déjà reçu reste lisible, et marqué tronqué.
+                // The draining future was just abandoned, perhaps after
+                // consuming bytes from the stream: the cursor is burnt. The
+                // buffer is closed so that the interface stops waiting — what
+                // was already received stays readable, and marked truncated.
                 buffer.mark_truncated();
                 buffer.mark_complete(BatchSource::stats(&source));
                 Err(OxynError::Timeout {
@@ -2047,9 +2042,9 @@ impl Executor {
                     connection: doc.connection,
                     save_named: doc.is_saved,
                     is_open: doc.is_open,
-                    // Ce chemin réécrit le texte d'un document existant sans
-                    // rien savoir de son origine. `None` ne l'efface pas : la
-                    // provenance déjà posée reste (ADR-0023).
+                    // This path rewrites the text of an existing document
+                    // without knowing anything of its origin. `None` does not
+                    // erase it: the provenance already set stays (ADR-0023).
                     provenance: None,
                 };
                 let saved = store
@@ -2067,15 +2062,15 @@ impl Executor {
         Ok(Outcome::DocumentWritten { document: doc.id })
     }
 
-    /// Enregistre ou met à jour une connexion.
+    /// Saves or updates a connection.
     async fn save_connection(
         &self,
         config: &ConnectionConfig,
         cancel: &CancelToken,
     ) -> Result<Outcome> {
-        // `Connections::save` **refuse** un paramètre portant un nom de secret :
-        // c'est le dernier point où un mot de passe peut être arrêté avant le
-        // disque (I-03). Rien n'est dupliqué ici.
+        // `Connections::save` **refuses** a parameter carrying a secret name: it
+        // is the last point where a password can be stopped before the disk
+        // (I-03). Nothing is duplicated here.
         let store = Arc::clone(&self.store);
         let connections = Arc::clone(&self.connections);
         let writes = Arc::clone(&self.connection_writes);
@@ -2095,7 +2090,7 @@ impl Executor {
         Ok(Outcome::ConnectionSaved { connection })
     }
 
-    /// Supprime une connexion, après avoir fermé ce qui l'utilisait.
+    /// Deletes a connection, after closing what was using it.
     async fn delete_connection(
         &self,
         connection: ConnectionId,
@@ -2105,8 +2100,8 @@ impl Executor {
             .cancel_connection(&self.sessions, connection)
             .await;
         for slot in self.sessions.drain_connection(connection) {
-            if let Err(erreur) = slot.close().await {
-                tracing::warn!(error = %erreur, "the server refused a clean session close");
+            if let Err(err) = slot.close().await {
+                tracing::warn!(error = %err, "the server refused a clean session close");
             }
         }
         let store = Arc::clone(&self.store);
@@ -2126,29 +2121,27 @@ impl Executor {
         })
     }
 
-    // ── Journal et historique ────────────────────────────────────────────────
+    // ── Log and history ──────────────────────────────────────────────────────
     //
-    // Chaque écriture est construite en mémoire ici — [`decision_record`],
-    // [`Self::history_record`], [`finished_history_record`] — puis soumise au
-    // pool bloquant par [`Self::write_audit`], appelée depuis [`Self::run`] et
-    // [`Self::dispatch_as`] (ADR-0035). Aucune de ces méthodes ne touche le
-    // `Store` : elles ne font que fabriquer la valeur qu'une opération possédée
-    // écrira plus loin.
+    // Each write is built in memory here — [`decision_record`],
+    // [`Self::history_record`], [`finished_history_record`] — then submitted to
+    // the blocking pool by [`Self::write_audit`], called from [`Self::run`] and
+    // [`Self::dispatch_as`] (ADR-0035). None of these methods touches the
+    // `Store`: they only build the value an owned operation will write later.
     //
-    // L'historique répond à « qu'est-ce que j'ai lancé hier ? », là où le
-    // journal d'audit répond à « qu'est-ce qui a été autorisé, et à qui ? ».
-    // Seules les exécutions y figurent : `HistoryRecord::from_command` rend
-    // `None` pour tout le reste, et une `Connect` au milieu des requêtes rendrait
-    // la liste illisible. Le journal, lui, les consigne toutes. Un historique
-    // qu'on ne peut pas écrire est une gêne, pas une promesse rompue : l'échec
-    // est crié, jamais propagé.
+    // The history answers "what did I run yesterday?", where the audit log
+    // answers "what was authorized, and to whom?". Only executions appear in
+    // it: `HistoryRecord::from_command` returns `None` for everything else, and
+    // a `Connect` among the queries would make the list unreadable. The log
+    // records them all. A history that cannot be written is a nuisance, not a
+    // broken promise: the failure is shouted, never propagated.
 
-    /// L'entrée d'historique d'une commande d'exécution, connexion nommée.
+    /// The history entry of an execution command, connection named.
     ///
-    /// Le nom est recopié pour que la ligne reste lisible après la suppression
-    /// de la connexion. Ce qui n'y entre **pas** : les valeurs liées, que
-    /// `ExecRequest` garde séparées du texte, et qui contiennent précisément ce
-    /// qu'un historique relu six mois plus tard ne doit pas exposer (I-03).
+    /// The name is copied so that the row stays readable after the connection
+    /// is deleted. What does **not** go in: the bound values, which
+    /// `ExecRequest` keeps apart from the text, and which contain precisely what
+    /// a history read again six months later must not expose (I-03).
     fn history_record(&self, actor: &Actor, command: &Command) -> Option<HistoryRecord> {
         let mut record = HistoryRecord::from_command(actor, command)?;
         record.connection_name = record
@@ -2157,33 +2150,34 @@ impl Executor {
         Some(record)
     }
 
-    // ── Ce que l'ordonnanceur sait des connexions ───────────────────────────
+    // ── What the executor knows about connections ────────────────────────────
 
-    /// Fait connaître une connexion à l'ordonnanceur.
+    /// Makes a connection known to the executor.
     ///
-    /// Sert à deux choses : retrouver l'environnement à soumettre au
-    /// `PolicyGate`, et ouvrir la session sans relire l'état local.
+    /// Serves two purposes: finding the environment to submit to the
+    /// `PolicyGate`, and opening the session without reading the local state
+    /// again.
     ///
-    /// **Ne remplace pas l'enregistrement auprès de la politique.**
-    /// [`PolicyGate`] n'expose aucune méthode d'enregistrement — c'est une
-    /// frontière, pas un registre —, donc `oxyn-desktop` appelle aussi
+    /// **Does not replace registration with the policy.**
+    /// [`PolicyGate`] exposes no registration method — it is a boundary, not a
+    /// registry —, so `oxyn-desktop` also calls
     /// [`DefaultPolicy::register`](oxyn_core::DefaultPolicy::register).
     pub fn register_connection(&self, config: &ConnectionConfig) {
         let _ordered = self.connection_writes.lock();
         self.connections.write().insert(config.id, config.clone());
     }
 
-    /// Oublie une connexion.
+    /// Forgets a connection.
     pub fn forget_connection(&self, connection: ConnectionId) {
         let _ordered = self.connection_writes.lock();
         self.connections.write().remove(&connection);
     }
 
-    /// Charge dans l'ordonnanceur les connexions d'un workspace, et rend leur
-    /// nombre.
+    /// Loads a workspace's connections into the executor, and returns their
+    /// number.
     ///
-    /// # Erreurs
-    /// Celles de l'état local.
+    /// # Errors
+    /// Those of the local state.
     pub fn load_connections(&self) -> Result<usize> {
         let _ordered = self.connection_writes.lock();
         let configs = self.store.connections().list(self.workspace)?;
@@ -2194,7 +2188,7 @@ impl Executor {
         Ok(configs.len())
     }
 
-    /// La configuration d'une connexion, du cache ou de l'état local.
+    /// A connection's configuration, from the cache or the local state.
     async fn connection_config(
         &self,
         connection: ConnectionId,
@@ -2229,70 +2223,70 @@ impl Executor {
         }
     }
 
-    /// L'environnement à soumettre au `PolicyGate`.
+    /// The environment to submit to the `PolicyGate`.
     ///
-    /// Une connexion que l'ordonnanceur ne connaît pas vaut
-    /// [`Production`](Environment::Production) : c'est le même « fermé par
-    /// défaut » que le gate lui-même, et ignorer un marquage inconnu
-    /// reviendrait à traiter la production comme du local.
+    /// A connection the executor does not know counts as
+    /// [`Production`](Environment::Production): it is the same "closed by
+    /// default" as the gate itself, and ignoring an unknown marking would amount
+    /// to treating production as local.
     ///
-    /// Public pour l'interface, qui doit savoir si l'accord qu'on lui demande
-    /// porte sur la production (ADR-0037) en lisant le calcul même qu'on
-    /// soumet au gate.
+    /// Public for the interface, which must know whether the approval it is
+    /// asked for concerns production (ADR-0037) by reading the very computation
+    /// submitted to the gate.
     #[must_use]
     pub fn environment_of(&self, command: &Command) -> Environment {
         match command {
-            // La connexion n'est pas encore enregistrée : c'est sa propre
-            // déclaration qui fait foi, et le gate la recoupera.
+            // The connection is not registered yet: its own declaration is
+            // authoritative, and the gate will cross-check it.
             Command::CreateConnection { config }
             | Command::UpdateConnection { config }
             | Command::TestConnection { config } => config.environment,
-            autre => autre
+            other => other
                 .target_connection()
                 .and_then(|id| self.connections.read().get(&id).map(|c| c.environment))
                 .unwrap_or_default(),
         }
     }
 
-    // ── Accès ───────────────────────────────────────────────────────────────
+    // ── Access ──────────────────────────────────────────────────────────────
 
-    /// Le canal d'événements.
+    /// The event channel.
     #[must_use]
     pub const fn events(&self) -> &EventBus {
         &self.events
     }
 
-    /// Ouvre un abonnement aux événements d'exécution.
+    /// Opens a subscription to execution events.
     #[must_use]
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::ExecEvent> {
         self.events.subscribe()
     }
 
-    /// Les commandes en attente d'accord.
+    /// The commands awaiting approval.
     #[must_use]
     pub const fn approvals(&self) -> &ApprovalRegistry {
         &self.approvals
     }
 
-    /// Les exécutions en cours.
+    /// The executions in progress.
     #[must_use]
     pub const fn running(&self) -> &CancelRegistry {
         &self.running
     }
 
-    /// Les sessions ouvertes.
+    /// The open sessions.
     #[must_use]
     pub const fn sessions(&self) -> &SessionRegistry {
         &self.sessions
     }
 
-    /// L'état local.
+    /// The local state.
     #[must_use]
     pub fn store(&self) -> &Arc<Store> {
         &self.store
     }
 
-    /// Le workspace courant.
+    /// The current workspace.
     #[must_use]
     pub const fn workspace(&self) -> WorkspaceId {
         self.workspace
@@ -2340,7 +2334,7 @@ impl Executor {
         drop(evicted);
     }
 
-    /// Le tampon d'un résultat, tant qu'il est retenu.
+    /// A result's buffer, as long as it is retained.
     #[must_use]
     pub fn result(&self, result: ResultId) -> Option<Arc<ResultBuffer>> {
         self.results
@@ -2349,10 +2343,10 @@ impl Executor {
             .map(|entry| Arc::clone(&entry.buffer))
     }
 
-    /// Oublie un résultat : l'onglet a été fermé.
+    /// Forgets a result: the tab was closed.
     ///
-    /// Le tampon n'est libéré que quand plus personne ne le tient — la grille
-    /// peut être en train de le lire.
+    /// The buffer is only freed when nobody holds it any more — the grid may be
+    /// reading it.
     pub fn forget_result(&self, result: ResultId) -> Option<Arc<ResultBuffer>> {
         self.results
             .write()
@@ -2360,14 +2354,14 @@ impl Executor {
             .map(|entry| entry.buffer)
     }
 
-    /// Annule tout et ferme toutes les sessions.
+    /// Cancels everything and closes every session.
     ///
-    /// À appeler à la fermeture de l'application : sans cela, les requêtes en
-    /// cours continuent côté serveur.
+    /// To be called when the application closes: without it, queries in
+    /// progress continue server-side.
     ///
-    /// Ne rend pas d'erreur — il n'y a plus rien à faire d'un échec de
-    /// fermeture à cet instant : il est journalisé au niveau `warn`. Rend le
-    /// nombre de sessions fermées.
+    /// Returns no error — there is nothing more to do about a closing failure
+    /// at that point: it is logged at `warn` level. Returns the number of
+    /// closed sessions.
     pub async fn shutdown(&self) -> usize {
         // Before closing sessions: a caller usually bounds this call, and a
         // server that never answers the close would cut it before the end —
@@ -2378,11 +2372,11 @@ impl Executor {
         }
         let sessions = self.sessions.drain_all();
         for slot in &sessions {
-            for entree in self.running.for_session(slot.id()) {
-                entree.token().cancel();
+            for entry in self.running.for_session(slot.id()) {
+                entry.token().cancel();
             }
-            if let Err(erreur) = slot.close().await {
-                tracing::warn!(error = %erreur, "the server refused a clean session close");
+            if let Err(err) = slot.close().await {
+                tracing::warn!(error = %err, "the server refused a clean session close");
             }
         }
         // Again, last: closing may have abandoned more, and nothing after this
@@ -2443,8 +2437,8 @@ fn append_outcomes(store: &Store, records: std::collections::VecDeque<JournalRec
     for record in records {
         match store.journal().append(&record) {
             Ok(_) => written += 1,
-            Err(erreur) => tracing::error!(
-                error = %erreur,
+            Err(err) => tracing::error!(
+                error = %err,
                 command = ?record.command_id,
                 "failed to journal the outcome of an abandoned command"
             ),
@@ -2478,15 +2472,15 @@ fn decision_record(
 ///
 /// Pure, for the same reason as [`decision_record`].
 fn finished_history_record(
-    en_cours: Option<(i64, HistoryRecord)>,
-    issue: &Result<Outcome>,
+    in_progress: Option<(i64, HistoryRecord)>,
+    result_outcome: &Result<Outcome>,
     duration: Duration,
 ) -> Option<(i64, HistoryRecord)> {
-    let (id, record) = en_cours?;
-    let mut record = match issue {
-        // Un drainage interrompu rend `Ok` : la commande n'a pas échoué,
-        // mais elle n'a pas rendu son résultat entier. La classer « réussie »
-        // ferait lire un résultat tronqué comme un résultat complet.
+    let (id, record) = in_progress?;
+    let mut record = match result_outcome {
+        // An interrupted draining returns `Ok`: the command did not fail, but
+        // it did not return its whole result. Classifying it "succeeded" would
+        // make a truncated result read as a complete one.
         Ok(Outcome::Executed {
             stats,
             sink: SinkOutcome::Cancelled,
@@ -2495,15 +2489,15 @@ fn finished_history_record(
             .succeeded(duration, Some(stats.rows))
             .failed(&OxynError::Cancelled),
         Ok(outcome) => record.succeeded(duration, outcome.rows()),
-        Err(erreur) => {
-            // Un échec a une durée, lui aussi : « expiré après 30 s » et
-            // « rejeté en 2 ms » ne décrivent pas le même incident.
-            let mut echouee = record.failed(erreur);
-            echouee.duration = Some(duration);
-            echouee
+        Err(error) => {
+            // A failure has a duration too: "timed out after 30 s" and
+            // "rejected in 2 ms" do not describe the same incident.
+            let mut failure = record.failed(error);
+            failure.duration = Some(duration);
+            failure
         }
     };
-    if let Ok(Outcome::Executed { result, .. }) = issue {
+    if let Ok(Outcome::Executed { result, .. }) = result_outcome {
         record.result = Some(*result);
     }
     Some((id, record))
@@ -2535,8 +2529,8 @@ pub(crate) fn outcome_record(
 }
 
 impl fmt::Debug for Executor {
-    /// Rend des compteurs, pas des contenus : ni configuration de connexion, ni
-    /// texte de requête, ni identifiants ne doivent atterrir dans une trace
+    /// Returns counters, not contents: neither a connection configuration,
+    /// nor a query text, nor credentials may land in a trace
     /// (I-03).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Executor")
@@ -2567,19 +2561,19 @@ impl Deadline {
     }
 }
 
-/// Ce qu'un événement de drainage doit nommer pour que l'interface sache
-/// quel onglet mettre à jour.
+/// What a draining event must name for the interface to know which tab to
+/// update.
 ///
-/// Transportées ensemble parce qu'elles ne servent qu'ensemble — et parce que
-/// les passer une par une ferait de la boucle de drainage une fonction à huit
-/// paramètres, ce qui est le signe qu'on a manqué un type.
+/// Carried together because they are only used together — and because
+/// passing them one by one would make the draining loop an eight-parameter
+/// function, which is the sign that a type was missed.
 #[derive(Debug, Clone, Copy)]
 struct Coordinates {
-    /// La commande à l'origine de l'exécution.
+    /// The command at the origin of the execution.
     command: CommandId,
-    /// La connexion visée.
+    /// The target connection.
     connection: ConnectionId,
-    /// Le résultat alimenté.
+    /// The result being fed.
     result: ResultId,
 }
 
@@ -2589,15 +2583,15 @@ struct Drained {
     statement: StatementHandle,
     buffer: Arc<ResultBuffer>,
     /// How the drain ended: `Err` for a failure, `Ok(Cancelled)` for a Stop.
-    issue: Result<SinkOutcome>,
+    outcome: Result<SinkOutcome>,
 }
 
-/// Reclassifie une commande d'exécution à partir de son seul texte.
+/// Reclassifies an execution command from its text alone.
 ///
-/// L'intention et le risque portés par la commande viennent de l'appelant, et un
-/// agent est un appelant : ils sont **remplacés**, jamais recoupés. Les autres
-/// commandes traversent inchangées — leur intention est une propriété de leur
-/// variante, pas une déclaration.
+/// The intent and risk carried by the command come from the caller, and an
+/// agent is a caller: they are **replaced**, never cross-checked. The other
+/// commands go through unchanged — their intent is a property of their
+/// variant, not a declaration.
 fn reclassified(command: Command) -> Command {
     match command {
         Command::Execute {
@@ -2612,7 +2606,7 @@ fn reclassified(command: Command) -> Command {
                 request: Box::new(classification.qualify(*request)),
             }
         }
-        autre => autre,
+        other => other,
     }
 }
 
@@ -2640,11 +2634,11 @@ fn bounded_to(command: Command, env: Environment) -> Command {
                 request,
             }
         }
-        autre => autre,
+        other => other,
     }
 }
 
-/// Le câblage d'un [`Executor`].
+/// The wiring of an [`Executor`].
 pub struct ExecutorBuilder {
     drivers: Arc<DriverRegistry>,
     store: Arc<Store>,
@@ -2658,7 +2652,7 @@ pub struct ExecutorBuilder {
 }
 
 impl ExecutorBuilder {
-    /// Câblage minimal : un état local et une politique.
+    /// Minimal wiring: a local state and a policy.
     #[must_use]
     pub fn new(store: Arc<Store>, policy: Arc<dyn PolicyGate>) -> Self {
         Self {
@@ -2675,56 +2669,56 @@ impl ExecutorBuilder {
         }
     }
 
-    /// Les drivers compilés dans ce binaire.
+    /// The drivers compiled into this binary.
     #[must_use]
     pub fn with_drivers(mut self, drivers: Arc<DriverRegistry>) -> Self {
         self.drivers = drivers;
         self
     }
 
-    /// Ce qui résout les identifiants — `oxyn-secrets`, en production.
+    /// What resolves credentials — `oxyn-secrets`, in production.
     #[must_use]
     pub fn with_credentials(mut self, credentials: Arc<dyn CredentialResolver>) -> Self {
         self.credentials = credentials;
         self
     }
 
-    /// Le workspace dans lequel les connexions et documents sont écrits.
+    /// The workspace in which connections and documents are written.
     #[must_use]
     pub fn with_workspace(mut self, workspace: WorkspaceId) -> Self {
         self.workspace = workspace;
         self
     }
 
-    /// Le lancement qui écrit la disposition des fenêtres (ADR-0043).
+    /// The launch that writes the window layout (ADR-0043).
     #[must_use]
     pub fn with_app_session(mut self, session: oxyn_core::AppSessionId) -> Self {
         self.app_session = session;
         self
     }
 
-    /// La durée de validité d'une demande d'approbation.
+    /// The validity duration of an approval request.
     #[must_use]
     pub fn with_approval_ttl(mut self, ttl: Duration) -> Self {
         self.approvals = ApprovalRegistry::with_ttl(ttl);
         self
     }
 
-    /// Le budget mémoire d'un tampon de résultats, en octets.
+    /// The memory budget of a result buffer, in bytes.
     #[must_use]
     pub fn with_memory_budget(mut self, bytes: usize) -> Self {
         self.memory_budget = bytes;
         self
     }
 
-    /// La profondeur du canal d'événements.
+    /// The depth of the event channel.
     #[must_use]
     pub fn with_event_capacity(mut self, capacity: usize) -> Self {
         self.events = EventBus::with_capacity(capacity);
         self
     }
 
-    /// Construit l'ordonnanceur.
+    /// Builds the executor.
     #[must_use]
     pub fn build(self) -> Executor {
         Executor {
@@ -2770,45 +2764,45 @@ mod tests {
     };
     use oxyn_store::{ActorKind, HistoryStatus, PolicyOutcome};
 
-    /// Un banc complet : état local en mémoire, politique par défaut, aucune
-    /// session ouverte. Aucun driver n'est enregistré — les tests qui suivent
-    /// portent sur ce qui se passe **avant** qu'un driver ne soit atteint, et
-    /// c'est précisément ce qui compte.
-    struct Banc {
-        executeur: Executor,
-        politique: Arc<DefaultPolicy>,
+    /// A complete bench: in-memory local state, default policy, no open
+    /// session. No driver is registered — the tests that follow are about what
+    /// happens **before** a driver is reached, and that is precisely what
+    /// matters.
+    struct Harness {
+        executor: Executor,
+        policy: Arc<DefaultPolicy>,
         store: Arc<Store>,
     }
 
-    impl Banc {
-        fn new(connexion: &ConnectionConfig) -> Self {
-            let store = Arc::new(Store::open_in_memory().expect("état local en mémoire"));
-            let atelier = store
+    impl Harness {
+        fn new(connection: &ConnectionConfig) -> Self {
+            let store = Arc::new(Store::open_in_memory().expect("in-memory local state"));
+            let setup = store
                 .workspaces()
                 .create("tests")
-                .expect("création du workspace");
+                .expect("workspace creation");
             store
                 .connections()
-                .save(atelier.id, connexion)
-                .expect("enregistrement de la connexion");
+                .save(setup.id, connection)
+                .expect("saving the connection");
 
-            let politique = Arc::new(DefaultPolicy::new());
-            politique.register(connexion);
+            let policy = Arc::new(DefaultPolicy::new());
+            policy.register(connection);
 
-            // `politique.clone()` et non `Arc::clone(&politique)` : la forme
-            // fonction résout `T` depuis le type attendu — donc `dyn PolicyGate` —
-            // et réclame un `&Arc<dyn PolicyGate>` avant toute coercition. En
-            // syntaxe de méthode, `T` vient du receveur, et l'`Arc<DefaultPolicy>`
-            // obtenu se coerce à l'affectation.
-            let gate: Arc<dyn PolicyGate> = politique.clone();
-            let executeur = Executor::builder(Arc::clone(&store), gate)
-                .with_workspace(atelier.id)
+            // `policy.clone()` and not `Arc::clone(&policy)`: the function
+            // form resolves `T` from the expected type — hence `dyn PolicyGate` —
+            // and demands a `&Arc<dyn PolicyGate>` before any coercion. In method
+            // syntax, `T` comes from the receiver, and the obtained
+            // `Arc<DefaultPolicy>` coerces at assignment.
+            let gate: Arc<dyn PolicyGate> = policy.clone();
+            let executor = Executor::builder(Arc::clone(&store), gate)
+                .with_workspace(setup.id)
                 .build();
-            executeur.register_connection(connexion);
+            executor.register_connection(connection);
 
             Self {
-                executeur,
-                politique,
+                executor,
+                policy,
                 store,
             }
         }
@@ -2818,12 +2812,12 @@ mod tests {
         Actor::agent(AgentId::new(), AgentSessionId::new())
     }
 
-    fn execution(connexion: ConnectionId, texte: &str, intent: StatementIntent) -> Command {
+    fn execution(conn: ConnectionId, text: &str, intent: StatementIntent) -> Command {
         Command::Execute {
-            connection: connexion,
+            connection: conn,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), texte)
+                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), text)
                     .with_intent(intent)
                     .with_limits(
                         ExecLimits::default()
@@ -2834,67 +2828,64 @@ mod tests {
         }
     }
 
-    // ── Les deux tests qui protègent la promesse du produit ─────────────────
+    // ── The two tests that protect the product's promise ────────────────────
 
-    /// **Un agent ne supprime rien en production.**
+    /// **An agent deletes nothing in production.**
     ///
-    /// L'agent déclare une lecture ; le texte dit autre chose. La
-    /// reclassification a lieu *avant* le gate, donc le gate voit un `DELETE`
-    /// non borné sur une connexion de production, et refuse — un refus, pas une
-    /// confirmation renforcée (I-02, ADR-0004).
+    /// The agent declares a read; the text says otherwise. Reclassification
+    /// takes place *before* the gate, so the gate sees an unbounded `DELETE` on
+    /// a production connection, and refuses — a refusal, not a stronger
+    /// confirmation (I-02, ADR-0004).
     ///
-    /// La preuve que la reclassification a bien eu lieu n'est pas dans le
-    /// refus : elle est dans le **journal**, qui a consigné l'intention
-    /// `write`, pas celle que l'agent avait déclarée.
+    /// The proof that reclassification did take place is not in the refusal:
+    /// it is in the **log**, which recorded the `write` intent, not the one the
+    /// agent had declared.
     #[test]
-    fn un_agent_ne_peut_pas_supprimer_sur_une_connexion_de_production() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+    fn an_agent_cannot_delete_on_a_production_connection() {
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let banc = Banc::new(&connexion);
-        let mut evenements = banc.executeur.subscribe();
+        let bench = Harness::new(&connection);
+        let mut events = bench.executor.subscribe();
 
-        // L'agent s'auto-déclare en lecture seule.
-        let commande = execution(
-            connexion.id,
+        // The agent declares itself read-only.
+        let cmd = execution(
+            connection.id,
             "DELETE FROM clients WHERE 1=1",
             StatementIntent::Read,
         );
 
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
-        )
-        .expect("un refus n'est pas une panne");
+        let outcome = block_on(bench.executor.dispatch(agent(), cmd, &CancelToken::new()))
+            .expect("a denial is not a failure");
 
-        let Outcome::Denied { command, reason } = issue else {
-            panic!("un agent doit être refusé sur une connexion de production : {issue:?}");
+        let Outcome::Denied { command, reason } = outcome else {
+            panic!("an agent must be refused on a production connection: {outcome:?}");
         };
         assert!(
             reason.contains("production"),
-            "le motif doit nommer la production : {reason}"
+            "the reason must name production: {reason}"
         );
 
-        // Rien n'attend d'accord : c'est un refus, pas une confirmation.
+        // Nothing awaits approval: it is a refusal, not a confirmation.
         assert!(
-            banc.executeur.approvals().is_empty(),
-            "un refus ne met rien en attente d'approbation"
+            bench.executor.approvals().is_empty(),
+            "a denial puts nothing on hold for approval"
         );
 
-        // Le journal a vu l'intention **réelle**, pas celle qui a été déclarée.
-        let trace = banc
+        // The log saw the **real** intent, not the declared one.
+        let trace = bench
             .store
             .journal()
             .recent(1)
-            .expect("relecture du journal")
+            .expect("reading the log back")
             .pop()
-            .expect("une entrée");
+            .expect("one entry");
         assert_eq!(trace.record.command_id, Some(command));
         assert_eq!(trace.record.actor_kind, ActorKind::Agent);
         assert_eq!(trace.record.decision, PolicyOutcome::Denied);
         assert_eq!(
             trace.record.intent,
             StatementIntent::Write,
-            "l'intention déclarée par l'agent doit avoir été écrasée"
+            "the intent declared by the agent must have been overwritten"
         );
         assert_eq!(trace.record.risk, MutationRisk::UnboundedDelete);
         assert_eq!(
@@ -2902,51 +2893,59 @@ mod tests {
             Some("DELETE FROM clients WHERE 1=1")
         );
 
-        // Et l'interface l'apprend par le canal, pas en scrutant un état.
-        let recu = evenements.try_recv().expect("un événement a été émis");
-        assert_eq!(recu.command, command);
-        assert!(matches!(recu.event, Event::Failed { .. }), "{recu:?}");
+        // And the interface learns it through the channel, not by polling a state.
+        let received = events.try_recv().expect("an event was emitted");
+        assert_eq!(received.command, command);
+        assert!(
+            matches!(received.event, Event::Failed { .. }),
+            "{received:?}"
+        );
     }
 
-    /// **Une commande refusée laisse une trace.**
+    /// **A denied command leaves a trace.**
     ///
-    /// Un journal qui ne consigne que ce qui a marché ne dit rien de ce qui a
-    /// été tenté — et c'est exactement ce qu'un audit cherche.
+    /// A log that records only what worked says nothing about what was
+    /// attempted — and that is exactly what an audit looks for.
     #[test]
-    fn le_journal_contient_une_entree_meme_quand_la_commande_est_refusee() {
-        // Connexion en lecture seule : le refus vaut pour un humain aussi.
-        let connexion = ConnectionConfig::new("réplica", DriverId::postgres())
+    fn the_log_holds_an_entry_even_when_the_command_is_denied() {
+        // Read-only connection: the refusal applies to a human too.
+        let connection = ConnectionConfig::new("replica", DriverId::postgres())
             .with_environment(Environment::Local)
             .read_only();
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
         assert_eq!(
-            banc.store.journal().count().expect("comptage"),
+            bench.store.journal().count().expect("count"),
             0,
-            "le journal part vide"
+            "the log starts empty"
         );
 
-        let commande = execution(connexion.id, "DROP TABLE clients", StatementIntent::Unknown);
-        let issue = block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        let command = execution(
+            connection.id,
+            "DROP TABLE clients",
+            StatementIntent::Unknown,
+        );
+        let outcome = block_on(
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect("un refus n'est pas une panne");
-        assert!(issue.is_denied(), "{issue:?}");
-        assert!(!issue.took_effect());
+        .expect("a denial is not a failure");
+        assert!(outcome.is_denied(), "{outcome:?}");
+        assert!(!outcome.took_effect());
 
         assert_eq!(
-            banc.store.journal().count().expect("comptage"),
+            bench.store.journal().count().expect("count"),
             1,
-            "une commande refusée est journalisée comme les autres"
+            "a denied command is logged like the others"
         );
-        let trace = banc
+        let trace = bench
             .store
             .journal()
             .recent(1)
-            .expect("relecture")
+            .expect("read back")
             .pop()
-            .expect("une entrée");
+            .expect("one entry");
         assert_eq!(trace.record.decision, PolicyOutcome::Denied);
         assert_eq!(trace.record.actor_kind, ActorKind::Human);
         assert_eq!(trace.record.command_kind, "Execute");
@@ -2959,248 +2958,239 @@ mod tests {
                 .record
                 .decision_reason
                 .as_deref()
-                .is_some_and(|motif| motif.contains("read-only")),
+                .is_some_and(|pattern| pattern.contains("read-only")),
             "{:?}",
             trace.record.decision_reason
         );
 
-        // Et la trace survit à ce que l'utilisateur peut effacer.
-        banc.store.history().clear().expect("purge de l'historique");
-        assert_eq!(banc.store.journal().count().expect("comptage"), 1);
+        // And the trace survives what the user can erase.
+        bench.store.history().clear().expect("purging the history");
+        assert_eq!(bench.store.journal().count().expect("count"), 1);
     }
 
-    // ── Le reste de la séquence ─────────────────────────────────────────────
+    // ── The rest of the sequence ────────────────────────────────────────────
 
     #[test]
-    fn une_ecriture_d_agent_hors_production_attend_un_accord_et_n_execute_rien() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::postgres())
+    fn an_agent_write_outside_production_waits_for_approval_and_executes_nothing() {
+        let conn = ConnectionConfig::new("atelier", DriverId::postgres())
             .with_environment(Environment::Development);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        let commande = execution(
-            connexion.id,
-            "UPDATE clients SET actif = true WHERE id = 1",
+        let cmd = execution(
+            conn.id,
+            "UPDATE clients SET active = true WHERE id = 1",
             StatementIntent::Read,
         );
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
-        )
-        .expect("une demande d'accord n'est pas une panne");
+        let outcome = block_on(bench.executor.dispatch(agent(), cmd, &CancelToken::new()))
+            .expect("an approval request is not a failure");
 
         let Outcome::NeedsApproval {
             command, preview, ..
-        } = issue
+        } = outcome
         else {
-            panic!("une écriture d'agent doit demander un accord : {issue:?}");
+            panic!("an agent write must request an approval: {outcome:?}");
         };
 
-        // La prévisualisation nomme la connexion, jamais son identifiant.
-        let preview = preview.expect("une prévisualisation");
+        // The preview names the connection, never its identifier.
+        let preview = preview.expect("a preview");
         assert_eq!(preview.connection, "atelier");
-        assert!(!preview.connection.contains(&connexion.id.to_string()));
+        assert!(!preview.connection.contains(&conn.id.to_string()));
 
-        // Rien n'a été exécuté : aucune session n'a même été cherchée.
-        assert_eq!(banc.executeur.approvals().len(), 1);
-        assert!(banc.executeur.running().is_empty());
+        // Nothing was executed: no session was even looked for.
+        assert_eq!(bench.executor.approvals().len(), 1);
+        assert!(bench.executor.running().is_empty());
 
-        // Et la trace de la demande est déjà au journal.
-        let trace = banc
+        // And the trace of the request is already in the log.
+        let trace = bench
             .store
             .journal()
             .recent(1)
-            .expect("relecture")
+            .expect("read back")
             .pop()
-            .expect("une entrée");
+            .expect("one entry");
         assert_eq!(trace.record.decision, PolicyOutcome::ApprovalRequired);
         assert_eq!(trace.record.command_id, Some(command));
     }
 
     #[test]
-    fn un_accord_inconnu_ou_perime_n_execute_rien() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn an_unknown_or_stale_approval_executes_nothing() {
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
-        let issue = block_on(banc.executeur.approve(
+        let outcome = block_on(bench.executor.approve(
             "nicolas",
             CommandId::new(),
             &CancelToken::new(),
         ));
-        let erreur = issue.expect_err("un accord sans objet est refusé");
-        assert!(
-            matches!(erreur, OxynError::PolicyDenied { .. }),
-            "{erreur:?}"
-        );
+        let error = outcome.expect_err("a moot approval is refused");
+        assert!(matches!(error, OxynError::PolicyDenied { .. }), "{error:?}");
         assert_eq!(
-            banc.store.journal().count().expect("comptage"),
+            bench.store.journal().count().expect("count"),
             0,
-            "rien n'a traversé le gate : il n'y a rien à journaliser"
+            "nothing went through the gate: there is nothing to log"
         );
     }
 
     #[test]
-    fn un_accord_ne_survit_pas_a_un_marquage_devenu_plus_strict() {
-        // La connexion est ouverte quand l'accord est demandé, marquée lecture
-        // seule quand il est donné. Le refus tardif l'emporte sur l'accord.
-        let connexion = ConnectionConfig::new("atelier", DriverId::postgres())
+    fn an_approval_does_not_survive_a_stricter_marking() {
+        // The connection is open when the approval is requested, marked
+        // read-only when it is given. The late refusal wins over the approval.
+        let connection = ConnectionConfig::new("atelier", DriverId::postgres())
             .with_environment(Environment::Development);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
-        let commande = execution(
-            connexion.id,
-            "UPDATE clients SET actif = true WHERE id = 1",
+        let cmd = execution(
+            connection.id,
+            "UPDATE clients SET active = true WHERE id = 1",
             StatementIntent::Write,
         );
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
-        )
-        .expect("demande d'accord");
-        let Outcome::NeedsApproval { command, .. } = issue else {
-            panic!("{issue:?}");
+        let outcome = block_on(bench.executor.dispatch(agent(), cmd, &CancelToken::new()))
+            .expect("approval request");
+        let Outcome::NeedsApproval { command, .. } = outcome else {
+            panic!("{outcome:?}");
         };
 
-        // Entre-temps, l'utilisateur marque la connexion en lecture seule.
-        let stricte = connexion.clone().read_only();
-        banc.politique.register(&stricte);
-        banc.executeur.register_connection(&stricte);
+        // Meanwhile, the user marks the connection read-only.
+        let strict = connection.clone().read_only();
+        bench.policy.register(&strict);
+        bench.executor.register_connection(&strict);
 
-        let issue = block_on(
-            banc.executeur
+        let outcome = block_on(
+            bench
+                .executor
                 .approve("nicolas", command, &CancelToken::new()),
         )
-        .expect("un refus tardif n'est pas une panne");
-        assert!(issue.is_denied(), "{issue:?}");
+        .expect("a late denial is not a failure");
+        assert!(outcome.is_denied(), "{outcome:?}");
     }
 
     #[test]
-    fn une_ecriture_sous_des_limites_en_lecture_seule_est_refusee() {
-        // `ExecLimits::default()` est en lecture seule : écrire est toujours
-        // une demande explicite. C'est la dernière barrière avant le driver.
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_write_under_read_only_limits_is_refused() {
+        // `ExecLimits::default()` is read-only: writing is always an explicit
+        // request. It is the last barrier before the driver.
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: conn.id,
             session: SessionId::new(),
             request: Box::new(ExecRequest::new(
                 QueryLanguage::Sql(SqlDialect::Sqlite),
-                "INSERT INTO clients (nom) VALUES ('x')",
+                "INSERT INTO clients (name) VALUES ('x')",
             )),
         };
 
-        let erreur = block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        let error = block_on(
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect_err("l'incohérence est tranchée du côté prudent");
-        assert!(
-            matches!(erreur, OxynError::PolicyDenied { .. }),
-            "{erreur:?}"
-        );
+        .expect_err("the inconsistency is settled on the cautious side");
+        assert!(matches!(error, OxynError::PolicyDenied { .. }), "{error:?}");
 
-        // Deux entrées : la décision de politique, puis l'issue.
-        assert_eq!(banc.store.journal().count().expect("comptage"), 2);
+        // Two entries: the policy decision, then the outcome.
+        assert_eq!(bench.store.journal().count().expect("count"), 2);
     }
 
     #[test]
-    fn une_lecture_locale_ne_demande_rien_et_echoue_faute_de_session() {
-        // Le gate autorise ; l'exécution échoue parce qu'aucune session n'est
-        // ouverte. Ce que ce test vérifie, c'est que l'échec arrive **après** le
-        // gate, et que les deux entrées de journal sont écrites.
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_local_read_asks_nothing_and_fails_for_lack_of_a_session() {
+        // The gate allows; execution fails because no session is open. What
+        // this test checks is that the failure comes **after** the gate, and
+        // that both log entries are written.
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Unknown);
-        let erreur = block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Unknown);
+        let err = block_on(
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect_err("aucune session n'est ouverte");
-        assert!(matches!(erreur, OxynError::Connection(_)), "{erreur:?}");
+        .expect_err("no session is open");
+        assert!(matches!(err, OxynError::Connection(_)), "{err:?}");
 
-        let entrees = banc.store.journal().recent(2).expect("relecture");
-        assert_eq!(entrees.len(), 2, "décision avant, issue après");
+        let entries = bench.store.journal().recent(2).expect("read back");
+        assert_eq!(entries.len(), 2, "decision before, outcome after");
         assert!(
-            entrees
+            entries
                 .iter()
                 .all(|e| e.record.decision == PolicyOutcome::Allowed),
-            "la lecture a bien été autorisée"
+            "the read was indeed authorized"
         );
         assert!(
-            entrees.iter().any(|e| e.record.error.is_some()),
-            "l'échec d'exécution figure au journal"
+            entries.iter().any(|e| e.record.error.is_some()),
+            "the execution failure is in the log"
         );
     }
 
     #[test]
-    fn une_connexion_inconnue_de_l_ordonnanceur_vaut_production() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_connection_unknown_to_the_executor_counts_as_production() {
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        banc.executeur.forget_connection(connexion.id);
+        let bench = Harness::new(&connection);
+        bench.executor.forget_connection(connection.id);
 
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Read);
         assert_eq!(
-            banc.executeur.environment_of(&commande),
+            bench.executor.environment_of(&command),
             Environment::Production
         );
     }
 
     #[test]
-    fn le_debug_de_l_ordonnanceur_ne_montre_aucun_contenu() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
-            .with_param("host", "interne.example");
-        let banc = Banc::new(&connexion);
-        let rendu = format!("{:?}", banc.executeur);
-        assert!(!rendu.contains("interne.example"), "{rendu}");
-        assert!(rendu.contains("DefaultPolicy"), "{rendu}");
+    fn the_executor_debug_shows_no_content() {
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
+            .with_param("host", "internal.example");
+        let bench = Harness::new(&connection);
+        let rendered = format!("{:?}", bench.executor);
+        assert!(!rendered.contains("internal.example"), "{rendered}");
+        assert!(rendered.contains("DefaultPolicy"), "{rendered}");
     }
 
     #[test]
-    fn une_annulation_est_toujours_autorisee() {
-        // Refuser une annulation ne protège rien et laisse une requête tourner.
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+    fn a_cancellation_is_always_allowed() {
+        // Refusing a cancellation protects nothing and leaves a query running.
+        let conn = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        let issue = block_on(banc.executeur.dispatch(
+        let outcome = block_on(bench.executor.dispatch(
             agent(),
             Command::Cancel {
-                connection: connexion.id,
+                connection: conn.id,
                 statement: StatementHandle::new(),
             },
             &CancelToken::new(),
         ))
-        .expect("annuler ne se refuse pas");
+        .expect("cancelling is not refused");
 
-        let Outcome::Cancelled { report } = issue else {
-            panic!("{issue:?}");
+        let Outcome::Cancelled { report } = outcome else {
+            panic!("{outcome:?}");
         };
-        assert!(!report.was_running, "l'exécution visée n'existe pas");
+        assert!(!report.was_running, "the target execution does not exist");
     }
 
-    // ── L'historique du requêteur ───────────────────────────────────────────
+    // ── The query history ───────────────────────────────────────────────────
 
-    /// Une session qui rend un seul lot de deux lignes, sans serveur.
+    /// A session that returns a single two-row batch, without a server.
     ///
-    /// Elle ne sert qu'à prouver le chemin nominal de l'historique : sans
-    /// exécution qui aboutit, la ligne `succeeded` n'existe dans aucun test, et
-    /// c'est exactement celle qui manquait jusqu'ici.
-    struct SessionFactice;
+    /// It only serves to prove the history's nominal path: without an
+    /// execution that succeeds, the `succeeded` row exists in no test, and it
+    /// is exactly the one that was missing until now.
+    struct StubSession;
 
     #[async_trait::async_trait]
-    impl oxyn_driver::Session for SessionFactice {
+    impl oxyn_driver::Session for StubSession {
         fn capabilities(&self) -> Capabilities {
             Capabilities::SQL | Capabilities::TABLES
         }
         async fn execute(&self, _: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
-            Ok(Box::new(CurseurFactice {
+            Ok(Box::new(FakeCursor {
                 handle: StatementHandle::new(),
-                rendu: false,
+                rendered: false,
                 stats: ExecStats::default(),
             }))
         }
@@ -3208,7 +3198,7 @@ mod tests {
             Ok(())
         }
         fn catalog(&self) -> &dyn oxyn_catalog::CatalogProvider {
-            unreachable!("les tests d'historique n'introspectent rien")
+            unreachable!("history tests introspect nothing")
         }
         async fn ping(&self) -> Result<Duration> {
             Ok(Duration::ZERO)
@@ -3218,60 +3208,60 @@ mod tests {
         }
     }
 
-    struct CurseurFactice {
+    struct FakeCursor {
         handle: StatementHandle,
-        rendu: bool,
+        rendered: bool,
         stats: ExecStats,
     }
 
-    fn schema_factice() -> arrow::datatypes::SchemaRef {
+    fn fake_schema() -> arrow::datatypes::SchemaRef {
         Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
         ]))
     }
 
     #[async_trait::async_trait]
-    impl Cursor for CurseurFactice {
+    impl Cursor for FakeCursor {
         fn handle(&self) -> StatementHandle {
             self.handle
         }
         fn schema(&self) -> arrow::datatypes::SchemaRef {
-            schema_factice()
+            fake_schema()
         }
         async fn next_batch(&mut self) -> Result<Option<arrow::record_batch::RecordBatch>> {
-            if self.rendu {
+            if self.rendered {
                 return Ok(None);
             }
-            self.rendu = true;
-            let lot = arrow::record_batch::RecordBatch::try_new(
-                schema_factice(),
+            self.rendered = true;
+            let batch = arrow::record_batch::RecordBatch::try_new(
+                fake_schema(),
                 vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2]))],
             )
-            .expect("la colonne correspond au schéma construit juste au-dessus");
+            .expect("the column matches the schema built just above");
             self.stats.record_batch(2, 0);
-            Ok(Some(lot))
+            Ok(Some(batch))
         }
         fn stats(&self) -> ExecStats {
             self.stats
         }
     }
 
-    /// **Une exécution qui aboutit laisse une trace complète.**
+    /// **An execution that succeeds leaves a complete trace.**
     ///
-    /// Durée et lignes comprises : un historique qui ne dit pas combien de
-    /// lignes une requête a rendues ne répond pas à la question qu'on lui pose.
+    /// Duration and rows included: a history that does not say how many rows a
+    /// query returned does not answer the question it is asked.
     #[test]
-    fn une_execution_reussie_est_inscrite_avec_sa_duree_et_ses_lignes() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_successful_execution_is_recorded_with_its_duration_and_rows() {
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        let session = banc
-            .executeur
+        let bench = Harness::new(&conn);
+        let session = bench
+            .executor
             .sessions
-            .insert(SessionSlot::new(connexion.id, Box::new(SessionFactice)));
+            .insert(SessionSlot::new(conn.id, Box::new(StubSession)));
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: conn.id,
             session: session.id(),
             request: Box::new(
                 ExecRequest::new(
@@ -3279,62 +3269,63 @@ mod tests {
                     "SELECT id FROM clients",
                 )
                 .with_intent(StatementIntent::Read)
-                // Sans délai : `block_on` n'a pas d'horloge tokio, et le
-                // délai par défaut en réclamerait une.
+                // No timeout: `block_on` has no tokio clock, and the default
+                // timeout would require one.
                 .with_limits(ExecLimits::default().with_timeout(None::<Duration>)),
             ),
         };
         block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect("l'exécution aboutit");
+        .expect("the execution succeeds");
 
-        let entree = banc
+        let entry = bench
             .store
             .history()
             .recent(10)
-            .expect("relecture de l'historique")
+            .expect("reading the history back")
             .pop()
-            .expect("une exécution laisse une entrée");
-        assert_eq!(entree.record.status, HistoryStatus::Succeeded);
-        assert_eq!(entree.record.rows, Some(2));
-        assert!(entree.record.duration.is_some(), "une durée est mesurée");
-        assert_eq!(entree.record.statement, "SELECT id FROM clients");
-        // Le nom est recopié pour survivre à la suppression de la connexion.
-        assert_eq!(entree.record.connection_name.as_deref(), Some("atelier"));
-        assert!(entree.record.error.is_none());
+            .expect("an execution leaves an entry");
+        assert_eq!(entry.record.status, HistoryStatus::Succeeded);
+        assert_eq!(entry.record.rows, Some(2));
+        assert!(entry.record.duration.is_some(), "a duration is measured");
+        assert_eq!(entry.record.statement, "SELECT id FROM clients");
+        // The name is copied to survive the connection's deletion.
+        assert_eq!(entry.record.connection_name.as_deref(), Some("atelier"));
+        assert!(entry.record.error.is_none());
     }
 
-    /// Les `HistoryRecorded` reçus jusqu'ici, sans attendre.
-    fn inscriptions_annoncees(
-        evenements: &mut tokio::sync::broadcast::Receiver<crate::events::ExecEvent>,
+    /// The `HistoryRecorded` received so far, without waiting.
+    fn announced_registrations(
+        received_events: &mut tokio::sync::broadcast::Receiver<crate::events::ExecEvent>,
     ) -> Vec<Option<ConnectionId>> {
-        std::iter::from_fn(|| evenements.try_recv().ok())
-            .filter(|recu| recu.event == Event::HistoryRecorded)
-            .map(|recu| recu.connection)
+        std::iter::from_fn(|| received_events.try_recv().ok())
+            .filter(|received| received.event == Event::HistoryRecorded)
+            .map(|received| received.connection)
             .collect()
     }
 
-    /// **Une lecture réussie annonce son inscription, qu'elle vienne de
-    /// l'humain ou de l'agent** (ADR-0022) : une bibliothèque ouverte n'a pas
-    /// d'autre moyen d'apprendre qu'une ligne s'est ajoutée. L'annonce suit
-    /// l'écriture de l'issue : relue à ce moment, la ligne n'est plus « en
-    /// cours ».
+    /// **A successful read announces its record, whether it comes from the
+    /// human or the agent** (ADR-0022): an open library has no other way to
+    /// learn that a row was added. The announcement follows the writing of the
+    /// outcome: read again at that moment, the row is no longer "in
+    /// progress".
     #[test]
-    fn une_lecture_reussie_annonce_son_inscription_a_l_historique() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_successful_read_announces_its_history_record() {
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        let session = banc
-            .executeur
+        let bench = Harness::new(&conn);
+        let session = bench
+            .executor
             .sessions
-            .insert(SessionSlot::new(connexion.id, Box::new(SessionFactice)));
-        let mut evenements = banc.executeur.subscribe();
+            .insert(SessionSlot::new(conn.id, Box::new(StubSession)));
+        let mut events = bench.executor.subscribe();
 
-        for acteur in [Actor::Human, agent()] {
-            let commande = Command::Execute {
-                connection: connexion.id,
+        for actor in [Actor::Human, agent()] {
+            let command = Command::Execute {
+                connection: conn.id,
                 session: session.id(),
                 request: Box::new(
                     ExecRequest::new(
@@ -3345,162 +3336,162 @@ mod tests {
                     .with_limits(ExecLimits::default().with_timeout(None::<Duration>)),
                 ),
             };
-            block_on(
-                banc.executeur
-                    .dispatch(acteur, commande, &CancelToken::new()),
-            )
-            .expect("l'exécution aboutit");
+            block_on(bench.executor.dispatch(actor, command, &CancelToken::new()))
+                .expect("the execution succeeds");
 
             assert_eq!(
-                inscriptions_annoncees(&mut evenements),
-                vec![Some(connexion.id)],
-                "une annonce par exécution réussie, rattachée à sa connexion"
+                announced_registrations(&mut events),
+                vec![Some(conn.id)],
+                "one announcement per successful execution, attached to its connection"
             );
-            let entree = banc
+            let entry = bench
                 .store
                 .history()
                 .recent(1)
-                .expect("relecture")
+                .expect("read back")
                 .pop()
-                .expect("une exécution laisse une entrée");
-            assert_eq!(entree.record.status, HistoryStatus::Succeeded);
+                .expect("an execution leaves an entry");
+            assert_eq!(entry.record.status, HistoryStatus::Succeeded);
         }
     }
 
-    /// **Un échec n'annonce rien** : relire la bibliothèque sur une erreur
-    /// n'apprend rien que l'erreur affichée ne dise déjà.
+    /// **A failure announces nothing**: reading the library again on an error
+    /// teaches nothing the displayed error does not already say.
     #[test]
-    fn un_echec_n_annonce_aucune_inscription() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_failure_announces_no_record() {
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        let mut evenements = banc.executeur.subscribe();
+        let bench = Harness::new(&connection);
+        let mut events = bench.executor.subscribe();
 
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Read);
         block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect_err("aucune session sous cet identifiant");
+        .expect_err("no session under this identifier");
 
-        assert!(inscriptions_annoncees(&mut evenements).is_empty());
+        assert!(announced_registrations(&mut events).is_empty());
     }
 
-    /// **Une exécution qui échoue laisse l'erreur, pas un silence.**
+    /// **An execution that fails leaves the error, not a silence.**
     ///
-    /// Avec sa **famille**, qui est la donnée dont dépend le droit de rejouer :
-    /// c'est elle qui interdira d'offrir « relancer » sur un `INSERT` dont
-    /// l'effet côté serveur est inconnu (I-13).
+    /// With its **family**, which is the data the right to replay depends on:
+    /// it is what will forbid offering "rerun" on an `INSERT` whose server-side
+    /// effect is unknown (I-13).
     #[test]
-    fn un_echec_est_inscrit_avec_son_erreur_et_sa_famille() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_failure_is_recorded_with_its_error_and_family() {
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
-        // Aucune session n'est ouverte : l'exécution échoue avant le driver.
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        // No session is open: execution fails before the driver.
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Read);
         block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect_err("aucune session sous cet identifiant");
+        .expect_err("no session under this identifier");
 
-        let entree = banc
+        let entry = bench
             .store
             .history()
             .recent(10)
-            .expect("relecture")
+            .expect("read back")
             .pop()
-            .expect("un échec laisse une entrée");
-        assert_eq!(entree.record.status, HistoryStatus::Failed);
-        assert!(entree.record.error.is_some(), "l'erreur est conservée");
-        assert!(entree.record.duration.is_some(), "un échec a une durée");
-        // La famille est retenue en tant que donnée, jamais déduite du message.
+            .expect("a failure leaves an entry");
+        assert_eq!(entry.record.status, HistoryStatus::Failed);
+        assert!(entry.record.error.is_some(), "the error is kept");
+        assert!(entry.record.duration.is_some(), "a failure has a duration");
+        // The family is kept as data, never inferred from the message.
         assert_eq!(
-            entree.record.error_class,
+            entry.record.error_class,
             Some(ErrorClass::Transient),
-            "une session absente se rouvre : c'est transitoire"
+            "a missing session is reopened: it is transient"
         );
     }
 
-    /// **Un refus figure à l'historique, avec son motif.**
+    /// **A denial appears in the history, with its reason.**
     ///
-    /// Un historique qui ne montre que ce qui a marché laisse l'utilisateur
-    /// chercher une requête qu'il a bel et bien lancée.
+    /// A history that shows only what worked leaves the user looking for a
+    /// query they did run.
     #[test]
-    fn un_refus_est_inscrit_avec_son_motif_et_sans_valeur_liee() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+    fn a_denial_is_recorded_with_its_reason_and_no_bound_value() {
+        let conn = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        // Le secret voyage en valeur liée, jamais dans le texte (I-03).
-        let commande = Command::Execute {
-            connection: connexion.id,
+        // The secret travels as a bound value, never in the text (I-03).
+        let command = Command::Execute {
+            connection: conn.id,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(
                     QueryLanguage::Sql(SqlDialect::Postgres),
-                    "DELETE FROM clients WHERE jeton = $1",
+                    "DELETE FROM clients WHERE token = $1",
                 )
                 .with_intent(StatementIntent::Read)
                 .with_params(vec![oxyn_core::ScalarValue::Text(
-                    "hunter2-le-secret".to_owned(),
+                    "hunter2-the-secret".to_owned(),
                 )])
                 .with_limits(ExecLimits::default().writable()),
             ),
         };
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
+        let outcome = block_on(
+            bench
+                .executor
+                .dispatch(agent(), command, &CancelToken::new()),
         )
-        .expect("un refus n'est pas une panne");
-        assert!(issue.is_denied(), "{issue:?}");
+        .expect("a denial is not a failure");
+        assert!(outcome.is_denied(), "{outcome:?}");
 
-        let entrees = banc.store.history().recent(10).expect("relecture");
-        assert_eq!(entrees.len(), 1, "un refus, une ligne — pas deux");
-        let record = &entrees[0].record;
+        let entries = bench.store.history().recent(10).expect("read back");
+        assert_eq!(entries.len(), 1, "one denial, one row — not two");
+        let record = &entries[0].record;
         assert_eq!(record.status, HistoryStatus::Denied);
         assert!(
             record
                 .error
                 .as_deref()
-                .is_some_and(|motif| motif.contains("production")),
+                .is_some_and(|pattern| pattern.contains("production")),
             "{:?}",
             record.error
         );
-        // L'intention inscrite est celle que le texte porte, pas celle que
-        // l'agent a déclarée.
+        // The recorded intent is the one the text carries, not the one the
+        // agent declared.
         assert_eq!(record.intent, StatementIntent::Write);
         assert!(
             !format!("{record:?}").contains("hunter2"),
-            "aucune valeur liée ne rejoint l'historique (I-03)"
+            "no bound value reaches the history (I-03)"
         );
     }
 
-    /// **L'historique ne consigne que des exécutions.**
+    /// **The history records only executions.**
     ///
-    /// Une `Connect` ou une `Cancel` au milieu des requêtes rendrait la liste
-    /// illisible ; elles restent au journal, qui les consigne toutes.
+    /// A `Connect` or a `Cancel` among the queries would make the list
+    /// unreadable; they stay in the log, which records them all.
     #[test]
-    fn une_commande_qui_n_est_pas_une_execution_ne_touche_pas_l_historique() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+    fn a_command_that_is_not_an_execution_does_not_touch_history() {
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        block_on(banc.executeur.dispatch(
+        block_on(bench.executor.dispatch(
             Actor::Human,
             Command::Cancel {
-                connection: connexion.id,
+                connection: conn.id,
                 statement: StatementHandle::new(),
             },
             &CancelToken::new(),
         ))
-        .expect("annuler ne se refuse pas");
+        .expect("cancelling is not refused");
 
-        assert_eq!(banc.store.history().count().expect("comptage"), 0);
+        assert_eq!(bench.store.history().count().expect("count"), 0);
         assert!(
-            banc.store.journal().count().expect("comptage") > 0,
-            "le journal, lui, les consigne toutes"
+            bench.store.journal().count().expect("count") > 0,
+            "the log, for its part, records them all"
         );
     }
 }

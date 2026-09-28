@@ -1,93 +1,92 @@
-//! L'abstraction des fournisseurs de modèles.
+//! The model provider abstraction.
 //!
-//! `oxyn-llm` sait parler à un modèle et à rien d'autre. Il ne connaît ni les
-//! agents, ni le catalogue, ni les niveaux de confidentialité : c'est `oxyn-ai`
-//! qui assemble le contexte et applique le niveau de la connexion
-//! ([I-04](../../CLAUDE.md#i-04)), et le `PolicyGate` qui décide de ce qu'une
-//! réponse a le droit de déclencher ([I-07](../../CLAUDE.md#i-07)). Cette crate
-//! est un **transport typé**, et c'est ce périmètre étroit qui la rend
-//! relisible.
+//! `oxyn-llm` knows how to talk to a model and to nothing else. It knows
+//! neither agents, nor the catalog, nor privacy tiers: it is `oxyn-ai` that
+//! assembles the context and applies the connection's tier
+//! ([I-04](../../../CLAUDE.md#i-04)), and the `PolicyGate` that decides what a
+//! response is allowed to trigger ([I-07](../../../CLAUDE.md#i-07)). This crate
+//! is a **typed transport**, and this narrow scope is what makes it
+//! reviewable.
 //!
-//! # Ce qu'on y trouve
+//! # What it contains
 //!
-//! | Module | Sujet |
+//! | Module | Subject |
 //! |---|---|
-//! | [`types`] | le vocabulaire d'un échange : messages, outils, événements, modèles |
-//! | [`provider`] | le trait [`LlmProvider`] et le [`ProviderRegistry`] |
-//! | [`openai_compatible`] | **une** implémentation pour sept fournisseurs |
-//! | [`anthropic`] | le protocole `/v1/messages`, complet |
-//! | [`gemini`] | protocole propre — requête écrite, envoi à faire |
-//! | [`reasoning`] | effort, budget, et les blocs qu'on renvoie tels quels |
-//! | [`error`] | [`LlmError`] et sa projection sur le domaine |
-//! | [`secret`] | [`ApiKey`], qui ne s'affiche jamais |
-//! | [`reach`] | local ou distant, décidé après résolution et non sur le nom |
+//! | [`types`] | the vocabulary of an exchange: messages, tools, events, models |
+//! | [`provider`] | the [`LlmProvider`] trait and the [`ProviderRegistry`] |
+//! | [`openai_compatible`] | **one** implementation for seven providers |
+//! | [`anthropic`] | the `/v1/messages` protocol, complete |
+//! | [`gemini`] | its own protocol — request written, sending still to do |
+//! | [`reasoning`] | effort, budget, and the blocks sent back as they are |
+//! | [`error`] | [`LlmError`] and its projection onto the domain |
+//! | [`secret`] | [`ApiKey`], which is never displayed |
+//! | [`reach`] | local or remote, decided after resolution and not on the name |
 //!
-//! # Les quatre choix qui gouvernent cette crate
+//! # The four choices that govern this crate
 //!
-//! **Aucun fournisseur n'est requis.** [`ProviderRegistry::default`] est vide,
-//! et c'est l'installation par défaut d'Oxyn : le workspace IA est alors absent
-//! de l'interface et le produit reste un client de base de données complet
-//! ([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)). Rien ici ne sonde la
-//! machine à la recherche d'un modèle local, ne lit une variable
-//! d'environnement au démarrage, ni ne construit un fournisseur qu'on ne lui a
-//! pas demandé.
+//! **No provider is required.** [`ProviderRegistry::default`] is empty, and it
+//! is Oxyn's default installation: the AI workspace is then absent from the
+//! interface and the product remains a complete database client
+//! ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)). Nothing here probes
+//! the machine looking for a local model, reads an environment variable at
+//! startup, or builds a provider it was not asked for.
 //!
-//! **Une implémentation pour les protocoles compatibles, une par protocole
-//! réel.** [`OpenAiCompatibleProvider`] couvre Ollama, LM Studio, `llama.cpp`,
-//! OpenAI, Azure et OpenRouter. Anthropic et Gemini ont la leur : leurs
-//! protocoles diffèrent là où Oxyn a besoin qu'ils soient exacts — les appels
-//! d'outils — et un adaptateur commun y serait faux
-//! ([`ARCHITECTURE` §7.5](../../docs/ARCHITECTURE.md)).
+//! **One implementation for the compatible protocols, one per real
+//! protocol.** [`OpenAiCompatibleProvider`] covers Ollama, LM Studio,
+//! `llama.cpp`, OpenAI, Azure and OpenRouter. Anthropic and Gemini have their
+//! own: their protocols differ exactly where Oxyn needs them to be exact —
+//! tool calls — and a common adapter would be wrong there
+//! ([`ARCHITECTURE` §7.5](../../../docs/ARCHITECTURE.md)).
 //!
-//! Ce qu'ils partagent est **le pilote de flux**, pas le décodage : la garantie
-//! « exactement un [`ChatEvent::Done`], en dernier, quelle que soit la sortie »
-//! est tenue à un seul endroit, et chaque protocole n'y branche que sa lecture
-//! de trames. Deux pilotes en parallèle divergeraient au premier ajout.
+//! What they share is **the stream driver**, not the decoding: the guarantee
+//! "exactly one [`ChatEvent::Done`], last, whatever the exit" is held in a
+//! single place, and each protocol only plugs its frame reading into it. Two
+//! drivers side by side would diverge at the first addition.
 //!
-//! **Ce qui sort ne s'affiche pas.** [`ApiKey`] masque son `Debug` et n'a pas de
-//! `Display` ; [`ChatMessage`] et [`ChatRequest`] masquent leur contenu, parce
-//! qu'au niveau `Sampled` ce contenu est constitué de lignes réelles de la base
-//! de l'utilisateur, et qu'un `tracing::debug!` les écrirait en clair sur disque
-//! ([I-03](../../CLAUDE.md#i-03)). Tout corps de réponse repris dans une erreur
-//! est tronqué et expurgé de la clé.
+//! **What goes out is not displayed.** [`ApiKey`] masks its `Debug` and has no
+//! `Display`; [`ChatMessage`] and [`ChatRequest`] mask their content, because
+//! at the `Sampled` tier that content is made of real rows from the user's
+//! database, and a `tracing::debug!` would write them in clear on disk
+//! ([I-03](../../../CLAUDE.md#i-03)). Any response body quoted in an error is
+//! truncated and scrubbed of the key.
 //!
-//! **L'annulation va jusqu'au bout.** Le [`oxyn_core::CancelToken`]
-//! passé à [`LlmProvider::stream`] est cloné dans le flux rendu : l'annuler
-//! interrompt la lecture, ferme la connexion et émet
-//! `Done { stop_reason: Cancelled }`. Aucun appel d'outil partiellement reçu
-//! n'est proposé — des arguments tronqués ne sont pas des arguments.
+//! **Cancellation goes all the way.** The [`oxyn_core::CancelToken`] passed to
+//! [`LlmProvider::stream`] is cloned into the returned stream: cancelling it
+//! interrupts the reading, closes the connection and emits
+//! `Done { stop_reason: Cancelled }`. No partially received tool call is
+//! proposed — truncated arguments are not arguments.
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```
 //! use oxyn_llm::prelude::*;
 //!
-//! // Sans configuration : aucun fournisseur. Ce n'est pas une panne.
-//! let registre = ProviderRegistry::default();
-//! assert!(registre.is_empty());
-//! assert!(registre.get(&ProviderId::ollama()).is_none());
+//! // Without configuration: no provider. This is not a failure.
+//! let registry = ProviderRegistry::default();
+//! assert!(registry.is_empty());
+//! assert!(registry.get(&ProviderId::ollama()).is_none());
 //! ```
 //!
-//! Une fois qu'un fournisseur est configuré par l'utilisateur :
+//! Once a provider is configured by the user:
 //!
 //! ```no_run
 //! use std::sync::Arc;
 //! use oxyn_llm::prelude::*;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let registre = ProviderRegistry::new();
-//! registre.register(Arc::new(OpenAiCompatibleProvider::ollama()?));
+//! let registry = ProviderRegistry::new();
+//! registry.register(Arc::new(OpenAiCompatibleProvider::ollama()?));
 //!
-//! let fournisseur = registre
+//! let provider = registry
 //!     .get(&ProviderId::ollama())
-//!     .ok_or("fournisseur absent")?;
+//!     .ok_or("provider missing")?;
 //!
-//! let requete = ChatRequest::new(
+//! let request = ChatRequest::new(
 //!     "llama3.2",
-//!     vec![ChatMessage::user("liste les tables de ce schéma")],
+//!     vec![ChatMessage::user("list the tables of this schema")],
 //! );
-//! let jeton = CancelToken::new();
-//! let _flux = fournisseur.stream(requete, &jeton);
+//! let token = CancelToken::new();
+//! let _stream = provider.stream(request, &token);
 //! # Ok(())
 //! # }
 //! ```
@@ -103,28 +102,28 @@ pub mod reasoning;
 pub mod secret;
 pub mod types;
 
-/// Décodage `text/event-stream`, partagé par les trois familles de protocoles.
+/// `text/event-stream` decoding, shared by the three protocol families.
 ///
-/// Interne : c'est un détail de transport, et l'exposer inviterait à écrire un
-/// fournisseur qui court-circuite [`LlmProvider`].
+/// Internal: it is a transport detail, and exposing it would invite writing a
+/// provider that bypasses [`LlmProvider`].
 mod sse;
 
-/// Le transport HTTP : construction du client, lecture d'une réponse d'échec.
+/// The HTTP transport: building the client, reading a failure response.
 ///
-/// Interne : c'est lui qui refuse les redirections, et cette garantie ne vaut
-/// que parce qu'aucun fournisseur ne construit son client autrement.
+/// Internal: it is what refuses redirections, and this guarantee only holds
+/// because no provider builds its client any other way.
 mod http;
 
-/// Le pilote de flux annulable, partagé lui aussi.
+/// The cancellable stream driver, shared as well.
 ///
-/// Interne pour la même raison que [`sse`] : c'est lui qui garantit qu'un
-/// `Done` est émis exactement une fois, et cette garantie ne vaut que parce
-/// qu'aucun fournisseur ne peut assembler son flux autrement.
+/// Internal for the same reason as [`sse`]: it is what guarantees that a
+/// `Done` is emitted exactly once, and this guarantee only holds because no
+/// provider can assemble its stream any other way.
 mod stream;
 
-/// Ré-exporté depuis `oxyn-core` : le jeton apparaît dans la signature de
-/// [`LlmProvider::stream`], et un appelant ne devrait pas avoir à dépendre du
-/// domaine pour en construire un.
+/// Re-exported from `oxyn-core`: the token appears in the signature of
+/// [`LlmProvider::stream`], and a caller should not have to depend on the
+/// domain to build one.
 pub use oxyn_core::CancelToken;
 
 pub use anthropic::AnthropicProvider;
@@ -141,7 +140,7 @@ pub use types::{
     ToolSpec,
 };
 
-/// Ce qu'on importe d'un coup pour parler à un modèle.
+/// What is imported in one go to talk to a model.
 ///
 /// ```
 /// use oxyn_llm::prelude::*;
@@ -165,42 +164,42 @@ pub mod prelude {
 mod tests {
     use crate::prelude::*;
 
-    /// Le trajet nominal de la phase 2, réduit à ce qui se teste sans réseau :
-    /// un registre vide, un fournisseur inscrit, une requête construite.
+    /// The nominal path of phase 2, reduced to what can be tested without a
+    /// network: an empty registry, a registered provider, a built request.
     #[test]
-    fn le_workspace_ia_est_absent_sans_configuration() {
-        // ADR-0006 : c'est l'état par défaut d'Oxyn, pas un état dégradé.
-        let registre = ProviderRegistry::new();
-        assert!(registre.is_empty());
-        assert!(registre.providers().is_empty());
+    fn the_ai_workspace_is_absent_without_configuration() {
+        // ADR-0006: this is Oxyn's default state, not a degraded state.
+        let registry = ProviderRegistry::new();
+        assert!(registry.is_empty());
+        assert!(registry.providers().is_empty());
         for id in [
             ProviderId::ollama(),
             ProviderId::openai(),
             ProviderId::anthropic(),
             ProviderId::gemini(),
         ] {
-            assert!(registre.get(&id).is_none(), "{id}");
+            assert!(registry.get(&id).is_none(), "{id}");
         }
     }
 
     #[test]
-    fn une_requete_ne_laisse_pas_filtrer_le_contexte_dans_les_traces() {
-        // La panne visée par I-03 : `tracing::debug!("{req:?}")` écrivant des
-        // lignes de la base cliente dans un fichier de journal.
-        let requete = ChatRequest::new(
+    fn a_request_does_not_leak_the_context_into_traces() {
+        // The failure I-03 targets: `tracing::debug!("{req:?}")` writing rows
+        // of the customer database into a log file.
+        let request = ChatRequest::new(
             "llama3.2",
             vec![
-                ChatMessage::system("tu réponds en SQL"),
-                ChatMessage::user("le client Dupont, IBAN FR7630006000011234567890189"),
+                ChatMessage::system("you answer in SQL"),
+                ChatMessage::user("customer Dupont, IBAN FR7630006000011234567890189"),
             ],
         );
-        let rendu = format!("{requete:?}");
-        assert!(!rendu.contains("Dupont"), "{rendu}");
-        assert!(!rendu.contains("FR76"), "{rendu}");
+        let rendered = format!("{request:?}");
+        assert!(!rendered.contains("Dupont"), "{rendered}");
+        assert!(!rendered.contains("FR76"), "{rendered}");
     }
 
     #[test]
-    fn les_identifiants_de_fournisseurs_sont_distincts_et_stables() {
+    fn provider_identifiers_are_distinct_and_stable() {
         let ids = [
             ProviderId::ollama(),
             ProviderId::lm_studio(),
@@ -211,10 +210,10 @@ mod tests {
             ProviderId::anthropic(),
             ProviderId::gemini(),
         ];
-        let mut vus: Vec<String> = ids.iter().map(ProviderId::to_string).collect();
-        vus.sort_unstable();
-        let compte = vus.len();
-        vus.dedup();
-        assert_eq!(vus.len(), compte, "deux fournisseurs partagent un nom");
+        let mut seen: Vec<String> = ids.iter().map(ProviderId::to_string).collect();
+        seen.sort_unstable();
+        let count = seen.len();
+        seen.dedup();
+        assert_eq!(seen.len(), count, "two providers share a name");
     }
 }

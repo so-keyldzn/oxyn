@@ -1,39 +1,39 @@
-# Rapport de relecture — <périmètre>
+# Review report — <scope>
 
-**Date :** AAAA-MM-JJ · **Périmètre :** `<chemins ou plage de commits>`
+**Date:** AAAA-MM-JJ · **Scope:** `<paths or commit range>`
 
 ## Verdict
 
-<Une phrase. S'il n'y a rien à signaler, cette section suffit et le rapport
-s'arrête ici. Ne pas inventer de remarques pour justifier l'exécution : un
-rapport qui trouve toujours quelque chose finit par n'être plus lu, et c'est
-alors que le vrai problème passe.>
+<One sentence. If there is nothing to report, this section is enough and the
+report stops here. Do not invent remarks to justify the run: a report that always
+finds something ends up no longer being read, and that is when the real problem
+slips through.>
 
-## Points, par gravité décroissante
+## Points, by decreasing severity
 
-### 1. <titre court> — bloquant / à corriger / à considérer
+### 1. <short title> — blocking / to fix / to consider
 
 | | |
 |---|---|
-| Où | `chemin/fichier.rs:42` |
-| Ce qui est enfreint | I-NN, ou le document d'autorité et sa section |
-| Scénario de panne | *Ce qui arrive à un utilisateur réel. Pas la règle récitée.* |
-| Correction | … |
+| Where | `path/file.rs:42` |
+| What is violated | I-NN, or the authoritative document and its section |
+| Failure scenario | *What happens to a real user. Not the rule recited.* |
+| Fix | … |
 
-<Répéter par point.>
+<Repeat per point.>
 
-## Ordre de gravité
+## Severity order
 
-1. invariant enfreint — bloquant
-2. divergence code / documentation — bloquant, c'est un bug par définition
-3. contrat non tenu
-4. budget dépassé sans mesure justifiant l'écart
-5. le reste
+1. invariant violated — blocking
+2. code / documentation divergence — blocking, it is a bug by definition
+3. contract not honored
+4. budget exceeded without a measurement justifying the gap
+5. the rest
 
-## Ce dont je ne suis pas sûr
+## What I am not sure about
 
-<Les doutes, nommés. Un doute signalé vaut mieux qu'une certitude fabriquée.>
+<The doubts, named. A reported doubt is worth more than a fabricated certainty.>
 
-## Ce qui n'a pas été relu
+## What was not reviewed
 
-<Le périmètre non couvert, et pourquoi. Un lecteur suppose que tout a été vu.>
+<The scope not covered, and why. A reader assumes everything was seen.>

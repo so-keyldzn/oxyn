@@ -1,8 +1,8 @@
 //! Files dropped on the window from the system
 //! ([ADR-0041](../../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md),
-//! point 9 ; UX-SPEC « Souris et glisser »).
+//! point 9 ; UX-SPEC « Mouse and drag »).
 //!
-//! A dropped path is **untrusted input** ([SECURITY](../../../docs/SECURITY.md#surface-dentrée)):
+//! A dropped path is **untrusted input** ([SECURITY](../../../docs/SECURITY.md#input-surface)):
 //! whatever the user dragged, or whatever a page they dragged from put on
 //! the pasteboard. So it is classified here, in Rust, and the front only ever
 //! receives what the classification decided:

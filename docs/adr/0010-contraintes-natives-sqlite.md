@@ -1,49 +1,50 @@
-# ADR-0010 — Une seule version de libsqlite3-sys dans le graphe
+# ADR-0010 — A single version of libsqlite3-sys in the graph
 
-**Statut :** accepté · **Date :** 2026-09-05
-**Découvert à :** la première résolution réelle du workspace, pas à la conception.
+**Status:** accepted · **Date:** 2026-09-05
+**Discovered at:** the first real resolution of the workspace, not at design time.
 
-## Contexte
+## Context
 
-Oxyn a besoin de SQLite deux fois, pour deux raisons sans rapport :
-`oxyn-store` l'utilise comme format d'état local (historique, journal d'audit, cache de
-catalogue) via `rusqlite`, et `oxyn-driver-sqlite` l'expose comme base de données cliente.
-Par ailleurs `oxyn-driver-postgres` dépend de `sqlx`.
+Oxyn needs SQLite twice, for two unrelated reasons: `oxyn-store` uses it as the
+local state format (history, audit log, catalog cache) through `rusqlite`, and
+`oxyn-driver-sqlite` exposes it as a client database. In addition,
+`oxyn-driver-postgres` depends on `sqlx`.
 
-Trois faits se combinent mal :
+Three facts combine badly:
 
-1. Cargo verrouille les dépendances **optionnelles** dans `Cargo.lock` : `sqlx` fait donc
-   entrer `sqlx-sqlite` dans le graphe de résolution même avec `default-features = false`
-   et sans aucune feature SQLite activée.
-2. `sqlx-sqlite` 0.9 accepte `libsqlite3-sys >=0.30.1, <0.38` ; `rusqlite` 0.40 exige `^0.38`.
-3. `libsqlite3-sys` déclare `links = "sqlite3"`. Cargo n'autorise **qu'un seul** paquet
-   déclarant un `links` donné dans tout le graphe.
+1. Cargo locks **optional** dependencies in `Cargo.lock`: `sqlx` therefore brings
+   `sqlx-sqlite` into the resolution graph even with `default-features = false` and
+   no SQLite feature enabled.
+2. `sqlx-sqlite` 0.9 accepts `libsqlite3-sys >=0.30.1, <0.38`; `rusqlite` 0.40
+   requires `^0.38`.
+3. `libsqlite3-sys` declares `links = "sqlite3"`. Cargo allows **only one** package
+   declaring a given `links` in the whole graph.
 
-L'intersection des bornes est vide : le workspace ne résout pas.
+The intersection of the bounds is empty: the workspace does not resolve.
 
-## Décision
+## Decision
 
-Épingler **`rusqlite` 0.37** (qui demande `libsqlite3-sys ^0.35`), seule version dont la
-borne intersecte celle de `sqlx-sqlite`. Le graphe résout alors sur `libsqlite3-sys` 0.35,
-partagé.
+Pin **`rusqlite` 0.37** (which asks for `libsqlite3-sys ^0.35`), the only version
+whose bound intersects that of `sqlx-sqlite`. The graph then resolves on
+`libsqlite3-sys` 0.35, shared.
 
-## Conséquences
+## Consequences
 
-* **+** Le workspace résout, et une seule copie de SQLite est compilée et liée.
-* **−** `rusqlite` est bloqué trois versions mineures en arrière, sur une contrainte qui ne
-  vient pas de lui. Toute API `rusqlite` postérieure à 0.37 est hors de portée.
-* **−** La contrainte est **transitive et invisible** : elle ne vient d'aucune décision
-  d'architecture, seulement de la coexistence de deux bibliothèques. Elle doit être écrite
-  quelque part, sinon quelqu'un remontera `rusqlite` dans six mois et passera une soirée
-  sur un message d'erreur `links` que rien n'explique.
+* **+** The workspace resolves, and a single copy of SQLite is compiled and linked.
+* **−** `rusqlite` is held three minor versions back, by a constraint that does not
+  come from it. Any `rusqlite` API later than 0.37 is out of reach.
+* **−** The constraint is **transitive and invisible**: it comes from no
+  architecture decision, only from the coexistence of two libraries. It must be
+  written down somewhere, otherwise someone will bump `rusqlite` in six months and
+  spend an evening on a `links` error message that nothing explains.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Utiliser `sqlx-sqlite` partout, supprimer `rusqlite` | `oxyn-store` a besoin d'un accès synchrone simple ; passer par un runtime async pour lire l'historique local est un coût permanent pour éviter un épinglage temporaire |
-| Retirer `sqlx` et écrire le driver PostgreSQL sur `tokio-postgres` | possible, mais on perd le pool, la gestion TLS et le typage de `sqlx` pour un problème de version |
-| Compiler SQLite en non-bundled | déplace le problème vers la machine de l'utilisateur, et « native first » n'est pas « dépend de ce qui traîne sur le système » |
+| Use `sqlx-sqlite` everywhere, remove `rusqlite` | `oxyn-store` needs simple synchronous access; going through an async runtime to read the local history is a permanent cost to avoid a temporary pin |
+| Remove `sqlx` and write the PostgreSQL driver on `tokio-postgres` | possible, but we lose `sqlx`'s pool, TLS handling and typing over a version problem |
+| Compile SQLite non-bundled | moves the problem to the user's machine, and "native first" does not mean "depends on whatever lies around on the system" |
 
-**Reconsidérer quand** `sqlx` élargira sa borne sur `libsqlite3-sys`. Ce jour-là,
-remonter `rusqlite` est un changement d'une ligne — à condition que cet ADR ait été lu.
+**Reconsider when** `sqlx` widens its bound on `libsqlite3-sys`. On that day,
+bumping `rusqlite` is a one-line change — provided this ADR has been read.

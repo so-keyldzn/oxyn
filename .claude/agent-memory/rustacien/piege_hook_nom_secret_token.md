@@ -1,27 +1,26 @@
 ---
 name: piege-hook-nom-secret-token
-description: Le hook code_interdit refuse tout derive(Debug) sur un type dont le nom contient Token, Secret, Dsn — y compris quand il ne porte aucun secret
+description: The code_interdit hook refuses any derive(Debug) on a type whose name contains Token, Secret, Dsn — including when it carries no secret
 metadata:
   type: feedback
 ---
 
-`NOM_SECRET` dans `.claude/hooks/code_interdit.py` est un motif sur le **nom du
-type**, pas sur ses champs :
-`Credential|Secret|Password|Passwd|Token|ApiKey|Dsn|ConnectionString`. Tout
-`#[derive(..., Debug, ...)]` sur un `struct` ou `enum` dont le nom contient l'un
-de ces mots est refusé, quel que soit son contenu.
+`SECRET_NAME` in `.claude/hooks/code_interdit.py` is a pattern on the **type
+name**, not on its fields:
+`Credential|Secret|Password|Passwd|Token|ApiKey|Dsn|ConnectionString`. Any
+`#[derive(..., Debug, ...)]` on a `struct` or `enum` whose name contains one of
+these words is refused, whatever its content.
 
-**Why:** un `TokenUsage` qui ne porte que des compteurs de jetons a été refusé
-comme porteur de secret. Le hook a raison neuf fois sur dix et c'est un mur, pas
-un rappel : il ne se discute pas.
+**Why:** a `TokenUsage` carrying only token counters was refused as a secret
+carrier. The hook is right nine times out of ten and it is a wall, not a
+reminder: it is not up for discussion.
 
-**How to apply:** renommer plutôt que contourner. `TokenUsage` → `TurnUsage`.
-Écrire un `Debug` manuel pour garder le nom, c'est ajouter du code pour
-neutraliser une protection — et le prochain lecteur lira « ce type porte un
-secret ». Le nom du type est de toute façon le premier indice qu'on donne au
-relecteur.
+**How to apply:** rename rather than work around. `TokenUsage` → `TurnUsage`.
+Writing a manual `Debug` to keep the name means adding code to neutralize a
+protection — and the next reader will read "this type carries a secret". The
+type name is anyway the first clue given to the reviewer.
 
-Le refus arrive à l'écriture du fichier, donc **avant** toute compilation :
-choisir le nom en connaissance de cause évite de réécrire un fichier de 800
-lignes. Voir aussi [[piege-hook-code-interdit-diff]], qui porte sur le fait que
-le hook lit le texte de l'édition et non le fichier.
+The refusal comes when the file is written, so **before** any compilation:
+choosing the name knowingly avoids rewriting an 800-line file. See also
+[[piege-hook-code-interdit-diff]], about the hook reading the edit's text and not
+the file.

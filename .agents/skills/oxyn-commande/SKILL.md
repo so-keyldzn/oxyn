@@ -1,18 +1,18 @@
 ---
 name: oxyn-commande
-description: "Ajouter une commande au command bus dans le projet Oxyn. À utiliser pour une demande correspondante dans ce dépôt."
+description: "Add a command to the command bus in the Oxyn project. Use for a matching request in this repository."
 ---
 
 # Oxyn — commande
 
-Lire les [consignes Codex du projet](../../../AGENTS.md), puis la
-[procédure commune commande](../../../.claude/commands/commande.md) et suivre
-ses étapes applicables à la demande. La procédure reste la source unique ;
-interpréter ses syntaxes Claude selon les adaptations de `AGENTS.md`.
+Read the [project's Codex instructions](../../../AGENTS.md), then the
+[shared commande procedure](../../../.claude/commands/commande.md) and follow
+its steps that apply to the request. The procedure stays the single source;
+interpret its Claude syntax according to the adaptations of `AGENTS.md`.
 
-Lire ADR-0004 et vérifier le PolicyGate pour Actor::Human et Actor::Agent.
+Read ADR-0004 and check the PolicyGate for Actor::Human and Actor::Agent.
 
-Résoudre les liens de la procédure depuis son propre répertoire. Les chemins
-shell sont relatifs à la racine Oxyn. Utiliser les outils de la session ; les
-métadonnées Claude n’accordent aucune permission supplémentaire. Effectuer
-les relectures localement si aucune délégation n’est demandée ou disponible.
+Resolve the procedure's links from its own directory. Shell paths are
+relative to the Oxyn root. Use the session's tools; Claude metadata grants
+no additional permission. Do the reviews locally if no delegation is
+requested or available.

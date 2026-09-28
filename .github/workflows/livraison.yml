@@ -1,35 +1,36 @@
-# La livraison : un tag `v*` construit l'application en release et dépose ses
-# paquets dans une release GitHub en BROUILLON.
+# Delivery: a `v*` tag builds the application in release mode and uploads its
+# packages to a DRAFT GitHub release.
 #
-# Rien n'est publié automatiquement : la release reste un brouillon jusqu'à ce
-# qu'un humain la relise et la publie. Une release publiée ne reçoit rien : une
-# relance, ou une publication tombée pendant les builds, fait échouer le dépôt
-# sans toucher à ses fichiers. Seule une publication pendant l'envoi d'un
-# fichier peut encore recevoir ce fichier-là, et le job échoue en le disant.
-# Un fichier déjà présent dans le brouillon n'est jamais remplacé.
+# Nothing is published automatically: the release stays a draft until a human
+# reviews and publishes it. A published release receives nothing: a rerun, or a
+# publication landing during the builds, fails the upload without touching its
+# files. Only a publication during a file's upload can still receive that one
+# file, and the job fails saying so. A file already present in the draft is
+# never replaced.
 #
-# Le tag vaut exactement `v` suivi de la version de
-# `crates/oxyn-desktop/tauri.conf.json`, suffixe de préversion compris
-# (`v0.1.0-rc.1` pour `0.1.0-rc.1`, qui crée un brouillon marqué préversion) ;
-# sinon le workflow échoue avant de créer le brouillon, et rien n'est corrigé
-# automatiquement. C'est cette version que les paquets portent dans leur nom.
+# The tag is exactly `v` followed by the version of
+# `crates/oxyn-desktop/tauri.conf.json`, prerelease suffix included
+# (`v0.1.0-rc.1` for `0.1.0-rc.1`, which creates a draft marked as a
+# prerelease); otherwise the workflow fails before creating the draft, and
+# nothing is corrected automatically. That is the version the packages carry in
+# their name.
 #
-# Ces deux règles sont appliquées et testées par `script/livraison`.
+# Both rules are applied and tested by `script/livraison`.
 #
-# Les paquets ne sont PAS signés : macOS demande au premier lancement un clic
-# droit, puis « Ouvrir ». La signature et la notarisation demandent un compte
-# Apple Developer et des secrets de dépôt qui n'existent pas encore.
+# The packages are NOT signed: on first launch macOS asks for a right click,
+# then "Open". Signing and notarization need an Apple Developer account and
+# repository secrets that do not exist yet.
 #
-# Versions des actions et des outils : docs/RESEARCH-NOTES.md, § CI et
-# livraison GitHub.
+# Versions of the actions and tools: docs/RESEARCH-NOTES.md, § CI and GitHub
+# delivery.
 name: livraison
 
 on:
   push:
     tags: ["v*"]
 
-# Deux poussées du même tag ne doivent pas écrire en même temps dans la même
-# release.
+# Two pushes of the same tag must not write to the same release at the same
+# time.
 concurrency:
   group: livraison-${{ github.ref }}
   cancel-in-progress: false
@@ -45,14 +46,14 @@ jobs:
   brouillon:
     runs-on: ubuntu-24.04
     steps:
-      - name: Récupérer le dépôt
+      - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Le job ne se sert pas de git : `gh` reçoit son jeton par GH_TOKEN.
+          # The job does not use git: `gh` gets its token through GH_TOKEN.
           persist-credentials: false
 
-      - name: Vérifier le tag et créer la release en brouillon
+      - name: Check the tag and create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 script/livraison brouillon "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
@@ -64,7 +65,7 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            # Le target du workspace est à la racine, pas sous la crate.
+            # The workspace target is at the root, not under the crate.
             paquets: target/release/bundle/dmg/*.dmg
           - os: ubuntu-24.04
             paquets: |
@@ -75,43 +76,43 @@ jobs:
     timeout-minutes: 75
 
     steps:
-      - name: Récupérer le dépôt
+      - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Installer les bibliothèques système de Tauri
+      - name: Install Tauri's system libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - name: Installer la chaîne d'outils épinglée
+      - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
 
-      - name: Restaurer le cache Cargo
+      - name: Restore the Cargo cache
         # Swatinem/rust-cache v2.9.2
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - name: Installer Node
+      - name: Install Node
         # actions/setup-node v7.0.0
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
 
-      - name: Installer pnpm
-        # pnpm/action-setup v6.1.0, version lue dans `packageManager`
+      - name: Install pnpm
+        # pnpm/action-setup v6.1.0, version read from `packageManager`
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
         with:
           package_json_file: apps/desktop/package.json
           cache: true
           cache_dependency_path: apps/desktop/pnpm-lock.yaml
 
-      - name: Construire l'application en release
-        # La même cible qu'en local : `make desktop PROFIL=release`.
+      - name: Build the application in release mode
+        # The same target as locally: `make desktop PROFIL=release`.
         run: make desktop PROFIL=release
 
-      - name: Déposer les paquets dans le brouillon
+      - name: Upload the packages to the draft
         env:
           GH_TOKEN: ${{ github.token }}
           PAQUETS: ${{ matrix.paquets }}
@@ -122,7 +123,7 @@ jobs:
             [ -n "$motif" ] && fichiers+=($motif)
           done <<< "$PAQUETS"
           if [ ${#fichiers[@]} -eq 0 ]; then
-            echo "Aucun paquet produit : le bundle de Tauri n'a rien écrit là où il était attendu."
+            echo "No package produced: the Tauri bundler wrote nothing where it was expected."
             find . -path ./node_modules -prune -o -type d -name bundle -print
             exit 1
           fi

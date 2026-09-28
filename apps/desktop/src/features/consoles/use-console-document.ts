@@ -112,8 +112,7 @@ export function useConsoleDocument({
   /**
    * The draft the store holds or is writing. `null` for a new document whose
    * seed was never written: a copy opened from History or a saved query is
-   * recoverable before its first edit (UX-SPEC « Autosauvegarde des
-   * brouillons »).
+   * recoverable before its first edit (UX-SPEC « Draft autosave »).
    */
   const lastDraft = React.useRef<Draft | null>(
     seed.revision === 0 && seed.text !== ""

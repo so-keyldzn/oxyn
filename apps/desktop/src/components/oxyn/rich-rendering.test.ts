@@ -89,7 +89,7 @@ describe("a mermaid block", () => {
 
   it("becomes a data URL, whatever its characters", () => {
     const svg =
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40"><text>été → 数据</text></svg>'
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40"><text>café → 数据</text></svg>'
     const url = svgDataUrl(svg)
     expect(url.startsWith("data:image/svg+xml;base64,")).toBe(true)
     const bytes = Uint8Array.from(

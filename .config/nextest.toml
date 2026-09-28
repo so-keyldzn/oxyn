@@ -1,38 +1,39 @@
-# Le profil d'exécution des tests.
+# The test execution profile.
 #
-# Deux modes de panne que `cargo test` ne sait pas traiter :
+# Two failure modes that `cargo test` cannot handle:
 #
-# 1. **Un test qui pend.** Un driver qui attend une réponse qui ne viendra
-#    jamais n'échoue pas : il attend. En local on l'interrompt ; en CI il
-#    consomme le runner jusqu'au délai du job, et le rapport ne désigne pas le
-#    coupable. `slow-timeout` avec `terminate-after` le tue et le nomme.
+# 1. **A hanging test.** A driver waiting for an answer that will never come
+#    does not fail: it waits. Locally we interrupt it; in CI it consumes the
+#    runner up to the job timeout, and the report does not name the culprit.
+#    `slow-timeout` with `terminate-after` kills it and names it.
 #
-# 2. **Des tests qui se marchent dessus.** Les tests d'intégration PostgreSQL
-#    créent et détruisent des objets dans le schéma `public` du même serveur.
-#    Leur module impose `--test-threads=1` en commentaire — c'est-à-dire qu'il
-#    l'impose à qui pense à le lire. Un groupe le rend vrai sans qu'on y pense.
+# 2. **Tests stepping on each other.** The PostgreSQL integration tests create
+#    and drop objects in the `public` schema of the same server. Their module
+#    requires `--test-threads=1` in a comment — that is, it requires it of
+#    whoever thinks of reading it. A group makes it true without anyone having
+#    to think of it.
 #
-# nextest n'exécute PAS les tests de documentation : `make test` lance
-# `cargo test --doc` en plus. Sans ça, les exemples des `//!` cesseraient
-# silencieusement d'être compilés.
+# nextest does NOT run documentation tests: `make test` also runs
+# `cargo test --doc`. Without it, the `//!` examples would silently stop being
+# compiled.
 
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 1 }
 
 [test-groups]
-# Un seul test à la fois sur le serveur d'essai partagé.
+# One test at a time on the shared test server.
 serveur-partage = { max-threads = 1 }
 
-# Le délai est relevé pour ce paquet : deux de ses tests prouvent l'annulation
-# côté serveur et le flux sur un volume qui ne tient pas en mémoire. Ils sont
-# lents par construction, et 60 s les tuerait alors qu'ils font leur travail.
+# The timeout is raised for this package: two of its tests prove server-side
+# cancellation and streaming over a volume that does not fit in memory. They
+# are slow by construction, and 60 s would kill them while they do their job.
 [[profile.default.overrides]]
 filter = 'package(oxyn-driver-postgres)'
 test-group = 'serveur-partage'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
-# Les lectures de production éprouvées à travers le bus créent un schéma et un
-# rôle du même nom sur le même serveur d'essai.
+# Production reads exercised through the bus create a schema and a role of the
+# same name on the same test server.
 [[profile.default.overrides]]
 filter = 'package(oxyn-exec) & test(/production_read_tests::server::/)'
 test-group = 'serveur-partage'

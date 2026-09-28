@@ -1,335 +1,335 @@
-# Sécurité
+# Security
 
-> **Autorité** : traitement des secrets, marquage des connexions, surface
-> d'attaque, politique `unsafe`.
+> **Authority**: handling of secrets, marking of connections, attack
+> surface, `unsafe` policy.
 
-Invariants concernés : [I-02](../CLAUDE.md#i-02), [I-03](../CLAUDE.md#i-03),
-[I-09](../CLAUDE.md#i-09). La politique d'autorisation elle-même est tranchée par
-[ADR-0004](adr/0004-command-bus.md) et n'est pas recopiée ici.
+Invariants involved: [I-02](../CLAUDE.md#i-02), [I-03](../CLAUDE.md#i-03),
+[I-09](../CLAUDE.md#i-09). The authorization policy itself is settled by
+[ADR-0004](adr/0004-command-bus.md) and is not copied here.
 
-## Signaler une vulnérabilité
+## Reporting a vulnerability
 
-Ne publiez jamais de secret, de preuve d'exploitation ou de donnée utilisateur
-dans une issue ou une pull request. Utilisez le formulaire privé
+Never publish a secret, a proof of exploitation or user data
+in an issue or a pull request. Use the repository's private
 [GitHub Security Advisories](https://github.com/so-keyldzn/oxyn/security/advisories/new)
-du dépôt. Décrivez la version ou le commit concerné, le scénario minimal, la
-gravité estimée et les étapes de reproduction après avoir supprimé les secrets.
+form. Describe the affected version or commit, the minimal scenario, the
+estimated severity and the reproduction steps, after removing the secrets.
 
-Le mainteneur accuse réception via le canal privé et coordonne la correction,
-la validation et la publication éventuelle d'un avis. Si le formulaire privé
-n'est pas disponible, contactez le mainteneur via son profil GitHub et indiquez
-uniquement que le signalement concerne la sécurité ; ne transmettez pas les
-détails sensibles dans un message public.
+The maintainer acknowledges receipt through the private channel and coordinates the fix,
+the validation and the possible publication of an advisory. If the private form
+is not available, contact the maintainer through their GitHub profile and state
+only that the report concerns security; do not send the
+sensitive details in a public message.
 
-Le modèle de menace d'Oxyn n'est pas celui d'un serveur. L'attaquant n'est pas
-un inconnu sur Internet : ce sont **les données que l'utilisateur ouvre** et
-**les erreurs qu'Oxyn lui laisse commettre**. Un client de base de données tourne
-avec les droits d'un administrateur sur des systèmes de production.
+Oxyn's threat model is not a server's. The attacker is not
+a stranger on the Internet: it is **the data the user opens** and
+**the mistakes Oxyn lets them make**. A database client runs
+with an administrator's privileges on production systems.
 
 ## Secrets
 
-### Ce qui ne touche jamais le disque en clair
+### What never touches the disk in clear
 
-Mots de passe, chaînes de connexion complètes, jetons d'API des fournisseurs IA,
-clés privées SSH de tunnel, certificats clients.
+Passwords, full connection strings, AI provider API tokens,
+SSH tunnel private keys, client certificates.
 
-Le stockage passe par le trousseau du système. Ce qui est persisté dans le
-workspace, c'est une **référence** au secret, jamais le secret.
+Storage goes through the system keychain. What is persisted in the
+workspace is a **reference** to the secret, never the secret.
 
-**Panne concrète :** un fichier de workspace contenant un mot de passe de
-production, commité par l'utilisateur dans le dépôt de son équipe, parce que le
-fichier avait l'air d'être une simple configuration.
+**Concrete failure:** a workspace file containing a production password,
+committed by the user to their team's repository, because the
+file looked like mere configuration.
 
-### Un secret ne suit pas sa connexion ailleurs
+### A secret does not follow its connection elsewhere
 
-Un secret saisi pour une destination n'est jamais présenté à une autre que
-l'utilisateur n'a pas choisie en le saisissant. Quand une modification change
-**un paramètre non secret déclaré par le driver** — hôte, port, base, fichier
-SQLite, mais aussi utilisateur, mode TLS ou nom d'application —, la connexion
-enregistrée ne référence plus l'entrée de trousseau de l'ancienne destination.
-Ce qui a été ressaisi dans la même modification est écrit dans une entrée
-**neuve**, sous une référence qu'aucune configuration n'a portée avant ; sans
-ressaisie, la connexion n'a plus de secret. L'ancienne entrée est ensuite
-**oubliée** du trousseau. Le nom, l'environnement, le niveau IA et la lecture
-seule ne changent pas la destination, et ne touchent pas au secret. Les valeurs
-se comparent après suppression des espaces de bord, comme elles s'enregistrent.
+A secret entered for one destination is never presented to another one that
+the user did not choose when entering it. When an edit changes
+**a non-secret parameter declared by the driver** — host, port, database, SQLite
+file, but also user, TLS mode or application name —, the saved
+connection no longer references the keychain entry of the previous destination.
+What was re-entered in the same edit is written to a **new**
+entry, under a reference that no configuration carried before; without
+re-entry, the connection no longer has a secret. The old entry is then
+**forgotten** from the keychain. The name, the environment, the AI tier and the read-only
+flag do not change the destination, and do not touch the secret. Values
+are compared after trimming surrounding whitespace, as they are saved.
 
-L'entrée neuve est ce qui rend la règle sans exception. La configuration est
-enregistrée **avant** l'écriture au trousseau — une modification retenue par la
-politique puis refusée ne doit rien changer — : une référence dérivée du seul
-identifiant nommerait, dans l'intervalle, l'entrée qui porte encore l'ancien
-mot de passe, et pour toujours si le processus s'arrête entre les deux. Avec
-une référence neuve, un échec d'écriture laisse la connexion sans secret, et un
-échec d'oubli laisse une entrée que plus rien ne référence ; ni l'un ni l'autre
-ne présente l'ancien secret à la nouvelle destination.
+The new entry is what makes the rule exceptionless. The configuration is
+saved **before** the keychain write — an edit held by the
+policy then refused must change nothing —: a reference derived from the
+identifier alone would, in the meantime, name the entry that still carries the old
+password, and forever if the process stops between the two. With
+a new reference, a failed write leaves the connection without a secret, and a
+failed forget leaves an entry that nothing references any more; neither
+presents the old secret to the new destination.
 
-Le formulaire le dit avant l'enregistrement
-([UX-SPEC](UX-SPEC.md#modifier-une-connexion-enregistrée)). L'action Test ne
-s'offre qu'à un brouillon neuf, sous un identifiant neuf : elle n'atteint jamais
-le secret d'une connexion enregistrée. Les fournisseurs IA suivent la même règle
-pour leur clé d'API, au changement de famille, de schéma, d'hôte, de port, de
-chemin ou de requête de l'URL de base.
+The form says so before saving
+([UX-SPEC](UX-SPEC.md#editing-a-saved-connection)). The Test action
+is only offered to a new draft, under a new identifier: it never reaches
+the secret of a saved connection. AI providers follow the same rule
+for their API key, when the family, scheme, host, port,
+path or query of the base URL changes.
 
-Tout paramètre plutôt qu'une « adresse » : un mot de passe envoyé sous un autre
-rôle, ou sous `sslmode=disable` là où il partait sous `verify-full`, fuit tout
-autant ; dans le doute, oublier ne coûte qu'une ressaisie.
+Every parameter rather than an "address": a password sent under another
+role, or under `sslmode=disable` where it used to go under `verify-full`, leaks just
+as much; when in doubt, forgetting only costs a re-entry.
 
-**Panne concrète :** une adresse collée depuis un message, ou une faute de frappe
-dans l'hôte, et le mot de passe de production part s'authentifier auprès d'un
-serveur tiers au premier clic, sans que l'utilisateur l'ait ressaisi.
+**Concrete failure:** an address pasted from a message, or a typo
+in the host, and the production password goes off to authenticate against a
+third-party server on the first click, without the user having re-entered it.
 
-### Ce qui ne sort jamais d'un processus
+### What never leaves a process
 
-Les six canaux, et il faut les traiter tous les six — il suffit d'en oublier un.
+The six channels, and all six must be handled — forgetting one is enough.
 
-| Canal | Le piège |
+| Channel | The trap |
 |---|---|
-| Journaux `tracing` | un `Debug` dérivé sur une structure de connexion imprime tout |
-| Messages d'erreur affichés | `sqlx` inclut parfois l'URL de connexion dans son erreur |
-| Rapports de plantage | une trace de pile capture les variables locales |
-| Fichiers de session et de workspace | la persistance « pour retrouver l'état » |
-| Invites envoyées aux fournisseurs IA | [AI-PROVIDERS](AI-PROVIDERS.md) |
-| Presse-papiers, export, capture d'écran | les fonctions de partage recopient ce qui est affiché |
+| `tracing` logs | a `Debug` derived on a connection structure prints everything |
+| Displayed error messages | `sqlx` sometimes includes the connection URL in its error |
+| Crash reports | a stack trace captures local variables |
+| Session and workspace files | persistence "to restore the state" |
+| Prompts sent to AI providers | [AI-PROVIDERS](AI-PROVIDERS.md) |
+| Clipboard, export, screenshot | sharing features copy what is displayed |
 
-Conséquence pratique : **aucun `#[derive(Debug)]` sur un type qui porte un
-secret.** L'implémentation est manuelle et rédige la valeur. Un `Debug` dérivé
-est le mode de fuite le plus fréquent parce qu'il est invisible à la relecture —
-c'est le `tracing::debug!("{cfg:?}")` ajouté six mois plus tard qui fuit.
+Practical consequence: **no `#[derive(Debug)]` on a type that carries a
+secret.** The implementation is manual and redacts the value. A derived `Debug`
+is the most frequent leak because it is invisible in review —
+it is the `tracing::debug!("{cfg:?}")` added six months later that leaks.
 
-### Ce qui sort vers un destinataire IA laisse une trace
+### What goes out to an AI recipient leaves a trace
 
-**Ce qui part vers un destinataire IA est journalisé**, dans `ai_egress`, table
-locale en ajout seul protégée comme `audit_journal` et jamais élaguée : la
-connexion, la source, les **noms** des colonnes envoyées, le nombre de lignes,
-le destinataire (fournisseur ou agent, modèle, portée `local`, `remote` ou
-`unresolved` mesurée pour cet envoi), la commande qui a lu les données et la
-conversation. **Jamais une valeur ni un jeton** : il n'y a pas de colonne pour
-les ranger, et le fichier refuse une liste de colonnes qui contiendrait autre
-chose que des noms. L'entrée s'écrit **avant** l'envoi ; si elle échoue, rien
-ne part.
+**What goes out to an AI recipient is logged**, in `ai_egress`, an append-only
+local table protected like `audit_journal` and never pruned: the
+connection, the source, the **names** of the columns sent, the number of rows,
+the recipient (provider or agent, model, scope `local`, `remote` or
+`unresolved` measured for that send), the command that read the data and the
+conversation. **Never a value nor a token**: there is no column to
+store them, and the file refuses a column list that would contain anything
+other than names. The entry is written **before** the send; if it fails, nothing
+goes out.
 
-## Marquage des connexions
+## Connection marking
 
-Toute connexion porte un environnement : `local`, `development`, `staging`,
-`production`. Le défaut, quand il n'est pas renseigné, est **`production`** —
-la valeur la plus contraignante, pas la plus permissive.
+Every connection carries an environment: `local`, `development`, `staging`,
+`production`. The default, when it is not set, is **`production`** —
+the most restrictive value, not the most permissive.
 
-**Panne concrète :** le défaut inverse. Un utilisateur ajoute une connexion à la
-hâte sans remplir le champ, le programme suppose « development », et un `UPDATE`
-sans `WHERE` part sans confirmation sur la base client.
+**Concrete failure:** the opposite default. A user adds a connection in a
+hurry without filling the field, the program assumes "development", and an `UPDATE`
+without `WHERE` goes out without confirmation on the customer database.
 
-Sur une connexion `production` : toute écriture, tout DDL, toute opération
-destructrice exige une confirmation explicite qui **nomme la connexion**, et
-l'interface porte un marqueur permanent. Voir [I-02](../CLAUDE.md#i-02). Cette
-confirmation est un dialogue natif et non un bouton de la webview
-([Surface d'entrée](#surface-dentrée), point 5).
+On a `production` connection: every write, every DDL, every destructive
+operation requires an explicit confirmation that **names the connection**, and
+the interface carries a permanent marker. See [I-02](../CLAUDE.md#i-02). This
+confirmation is a native dialog, not a webview button
+([Input surface](#input-surface), item 5).
 
-Une **lecture** passe sans confirmation, et c'est ce qui la rend dangereuse : un
-`SELECT` qui appelle une fonction `VOLATILE`, ou qui lit une vue qui le fait,
-écrit, et aucune analyse du texte ne peut le voir. Sur une connexion
-`production`, `oxyn-exec` borne donc toute exécution classée lecture à la
-lecture seule, quelles que soient les bornes demandées par l'appelant, et le
-driver fait refuser l'écriture par le serveur (PostgreSQL : transaction
-`READ ONLY` ; SQLite : `sqlite3_stmt_readonly`). Une telle fonction ne s'appelle
-en production que sous une forme que la classification ne lit pas comme une
-lecture — `CALL`, un bloc `DO` —, donc après la confirmation qui nomme la
-connexion. La borne ne confine pas tout : une transaction `READ ONLY` de
-PostgreSQL écrit encore dans une table temporaire, et ne retient rien de ce qui
-sort de la transaction — `dblink_exec` vers une autre connexion,
-`pg_terminate_backend`, `set_config`, les verrous consultatifs.
+A **read** goes through without confirmation, and that is what makes it dangerous: a
+`SELECT` that calls a `VOLATILE` function, or that reads a view that does,
+writes, and no analysis of the text can see it. On a
+`production` connection, `oxyn-exec` therefore bounds every execution classified as a read to
+read-only, whatever bounds the caller requested, and the
+driver has the server refuse the write (PostgreSQL: `READ ONLY`
+transaction; SQLite: `sqlite3_stmt_readonly`). Such a function can only be called
+in production in a form the classification does not read as a
+read — `CALL`, a `DO` block —, hence after the confirmation that names the
+connection. The bound does not confine everything: a PostgreSQL `READ ONLY` transaction
+still writes to a temporary table, and holds back nothing that
+leaves the transaction — `dblink_exec` to another connection,
+`pg_terminate_backend`, `set_config`, advisory locks.
 
-**Panne concrète :** `SELECT public.audit_touch()` dans une console de
-production, où la fonction insère une ligne : l'écriture partait sans
-confirmation, classée comme une lecture.
+**Concrete failure:** `SELECT public.audit_touch()` in a production
+console, where the function inserts a row: the write went out without
+confirmation, classified as a read.
 
-Pour un `Actor::Agent`, une connexion `production` est en **lecture seule
-stricte** — ce n'est pas une confirmation renforcée, c'est un refus
-([ADR-0004](adr/0004-command-bus.md#politique-par-défaut)). La différence
-compte : une confirmation finit par être cliquée.
+For an `Actor::Agent`, a `production` connection is **strictly
+read-only** — it is not a stronger confirmation, it is a refusal
+([ADR-0004](adr/0004-command-bus.md#default-policy)). The difference
+matters: a confirmation ends up being clicked.
 
-Un `Actor::Agent` ne pilote pas non plus une transaction, quel que soit
-l'environnement : `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE` et
-leurs synonymes (`END`, `ABORT`, `PREPARE TRANSACTION`…) lui sont refusés. Ces
-instructions ne lisent ni n'écrivent d'elles-mêmes, mais elles valident ou
-annulent ce que la session tient — sur une session partagée, les écritures de
-l'utilisateur. Le refus ne dépend pas de l'état de transaction : le `PolicyGate`
-ne le consulte pas ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)).
+An `Actor::Agent` does not drive a transaction either, whatever the
+environment: `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE` and
+their synonyms (`END`, `ABORT`, `PREPARE TRANSACTION`…) are refused to it. These
+statements neither read nor write by themselves, but they commit or
+roll back what the session holds — on a shared session, the user's
+writes. The refusal does not depend on the transaction state: the `PolicyGate`
+does not consult it ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)).
 
-Ce refus a deux limites connues. Il ne lit que le SQL : un langage que
-`oxyn-query` n'analyse pas est `Unknown`, soumis à approbation hors production,
-et le premier driver non SQL devra apprendre ses propres verbes de transaction.
-Et il ne couvre que les fins **explicites** : sous SQLite, une écriture
-interrompue (Stop, délai dépassé) ou tombée sur `SQLITE_FULL`, `SQLITE_IOERR`
-ou `SQLITE_BUSY` peut annuler toute la transaction ouverte — une écriture
-d'agent approuvée sur une session partagée le peut donc aussi. Le panneau
-d'assistant ouvre aujourd'hui sa propre session, distincte des consoles.
+This refusal has two known limits. It only reads SQL: a language that
+`oxyn-query` does not parse is `Unknown`, subject to approval outside production,
+and the first non-SQL driver will have to learn its own transaction verbs.
+And it only covers **explicit** ends: under SQLite, an interrupted write
+(Stop, timeout) or one that hit `SQLITE_FULL`, `SQLITE_IOERR`
+or `SQLITE_BUSY` can roll back the whole open transaction — an approved agent
+write on a shared session can therefore too. The assistant
+panel currently opens its own session, separate from the consoles.
 
-## Surface d'entrée
+## Input surface
 
-Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
+What enters Oxyn and is untrusted, in order of underestimation:
 
-1. **Les réponses des serveurs de bases de données.** Voir
-   [DRIVER-CONTRACT](DRIVER-CONTRACT.md). Un serveur compromis ou simplement
-   inhabituel renvoie ce qu'il veut.
-2. **Les noms d'objets du catalogue.** Une table, une colonne, un commentaire
-   peuvent contenir n'importe quel octet, y compris du SQL, des séquences de
-   contrôle de terminal, ou du texte imitant une consigne. Un nom de colonne
-   n'est jamais interpolé dans une requête sans citation, et **jamais traité
-   comme une instruction** lorsqu'il est joint à une invite IA.
-3. **Les fichiers de workspace.** Ils peuvent avoir été écrits par un tiers, ou
-   par une version future du programme.
-4. **Les plugins.** Du code tiers, exécuté dans un bac à sable WASM
-   ([ADR-0005](adr/0005-wasm-plugins.md)). Le bac à sable borne les dégâts ; il
-   ne dispense pas de ne rien lui confier. Voir
+1. **Database server responses.** See
+   [DRIVER-CONTRACT](DRIVER-CONTRACT.md). A compromised or merely
+   unusual server returns whatever it wants.
+2. **Catalog object names.** A table, a column, a comment
+   can contain any byte, including SQL, terminal control
+   sequences, or text imitating an instruction. A column name
+   is never interpolated into a query without quoting, and **never treated
+   as an instruction** when it is attached to an AI prompt.
+3. **Workspace files.** They may have been written by a third party, or
+   by a future version of the program.
+4. **Plugins.** Third-party code, run in a WASM sandbox
+   ([ADR-0005](adr/0005-wasm-plugins.md)). The sandbox bounds the damage; it
+   does not exempt from entrusting it with nothing. See
    [PLUGIN-CONTRACT](PLUGIN-CONTRACT.md).
-5. **La webview.** Une valeur de cellule, un nom d'objet ou une réponse de modèle
-   rendus dans le DOM sont le premier vecteur d'une XSS, et une XSS dans la
-   webview atteint les commandes Tauri ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
-   D'où : rendu en texte seulement — jamais `dangerouslySetInnerHTML` sur une
-   donnée reçue —, CSP stricte dans `crates/oxyn-desktop/tauri.conf.json`,
-   *capabilities* minimales dans `capabilities/main.json`, et une surface IPC
-   dont chaque commande est relue comme un changement de sécurité.
+5. **The webview.** A cell value, an object name or a model response
+   rendered in the DOM are the first vector of an XSS, and an XSS in the
+   webview reaches the Tauri commands ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
+   Hence: text-only rendering — never `dangerouslySetInnerHTML` on
+   received data —, a strict CSP in `crates/oxyn-desktop/tauri.conf.json`,
+   minimal *capabilities* in `capabilities/main.json`, and an IPC surface
+   in which every command is reviewed as a security change.
 
-   **Plusieurs fenêtres ne font pas plusieurs surfaces**
-   ([ADR-0043](adr/0043-multi-fenetre.md)). La capability couvre les fenêtres
-   par le motif `workspace-*`, avec les mêmes trois permissions, dont aucune
-   ne crée de fenêtre ni de webview. Une fenêtre ne s'ouvre que par
-   `open_window`, en Rust, bornée à 16. L'identité d'une fenêtre vient de la
-   `Webview` que Tauri fournit à la commande, jamais d'un libellé envoyé par
-   le JavaScript. Chaque commande qui vise une console, une session, une
-   commande, un résultat, un document ou l'assistant d'une connexion refuse ce
-   qu'une autre fenêtre possède (`backend/windows.rs`). Rien n'est diffusé :
-   chaque fenêtre a ses `Channel`, filtrés en Rust, et `clippy.toml` interdit
-   les méthodes d'émission de `tauri::Emitter`. Ce qu'une XSS dans une fenêtre
-   en tire : ouvrir des fenêtres jusqu'à la borne, fermer la sienne, retenir
-   ou annuler sa propre fermeture, réécrire la liste de ses propres consoles
-   pour le prochain lancement (`report_window_consoles`, 256 au plus, jamais
-   un document qu'une autre fenêtre écrit), déplacer l'une de ses propres
-   consoles vers une fenêtre neuve (`open_in_new_window`, qui ne prend ni
-   libellé ni fenêtre cible). Elle n'atteint rien d'une autre fenêtre.
-   Une réserve, qui tient à un secret : `start_dragging` et
-   `internal_toggle_maximize` de Tauri acceptent le libellé d'une autre
-   fenêtre (`tauri` 2.11.5, `src/window/plugin.rs`, `get_window`). Aucune
-   commande ne renvoie donc au front le libellé d'une fenêtre, ni même le
-   sien ; une commande qui le ferait donnerait à une XSS de quoi déplacer ou
-   agrandir les autres fenêtres.
+   **Several windows do not make several surfaces**
+   ([ADR-0043](adr/0043-multi-fenetre.md)). The capability covers windows
+   through the `workspace-*` pattern, with the same three permissions, none of which
+   creates a window or a webview. A window only opens through
+   `open_window`, in Rust, bounded to 16. The identity of a window comes from the
+   `Webview` Tauri provides to the command, never from a label sent by
+   the JavaScript. Every command that targets a console, a session, a
+   command, a result, a document or a connection's assistant refuses what
+   another window owns (`backend/windows.rs`). Nothing is broadcast:
+   each window has its `Channel`s, filtered in Rust, and `clippy.toml` forbids
+   the emit methods of `tauri::Emitter`. What an XSS in a window
+   gets out of it: opening windows up to the bound, closing its own, holding
+   or cancelling its own closing, rewriting the list of its own consoles
+   for the next launch (`report_window_consoles`, 256 at most, never
+   a document another window writes), moving one of its own
+   consoles to a new window (`open_in_new_window`, which takes neither a
+   label nor a target window). It reaches nothing of another window.
+   One caveat, which comes down to a secret: Tauri's `start_dragging` and
+   `internal_toggle_maximize` accept the label of another
+   window (`tauri` 2.11.5, `src/window/plugin.rs`, `get_window`). No
+   command therefore returns to the front end the label of a window, not even its
+   own; a command that did would give an XSS the means to move or
+   maximize the other windows.
 
-   **Une confirmation dessinée dans la webview ne résiste pas à un script qui
-   s'y exécute** : il appelle la commande que le bouton aurait appelée. Les
-   décisions critiques se confirment donc dans un **dialogue natif de l'hôte**,
-   composé par le backend, dont la fermeture vaut refus. Ce qui est critique,
-   ce que le dialogue dit et comment il se teste vivent dans
-   [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md), et
-   nulle part ailleurs ; le reste garde sa confirmation dans la webview.
+   **A confirmation drawn in the webview does not withstand a script running
+   in it**: the script calls the command the button would have called. Critical
+   decisions are therefore confirmed in a **native host dialog**,
+   composed by the backend, whose dismissal counts as a refusal. What is critical,
+   what the dialog says and how it is tested live in
+   [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md), and
+   nowhere else; everything else keeps its confirmation in the webview.
 
-   `style-src` y garde `'self' 'unsafe-inline'` : des composants posent un
-   `<style>` à l'exécution, dans le DOM de la webview, alors que Tauri ne pose
-   un `nonce` que sur les `<style>` déjà présents, en texte, dans le HTML
-   statique du build — et ce fichier n'en contient aucun (vérifié dans le
-   source de `tauri-codegen` 2.6.3 et `tauri-utils` 2.9.3, versions de
-   `Cargo.lock`, le 2026-09-24 — [I-12](../CLAUDE.md#i-12)). En dépendent :
+   `style-src` keeps `'self' 'unsafe-inline'` there: components insert a
+   `<style>` at runtime, into the webview's DOM, whereas Tauri only puts
+   a `nonce` on the `<style>` elements already present, as text, in the static
+   HTML of the build — and that file contains none (checked in the
+   source of `tauri-codegen` 2.6.3 and `tauri-utils` 2.9.3, the versions in
+   `Cargo.lock`, on 2026-09-24 — [I-12](../CLAUDE.md#i-12)). Depending on it:
 
-   - `ChartStyle` (`apps/desktop/src/components/ui/chart.tsx`) ;
-   - l'éditeur SQL CodeMirror (`sql-editor.tsx`), via `style-mod` 4.1.3 ;
-   - `ScrollArea` et `Select` de Base UI 1.8.0 (`scroll-area.tsx`,
-     `select.tsx`), qui masquent la barre de défilement par un `<style>`
-     injecté ;
-   - le rendu mermaid (`mermaid-render.ts`, mermaid 11.17.2) : `render()`
-     sans conteneur pose son diagramme (et un `<style>` de thème) dans
-     `document.body` le temps de mesurer les libellés, avant de sérialiser le
-     SVG et de retirer cet élément — vérifié dans le source installé,
-     `mermaid.core.mjs` (fonctions `render`, `appendDivSvgG`), le 2026-09-24.
+   - `ChartStyle` (`apps/desktop/src/components/ui/chart.tsx`);
+   - the CodeMirror SQL editor (`sql-editor.tsx`), through `style-mod` 4.1.3;
+   - Base UI 1.8.0's `ScrollArea` and `Select` (`scroll-area.tsx`,
+     `select.tsx`), which hide the scrollbar with an injected
+     `<style>`;
+   - mermaid rendering (`mermaid-render.ts`, mermaid 11.17.2): `render()`
+     without a container puts its diagram (and a theme `<style>`) into
+     `document.body` long enough to measure the labels, before serializing the
+     SVG and removing that element — checked in the installed source,
+     `mermaid.core.mjs` (functions `render`, `appendDivSvgG`), on 2026-09-24.
 
-   Ce que la CSP borne autour : `script-src` reste `'self'`, `img-src`,
-   `font-src` et `connect-src` sont fermés — une règle CSS injectée ne peut
-   rien exfiltrer. Le contenu de `ChartStyle` n'est jamais une donnée reçue :
-   les clés (`s0`, `s1`…) viennent d'Oxyn, les couleurs d'une palette fixe
-   (commentaire de `assistant-result-chart.tsx`) — c'est ce qui le rend
-   compatible avec la règle du point 5 ci-dessus.
+   What the CSP bounds around it: `script-src` stays `'self'`, `img-src`,
+   `font-src` and `connect-src` are closed — an injected CSS rule cannot
+   exfiltrate anything. The content of `ChartStyle` is never received data:
+   the keys (`s0`, `s1`…) come from Oxyn, the colors from a fixed palette
+   (comment in `assistant-result-chart.tsx`) — that is what makes it
+   compatible with the rule of item 5 above.
 
-   **Ce qui l'annulerait sans erreur visible :** qu'un `<style>` apparaisse un
-   jour dans le HTML du build — Tauri lui poserait alors un `nonce`, ce qui
-   rend `'unsafe-inline'` inopérant pour le navigateur (même mécanisme que
-   pour `script-src` en développement, voir
-   [RESEARCH-NOTES](RESEARCH-NOTES.md)), et ces composants perdraient leurs
-   styles sans qu'aucune erreur ne le signale — pour mermaid, un diagramme
-   mesuré avec la mauvaise police mais dessiné avec la bonne, donc des
-   libellés qui débordent de leurs boîtes, sans erreur non plus.
+   **What would cancel it without a visible error:** a `<style>` appearing one
+   day in the build's HTML — Tauri would then put a `nonce` on it, which
+   makes `'unsafe-inline'` inoperative for the browser (same mechanism as
+   for `script-src` in development, see
+   [RESEARCH-NOTES](RESEARCH-NOTES.md)), and these components would lose their
+   styles without any error reporting it — for mermaid, a diagram
+   measured with the wrong font but drawn with the right one, hence
+   labels overflowing their boxes, without an error either.
 
-   **Condition de retrait :** seulement quand chacun de ces `<style>` reçoit un
-   `nonce` transmis au front (`EditorView.cspNonce` pour CodeMirror,
-   `CSPProvider` pour Base UI) ou disparaît (`disableStyleElements` pour Base
-   UI, des variables CSS posées par `style={{}}` — CSSOM, non concerné par
-   `style-src` — pour `ChartStyle`) — et, pour mermaid, seulement quand une
-   version future accepte un `nonce` sur son `<style>` de thème, ou rend hors
-   du document principal de la webview.
-6. **Les réponses des fournisseurs IA.** Ce sont des propositions, pas des
-   ordres : elles passent par le `PolicyGate` comme n'importe quelle commande
-   ([ADR-0004](adr/0004-command-bus.md)). Voir [I-07](../CLAUDE.md#i-07).
-7. **Les fichiers déposés sur la fenêtre.** Un chemin reçu du système est ce
-   que l'utilisateur a glissé — ou ce qu'une page ouverte ailleurs a mis dans
-   le glisser. Il est classé en Rust (`crates/oxyn-desktop/src/file_drop.rs`) :
-   un lien symbolique est refusé, pas suivi, parce que l'extension de son nom
-   ne dit rien du fichier visé ; un `.sql` est lu borné à 4 Mio, en UTF-8
-   strict, et ouvert dans une console sans être exécuté ; un fichier de base
-   n'est qu'**offert** comme connexion, en `production`, créée seulement si
-   l'utilisateur la valide. La commande `subscribe_file_drops` ne prend aucun
-   chemin : la webview ne peut pas demander la lecture d'un fichier de son
-   choix, et le front ne reçoit qu'un texte ou une valeur de formulaire.
+   **Removal condition:** only when each of these `<style>` elements receives a
+   `nonce` passed to the front end (`EditorView.cspNonce` for CodeMirror,
+   `CSPProvider` for Base UI) or disappears (`disableStyleElements` for Base
+   UI, CSS variables set through `style={{}}` — CSSOM, not affected by
+   `style-src` — for `ChartStyle`) — and, for mermaid, only when a
+   future version accepts a `nonce` on its theme `<style>`, or renders outside
+   the webview's main document.
+6. **AI provider responses.** They are proposals, not
+   orders: they go through the `PolicyGate` like any other command
+   ([ADR-0004](adr/0004-command-bus.md)). See [I-07](../CLAUDE.md#i-07).
+7. **Files dropped on the window.** A path received from the system is what
+   the user dragged — or what a page open elsewhere put into
+   the drag. It is classified in Rust (`crates/oxyn-desktop/src/file_drop.rs`):
+   a symbolic link is refused, not followed, because the extension of its name
+   says nothing of the targeted file; a `.sql` is read bounded to 4 MiB, as strict
+   UTF-8, and opened in a console without being executed; a database file
+   is only **offered** as a connection, in `production`, created only if
+   the user validates it. The `subscribe_file_drops` command takes no
+   path: the webview cannot request reading a file of its
+   choice, and the front end only receives a text or a form value.
 
-## Politique `unsafe`
+## `unsafe` policy
 
-**`unsafe` est refusé à la compilation.** `[workspace.lints.rust]` porte
-`unsafe_code = "deny"`, et aucune des quatorze crates — douze sous `crates/`,
-deux drivers sous `drivers/` — n'en contient ni ne le réautorise. C'est le manifeste qui fait foi ici, parce que c'est lui qui est
-exécuté : ce document décrivait auparavant une politique d'encadrement que la
-compilation n'accorde pas, et [ADR-0021](adr/0021-marqueur-d-arret.md) a fondé
-une décision d'architecture — ne pas vérifier un pid — sur le refus, pas sur
-l'encadrement.
+**`unsafe` is refused at compile time.** `[workspace.lints.rust]` carries
+`unsafe_code = "deny"`, and none of the fourteen crates — twelve under `crates/`,
+two drivers under `drivers/` — contains it or re-allows it. The manifest is authoritative here, because it is what is
+executed: this document previously described a policy of supervised use that
+compilation does not grant, and [ADR-0021](adr/0021-marqueur-d-arret.md) grounded
+an architecture decision — not checking a pid — on the refusal, not on the
+supervision.
 
-Lever ce refus est une décision d'architecture, pas un `#[allow]` local :
+Lifting this refusal is an architecture decision, not a local `#[allow]`:
 
-- elle passe par un **ADR** qui dit ce que `unsafe` achète et ce qu'il coûte ;
-- le `#[allow(unsafe_code)]` qui en découle est porté au plus près, jamais au
-  workspace ;
-- chaque bloc porte un `// SAFETY:` qui énonce l'invariant qui le rend correct,
-  et **qui** le garantit ;
-- il passe par la relecture de l'agent `relecteur-securite` ;
-- la crate qui l'expose derrière une API sûre documente les conditions de cette
-  sûreté.
+- it goes through an **ADR** that says what `unsafe` buys and what it costs;
+- the resulting `#[allow(unsafe_code)]` is placed as close as possible, never on the
+  workspace;
+- each block carries a `// SAFETY:` that states the invariant that makes it correct,
+  and **who** guarantees it;
+- it goes through the review of the `relecteur-securite` agent;
+- the crate that exposes it behind a safe API documents the conditions of that
+  safety.
 
-Les dépendances externes, elles, en contiennent — Tauri, ses
-webviews et les FFI de pilotes en imposent. Le refus porte sur **ce que ce dépôt écrit**.
+External dependencies, for their part, contain it — Tauri, its
+webviews and driver FFIs require it. The refusal covers **what this repository writes**.
 
-Un `// SAFETY:` qui paraphrase le code (« on déréférence un pointeur valide »)
-ne vaut rien : il doit dire **pourquoi** le pointeur est valide à cet endroit et
-ce qui le maintiendra valide.
+A `// SAFETY:` that paraphrases the code ("we dereference a valid pointer")
+is worthless: it must say **why** the pointer is valid at that place and
+what will keep it valid.
 
-## Dépendances
+## Dependencies
 
-- toute nouvelle dépendance directe est justifiée en revue : ce qu'elle apporte,
-  et le coût de s'en passer ;
-- `cargo deny` sur les licences et les avis de sécurité fait partie de la porte
-  de qualité, par la cible `make deny` que `make qualite` appelle. Elle **avertit
-  sans bloquer** quand `cargo-deny` n'est pas installé : une porte qui échoue sur
-  un outil absent finit par être contournée, et c'est alors tout le contrôle qui
-  disparaît. La configuration vit dans `deny.toml`. Toute licence qu'elle
-  accepte est compatible avec la GPLv3, la licence de l'application
-  ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md)) ;
-- les dépendances npm de production d'`apps/desktop` passent le même contrôle,
-  par `make licences-npm`, que `make front-controles` appelle. La liste est
-  celle de `deny.toml`, complétée pour npm par `apps/desktop/licences-npm.toml` ;
-- une dépendance qui n'est utilisée qu'à un seul endroit pour une seule fonction
-  est un candidat à la réécriture, pas une évidence ;
-- une crate non maintenue sur une frontière externe est un risque à documenter,
-  pas à ignorer ;
-- un avis de sécurité écarté l'est **dans `deny.toml`, avec sa raison écrite**.
-  Le seul aujourd'hui est RUSTSEC-2024-0429 — une *unsoundness* de
-  `glib::VariantStrIter`, atteinte par `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
-  La correction est dans `glib 0.20`, que `gtk 0.18` refuse : rien ne se monte
-  ici tant que Tauri n'a pas changé de GTK. Ce code est celui de Linux ; il
-  n'est pas compilé sur macOS, la seule cible livrée aujourd'hui, et Oxyn
-  n'appelle pas cet itérateur. À rouvrir à la prochaine montée de Tauri.
+- every new direct dependency is justified in review: what it brings,
+  and the cost of doing without it;
+- `cargo deny` on licenses and security advisories is part of the quality
+  gate, through the `make deny` target that `make qualite` calls. It **warns
+  without blocking** when `cargo-deny` is not installed: a gate that fails on
+  a missing tool ends up being bypassed, and then the whole check
+  disappears. The configuration lives in `deny.toml`. Every license it
+  accepts is compatible with GPLv3, the application's license
+  ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md));
+- the production npm dependencies of `apps/desktop` go through the same check,
+  through `make licences-npm`, which `make front-controles` calls. The list is
+  the one in `deny.toml`, completed for npm by `apps/desktop/licences-npm.toml`;
+- a dependency used in a single place for a single function
+  is a candidate for rewriting, not a given;
+- an unmaintained crate on an external boundary is a risk to document,
+  not to ignore;
+- a dismissed security advisory is dismissed **in `deny.toml`, with its written reason**.
+  The only one today is RUSTSEC-2024-0429 — an *unsoundness* in
+  `glib::VariantStrIter`, reached through `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
+  The fix is in `glib 0.20`, which `gtk 0.18` refuses: nothing can be upgraded
+  here until Tauri changes GTK. This code is Linux's; it
+  is not compiled on macOS, the only target shipped today, and Oxyn
+  does not call this iterator. To reopen at the next Tauri upgrade.
 
-Voir aussi [`/securite`](../.claude/commands/securite.md) et
-[la liste de contrôle](../.claude/checklists/revue-securite.md).
+See also [`/securite`](../.claude/commands/securite.md) and
+[the checklist](../.claude/checklists/revue-securite.md).

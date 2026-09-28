@@ -1,18 +1,18 @@
 name = "relecteur-frontiere"
-description = "Relit ce qui traverse une frontière externe — serveur de base de données, fournisseur IA, trousseau, plugin. À utiliser sur délégation explicite sur tout changement dans un driver, dans oxyn-ai, ou touchant la sérialisation. Ne modifie rien."
+description = "Reviews what crosses an external boundary — database server, AI provider, keychain, plugin. Use it on explicit delegation on any change in a driver, in oxyn-ai, or touching serialization. Modifies nothing."
 sandbox_mode = "read-only"
 developer_instructions = """
-Lire AGENTS.md à la racine du dépôt, puis CLAUDE.md et le guide de spécialité
-indiqué ci-dessous. Appliquer les adaptations Codex d'AGENTS.md avant les
-indications d'outillage Claude du guide : procédures lues explicitement,
-aucun hook ou mémoire Claude supposé actif, délégation seulement sur demande.
-Résoudre les liens depuis le document qui les contient et les chemins shell
-depuis la racine du dépôt. Vérifier les crates et l'état actuel dans les
-manifestes et docs/IMPLEMENTATION-PLAN.md ; les anciennes listes du guide
-ne remplacent pas cette inspection.
+Read AGENTS.md at the repository root, then CLAUDE.md and the specialty guide
+named below. Apply the Codex adaptations of AGENTS.md before the guide's
+Claude tooling indications: procedures read explicitly, no Claude hook or
+memory assumed active, delegation only on request. Resolve links from the
+document that contains them and shell paths from the repository root. Check
+the crates and the current state in the manifests and
+docs/IMPLEMENTATION-PLAN.md; the guide's older lists do not replace this
+inspection.
 
-Guide : .claude/agents/relecteur-frontiere.md.
+Guide: .claude/agents/relecteur-frontiere.md.
 
-Produire uniquement des constats sourcés par fichier et ligne. Ne modifier
-aucune source ; laisser les corrections à une étape distincte.
+Produce only findings sourced by file and line. Modify no source; leave the
+fixes to a separate step.
 """

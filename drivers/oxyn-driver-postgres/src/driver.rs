@@ -1,25 +1,25 @@
-//! Le driver : ce qu'il dit de lui-même, et comment il ouvre une session.
+//! The driver: what it says about itself, and how it opens a session.
 //!
-//! # Un driver par protocole
+//! # One driver per protocol
 //!
-//! Cette crate est celle de **tout ce qui parle le protocole PostgreSQL** :
-//! PostgreSQL, Amazon Redshift, TimescaleDB, pgvector, Citus. Il n'y a pas de
-//! crate `oxyn-driver-redshift`, et il n'y en aura pas : la différence entre ces
-//! produits est un jeu de capacités, pas un décodeur de protocole de plus
-//! ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
+//! This crate is the one for **everything that speaks the PostgreSQL
+//! protocol**: PostgreSQL, Amazon Redshift, TimescaleDB, pgvector, Citus. There
+//! is no `oxyn-driver-redshift` crate, and there will not be one: the difference
+//! between these products is a set of capabilities, not one more protocol
+//! decoder ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
 //!
-//! # La connexion en trois temps
+//! # The connection in three steps
 //!
-//! 1. la configuration devient un [`ConnectSpec`], qui refuse tout secret
-//!    persisté et n'a pas de `Debug` bavard ;
-//! 2. le bassin s'ouvre, en course contre l'annulation — une poignée de main TLS
-//!    vers un hôte injoignable dure une minute, et `Échap` doit y couper court ;
-//! 3. la variante est **détectée** : `version()` puis `pg_extension`. C'est là,
-//!    et seulement là, que les capacités de la session se fixent.
+//! 1. the configuration becomes a [`ConnectSpec`], which refuses any persisted
+//!    secret and has no talkative `Debug`;
+//! 2. the pool opens, racing against cancellation — a TLS handshake to an
+//!    unreachable host lasts a minute, and `Esc` must cut it short;
+//! 3. the variant is **detected**: `version()` then `pg_extension`. That is
+//!    where, and only where, the session's capabilities are fixed.
 //!
-//! Si la détection échoue, la connexion échoue. Ouvrir une session dont on ne
-//! sait pas ce qu'elle peut faire reviendrait à déclarer des capacités au jugé —
-//! et une capacité fausse fait apparaître une surface qui ne marche pas.
+//! If detection fails, the connection fails. Opening a session without knowing
+//! what it can do would mean declaring capabilities by guesswork — and a wrong
+//! capability brings up a surface that does not work.
 
 use async_trait::async_trait;
 use oxyn_core::{CancelToken, Capabilities, ConnectionConfig, DriverId, Result, StatementIntent};
@@ -36,23 +36,22 @@ use crate::options::{
 use crate::session::{PostgresSession, race_cancel};
 use crate::variant::{PostgresVariant, driver_capabilities};
 
-/// Identité du serveur et base courante. Littéral, sans rien de composé.
+/// Server identity and current database. A literal, nothing composed.
 const SQL_IDENTITY: &str = "SELECT version(), current_database()";
-/// Les extensions installées dans la base courante.
+/// The extensions installed in the current database.
 ///
-/// `::text` parce que `extname` est de type `name` : la conversion évite d'avoir
-/// à décoder un type dont tous les dialectes compatibles ne partagent pas
-/// l'OID.
+/// `::text` because `extname` is of type `name`: the cast avoids having to
+/// decode a type whose OID not all compatible dialects share.
 const SQL_EXTENSIONS: &str = "SELECT extname::text FROM pg_catalog.pg_extension ORDER BY extname";
 
-/// Le driver PostgreSQL.
+/// The PostgreSQL driver.
 #[derive(Debug, Clone)]
 pub struct PostgresDriver {
     metadata: DriverMetadata,
 }
 
 impl PostgresDriver {
-    /// Construit le driver et son formulaire de connexion.
+    /// Builds the driver and its connection form.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -67,15 +66,15 @@ impl Default for PostgresDriver {
     }
 }
 
-/// Le formulaire de connexion de PostgreSQL.
+/// PostgreSQL's connection form.
 ///
-/// Aucun driver ne code son propre écran : il décrit ses champs, l'interface les
-/// rend. C'est ce qui garantit qu'un champ de mot de passe reste un champ de mot
-/// de passe dans les quatorze drivers, et qu'il ne rejoint jamais un fichier de
-/// workspace.
+/// No driver codes its own screen: it describes its fields, the interface
+/// renders them. That is what guarantees that a password field stays a password
+/// field in all fourteen drivers, and that it never ends up in a workspace
+/// file.
 ///
-/// Le champ `password` **n'a pas de valeur par défaut** : elle serait écrite en
-/// clair dans le binaire, et `DriverMetadata::check` la refuserait.
+/// The `password` field **has no default value**: it would be written in clear
+/// in the binary, and `DriverMetadata::check` would refuse it.
 #[must_use]
 pub fn postgres_metadata() -> DriverMetadata {
     DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)
@@ -124,25 +123,25 @@ impl Driver for PostgresDriver {
         &self.metadata
     }
 
-    /// Le plafond de ce que le driver peut offrir.
+    /// The ceiling of what the driver can offer.
     ///
-    /// Indicatif : ce qui fait foi est [`Session::capabilities`], évalué après
-    /// détection de la variante.
+    /// Indicative: what is authoritative is [`Session::capabilities`], evaluated
+    /// after the variant is detected.
     fn capabilities(&self) -> Capabilities {
         driver_capabilities()
     }
 
-    /// Ouvre un bassin, détecte la variante, et rend la session.
+    /// Opens a pool, detects the variant, and returns the session.
     ///
-    /// # Erreurs
-    /// Chemins complets : `OxynError` n'est pas importé dans ce module, et un
-    /// lien intra-doc ne se résout pas sur un nom absent de la portée.
+    /// # Errors
+    /// Full paths: `OxynError` is not imported in this module, and an intra-doc
+    /// link does not resolve on a name absent from the scope.
     ///
-    /// [`oxyn_core::OxynError::Config`] si la configuration est incomplète ou
-    /// porte un secret ; [`oxyn_core::OxynError::Authentication`] si le serveur
-    /// refuse les identifiants ; [`oxyn_core::OxynError::Connection`] s'il est
-    /// injoignable ; [`oxyn_core::OxynError::Cancelled`] si `cancel` se
-    /// déclenche pendant la poignée de main.
+    /// [`oxyn_core::OxynError::Config`] if the configuration is incomplete or
+    /// carries a secret; [`oxyn_core::OxynError::Authentication`] if the server
+    /// refuses the credentials; [`oxyn_core::OxynError::Connection`] if it is
+    /// unreachable; [`oxyn_core::OxynError::Cancelled`] if `cancel` fires during
+    /// the handshake.
     async fn connect(
         &self,
         config: &ConnectionConfig,
@@ -157,93 +156,93 @@ impl Driver for PostgresDriver {
                 .max_connections(MAX_CONNECTIONS)
                 .min_connections(0)
                 .acquire_timeout(ACQUIRE_TIMEOUT)
-                // Une connexion tirée du bassin après une coupure réseau doit
-                // échouer ici, pas au milieu de la requête de l'utilisateur.
+                // A connection taken from the pool after a network cut must
+                // fail here, not in the middle of the user's query.
                 .test_before_acquire(true)
                 .connect_with(spec.options().clone())
                 .await
-                .map_err(|erreur| map_connect_error(&erreur))
+                .map_err(|error| map_connect_error(&error))
         })
         .await?;
 
-        let variante = match race_cancel(cancel, detect_variant(&pool)).await {
-            Ok(variante) => variante,
-            Err(erreur) => {
-                // Un bassin ouvert que personne ne tiendra doit être refermé :
-                // sinon la connexion reste établie côté serveur.
+        let variant = match race_cancel(cancel, detect_variant(&pool)).await {
+            Ok(variant) => variant,
+            Err(error) => {
+                // An open pool nobody will hold must be closed: otherwise the
+                // connection stays established on the server.
                 pool.close().await;
-                return Err(erreur);
+                return Err(error);
             }
         };
 
         tracing::debug!(
             target: "oxyn::driver::postgres",
-            produit = %variante.product(),
-            version = %variante.server_version,
-            "session ouverte"
+            product = %variant.product(),
+            version = %variant.server_version,
+            "session opened"
         );
 
         Ok(Box::new(PostgresSession::new(
             self.id(),
             pool,
             spec,
-            variante,
+            variant,
             base,
         )))
     }
 }
 
-/// Interroge le serveur sur son identité et ses extensions.
+/// Asks the server for its identity and its extensions.
 ///
-/// Deux allers-retours, une fois par session. Le second est **facultatif** :
-/// `pg_extension` n'existe pas sur Redshift et n'est pas lisible par un compte
-/// aux droits restreints. Une liste d'extensions vide dit « je n'ai rien
-/// trouvé », pas « il n'y en a pas » — et aucune capacité optionnelle n'est
-/// alors activée, ce qui est le côté prudent.
+/// Two round trips, once per session. The second is **optional**:
+/// `pg_extension` does not exist on Redshift and is not readable by an account
+/// with restricted rights. An empty extension list says "I found nothing", not
+/// "there are none" — and no optional capability is then enabled, which is the
+/// cautious side.
 async fn detect_variant(pool: &PgPool) -> Result<PostgresVariant> {
-    let identite = sqlx::query(SQL_IDENTITY)
+    let identity = sqlx::query(SQL_IDENTITY)
         .fetch_one(pool)
         .await
-        .map_err(|erreur| map_connect_error(&erreur))?;
+        .map_err(|error| map_connect_error(&error))?;
 
-    let banniere: String = identite
+    let banner: String = identity
         .try_get(0)
-        .map_err(|erreur| map_exec_error(&DriverId::postgres(), StatementIntent::Read, erreur))?;
+        .map_err(|error| map_exec_error(&DriverId::postgres(), StatementIntent::Read, error))?;
 
     let extensions: Vec<String> = match sqlx::query(SQL_EXTENSIONS).fetch_all(pool).await {
-        Ok(lignes) => lignes
+        Ok(rows) => rows
             .iter()
-            .filter_map(|ligne| ligne.try_get::<String, _>(0).ok())
+            .filter_map(|row| row.try_get::<String, _>(0).ok())
             .collect(),
-        Err(erreur) => {
-            // Traduite avant d'être journalisée : `sqlx` compose parfois ses
-            // messages avec l'URL de connexion, et « aucun `sqlx::Error` ne sort
-            // sans traduction » est une règle qui ne vaut que sans exception.
+        Err(error) => {
+            // Translated before being logged: `sqlx` sometimes composes its
+            // messages with the connection URL, and "no `sqlx::Error` goes out
+            // untranslated" is a rule that only holds without exception.
             tracing::debug!(
                 target: "oxyn::driver::postgres",
-                error = %map_connect_error(&erreur),
+                error = %map_connect_error(&error),
                 "pg_extension is unreadable: no extension capability will be declared"
             );
             Vec::new()
         }
     };
 
-    let version = server_version_from_banner(&banniere);
-    Ok(PostgresVariant::detect(&banniere, &version, extensions))
+    let version = server_version_from_banner(&banner);
+    Ok(PostgresVariant::detect(&banner, &version, extensions))
 }
 
-/// Extrait le numéro de version d'une bannière `version()`.
+/// Extracts the version number from a `version()` banner.
 ///
-/// La bannière est de la forme `PostgreSQL 17.2 on aarch64-apple-darwin…` : le
-/// second mot est la version, pour PostgreSQL comme pour les produits qui
-/// imitent sa bannière. On ne devine rien de plus ; si la forme change, la
-/// version est vide et [`PostgresVariant::major_version`] vaut `None`, ce qui
-/// est une réponse honnête.
+/// The banner has the form `PostgreSQL 17.2 on aarch64-apple-darwin…`: the
+/// second word is the version, for PostgreSQL as for the products that imitate
+/// its banner. Nothing more is guessed; if the form changes, the version is
+/// empty and [`PostgresVariant::major_version`] is `None`, which is an honest
+/// answer.
 fn server_version_from_banner(banner: &str) -> String {
     banner
         .split_whitespace()
         .nth(1)
-        .filter(|mot| mot.starts_with(|c: char| c.is_ascii_digit()))
+        .filter(|word| word.starts_with(|c: char| c.is_ascii_digit()))
         .unwrap_or_default()
         .to_owned()
 }
@@ -255,27 +254,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn le_driver_se_declare_de_facon_coherente() {
-        // `DriverRegistry::register` refuse une divergence entre `id()` et les
-        // métadonnées, parce qu'elle rendrait le driver introuvable.
+    fn the_driver_declares_itself_consistently() {
+        // `DriverRegistry::register` refuses a divergence between `id()` and the
+        // metadata, because it would make the driver impossible to find.
         let driver = PostgresDriver::new();
         assert_eq!(driver.id(), driver.metadata().id);
         driver
             .metadata()
             .check()
-            .expect("le formulaire de connexion est cohérent");
+            .expect("the connection form is consistent");
 
-        let mut registre = DriverRegistry::new();
-        registre
+        let mut registry = DriverRegistry::new();
+        registry
             .register(std::sync::Arc::new(PostgresDriver::new()))
-            .expect("enregistrement");
-        assert!(registre.contains(&DriverId::postgres()));
+            .expect("registration");
+        assert!(registry.contains(&DriverId::postgres()));
     }
 
     #[test]
-    fn le_formulaire_porte_les_champs_attendus() {
-        let metadonnees = postgres_metadata();
-        for cle in [
+    fn the_form_carries_the_expected_fields() {
+        let metadata = postgres_metadata();
+        for key in [
             "host",
             "port",
             "database",
@@ -284,38 +283,38 @@ mod tests {
             "sslmode",
             "application_name",
         ] {
-            assert!(metadonnees.field(cle).is_some(), "champ `{cle}` absent");
+            assert!(metadata.field(key).is_some(), "field `{key}` missing");
         }
-        assert_eq!(metadonnees.default_port, Some(5432));
+        assert_eq!(metadata.default_port, Some(5432));
     }
 
     #[test]
-    fn le_mot_de_passe_est_le_seul_champ_secret_et_n_a_pas_de_defaut() {
-        // Une valeur par défaut sur un champ secret serait écrite en clair dans
-        // le binaire (I-03).
-        let metadonnees = postgres_metadata();
-        let secrets: Vec<&str> = metadonnees
+    fn the_password_is_the_only_secret_field_and_has_no_default() {
+        // A default value on a secret field would be written in clear in the
+        // binary (I-03).
+        let metadata = postgres_metadata();
+        let secrets: Vec<&str> = metadata
             .secret_fields()
-            .map(|champ| champ.key.as_str())
+            .map(|field| field.key.as_str())
             .collect();
         assert_eq!(secrets, ["password"]);
 
-        let champ = metadonnees
+        let field = metadata
             .field("password")
-            .expect("le champ mot de passe existe");
-        assert!(champ.default.is_none());
-        assert_eq!(champ.kind, FieldKind::Password);
+            .expect("the password field exists");
+        assert!(field.default.is_none());
+        assert_eq!(field.kind, FieldKind::Password);
     }
 
     #[test]
-    fn le_mode_tls_propose_les_six_valeurs_de_libpq() {
-        let metadonnees = postgres_metadata();
-        let champ = metadonnees.field("sslmode").expect("le champ TLS existe");
-        let FieldKind::Choice(valeurs) = &champ.kind else {
-            panic!("`sslmode` doit être un choix fermé : {:?}", champ.kind);
+    fn the_tls_mode_offers_the_six_libpq_values() {
+        let metadata = postgres_metadata();
+        let field = metadata.field("sslmode").expect("the TLS field exists");
+        let FieldKind::Choice(values) = &field.kind else {
+            panic!("`sslmode` must be a closed choice: {:?}", field.kind);
         };
         assert_eq!(
-            valeurs,
+            values,
             &[
                 "disable",
                 "allow",
@@ -328,28 +327,34 @@ mod tests {
     }
 
     #[test]
-    fn une_configuration_de_connexion_valide_passe_la_validation_du_driver() {
-        let metadonnees = postgres_metadata();
-        let connexion = ConnectionConfig::new("caisse", DriverId::postgres())
-            .with_param("host", "interne.example")
-            .with_param("database", "caisse")
+    fn a_valid_connection_configuration_passes_driver_validation() {
+        let metadata = postgres_metadata();
+        let connection = ConnectionConfig::new("shop", DriverId::postgres())
+            .with_param("host", "internal.example")
+            .with_param("database", "shop")
             .with_param("user", "app");
-        metadonnees
-            .validate(&connexion)
-            .expect("les trois champs obligatoires sont renseignés");
+        metadata
+            .validate(&connection)
+            .expect("the three required fields are filled in");
     }
 
     #[test]
-    fn le_plafond_du_driver_contient_le_sql_et_l_annulation_serveur() {
-        let capacites = PostgresDriver::new().capabilities();
-        assert!(capacites.contains(Capabilities::SQL));
-        assert!(capacites.contains(Capabilities::SERVER_SIDE_CANCEL));
-        assert!(capacites.contains(Capabilities::VECTOR_SEARCH), "pgvector");
-        assert!(capacites.contains(Capabilities::TIME_SERIES), "TimescaleDB");
+    fn the_driver_ceiling_contains_sql_and_server_side_cancel() {
+        let capabilities = PostgresDriver::new().capabilities();
+        assert!(capabilities.contains(Capabilities::SQL));
+        assert!(capabilities.contains(Capabilities::SERVER_SIDE_CANCEL));
+        assert!(
+            capabilities.contains(Capabilities::VECTOR_SEARCH),
+            "pgvector"
+        );
+        assert!(
+            capabilities.contains(Capabilities::TIME_SERIES),
+            "TimescaleDB"
+        );
     }
 
     #[test]
-    fn la_version_se_lit_dans_la_banniere() {
+    fn the_version_is_read_from_the_banner() {
         assert_eq!(
             server_version_from_banner("PostgreSQL 17.2 on aarch64-apple-darwin, 64-bit"),
             "17.2"
@@ -363,16 +368,16 @@ mod tests {
     }
 
     #[test]
-    fn une_banniere_inattendue_ne_produit_pas_de_version_inventee() {
-        // « On ne devine pas » : mieux vaut ne rien annoncer qu'annoncer faux.
+    fn an_unexpected_banner_produces_no_invented_version() {
+        // "Nothing is guessed": better announce nothing than announce wrong.
         assert_eq!(server_version_from_banner("bonjour"), "");
         assert_eq!(server_version_from_banner("CockroachDB CCL v23.1.0"), "");
         assert_eq!(server_version_from_banner(""), "");
     }
 
     #[test]
-    fn le_sql_compose_a_la_connexion_ne_concatene_rien() {
-        // I-10 : ces deux requêtes sont tout ce que le driver compose ici.
+    fn sql_composed_at_connection_concatenates_nothing() {
+        // I-10: these two queries are all the driver composes here.
         for compose in [SQL_IDENTITY, SQL_EXTENSIONS] {
             assert!(!compose.contains('{'), "{compose}");
             assert!(!compose.contains("||"), "{compose}");

@@ -1,45 +1,45 @@
-# Rapport de mesure — <ce qui a été mesuré>
+# Measurement report — <what was measured>
 
-**Date :** AAAA-MM-JJ · **Commit :** `<hash>` · **Machine :** <modèle, cœurs, RAM>
+**Date:** AAAA-MM-JJ · **Commit:** `<hash>` · **Machine:** <model, cores, RAM>
 
-## Ce qui a été mesuré, et avec quoi
+## What was measured, and with what
 
 | | |
 |---|---|
-| Sujet | … |
-| Instrument | `criterion` / instruments du système / observation longue |
-| Volume d'entrée | … *(du même ordre que le volume réel ; mille lignes tiennent dans le cache L2 et ne mesurent que lui)* |
-| Machine au repos | oui / non *(un `cargo build` en arrière-plan invalide le résultat)* |
+| Subject | … |
+| Instrument | `criterion` / system instruments / long observation |
+| Input volume | … *(of the same order as the real volume; a thousand rows fit in the L2 cache and only measure it)* |
+| Machine idle | yes / no *(a `cargo build` in the background invalidates the result)* |
 
-## Résultats
+## Results
 
-| Mesure | Avant | Après | Écart |
+| Measurement | Before | After | Delta |
 |---|---|---|---|
 | … | … | … | … |
 
-## Contre les budgets
+## Against the budgets
 
-Budgets dans `docs/PERFORMANCE.md`.
+Budgets in `docs/PERFORMANCE.md`.
 
-| Budget | Valeur | Mesuré | Tenu |
+| Budget | Value | Measured | Held |
 |---|---|---|---|
-| … | … | … | oui / non |
+| … | … | … | yes / no |
 
-## Interprétation
+## Interpretation
 
-Ce que le chiffre dit, et ce qu'il ne dit pas. Nommer explicitement ce qui n'a
-**pas** été mesuré : c'est ce qu'un lecteur pressé supposera acquis.
+What the figure says, and what it does not say. Explicitly name what was **not**
+measured: it is what a hurried reader will assume is settled.
 
-## Décision
+## Decision
 
-- [ ] L'optimisation vaut sa complexité — le chiffre part dans le message de
-      commit
-- [ ] L'optimisation ne vaut pas sa complexité — on garde le code clair
-- [ ] Un budget ne peut pas être tenu → **écrire un ADR**, jamais ajuster le
-      budget en silence
+- [ ] The optimization is worth its complexity — the figure goes into the commit
+      message
+- [ ] The optimization is not worth its complexity — the clear code stays
+- [ ] A budget cannot be held → **write an ADR**, never adjust the budget
+      silently
 
-## Rappel
+## Reminder
 
-Une mesure contre une base réelle n'est pas un banc d'essai : le réseau et
-l'état du serveur dominent le signal. Ce qui se mesure, c'est le temps passé
-*dans* Oxyn.
+A measurement against a real database is not a bench: the network and the
+server state dominate the signal. What gets measured is the time spent *inside*
+Oxyn.

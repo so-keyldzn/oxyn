@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-driver-postgres"
-description = "Driver PostgreSQL (et dialectes compatibles : Redshift, Timescale, pgvector)"
+description = "PostgreSQL driver (and compatible dialects: Redshift, Timescale, pgvector)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

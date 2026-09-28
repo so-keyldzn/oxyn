@@ -1,47 +1,47 @@
-//! Le `PolicyGate` : le point de passage unique du command bus (ADR-0004).
+//! The `PolicyGate`: the single gateway of the command bus (ADR-0004).
 //!
-//! Donner à des agents IA l'accès à des bases de production est le risque n° 1
-//! du produit. Toute commande — de l'interface, d'un agent, d'un plugin —
-//! traverse ce gate et en ressort avec une [`Decision`] : `Allow`,
-//! `RequireApproval` ou `Deny`. Il n'y a pas de second chemin, et il ne doit
-//! jamais y avoir de `if` de vérification dupliqué dans un appelant : deux
-//! endroits qui décident, c'est un endroit qui oubliera.
+//! Giving AI agents access to production databases is the product's number 1
+//! risk. Every command — from the interface, an agent, a plugin — goes through
+//! this gate and comes out with a [`Decision`]: `Allow`, `RequireApproval` or
+//! `Deny`. There is no second path, and there must never be a duplicated
+//! checking `if` in a caller: two places that decide make one place that will
+//! forget.
 //!
-//! # La politique par défaut
+//! # The default policy
 //!
-//! [`DefaultPolicy`] applique, dans cet ordre :
+//! [`DefaultPolicy`] applies, in this order:
 //!
-//! | Règle | Effet |
+//! | Rule | Effect |
 //! |---|---|
 //! | agent + `GRANT`/`REVOKE` | `Deny` |
-//! | agent + `SetSessionContext` | `Deny` — l'effet porte sur les instructions suivantes |
-//! | agent + contrôle de transaction (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`…) | `Deny` — l'effet porte sur la transaction de la session, peut-être celle de l'utilisateur |
-//! | commande mutante sur une connexion marquée lecture seule | `Deny`, humain compris |
-//! | commande mutante sur une connexion **inconnue** du gate | `Deny` |
-//! | agent + commande mutante + production | `Deny` — lecture seule stricte |
-//! | risque de mutation non borné (`UPDATE`/`DELETE` sans `WHERE`, `TRUNCATE`, `DROP`) | `RequireApproval`, quel que soit l'acteur |
-//! | agent + commande mutante | `RequireApproval` avec prévisualisation |
-//! | humain + commande mutante + production | `RequireApproval` nommant la connexion |
-//! | le reste | `Allow` |
+//! | agent + `SetSessionContext` | `Deny` — the effect bears on the following statements |
+//! | agent + transaction control (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`…) | `Deny` — the effect bears on the session's transaction, perhaps the user's |
+//! | mutating command on a connection marked read-only | `Deny`, human included |
+//! | mutating command on a connection **unknown** to the gate | `Deny` |
+//! | agent + mutating command + production | `Deny` — strict read-only |
+//! | unbounded mutation risk (`UPDATE`/`DELETE` without `WHERE`, `TRUNCATE`, `DROP`) | `RequireApproval`, whatever the actor |
+//! | agent + mutating command | `RequireApproval` with preview |
+//! | human + mutating command + production | `RequireApproval` naming the connection |
+//! | the rest | `Allow` |
 //!
-//! Deux points qui ne sont pas des détails :
+//! Two points that are not details:
 //!
-//! * pour un agent, une connexion de production est en **lecture seule
-//!   stricte** — un refus, pas une confirmation renforcée. La différence
-//!   compte : une confirmation finit par être cliquée ;
-//! * la règle « humain + production » vient de
-//!   [`SECURITY`](../../../docs/SECURITY.md) : sur une connexion `production`,
-//!   toute écriture et tout DDL exigent une confirmation explicite qui **nomme
-//!   la connexion**. Elle s'ajoute à la matrice acteur × intention.
+//! * for an agent, a production connection is **strictly read-only** — a
+//!   refusal, not a stronger confirmation. The difference matters: a
+//!   confirmation ends up being clicked;
+//! * the "human + production" rule comes from
+//!   [`SECURITY`](../../../docs/SECURITY.md): on a `production` connection,
+//!   every write and every DDL require an explicit confirmation that **names
+//!   the connection**. It adds to the actor × intent matrix.
 //!
-//! # Fermé par défaut
+//! # Closed by default
 //!
-//! Une commande mutante visant une connexion que le gate ne connaît pas est
-//! **refusée**. Le gate ne peut pas décider de ce qu'il ne voit pas : ignorer le
-//! marquage d'environnement d'une connexion non enregistrée reviendrait à
-//! traiter la production comme du local. Enregistrer les connexions avec
-//! [`DefaultPolicy::register`] fait donc partie du câblage, pas de la
-//! configuration optionnelle.
+//! A mutating command targeting a connection the gate does not know is
+//! **refused**. The gate cannot decide on what it does not see: ignoring the
+//! environment marking of an unregistered connection would amount to treating
+//! production as local. Registering connections with
+//! [`DefaultPolicy::register`] is therefore part of the wiring, not optional
+//! configuration.
 
 use std::collections::HashMap;
 
@@ -53,31 +53,31 @@ use crate::connection::{ConnectionConfig, Environment};
 use crate::ids::ConnectionId;
 use crate::query::StatementIntent;
 
-/// Ce que le gate répond.
+/// What the gate answers.
 ///
-/// Énumération **fermée** : la triade d'ADR-0004 est le contrat du bus. Une
-/// quatrième réponse serait une décision d'ADR.
+/// **Closed** enumeration: ADR-0004's triad is the bus's contract. A fourth
+/// answer would be an ADR decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "decision")]
 pub enum Decision {
-    /// La commande peut s'exécuter.
+    /// The command can run.
     Allow,
-    /// La commande ne s'exécute qu'après un accord explicite de l'utilisateur.
+    /// The command only runs after an explicit agreement from the user.
     RequireApproval {
-        /// Ce sur quoi l'utilisateur doit se prononcer, rédigé pour être lu.
+        /// What the user must decide on, written to be read.
         reason: String,
-        /// De quoi juger sans relire la requête ailleurs.
+        /// What is needed to judge without reading the query elsewhere.
         preview: Option<Preview>,
     },
-    /// La commande ne s'exécutera pas. Aucune confirmation ne la débloque.
+    /// The command will not run. No confirmation unblocks it.
     Deny {
-        /// Pourquoi, en des termes montrables à l'utilisateur.
+        /// Why, in terms showable to the user.
         reason: String,
     },
 }
 
 impl Decision {
-    /// Construit un refus.
+    /// Builds a refusal.
     #[must_use]
     pub fn deny(reason: impl Into<String>) -> Self {
         Self::Deny {
@@ -85,7 +85,7 @@ impl Decision {
         }
     }
 
-    /// Construit une demande d'approbation.
+    /// Builds an approval request.
     #[must_use]
     pub fn approval(reason: impl Into<String>, preview: Option<Preview>) -> Self {
         Self::RequireApproval {
@@ -94,29 +94,29 @@ impl Decision {
         }
     }
 
-    /// La commande peut-elle s'exécuter sans autre formalité ?
+    /// Can the command run without further formality?
     #[must_use]
     pub const fn is_allowed(&self) -> bool {
         matches!(self, Self::Allow)
     }
 
-    /// La commande est-elle refusée ?
+    /// Is the command refused?
     #[must_use]
     pub const fn is_denied(&self) -> bool {
         matches!(self, Self::Deny { .. })
     }
 
-    /// La commande attend-elle un accord ?
+    /// Is the command waiting for an agreement?
     #[must_use]
     pub const fn requires_approval(&self) -> bool {
         matches!(self, Self::RequireApproval { .. })
     }
 
-    /// Degré de restriction, croissant : `Allow` < `RequireApproval` < `Deny`.
+    /// Degree of restriction, increasing: `Allow` < `RequireApproval` < `Deny`.
     ///
-    /// Sert à comparer deux décisions — notamment à vérifier qu'une décision
-    /// rendue pour un agent est au moins aussi restrictive que celle rendue
-    /// pour un humain sur la même commande.
+    /// Used to compare two decisions — notably to check that a decision given
+    /// for an agent is at least as restrictive as the one given for a human on
+    /// the same command.
     #[must_use]
     pub const fn restrictiveness(&self) -> u8 {
         match self {
@@ -127,34 +127,35 @@ impl Decision {
     }
 }
 
-/// Ce qu'on montre à l'utilisateur avant qu'il tranche.
+/// What is shown to the user before they decide.
 ///
-/// Une confirmation qui se clique par réflexe ne protège personne : la
-/// prévisualisation nomme la connexion et montre l'instruction exacte.
+/// A confirmation clicked by reflex protects nobody: the preview names the
+/// connection and shows the exact statement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preview {
-    /// L'instruction exacte, telle que l'utilisateur ou l'agent l'a écrite.
-    /// Sans les valeurs liées (I-03).
+    /// The exact statement, as the user or the agent wrote it. Without bound
+    /// values (I-03).
     pub statement: String,
-    /// Le **nom** de la connexion, jamais son identifiant.
+    /// The connection's **name**, never its identifier.
     pub connection: String,
-    /// Estimation du nombre de lignes touchées, quand elle est connue.
-    // TODO(2026-12-31) : l'estimation demande un `EXPLAIN` avant revue, dont le
-    // coût et la forme diffèrent par driver — c'est cela qui la débloque, et
-    // c'est un lot identifié dans IMPLEMENTATION-PLAN.
+    /// Estimate of the number of rows touched, when it is known.
+    // TODO(2026-12-31): the estimate needs an `EXPLAIN` before review, whose
+    // cost and shape differ per driver — that is what unblocks it, and it is a
+    // batch identified in IMPLEMENTATION-PLAN.
     //
-    // La rédaction précédente disait « tant que `oxyn-catalog` n'existe pas ».
-    // Cette crate existe et sert partout depuis longtemps : la marque portait
-    // une condition déjà satisfaite, donc un déblocage qui ne viendrait jamais.
-    // `script/verifier-todo` contrôle l'échéance, pas la véracité du motif.
+    // The previous wording said "as long as `oxyn-catalog` does not exist".
+    // That crate has existed and been used everywhere for a long time: the
+    // marker carried a condition already met, hence an unblocking that would
+    // never come. `script/verifier-todo` checks the deadline, not the truth of
+    // the reason.
     //
-    // Un chiffre inventé serait pire que pas de chiffre : la revue de
-    // production le lirait comme une mesure.
+    // An invented figure would be worse than no figure: the production review
+    // would read it as a measurement.
     pub estimated_rows: Option<u64>,
 }
 
 impl Preview {
-    /// Construit une prévisualisation sans estimation.
+    /// Builds a preview without an estimate.
     #[must_use]
     pub fn new(statement: impl Into<String>, connection: impl Into<String>) -> Self {
         Self {
@@ -165,18 +166,18 @@ impl Preview {
     }
 }
 
-/// Le point de passage unique de toute commande.
+/// The single gateway of every command.
 ///
-/// C'est une **frontière**, pas une abstraction spéculative : les politiques
-/// d'entreprise et les politiques de test sont d'autres implémentations.
+/// It is a **boundary**, not a speculative abstraction: enterprise policies
+/// and test policies are other implementations.
 pub trait PolicyGate: Send + Sync {
-    /// Rend la décision applicable à cette commande, pour cet acteur, dans cet
-    /// environnement.
+    /// Returns the decision applicable to this command, for this actor, in this
+    /// environment.
     ///
-    /// `env` est l'environnement que l'appelant attribue à la commande. Une
-    /// implémentation qui connaît le marquage réel de la connexion visée doit
-    /// retenir **le plus contraignant des deux** : un appelant qui se trompe ne
-    /// doit pas pouvoir dégrader la protection.
+    /// `env` is the environment the caller assigns to the command. An
+    /// implementation that knows the real marking of the target connection must
+    /// keep **the more restrictive of the two**: a caller that gets it wrong
+    /// must not be able to lower the protection.
     fn authorize(&self, actor: &Actor, cmd: &Command, env: Environment) -> Decision;
 
     /// The environment `authorize` judges `cmd` in, when the caller announces
@@ -191,23 +192,23 @@ pub trait PolicyGate: Send + Sync {
         announced
     }
 
-    /// Nom de la politique, pour le journal d'audit.
+    /// Name of the policy, for the audit log.
     fn name(&self) -> &'static str {
         "policy"
     }
 }
 
-/// Ce que le gate doit savoir d'une connexion pour décider.
+/// What the gate must know about a connection to decide.
 ///
-/// Volontairement réduit : ni paramètres, ni référence de secret. Le gate n'a
-/// pas besoin de savoir se connecter, seulement de savoir ce qu'il protège.
+/// Deliberately reduced: no parameters, no secret reference. The gate does not
+/// need to know how to connect, only to know what it protects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionFacts {
-    /// Le nom montré à l'utilisateur.
+    /// The name shown to the user.
     pub name: String,
-    /// Le marquage d'environnement.
+    /// The environment marking.
     pub environment: Environment,
-    /// La connexion est-elle déclarée en lecture seule ?
+    /// Is the connection declared read-only?
     pub read_only: bool,
 }
 
@@ -221,84 +222,83 @@ impl From<&ConnectionConfig> for ConnectionFacts {
     }
 }
 
-/// La politique par défaut d'Oxyn.
+/// Oxyn's default policy.
 ///
-/// Le registre de connexions est interne et protégé par un verrou en lecture
-/// écriture : le gate est partagé entre le thread d'interface, l'exécuteur et
-/// les agents, et les connexions apparaissent et disparaissent pendant la vie
-/// du programme.
+/// The connection registry is internal and protected by a read-write lock: the
+/// gate is shared between the interface thread, the executor and the agents,
+/// and connections appear and disappear during the program's life.
 #[derive(Debug, Default)]
 pub struct DefaultPolicy {
     connections: RwLock<HashMap<ConnectionId, ConnectionFacts>>,
 }
 
 impl DefaultPolicy {
-    /// Crée une politique sans aucune connexion enregistrée.
+    /// Creates a policy with no connection registered.
     ///
-    /// Dans cet état, toute commande **mutante** visant un serveur est refusée :
-    /// voir la note « fermé par défaut » du module.
+    /// In this state, every **mutating** command targeting a server is refused:
+    /// see the module's "closed by default" note.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Enregistre ou met à jour ce que le gate sait d'une connexion.
+    /// Registers or updates what the gate knows about a connection.
     ///
-    /// À appeler à la création d'une connexion et à chaque modification : un
-    /// registre en retard sur la configuration ferait décider le gate sur un
-    /// marquage périmé.
+    /// To be called when a connection is created and on every modification: a
+    /// registry lagging behind the configuration would make the gate decide on
+    /// a stale marking.
     pub fn register(&self, config: &ConnectionConfig) {
         self.connections
             .write()
             .insert(config.id, ConnectionFacts::from(config));
     }
 
-    /// Enregistre des faits construits à la main.
+    /// Registers hand-built facts.
     pub fn register_facts(&self, id: ConnectionId, facts: ConnectionFacts) {
         self.connections.write().insert(id, facts);
     }
 
-    /// Oublie une connexion supprimée.
+    /// Forgets a removed connection.
     pub fn forget(&self, id: ConnectionId) {
         self.connections.write().remove(&id);
     }
 
-    /// Ce que le gate sait d'une connexion.
+    /// What the gate knows about a connection.
     #[must_use]
     pub fn facts(&self, id: ConnectionId) -> Option<ConnectionFacts> {
         self.connections.read().get(&id).cloned()
     }
 
-    /// L'environnement sur lequel le gate juge `cmd`, quand l'appelant annonce
-    /// `announced`.
+    /// The environment on which the gate judges `cmd`, when the caller
+    /// announces `announced`.
     ///
-    /// Exposé pour qu'un appelant qui doit savoir si une décision porte sur la
-    /// production — le dialogue natif d'ADR-0037 — lise **ce** calcul plutôt
-    /// qu'une copie qui divergerait.
+    /// Exposed so that a caller that must know whether a decision bears on
+    /// production — ADR-0037's native dialog — reads **this** computation
+    /// rather than a copy that would diverge.
     #[must_use]
     pub fn retained_environment(&self, cmd: &Command, announced: Environment) -> Environment {
         let facts = cmd.target_connection().and_then(|id| self.facts(id));
         Self::retain(announced, facts.as_ref())
     }
 
-    /// Le plus contraignant entre l'environnement annoncé et celui dont la
-    /// connexion est marquée : un appelant qui se trompe ne doit pas pouvoir
-    /// dégrader la protection.
+    /// The more restrictive of the announced environment and the one the
+    /// connection is marked with: a caller that gets it wrong must not be able
+    /// to lower the protection.
     fn retain(announced: Environment, facts: Option<&ConnectionFacts>) -> Environment {
         facts.map_or(announced, |f| announced.max(f.environment))
     }
 
-    /// Nom montrable d'une connexion, ou une mention neutre si elle est
-    /// inconnue. Ne rend **jamais** l'identifiant (I-03).
+    /// Showable name of a connection, or a neutral mention if it is unknown.
+    /// **Never** returns the identifier (I-03).
     fn display_name(facts: Option<&ConnectionFacts>) -> String {
         facts.map_or_else(|| "unknown connection".to_owned(), |f| f.name.clone())
     }
 
-    /// Construit la prévisualisation d'une commande.
+    /// Builds the preview of a command.
     fn preview(cmd: &Command, facts: Option<&ConnectionFacts>) -> Option<Preview> {
         let statement = cmd
             .statement_text()
-            .map_or_else(|| cmd.name().to_owned(), |texte| texte.to_owned());
+            .map_or_else(|| cmd.name().to_owned(), |text| text.to_owned());
         Some(Preview::new(statement, Self::display_name(facts)))
     }
 }
@@ -316,12 +316,12 @@ impl PolicyGate for DefaultPolicy {
                 reason: "only the human may arrange the windows".into(),
             };
         }
-        // Un agent ne déclare pas le point d'accès par lequel il parle. Une
-        // déclaration porte une URL de base : un agent qui pourrait l'écrire
-        // ferait sortir de la machine tout ce qu'on lui confie ensuite, sans
-        // qu'aucune exécution ne figure au journal. C'est un refus et non une
-        // approbation renforcée — une confirmation finit par être cliquée
-        // (I-02, ADR-0023).
+        // An agent does not declare the endpoint it speaks through. A
+        // declaration carries a base URL: an agent that could write it would
+        // send out of the machine everything entrusted to it afterwards,
+        // without any execution appearing in the log. It is a refusal and not
+        // a stronger approval — a confirmation ends up being clicked (I-02,
+        // ADR-0023).
         if actor.is_agent()
             && matches!(
                 cmd,
@@ -341,10 +341,10 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent() && matches!(cmd, Command::TestConnection { .. }) {
             return Decision::deny("only the human may test a connection configuration");
         }
-        // Réconcilier, c'est déclarer avoir inspecté le serveur. Un agent n'a
-        // rien inspecté : l'accepter ferait taire l'avertissement d'une écriture
-        // au résultat inconnu que personne n'a regardée (I-13). Un refus, pas
-        // une confirmation : une confirmation finit par être cliquée (I-02).
+        // Reconciling means declaring one inspected the server. An agent
+        // inspected nothing: accepting it would silence the warning of a write
+        // with an unknown outcome that nobody looked at (I-13). A refusal, not
+        // a confirmation: a confirmation ends up being clicked (I-02).
         if actor.is_agent() && matches!(cmd, Command::ReconcileHistoryEntry { .. }) {
             return Decision::Deny {
                 reason: "only the human may declare an interrupted write reconciled".into(),
@@ -358,18 +358,19 @@ impl PolicyGate for DefaultPolicy {
 
         // ── Refus ───────────────────────────────────────────────────────────
 
-        // Un agent ne gère jamais les droits. Ce n'est pas une question de
-        // confiance dans le modèle : c'est la seule catégorie d'action dont un
-        // agent n'a aucun usage légitime et dont l'effet survit à la session.
+        // An agent never manages rights. It is not a question of trust in the
+        // model: it is the only category of action an agent has no legitimate
+        // use for and whose effect outlives the session.
         if actor.is_agent() && intent == StatementIntent::Grant {
             return Decision::deny("an agent may not change privileges (GRANT / REVOKE)");
         }
 
-        // Un agent ne déplace pas le contexte de session. La commande ne lit ni
-        // n'écrit de donnée — mais son effet survit à la commande, et il porte
-        // sur le sens des instructions **suivantes** : l'utilisateur qui écrit
-        // ensuite `DELETE FROM users` frapperait un autre schéma que celui qu'il
-        // croit viser, sans qu'aucune confirmation ne parle de ce déplacement.
+        // An agent does not move the session context. The command neither
+        // reads nor writes data — but its effect outlives the command, and it
+        // bears on the meaning of the **following** statements: the user who
+        // then writes `DELETE FROM users` would hit a different schema from
+        // the one they believe they target, without any confirmation
+        // mentioning that move.
         if actor.is_agent() && matches!(cmd, Command::SetSessionContext { .. }) {
             return Decision::deny(
                 "an agent may not change the session context: \
@@ -410,8 +411,8 @@ impl PolicyGate for DefaultPolicy {
             }
         }
 
-        // Pour un agent, une connexion de production est en lecture seule
-        // stricte. Un refus, pas une confirmation renforcée.
+        // For an agent, a production connection is strictly read-only. A
+        // refusal, not a stronger confirmation.
         if actor.is_agent() && mutating && env.is_production() {
             return Decision::deny(format!(
                 "an agent is strictly read-only on \"{}\" (production)",
@@ -419,12 +420,12 @@ impl PolicyGate for DefaultPolicy {
             ));
         }
 
-        // ── Approbations ────────────────────────────────────────────────────
+        // ── Approvals ───────────────────────────────────────────────────────
 
-        // Le risque prime, parce que son motif est le plus informatif : mieux
-        // vaut lire « DELETE sans WHERE » que « écriture par un agent ».
-        if let Some(motif) = cmd.mutation_risk().reason() {
-            return Decision::approval(motif, Self::preview(cmd, facts.as_ref()));
+        // The risk comes first, because its reason is the most informative:
+        // better to read "DELETE without WHERE" than "write by an agent".
+        if let Some(reason) = cmd.mutation_risk().reason() {
+            return Decision::approval(reason, Self::preview(cmd, facts.as_ref()));
         }
 
         if actor.is_agent() && mutating {
@@ -437,8 +438,8 @@ impl PolicyGate for DefaultPolicy {
             );
         }
 
-        // SECURITY : sur une connexion de production, toute écriture et tout
-        // DDL exigent une confirmation qui nomme la connexion.
+        // SECURITY: on a production connection, every write and every DDL
+        // require a confirmation that names the connection.
         if mutating && env.is_production() {
             return Decision::approval(
                 format!(
@@ -468,16 +469,16 @@ mod tests {
     use crate::ids::{AgentId, AgentSessionId, DriverId, SessionId, StatementHandle};
     use crate::query::{ExecRequest, MutationRisk, QueryLanguage};
 
-    /// Forme attendue d'une décision, indépendamment du texte du motif.
+    /// Expected shape of a decision, independently of the reason's text.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Forme {
+    enum Shape {
         Allow,
         Approve,
         Deny,
     }
 
-    impl Forme {
-        fn de(decision: &Decision) -> Self {
+    impl Shape {
+        fn of(decision: &Decision) -> Self {
             match decision {
                 Decision::Allow => Self::Allow,
                 Decision::RequireApproval { .. } => Self::Approve,
@@ -486,46 +487,46 @@ mod tests {
         }
     }
 
-    struct Banc {
-        politique: DefaultPolicy,
-        ouverte: ConnectionId,
-        lecture_seule: ConnectionId,
+    struct Bench {
+        policy: DefaultPolicy,
+        open: ConnectionId,
+        read_only_connection: ConnectionId,
     }
 
-    impl Banc {
+    impl Bench {
         fn new() -> Self {
-            let politique = DefaultPolicy::new();
+            let policy = DefaultPolicy::new();
 
-            // Les deux connexions sont marquées `Local` : c'est l'environnement
-            // passé à `authorize` qui pilote la matrice. L'escalade par le
-            // marquage a son propre test.
-            let ouverte = ConnectionConfig::new("atelier", DriverId::postgres())
+            // Both connections are marked `Local`: it is the environment
+            // passed to `authorize` that drives the matrix. Escalation through
+            // the marking has its own test.
+            let open = ConnectionConfig::new("workshop", DriverId::postgres())
                 .with_environment(Environment::Local);
-            let lecture_seule = ConnectionConfig::new("réplica", DriverId::postgres())
+            let read_only_connection = ConnectionConfig::new("replica", DriverId::postgres())
                 .with_environment(Environment::Local)
                 .read_only();
 
-            politique.register(&ouverte);
-            politique.register(&lecture_seule);
+            policy.register(&open);
+            policy.register(&read_only_connection);
 
             Self {
-                politique,
-                ouverte: ouverte.id,
-                lecture_seule: lecture_seule.id,
+                policy,
+                open: open.id,
+                read_only_connection: read_only_connection.id,
             }
         }
 
-        fn connexion(&self, read_only: bool) -> ConnectionId {
+        fn connection(&self, read_only: bool) -> ConnectionId {
             if read_only {
-                self.lecture_seule
+                self.read_only_connection
             } else {
-                self.ouverte
+                self.open
             }
         }
 
         fn execute(&self, read_only: bool, intent: StatementIntent) -> Command {
             Command::Execute {
-                connection: self.connexion(read_only),
+                connection: self.connection(read_only),
                 session: SessionId::new(),
                 request: Box::new(
                     ExecRequest::new(QueryLanguage::SQL, "SELECT 1").with_intent(intent),
@@ -534,7 +535,7 @@ mod tests {
         }
     }
 
-    fn humain() -> Actor {
+    fn human() -> Actor {
         Actor::Human
     }
 
@@ -549,138 +550,138 @@ mod tests {
         Environment::Production,
     ];
 
-    /// La matrice complète : acteur × intention × environnement × lecture seule.
+    /// The complete matrix: actor × intent × environment × read-only.
     ///
-    /// Chaque cellule est écrite à la main. Une table calculée par une fonction
-    /// oracle ne prouverait rien : elle recopierait l'implémentation.
+    /// Each cell is written by hand. A table computed by an oracle function
+    /// would prove nothing: it would copy the implementation.
     #[rustfmt::skip]
-    const MATRICE: &[(bool, StatementIntent, Environment, bool, Forme)] = &[
-        // ── humain, connexion ouverte ───────────────────────────────────────
-        (false, StatementIntent::Read,    Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Production,  false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Production,  false, Forme::Approve),
-        (false, StatementIntent::Ddl,     Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Ddl,     Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Ddl,     Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Ddl,     Environment::Production,  false, Forme::Approve),
-        (false, StatementIntent::Grant,   Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Grant,   Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Grant,   Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Grant,   Environment::Production,  false, Forme::Approve),
-        (false, StatementIntent::Unknown, Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Unknown, Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Unknown, Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Unknown, Environment::Production,  false, Forme::Approve),
+    const MATRIX: &[(bool, StatementIntent, Environment, bool, Shape)] = &[
+        // ── human, open connection ──────────────────────────────────────────
+        (false, StatementIntent::Read,    Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Production,  false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Production,  false, Shape::Approve),
+        (false, StatementIntent::Ddl,     Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Ddl,     Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Ddl,     Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Ddl,     Environment::Production,  false, Shape::Approve),
+        (false, StatementIntent::Grant,   Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Grant,   Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Grant,   Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Grant,   Environment::Production,  false, Shape::Approve),
+        (false, StatementIntent::Unknown, Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Unknown, Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Unknown, Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Unknown, Environment::Production,  false, Shape::Approve),
 
-        // ── humain, connexion en lecture seule ──────────────────────────────
-        (false, StatementIntent::Read,    Environment::Local,       true,  Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Development, true,  Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Staging,     true,  Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Production,  true,  Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Write,   Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Write,   Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Write,   Environment::Production,  true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Production,  true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Production,  true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Production,  true,  Forme::Deny),
+        // ── human, read-only connection ────────────────────────────────────
+        (false, StatementIntent::Read,    Environment::Local,       true,  Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Development, true,  Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Staging,     true,  Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Production,  true,  Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Write,   Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Write,   Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Write,   Environment::Production,  true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Production,  true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Production,  true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Production,  true,  Shape::Deny),
 
-        // ── agent, connexion ouverte ────────────────────────────────────────
-        (true,  StatementIntent::Read,    Environment::Local,       false, Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Development, false, Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Staging,     false, Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Production,  false, Forme::Allow),
-        (true,  StatementIntent::Write,   Environment::Local,       false, Forme::Approve),
-        (true,  StatementIntent::Write,   Environment::Development, false, Forme::Approve),
-        (true,  StatementIntent::Write,   Environment::Staging,     false, Forme::Approve),
-        (true,  StatementIntent::Write,   Environment::Production,  false, Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Local,       false, Forme::Approve),
-        (true,  StatementIntent::Ddl,     Environment::Development, false, Forme::Approve),
-        (true,  StatementIntent::Ddl,     Environment::Staging,     false, Forme::Approve),
-        (true,  StatementIntent::Ddl,     Environment::Production,  false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Local,       false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Development, false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Staging,     false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Production,  false, Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Local,       false, Forme::Approve),
-        (true,  StatementIntent::Unknown, Environment::Development, false, Forme::Approve),
-        (true,  StatementIntent::Unknown, Environment::Staging,     false, Forme::Approve),
-        (true,  StatementIntent::Unknown, Environment::Production,  false, Forme::Deny),
+        // ── agent, open connection ───────────────────────────────────────────
+        (true,  StatementIntent::Read,    Environment::Local,       false, Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Development, false, Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Staging,     false, Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Production,  false, Shape::Allow),
+        (true,  StatementIntent::Write,   Environment::Local,       false, Shape::Approve),
+        (true,  StatementIntent::Write,   Environment::Development, false, Shape::Approve),
+        (true,  StatementIntent::Write,   Environment::Staging,     false, Shape::Approve),
+        (true,  StatementIntent::Write,   Environment::Production,  false, Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Local,       false, Shape::Approve),
+        (true,  StatementIntent::Ddl,     Environment::Development, false, Shape::Approve),
+        (true,  StatementIntent::Ddl,     Environment::Staging,     false, Shape::Approve),
+        (true,  StatementIntent::Ddl,     Environment::Production,  false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Local,       false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Development, false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Staging,     false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Production,  false, Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Local,       false, Shape::Approve),
+        (true,  StatementIntent::Unknown, Environment::Development, false, Shape::Approve),
+        (true,  StatementIntent::Unknown, Environment::Staging,     false, Shape::Approve),
+        (true,  StatementIntent::Unknown, Environment::Production,  false, Shape::Deny),
 
-        // ── agent, connexion en lecture seule ───────────────────────────────
-        (true,  StatementIntent::Read,    Environment::Local,       true,  Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Development, true,  Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Staging,     true,  Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Production,  true,  Forme::Allow),
-        (true,  StatementIntent::Write,   Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Write,   Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Write,   Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Write,   Environment::Production,  true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Production,  true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Production,  true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Production,  true,  Forme::Deny),
+        // ── agent, read-only connection ─────────────────────────────────────
+        (true,  StatementIntent::Read,    Environment::Local,       true,  Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Development, true,  Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Staging,     true,  Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Production,  true,  Shape::Allow),
+        (true,  StatementIntent::Write,   Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Write,   Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Write,   Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Write,   Environment::Production,  true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Production,  true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Production,  true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Production,  true,  Shape::Deny),
     ];
 
     #[test]
-    fn la_matrice_couvre_toutes_les_cellules() {
-        // 2 acteurs × 5 intentions × 4 environnements × 2 marquages.
-        assert_eq!(MATRICE.len(), 80, "une cellule manque à la matrice");
+    fn the_matrix_covers_every_cell() {
+        // 2 actors × 5 intents × 4 environments × 2 markings.
+        assert_eq!(MATRIX.len(), 80, "a cell is missing from the matrix");
 
-        let mut vues = std::collections::HashSet::new();
-        for (est_agent, intent, env, ro, _) in MATRICE {
+        let mut seen = std::collections::HashSet::new();
+        for (is_agent, intent, env, ro, _) in MATRIX {
             assert!(
-                vues.insert((*est_agent, *intent, *env, *ro)),
-                "cellule dupliquée : {est_agent} {intent} {env} {ro}"
+                seen.insert((*is_agent, *intent, *env, *ro)),
+                "duplicated cell: {is_agent} {intent} {env} {ro}"
             );
         }
     }
 
     #[test]
-    fn matrice_de_la_politique_par_defaut() {
-        let banc = Banc::new();
+    fn default_policy_matrix() {
+        let bench = Bench::new();
 
-        for (est_agent, intent, env, read_only, attendu) in MATRICE {
-            let acteur = if *est_agent { agent() } else { humain() };
-            let cmd = banc.execute(*read_only, *intent);
-            let decision = banc.politique.authorize(&acteur, &cmd, *env);
+        for (is_agent, intent, env, read_only, expected) in MATRIX {
+            let actor = if *is_agent { agent() } else { human() };
+            let cmd = bench.execute(*read_only, *intent);
+            let decision = bench.policy.authorize(&actor, &cmd, *env);
 
             assert_eq!(
-                Forme::de(&decision),
-                *attendu,
-                "acteur={acteur} intention={intent} env={env} lecture_seule={read_only} \
+                Shape::of(&decision),
+                *expected,
+                "actor={actor} intent={intent} env={env} read_only={read_only} \
                  → {decision:?}"
             );
         }
     }
 
     #[test]
-    fn un_agent_n_est_jamais_moins_restreint_qu_un_humain() {
-        // Le test que demande la commande `/commande` : la même commande émise
-        // par un agent donne une décision au moins aussi restrictive.
-        let banc = Banc::new();
+    fn an_agent_is_never_less_restricted_than_a_human() {
+        // The test the `/commande` command asks for: the same command emitted
+        // by an agent gets a decision at least as restrictive.
+        let bench = Bench::new();
         let agent = agent();
 
         for intent in [
@@ -692,13 +693,13 @@ mod tests {
         ] {
             for env in ENVS {
                 for read_only in [false, true] {
-                    let cmd = banc.execute(read_only, intent);
-                    let pour_humain = banc.politique.authorize(&humain(), &cmd, env);
-                    let pour_agent = banc.politique.authorize(&agent, &cmd, env);
+                    let cmd = bench.execute(read_only, intent);
+                    let for_human = bench.policy.authorize(&human(), &cmd, env);
+                    let for_agent = bench.policy.authorize(&agent, &cmd, env);
                     assert!(
-                        pour_agent.restrictiveness() >= pour_humain.restrictiveness(),
-                        "intention={intent} env={env} lecture_seule={read_only} : \
-                         agent={pour_agent:?} humain={pour_humain:?}"
+                        for_agent.restrictiveness() >= for_human.restrictiveness(),
+                        "intent={intent} env={env} read_only={read_only}: \
+                         agent={for_agent:?} human={for_human:?}"
                     );
                 }
             }
@@ -706,52 +707,50 @@ mod tests {
     }
 
     #[test]
-    fn un_risque_non_borne_exige_une_approbation_meme_pour_un_humain_en_local() {
-        let banc = Banc::new();
+    fn an_unbounded_risk_requires_approval_even_for_a_human_locally() {
+        let bench = Bench::new();
 
-        for risque in [
+        for risk in [
             MutationRisk::UnboundedUpdate,
             MutationRisk::UnboundedDelete,
             MutationRisk::Truncate,
             MutationRisk::DropObject,
         ] {
             let cmd = Command::Execute {
-                connection: banc.ouverte,
+                connection: bench.open,
                 session: SessionId::new(),
                 request: Box::new(
                     ExecRequest::new(QueryLanguage::SQL, "DELETE FROM events")
                         .with_intent(StatementIntent::Write)
-                        .with_risk(risque),
+                        .with_risk(risk),
                 ),
             };
-            let decision = banc
-                .politique
-                .authorize(&humain(), &cmd, Environment::Local);
+            let decision = bench.policy.authorize(&human(), &cmd, Environment::Local);
             assert!(
                 decision.requires_approval(),
-                "{risque:?} devrait exiger une approbation, obtenu {decision:?}"
+                "{risk:?} should require an approval, got {decision:?}"
             );
 
             let Decision::RequireApproval { reason, preview } = decision else {
-                unreachable!("vérifié juste au-dessus");
+                unreachable!("checked just above");
             };
             assert!(!reason.is_empty());
-            let preview = preview.expect("une opération destructrice se prévisualise");
+            let preview = preview.expect("a destructive operation is previewed");
             assert_eq!(
-                preview.connection, "atelier",
-                "la connexion doit être nommée"
+                preview.connection, "workshop",
+                "the connection must be named"
             );
             assert_eq!(preview.statement, "DELETE FROM events");
         }
     }
 
     #[test]
-    fn un_risque_non_borne_reste_refuse_sur_une_connexion_en_lecture_seule() {
-        let banc = Banc::new();
-        // Intention déclarée en lecture, risque destructeur : l'incohérence est
-        // tranchée du côté prudent, donc le refus s'applique.
+    fn an_unbounded_risk_stays_refused_on_a_read_only_connection() {
+        let bench = Bench::new();
+        // Intent declared as read, destructive risk: the inconsistency is
+        // settled on the cautious side, so the refusal applies.
         let cmd = Command::Execute {
-            connection: banc.lecture_seule,
+            connection: bench.read_only_connection,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "TRUNCATE audit")
@@ -759,19 +758,17 @@ mod tests {
                     .with_risk(MutationRisk::Truncate),
             ),
         };
-        let decision = banc
-            .politique
-            .authorize(&humain(), &cmd, Environment::Local);
+        let decision = bench.policy.authorize(&human(), &cmd, Environment::Local);
         assert!(decision.is_denied(), "{decision:?}");
     }
 
     #[test]
-    fn une_connexion_inconnue_ferme_la_porte() {
-        let politique = DefaultPolicy::new();
-        let inconnue = ConnectionId::new();
+    fn an_unknown_connection_closes_the_door() {
+        let policy = DefaultPolicy::new();
+        let unknown = ConnectionId::new();
 
-        let ecriture = Command::Execute {
-            connection: inconnue,
+        let write = Command::Execute {
+            connection: unknown,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "INSERT INTO t VALUES (1)")
@@ -779,33 +776,33 @@ mod tests {
             ),
         };
         assert!(
-            politique
-                .authorize(&humain(), &ecriture, Environment::Local)
+            policy
+                .authorize(&human(), &write, Environment::Local)
                 .is_denied(),
-            "le gate ne peut pas décider de ce qu'il ne voit pas"
+            "the gate cannot decide on what it does not see"
         );
 
-        // Une lecture, elle, n'a pas besoin du marquage.
-        let lecture = Command::Execute {
-            connection: inconnue,
+        // A read, on the other hand, does not need the marking.
+        let read = Command::Execute {
+            connection: unknown,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "SELECT 1").with_intent(StatementIntent::Read),
             ),
         };
         assert!(
-            politique
-                .authorize(&humain(), &lecture, Environment::Local)
+            policy
+                .authorize(&human(), &read, Environment::Local)
                 .is_allowed()
         );
     }
 
     #[test]
-    fn le_marquage_de_la_connexion_l_emporte_sur_un_environnement_annonce_trop_permissif() {
-        let politique = DefaultPolicy::new();
-        let prod = ConnectionConfig::new("caisse", DriverId::postgres())
+    fn the_connection_marking_prevails_over_a_too_permissive_announced_environment() {
+        let policy = DefaultPolicy::new();
+        let prod = ConnectionConfig::new("checkout", DriverId::postgres())
             .with_environment(Environment::Production);
-        politique.register(&prod);
+        policy.register(&prod);
 
         let cmd = Command::Execute {
             connection: prod.id,
@@ -816,52 +813,54 @@ mod tests {
             ),
         };
 
-        // L'appelant annonce `Local` — par erreur, ou parce qu'il a mal câblé.
-        let decision = politique.authorize(&humain(), &cmd, Environment::Local);
+        // The caller announces `Local` — by mistake, or because it was wired wrong.
+        let decision = policy.authorize(&human(), &cmd, Environment::Local);
         assert!(
             decision.requires_approval(),
-            "le marquage production doit l'emporter : {decision:?}"
+            "the production marking must prevail: {decision:?}"
         );
 
-        let decision = politique.authorize(&agent(), &cmd, Environment::Local);
+        let decision = policy.authorize(&agent(), &cmd, Environment::Local);
         assert!(
             decision.is_denied(),
-            "un agent reste en lecture seule stricte sur une connexion production : {decision:?}"
+            "an agent stays strictly read-only on a production connection: {decision:?}"
         );
     }
 
     #[test]
-    fn oublier_une_connexion_referme_la_porte() {
-        let banc = Banc::new();
-        let cmd = banc.execute(false, StatementIntent::Write);
+    fn forgetting_a_connection_closes_the_door_again() {
+        let bench = Bench::new();
+        let cmd = bench.execute(false, StatementIntent::Write);
         assert!(
-            banc.politique
-                .authorize(&humain(), &cmd, Environment::Local)
+            bench
+                .policy
+                .authorize(&human(), &cmd, Environment::Local)
                 .is_allowed()
         );
 
-        banc.politique.forget(banc.ouverte);
+        bench.policy.forget(bench.open);
         assert!(
-            banc.politique
-                .authorize(&humain(), &cmd, Environment::Local)
+            bench
+                .policy
+                .authorize(&human(), &cmd, Environment::Local)
                 .is_denied()
         );
     }
 
     #[test]
-    fn annuler_reste_possible_partout() {
-        // Refuser une annulation ne protège rien et laisse une requête tourner.
-        let banc = Banc::new();
+    fn cancelling_stays_possible_everywhere() {
+        // Refusing a cancellation protects nothing and leaves a query running.
+        let bench = Bench::new();
         for read_only in [false, true] {
             for env in ENVS {
-                for acteur in [humain(), agent()] {
+                for actor in [human(), agent()] {
                     let cmd = Command::Cancel {
-                        connection: banc.connexion(read_only),
+                        connection: bench.connection(read_only),
                         statement: StatementHandle::new(),
                     };
                     assert!(
-                        banc.politique.authorize(&acteur, &cmd, env).is_allowed(),
-                        "annulation refusée : acteur={acteur} env={env} ro={read_only}"
+                        bench.policy.authorize(&actor, &cmd, env).is_allowed(),
+                        "cancellation refused: actor={actor} env={env} ro={read_only}"
                     );
                 }
             }
@@ -869,24 +868,24 @@ mod tests {
     }
 
     #[test]
-    fn lire_le_catalogue_local_est_permis_partout_sans_approbation() {
-        // Une lecture du cache local : aucun serveur contacté, aucune valeur de
-        // ligne. La refuser en production laisserait l'agent deviner des noms ;
-        // la soumettre à approbation apprendrait à cliquer. Ce qui en sort est
-        // gouverné par le niveau de confidentialité, dans `oxyn-ai`.
-        let banc = Banc::new();
+    fn reading_the_local_catalog_is_allowed_everywhere_without_approval() {
+        // A read of the local cache: no server contacted, no row value.
+        // Refusing it in production would leave the agent guessing names;
+        // submitting it to approval would teach clicking. What comes out of it
+        // is governed by the privacy tier, in `oxyn-ai`.
+        let bench = Bench::new();
         for read_only in [false, true] {
             for env in ENVS {
-                for acteur in [humain(), agent()] {
+                for actor in [human(), agent()] {
                     let cmd = Command::DescribeCatalog {
-                        connection: banc.connexion(read_only),
-                        focus: Some("clients".to_owned()),
+                        connection: bench.connection(read_only),
+                        focus: Some("customers".to_owned()),
                     };
                     assert!(!cmd.is_mutating());
                     assert!(!cmd.touches_database());
                     assert!(
-                        banc.politique.authorize(&acteur, &cmd, env).is_allowed(),
-                        "lecture du catalogue refusée : acteur={acteur} env={env} ro={read_only}"
+                        bench.policy.authorize(&actor, &cmd, env).is_allowed(),
+                        "catalog read refused: actor={actor} env={env} ro={read_only}"
                     );
                 }
             }
@@ -894,61 +893,64 @@ mod tests {
     }
 
     #[test]
-    fn un_agent_ne_peut_pas_creer_de_connexion_sans_approbation() {
-        // Le canal d'exfiltration : un agent qui déclarerait une connexion vers
-        // l'hôte de son choix.
-        let politique = DefaultPolicy::new();
-        let cfg = ConnectionConfig::new("ailleurs", DriverId::postgres())
+    fn an_agent_cannot_create_a_connection_without_approval() {
+        // The exfiltration channel: an agent that would declare a connection
+        // to the host of its choice.
+        let policy = DefaultPolicy::new();
+        let cfg = ConnectionConfig::new("elsewhere", DriverId::postgres())
             .with_environment(Environment::Local);
         let cmd = Command::CreateConnection {
             config: Box::new(cfg),
         };
 
-        let decision = politique.authorize(&agent(), &cmd, Environment::Local);
+        let decision = policy.authorize(&agent(), &cmd, Environment::Local);
         assert!(
             !decision.is_allowed(),
-            "un agent ne crée pas une connexion sans accord : {decision:?}"
+            "an agent does not create a connection without agreement: {decision:?}"
         );
 
-        // Un humain, lui, n'est pas gêné : la connexion n'est pas encore
-        // enregistrée, et la règle du « fermé par défaut » ne vise que ce qui
-        // atteint un serveur.
+        // A human, on the other hand, is not hindered: the connection is not
+        // registered yet, and the "closed by default" rule only targets what
+        // reaches a server.
         assert!(
-            politique
-                .authorize(&humain(), &cmd, Environment::Local)
+            policy
+                .authorize(&human(), &cmd, Environment::Local)
                 .is_allowed()
         );
     }
 
     #[test]
-    fn ecrire_un_document_local_ne_declenche_aucune_approbation() {
-        let politique = DefaultPolicy::new();
+    fn writing_a_local_document_triggers_no_approval() {
+        let policy = DefaultPolicy::new();
         let cmd = Command::WriteDocument {
             workspace: crate::ids::WorkspaceId::new(),
             document: crate::ids::DocumentId::new(),
             text: "SELECT 1".into(),
         };
-        for acteur in [humain(), agent()] {
+        for actor in [human(), agent()] {
             assert!(
-                politique
-                    .authorize(&acteur, &cmd, Environment::Production)
+                policy
+                    .authorize(&actor, &cmd, Environment::Production)
                     .is_allowed(),
-                "un document local n'est pas une écriture en base"
+                "a local document is not a database write"
             );
         }
     }
 
     #[test]
-    fn aucun_motif_ne_laisse_fuir_un_identifiant_de_connexion() {
-        let banc = Banc::new();
-        let identifiants = [banc.ouverte.to_string(), banc.lecture_seule.to_string()];
+    fn no_reason_leaks_a_connection_identifier() {
+        let bench = Bench::new();
+        let identifiers = [
+            bench.open.to_string(),
+            bench.read_only_connection.to_string(),
+        ];
 
-        for (est_agent, intent, env, read_only, _) in MATRICE {
-            let acteur = if *est_agent { agent() } else { humain() };
-            let cmd = banc.execute(*read_only, *intent);
-            let decision = banc.politique.authorize(&acteur, &cmd, *env);
+        for (is_agent, intent, env, read_only, _) in MATRIX {
+            let actor = if *is_agent { agent() } else { human() };
+            let cmd = bench.execute(*read_only, *intent);
+            let decision = bench.policy.authorize(&actor, &cmd, *env);
 
-            let texte = match &decision {
+            let text = match &decision {
                 Decision::Allow => String::new(),
                 Decision::Deny { reason } => reason.clone(),
                 Decision::RequireApproval { reason, preview } => {
@@ -960,38 +962,35 @@ mod tests {
                     t
                 }
             };
-            for id in &identifiants {
+            for id in &identifiers {
                 assert!(
-                    !texte.contains(id.as_str()),
-                    "un identifiant de connexion a fuité dans un motif : {texte}"
+                    !text.contains(id.as_str()),
+                    "a connection identifier leaked into a reason: {text}"
                 );
             }
         }
     }
 
     #[test]
-    fn un_refus_dit_pourquoi() {
-        let banc = Banc::new();
-        for (est_agent, intent, env, read_only, attendu) in MATRICE {
-            if *attendu != Forme::Deny {
+    fn a_refusal_says_why() {
+        let bench = Bench::new();
+        for (is_agent, intent, env, read_only, expected) in MATRIX {
+            if *expected != Shape::Deny {
                 continue;
             }
-            let acteur = if *est_agent { agent() } else { humain() };
-            let cmd = banc.execute(*read_only, *intent);
-            let Decision::Deny { reason } = banc.politique.authorize(&acteur, &cmd, *env) else {
-                panic!("refus attendu");
+            let actor = if *is_agent { agent() } else { human() };
+            let cmd = bench.execute(*read_only, *intent);
+            let Decision::Deny { reason } = bench.policy.authorize(&actor, &cmd, *env) else {
+                panic!("refusal expected");
             };
-            assert!(
-                reason.len() > 10,
-                "motif trop pauvre pour être montré : {reason}"
-            );
+            assert!(reason.len() > 10, "reason too poor to be shown: {reason}");
         }
     }
 
     #[test]
-    fn le_gate_est_utilisable_derriere_un_objet_de_trait() {
-        // Il doit pouvoir être partagé entre le thread d'interface, l'exécuteur
-        // et les agents.
+    fn the_gate_is_usable_behind_a_trait_object() {
+        // It must be shareable between the interface thread, the executor and
+        // the agents.
         let gate: std::sync::Arc<dyn PolicyGate> = std::sync::Arc::new(DefaultPolicy::new());
         assert_eq!(gate.name(), "DefaultPolicy");
 
@@ -999,21 +998,21 @@ mod tests {
             connection: ConnectionId::new(),
         };
         assert!(
-            gate.authorize(&humain(), &cmd, Environment::Production)
+            gate.authorize(&human(), &cmd, Environment::Production)
                 .is_allowed()
         );
     }
 
     #[test]
-    fn un_agent_ne_deplace_pas_le_contexte_de_session() {
-        // Le geste ne lit ni n'écrit de donnée : classé `Read`, il passe pour un
-        // humain, y compris sur une connexion en lecture seule où changer de
-        // schéma pour lire ailleurs est justement l'usage. Pour un agent c'est
-        // un refus, parce que l'effet porte sur les instructions suivantes.
-        let banc = Banc::new();
+    fn an_agent_does_not_move_the_session_context() {
+        // The gesture neither reads nor writes data: classified `Read`, it
+        // passes for a human, including on a read-only connection where
+        // switching schema to read elsewhere is precisely the use. For an agent
+        // it is a refusal, because the effect bears on the following statements.
+        let bench = Bench::new();
         for read_only in [false, true] {
             let cmd = Command::SetSessionContext {
-                connection: banc.connexion(read_only),
+                connection: bench.connection(read_only),
                 session: SessionId::new(),
                 catalog: None,
                 namespace: Some("analytics".to_owned()),
@@ -1024,62 +1023,62 @@ mod tests {
                 Environment::Staging,
                 Environment::Production,
             ] {
-                let humaine = banc.politique.authorize(&humain(), &cmd, env);
+                let for_human = bench.policy.authorize(&human(), &cmd, env);
                 assert!(
-                    humaine.is_allowed(),
-                    "un humain change de contexte : env={env} lecture_seule={read_only} → {humaine:?}"
+                    for_human.is_allowed(),
+                    "a human changes context: env={env} read_only={read_only} → {for_human:?}"
                 );
-                let agentive = banc.politique.authorize(&agent(), &cmd, env);
+                let for_agent = bench.policy.authorize(&agent(), &cmd, env);
                 assert!(
-                    !agentive.is_allowed(),
-                    "un agent ne le fait jamais : env={env} lecture_seule={read_only}"
+                    !for_agent.is_allowed(),
+                    "an agent never does it: env={env} read_only={read_only}"
                 );
             }
         }
     }
 
     #[test]
-    fn un_agent_ne_pilote_pas_la_transaction_de_la_session() {
+    fn an_agent_does_not_drive_the_session_transaction() {
         // `COMMIT` is classified `Read`: it passes for a human everywhere,
         // read-only connection included, where closing a read transaction is
         // the very use. For an agent it is a refusal, not an approval, in every
         // environment: it would settle a transaction the user may have opened.
-        let banc = Banc::new();
+        let bench = Bench::new();
         for read_only in [false, true] {
-            let mut cmd = banc.execute(read_only, StatementIntent::Read);
+            let mut cmd = bench.execute(read_only, StatementIntent::Read);
             if let Command::Execute { request, .. } = &mut cmd {
                 request.transaction_control = true;
             }
             assert!(!cmd.is_mutating());
             for env in ENVS {
-                let humaine = banc.politique.authorize(&humain(), &cmd, env);
+                let for_human = bench.policy.authorize(&human(), &cmd, env);
                 assert!(
-                    humaine.is_allowed(),
-                    "env={env} lecture_seule={read_only} → {humaine:?}"
+                    for_human.is_allowed(),
+                    "env={env} read_only={read_only} → {for_human:?}"
                 );
-                let agentive = banc.politique.authorize(&agent(), &cmd, env);
+                let for_agent = bench.policy.authorize(&agent(), &cmd, env);
                 assert!(
-                    agentive.is_denied(),
-                    "env={env} lecture_seule={read_only} → {agentive:?}"
+                    for_agent.is_denied(),
+                    "env={env} read_only={read_only} → {for_agent:?}"
                 );
             }
         }
     }
 
     #[test]
-    fn seul_l_humain_declare_une_ecriture_reconciliee() {
-        // Local, sans connexion visée : l'humain n'a rien à confirmer. L'agent
-        // est refusé partout — pas soumis à approbation — parce qu'il affirmerait
-        // une vérification du serveur que personne n'a faite.
-        let politique = DefaultPolicy::new();
+    fn only_the_human_declares_a_reconciled_write() {
+        // Local, without a target connection: the human has nothing to confirm.
+        // The agent is refused everywhere — not submitted to approval — because
+        // it would assert a check of the server nobody made.
+        let policy = DefaultPolicy::new();
         let cmd = Command::ReconcileHistoryEntry { entry: 1 };
         for env in ENVS {
-            let humaine = politique.authorize(&humain(), &cmd, env);
-            assert!(humaine.is_allowed(), "env={env} → {humaine:?}");
-            let agentive = politique.authorize(&agent(), &cmd, env);
+            let for_human = policy.authorize(&human(), &cmd, env);
+            assert!(for_human.is_allowed(), "env={env} → {for_human:?}");
+            let for_agent = policy.authorize(&agent(), &cmd, env);
             assert!(
-                matches!(agentive, Decision::Deny { .. }),
-                "env={env} → {agentive:?}"
+                matches!(for_agent, Decision::Deny { .. }),
+                "env={env} → {for_agent:?}"
             );
         }
     }

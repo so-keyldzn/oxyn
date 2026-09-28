@@ -1,36 +1,35 @@
-//! Les trois traits que tout driver implémente.
+//! The three traits every driver implements.
 //!
-//! Ce sont ceux d'[`ARCHITECTURE` §4.1](../../../docs/ARCHITECTURE.md) :
-//! [`Driver`] ouvre, [`Session`] exécute, [`Cursor`] rend les lots. Une erreur
-//! ici se paie quatorze fois — c'est le nombre d'implémentations réelles que la
-//! vision suppose (ADR-0003).
+//! They are those of [`ARCHITECTURE` §4.1](../../../docs/ARCHITECTURE.md):
+//! [`Driver`] opens, [`Session`] executes, [`Cursor`] returns the batches. A
+//! mistake here is paid fourteen times — the number of real implementations
+//! the vision assumes (ADR-0003).
 //!
-//! # Trois contraintes dures, pas des préférences
+//! # Three hard constraints, not preferences
 //!
-//! **Objet-sûr.** Les trois traits s'emploient derrière `Box<dyn ...>`. Aucune
-//! méthode générique, aucun `impl Trait` en position de retour, aucun `where
-//! Self: Sized` sur une méthode appelée à travers l'objet. Un test de ce module
-//! le vérifie, parce que la rupture est facile et le message du compilateur
-//! l'est moins.
+//! **Object-safe.** The three traits are used behind `Box<dyn ...>`. No
+//! generic method, no `impl Trait` in return position, no `where Self: Sized`
+//! on a method called through the object. A test of this module checks it,
+//! because breaking it is easy and the compiler's message is less so.
 //!
-//! **Annulable de bout en bout.** Un `&CancelToken` traverse toute méthode qui
-//! peut durer. Le jeton **signale** ; c'est au driver d'en faire un
-//! `pg_cancel_backend`, un `KILL QUERY` ou un `sqlite3_interrupt`, et de
-//! déclarer [`Capabilities::SERVER_SIDE_CANCEL`] s'il en est capable. Abandonner
-//! le futur ne libère ni la connexion ni le verrou
+//! **Cancellable end to end.** A `&CancelToken` goes through every method that
+//! can last. The token **signals**; it is up to the driver to turn it into a
+//! `pg_cancel_backend`, a `KILL QUERY` or a `sqlite3_interrupt`, and to declare
+//! [`Capabilities::SERVER_SIDE_CANCEL`] if it is able to. Dropping the future
+//! releases neither the connection nor the lock
 //! ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md)).
 //!
-//! **En flux, jamais matérialisé.** [`Cursor::next_batch`] rend **un** lot. Un
-//! driver qui construit tout le résultat avant de rendre la main fait grimper la
-//! RSS jusqu'à l'OOM killer, sur un simple clic dans l'arborescence
+//! **Streamed, never materialized.** [`Cursor::next_batch`] returns **one**
+//! batch. A driver that builds the whole result before returning makes the RSS
+//! climb up to the OOM killer, on a simple click in the tree
 //! ([I-06](../../../CLAUDE.md#i-06)).
 //!
-//! # Frontière WASM
+//! # WASM boundary
 //!
-//! Ces traits respectent dès aujourd'hui les contraintes de
-//! [PLUGIN-CONTRACT](../../../docs/PLUGIN-CONTRACT.md) : aucun paramètre
-//! générique, aucun rappel synchrone vers l'hôte, toute erreur exprimée en
-//! valeur. Les corriger en phase 4 coûterait une refonte des quatorze drivers.
+//! These traits already honor the constraints of
+//! [PLUGIN-CONTRACT](../../../docs/PLUGIN-CONTRACT.md): no generic parameter,
+//! no synchronous callback into the host, every error expressed as a value.
+//! Fixing them in phase 4 would cost a rework of the fourteen drivers.
 
 use std::time::Duration;
 
@@ -49,60 +48,60 @@ use crate::context::SessionContext;
 use crate::credentials::Credentials;
 use crate::metadata::DriverMetadata;
 
-/// Un protocole de base de données, pas un produit.
+/// A database protocol, not a product.
 ///
-/// `postgres` couvre Redshift, TimescaleDB et pgvector ; `mysql` couvre MariaDB
-/// (ADR-0003). Un driver est sans état partagé : c'est [`Session`] qui porte une
-/// connexion ouverte.
+/// `postgres` covers Redshift, TimescaleDB and pgvector; `mysql` covers
+/// MariaDB (ADR-0003). A driver has no shared state: it is [`Session`] that
+/// carries an open connection.
 ///
-/// # Ce qu'un driver n'a pas le droit de faire
+/// # What a driver is not allowed to do
 ///
-/// Lire une variable d'environnement, écrire un fichier, ouvrir une fenêtre,
-/// journaliser une valeur liée, ou retenter tout seul. La politique de reprise
-/// appartient à l'appelant, seul à savoir si l'opération est rejouable
+/// Read an environment variable, write a file, open a window, log a bound
+/// value, or retry on its own. The retry policy belongs to the caller, the only
+/// one to know whether the operation can be replayed
 /// ([`DRIVER-CONTRACT`](../../../docs/DRIVER-CONTRACT.md)).
 #[async_trait]
 pub trait Driver: Send + Sync + 'static {
-    /// L'identifiant du protocole. Doit être égal à
-    /// [`DriverMetadata::id`] — [`DriverRegistry::register`](crate::registry::DriverRegistry::register)
-    /// le vérifie, parce qu'une divergence rendrait le driver introuvable après
-    /// son enregistrement.
+    /// The protocol identifier. Must equal [`DriverMetadata::id`] —
+    /// [`DriverRegistry::register`](crate::registry::DriverRegistry::register)
+    /// checks it, because a divergence would make the driver unreachable once
+    /// registered.
     fn id(&self) -> DriverId;
 
-    /// Ce que le driver dit de lui-même, formulaire de connexion compris.
+    /// What the driver says about itself, connection form included.
     ///
-    /// La valeur est **empruntée** : elle est construite une fois, à la
-    /// création du driver, pas à chaque affichage de la liste.
+    /// The value is **borrowed**: it is built once, when the driver is
+    /// created, not each time the list is displayed.
     fn metadata(&self) -> &DriverMetadata;
 
-    /// Les capacités que le driver peut offrir **au mieux**.
+    /// The capabilities the driver can offer **at best**.
     ///
-    /// C'est un plafond indicatif, pas une promesse : ce qui fait foi est
-    /// [`Session::capabilities`], évalué après connexion. Le même driver
-    /// PostgreSQL parle à une base 12 sans `MERGE` et à une base 17 qui l'a
-    /// (ADR-0003).
+    /// It is an indicative ceiling, not a promise: what counts is
+    /// [`Session::capabilities`], evaluated after connecting. The same
+    /// PostgreSQL driver talks to a version 12 database without `MERGE` and to
+    /// a version 17 database that has it (ADR-0003).
     fn capabilities(&self) -> Capabilities;
 
-    /// Ouvre une session.
+    /// Opens a session.
     ///
-    /// `config` ne porte **aucun secret** : les identifiants arrivent par
-    /// `credentials`, résolus depuis le trousseau du système par l'appelant. Un
-    /// driver ne va jamais chercher lui-même un mot de passe, ni dans
-    /// l'environnement, ni dans un fichier.
+    /// `config` carries **no secret**: credentials arrive through
+    /// `credentials`, resolved from the system keychain by the caller. A driver
+    /// never looks for a password itself, neither in the environment nor in a
+    /// file.
     ///
-    /// # Divergence assumée avec ARCHITECTURE §4.1
+    /// # Deliberate divergence from ARCHITECTURE §4.1
     ///
-    /// Le document ne montre que `(cfg, ct)`. Cette signature-là ne permet
-    /// d'authentifier personne : `ConnectionConfig` ne porte qu'une *référence*
-    /// de secret, que seul `oxyn-secrets` sait résoudre — et faire dépendre les
-    /// drivers du trousseau du système renverserait le sens des dépendances.
-    /// Le paramètre est donc explicite. À reporter dans ARCHITECTURE §4.1.
+    /// The document only shows `(cfg, ct)`. That signature authenticates
+    /// nobody: `ConnectionConfig` carries only a secret *reference*, which only
+    /// `oxyn-secrets` can resolve — and making drivers depend on the system
+    /// keychain would reverse the direction of dependencies. The parameter is
+    /// therefore explicit. To be carried over into ARCHITECTURE §4.1.
     ///
-    /// # Erreurs
-    /// [`OxynError::Connection`] si le serveur est injoignable,
-    /// [`OxynError::Authentication`] s'il refuse les identifiants,
-    /// [`OxynError::Cancelled`] si `cancel` se déclenche pendant la poignée de
-    /// main, [`OxynError::Config`] si la configuration est inutilisable.
+    /// # Errors
+    /// [`OxynError::Connection`] if the server is unreachable,
+    /// [`OxynError::Authentication`] if it refuses the credentials,
+    /// [`OxynError::Cancelled`] if `cancel` fires during the handshake,
+    /// [`OxynError::Config`] if the configuration is unusable.
     async fn connect(
         &self,
         config: &ConnectionConfig,
@@ -111,39 +110,37 @@ pub trait Driver: Send + Sync + 'static {
     ) -> Result<Box<dyn Session>>;
 }
 
-/// Une connexion ouverte.
+/// An open connection.
 ///
-/// Les méthodes prennent `&self` : une session est partageable, et la
-/// synchronisation d'un client qui ne l'est pas appartient au driver. Elle est
-/// `Send + Sync` parce qu'elle vit sur le runtime Tokio pendant que le thread
-/// d'interface lit le tampon de résultats (ARCHITECTURE §9).
+/// The methods take `&self`: a session is shareable, and synchronizing a client
+/// that is not belongs to the driver. It is `Send + Sync` because it lives on
+/// the Tokio runtime while the interface thread reads the result buffer
+/// (ARCHITECTURE §9).
 #[async_trait]
 pub trait Session: Send + Sync {
-    /// Ce que **cette** session sait faire.
+    /// What **this** session can do.
     ///
-    /// Évalué après connexion, à partir de la version du serveur, de ses
-    /// extensions et des droits du compte — pas déduit du driver (ADR-0003).
-    /// Un drapeau absent signifie « je ne sais pas faire », jamais « je ferai
-    /// semblant ».
+    /// Evaluated after connecting, from the server version, its extensions and
+    /// the account's privileges — not deduced from the driver (ADR-0003). A
+    /// missing flag means "I cannot do it", never "I will pretend".
     fn capabilities(&self) -> Capabilities;
 
-    /// Exécute une demande et rend un curseur sur ses lots.
+    /// Executes a request and returns a cursor over its batches.
     ///
-    /// Rend la main **dès que le schéma est connu**, sans attendre la première
-    /// ligne : c'est ce qui permet à la grille de dessiner ses colonnes pendant
-    /// que les données arrivent.
+    /// Returns **as soon as the schema is known**, without waiting for the
+    /// first row: that is what lets the grid draw its columns while the data
+    /// arrives.
     ///
-    /// Le driver frappe une [`StatementHandle`] pour cette exécution et
-    /// l'expose par [`Cursor::handle`] : c'est elle que [`Session::cancel`]
-    /// vise.
+    /// The driver mints a [`StatementHandle`] for this execution and exposes it
+    /// through [`Cursor::handle`]: it is what [`Session::cancel`] targets.
     ///
-    /// L'implémentation **refuse** un langage qu'elle ne déclare pas
-    /// ([`Capabilities::require_language`]) ; elle ne traduit pas.
+    /// The implementation **refuses** a language it does not declare
+    /// ([`Capabilities::require_language`]); it does not translate.
     ///
-    /// # Erreurs
-    /// [`OxynError::NotSupported`] si le langage ou une capacité requise
-    /// manque, [`OxynError::Query`] si le serveur rejette l'instruction,
-    /// [`OxynError::Cancelled`] si `cancel` se déclenche.
+    /// # Errors
+    /// [`OxynError::NotSupported`] if the language or a required capability is
+    /// missing, [`OxynError::Query`] if the server rejects the statement,
+    /// [`OxynError::Cancelled`] if `cancel` fires.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>>;
 
     /// Compose a read-only preview, with cancellable metadata I/O if needed.
@@ -197,77 +194,77 @@ pub trait Session: Send + Sync {
         })
     }
 
-    /// Déclare où cette session résout les noms qu'une instruction ne qualifie
-    /// pas, et attend la confirmation du serveur.
+    /// Declares where this session resolves the names a statement does not
+    /// qualify, and waits for the server's confirmation.
     ///
-    /// N'est appelée que si [`Capabilities::SESSION_CONTEXT`] est déclaré. Le
-    /// driver **cite lui-même** chaque segment : un nom de schéma est une
-    /// donnée venue du catalogue, et le concaténer exécuterait ce qu'il
-    /// contient ([I-10](../../../CLAUDE.md#i-10)).
+    /// Only called if [`Capabilities::SESSION_CONTEXT`] is declared. The driver
+    /// **quotes each segment itself**: a schema name is data coming from the
+    /// catalog, and concatenating it would execute what it contains
+    /// ([I-10](../../../CLAUDE.md#i-10)).
     ///
-    /// L'implémentation ne touche à rien d'autre. Un changement de contexte qui
-    /// viderait au passage un `search_path` composé par l'utilisateur, ou qui
-    /// ouvrirait une transaction, ferait plus que ce que son nom annonce — et
-    /// c'est précisément l'état de session invisible que le contrat refuse.
+    /// The implementation touches nothing else. A context change that would
+    /// empty along the way a `search_path` composed by the user, or that would
+    /// open a transaction, would do more than its name announces — and that is
+    /// precisely the invisible session state the contract refuses.
     ///
-    /// # Erreurs
-    /// [`OxynError::NotSupported`] si le moteur n'a pas de contexte de session,
-    /// [`OxynError::Cancelled`] si `cancel` se déclenche, et l'erreur du
-    /// serveur si l'emplacement demandé n'existe pas.
+    /// # Errors
+    /// [`OxynError::NotSupported`] if the engine has no session context,
+    /// [`OxynError::Cancelled`] if `cancel` fires, and the server's error if
+    /// the requested location does not exist.
     async fn set_context(&self, _context: &SessionContext, _cancel: &CancelToken) -> Result<()> {
         Err(OxynError::NotSupported {
             capability: "session context".to_owned(),
         })
     }
 
-    /// Ce que le serveur a **confirmé**, jamais ce qui a été demandé.
+    /// What the server **confirmed**, never what was requested.
     ///
-    /// `None` tant qu'aucun contexte n'a été déclaré : l'interface montre alors
-    /// que la session travaille dans ce que le serveur a choisi à l'ouverture,
-    /// ce qui n'est pas la même chose qu'un emplacement choisi.
+    /// `None` as long as no context has been declared: the interface then shows
+    /// that the session works in what the server chose when opening, which is
+    /// not the same thing as a chosen location.
     ///
-    /// Rend une valeur et non une référence : une implémentation garde son
-    /// contexte derrière un verrou, parce que `set_context` prend `&self`.
+    /// Returns a value and not a reference: an implementation keeps its
+    /// context behind a lock, because `set_context` takes `&self`.
     fn context(&self) -> Option<SessionContext> {
         None
     }
 
-    /// Demande au **serveur** d'interrompre une exécution.
+    /// Asks the **server** to interrupt an execution.
     ///
-    /// N'est appelée que si [`Capabilities::SERVER_SIDE_CANCEL`] est déclaré :
-    /// une implémentation qui se contente d'abandonner le futur laisse la
-    /// requête tourner, la connexion prise et le verrou posé. Au dixième onglet
-    /// fermé, la base refuse les connexions et l'utilisateur conclut qu'Oxyn a
-    /// cassé sa production.
+    /// Only called if [`Capabilities::SERVER_SIDE_CANCEL`] is declared: an
+    /// implementation that merely drops the future leaves the query running,
+    /// the connection taken and the lock held. By the tenth closed tab, the
+    /// database refuses connections and the user concludes Oxyn broke their
+    /// production.
     ///
-    /// Annuler une instruction déjà terminée n'est **pas** une erreur.
+    /// Cancelling a statement that already ended is **not** an error.
     ///
-    /// # Erreurs
-    /// [`OxynError::NotSupported`] si la session ne sait pas annuler côté
-    /// serveur, ou toute erreur de transport.
+    /// # Errors
+    /// [`OxynError::NotSupported`] if the session cannot cancel server-side,
+    /// or any transport error.
     async fn cancel(&self, statement: StatementHandle) -> Result<()>;
 
-    /// L'introspection de cette session.
+    /// The introspection of this session.
     ///
-    /// Emprunté, jamais construit à la demande : l'arborescence l'appelle à
-    /// chaque nœud ouvert.
+    /// Borrowed, never built on demand: the tree calls it on every node
+    /// opened.
     fn catalog(&self) -> &dyn CatalogProvider;
 
-    /// Vérifie que la connexion est vivante, et rend l'aller-retour mesuré.
+    /// Checks that the connection is alive, and returns the measured round
+    /// trip.
     ///
-    /// # Erreurs
-    /// Toute erreur de transport. Une session dont le `ping` échoue est
-    /// considérée comme perdue.
+    /// # Errors
+    /// Any transport error. A session whose `ping` fails is considered lost.
     async fn ping(&self) -> Result<Duration>;
 
-    /// Ferme la session proprement.
+    /// Closes the session cleanly.
     ///
-    /// Consomme la session : une session fermée ne se réutilise pas. Une erreur
-    /// de fermeture se signale mais ne se rattrape pas — les ressources locales
-    /// sont libérées dans tous les cas.
+    /// Consumes the session: a closed session is not reused. A closing error is
+    /// reported but not recovered from — local resources are released in every
+    /// case.
     ///
-    /// # Erreurs
-    /// Toute erreur de transport rencontrée à la fermeture.
+    /// # Errors
+    /// Any transport error met while closing.
     async fn close(self: Box<Self>) -> Result<()>;
 
     /// The transaction state, once every operation already submitted on this
@@ -301,53 +298,53 @@ pub trait Session: Send + Sync {
         TransactionState::Unknown
     }
 
-    /// Ouvre une transaction.
+    /// Opens a transaction.
     ///
-    /// # L'implémentation par défaut, et ce qu'elle protège
+    /// # The default implementation, and what it protects
     ///
-    /// Elle ne fait rien d'utile — **à dessein**. Elle commence par exiger
-    /// [`Capabilities::TRANSACTIONS`] : une session qui ne le déclare pas rend
-    /// [`OxynError::NotSupported`], qui est une réponse honnête. Une session qui
-    /// le déclare **et** n'a pas redéfini cette méthode rend
-    /// [`OxynError::Internal`], parce que c'est un bug du driver.
+    /// It does nothing useful — **on purpose**. It starts by requiring
+    /// [`Capabilities::TRANSACTIONS`]: a session that does not declare it
+    /// returns [`OxynError::NotSupported`], which is an honest answer. A
+    /// session that declares it **and** has not overridden this method returns
+    /// [`OxynError::Internal`], because it is a driver bug.
     ///
-    /// Ce qu'il ne faut surtout pas faire, c'est réussir sans rien ouvrir :
-    /// l'utilisateur croirait qu'un `ROLLBACK` a annulé son écriture. Ne pas
-    /// savoir faire est une réponse acceptable ; laisser croire ne l'est pas
+    /// What must above all not happen is succeeding without opening anything:
+    /// the user would believe a `ROLLBACK` undid their write. Not knowing how
+    /// is an acceptable answer; letting them believe is not
     /// ([`DRIVER-CONTRACT` §5](../../../docs/DRIVER-CONTRACT.md)).
     ///
-    /// # Erreurs
-    /// [`OxynError::NotSupported`] si la session n'a pas
-    /// [`Capabilities::TRANSACTIONS`], [`OxynError::Internal`] si elle l'a sans
-    /// implémenter la méthode, ou toute erreur du serveur.
+    /// # Errors
+    /// [`OxynError::NotSupported`] if the session does not have
+    /// [`Capabilities::TRANSACTIONS`], [`OxynError::Internal`] if it has it
+    /// without implementing the method, or any server error.
     async fn begin(&self, cancel: &CancelToken) -> Result<()> {
         let _ = cancel;
         self.capabilities().require(Capabilities::TRANSACTIONS)?;
         Err(unimplemented_transaction("begin"))
     }
 
-    /// Valide la transaction en cours.
+    /// Commits the current transaction.
     ///
-    /// Même garde que [`begin`](Self::begin).
+    /// Same guard as [`begin`](Self::begin).
     ///
-    /// # Erreurs
-    /// Celles de [`begin`](Self::begin), plus le rejet du serveur si aucune
-    /// transaction n'est ouverte.
+    /// # Errors
+    /// Those of [`begin`](Self::begin), plus the server's rejection if no
+    /// transaction is open.
     async fn commit(&self, cancel: &CancelToken) -> Result<()> {
         let _ = cancel;
         self.capabilities().require(Capabilities::TRANSACTIONS)?;
         Err(unimplemented_transaction("commit"))
     }
 
-    /// Annule la transaction en cours.
+    /// Rolls back the current transaction.
     ///
-    /// Même garde que [`begin`](Self::begin). C'est la méthode dont l'échec
-    /// silencieux coûte le plus cher : un `ROLLBACK` qui ne rejoue rien laisse
-    /// l'écriture appliquée.
+    /// Same guard as [`begin`](Self::begin). It is the method whose silent
+    /// failure costs the most: a `ROLLBACK` that undoes nothing leaves the
+    /// write applied.
     ///
-    /// # Erreurs
-    /// Celles de [`begin`](Self::begin), plus le rejet du serveur si aucune
-    /// transaction n'est ouverte.
+    /// # Errors
+    /// Those of [`begin`](Self::begin), plus the server's rejection if no
+    /// transaction is open.
     async fn rollback(&self, cancel: &CancelToken) -> Result<()> {
         let _ = cancel;
         self.capabilities().require(Capabilities::TRANSACTIONS)?;
@@ -355,67 +352,64 @@ pub trait Session: Send + Sync {
     }
 }
 
-/// Un flux de lots Arrow.
+/// A stream of Arrow batches.
 ///
-/// `Send` mais pas `Sync` : un curseur est déplacé sur la tâche qui le draine,
-/// jamais partagé. La contre-pression et le débordement sur disque sont l'usage
-/// de `oxyn-data` ; le curseur, lui, ne fait que rendre le lot suivant quand on
-/// le lui demande.
+/// `Send` but not `Sync`: a cursor is moved onto the task that drains it,
+/// never shared. Backpressure and spilling to disk are the business of
+/// `oxyn-data`; the cursor only returns the next batch when asked.
 #[async_trait]
 pub trait Cursor: Send {
-    /// La poignée de l'exécution qui alimente ce curseur.
+    /// The handle of the execution that feeds this cursor.
     ///
-    /// C'est ce que [`Session::cancel`] vise. **Ajout par rapport à
-    /// ARCHITECTURE §4.1**, où rien ne dit d'où vient la
-    /// [`StatementHandle`] : sans elle, l'annulation côté serveur n'a pas de
-    /// cible. À reporter dans le document.
+    /// It is what [`Session::cancel`] targets. **Addition to ARCHITECTURE
+    /// §4.1**, where nothing says where the [`StatementHandle`] comes from:
+    /// without it, server-side cancellation has no target. To be carried over
+    /// into the document.
     fn handle(&self) -> StatementHandle;
 
-    /// Le schéma des lots.
+    /// The schema of the batches.
     ///
-    /// Connu **avant** le premier lot, et stable pour toute la durée du flux.
-    /// Une source sans schéma l'infère par échantillonnage et marque chaque
-    /// champ comme déduit ; elle ne le présente jamais comme une déclaration du
-    /// serveur ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)).
+    /// Known **before** the first batch, and stable for the whole stream. A
+    /// schemaless source infers it by sampling and marks each field as
+    /// inferred; it never presents it as a declaration of the server
+    /// ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)).
     fn schema(&self) -> SchemaRef;
 
-    /// Le lot suivant, ou `None` quand le flux est épuisé.
+    /// The next batch, or `None` when the stream is exhausted.
     ///
-    /// Le lot se dimensionne **en octets, pas en lignes** : mille lignes
-    /// portant chacune un BLOB d'un mégaoctet font un gigaoctet, et un
-    /// `batch_size` compté en lignes marche sur les tables de démonstration
-    /// avant de déclencher l'OOM sur les vraies.
+    /// The batch is sized **in bytes, not in rows**: a thousand rows each
+    /// carrying a one-megabyte BLOB make a gigabyte, and a `batch_size` counted
+    /// in rows works on demo tables before triggering the OOM on real ones.
     ///
-    /// Le futur doit être abandonnable. Après un abandon, le curseur est
-    /// **inutilisable** : il a pu consommer des octets du flux, laissant le
-    /// décodeur désynchronisé. Il se détruit, il ne se reprend pas.
+    /// The future must be droppable. After a drop, the cursor is **unusable**:
+    /// it may have consumed bytes of the stream, leaving the decoder out of
+    /// sync. It is destroyed, not resumed.
     ///
-    /// # Erreurs
-    /// Toute erreur du serveur ou du décodage, **classée** :
-    /// [`OxynError::driver`] avec la bonne
-    /// [`ErrorClass`](oxyn_core::ErrorClass). Une expiration côté client
-    /// pendant une écriture est [`Ambiguous`](oxyn_core::ErrorClass::Ambiguous),
-    /// jamais transitoire (I-13).
+    /// # Errors
+    /// Any server or decoding error, **classified**: [`OxynError::driver`] with
+    /// the right [`ErrorClass`](oxyn_core::ErrorClass). A client-side timeout
+    /// during a write is [`Ambiguous`](oxyn_core::ErrorClass::Ambiguous), never
+    /// transient (I-13).
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>>;
 
-    /// Ce que le curseur sait de l'exécution.
+    /// What the cursor knows about the execution.
     ///
-    /// Interrogé à la fin du flux pour clore le tampon. Le temps serveur, quand
-    /// le serveur le rend, est ce qui permet de distinguer une base lente d'un
-    /// réseau lent.
+    /// Queried at the end of the stream to close the buffer. Server time, when
+    /// the server returns it, is what tells a slow database from a slow
+    /// network.
     fn stats(&self) -> ExecStats;
 }
 
-/// Un [`Cursor`] est une source de lots pour `oxyn-data`.
+/// A [`Cursor`] is a batch source for `oxyn-data`.
 ///
-/// L'adaptation est l'aiguillage entre les deux crates : `oxyn-data` ne dépend
-/// pas de `oxyn-driver` — c'est l'inverse — donc c'est ici que le pont se pose.
-/// [`BatchSink`](oxyn_data::BatchSink) peut ainsi drainer un curseur de driver
-/// avec contre-pression, sans qu'aucun driver n'ait à connaître le tampon.
+/// The adaptation is the junction between the two crates: `oxyn-data` does
+/// not depend on `oxyn-driver` — it is the other way round — so this is where
+/// the bridge goes. [`BatchSink`](oxyn_data::BatchSink) can thus drain a driver
+/// cursor with backpressure, without any driver having to know the buffer.
 ///
-/// L'implémentation vise `Box<dyn Cursor>` et non `dyn Cursor` : c'est sous
-/// cette forme que le curseur circule, et `BatchSource` exige `Sized`
-/// implicitement pour ses implémenteurs.
+/// The implementation targets `Box<dyn Cursor>` and not `dyn Cursor`: that is
+/// the form in which the cursor travels, and `BatchSource` implicitly requires
+/// `Sized` for its implementors.
 impl BatchSource for Box<dyn Cursor> {
     fn schema(&self) -> SchemaRef {
         (**self).schema()
@@ -430,10 +424,11 @@ impl BatchSource for Box<dyn Cursor> {
     }
 }
 
-/// L'erreur d'une session qui déclare les transactions sans les implémenter.
+/// The error of a session that declares transactions without implementing
+/// them.
 ///
-/// C'est un bug du driver, pas une erreur d'usage : le message le dit, pour
-/// qu'il ne soit pas montré à l'utilisateur comme une limitation du serveur.
+/// It is a driver bug, not a usage error: the message says so, so that it is
+/// not shown to the user as a limitation of the server.
 fn unimplemented_transaction(operation: &'static str) -> OxynError {
     OxynError::Internal(format!(
         "the session declares TRANSACTIONS without implementing `{operation}`: \
@@ -459,20 +454,20 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
     }
 
-    fn lot(depart: i32, lignes: i32) -> RecordBatch {
-        let ids: Vec<i32> = (depart..depart.saturating_add(lignes)).collect();
+    fn batch(start: i32, rows: i32) -> RecordBatch {
+        let ids: Vec<i32> = (start..start.saturating_add(rows)).collect();
         RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(ids))])
-            .expect("la colonne correspond au schéma construit juste au-dessus")
+            .expect("the column matches the schema built just above")
     }
 
     #[derive(Debug)]
-    struct CatalogueFactice;
+    struct FakeCatalog;
 
     #[async_trait]
-    impl CatalogProvider for CatalogueFactice {
+    impl CatalogProvider for FakeCatalog {
         async fn server_info(&self, _cancel: &CancelToken) -> Result<ServerInfo> {
             Ok(ServerInfo::new(
-                "Factice",
+                "Fake",
                 "1.0",
                 Capabilities::SQL | Capabilities::RELATIONAL,
             ))
@@ -499,24 +494,24 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct CurseurFactice {
+    struct FakeCursor {
         handle: StatementHandle,
-        restants: Vec<RecordBatch>,
+        remaining: Vec<RecordBatch>,
         stats: ExecStats,
     }
 
-    impl CurseurFactice {
-        fn new(lots: Vec<RecordBatch>) -> Self {
+    impl FakeCursor {
+        fn new(batches: Vec<RecordBatch>) -> Self {
             Self {
                 handle: StatementHandle::new(),
-                restants: lots,
+                remaining: batches,
                 stats: ExecStats::default(),
             }
         }
     }
 
     #[async_trait]
-    impl Cursor for CurseurFactice {
+    impl Cursor for FakeCursor {
         fn handle(&self) -> StatementHandle {
             self.handle
         }
@@ -526,15 +521,15 @@ mod tests {
         }
 
         async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-            if self.restants.is_empty() {
+            if self.remaining.is_empty() {
                 return Ok(None);
             }
-            let lot = self.restants.remove(0);
+            let batch = self.remaining.remove(0);
             self.stats.record_batch(
-                u64::try_from(lot.num_rows()).unwrap_or(u64::MAX),
-                u64::try_from(lot.get_array_memory_size()).unwrap_or(u64::MAX),
+                u64::try_from(batch.num_rows()).unwrap_or(u64::MAX),
+                u64::try_from(batch.get_array_memory_size()).unwrap_or(u64::MAX),
             );
-            Ok(Some(lot))
+            Ok(Some(batch))
         }
 
         fn stats(&self) -> ExecStats {
@@ -543,22 +538,22 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct SessionFactice {
+    struct FakeSession {
         capabilities: Capabilities,
-        catalogue: CatalogueFactice,
+        catalog: FakeCatalog,
     }
 
-    impl SessionFactice {
+    impl FakeSession {
         fn new(capabilities: Capabilities) -> Self {
             Self {
                 capabilities,
-                catalogue: CatalogueFactice,
+                catalog: FakeCatalog,
             }
         }
     }
 
     #[async_trait]
-    impl Session for SessionFactice {
+    impl Session for FakeSession {
         fn capabilities(&self) -> Capabilities {
             self.capabilities
         }
@@ -569,7 +564,7 @@ mod tests {
             _cancel: &CancelToken,
         ) -> Result<Box<dyn Cursor>> {
             self.capabilities.require_language(request.language)?;
-            Ok(Box::new(CurseurFactice::new(vec![lot(0, 3), lot(3, 2)])))
+            Ok(Box::new(FakeCursor::new(vec![batch(0, 3), batch(3, 2)])))
         }
 
         async fn cancel(&self, _statement: StatementHandle) -> Result<()> {
@@ -577,7 +572,7 @@ mod tests {
         }
 
         fn catalog(&self) -> &dyn CatalogProvider {
-            &self.catalogue
+            &self.catalog
         }
 
         async fn ping(&self) -> Result<Duration> {
@@ -590,16 +585,16 @@ mod tests {
     }
 
     #[derive(Debug)]
-    struct DriverFactice {
+    struct FakeDriver {
         metadata: DriverMetadata,
     }
 
-    impl DriverFactice {
+    impl FakeDriver {
         fn new() -> Self {
             Self {
                 metadata: DriverMetadata::new(
                     DriverId::sqlite(),
-                    "SQLite factice",
+                    "Fake SQLite",
                     DriverFamily::Relational,
                 ),
             }
@@ -607,7 +602,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Driver for DriverFactice {
+    impl Driver for FakeDriver {
         fn id(&self) -> DriverId {
             self.metadata.id.clone()
         }
@@ -626,130 +621,130 @@ mod tests {
             _credentials: &Credentials,
             _cancel: &CancelToken,
         ) -> Result<Box<dyn Session>> {
-            Ok(Box::new(SessionFactice::new(
+            Ok(Box::new(FakeSession::new(
                 Capabilities::SQL | Capabilities::RELATIONAL | Capabilities::STREAMING,
             )))
         }
     }
 
     #[test]
-    fn les_trois_traits_restent_objet_surs() {
-        // Contrainte dure d'ARCHITECTURE §4.1. Une méthode générique la
-        // romprait, et le message du compilateur ne dirait pas pourquoi.
-        let driver: Box<dyn Driver> = Box::new(DriverFactice::new());
-        let config = ConnectionConfig::new("atelier", DriverId::sqlite());
-        let identifiants = Credentials::new();
-        let jeton = CancelToken::new();
+    fn the_three_traits_stay_object_safe() {
+        // Hard constraint of ARCHITECTURE §4.1. A generic method would break
+        // it, and the compiler's message would not say why.
+        let driver: Box<dyn Driver> = Box::new(FakeDriver::new());
+        let config = ConnectionConfig::new("workshop", DriverId::sqlite());
+        let credentials = Credentials::new();
+        let token = CancelToken::new();
 
         let session: Box<dyn Session> =
-            block_on(driver.connect(&config, &identifiants, &jeton)).expect("connexion factice");
+            block_on(driver.connect(&config, &credentials, &token)).expect("fake connection");
         assert!(session.capabilities().contains(Capabilities::SQL));
 
-        let curseur: Box<dyn Cursor> = block_on(session.execute(
+        let cursor: Box<dyn Cursor> = block_on(session.execute(
             ExecRequest::new(oxyn_core::QueryLanguage::SQL, "SELECT 1"),
-            &jeton,
+            &token,
         ))
-        .expect("exécution factice");
-        assert_eq!(curseur.schema().fields().len(), 1);
+        .expect("fake execution");
+        assert_eq!(cursor.schema().fields().len(), 1);
 
-        block_on(session.close()).expect("fermeture");
+        block_on(session.close()).expect("closing");
     }
 
     #[test]
-    fn un_langage_non_declare_est_refuse_pas_traduit() {
-        let session = SessionFactice::new(Capabilities::SQL);
-        let jeton = CancelToken::new();
-        let demande = ExecRequest::new(oxyn_core::QueryLanguage::Cypher, "MATCH (n) RETURN n");
+    fn an_undeclared_language_is_refused_not_translated() {
+        let session = FakeSession::new(Capabilities::SQL);
+        let token = CancelToken::new();
+        let request = ExecRequest::new(oxyn_core::QueryLanguage::Cypher, "MATCH (n) RETURN n");
 
-        // Voir `registry.rs` : `expect_err` exigerait `Debug` sur `dyn Cursor`.
-        let err = match block_on(session.execute(demande, &jeton)) {
-            Ok(_) => panic!("refus attendu : Cypher n'est pas déclaré"),
+        // See `registry.rs`: `expect_err` would require `Debug` on `dyn Cursor`.
+        let err = match block_on(session.execute(request, &token)) {
+            Ok(_) => panic!("refusal expected: Cypher is not declared"),
             Err(err) => err,
         };
         assert!(matches!(err, OxynError::NotSupported { .. }), "{err:?}");
-        assert!(err.is_user_error(), "ce n'est pas un incident");
+        assert!(err.is_user_error(), "it is not an incident");
     }
 
     #[test]
-    fn une_session_sans_transactions_le_dit_au_lieu_de_faire_semblant() {
-        // DRIVER-CONTRACT §5 : ne pas savoir faire est une réponse acceptable ;
-        // laisser croire qu'un ROLLBACK a annulé l'écriture ne l'est pas.
-        let session = SessionFactice::new(Capabilities::SQL);
-        let jeton = CancelToken::new();
+    fn a_session_without_transactions_says_so_instead_of_pretending() {
+        // DRIVER-CONTRACT §5: not knowing how is an acceptable answer; letting
+        // the user believe a ROLLBACK undid the write is not.
+        let session = FakeSession::new(Capabilities::SQL);
+        let token = CancelToken::new();
 
-        for issue in [
-            block_on(session.begin(&jeton)),
-            block_on(session.commit(&jeton)),
-            block_on(session.rollback(&jeton)),
+        for outcome in [
+            block_on(session.begin(&token)),
+            block_on(session.commit(&token)),
+            block_on(session.rollback(&token)),
         ] {
-            let err = issue.expect_err("refus attendu");
+            let err = outcome.expect_err("refusal expected");
             assert!(matches!(err, OxynError::NotSupported { .. }), "{err:?}");
             assert!(err.to_string().contains("TRANSACTIONS"), "{err}");
         }
     }
 
     #[test]
-    fn declarer_les_transactions_sans_les_implementer_est_un_bug_pas_un_succes() {
-        // Le pire cas serait de réussir sans rien ouvrir.
-        let session = SessionFactice::new(Capabilities::SQL | Capabilities::TRANSACTIONS);
-        let jeton = CancelToken::new();
+    fn declaring_transactions_without_implementing_them_is_a_bug_not_a_success() {
+        // The worst case would be succeeding without opening anything.
+        let session = FakeSession::new(Capabilities::SQL | Capabilities::TRANSACTIONS);
+        let token = CancelToken::new();
 
-        let err = block_on(session.rollback(&jeton)).expect_err("refus attendu");
+        let err = block_on(session.rollback(&token)).expect_err("refusal expected");
         assert!(matches!(err, OxynError::Internal(_)), "{err:?}");
         assert!(
             !err.is_user_error(),
-            "c'est un bug du driver, pas une erreur d'usage"
+            "it is a driver bug, not a usage error"
         );
     }
 
     #[test]
-    fn par_defaut_une_session_ne_pretend_pas_connaitre_sa_transaction() {
-        // ADR-0039 : un driver qui n'a rien implémenté ne dit pas « aucune
-        // transaction », même s'il déclare la capacité.
-        let jeton = CancelToken::new();
-        for capacites in [
+    fn by_default_a_session_does_not_claim_to_know_its_transaction() {
+        // ADR-0039: a driver that implemented nothing does not say "no
+        // transaction", even if it declares the capability.
+        let token = CancelToken::new();
+        for capabilities in [
             Capabilities::SQL,
             Capabilities::SQL | Capabilities::TRANSACTIONS,
         ] {
-            let session = SessionFactice::new(capacites);
+            let session = FakeSession::new(capabilities);
             assert_eq!(
-                block_on(session.transaction_state(&jeton)),
+                block_on(session.transaction_state(&token)),
                 TransactionState::Unknown
             );
         }
     }
 
     #[test]
-    fn un_curseur_alimente_directement_un_tampon_de_resultats() {
-        // C'est l'aiguillage entre `oxyn-driver` et `oxyn-data` : si cette
-        // adaptation casse, plus rien ne relie un driver à l'écran.
-        let curseur: Box<dyn Cursor> = Box::new(CurseurFactice::new(vec![lot(0, 3), lot(3, 2)]));
-        let poignee = curseur.handle();
+    fn a_cursor_feeds_a_result_buffer_directly() {
+        // It is the junction between `oxyn-driver` and `oxyn-data`: if this
+        // adaptation breaks, nothing connects a driver to the screen anymore.
+        let cursor: Box<dyn Cursor> = Box::new(FakeCursor::new(vec![batch(0, 3), batch(3, 2)]));
+        let handle = cursor.handle();
 
-        let tampon = Arc::new(ResultBuffer::new(BatchSource::schema(&curseur), 1 << 20));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut source = curseur;
+        let buffer = Arc::new(ResultBuffer::new(BatchSource::schema(&cursor), 1 << 20));
+        let sink = BatchSink::new(Arc::clone(&buffer));
+        let mut source = cursor;
 
-        let issue = block_on(puits.drain(&mut source, &CancelToken::new())).expect("drainage");
+        let outcome = block_on(sink.drain(&mut source, &CancelToken::new())).expect("draining");
 
         assert!(
-            issue.is_complete(),
-            "la source factice s'épuise : {issue:?}"
+            outcome.is_complete(),
+            "the fake source runs out: {outcome:?}"
         );
-        assert_eq!(tampon.row_count(), 5);
-        assert_eq!(tampon.batch_count(), 2);
+        assert_eq!(buffer.row_count(), 5);
+        assert_eq!(buffer.batch_count(), 2);
 
-        // La poignée reste celle de l'exécution : c'est elle que vise
-        // `Session::cancel`.
+        // The handle stays that of the execution: it is what
+        // `Session::cancel` targets.
         assert_eq!(BatchSource::stats(&source).rows, 5);
-        assert_eq!(source.handle(), poignee);
+        assert_eq!(source.handle(), handle);
     }
 
     #[test]
-    fn un_curseur_epuise_rend_none_plutot_qu_une_erreur() {
-        let mut curseur = CurseurFactice::new(Vec::new());
-        let lot = block_on(curseur.next_batch()).expect("pas d'erreur");
-        assert!(lot.is_none());
-        assert!(curseur.stats().is_empty());
+    fn an_exhausted_cursor_returns_none_rather_than_an_error() {
+        let mut cursor = FakeCursor::new(Vec::new());
+        let batch = block_on(cursor.next_batch()).expect("no error");
+        assert!(batch.is_none());
+        assert!(cursor.stats().is_empty());
     }
 }

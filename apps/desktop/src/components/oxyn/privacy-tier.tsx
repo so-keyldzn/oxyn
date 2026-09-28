@@ -66,7 +66,7 @@ const ORDER: ReadonlyArray<PrivacyTier> = ["local", "metadata", "sampled"]
  *
  * `unresolved` and an external agent get no suffix: Oxyn cannot see where they
  * send data, and « Cloud » is a claim, not a default (docs/UX-SPEC.md,
- * « Repères permanents »).
+ * « Permanent landmarks »).
  */
 const REACH_SUFFIX: Record<ProviderReach, string | null> = {
   local: "Local",

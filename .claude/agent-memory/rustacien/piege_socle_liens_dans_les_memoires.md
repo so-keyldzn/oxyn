@@ -1,28 +1,28 @@
 ---
 name: piege-socle-liens-dans-les-memoires
-description: verifier_socle.py scanne les .md de .claude/, agent-memory comprise ; un exemple rustdoc écrit en lien Markdown fait échouer make qualite
+description: verifier_socle.py scans the .md files of .claude/, agent-memory included; a rustdoc example written as a Markdown link makes make qualite fail
 metadata:
   type: feedback
 ---
 
-`.claude/verifier_socle.py` traite **tout** lien Markdown des fichiers `.md`
-sous `.claude/` — `agent-memory/` comprise — comme un chemin de fichier à
-résoudre, y compris à l'intérieur d'un bloc de code. Une cible qui n'est pas un
-fichier existant devient « lien mort », et `make qualite` s'arrête sur `socle`,
-avant même `cargo fmt`. Écrire la forme du motif dans cette note suffisait à la
-déclencher : elle est donc décrite, jamais recopiée.
+`.claude/verifier_socle.py` treats **every** Markdown link in the `.md` files
+under `.claude/` — `agent-memory/` included — as a file path to resolve,
+including inside a code block. A target that is not an existing file becomes a
+"dead link", and `make qualite` stops on `socle`, before even `cargo fmt`.
+Writing the pattern's shape in this note was enough to trigger it: so it is
+described, never copied.
 
-**Why:** vu le 2026-09-10 — la porte de qualité refusait à cause de trois
-« liens morts » dans la mémoire d'un autre agent, qui n'étaient que des exemples
-de liens intra-doc rustdoc (une cible en chemin Rust, pas en chemin de fichier)
-recopiés dans une note. Le code Rust du dépôt était sain.
+**Why:** seen on 2026-09-10 — the quality gate refused because of three "dead
+links" in another agent's memory, which were only examples of rustdoc intra-doc
+links (a target as a Rust path, not a file path) copied into a note. The
+repository's Rust code was sound.
 
-**How to apply:** dans une mémoire ou une règle, citer un chemin rustdoc en
-`code inline` plutôt qu'en syntaxe de lien Markdown. Corollaire de diagnostic :
-un échec `make qualite` sur `socle` ne vient pas forcément de son propre travail
-— lire le nom de fichier de l'erreur avant de chercher dans le code.
+**How to apply:** in a memory or a rule, cite a rustdoc path as `inline code`
+rather than with Markdown link syntax. Diagnostic corollary: a `make qualite`
+failure on `socle` does not necessarily come from your own work — read the file
+name in the error before searching the code.
 
-Voisin utile : sous `RUSTDOCFLAGS="-D warnings"`, rustdoc refuse un lien dont le
-libellé et la cible désignent la même chose (`redundant-explicit-links`). Écrire
-la cible seule quand elle résout déjà. Voir [[piege-cargo-fmt-portee-crate]]
-pour l'autre outil qui déborde du périmètre annoncé.
+Useful neighbor: under `RUSTDOCFLAGS="-D warnings"`, rustdoc refuses a link whose
+label and target designate the same thing (`redundant-explicit-links`). Write the
+target alone when it already resolves. See [[piege-cargo-fmt-portee-crate]] for
+the other tool that overflows the announced scope.

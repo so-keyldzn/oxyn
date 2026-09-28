@@ -1,50 +1,50 @@
-//! Les échecs que cette crate sait nommer.
+//! The failures this crate knows how to name.
 //!
-//! L'analyse d'intention, elle, n'échoue **jamais** : ce qu'elle ne comprend
-//! pas devient [`Unknown`](oxyn_core::StatementIntent::Unknown), qui compte pour
-//! mutant. Une erreur remontée ici sert à l'éditeur — souligner une ligne,
-//! refuser de reformater — pas à décider d'une autorisation.
+//! Intent analysis, for its part, **never** fails: what it does not understand
+//! becomes [`Unknown`](oxyn_core::StatementIntent::Unknown), which counts as
+//! mutating. An error raised here serves the editor — underlining a line,
+//! refusing to reformat — not an authorization decision.
 
 use std::ops::Range;
 
 use oxyn_core::{OxynError, QueryLanguage};
 
-/// Ce qui empêche de lire un texte de requête.
+/// What prevents reading a query text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum QueryError {
-    /// Le curseur ne désigne pas une instruction entière exécutable.
+    /// The cursor does not designate a whole executable statement.
     #[error("cannot select a statement at byte {cursor}: {message}")]
     Selection {
-        /// Position du curseur dans le texte UTF-8.
+        /// Cursor position in the UTF-8 text.
         cursor: usize,
-        /// Raison du refus.
+        /// Reason for the refusal.
         message: String,
     },
 
-    /// Le texte ne se lit pas dans le dialecte demandé.
+    /// The text does not parse in the requested dialect.
     ///
-    /// Le message provient de `sqlparser` et peut reprendre un fragment du SQL
-    /// fautif. C'est acceptable : le texte d'une requête est déjà conservé tel
-    /// quel par [`ExecRequest`](oxyn_core::ExecRequest) et fait partie de ce que
-    /// le journal enregistre. Les **valeurs liées**, elles, ne passent jamais
-    /// par ici.
+    /// The message comes from `sqlparser` and may repeat a fragment of the
+    /// faulty SQL. That is acceptable: the text of a query is already kept as
+    /// is by [`ExecRequest`](oxyn_core::ExecRequest) and is part of what the
+    /// journal records. **Bound values**, on the other hand, never go through
+    /// here.
     #[error("cannot parse SQL at byte {}: {message}", .span.start)]
     Syntax {
-        /// Message de l'analyseur.
+        /// Parser message.
         message: String,
-        /// Bornes en octets de l'instruction fautive dans le texte d'origine.
+        /// Byte bounds of the faulty statement in the original text.
         span: Range<usize>,
     },
 
-    /// Le langage n'est pas du SQL : cette crate ne sait pas l'analyser.
+    /// The language is not SQL: this crate cannot parse it.
     ///
-    /// Ce n'est pas un défaut de la requête. `oxyn-query` analyse le SQL ; un
-    /// langage de graphe ou de document sera classé par son propre analyseur
-    /// (ADR-0003), pas ramené au SQL.
+    /// It is not a defect of the query. `oxyn-query` parses SQL; a graph or
+    /// document language will be classified by its own parser (ADR-0003), not
+    /// brought back to SQL.
     #[error("language not parsed by oxyn-query: {language}")]
     UnsupportedLanguage {
-        /// Le langage refusé.
+        /// The refused language.
         language: QueryLanguage,
     },
 }
@@ -61,29 +61,29 @@ mod tests {
     use oxyn_core::SqlDialect;
 
     #[test]
-    fn une_erreur_de_syntaxe_situe_le_fautif() {
-        let erreur = QueryError::Syntax {
+    fn a_syntax_error_locates_the_culprit() {
+        let failure = QueryError::Syntax {
             message: "Expected an expression".to_owned(),
             span: 42..60,
         };
-        assert!(erreur.to_string().contains("42"));
+        assert!(failure.to_string().contains("42"));
     }
 
     #[test]
-    fn un_langage_non_sql_se_nomme() {
-        let erreur = QueryError::UnsupportedLanguage {
+    fn a_non_sql_language_is_named() {
+        let failure = QueryError::UnsupportedLanguage {
             language: QueryLanguage::Cypher,
         };
-        assert!(erreur.to_string().contains("cypher"));
+        assert!(failure.to_string().contains("cypher"));
     }
 
     #[test]
-    fn l_erreur_se_replie_sur_le_vocabulaire_du_domaine() {
-        let erreur: OxynError = QueryError::UnsupportedLanguage {
+    fn the_error_folds_into_the_domain_vocabulary() {
+        let failure: OxynError = QueryError::UnsupportedLanguage {
             language: QueryLanguage::Sql(SqlDialect::Postgres),
         }
         .into();
-        assert!(matches!(erreur, OxynError::Query(_)));
-        assert!(erreur.is_user_error());
+        assert!(matches!(failure, OxynError::Query(_)));
+        assert!(failure.is_user_error());
     }
 }

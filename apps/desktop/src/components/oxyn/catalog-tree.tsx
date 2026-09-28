@@ -51,7 +51,7 @@ import { InputGroupTextInput } from "./text-field"
  *
  * A pin exists to offer a row sample, and a sample leaves only under
  * `sampled`, to the destination the assistant would ask — a built-in provider
- * or an external agent (docs/AI-PROVIDERS.md, « Échantillon approuvé »,
+ * or an external agent (docs/AI-PROVIDERS.md, « Approved sample »,
  * ADR-0034). Anywhere else the action is absent rather than disabled: a
  * greyed item would advertise a path the tier closes.
  */
@@ -355,9 +355,9 @@ const MATCHED: Record<CatalogSearchHit["matched"], string> = {
  * The objects of the open connection.
  *
  * Expanding a node asks for that level through the command bus; nothing is
- * invented while it loads (docs/UX-SPEC.md, « Navigation du premier
- * workspace »). The search covers loaded objects only, and says so. System
- * schemas can be hidden; they are never removed from the catalog.
+ * invented while it loads (docs/UX-SPEC.md, « First workspace navigation »).
+ * The search covers loaded objects only, and says so. System schemas can be
+ * hidden; they are never removed from the catalog.
  *
  * Names are text. The context menu copies the name the **backend** quoted
  * for the session's dialect — this component never builds one.
@@ -405,8 +405,8 @@ export function CatalogTree({
   copyAs?: CopyAs
   /**
    * Opens a console whose session context is this schema. Given only where a
-   * console's context can be a schema (UX-SPEC, « Contexte de session d'une
-   * console »); offered on schema nodes.
+   * console's context can be a schema (UX-SPEC, « Session context of a console
+   * »); offered on schema nodes.
    */
   onNewConsole?: (node: CatalogNode) => void
   /** A relation dragged to the editor, or ⌥↵: its quoted name goes there. */

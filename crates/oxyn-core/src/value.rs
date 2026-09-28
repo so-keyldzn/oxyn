@@ -1,21 +1,21 @@
-//! Valeurs scalaires du domaine.
+//! Scalar values of the domain.
 //!
-//! [`ScalarValue`] n'est **pas** le modèle de résultat : les résultats sont des
-//! `arrow::RecordBatch` (ADR-0002) et ne passent jamais par ce type. `ScalarValue`
-//! sert aux valeurs isolées : paramètres liés d'une requête, cellule éditée,
-//! valeur affichée dans un inspecteur.
+//! [`ScalarValue`] is **not** the result model: results are
+//! `arrow::RecordBatch` (ADR-0002) and never go through this type. `ScalarValue`
+//! serves isolated values: bound parameters of a query, an edited cell, a value
+//! shown in an inspector.
 //!
-//! Le traitement du temps suit
-//! [`DRIVER-CONTRACT` §7](../../../docs/DRIVER-CONTRACT.md) : un instant avec
-//! fuseau se transporte en UTC ([`Timestamp`](ScalarValue::Timestamp)), un
-//! horodatage sans fuseau se transporte **sans en inventer un**
-//! ([`TimestampNaive`](ScalarValue::TimestampNaive)). Les deux ne se confondent
-//! pas : c'est cette confusion qui décale une donnée de deux heures en base, de
-//! façon invisible et permanente.
+//! Time handling follows
+//! [`DRIVER-CONTRACT` §7](../../../docs/DRIVER-CONTRACT.md): an instant with a
+//! time zone travels in UTC ([`Timestamp`](ScalarValue::Timestamp)), a
+//! timestamp without a time zone travels **without inventing one**
+//! ([`TimestampNaive`](ScalarValue::TimestampNaive)). The two are never
+//! confused: it is this confusion that shifts a value by two hours in the
+//! database, invisibly and permanently.
 //!
-//! Les décimales voyagent en texte ([`Decimal`](ScalarValue::Decimal)) : aucun
-//! type flottant ne représente `0.1` exactement, et une valeur monétaire arrondie
-//! au passage est une corruption silencieuse.
+//! Decimals travel as text ([`Decimal`](ScalarValue::Decimal)): no floating
+//! type represents `0.1` exactly, and a monetary value rounded along the way is
+//! a silent corruption.
 
 use std::fmt;
 
@@ -23,70 +23,68 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Une valeur scalaire, telle qu'elle traverse la frontière d'un driver.
+/// A scalar value, as it crosses a driver's boundary.
 ///
-/// L'énumération est **fermée**, contrairement à la convention du dépôt sur les
-/// énumérations publiques. La raison est le contrat de driver : chaque driver
-/// tient une table de correspondance de types **dans les deux sens**, et cette
-/// table est un `match`. Ajouter un type scalaire doit faire échouer la
-/// compilation de chaque driver, pour que la question « et celui-là, je le rends
-/// comment ? » soit posée — plutôt que d'être absorbée par un `_ =>` qui
-/// produirait une conversion silencieusement fausse.
+/// The enumeration is **closed**, unlike the repository's convention on public
+/// enumerations. The reason is the driver contract: each driver keeps a type
+/// mapping table **in both directions**, and that table is a `match`. Adding a
+/// scalar type must break the compilation of every driver, so that the
+/// question "and this one, how do I render it?" gets asked — rather than being
+/// absorbed by a `_ =>` that would produce a silently wrong conversion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ScalarValue {
-    /// Absence de valeur. Se distingue toujours de la chaîne vide et de zéro.
+    /// No value. Always distinct from the empty string and from zero.
     Null,
-    /// Booléen.
+    /// Boolean.
     Bool(bool),
-    /// Entier signé 64 bits.
+    /// Signed 64-bit integer.
     Int64(i64),
-    /// Flottant double précision.
+    /// Double-precision float.
     Float64(f64),
-    /// Décimal exact, conservé en texte pour ne rien perdre.
+    /// Exact decimal, kept as text so that nothing is lost.
     Decimal(String),
-    /// Texte. L'encodage est déjà validé : ce qui arrive du serveur et n'est pas
-    /// de l'UTF-8 valide devient [`Bytes`](Self::Bytes), pas un texte mutilé.
+    /// Text. The encoding is already validated: what arrives from the server
+    /// and is not valid UTF-8 becomes [`Bytes`](Self::Bytes), not a mangled text.
     Text(String),
-    /// Suite d'octets opaque.
+    /// Opaque byte sequence.
     Bytes(Vec<u8>),
     /// UUID.
     Uuid(Uuid),
-    /// Date sans heure ni fuseau.
+    /// Date without time or time zone.
     Date(NaiveDate),
-    /// Heure sans date ni fuseau.
+    /// Time without date or time zone.
     Time(NaiveTime),
-    /// Instant absolu, transporté en UTC.
+    /// Absolute instant, carried in UTC.
     Timestamp(DateTime<Utc>),
-    /// Horodatage sans fuseau. Aucun fuseau ne lui est attribué à la lecture.
+    /// Timestamp without a time zone. None is assigned to it on read.
     TimestampNaive(NaiveDateTime),
-    /// Intervalle, décomposé comme PostgreSQL le fait : les mois n'ont pas de
-    /// durée fixe, les jours non plus dès qu'il y a un changement d'heure. Les
-    /// aplatir en une seule durée serait faux.
+    /// Interval, broken down as PostgreSQL does: months have no fixed
+    /// duration, and neither do days as soon as there is a clock change.
+    /// Flattening them into a single duration would be wrong.
     Interval {
-        /// Nombre de mois.
+        /// Number of months.
         months: i32,
-        /// Nombre de jours.
+        /// Number of days.
         days: i32,
-        /// Reste, en nanosecondes.
+        /// Remainder, in nanoseconds.
         nanos: i64,
     },
-    /// Document JSON.
+    /// JSON document.
     Json(serde_json::Value),
-    /// Tableau homogène ou non, selon ce qu'accepte la source.
+    /// Array, homogeneous or not, depending on what the source accepts.
     Array(Vec<ScalarValue>),
 }
 
 impl ScalarValue {
-    /// Nombre maximal d'octets rendus par [`fmt::Display`] pour
-    /// [`Bytes`](Self::Bytes) avant troncature.
-    const APERCU_OCTETS: usize = 32;
+    /// Maximum number of bytes rendered by [`fmt::Display`] for
+    /// [`Bytes`](Self::Bytes) before truncation.
+    const PREVIEW_BYTES: usize = 32;
 
-    /// Nom stable du type, utilisable dans un message ou une table de
-    /// correspondance de types.
+    /// Stable name of the type, usable in a message or a type mapping table.
     ///
-    /// Ces noms font partie de l'API : ils apparaissent dans les messages
-    /// d'erreur de conversion et dans les tables de correspondance des drivers.
+    /// These names are part of the API: they appear in conversion error
+    /// messages and in the drivers' mapping tables.
     #[must_use]
     pub const fn type_name(&self) -> &'static str {
         match self {
@@ -108,7 +106,7 @@ impl ScalarValue {
         }
     }
 
-    /// La valeur est-elle absente ?
+    /// Is the value absent?
     #[must_use]
     pub const fn is_null(&self) -> bool {
         matches!(self, Self::Null)
@@ -116,13 +114,12 @@ impl ScalarValue {
 }
 
 impl fmt::Display for ScalarValue {
-    /// Rendu lisible, destiné à l'affichage et aux tests.
+    /// Readable rendering, meant for display and tests.
     ///
-    /// Ce n'est **pas** un littéral SQL : `Text` n'est pas mis entre
-    /// apostrophes et rien n'est échappé. Composer du SQL à partir de ce rendu
-    /// serait exactement l'erreur que
-    /// [`DRIVER-CONTRACT` §6](../../../docs/DRIVER-CONTRACT.md) interdit ;
-    /// les valeurs se **lient**, elles ne se concatènent pas.
+    /// It is **not** a SQL literal: `Text` is not put in quotes and nothing is
+    /// escaped. Composing SQL from this rendering would be exactly the mistake
+    /// that [`DRIVER-CONTRACT` §6](../../../docs/DRIVER-CONTRACT.md) forbids;
+    /// values are **bound**, they are not concatenated.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Null => f.write_str("NULL"),
@@ -133,10 +130,10 @@ impl fmt::Display for ScalarValue {
             Self::Text(t) => f.write_str(t),
             Self::Bytes(b) => {
                 f.write_str("\\x")?;
-                for octet in b.iter().take(Self::APERCU_OCTETS) {
-                    write!(f, "{octet:02x}")?;
+                for byte in b.iter().take(Self::PREVIEW_BYTES) {
+                    write!(f, "{byte:02x}")?;
                 }
-                if b.len() > Self::APERCU_OCTETS {
+                if b.len() > Self::PREVIEW_BYTES {
                     write!(f, "… ({} bytes)", b.len())?;
                 }
                 Ok(())
@@ -144,7 +141,7 @@ impl fmt::Display for ScalarValue {
             Self::Uuid(u) => write!(f, "{u}"),
             Self::Date(d) => write!(f, "{d}"),
             Self::Time(t) => write!(f, "{t}"),
-            // RFC 3339 en UTC : jamais converti dans le fuseau du poste.
+            // RFC 3339 in UTC: never converted to the machine's time zone.
             Self::Timestamp(ts) => write!(f, "{}", ts.to_rfc3339()),
             Self::TimestampNaive(ts) => write!(f, "{}", ts.format("%Y-%m-%dT%H:%M:%S%.f")),
             Self::Interval {
@@ -152,10 +149,10 @@ impl fmt::Display for ScalarValue {
                 days,
                 nanos,
             } => {
-                // Forme ISO 8601 : les trois composantes restent distinctes.
-                let secondes = nanos / 1_000_000_000;
-                let reste = (nanos % 1_000_000_000).unsigned_abs();
-                write!(f, "P{months}M{days}DT{secondes}.{reste:09}S")
+                // ISO 8601 form: the three components stay distinct.
+                let seconds = nanos / 1_000_000_000;
+                let remainder = (nanos % 1_000_000_000).unsigned_abs();
+                write!(f, "P{months}M{days}DT{seconds}.{remainder:09}S")
             }
             Self::Json(v) => write!(f, "{v}"),
             Self::Array(items) => {
@@ -423,7 +420,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn null_se_rend_en_majuscules_et_se_distingue_du_vide() {
+    fn null_renders_in_uppercase_and_differs_from_empty() {
         assert_eq!(ScalarValue::Null.to_string(), "NULL");
         assert_eq!(ScalarValue::Text(String::new()).to_string(), "");
         // The trap, stated as such: `Display` does not tell `NULL` apart from
@@ -435,13 +432,13 @@ mod tests {
         assert_eq!(
             ScalarValue::Null.to_string(),
             ScalarValue::Text("NULL".into()).to_string(),
-            "si ces deux rendus divergent un jour, la grille peut cesser de les \
-             distinguer visuellement : c'est elle qui porte la distinction"
+            "if these two renderings ever diverge, the grid may stop telling them \
+             apart visually: the grid is what carries the distinction"
         );
     }
 
     #[test]
-    fn les_noms_de_types_sont_stables() {
+    fn type_names_are_stable() {
         assert_eq!(ScalarValue::Null.type_name(), "null");
         assert_eq!(ScalarValue::Int64(1).type_name(), "int64");
         assert_eq!(
@@ -451,50 +448,50 @@ mod tests {
         assert_eq!(
             ScalarValue::TimestampNaive(DateTime::<Utc>::UNIX_EPOCH.naive_utc()).type_name(),
             "timestamp",
-            "un horodatage sans fuseau ne porte pas le même nom qu'un instant"
+            "a timestamp without a time zone does not carry the same name as an instant"
         );
     }
 
     #[test]
-    fn un_instant_se_rend_en_utc() {
+    fn an_instant_renders_in_utc() {
         let ts = DateTime::<Utc>::UNIX_EPOCH;
-        let rendu = ScalarValue::Timestamp(ts).to_string();
-        assert!(rendu.ends_with("+00:00"), "rendu inattendu : {rendu}");
-        assert!(rendu.starts_with("1970-01-01T00:00:00"));
+        let rendered = ScalarValue::Timestamp(ts).to_string();
+        assert!(
+            rendered.ends_with("+00:00"),
+            "unexpected rendering: {rendered}"
+        );
+        assert!(rendered.starts_with("1970-01-01T00:00:00"));
     }
 
     #[test]
-    fn un_horodatage_sans_fuseau_n_en_invente_pas_un() {
+    fn a_timestamp_without_time_zone_does_not_invent_one() {
         let naive = DateTime::<Utc>::UNIX_EPOCH.naive_utc();
-        let rendu = ScalarValue::TimestampNaive(naive).to_string();
+        let rendered = ScalarValue::TimestampNaive(naive).to_string();
         assert!(
-            !rendu.contains('+') && !rendu.ends_with('Z'),
-            "un fuseau a été inventé : {rendu}"
+            !rendered.contains('+') && !rendered.ends_with('Z'),
+            "a time zone was invented: {rendered}"
         );
     }
 
     #[test]
-    fn les_octets_sont_tronques_a_l_affichage() {
-        let court = ScalarValue::Bytes(vec![0x00, 0x0a, 0xff]);
-        assert_eq!(court.to_string(), "\\x000aff");
+    fn bytes_are_truncated_on_display() {
+        let short = ScalarValue::Bytes(vec![0x00, 0x0a, 0xff]);
+        assert_eq!(short.to_string(), "\\x000aff");
 
         let long = ScalarValue::Bytes(vec![0xab; 1024]);
-        let rendu = long.to_string();
-        assert!(rendu.contains("1024 bytes"), "rendu : {rendu}");
-        assert!(
-            rendu.len() < 128,
-            "un BLOB ne doit pas être rendu en entier"
-        );
+        let rendered = long.to_string();
+        assert!(rendered.contains("1024 bytes"), "rendering: {rendered}");
+        assert!(rendered.len() < 128, "a BLOB must not be rendered in full");
     }
 
     #[test]
-    fn les_decimales_ne_passent_pas_par_un_flottant() {
+    fn decimals_do_not_go_through_a_float() {
         let d = ScalarValue::Decimal("0.10".into());
-        assert_eq!(d.to_string(), "0.10", "les zéros de queue sont signifiants");
+        assert_eq!(d.to_string(), "0.10", "trailing zeros are significant");
     }
 
     #[test]
-    fn un_intervalle_garde_ses_trois_composantes() {
+    fn an_interval_keeps_its_three_components() {
         let i = ScalarValue::Interval {
             months: 1,
             days: 2,
@@ -504,7 +501,7 @@ mod tests {
     }
 
     #[test]
-    fn un_tableau_se_rend_imbrique() {
+    fn an_array_renders_nested() {
         let a = ScalarValue::Array(vec![
             ScalarValue::Int64(1),
             ScalarValue::Null,
@@ -514,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn conversion_depuis_option() {
+    fn conversion_from_option() {
         let absent: ScalarValue = Option::<i64>::None.into();
         assert!(absent.is_null());
         let present: ScalarValue = Some(7_i64).into();
@@ -522,8 +519,8 @@ mod tests {
     }
 
     #[test]
-    fn aller_retour_json() {
-        let cas = [
+    fn json_round_trip() {
+        let cases = [
             ScalarValue::Null,
             ScalarValue::Bool(true),
             ScalarValue::Int64(-42),
@@ -538,14 +535,14 @@ mod tests {
             },
             ScalarValue::Array(vec![ScalarValue::Int64(1)]),
         ];
-        for valeur in cas {
-            let json = serde_json::to_string(&valeur).expect("sérialisation");
-            let relu: ScalarValue = serde_json::from_str(&json).expect("désérialisation");
+        for value in cases {
+            let json = serde_json::to_string(&value).expect("serialization");
+            let read_back: ScalarValue = serde_json::from_str(&json).expect("deserialization");
             assert_eq!(
-                valeur,
-                relu,
-                "aller-retour raté pour {}",
-                valeur.type_name()
+                value,
+                read_back,
+                "round trip failed for {}",
+                value.type_name()
             );
         }
     }
@@ -768,7 +765,7 @@ mod tests {
 
     #[test]
     fn parameter_parse_error_never_carries_the_rejected_text() {
-        let sentinel = "S3NT1NELLE";
+        let sentinel = "S3NT1NEL";
         let err = ParameterType::Int64.parse(sentinel).expect_err("invalid");
         assert!(!format!("{err:?}").contains(sentinel));
         assert!(!format!("{err}").contains(sentinel));

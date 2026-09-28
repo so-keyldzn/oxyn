@@ -118,7 +118,7 @@ function ColumnRow({
  * The approval of a row sample, column by column (ADR-0006, `Sampled`).
  *
  * This is the screen `Sampled` was always described with and never had: the
- * tier says row values leave « approuvé explicitement, colonne par colonne »,
+ * tier says row values leave « approved column by column »,
  * and without a place to approve, the tier could not be held as written.
  *
  * Four decisions, and each one is a refusal of something easier:

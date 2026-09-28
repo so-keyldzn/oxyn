@@ -1,24 +1,24 @@
-//! Les sessions ouvertes, et la résolution des identifiants qui les ouvre.
+//! Open sessions, and the resolution of the credentials that open them.
 //!
-//! Une [`Session`] de driver est `Send + Sync` et s'emploie par `&self` : elle
-//! peut donc servir plusieurs exécutions à la fois. Ce qu'elle ne supporte pas,
-//! c'est d'être fermée pendant qu'on s'en sert — [`Session::close`] consomme la
-//! session. D'où [`SessionSlot`] : un verrou en lecture-écriture **asynchrone**
-//! autour d'une session éventuellement fermée.
+//! A driver [`Session`] is `Send + Sync` and is used through `&self`: it can
+//! therefore serve several executions at once. What it does not support is
+//! being closed while in use — [`Session::close`] consumes the session. Hence
+//! [`SessionSlot`]: an **asynchronous** read-write lock around a possibly
+//! closed session.
 //!
-//! Le verrou est celui de `tokio` et non de `parking_lot` parce que sa garde
-//! traverse un `await` : `execute` est tenu en lecture pendant tout l'aller
-//! serveur. Une garde `parking_lot` n'est pas `Send`, et une exécution qui bloque
-//! un thread du runtime pendant trente secondes est exactement ce que le modèle
-//! de threads interdit (ARCHITECTURE §9).
+//! The lock is `tokio`'s and not `parking_lot`'s because its guard crosses an
+//! `await`: `execute` is held for reading during the whole server round trip.
+//! A `parking_lot` guard is not `Send`, and an execution that blocks a runtime
+//! thread for thirty seconds is exactly what the threading model forbids
+//! (ARCHITECTURE §9).
 //!
-//! # Ce qui n'est pas ici
+//! # What is not here
 //!
-//! **Le trousseau.** `oxyn-exec` ne dépend pas de `oxyn-secrets` : les
-//! identifiants arrivent par [`CredentialResolver`], que `oxyn-desktop` câble sur le
-//! trousseau du système. Ce n'est pas une abstraction spéculative — c'est la
-//! frontière qui empêche l'ordonnanceur d'aller lire un mot de passe lui-même,
-//! et qui rend les tests possibles sans trousseau.
+//! **The keychain.** `oxyn-exec` does not depend on `oxyn-secrets`: credentials
+//! arrive through [`CredentialResolver`], which `oxyn-desktop` wires to the
+//! system keychain. It is not a speculative abstraction — it is the boundary
+//! that keeps the executor from reading a password itself, and that makes
+//! tests possible without a keychain.
 //!
 //! Catalog reads keep the session read guard until provider completion.
 //! Cancellation reaches the provider token, including during disconnect.
@@ -36,39 +36,39 @@ use oxyn_driver::{Credentials, Cursor, Session};
 use parking_lot::RwLock;
 use tokio::sync::RwLock as AsyncRwLock;
 
-/// Ce qui sait retrouver les identifiants d'une connexion.
+/// What knows how to find a connection's credentials.
 ///
-/// Implémenté par `oxyn-desktop` au-dessus de `oxyn-secrets`. La méthode est
-/// **synchrone** : les trousseaux du système le sont, et prétendre le contraire
-/// masquerait qu'elle bloque.
+/// Implemented by `oxyn-desktop` on top of `oxyn-secrets`. The method is
+/// **synchronous**: system keychains are, and pretending otherwise would hide
+/// that it blocks.
 ///
-/// La valeur rendue ne traverse jamais un journal ni une trace :
-/// [`Credentials`] masque son contenu dans `Debug` (I-03).
+/// The returned value never goes through a log or a trace:
+/// [`Credentials`] masks its content in `Debug` (I-03).
 pub trait CredentialResolver: Send + Sync {
-    /// Résout les identifiants d'une connexion.
+    /// Resolves a connection's credentials.
     ///
-    /// `config` ne porte qu'une
-    /// [`secret_ref`](oxyn_core::ConnectionConfig::secret_ref) ; c'est elle qui
-    /// est résolue.
+    /// `config` carries only a
+    /// [`secret_ref`](oxyn_core::ConnectionConfig::secret_ref); it is the one
+    /// that is resolved.
     ///
-    /// # Erreurs
-    /// [`OxynError::Authentication`] si le trousseau refuse ou ne connaît pas la
-    /// référence, [`OxynError::Config`] si la référence est illisible.
+    /// # Errors
+    /// [`OxynError::Authentication`] if the keychain refuses or does not know
+    /// the reference, [`OxynError::Config`] if the reference is unreadable.
     fn resolve(&self, config: &ConnectionConfig) -> Result<Credentials>;
 
-    /// Nom du résolveur, pour les traces.
+    /// Name of the resolver, for traces.
     fn name(&self) -> &'static str {
         "credentials"
     }
 }
 
-/// Le résolveur qui ne résout rien.
+/// The resolver that resolves nothing.
 ///
-/// Rend des identifiants **vides**, ce qui est la vérité pour SQLite et pour
-/// toute connexion sans secret. Ce n'est pas un bouchon qui fait semblant : un
-/// driver qui a besoin d'un mot de passe recevra un `Credentials` vide et
-/// rendra [`OxynError::Authentication`], ce qui est la bonne réponse tant que le
-/// trousseau n'est pas câblé.
+/// Returns **empty** credentials, which is the truth for SQLite and for any
+/// connection without a secret. It is not a stub that pretends: a driver that
+/// needs a password will receive an empty `Credentials` and return
+/// [`OxynError::Authentication`], which is the right answer as long as the
+/// keychain is not wired.
 #[derive(Clone, Copy, Default)]
 pub struct NoCredentials;
 
@@ -83,20 +83,19 @@ impl CredentialResolver for NoCredentials {
 }
 
 impl fmt::Debug for NoCredentials {
-    /// Écrit à la main, comme tout ce qui touche aux identifiants : un `Debug`
-    /// dérivé sur cette famille de types est ce qui fuit six mois plus tard,
-    /// quand quelqu'un ajoute un `tracing::debug!` (I-03). Le type ne porte
-    /// rien aujourd'hui ; la règle vaut pour le jour où il portera quelque
-    /// chose.
+    /// Written by hand, like everything that touches credentials: a derived
+    /// `Debug` on this family of types is what leaks six months later, when
+    /// someone adds a `tracing::debug!` (I-03). The type carries nothing
+    /// today; the rule holds for the day it will carry something.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("NoCredentials")
     }
 }
 
-/// Une session ouverte, partageable et fermable.
+/// An open session, shareable and closable.
 ///
-/// Se manipule par `Arc` : l'ordonnanceur en garde une copie dans son registre
-/// pendant qu'une exécution en tient une autre.
+/// Handled through `Arc`: the executor keeps one copy in its registry while an
+/// execution holds another.
 pub struct SessionSlot {
     id: SessionId,
     connection: ConnectionId,
@@ -107,11 +106,11 @@ pub struct SessionSlot {
 }
 
 impl SessionSlot {
-    /// Range une session fraîchement ouverte.
+    /// Stores a freshly opened session.
     ///
-    /// Les capacités sont **relevées à l'ouverture** : elles sont fixées par la
-    /// version du serveur et les droits du compte, qui ne changent pas pendant
-    /// la vie de la session (ADR-0003).
+    /// Capabilities are **read at opening**: they are set by the server version
+    /// and the account's rights, which do not change during the session's life
+    /// (ADR-0003).
     #[must_use]
     pub fn new(connection: ConnectionId, session: Box<dyn Session>) -> Self {
         let capabilities = session.capabilities();
@@ -125,50 +124,50 @@ impl SessionSlot {
         }
     }
 
-    /// L'identifiant de la session.
+    /// The session's identifier.
     #[must_use]
     pub const fn id(&self) -> SessionId {
         self.id
     }
 
-    /// La connexion dont elle est issue.
+    /// The connection it comes from.
     #[must_use]
     pub const fn connection(&self) -> ConnectionId {
         self.connection
     }
 
-    /// Ce que **cette** session sait faire.
+    /// What **this** session can do.
     #[must_use]
     pub const fn capabilities(&self) -> Capabilities {
         self.capabilities
     }
 
-    /// Depuis combien de temps elle est ouverte.
+    /// How long it has been open.
     #[must_use]
     pub fn uptime(&self) -> Duration {
         self.opened_at.elapsed()
     }
 
-    /// La session est-elle encore ouverte ?
+    /// Is the session still open?
     ///
-    /// Réponse instantanée quand le verrou est libre ; `false` par prudence si
-    /// une fermeture est en cours — une session en train de se fermer ne doit
-    /// pas se voir confier une exécution.
+    /// Instant answer when the lock is free; `false` out of caution if a
+    /// closing is in progress — a session being closed must not be entrusted
+    /// with an execution.
     #[must_use]
     pub fn is_open(&self) -> bool {
         if self.closing.is_cancelled() {
             return false;
         }
-        // `tokio::sync::RwLock::try_read` rend un `Result` : l'échec signifie
-        // « un écrivain tient le verrou », c'est-à-dire une fermeture en cours.
+        // `tokio::sync::RwLock::try_read` returns a `Result`: failure means
+        // "a writer holds the lock", that is, a closing in progress.
         self.session.try_read().is_ok_and(|g| g.is_some())
     }
 
-    /// Exécute une demande sur cette session.
+    /// Executes a request on this session.
     ///
-    /// # Erreurs
-    /// [`OxynError::Connection`] si la session a été fermée, et toute erreur
-    /// rendue par le driver.
+    /// # Errors
+    /// [`OxynError::Connection`] if the session was closed, and any error
+    /// returned by the driver.
     pub async fn execute(
         &self,
         request: ExecRequest,
@@ -299,32 +298,32 @@ impl SessionSlot {
         }
     }
 
-    /// Demande au serveur d'interrompre une exécution.
+    /// Asks the server to interrupt an execution.
     ///
-    /// N'a de sens que si la session déclare
-    /// [`Capabilities::SERVER_SIDE_CANCEL`] ; c'est
-    /// [`CancelRegistry::cancel`](crate::CancelRegistry::cancel) qui fait cette
-    /// vérification, pour qu'elle n'existe qu'à un seul endroit.
+    /// Only makes sense if the session declares
+    /// [`Capabilities::SERVER_SIDE_CANCEL`]; it is
+    /// [`CancelRegistry::cancel`](crate::CancelRegistry::cancel) that does this
+    /// check, so that it exists in one place only.
     ///
-    /// # Erreurs
-    /// [`OxynError::NotSupported`] si le driver ne sait pas annuler côté
-    /// serveur, et toute erreur de transport.
+    /// # Errors
+    /// [`OxynError::NotSupported`] if the driver cannot cancel server-side, and
+    /// any transport error.
     pub async fn cancel_statement(&self, statement: StatementHandle) -> Result<()> {
         let guard = self.session.read().await;
         let Some(session) = guard.as_deref() else {
-            // Une session fermée a libéré ses requêtes : il n'y a plus rien à
-            // interrompre, et le dire comme une erreur ferait du bruit à chaque
-            // fermeture d'onglet.
+            // A closed session released its queries: there is nothing left to
+            // interrupt, and saying so as an error would make noise at every
+            // tab closing.
             return Ok(());
         };
         session.cancel(statement).await
     }
 
-    /// Vérifie que la connexion est vivante.
+    /// Checks that the connection is alive.
     ///
-    /// # Erreurs
-    /// [`OxynError::Connection`] si la session a été fermée, et toute erreur de
-    /// transport.
+    /// # Errors
+    /// [`OxynError::Connection`] if the session was closed, and any transport
+    /// error.
     pub async fn ping(&self) -> Result<Duration> {
         let guard = self.session.read().await;
         let Some(session) = guard.as_deref() else {
@@ -343,14 +342,13 @@ impl SessionSlot {
         &self.closing
     }
 
-    /// Ferme la session.
+    /// Closes the session.
     ///
-    /// Idempotent : fermer deux fois n'est pas une erreur. Les ressources
-    /// locales sont libérées dans tous les cas, y compris si le serveur refuse
-    /// la fermeture.
+    /// Idempotent: closing twice is not an error. Local resources are released
+    /// in every case, including if the server refuses the closing.
     ///
-    /// # Erreurs
-    /// Toute erreur de transport rencontrée à la fermeture.
+    /// # Errors
+    /// Any transport error met while closing.
     pub async fn close(&self) -> Result<()> {
         self.begin_close();
         let session = { self.session.write().await.take() };
@@ -362,8 +360,8 @@ impl SessionSlot {
 }
 
 impl fmt::Debug for SessionSlot {
-    /// Ne rend ni la session ni ce qu'elle porte : un driver n'est pas tenu
-    /// d'avoir un `Debug` sans secret.
+    /// Returns neither the session nor what it carries: a driver is not bound
+    /// to have a secret-free `Debug`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SessionSlot")
             .field("id", &self.id)
@@ -374,46 +372,46 @@ impl fmt::Debug for SessionSlot {
     }
 }
 
-/// L'erreur d'une session dont on se sert après l'avoir fermée.
+/// The error of a session used after being closed.
 ///
-/// Classée [`Connection`](OxynError::Connection), donc **transitoire** : la
-/// bonne suite est de rouvrir, ce que l'interface sait faire.
+/// Classified [`Connection`](OxynError::Connection), hence **transient**: the
+/// right follow-up is to reopen, which the interface knows how to do.
 fn session_closed() -> OxynError {
     OxynError::Connection("the session has been closed".to_owned())
 }
 
-/// Les sessions ouvertes de l'ordonnanceur.
+/// The executor's open sessions.
 #[derive(Debug, Default)]
 pub struct SessionRegistry {
     sessions: RwLock<HashMap<SessionId, Arc<SessionSlot>>>,
 }
 
 impl SessionRegistry {
-    /// Registre vide.
+    /// Empty registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Range une session ouverte et rend sa poignée partagée.
+    /// Stores an open session and returns its shared handle.
     pub fn insert(&self, slot: SessionSlot) -> Arc<SessionSlot> {
         let slot = Arc::new(slot);
         self.sessions.write().insert(slot.id(), Arc::clone(&slot));
         slot
     }
 
-    /// Retrouve une session.
+    /// Finds a session.
     #[must_use]
     pub fn get(&self, id: SessionId) -> Option<Arc<SessionSlot>> {
         self.sessions.read().get(&id).map(Arc::clone)
     }
 
-    /// Retire une session du registre **sans la fermer**.
+    /// Removes a session from the registry **without closing it**.
     pub fn remove(&self, id: SessionId) -> Option<Arc<SessionSlot>> {
         self.sessions.write().remove(&id)
     }
 
-    /// Les sessions ouvertes sur une connexion.
+    /// The sessions open on a connection.
     #[must_use]
     pub fn for_connection(&self, connection: ConnectionId) -> Vec<Arc<SessionSlot>> {
         self.sessions
@@ -424,35 +422,35 @@ impl SessionRegistry {
             .collect()
     }
 
-    /// Retire et rend toutes les sessions d'une connexion.
+    /// Removes and returns every session of a connection.
     ///
-    /// Retirer **avant** de fermer : une session en cours de fermeture ne doit
-    /// plus pouvoir se voir confier une exécution.
+    /// Remove **before** closing: a session being closed must no longer be
+    /// entrusted with an execution.
     pub fn drain_connection(&self, connection: ConnectionId) -> Vec<Arc<SessionSlot>> {
         let mut guard = self.sessions.write();
-        let visees: Vec<SessionId> = guard
+        let targeted: Vec<SessionId> = guard
             .values()
             .filter(|s| s.connection() == connection)
             .map(|s| s.id())
             .collect();
-        visees
+        targeted
             .into_iter()
             .filter_map(|id| guard.remove(&id))
             .collect()
     }
 
-    /// Retire et rend toutes les sessions.
+    /// Removes and returns every session.
     pub fn drain_all(&self) -> Vec<Arc<SessionSlot>> {
         self.sessions.write().drain().map(|(_, s)| s).collect()
     }
 
-    /// Nombre de sessions ouvertes.
+    /// Number of open sessions.
     #[must_use]
     pub fn len(&self) -> usize {
         self.sessions.read().len()
     }
 
-    /// Aucune session ouverte ?
+    /// No open session?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sessions.read().is_empty()
@@ -465,21 +463,21 @@ mod tests {
     use oxyn_core::DriverId;
 
     #[test]
-    fn le_resolveur_vide_ne_pretend_rien() {
+    fn the_empty_resolver_claims_nothing() {
         let config = ConnectionConfig::new("atelier", DriverId::sqlite());
-        let identifiants = NoCredentials
+        let credentials = NoCredentials
             .resolve(&config)
-            .expect("le résolveur vide n'échoue jamais");
-        assert!(identifiants.is_empty());
+            .expect("the empty resolver never fails");
+        assert!(credentials.is_empty());
         assert_eq!(NoCredentials.name(), "no-credentials");
     }
 
     #[test]
-    fn un_registre_vide_ne_retrouve_rien() {
-        let registre = SessionRegistry::new();
-        assert!(registre.is_empty());
-        assert!(registre.get(SessionId::new()).is_none());
-        assert!(registre.drain_connection(ConnectionId::new()).is_empty());
+    fn an_empty_registry_finds_nothing() {
+        let registry = SessionRegistry::new();
+        assert!(registry.is_empty());
+        assert!(registry.get(SessionId::new()).is_none());
+        assert!(registry.drain_connection(ConnectionId::new()).is_empty());
     }
 
     #[test]
@@ -540,10 +538,10 @@ mod tests {
     }
 
     #[test]
-    fn une_session_fermee_est_une_erreur_transitoire() {
-        // La bonne suite est de rouvrir : l'interface doit pouvoir le proposer
-        // sans analyser le message.
-        let erreur = session_closed();
-        assert!(erreur.is_retryable(), "{erreur:?}");
+    fn a_closed_session_is_a_transient_error() {
+        // The right follow-up is to reopen: the interface must be able to offer
+        // it without parsing the message.
+        let error = session_closed();
+        assert!(error.is_retryable(), "{error:?}");
     }
 }

@@ -1,57 +1,55 @@
-//! Ce qu'Oxyn accorde à un agent externe, et ce qu'il lui refuse d'office.
+//! What Oxyn grants an external agent, and what it refuses it outright.
 //!
-//! Autorité : [ADR-0026](../../../docs/adr/0026-agents-externes-acp.md).
+//! Authority: [ADR-0026](../../../docs/adr/0026-agents-externes-acp.md).
 //!
-//! # La correction qui a fondé ce module
+//! # The correction that founded this module
 //!
-//! Une première rédaction d'ADR-0026 affirmait que `session/request_permission`
-//! **est** le point d'entrée du `PolicyGate`. La lecture du protocole a montré
-//! que c'était trop fort, et le corriger a décidé de la forme d'ici.
+//! A first draft of ADR-0026 claimed that `session/request_permission` **is**
+//! the entry point of the `PolicyGate`. Reading the protocol showed that this
+//! was too strong, and correcting it decided the shape of this module.
 //!
-//! La demande d'autorisation porte un `tool_call` — un outil **de l'agent** :
-//! lire un fichier, en éditer un, lancer une commande. Ce ne sont pas des
-//! `Command` d'Oxyn, et il n'existe aucune traduction : « l'agent veut éditer
-//! `/etc/hosts` » ne devient pas une commande de base de données. Le
-//! `PolicyGate` garde donc son domaine — ce qu'un agent demande **à Oxyn** —,
-//! et ce module décide de l'autre moitié : ce qu'un agent demande à faire **sur
-//! la machine**, pendant qu'Oxyn est son client.
+//! The permission request carries a `tool_call` — a tool **of the agent**:
+//! reading a file, editing one, running a command. These are not Oxyn
+//! `Command`s, and there is no translation: "the agent wants to edit
+//! `/etc/hosts`" does not become a database command. The `PolicyGate`
+//! therefore keeps its domain — what an agent asks **of Oxyn** —, and this
+//! module decides the other half: what an agent asks to do **on the machine**,
+//! while Oxyn is its client.
 //!
-//! # Le parti retenu : Oxyn n'est pas un hôte d'agent de code
+//! # The stance taken: Oxyn is not a coding agent host
 //!
-//! Oxyn est un atelier de bases de données. Rien dans son périmètre ne justifie
-//! qu'il accorde à un sous-processus le droit d'écrire des fichiers, d'en
-//! supprimer ou de lancer des commandes — et il n'a pas d'interface pour
-//! montrer *quel* fichier ni *quelle* commande, donc pas de quoi demander à
-//! l'utilisateur de décider en connaissance de cause.
+//! Oxyn is a database workbench. Nothing in its scope justifies granting a
+//! subprocess the right to write files, delete them or run commands — and it
+//! has no interface to show *which* file or *which* command, hence nothing to
+//! let the user decide knowingly.
 //!
-//! Un éditeur de code accorde ces droits parce que son périmètre les
-//! rend sensés et parce qu'il sait les montrer. Copier ce choix sans l'un ni
-//! l'autre serait ouvrir un accès au système derrière une fenêtre de base de
-//! données.
+//! A code editor grants these rights because its scope makes them sensible and
+//! because it knows how to show them. Copying that choice without either would
+//! open access to the system behind a database window.
 
 use agent_client_protocol::schema::v1::{PermissionOption, PermissionOptionKind, ToolKind};
 use oxyn_core::{ExternalAgentConfig, Result};
 
-/// Vérifie qu'une déclaration d'agent est lançable.
+/// Checks that an agent declaration can be launched.
 ///
-/// # Pourquoi la commande et ses arguments restent séparés
+/// # Why the command and its arguments stay separate
 ///
-/// L'exemple du protocole part d'une **chaîne unique** — `"python my_agent.py"`
-/// — qu'il découpe. Un découpage de ligne de commande est une grammaire, et une
-/// grammaire est une surface : un nom de programme contenant une espace, un
-/// guillemet ou un point-virgule y prend un sens qu'on n'a pas voulu.
+/// The protocol's example starts from a **single string** —
+/// `"python my_agent.py"` — that it splits. Splitting a command line is a
+/// grammar, and a grammar is a surface: a program name containing a space, a
+/// quote or a semicolon takes on a meaning nobody intended.
 ///
-/// La déclaration d'Oxyn sépare la commande de ses arguments **à la saisie**, et
-/// le lancement les transmet séparément à l'appel système. Rien n'est jamais
-/// réassemblé en une chaîne, donc rien n'est jamais redécoupé : il n'y a pas de
-/// shell dans le trajet.
+/// Oxyn's declaration separates the command from its arguments **at input
+/// time**, and the launch passes them separately to the system call. Nothing is
+/// ever reassembled into a string, so nothing is ever split again: there is no
+/// shell on the path.
 ///
-/// # Erreurs
+/// # Errors
 ///
-/// [`OxynError::Config`](oxyn_core::OxynError::Config) si la déclaration ne
-/// passe pas sa propre validation — nom ou commande vide, caractère de contrôle,
-/// listes hors borne. Valider **ici** plutôt qu'à la saisie seule : une
-/// déclaration peut venir d'un fichier d'état écrit ailleurs.
+/// [`OxynError::Config`](oxyn_core::OxynError::Config) if the declaration
+/// fails its own validation — empty name or command, control character,
+/// out-of-bounds lists. Validating **here** rather than only at input time: a
+/// declaration can come from a state file written elsewhere.
 pub fn check_launchable(agent: &ExternalAgentConfig) -> Result<()> {
     agent.validate()
 }
@@ -87,48 +85,48 @@ pub fn is_protocol_chatter(target: &str, level: &tracing::Level) -> bool {
     ours && *level > tracing::Level::ERROR
 }
 
-/// Ce qu'Oxyn répond à une demande d'autorisation d'agent externe.
+/// What Oxyn answers to an external agent's permission request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PermissionVerdict {
-    /// Accordé sans demander : l'action ne quitte pas l'agent.
+    /// Granted without asking: the action does not leave the agent.
     Granted,
-    /// Refusé, avec la raison à afficher **et** à renvoyer à l'agent.
+    /// Refused, with the reason to display **and** to send back to the agent.
     ///
-    /// La raison est rendue telle quelle à l'agent pour qu'il cesse d'insister
-    /// plutôt que de reformuler sa demande indéfiniment.
+    /// The reason is returned as is to the agent so that it stops insisting
+    /// rather than rephrasing its request indefinitely.
     Refused(&'static str),
 }
 
 impl PermissionVerdict {
-    /// Le verdict est-il un refus ?
+    /// Is the verdict a refusal?
     #[must_use]
     pub const fn is_refused(&self) -> bool {
         matches!(self, Self::Refused(_))
     }
 }
 
-/// Ce qu'Oxyn accorde, par genre d'outil.
+/// What Oxyn grants, by tool kind.
 ///
-/// **Refus par défaut.** Seuls les genres qui ne touchent ni au système de
-/// fichiers, ni au réseau, ni à un processus sont accordés : ils se déroulent
-/// entièrement dans l'agent, et les refuser empêcherait toute conversation sans
-/// rien protéger.
+/// **Refused by default.** Only the kinds that touch neither the file system,
+/// nor the network, nor a process are granted: they happen entirely inside the
+/// agent, and refusing them would prevent any conversation without protecting
+/// anything.
 ///
-/// Le reste est refusé **d'office**, sans demander à l'utilisateur — non par
-/// prudence excessive, mais parce qu'Oxyn n'a pas d'écran pour montrer quel
-/// fichier ou quelle commande est en jeu. Une confirmation qui ne dit pas ce
-/// qu'elle autorise est pire qu'un refus : elle déplace la responsabilité sans
-/// donner de quoi l'exercer, et [I-02](../../../CLAUDE.md#i-02) dit déjà qu'une
-/// confirmation finit par être cliquée.
+/// The rest is refused **outright**, without asking the user — not out of
+/// excessive caution, but because Oxyn has no screen to show which file or
+/// which command is at stake. A confirmation that does not say what it
+/// authorizes is worse than a refusal: it shifts the responsibility without
+/// giving the means to exercise it, and [I-02](../../../CLAUDE.md#i-02) already
+/// says a confirmation ends up being clicked.
 ///
-/// `Read` est refusé comme les autres, et c'est délibéré : lire un fichier
-/// arbitraire de la machine est une lecture **hors** du périmètre de la
-/// connexion, donc hors de ce que le niveau de confidentialité gouverne.
+/// `Read` is refused like the others, and deliberately: reading an arbitrary
+/// file of the machine is a read **outside** the connection's scope, hence
+/// outside what the privacy tier governs.
 #[must_use]
 pub const fn permission_for(kind: ToolKind) -> PermissionVerdict {
     match kind {
-        // Raisonnement interne et changement de mode : rien ne sort de l'agent.
+        // Internal reasoning and mode switch: nothing leaves the agent.
         ToolKind::Think | ToolKind::SwitchMode => PermissionVerdict::Granted,
         ToolKind::Read | ToolKind::Search => PermissionVerdict::Refused(
             "Oxyn does not grant agents access to the file system. \
@@ -144,47 +142,47 @@ pub const fn permission_for(kind: ToolKind) -> PermissionVerdict {
         ToolKind::Fetch => PermissionVerdict::Refused(
             "Oxyn does not fetch external resources on behalf of an agent.",
         ),
-        // `Other` est le défaut de désérialisation du protocole : un genre
-        // qu'on ne connaît pas est un genre qu'on ne sait pas juger.
+        // `Other` is the protocol's deserialization default: a kind we do not
+        // know is a kind we cannot judge.
         ToolKind::Other => PermissionVerdict::Refused(
             "Oxyn cannot tell what this tool would do, so it does not allow it.",
         ),
-        // `ToolKind` est `#[non_exhaustive]` côté protocole : une version
-        // ultérieure peut en ajouter. Refuser est le seul défaut sûr — accorder
-        // un genre inconnu serait accorder ce que le protocole inventera.
+        // `ToolKind` is `#[non_exhaustive]` on the protocol side: a later
+        // version can add some. Refusing is the only safe default — granting
+        // an unknown kind would grant whatever the protocol invents.
         _ => PermissionVerdict::Refused(
             "This Oxyn build does not know that tool kind, so it does not allow it.",
         ),
     }
 }
 
-/// Choisit l'option de réponse qui exprime le verdict.
+/// Chooses the answer option that expresses the verdict.
 ///
-/// # L'asymétrie est délibérée
+/// # The asymmetry is deliberate
 ///
-/// Le protocole offre quatre genres d'option : autoriser une fois, autoriser
-/// toujours, refuser une fois, refuser toujours.
+/// The protocol offers four kinds of option: allow once, allow always, reject
+/// once, reject always.
 ///
-/// **À l'autorisation, Oxyn ne choisit jamais « toujours ».** Mémoriser un
-/// accord large est une décision que l'utilisateur n'a pas prise, et que rien à
-/// l'écran ne lui montrerait. `AllowOnce` seulement.
+/// **When allowing, Oxyn never chooses "always".** Remembering a broad grant is
+/// a decision the user did not make, and that nothing on screen would show
+/// them. `AllowOnce` only.
 ///
-/// **Au refus, Oxyn choisit « toujours » quand il peut.** Ce qu'il refuse, il le
-/// refusera à chaque fois — la raison rendue par [`permission_for`] est une
-/// propriété du produit, pas une humeur. Laisser l'agent redemander à chaque
-/// tour lui ferait perdre le sien, et l'utilisateur verrait une conversation qui
-/// tourne en rond sans comprendre pourquoi.
+/// **When refusing, Oxyn chooses "always" when it can.** What it refuses, it
+/// will refuse every time — the reason returned by [`permission_for`] is a
+/// property of the product, not a mood. Letting the agent ask again at every
+/// turn would make it lose its own, and the user would see a conversation going
+/// round in circles without understanding why.
 ///
-/// Rend `None` quand aucune option ne convient — l'appelant répond alors
-/// `Cancelled`, seule issue honnête : prétendre autoriser en sélectionnant une
-/// option de refus, ou l'inverse, serait pire que d'interrompre.
+/// Returns `None` when no option fits — the caller then answers `Cancelled`,
+/// the only honest outcome: pretending to allow by selecting a reject option,
+/// or the reverse, would be worse than interrupting.
 ///
-/// Le `match` est **exhaustif sans bras attrape-tout**, et délibérément :
-/// [`PermissionVerdict`] est défini ici, donc ajouter un verdict casse cette
-/// fonction à la compilation plutôt que de le faire tomber en silence dans un
-/// défaut. C'est le seul endroit du module où ce choix est possible — pour
-/// [`ToolKind`], qui vient du protocole, l'attrape-tout est au contraire
-/// obligatoire.
+/// The `match` is **exhaustive with no catch-all arm**, deliberately:
+/// [`PermissionVerdict`] is defined here, so adding a verdict breaks this
+/// function at compile time rather than letting it fall silently into a
+/// default. It is the only place of the module where that choice is possible —
+/// for [`ToolKind`], which comes from the protocol, the catch-all is on the
+/// contrary mandatory.
 #[must_use]
 pub fn option_for<'a>(
     verdict: &PermissionVerdict,

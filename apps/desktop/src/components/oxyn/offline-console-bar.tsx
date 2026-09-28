@@ -6,7 +6,7 @@ import { Spinner } from "@/components/ui/spinner"
 
 /**
  * The bar of a restored console that has no session yet (UX-SPEC
- * § Restauration sélective au démarrage).
+ * § Selective restore at startup).
  *
  * Editing, the draft and the named save work offline; running waits for the
  * user to attach the console. Attaching is its own gesture: on the connection

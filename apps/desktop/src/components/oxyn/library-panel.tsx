@@ -119,7 +119,7 @@ function when(iso: string) {
  * object, and asks first.
  *
  * A right click — or ⇧F10 on a focused entry — opens the entry's context menu
- * (UX-SPEC « Menus contextuels »). `Open` is `Open copy`, its destination
+ * (UX-SPEC « Context menus »). `Open` is `Open copy`, its destination
  * named under it; `Delete…` is the same confirmation as the button, for a
  * saved query only. A history row offers `Open` alone, and not even that
  * when the write awaits inspection (I-13).
@@ -130,9 +130,9 @@ function retainsResult(row: HistoryRow, connection: string) {
 }
 
 /**
- * Names the connection the copy opens on before the click (UX-SPEC « Ouvrir
- * depuis la bibliothèque »): the entry lists where the text ran, which is not
- * where it would run now.
+ * Names the connection the copy opens on before the click (UX-SPEC « Opening
+ * from the library »): the entry lists where the text ran, which is not where
+ * it would run now.
  */
 function OpenCopyButton({
   destination,

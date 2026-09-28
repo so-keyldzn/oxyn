@@ -1,38 +1,39 @@
-## Problème et résultat
+## Problem and outcome
 
-Décrivez le problème concret et le comportement obtenu après ce changement.
+Describe the concrete problem and the behavior obtained after this change.
 
-## Périmètre
+## Scope
 
-- Issue(s) liée(s) :
-- Zones touchées :
-- Documents d'autorité concernés :
+- Linked issue(s):
+- Areas touched:
+- Authoritative documents concerned:
 
 ## Validation
 
 - [ ] `make qualite`
-- [ ] Tests ciblés ajoutés ou exécutés
-- [ ] Scénarios d'erreur, d'annulation et de concurrence vérifiés si concernés
-- [ ] Recette native effectuée si le rendu ou les fenêtres sont concernés
+- [ ] Targeted tests added or run
+- [ ] Error, cancellation and concurrency scenarios checked if relevant
+- [ ] Native acceptance check done if rendering or windows are concerned
 
-Indiquez ici les commandes réellement exécutées et les résultats. Distinguez les
-tests ciblés, les tests headless, les tests avec PostgreSQL et la recette native.
+List here the commands actually run and their results. Distinguish targeted
+tests, headless tests, tests against PostgreSQL and the native acceptance check.
 
-## Sécurité et données
+## Security and data
 
-- [ ] Aucun secret, identifiant sensible ou donnée utilisateur n'est ajouté aux logs, erreurs, fixtures ou captures.
-- [ ] Les commandes passent par le command bus et les contrôles de politique.
-- [ ] Les écritures ambiguës ne sont pas rejouées automatiquement.
-- [ ] Les frontières externes concernées ont été relues.
+- [ ] No secret, sensitive identifier or user data is added to logs, errors, fixtures or screenshots.
+- [ ] Commands go through the command bus and the policy checks.
+- [ ] Ambiguous writes are not replayed automatically.
+- [ ] The external boundaries concerned have been reviewed.
 
-## Risques et limites
+## Risks and limits
 
-Décrivez ce qui reste non prouvé, les tests ignorés, les dépendances externes et
-les étapes de déploiement ou de migration nécessaires.
+Describe what remains unproven, the skipped tests, the external dependencies
+and the deployment or migration steps required.
 
-## Checklist finale
+## Final checklist
 
-- [ ] Le changement respecte les invariants I-01 à I-13.
-- [ ] La documentation d'autorité reste cohérente avec le code.
-- [ ] Les TODO ajoutés sont datés et indiquent ce qui les débloque.
-- [ ] Les licences et versions externes sont justifiées et documentées.
+- [ ] The change respects invariants I-01 to I-13.
+- [ ] The authoritative documentation stays consistent with the code.
+- [ ] Added TODOs are dated and say what unblocks them.
+- [ ] External licenses and versions are justified and documented.
+- [ ] Commit messages and this description are in English.

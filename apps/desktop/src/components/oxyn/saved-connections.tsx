@@ -68,7 +68,7 @@ function matches(connection: ConnectionSummary, query: string) {
  * five rows show until « Show all ». The one opening always stays in view.
  *
  * A right click — or ⇧F10 on a focused row — opens the row's context menu
- * (UX-SPEC « Menus contextuels »). `Connect` is the click; the other entries
+ * (UX-SPEC « Context menus »). `Connect` is the click; the other entries
  * are what `menuActions` gives for that connection, and an entry it leaves
  * out is not offered. A connection in `openIds` offers `Disconnect` instead
  * of `Connect`.

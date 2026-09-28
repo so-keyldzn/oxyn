@@ -1,28 +1,28 @@
-# ADR-0006 — Niveaux de confidentialité IA, par connexion
+# ADR-0006 — AI privacy tiers, per connection
 
-**Statut :** accepté · **Date :** 2026-09-05
+**Status:** accepted · **Date:** 2026-09-05
 
-## Contexte
-« Privacy first » et « AI when it adds value » entrent en tension dès qu'un schéma ou
-des lignes sont envoyés à une API cloud. Un réglage global est trop grossier : la même
-personne peut vouloir un modèle cloud sur sa base de dev et rien du tout sur la prod.
+## Context
+"Privacy first" and "AI when it adds value" pull against each other as soon as a
+schema or rows are sent to a cloud API. A global setting is too coarse: the same
+person may want a cloud model on their dev database and nothing at all on production.
 
-## Décision
-Trois niveaux, choisis **par connexion**, avec `Metadata` par défaut :
+## Decision
+Three tiers, chosen **per connection**, with `Metadata` by default:
 
-| Niveau | Ce qui sort de la machine |
+| Tier | What leaves the machine |
 |---|---|
-| `Local` | Rien — modèle local uniquement |
-| `Metadata` *(défaut)* | DDL, noms, types, index, cardinalités, plans d'exécution |
-| `Sampled` | + échantillon de lignes approuvé explicitement, colonne par colonne |
+| `Local` | Nothing — local model only |
+| `Metadata` *(default)* | DDL, names, types, indexes, cardinalities, execution plans |
+| `Sampled` | + a sample of rows explicitly approved, column by column |
 
-Aucun fournisseur n'est requis : sans configuration, le workspace IA est absent de l'UI
-et Oxyn reste un client complet.
+No provider is required: without configuration, the AI workspace is absent from the UI
+and Oxyn remains a complete client.
 
-## Conséquences
-* **+** Le défaut est sûr ; envoyer des valeurs de données est un acte délibéré.
-* **+** Compatible avec des environnements réglementés sans configuration spéciale.
-* **−** Certaines fonctionnalités (détection de doublons, incohérences de valeurs) sont
-  dégradées en `Metadata` : il faut le dire dans l'UI, pas le masquer.
-* **−** La compaction du contexte (élagage des tables non pertinentes sur une base à
-  5 000 tables) devient un composant à part entière, pas un détail.
+## Consequences
+* **+** The default is safe; sending data values is a deliberate act.
+* **+** Compatible with regulated environments without special configuration.
+* **−** Some features (duplicate detection, value inconsistencies) are degraded in
+  `Metadata`: the UI must say so, not hide it.
+* **−** Context compaction (pruning irrelevant tables on a 5,000-table database)
+  becomes a component in its own right, not a detail.

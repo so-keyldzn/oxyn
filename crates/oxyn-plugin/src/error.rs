@@ -1,19 +1,17 @@
-//! L'erreur de l'hôte de plugins.
+//! The plugin host's error.
 //!
-//! Une seule règle gouverne ce module, et elle vient de
-//! [`PLUGIN-CONTRACT`](../../../docs/PLUGIN-CONTRACT.md) : **un refus est un
-//! refus**. Un manifeste illisible, une version d'interface antérieure, une
-//! permission non approuvée ne produisent jamais un chargement dégradé « pour
-//! voir » ; ils produisent une variante de [`PluginError`] que l'interface
-//! affiche.
+//! A single rule governs this module, and it comes from
+//! [`PLUGIN-CONTRACT`](../../../docs/PLUGIN-CONTRACT.md): **a refusal is a
+//! refusal**. An unreadable manifest, an older interface version, an
+//! unapproved permission never produce a degraded load "to see"; they produce
+//! a [`PluginError`] variant that the interface displays.
 //!
-//! Le contenu d'un `plugin.toml` est écrit par un tiers
-//! ([`SECURITY` §surface d'entrée](../../../docs/SECURITY.md)). Les messages
-//! reprennent donc le **diagnostic** — la ligne fautive telle que l'analyseur
-//! TOML la décrit — mais jamais un identifiant de connexion, un chemin de
-//! trousseau ni une valeur de secret : ceux-ci n'ont de toute façon rien à faire
-//! dans un manifeste, et [`crate::manifest::PluginPermissions`] refuse de les
-//! transporter.
+//! The content of a `plugin.toml` is written by a third party
+//! ([`SECURITY` §input surface](../../../docs/SECURITY.md)). Messages therefore
+//! repeat the **diagnostic** — the faulty line as the TOML parser describes it
+//! — but never a connection identifier, a keychain path or a secret value:
+//! those have no business in a manifest anyway, and
+//! [`crate::manifest::PluginPermissions`] refuses to carry them.
 
 use std::path::PathBuf;
 
@@ -21,156 +19,153 @@ use oxyn_core::{IdParseError, OxynError};
 
 use crate::manifest::PluginVersion;
 
-/// Résultat des opérations de cette crate.
+/// Result of this crate's operations.
 pub type Result<T> = std::result::Result<T, PluginError>;
 
-/// Ce qui peut échouer entre un répertoire de plugins et un composant chargé.
+/// What can fail between a plugin directory and a loaded component.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PluginError {
-    /// Le texte du manifeste n'est pas du TOML, ou ne correspond pas à la forme
-    /// attendue.
+    /// The manifest text is not TOML, or does not match the expected shape.
     ///
-    /// Le détail vient de l'analyseur : il nomme la ligne et la clé fautives,
-    /// ce qui est exactement ce dont l'auteur du plugin a besoin.
-    #[error("manifeste illisible : {detail}")]
+    /// The detail comes from the parser: it names the faulty line and key,
+    /// which is exactly what the plugin author needs.
+    #[error("unreadable manifest: {detail}")]
     UnreadableManifest {
-        /// Diagnostic de l'analyseur TOML.
+        /// TOML parser diagnostic.
         detail: String,
     },
 
-    /// Le manifeste s'analyse mais viole une règle du contrat de plugin.
+    /// The manifest parses but violates a rule of the plugin contract.
     ///
-    /// C'est le cas d'un agent déclaratif qui porterait un point d'entrée, d'un
-    /// driver qui n'en porterait pas, ou d'un plugin dont le répertoire ne
-    /// porte pas son identifiant.
-    #[error("manifeste invalide pour `{plugin}` : {detail}")]
+    /// It is the case of a declarative agent carrying an entrypoint, of a
+    /// driver carrying none, or of a plugin whose directory does not carry its
+    /// identifier.
+    #[error("invalid manifest for `{plugin}`: {detail}")]
     InvalidManifest {
-        /// Identifiant du plugin, ou nom de son répertoire s'il n'a pas pu être
-        /// lu.
+        /// Plugin identifier, or the name of its directory if it could not be
+        /// read.
         plugin: String,
-        /// Ce qui est refusé, et pourquoi.
+        /// What is refused, and why.
         detail: String,
     },
 
-    /// Un identifiant du manifeste est mal formé.
+    /// An identifier of the manifest is malformed.
     ///
-    /// La valeur fautive n'est **jamais** reprise dans le message : c'est la
-    /// garantie que porte [`IdParseError`], et elle vaut aussi ici.
-    #[error("identifiant invalide : {0}")]
+    /// The faulty value is **never** repeated in the message: it is the
+    /// guarantee [`IdParseError`] carries, and it holds here too.
+    #[error("invalid identifier: {0}")]
     InvalidId(#[from] IdParseError),
 
-    /// Le répertoire des plugins, ou l'un de ses sous-répertoires, n'est pas
-    /// lisible.
-    #[error("`{}` illisible : {source}", path.display())]
+    /// The plugin directory, or one of its subdirectories, is not readable.
+    #[error("`{}` unreadable: {source}", path.display())]
     Directory {
-        /// Le chemin en cause.
+        /// The path at fault.
         path: PathBuf,
-        /// L'erreur du système de fichiers.
+        /// The file system error.
         #[source]
         source: std::io::Error,
     },
 
-    /// Le fichier d'approbations n'a pas pu être lu ou écrit.
+    /// The approvals file could not be read or written.
     ///
-    /// Ce n'est pas une erreur bénigne : sans lui, tous les plugins retombent à
-    /// l'état [`Installed`](crate::registry::PluginState::Installed) et rien ne
-    /// se charge. C'est le sens du refus — perdre les approbations doit se voir.
-    #[error("approbations de plugins illisibles ou non écrites : {detail}")]
+    /// It is not a benign error: without it, every plugin falls back to the
+    /// [`Installed`](crate::registry::PluginState::Installed) state and nothing
+    /// loads. That is the point of the refusal — losing the approvals must
+    /// show.
+    #[error("plugin approvals unreadable or not written: {detail}")]
     Approvals {
-        /// Ce qui a échoué.
+        /// What failed.
         detail: String,
     },
 
-    /// Le plugin n'a pas été approuvé par l'utilisateur.
+    /// The plugin was not approved by the user.
     ///
-    /// Un plugin installé n'est pas un plugin autorisé : ses permissions
-    /// doivent lui être présentées, et acceptées, avant tout chargement
-    /// (ADR-0005).
+    /// An installed plugin is not an authorized plugin: its permissions must be
+    /// presented to the user, and accepted, before any load (ADR-0005).
     #[error(
-        "le plugin `{plugin}` n'est pas approuvé : ses permissions doivent être \
-         présentées à l'utilisateur avant tout chargement"
+        "the plugin `{plugin}` is not approved: its permissions must be \
+         presented to the user before any load"
     )]
     NotApproved {
-        /// Le plugin refusé.
+        /// The refused plugin.
         plugin: String,
     },
 
-    /// Le plugin demande davantage que ce que l'utilisateur avait approuvé.
+    /// The plugin asks for more than what the user had approved.
     ///
-    /// C'est le cas d'une mise à jour qui ajoute un hôte réseau ou un accès en
-    /// écriture aux connexions. L'approbation est **caduque** : elle n'est pas
-    /// étendue en silence.
-    #[error("les permissions de `{plugin}` ont changé depuis l'approbation : {detail}")]
+    /// It is the case of an update that adds a network host or write access to
+    /// connections. The approval is **void**: it is not silently extended.
+    #[error("the permissions of `{plugin}` changed since the approval: {detail}")]
     ApprovalStale {
-        /// Le plugin dont l'approbation est caduque.
+        /// The plugin whose approval is void.
         plugin: String,
-        /// Ce qui a été ajouté par rapport à l'approbation.
+        /// What was added compared with the approval.
         detail: String,
     },
 
-    /// Le plugin vise une version d'interface que cet hôte ne fournit pas.
+    /// The plugin targets an interface version this host does not provide.
     ///
-    /// [`PLUGIN-CONTRACT` §3](../../../docs/PLUGIN-CONTRACT.md) : un plugin
-    /// construit contre une autre version est refusé avec un message clair,
-    /// jamais chargé « pour voir ».
+    /// [`PLUGIN-CONTRACT` §3](../../../docs/PLUGIN-CONTRACT.md): a plugin built
+    /// against another version is refused with a clear message, never loaded
+    /// "to see".
     #[error(
-        "le plugin `{plugin}` vise l'interface {declared}, cette version d'Oxyn \
-         fournit {host}"
+        "the plugin `{plugin}` targets interface {declared}, this version of Oxyn \
+         provides {host}"
     )]
     IncompatibleInterface {
-        /// Le plugin refusé.
+        /// The refused plugin.
         plugin: String,
-        /// Ce que le manifeste déclare.
+        /// What the manifest declares.
         declared: PluginVersion,
-        /// Ce que l'hôte fournit.
+        /// What the host provides.
         host: PluginVersion,
     },
 
-    /// Le composant demande à l'exécution un accès que son manifeste n'a pas
-    /// déclaré.
+    /// The component asks at runtime for an access its manifest did not
+    /// declare.
     ///
-    /// Le bac à sable rend la tentative inoffensive ; cette erreur la rend
-    /// **visible**, ce que le bac à sable seul ne fait pas.
-    #[error("permission refusée à `{plugin}` : {detail}")]
+    /// The sandbox makes the attempt harmless; this error makes it **visible**,
+    /// which the sandbox alone does not.
+    #[error("permission denied to `{plugin}`: {detail}")]
     PermissionDenied {
-        /// Le plugin en cause.
+        /// The plugin at fault.
         plugin: String,
-        /// L'accès refusé.
+        /// The denied access.
         detail: String,
     },
 
-    /// Aucun plugin de ce nom n'est installé.
-    #[error("aucun plugin `{plugin}` n'est installé")]
+    /// No plugin of this name is installed.
+    #[error("no plugin `{plugin}` is installed")]
     Unknown {
-        /// Le nom cherché.
+        /// The searched name.
         plugin: String,
     },
 
-    /// Le plugin a besoin de l'hôte WebAssembly, absent de cette compilation.
+    /// The plugin needs the WebAssembly host, missing from this build.
     ///
-    /// Un agent déclaratif n'en a jamais besoin — c'est le cas courant, et il
-    /// fonctionne sans la feature `wasm-host`.
+    /// A declarative agent never needs it — it is the common case, and it works
+    /// without the `wasm-host` feature.
     #[error(
-        "le plugin `{plugin}` exige l'hôte WebAssembly, absent de cette \
-         compilation d'Oxyn (feature `wasm-host`)"
+        "the plugin `{plugin}` requires the WebAssembly host, missing from this \
+         build of Oxyn (feature `wasm-host`)"
     )]
     WasmHostUnavailable {
-        /// Le plugin qui ne peut pas être chargé.
+        /// The plugin that cannot be loaded.
         plugin: String,
     },
 
-    /// L'hôte WebAssembly a échoué : moteur, compilation du composant, magasin.
+    /// The WebAssembly host failed: engine, component compilation, store.
     #[cfg(feature = "wasm-host")]
-    #[error("hôte WebAssembly : {detail}")]
+    #[error("WebAssembly host: {detail}")]
     WasmHost {
-        /// Le diagnostic de wasmtime.
+        /// The wasmtime diagnostic.
         detail: String,
     },
 }
 
 impl PluginError {
-    /// Construit un refus de manifeste.
+    /// Builds a manifest refusal.
     #[must_use]
     pub fn invalid_manifest(plugin: impl Into<String>, detail: impl Into<String>) -> Self {
         Self::InvalidManifest {
@@ -179,11 +174,11 @@ impl PluginError {
         }
     }
 
-    /// L'erreur relève-t-elle d'une décision de l'utilisateur — approuver,
-    /// réapprouver — plutôt que d'un défaut du plugin ou de l'hôte ?
+    /// Does the error call for a user decision — approve, reapprove — rather
+    /// than stem from a defect of the plugin or the host?
     ///
-    /// L'interface s'en sert pour choisir entre « ce plugin attend votre
-    /// approbation » et « ce plugin est cassé ».
+    /// The interface uses it to choose between "this plugin awaits your
+    /// approval" and "this plugin is broken".
     #[must_use]
     pub const fn needs_user_decision(&self) -> bool {
         matches!(self, Self::NotApproved { .. } | Self::ApprovalStale { .. })
@@ -191,14 +186,14 @@ impl PluginError {
 }
 
 impl From<PluginError> for OxynError {
-    /// Projette l'erreur sur le vocabulaire du domaine en conservant son
-    /// **sens**, pas son libellé.
+    /// Projects the error onto the domain vocabulary, keeping its **meaning**,
+    /// not its wording.
     ///
-    /// Ce qui attend une décision de l'utilisateur devient
-    /// [`ApprovalRequired`](OxynError::ApprovalRequired) et non `Config` : un
-    /// plugin en attente d'approbation ne doit pas s'afficher comme un
-    /// incident. Un refus de permission reste un
-    /// [`PolicyDenied`](OxynError::PolicyDenied) — le produit fait son travail.
+    /// What awaits a user decision becomes
+    /// [`ApprovalRequired`](OxynError::ApprovalRequired) and not `Config`: a
+    /// plugin awaiting approval must not display as an incident. A permission
+    /// refusal stays a [`PolicyDenied`](OxynError::PolicyDenied) — the product
+    /// is doing its job.
     fn from(err: PluginError) -> Self {
         let message = err.to_string();
         match err {
@@ -225,25 +220,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn une_approbation_manquante_n_est_pas_un_incident() {
-        // Un plugin qui attend une approbation doit s'afficher comme une action
-        // possible, pas comme une panne d'Oxyn.
+    fn a_missing_approval_is_not_an_incident() {
+        // A plugin awaiting an approval must display as a possible action, not
+        // as an Oxyn failure.
         let err = PluginError::NotApproved {
             plugin: "hello".to_owned(),
         };
         assert!(err.needs_user_decision());
 
-        let domaine: OxynError = err.into();
-        assert!(matches!(domaine, OxynError::ApprovalRequired { .. }));
-        assert!(domaine.is_user_error());
-        assert!(!domaine.is_retryable());
+        let domain: OxynError = err.into();
+        assert!(matches!(domain, OxynError::ApprovalRequired { .. }));
+        assert!(domain.is_user_error());
+        assert!(!domain.is_retryable());
     }
 
     #[test]
-    fn une_approbation_caduque_demande_une_decision() {
+    fn a_stale_approval_asks_for_a_decision() {
         let err = PluginError::ApprovalStale {
             plugin: "hello".to_owned(),
-            detail: "un hôte réseau a été ajouté".to_owned(),
+            detail: "a network host was added".to_owned(),
         };
         assert!(err.needs_user_decision());
         assert!(matches!(
@@ -253,30 +248,30 @@ mod tests {
     }
 
     #[test]
-    fn un_refus_de_permission_reste_un_refus() {
+    fn a_permission_refusal_stays_a_refusal() {
         let err = PluginError::PermissionDenied {
             plugin: "hello".to_owned(),
-            detail: "hôte `exfiltration.example:443` non accordé".to_owned(),
+            detail: "host `exfiltration.example:443` not granted".to_owned(),
         };
         assert!(!err.needs_user_decision());
 
-        let domaine: OxynError = err.into();
+        let domain: OxynError = err.into();
         assert!(
-            matches!(domaine, OxynError::PolicyDenied { .. }),
-            "un refus affiché comme un incident interne se lit comme un bug d'Oxyn"
+            matches!(domain, OxynError::PolicyDenied { .. }),
+            "a refusal displayed as an internal incident reads as an Oxyn bug"
         );
     }
 
     #[test]
-    fn une_interface_incompatible_est_une_capacite_absente() {
+    fn an_incompatible_interface_is_a_missing_capability() {
         let err = PluginError::IncompatibleInterface {
             plugin: "hello".to_owned(),
             declared: PluginVersion::new(0, 9, 0),
             host: PluginVersion::new(0, 1, 0),
         };
-        let rendu = err.to_string();
-        assert!(rendu.contains("0.9.0"), "{rendu}");
-        assert!(rendu.contains("0.1.0"), "{rendu}");
+        let rendered = err.to_string();
+        assert!(rendered.contains("0.9.0"), "{rendered}");
+        assert!(rendered.contains("0.1.0"), "{rendered}");
         assert!(matches!(
             OxynError::from(err),
             OxynError::NotSupported { .. }
@@ -284,15 +279,15 @@ mod tests {
     }
 
     #[test]
-    fn un_identifiant_fautif_n_est_pas_recopie_dans_le_message() {
-        // La garantie d'`IdParseError` traverse la conversion : le manifeste
-        // d'un tiers ne dicte pas le contenu d'un journal.
+    fn a_faulty_identifier_is_not_copied_into_the_message() {
+        // The guarantee of `IdParseError` goes through the conversion: a third
+        // party's manifest does not dictate the content of a log.
         let err = PluginError::InvalidId(IdParseError::new(
             "PluginId",
-            "caractères autorisés : a-z, 0-9, `-`, `_`",
+            "allowed characters: a-z, 0-9, `-`, `_`",
         ));
-        let rendu = err.to_string();
-        assert!(rendu.contains("PluginId"), "{rendu}");
+        let rendered = err.to_string();
+        assert!(rendered.contains("PluginId"), "{rendered}");
         assert!(matches!(OxynError::from(err), OxynError::Serialization(_)));
     }
 }

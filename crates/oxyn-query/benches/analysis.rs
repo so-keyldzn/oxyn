@@ -7,7 +7,7 @@
 //! `current_statement` runs on **every keystroke** of the editor, because the
 //! statement under the caret is part of the editor's live state. The last one
 //! is therefore the only one of the three that sits under the 8 ms frame budget
-//! of [PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction); the
+//! of [PERFORMANCE](../../../docs/PERFORMANCE.md#interaction-budgets); the
 //! first two sit under the 100 ms visible-feedback budget.
 //!
 //! # Why several script sizes

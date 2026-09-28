@@ -1,37 +1,37 @@
-//! L'exécution d'une demande, côté thread porteur.
+//! Executing a request, on the worker thread side.
 //!
-//! Tout ce qui est ici tourne **sur le thread de la connexion** : c'est le seul
-//! endroit où un `Statement` et ses `Rows` existent, et ils n'en sortent jamais.
-//! Ce qui traverse le canal, ce sont des `RecordBatch` Arrow.
+//! Everything here runs **on the connection's thread**: it is the only place
+//! where a `Statement` and its `Rows` exist, and they never leave it. What
+//! crosses the channel are Arrow `RecordBatch`es.
 //!
-//! # Un lot de plusieurs instructions
+//! # A batch of several statements
 //!
-//! Le découpage d'un script appartient à `oxyn-query`
-//! ([ARCHITECTURE §3](../../../docs/ARCHITECTURE.md)) ; ce driver accepte
-//! néanmoins plusieurs instructions dans une soumission, et la règle est en une
-//! phrase :
+//! Splitting a script belongs to `oxyn-query`
+//! ([ARCHITECTURE §3](../../../docs/ARCHITECTURE.md)); this driver nevertheless
+//! accepts several statements in one submission, and the rule fits in one
+//! sentence:
 //!
-//! > **Toutes les instructions sont exécutées, dans l'ordre ; le curseur porte
-//! > le résultat de la dernière.**
+//! > **Every statement is executed, in order; the cursor carries the result of
+//! > the last one.**
 //!
-//! Un jeu de résultats produit par une instruction qui n'est pas la dernière est
-//! consommé et jeté — l'instruction s'exécute quand même, parce que ses effets
-//! comptent. `SELECT 1; INSERT INTO t VALUES (2);` insère donc bien, et rend un
-//! résultat vide.
+//! A result set produced by a statement that is not the last is consumed and
+//! thrown away — the statement runs all the same, because its effects count.
+//! `SELECT 1; INSERT INTO t VALUES (2);` therefore does insert, and returns an
+//! empty result.
 //!
-//! Les instructions sont préparées **au fur et à mesure**, pas toutes d'avance :
-//! préparer `SELECT * FROM t` avant d'avoir exécuté le `CREATE TABLE t` qui le
-//! précède échouerait.
+//! Statements are prepared **as they come**, not all in advance: preparing
+//! `SELECT * FROM t` before running the `CREATE TABLE t` that precedes it would
+//! fail.
 //!
-//! # Ce qui est refusé, et pourquoi
+//! # What is refused, and why
 //!
-//! * **Des paramètres liés avec un lot de plusieurs instructions.** Rien ne dit
-//!   à laquelle ils se rapportent. Deviner reviendrait à lier des valeurs à une
-//!   instruction que l'utilisateur ne visait pas.
-//! * **Une écriture sous `ExecLimits::read_only`.** La question n'est pas posée
-//!   au texte mais au moteur : `sqlite3_stmt_readonly` sait ce que
-//!   l'instruction compilée peut faire, là où une analyse lexicale se ferait
-//!   avoir par une vue, un déclencheur ou une table virtuelle.
+//! * **Bound parameters with a batch of several statements.** Nothing says which
+//!   one they relate to. Guessing would mean binding values to a statement the
+//!   user did not target.
+//! * **A write under `ExecLimits::read_only`.** The question is not asked of the
+//!   text but of the engine: `sqlite3_stmt_readonly` knows what the compiled
+//!   statement can do, where a lexical analysis would be fooled by a view, a
+//!   trigger or a virtual table.
 
 use std::sync::Arc;
 
@@ -49,51 +49,51 @@ use crate::interrupt::Interrupter;
 use crate::options::BatchLimits;
 use crate::params;
 
-/// La demande d'un lot, par le curseur.
+/// A batch request, from the cursor.
 pub(crate) type Pull = oneshot::Sender<Result<Pulled>>;
 
-/// Ce qu'une demande de lot rapporte.
+/// What a batch request brings back.
 pub(crate) enum Pulled {
-    /// Un lot de lignes.
+    /// A batch of rows.
     Batch(RecordBatch),
-    /// Le flux est terminé.
+    /// The stream is finished.
     Done {
-        /// Des lignes manquent, parce que `ExecLimits::max_rows` a coupé.
+        /// Rows are missing, because `ExecLimits::max_rows` cut.
         truncated: bool,
     },
 }
 
-/// Ce que l'exécution rend dès que le schéma est connu.
+/// What the execution returns as soon as the schema is known.
 ///
-/// Le premier lot est **déjà là** : le résoudre a demandé de lire des lignes, et
-/// les jeter pour les relire ensuite serait absurde.
+/// The first batch is **already there**: resolving it required reading rows, and
+/// throwing them away to read them again would be absurd.
 pub(crate) struct StreamStart {
-    /// Le schéma des lots, stable pour toute la durée du flux.
+    /// The schema of the batches, stable for the whole duration of the stream.
     pub schema: SchemaRef,
-    /// Le premier lot, ou la fin du flux s'il n'y a pas de ligne.
+    /// The first batch, or the end of the stream if there is no row.
     pub first: Pulled,
-    /// Lignes affectées par les instructions qui n'ont pas produit de colonnes.
+    /// Rows affected by the statements that produced no columns.
     pub affected: u64,
 }
 
-/// Une exécution confiée au thread porteur.
+/// An execution handed to the worker thread.
 pub(crate) struct StreamJob {
-    /// La demande, telle que l'appelant l'a formulée.
+    /// The request, as the caller phrased it.
     pub request: ExecRequest,
-    /// Les bornes d'un lot Arrow.
+    /// The bounds of an Arrow batch.
     pub limits: BatchLimits,
-    /// Où répondre une fois le schéma connu.
+    /// Where to reply once the schema is known.
     pub start: oneshot::Sender<Result<StreamStart>>,
-    /// Par où le curseur demande la suite.
+    /// Through which the cursor requests what follows.
     pub pulls: mpsc::UnboundedReceiver<Pull>,
 }
 
-/// Exécute une demande et diffuse ses lots jusqu'à épuisement ou destruction du
-/// curseur.
+/// Executes a request and streams its batches until exhaustion or destruction of
+/// the cursor.
 ///
-/// `interrupter` est consulté juste avant le démarrage de chaque instruction :
-/// une interruption posée pendant une préparation serait sinon effacée par le
-/// moteur au premier pas de l'instruction suivante ([`crate::interrupt`]).
+/// `interrupter` is consulted just before each statement starts: an interruption
+/// set during a preparation would otherwise be cleared by the engine at the first
+/// step of the next statement ([`crate::interrupt`]).
 pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interrupter) {
     let StreamJob {
         request,
@@ -102,10 +102,9 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
         mut pulls,
     } = job;
 
-    // Relevé une fois pour toute l'exécution : à partir de `params::bind`, le
-    // moteur peut citer une de ces valeurs dans son message, et il faut le
-    // savoir au moment de classer l'erreur plutôt que d'essayer de le deviner
-    // sur son texte (I-03).
+    // Taken once for the whole execution: from `params::bind` on, the engine
+    // may quote one of these values in its message, and this must be known
+    // when classifying the error rather than guessed from its text (I-03).
     let bound = Bound::of(&request.params);
     let mut affected = 0_u64;
     let mut batch = Batch::new(connection, &request.text);
@@ -116,11 +115,11 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
             return;
         }
     };
-    // Pas de `drop(batch)` ici : `rusqlite::Batch` n'implémente pas `Drop`, donc
-    // l'appel ne libérait rien — l'emprunt de la connexion se termine de toute
-    // façon à sa dernière utilisation, juste au-dessus.
+    // No `drop(batch)` here: `rusqlite::Batch` does not implement `Drop`, so the
+    // call freed nothing — the borrow of the connection ends anyway at its last
+    // use, just above.
     let Some(mut statement) = last else {
-        // Un texte vide, ou seulement des commentaires.
+        // An empty text, or only comments.
         let _ = start.send(Ok(nothing(affected)));
         return;
     };
@@ -140,8 +139,8 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
         return;
     }
     if statement.column_count() == 0 {
-        // Écriture ou DDL : pas de colonnes, donc pas de flux. Ce que
-        // l'utilisateur attend, c'est le compte de lignes affectées.
+        // Write or DDL: no columns, hence no stream. What the user expects is
+        // the count of affected rows.
         let before = connection.total_changes();
         if let Err(err) = statement.raw_execute() {
             let _ = start.send(Err(error::engine_bound(err, effect, bound)));
@@ -157,7 +156,7 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
     );
 }
 
-/// Le résultat d'une exécution qui ne produit aucune colonne.
+/// The result of an execution that produces no column.
 fn nothing(affected: u64) -> StreamStart {
     StreamStart {
         schema: Arc::new(Schema::empty()),
@@ -166,9 +165,9 @@ fn nothing(affected: u64) -> StreamStart {
     }
 }
 
-/// Exécute toutes les instructions sauf la dernière, et rend celle-ci.
+/// Executes every statement but the last, and returns that one.
 ///
-/// Rend `None` si le texte ne contient aucune instruction.
+/// Returns `None` if the text contains no statement.
 fn select_last<'conn>(
     connection: &'conn Connection,
     batch: &mut Batch<'conn, '_>,
@@ -182,12 +181,12 @@ fn select_last<'conn>(
             return Ok(None);
         };
 
-        // Sans paramètres liés, une instruction sans colonnes s'exécute avant
-        // que la suivante soit préparée. C'est ce qui fait marcher
-        // `CREATE TABLE t; SELECT * FROM t;` : la seconde ne se prépare qu'une
-        // fois la table créée. Rien n'étant lié ici, le message du moteur ne
-        // peut citer que le SQL soumis : `error::engine` suffit dans cette
-        // fonction.
+        // Without bound parameters, a statement without columns runs before the
+        // next one is prepared. That is what makes
+        // `CREATE TABLE t; SELECT * FROM t;` work: the second is prepared only
+        // once the table is created. Nothing being bound here, the engine message
+        // can quote only the submitted SQL: `error::engine` is enough in this
+        // function.
         if request.params.is_empty() && statement.column_count() == 0 {
             guard_read_only(&statement, request)?;
             let effect = effect_of(&statement);
@@ -201,9 +200,9 @@ fn select_last<'conn>(
             continue;
         }
 
-        // Il faut savoir s'il reste une instruction après celle-ci. La préparer
-        // maintenant est sans danger : tout ce qui la précède a déjà tourné, et
-        // préparer n'exécute rien.
+        // We must know whether a statement remains after this one. Preparing it
+        // now is harmless: everything before it has already run, and preparing
+        // executes nothing.
         let next = next_statement(batch)?;
         if next.is_none() {
             return Ok(Some(statement));
@@ -215,27 +214,27 @@ fn select_last<'conn>(
             ));
         }
         guard_read_only(&statement, request)?;
-        // Après la préparation de la suivante, qui efface le drapeau du moteur.
+        // After preparing the next one, which clears the engine's flag.
         interrupter.checkpoint(effect_of(&statement), Bound::Internal)?;
-        // Ce jeu de résultats est écrasé par celui de l'instruction suivante. On
-        // l'exécute quand même — ses effets comptent — et on jette ses lignes.
+        // This result set is overwritten by the next statement's. It is run all
+        // the same — its effects count — and its rows are thrown away.
         discard(&mut statement, connection, affected)?;
         pending = next;
     }
 }
 
-/// L'instruction suivante du lot, préparée.
+/// The next statement of the batch, prepared.
 fn next_statement<'conn>(batch: &mut Batch<'conn, '_>) -> Result<Option<Statement<'conn>>> {
-    // Préparer ne modifie rien : une erreur de préparation n'est jamais ambiguë.
+    // Preparing modifies nothing: a preparation error is never ambiguous.
     batch
         .next()
         .map_err(|err| error::engine(err, Effect::ReadOnly))
 }
 
-/// Exécute une instruction et jette ses lignes.
+/// Executes a statement and throws its rows away.
 ///
-/// Appelée seulement depuis [`select_last`], qui a refusé les paramètres liés
-/// avant d'y arriver : d'où [`Bound::Internal`].
+/// Called only from [`select_last`], which refused bound parameters before
+/// getting here: hence [`Bound::Internal`].
 fn discard(
     statement: &mut Statement<'_>,
     connection: &Connection,
@@ -250,11 +249,11 @@ fn discard(
     Ok(())
 }
 
-/// Diffuse les lignes d'une instruction.
+/// Streams the rows of a statement.
 ///
-/// `bound` accompagne `effect` jusqu'aux fonctions de lecture : elles n'ont pas
-/// la demande sous la main, et le deviner à leur niveau serait une supposition
-/// de plus.
+/// `bound` goes with `effect` down to the read functions: they do not have the
+/// request at hand, and guessing it at their level would be one more
+/// assumption.
 fn stream_rows(
     mut statement: Statement<'_>,
     request: &ExecRequest,
@@ -264,8 +263,8 @@ fn stream_rows(
     start: oneshot::Sender<Result<StreamStart>>,
     pulls: &mut mpsc::UnboundedReceiver<Pull>,
 ) {
-    // Relevé avant d'emprunter l'instruction pour la lecture : `columns()`
-    // emprunte, `raw_query()` emprunte mutablement.
+    // Taken before borrowing the statement for reading: `columns()` borrows,
+    // `raw_query()` borrows mutably.
     let declared: Vec<(String, Option<String>)> = statement
         .columns()
         .iter()
@@ -280,8 +279,8 @@ fn stream_rows(
     let mut remaining = request.limits.max_rows;
     let mut rows = statement.raw_query();
 
-    let sonde = match probe(&mut rows, width, limits, &mut remaining, effect, bound) {
-        Ok(sonde) => sonde,
+    let probed = match probe(&mut rows, width, limits, &mut remaining, effect, bound) {
+        Ok(probed) => probed,
         Err(err) => {
             let _ = start.send(Err(err));
             return;
@@ -290,16 +289,15 @@ fn stream_rows(
 
     let plans: Vec<ColumnPlan> = declared
         .into_iter()
-        .zip(sonde.observed)
+        .zip(probed.observed)
         .map(|((name, declared), observed)| ColumnPlan::resolve(name, declared, observed))
         .collect();
     let schema = schema_of(&plans);
     for (index, plan) in plans.iter().enumerate() {
         if plan.observed.is_mixed() {
-            // Ni le nom de la colonne ni aucune valeur : seulement l'index et
-            // les classes rencontrées (I-03). Le signal destiné à l'interface
-            // est dans les métadonnées du champ ; celui-ci est pour le
-            // diagnostic.
+            // Neither the column name nor any value: only the index and the
+            // classes encountered (I-03). The signal meant for the interface is
+            // in the field's metadata; this one is for diagnostics.
             tracing::debug!(
                 column = index,
                 storage_classes = %plan.observed.names(),
@@ -308,20 +306,20 @@ fn stream_rows(
             );
         }
     }
-    let capacity = sonde.rows.max(64);
+    let capacity = probed.rows.max(64);
     let mut builders: Vec<ColumnBuilder> = plans
         .iter()
         .enumerate()
         .map(|(index, plan)| ColumnBuilder::new(plan.kind, index, capacity))
         .collect();
 
-    let mut finished = sonde.finished;
-    let mut truncated = sonde.truncated;
+    let mut finished = probed.finished;
+    let mut truncated = probed.truncated;
 
-    let first = if sonde.rows == 0 {
+    let first = if probed.rows == 0 {
         Pulled::Done { truncated }
     } else {
-        match assemble(&mut builders, &sonde.values, &schema) {
+        match assemble(&mut builders, &probed.values, &schema) {
             Ok(batch) => Pulled::Batch(batch),
             Err(err) => {
                 let _ = start.send(Err(err));
@@ -338,21 +336,20 @@ fn stream_rows(
         }))
         .is_err()
     {
-        // L'appelant a renoncé avant même de lire le premier lot.
+        // The caller gave up before even reading the first batch.
         return;
     }
 
     while let Some(reply) = pulls.blocking_recv() {
         if finished {
             let _ = reply.send(Ok(Pulled::Done { truncated }));
-            // `return` et non `continue` : la source est épuisée, il n'y a plus
-            // rien à produire, et rester dans la boucle **retient le fil
-            // porteur** jusqu'à ce que le curseur soit lâché. Un curseur laissé
-            // dans une portée après avoir été vidé bloquait alors toute
-            // exécution suivante sur la même session — le driver n'a qu'un fil.
-            // `Cursor::next_batch` court-circuite sur son propre `finished` : il
-            // ne tirera plus, et la fermeture du canal ne peut pas lui être
-            // signalée comme une erreur.
+            // `return` and not `continue`: the source is exhausted, there is
+            // nothing left to produce, and staying in the loop **holds the worker
+            // thread** until the cursor is dropped. A cursor left in a scope after
+            // being drained then blocked every following execution on the same
+            // session — the driver has a single thread. `Cursor::next_batch`
+            // short-circuits on its own `finished`: it will not pull anymore, and
+            // the channel closing cannot be reported to it as an error.
             return;
         }
         let filled = match fill(
@@ -372,43 +369,43 @@ fn stream_rows(
         finished = filled.finished;
         truncated |= filled.truncated;
 
-        let epuise = filled.rows == 0;
-        let answer = if epuise {
+        let nothing_left = filled.rows == 0;
+        let answer = if nothing_left {
             Ok(Pulled::Done { truncated })
         } else {
             finish_batch(&mut builders, &schema).map(Pulled::Batch)
         };
         let failed = answer.is_err();
-        // `epuise` rejoint les deux autres causes d'arrêt pour la même raison
-        // qu'au-dessus : une fois `Done` annoncé, garder le fil ne sert plus
-        // qu'à empêcher la requête suivante.
-        if reply.send(answer).is_err() || failed || epuise {
+        // `nothing_left` joins the two other stop causes for the same reason as
+        // above: once `Done` is announced, keeping the thread only serves to
+        // block the next query.
+        if reply.send(answer).is_err() || failed || nothing_left {
             return;
         }
     }
 }
 
-/// Ce que la sonde du premier lot a appris.
+/// What the first-batch probe learned.
 struct Probe {
-    /// Les valeurs du premier lot, ligne par ligne, colonne par colonne.
+    /// The values of the first batch, row by row, column by column.
     values: Vec<ProbeValue>,
-    /// Les classes de stockage vues, colonne par colonne.
+    /// The storage classes seen, column by column.
     observed: Vec<Observed>,
-    /// Lignes lues.
+    /// Rows read.
     rows: usize,
-    /// La source est épuisée, ou la borne de lignes est atteinte.
+    /// The source is exhausted, or the row bound is reached.
     finished: bool,
-    /// Des lignes manquent.
+    /// Rows are missing.
     truncated: bool,
 }
 
-/// Lit le premier lot **en valeurs brutes**, pour décider du type des colonnes.
+/// Reads the first batch **as raw values**, to decide the column types.
 ///
-/// C'est le prix de l'honnêteté sur le typage dynamique de SQLite : sans cette
-/// sonde, le type d'une colonne sans déclaration ne pourrait venir que de la
-/// première ligne, et une colonne mêlant entiers et texte serait typée sur son
-/// premier échantillon. La copie ne concerne que le premier lot, dont la taille
-/// est bornée en lignes **et** en octets.
+/// It is the price of honesty about SQLite's dynamic typing: without this probe,
+/// the type of an undeclared column could come only from the first row, and a
+/// column mixing integers and text would be typed on its first sample. The copy
+/// concerns only the first batch, whose size is bounded in rows **and** in
+/// bytes.
 fn probe(
     rows: &mut Rows<'_>,
     width: usize,
@@ -458,17 +455,17 @@ fn probe(
     })
 }
 
-/// Ce qu'un lot de régime a rapporté.
+/// What a steady-state batch brought back.
 struct Filled {
-    /// Lignes ajoutées.
+    /// Rows added.
     rows: usize,
-    /// Plus rien ne viendra.
+    /// Nothing more will come.
     finished: bool,
-    /// Des lignes manquent.
+    /// Rows are missing.
     truncated: bool,
 }
 
-/// Remplit un lot en régime établi : le type des colonnes est déjà décidé.
+/// Fills a batch in steady state: the column types are already decided.
 fn fill(
     rows: &mut Rows<'_>,
     builders: &mut [ColumnBuilder],
@@ -515,7 +512,7 @@ fn fill(
     })
 }
 
-/// Avance d'une ligne.
+/// Advances by one row.
 fn step<'a, 'stmt>(
     rows: &'a mut Rows<'stmt>,
     effect: Effect,
@@ -525,25 +522,24 @@ fn step<'a, 'stmt>(
         .map_err(|err| error::engine_bound(err, effect, bound))
 }
 
-/// Décompte une ligne de la borne `ExecLimits::max_rows`, quand il y en a une.
+/// Counts a row against the `ExecLimits::max_rows` bound, when there is one.
 fn consume_one(remaining: &mut Option<usize>) {
     if let Some(left) = remaining {
         *left = left.saturating_sub(1);
     }
 }
 
-/// Le nombre de lignes modifiées depuis un relevé.
+/// The number of rows modified since a reading.
 ///
-/// `total_changes` est monotone sur la durée de la connexion, contrairement à
-/// `changes()` qui ne parle que de la dernière instruction — et qui garde sa
-/// valeur précédente après un `SELECT` ou un `CREATE TABLE`. Le compte inclut
-/// les lignes touchées par les déclencheurs, ce qui est ce que l'utilisateur
-/// veut savoir.
+/// `total_changes` is monotonic over the connection's lifetime, unlike
+/// `changes()`, which speaks only of the last statement — and keeps its previous
+/// value after a `SELECT` or a `CREATE TABLE`. The count includes the rows
+/// touched by triggers, which is what the user wants to know.
 fn changes_since(connection: &Connection, before: u64) -> u64 {
     connection.total_changes().saturating_sub(before)
 }
 
-/// Verse les valeurs mises de côté par la sonde dans les constructeurs.
+/// Pours the values set aside by the probe into the builders.
 fn assemble(
     builders: &mut [ColumnBuilder],
     values: &[ProbeValue],
@@ -562,14 +558,14 @@ fn assemble(
     finish_batch(builders, schema)
 }
 
-/// Ferme les constructeurs et assemble le `RecordBatch`.
+/// Finishes the builders and assembles the `RecordBatch`.
 fn finish_batch(builders: &mut [ColumnBuilder], schema: &SchemaRef) -> Result<RecordBatch> {
     let columns: Vec<ArrayRef> = builders.iter_mut().map(ColumnBuilder::finish).collect();
     RecordBatch::try_new(Arc::clone(schema), columns)
         .map_err(|err| error::driver(SqliteError::Arrow(err), ErrorClass::Permanent))
 }
 
-/// Ce que l'instruction compilée peut faire à la base.
+/// What the compiled statement can do to the database.
 fn effect_of(statement: &Statement<'_>) -> Effect {
     if statement.readonly() {
         Effect::ReadOnly
@@ -578,11 +574,11 @@ fn effect_of(statement: &Statement<'_>) -> Effect {
     }
 }
 
-/// Refuse une écriture quand la demande se déclare en lecture seule.
+/// Refuses a write when the request declares itself read-only.
 ///
-/// La question est posée au **moteur** (`sqlite3_stmt_readonly`), pas au texte :
-/// une analyse lexicale se ferait avoir par une vue, un déclencheur ou une table
-/// virtuelle qui écrit.
+/// The question is asked of the **engine** (`sqlite3_stmt_readonly`), not of the
+/// text: a lexical analysis would be fooled by a view, a trigger or a virtual
+/// table that writes.
 fn guard_read_only(statement: &Statement<'_>, request: &ExecRequest) -> Result<()> {
     if request.limits.read_only && !statement.readonly() {
         return Err(OxynError::PolicyDenied {

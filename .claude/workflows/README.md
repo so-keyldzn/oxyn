@@ -1,117 +1,118 @@
 # Workflows
 
-L'enchaînement des gestes pour les travaux qui en demandent plusieurs. Chaque
-étape renvoie à la commande ou à l'agent qui la porte : **rien n'est redit ici.**
+The sequence of moves for the pieces of work that need several. Each step
+points to the command or agent that carries it: **nothing is restated here.**
 
-Un workflow n'est pas une procédure à suivre mécaniquement. C'est l'ordre qui
-évite de découvrir trop tard qu'une étape en conditionnait une autre.
+A workflow is not a procedure to follow mechanically. It is the order that
+avoids discovering too late that one step conditioned another.
 
-## Nouvelle fonctionnalité
+## New feature
 
-1. [`/plan`](../commands/plan.md) — dans quelle phase, quelle crate, quels
-   invariants, qu'est-ce qui n'est pas tranché
-2. Si quelque chose n'est pas tranché → [`/adr`](../commands/adr.md), **avant**
-   de coder
-3. [`/commande`](../commands/commande.md) — la commande du bus d'abord
-4. [`/implementer`](../commands/implementer.md) ou l'agent du domaine
-5. [`/ecran`](../commands/ecran.md) si une interface est concernée
+1. [`/plan`](../commands/plan.md) — which phase, which crate, which invariants,
+   what is not settled
+2. If something is not settled → [`/adr`](../commands/adr.md), **before**
+   coding
+3. [`/commande`](../commands/commande.md) — the bus command first
+4. [`/implementer`](../commands/implementer.md) or the domain agent
+5. [`/ecran`](../commands/ecran.md) if an interface is involved
 6. [`/relire`](../commands/relire.md)
 7. [`.claude/checklists/fin-de-tache.md`](../checklists/fin-de-tache.md)
 
-**L'ordre 3 avant 5 n'est pas négociable** : une vue écrite avant sa commande
-appelle un driver « en attendant », et ce second chemin ne disparaît jamais.
+**The order 3 before 5 is not negotiable**: a view written before its command
+calls a driver "for the time being", and that second path never goes away.
 
-### En version orchestrée
+### Orchestrated version
 
-[`implementer-senior.js`](implementer-senior.js) enchaîne ces étapes avec
-plusieurs agents : cadrage en parallèle (code, skills TanStack/Tauri/shadcn du
-dépôt **et** ceux embarqués dans `node_modules`, invariants), plan Opus critiqué
-puis révisé, implémentation par les agents du domaine, `make qualite` avec
-réparation bornée, relecture par les relecteurs du dépôt, chaque constat soumis
-à deux sceptiques de modèles différents. Il **s'arrête sans rien écrire** si le
-plan contient une décision non tranchée, et ne commite jamais.
+[`implementer-senior.js`](implementer-senior.js) chains these steps with
+several agents: parallel framing (code, the repository's TanStack/Tauri/shadcn
+skills **and** those shipped in `node_modules`, invariants), an Opus plan
+critiqued then revised, implementation by the domain agents, `make qualite`
+with bounded repair, review by the repository's reviewers, each finding
+submitted to two skeptics from different models. It **stops without writing
+anything** if the plan contains an unsettled decision, and never commits.
 
-Il se lance en demandant à Claude d'exécuter le workflow `implementer-senior`
-avec la tâche en argument.
+It is launched by asking Claude to run the `implementer-senior` workflow with
+the task as argument.
 
-## Nouveau driver
+## New driver
 
-1. [`/driver`](../commands/driver.md) — la première question est *nouveau
-   protocole, ou produit parlant un protocole déjà là ?*
-2. Si le protocole existe déjà : **il n'y a pas de crate à créer**, la différence
-   se déclare en capacités. Le workflow s'arrête ici.
-3. Implémentation par l'agent `driveriste`
-4. Les deux tests qui ne se contournent pas : annulation prouvée côté serveur,
-   flux sur un volume qui ne tient pas en mémoire
+1. [`/driver`](../commands/driver.md) — the first question is *new protocol, or
+   a product speaking a protocol already there?*
+2. If the protocol already exists: **there is no crate to create**, the
+   difference is declared as capabilities. The workflow stops here.
+3. Implementation by the `driveriste` agent
+4. The two tests that cannot be worked around: cancellation proven
+   server-side, streaming over a volume that does not fit in memory
 5. [`.claude/checklists/revue-driver.md`](../checklists/revue-driver.md),
-   intégralement
-6. Agents `relecteur-frontiere` puis `relecteur-invariants`
+   in full
+6. `relecteur-frontiere` then `relecteur-invariants` agents
 
-## Correction d'un défaut
+## Fixing a defect
 
-1. **Reproduire d'abord.** Un correctif sans reproduction corrige une hypothèse
-2. Écrire le test qui échoue, avant le correctif
+1. **Reproduce first.** A fix without reproduction fixes a hypothesis
+2. Write the failing test, before the fix
 3. [`/implementer`](../commands/implementer.md)
-4. Le test passe, et `make qualite` aussi
-5. **Chercher les jumeaux** : le même défaut existe souvent dans le driver
-   voisin, la vue voisine. C'est l'étape la plus rentable et la plus sautée
-6. Si le défaut vient d'une divergence code/documentation, corriger **les deux**
-   dans le même commit
+4. The test passes, and `make qualite` too
+5. **Look for the twins**: the same defect often exists in the neighboring
+   driver, the neighboring view. It is the most cost-effective step and the
+   most skipped
+6. If the defect comes from a code/documentation divergence, fix **both** in
+   the same commit
 
-## Optimisation
+## Optimization
 
-1. [`/benchmark`](../commands/benchmark.md) — **mesurer avant**
-2. Le chiffre justifie-t-il la complexité ? Si non, le workflow s'arrête, et
-   c'est un résultat, pas un échec
-3. Optimiser
-4. Mesurer après, avec le même protocole
-5. Le chiffre avant/après dans le message de commit
-6. Si un budget ne peut pas être tenu → [`/adr`](../commands/adr.md), jamais un
-   ajustement silencieux du budget
+1. [`/benchmark`](../commands/benchmark.md) — **measure before**
+2. Does the number justify the complexity? If not, the workflow stops, and it
+   is a result, not a failure
+3. Optimize
+4. Measure after, with the same protocol
+5. The before/after number in the commit message
+6. If a budget cannot be met → [`/adr`](../commands/adr.md), never a silent
+   adjustment of the budget
 
-## Conformité shadcn
+## shadcn compliance
 
-1. [`/conformite-shadcn --releve`](../commands/conformite-shadcn.md) — relevé mécanique, puis relevé
-   par lots en parallèle par l'agent `shadcniste`
-2. Les écarts de risque `décision` (registre, jeton, composant de `ui/` à mettre
-   à jour) sont tranchés par l'utilisateur **avant** toute correction
-3. [`/conformite-shadcn`](../commands/conformite-shadcn.md) — correction par lots disjoints, trois à la
-   fois au plus
-4. `make qualite`, relevé à nouveau, puis agent `relecteur-invariants`
+1. [`/conformite-shadcn --releve`](../commands/conformite-shadcn.md) — mechanical survey, then survey
+   by batches in parallel by the `shadcniste` agent
+2. The `décision`-risk deviations (registry, token, `ui/` component to update)
+   are settled by the user **before** any fix
+3. [`/conformite-shadcn`](../commands/conformite-shadcn.md) — fixing by disjoint batches, three at a
+   time at most
+4. `make qualite`, survey again, then the `relecteur-invariants` agent
 
-**Un écran neuf ne passe pas par là** : il s'écrit conforme avec
-[`/ecran`](../commands/ecran.md). Cette passe rattrape l'existant.
+**A new screen does not go through this**: it is written compliant with
+[`/ecran`](../commands/ecran.md). This pass catches up on what exists.
 
-## Évolution d'architecture
+## Architecture change
 
-1. Agent `architecte`
-2. [`/adr`](../commands/adr.md) — coût de sortie et condition de reconsidération
-   inclus
-3. Mettre à jour les documents d'autorité **rendus faux** par la décision
-4. `docs/README.md` — l'index, dans le même commit
-5. Agent `detecteur-divergence` — vérifier qu'aucun document ne dit encore
-   l'ancienne chose
+1. `architecte` agent
+2. [`/adr`](../commands/adr.md) — exit cost and reconsideration condition
+   included
+3. Update the authoritative documents **made wrong** by the decision
+4. `docs/README.md` — the index, in the same commit
+5. `detecteur-divergence` agent — check that no document still says the old
+   thing
 
-## Revue de la documentation
+## Documentation review
 
-1. Agent `detecteur-divergence`
-2. `make socle` — liens morts, règles sans `paths:`, invariants orphelins
-3. [`/versions`](../commands/versions.md) si la dernière vérification date de
-   plus de 90 jours ; le hook `SessionStart` le signale
-4. Agent `documentaliste` pour les corrections
+1. `detecteur-divergence` agent
+2. `make socle` — dead links, rules without `paths:`, orphan invariants, stale
+   French mirrors
+3. [`/versions`](../commands/versions.md) if the last check is more than 90
+   days old; the `SessionStart` hook flags it
+4. `documentaliste` agent for the fixes
 
-## Audit du dépôt et issues GitHub
+## Repository audit and GitHub issues
 
-[`/audit`](../commands/audit.md) suit le
-[workflow multi-agents](audit-multi-agents.md) : référence Git et issues
-existantes, quatre domaines en lecture seule, réfutation indépendante,
-`make qualite`, rapport daté et publication avec `gh` lorsque l'utilisateur la
-demande. Le moteur Claude peut exécuter
-[`audit-multi-agents.js`](audit-multi-agents.js) ; Codex suit la même procédure
-avec les outils de collaboration disponibles. Aucune correction ni commit.
+[`/audit`](../commands/audit.md) follows the
+[multi-agent workflow](audit-multi-agents.md): Git reference and existing
+issues, four read-only domains, independent refutation, `make qualite`, dated
+report and publication with `gh` when the user asks for it. The Claude engine
+can run [`audit-multi-agents.js`](audit-multi-agents.js); Codex follows the
+same procedure with the available collaboration tools. No fix, no commit.
 
-## Publication
+## Release
 
-Pas encore de workflow : il n'y a rien à publier, et une procédure écrite avant
-d'avoir été exécutée une fois est une fiction. À écrire au moment de la première
-publication réelle, à partir de ce qui aura été fait.
+No workflow yet: there is nothing to release, and a procedure written before
+having been executed once is fiction. To be written at the first real release,
+based on what will have been done.

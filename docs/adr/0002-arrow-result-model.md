@@ -1,35 +1,35 @@
-# ADR-0002 — Apache Arrow comme représentation universelle des résultats
+# ADR-0002 — Apache Arrow as the universal representation of results
 
-**Statut :** accepté · **Date :** 2026-09-05
+**Status:** accepted · **Date:** 2026-09-05
 
-## Contexte
-Un résultat peut atteindre des centaines de millions de lignes. Une représentation en
-lignes (`Vec<Vec<String>>`) sature la mémoire, ralentit le rendu et impose une
-conversion à chaque export.
+## Context
+A result can reach hundreds of millions of rows. A row representation
+(`Vec<Vec<String>>`) saturates memory, slows rendering and forces a conversion on
+every export.
 
-## Décision
-Tout driver produit des `arrow::RecordBatch`. Aucune reconversion n'a lieu entre le
-driver et l'écran, l'export ou le processus sidecar.
+## Decision
+Every driver produces `arrow::RecordBatch`es. No reconversion happens between the
+driver and the screen, the export or the sidecar process.
 
-## Conséquences
-* **+** Empreinte mémoire colonnaire ; accès O(1) pour la grille virtualisée.
-* **+** Export CSV/Parquet/JSON/IPC fourni par l'écosystème.
-* **+** DataFusion se branche directement : filtre, tri, agrégation côté client.
-* **+** Zéro-copie avec DuckDB, ClickHouse et le sidecar (Arrow IPC).
-* **−** Les drivers ligne-à-ligne (`sqlx`) demandent une couche de conversion en batch.
-* **−** Les données sans schéma (Mongo) exigent une inférence par échantillonnage,
-  affichée comme telle dans l'UI.
+## Consequences
+* **+** Columnar memory footprint; O(1) access for the virtualized grid.
+* **+** CSV/Parquet/JSON/IPC export provided by the ecosystem.
+* **+** DataFusion plugs in directly: filter, sort, aggregation on the client side.
+* **+** Zero-copy with DuckDB, ClickHouse and the sidecar (Arrow IPC).
+* **−** Row-by-row drivers (`sqlx`) need a batch conversion layer.
+* **−** Schemaless data (Mongo) requires inference by sampling, shown as such in the
+  UI.
 
-## Détail : débordement disque
-`ResultBuffer` garde un budget mémoire configurable (défaut 256 Mo) et écrit le reste
-dans un fichier Arrow IPC temporaire. Faire défiler loin lit une page disque ; la
-requête n'est jamais relancée.
+## Detail: spilling to disk
+`ResultBuffer` keeps a configurable memory budget (default 256 MB) and writes the rest
+to a temporary Arrow IPC file. Scrolling far reads a disk page; the query is never
+re-run.
 
-> **Corrigé le 2026-09-14.** Cette phrase disait « mappé en mémoire ». C'était
-> faux, et le dépôt s'interdit de le rendre vrai : l'API de `memmap2` est
-> `unsafe`, et `unsafe_code = "deny"` vaut pour tout le workspace. `spill.rs`
-> alloue donc un tampon et lit le fichier, ce que son propre `///` explique. La
-> dépendance `memmap2`, déclarée mais utilisée nulle part, a été retirée au même
-> moment. Ce qui reste vrai est l'essentiel : **une lecture, jamais une
-> réexécution** — mesurée à 4,5 µs pour un lot de 512 lignes
+> **Corrected on 2026-09-14.** This sentence said "memory-mapped". That was
+> wrong, and the repository forbids itself from making it true: the `memmap2` API
+> is `unsafe`, and `unsafe_code = "deny"` applies to the whole workspace.
+> `spill.rs` therefore allocates a buffer and reads the file, as its own `///`
+> explains. The `memmap2` dependency, declared but used nowhere, was removed at the
+> same time. What remains true is the essential part: **a read, never a
+> re-execution** — measured at 4.5 µs for a batch of 512 rows
 > ([PERFORMANCE](../PERFORMANCE.md)).
