@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="20bd2ca33330" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0821c9cc0bc3" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1828,6 +1828,18 @@ Ces sources établissent les contrats des dépendances. Les défauts propres à
 Oxyn, les reproductions synthétiques et leurs limites sont consignés dans les
 rapports datés de `.claude/audits/` et les issues correspondantes ; un lien
 officiel seul ne constitue pas une reproduction du produit.
+
+## `sqlx` et les types PostgreSQL — vérifié le 2026-09-28
+
+`sqlx` 0.9.0, dernière version publiée sur crates.io au 2026-09-28 (publiée
+le 2026-05-21), utilisée par `oxyn-driver-postgres` :
+
+| Fait | Conséquence | Source |
+|---|---|---|
+| Après Describe, `resolve_statement_metadata` interroge `pg_type` pour chaque OID inconnu et n'accepte que les `typtype` `b c d e p r` et les `typcategory` `A B C D E G I N P R S T U V X` ; la branche `main` est identique | les multi-plages (`'m'`, PostgreSQL 14+) et les types internes (`'Z'` : `pg_node_tree`, `pg_ndistinct`, `pg_dependencies`, `pg_mcv_list`, résumés BRIN) font échouer `prepare` par un `ColumnDecode` sur `typtype` / `typcategory` | [resolve.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/connection/resolve.rs) |
+| Le Bind de `query_with` demande le format binaire pour toutes les colonnes du résultat, en dur | `aclitem`, `gtsvector` et leurs tableaux (`typsend = 0` dans le `pg_type` de PostgreSQL 17.11) sont refusés par le serveur : `no binary output function available` | [executor.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/connection/executor.rs) |
+| `raw_sql` passe par le protocole simple et ne résout pas les OID inconnus (`DeclareWithOid`) | toutes les valeurs arrivent en texte ; `PgTypeInfo::name()` renvoie `"?"` pour un tel type | idem |
+| `PgTypeInfo::kind()` appelle `unreachable!` sur un type non résolu | une colonne du protocole simple ne doit jamais passer par le décodage typé (ADR-0048) | [type_info.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/type_info.rs) |
 
 ## Formats binaires de PostgreSQL sur le fil — vérification du 2026-09-28
 

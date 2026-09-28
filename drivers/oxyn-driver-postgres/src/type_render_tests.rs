@@ -208,3 +208,190 @@ async fn an_array_of_a_rendered_type_is_a_list_of_text() {
     assert_eq!(items.value(2), "::1");
     session.close().await.expect("close");
 }
+
+/// The simple-protocol fallback (ADR-0048): what `sqlx` cannot prepare, or the
+/// server cannot send in binary, still arrives, as the server's text.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the `integration` module documentation"]
+async fn what_sqlx_cannot_prepare_arrives_as_the_servers_text() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let cases = [
+        (
+            "SELECT int4multirange(int4range(1, 5), int4range(7, 9)) AS m",
+            "{[1,5),[7,9)}",
+        ),
+        ("SELECT relacl FROM pg_class WHERE relname = 'pg_class'", ""),
+        (
+            "SELECT ev_action IS NOT NULL AS present, ev_action \
+             FROM pg_rewrite LIMIT 1",
+            "",
+        ),
+    ];
+    for (sql, expected) in cases {
+        let mut cursor = session
+            .execute(read(sql), &CancelToken::new())
+            .await
+            .unwrap_or_else(|error| panic!("`{sql}`: {error}"));
+        let schema = cursor.schema();
+        assert!(!schema.fields().is_empty(), "`{sql}`: columns known");
+        for field in schema.fields() {
+            assert_eq!(field.data_type(), &DataType::Utf8, "`{sql}`");
+            assert_eq!(
+                field
+                    .metadata()
+                    .get(crate::META_FALLBACK)
+                    .map(String::as_str),
+                Some("text"),
+                "`{sql}`: marked as the server's text"
+            );
+        }
+        let batch = cursor
+            .next_batch()
+            .await
+            .unwrap_or_else(|error| panic!("`{sql}`: {error}"))
+            .unwrap_or_else(|| panic!("`{sql}`: no row"));
+        if !expected.is_empty() {
+            assert_eq!(batch.column(0).as_string::<i32>().value(0), expected);
+        }
+    }
+
+    // The whole catalog row, the query that used to fail on `relacl` and
+    // `relpartbound`.
+    let mut cursor = session
+        .execute(read("SELECT * FROM pg_class LIMIT 3"), &CancelToken::new())
+        .await
+        .expect("SELECT * FROM pg_class");
+    let batch = cursor.next_batch().await.expect("stream").expect("rows");
+    assert_eq!(batch.num_rows(), 3);
+    drop(cursor);
+
+    // The connection is still in step with the server after `sqlx`'s failed
+    // preparation: the next typed statements run normally.
+    for _ in 0..3 {
+        let mut cursor = session
+            .execute(read("SELECT 41 + 1"), &CancelToken::new())
+            .await
+            .expect("a typed statement after the fallback");
+        let batch = cursor.next_batch().await.expect("stream").expect("row");
+        assert_eq!(batch.column(0).data_type(), &DataType::Int32);
+        let _ = session
+            .execute(
+                read("SELECT int4multirange(int4range(1, 2))"),
+                &CancelToken::new(),
+            )
+            .await
+            .expect("fallback again");
+    }
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the `integration` module documentation"]
+async fn the_fallback_refuses_bound_parameters_by_name() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let request = read("SELECT int4multirange(int4range($1::int, 5))")
+        .with_params(vec![oxyn_core::ScalarValue::Int64(1)]);
+    let refusal = match session.execute(request, &CancelToken::new()).await {
+        Ok(_) => panic!("a bound parameter cannot go through the simple protocol"),
+        Err(error) => error,
+    };
+    assert!(
+        refusal.to_string().contains("cast that column to `text`"),
+        "{refusal}"
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the `integration` module documentation"]
+async fn the_fallback_keeps_read_only() {
+    let Some(session) = session().await else {
+        return;
+    };
+    for sql in [
+        "DROP TABLE IF EXISTS oxyn_trial_ranges",
+        "CREATE TABLE oxyn_trial_ranges (m int4multirange)",
+        "INSERT INTO oxyn_trial_ranges VALUES ('{[1,2)}')",
+    ] {
+        apply(&*session, sql).await;
+    }
+    let mut limits = ExecLimits::default().with_max_rows(None);
+    limits.read_only = true;
+    let request =
+        read("UPDATE oxyn_trial_ranges SET m = '{[5,6)}' RETURNING m").with_limits(limits);
+    let issue = session.execute(request, &CancelToken::new()).await;
+    let refused = match issue {
+        Err(_) => true,
+        Ok(mut cursor) => cursor.next_batch().await.is_err(),
+    };
+    assert!(refused, "a write in the simple protocol stays read-only");
+
+    let mut cursor = session
+        .execute(
+            read("SELECT m::text FROM oxyn_trial_ranges"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("read back");
+    let batch = cursor.next_batch().await.expect("stream").expect("row");
+    assert_eq!(batch.column(0).as_string::<i32>().value(0), "{[1,2)}");
+    drop(cursor);
+    apply(&*session, "DROP TABLE oxyn_trial_ranges").await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the `integration` module documentation"]
+async fn cancelling_a_fallback_stops_it_on_the_server() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let token = CancelToken::new();
+    let canceller = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        canceller.cancel();
+    });
+    let started = std::time::Instant::now();
+    let issue = session
+        .execute(
+            read("SELECT pg_sleep(30), int4multirange(int4range(1, 2))"),
+            &token,
+        )
+        .await;
+    if let Ok(mut cursor) = issue {
+        let next = cursor.next_batch().await;
+        assert!(next.is_err(), "a cancelled fallback reports it: {next:?}");
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the cancellation must not wait for the query"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let mut remaining = session
+        .execute(
+            read(
+                "SELECT count(*)::int FROM pg_stat_activity \
+                 WHERE query LIKE '%pg_sleep(30)%' AND state = 'active' \
+                 AND pid <> pg_backend_pid()",
+            ),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("execution");
+    let batch = remaining.next_batch().await.expect("stream").expect("row");
+    assert_eq!(
+        batch
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>()
+            .value(0),
+        0,
+        "no pg_sleep left running on the server"
+    );
+    session.close().await.expect("close");
+}

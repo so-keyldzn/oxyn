@@ -39,6 +39,7 @@
 //! | `timestamptz` inside a range or a record | `Utf8` | printed in UTC (`+00`), whatever the session's `TimeZone` |
 //! | `reg*` (`regclass`, `regtype`…), `xid`, `cid` | `UInt32` | the OID, not the name: resolving it needs the catalog, and `::text` in SQL gives it |
 //! | `xid8` | `UInt64` | none |
+//! | multiranges, `pg_node_tree` and the other internal `Z` types, `aclitem`, `gtsvector` | `Utf8` for **every** column of that result | the statement runs in the simple protocol (ADR-0048): every value is the server's text, `int4` included, marked `oxyn:fallback = text`; a result without rows has no columns; refused with bound parameters |
 //!
 //! # Why `numeric` is not a `Decimal128`
 //!
@@ -557,6 +558,31 @@ pub(crate) fn decoding_for_builtin_oid(raw_type: u32) -> Option<PgDecoding> {
         .iter()
         .find(|(range, _)| *range == raw_type)?;
     Some(PgDecoding::Range(Box::new(decoding_for_oid(*element)?)))
+}
+
+/// The built-in types without a binary output function (`typsend = 0`), read
+/// in `pg_type` of PostgreSQL 17 on 2026-09-28: `aclitem`, `aclitem[]`,
+/// `gtsvector`, `gtsvector[]`. The server refuses a Bind that asks for them in
+/// binary.
+const NO_BINARY_OUTPUT: &[u32] = &[1033, 1034, 3642, 3644];
+
+/// Does a result column need the text format, the server having no binary
+/// form for its type? Follows a domain to its base type.
+///
+/// Called on a prepared statement's columns only: `sqlx` has resolved every
+/// type there. On an unresolved one — what the simple protocol yields —
+/// `PgTypeInfo::kind` **panics** (ADR-0048).
+pub(crate) fn lacks_binary_output(ty: &PgTypeInfo) -> bool {
+    if ty
+        .oid()
+        .is_some_and(|raw_type| NO_BINARY_OUTPUT.contains(&raw_type.0))
+    {
+        return true;
+    }
+    match ty.kind() {
+        PgTypeKind::Domain(base) => lacks_binary_output(base),
+        _ => false,
+    }
 }
 
 /// Decoding of an extension type, recognized by its name.

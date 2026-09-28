@@ -1820,6 +1820,18 @@ the synthetic reproductions and their limits are recorded in the dated reports
 of `.claude/audits/` and the corresponding issues; an official link alone does
 not constitute a reproduction of the product.
 
+## `sqlx` and PostgreSQL types — checked on 2026-09-28
+
+`sqlx` 0.9.0, the latest release on crates.io on 2026-09-28 (published
+2026-05-21), used by `oxyn-driver-postgres`:
+
+| Fact | Consequence | Source |
+|---|---|---|
+| After Describe, `resolve_statement_metadata` queries `pg_type` for each unknown OID and accepts only `typtype` `b c d e p r` and `typcategory` `A B C D E G I N P R S T U V X`; the `main` branch is the same | multiranges (`'m'`, PostgreSQL 14+) and internal types (`'Z'`: `pg_node_tree`, `pg_ndistinct`, `pg_dependencies`, `pg_mcv_list`, BRIN summaries) fail `prepare` with `ColumnDecode` on `typtype` / `typcategory` | [resolve.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/connection/resolve.rs) |
+| The Bind of `query_with` asks for the binary format for every result column, hard-coded | `aclitem`, `gtsvector` and their arrays (`typsend = 0` in `pg_type` of PostgreSQL 17.11) are refused by the server: `no binary output function available` | [executor.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/connection/executor.rs) |
+| `raw_sql` runs the simple protocol and does not resolve unknown OIDs (`DeclareWithOid`) | every value arrives as text; `PgTypeInfo::name()` returns `"?"` for such a type | same |
+| `PgTypeInfo::kind()` calls `unreachable!` on an unresolved type | a simple-protocol column must never go through the typed decoding (ADR-0048) | [type_info.rs](https://github.com/launchbadge/sqlx/blob/main/sqlx-postgres/src/type_info.rs) |
+
 ## PostgreSQL binary wire formats — checked on 2026-09-28
 
 What the server sends for each type in the extended protocol's **binary**
