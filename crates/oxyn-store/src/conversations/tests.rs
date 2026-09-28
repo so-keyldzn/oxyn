@@ -15,51 +15,51 @@ use oxyn_core::{
 };
 
 /// A migrated store, a workspace, a connection: the common setup.
-fn decor() -> (Store, WorkspaceId, ConnectionId) {
+fn fixture() -> (Store, WorkspaceId, ConnectionId) {
     let store = Store::open_in_memory().expect("open");
-    let workspace = store.workspaces().create("atelier").expect("workspace").id;
-    let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+    let workspace = store.workspaces().create("workshop").expect("workspace").id;
+    let connection = ConnectionConfig::new("customer db", DriverId::postgres())
         .with_environment(Environment::Production);
     store
         .connections()
-        .save(workspace, &connexion)
+        .save(workspace, &connection)
         .expect("connection");
-    (store, workspace, connexion.id)
+    (store, workspace, connection.id)
 }
 
 /// Reads a whole thread back, page by page, as a caller must.
 ///
 /// Pages are deliberately small: the seam between two pages is what every
 /// test should exercise, not only the test dedicated to it.
-fn tout_le_fil(store: &Store, id: ConversationId) -> Vec<Turn> {
-    let mut tours = Vec::new();
-    let mut apres = None;
+fn whole_thread(store: &Store, id: ConversationId) -> Vec<Turn> {
+    let mut turns = Vec::new();
+    let mut after = None;
     loop {
         let page = store
             .conversations()
-            .transcript_page(id, apres, 2)
+            .transcript_page(id, after, 2)
             .expect("read back a page");
-        tours.extend(page.turns);
+        turns.extend(page.turns);
         match page.next {
-            Some(suivant) => apres = Some(suivant),
-            None => return tours,
+            Some(next) => after = Some(next),
+            None => return turns,
         }
     }
 }
 
 /// A provider destination, the common shape.
-fn fournisseur() -> Destination {
+fn provider() -> Destination {
     Destination::provider(
         ProviderId::new("anthropic-1a2b3c4d").expect("identifier"),
         "Anthropic",
-        "un-modele",
+        "a-model",
     )
 }
 
 /// An open and saved thread.
-fn fil(store: &Store, workspace: WorkspaceId, connexion: ConnectionId) -> ConversationId {
-    let conversation = Conversation::new(workspace, fournisseur(), "Doublons de commandes")
-        .on_connection(connexion, "base client");
+fn thread(store: &Store, workspace: WorkspaceId, connection: ConnectionId) -> ConversationId {
+    let conversation = Conversation::new(workspace, provider(), "Duplicate orders")
+        .on_connection(connection, "customer db");
     let id = conversation.id;
     store
         .conversations()
@@ -70,24 +70,24 @@ fn fil(store: &Store, workspace: WorkspaceId, connexion: ConnectionId) -> Conver
 
 /// A loaded assistant turn: written reasoning, encrypted reasoning, tool call,
 /// declared usage, stop reason.
-fn tour_charge() -> TurnRecord {
+fn loaded_turn() -> TurnRecord {
     TurnRecord::new(
         TurnRole::Assistant,
         PrivacyTier::Metadata,
-        "Voici la requête qui trouve les doublons.",
+        "Here is the query that finds the duplicates.",
     )
     .with_reasoning(vec![
-        ReasoningBlock::summarized("Je compare les colonnes indexées", Some("SIG-1".into())),
-        ReasoningBlock::redacted("CHARGE-CHIFFREE-DU-FOURNISSEUR"),
+        ReasoningBlock::summarized("I compare the indexed columns", Some("SIG-1".into())),
+        ReasoningBlock::redacted("ENCRYPTED-PROVIDER-PAYLOAD"),
     ])
     .with_tool_calls(vec![
         ToolCallRecord::new(
             "call_1",
             "execute",
-            "Exécuter une lecture sur « base client »",
+            "Run a read on “customer db”",
             ToolCallStatus::Completed,
         )
-        .with_statement("SELECT email, COUNT(*) FROM clients GROUP BY email HAVING COUNT(*) > 1"),
+        .with_statement("SELECT email, COUNT(*) FROM customers GROUP BY email HAVING COUNT(*) > 1"),
     ])
     .with_usage(TurnUsage {
         prompt: Some(1_200),
@@ -110,51 +110,51 @@ fn tour_charge() -> TurnRecord {
 /// rebuilt — and that refusal would show up neither here nor in review.
 #[test]
 fn a_thread_read_back_is_the_thread_written() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     let session = AgentSessionId::new();
 
     let question = TurnRecord::new(
         TurnRole::User,
         PrivacyTier::Metadata,
-        "Trouve-moi les doublons de clients",
+        "Find me the duplicate customers",
     )
     .in_agent_session(session);
-    let reponse = tour_charge().in_agent_session(session);
+    let answer = loaded_turn().in_agent_session(session);
 
     assert_eq!(
         store.conversations().append(id, &question).expect("write"),
         Some(0)
     );
     assert_eq!(
-        store.conversations().append(id, &reponse).expect("write"),
+        store.conversations().append(id, &answer).expect("write"),
         Some(1)
     );
 
-    let relu = tout_le_fil(&store, id);
-    assert_eq!(relu.len(), 2);
-    assert_eq!(relu[0].ordinal, 0);
-    assert_eq!(relu[0].record.role, TurnRole::User);
-    assert_eq!(relu[0].record.agent_session, Some(session));
+    let read_back = whole_thread(&store, id);
+    assert_eq!(read_back.len(), 2);
+    assert_eq!(read_back[0].ordinal, 0);
+    assert_eq!(read_back[0].record.role, TurnRole::User);
+    assert_eq!(read_back[0].record.agent_session, Some(session));
 
-    let tour = &relu[1].record;
-    assert_eq!(tour.role, TurnRole::Assistant);
-    assert_eq!(tour.tier, PrivacyTier::Metadata);
+    let turn = &read_back[1].record;
+    assert_eq!(turn.role, TurnRole::Assistant);
+    assert_eq!(turn.tier, PrivacyTier::Metadata);
     assert_eq!(
-        tour.reasoning, reponse.reasoning,
+        turn.reasoning, answer.reasoning,
         "a rebuilt block makes the next turn refused"
     );
     assert!(
-        tour.reasoning.iter().any(ReasoningBlock::is_redacted),
+        turn.reasoning.iter().any(ReasoningBlock::is_redacted),
         "the encrypted block must survive: without it the provider loses the thread"
     );
-    assert_eq!(tour.tool_calls, reponse.tool_calls);
-    assert_eq!(tour.usage, reponse.usage);
-    assert_eq!(tour.stop, Some(StopReason::EndTurn));
+    assert_eq!(turn.tool_calls, answer.tool_calls);
+    assert_eq!(turn.usage, answer.usage);
+    assert_eq!(turn.stop, Some(StopReason::EndTurn));
 
     // "Not declared" and "zero" stay two different facts.
-    assert_eq!(tour.usage.cache_read, None);
-    assert_eq!(tour.usage.cache_write, Some(800));
+    assert_eq!(turn.usage.cache_read, None);
+    assert_eq!(turn.usage.cache_write, Some(800));
 }
 
 /// A tool call read back keeps its SQL byte for byte, layout included.
@@ -164,10 +164,10 @@ fn a_thread_read_back_is_the_thread_written() {
 /// it as one block, without anything failing.
 #[test]
 fn a_tool_call_read_back_keeps_its_sql_layout() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    let sql = "WITH ventes AS (\n  SELECT c.name AS category,\n         SUM(oi.quantity) AS total\n  FROM main.order_items AS oi\n\tJOIN main.categories AS c ON c.id = oi.category_id\n  GROUP BY c.name\n)\nSELECT * FROM ventes ORDER BY total DESC;\n";
-    let tour =
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    let sql = "WITH sales AS (\n  SELECT c.name AS category,\n         SUM(oi.quantity) AS total\n  FROM main.order_items AS oi\n\tJOIN main.categories AS c ON c.id = oi.category_id\n  GROUP BY c.name\n)\nSELECT * FROM sales ORDER BY total DESC;\n";
+    let turn =
         TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "").with_tool_calls(vec![
             ToolCallRecord::new(
                 "call_1",
@@ -177,18 +177,18 @@ fn a_tool_call_read_back_keeps_its_sql_layout() {
             )
             .with_statement(sql),
         ]);
-    store.conversations().append(id, &tour).expect("write");
+    store.conversations().append(id, &turn).expect("write");
 
-    let relu = tout_le_fil(&store, id);
-    let appel = relu[0]
+    let read_back = whole_thread(&store, id);
+    let call = read_back[0]
         .record
         .tool_calls
         .first()
         .expect("the call is read back");
-    assert_eq!(appel.statement.as_deref(), Some(sql));
-    assert_eq!(appel.tool, "execute_query");
-    assert_eq!(appel.summary, "7 rows, 1 batches");
-    assert_eq!(appel.status, ToolCallStatus::Completed);
+    assert_eq!(call.statement.as_deref(), Some(sql));
+    assert_eq!(call.tool, "execute_query");
+    assert_eq!(call.summary, "7 rows, 1 batches");
+    assert_eq!(call.status, ToolCallStatus::Completed);
 }
 
 /// A provider-specific stop reason is kept as is.
@@ -198,15 +198,15 @@ fn a_tool_call_read_back_keeps_its_sql_layout() {
 /// it wrong.
 #[test]
 fn an_unknown_stop_reason_keeps_the_provider_word() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    let tour = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Local, "")
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    let turn = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Local, "")
         .stopped(StopReason::Other("quota_exhausted".into()));
-    store.conversations().append(id, &tour).expect("write");
+    store.conversations().append(id, &turn).expect("write");
 
-    let relu = tout_le_fil(&store, id);
+    let read_back = whole_thread(&store, id);
     assert_eq!(
-        relu[0].record.stop,
+        read_back[0].record.stop,
         Some(StopReason::Other("quota_exhausted".into()))
     );
 }
@@ -225,61 +225,65 @@ fn an_unknown_stop_reason_keeps_the_provider_word() {
 // these forms, going through it would prove nothing.
 
 /// Writes a turn carrying `stop_reason` as is, then returns the reason read back.
-fn raison_relue(stop_reason_json: &str) -> Option<StopReason> {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+fn reason_read_back(stop_reason_json: &str) -> Option<StopReason> {
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     store
         .with_connection(|conn| {
             conn.execute(
                 "INSERT INTO ai_conversation_turns
                      (conversation_id, ordinal, ts, role, privacy_tier, text, stop_reason)
-                 VALUES (?1, 0, ?2, 'assistant', 'metadata', 'Voici le début de la rép', ?3)",
+                 VALUES (?1, 0, ?2, 'assistant', 'metadata', 'Here is the start of the ans', ?3)",
                 rusqlite::params![id.to_string(), Utc::now(), stop_reason_json],
             )?;
             Ok(())
         })
         .expect("row written by a previous version");
-    tout_le_fil(&store, id)
+    whole_thread(&store, id)
         .pop()
-        .and_then(|tour| tour.record.stop)
+        .and_then(|turn| turn.record.stop)
 }
 
-/// Checks that a legacy form reads back as `attendu`, and never as a
+/// Checks that a legacy form reads back as `expected`, and never as a
 /// complete answer.
-fn verifier_forme_ancienne(stop_reason_json: &str, attendu: StopReason) {
-    let relue = raison_relue(stop_reason_json);
-    assert_eq!(relue.as_ref(), Some(&attendu), "form {stop_reason_json}");
+fn check_old_form(stop_reason_json: &str, expected: StopReason) {
+    let read_back = reason_read_back(stop_reason_json);
+    assert_eq!(
+        read_back.as_ref(),
+        Some(&expected),
+        "form {stop_reason_json}"
+    );
     assert!(
-        attendu.is_truncated(),
+        expected.is_truncated(),
         "an abnormal ending must never read back as a complete answer"
     );
 }
 
 #[test]
-fn legacy_form_flux_interrompu_reads_back_interrupted() {
-    verifier_forme_ancienne(r#"{"Other":"flux interrompu"}"#, StopReason::Interrupted);
+fn legacy_french_form_interrupted_stream_reads_back_interrupted() {
+    check_old_form(r#"{"Other":"flux interrompu"}"#, StopReason::Interrupted);
 }
 
 #[test]
-fn legacy_form_flux_illisible_reads_back_interrupted() {
-    verifier_forme_ancienne(r#"{"Other":"flux illisible"}"#, StopReason::Interrupted);
+fn legacy_french_form_unreadable_stream_reads_back_interrupted() {
+    check_old_form(r#"{"Other":"flux illisible"}"#, StopReason::Interrupted);
 }
 
 #[test]
 fn legacy_form_interrupted_stream_reads_back_interrupted() {
-    verifier_forme_ancienne(r#"{"Other":"interrupted stream"}"#, StopReason::Interrupted);
+    check_old_form(r#"{"Other":"interrupted stream"}"#, StopReason::Interrupted);
 }
 
 #[test]
 fn legacy_form_unreadable_stream_reads_back_interrupted() {
-    verifier_forme_ancienne(r#"{"Other":"unreadable stream"}"#, StopReason::Interrupted);
+    check_old_form(r#"{"Other":"unreadable stream"}"#, StopReason::Interrupted);
 }
 
 /// An error announced by the provider is truncated but **not** ambiguous:
 /// reading it back as `Interrupted` would block a legitimate retry.
 #[test]
-fn legacy_form_erreur_du_fournisseur_reads_back_provider_error() {
-    verifier_forme_ancienne(
+fn legacy_french_form_provider_error_reads_back_provider_error() {
+    check_old_form(
         r#"{"Other":"erreur du fournisseur"}"#,
         StopReason::ProviderError,
     );
@@ -287,7 +291,7 @@ fn legacy_form_erreur_du_fournisseur_reads_back_provider_error() {
 
 #[test]
 fn legacy_form_provider_error_reads_back_provider_error() {
-    verifier_forme_ancienne(r#"{"Other":"provider error"}"#, StopReason::ProviderError);
+    check_old_form(r#"{"Other":"provider error"}"#, StopReason::ProviderError);
 }
 
 /// The boundary: only the six exact forms are recognized.
@@ -297,7 +301,7 @@ fn legacy_form_provider_error_reads_back_provider_error() {
 /// a stop nobody ever reported as such.
 #[test]
 fn no_other_other_value_is_recognized() {
-    for mot in [
+    for word in [
         "quota_exhausted",
         "Interrupted Stream",
         "interrupted stream ",
@@ -305,11 +309,11 @@ fn no_other_other_value_is_recognized() {
         "provider",
         "",
     ] {
-        let json = serde_json::to_string(&StopReason::Other(mot.into())).expect("encoding");
+        let json = serde_json::to_string(&StopReason::Other(word.into())).expect("encoding");
         assert_eq!(
-            raison_relue(&json),
-            Some(StopReason::Other(mot.into())),
-            "`{mot}` must not be recognized"
+            reason_read_back(&json),
+            Some(StopReason::Other(word.into())),
+            "`{word}` must not be recognized"
         );
     }
 }
@@ -321,28 +325,28 @@ fn no_other_other_value_is_recognized() {
 /// stored once at the top would be wrong for half of the thread.
 #[test]
 fn the_tier_follows_the_turn_not_the_thread() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
 
     store
         .conversations()
         .append(
             id,
-            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "première question"),
+            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "first question"),
         )
         .expect("write");
     store
         .conversations()
         .append(
             id,
-            &TurnRecord::new(TurnRole::User, PrivacyTier::Sampled, "seconde question"),
+            &TurnRecord::new(TurnRole::User, PrivacyTier::Sampled, "second question"),
         )
         .expect("write");
 
-    let relu = tout_le_fil(&store, id);
-    assert_eq!(relu[0].record.tier, PrivacyTier::Metadata);
+    let read_back = whole_thread(&store, id);
+    assert_eq!(read_back[0].record.tier, PrivacyTier::Metadata);
     assert_eq!(
-        relu[1].record.tier,
+        read_back[1].record.tier,
         PrivacyTier::Sampled,
         "the second turn took place under another regime, and reading back must say so"
     );
@@ -351,25 +355,25 @@ fn the_tier_follows_the_turn_not_the_thread() {
 /// The thread survives the connection's deletion, under its name at the time.
 #[test]
 fn a_thread_survives_the_deletion_of_its_connection() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     store
         .conversations()
         .append(
             id,
-            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "une question"),
+            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "a question"),
         )
         .expect("write");
 
-    store.connections().delete(connexion).expect("deletion");
+    store.connections().delete(connection).expect("deletion");
 
-    let relu = store
+    let read_back = store
         .conversations()
         .get(id)
         .expect("read back")
         .expect("the thread still exists");
-    assert_eq!(relu.connection_name.as_deref(), Some("base client"));
-    assert_eq!(tout_le_fil(&store, id).len(), 1);
+    assert_eq!(read_back.connection_name.as_deref(), Some("customer db"));
+    assert_eq!(whole_thread(&store, id).len(), 1);
 }
 
 /// A deleted connection leaves its threads readable in the orphan list, under
@@ -377,26 +381,29 @@ fn a_thread_survives_the_deletion_of_its_connection() {
 /// without a connection are not in it.
 #[test]
 fn threads_of_a_deleted_connection_are_listed_under_its_name() {
-    let (store, workspace, supprimee) = decor();
-    let orphelin = fil(&store, workspace, supprimee);
+    let (store, workspace, deleted) = fixture();
+    let orphan = thread(&store, workspace, deleted);
     store
         .conversations()
         .append(
-            orphelin,
-            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "une question"),
+            orphan,
+            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "a question"),
         )
         .expect("write");
 
-    let vivante = ConnectionConfig::new("entrepôt", DriverId::postgres());
+    let alive_one = ConnectionConfig::new("warehouse", DriverId::postgres());
     store
         .connections()
-        .save(workspace, &vivante)
+        .save(workspace, &alive_one)
         .expect("connection");
-    fil(&store, workspace, vivante.id);
-    let sans_connexion = Conversation::new(workspace, fournisseur(), "Sans connexion");
-    store.conversations().save(&sans_connexion).expect("save");
-    let ailleurs = store.workspaces().create("ailleurs").expect("workspace").id;
-    fil(&store, ailleurs, ConnectionId::new());
+    thread(&store, workspace, alive_one.id);
+    let without_connection = Conversation::new(workspace, provider(), "Sans connexion");
+    store
+        .conversations()
+        .save(&without_connection)
+        .expect("save");
+    let elsewhere = store.workspaces().create("ailleurs").expect("workspace").id;
+    thread(&store, elsewhere, ConnectionId::new());
 
     assert!(
         store
@@ -407,20 +414,20 @@ fn threads_of_a_deleted_connection_are_listed_under_its_name() {
         "as long as the connection exists, its thread is not orphaned"
     );
 
-    store.connections().delete(supprimee).expect("deletion");
+    store.connections().delete(deleted).expect("deletion");
 
-    let orphelins = store.conversations().orphans(workspace, 10).expect("list");
-    assert_eq!(orphelins.len(), 1);
-    assert_eq!(orphelins[0].summary.id, orphelin);
-    assert_eq!(orphelins[0].summary.turns, 1);
-    assert_eq!(orphelins[0].connection_name.as_deref(), Some("base client"));
+    let orphans = store.conversations().orphans(workspace, 10).expect("list");
+    assert_eq!(orphans.len(), 1);
+    assert_eq!(orphans[0].summary.id, orphan);
+    assert_eq!(orphans[0].summary.turns, 1);
+    assert_eq!(orphans[0].connection_name.as_deref(), Some("customer db"));
 
     // Listing an orphan does not allow erasing it in the name of another
     // connection: the deletion carries the connection in its `WHERE`.
     assert!(
         !store
             .conversations()
-            .delete(vivante.id, orphelin)
+            .delete(alive_one.id, orphan)
             .expect("deletion refused without an error")
     );
     assert_eq!(
@@ -436,18 +443,18 @@ fn threads_of_a_deleted_connection_are_listed_under_its_name() {
 /// A turn written into a vanished thread is not a failure, it is a `None`.
 #[test]
 fn writing_into_a_vanished_thread_returns_none() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     assert!(
         store
             .conversations()
-            .delete(connexion, id)
+            .delete(connection, id)
             .expect("deletion")
     );
 
-    let tour = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "trop tard");
+    let turn = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "trop tard");
     assert_eq!(
-        store.conversations().append(id, &tour).expect("write"),
+        store.conversations().append(id, &turn).expect("write"),
         None
     );
 }
@@ -455,8 +462,8 @@ fn writing_into_a_vanished_thread_returns_none() {
 /// Deleting a thread takes its turns: the foreign key holds it, not the code.
 #[test]
 fn deleting_a_thread_takes_its_turns() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     for index in 0..4 {
         store
             .conversations()
@@ -468,10 +475,10 @@ fn deleting_a_thread_takes_its_turns() {
     }
     store
         .conversations()
-        .delete(connexion, id)
+        .delete(connection, id)
         .expect("deletion");
 
-    let restants: i64 = store
+    let remaining: i64 = store
         .with_connection(|conn| {
             Ok(
                 conn.query_row("SELECT COUNT(*) FROM ai_conversation_turns", [], |row| {
@@ -480,43 +487,40 @@ fn deleting_a_thread_takes_its_turns() {
             )
         })
         .expect("count");
-    assert_eq!(restants, 0, "no orphan turn may remain");
+    assert_eq!(remaining, 0, "no orphan turn may remain");
 }
 
 /// A connection's list is ordered by activity, and counts its turns.
 #[test]
 fn the_list_is_ordered_by_activity() {
-    let (store, workspace, connexion) = decor();
-    let ancien = fil(&store, workspace, connexion);
-    let recent = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let old = thread(&store, workspace, connection);
+    let recent = thread(&store, workspace, connection);
 
     store
         .conversations()
         .append(
-            ancien,
+            old,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "vieux"),
         )
         .expect("write");
-    let mut plus_tard = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "neuf");
-    plus_tard.ts = Utc::now() + TimeDelta::minutes(5);
-    store
-        .conversations()
-        .append(recent, &plus_tard)
-        .expect("write");
+    let mut later = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "neuf");
+    later.ts = Utc::now() + TimeDelta::minutes(5);
+    store.conversations().append(recent, &later).expect("write");
 
-    let liste = store.conversations().list(connexion, 10).expect("list");
-    assert_eq!(liste.len(), 2);
-    assert_eq!(liste[0].id, recent);
-    assert_eq!(liste[0].turns, 1);
-    assert_eq!(liste[1].id, ancien);
+    let list = store.conversations().list(connection, 10).expect("list");
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].id, recent);
+    assert_eq!(list[0].turns, 1);
+    assert_eq!(list[1].id, old);
 }
 
 /// Renaming does not reorder the history under the user's cursor.
 #[test]
 fn renaming_is_not_an_activity() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    let avant = store
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    let before = store
         .conversations()
         .get(id)
         .expect("read back")
@@ -530,13 +534,13 @@ fn renaming_is_not_an_activity() {
             .expect("rename")
     );
 
-    let apres = store
+    let after = store
         .conversations()
         .get(id)
         .expect("read back")
         .expect("thread");
-    assert_eq!(apres.title, "Nouveau titre");
-    assert_eq!(apres.updated_at, avant);
+    assert_eq!(after.title, "Nouveau titre");
+    assert_eq!(after.updated_at, before);
 }
 
 // --- Write bounds -----------------------------------------------------------
@@ -544,24 +548,24 @@ fn renaming_is_not_an_activity() {
 /// What does not fit is refused, never truncated.
 #[test]
 fn a_turn_too_large_is_refused_not_truncated() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    let tour = TurnRecord::new(
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    let turn = TurnRecord::new(
         TurnRole::Assistant,
         PrivacyTier::Metadata,
         "x".repeat(MAX_TURN_TEXT_BYTES + 1),
     );
 
-    let erreur = store
+    let error = store
         .conversations()
-        .append(id, &tour)
+        .append(id, &turn)
         .expect_err("the bound must refuse");
     assert!(
-        matches!(erreur, StoreError::TooLarge { field, .. } if field.ends_with(".text")),
-        "{erreur:?}"
+        matches!(error, StoreError::TooLarge { field, .. } if field.ends_with(".text")),
+        "{error:?}"
     );
     assert!(
-        tout_le_fil(&store, id).is_empty(),
+        whole_thread(&store, id).is_empty(),
         "a refusal must leave nothing behind"
     );
 }
@@ -569,9 +573,9 @@ fn a_turn_too_large_is_refused_not_truncated() {
 /// The file's bound also holds against a third party armed with `sqlite3`.
 #[test]
 fn the_bounds_hold_in_the_file() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    let refus = store.with_connection(|conn| {
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    let refusal = store.with_connection(|conn| {
         Ok(conn.execute(
             "INSERT INTO ai_conversation_turns
                  (conversation_id, ordinal, ts, role, privacy_tier, text)
@@ -584,13 +588,13 @@ fn the_bounds_hold_in_the_file() {
         )?)
     });
     assert!(
-        refus.is_err(),
+        refusal.is_err(),
         "the budget must be enforceable outside Oxyn, not only in the code"
     );
 }
 
 /// Writes `count` user turns in direct SQL, without going through `append`.
-fn tours_bruts(store: &Store, id: ConversationId, count: u32) {
+fn raw_turns(store: &Store, id: ConversationId, count: u32) {
     store
         .with_connection(|conn| {
             let tx = conn.unchecked_transaction()?;
@@ -616,9 +620,9 @@ fn tours_bruts(store: &Store, id: ConversationId, count: u32) {
 /// allowed, or the reverse, without anything reporting it.
 #[test]
 fn the_file_bounds_turns_and_the_stop_reason() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    let inserer = |ordinal: u32, stop: Option<String>| {
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    let insert_row = |ordinal: u32, stop: Option<String>| {
         store.with_connection(|conn| {
             Ok(conn.execute(
                 "INSERT INTO ai_conversation_turns
@@ -630,25 +634,25 @@ fn the_file_bounds_turns_and_the_stop_reason() {
     };
 
     assert!(
-        inserer(MAX_TURNS_PER_CONVERSATION, None).is_err(),
+        insert_row(MAX_TURNS_PER_CONVERSATION, None).is_err(),
         "a turn beyond the bound"
     );
-    let trop_long = format!("\"{}\"", "x".repeat(MAX_STOP_REASON_BYTES));
+    let too_long = format!("\"{}\"", "x".repeat(MAX_STOP_REASON_BYTES));
     assert!(
-        inserer(0, Some(trop_long.clone())).is_err(),
+        insert_row(0, Some(too_long.clone())).is_err(),
         "a stop reason too long"
     );
-    inserer(MAX_TURNS_PER_CONVERSATION - 1, Some("\"EndTurn\"".into()))
+    insert_row(MAX_TURNS_PER_CONVERSATION - 1, Some("\"EndTurn\"".into()))
         .expect("the last accepted position");
-    let mise_a_jour = store.with_connection(|conn| {
+    let update = store.with_connection(|conn| {
         Ok(conn.execute(
             "UPDATE ai_conversation_turns SET stop_reason = ?1",
-            rusqlite::params![trop_long],
+            rusqlite::params![too_long],
         )?)
     });
-    assert!(mise_a_jour.is_err(), "the update is bounded too");
+    assert!(update.is_err(), "the update is bounded too");
 
-    let declencheur: String = store
+    let trigger: String = store
         .with_connection(|conn| {
             Ok(conn.query_row(
                 "SELECT sql FROM sqlite_schema WHERE name = 'ai_conversation_turns_bounds_insert'",
@@ -657,27 +661,27 @@ fn the_file_bounds_turns_and_the_stop_reason() {
             )?)
         })
         .expect("trigger");
-    assert!(declencheur.contains(&format!(">= {MAX_TURNS_PER_CONVERSATION}")));
-    assert!(declencheur.contains(&format!("> {MAX_STOP_REASON_BYTES}")));
+    assert!(trigger.contains(&format!(">= {MAX_TURNS_PER_CONVERSATION}")));
+    assert!(trigger.contains(&format!("> {MAX_STOP_REASON_BYTES}")));
 }
 
 /// `append` refuses the extra turn with an error that names the bound.
 #[test]
 fn a_full_thread_refuses_the_next_turn() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    tours_bruts(&store, id, MAX_TURNS_PER_CONVERSATION);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    raw_turns(&store, id, MAX_TURNS_PER_CONVERSATION);
 
-    let erreur = store
+    let error = store
         .conversations()
         .append(
             id,
-            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "de trop"),
+            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "one too many"),
         )
         .expect_err("the thread is full");
     assert!(
-        matches!(erreur, StoreError::TooLarge { field, .. } if field.ends_with(".ordinal")),
-        "{erreur:?}"
+        matches!(error, StoreError::TooLarge { field, .. } if field.ends_with(".ordinal")),
+        "{error:?}"
     );
 }
 
@@ -688,29 +692,29 @@ fn a_full_thread_refuses_the_next_turn() {
 /// label, not a transcript.
 #[test]
 fn a_stop_reason_too_long_is_shortened_and_the_turn_kept() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     // Quotes, so that JSON escaping lengthens the encoding beyond the raw
     // text: the case where cutting at a byte count is not enough.
-    let mot = "\"é".repeat(10_000);
-    let tour = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "La réponse")
-        .stopped(StopReason::Other(mot));
+    let word = "\"é".repeat(10_000);
+    let turn = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "The answer")
+        .stopped(StopReason::Other(word));
     store
         .conversations()
-        .append(id, &tour)
+        .append(id, &turn)
         .expect("the turn is written");
 
-    let relu = tout_le_fil(&store, id);
-    assert_eq!(relu[0].record.text, "La réponse");
-    let Some(StopReason::Other(garde)) = &relu[0].record.stop else {
+    let read_back = whole_thread(&store, id);
+    assert_eq!(read_back[0].record.text, "The answer");
+    let Some(StopReason::Other(guard)) = &read_back[0].record.stop else {
         panic!(
             "the reason stays the provider's word: {:?}",
-            relu[0].record.stop
+            read_back[0].record.stop
         );
     };
-    assert!(garde.ends_with('…'), "the shortening shows");
+    assert!(guard.ends_with('…'), "the shortening shows");
     assert!(
-        serde_json::to_string(&StopReason::Other(garde.clone()))
+        serde_json::to_string(&StopReason::Other(guard.clone()))
             .expect("encoding")
             .len()
             <= MAX_STOP_REASON_BYTES
@@ -721,43 +725,43 @@ fn a_stop_reason_too_long_is_shortened_and_the_turn_kept() {
 /// page or a duplicate — and its `limit` bounds hold.
 #[test]
 fn paginated_reading_returns_the_whole_thread_and_nothing_more() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
-    tours_bruts(&store, id, 20);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    raw_turns(&store, id, 20);
 
-    let premiere = store
+    let first_one = store
         .conversations()
         .transcript_page(id, None, u16::MAX)
         .expect("page");
     assert_eq!(
-        premiere.turns.len(),
+        first_one.turns.len(),
         usize::from(MAX_TURN_PAGE),
         "`limit` is capped"
     );
-    assert_eq!(premiere.next, Some(u32::from(MAX_TURN_PAGE) - 1));
+    assert_eq!(first_one.next, Some(u32::from(MAX_TURN_PAGE) - 1));
 
-    let seconde = store
+    let second_one = store
         .conversations()
-        .transcript_page(id, premiere.next, u16::MAX)
+        .transcript_page(id, first_one.next, u16::MAX)
         .expect("page");
-    assert_eq!(seconde.turns.len(), 4);
-    assert_eq!(seconde.next, None, "no empty page after the last one");
+    assert_eq!(second_one.turns.len(), 4);
+    assert_eq!(second_one.next, None, "no empty page after the last one");
 
-    let unitaire = store
+    let unit = store
         .conversations()
         .transcript_page(id, None, 0)
         .expect("page");
-    assert_eq!(unitaire.turns.len(), 1, "a zero `limit` counts as one");
+    assert_eq!(unit.turns.len(), 1, "a zero `limit` counts as one");
 
-    let ordinaux: Vec<u32> = tout_le_fil(&store, id)
+    let ordinals: Vec<u32> = whole_thread(&store, id)
         .iter()
-        .map(|tour| tour.ordinal)
+        .map(|turn| turn.ordinal)
         .collect();
-    assert_eq!(ordinaux, (0..20).collect::<Vec<_>>());
+    assert_eq!(ordinals, (0..20).collect::<Vec<_>>());
 
     // A thread whose count is an exact multiple of the page.
-    let pair = fil(&store, workspace, connexion);
-    tours_bruts(&store, pair, 4);
+    let pair = thread(&store, workspace, connection);
+    raw_turns(&store, pair, 4);
     let page = store
         .conversations()
         .transcript_page(pair, Some(1), 2)
@@ -777,28 +781,28 @@ fn paginated_reading_returns_the_whole_thread_and_nothing_more() {
 /// surplus turns are read in bounded pages.
 #[test]
 fn a_file_older_than_the_bounds_opens_and_reads_back() {
-    let racine = tempfile::tempdir().expect("temporary directory");
-    let chemin = racine.path().join("oxyn.sqlite3");
+    let root = tempfile::tempdir().expect("temporary directory");
+    let path = root.path().join("oxyn.sqlite3");
     let id = ConversationId::new();
     {
         // A version 10 file: neither bounds nor tree.
-        let conn = crate::schema::file_at_version(&chemin, 10);
-        let atelier = oxyn_core::WorkspaceId::new();
+        let conn = crate::schema::file_at_version(&path, 10);
+        let workshop = oxyn_core::WorkspaceId::new();
         // The exact form rusqlite writes for a `DateTime<Utc>`.
-        let quand = Utc::now().format("%F %T%.f%:z");
+        let when = Utc::now().format("%F %T%.f%:z");
         conn.execute_batch(&format!(
-            "INSERT INTO workspaces VALUES ('{atelier}', 'atelier', '{quand}', '{quand}');
+            "INSERT INTO workspaces VALUES ('{workshop}', 'workshop', '{when}', '{when}');
              INSERT INTO ai_conversations
                  (id, workspace_id, destination_kind, destination_label, title,
                   created_at, updated_at)
-             VALUES ('{id}', '{atelier}', 'provider', 'Anthropic', 'Fil', '{quand}', '{quand}');"
+             VALUES ('{id}', '{workshop}', 'provider', 'Anthropic', 'Thread', '{when}', '{when}');"
         ))
         .expect("thread from an earlier version");
         conn.execute(
             "INSERT INTO ai_conversation_turns
                  (conversation_id, ordinal, ts, role, privacy_tier, text, stop_reason)
-             VALUES (?1, 0, ?2, 'assistant', 'metadata', 'réponse', ?3),
-                    (?1, 700, ?2, 'user', 'metadata', 'au-delà de la borne', NULL)",
+             VALUES (?1, 0, ?2, 'assistant', 'metadata', 'answer', ?3),
+                    (?1, 700, ?2, 'user', 'metadata', 'beyond the bound', NULL)",
             rusqlite::params![
                 id.to_string(),
                 Utc::now(),
@@ -808,19 +812,19 @@ fn a_file_older_than_the_bounds_opens_and_reads_back() {
         .expect("turns from an earlier version");
     }
 
-    let store = Store::open_at(&chemin).expect("opening must not fail");
-    let relu = tout_le_fil(&store, id);
-    assert_eq!(relu.len(), 2, "no row lost or rewritten");
-    assert_eq!(relu[0].record.text, "réponse");
+    let store = Store::open_at(&path).expect("opening must not fail");
+    let read_back = whole_thread(&store, id);
+    assert_eq!(read_back.len(), 2, "no row lost or rewritten");
+    assert_eq!(read_back[0].record.text, "answer");
     assert_eq!(
-        relu[0].record.stop,
+        read_back[0].record.stop,
         Some(StopReason::Unspecified),
         "the oversized value is not loaded"
     );
-    assert_eq!(relu[1].ordinal, 700);
+    assert_eq!(read_back[1].ordinal, 700);
 
     // And the triggers are back for what will be written next.
-    let declencheurs: i64 = store
+    let triggers: i64 = store
         .with_connection(|conn| {
             Ok(conn.query_row(
                 "SELECT COUNT(*) FROM sqlite_schema
@@ -830,7 +834,7 @@ fn a_file_older_than_the_bounds_opens_and_reads_back() {
             )?)
         })
         .expect("count");
-    assert_eq!(declencheurs, 2);
+    assert_eq!(triggers, 2);
 }
 
 /// A row nobody can read anymore does not fail the opening.
@@ -841,13 +845,13 @@ fn a_file_older_than_the_bounds_opens_and_reads_back() {
 /// can no longer be opened because one row is odd protects no one.
 #[test]
 fn a_corrupted_row_does_not_prevent_opening() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     store
         .conversations()
         .append(
             id,
-            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "une question saine"),
+            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "a healthy question"),
         )
         .expect("write");
 
@@ -857,46 +861,46 @@ fn a_corrupted_row_does_not_prevent_opening() {
                 "INSERT INTO ai_conversation_turns
                      (conversation_id, ordinal, ts, role, privacy_tier, text, reasoning,
                       tool_calls, stop_reason, prompt_tokens)
-                 VALUES (?1, 1, ?2, 'oracle', 'confidentiel', 'du texte', '{ pas du json',
+                 VALUES (?1, 1, ?2, 'oracle', 'confidentiel', 'some text', '{ not json',
                          '[{\"call_id\":\"c\",\"tool\":\"t\",\"summary\":\"s\",\"status\":\"vaporise\"}]',
-                         'pas du json non plus', -7)",
+                         'not json either', -7)",
                 rusqlite::params![id.to_string(), Utc::now()],
             )?;
             Ok(())
         })
         .expect("row written outside Oxyn");
 
-    let relu = tout_le_fil(&store, id);
-    assert_eq!(relu.len(), 2, "the healthy row and the odd row");
+    let read_back = whole_thread(&store, id);
+    assert_eq!(read_back.len(), 2, "the healthy row and the odd row");
 
-    let etrange = &relu[1].record;
+    let odd = &read_back[1].record;
     assert_eq!(
-        etrange.role,
+        odd.role,
         TurnRole::Unknown,
         "an unknown role is neither the user nor the assistant"
     );
     assert_eq!(
-        etrange.tier,
+        odd.tier,
         PrivacyTier::Local,
         "an unreadable tier falls back to the most restrictive"
     );
-    assert_eq!(etrange.text, "du texte", "the readable text stays readable");
+    assert_eq!(odd.text, "some text", "the readable text stays readable");
     assert!(
-        etrange.reasoning.is_empty(),
+        odd.reasoning.is_empty(),
         "an unreadable reasoning is dropped, the turn survives"
     );
     assert_eq!(
-        etrange.tool_calls[0].status,
+        odd.tool_calls[0].status,
         ToolCallStatus::Unknown,
         "an unreadable outcome does not pass for a success"
     );
     assert_eq!(
-        etrange.stop,
-        Some(StopReason::Other("pas du json non plus".into())),
+        odd.stop,
+        Some(StopReason::Other("not json either".into())),
         "the provider's word is better than an absence"
     );
     assert_eq!(
-        etrange.usage.prompt, None,
+        odd.usage.prompt, None,
         "an out-of-bounds count reads as \"not declared\", not as a wrong number"
     );
 }
@@ -904,12 +908,12 @@ fn a_corrupted_row_does_not_prevent_opening() {
 /// An unreadable destination identifier does not erase the thread from the list.
 #[test]
 fn an_unreadable_destination_leaves_the_thread_readable() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     store
         .with_connection(|conn| {
             conn.execute(
-                "UPDATE ai_conversations SET destination_id = 'PAS UN IDENTIFIANT',
+                "UPDATE ai_conversations SET destination_id = 'NOT AN IDENTIFIER',
                                              destination_kind = 'oracle' WHERE id = ?1",
                 rusqlite::params![id.to_string()],
             )?;
@@ -917,43 +921,43 @@ fn an_unreadable_destination_leaves_the_thread_readable() {
         })
         .expect("write outside Oxyn");
 
-    let relu = store
+    let read_back = store
         .conversations()
         .get(id)
         .expect("read back")
         .expect("thread");
-    assert_eq!(relu.destination.id, None);
-    assert_eq!(relu.destination.kind, DestinationKind::Unknown);
-    assert_eq!(relu.destination.label, "Anthropic");
+    assert_eq!(read_back.destination.id, None);
+    assert_eq!(read_back.destination.kind, DestinationKind::Unknown);
+    assert_eq!(read_back.destination.label, "Anthropic");
 }
 
 // --- Pruning ----------------------------------------------------------------
 
 /// Writes `count` threads, oldest to newest, with one turn each.
-fn fils_dates(
+fn dated_threads(
     store: &Store,
     workspace: WorkspaceId,
-    connexion: ConnectionId,
+    connection: ConnectionId,
     count: u32,
 ) -> Vec<ConversationId> {
     let base = Utc::now() - TimeDelta::days(i64::from(count) + 1);
     (0..count)
         .map(|index| {
-            let quand = base + TimeDelta::days(i64::from(index));
+            let when = base + TimeDelta::days(i64::from(index));
             let mut conversation =
-                Conversation::new(workspace, fournisseur(), format!("fil {index}"))
-                    .on_connection(connexion, "base client");
-            conversation.created_at = quand;
-            conversation.updated_at = quand;
+                Conversation::new(workspace, provider(), format!("thread {index}"))
+                    .on_connection(connection, "customer db");
+            conversation.created_at = when;
+            conversation.updated_at = when;
             let id = conversation.id;
             store.conversations().save(&conversation).expect("thread");
-            let mut tour = TurnRecord::new(
+            let mut turn = TurnRecord::new(
                 TurnRole::User,
                 PrivacyTier::Metadata,
                 format!("question {index}"),
             );
-            tour.ts = quand;
-            store.conversations().append(id, &tour).expect("turn");
+            turn.ts = when;
+            store.conversations().append(id, &turn).expect("turn");
             id
         })
         .collect()
@@ -962,26 +966,26 @@ fn fils_dates(
 /// Pruning respects the count bound and keeps the most recent.
 #[test]
 fn pruning_keeps_the_most_recent() {
-    let (store, workspace, connexion) = decor();
-    let fils = fils_dates(&store, workspace, connexion, 10);
-    let politique = RetentionPolicy {
+    let (store, workspace, connection) = fixture();
+    let threads = dated_threads(&store, workspace, connection, 10);
+    let policy = RetentionPolicy {
         max_conversations: 4,
         max_age_days: None,
         max_bytes: u64::MAX,
     };
 
-    let rapport = store
+    let report = store
         .conversations()
-        .prune(workspace, politique)
+        .prune(workspace, policy)
         .expect("pruning");
-    assert_eq!(rapport.conversations, 6);
-    assert_eq!(rapport.turns, 6);
+    assert_eq!(report.conversations, 6);
+    assert_eq!(report.turns, 6);
 
-    let restants = store.conversations().list(connexion, 100).expect("list");
-    assert_eq!(restants.len(), 4);
-    for garde in &fils[6..] {
+    let remaining = store.conversations().list(connection, 100).expect("list");
+    assert_eq!(remaining.len(), 4);
+    for guard in &threads[6..] {
         assert!(
-            restants.iter().any(|fil| fil.id == *garde),
+            remaining.iter().any(|thread| thread.id == *guard),
             "the four most recent must remain"
         );
     }
@@ -990,7 +994,7 @@ fn pruning_keeps_the_most_recent() {
     assert!(
         store
             .conversations()
-            .prune(workspace, politique)
+            .prune(workspace, policy)
             .expect("second pruning")
             .is_empty()
     );
@@ -1003,17 +1007,20 @@ fn pruning_keeps_the_most_recent() {
 /// removed rather than never said.
 #[test]
 fn pruning_never_cuts_a_thread_in_two() {
-    let (store, workspace, connexion) = decor();
-    let fils = fils_dates(&store, workspace, connexion, 6);
+    let (store, workspace, connection) = fixture();
+    let threads = dated_threads(&store, workspace, connection, 6);
     // The oldest gets many turns: it is the one the bound targets.
     for index in 0..20 {
-        let mut tour = TurnRecord::new(
+        let mut turn = TurnRecord::new(
             TurnRole::Assistant,
             PrivacyTier::Metadata,
-            format!("réponse {index}"),
+            format!("answer {index}"),
         );
-        tour.ts = Utc::now() - TimeDelta::days(7);
-        store.conversations().append(fils[0], &tour).expect("write");
+        turn.ts = Utc::now() - TimeDelta::days(7);
+        store
+            .conversations()
+            .append(threads[0], &turn)
+            .expect("write");
     }
 
     store
@@ -1030,7 +1037,7 @@ fn pruning_never_cuts_a_thread_in_two() {
 
     // No turn remains without its header, and no header lost half of its
     // turns: each remaining thread has exactly what it had.
-    let orphelins: i64 = store
+    let orphans: i64 = store
         .with_connection(|conn| {
             Ok(conn.query_row(
                 "SELECT COUNT(*) FROM ai_conversation_turns t
@@ -1040,11 +1047,11 @@ fn pruning_never_cuts_a_thread_in_two() {
             )?)
         })
         .expect("count");
-    assert_eq!(orphelins, 0);
+    assert_eq!(orphans, 0);
     assert!(
         store
             .conversations()
-            .get(fils[0])
+            .get(threads[0])
             .expect("read back")
             .is_none(),
         "the targeted thread must have gone in full"
@@ -1054,25 +1061,22 @@ fn pruning_never_cuts_a_thread_in_two() {
 /// The age bound prunes on inactivity, not on creation.
 #[test]
 fn age_pruning_looks_at_the_last_activity() {
-    let (store, workspace, connexion) = decor();
-    let ancien = fil(&store, workspace, connexion);
-    let mut vieux_tour = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "il y a longtemps");
-    vieux_tour.ts = Utc::now() - TimeDelta::days(200);
-    store
-        .conversations()
-        .append(ancien, &vieux_tour)
-        .expect("write");
+    let (store, workspace, connection) = fixture();
+    let old = thread(&store, workspace, connection);
+    let mut old_turn = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "long ago");
+    old_turn.ts = Utc::now() - TimeDelta::days(200);
+    store.conversations().append(old, &old_turn).expect("write");
 
-    let vivant = fil(&store, workspace, connexion);
+    let alive = thread(&store, workspace, connection);
     store
         .conversations()
         .append(
-            vivant,
+            alive,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "aujourd'hui"),
         )
         .expect("write");
 
-    let rapport = store
+    let report = store
         .conversations()
         .prune(
             workspace,
@@ -1083,18 +1087,12 @@ fn age_pruning_looks_at_the_last_activity() {
             },
         )
         .expect("pruning");
-    assert_eq!(rapport.conversations, 1);
+    assert_eq!(report.conversations, 1);
+    assert!(store.conversations().get(old).expect("read back").is_none());
     assert!(
         store
             .conversations()
-            .get(ancien)
-            .expect("read back")
-            .is_none()
-    );
-    assert!(
-        store
-            .conversations()
-            .get(vivant)
+            .get(alive)
             .expect("read back")
             .is_some()
     );
@@ -1103,10 +1101,10 @@ fn age_pruning_looks_at_the_last_activity() {
 /// The byte bound never erases the thread the user is looking at.
 #[test]
 fn the_byte_bound_spares_the_current_thread() {
-    let (store, workspace, connexion) = decor();
-    let fils = fils_dates(&store, workspace, connexion, 3);
+    let (store, workspace, connection) = fixture();
+    let threads = dated_threads(&store, workspace, connection, 3);
 
-    let rapport = store
+    let report = store
         .conversations()
         .prune(
             workspace,
@@ -1117,11 +1115,11 @@ fn the_byte_bound_spares_the_current_thread() {
             },
         )
         .expect("pruning");
-    assert_eq!(rapport.conversations, 2);
+    assert_eq!(report.conversations, 2);
     assert!(
         store
             .conversations()
-            .get(fils[2])
+            .get(threads[2])
             .expect("read back")
             .is_some(),
         "deleting the current thread to hold a budget would be a visible loss"
@@ -1131,8 +1129,8 @@ fn the_byte_bound_spares_the_current_thread() {
 /// Deleting a workspace takes its conversations.
 #[test]
 fn deleting_a_workspace_takes_its_conversations() {
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
     store.workspaces().delete(workspace).expect("deletion");
     assert!(store.conversations().get(id).expect("read back").is_none());
 }
@@ -1151,21 +1149,21 @@ fn an_average_conversation_costs_what_the_policy_assumes() {
     // On a file and not in memory: what we want to know is what the
     // conversation costs **on the user's disk**, indexes and row overhead
     // included — and an in-memory database does not say.
-    let racine = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open_at(racine.path().join("oxyn.sqlite3")).expect("open");
-    let workspace = store.workspaces().create("atelier").expect("workspace").id;
-    let connexion = ConnectionConfig::new("base client", DriverId::postgres());
+    let root = tempfile::tempdir().expect("temporary directory");
+    let store = Store::open_at(root.path().join("oxyn.sqlite3")).expect("open");
+    let workspace = store.workspaces().create("workshop").expect("workspace").id;
+    let connection = ConnectionConfig::new("customer db", DriverId::postgres());
     store
         .connections()
-        .save(workspace, &connexion)
+        .save(workspace, &connection)
         .expect("connection");
-    let connexion = connexion.id;
-    let avant = octets_du_fichier(&store);
+    let connection = connection.id;
+    let before = file_bytes(&store);
 
     // Twelve exchanges: the length of a working session on a schema.
-    const ECHANGES: usize = 12;
-    let id = fil(&store, workspace, connexion);
-    for index in 0..ECHANGES {
+    const EXCHANGES: usize = 12;
+    let id = thread(&store, workspace, connection);
+    for index in 0..EXCHANGES {
         store
             .conversations()
             .append(
@@ -1173,29 +1171,29 @@ fn an_average_conversation_costs_what_the_policy_assumes() {
                 &TurnRecord::new(
                     TurnRole::User,
                     PrivacyTier::Metadata,
-                    format!("Question {index} sur le schéma des commandes et leurs jointures."),
+                    format!("Question {index} about the orders schema and its joins."),
                 ),
             )
             .expect("question");
-        let mut reponse = tour_charge();
+        let mut answer = loaded_turn();
         // A real answer: a paragraph, a query, a written reasoning and an
         // encrypted payload of realistic size.
-        reponse.text = "r".repeat(2_048);
-        reponse.reasoning = vec![
+        answer.text = "r".repeat(2_048);
+        answer.reasoning = vec![
             ReasoningBlock::summarized("t".repeat(1_024), Some("s".repeat(512))),
             ReasoningBlock::redacted("c".repeat(1_536)),
         ];
-        store.conversations().append(id, &reponse).expect("answer");
+        store.conversations().append(id, &answer).expect("answer");
     }
 
     let transcript = store
         .conversations()
         .bytes_held(workspace)
         .expect("measure");
-    let fichier = octets_du_fichier(&store).saturating_sub(avant);
+    let file = file_bytes(&store).saturating_sub(before);
     println!(
-        "conversation de {ECHANGES} échanges : {transcript} octets de transcript, \
-         {fichier} octets de fichier"
+        "conversation of {EXCHANGES} exchanges: {transcript} bytes of transcript, \
+         {file} bytes of file"
     );
 
     assert!(
@@ -1206,28 +1204,28 @@ fn an_average_conversation_costs_what_the_policy_assumes() {
     // The factor is what translates `max_bytes` into occupied space; if it
     // soars, the bound no longer means what its documentation says.
     assert!(
-        fichier <= transcript * 3,
-        "the file costs {fichier} bytes for {transcript} of transcript"
+        file <= transcript * 3,
+        "the file costs {file} bytes for {transcript} of transcript"
     );
 
     // The two default bounds must speak of the same thing: the byte budget
     // must hold at least half of the allowed number of conversations,
     // otherwise one of the two is never used.
-    let defaut = RetentionPolicy::default();
+    let default_value = RetentionPolicy::default();
     assert!(
-        defaut.max_bytes / transcript >= u64::from(defaut.max_conversations) / 2,
+        default_value.max_bytes / transcript >= u64::from(default_value.max_conversations) / 2,
         "the two default bounds do not speak of the same thing"
     );
 }
 
 /// The size actually occupied by the local state file.
-fn octets_du_fichier(store: &Store) -> u64 {
+fn file_bytes(store: &Store) -> u64 {
     store
         .with_connection(|conn| {
             let pages: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
-            let taille: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+            let page_size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
             Ok(crate::encoding::count_from_i64(
-                pages.saturating_mul(taille),
+                pages.saturating_mul(page_size),
             ))
         })
         .expect("measure the file")
@@ -1244,62 +1242,65 @@ fn octets_du_fichier(store: &Store) -> u64 {
 /// it ([I-03](../../../../CLAUDE.md#i-03)).
 #[test]
 fn no_bound_value_or_key_reaches_the_table() {
-    const TEMOIN: &str = "oxyn-temoin-ne-doit-jamais-atteindre-la-table-des-conversations";
+    const CANARY: &str = "oxyn-canary-must-never-reach-the-conversations-table";
 
-    let (store, workspace, connexion) = decor();
-    let id = fil(&store, workspace, connexion);
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
 
     // An agent query, as it crosses the bus: the statement is legitimate and
     // stays, its bound values have nowhere to go.
-    let requete = ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM clients WHERE email = $1")
-        .with_intent(StatementIntent::Read)
-        .with_params(vec![ScalarValue::from(TEMOIN)]);
+    let query = ExecRequest::new(
+        QueryLanguage::SQL,
+        "SELECT * FROM customers WHERE email = $1",
+    )
+    .with_intent(StatementIntent::Read)
+    .with_params(vec![ScalarValue::from(CANARY)]);
 
     // A declared provider, whose key is only a keychain reference.
-    let fournisseur_declare = AiProviderConfig::new(
-        ProviderId::new("temoin-fournisseur").expect("identifier"),
+    let declared_provider = AiProviderConfig::new(
+        ProviderId::new("canary-provider").expect("identifier"),
         AiProviderKind::OpenAiCompatible,
-        "Fournisseur témoin",
+        "Canary provider",
         "http://127.0.0.1:11434/v1",
-        "un-modele",
+        "a-model",
     )
-    .with_secret_ref(format!("keychain://oxyn/{TEMOIN}"));
+    .with_secret_ref(format!("keychain://oxyn/{CANARY}"));
     store
         .providers()
-        .save(&fournisseur_declare)
+        .save(&declared_provider)
         .expect("provider");
 
-    let tour = TurnRecord::new(
+    let turn = TurnRecord::new(
         TurnRole::Assistant,
         PrivacyTier::Metadata,
-        "J'ai cherché ce client.",
+        "I looked up this customer.",
     )
     .with_tool_calls(vec![
         ToolCallRecord::new(
             "call_1",
             "execute",
-            "Exécuter une lecture sur « base client »",
+            "Run a read on “customer db”",
             ToolCallStatus::Completed,
         )
-        .with_statement(requete.text.clone()),
+        .with_statement(query.text.clone()),
     ]);
-    store.conversations().append(id, &tour).expect("write");
+    store.conversations().append(id, &turn).expect("write");
 
-    let fuites = balayer_les_conversations(&store, TEMOIN);
+    let leaks = sweep_conversations(&store, CANARY);
     assert!(
-        fuites.is_empty(),
-        "the witness value reached the table: {fuites:#?}"
+        leaks.is_empty(),
+        "the witness value reached the table: {leaks:#?}"
     );
 
     // The test would prove nothing if nothing had been written.
-    let relu = tout_le_fil(&store, id);
+    let read_back = whole_thread(&store, id);
     assert_eq!(
-        relu[0].record.tool_calls[0].statement.as_deref(),
-        Some("SELECT * FROM clients WHERE email = $1"),
+        read_back[0].record.tool_calls[0].statement.as_deref(),
+        Some("SELECT * FROM customers WHERE email = $1"),
         "the SQL stays: it is the question, not a value"
     );
     assert!(
-        !requete.params.is_empty(),
+        !query.params.is_empty(),
         "the query did have to carry a bound value"
     );
 }
@@ -1308,29 +1309,29 @@ fn no_bound_value_or_key_reaches_the_table() {
 ///
 /// Goes through `pragma_table_info` rather than a list: a column added
 /// tomorrow is swept without anyone having to think of it.
-fn balayer_les_conversations(store: &Store, temoin: &str) -> Vec<(String, String)> {
+fn sweep_conversations(store: &Store, canary: &str) -> Vec<(String, String)> {
     store
         .with_connection(|conn| {
-            let mut trouvailles = Vec::new();
+            let mut findings = Vec::new();
             for table in ["ai_conversations", "ai_conversation_turns"] {
-                let colonnes: Vec<String> = conn
+                let columns: Vec<String> = conn
                     .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
                     .query_map([], |row| row.get(0))?
                     .collect::<rusqlite::Result<_>>()?;
-                for colonne in colonnes {
-                    let mut requete = conn.prepare(&format!(
-                        "SELECT CAST(\"{colonne}\" AS TEXT) FROM \"{table}\" \
-                         WHERE \"{colonne}\" IS NOT NULL"
+                for column in columns {
+                    let mut query = conn.prepare(&format!(
+                        "SELECT CAST(\"{column}\" AS TEXT) FROM \"{table}\" \
+                         WHERE \"{column}\" IS NOT NULL"
                     ))?;
-                    let valeurs = requete.query_map([], |row| row.get::<_, String>(0))?;
-                    for valeur in valeurs.flatten() {
-                        if valeur.contains(temoin) {
-                            trouvailles.push((colonne.clone(), valeur));
+                    let values = query.query_map([], |row| row.get::<_, String>(0))?;
+                    for value in values.flatten() {
+                        if value.contains(canary) {
+                            findings.push((column.clone(), value));
                         }
                     }
                 }
             }
-            Ok(trouvailles)
+            Ok(findings)
         })
         .expect("sweep")
 }
@@ -1344,52 +1345,52 @@ fn balayer_les_conversations(store: &Store, temoin: &str) -> Vec<(String, String
 #[test]
 fn debug_does_not_render_the_user_text() {
     // A tool call: an agent's statement copies what it read.
-    let appel = ToolCallRecord::new(
+    let call = ToolCallRecord::new(
         "call_1",
         "execute",
         "ALTER ROLE app PASSWORD 'hunter2-temoin'",
         ToolCallStatus::Completed,
     )
     .with_statement("ALTER ROLE app PASSWORD 'hunter2-temoin'");
-    let rendu = format!("{appel:?}");
-    assert!(!rendu.contains("hunter2"), "{rendu}");
-    assert!(rendu.contains("statement_bytes"), "{rendu}");
-    assert!(rendu.contains("execute"), "{rendu}");
+    let rendered = format!("{call:?}");
+    assert!(!rendered.contains("hunter2"), "{rendered}");
+    assert!(rendered.contains("statement_bytes"), "{rendered}");
+    assert!(rendered.contains("execute"), "{rendered}");
 
-    let tour = TurnRecord::new(
+    let turn = TurnRecord::new(
         TurnRole::User,
         PrivacyTier::Metadata,
-        "mot-de-passe-colle-par-erreur",
+        "password-pasted-by-mistake",
     );
-    let rendu = format!("{tour:?}");
-    assert!(!rendu.contains("mot-de-passe"), "{rendu}");
-    assert!(rendu.contains("text_bytes"), "{rendu}");
+    let rendered = format!("{turn:?}");
+    assert!(!rendered.contains("password"), "{rendered}");
+    assert!(rendered.contains("text_bytes"), "{rendered}");
 
-    let (store, workspace, connexion) = decor();
-    let conversation = Conversation::new(workspace, fournisseur(), "question-collee-par-erreur")
-        .on_connection(connexion, "base client");
+    let (store, workspace, connection) = fixture();
+    let conversation = Conversation::new(workspace, provider(), "question-collee-par-erreur")
+        .on_connection(connection, "customer db");
     store.conversations().save(&conversation).expect("thread");
-    let rendu = format!("{conversation:?}");
-    assert!(!rendu.contains("question-collee"), "{rendu}");
-    assert!(rendu.contains("title_bytes"), "{rendu}");
+    let rendered = format!("{conversation:?}");
+    assert!(!rendered.contains("question-collee"), "{rendered}");
+    assert!(rendered.contains("title_bytes"), "{rendered}");
 
-    let liste = store.conversations().list(connexion, 10).expect("list");
-    let rendu = format!("{:?}", liste[0]);
-    assert!(!rendu.contains("question-collee"), "{rendu}");
-    assert!(rendu.contains("title_bytes"), "{rendu}");
+    let list = store.conversations().list(connection, 10).expect("list");
+    let rendered = format!("{:?}", list[0]);
+    assert!(!rendered.contains("question-collee"), "{rendered}");
+    assert!(rendered.contains("title_bytes"), "{rendered}");
 }
 
 /// A thread role coming from `oxyn-llm` converts without loss.
 #[test]
 fn thread_roles_cover_the_protocol_roles() {
-    for (role, attendu) in [
+    for (role, expected) in [
         (Role::System, TurnRole::System),
         (Role::User, TurnRole::User),
         (Role::Assistant, TurnRole::Assistant),
         (Role::Tool, TurnRole::Tool),
     ] {
-        assert_eq!(TurnRole::from(role), attendu);
-        assert_eq!(TurnRole::from_text(attendu.as_str()), attendu);
+        assert_eq!(TurnRole::from(role), expected);
+        assert_eq!(TurnRole::from_text(expected.as_str()), expected);
     }
     assert_eq!(TurnRole::from_text("oracle"), TurnRole::Unknown);
 }

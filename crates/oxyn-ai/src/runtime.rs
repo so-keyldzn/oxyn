@@ -1225,7 +1225,7 @@ fn charge(
     event: &ChatEvent,
 ) -> Result<(), oxyn_llm::BudgetExceeded> {
     match event {
-        ChatEvent::TextDelta(texte) | ChatEvent::RefusalDelta(texte) => budget.charge(texte.len()),
+        ChatEvent::TextDelta(text) | ChatEvent::RefusalDelta(text) => budget.charge(text.len()),
         ChatEvent::ReasoningDelta { text, .. } => budget.charge(text.len()),
         ChatEvent::ToolCallDelta { arguments, .. } => budget.charge(arguments.len()),
         // The name only arrives here: without this count, a third-party
@@ -1235,11 +1235,11 @@ fn charge(
         }
         ChatEvent::ToolCallComplete(call) => {
             // Measured without being copied: the write only counts.
-            let mut compteur = ByteCount(0);
-            let taille = serde_json::to_writer(&mut compteur, &call.arguments)
-                .map_or(usize::MAX, |()| compteur.0);
+            let mut counter = ByteCount(0);
+            let size = serde_json::to_writer(&mut counter, &call.arguments)
+                .map_or(usize::MAX, |()| counter.0);
             let index = u32::try_from(budget.tool_calls()).unwrap_or(u32::MAX);
-            budget.check_tool_arguments(index, taille)?;
+            budget.check_tool_arguments(index, size)?;
             budget.open_tool_call()
         }
         ChatEvent::ReasoningComplete { block, .. } => {
@@ -1291,8 +1291,8 @@ impl AgentRuntime {
             // stream is dropped — the connection closes — and the turn is a
             // cut: nothing it proposed is executed, and the provider may have
             // billed what we did not read (I-13).
-            if let Err(limite) = charge(&mut budget, &event) {
-                return Err(AiError::Interrupted(limite.to_string()));
+            if let Err(limit) = charge(&mut budget, &event) {
+                return Err(AiError::Interrupted(limit.to_string()));
             }
             match event {
                 ChatEvent::TextDelta(delta) => {
@@ -1395,7 +1395,7 @@ impl AgentRuntime {
 mod tests {
     /// `from_dispatch` for an outcome that is not a read catalog: the
     /// language and search words play no part.
-    fn hors_catalogue(tier: PrivacyTier, outcome: DispatchOutcome) -> ToolOutcome {
+    fn outside_catalog(tier: PrivacyTier, outcome: DispatchOutcome) -> ToolOutcome {
         ToolOutcome::from_dispatch(tier, outcome, oxyn_core::QueryLanguage::SQL, None)
     }
 
@@ -1428,18 +1428,18 @@ mod tests {
             class: ErrorClass::Permanent,
             message: "Key (email)=(dupont@example.com) already exists".to_owned(),
         };
-        let rendu = format!("{issue:?}");
+        let rendered = format!("{issue:?}");
         assert!(
-            !rendu.contains("dupont@example.com"),
-            "no row value in a Debug: {rendu}"
+            !rendered.contains("dupont@example.com"),
+            "no row value in a Debug: {rendered}"
         );
         assert!(
-            rendu.contains("Permanent"),
-            "the class stays readable, it quotes nothing: {rendu}"
+            rendered.contains("Permanent"),
+            "the class stays readable, it quotes nothing: {rendered}"
         );
         assert!(
-            rendu.contains("message_bytes"),
-            "and the length is enough to diagnose: {rendu}"
+            rendered.contains("message_bytes"),
+            "and the length is enough to diagnose: {rendered}"
         );
     }
 
@@ -1451,61 +1451,61 @@ mod tests {
         let issue = ToolOutcome::Described {
             block: "table \"patients\"\n  \"hiv_status\" bool".to_owned(),
         };
-        let rendu = format!("{issue:?}");
-        assert!(!rendu.contains("patients"), "{rendu}");
-        assert!(!rendu.contains("hiv_status"), "{rendu}");
+        let rendered = format!("{issue:?}");
+        assert!(!rendered.contains("patients"), "{rendered}");
+        assert!(!rendered.contains("hiv_status"), "{rendered}");
         assert!(
-            rendu.contains("Described"),
-            "the variant stays readable: {rendu}"
+            rendered.contains("Described"),
+            "the variant stays readable: {rendered}"
         );
         assert!(
-            rendu.contains("bytes"),
-            "the length is enough to diagnose: {rendu}"
+            rendered.contains("bytes"),
+            "the length is enough to diagnose: {rendered}"
         );
     }
 
     /// Test provider: replays a list of turns, without network.
     #[derive(Debug)]
-    struct FournisseurScripte {
-        tours: Mutex<Vec<Vec<ChatEvent>>>,
-        appels: Mutex<usize>,
+    struct ScriptedProvider {
+        turns: Mutex<Vec<Vec<ChatEvent>>>,
+        calls: Mutex<usize>,
         /// What **actually** went to the provider, turn by turn.
         ///
         /// Re-reading `session.messages()` would say what the conversation
         /// contains at the end; this says what crossed the boundary, and that
         /// is what I-04 measures.
-        recues: Mutex<Vec<String>>,
+        received: Mutex<Vec<String>>,
         /// Each request's effort, as it went out.
         efforts: Mutex<Vec<Option<oxyn_llm::ReasoningEffort>>>,
     }
 
-    impl FournisseurScripte {
-        fn new(tours: Vec<Vec<ChatEvent>>) -> Arc<Self> {
+    impl ScriptedProvider {
+        fn new(turns: Vec<Vec<ChatEvent>>) -> Arc<Self> {
             Arc::new(Self {
-                tours: Mutex::new(tours),
-                appels: Mutex::new(0),
-                recues: Mutex::new(Vec::new()),
+                turns: Mutex::new(turns),
+                calls: Mutex::new(0),
+                received: Mutex::new(Vec::new()),
                 efforts: Mutex::new(Vec::new()),
             })
         }
 
         /// A provider that asks for the same tool forever.
-        fn boucle() -> Arc<Self> {
+        fn looping() -> Arc<Self> {
             Self::new(Vec::new())
         }
 
         /// Number of requests received.
-        fn appels(&self) -> usize {
-            *self.appels.lock().expect("test lock")
+        fn calls(&self) -> usize {
+            *self.calls.lock().expect("test lock")
         }
 
         /// Everything that crossed the boundary, as a single text.
-        fn envoye(&self) -> String {
-            self.recues.lock().expect("test lock").join("\n")
+        fn sent(&self) -> String {
+            self.received.lock().expect("test lock").join("\n")
         }
     }
 
-    fn appel_outil() -> ChatEvent {
+    fn tool_call() -> ChatEvent {
         ChatEvent::ToolCallComplete(ToolCall::new(
             "call_1",
             EXECUTE_QUERY,
@@ -1513,14 +1513,14 @@ mod tests {
         ))
     }
 
-    fn fin_outils() -> ChatEvent {
+    fn end_of_tool_calls() -> ChatEvent {
         ChatEvent::Done {
             stop_reason: StopReason::ToolCalls,
         }
     }
 
     #[async_trait]
-    impl LlmProvider for FournisseurScripte {
+    impl LlmProvider for ScriptedProvider {
         fn id(&self) -> oxyn_llm::ProviderId {
             oxyn_llm::ProviderId::ollama()
         }
@@ -1534,12 +1534,12 @@ mod tests {
             request: ChatRequest,
             _cancel: &CancelToken,
         ) -> CoreResult<BoxStream<'static, ChatEvent>> {
-            *self.appels.lock().expect("test lock") += 1;
+            *self.calls.lock().expect("test lock") += 1;
             self.efforts
                 .lock()
                 .expect("test lock")
                 .push(request.reasoning_effort);
-            self.recues.lock().expect("test lock").push(
+            self.received.lock().expect("test lock").push(
                 request
                     .messages
                     .iter()
@@ -1550,36 +1550,36 @@ mod tests {
             // The lock is released before the stream is built: a
             // `std::sync::Mutex` guard is not `Send`, and an `LlmProvider`'s
             // future must be.
-            let evenements = {
-                let mut tours = self.tours.lock().expect("test lock");
-                if tours.is_empty() {
+            let events = {
+                let mut turns = self.turns.lock().expect("test lock");
+                if turns.is_empty() {
                     // Default behavior: ask for the same tool again, to test
                     // the turn bound.
-                    vec![appel_outil(), fin_outils()]
+                    vec![tool_call(), end_of_tool_calls()]
                 } else {
-                    tours.remove(0)
+                    turns.remove(0)
                 }
             };
-            Ok(Box::pin(futures::stream::iter(evenements)))
+            Ok(Box::pin(futures::stream::iter(events)))
         }
     }
 
     /// Test bus: records what is submitted to it, returns a fixed answer.
     #[derive(Debug)]
-    struct BusFactice {
-        recues: Mutex<Vec<(Actor, Command)>>,
-        reponse: DispatchOutcome,
+    struct FakeBus {
+        received: Mutex<Vec<(Actor, Command)>>,
+        answer: DispatchOutcome,
     }
 
-    impl BusFactice {
-        fn new(reponse: DispatchOutcome) -> Self {
+    impl FakeBus {
+        fn new(answer: DispatchOutcome) -> Self {
             Self {
-                recues: Mutex::new(Vec::new()),
-                reponse,
+                received: Mutex::new(Vec::new()),
+                answer,
             }
         }
 
-        fn succes() -> Self {
+        fn succeeding() -> Self {
             Self::new(DispatchOutcome::Completed {
                 summary: "1 rows, 1 batches".to_owned(),
             })
@@ -1587,31 +1587,31 @@ mod tests {
 
         /// A bus that fails by copying the server's message, values included —
         /// that is what a real server does.
-        fn echec(message: &str) -> Self {
+        fn failure(message: &str) -> Self {
             Self::new(DispatchOutcome::Failed {
                 class: ErrorClass::Permanent,
                 message: message.to_owned(),
             })
         }
 
-        fn commandes(&self) -> Vec<(Actor, Command)> {
-            self.recues.lock().expect("test lock").clone()
+        fn commands(&self) -> Vec<(Actor, Command)> {
+            self.received.lock().expect("test lock").clone()
         }
     }
 
     #[async_trait]
-    impl CommandSink for BusFactice {
+    impl CommandSink for FakeBus {
         async fn dispatch(
             &self,
             actor: Actor,
             command: Command,
             _cancel: &CancelToken,
         ) -> DispatchOutcome {
-            self.recues
+            self.received
                 .lock()
                 .expect("test lock")
                 .push((actor, command));
-            self.reponse.clone()
+            self.answer.clone()
         }
     }
 
@@ -1620,73 +1620,73 @@ mod tests {
     /// A real observer pushes into a channel; this one keeps, because a test
     /// must be able to re-read the order as much as the content.
     #[derive(Debug, Clone, PartialEq)]
-    enum Vu {
-        Tour {
+    enum Seen {
+        Turn {
             turn: usize,
             max_turns: usize,
         },
-        Texte(String),
-        Soumise {
+        Text(String),
+        Submitted {
             tool: String,
             command: &'static str,
             connection: Option<ConnectionId>,
             mutating: bool,
         },
-        Rapport {
+        Report {
             tool: String,
             outcome: DispatchOutcome,
             withheld: bool,
         },
-        Refus {
+        Rejected {
             tool: String,
             message: String,
         },
-        Fin(AgentOutcome),
+        End(AgentOutcome),
     }
 
     /// Test observer: keeps everything, in order.
     #[derive(Debug, Default)]
-    struct Temoin {
-        vus: Mutex<Vec<Vu>>,
+    struct Witness {
+        seen: Mutex<Vec<Seen>>,
     }
 
-    impl Temoin {
-        fn vus(&self) -> Vec<Vu> {
-            self.vus.lock().expect("test lock").clone()
+    impl Witness {
+        fn seen(&self) -> Vec<Seen> {
+            self.seen.lock().expect("test lock").clone()
         }
 
         /// The single execution report seen, when the scenario produces only
         /// one.
-        fn rapport(&self) -> Vu {
-            self.vus()
+        fn report(&self) -> Seen {
+            self.seen()
                 .into_iter()
-                .find(|vu| matches!(vu, Vu::Rapport { .. }))
+                .find(|seen| matches!(seen, Seen::Report { .. }))
                 .expect("an execution report")
         }
 
-        fn position(&self, correspond: impl Fn(&Vu) -> bool) -> usize {
-            self.vus()
+        fn position(&self, predicate: impl Fn(&Seen) -> bool) -> usize {
+            self.seen()
                 .iter()
-                .position(correspond)
+                .position(predicate)
                 .expect("the expected event")
         }
     }
 
-    impl AgentObserver for Temoin {
+    impl AgentObserver for Witness {
         fn observe(&self, event: AgentEvent<'_>) {
             // Exhaustive, without `_`: `AgentEvent` is `#[non_exhaustive]` but
             // the attribute only applies outside the crate. An added variant
             // therefore turns this test red rather than being silently
             // ignored.
-            let vu = match event {
-                AgentEvent::TurnStarted { turn, max_turns } => Vu::Tour { turn, max_turns },
-                AgentEvent::TextDelta { text } => Vu::Texte(text.to_owned()),
+            let seen = match event {
+                AgentEvent::TurnStarted { turn, max_turns } => Seen::Turn { turn, max_turns },
+                AgentEvent::TextDelta { text } => Seen::Text(text.to_owned()),
                 AgentEvent::CommandSubmitted {
                     tool,
                     command,
                     connection,
                     mutating,
-                } => Vu::Soumise {
+                } => Seen::Submitted {
                     tool: tool.to_owned(),
                     command,
                     connection,
@@ -1696,16 +1696,16 @@ mod tests {
                     tool,
                     outcome,
                     withheld,
-                } => Vu::Rapport {
+                } => Seen::Report {
                     tool: tool.to_owned(),
                     outcome: outcome.clone(),
                     withheld,
                 },
-                AgentEvent::CallRejected { tool, error } => Vu::Refus {
+                AgentEvent::CallRejected { tool, error } => Seen::Rejected {
                     tool: tool.to_owned(),
                     message: error.to_string(),
                 },
-                AgentEvent::Finished { outcome } => Vu::Fin(outcome.clone()),
+                AgentEvent::Finished { outcome } => Seen::End(outcome.clone()),
                 // Named one by one, still without `_`: what streams alongside
                 // the answer is not what these tests compare.
                 AgentEvent::ThinkingDelta { .. }
@@ -1719,7 +1719,7 @@ mod tests {
                 | AgentEvent::ContextWindow { .. }
                 | AgentEvent::AgentSettings(_) => return,
             };
-            self.vus.lock().expect("test lock").push(vu);
+            self.seen.lock().expect("test lock").push(seen);
         }
     }
 
@@ -1729,42 +1729,36 @@ mod tests {
             .with_max_turns(3)
     }
 
-    fn perimetre() -> ToolScope {
+    fn granted_scope() -> ToolScope {
         ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL)
     }
 
     fn session(tier: PrivacyTier) -> AgentSession {
         let cache = CatalogCache::new();
-        let contexte = ContextBuilder::new(&cache, tier).build();
-        let mut session = AgentSession::new(&spec(), &contexte, perimetre());
+        let context = ContextBuilder::new(&cache, tier).build();
+        let mut session = AgentSession::new(&spec(), &context, granted_scope());
         session.ask("how many clients?");
         session
     }
 
-    fn runtime(fournisseur: Arc<FournisseurScripte>, reach: Reach) -> AgentRuntime {
-        AgentRuntime::new(
-            spec(),
-            fournisseur,
-            reach,
-            ToolRegistry::builtin(),
-            "llama3.2",
-        )
-        .expect("valid declaration")
+    fn runtime(provider: Arc<ScriptedProvider>, reach: Reach) -> AgentRuntime {
+        AgentRuntime::new(spec(), provider, reach, ToolRegistry::builtin(), "llama3.2")
+            .expect("valid declaration")
     }
 
     #[test]
     fn an_answer_without_tools_ends_the_conversation() {
-        let fournisseur = FournisseurScripte::new(vec![vec![
+        let provider = ScriptedProvider::new(vec![vec![
             ChatEvent::TextDelta("SELECT count(*) FROM clients;".to_owned()),
             ChatEvent::Done {
                 stop_reason: StopReason::EndTurn,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation carried out");
         assert_eq!(
             issue,
@@ -1775,29 +1769,29 @@ mod tests {
                 stop: StopReason::EndTurn,
             }
         );
-        assert!(bus.commandes().is_empty(), "nothing was to be executed");
+        assert!(bus.commands().is_empty(), "nothing was to be executed");
     }
 
     /// A partial answer returned as a complete one is a silent lie: the user
     /// acts on half an analysis.
-    fn fin_de_tour(raison: StopReason) -> AgentOutcome {
-        let fournisseur = FournisseurScripte::new(vec![vec![
+    fn end_of_turn(reason: StopReason) -> AgentOutcome {
+        let provider = ScriptedProvider::new(vec![vec![
             ChatEvent::TextDelta("looking at the invoices".to_owned()),
             ChatEvent::Done {
-                stop_reason: raison,
+                stop_reason: reason,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation carried out")
     }
 
     #[test]
     fn a_refusal_and_a_pause_are_not_answers() {
         assert_eq!(
-            fin_de_tour(StopReason::ContentFilter),
+            end_of_turn(StopReason::ContentFilter),
             AgentOutcome::Refused {
                 text: "looking at the invoices".to_owned(),
                 turns: 1,
@@ -1806,13 +1800,13 @@ mod tests {
         // The model's own refusal, distinct from the provider's filtering, is
         // no more an answer.
         assert!(matches!(
-            fin_de_tour(StopReason::Refusal),
+            end_of_turn(StopReason::Refusal),
             AgentOutcome::Refused { .. }
         ));
         // The pause has its variant: the provider no longer writes it in
         // `Other`.
         assert_eq!(
-            fin_de_tour(StopReason::Paused),
+            end_of_turn(StopReason::Paused),
             AgentOutcome::Paused {
                 text: "looking at the invoices".to_owned(),
                 turns: 1,
@@ -1821,7 +1815,7 @@ mod tests {
         // An unknown reason stays an answer: inventing a pause would block a
         // finished conversation.
         assert!(matches!(
-            fin_de_tour(StopReason::Other("in-house filter".to_owned())),
+            end_of_turn(StopReason::Other("in-house filter".to_owned())),
             AgentOutcome::Answered { .. }
         ));
     }
@@ -1830,8 +1824,8 @@ mod tests {
     fn a_tool_call_becomes_a_command_carrying_actor_agent() {
         // I-07: no model output is executed directly. It becomes a Command
         // carrying Actor::Agent and goes into the caller's bus.
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
                 ChatEvent::TextDelta("there is one row".to_owned()),
                 ChatEvent::Done {
@@ -1840,71 +1834,71 @@ mod tests {
             ],
         ]);
         let declaration = spec();
-        let moteur = AgentRuntime::new(
+        let engine = AgentRuntime::new(
             declaration.clone(),
-            fournisseur,
+            provider,
             Reach::Local,
             ToolRegistry::builtin(),
             "llama3.2",
         )
         .expect("valid declaration");
-        let bus = BusFactice::succes();
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
         let conversation = session.id();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert!(
             matches!(issue, AgentOutcome::Answered { turns: 2, .. }),
             "{issue:?}"
         );
 
-        let commandes = bus.commandes();
-        assert_eq!(commandes.len(), 1);
-        let (acteur, commande) = &commandes[0];
-        assert_eq!(*acteur, Actor::agent(declaration.id, conversation));
-        assert!(acteur.is_agent());
-        assert_eq!(commande.name(), "Execute");
-        assert_eq!(commande.intent(), StatementIntent::Read);
+        let commands = bus.commands();
+        assert_eq!(commands.len(), 1);
+        let (actor, command) = &commands[0];
+        assert_eq!(*actor, Actor::agent(declaration.id, conversation));
+        assert!(actor.is_agent());
+        assert_eq!(command.name(), "Execute");
+        assert_eq!(command.intent(), StatementIntent::Read);
 
         // The result is fed back fenced: a server error message contains
         // database content. It is no longer the last message: the final
         // answer is kept in memory for the next question.
-        let outil = session
+        let tool = session
             .messages()
             .iter()
             .rev()
             .find(|message| message.role == oxyn_llm::Role::Tool)
             .expect("the tool's result is in the conversation");
-        assert!(outil.content.contains(untrusted::FENCE_OPEN));
-        let dernier = session
+        assert!(tool.content.contains(untrusted::FENCE_OPEN));
+        let last = session
             .messages()
             .last()
             .expect("the conversation is not empty");
-        assert_eq!(dernier.role, oxyn_llm::Role::Assistant);
-        assert_eq!(dernier.content, "there is one row");
+        assert_eq!(last.role, oxyn_llm::Role::Assistant);
+        assert_eq!(last.content, "there is one row");
     }
 
     #[test]
     fn the_turn_limit_stops_the_loop() {
         // An agent looping on a remote provider is a bill the user discovers
         // after the fact.
-        let fournisseur = FournisseurScripte::boucle();
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local);
-        let bus = BusFactice::succes();
+        let provider = ScriptedProvider::looping();
+        let engine = runtime(Arc::clone(&provider), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert_eq!(issue, AgentOutcome::TurnLimit { turns: 3 });
-        assert_eq!(bus.commandes().len(), 3, "one call per turn, no more");
-        assert_eq!(fournisseur.appels(), 3, "not one more model turn");
+        assert_eq!(bus.commands().len(), 3, "one call per turn, no more");
+        assert_eq!(provider.calls(), 3, "not one more model turn");
     }
 
     #[test]
     fn a_gate_refusal_is_sent_back_to_the_model_without_stopping_the_conversation() {
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
                 ChatEvent::TextDelta("understood, I will not retry".to_owned()),
                 ChatEvent::Done {
@@ -1912,64 +1906,64 @@ mod tests {
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::new(DispatchOutcome::Denied {
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::new(DispatchOutcome::Denied {
             reason: "an agent cannot change privileges".to_owned(),
         });
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert!(matches!(issue, AgentOutcome::Answered { .. }), "{issue:?}");
-        let dernier_outil = session
+        let last_tool = session
             .messages()
             .iter()
             .rfind(|m| m.role == oxyn_llm::Role::Tool)
             .expect("a tool result");
-        assert!(dernier_outil.content.contains("status: denied"));
-        assert!(dernier_outil.content.contains("Do not retry"));
+        assert!(last_tool.content.contains("status: denied"));
+        assert!(last_tool.content.contains("Do not retry"));
     }
 
     #[test]
     fn a_cancellation_executes_nothing() {
         // Escape must stop everything, including tool calls already received
         // from the model: that is precisely what the user just refused.
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(ScriptedProvider::looping(), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let jeton = CancelToken::new();
-        jeton.cancel();
+        let token = CancelToken::new();
+        token.cancel();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &jeton)).expect("conversation");
+        let issue = block_on(engine.run(&mut session, &bus, &(), &token)).expect("conversation");
         assert_eq!(issue, AgentOutcome::Cancelled { turns: 0 });
-        assert!(bus.commandes().is_empty());
+        assert!(bus.commands().is_empty());
     }
 
     #[test]
     fn a_local_tier_refuses_a_remote_provider() {
         // ADR-0006: `Local` is a guarantee. The refusal happens before any
         // context leaves.
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Remote);
-        assert!(!moteur.accepts_tier(PrivacyTier::Local));
-        assert!(moteur.accepts_tier(PrivacyTier::Metadata));
+        let engine = runtime(ScriptedProvider::looping(), Reach::Remote);
+        assert!(!engine.accepts_tier(PrivacyTier::Local));
+        assert!(engine.accepts_tier(PrivacyTier::Metadata));
 
-        let bus = BusFactice::succes();
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Local);
-        let refus = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let refusal = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect_err("the tier forbids this endpoint");
         assert!(
-            matches!(refus, AiError::RemoteProviderRefused { .. }),
-            "{refus:?}"
+            matches!(refusal, AiError::RemoteProviderRefused { .. }),
+            "{refusal:?}"
         );
-        assert!(bus.commandes().is_empty());
+        assert!(bus.commands().is_empty());
     }
 
     #[test]
     fn a_tool_outside_the_allowlist_produces_no_command() {
-        let fournisseur = FournisseurScripte::new(vec![
+        let provider = ScriptedProvider::new(vec![
             vec![
                 ChatEvent::ToolCallComplete(ToolCall::new("c1", "refresh_catalog", json!({}))),
-                fin_outils(),
+                end_of_tool_calls(),
             ],
             vec![
                 ChatEvent::TextDelta("all right".to_owned()),
@@ -1978,74 +1972,74 @@ mod tests {
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let issue = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect("conversation");
         assert!(matches!(issue, AgentOutcome::Answered { .. }), "{issue:?}");
         assert!(
-            bus.commandes().is_empty(),
+            bus.commands().is_empty(),
             "a tool not granted must produce no command"
         );
-        let resultat = session
+        let result = session
             .messages()
             .iter()
             .find(|m| m.role == oxyn_llm::Role::Tool)
             .expect("a tool result");
-        assert!(resultat.content.contains("status: rejected"));
+        assert!(result.content.contains("status: rejected"));
     }
 
     #[test]
     fn the_system_message_carries_the_preamble_before_the_context() {
         let session = session(PrivacyTier::Metadata);
-        let systeme = session
+        let system = session
             .messages()
             .first()
             .expect("a system message")
             .content
             .clone();
-        let preambule = systeme.find(untrusted::PREAMBLE).expect("the preamble");
+        let preamble = system.find(untrusted::PREAMBLE).expect("the preamble");
         // `rfind`: the preamble itself quotes the tag to explain it to the
         // model, so the first occurrence is its own.
-        let encadre = systeme.rfind(untrusted::FENCE_OPEN).expect("the fence");
+        let fenced = system.rfind(untrusted::FENCE_OPEN).expect("the fence");
         assert!(
-            preambule < encadre,
+            preamble < fenced,
             "a model that reads the instruction after the data has already read the data"
         );
         assert!(
-            systeme.starts_with("You write SQL."),
-            "the agent's prompt comes first: {systeme}"
+            system.starts_with("You write SQL."),
+            "the agent's prompt comes first: {system}"
         );
     }
 
     #[test]
     fn a_provider_error_interrupts_the_conversation() {
-        let fournisseur =
-            FournisseurScripte::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let provider =
+            ScriptedProvider::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
 
-        let echec = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let failure = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect_err("the provider failed");
-        assert!(matches!(echec, AiError::Provider(_)), "{echec:?}");
+        assert!(matches!(failure, AiError::Provider(_)), "{failure:?}");
     }
 
-    /// A stream that announces an error then ends with `raison`.
-    fn erreur_puis(raison: StopReason) -> AiError {
-        let fournisseur = FournisseurScripte::new(vec![vec![
+    /// A stream that announces an error then ends with `reason`.
+    fn error_then(reason: StopReason) -> AiError {
+        let provider = ScriptedProvider::new(vec![vec![
             ChatEvent::TextDelta("there is".to_owned()),
             ChatEvent::Error("connection reset by peer".to_owned()),
             ChatEvent::Done {
-                stop_reason: raison,
+                stop_reason: reason,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect_err("the turn failed")
     }
 
@@ -2054,39 +2048,42 @@ mod tests {
         // I-13: leaving at the first `Error` lost the `Done { Interrupted }`
         // that follows it, and a possibly billed turn became a replayable
         // failure.
-        let coupure = erreur_puis(StopReason::Interrupted);
-        assert!(matches!(coupure, AiError::Interrupted(_)), "{coupure:?}");
-        assert_eq!(coupure.class(), Some(oxyn_core::ErrorClass::Ambiguous));
+        let interruption = error_then(StopReason::Interrupted);
         assert!(
-            coupure.to_string().contains("may have finished"),
-            "{coupure}"
+            matches!(interruption, AiError::Interrupted(_)),
+            "{interruption:?}"
         );
-        assert!(!OxynError::from(coupure).is_retryable());
+        assert_eq!(interruption.class(), Some(oxyn_core::ErrorClass::Ambiguous));
+        assert!(
+            interruption.to_string().contains("may have finished"),
+            "{interruption}"
+        );
+        assert!(!OxynError::from(interruption).is_retryable());
 
         // The provider stated its failure: no doubt, the question can be
         // asked again.
-        let annonce = erreur_puis(StopReason::ProviderError);
-        assert!(matches!(annonce, AiError::Provider(_)), "{annonce:?}");
-        assert_eq!(annonce.class(), None);
+        let reported = error_then(StopReason::ProviderError);
+        assert!(matches!(reported, AiError::Provider(_)), "{reported:?}");
+        assert_eq!(reported.class(), None);
     }
 
     #[test]
     fn a_cut_without_a_message_stays_ambiguous() {
-        let fournisseur = FournisseurScripte::new(vec![vec![
+        let provider = ScriptedProvider::new(vec![vec![
             ChatEvent::TextDelta("there is".to_owned()),
             ChatEvent::Done {
                 stop_reason: StopReason::Interrupted,
             },
         ]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let echec = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let failure = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect_err("a cut is not an answer");
-        assert_eq!(echec.class(), Some(oxyn_core::ErrorClass::Ambiguous));
+        assert_eq!(failure.class(), Some(oxyn_core::ErrorClass::Ambiguous));
     }
 
-    fn repond() -> Vec<ChatEvent> {
+    fn answering() -> Vec<ChatEvent> {
         vec![
             ChatEvent::TextDelta("done".to_owned()),
             ChatEvent::Done {
@@ -2095,7 +2092,7 @@ mod tests {
         ]
     }
 
-    fn fiche(efforts: Vec<oxyn_llm::ReasoningEffort>) -> ModelInfo {
+    fn model_info(efforts: Vec<oxyn_llm::ReasoningEffort>) -> ModelInfo {
         ModelInfo::new("dummy")
             .with_reasoning_support(oxyn_llm::Support::Yes)
             .with_reasoning_efforts(efforts)
@@ -2105,43 +2102,43 @@ mod tests {
     fn the_declared_effort_goes_out_every_turn_and_high_is_omitted() {
         use oxyn_llm::ReasoningEffort::{High, Low};
 
-        let fournisseur = FournisseurScripte::new(vec![repond()]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local)
-            .with_reasoning_effort(Low, &fiche(vec![Low, High]))
+        let provider = ScriptedProvider::new(vec![answering()]);
+        let engine = runtime(Arc::clone(&provider), Reach::Local)
+            .with_reasoning_effort(Low, &model_info(vec![Low, High]))
             .expect("a declared level");
-        block_on(moteur.run(
+        block_on(engine.run(
             &mut session(PrivacyTier::Metadata),
-            &BusFactice::succes(),
+            &FakeBus::succeeding(),
             &(),
             &CancelToken::new(),
         ))
         .expect("an answer");
-        assert_eq!(*fournisseur.efforts.lock().expect("lock"), vec![Some(Low)]);
+        assert_eq!(*provider.efforts.lock().expect("lock"), vec![Some(Low)]);
 
         // `High`, the default: checked, then omitted.
-        let fournisseur = FournisseurScripte::new(vec![repond()]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local)
-            .with_reasoning_effort(High, &fiche(vec![Low, High]))
+        let provider = ScriptedProvider::new(vec![answering()]);
+        let engine = runtime(Arc::clone(&provider), Reach::Local)
+            .with_reasoning_effort(High, &model_info(vec![Low, High]))
             .expect("a declared level");
-        block_on(moteur.run(
+        block_on(engine.run(
             &mut session(PrivacyTier::Metadata),
-            &BusFactice::succes(),
+            &FakeBus::succeeding(),
             &(),
             &CancelToken::new(),
         ))
         .expect("an answer");
-        assert_eq!(*fournisseur.efforts.lock().expect("lock"), vec![None]);
+        assert_eq!(*provider.efforts.lock().expect("lock"), vec![None]);
 
         // Nothing chosen: nothing sent.
-        let fournisseur = FournisseurScripte::new(vec![repond()]);
-        block_on(runtime(Arc::clone(&fournisseur), Reach::Local).run(
+        let provider = ScriptedProvider::new(vec![answering()]);
+        block_on(runtime(Arc::clone(&provider), Reach::Local).run(
             &mut session(PrivacyTier::Metadata),
-            &BusFactice::succes(),
+            &FakeBus::succeeding(),
             &(),
             &CancelToken::new(),
         ))
         .expect("an answer");
-        assert_eq!(*fournisseur.efforts.lock().expect("lock"), vec![None]);
+        assert_eq!(*provider.efforts.lock().expect("lock"), vec![None]);
     }
 
     #[test]
@@ -2149,14 +2146,14 @@ mod tests {
         use oxyn_llm::ReasoningEffort::{High, Low, Max};
         use oxyn_llm::Support;
 
-        let refus = |fiche: &ModelInfo, effort| {
-            runtime(FournisseurScripte::new(Vec::new()), Reach::Local)
-                .with_reasoning_effort(effort, fiche)
+        let refusal = |model_info: &ModelInfo, effort| {
+            runtime(ScriptedProvider::new(Vec::new()), Reach::Local)
+                .with_reasoning_effort(effort, model_info)
                 .expect_err("not declared")
         };
 
         // Missing from a declared list.
-        let absent = refus(&fiche(vec![Low, High]), Max);
+        let absent = refusal(&model_info(vec![Low, High]), Max);
         assert!(
             matches!(
                 absent,
@@ -2166,28 +2163,31 @@ mod tests {
         );
         // Empty list: "not declared", not "anything goes" — and `High` is no
         // exception.
-        let inconnu = refus(&ModelInfo::new("dummy"), High);
+        let unknown = refusal(&ModelInfo::new("dummy"), High);
         assert!(
-            inconnu.to_string().contains("does not declare"),
-            "Unknown does not read as \"does not reason\": {inconnu}"
+            unknown.to_string().contains("does not declare"),
+            "Unknown does not read as \"does not reason\": {unknown}"
         );
-        let non = refus(
+        let declined = refusal(
             &ModelInfo::new("dummy").with_reasoning_support(Support::No),
             Low,
         );
-        assert!(non.to_string().contains("does not reason"), "{non}");
+        assert!(
+            declined.to_string().contains("does not reason"),
+            "{declined}"
+        );
     }
 
     #[test]
     fn a_pending_approval_says_nothing_happened() {
         // The trap: a model assumes the INSERT took place and moves on.
-        let attente = ToolOutcome::AwaitingApproval {
-            reason: "an agent is requesting a write operation on \"caisse\"".to_owned(),
+        let awaiting = ToolOutcome::AwaitingApproval {
+            reason: "an agent is requesting a write operation on \"retail\"".to_owned(),
         };
-        assert!(!attente.is_completed());
-        let rendu = attente.render();
-        assert!(rendu.contains("Nothing ran"), "{rendu}");
-        assert!(rendu.contains(untrusted::FENCE_OPEN), "{rendu}");
+        assert!(!awaiting.is_completed());
+        let rendered = awaiting.render();
+        assert!(rendered.contains("Nothing ran"), "{rendered}");
+        assert!(rendered.contains(untrusted::FENCE_OPEN), "{rendered}");
     }
 
     #[test]
@@ -2215,7 +2215,7 @@ mod tests {
         // The tier is `Sampled` **on purpose**: it is the only one under which
         // the message crosses, hence the only one where fencing has something
         // to fence. Under the others, this test would prove nothing.
-        let echec = hors_catalogue(
+        let failure = outside_catalog(
             PrivacyTier::Sampled,
             DispatchOutcome::Failed {
                 class: ErrorClass::Permanent,
@@ -2223,23 +2223,27 @@ mod tests {
                     .to_owned(),
             },
         );
-        let rendu = echec.render();
-        assert!(rendu.contains("does not exist"), "{rendu}");
-        assert_eq!(rendu.matches(untrusted::FENCE_CLOSE).count(), 1, "{rendu}");
+        let rendered = failure.render();
+        assert!(rendered.contains("does not exist"), "{rendered}");
+        assert_eq!(
+            rendered.matches(untrusted::FENCE_CLOSE).count(),
+            1,
+            "{rendered}"
+        );
     }
 
     /// The message PostgreSQL returns on a unique constraint violation: it
     /// copies the row's value into its text.
-    const ECHEC_SERVEUR: &str = "duplicate key value violates unique constraint \
+    const SERVER_FAILURE: &str = "duplicate key value violates unique constraint \
                                  \"clients_email_key\" DETAIL: Key (email)=\
                                  (dupont@example.com) already exists. (SQLSTATE 23505) \
                                  iban=FR7630006000011234567890189";
 
     /// Runs a conversation where the only tool call fails, and returns the
     /// session messages as they would go back to the provider.
-    fn conversation_en_echec(tier: PrivacyTier) -> Vec<ChatMessage> {
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+    fn failed_conversation(tier: PrivacyTier) -> Vec<ChatMessage> {
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
                 ChatEvent::TextDelta("received".to_owned()),
                 ChatEvent::Done {
@@ -2250,11 +2254,11 @@ mod tests {
         // `Reach::Local`: under the `Local` tier, a remote endpoint would be
         // refused before even the first turn, and the test would say nothing
         // about the error path.
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::echec(ECHEC_SERVEUR);
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::failure(SERVER_FAILURE);
         let mut session = session(tier);
 
-        block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new())).expect("conversation");
+        block_on(engine.run(&mut session, &bus, &(), &CancelToken::new())).expect("conversation");
         session.messages().to_vec()
     }
 
@@ -2264,16 +2268,16 @@ mod tests {
         // one. A server message quotes the value violating the constraint: it
         // must join neither the rendering nor the conversation, which goes
         // back whole to the provider on the next turn (I-04).
-        for niveau in [PrivacyTier::Local, PrivacyTier::Metadata] {
-            let echec = hors_catalogue(
-                niveau,
+        for tier in [PrivacyTier::Local, PrivacyTier::Metadata] {
+            let failure = outside_catalog(
+                tier,
                 DispatchOutcome::Failed {
                     class: ErrorClass::Permanent,
-                    message: ECHEC_SERVEUR.to_owned(),
+                    message: SERVER_FAILURE.to_owned(),
                 },
             );
 
-            let messages = conversation_en_echec(niveau);
+            let messages = failed_conversation(tier);
             let conversation = messages
                 .iter()
                 .map(|m| m.content.clone())
@@ -2282,25 +2286,31 @@ mod tests {
 
             // `Display`, `Debug` and the fenced rendering: the three channels
             // through which the text could come out.
-            let canaux = [
-                echec.to_string(),
-                format!("{echec:?}"),
-                echec.render(),
+            let channels = [
+                failure.to_string(),
+                format!("{failure:?}"),
+                failure.render(),
                 conversation,
                 format!("{messages:?}"),
             ];
-            for rendu in &canaux {
-                assert!(!rendu.contains("dupont@example.com"), "{niveau}: {rendu}");
-                assert!(!rendu.contains("FR76"), "{niveau}: {rendu}");
-                assert!(!rendu.contains("clients_email_key"), "{niveau}: {rendu}");
+            for rendered in &channels {
+                assert!(
+                    !rendered.contains("dupont@example.com"),
+                    "{tier}: {rendered}"
+                );
+                assert!(!rendered.contains("FR76"), "{tier}: {rendered}");
+                assert!(
+                    !rendered.contains("clients_email_key"),
+                    "{tier}: {rendered}"
+                );
             }
 
             // What remains must stay usable: the model must know it is final,
             // and the code tells it what to fix.
-            let rendu = echec.render();
-            assert!(rendu.contains("status: failed"), "{rendu}");
-            assert!(rendu.contains("retryable: false"), "{rendu}");
-            assert!(rendu.contains("SQLSTATE 23505"), "{rendu}");
+            let rendered = failure.render();
+            assert!(rendered.contains("status: failed"), "{rendered}");
+            assert!(rendered.contains("retryable: false"), "{rendered}");
+            assert!(rendered.contains("SQLSTATE 23505"), "{rendered}");
         }
     }
 
@@ -2309,17 +2319,17 @@ mod tests {
         // The negative test that gives the previous one its meaning: without
         // it, everything could be masked permanently without anything
         // flagging it.
-        let messages = conversation_en_echec(PrivacyTier::Sampled);
-        let resultat = messages
+        let messages = failed_conversation(PrivacyTier::Sampled);
+        let result = messages
             .iter()
             .find(|m| m.role == oxyn_llm::Role::Tool)
             .expect("a tool result");
         assert!(
-            resultat.content.contains("dupont@example.com"),
+            result.content.contains("dupont@example.com"),
             "{}",
-            resultat.content
+            result.content
         );
-        assert!(resultat.content.contains("clients_email_key"));
+        assert!(result.content.contains("clients_email_key"));
     }
 
     #[test]
@@ -2327,28 +2337,28 @@ mod tests {
         // I-13: a client-side timeout during a write is not transient — the
         // server may have applied it. Filtering must not turn that uncertainty
         // into an invitation to replay.
-        for (classe, retentable) in [
+        for (class, retryable) in [
             (ErrorClass::Transient, true),
             (ErrorClass::Permanent, false),
             (ErrorClass::Ambiguous, false),
         ] {
-            let echec = hors_catalogue(
+            let failure = outside_catalog(
                 PrivacyTier::Metadata,
                 DispatchOutcome::Failed {
-                    class: classe,
+                    class,
                     message: "timed out after 30s while inserting".to_owned(),
                 },
             );
-            let ToolOutcome::Failed { report } = &echec else {
-                panic!("unexpected variant: {echec:?}");
+            let ToolOutcome::Failed { report } = &failure else {
+                panic!("unexpected variant: {failure:?}");
             };
-            assert_eq!(report.class(), classe);
-            assert_eq!(report.is_retryable(), retentable, "{classe}");
+            assert_eq!(report.class(), class);
+            assert_eq!(report.is_retryable(), retryable, "{class}");
             assert!(
-                echec
+                failure
                     .to_string()
-                    .contains(&format!("retryable: {retentable}")),
-                "{echec}"
+                    .contains(&format!("retryable: {retryable}")),
+                "{failure}"
             );
         }
     }
@@ -2360,18 +2370,18 @@ mod tests {
         let expiration = OxynError::Timeout {
             after: std::time::Duration::from_secs(30),
         };
-        let brut = DispatchOutcome::failed(&expiration);
+        let raw = DispatchOutcome::failed(&expiration);
         assert_eq!(
-            brut,
+            raw,
             DispatchOutcome::Failed {
                 class: ErrorClass::Ambiguous,
                 message: expiration.to_string(),
             }
         );
 
-        let echec = hors_catalogue(PrivacyTier::Metadata, brut);
-        let ToolOutcome::Failed { report } = &echec else {
-            panic!("unexpected variant: {echec:?}");
+        let failure = outside_catalog(PrivacyTier::Metadata, raw);
+        let ToolOutcome::Failed { report } = &failure else {
+            panic!("unexpected variant: {failure:?}");
         };
         assert!(!report.is_retryable());
         assert!(
@@ -2386,11 +2396,11 @@ mod tests {
         // indistinguishable from a stuck agent". What this test holds is the
         // order: the turn, then the text as the stream goes, then the
         // command, then only its report.
-        let fournisseur = FournisseurScripte::new(vec![
+        let provider = ScriptedProvider::new(vec![
             vec![
                 ChatEvent::TextDelta("looking".to_owned()),
-                appel_outil(),
-                fin_outils(),
+                tool_call(),
+                end_of_tool_calls(),
             ],
             vec![
                 ChatEvent::TextDelta("there is one row".to_owned()),
@@ -2399,54 +2409,54 @@ mod tests {
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let connexion = session.scope().connection;
-        let temoin = Temoin::default();
+        let connection = session.scope().connection;
+        let witness = Witness::default();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
-        let vus = temoin.vus();
+        let seen = witness.seen();
         assert_eq!(
-            vus.first(),
-            Some(&Vu::Tour {
+            seen.first(),
+            Some(&Seen::Turn {
                 turn: 1,
                 max_turns: 3
             }),
-            "{vus:?}"
+            "{seen:?}"
         );
         assert!(
-            vus.contains(&Vu::Texte("looking".to_owned())),
-            "the text must come out as the stream goes: {vus:?}"
+            seen.contains(&Seen::Text("looking".to_owned())),
+            "the text must come out as the stream goes: {seen:?}"
         );
         assert_eq!(
-            vus.iter()
-                .filter(|vu| matches!(vu, Vu::Tour { .. }))
+            seen.iter()
+                .filter(|seen| matches!(seen, Seen::Turn { .. }))
                 .count(),
             2
         );
 
-        let soumise = temoin.position(|vu| matches!(vu, Vu::Soumise { .. }));
-        let rapport = temoin.position(|vu| matches!(vu, Vu::Rapport { .. }));
+        let submitted = witness.position(|seen| matches!(seen, Seen::Submitted { .. }));
+        let report = witness.position(|seen| matches!(seen, Seen::Report { .. }));
         assert!(
-            soumise < rapport,
-            "the command shows before its result: {vus:?}"
+            submitted < report,
+            "the command shows before its result: {seen:?}"
         );
         assert_eq!(
-            vus.get(soumise),
-            Some(&Vu::Soumise {
+            seen.get(submitted),
+            Some(&Seen::Submitted {
                 tool: EXECUTE_QUERY.to_owned(),
                 command: "Execute",
-                connection: Some(connexion),
+                connection: Some(connection),
                 mutating: false,
             }),
-            "{vus:?}"
+            "{seen:?}"
         );
 
         // The end is announced, and it is announced last.
-        assert_eq!(vus.last(), Some(&Vu::Fin(issue)), "{vus:?}");
+        assert_eq!(seen.last(), Some(&Seen::End(issue)), "{seen:?}");
     }
 
     #[test]
@@ -2456,8 +2466,8 @@ mod tests {
         // server answers — but nothing it sees can join the prompt: the
         // notification returns nothing, and the only text that goes back to
         // the provider is the one `from_dispatch` filtered (I-04).
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
                 ChatEvent::TextDelta("received".to_owned()),
                 ChatEvent::Done {
@@ -2465,18 +2475,18 @@ mod tests {
                 },
             ],
         ]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local);
-        let bus = BusFactice::echec(ECHEC_SERVEUR);
+        let engine = runtime(Arc::clone(&provider), Reach::Local);
+        let bus = FakeBus::failure(SERVER_FAILURE);
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
         // What the user sees: the facts, whole.
-        let Vu::Rapport {
+        let Seen::Report {
             outcome, withheld, ..
-        } = temoin.rapport()
+        } = witness.report()
         else {
             panic!("the expected report");
         };
@@ -2484,7 +2494,7 @@ mod tests {
             outcome,
             DispatchOutcome::Failed {
                 class: ErrorClass::Permanent,
-                message: ECHEC_SERVEUR.to_owned(),
+                message: SERVER_FAILURE.to_owned(),
             },
             "the observer must receive the facts, not the filtered text"
         );
@@ -2495,11 +2505,11 @@ mod tests {
         );
 
         // What crossed the boundary: not one row value.
-        let envoye = fournisseur.envoye();
-        for interdit in ["dupont@example.com", "FR76", "clients_email_key"] {
+        let sent = provider.sent();
+        for forbidden in ["dupont@example.com", "FR76", "clients_email_key"] {
             assert!(
-                !envoye.contains(interdit),
-                "`{interdit}` reached the provider: {envoye}"
+                !sent.contains(forbidden),
+                "`{forbidden}` reached the provider: {sent}"
             );
         }
     }
@@ -2509,8 +2519,8 @@ mod tests {
         // The negative test that gives the previous one its meaning: without
         // it, `withheld` could be permanently true — a panel that announces a
         // gap on every error announces nothing anymore.
-        let fournisseur = FournisseurScripte::new(vec![
-            vec![appel_outil(), fin_outils()],
+        let provider = ScriptedProvider::new(vec![
+            vec![tool_call(), end_of_tool_calls()],
             vec![
                 ChatEvent::TextDelta("received".to_owned()),
                 ChatEvent::Done {
@@ -2518,38 +2528,38 @@ mod tests {
                 },
             ],
         ]);
-        let moteur = runtime(Arc::clone(&fournisseur), Reach::Local);
-        let bus = BusFactice::echec(ECHEC_SERVEUR);
+        let engine = runtime(Arc::clone(&provider), Reach::Local);
+        let bus = FakeBus::failure(SERVER_FAILURE);
         let mut session = session(PrivacyTier::Sampled);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
-        let Vu::Rapport { withheld, .. } = temoin.rapport() else {
+        let Seen::Report { withheld, .. } = witness.report() else {
             panic!("the expected report");
         };
         assert!(
             !withheld,
             "under `Sampled` the message crosses: there is no gap to announce"
         );
-        assert!(fournisseur.envoye().contains("dupont@example.com"));
+        assert!(provider.sent().contains("dupont@example.com"));
     }
 
     #[test]
     fn a_success_announces_no_gap() {
         // A successful execution's summary is written by Oxyn, not by the
         // server: it crosses the filter unchanged, at every tier.
-        for niveau in [
+        for tier in [
             PrivacyTier::Local,
             PrivacyTier::Metadata,
             PrivacyTier::Sampled,
         ] {
-            let faits = DispatchOutcome::Completed {
+            let completed = DispatchOutcome::Completed {
                 summary: "1 rows, 1 batches".to_owned(),
             };
-            let filtre = hors_catalogue(niveau, faits.clone());
-            assert!(!filtre.withholds_from(&faits), "{niveau}");
+            let filtered = outside_catalog(tier, completed.clone());
+            assert!(!filtered.withholds_from(&completed), "{tier}");
         }
     }
 
@@ -2558,35 +2568,35 @@ mod tests {
         // UX-SPEC: "said as such, with the number of turns. It is neither a
         // success nor a failure." The number must therefore travel with the
         // event.
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(ScriptedProvider::looping(), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        let issue = block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        let issue = block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
         assert_eq!(issue, AgentOutcome::TurnLimit { turns: 3 });
         assert_eq!(
-            temoin.vus().last(),
-            Some(&Vu::Fin(AgentOutcome::TurnLimit { turns: 3 })),
+            witness.seen().last(),
+            Some(&Seen::End(AgentOutcome::TurnLimit { turns: 3 })),
             "{:?}",
-            temoin.vus()
+            witness.seen()
         );
     }
 
     #[test]
     fn a_cancellation_is_announced_as_such() {
-        let moteur = runtime(FournisseurScripte::boucle(), Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(ScriptedProvider::looping(), Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
-        let jeton = CancelToken::new();
-        jeton.cancel();
+        let witness = Witness::default();
+        let token = CancelToken::new();
+        token.cancel();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &jeton)).expect("conversation");
+        block_on(engine.run(&mut session, &bus, &witness, &token)).expect("conversation");
         assert_eq!(
-            temoin.vus(),
-            vec![Vu::Fin(AgentOutcome::Cancelled { turns: 0 })],
+            witness.seen(),
+            vec![Seen::End(AgentOutcome::Cancelled { turns: 0 })],
             "a conversation cancelled before its first turn has nothing else to show"
         );
     }
@@ -2597,20 +2607,23 @@ mod tests {
         // Announcing it here too would give two displays for a single
         // incident — and the panel would show "finished" on a conversation
         // that failed.
-        let fournisseur =
-            FournisseurScripte::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let provider =
+            ScriptedProvider::new(vec![vec![ChatEvent::Error("connection reset".to_owned())]]);
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        let echec = block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        let failure = block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect_err("the provider failed");
-        assert!(matches!(echec, AiError::Provider(_)), "{echec:?}");
+        assert!(matches!(failure, AiError::Provider(_)), "{failure:?}");
         assert!(
-            !temoin.vus().iter().any(|vu| matches!(vu, Vu::Fin(_))),
+            !witness
+                .seen()
+                .iter()
+                .any(|seen| matches!(seen, Seen::End(_))),
             "{:?}",
-            temoin.vus()
+            witness.seen()
         );
     }
 
@@ -2618,10 +2631,10 @@ mod tests {
     fn a_call_refused_at_translation_shows_without_a_submitted_command() {
         // A turn that produces nothing must stay visible: without this event,
         // the panel would show a turn then a silence.
-        let fournisseur = FournisseurScripte::new(vec![
+        let provider = ScriptedProvider::new(vec![
             vec![
                 ChatEvent::ToolCallComplete(ToolCall::new("c1", "refresh_catalog", json!({}))),
-                fin_outils(),
+                end_of_tool_calls(),
             ],
             vec![
                 ChatEvent::TextDelta("all right".to_owned()),
@@ -2630,26 +2643,28 @@ mod tests {
                 },
             ],
         ]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let temoin = Temoin::default();
+        let witness = Witness::default();
 
-        block_on(moteur.run(&mut session, &bus, &temoin, &CancelToken::new()))
+        block_on(engine.run(&mut session, &bus, &witness, &CancelToken::new()))
             .expect("conversation");
 
-        let vus = temoin.vus();
+        let seen = witness.seen();
         assert!(
-            vus.iter().any(|vu| matches!(
-                vu,
-                Vu::Refus { tool, message }
+            seen.iter().any(|seen| matches!(
+                seen,
+                Seen::Rejected { tool, message }
                     if tool == "refresh_catalog" && message.contains("not allowed")
             )),
-            "{vus:?}"
+            "{seen:?}"
         );
         assert!(
-            !vus.iter().any(|vu| matches!(vu, Vu::Soumise { .. })),
-            "nothing was submitted, nothing must announce itself as submitted: {vus:?}"
+            !seen
+                .iter()
+                .any(|seen| matches!(seen, Seen::Submitted { .. })),
+            "nothing was submitted, nothing must announce itself as submitted: {seen:?}"
         );
     }
 
@@ -2665,27 +2680,27 @@ mod tests {
             let Ok((mut socket, _)) = listener.accept().await else {
                 return;
             };
-            let mut lu = Vec::new();
-            let mut tampon = [0_u8; 4096];
-            while let Ok(n) = socket.read(&mut tampon).await {
+            let mut read_back = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            while let Ok(n) = socket.read(&mut buffer).await {
                 if n == 0 {
                     break;
                 }
-                lu.extend_from_slice(tampon.get(..n).unwrap_or_default());
-                let texte = String::from_utf8_lossy(&lu).into_owned();
-                let Some(fin) = texte.find("\r\n\r\n") else {
+                read_back.extend_from_slice(buffer.get(..n).unwrap_or_default());
+                let text = String::from_utf8_lossy(&read_back).into_owned();
+                let Some(header_end) = text.find("\r\n\r\n") else {
                     continue;
                 };
-                let attendu = texte
+                let expected = text
                     .lines()
-                    .find_map(|ligne| {
-                        let (nom, valeur) = ligne.split_once(':')?;
-                        nom.eq_ignore_ascii_case("content-length")
-                            .then(|| valeur.trim().parse::<usize>().ok())
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
                             .flatten()
                     })
                     .unwrap_or(0);
-                if lu.len() >= fin + 4 + attendu {
+                if read_back.len() >= header_end + 4 + expected {
                     break;
                 }
             }
@@ -2697,130 +2712,130 @@ mod tests {
 
     /// Dummy key: looking for it in what comes out is enough to prove it is
     /// not there. Never a real key.
-    const SENTINELLE: &str = "sk-sentinel-3b9d-must-not-leak";
+    const SENTINEL: &str = "sk-sentinel-3b9d-must-not-leak";
 
     /// A `200` whose only SSE frame is an error copying the key.
-    fn flux_d_erreur(trame: &str) -> String {
+    fn error_stream(frame: &str) -> String {
         format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{trame}",
-            trame.len()
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{frame}",
+            frame.len()
         )
     }
 
     /// I-03, displayed-errors channel: an error streamed after a `200`
     /// becomes `AiError::Provider`, whose `Display` and `Debug` must not quote
     /// the key.
-    async fn erreur_du_fournisseur(fournisseur: Arc<dyn LlmProvider>) {
-        let moteur = AgentRuntime::new(
+    async fn provider_error(provider: Arc<dyn LlmProvider>) {
+        let engine = AgentRuntime::new(
             spec(),
-            fournisseur,
+            provider,
             Reach::Local,
             ToolRegistry::builtin(),
             "model",
         )
         .expect("valid declaration");
-        let bus = BusFactice::succes();
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let erreur = moteur
+        let error = engine
             .run(&mut session, &bus, &(), &CancelToken::new())
             .await
             .expect_err("the provider reported an error");
-        assert!(matches!(erreur, AiError::Provider(_)), "{erreur}");
-        for rendu in [erreur.to_string(), format!("{erreur:?}")] {
-            assert!(!rendu.contains(SENTINELLE), "{rendu}");
-            assert!(rendu.contains("<redacted API key>"), "{rendu}");
+        assert!(matches!(error, AiError::Provider(_)), "{error}");
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains(SENTINEL), "{rendered}");
+            assert!(rendered.contains("<redacted API key>"), "{rendered}");
         }
-        let domaine = OxynError::from(erreur).to_string();
-        assert!(!domaine.contains(SENTINELLE), "{domaine}");
+        let domain = OxynError::from(error).to_string();
+        assert!(!domain.contains(SENTINEL), "{domain}");
     }
 
     #[tokio::test]
     async fn an_error_streamed_by_an_openai_compatible_provider_does_not_quote_the_key() {
-        let trame = format!("data: {{\"error\":{{\"message\":\"invalid key {SENTINELLE}\"}}}}\n\n");
-        let origine = served_once(flux_d_erreur(&trame)).await;
-        let fournisseur = oxyn_llm::OpenAiCompatibleProvider::new(
+        let frame = format!("data: {{\"error\":{{\"message\":\"invalid key {SENTINEL}\"}}}}\n\n");
+        let original = served_once(error_stream(&frame)).await;
+        let provider = oxyn_llm::OpenAiCompatibleProvider::new(
             oxyn_llm::ProviderId::openrouter(),
-            &format!("{origine}/v1"),
+            &format!("{original}/v1"),
         )
         .expect("provider")
-        .with_api_key(oxyn_llm::ApiKey::new(SENTINELLE));
-        erreur_du_fournisseur(Arc::new(fournisseur)).await;
+        .with_api_key(oxyn_llm::ApiKey::new(SENTINEL));
+        provider_error(Arc::new(provider)).await;
     }
 
     #[tokio::test]
     async fn an_error_streamed_by_anthropic_does_not_quote_the_key() {
-        let trame = format!(
-            "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"echo {SENTINELLE}\"}}}}\n\n"
+        let frame = format!(
+            "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"echo {SENTINEL}\"}}}}\n\n"
         );
-        let origine = served_once(flux_d_erreur(&trame)).await;
-        let fournisseur =
-            oxyn_llm::AnthropicProvider::with_base_url(SENTINELLE, &origine).expect("provider");
-        erreur_du_fournisseur(Arc::new(fournisseur)).await;
+        let original = served_once(error_stream(&frame)).await;
+        let provider =
+            oxyn_llm::AnthropicProvider::with_base_url(SENTINEL, &original).expect("provider");
+        provider_error(Arc::new(provider)).await;
     }
 
     /// A turn whose provider exceeds a budget stops as a cut, and executes
     /// nothing of what it proposed before.
-    fn depasse(tour: Vec<ChatEvent>, limite: usize) {
-        let fournisseur = FournisseurScripte::new(vec![tour]);
-        let moteur = runtime(fournisseur, Reach::Local);
-        let bus = BusFactice::succes();
+    fn overflows(turn: Vec<ChatEvent>, limit: usize) {
+        let provider = ScriptedProvider::new(vec![turn]);
+        let engine = runtime(provider, Reach::Local);
+        let bus = FakeBus::succeeding();
         let mut session = session(PrivacyTier::Metadata);
-        let erreur = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+        let error = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
             .expect_err("the budget stops the turn");
         assert!(
-            matches!(&erreur, AiError::Interrupted(message) if message.contains(&limite.to_string())),
-            "{erreur}"
+            matches!(&error, AiError::Interrupted(message) if message.contains(&limit.to_string())),
+            "{error}"
         );
         assert!(
-            erreur.class() == Some(ErrorClass::Ambiguous),
+            error.class() == Some(ErrorClass::Ambiguous),
             "the provider may have billed what was not read"
         );
-        assert!(bus.commandes().is_empty(), "nothing is executed");
+        assert!(bus.commands().is_empty(), "nothing is executed");
     }
 
     #[test]
     fn a_text_over_budget_in_several_fragments_stops_the_turn() {
-        let morceau = "x".repeat(1024 * 1024);
-        let mut tour = vec![appel_outil()];
-        tour.extend((0..9).map(|_| ChatEvent::TextDelta(morceau.clone())));
-        tour.push(fin_outils());
-        depasse(tour, oxyn_llm::budget::MAX_GENERATION_BYTES);
+        let chunk = "x".repeat(1024 * 1024);
+        let mut turn = vec![tool_call()];
+        turn.extend((0..9).map(|_| ChatEvent::TextDelta(chunk.clone())));
+        turn.push(end_of_tool_calls());
+        overflows(turn, oxyn_llm::budget::MAX_GENERATION_BYTES);
     }
 
     #[test]
     fn a_refusal_over_budget_stops_the_turn() {
-        let morceau = "r".repeat(1024 * 1024);
-        let mut tour: Vec<ChatEvent> = (0..9)
-            .map(|_| ChatEvent::RefusalDelta(morceau.clone()))
+        let chunk = "r".repeat(1024 * 1024);
+        let mut turn: Vec<ChatEvent> = (0..9)
+            .map(|_| ChatEvent::RefusalDelta(chunk.clone()))
             .collect();
-        tour.push(ChatEvent::Done {
+        turn.push(ChatEvent::Done {
             stop_reason: StopReason::Refusal,
         });
-        depasse(tour, oxyn_llm::budget::MAX_GENERATION_BYTES);
+        overflows(turn, oxyn_llm::budget::MAX_GENERATION_BYTES);
     }
 
     #[test]
     fn too_many_tool_calls_stop_the_turn_without_executing_any() {
-        let mut tour: Vec<ChatEvent> = (0..=oxyn_llm::budget::MAX_TOOL_CALLS)
-            .map(|_| appel_outil())
+        let mut turn: Vec<ChatEvent> = (0..=oxyn_llm::budget::MAX_TOOL_CALLS)
+            .map(|_| tool_call())
             .collect();
-        tour.push(fin_outils());
-        depasse(tour, oxyn_llm::budget::MAX_TOOL_CALLS);
+        turn.push(end_of_tool_calls());
+        overflows(turn, oxyn_llm::budget::MAX_TOOL_CALLS);
     }
 
     #[test]
     fn a_call_delivered_in_one_block_over_its_budget_stops_the_turn() {
         // A third-party provider that sends no fragment: only the complete
         // call carries the size.
-        let enorme = "x".repeat(oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
-        let tour = vec![
+        let huge = "x".repeat(oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
+        let turn = vec![
             ChatEvent::ToolCallComplete(ToolCall::new(
                 "call_1",
                 EXECUTE_QUERY,
-                json!({ "statement": enorme }),
+                json!({ "statement": huge }),
             )),
-            fin_outils(),
+            end_of_tool_calls(),
         ];
-        depasse(tour, oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
+        overflows(turn, oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
     }
 }

@@ -298,7 +298,7 @@ impl DefaultPolicy {
     fn preview(cmd: &Command, facts: Option<&ConnectionFacts>) -> Option<Preview> {
         let statement = cmd
             .statement_text()
-            .map_or_else(|| cmd.name().to_owned(), |texte| texte.to_owned());
+            .map_or_else(|| cmd.name().to_owned(), |text| text.to_owned());
         Some(Preview::new(statement, Self::display_name(facts)))
     }
 }
@@ -420,12 +420,12 @@ impl PolicyGate for DefaultPolicy {
             ));
         }
 
-        // ── Approbations ────────────────────────────────────────────────────
+        // ── Approvals ───────────────────────────────────────────────────────
 
         // The risk comes first, because its reason is the most informative:
         // better to read "DELETE without WHERE" than "write by an agent".
-        if let Some(motif) = cmd.mutation_risk().reason() {
-            return Decision::approval(motif, Self::preview(cmd, facts.as_ref()));
+        if let Some(reason) = cmd.mutation_risk().reason() {
+            return Decision::approval(reason, Self::preview(cmd, facts.as_ref()));
         }
 
         if actor.is_agent() && mutating {
@@ -471,14 +471,14 @@ mod tests {
 
     /// Expected shape of a decision, independently of the reason's text.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Forme {
+    enum Shape {
         Allow,
         Approve,
         Deny,
     }
 
-    impl Forme {
-        fn de(decision: &Decision) -> Self {
+    impl Shape {
+        fn of(decision: &Decision) -> Self {
             match decision {
                 Decision::Allow => Self::Allow,
                 Decision::RequireApproval { .. } => Self::Approve,
@@ -487,46 +487,46 @@ mod tests {
         }
     }
 
-    struct Banc {
-        politique: DefaultPolicy,
-        ouverte: ConnectionId,
-        lecture_seule: ConnectionId,
+    struct Bench {
+        policy: DefaultPolicy,
+        open: ConnectionId,
+        read_only_connection: ConnectionId,
     }
 
-    impl Banc {
+    impl Bench {
         fn new() -> Self {
-            let politique = DefaultPolicy::new();
+            let policy = DefaultPolicy::new();
 
             // Both connections are marked `Local`: it is the environment
             // passed to `authorize` that drives the matrix. Escalation through
             // the marking has its own test.
-            let ouverte = ConnectionConfig::new("atelier", DriverId::postgres())
+            let open = ConnectionConfig::new("workshop", DriverId::postgres())
                 .with_environment(Environment::Local);
-            let lecture_seule = ConnectionConfig::new("replica", DriverId::postgres())
+            let read_only_connection = ConnectionConfig::new("replica", DriverId::postgres())
                 .with_environment(Environment::Local)
                 .read_only();
 
-            politique.register(&ouverte);
-            politique.register(&lecture_seule);
+            policy.register(&open);
+            policy.register(&read_only_connection);
 
             Self {
-                politique,
-                ouverte: ouverte.id,
-                lecture_seule: lecture_seule.id,
+                policy,
+                open: open.id,
+                read_only_connection: read_only_connection.id,
             }
         }
 
-        fn connexion(&self, read_only: bool) -> ConnectionId {
+        fn connection(&self, read_only: bool) -> ConnectionId {
             if read_only {
-                self.lecture_seule
+                self.read_only_connection
             } else {
-                self.ouverte
+                self.open
             }
         }
 
         fn execute(&self, read_only: bool, intent: StatementIntent) -> Command {
             Command::Execute {
-                connection: self.connexion(read_only),
+                connection: self.connection(read_only),
                 session: SessionId::new(),
                 request: Box::new(
                     ExecRequest::new(QueryLanguage::SQL, "SELECT 1").with_intent(intent),
@@ -535,7 +535,7 @@ mod tests {
         }
     }
 
-    fn humain() -> Actor {
+    fn human() -> Actor {
         Actor::Human
     }
 
@@ -555,123 +555,123 @@ mod tests {
     /// Each cell is written by hand. A table computed by an oracle function
     /// would prove nothing: it would copy the implementation.
     #[rustfmt::skip]
-    const MATRICE: &[(bool, StatementIntent, Environment, bool, Forme)] = &[
+    const MATRIX: &[(bool, StatementIntent, Environment, bool, Shape)] = &[
         // ── human, open connection ──────────────────────────────────────────
-        (false, StatementIntent::Read,    Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Production,  false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Production,  false, Forme::Approve),
-        (false, StatementIntent::Ddl,     Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Ddl,     Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Ddl,     Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Ddl,     Environment::Production,  false, Forme::Approve),
-        (false, StatementIntent::Grant,   Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Grant,   Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Grant,   Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Grant,   Environment::Production,  false, Forme::Approve),
-        (false, StatementIntent::Unknown, Environment::Local,       false, Forme::Allow),
-        (false, StatementIntent::Unknown, Environment::Development, false, Forme::Allow),
-        (false, StatementIntent::Unknown, Environment::Staging,     false, Forme::Allow),
-        (false, StatementIntent::Unknown, Environment::Production,  false, Forme::Approve),
+        (false, StatementIntent::Read,    Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Production,  false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Production,  false, Shape::Approve),
+        (false, StatementIntent::Ddl,     Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Ddl,     Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Ddl,     Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Ddl,     Environment::Production,  false, Shape::Approve),
+        (false, StatementIntent::Grant,   Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Grant,   Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Grant,   Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Grant,   Environment::Production,  false, Shape::Approve),
+        (false, StatementIntent::Unknown, Environment::Local,       false, Shape::Allow),
+        (false, StatementIntent::Unknown, Environment::Development, false, Shape::Allow),
+        (false, StatementIntent::Unknown, Environment::Staging,     false, Shape::Allow),
+        (false, StatementIntent::Unknown, Environment::Production,  false, Shape::Approve),
 
         // ── human, read-only connection ────────────────────────────────────
-        (false, StatementIntent::Read,    Environment::Local,       true,  Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Development, true,  Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Staging,     true,  Forme::Allow),
-        (false, StatementIntent::Read,    Environment::Production,  true,  Forme::Allow),
-        (false, StatementIntent::Write,   Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Write,   Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Write,   Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Write,   Environment::Production,  true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Ddl,     Environment::Production,  true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Grant,   Environment::Production,  true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Local,       true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Development, true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Staging,     true,  Forme::Deny),
-        (false, StatementIntent::Unknown, Environment::Production,  true,  Forme::Deny),
+        (false, StatementIntent::Read,    Environment::Local,       true,  Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Development, true,  Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Staging,     true,  Shape::Allow),
+        (false, StatementIntent::Read,    Environment::Production,  true,  Shape::Allow),
+        (false, StatementIntent::Write,   Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Write,   Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Write,   Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Write,   Environment::Production,  true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Ddl,     Environment::Production,  true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Grant,   Environment::Production,  true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Local,       true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Development, true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Staging,     true,  Shape::Deny),
+        (false, StatementIntent::Unknown, Environment::Production,  true,  Shape::Deny),
 
         // ── agent, open connection ───────────────────────────────────────────
-        (true,  StatementIntent::Read,    Environment::Local,       false, Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Development, false, Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Staging,     false, Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Production,  false, Forme::Allow),
-        (true,  StatementIntent::Write,   Environment::Local,       false, Forme::Approve),
-        (true,  StatementIntent::Write,   Environment::Development, false, Forme::Approve),
-        (true,  StatementIntent::Write,   Environment::Staging,     false, Forme::Approve),
-        (true,  StatementIntent::Write,   Environment::Production,  false, Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Local,       false, Forme::Approve),
-        (true,  StatementIntent::Ddl,     Environment::Development, false, Forme::Approve),
-        (true,  StatementIntent::Ddl,     Environment::Staging,     false, Forme::Approve),
-        (true,  StatementIntent::Ddl,     Environment::Production,  false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Local,       false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Development, false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Staging,     false, Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Production,  false, Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Local,       false, Forme::Approve),
-        (true,  StatementIntent::Unknown, Environment::Development, false, Forme::Approve),
-        (true,  StatementIntent::Unknown, Environment::Staging,     false, Forme::Approve),
-        (true,  StatementIntent::Unknown, Environment::Production,  false, Forme::Deny),
+        (true,  StatementIntent::Read,    Environment::Local,       false, Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Development, false, Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Staging,     false, Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Production,  false, Shape::Allow),
+        (true,  StatementIntent::Write,   Environment::Local,       false, Shape::Approve),
+        (true,  StatementIntent::Write,   Environment::Development, false, Shape::Approve),
+        (true,  StatementIntent::Write,   Environment::Staging,     false, Shape::Approve),
+        (true,  StatementIntent::Write,   Environment::Production,  false, Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Local,       false, Shape::Approve),
+        (true,  StatementIntent::Ddl,     Environment::Development, false, Shape::Approve),
+        (true,  StatementIntent::Ddl,     Environment::Staging,     false, Shape::Approve),
+        (true,  StatementIntent::Ddl,     Environment::Production,  false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Local,       false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Development, false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Staging,     false, Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Production,  false, Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Local,       false, Shape::Approve),
+        (true,  StatementIntent::Unknown, Environment::Development, false, Shape::Approve),
+        (true,  StatementIntent::Unknown, Environment::Staging,     false, Shape::Approve),
+        (true,  StatementIntent::Unknown, Environment::Production,  false, Shape::Deny),
 
         // ── agent, read-only connection ─────────────────────────────────────
-        (true,  StatementIntent::Read,    Environment::Local,       true,  Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Development, true,  Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Staging,     true,  Forme::Allow),
-        (true,  StatementIntent::Read,    Environment::Production,  true,  Forme::Allow),
-        (true,  StatementIntent::Write,   Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Write,   Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Write,   Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Write,   Environment::Production,  true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Ddl,     Environment::Production,  true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Grant,   Environment::Production,  true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Local,       true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Development, true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Staging,     true,  Forme::Deny),
-        (true,  StatementIntent::Unknown, Environment::Production,  true,  Forme::Deny),
+        (true,  StatementIntent::Read,    Environment::Local,       true,  Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Development, true,  Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Staging,     true,  Shape::Allow),
+        (true,  StatementIntent::Read,    Environment::Production,  true,  Shape::Allow),
+        (true,  StatementIntent::Write,   Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Write,   Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Write,   Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Write,   Environment::Production,  true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Ddl,     Environment::Production,  true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Grant,   Environment::Production,  true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Local,       true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Development, true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Staging,     true,  Shape::Deny),
+        (true,  StatementIntent::Unknown, Environment::Production,  true,  Shape::Deny),
     ];
 
     #[test]
     fn the_matrix_covers_every_cell() {
         // 2 actors × 5 intents × 4 environments × 2 markings.
-        assert_eq!(MATRICE.len(), 80, "a cell is missing from the matrix");
+        assert_eq!(MATRIX.len(), 80, "a cell is missing from the matrix");
 
-        let mut vues = std::collections::HashSet::new();
-        for (est_agent, intent, env, ro, _) in MATRICE {
+        let mut seen = std::collections::HashSet::new();
+        for (is_agent, intent, env, ro, _) in MATRIX {
             assert!(
-                vues.insert((*est_agent, *intent, *env, *ro)),
-                "duplicated cell: {est_agent} {intent} {env} {ro}"
+                seen.insert((*is_agent, *intent, *env, *ro)),
+                "duplicated cell: {is_agent} {intent} {env} {ro}"
             );
         }
     }
 
     #[test]
     fn default_policy_matrix() {
-        let banc = Banc::new();
+        let bench = Bench::new();
 
-        for (est_agent, intent, env, read_only, attendu) in MATRICE {
-            let acteur = if *est_agent { agent() } else { humain() };
-            let cmd = banc.execute(*read_only, *intent);
-            let decision = banc.politique.authorize(&acteur, &cmd, *env);
+        for (is_agent, intent, env, read_only, expected) in MATRIX {
+            let actor = if *is_agent { agent() } else { human() };
+            let cmd = bench.execute(*read_only, *intent);
+            let decision = bench.policy.authorize(&actor, &cmd, *env);
 
             assert_eq!(
-                Forme::de(&decision),
-                *attendu,
-                "acteur={acteur} intention={intent} env={env} lecture_seule={read_only} \
+                Shape::of(&decision),
+                *expected,
+                "actor={actor} intent={intent} env={env} read_only={read_only} \
                  → {decision:?}"
             );
         }
@@ -681,7 +681,7 @@ mod tests {
     fn an_agent_is_never_less_restricted_than_a_human() {
         // The test the `/commande` command asks for: the same command emitted
         // by an agent gets a decision at least as restrictive.
-        let banc = Banc::new();
+        let bench = Bench::new();
         let agent = agent();
 
         for intent in [
@@ -693,13 +693,13 @@ mod tests {
         ] {
             for env in ENVS {
                 for read_only in [false, true] {
-                    let cmd = banc.execute(read_only, intent);
-                    let pour_humain = banc.politique.authorize(&humain(), &cmd, env);
-                    let pour_agent = banc.politique.authorize(&agent, &cmd, env);
+                    let cmd = bench.execute(read_only, intent);
+                    let for_human = bench.policy.authorize(&human(), &cmd, env);
+                    let for_agent = bench.policy.authorize(&agent, &cmd, env);
                     assert!(
-                        pour_agent.restrictiveness() >= pour_humain.restrictiveness(),
-                        "intention={intent} env={env} lecture_seule={read_only} : \
-                         agent={pour_agent:?} humain={pour_humain:?}"
+                        for_agent.restrictiveness() >= for_human.restrictiveness(),
+                        "intent={intent} env={env} read_only={read_only}: \
+                         agent={for_agent:?} human={for_human:?}"
                     );
                 }
             }
@@ -708,29 +708,27 @@ mod tests {
 
     #[test]
     fn an_unbounded_risk_requires_approval_even_for_a_human_locally() {
-        let banc = Banc::new();
+        let bench = Bench::new();
 
-        for risque in [
+        for risk in [
             MutationRisk::UnboundedUpdate,
             MutationRisk::UnboundedDelete,
             MutationRisk::Truncate,
             MutationRisk::DropObject,
         ] {
             let cmd = Command::Execute {
-                connection: banc.ouverte,
+                connection: bench.open,
                 session: SessionId::new(),
                 request: Box::new(
                     ExecRequest::new(QueryLanguage::SQL, "DELETE FROM events")
                         .with_intent(StatementIntent::Write)
-                        .with_risk(risque),
+                        .with_risk(risk),
                 ),
             };
-            let decision = banc
-                .politique
-                .authorize(&humain(), &cmd, Environment::Local);
+            let decision = bench.policy.authorize(&human(), &cmd, Environment::Local);
             assert!(
                 decision.requires_approval(),
-                "{risque:?} should require an approval, got {decision:?}"
+                "{risk:?} should require an approval, got {decision:?}"
             );
 
             let Decision::RequireApproval { reason, preview } = decision else {
@@ -739,7 +737,7 @@ mod tests {
             assert!(!reason.is_empty());
             let preview = preview.expect("a destructive operation is previewed");
             assert_eq!(
-                preview.connection, "atelier",
+                preview.connection, "workshop",
                 "the connection must be named"
             );
             assert_eq!(preview.statement, "DELETE FROM events");
@@ -748,11 +746,11 @@ mod tests {
 
     #[test]
     fn an_unbounded_risk_stays_refused_on_a_read_only_connection() {
-        let banc = Banc::new();
+        let bench = Bench::new();
         // Intent declared as read, destructive risk: the inconsistency is
         // settled on the cautious side, so the refusal applies.
         let cmd = Command::Execute {
-            connection: banc.lecture_seule,
+            connection: bench.read_only_connection,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "TRUNCATE audit")
@@ -760,19 +758,17 @@ mod tests {
                     .with_risk(MutationRisk::Truncate),
             ),
         };
-        let decision = banc
-            .politique
-            .authorize(&humain(), &cmd, Environment::Local);
+        let decision = bench.policy.authorize(&human(), &cmd, Environment::Local);
         assert!(decision.is_denied(), "{decision:?}");
     }
 
     #[test]
     fn an_unknown_connection_closes_the_door() {
-        let politique = DefaultPolicy::new();
-        let inconnue = ConnectionId::new();
+        let policy = DefaultPolicy::new();
+        let unknown = ConnectionId::new();
 
-        let ecriture = Command::Execute {
-            connection: inconnue,
+        let write = Command::Execute {
+            connection: unknown,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "INSERT INTO t VALUES (1)")
@@ -780,33 +776,33 @@ mod tests {
             ),
         };
         assert!(
-            politique
-                .authorize(&humain(), &ecriture, Environment::Local)
+            policy
+                .authorize(&human(), &write, Environment::Local)
                 .is_denied(),
             "the gate cannot decide on what it does not see"
         );
 
         // A read, on the other hand, does not need the marking.
-        let lecture = Command::Execute {
-            connection: inconnue,
+        let read = Command::Execute {
+            connection: unknown,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "SELECT 1").with_intent(StatementIntent::Read),
             ),
         };
         assert!(
-            politique
-                .authorize(&humain(), &lecture, Environment::Local)
+            policy
+                .authorize(&human(), &read, Environment::Local)
                 .is_allowed()
         );
     }
 
     #[test]
     fn the_connection_marking_prevails_over_a_too_permissive_announced_environment() {
-        let politique = DefaultPolicy::new();
-        let prod = ConnectionConfig::new("caisse", DriverId::postgres())
+        let policy = DefaultPolicy::new();
+        let prod = ConnectionConfig::new("checkout", DriverId::postgres())
             .with_environment(Environment::Production);
-        politique.register(&prod);
+        policy.register(&prod);
 
         let cmd = Command::Execute {
             connection: prod.id,
@@ -818,13 +814,13 @@ mod tests {
         };
 
         // The caller announces `Local` — by mistake, or because it was wired wrong.
-        let decision = politique.authorize(&humain(), &cmd, Environment::Local);
+        let decision = policy.authorize(&human(), &cmd, Environment::Local);
         assert!(
             decision.requires_approval(),
             "the production marking must prevail: {decision:?}"
         );
 
-        let decision = politique.authorize(&agent(), &cmd, Environment::Local);
+        let decision = policy.authorize(&agent(), &cmd, Environment::Local);
         assert!(
             decision.is_denied(),
             "an agent stays strictly read-only on a production connection: {decision:?}"
@@ -833,18 +829,20 @@ mod tests {
 
     #[test]
     fn forgetting_a_connection_closes_the_door_again() {
-        let banc = Banc::new();
-        let cmd = banc.execute(false, StatementIntent::Write);
+        let bench = Bench::new();
+        let cmd = bench.execute(false, StatementIntent::Write);
         assert!(
-            banc.politique
-                .authorize(&humain(), &cmd, Environment::Local)
+            bench
+                .policy
+                .authorize(&human(), &cmd, Environment::Local)
                 .is_allowed()
         );
 
-        banc.politique.forget(banc.ouverte);
+        bench.policy.forget(bench.open);
         assert!(
-            banc.politique
-                .authorize(&humain(), &cmd, Environment::Local)
+            bench
+                .policy
+                .authorize(&human(), &cmd, Environment::Local)
                 .is_denied()
         );
     }
@@ -852,17 +850,17 @@ mod tests {
     #[test]
     fn cancelling_stays_possible_everywhere() {
         // Refusing a cancellation protects nothing and leaves a query running.
-        let banc = Banc::new();
+        let bench = Bench::new();
         for read_only in [false, true] {
             for env in ENVS {
-                for acteur in [humain(), agent()] {
+                for actor in [human(), agent()] {
                     let cmd = Command::Cancel {
-                        connection: banc.connexion(read_only),
+                        connection: bench.connection(read_only),
                         statement: StatementHandle::new(),
                     };
                     assert!(
-                        banc.politique.authorize(&acteur, &cmd, env).is_allowed(),
-                        "cancellation refused: actor={acteur} env={env} ro={read_only}"
+                        bench.policy.authorize(&actor, &cmd, env).is_allowed(),
+                        "cancellation refused: actor={actor} env={env} ro={read_only}"
                     );
                 }
             }
@@ -875,19 +873,19 @@ mod tests {
         // Refusing it in production would leave the agent guessing names;
         // submitting it to approval would teach clicking. What comes out of it
         // is governed by the privacy tier, in `oxyn-ai`.
-        let banc = Banc::new();
+        let bench = Bench::new();
         for read_only in [false, true] {
             for env in ENVS {
-                for acteur in [humain(), agent()] {
+                for actor in [human(), agent()] {
                     let cmd = Command::DescribeCatalog {
-                        connection: banc.connexion(read_only),
-                        focus: Some("clients".to_owned()),
+                        connection: bench.connection(read_only),
+                        focus: Some("customers".to_owned()),
                     };
                     assert!(!cmd.is_mutating());
                     assert!(!cmd.touches_database());
                     assert!(
-                        banc.politique.authorize(&acteur, &cmd, env).is_allowed(),
-                        "catalog read refused: actor={acteur} env={env} ro={read_only}"
+                        bench.policy.authorize(&actor, &cmd, env).is_allowed(),
+                        "catalog read refused: actor={actor} env={env} ro={read_only}"
                     );
                 }
             }
@@ -898,14 +896,14 @@ mod tests {
     fn an_agent_cannot_create_a_connection_without_approval() {
         // The exfiltration channel: an agent that would declare a connection
         // to the host of its choice.
-        let politique = DefaultPolicy::new();
-        let cfg = ConnectionConfig::new("ailleurs", DriverId::postgres())
+        let policy = DefaultPolicy::new();
+        let cfg = ConnectionConfig::new("elsewhere", DriverId::postgres())
             .with_environment(Environment::Local);
         let cmd = Command::CreateConnection {
             config: Box::new(cfg),
         };
 
-        let decision = politique.authorize(&agent(), &cmd, Environment::Local);
+        let decision = policy.authorize(&agent(), &cmd, Environment::Local);
         assert!(
             !decision.is_allowed(),
             "an agent does not create a connection without agreement: {decision:?}"
@@ -915,24 +913,24 @@ mod tests {
         // registered yet, and the "closed by default" rule only targets what
         // reaches a server.
         assert!(
-            politique
-                .authorize(&humain(), &cmd, Environment::Local)
+            policy
+                .authorize(&human(), &cmd, Environment::Local)
                 .is_allowed()
         );
     }
 
     #[test]
     fn writing_a_local_document_triggers_no_approval() {
-        let politique = DefaultPolicy::new();
+        let policy = DefaultPolicy::new();
         let cmd = Command::WriteDocument {
             workspace: crate::ids::WorkspaceId::new(),
             document: crate::ids::DocumentId::new(),
             text: "SELECT 1".into(),
         };
-        for acteur in [humain(), agent()] {
+        for actor in [human(), agent()] {
             assert!(
-                politique
-                    .authorize(&acteur, &cmd, Environment::Production)
+                policy
+                    .authorize(&actor, &cmd, Environment::Production)
                     .is_allowed(),
                 "a local document is not a database write"
             );
@@ -941,15 +939,18 @@ mod tests {
 
     #[test]
     fn no_reason_leaks_a_connection_identifier() {
-        let banc = Banc::new();
-        let identifiants = [banc.ouverte.to_string(), banc.lecture_seule.to_string()];
+        let bench = Bench::new();
+        let identifiers = [
+            bench.open.to_string(),
+            bench.read_only_connection.to_string(),
+        ];
 
-        for (est_agent, intent, env, read_only, _) in MATRICE {
-            let acteur = if *est_agent { agent() } else { humain() };
-            let cmd = banc.execute(*read_only, *intent);
-            let decision = banc.politique.authorize(&acteur, &cmd, *env);
+        for (is_agent, intent, env, read_only, _) in MATRIX {
+            let actor = if *is_agent { agent() } else { human() };
+            let cmd = bench.execute(*read_only, *intent);
+            let decision = bench.policy.authorize(&actor, &cmd, *env);
 
-            let texte = match &decision {
+            let text = match &decision {
                 Decision::Allow => String::new(),
                 Decision::Deny { reason } => reason.clone(),
                 Decision::RequireApproval { reason, preview } => {
@@ -961,10 +962,10 @@ mod tests {
                     t
                 }
             };
-            for id in &identifiants {
+            for id in &identifiers {
                 assert!(
-                    !texte.contains(id.as_str()),
-                    "a connection identifier leaked into a reason: {texte}"
+                    !text.contains(id.as_str()),
+                    "a connection identifier leaked into a reason: {text}"
                 );
             }
         }
@@ -972,14 +973,14 @@ mod tests {
 
     #[test]
     fn a_refusal_says_why() {
-        let banc = Banc::new();
-        for (est_agent, intent, env, read_only, attendu) in MATRICE {
-            if *attendu != Forme::Deny {
+        let bench = Bench::new();
+        for (is_agent, intent, env, read_only, expected) in MATRIX {
+            if *expected != Shape::Deny {
                 continue;
             }
-            let acteur = if *est_agent { agent() } else { humain() };
-            let cmd = banc.execute(*read_only, *intent);
-            let Decision::Deny { reason } = banc.politique.authorize(&acteur, &cmd, *env) else {
+            let actor = if *is_agent { agent() } else { human() };
+            let cmd = bench.execute(*read_only, *intent);
+            let Decision::Deny { reason } = bench.policy.authorize(&actor, &cmd, *env) else {
                 panic!("refusal expected");
             };
             assert!(reason.len() > 10, "reason too poor to be shown: {reason}");
@@ -997,7 +998,7 @@ mod tests {
             connection: ConnectionId::new(),
         };
         assert!(
-            gate.authorize(&humain(), &cmd, Environment::Production)
+            gate.authorize(&human(), &cmd, Environment::Production)
                 .is_allowed()
         );
     }
@@ -1008,10 +1009,10 @@ mod tests {
         // passes for a human, including on a read-only connection where
         // switching schema to read elsewhere is precisely the use. For an agent
         // it is a refusal, because the effect bears on the following statements.
-        let banc = Banc::new();
+        let bench = Bench::new();
         for read_only in [false, true] {
             let cmd = Command::SetSessionContext {
-                connection: banc.connexion(read_only),
+                connection: bench.connection(read_only),
                 session: SessionId::new(),
                 catalog: None,
                 namespace: Some("analytics".to_owned()),
@@ -1022,14 +1023,14 @@ mod tests {
                 Environment::Staging,
                 Environment::Production,
             ] {
-                let humaine = banc.politique.authorize(&humain(), &cmd, env);
+                let for_human = bench.policy.authorize(&human(), &cmd, env);
                 assert!(
-                    humaine.is_allowed(),
-                    "a human changes context: env={env} read_only={read_only} → {humaine:?}"
+                    for_human.is_allowed(),
+                    "a human changes context: env={env} read_only={read_only} → {for_human:?}"
                 );
-                let agentive = banc.politique.authorize(&agent(), &cmd, env);
+                let for_agent = bench.policy.authorize(&agent(), &cmd, env);
                 assert!(
-                    !agentive.is_allowed(),
+                    !for_agent.is_allowed(),
                     "an agent never does it: env={env} read_only={read_only}"
                 );
             }
@@ -1042,23 +1043,23 @@ mod tests {
         // read-only connection included, where closing a read transaction is
         // the very use. For an agent it is a refusal, not an approval, in every
         // environment: it would settle a transaction the user may have opened.
-        let banc = Banc::new();
+        let bench = Bench::new();
         for read_only in [false, true] {
-            let mut cmd = banc.execute(read_only, StatementIntent::Read);
+            let mut cmd = bench.execute(read_only, StatementIntent::Read);
             if let Command::Execute { request, .. } = &mut cmd {
                 request.transaction_control = true;
             }
             assert!(!cmd.is_mutating());
             for env in ENVS {
-                let humaine = banc.politique.authorize(&humain(), &cmd, env);
+                let for_human = bench.policy.authorize(&human(), &cmd, env);
                 assert!(
-                    humaine.is_allowed(),
-                    "env={env} read_only={read_only} → {humaine:?}"
+                    for_human.is_allowed(),
+                    "env={env} read_only={read_only} → {for_human:?}"
                 );
-                let agentive = banc.politique.authorize(&agent(), &cmd, env);
+                let for_agent = bench.policy.authorize(&agent(), &cmd, env);
                 assert!(
-                    agentive.is_denied(),
-                    "env={env} read_only={read_only} → {agentive:?}"
+                    for_agent.is_denied(),
+                    "env={env} read_only={read_only} → {for_agent:?}"
                 );
             }
         }
@@ -1069,15 +1070,15 @@ mod tests {
         // Local, without a target connection: the human has nothing to confirm.
         // The agent is refused everywhere — not submitted to approval — because
         // it would assert a check of the server nobody made.
-        let politique = DefaultPolicy::new();
+        let policy = DefaultPolicy::new();
         let cmd = Command::ReconcileHistoryEntry { entry: 1 };
         for env in ENVS {
-            let humaine = politique.authorize(&humain(), &cmd, env);
-            assert!(humaine.is_allowed(), "env={env} → {humaine:?}");
-            let agentive = politique.authorize(&agent(), &cmd, env);
+            let for_human = policy.authorize(&human(), &cmd, env);
+            assert!(for_human.is_allowed(), "env={env} → {for_human:?}");
+            let for_agent = policy.authorize(&agent(), &cmd, env);
             assert!(
-                matches!(agentive, Decision::Deny { .. }),
-                "env={env} → {agentive:?}"
+                matches!(for_agent, Decision::Deny { .. }),
+                "env={env} → {for_agent:?}"
             );
         }
     }

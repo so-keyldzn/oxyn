@@ -100,7 +100,7 @@ pub async fn run_turn(
     // The turn and the transport move forward together; the session dropped on
     // the way out terminates the process group, cancellation included.
     match select(turn, driver).await {
-        Either::Left((fin, _)) => Ok(fin?),
+        Either::Left((header_end, _)) => Ok(header_end?),
         Either::Right(((), _)) => Err(super::session::ExternalError::Exited.into()),
     }
 }

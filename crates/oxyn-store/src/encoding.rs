@@ -225,9 +225,9 @@ mod tests {
 
     #[test]
     fn an_unreadable_identifier_names_the_column_not_the_value() {
-        let erreur = parse_id::<ConnectionId>("base-de-production-banque", "connection_id")
+        let error = parse_id::<ConnectionId>("bank-production-db", "connection_id")
             .expect_err("this is not a UUID");
-        let message = erreur.to_string();
+        let message = error.to_string();
         assert!(message.contains("connection_id"));
         assert!(!message.contains("banque"), "the value leaked: {message}");
     }
@@ -236,23 +236,23 @@ mod tests {
     fn non_exhaustive_tags_round_trip() {
         // MutationRisk and QueryLanguage are `#[non_exhaustive]`: their stable
         // name comes from serde, not from a `match` one would forget to extend.
-        for risque in [
+        for risk in [
             MutationRisk::None,
             MutationRisk::UnboundedUpdate,
             MutationRisk::UnboundedDelete,
             MutationRisk::Truncate,
             MutationRisk::DropObject,
         ] {
-            let brut = tag_to_json(&risque).expect("serialization");
-            let relu: MutationRisk = tag_from_json(&brut, "risk").expect("deserialization");
-            assert_eq!(risque, relu);
+            let raw = tag_to_json(&risk).expect("serialization");
+            let read_back: MutationRisk = tag_from_json(&raw, "risk").expect("deserialization");
+            assert_eq!(risk, read_back);
         }
 
-        let langage = QueryLanguage::Sql(SqlDialect::Postgres);
-        let brut = tag_to_json(&langage).expect("serialization");
-        let relu: QueryLanguage = tag_from_json(&brut, "language").expect("deserialization");
+        let language = QueryLanguage::Sql(SqlDialect::Postgres);
+        let raw = tag_to_json(&language).expect("serialization");
+        let read_back: QueryLanguage = tag_from_json(&raw, "language").expect("deserialization");
         assert_eq!(
-            langage, relu,
+            language, read_back,
             "the dialect must not be lost by the encoding"
         );
     }
@@ -262,10 +262,10 @@ mod tests {
         assert_eq!(intent_from_text("read"), StatementIntent::Read);
         assert_eq!(intent_from_text("grant"), StatementIntent::Grant);
 
-        let inconnue = intent_from_text("vaporize");
-        assert_eq!(inconnue, StatementIntent::Unknown);
+        let unknown = intent_from_text("vaporize");
+        assert_eq!(unknown, StatementIntent::Unknown);
         assert!(
-            inconnue.is_mutating(),
+            unknown.is_mutating(),
             "an unreadable intent must never pass for a read"
         );
     }
@@ -273,12 +273,12 @@ mod tests {
     #[test]
     fn an_error_class_reads_back_in_both_languages() {
         // What the current version writes.
-        for famille in [
+        for family in [
             ErrorClass::Transient,
             ErrorClass::Permanent,
             ErrorClass::Ambiguous,
         ] {
-            assert_eq!(error_class_from_text(famille.as_str()), famille);
+            assert_eq!(error_class_from_text(family.as_str()), family);
         }
 
         // What versions before 2026-09-16 wrote. Without these three arms, an
@@ -289,11 +289,11 @@ mod tests {
         assert_eq!(error_class_from_text("ambiguë"), ErrorClass::Ambiguous);
 
         assert_eq!(
-            error_class_from_text("vaporisée"),
+            error_class_from_text("vaporised"),
             ErrorClass::Ambiguous,
             "I-13 down to reading back: what cannot be read is not retried"
         );
-        assert!(!error_class_from_text("vaporisée").is_retryable());
+        assert!(!error_class_from_text("vaporised").is_retryable());
     }
 
     #[test]

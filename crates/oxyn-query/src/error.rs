@@ -62,28 +62,28 @@ mod tests {
 
     #[test]
     fn a_syntax_error_locates_the_culprit() {
-        let erreur = QueryError::Syntax {
+        let failure = QueryError::Syntax {
             message: "Expected an expression".to_owned(),
             span: 42..60,
         };
-        assert!(erreur.to_string().contains("42"));
+        assert!(failure.to_string().contains("42"));
     }
 
     #[test]
     fn a_non_sql_language_is_named() {
-        let erreur = QueryError::UnsupportedLanguage {
+        let failure = QueryError::UnsupportedLanguage {
             language: QueryLanguage::Cypher,
         };
-        assert!(erreur.to_string().contains("cypher"));
+        assert!(failure.to_string().contains("cypher"));
     }
 
     #[test]
     fn the_error_folds_into_the_domain_vocabulary() {
-        let erreur: OxynError = QueryError::UnsupportedLanguage {
+        let failure: OxynError = QueryError::UnsupportedLanguage {
             language: QueryLanguage::Sql(SqlDialect::Postgres),
         }
         .into();
-        assert!(matches!(erreur, OxynError::Query(_)));
-        assert!(erreur.is_user_error());
+        assert!(matches!(failure, OxynError::Query(_)));
+        assert!(failure.is_user_error());
     }
 }

@@ -37,7 +37,7 @@ use crate::error::Result;
 pub struct RetentionPolicy {
     /// Conversations kept per workspace, most recently active first.
     ///
-    /// `0` keeps none: that is how « do not keep any assistant history » is
+    /// `0` keeps none: that is how "do not keep any assistant history" is
     /// expressed, and it is the only value for which the current thread is not
     /// protected.
     pub max_conversations: u32,
@@ -135,7 +135,7 @@ impl Conversations<'_> {
     /// nothing and reports [`PruneReport::is_empty`].
     ///
     /// Blocking, like everything in this crate: call it from the blocking pool,
-    /// not the interface thread ([I-05](../../../CLAUDE.md#i-05)).
+    /// not the interface thread ([I-05](../../../../CLAUDE.md#i-05)).
     ///
     /// # Errors
     /// [`crate::StoreError::Sqlite`] if the read or the delete fails;

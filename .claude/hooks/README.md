@@ -16,7 +16,7 @@ every hook added.
 On a `deny`, `permissionDecisionReason` is passed **to Claude**: it must
 therefore say what to do instead. On an `ask`, it goes **to the user only**;
 without `additionalContext`, Claude sees its action suspended without knowing
-by what, and retries identically. `protocole_hook.demander()` therefore repeats
+by what, and retries identically. `protocole_hook.ask()` therefore repeats
 the reason in both fields.
 
 **2. `systemMessage` is a top-level field, and `Stop` does not drop it.**

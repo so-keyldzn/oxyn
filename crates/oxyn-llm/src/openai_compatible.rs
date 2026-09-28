@@ -80,7 +80,7 @@ pub enum AuthStyle {
 /// Shape of the endpoint's paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Route {
-    /// `<base>/chat/completions` et `<base>/models`.
+    /// `<base>/chat/completions` and `<base>/models`.
     OpenAi,
     /// `<base>/openai/deployments/<deployment>/chat/completions?api-version=…`
     AzureDeployment {
@@ -132,13 +132,13 @@ impl OpenAiCompatibleProvider {
     /// # Errors
     /// Unreadable URL, or HTTP client impossible to build.
     pub fn new(id: ProviderId, base_url: &str) -> Result<Self> {
-        let analysee = Url::parse(base_url).map_err(|err| LlmError::Config {
+        let parsed = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
         })?;
         let client = http::client(&id)?;
         Ok(Self {
-            base_url: provider::normalize_base_url(analysee),
+            base_url: provider::normalize_base_url(parsed),
             api_key: None,
             auth: AuthStyle::Bearer,
             route: Route::OpenAi,
@@ -192,8 +192,8 @@ impl OpenAiCompatibleProvider {
 
     /// OpenRouter.
     ///
-    /// # Erreurs
-    /// Voir [`new`](Self::new).
+    /// # Errors
+    /// See [`new`](Self::new).
     pub fn openrouter(api_key: impl Into<ApiKey>) -> Result<Self> {
         Ok(Self::new(ProviderId::openrouter(), OPENROUTER_BASE_URL)?
             .with_api_key(api_key.into())
@@ -218,17 +218,17 @@ impl OpenAiCompatibleProvider {
     pub fn azure(endpoint: &str, deployment: &str, api_key: impl Into<ApiKey>) -> Result<Self> {
         let id = ProviderId::azure_openai();
         let deployment = validate_deployment(&id, deployment)?;
-        let mut fournisseur = Self::new(id, endpoint)?
+        let mut provider = Self::new(id, endpoint)?
             .with_api_key(api_key.into())
             .requiring_api_key()
             .with_usage_reporting(true)
             .supporting_reasoning_effort();
-        fournisseur.auth = AuthStyle::ApiKeyHeader;
-        fournisseur.route = Route::AzureDeployment {
+        provider.auth = AuthStyle::ApiKeyHeader;
+        provider.route = Route::AzureDeployment {
             deployment,
             api_version: AZURE_DEFAULT_API_VERSION.to_owned(),
         };
-        Ok(fournisseur)
+        Ok(provider)
     }
 
     /// Attaches a key.
@@ -290,16 +290,17 @@ impl OpenAiCompatibleProvider {
     /// Name or value not representable in an HTTP header. The message does
     /// **not** copy the faulty value, which may be a secret.
     pub fn with_header(mut self, name: &str, value: &str) -> Result<Self> {
-        let nom = HeaderName::from_bytes(name.as_bytes()).map_err(|_| LlmError::Config {
-            provider: self.id.clone(),
-            detail: format!("`{name}` is not a valid HTTP header name"),
-        })?;
-        let mut valeur = HeaderValue::from_str(value).map_err(|_| LlmError::Config {
+        let header_name =
+            HeaderName::from_bytes(name.as_bytes()).map_err(|_| LlmError::Config {
+                provider: self.id.clone(),
+                detail: format!("`{name}` is not a valid HTTP header name"),
+            })?;
+        let mut header_value = HeaderValue::from_str(value).map_err(|_| LlmError::Config {
             provider: self.id.clone(),
             detail: format!("the value given for header `{name}` is not valid in an HTTP header"),
         })?;
-        valeur.set_sensitive(true);
-        self.extra_headers.push((nom, valeur));
+        header_value.set_sensitive(true);
+        self.extra_headers.push((header_name, header_value));
         Ok(self)
     }
 
@@ -342,10 +343,10 @@ impl OpenAiCompatibleProvider {
     }
 
     /// Assembles a relative path onto the base URL.
-    fn join(&self, chemin: &str) -> std::result::Result<Url, LlmError> {
-        self.base_url.join(chemin).map_err(|err| LlmError::Config {
+    fn join(&self, path: &str) -> std::result::Result<Url, LlmError> {
+        self.base_url.join(path).map_err(|err| LlmError::Config {
             provider: self.id.clone(),
-            detail: format!("cannot append path `{chemin}` to the base URL: {err}"),
+            detail: format!("cannot append path `{path}` to the base URL: {err}"),
         })
     }
 
@@ -354,37 +355,37 @@ impl OpenAiCompatibleProvider {
         &self,
         mut builder: RequestBuilder,
     ) -> std::result::Result<RequestBuilder, LlmError> {
-        for (nom, valeur) in &self.extra_headers {
-            builder = builder.header(nom.clone(), valeur.clone());
+        for (header_name, value) in &self.extra_headers {
+            builder = builder.header(header_name.clone(), value.clone());
         }
 
-        let manquante = || LlmError::MissingApiKey {
+        let missing = || LlmError::MissingApiKey {
             provider: self.id.clone(),
         };
-        let Some(cle) = &self.api_key else {
+        let Some(key) = &self.api_key else {
             if self.requires_key {
-                return Err(manquante());
+                return Err(missing());
             }
             return Ok(builder);
         };
-        if cle.is_blank() {
-            return Err(manquante());
+        if key.is_blank() {
+            return Err(missing());
         }
 
-        let (nom, brut) = match self.auth {
-            AuthStyle::Bearer => (AUTHORIZATION, format!("Bearer {}", cle.expose())),
+        let (header_name, raw) = match self.auth {
+            AuthStyle::Bearer => (AUTHORIZATION, format!("Bearer {}", key.expose())),
             AuthStyle::ApiKeyHeader => {
-                (HeaderName::from_static("api-key"), cle.expose().to_owned())
+                (HeaderName::from_static("api-key"), key.expose().to_owned())
             }
         };
-        let mut valeur = HeaderValue::from_str(&brut).map_err(|_| LlmError::Config {
+        let mut value = HeaderValue::from_str(&raw).map_err(|_| LlmError::Config {
             provider: self.id.clone(),
             detail: "the API key contains a character that is not valid in an HTTP header"
                 .to_owned(),
         })?;
         // Marked sensitive: the HTTP stack will not render it in its traces.
-        valeur.set_sensitive(true);
-        Ok(builder.header(nom, valeur))
+        value.set_sensitive(true);
+        Ok(builder.header(header_name, value))
     }
 
     /// Refuses a reasoning request this protocol cannot carry.
@@ -402,17 +403,17 @@ impl OpenAiCompatibleProvider {
     /// regresses for all that — a request that asks for no reasoning never
     /// meets this path.
     fn check_reasoning(&self, request: &ChatRequest) -> std::result::Result<(), LlmError> {
-        let refus = |capability: &str| LlmError::Unsupported {
+        let refusal = |capability: &str| LlmError::Unsupported {
             provider: self.id.clone(),
             capability: capability.to_owned(),
         };
         if request.reasoning_budget_tokens.is_some() {
-            return Err(refus(
+            return Err(refusal(
                 "a thinking budget in tokens; this protocol has no such setting",
             ));
         }
         if request.reasoning_effort.is_some() && !self.reasoning_effort {
-            return Err(refus("a reasoning effort (`reasoning_effort`)"));
+            return Err(refusal("a reasoning effort (`reasoning_effort`)"));
         }
         Ok(())
     }
@@ -436,23 +437,23 @@ impl OpenAiCompatibleProvider {
 /// Everything else is refused rather than escaped: an exotic name is far more
 /// likely a typing mistake than a real need, and refusing can be explained.
 fn validate_deployment(id: &ProviderId, deployment: &str) -> Result<String> {
-    let invalide = |detail: &str| {
+    let invalid = |detail: &str| {
         OxynError::from(LlmError::Config {
             provider: id.clone(),
             detail: detail.to_owned(),
         })
     };
     if deployment.is_empty() {
-        return Err(invalide("the deployment name is empty"));
+        return Err(invalid("the deployment name is empty"));
     }
     if deployment.len() > 64 {
-        return Err(invalide("the deployment name is longer than 64 characters"));
+        return Err(invalid("the deployment name is longer than 64 characters"));
     }
     if !deployment
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
-        return Err(invalide(
+        return Err(invalid(
             "the deployment name accepts only A-Z, a-z, 0-9, `-`, `_` and `.`",
         ));
     }
@@ -479,7 +480,7 @@ impl fmt::Debug for OpenAiCompatibleProvider {
                 &self
                     .extra_headers
                     .iter()
-                    .map(|(nom, _)| nom.as_str())
+                    .map(|(header_name, _)| header_name.as_str())
                     .collect::<Vec<_>>(),
             )
             .field("include_usage", &self.include_usage)
@@ -499,16 +500,16 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
     async fn models(&self) -> Result<Vec<ModelInfo>> {
         let url = self.models_url()?;
-        let requete = self.apply_auth(self.client.get(url))?;
-        let reponse = requete.send().await.map_err(|err| self.transport(&err))?;
-        if !reponse.status().is_success() {
-            return Err(self.failure(reponse, None).await.into());
+        let request = self.apply_auth(self.client.get(url))?;
+        let response = request.send().await.map_err(|err| self.transport(&err))?;
+        if !response.status().is_success() {
+            return Err(self.failure(response, None).await.into());
         }
         // No token here: the trait does not pass one. The reading stays bounded
         // in size and in time.
-        let brut: wire::ModelsResponse =
-            http::read_json(&self.id, reponse, "model list", None).await?;
-        Ok(wire::parse_models(brut))
+        let raw: wire::ModelsResponse =
+            http::read_json(&self.id, response, "model list", None).await?;
+        Ok(wire::parse_models(raw))
     }
 
     async fn stream(
@@ -530,12 +531,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
         self.check_reasoning(&request)?;
 
         let url = self.chat_url()?;
-        let corps = wire::ChatCompletionRequest::from_request(
+        let body = wire::ChatCompletionRequest::from_request(
             &request,
             self.include_usage,
             self.reasoning_effort,
         );
-        let requete = self.apply_auth(self.client.post(url).json(&corps))?;
+        let http_request = self.apply_auth(self.client.post(url).json(&body))?;
 
         // The sending itself must yield to cancellation: an endpoint that does
         // not answer would otherwise leave the user in front of a "Cancel"
@@ -543,25 +544,25 @@ impl LlmProvider for OpenAiCompatibleProvider {
         // `std::pin::pin!` and not `futures::pin_mut!`: the standard library's
         // pinning introduces no `unsafe` block in this crate, where it is
         // refused.
-        let envoi = pin!(requete.send());
-        let attente = pin!(cancel.cancelled());
-        let reponse = match select(attente, envoi).await {
+        let send = pin!(http_request.send());
+        let pending = pin!(cancel.cancelled());
+        let response = match select(pending, send).await {
             Either::Left(((), _)) => return Err(OxynError::Cancelled),
-            Either::Right((resultat, _)) => resultat.map_err(|err| self.transport(&err))?,
+            Either::Right((result, _)) => result.map_err(|err| self.transport(&err))?,
         };
 
-        if !reponse.status().is_success() {
+        if !response.status().is_success() {
             // The error body is read under the same token as the sending: a
             // failure status followed by a body that never ends must not make
             // "Cancel" ineffective.
-            return Err(self.failure(reponse, Some(cancel)).await.into());
+            return Err(self.failure(response, Some(cancel)).await.into());
         }
 
-        let octets = reponse
+        let bytes = response
             .bytes_stream()
-            .map(|resultat| resultat.map_err(|err| crate::stream::describe_stream_error(&err)));
+            .map(|result| result.map_err(|err| crate::stream::describe_stream_error(&err)));
         Ok(stream::openai_events(
-            Box::pin(octets),
+            Box::pin(bytes),
             cancel.clone(),
             self.api_key.clone(),
         ))
@@ -573,7 +574,7 @@ mod tests {
     use super::*;
     use crate::types::ChatMessage;
 
-    fn cle() -> ApiKey {
+    fn key() -> ApiKey {
         ApiKey::new("sk-test-0123456789")
     }
 
@@ -585,23 +586,23 @@ mod tests {
     /// content sent to the provider one `{:?}` away ([I-03]).
     ///
     /// [I-03]: ../../../CLAUDE.md#i-03
-    fn refus<T>(issue: std::result::Result<T, OxynError>, attendu: &str) -> OxynError {
+    fn refusal<T>(issue: std::result::Result<T, OxynError>, expected: &str) -> OxynError {
         match issue {
-            Ok(_) => panic!("{attendu}"),
+            Ok(_) => panic!("{expected}"),
             Err(err) => err,
         }
     }
 
-    // ── Construction et URL ────────────────────────────────────────────────
+    // ── Construction and URL────────────────────────────────────────────────
 
     #[test]
     fn local_constructors_ask_for_no_key() {
-        for fournisseur in [
+        for provider in [
             OpenAiCompatibleProvider::ollama(),
             OpenAiCompatibleProvider::lm_studio(),
             OpenAiCompatibleProvider::llama_cpp(),
         ] {
-            let f = fournisseur.expect("local construction");
+            let f = provider.expect("local construction");
             assert!(!f.requires_key, "{f:?}");
             assert!(f.api_key.is_none(), "{f:?}");
         }
@@ -636,7 +637,7 @@ mod tests {
         let f = OpenAiCompatibleProvider::azure(
             "https://contoso.openai.azure.com",
             "gpt4o-prod",
-            cle(),
+            key(),
         )
         .expect("azure construction")
         .with_azure_api_version("2099-01-01");
@@ -652,29 +653,32 @@ mod tests {
     #[test]
     fn a_deployment_name_that_would_rewrite_the_request_is_refused() {
         // I-10: a received identifier is not concatenated without checking.
-        for tordu in [
+        for malformed in [
             "",
-            "prod/../autre",
+            "prod/../other",
             "prod?api-version=1900-01-01",
             "prod#fragment",
-            "prod déploiement",
+            "prod deployment",
         ] {
-            let r =
-                OpenAiCompatibleProvider::azure("https://contoso.openai.azure.com", tordu, cle());
-            assert!(r.is_err(), "`{tordu}` should have been refused");
+            let r = OpenAiCompatibleProvider::azure(
+                "https://contoso.openai.azure.com",
+                malformed,
+                key(),
+            );
+            assert!(r.is_err(), "`{malformed}` should have been refused");
         }
     }
 
     #[test]
     fn an_unreadable_base_url_is_a_configuration_error() {
-        let err = OpenAiCompatibleProvider::new(ProviderId::openai(), "pas une url")
+        let err = OpenAiCompatibleProvider::new(ProviderId::openai(), "not a url")
             .expect_err("invalid URL");
         assert!(matches!(err, OxynError::Config(_)), "{err}");
     }
 
     #[test]
     fn azure_adds_the_version_to_the_model_list_too() {
-        let f = OpenAiCompatibleProvider::azure("https://contoso.openai.azure.com", "d", cle())
+        let f = OpenAiCompatibleProvider::azure("https://contoso.openai.azure.com", "d", key())
             .expect("construction")
             .with_azure_api_version("2099-01-01");
         let url = f.models_url().expect("URL");
@@ -686,22 +690,22 @@ mod tests {
 
     #[test]
     fn the_provider_debug_does_not_show_the_key() {
-        let f = OpenAiCompatibleProvider::openai(cle()).expect("construction");
-        let rendu = format!("{f:?}");
-        assert!(!rendu.contains("sk-test"), "{rendu}");
-        assert!(rendu.contains("<present>"), "{rendu}");
-        assert!(rendu.contains("openai"), "{rendu}");
+        let f = OpenAiCompatibleProvider::openai(key()).expect("construction");
+        let rendered = format!("{f:?}");
+        assert!(!rendered.contains("sk-test"), "{rendered}");
+        assert!(rendered.contains("<present>"), "{rendered}");
+        assert!(rendered.contains("openai"), "{rendered}");
     }
 
     #[test]
     fn debug_scrubs_the_credentials_of_the_base_url() {
         let f = OpenAiCompatibleProvider::new(
             ProviderId::openai(),
-            "https://bob:motdepasse@proxy.example/v1",
+            "https://bob:hunter2@proxy.example/v1",
         )
         .expect("construction");
-        let rendu = format!("{f:?}");
-        assert!(!rendu.contains("motdepasse"), "{rendu}");
+        let rendered = format!("{f:?}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
     }
 
     #[test]
@@ -737,12 +741,12 @@ mod tests {
     fn a_key_with_a_line_break_is_refused_without_being_displayed() {
         // A key pasted from a terminal often carries a `\n`.
         let f =
-            OpenAiCompatibleProvider::openai(ApiKey::new("sk-avec\nsaut")).expect("construction");
+            OpenAiCompatibleProvider::openai(ApiKey::new("sk-with\nbreak")).expect("construction");
         let err = f
             .apply_auth(Client::new().get(OPENAI_BASE_URL))
             .expect_err("invalid header");
-        let rendu = err.to_string();
-        assert!(!rendu.contains("sk-avec"), "{rendu}");
+        let rendered = err.to_string();
+        assert!(!rendered.contains("sk-with"), "{rendered}");
     }
 
     // ── Request ────────────────────────────────────────────────────────────
@@ -750,9 +754,9 @@ mod tests {
     #[test]
     fn a_request_without_model_is_refused_before_any_network_call() {
         let f = OpenAiCompatibleProvider::ollama().expect("construction");
-        let requete = ChatRequest::new("  ", vec![ChatMessage::user("bonjour")]);
-        let err = refus(
-            futures::executor::block_on(f.stream(requete, &CancelToken::new())),
+        let request = ChatRequest::new("  ", vec![ChatMessage::user("hello")]);
+        let err = refusal(
+            futures::executor::block_on(f.stream(request, &CancelToken::new())),
             "empty model",
         );
         assert!(matches!(err, OxynError::Config(_)), "{err}");
@@ -761,11 +765,11 @@ mod tests {
     #[test]
     fn an_already_cancelled_token_short_circuits_the_call() {
         let f = OpenAiCompatibleProvider::ollama().expect("construction");
-        let jeton = CancelToken::new();
-        jeton.cancel();
-        let requete = ChatRequest::new("llama3.2", vec![ChatMessage::user("bonjour")]);
-        let err = refus(
-            futures::executor::block_on(f.stream(requete, &jeton)),
+        let token = CancelToken::new();
+        token.cancel();
+        let request = ChatRequest::new("llama3.2", vec![ChatMessage::user("hello")]);
+        let err = refusal(
+            futures::executor::block_on(f.stream(request, &token)),
             "cancelled beforehand",
         );
         assert!(err.is_cancelled(), "{err}");

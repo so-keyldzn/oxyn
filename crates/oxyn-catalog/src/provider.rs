@@ -229,10 +229,10 @@ mod tests {
     /// no `#[tokio::test]`. The test implementations below await nothing and
     /// are ready at the first poll; the same technique is used in
     /// `oxyn_core::cancel`.
-    fn resoudre<F: Future>(mut futur: std::pin::Pin<&mut F>) -> F::Output {
+    fn resolve<F: Future>(mut fut: std::pin::Pin<&mut F>) -> F::Output {
         let mut cx = Context::from_waker(Waker::noop());
-        match futur.as_mut().poll(&mut cx) {
-            Poll::Ready(valeur) => valeur,
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => value,
             Poll::Pending => panic!("the test future must be ready at the first poll"),
         }
     }
@@ -240,13 +240,13 @@ mod tests {
     /// The minimum a driver must provide: a flat source, without catalog or
     /// namespace, the way Elasticsearch is.
     #[derive(Debug)]
-    struct SourcePlate;
+    struct FlatSource;
 
     #[async_trait]
-    impl CatalogProvider for SourcePlate {
+    impl CatalogProvider for FlatSource {
         async fn server_info(&self, _cancel: &CancelToken) -> Result<ServerInfo> {
             Ok(ServerInfo::new(
-                "SourcePlate",
+                "FlatSource",
                 "1.0",
                 Capabilities::SEARCH_DSL | Capabilities::DOCUMENT,
             ))
@@ -257,7 +257,7 @@ mod tests {
             namespace: &CatalogPath,
             _cancel: &CancelToken,
         ) -> Result<Vec<RelationRef>> {
-            let reference = RelationRef::new(namespace.clone(), "journaux", RelationKind::Index)?;
+            let reference = RelationRef::new(namespace.clone(), "logs", RelationKind::Index)?;
             Ok(vec![reference])
         }
 
@@ -266,46 +266,45 @@ mod tests {
             relation: &CatalogPath,
             _cancel: &CancelToken,
         ) -> Result<Relation> {
-            let nom = relation.relation().unwrap_or("");
-            Ok(Relation::new(nom, RelationKind::Index))
+            let name = relation.relation().unwrap_or("");
+            Ok(Relation::new(name, RelationKind::Index))
         }
     }
 
     #[test]
     fn missing_levels_return_an_empty_list() {
-        let source = SourcePlate;
-        let jeton = CancelToken::new();
+        let source = FlatSource;
+        let token = CancelToken::new();
 
-        let catalogues = resoudre(pin!(source.list_catalogs(&jeton))).expect("successful call");
+        let catalogues = resolve(pin!(source.list_catalogs(&token))).expect("successful call");
         assert!(
             catalogues.is_empty(),
             "a source without a catalog level returns an empty list, not an error"
         );
 
-        let espaces =
-            resoudre(pin!(source.list_namespaces(None, &jeton))).expect("successful call");
-        assert!(espaces.is_empty());
+        let spaces = resolve(pin!(source.list_namespaces(None, &token))).expect("successful call");
+        assert!(spaces.is_empty());
     }
 
     #[test]
     fn unsupported_introspection_is_a_refusal_not_an_empty_list() {
         // DRIVER-CONTRACT §5: an empty list would assert "no index", which a
         // driver that cannot introspect cannot assert.
-        let source = SourcePlate;
-        let jeton = CancelToken::new();
-        let chemin = CatalogPath::for_relation(None, None, "journaux").expect("valid");
+        let source = FlatSource;
+        let token = CancelToken::new();
+        let item_path = CatalogPath::for_relation(None, None, "logs").expect("valid");
 
-        let err = resoudre(pin!(source.list_indexes(&chemin, &jeton)))
+        let err = resolve(pin!(source.list_indexes(&item_path, &token)))
             .expect_err("the source cannot introspect indexes");
         assert!(matches!(err, OxynError::NotSupported { .. }));
         assert!(err.to_string().contains("INDEXES"));
         assert!(err.is_user_error(), "it is not an incident");
 
         let err =
-            resoudre(pin!(source.list_constraints(&chemin, &jeton))).expect_err("unsupported");
+            resolve(pin!(source.list_constraints(&item_path, &token))).expect_err("unsupported");
         assert!(matches!(err, OxynError::NotSupported { .. }));
 
-        let err = resoudre(pin!(source.list_foreign_keys(&chemin, &jeton)))
+        let err = resolve(pin!(source.list_foreign_keys(&item_path, &token)))
             .expect_err("the source cannot introspect foreign keys");
         assert!(err.to_string().contains("FOREIGN_KEYS"));
     }
@@ -314,20 +313,20 @@ mod tests {
     fn the_trait_stays_object_safe() {
         // Hard constraint of ARCHITECTURE §4.1: traits are used behind
         // `Box<dyn ...>`. A generic method would silently break it.
-        let source: Box<dyn CatalogProvider> = Box::new(SourcePlate);
-        let jeton = CancelToken::new();
-        let info = resoudre(pin!(source.server_info(&jeton))).expect("successful call");
-        assert_eq!(info.product, "SourcePlate");
+        let source: Box<dyn CatalogProvider> = Box::new(FlatSource);
+        let token = CancelToken::new();
+        let info = resolve(pin!(source.server_info(&token))).expect("successful call");
+        assert_eq!(info.product, "FlatSource");
     }
 
     #[test]
     fn returned_references_carry_their_full_path() {
-        let source = SourcePlate;
-        let jeton = CancelToken::new();
-        let espace = CatalogPath::empty();
+        let source = FlatSource;
+        let token = CancelToken::new();
+        let space = CatalogPath::empty();
 
-        let relations = resoudre(pin!(source.list_relations(&espace, &jeton))).expect("succeeded");
-        let premiere = relations.first().expect("a relation");
-        assert_eq!(premiere.path().to_string(), "journaux");
+        let relations = resolve(pin!(source.list_relations(&space, &token))).expect("succeeded");
+        let first_rel = relations.first().expect("a relation");
+        assert_eq!(first_rel.path().to_string(), "logs");
     }
 }

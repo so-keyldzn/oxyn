@@ -81,27 +81,27 @@ pub enum BudgetExceeded {
 
 impl fmt::Display for BudgetExceeded {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let arret = "Oxyn stopped reading the answer";
+        let stop = "Oxyn stopped reading the answer";
         match self {
             Self::Generation => write!(
                 f,
-                "the answer exceeded {MAX_GENERATION_BYTES} bytes; {arret}"
+                "the answer exceeded {MAX_GENERATION_BYTES} bytes; {stop}"
             ),
             Self::ToolArguments { index } => write!(
                 f,
-                "the arguments of tool call #{index} exceeded {MAX_TOOL_ARGUMENTS_BYTES} bytes; {arret}"
+                "the arguments of tool call #{index} exceeded {MAX_TOOL_ARGUMENTS_BYTES} bytes; {stop}"
             ),
             Self::ToolName { index } => write!(
                 f,
-                "the name of tool call #{index} exceeded {MAX_TOOL_NAME_BYTES} bytes; {arret}"
+                "the name of tool call #{index} exceeded {MAX_TOOL_NAME_BYTES} bytes; {stop}"
             ),
             Self::ToolCalls => write!(
                 f,
-                "the answer opened more than {MAX_TOOL_CALLS} tool calls; {arret}"
+                "the answer opened more than {MAX_TOOL_CALLS} tool calls; {stop}"
             ),
             Self::ContentBlocks => write!(
                 f,
-                "the answer opened more than {MAX_CONTENT_BLOCKS} content blocks; {arret}"
+                "the answer opened more than {MAX_CONTENT_BLOCKS} content blocks; {stop}"
             ),
         }
     }
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn each_message_names_its_limit() {
-        for (limite, valeur) in [
+        for (limit, value) in [
             (BudgetExceeded::Generation, MAX_GENERATION_BYTES),
             (
                 BudgetExceeded::ToolArguments { index: 3 },
@@ -267,9 +267,9 @@ mod tests {
             (BudgetExceeded::ToolCalls, MAX_TOOL_CALLS),
             (BudgetExceeded::ContentBlocks, MAX_CONTENT_BLOCKS),
         ] {
-            let rendu = limite.to_string();
-            assert!(rendu.contains(&valeur.to_string()), "{rendu}");
-            assert!(rendu.contains("stopped"), "{rendu}");
+            let rendered = limit.to_string();
+            assert!(rendered.contains(&value.to_string()), "{rendered}");
+            assert!(rendered.contains("stopped"), "{rendered}");
         }
     }
 }

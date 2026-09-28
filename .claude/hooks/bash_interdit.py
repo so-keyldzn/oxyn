@@ -24,170 +24,170 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import protocole_hook as p  # noqa: E402
 
-EVENEMENT = "PreToolUse"
+EVENT = "PreToolUse"
 
-SEPARATEURS = {"&&", "||", ";", "|", "|&", "&", "\n"}
+SEPARATORS = {"&&", "||", ";", "|", "|&", "&", "\n"}
 
 # Launchers that execute their argument: the prohibition must be looked for behind them.
-LANCEURS = {
+LAUNCHERS = {
     "uv", "uvx", "npx", "pnpm", "yarn", "npm", "bunx", "poetry", "pipx",
     "env", "time", "timeout", "nice", "nohup", "stdbuf", "xargs", "command",
     "sudo", "doas", "watch", "mise", "direnv", "devbox", "just",
 }
 # Launcher subcommands to skip (`uv run …`, `pnpm exec …`).
-SOUS_LANCEURS = {"run", "exec", "x", "dlx", "tool"}
+SUB_LAUNCHERS = {"run", "exec", "x", "dlx", "tool"}
 # Launchers whose first positional argument is a duration, not the command.
-DUREE_POSITIONNELLE = {"timeout", "nice", "watch"}
+POSITIONAL_DURATION = {"timeout", "nice", "watch"}
 
 # Commands that write a file or modify a file in place.
-ECRITURE = {"sed", "tee", "truncate", "install", "patch", "dd", "shred"}
-INTERPRETES = {"python", "python3", "perl", "ruby", "node", "bun", "deno", "osascript"}
+WRITE_PATTERN = {"sed", "tee", "truncate", "install", "patch", "dd", "shred"}
+INTERPRETERS = {"python", "python3", "perl", "ruby", "node", "bun", "deno", "osascript"}
 
 
-def _decouper(commande: str) -> list[list[str]]:
+def _split(command: str) -> list[list[str]]:
     """Split into subcommands and tokenize. An unreadable command produces no
     decision: this hook does not guess."""
     try:
-        jetons = shlex.split(commande, comments=False, posix=True)
+        tokens = shlex.split(command, comments=False, posix=True)
     except ValueError:
         return []
-    sous: list[list[str]] = []
-    courant: list[str] = []
-    for jeton in jetons:
-        if jeton in SEPARATEURS:
-            if courant:
-                sous.append(courant)
-            courant = []
+    sub_commands: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token in SEPARATORS:
+            if current:
+                sub_commands.append(current)
+            current = []
         else:
-            courant.append(jeton)
-    if courant:
-        sous.append(courant)
-    return sous
+            current.append(token)
+    if current:
+        sub_commands.append(current)
+    return sub_commands
 
 
-def _deplier(jetons: list[str]) -> list[str]:
+def _unfold(tokens: list[str]) -> list[str]:
     """Strip launchers and their options to reach the real command."""
     i = 0
-    vus = 0
-    while i < len(jetons) and vus < 6:
-        jeton = jetons[i]
-        base = Path(jeton).name
-        if base in LANCEURS:
+    seen = 0
+    while i < len(tokens) and seen < 6:
+        token = tokens[i]
+        base = Path(token).name
+        if base in LAUNCHERS:
             i += 1
-            vus += 1
-            while i < len(jetons) and jetons[i].startswith("-"):
+            seen += 1
+            while i < len(tokens) and tokens[i].startswith("-"):
                 i += 1
-            if i < len(jetons) and jetons[i] in SOUS_LANCEURS:
+            if i < len(tokens) and tokens[i] in SUB_LAUNCHERS:
                 i += 1
             # `timeout 30 …`, `nice 10 …`: the launcher's positional argument
             # is not the command. Without this skip, unwrapping stops on the
             # number and any prohibition slips through behind `timeout`.
-            if base in DUREE_POSITIONNELLE and i < len(jetons):
-                if re.match(r"^\d+(?:\.\d+)?[smhd]?$", jetons[i]):
+            if base in POSITIONAL_DURATION and i < len(tokens):
+                if re.match(r"^\d+(?:\.\d+)?[smhd]?$", tokens[i]):
                     i += 1
             continue
-        if "=" in jeton and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", jeton):
+        if "=" in token and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
             i += 1  # variable assignment as a prefix
             continue
         break
-    return jetons[i:]
+    return tokens[i:]
 
 
-def verifier(jetons: list[str], commande_brute: str) -> None:
-    if not jetons:
+def verify(tokens: list[str], raw_command: str) -> None:
+    if not tokens:
         return
-    reels = _deplier(jetons)
-    if not reels:
+    actual_items = _unfold(tokens)
+    if not actual_items:
         return
-    programme = Path(reels[0]).name
-    args = reels[1:]
-    mots = set(args)
+    program = Path(actual_items[0]).name
+    args = actual_items[1:]
+    words = set(args)
 
     # --- Refusal: bypassing the repository's safeguards ----------------------
-    if programme == "git":
-        if "--no-verify" in mots or "-n" in mots and "commit" in args[:1]:
-            p.refuser(
-                EVENEMENT,
+    if program == "git":
+        if "--no-verify" in words or "-n" in words and "commit" in args[:1]:
+            p.deny(
+                EVENT,
                 "`--no-verify` bypasses the repository's commit checks. If a "
                 "check blocks wrongly, it is the check that must be fixed — "
                 "bypassing it once makes it bypassable forever.",
             )
         if "push" in args[:1] and (
-            "--force" in mots or "-f" in mots or any(m.startswith("--force=") for m in mots)
+            "--force" in words or "-f" in words or any(m.startswith("--force=") for m in words)
         ):
-            p.refuser(
-                EVENEMENT,
+            p.deny(
+                EVENT,
                 "`git push --force` rewrites published history and destroys "
                 "other people's work without warning. Use `--force-with-lease` "
                 "after checking the remote state, and do it yourself.",
             )
 
-    if programme == "cargo" and args[:1] == ["publish"]:
-        p.refuser(
-            EVENEMENT,
+    if program == "cargo" and args[:1] == ["publish"]:
+        p.deny(
+            EVENT,
             "`cargo publish` pushes to a public registry: it is irreversible, "
             "a published version cannot be withdrawn. Publishing is done by "
             "hand, after the release checklist.",
         )
 
     # --- Refusal: reading secrets --------------------------------------------
-    if programme in {"cat", "head", "tail", "less", "more", "bat", "strings", "xxd", "od"}:
+    if program in {"cat", "head", "tail", "less", "more", "bat", "strings", "xxd", "od"}:
         for arg in args:
             if re.search(r"\.(?:example|sample|template|dist)$", arg):
                 continue  # committed template, no real value
             if re.search(r"(?:^|/)\.env(?:\.|$)|\.pem$|\.key$|/secrets?/", arg):
-                p.refuser(
-                    EVENEMENT,
+                p.deny(
+                    EVENT,
                     f"Reading a secrets file (`{arg}`). Secrets do not go "
                     "through the session context (I-03, docs/SECURITY.md).",
                 )
 
     # --- Arbitration: writing a repository file through the shell ------------
-    raison_ecriture = None
-    if programme in ECRITURE:
-        if programme == "sed" and not any(a == "-i" or a.startswith("-i") for a in args):
-            raison_ecriture = None
+    write_reason = None
+    if program in WRITE_PATTERN:
+        if program == "sed" and not any(a == "-i" or a.startswith("-i") for a in args):
+            write_reason = None
         else:
-            raison_ecriture = f"`{programme}` modifies a file in place"
-    elif programme in INTERPRETES and any(a in ("-c", "-e") for a in args):
-        raison_ecriture = f"`{programme} -c` can write any file"
-    elif re.search(r"(?<![0-9<>])>>?\s*(?!/dev/null)\S", commande_brute):
-        raison_ecriture = "a redirection writes to a file"
+            write_reason = f"`{program}` modifies a file in place"
+    elif program in INTERPRETERS and any(a in ("-c", "-e") for a in args):
+        write_reason = f"`{program} -c` can write any file"
+    elif re.search(r"(?<![0-9<>])>>?\s*(?!/dev/null)\S", raw_command):
+        write_reason = "a redirection writes to a file"
 
-    if raison_ecriture:
-        p.demander(
-            EVENEMENT,
-            f"{raison_ecriture}. Writes going through the shell escape the "
+    if write_reason:
+        p.ask(
+            EVENT,
+            f"{write_reason}. Writes going through the shell escape the "
             "invariant checks applied to Write and Edit: a `use tauri` in the "
             "core or a hard-coded secret would pass unseen. Prefer Write or "
             "Edit; if the shell is needed, approve this command.",
         )
 
     # --- Arbitration: destruction --------------------------------------------
-    if programme == "rm" and any(re.match(r"^-[a-zA-Z]*[rf]", a) for a in args):
-        p.demander(
-            EVENEMENT,
+    if program == "rm" and any(re.match(r"^-[a-zA-Z]*[rf]", a) for a in args):
+        p.ask(
+            EVENT,
             "Recursive or forced deletion. Check the target first: this "
             "repository does not yet have a complete history, a deletion here "
             "is final.",
         )
 
 
-def principal() -> None:
-    evenement = p.lire_evenement()
-    if evenement.get("tool_name") != "Bash":
+def main() -> None:
+    event = p.read_event()
+    if event.get("tool_name") != "Bash":
         p.laisser_passer()
-    commande = p.commande_bash(evenement)
-    if not commande.strip():
+    command = p.bash_command(event)
+    if not command.strip():
         p.laisser_passer()
-    for jetons in _decouper(commande):
-        verifier(jetons, commande)
+    for tokens in _split(command):
+        verify(tokens, command)
     p.laisser_passer()
 
 
 if __name__ == "__main__":
     try:
-        principal()
+        main()
     except SystemExit:
         raise
     except Exception:

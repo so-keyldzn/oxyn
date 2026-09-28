@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="9368822d2302" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="f35b66c29b55" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2391,7 +2391,7 @@ porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0026](adr/0026-agents-externes-acp.md) | accepté | `an_external_agent_never_serves_a_local_connection` (`oxyn-ai/src/privacy.rs`), `the_table_has_no_secret_column` (`oxyn-store/src/agents/tests.rs`) |
 | [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepté | `under_local_no_prompt_is_composed` (`oxyn-ai/src/external/prompt/tests.rs`), `the_local_tier_refuses_before_even_launching_the_process` (`oxyn-ai/src/external/tests.rs`) |
 | [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepté | `a_preview_without_request_composes_neither_where_nor_order_by` (les deux drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
-| [0029](adr/0029-interface-tauri-shadcn.md) | accepté | `controler_graphe_dependances` de `.claude/verifier_socle.py` (par `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). La campagne de mesure est sa condition de **reconsidération**, pas un préalable |
+| [0029](adr/0029-interface-tauri-shadcn.md) | accepté | `check_dependency_graph` de `.claude/verifier_socle.py` (par `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). La campagne de mesure est sa condition de **reconsidération**, pas un préalable |
 | [0031](adr/0031-validation-des-reponses-ipc.md) | accepté | « rejects what the grid could not draw, rather than letting it through » (`apps/desktop/src/lib/ipc/types.test.ts`), « degrades an unknown ending instead of refusing the event » (`ai.test.ts`) |
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepté | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
 | [0033](adr/0033-couches-de-configuration-codex.md) | accepté | `every_readable_layer_is_switched_off_by_name_each_once` (`oxyn-ai/src/external/confine/codex_layers.rs`) |

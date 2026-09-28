@@ -150,19 +150,19 @@ mod tests {
     #[test]
     fn an_event_reaches_every_subscriber() {
         let bus = EventBus::new();
-        let mut grille = bus.subscribe();
-        let mut barre = bus.subscribe();
+        let mut grid = bus.subscribe();
+        let mut bar = bus.subscribe();
         assert_eq!(bus.subscribers(), 2);
 
-        let commande = CommandId::new();
-        let resultat = ResultId::new();
-        let recus = bus.publish(commande, None, Event::SchemaReady { result: resultat });
-        assert_eq!(recus, 2);
+        let cmd = CommandId::new();
+        let res = ResultId::new();
+        let received = bus.publish(cmd, None, Event::SchemaReady { result: res });
+        assert_eq!(received, 2);
 
-        for canal in [&mut grille, &mut barre] {
-            let recu = canal.try_recv().expect("the event was broadcast");
-            assert_eq!(recu.command, commande);
-            assert_eq!(recu.event, Event::SchemaReady { result: resultat });
+        for channel in [&mut grid, &mut bar] {
+            let got = channel.try_recv().expect("the event was broadcast");
+            assert_eq!(got.command, cmd);
+            assert_eq!(got.event, Event::SchemaReady { result: res });
         }
     }
 
@@ -178,21 +178,21 @@ mod tests {
         // `broadcast::channel(0)` panics: a configuration setting must not be
         // able to get that far.
         let bus = EventBus::with_capacity(0);
-        let mut abonne = bus.subscribe();
+        let mut subscriber = bus.subscribe();
         bus.publish(CommandId::new(), None, Event::CatalogUpdated);
-        assert!(abonne.try_recv().is_ok());
+        assert!(subscriber.try_recv().is_ok());
     }
 
     #[test]
     fn a_terminal_event_is_recognized_through_the_envelope() {
-        let enveloppe = ExecEvent::new(
+        let envelope = ExecEvent::new(
             CommandId::new(),
             None,
             Event::Failed {
-                error: "boum".into(),
+                error: "boom".into(),
                 retryable: false,
             },
         );
-        assert!(enveloppe.is_terminal());
+        assert!(envelope.is_terminal());
     }
 }

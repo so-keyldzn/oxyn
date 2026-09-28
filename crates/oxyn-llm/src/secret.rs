@@ -43,9 +43,9 @@ impl ApiKey {
     /// (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`…).
     #[must_use]
     pub fn from_env(variable: &str) -> Option<Self> {
-        let brute = std::env::var(variable).ok()?;
-        let cle = Self::new(brute);
-        if cle.is_blank() { None } else { Some(cle) }
+        let raw = std::env::var(variable).ok()?;
+        let key = Self::new(raw);
+        if key.is_blank() { None } else { Some(key) }
     }
 
     /// Exposes the key, to put it in an HTTP header and nothing else.
@@ -67,7 +67,7 @@ impl ApiKey {
         self.0.trim().is_empty()
     }
 
-    /// Longueur en octets, seule information qu'on accepte de divulguer.
+    /// Length in bytes, the only information we agree to disclose.
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
@@ -104,8 +104,8 @@ impl Drop for ApiKey {
     fn drop(&mut self) {
         // `String::into_bytes` reuses the allocation: so it is indeed the
         // buffer that carried the key that is overwritten, not a copy.
-        let mut octets = std::mem::take(&mut self.0).into_bytes();
-        octets.fill(0);
+        let mut bytes = std::mem::take(&mut self.0).into_bytes();
+        bytes.fill(0);
     }
 }
 
@@ -123,10 +123,10 @@ pub(crate) const REDACTED: &str = "<redacted API key>";
 ///
 /// An empty or blank key is not searched for: it would appear everywhere.
 #[must_use]
-pub(crate) fn redact_key(texte: &str, cle: Option<&ApiKey>) -> String {
-    match cle {
-        Some(cle) if !cle.is_blank() => texte.replace(cle.expose(), REDACTED),
-        _ => texte.to_owned(),
+pub(crate) fn redact_key(text: &str, key: Option<&ApiKey>) -> String {
+    match key {
+        Some(key) if !key.is_blank() => text.replace(key.expose(), REDACTED),
+        _ => text.to_owned(),
     }
 }
 
@@ -136,20 +136,20 @@ mod tests {
 
     #[test]
     fn debug_leaks_nothing() {
-        let cle = ApiKey::new("sk-proj-0123456789abcdef");
-        let rendu = format!("{cle:?}");
-        assert!(!rendu.contains("sk-proj"), "{rendu}");
-        assert!(!rendu.contains("0123"), "{rendu}");
-        assert!(rendu.contains("masked"), "{rendu}");
+        let key = ApiKey::new("sk-proj-0123456789abcdef");
+        let rendered = format!("{key:?}");
+        assert!(!rendered.contains("sk-proj"), "{rendered}");
+        assert!(!rendered.contains("0123"), "{rendered}");
+        assert!(rendered.contains("masked"), "{rendered}");
     }
 
     #[test]
     fn an_option_debug_leaks_nothing_either() {
         // The real case: `#[derive(Debug)]` on a struct that carries
         // `Option<ApiKey>` delegates to the `Debug` of `ApiKey`.
-        let porte = Some(ApiKey::new("sk-secret"));
-        let rendu = format!("{porte:?}");
-        assert!(!rendu.contains("secret"), "{rendu}");
+        let wrapped = Some(ApiKey::new("sk-secret"));
+        let rendered = format!("{wrapped:?}");
+        assert!(!rendered.contains("secret"), "{rendered}");
     }
 
     #[test]
@@ -161,23 +161,23 @@ mod tests {
 
     #[test]
     fn redaction_erases_the_key_copied_by_the_provider() {
-        let cle = ApiKey::new("sk-abcdef");
-        let corps = r#"{"error":{"message":"Incorrect API key provided: sk-abcdef"}}"#;
-        let filtre = redact_key(corps, Some(&cle));
-        assert!(!filtre.contains("sk-abcdef"), "{filtre}");
-        assert!(filtre.contains(REDACTED), "{filtre}");
+        let key = ApiKey::new("sk-abcdef");
+        let body = r#"{"error":{"message":"Incorrect API key provided: sk-abcdef"}}"#;
+        let filter = redact_key(body, Some(&key));
+        assert!(!filter.contains("sk-abcdef"), "{filter}");
+        assert!(filter.contains(REDACTED), "{filter}");
     }
 
     #[test]
     fn redaction_without_a_key_leaves_the_text_intact() {
-        let corps = "model not found";
-        assert_eq!(redact_key(corps, None), corps);
+        let body = "model not found";
+        assert_eq!(redact_key(body, None), body);
     }
 
     #[test]
     fn a_blank_key_is_not_used_as_a_redaction_pattern() {
         // Otherwise `replace("", …)` would insert the mention between every character.
-        let cle = ApiKey::new("   ");
-        assert_eq!(redact_key("abc", Some(&cle)), "abc");
+        let key = ApiKey::new("   ");
+        assert_eq!(redact_key("abc", Some(&key)), "abc");
     }
 }

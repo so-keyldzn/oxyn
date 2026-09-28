@@ -42,17 +42,15 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn lot(lignes: usize) -> RecordBatch {
-    let entiers = Int64Array::from_iter_values(0..lignes as i64);
-    let mots: Vec<String> = (0..lignes)
-        .map(|rang| format!("valeur_{rang:07}"))
-        .collect();
+fn batch_of(rows: usize) -> RecordBatch {
+    let integers = Int64Array::from_iter_values(0..rows as i64);
+    let words: Vec<String> = (0..rows).map(|rank| format!("valeur_{rank:07}")).collect();
     RecordBatch::try_new(
         schema(),
         vec![
-            Arc::new(entiers),
+            Arc::new(integers),
             Arc::new(StringArray::from(
-                mots.iter().map(String::as_str).collect::<Vec<_>>(),
+                words.iter().map(String::as_str).collect::<Vec<_>>(),
             )),
         ],
     )
@@ -66,39 +64,39 @@ fn lot(lignes: usize) -> RecordBatch {
 /// measure a **cached** read if the spill did not happen, announce a few
 /// nanoseconds, and that figure would pass for an excellent result. That is
 /// exactly the failure that already skewed a bench in this repository.
-fn tampon_deborde(lignes: usize) -> (ResultBuffer, BatchIndex) {
-    let tampon = ResultBuffer::new(schema(), 1);
+fn spilled_buffer(rows: usize) -> (ResultBuffer, BatchIndex) {
+    let buffer = ResultBuffer::new(schema(), 1);
     for _ in 0..4 {
-        tampon.push(lot(lignes)).expect("batch accepted");
+        buffer.push(batch_of(rows)).expect("batch accepted");
     }
-    let dernier = BatchIndex::new(tampon.batch_count() - 1);
+    let last = BatchIndex::new(buffer.batch_count() - 1);
     assert!(
-        !tampon.is_resident(dernier),
+        !buffer.is_resident(last),
         "the bench must measure a disk read: this batch is still in memory"
     );
-    (tampon, dernier)
+    (buffer, last)
 }
 
 fn read_back_a_spilled_batch(c: &mut Criterion) {
-    let mut groupe = c.benchmark_group("spilled_page");
+    let mut group = c.benchmark_group("spilled_page");
 
-    for lignes in [512usize, 8_192] {
-        let (tampon, position) = tampon_deborde(lignes);
+    for rows in [512usize, 8_192] {
+        let (buffer, position) = spilled_buffer(rows);
 
-        groupe.bench_with_input(BenchmarkId::from_parameter(lignes), &lignes, |banc, _| {
-            banc.iter(|| {
-                let lot = tampon
+        group.bench_with_input(BenchmarkId::from_parameter(rows), &rows, |bench, _| {
+            bench.iter(|| {
+                let rb = buffer
                     .batch(black_box(position))
                     .expect("the read succeeds")
                     .expect("the batch exists");
                 // `num_rows` is O(1): a real value of the batch is consumed so
                 // that decoding cannot be elided.
-                black_box(lot.num_rows())
+                black_box(rb.num_rows())
             });
         });
     }
 
-    groupe.finish();
+    group.finish();
 }
 
 criterion_group!(benches, read_back_a_spilled_batch);

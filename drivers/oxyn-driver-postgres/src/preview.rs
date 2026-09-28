@@ -280,8 +280,8 @@ mod tests {
         let fields = columns
             .iter()
             .enumerate()
-            .map(|(rang, (name, key))| {
-                let position = u32::try_from(rang).expect("fewer than 2^32 test columns");
+            .map(|(rank, (name, key))| {
+                let position = u32::try_from(rank).expect("fewer than 2^32 test columns");
                 let mut field = Field::new(*name, position, LogicalType::Text, "text");
                 field.is_primary_key = *key;
                 field
@@ -391,22 +391,22 @@ mod tests {
     #[test]
     fn an_unknown_sort_column_is_refused_before_the_server() {
         let shape = PreviewShape {
-            sort: vec![PreviewSort::ascending("absente")],
+            sort: vec![PreviewSort::ascending("missing")],
             ..PreviewShape::default()
         };
-        let erreur = compose(&shape, &facts(&[("id", true)])).expect_err("refusal expected");
-        refus_permanent(&erreur);
+        let error = compose(&shape, &facts(&[("id", true)])).expect_err("refusal expected");
+        permanent_refusal(&error);
     }
 
     /// A column the relation does not declare will not reappear on the next
     /// attempt: the error is permanent, never `Transient`.
-    fn refus_permanent(erreur: &OxynError) {
+    fn permanent_refusal(error: &OxynError) {
         assert!(
-            matches!(erreur, OxynError::Query(message) if message.contains("absente")),
-            "{erreur}"
+            matches!(error, OxynError::Query(message) if message.contains("missing")),
+            "{error}"
         );
-        assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
-        assert!(!erreur.is_retryable(), "{erreur}");
+        assert_eq!(error.class(), oxyn_core::ErrorClass::Permanent);
+        assert!(!error.is_retryable(), "{error}");
     }
 
     #[test]
@@ -416,19 +416,18 @@ mod tests {
             offset: 200,
             ..PreviewShape::default()
         };
-        let erreur =
-            compose(&shape, &facts(&[("name", false)])).expect_err("pagination impossible");
-        let OxynError::NotSupported { capability } = &erreur else {
-            panic!("refusal expected, got {erreur}");
+        let error = compose(&shape, &facts(&[("name", false)])).expect_err("pagination impossible");
+        let OxynError::NotSupported { capability } = &error else {
+            panic!("refusal expected, got {error}");
         };
         assert!(capability.contains("unique key"), "{capability}");
         // The same relation stays viewable on its first page: that is today's
         // preview, and it has lost nothing.
-        let premiere = PreviewShape {
+        let first_value = PreviewShape {
             sort: vec![PreviewSort::ascending("name")],
             ..PreviewShape::default()
         };
-        assert!(compose(&premiere, &facts(&[("name", false)])).is_ok());
+        assert!(compose(&first_value, &facts(&[("name", false)])).is_ok());
     }
 
     #[test]
@@ -436,14 +435,14 @@ mod tests {
         let shape = PreviewShape {
             // An end-of-line comment: without the newline, it would swallow the
             // ORDER BY and the LIMIT, and the preview would read the whole table.
-            predicate: Some("amount > 100 -- au-delà de cent".into()),
+            predicate: Some("amount > 100 -- over a hundred".into()),
             sort: vec![PreviewSort::ascending("id")],
             ..PreviewShape::default()
         };
         let request = compose(&shape, &facts(&[("id", true)])).expect("predicate");
         assert_eq!(
             request.text,
-            "SELECT * FROM \"public\".\"t\" WHERE (amount > 100 -- au-delà de cent\n\
+            "SELECT * FROM \"public\".\"t\" WHERE (amount > 100 -- over a hundred\n\
              ) ORDER BY \"id\" ASC LIMIT 200"
         );
         assert!(request.limits.read_only);
@@ -567,10 +566,10 @@ mod tests {
     #[test]
     fn an_unknown_projected_column_is_refused_before_the_server() {
         let shape = PreviewShape {
-            columns: Some(vec!["absente".into(), "id".into()]),
+            columns: Some(vec!["missing".into(), "id".into()]),
             ..PreviewShape::default()
         };
-        let typee = request_with_columns(
+        let typed = request_with_columns(
             "db",
             SqlDialect::Postgres,
             &path(),
@@ -579,18 +578,18 @@ mod tests {
             &shape,
             &RelationFacts::default(),
         );
-        let decrite = compose(&shape, &facts(&[("id", true)]));
+        let described_relation = compose(&shape, &facts(&[("id", true)]));
         // Nothing read, nothing known: a name does not pass for lack of checking.
-        let rien = compose(&shape, &RelationFacts::default());
-        for erreur in [typee, decrite, rien] {
-            refus_permanent(&erreur.expect_err("refusal expected"));
+        let nothing = compose(&shape, &RelationFacts::default());
+        for error in [typed, described_relation, nothing] {
+            permanent_refusal(&error.expect_err("refusal expected"));
         }
-        let vide = PreviewShape {
+        let empty_shape = PreviewShape {
             columns: Some(Vec::new()),
             ..PreviewShape::default()
         };
         assert!(matches!(
-            compose(&vide, &facts(&[("id", true)])),
+            compose(&empty_shape, &facts(&[("id", true)])),
             Err(OxynError::Config(_))
         ));
     }

@@ -13,7 +13,7 @@ paths:
   - "script/*"
 ---
 
-<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="d74b32ee1b87" -->
+<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="8972c1a3c544" -->
 
 > Traduction française de [.claude/rules/manifestes.md](../../../../.claude/rules/manifestes.md). **La version anglaise fait foi.**
 
@@ -66,13 +66,13 @@ existence en le voyant échouer.
 
 Le découpage a le risque inverse : une cible ajoutée à `qualite` et oubliée dans
 le workflow ne tournerait jamais en CI. `make socle` le refuse
-(`controler_couverture_ci`). Une nouvelle cible de la porte s'ajoute donc aux
+(`check_ci_coverage`). Une nouvelle cible de la porte s'ajoute donc aux
 deux endroits dans le même commit.
 
 Sur une pull request, les jobs d'une zone intacte sont sautés
 ([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)) ; sur
 `main`, tout tourne. Un nouveau job qui appelle `make` s'ajoute aux `needs` du
-job agrégat `qualite` (`controler_agregat_ci`), et un nouveau répertoire de
+job agrégat `qualite` (`check_ci_aggregate`), et un nouveau répertoire de
 premier niveau se range dans `script/zones-ci` — sans quoi il déclenche tout.
 
 ## Où vivent les interdits mécanisables

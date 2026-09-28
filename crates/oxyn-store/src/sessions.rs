@@ -153,11 +153,11 @@ impl<'a> Sessions<'a> {
     /// Storage errors.
     pub fn forget_closed_before(&self, keep: DateTime<Utc>) -> Result<usize> {
         self.store.with_connection(|connection| {
-            let effacees = connection.execute(
+            let erased = connection.execute(
                 "DELETE FROM app_sessions WHERE closed_at IS NOT NULL AND closed_at < ?1",
                 params![keep],
             )?;
-            Ok(effacees)
+            Ok(erased)
         })
     }
 }
@@ -195,21 +195,21 @@ fn previous(
     cutoff: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<PreviousShutdown> {
-    let annoncees = connection.execute(
+    let announced_ones = connection.execute(
         "UPDATE app_sessions SET reported_at = ?3
          WHERE workspace_id = ?1 AND closed_at IS NULL AND reported_at IS NULL
            AND heartbeat_at < ?2",
         params![workspace.to_string(), cutoff, now],
     )?;
-    if annoncees > 0 {
+    if announced_ones > 0 {
         return Ok(PreviousShutdown::Abnormal);
     }
-    let connues: i64 = connection.query_row(
+    let known: i64 = connection.query_row(
         "SELECT COUNT(*) FROM app_sessions WHERE workspace_id = ?1",
         params![workspace.to_string()],
         |row| row.get(0),
     )?;
-    if connues > 0 {
+    if known > 0 {
         Ok(PreviousShutdown::Clean)
     } else {
         Ok(PreviousShutdown::Never)
@@ -220,15 +220,15 @@ fn previous(
 mod tests {
     use super::*;
 
-    fn atelier() -> (Store, WorkspaceId) {
+    fn workshop() -> (Store, WorkspaceId) {
         let store = Store::open_in_memory().expect("in-memory store");
-        let workspace = store.workspaces().create("atelier").expect("workspace").id;
+        let workspace = store.workspaces().create("workshop").expect("workspace").id;
         (store, workspace)
     }
 
     /// Ages a session's heartbeat, to simulate time passing without waiting
     /// two minutes in a test.
-    fn vieillir(store: &Store, session: AppSessionId, de: Duration) {
+    fn age_session(store: &Store, session: AppSessionId, de: Duration) {
         store
             .with_connection(|connection| {
                 connection.execute(
@@ -242,8 +242,8 @@ mod tests {
 
     #[test]
     fn a_first_opening_reports_no_abnormal_shutdown() {
-        let (store, atelier) = atelier();
-        let (_, verdict) = store.sessions().begin(atelier).expect("open");
+        let (store, workshop) = workshop();
+        let (_, verdict) = store.sessions().begin(workshop).expect("open");
         assert_eq!(verdict, PreviousShutdown::Never);
         assert!(!verdict.needs_recovery());
     }
@@ -252,23 +252,23 @@ mod tests {
     /// crash.
     #[test]
     fn an_ordinary_close_does_not_trigger_recovery() {
-        let (store, atelier) = atelier();
-        let (session, _) = store.sessions().begin(atelier).expect("open");
+        let (store, workshop) = workshop();
+        let (session, _) = store.sessions().begin(workshop).expect("open");
         store.sessions().close(session).expect("close");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relaunch");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Clean);
         assert!(!verdict.needs_recovery());
     }
 
     #[test]
     fn a_session_left_open_and_silent_is_an_abnormal_shutdown() {
-        let (store, atelier) = atelier();
-        let (session, _) = store.sessions().begin(atelier).expect("open");
+        let (store, workshop) = workshop();
+        let (session, _) = store.sessions().begin(workshop).expect("open");
         // Neither `close` nor heartbeat: the process died without a word.
-        vieillir(&store, session, ABANDONED_AFTER + Duration::seconds(1));
+        age_session(&store, session, ABANDONED_AFTER + Duration::seconds(1));
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relaunch");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Abnormal);
         assert!(verdict.needs_recovery());
     }
@@ -276,13 +276,13 @@ mod tests {
     /// The test that prevents blaming an instance that is working.
     #[test]
     fn an_instance_still_beating_is_not_a_crash() {
-        let (store, atelier) = atelier();
-        let (vivante, _) = store.sessions().begin(atelier).expect("first instance");
-        vieillir(&store, vivante, ABANDONED_AFTER + Duration::seconds(1));
+        let (store, workshop) = workshop();
+        let (alive_one, _) = store.sessions().begin(workshop).expect("first instance");
+        age_session(&store, alive_one, ABANDONED_AFTER + Duration::seconds(1));
         // It shows signs of life just before the second one starts.
-        store.sessions().heartbeat(vivante).expect("heartbeat");
+        store.sessions().heartbeat(alive_one).expect("heartbeat");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("second instance");
+        let (_, verdict) = store.sessions().begin(workshop).expect("second instance");
         assert_eq!(
             verdict,
             PreviousShutdown::Clean,
@@ -293,15 +293,15 @@ mod tests {
     /// The observed defect: an old crash made recovery permanent.
     #[test]
     fn an_abnormal_shutdown_is_announced_only_once() {
-        let (store, atelier) = atelier();
-        let (plantee, _) = store.sessions().begin(atelier).expect("open");
-        vieillir(&store, plantee, ABANDONED_AFTER + Duration::seconds(1));
+        let (store, workshop) = workshop();
+        let (crashed, _) = store.sessions().begin(workshop).expect("open");
+        age_session(&store, crashed, ABANDONED_AFTER + Duration::seconds(1));
 
-        let (relance, verdict) = store.sessions().begin(atelier).expect("relaunch");
+        let (relaunch, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Abnormal);
-        store.sessions().close(relance).expect("ordinary close");
+        store.sessions().close(relaunch).expect("ordinary close");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("second relaunch");
+        let (_, verdict) = store.sessions().begin(workshop).expect("second relaunch");
         assert_eq!(
             verdict,
             PreviousShutdown::Clean,
@@ -311,50 +311,50 @@ mod tests {
 
     #[test]
     fn an_announced_session_keeps_its_missing_closing() {
-        let (store, atelier) = atelier();
-        let (plantee, _) = store.sessions().begin(atelier).expect("open");
-        vieillir(&store, plantee, ABANDONED_AFTER + Duration::seconds(1));
-        store.sessions().begin(atelier).expect("relaunch");
+        let (store, workshop) = workshop();
+        let (crashed, _) = store.sessions().begin(workshop).expect("open");
+        age_session(&store, crashed, ABANDONED_AFTER + Duration::seconds(1));
+        store.sessions().begin(workshop).expect("relaunch");
 
-        let (fermee, annoncee): (Option<String>, Option<String>) = store
+        let (closed, announced): (Option<String>, Option<String>) = store
             .with_connection(|connection| {
                 Ok(connection.query_row(
                     "SELECT closed_at, reported_at FROM app_sessions WHERE id = ?1",
-                    params![plantee.to_string()],
+                    params![crashed.to_string()],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?)
             })
             .expect("read");
-        assert!(fermee.is_none(), "a crash does not become a clean shutdown");
-        assert!(annoncee.is_some());
+        assert!(closed.is_none(), "a crash does not become a clean shutdown");
+        assert!(announced.is_some());
     }
 
     #[test]
     fn a_heartbeat_does_not_revive_a_closed_session() {
-        let (store, atelier) = atelier();
-        let (session, _) = store.sessions().begin(atelier).expect("open");
+        let (store, workshop) = workshop();
+        let (session, _) = store.sessions().begin(workshop).expect("open");
         store.sessions().close(session).expect("close");
         store.sessions().heartbeat(session).expect("late heartbeat");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relaunch");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(verdict, PreviousShutdown::Clean);
     }
 
     #[test]
     fn maintenance_erases_closed_sessions_without_touching_the_observation() {
-        let (store, atelier) = atelier();
-        let (close, _) = store.sessions().begin(atelier).expect("open");
+        let (store, workshop) = workshop();
+        let (close, _) = store.sessions().begin(workshop).expect("open");
         store.sessions().close(close).expect("close");
-        let (abandonnee, _) = store.sessions().begin(atelier).expect("second");
-        vieillir(&store, abandonnee, ABANDONED_AFTER + Duration::seconds(1));
+        let (abandoned, _) = store.sessions().begin(workshop).expect("second");
+        age_session(&store, abandoned, ABANDONED_AFTER + Duration::seconds(1));
 
-        let efface = store
+        let erased = store
             .sessions()
             .forget_closed_before(Utc::now() + Duration::seconds(1))
             .expect("maintenance");
-        assert_eq!(efface, 1, "only the closed session is forgotten");
+        assert_eq!(erased, 1, "only the closed session is forgotten");
 
-        let (_, verdict) = store.sessions().begin(atelier).expect("relaunch");
+        let (_, verdict) = store.sessions().begin(workshop).expect("relaunch");
         assert_eq!(
             verdict,
             PreviousShutdown::Abnormal,

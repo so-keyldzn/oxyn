@@ -3,9 +3,9 @@ use oxyn_core::{ConnectionId, ObjectSection, QueryLanguage};
 use super::*;
 use crate::documents::Document;
 
-fn atelier() -> (Store, WorkspaceId) {
+fn workshop() -> (Store, WorkspaceId) {
     let store = Store::open_in_memory().expect("in-memory store");
-    let workspace = store.workspaces().create("atelier").expect("workspace").id;
+    let workspace = store.workspaces().create("workshop").expect("workspace").id;
     (store, workspace)
 }
 
@@ -55,7 +55,7 @@ fn sql<T: rusqlite::types::FromSql>(store: &Store, query: &str) -> T {
 
 #[test]
 fn a_written_window_comes_back_at_the_next_launch() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (first, _) = store.sessions().begin(workspace).expect("launch");
     let mut written = layout(vec![console(&store, workspace), console(&store, workspace)]);
     written.object_location = Some(ObjectLocation {
@@ -76,7 +76,7 @@ fn a_written_window_comes_back_at_the_next_launch() {
 
 #[test]
 fn a_rewrite_replaces_the_consoles_and_counts_the_revision() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     let (a, b) = (console(&store, workspace), console(&store, workspace));
     let mut written = layout(vec![a, b]);
@@ -103,7 +103,7 @@ fn a_rewrite_replaces_the_consoles_and_counts_the_revision() {
 /// of making the write fail.
 #[test]
 fn a_console_is_in_a_single_window() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     let moved = console(&store, workspace);
     let left = layout(vec![moved]);
@@ -126,7 +126,7 @@ fn a_console_is_in_a_single_window() {
 
 #[test]
 fn a_never_saved_console_is_not_written() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     let written = layout(vec![DocumentId::new()]);
     store
@@ -141,7 +141,7 @@ fn a_never_saved_console_is_not_written() {
 
 #[test]
 fn removing_a_window_leaves_its_documents_in_the_library() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     let kept = console(&store, workspace);
     let written = layout(vec![kept]);
@@ -168,7 +168,7 @@ fn removing_a_window_leaves_its_documents_in_the_library() {
 /// over the other's windows while it is still beating.
 #[test]
 fn the_windows_of_a_live_instance_stay_its_own() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (alive, _) = store.sessions().begin(workspace).expect("first instance");
     store
         .windows()
@@ -203,7 +203,7 @@ fn the_windows_of_a_live_instance_stay_its_own() {
 
 #[test]
 fn beyond_sixteen_windows_the_surplus_is_forgotten() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     for ordinal in 0..20 {
         let mut written = layout(Vec::new());
@@ -228,7 +228,7 @@ fn beyond_sixteen_windows_the_surplus_is_forgotten() {
 /// get past reading.
 #[test]
 fn a_hostile_row_is_clamped_or_ignored() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     let active = console(&store, workspace);
     let written = layout(vec![active]);
@@ -240,13 +240,13 @@ fn a_hostile_row_is_clamped_or_ignored() {
         .with_connection(|connection| {
             connection.execute(
                 "UPDATE workspace_windows SET x = 1e300, y = NULL, width = -4, height = 9e99,
-                     ordinal = -3, object_location = '{\"pas\": \"un emplacement\"}'",
+                     ordinal = -3, object_location = '{\"not\": \"a location\"}'",
                 [],
             )?;
             connection.execute(
                 "INSERT INTO workspace_windows (id, workspace_id, app_session_id, ordinal,
                      width, height, maximized, revision, updated_at)
-                 VALUES ('pas-un-uuid', ?1, 'personne', 1, 800, 600, 0, 1, 'hier')",
+                 VALUES ('not-a-uuid', ?1, 'nobody', 1, 800, 600, 0, 1, 'yesterday')",
                 params![workspace.to_string()],
             )?;
             Ok(())
@@ -275,7 +275,7 @@ fn a_hostile_row_is_clamped_or_ignored() {
 
 #[test]
 fn a_closed_console_does_not_come_back() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     let closed = console(&store, workspace);
     store
@@ -293,7 +293,7 @@ fn a_closed_console_does_not_come_back() {
 /// row, forgotten without coming back at the next launch, or its column.
 #[test]
 fn a_mistyped_column_only_costs_its_row() {
-    let (store, workspace) = atelier();
+    let (store, workspace) = workshop();
     let (session, _) = store.sessions().begin(workspace).expect("launch");
     let kept = layout(Vec::new());
     store
@@ -307,11 +307,11 @@ fn a_mistyped_column_only_costs_its_row() {
                  CREATE TABLE workspace_window_consoles (window_id, document_id, position);",
             )?;
             connection.execute(
-                "INSERT INTO workspace_windows VALUES (42, ?1, 'personne', 0, 1, 2, 800, 600, 0, NULL, NULL, 1, 'hier')",
+                "INSERT INTO workspace_windows VALUES (42, ?1, 'nobody', 0, 1, 2, 800, 600, 0, NULL, NULL, 1, 'yesterday')",
                 params![workspace.to_string()],
             )?;
             connection.execute(
-                "INSERT INTO workspace_windows VALUES (?1, ?2, 'personne', 1, NULL, NULL, 'large', 600, 0, NULL, NULL, 1, 'hier')",
+                "INSERT INTO workspace_windows VALUES (?1, ?2, 'nobody', 1, NULL, NULL, 'large', 600, 0, NULL, NULL, 1, 'yesterday')",
                 params![kept.window.to_string(), workspace.to_string()],
             )?;
             Ok(())

@@ -67,21 +67,19 @@ impl KeyringCredentials {
         let reference = reference_of(config)?;
 
         let mut bundle = CredentialBundle::new();
-        for (cle, valeur) in values {
-            bundle = match cle.as_str() {
-                "password" => bundle.with_password(valeur),
-                "token" => bundle.with_token(valeur),
-                _ => bundle.with_extra(cle, valeur),
+        for (field, value) in values {
+            bundle = match field.as_str() {
+                "password" => bundle.with_password(value),
+                "token" => bundle.with_token(value),
+                _ => bundle.with_extra(field, value),
             };
         }
 
         self.store
             .put_bundle(&reference, &bundle)
-            // `erreur` names the backend and the failure, never the value:
+            // `err` names the backend and the failure, never the value:
             // `SecretError` is written not to carry one.
-            .map_err(|erreur| {
-                OxynError::Config(format!("writing the connection secrets: {erreur}"))
-            })?;
+            .map_err(|err| OxynError::Config(format!("writing the connection secrets: {err}")))?;
 
         Ok(reference)
     }
@@ -109,22 +107,18 @@ impl KeyringCredentials {
         let mut bundle = self
             .store
             .get_bundle(&reference)
-            .map_err(|erreur| {
-                OxynError::Config(format!("reading the connection secrets: {erreur}"))
-            })?
+            .map_err(|err| OxynError::Config(format!("reading the connection secrets: {err}")))?
             .unwrap_or_default();
-        for (cle, valeur) in values {
-            bundle = match cle.as_str() {
-                "password" => bundle.with_password(valeur),
-                "token" => bundle.with_token(valeur),
-                _ => bundle.with_extra(cle, valeur),
+        for (field, value) in values {
+            bundle = match field.as_str() {
+                "password" => bundle.with_password(value),
+                "token" => bundle.with_token(value),
+                _ => bundle.with_extra(field, value),
             };
         }
         self.store
             .put_bundle(&reference, &bundle)
-            .map_err(|erreur| {
-                OxynError::Config(format!("writing the connection secrets: {erreur}"))
-            })?;
+            .map_err(|err| OxynError::Config(format!("writing the connection secrets: {err}")))?;
         Ok(reference)
     }
 
@@ -158,12 +152,11 @@ impl KeyringCredentials {
     /// [`OxynError::Config`] if the reference cannot be parsed or the keyring
     /// refuses the deletion.
     pub fn forget_secrets(&self, reference: &str) -> Result<(), OxynError> {
-        let reference = SecretRef::parse(reference).map_err(|erreur| {
-            OxynError::Config(format!("connection secret reference: {erreur}"))
-        })?;
-        self.store.delete(&reference).map_err(|erreur| {
-            OxynError::Config(format!("forgetting the connection secrets: {erreur}"))
-        })
+        let reference = SecretRef::parse(reference)
+            .map_err(|err| OxynError::Config(format!("connection secret reference: {err}")))?;
+        self.store
+            .delete(&reference)
+            .map_err(|err| OxynError::Config(format!("forgetting the connection secrets: {err}")))
     }
 
     /// Writes a model provider's API key, replacing whatever was there.
@@ -184,10 +177,10 @@ impl KeyringCredentials {
         key: &str,
     ) -> Result<SecretRef, OxynError> {
         let reference = SecretRef::for_provider(provider.as_str())
-            .map_err(|erreur| OxynError::Config(format!("provider secret reference: {erreur}")))?;
+            .map_err(|err| OxynError::Config(format!("provider secret reference: {err}")))?;
         self.store
             .put(&reference, SecretString::from(key.to_owned()))
-            .map_err(|erreur| OxynError::Config(format!("writing the provider key: {erreur}")))?;
+            .map_err(|err| OxynError::Config(format!("writing the provider key: {err}")))?;
         Ok(reference)
     }
 
@@ -208,11 +201,11 @@ impl KeyringCredentials {
             return Ok(None);
         };
         let reference = SecretRef::parse(reference)
-            .map_err(|erreur| OxynError::Config(format!("provider secret reference: {erreur}")))?;
+            .map_err(|err| OxynError::Config(format!("provider secret reference: {err}")))?;
         let secret = self
             .store
             .get(&reference)
-            .map_err(|erreur| OxynError::Config(format!("reading the provider key: {erreur}")))?;
+            .map_err(|err| OxynError::Config(format!("reading the provider key: {err}")))?;
         Ok(secret.map(|value| ApiKey::new(value.expose_secret())))
     }
 
@@ -229,10 +222,10 @@ impl KeyringCredentials {
     /// refuses the deletion.
     pub fn forget_provider_key(&self, reference: &str) -> Result<(), OxynError> {
         let reference = SecretRef::parse(reference)
-            .map_err(|erreur| OxynError::Config(format!("provider secret reference: {erreur}")))?;
+            .map_err(|err| OxynError::Config(format!("provider secret reference: {err}")))?;
         self.store
             .delete(&reference)
-            .map_err(|erreur| OxynError::Config(format!("forgetting the provider key: {erreur}")))
+            .map_err(|err| OxynError::Config(format!("forgetting the provider key: {err}")))
     }
 }
 
@@ -241,7 +234,7 @@ impl KeyringCredentials {
 /// reads would leave the old secrets in use.
 fn reference_of(config: &ConnectionConfig) -> Result<SecretRef, OxynError> {
     SecretRef::for_connection_config(config)
-        .map_err(|erreur| OxynError::Config(format!("connection secret reference: {erreur}")))
+        .map_err(|err| OxynError::Config(format!("connection secret reference: {err}")))
 }
 
 impl CredentialResolver for KeyringCredentials {
@@ -253,12 +246,11 @@ impl CredentialResolver for KeyringCredentials {
             return Ok(Credentials::new());
         };
 
-        let reference = SecretRef::parse(reference).map_err(|erreur| {
-            OxynError::Config(format!("unreadable secret reference: {erreur}"))
-        })?;
+        let reference = SecretRef::parse(reference)
+            .map_err(|err| OxynError::Config(format!("unreadable secret reference: {err}")))?;
 
-        let bundle = self.store.get_bundle(&reference).map_err(|erreur| {
-            OxynError::Authentication(format!("reading the connection secrets: {erreur}"))
+        let bundle = self.store.get_bundle(&reference).map_err(|err| {
+            OxynError::Authentication(format!("reading the connection secrets: {err}"))
         })?;
 
         // A reference that names nothing is *not* an authentication failure to
@@ -273,26 +265,26 @@ impl CredentialResolver for KeyringCredentials {
         };
 
         let mut credentials = Credentials::new();
-        if let Some(mot_de_passe) = bundle.password() {
-            credentials = credentials.with_password(mot_de_passe);
+        if let Some(password) = bundle.password() {
+            credentials = credentials.with_password(password);
         }
-        if let Some(jeton) = bundle.token() {
-            credentials = credentials.with_token(jeton);
+        if let Some(token) = bundle.token() {
+            credentials = credentials.with_token(token);
         }
 
         // `filled_fields` is the only way to enumerate the extras, and the names
         // it returns are driver-chosen labels, never values — that is the
         // documented escape hatch from the redacted `Debug`.
-        for nom in bundle.filled_fields() {
-            match nom {
+        for field_name in bundle.filled_fields() {
+            match field_name {
                 "password" | "token" => {}
-                autre => match bundle.extra(autre) {
-                    Some(valeur) => credentials = credentials.with_extra(autre, valeur),
+                other_field => match bundle.extra(other_field) {
+                    Some(value) => credentials = credentials.with_extra(other_field, value),
                     // A TLS or SSH slot: stored, but `Credentials` has no place
                     // for it yet. Saying so is better than a connection that
                     // fails with the server's opaque refusal.
                     None => tracing::warn!(
-                        field = autre,
+                        field = other_field,
                         connection = %config.name,
                         "secret stored but not carried to the driver"
                     ),

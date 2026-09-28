@@ -74,7 +74,7 @@ async fn incoming_keys_cross_schemas_preserve_composite_order_and_declared_cardi
         "CREATE TABLE oxyn_incoming_source.parent (a integer PRIMARY KEY)",
         "CREATE TABLE oxyn_incoming_source.other_child (a integer REFERENCES oxyn_incoming_source.parent)",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
     let path =
         CatalogPath::for_relation(None, Some("oxyn_incoming_target"), "parent").expect("path");
@@ -119,8 +119,8 @@ async fn incoming_keys_cross_schemas_preserve_composite_order_and_declared_cardi
             None
         );
     }
-    appliquer(&*session, "DROP SCHEMA oxyn_incoming_source CASCADE").await;
-    appliquer(&*session, "DROP SCHEMA oxyn_incoming_target CASCADE").await;
+    apply(&*session, "DROP SCHEMA oxyn_incoming_source CASCADE").await;
+    apply(&*session, "DROP SCHEMA oxyn_incoming_target CASCADE").await;
 }
 
 #[tokio::test]
@@ -130,17 +130,17 @@ async fn constraints_report_validation_status_from_the_server() {
     let Some(session) = session().await else {
         return;
     };
-    appliquer(
+    apply(
         &*session,
         "CREATE TABLE oxyn_constraint_validation (id integer)",
     )
     .await;
-    appliquer(
+    apply(
         &*session,
         "INSERT INTO oxyn_constraint_validation VALUES (-1)",
     )
     .await;
-    appliquer(
+    apply(
         &*session,
         "ALTER TABLE oxyn_constraint_validation ADD CONSTRAINT positive CHECK (id > 0) NOT VALID",
     )
@@ -156,8 +156,8 @@ async fn constraints_report_validation_status_from_the_server() {
         constraints.first().expect("constraint").validated,
         Some(false)
     );
-    appliquer(&*session, "UPDATE oxyn_constraint_validation SET id = 1").await;
-    appliquer(
+    apply(&*session, "UPDATE oxyn_constraint_validation SET id = 1").await;
+    apply(
         &*session,
         "ALTER TABLE oxyn_constraint_validation VALIDATE CONSTRAINT positive",
     )
@@ -171,7 +171,7 @@ async fn constraints_report_validation_status_from_the_server() {
         constraints.first().expect("constraint").validated,
         Some(true)
     );
-    appliquer(&*session, "DROP TABLE oxyn_constraint_validation").await;
+    apply(&*session, "DROP TABLE oxyn_constraint_validation").await;
 }
 
 #[tokio::test]
@@ -184,7 +184,7 @@ async fn constraints_reject_oversized_catalogs_without_publishing_partial_lists(
     let clauses = std::iter::repeat_n("CHECK (id >= 0)", 1025)
         .collect::<Vec<_>>()
         .join(", ");
-    appliquer(
+    apply(
         &*session,
         &format!("CREATE TABLE oxyn_many_constraints (id integer, {clauses})"),
     )
@@ -197,9 +197,9 @@ async fn constraints_reject_oversized_catalogs_without_publishing_partial_lists(
         .await
         .expect_err("never silently truncate constraints");
     assert!(error.to_string().contains("1024"));
-    appliquer(&*session, "DROP TABLE oxyn_many_constraints").await;
+    apply(&*session, "DROP TABLE oxyn_many_constraints").await;
     let literal = "x".repeat(16385);
-    appliquer(
+    apply(
         &*session,
         &format!("CREATE TABLE oxyn_large_constraint (id text CHECK (id <> '{literal}'))"),
     )
@@ -212,7 +212,7 @@ async fn constraints_reject_oversized_catalogs_without_publishing_partial_lists(
         .await
         .expect_err("definition size is bounded before transfer");
     assert!(error.to_string().contains("16 KiB"));
-    appliquer(&*session, "DROP TABLE oxyn_large_constraint").await;
+    apply(&*session, "DROP TABLE oxyn_large_constraint").await;
 }
 
 #[tokio::test]
@@ -222,7 +222,7 @@ async fn constraints_preserve_names_column_order_and_engine_definitions() {
     let Some(session) = session().await else {
         return;
     };
-    appliquer(&*session, "CREATE TABLE \"oxyn_constraints\"\";--\" (b integer, a integer NOT NULL, score integer, CONSTRAINT \"key\"\";--\" PRIMARY KEY (b, a), CONSTRAINT score_positive CHECK (score > 0), UNIQUE (a), FOREIGN KEY (a) REFERENCES \"oxyn_constraints\"\";--\" (a))").await;
+    apply(&*session, "CREATE TABLE \"oxyn_constraints\"\";--\" (b integer, a integer NOT NULL, score integer, CONSTRAINT \"key\"\";--\" PRIMARY KEY (b, a), CONSTRAINT score_positive CHECK (score > 0), UNIQUE (a), FOREIGN KEY (a) REFERENCES \"oxyn_constraints\"\";--\" (a))").await;
     let path =
         CatalogPath::for_relation(None, Some("public"), "oxyn_constraints\";--").expect("path");
     let constraints = session
@@ -265,7 +265,7 @@ async fn constraints_preserve_names_column_order_and_engine_definitions() {
         session.catalog().list_constraints(&path, &cancel).await,
         Err(OxynError::Cancelled)
     ));
-    appliquer(&*session, "DROP TABLE \"oxyn_constraints\"\";--\"").await;
+    apply(&*session, "DROP TABLE \"oxyn_constraints\"\";--\"").await;
 }
 
 #[tokio::test]
@@ -288,17 +288,17 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
         "DROP TABLE IF EXISTS oxyn_preview_types CASCADE",
         "DROP DOMAIN IF EXISTS oxyn_preview_acl CASCADE",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
-    appliquer(&*session, "CREATE DOMAIN oxyn_preview_acl AS aclitem[]").await;
-    appliquer(
+    apply(&*session, "CREATE DOMAIN oxyn_preview_acl AS aclitem[]").await;
+    apply(
         &*session,
         "CREATE TABLE oxyn_preview_types (\
         id bigint DEFAULT 1, at timestamptz, acl oxyn_preview_acl, function regproc, \
         \"a\"\"; --\" text)",
     )
     .await;
-    appliquer(
+    apply(
         &*session,
         // `=r/<role>` must name a role **that exists**, and the repository's
         // test protocol creates `oxyn_test`, not `postgres`. Hard-coding the
@@ -345,7 +345,7 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
     assert!(cursor.next_batch().await.expect("end").is_none());
 
     let mut raw = session
-        .execute(lecture("SELECT 52::regproc AS function"), &token)
+        .execute(read_request("SELECT 52::regproc AS function"), &token)
         .await
         .expect("unmodified user SQL");
     let schema = raw.schema();
@@ -390,7 +390,7 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
             .execute(request, &token)
             .await
             .expect("system preview");
-        assert_eq!(drainer(&mut cursor).await.0, 1, "{relation}");
+        assert_eq!(drain(&mut cursor).await.0, 1, "{relation}");
     }
     let cancelled = CancelToken::new();
     cancelled.cancel();
@@ -400,28 +400,28 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
             .await,
         Err(OxynError::Cancelled)
     ));
-    appliquer(&*session, "DROP TABLE oxyn_preview_types").await;
-    appliquer(&*session, "DROP DOMAIN oxyn_preview_acl").await;
+    apply(&*session, "DROP TABLE oxyn_preview_types").await;
+    apply(&*session, "DROP DOMAIN oxyn_preview_acl").await;
     session.close().await.expect("close");
 }
 
 /// An unlikely value, so that a test looking for it only finds it if it
 /// really crossed.
-const SENTINELLE: &str = "S3NT1NELLE-42";
+const SENTINEL: &str = "S3NT1N3L-42";
 
 /// The error of a failing execution, whether at preparation or in the
 /// stream.
 ///
 /// An invalid cast passes preparation — the type of `$1` is `text` — and only
 /// fails at execution: the error then arrives through the cursor.
-async fn echouer(session: &dyn Session, demande: ExecRequest) -> OxynError {
-    match session.execute(demande, &CancelToken::new()).await {
-        Err(erreur) => erreur,
-        Ok(mut curseur) => loop {
-            match curseur.next_batch().await {
+async fn fail(session: &dyn Session, exec_request: ExecRequest) -> OxynError {
+    match session.execute(exec_request, &CancelToken::new()).await {
+        Err(error) => error,
+        Ok(mut cursor) => loop {
+            match cursor.next_batch().await {
                 Ok(Some(_)) => {}
                 Ok(None) => panic!("the statement should have been refused"),
-                Err(erreur) => break erreur,
+                Err(error) => break error,
             }
         },
     }
@@ -437,36 +437,39 @@ async fn a_bound_value_never_comes_out_of_the_server_message() {
         return;
     };
 
-    let erreur = echouer(
+    let error = fail(
         &*session,
-        lecture("SELECT ($1::text)::integer")
-            .with_params(vec![oxyn_core::ScalarValue::Text(SENTINELLE.to_owned())]),
+        read_request("SELECT ($1::text)::integer")
+            .with_params(vec![oxyn_core::ScalarValue::Text(SENTINEL.to_owned())]),
     )
     .await;
-    for rendu in [format!("{erreur}"), format!("{erreur:?}")] {
-        assert!(!rendu.contains(SENTINELLE), "bound value rendered: {rendu}");
-        assert!(!rendu.contains("invalid input syntax"), "{rendu}");
+    for rendered in [format!("{error}"), format!("{error:?}")] {
+        assert!(
+            !rendered.contains(SENTINEL),
+            "bound value rendered: {rendered}"
+        );
+        assert!(!rendered.contains("invalid input syntax"), "{rendered}");
     }
     assert!(
-        erreur.to_string().contains("withheld"),
-        "the withholding must be stated: {erreur}"
+        error.to_string().contains("withheld"),
+        "the withholding must be stated: {error}"
     );
     // `invalid_text_representation`: the SQLSTATE survives, it is a code.
-    assert!(erreur.to_string().contains("22P02"), "{erreur}");
-    assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
+    assert!(error.to_string().contains("22P02"), "{error}");
+    assert_eq!(error.class(), oxyn_core::ErrorClass::Permanent);
 
     // Without a bound value, the same refusal keeps PostgreSQL's message:
     // Oxyn's audience reads it, and a paraphrase would be a defect.
-    let entier = echouer(
+    let integer_error = fail(
         &*session,
-        lecture(&format!("SELECT ('{SENTINELLE}'::text)::integer")),
+        read_request(&format!("SELECT ('{SENTINEL}'::text)::integer")),
     )
     .await;
     assert!(
-        entier
+        integer_error
             .to_string()
             .contains("invalid input syntax for type integer"),
-        "{entier}"
+        "{integer_error}"
     );
 
     session.close().await.expect("close");
@@ -480,52 +483,58 @@ async fn a_trigger_that_copies_the_value_does_not_leak_it() {
     let Some(session) = session().await else {
         return;
     };
-    appliquer(&*session, "CREATE TABLE oxyn_withheld (note text)").await;
-    appliquer(
+    apply(&*session, "CREATE TABLE oxyn_withheld (note text)").await;
+    apply(
         &*session,
         "CREATE FUNCTION oxyn_withheld_guard() RETURNS trigger LANGUAGE plpgsql AS \
-         $$ BEGIN RAISE EXCEPTION 'solde : %', NEW.note; END $$",
+         $$ BEGIN RAISE EXCEPTION 'balance: %', NEW.note; END $$",
     )
     .await;
-    appliquer(
+    apply(
         &*session,
         "CREATE TRIGGER oxyn_withheld_trigger BEFORE INSERT ON oxyn_withheld \
          FOR EACH ROW EXECUTE FUNCTION oxyn_withheld_guard()",
     )
     .await;
 
-    let erreur = echouer(
+    let error = fail(
         &*session,
-        ecriture("INSERT INTO oxyn_withheld(note) VALUES ($1)")
-            .with_params(vec![oxyn_core::ScalarValue::Text(SENTINELLE.to_owned())]),
+        write_request("INSERT INTO oxyn_withheld(note) VALUES ($1)")
+            .with_params(vec![oxyn_core::ScalarValue::Text(SENTINEL.to_owned())]),
     )
     .await;
-    for rendu in [format!("{erreur}"), format!("{erreur:?}")] {
-        assert!(!rendu.contains(SENTINELLE), "bound value rendered: {rendu}");
-        assert!(!rendu.contains("solde"), "server message rendered: {rendu}");
+    for rendered in [format!("{error}"), format!("{error:?}")] {
+        assert!(
+            !rendered.contains(SENTINEL),
+            "bound value rendered: {rendered}"
+        );
+        assert!(
+            !rendered.contains("balance"),
+            "server message rendered: {rendered}"
+        );
     }
-    assert!(erreur.to_string().contains("withheld"), "{erreur}");
-    assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
+    assert!(error.to_string().contains("withheld"), "{error}");
+    assert_eq!(error.class(), oxyn_core::ErrorClass::Permanent);
 
-    appliquer(
+    apply(
         &*session,
         "DROP TRIGGER oxyn_withheld_trigger ON oxyn_withheld",
     )
     .await;
-    appliquer(&*session, "DROP FUNCTION oxyn_withheld_guard()").await;
-    appliquer(&*session, "DROP TABLE oxyn_withheld").await;
+    apply(&*session, "DROP FUNCTION oxyn_withheld_guard()").await;
+    apply(&*session, "DROP TABLE oxyn_withheld").await;
     session.close().await.expect("close");
 }
 
 /// The test configuration, or `None` when no server is declared.
-pub(super) fn cible() -> Option<(ConnectionConfig, Credentials)> {
+pub(super) fn target() -> Option<(ConnectionConfig, Credentials)> {
     let url = std::env::var(VARIABLE).ok()?;
-    let relue = ParsedDsn::parse(&url).expect("OXYN_PG_TEST_URL must be a `postgres://` URL");
-    let (parts, identifiants) = relue.into_parts();
+    let read_back = ParsedDsn::parse(&url).expect("OXYN_PG_TEST_URL must be a `postgres://` URL");
+    let (parts, credentials) = read_back.into_parts();
     let config = parts
-        .to_config("essai", DriverId::postgres())
+        .to_config("trial", DriverId::postgres())
         .with_environment(Environment::Local);
-    Some((config, identifiants))
+    Some((config, credentials))
 }
 
 /// The error of an execution that should have been refused.
@@ -536,36 +545,36 @@ pub(super) fn cible() -> Option<(ConnectionConfig, Credentials)> {
 /// ([I-03]). Going through `match` requires nothing of `T`.
 ///
 /// [I-03]: ../../../CLAUDE.md#i-03
-fn refus<T>(issue: Result<T, OxynError>, attendu: &str) -> OxynError {
+fn refusal<T>(issue: Result<T, OxynError>, expected: &str) -> OxynError {
     match issue {
-        Ok(_) => panic!("{attendu}"),
+        Ok(_) => panic!("{expected}"),
         Err(err) => err,
     }
 }
 
 /// Opens a session, or returns `None` and says so.
 pub(super) async fn session() -> Option<Box<dyn Session>> {
-    let Some((config, identifiants)) = cible() else {
+    let Some((config, credentials)) = target() else {
         eprintln!("{VARIABLE} is not set: test skipped");
         return None;
     };
     let driver = PostgresDriver::new();
     let session = driver
-        .connect(&config, &identifiants, &CancelToken::new())
+        .connect(&config, &credentials, &CancelToken::new())
         .await
         .expect("the test server must be reachable");
     Some(session)
 }
 
 /// A read request, with wide limits.
-fn lecture(sql: &str) -> ExecRequest {
+fn read_request(sql: &str) -> ExecRequest {
     ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), sql)
         .with_intent(StatementIntent::Read)
         .with_limits(ExecLimits::default().with_max_rows(None))
 }
 
 /// A write request, allowed to write.
-fn ecriture(sql: &str) -> ExecRequest {
+fn write_request(sql: &str) -> ExecRequest {
     ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), sql)
         .with_intent(StatementIntent::Write)
         .with_limits(ExecLimits::default().writable().with_max_rows(None))
@@ -575,23 +584,23 @@ fn ecriture(sql: &str) -> ExecRequest {
 ///
 /// Test setups and cleanups go through here: what matters is that the
 /// statement is accepted, not what it returns.
-pub(super) async fn appliquer(session: &dyn Session, sql: &str) {
-    let mut curseur = session
-        .execute(ecriture(sql), &CancelToken::new())
+pub(super) async fn apply(session: &dyn Session, sql: &str) {
+    let mut cursor = session
+        .execute(write_request(sql), &CancelToken::new())
         .await
-        .unwrap_or_else(|erreur| panic!("`{sql}` must be accepted: {erreur}"));
-    let _ = drainer(&mut curseur).await;
+        .unwrap_or_else(|error| panic!("`{sql}` must be accepted: {error}"));
+    let _ = drain(&mut cursor).await;
 }
 
 /// Drains a cursor and returns (rows, batches).
-async fn drainer(curseur: &mut Box<dyn Cursor>) -> (usize, usize) {
-    let mut lignes = 0;
-    let mut lots = 0;
-    while let Some(lot) = curseur.next_batch().await.expect("stream without error") {
-        lignes += lot.num_rows();
-        lots += 1;
+async fn drain(cursor: &mut Box<dyn Cursor>) -> (usize, usize) {
+    let mut rows = 0;
+    let mut batches = 0;
+    while let Some(batch) = cursor.next_batch().await.expect("stream without error") {
+        rows += batch.num_rows();
+        batches += 1;
     }
-    (lignes, lots)
+    (rows, batches)
 }
 
 #[tokio::test]
@@ -600,10 +609,10 @@ async fn the_connection_detects_the_variant_and_its_capabilities() {
     let Some(session) = session().await else {
         return;
     };
-    let capacites = session.capabilities();
-    assert!(capacites.contains(Capabilities::SQL));
-    assert!(capacites.contains(Capabilities::SERVER_SIDE_CANCEL));
-    assert!(capacites.contains(Capabilities::STREAMING));
+    let capabilities = session.capabilities();
+    assert!(capabilities.contains(Capabilities::SQL));
+    assert!(capabilities.contains(Capabilities::SERVER_SIDE_CANCEL));
+    assert!(capabilities.contains(Capabilities::STREAMING));
 
     let info = session
         .catalog()
@@ -624,19 +633,19 @@ async fn the_schema_is_known_before_the_first_row() {
     let Some(session) = session().await else {
         return;
     };
-    let mut curseur = session
+    let mut cursor = session
         .execute(
-            lecture("SELECT 1 AS un, 'deux'::text AS deux"),
+            read_request("SELECT 1 AS one, 'two'::text AS two"),
             &CancelToken::new(),
         )
         .await
         .expect("execution");
 
-    assert_eq!(curseur.schema().fields().len(), 2);
-    assert_eq!(curseur.schema().field(0).name(), "un");
+    assert_eq!(cursor.schema().fields().len(), 2);
+    assert_eq!(cursor.schema().field(0).name(), "one");
 
-    let (lignes, _) = drainer(&mut curseur).await;
-    assert_eq!(lignes, 1);
+    let (rows, _) = drain(&mut cursor).await;
+    assert_eq!(rows, 1);
     session.close().await.expect("close");
 }
 
@@ -650,19 +659,19 @@ async fn a_volume_that_would_not_fit_in_memory_arrives_in_batches() {
     let Some(session) = session().await else {
         return;
     };
-    let mut curseur = session
+    let mut cursor = session
         .execute(
-            lecture("SELECT i, repeat('x', 100) FROM generate_series(1, 2000000) AS s(i)"),
+            read_request("SELECT i, repeat('x', 100) FROM generate_series(1, 2000000) AS s(i)"),
             &CancelToken::new(),
         )
         .await
         .expect("execution");
 
-    let (lignes, lots) = drainer(&mut curseur).await;
-    assert_eq!(lignes, 2_000_000);
-    assert!(lots > 10, "the result must arrive in batches: {lots}");
-    assert_eq!(curseur.stats().rows, 2_000_000);
-    assert!(!curseur.stats().truncated);
+    let (rows, batches) = drain(&mut cursor).await;
+    assert_eq!(rows, 2_000_000);
+    assert!(batches > 10, "the result must arrive in batches: {batches}");
+    assert_eq!(cursor.stats().rows, 2_000_000);
+    assert!(!cursor.stats().truncated);
 
     session.close().await.expect("close");
 }
@@ -676,31 +685,31 @@ async fn cancellation_really_stops_the_query_server_side() {
     let Some(session) = session().await else {
         return;
     };
-    let jeton = CancelToken::new();
-    let mut curseur = session
-        .execute(lecture("SELECT pg_sleep(30)"), &jeton)
+    let token = CancelToken::new();
+    let mut cursor = session
+        .execute(read_request("SELECT pg_sleep(30)"), &token)
         .await
         .expect("execution");
 
-    let poignee = curseur.handle();
+    let handle = cursor.handle();
     session
-        .cancel(poignee)
+        .cancel(handle)
         .await
         .expect("cancellation requested");
 
-    let issue = curseur.next_batch().await;
+    let issue = cursor.next_batch().await;
     assert!(
         matches!(issue, Err(ref err) if err.is_cancelled()),
         "the cursor must return a cancellation: {issue:?}"
     );
 
     // The proof: no `pg_sleep` runs any more for this database.
-    drop(curseur);
+    drop(cursor);
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let mut restants = session
+    let mut remaining = session
         .execute(
-            lecture(
+            read_request(
                 "SELECT count(*) FROM pg_stat_activity \
                  WHERE query LIKE '%pg_sleep%' AND state = 'active' AND pid <> pg_backend_pid()",
             ),
@@ -708,8 +717,8 @@ async fn cancellation_really_stops_the_query_server_side() {
         )
         .await
         .expect("execution");
-    let (lignes, _) = drainer(&mut restants).await;
-    assert_eq!(lignes, 1, "one count row");
+    let (rows, _) = drain(&mut remaining).await;
+    assert_eq!(rows, 1, "one count row");
 
     session.close().await.expect("close");
 }
@@ -723,20 +732,20 @@ async fn closing_a_cursor_stops_the_query_without_being_asked() {
         return;
     };
     for _ in 0..10 {
-        let curseur = session
-            .execute(lecture("SELECT pg_sleep(30)"), &CancelToken::new())
+        let cursor = session
+            .execute(read_request("SELECT pg_sleep(30)"), &CancelToken::new())
             .await
             .expect("execution");
-        drop(curseur);
+        drop(cursor);
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let mut curseur = session
-        .execute(lecture("SELECT 1"), &CancelToken::new())
+    let mut cursor = session
+        .execute(read_request("SELECT 1"), &CancelToken::new())
         .await
         .expect("the database still accepts connections");
-    let (lignes, _) = drainer(&mut curseur).await;
-    assert_eq!(lignes, 1);
+    let (rows, _) = drain(&mut cursor).await;
+    assert_eq!(rows, 1);
 
     session.close().await.expect("close");
 }
@@ -749,21 +758,21 @@ async fn the_row_bound_truncates_and_says_so() {
     let Some(session) = session().await else {
         return;
     };
-    let demande = ExecRequest::new(
+    let exec_request = ExecRequest::new(
         QueryLanguage::Sql(SqlDialect::Postgres),
         "SELECT i FROM generate_series(1, 100000) AS s(i)",
     )
     .with_intent(StatementIntent::Read)
     .with_limits(ExecLimits::default().with_max_rows(Some(1_000)));
 
-    let mut curseur = session
-        .execute(demande, &CancelToken::new())
+    let mut cursor = session
+        .execute(exec_request, &CancelToken::new())
         .await
         .expect("execution");
-    let (lignes, _) = drainer(&mut curseur).await;
+    let (rows, _) = drain(&mut cursor).await;
 
-    assert_eq!(lignes, 1_000);
-    assert!(curseur.stats().truncated, "truncation must be known");
+    assert_eq!(rows, 1_000);
+    assert!(cursor.stats().truncated, "truncation must be known");
 
     session.close().await.expect("close");
 }
@@ -776,33 +785,33 @@ async fn read_only_is_enforced_by_the_server() {
     let Some(session) = session().await else {
         return;
     };
-    appliquer(
+    apply(
         &*session,
-        "CREATE TABLE IF NOT EXISTS oxyn_essai_ro (id int)",
+        "CREATE TABLE IF NOT EXISTS oxyn_trial_ro (id int)",
     )
     .await;
 
     // Preparation passes — `PREPARE` does not check read-only — and it is the
     // execution the server refuses. The refusal therefore arrives through the
     // stream, not through `execute`.
-    let mut curseur = session
+    let mut cursor = session
         .execute(
-            lecture("INSERT INTO oxyn_essai_ro VALUES (1)"),
+            read_request("INSERT INTO oxyn_trial_ro VALUES (1)"),
             &CancelToken::new(),
         )
         .await
         .expect("preparing an INSERT is accepted");
-    let refus = curseur
+    let refusal = cursor
         .next_batch()
         .await
         .expect_err("the server must refuse the write");
     assert!(
-        refus.to_string().contains("bounded to read-only"),
-        "the message must name the bounds, not the privileges: {refus}"
+        refusal.to_string().contains("bounded to read-only"),
+        "the message must name the bounds, not the privileges: {refusal}"
     );
-    drop(curseur);
+    drop(cursor);
 
-    appliquer(&*session, "DROP TABLE oxyn_essai_ro").await;
+    apply(&*session, "DROP TABLE oxyn_trial_ro").await;
 
     session.close().await.expect("close");
 }
@@ -816,11 +825,11 @@ async fn the_type_table_crosses_the_wire_losslessly() {
     let Some(session) = session().await else {
         return;
     };
-    let mut curseur = session
+    let mut cursor = session
         .execute(
-            lecture(
+            read_request(
                 "SELECT true::bool, 1::int2, 2::int4, 3::int8, 1.5::float4, 2.5::float8, \
-                 12345678901234567890.12345678::numeric, 'texte'::text, \
+                 12345678901234567890.12345678::numeric, 'text'::text, \
                  '\\x00ff'::bytea, '67e55044-10b1-426f-9d0c-451f8ad05b1a'::uuid, \
                  '2026-09-05'::date, '14:30:00'::time, \
                  '2026-09-05 14:30:00'::timestamp, '2026-09-05 14:30:00+02'::timestamptz, \
@@ -831,8 +840,8 @@ async fn the_type_table_crosses_the_wire_losslessly() {
         .await
         .expect("execution");
 
-    let schema = curseur.schema();
-    let attendus = [
+    let schema = cursor.schema();
+    let expected_all = [
         DataType::Boolean,
         DataType::Int16,
         DataType::Int32,
@@ -850,21 +859,20 @@ async fn the_type_table_crosses_the_wire_losslessly() {
         DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
         DataType::Utf8,
     ];
-    for (rang, attendu) in attendus.iter().enumerate() {
-        assert_eq!(schema.field(rang).data_type(), attendu, "column {rang}");
+    for (rank, expected) in expected_all.iter().enumerate() {
+        assert_eq!(schema.field(rank).data_type(), expected, "column {rank}");
     }
     assert!(matches!(schema.field(15).data_type(), DataType::List(_)));
 
-    let lot = curseur
-        .next_batch()
-        .await
-        .expect("stream")
-        .expect("one row");
-    assert_eq!(lot.num_rows(), 1);
+    let batch = cursor.next_batch().await.expect("stream").expect("one row");
+    assert_eq!(batch.num_rows(), 1);
 
     // The exact decimal: 26 significant digits, out of reach of an f64.
-    let numerique = lot.column(6).as_string_opt::<i32>().expect("a text column");
-    assert_eq!(numerique.value(0), "12345678901234567890.12345678");
+    let numeric_column = batch
+        .column(6)
+        .as_string_opt::<i32>()
+        .expect("a text column");
+    assert_eq!(numeric_column.value(0), "12345678901234567890.12345678");
 
     session.close().await.expect("close");
 }
@@ -879,40 +887,36 @@ async fn an_unknown_type_does_not_fail_the_query() {
         return;
     };
     for sql in [
-        "DROP TYPE IF EXISTS oxyn_essai_etat",
-        "CREATE TYPE oxyn_essai_etat AS ENUM ('brouillon', 'expedie')",
+        "DROP TYPE IF EXISTS oxyn_trial_state",
+        "CREATE TYPE oxyn_trial_state AS ENUM ('draft', 'shipped')",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
 
-    let mut curseur = session
+    let mut cursor = session
         .execute(
-            lecture("SELECT 'expedie'::oxyn_essai_etat"),
+            read_request("SELECT 'shipped'::oxyn_trial_state"),
             &CancelToken::new(),
         )
         .await
         .expect("execution");
-    let lot = curseur
-        .next_batch()
-        .await
-        .expect("stream")
-        .expect("one row");
-    let valeurs = lot
+    let batch = cursor.next_batch().await.expect("stream").expect("one row");
+    let values = batch
         .column(0)
         .as_string_opt::<i32>()
         .expect("a text fallback");
-    assert_eq!(valeurs.value(0), "expedie");
+    assert_eq!(values.value(0), "shipped");
 
     // The PostgreSQL type name survives in the field metadata.
-    let champ = curseur.schema();
-    let meta = champ.field(0).metadata();
+    let field = cursor.schema();
+    let meta = field.field(0).metadata();
     assert_eq!(
         meta.get(crate::META_PG_TYPE).map(String::as_str),
-        Some("oxyn_essai_etat")
+        Some("oxyn_trial_state")
     );
-    drop(curseur);
+    drop(cursor);
 
-    appliquer(&*session, "DROP TYPE oxyn_essai_etat").await;
+    apply(&*session, "DROP TYPE oxyn_trial_state").await;
     session.close().await.expect("close");
 }
 
@@ -922,83 +926,82 @@ async fn introspection_walks_down_the_hierarchy_level_by_level() {
     let Some(session) = session().await else {
         return;
     };
-    let jeton = CancelToken::new();
+    let token = CancelToken::new();
 
     for sql in [
-        "DROP TABLE IF EXISTS oxyn_essai_ligne",
-        "DROP TABLE IF EXISTS oxyn_essai_commande",
-        "CREATE TABLE oxyn_essai_commande (id bigserial PRIMARY KEY, \
-         montant numeric(12,2) NOT NULL, cree timestamptz DEFAULT now())",
-        "CREATE TABLE oxyn_essai_ligne (id bigserial PRIMARY KEY, \
-         commande_id bigint NOT NULL REFERENCES oxyn_essai_commande(id) ON DELETE CASCADE)",
-        "CREATE INDEX oxyn_essai_ligne_commande ON oxyn_essai_ligne (commande_id)",
-        "COMMENT ON TABLE oxyn_essai_commande IS 'commandes de la caisse'",
+        "DROP TABLE IF EXISTS oxyn_trial_line",
+        "DROP TABLE IF EXISTS oxyn_trial_order",
+        "CREATE TABLE oxyn_trial_order (id bigserial PRIMARY KEY, \
+         amount numeric(12,2) NOT NULL, created timestamptz DEFAULT now())",
+        "CREATE TABLE oxyn_trial_line (id bigserial PRIMARY KEY, \
+         order_id bigint NOT NULL REFERENCES oxyn_trial_order(id) ON DELETE CASCADE)",
+        "CREATE INDEX oxyn_trial_line_order ON oxyn_trial_line (order_id)",
+        "COMMENT ON TABLE oxyn_trial_order IS 'orders of the shop'",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
 
-    let catalogue = session.catalog();
-    let espaces = catalogue
-        .list_namespaces(None, &jeton)
+    let catalog = session.catalog();
+    let namespaces = catalog
+        .list_namespaces(None, &token)
         .await
         .expect("the schemas");
-    assert!(espaces.iter().any(|e| e.name() == "public"));
+    assert!(namespaces.iter().any(|e| e.name() == "public"));
     assert!(
-        espaces
+        namespaces
             .iter()
             .any(|e| e.name() == "pg_catalog" && e.is_system),
         "system schemas are marked, not hidden"
     );
 
     let public = oxyn_catalog::CatalogPath::for_namespace(None, "public").expect("path");
-    let relations = catalogue
-        .list_relations(&public, &jeton)
+    let relations = catalog
+        .list_relations(&public, &token)
         .await
         .expect("the relations");
-    assert!(relations.iter().any(|r| r.name() == "oxyn_essai_commande"));
+    assert!(relations.iter().any(|r| r.name() == "oxyn_trial_order"));
 
-    let commande = public.with_relation("oxyn_essai_commande").expect("path");
-    let decrite = catalogue
-        .describe_relation(&commande, &jeton)
+    let order = public.with_relation("oxyn_trial_order").expect("path");
+    let described_relation = catalog
+        .describe_relation(&order, &token)
         .await
         .expect("the description");
-    assert_eq!(decrite.comment.as_deref(), Some("commandes de la caisse"));
-    let montant = decrite.field("montant").expect("the montant column");
-    assert!(!montant.nullable);
     assert_eq!(
-        montant.logical_type,
+        described_relation.comment.as_deref(),
+        Some("orders of the shop")
+    );
+    let amount = described_relation
+        .field("amount")
+        .expect("the amount column");
+    assert!(!amount.nullable);
+    assert_eq!(
+        amount.logical_type,
         oxyn_catalog::LogicalType::Decimal {
             precision: Some(12),
             scale: Some(2)
         }
     );
-    assert_eq!(decrite.primary_key().len(), 1);
+    assert_eq!(described_relation.primary_key().len(), 1);
 
-    let ligne = public.with_relation("oxyn_essai_ligne").expect("path");
-    let index = catalogue
-        .list_indexes(&ligne, &jeton)
+    let row = public.with_relation("oxyn_trial_line").expect("path");
+    let index = catalog
+        .list_indexes(&row, &token)
         .await
         .expect("the indexes");
-    assert!(index.iter().any(|i| i.name == "oxyn_essai_ligne_commande"));
+    assert!(index.iter().any(|i| i.name == "oxyn_trial_line_order"));
 
-    let cles = catalogue
-        .list_foreign_keys(&ligne, &jeton)
+    let keys = catalog
+        .list_foreign_keys(&row, &token)
         .await
         .expect("the foreign keys");
-    let cle = cles.first().expect("a foreign key");
-    assert!(cle.is_well_formed());
-    assert_eq!(cle.fields, ["commande_id"]);
-    assert_eq!(
-        cle.references.relation.relation(),
-        Some("oxyn_essai_commande")
-    );
-    assert_eq!(cle.on_delete, oxyn_catalog::ReferentialAction::Cascade);
+    let key = keys.first().expect("a foreign key");
+    assert!(key.is_well_formed());
+    assert_eq!(key.fields, ["order_id"]);
+    assert_eq!(key.references.relation.relation(), Some("oxyn_trial_order"));
+    assert_eq!(key.on_delete, oxyn_catalog::ReferentialAction::Cascade);
 
-    for sql in [
-        "DROP TABLE oxyn_essai_ligne",
-        "DROP TABLE oxyn_essai_commande",
-    ] {
-        appliquer(&*session, sql).await;
+    for sql in ["DROP TABLE oxyn_trial_line", "DROP TABLE oxyn_trial_order"] {
+        apply(&*session, sql).await;
     }
     session.close().await.expect("close");
 }
@@ -1010,14 +1013,14 @@ async fn another_database_is_not_introspectable_and_says_so() {
     let Some(session) = session().await else {
         return;
     };
-    let erreur = session
+    let error = session
         .catalog()
-        .list_namespaces(Some("une_autre_base"), &CancelToken::new())
+        .list_namespaces(Some("another_database"), &CancelToken::new())
         .await
         .expect_err("refusal expected");
     assert!(
-        matches!(erreur, OxynError::CatalogUnavailable(_)),
-        "{erreur:?}"
+        matches!(error, OxynError::CatalogUnavailable(_)),
+        "{error:?}"
     );
     session.close().await.expect("close");
 }
@@ -1028,15 +1031,15 @@ async fn a_syntax_error_is_permanent_and_carries_its_sqlstate() {
     let Some(session) = session().await else {
         return;
     };
-    let erreur = refus(
+    let error = refusal(
         session
-            .execute(lecture("SELECT FROM WHERE"), &CancelToken::new())
+            .execute(read_request("SELECT FROM WHERE"), &CancelToken::new())
             .await,
         "rejection expected",
     );
 
-    assert!(!erreur.is_retryable(), "a wrong syntax is not retried");
-    if let OxynError::Driver { source, .. } = &erreur {
+    assert!(!error.is_retryable(), "a wrong syntax is not retried");
+    if let OxynError::Driver { source, .. } = &error {
         let postgres = source
             .downcast_ref::<crate::PostgresError>()
             .expect("the driver wraps its errors");
@@ -1056,10 +1059,10 @@ async fn a_failing_preparation_keeps_the_server_message_even_with_a_parameter() 
     let Some(session) = session().await else {
         return;
     };
-    let erreur = refus(
+    let error = refusal(
         session
             .execute(
-                lecture("SELECT * FROM oxyn_facturse WHERE client_id = $1")
+                read_request("SELECT * FROM oxyn_invoicess WHERE client_id = $1")
                     .with_params(vec![oxyn_core::ScalarValue::Int64(42)]),
                 &CancelToken::new(),
             )
@@ -1068,15 +1071,15 @@ async fn a_failing_preparation_keeps_the_server_message_even_with_a_parameter() 
     );
 
     assert!(
-        erreur.to_string().contains("oxyn_facturse"),
-        "the faulty object name must survive: {erreur}"
+        error.to_string().contains("oxyn_invoicess"),
+        "the faulty object name must survive: {error}"
     );
     assert!(
-        !erreur.to_string().contains("withheld"),
-        "no value reached the server: {erreur}"
+        !error.to_string().contains("withheld"),
+        "no value reached the server: {error}"
     );
-    assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
-    if let OxynError::Driver { source, .. } = &erreur {
+    assert_eq!(error.class(), oxyn_core::ErrorClass::Permanent);
+    if let OxynError::Driver { source, .. } = &error {
         let postgres = source
             .downcast_ref::<crate::PostgresError>()
             .expect("the driver wraps its errors");
@@ -1099,51 +1102,51 @@ const SCHEMA_A: &str = "oxyn_ctx_a";
 /// The twin of [`SCHEMA_A`], which no context of these tests declares.
 const SCHEMA_B: &str = "oxyn_ctx_b";
 /// The same-named table, never present in `public`.
-const TABLE_PARTAGEE: &str = "shared_target";
+const SHARED_TABLE: &str = "shared_target";
 /// A table only the server's default `search_path` reaches.
-const TABLE_PAR_DEFAUT: &str = "oxyn_ctx_default_only";
+const DEFAULT_TABLE: &str = "oxyn_ctx_default_only";
 
 /// A context that names only a namespace.
-fn contexte(namespace: &str) -> SessionContext {
+fn context(namespace: &str) -> SessionContext {
     SessionContext::new(None, Some(namespace.to_owned()))
 }
 
 /// Creates the two twin schemas and the table only the default reaches.
-async fn preparer_jumeaux(session: &dyn Session) {
-    nettoyer_jumeaux(session).await;
-    for (schema, marqueur) in [(SCHEMA_A, "a"), (SCHEMA_B, "b")] {
-        appliquer(session, &format!("CREATE SCHEMA {schema}")).await;
-        appliquer(
+async fn prepare_twins(session: &dyn Session) {
+    drop_twins(session).await;
+    for (schema, marker) in [(SCHEMA_A, "a"), (SCHEMA_B, "b")] {
+        apply(session, &format!("CREATE SCHEMA {schema}")).await;
+        apply(
             session,
-            &format!("CREATE TABLE {schema}.{TABLE_PARTAGEE} (marker text)"),
+            &format!("CREATE TABLE {schema}.{SHARED_TABLE} (marker text)"),
         )
         .await;
-        appliquer(
+        apply(
             session,
-            &format!("INSERT INTO {schema}.{TABLE_PARTAGEE} VALUES ('{marqueur}')"),
+            &format!("INSERT INTO {schema}.{SHARED_TABLE} VALUES ('{marker}')"),
         )
         .await;
     }
-    appliquer(
+    apply(
         session,
-        &format!("CREATE TABLE public.{TABLE_PAR_DEFAUT} (marker text)"),
+        &format!("CREATE TABLE public.{DEFAULT_TABLE} (marker text)"),
     )
     .await;
-    appliquer(
+    apply(
         session,
-        &format!("INSERT INTO public.{TABLE_PAR_DEFAUT} VALUES ('defaut')"),
+        &format!("INSERT INTO public.{DEFAULT_TABLE} VALUES ('default_value')"),
     )
     .await;
 }
 
-/// Undoes what [`preparer_jumeaux`] created.
-async fn nettoyer_jumeaux(session: &dyn Session) {
+/// Undoes what [`prepare_twins`] created.
+async fn drop_twins(session: &dyn Session) {
     for schema in [SCHEMA_A, SCHEMA_B] {
-        appliquer(session, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).await;
+        apply(session, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).await;
     }
-    appliquer(
+    apply(
         session,
-        &format!("DROP TABLE IF EXISTS public.{TABLE_PAR_DEFAUT}"),
+        &format!("DROP TABLE IF EXISTS public.{DEFAULT_TABLE}"),
     )
     .await;
 }
@@ -1154,21 +1157,22 @@ async fn nettoyer_jumeaux(session: &dyn Session) {
 /// so its connection is closed instead of returning to the pool. Tests that
 /// compare pids from one execution to the next would then never get the same
 /// connection twice, and would prove nothing about the state it carries.
-async fn premier_texte(session: &dyn Session, sql: &str) -> String {
+async fn first_text(session: &dyn Session, sql: &str) -> String {
     use arrow::array::AsArray as _;
-    let mut curseur = session
-        .execute(lecture(sql), &CancelToken::new())
+    let mut cursor = session
+        .execute(read_request(sql), &CancelToken::new())
         .await
-        .unwrap_or_else(|erreur| panic!("`{sql}` must execute: {erreur}"));
-    let mut premier = None;
-    while let Some(lot) = curseur
+        .unwrap_or_else(|error| panic!("`{sql}` must execute: {error}"));
+    let mut first = None;
+    while let Some(batch) = cursor
         .next_batch()
         .await
-        .unwrap_or_else(|erreur| panic!("`{sql}` must return a batch: {erreur}"))
+        .unwrap_or_else(|error| panic!("`{sql}` must return a batch: {error}"))
     {
-        if premier.is_none() && lot.num_rows() > 0 {
-            premier = Some(
-                lot.column(0)
+        if first.is_none() && batch.num_rows() > 0 {
+            first = Some(
+                batch
+                    .column(0)
                     .as_string_opt::<i32>()
                     .expect("a text column")
                     .value(0)
@@ -1176,21 +1180,21 @@ async fn premier_texte(session: &dyn Session, sql: &str) -> String {
             );
         }
     }
-    premier.unwrap_or_else(|| panic!("`{sql}` must return a row"))
+    first.unwrap_or_else(|| panic!("`{sql}` must return a row"))
 }
 
 /// What `SELECT marker FROM shared_target` resolves, unqualified.
-const LECTURE_NUE: &str = "SELECT marker FROM shared_target";
+const BARE_READ: &str = "SELECT marker FROM shared_target";
 
-/// What [`requete_de_resolution`] returns when the bare name designates nothing.
-const INTROUVABLE: &str = "introuvable";
+/// What [`resolution_query`] returns when the bare name designates nothing.
+const NOT_FOUND: &str = "not_found";
 
 /// The query that reads the marker of the same-named table, unqualified.
 ///
 /// The `CROSS JOIN` is not decorative: it makes the result long enough for the
 /// stream task to stay blocked on its connection until we drain. This is what
 /// forces the pool to open another one for the next execution.
-const REQUETE_DE_MARQUEUR: &str = "SELECT marker || '@' || pg_catalog.pg_backend_pid()::text \
+const MARKER_QUERY: &str = "SELECT marker || '@' || pg_catalog.pg_backend_pid()::text \
                                    FROM shared_target CROSS JOIN generate_series(1, 50000)";
 
 /// The query that asks the server what it resolves for a bare name.
@@ -1200,9 +1204,9 @@ const REQUETE_DE_MARQUEUR: &str = "SELECT marker || '@' || pg_catalog.pg_backend
 /// `NULL` instead of raising. The connection therefore stays healthy and
 /// returns to the pool — a condition without which two successive calls never
 /// hit the same connections, and prove nothing about the state they keep.
-fn requete_de_resolution(nom: &str) -> String {
+fn resolution_query(name: &str) -> String {
     format!(
-        "SELECT coalesce(pg_catalog.to_regclass('{nom}')::text, '{INTROUVABLE}') \
+        "SELECT coalesce(pg_catalog.to_regclass('{name}')::text, '{NOT_FOUND}') \
          || '@' || pg_catalog.pg_backend_pid()::text FROM generate_series(1, 50000)"
     )
 }
@@ -1210,7 +1214,7 @@ fn requete_de_resolution(nom: &str) -> String {
 /// What **each** connection of the pool answers, keyed by pid.
 ///
 /// The query must return `value@pid` in its first column, and enough rows to
-/// keep its connection busy — see [`REQUETE_DE_MARQUEUR`].
+/// keep its connection busy — see [`MARKER_QUERY`].
 ///
 /// The four executions are alive at the same time: `execute` holds its
 /// connection from start to end and the cursor channel is bounded to one batch,
@@ -1218,29 +1222,30 @@ fn requete_de_resolution(nom: &str) -> String {
 /// ([`MAX_CONNECTIONS`]), so all four are exercised. The final drain leaves
 /// them healthy: a dropped cursor leaves unread bytes, its connection is
 /// closed, and the next call would not find the same ones.
-async fn sur_tout_le_bassin(
+async fn on_whole_pool(
     session: &dyn Session,
     sql: &str,
 ) -> std::collections::BTreeMap<String, String> {
     use arrow::array::AsArray as _;
 
-    let mut curseurs = Vec::new();
+    let mut cursors = Vec::new();
     for _ in 0..MAX_CONNECTIONS {
-        curseurs.push(
+        cursors.push(
             session
-                .execute(lecture(sql), &CancelToken::new())
+                .execute(read_request(sql), &CancelToken::new())
                 .await
                 .expect("execution"),
         );
     }
 
-    let mut vues = std::collections::BTreeMap::new();
-    for curseur in &mut curseurs {
-        let mut premier = None;
-        while let Some(lot) = curseur.next_batch().await.expect("stream") {
-            if premier.is_none() && lot.num_rows() > 0 {
-                premier = Some(
-                    lot.column(0)
+    let mut seen_count = std::collections::BTreeMap::new();
+    for cursor in &mut cursors {
+        let mut first = None;
+        while let Some(batch) = cursor.next_batch().await.expect("stream") {
+            if first.is_none() && batch.num_rows() > 0 {
+                first = Some(
+                    batch
+                        .column(0)
                         .as_string_opt::<i32>()
                         .expect("a text column")
                         .value(0)
@@ -1248,13 +1253,13 @@ async fn sur_tout_le_bassin(
                 );
             }
         }
-        let brut = premier.expect("one row");
-        let (quoi, processus) = brut
+        let raw_type = first.expect("one row");
+        let (what, process) = raw_type
             .split_once('@')
             .expect("the template composes both fields");
-        vues.insert(processus.to_owned(), quoi.to_owned());
+        seen_count.insert(process.to_owned(), what.to_owned());
     }
-    vues
+    seen_count
 }
 
 #[tokio::test]
@@ -1271,27 +1276,27 @@ async fn the_context_applies_to_every_connection_of_the_pool() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_jumeaux(&*session).await;
+    prepare_twins(&*session).await;
     session
-        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .set_context(&context(SCHEMA_A), &CancelToken::new())
         .await
         .expect("the context must be accepted");
 
-    let vues = sur_tout_le_bassin(&*session, REQUETE_DE_MARQUEUR).await;
+    let seen_count = on_whole_pool(&*session, MARKER_QUERY).await;
     assert_eq!(
-        vues.len(),
+        seen_count.len(),
         usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections ({vues:?}): \
+        "the test did not exercise four distinct connections ({seen_count:?}): \
          it then proves nothing about per-connection state"
     );
-    for (processus, marqueur) in &vues {
+    for (process, marker) in &seen_count {
         assert_eq!(
-            marqueur, "a",
-            "connection {processus} resolved outside {SCHEMA_A}"
+            marker, "a",
+            "connection {process} resolved outside {SCHEMA_A}"
         );
     }
 
-    nettoyer_jumeaux(&*session).await;
+    drop_twins(&*session).await;
     session.close().await.expect("close");
 }
 
@@ -1307,34 +1312,34 @@ async fn a_context_change_survives_the_prepared_statement_cache() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_jumeaux(&*session).await;
+    prepare_twins(&*session).await;
 
     session
-        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .set_context(&context(SCHEMA_A), &CancelToken::new())
         .await
         .expect("the context must be accepted");
-    let avant = sur_tout_le_bassin(&*session, REQUETE_DE_MARQUEUR).await;
-    assert!(avant.values().all(|vu| vu == "a"), "{avant:?}");
+    let before = on_whole_pool(&*session, MARKER_QUERY).await;
+    assert!(before.values().all(|seen| seen == "a"), "{before:?}");
 
     session
-        .set_context(&contexte(SCHEMA_B), &CancelToken::new())
+        .set_context(&context(SCHEMA_B), &CancelToken::new())
         .await
         .expect("the second context must be accepted");
-    let apres = sur_tout_le_bassin(&*session, REQUETE_DE_MARQUEUR).await;
+    let after = on_whole_pool(&*session, MARKER_QUERY).await;
     assert_eq!(
-        apres.keys().collect::<Vec<_>>(),
-        avant.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>(),
+        before.keys().collect::<Vec<_>>(),
         "the pool must have reused the connections that carried the prepared \
          statement: otherwise the test proves nothing about the cache"
     );
-    for (processus, marqueur) in &apres {
+    for (process, marker) in &after {
         assert_eq!(
-            marqueur, "b",
-            "connection {processus} still reads the old schema"
+            marker, "b",
+            "connection {process} still reads the old schema"
         );
     }
 
-    nettoyer_jumeaux(&*session).await;
+    drop_twins(&*session).await;
     session.close().await.expect("close");
 }
 
@@ -1358,23 +1363,23 @@ async fn going_back_to_the_default_undoes_the_context_on_the_connection_that_car
     let Some(session) = session().await else {
         return;
     };
-    preparer_jumeaux(&*session).await;
+    prepare_twins(&*session).await;
 
     session
-        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .set_context(&context(SCHEMA_A), &CancelToken::new())
         .await
         .expect("the context must be accepted");
-    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+    assert_eq!(first_text(&*session, BARE_READ).await, "a");
 
-    let sous_contexte = sur_tout_le_bassin(&*session, &requete_de_resolution(TABLE_PARTAGEE)).await;
+    let sub_context = on_whole_pool(&*session, &resolution_query(SHARED_TABLE)).await;
     assert_eq!(
-        sous_contexte.len(),
+        sub_context.len(),
         usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections: {sous_contexte:?}"
+        "the test did not exercise four distinct connections: {sub_context:?}"
     );
     assert!(
-        sous_contexte.values().all(|vu| vu == TABLE_PARTAGEE),
-        "every connection must resolve the bare name: {sous_contexte:?}"
+        sub_context.values().all(|seen| seen == SHARED_TABLE),
+        "every connection must resolve the bare name: {sub_context:?}"
     );
 
     session
@@ -1382,41 +1387,41 @@ async fn going_back_to_the_default_undoes_the_context_on_the_connection_that_car
         .await
         .expect("going back to the default must be accepted");
 
-    let apres = sur_tout_le_bassin(&*session, &requete_de_resolution(TABLE_PARTAGEE)).await;
+    let after = on_whole_pool(&*session, &resolution_query(SHARED_TABLE)).await;
     assert_eq!(
-        apres.keys().collect::<Vec<_>>(),
-        sous_contexte.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>(),
+        sub_context.keys().collect::<Vec<_>>(),
         "the pool did not reuse the connections that carried the context: \
          the test then does not prove that the `SET … TO DEFAULT` is emitted"
     );
     assert!(
-        apres.values().all(|vu| vu == INTROUVABLE),
-        "outside the context, `shared_target` must no longer resolve: {apres:?}"
+        after.values().all(|seen| seen == NOT_FOUND),
+        "outside the context, `shared_target` must no longer resolve: {after:?}"
     );
 
-    let visible = sur_tout_le_bassin(&*session, &requete_de_resolution(TABLE_PAR_DEFAUT)).await;
+    let visible = on_whole_pool(&*session, &resolution_query(DEFAULT_TABLE)).await;
     assert!(
-        visible.values().all(|vu| vu == TABLE_PAR_DEFAUT),
+        visible.values().all(|seen| seen == DEFAULT_TABLE),
         "the default `search_path` must become resolvable again: {visible:?}"
     );
     assert_eq!(
-        premier_texte(&*session, &format!("SELECT marker FROM {TABLE_PAR_DEFAUT}")).await,
-        "defaut"
+        first_text(&*session, &format!("SELECT marker FROM {DEFAULT_TABLE}")).await,
+        "default_value"
     );
 
     // And the real query fails the way the server says.
     //
-    // Through `echouer` and not `refus`: `sqlx` keeps a **per-connection**
+    // Through `fail` and not `refusal`: `sqlx` keeps a **per-connection**
     // prepared statement cache, keyed on the text. The same text having already
     // been prepared above under `oxyn_ctx_a`, preparation does not go back to
     // the server and returns without error. It is the server that redoes the
     // analysis at execution, because `search_path` changed — the refusal thus
     // arrives through the stream. What this test checks here is precisely that
     // the cache does not keep the old resolution alive.
-    let disparue = echouer(&*session, lecture(LECTURE_NUE)).await;
-    assert!(disparue.to_string().contains(TABLE_PARTAGEE), "{disparue}");
+    let gone = fail(&*session, read_request(BARE_READ)).await;
+    assert!(gone.to_string().contains(SHARED_TABLE), "{gone}");
 
-    nettoyer_jumeaux(&*session).await;
+    drop_twins(&*session).await;
     session.close().await.expect("close");
 }
 
@@ -1430,32 +1435,32 @@ async fn a_missing_schema_is_refused_and_keeps_the_previous_context() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_jumeaux(&*session).await;
+    prepare_twins(&*session).await;
     session
-        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .set_context(&context(SCHEMA_A), &CancelToken::new())
         .await
         .expect("the context must be accepted");
 
-    let erreur = refus(
+    let error = refusal(
         session
-            .set_context(&contexte("oxyn_ctx_absent"), &CancelToken::new())
+            .set_context(&context("oxyn_ctx_absent"), &CancelToken::new())
             .await,
         "a missing schema must be refused",
     );
-    assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
-    assert!(erreur.to_string().contains("oxyn_ctx_absent"), "{erreur}");
-    assert!(erreur.is_user_error(), "{erreur}");
+    assert!(matches!(error, OxynError::Config(_)), "{error:?}");
+    assert!(error.to_string().contains("oxyn_ctx_absent"), "{error}");
+    assert!(error.is_user_error(), "{error}");
 
     assert_eq!(
         session
             .context()
-            .and_then(|vu| vu.namespace().map(str::to_owned)),
+            .and_then(|seen| seen.namespace().map(str::to_owned)),
         Some(SCHEMA_A.to_owned()),
         "the confirmed context must not move on a refusal"
     );
-    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+    assert_eq!(first_text(&*session, BARE_READ).await, "a");
 
-    nettoyer_jumeaux(&*session).await;
+    drop_twins(&*session).await;
     session.close().await.expect("close");
 }
 
@@ -1468,13 +1473,13 @@ async fn another_database_is_refused_at_the_catalog_level() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_jumeaux(&*session).await;
+    prepare_twins(&*session).await;
 
-    let erreur = refus(
+    let error = refusal(
         session
             .set_context(
                 &SessionContext::new(
-                    Some("oxyn_une_autre_base".to_owned()),
+                    Some("oxyn_another_database".to_owned()),
                     Some(SCHEMA_A.to_owned()),
                 ),
                 &CancelToken::new(),
@@ -1482,12 +1487,12 @@ async fn another_database_is_refused_at_the_catalog_level() {
             .await,
         "another database must be refused",
     );
-    assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
-    assert!(erreur.to_string().contains("database"), "{erreur}");
+    assert!(matches!(error, OxynError::Config(_)), "{error:?}");
+    assert!(error.to_string().contains("database"), "{error}");
     assert!(session.context().is_none(), "no context must be kept");
 
     // The connection's own database is a legitimate `catalog` level.
-    let base = premier_texte(&*session, "SELECT current_database()::text").await;
+    let base = first_text(&*session, "SELECT current_database()::text").await;
     session
         .set_context(
             &SessionContext::new(Some(base), Some(SCHEMA_A.to_owned())),
@@ -1495,9 +1500,9 @@ async fn another_database_is_refused_at_the_catalog_level() {
         )
         .await
         .expect("the connection database must be accepted");
-    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+    assert_eq!(first_text(&*session, BARE_READ).await, "a");
 
-    nettoyer_jumeaux(&*session).await;
+    drop_twins(&*session).await;
     session.close().await.expect("close");
 }
 
@@ -1510,17 +1515,17 @@ async fn user_sql_is_not_rewritten_by_the_context() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_jumeaux(&*session).await;
+    prepare_twins(&*session).await;
     session
-        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .set_context(&context(SCHEMA_A), &CancelToken::new())
         .await
         .expect("the context must be accepted");
 
-    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+    assert_eq!(first_text(&*session, BARE_READ).await, "a");
     assert_eq!(
-        premier_texte(
+        first_text(
             &*session,
-            &format!("SELECT marker FROM {SCHEMA_B}.{TABLE_PARTAGEE}")
+            &format!("SELECT marker FROM {SCHEMA_B}.{SHARED_TABLE}")
         )
         .await,
         "b",
@@ -1528,15 +1533,15 @@ async fn user_sql_is_not_rewritten_by_the_context() {
     );
 
     // The most direct proof: ask the server for the text it received.
-    const RELU: &str = "SELECT query FROM pg_catalog.pg_stat_activity \
+    const READ_BACK: &str = "SELECT query FROM pg_catalog.pg_stat_activity \
                         WHERE pid = pg_catalog.pg_backend_pid()";
     assert_eq!(
-        premier_texte(&*session, RELU).await,
-        RELU,
+        first_text(&*session, READ_BACK).await,
+        READ_BACK,
         "the text received by the server must be exactly the one submitted"
     );
 
-    nettoyer_jumeaux(&*session).await;
+    drop_twins(&*session).await;
     session.close().await.expect("close");
 }
 
@@ -1556,33 +1561,37 @@ async fn a_hostile_schema_name_is_quoted_and_works() {
         (r#"oxyn_ctx"weird"#, "guillemet"),
         ("oxyn_ctx.dotted", "point"),
     ];
-    let citer = |nom: &str| quote_identifier(nom, QuoteStyle::for_dialect(SqlDialect::Postgres));
+    let quote = |name: &str| quote_identifier(name, QuoteStyle::for_dialect(SqlDialect::Postgres));
 
-    for (nom, marqueur) in hostiles {
-        let cite = citer(nom);
-        appliquer(&*session, &format!("DROP SCHEMA IF EXISTS {cite} CASCADE")).await;
-        appliquer(&*session, &format!("CREATE SCHEMA {cite}")).await;
-        appliquer(
+    for (name, marker) in hostiles {
+        let quoted = quote(name);
+        apply(
             &*session,
-            &format!("CREATE TABLE {cite}.{TABLE_PARTAGEE} (marker text)"),
+            &format!("DROP SCHEMA IF EXISTS {quoted} CASCADE"),
         )
         .await;
-        appliquer(
+        apply(&*session, &format!("CREATE SCHEMA {quoted}")).await;
+        apply(
             &*session,
-            &format!("INSERT INTO {cite}.{TABLE_PARTAGEE} VALUES ('{marqueur}')"),
+            &format!("CREATE TABLE {quoted}.{SHARED_TABLE} (marker text)"),
+        )
+        .await;
+        apply(
+            &*session,
+            &format!("INSERT INTO {quoted}.{SHARED_TABLE} VALUES ('{marker}')"),
         )
         .await;
     }
 
-    for (nom, marqueur) in hostiles {
+    for (name, marker) in hostiles {
         session
-            .set_context(&contexte(nom), &CancelToken::new())
+            .set_context(&context(name), &CancelToken::new())
             .await
-            .unwrap_or_else(|erreur| panic!("`{nom}` must be accepted: {erreur}"));
+            .unwrap_or_else(|error| panic!("`{name}` must be accepted: {error}"));
         assert_eq!(
-            premier_texte(&*session, LECTURE_NUE).await,
-            marqueur,
-            "`{nom}` was not quoted correctly"
+            first_text(&*session, BARE_READ).await,
+            marker,
+            "`{name}` was not quoted correctly"
         );
     }
 
@@ -1590,10 +1599,10 @@ async fn a_hostile_schema_name_is_quoted_and_works() {
         .set_context(&SessionContext::server_default(), &CancelToken::new())
         .await
         .expect("back to the default");
-    for (nom, _) in hostiles {
-        appliquer(
+    for (name, _) in hostiles {
+        apply(
             &*session,
-            &format!("DROP SCHEMA IF EXISTS {} CASCADE", citer(nom)),
+            &format!("DROP SCHEMA IF EXISTS {} CASCADE", quote(name)),
         )
         .await;
     }
@@ -1610,49 +1619,49 @@ async fn a_declared_context_does_not_disarm_read_only() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_jumeaux(&*session).await;
+    prepare_twins(&*session).await;
     session
-        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .set_context(&context(SCHEMA_A), &CancelToken::new())
         .await
         .expect("the context must be accepted");
 
-    let mut curseur = session
+    let mut cursor = session
         .execute(
-            lecture(&format!("INSERT INTO {TABLE_PARTAGEE} VALUES ('intrus')")),
+            read_request(&format!("INSERT INTO {SHARED_TABLE} VALUES ('intruder')")),
             &CancelToken::new(),
         )
         .await
         .expect("preparing an INSERT is accepted");
-    let refus = curseur
+    let refusal = cursor
         .next_batch()
         .await
         .expect_err("the server must refuse the write");
     assert!(
-        refus.to_string().contains("bounded to read-only"),
-        "the message must name the bounds, not the privileges: {refus}"
+        refusal.to_string().contains("bounded to read-only"),
+        "the message must name the bounds, not the privileges: {refusal}"
     );
-    drop(curseur);
+    drop(cursor);
 
     // And reading still works in the declared context.
-    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+    assert_eq!(first_text(&*session, BARE_READ).await, "a");
     assert_eq!(
-        premier_texte(&*session, "SELECT count(*)::text FROM shared_target").await,
+        first_text(&*session, "SELECT count(*)::text FROM shared_target").await,
         "1",
         "the refused write must have left nothing"
     );
 
-    nettoyer_jumeaux(&*session).await;
+    drop_twins(&*session).await;
     session.close().await.expect("close");
 }
 
 /// The table whose definition is read, in [`SCHEMA_A`].
 ///
-/// Distinct from [`TABLE_PARTAGEE`]: what is tested here is not the resolution
+/// Distinct from [`SHARED_TABLE`]: what is tested here is not the resolution
 /// of a bare name, but the **rendering** of a definition.
-const TABLE_DEFINIE: &str = "ctx_defined";
+const DEFINED_TABLE: &str = "ctx_defined";
 
-/// The query that keeps a connection busy working in [`TABLE_DEFINIE`].
-const REQUETE_DEFINIE: &str = "SELECT marker || '@' || pg_catalog.pg_backend_pid()::text \
+/// The query that keeps a connection busy working in [`DEFINED_TABLE`].
+const DEFINED_QUERY: &str = "SELECT marker || '@' || pg_catalog.pg_backend_pid()::text \
                                FROM ctx_defined CROSS JOIN generate_series(1, 50000)";
 
 /// Creates in [`SCHEMA_A`] an object whose definition **renders** differently
@@ -1662,8 +1671,8 @@ const REQUETE_DEFINIE: &str = "SELECT marker || '@' || pg_catalog.pg_backend_pid
 /// `pg_get_constraintdef` and `pg_get_expr` qualify their output when the
 /// schema is not on the path, and omit it when it is. This is exactly the
 /// channel through which a console's context could leak into introspection.
-async fn preparer_objet_defini(session: &dyn Session) {
-    appliquer(
+async fn prepare_defined_object(session: &dyn Session) {
+    apply(
         session,
         &format!("DROP SCHEMA IF EXISTS {SCHEMA_A} CASCADE"),
     )
@@ -1676,17 +1685,17 @@ async fn preparer_objet_defini(session: &dyn Session) {
              LANGUAGE sql IMMUTABLE AS $$ SELECT v > 0 $$"
         ),
         format!(
-            "CREATE TABLE {SCHEMA_A}.{TABLE_DEFINIE} (\
+            "CREATE TABLE {SCHEMA_A}.{DEFINED_TABLE} (\
              marker text, amount {SCHEMA_A}.ctx_amount, \
              CONSTRAINT ctx_defined_positive CHECK ({SCHEMA_A}.ctx_positive(amount)))"
         ),
         format!(
-            "CREATE INDEX ctx_defined_partial ON {SCHEMA_A}.{TABLE_DEFINIE} (marker) \
+            "CREATE INDEX ctx_defined_partial ON {SCHEMA_A}.{DEFINED_TABLE} (marker) \
              WHERE {SCHEMA_A}.ctx_positive(amount)"
         ),
-        format!("INSERT INTO {SCHEMA_A}.{TABLE_DEFINIE} VALUES ('a', 1)"),
+        format!("INSERT INTO {SCHEMA_A}.{DEFINED_TABLE} VALUES ('a', 1)"),
     ] {
-        appliquer(session, &sql).await;
+        apply(session, &sql).await;
     }
 }
 
@@ -1696,41 +1705,38 @@ async fn preparer_objet_defini(session: &dyn Session) {
 /// The three sources named by the finding: `format_type` for `raw_type`,
 /// `pg_get_constraintdef` for a constraint expression, `pg_get_expr` for the
 /// predicate of a partial index.
-async fn empreinte_de_definition(
-    session: &dyn Session,
-    path: &oxyn_catalog::CatalogPath,
-) -> String {
-    let jeton = CancelToken::new();
+async fn definition_fingerprint(session: &dyn Session, path: &oxyn_catalog::CatalogPath) -> String {
+    let token = CancelToken::new();
     let relation = session
         .catalog()
-        .describe_relation(path, &jeton)
+        .describe_relation(path, &token)
         .await
         .expect("the description must succeed");
-    let contraintes = session
+    let constraints = session
         .catalog()
-        .list_constraints(path, &jeton)
+        .list_constraints(path, &token)
         .await
         .expect("the constraints must succeed");
     let index = session
         .catalog()
-        .list_indexes(path, &jeton)
+        .list_indexes(path, &token)
         .await
         .expect("the indexes must succeed");
 
     let types: Vec<&str> = relation
         .fields
         .iter()
-        .map(|champ| champ.raw_type.as_str())
+        .map(|field| field.raw_type.as_str())
         .collect();
-    let expressions: Vec<&str> = contraintes
+    let expressions: Vec<&str> = constraints
         .iter()
-        .filter_map(|contrainte| contrainte.expression.as_deref())
+        .filter_map(|constraint| constraint.expression.as_deref())
         .collect();
-    let predicats: Vec<&str> = index
+    let predicates: Vec<&str> = index
         .iter()
-        .filter_map(|un_index| un_index.predicate.as_deref())
+        .filter_map(|index_def| index_def.predicate.as_deref())
         .collect();
-    format!("{types:?} | {expressions:?} | {predicats:?}")
+    format!("{types:?} | {expressions:?} | {predicates:?}")
 }
 
 #[tokio::test]
@@ -1758,34 +1764,34 @@ async fn introspection_does_not_depend_on_a_console_context() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_objet_defini(&*session).await;
-    let path = CatalogPath::for_relation(None, Some(SCHEMA_A), TABLE_DEFINIE).expect("path");
+    prepare_defined_object(&*session).await;
+    let path = CatalogPath::for_relation(None, Some(SCHEMA_A), DEFINED_TABLE).expect("path");
 
     // The reference: what the server returns when no context was ever
     // declared. The three forms must be qualified there, otherwise the fixture
     // would no longer exercise anything.
-    let reference = empreinte_de_definition(&*session, &path).await;
-    for attendu in [
+    let reference = definition_fingerprint(&*session, &path).await;
+    for expected in [
         format!("{SCHEMA_A}.ctx_amount"),
         format!("{SCHEMA_A}.ctx_positive"),
     ] {
         assert!(
-            reference.contains(&attendu),
-            "the fixture no longer exercises the qualified rendering ({attendu}): {reference}"
+            reference.contains(&expected),
+            "the fixture no longer exercises the qualified rendering ({expected}): {reference}"
         );
     }
 
     session
-        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .set_context(&context(SCHEMA_A), &CancelToken::new())
         .await
         .expect("the context must be accepted");
 
     // The four pool connections carried the `SET`, then gave it back.
-    let vues = sur_tout_le_bassin(&*session, REQUETE_DEFINIE).await;
+    let seen_count = on_whole_pool(&*session, DEFINED_QUERY).await;
     assert_eq!(
-        vues.len(),
+        seen_count.len(),
         usize::try_from(MAX_CONNECTIONS).expect("four fits in a usize"),
-        "the test did not exercise four distinct connections ({vues:?}): \
+        "the test did not exercise four distinct connections ({seen_count:?}): \
          it then proves nothing about what the pool keeps"
     );
 
@@ -1793,33 +1799,33 @@ async fn introspection_does_not_depend_on_a_console_context() {
     // four, all four just served an execution under a context, and three stay
     // tied up by live cursors. Introspection can therefore only borrow a
     // recycled connection — it has no choice.
-    let mut occupees = Vec::new();
+    let mut held = Vec::new();
     for _ in 1..MAX_CONNECTIONS {
-        occupees.push(
+        held.push(
             session
-                .execute(lecture(REQUETE_DEFINIE), &CancelToken::new())
+                .execute(read_request(DEFINED_QUERY), &CancelToken::new())
                 .await
                 .expect("execution"),
         );
     }
     assert_eq!(
-        empreinte_de_definition(&*session, &path).await,
+        definition_fingerprint(&*session, &path).await,
         reference,
         "introspection followed the console context"
     );
-    drop(occupees);
+    drop(held);
 
     // Then alternating, to cover the connections as the pool rotates them.
-    for tour in 0..4 {
-        let _ = sur_tout_le_bassin(&*session, REQUETE_DEFINIE).await;
+    for round in 0..4 {
+        let _ = on_whole_pool(&*session, DEFINED_QUERY).await;
         assert_eq!(
-            empreinte_de_definition(&*session, &path).await,
+            definition_fingerprint(&*session, &path).await,
             reference,
-            "the definition changed at round {tour}"
+            "the definition changed at round {round}"
         );
     }
 
-    appliquer(&*session, &format!("DROP SCHEMA {SCHEMA_A} CASCADE")).await;
+    apply(&*session, &format!("DROP SCHEMA {SCHEMA_A} CASCADE")).await;
     session.close().await.expect("close");
 }
 
@@ -1827,37 +1833,37 @@ async fn introspection_does_not_depend_on_a_console_context() {
 ///
 /// Pagination that skips a row or shows the same one twice does not show on
 /// ten rows; it shows on five hundred read page by page.
-const LIGNES_APERCU: i64 = 500;
+const PREVIEW_ROWS: i64 = 500;
 
 /// Prepares a preview table, its ties and a canary table.
 ///
-/// `seau` is `id % 7`: sorting on it leaves dozens of ties, hence a non-total
+/// `bucket` is `id % 7`: sorting on it leaves dozens of ties, hence a non-total
 /// order until the primary key completes it.
-async fn preparer_apercu(session: &dyn Session) {
-    appliquer(
+async fn prepare_preview(session: &dyn Session) {
+    apply(
         session,
         "CREATE TABLE oxyn_preview_page (\
-         id bigint PRIMARY KEY, seau bigint, nom text)",
+         id bigint PRIMARY KEY, bucket bigint, name text)",
     )
     .await;
-    appliquer(
+    apply(
         session,
         &format!(
-            "INSERT INTO oxyn_preview_page(id, seau, nom) \
-             SELECT i, i % 7, 'ligne-' || i FROM generate_series(1, {LIGNES_APERCU}) AS s(i)"
+            "INSERT INTO oxyn_preview_page(id, bucket, name) \
+             SELECT i, i % 7, 'row-' || i FROM generate_series(1, {PREVIEW_ROWS}) AS s(i)"
         ),
     )
     .await;
-    appliquer(session, "CREATE TABLE oxyn_preview_temoin (garde text)").await;
-    appliquer(
+    apply(session, "CREATE TABLE oxyn_preview_witness (guard text)").await;
+    apply(
         session,
-        "INSERT INTO oxyn_preview_temoin VALUES ('intacte')",
+        "INSERT INTO oxyn_preview_witness VALUES ('intact')",
     )
     .await;
 }
 
 /// Composes then executes a preview, and returns the integers of its first column.
-async fn ids_apercu(
+async fn preview_ids(
     session: &dyn Session,
     relation: &str,
     limit: u32,
@@ -1866,23 +1872,23 @@ async fn ids_apercu(
     use arrow::array::AsArray as _;
     use oxyn_catalog::CatalogPath;
 
-    let jeton = CancelToken::new();
-    let chemin = CatalogPath::for_relation(None, Some("public"), relation).expect("valid path");
-    let demande = session
-        .preview_request(&chemin, limit, shape, &jeton)
+    let token = CancelToken::new();
+    let path = CatalogPath::for_relation(None, Some("public"), relation).expect("valid path");
+    let exec_request = session
+        .preview_request(&path, limit, shape, &token)
         .await
-        .unwrap_or_else(|erreur| panic!("composing the preview of `{relation}`: {erreur}"));
-    let mut curseur = session
-        .execute(demande, &jeton)
+        .unwrap_or_else(|error| panic!("composing the preview of `{relation}`: {error}"));
+    let mut cursor = session
+        .execute(exec_request, &token)
         .await
-        .unwrap_or_else(|erreur| panic!("executing the preview of `{relation}`: {erreur}"));
+        .unwrap_or_else(|error| panic!("executing the preview of `{relation}`: {error}"));
     let mut ids = Vec::new();
-    while let Some(lot) = curseur.next_batch().await.expect("stream without error") {
-        let colonne = lot
+    while let Some(batch) = cursor.next_batch().await.expect("stream without error") {
+        let column = batch
             .column(0)
             .as_primitive_opt::<arrow::datatypes::Int64Type>()
             .expect("integer column");
-        ids.extend(colonne.values().iter().copied());
+        ids.extend(column.values().iter().copied());
     }
     ids
 }
@@ -1895,101 +1901,102 @@ async fn pages_of_a_sorted_preview_neither_overlap_nor_omit_a_row() {
     let Some(session) = session().await else {
         return;
     };
-    preparer_apercu(&*session).await;
+    prepare_preview(&*session).await;
 
     // Simple sort, in both directions.
-    let croissant = PreviewShape {
+    let ascending = PreviewShape {
         sort: vec![PreviewSort::ascending("id")],
         ..PreviewShape::default()
     };
     assert_eq!(
-        ids_apercu(&*session, "oxyn_preview_page", 10, &croissant).await,
+        preview_ids(&*session, "oxyn_preview_page", 10, &ascending).await,
         (1..=10).collect::<Vec<_>>()
     );
-    let decroissant = PreviewShape {
+    let descending = PreviewShape {
         sort: vec![PreviewSort::descending("id")],
         ..PreviewShape::default()
     };
     assert_eq!(
-        ids_apercu(&*session, "oxyn_preview_page", 10, &decroissant).await,
-        (LIGNES_APERCU - 9..=LIGNES_APERCU)
-            .rev()
-            .collect::<Vec<_>>()
+        preview_ids(&*session, "oxyn_preview_page", 10, &descending).await,
+        (PREVIEW_ROWS - 9..=PREVIEW_ROWS).rev().collect::<Vec<_>>()
     );
 
     // Three consecutive pages on a column full of ties.
-    let taille = 200_u32;
-    let mut vues = Vec::new();
-    let mut tailles = Vec::new();
+    let size = 200_u32;
+    let mut seen_count = Vec::new();
+    let mut sizes = Vec::new();
     for page in 0..3_u64 {
         let shape = PreviewShape {
-            sort: vec![PreviewSort::ascending("seau")],
-            offset: page * u64::from(taille),
+            sort: vec![PreviewSort::ascending("bucket")],
+            offset: page * u64::from(size),
             ..PreviewShape::default()
         };
-        let ids = ids_apercu(&*session, "oxyn_preview_page", taille, &shape).await;
-        tailles.push(ids.len());
-        vues.extend(ids);
+        let ids = preview_ids(&*session, "oxyn_preview_page", size, &shape).await;
+        sizes.push(ids.len());
+        seen_count.extend(ids);
     }
-    assert_eq!(tailles, vec![200, 200, 100], "three pages, 500 rows");
-    let mut triees = vues.clone();
-    triees.sort_unstable();
-    triees.dedup();
-    assert_eq!(triees.len(), vues.len(), "no row must appear on two pages");
+    assert_eq!(sizes, vec![200, 200, 100], "three pages, 500 rows");
+    let mut sorted_ones = seen_count.clone();
+    sorted_ones.sort_unstable();
+    sorted_ones.dedup();
     assert_eq!(
-        triees,
-        (1..=LIGNES_APERCU).collect::<Vec<_>>(),
+        sorted_ones.len(),
+        seen_count.len(),
+        "no row must appear on two pages"
+    );
+    assert_eq!(
+        sorted_ones,
+        (1..=PREVIEW_ROWS).collect::<Vec<_>>(),
         "the union of the pages is exactly the table"
     );
 
     // A sort or projection column the relation does not declare: refused
     // here, never sent to the server, and permanent — retrying will not make
     // it appear.
-    let chemin =
-        CatalogPath::for_relation(None, Some("public"), "oxyn_preview_page").expect("path");
-    let triee = PreviewShape {
-        sort: vec![PreviewSort::ascending("colonne_absente")],
+    let path = CatalogPath::for_relation(None, Some("public"), "oxyn_preview_page").expect("path");
+    let sorted = PreviewShape {
+        sort: vec![PreviewSort::ascending("missing_column")],
         ..PreviewShape::default()
     };
-    let projetee = PreviewShape {
-        columns: Some(vec!["colonne_absente".into()]),
+    let projected = PreviewShape {
+        columns: Some(vec!["missing_column".into()]),
         ..PreviewShape::default()
     };
-    for inconnue in [triee, projetee] {
-        let erreur = session
-            .preview_request(&chemin, 10, &inconnue, &CancelToken::new())
+    for unknown in [sorted, projected] {
+        let error = session
+            .preview_request(&path, 10, &unknown, &CancelToken::new())
             .await
             .expect_err("an unknown column is neither read nor sorted");
         assert!(
-            matches!(&erreur, OxynError::Query(message)
-                if message.contains("colonne_absente")),
-            "{erreur}"
+            matches!(&error, OxynError::Query(message)
+                if message.contains("missing_column")),
+            "{error}"
         );
-        assert!(!erreur.is_retryable(), "{erreur}");
+        assert!(!error.is_retryable(), "{error}");
     }
 
     // A page on a relation without a unique key: refused, saying why.
-    appliquer(&*session, "CREATE TABLE oxyn_preview_sans_cle (x text)").await;
-    let sans_cle =
-        CatalogPath::for_relation(None, Some("public"), "oxyn_preview_sans_cle").expect("path");
+    apply(&*session, "CREATE TABLE oxyn_preview_keyless (x text)").await;
+    let without_key =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_preview_keyless").expect("path");
     let page = PreviewShape {
         offset: 1,
         ..PreviewShape::default()
     };
-    let erreur = session
-        .preview_request(&sans_cle, 10, &page, &CancelToken::new())
+    let error = session
+        .preview_request(&without_key, 10, &page, &CancelToken::new())
         .await
         .expect_err("a page without a unique key makes no sense");
     assert!(
-        matches!(&erreur, OxynError::NotSupported { capability }
+        matches!(&error, OxynError::NotSupported { capability }
             if capability.contains("unique key")),
-        "{erreur}"
+        "{error}"
     );
     // Its first page stays readable: it is today's preview.
     assert!(
         session
             .preview_request(
-                &sans_cle,
+                &without_key,
                 10,
                 &PreviewShape::unordered(),
                 &CancelToken::new()
@@ -1998,9 +2005,9 @@ async fn pages_of_a_sorted_preview_neither_overlap_nor_omit_a_row() {
             .is_ok()
     );
 
-    appliquer(&*session, "DROP TABLE oxyn_preview_sans_cle").await;
-    appliquer(&*session, "DROP TABLE oxyn_preview_page").await;
-    appliquer(&*session, "DROP TABLE oxyn_preview_temoin").await;
+    apply(&*session, "DROP TABLE oxyn_preview_keyless").await;
+    apply(&*session, "DROP TABLE oxyn_preview_page").await;
+    apply(&*session, "DROP TABLE oxyn_preview_witness").await;
     session.close().await.expect("close");
 }
 
@@ -2013,107 +2020,112 @@ async fn a_preview_predicate_is_sent_as_is_without_reaching_a_second_statement()
     let Some(session) = session().await else {
         return;
     };
-    preparer_apercu(&*session).await;
-    appliquer(
+    prepare_preview(&*session).await;
+    apply(
         &*session,
-        "INSERT INTO oxyn_preview_page(id, seau, nom) \
-         VALUES (1001, 0, '100%'), (1002, 0, '100 pour cent')",
+        "INSERT INTO oxyn_preview_page(id, bucket, name) \
+         VALUES (1001, 0, '100%'), (1002, 0, '100 percent')",
     )
     .await;
-    let jeton = CancelToken::new();
-    let chemin =
-        CatalogPath::for_relation(None, Some("public"), "oxyn_preview_page").expect("path");
+    let token = CancelToken::new();
+    let path = CatalogPath::for_relation(None, Some("public"), "oxyn_preview_page").expect("path");
 
     // The `%` is not a metacharacter: the driver composes no pattern, it
     // passes the user's text through.
-    async fn noms(
+    async fn names(
         session: &dyn Session,
-        chemin: &CatalogPath,
-        jeton: &CancelToken,
+        path: &CatalogPath,
+        token: &CancelToken,
         predicate: &str,
     ) -> Vec<String> {
         let shape = PreviewShape {
             predicate: Some(predicate.to_owned()),
             ..PreviewShape::default()
         };
-        let demande = session
-            .preview_request(chemin, 200, &shape, jeton)
+        let exec_request = session
+            .preview_request(path, 200, &shape, token)
             .await
             .expect("composition");
-        let mut curseur = session.execute(demande, jeton).await.expect("execution");
-        let mut noms = Vec::new();
-        while let Some(lot) = curseur.next_batch().await.expect("stream") {
-            let colonne = lot.column(2).as_string_opt::<i32>().expect("colonne texte");
-            for rang in 0..colonne.len() {
-                noms.push(colonne.value(rang).to_owned());
+        let mut cursor = session
+            .execute(exec_request, token)
+            .await
+            .expect("execution");
+        let mut names = Vec::new();
+        while let Some(batch) = cursor.next_batch().await.expect("stream") {
+            let column = batch.column(2).as_string_opt::<i32>().expect("text column");
+            for rank in 0..column.len() {
+                names.push(column.value(rank).to_owned());
             }
         }
-        noms
+        names
     }
     assert_eq!(
-        noms(&*session, &chemin, &jeton, "nom = '100%'").await,
+        names(&*session, &path, &token, "name = '100%'").await,
         vec!["100%".to_owned()],
         "an equality returns only the literal row"
     );
-    let mut motif = noms(&*session, &chemin, &jeton, "nom LIKE '100%'").await;
-    motif.sort();
-    assert_eq!(motif, vec!["100 pour cent".to_owned(), "100%".to_owned()]);
+    let mut pattern = names(&*session, &path, &token, "name LIKE '100%'").await;
+    pattern.sort();
+    assert_eq!(pattern, vec!["100 percent".to_owned(), "100%".to_owned()]);
 
     for hostile in [
         // A second statement: the extended protocol prepares only one
         // statement, so it cannot reach the server.
-        "nom = 'ligne-1'; DROP TABLE oxyn_preview_temoin",
-        "nom = 'ligne-1'; DELETE FROM oxyn_preview_temoin",
+        "name = 'row-1'; DROP TABLE oxyn_preview_witness",
+        "name = 'row-1'; DELETE FROM oxyn_preview_witness",
         // An unbalanced quote: syntax error, nothing more.
-        "nom = 'ligne-1",
+        "name = 'row-1",
         // An end-of-line comment: it must not swallow the LIMIT.
-        "nom LIKE 'ligne-%' -- ; DROP TABLE oxyn_preview_temoin",
+        "name LIKE 'row-%' -- ; DROP TABLE oxyn_preview_witness",
     ] {
         let shape = PreviewShape {
             predicate: Some(hostile.to_owned()),
             ..PreviewShape::default()
         };
-        let demande = session
-            .preview_request(&chemin, 3, &shape, &jeton)
+        let exec_request = session
+            .preview_request(&path, 3, &shape, &token)
             .await
             .expect("composition does not judge the predicate");
         assert!(
-            demande.text.contains(hostile),
+            exec_request.text.contains(hostile),
             "the predicate is sent as is: {}",
-            demande.text
+            exec_request.text
         );
-        match session.execute(demande, &jeton).await {
+        match session.execute(exec_request, &token).await {
             Err(_) => {}
-            Ok(mut curseur) => {
-                let (lignes, _) = drainer(&mut curseur).await;
-                assert!(lignes <= 3, "{hostile}: {lignes} rows despite LIMIT 3");
+            Ok(mut cursor) => {
+                let (rows, _) = drain(&mut cursor).await;
+                assert!(rows <= 3, "{hostile}: {rows} rows despite LIMIT 3");
             }
         }
-        let mut curseur = session
-            .execute(lecture("SELECT garde FROM oxyn_preview_temoin"), &jeton)
+        let mut cursor = session
+            .execute(
+                read_request("SELECT guard FROM oxyn_preview_witness"),
+                &token,
+            )
             .await
-            .unwrap_or_else(|erreur| panic!("the canary table must survive `{hostile}`: {erreur}"));
-        assert_eq!(drainer(&mut curseur).await.0, 1, "canary after `{hostile}`");
+            .unwrap_or_else(|error| panic!("the canary table must survive `{hostile}`: {error}"));
+        assert_eq!(drain(&mut cursor).await.0, 1, "canary after `{hostile}`");
     }
 
     // The two guards of the clause, tested here as on SQLite: the line break
     // for `--`, the parentheses for the `/*` no line break ends. PostgreSQL
     // already refused the second; it must keep doing so.
-    let bloc = PreviewShape {
-        predicate: Some("nom IS NOT NULL /*".into()),
+    let block = PreviewShape {
+        predicate: Some("name IS NOT NULL /*".into()),
         ..PreviewShape::default()
     };
-    let demande = session
-        .preview_request(&chemin, 3, &bloc, &jeton)
+    let exec_request = session
+        .preview_request(&path, 3, &block, &token)
         .await
         .expect("composition does not judge the predicate");
     assert!(
-        session.execute(demande, &jeton).await.is_err(),
+        session.execute(exec_request, &token).await.is_err(),
         "an unclosed block comment must be refused, not executed unbounded"
     );
     // The session survives this refusal.
     assert_eq!(
-        ids_apercu(
+        preview_ids(
             &*session,
             "oxyn_preview_page",
             3,
@@ -2124,47 +2136,47 @@ async fn a_preview_predicate_is_sent_as_is_without_reaching_a_second_statement()
         3
     );
 
-    let ligne = PreviewShape {
-        predicate: Some("id > 0 -- ceci est un commentaire".into()),
+    let row = PreviewShape {
+        predicate: Some("id > 0 -- this is a comment".into()),
         sort: vec![PreviewSort::ascending("id")],
         ..PreviewShape::default()
     };
     assert_eq!(
-        ids_apercu(&*session, "oxyn_preview_page", 3, &ligne).await,
+        preview_ids(&*session, "oxyn_preview_page", 3, &row).await,
         vec![1, 2, 3]
     );
 
     // A predicate that already carries its parentheses returns exactly what
     // the same text would return without the wrapping.
-    let parenthese = PreviewShape {
-        predicate: Some("(id > 0 AND seau < 2) OR nom IS NULL".into()),
+    let parenthesis = PreviewShape {
+        predicate: Some("(id > 0 AND bucket < 2) OR name IS NULL".into()),
         sort: vec![PreviewSort::ascending("id")],
         ..PreviewShape::default()
     };
-    let enveloppe = ids_apercu(&*session, "oxyn_preview_page", 5, &parenthese).await;
-    let mut curseur = session
+    let envelope = preview_ids(&*session, "oxyn_preview_page", 5, &parenthesis).await;
+    let mut cursor = session
         .execute(
-            lecture(
+            read_request(
                 "SELECT * FROM \"public\".\"oxyn_preview_page\" \
-                 WHERE (id > 0 AND seau < 2) OR nom IS NULL \
+                 WHERE (id > 0 AND bucket < 2) OR name IS NULL \
                  ORDER BY \"id\" ASC LIMIT 5",
             ),
-            &jeton,
+            &token,
         )
         .await
         .expect("the same text, without wrapping");
-    let mut sans_enveloppe = Vec::new();
-    while let Some(lot) = curseur.next_batch().await.expect("stream") {
-        let colonne = lot
+    let mut unwrapped = Vec::new();
+    while let Some(batch) = cursor.next_batch().await.expect("stream") {
+        let column = batch
             .column(0)
             .as_primitive_opt::<arrow::datatypes::Int64Type>()
             .expect("integer column");
-        sans_enveloppe.extend(colonne.values().iter().copied());
+        unwrapped.extend(column.values().iter().copied());
     }
-    assert_eq!(enveloppe, sans_enveloppe);
-    assert_eq!(enveloppe, vec![1, 7, 8, 14, 15]);
+    assert_eq!(envelope, unwrapped);
+    assert_eq!(envelope, vec![1, 7, 8, 14, 15]);
 
-    appliquer(&*session, "DROP TABLE oxyn_preview_page").await;
-    appliquer(&*session, "DROP TABLE oxyn_preview_temoin").await;
+    apply(&*session, "DROP TABLE oxyn_preview_page").await;
+    apply(&*session, "DROP TABLE oxyn_preview_witness").await;
     session.close().await.expect("close");
 }

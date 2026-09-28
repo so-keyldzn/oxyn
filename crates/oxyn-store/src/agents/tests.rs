@@ -15,14 +15,18 @@ fn agent(id: &str, label: &str) -> ExternalAgentConfig {
 #[test]
 fn a_declaration_reads_back_identically() {
     let store = Store::open_in_memory().expect("open");
-    let ecrit = agent("claude-code", "Claude Code");
-    store.external_agents().save(&ecrit).expect("write");
+    let written = agent("claude-code", "Claude Code");
+    store.external_agents().save(&written).expect("write");
 
-    let relus = store.external_agents().list().expect("read");
-    assert_eq!(relus.len(), 1);
-    assert_eq!(relus[0].id, ecrit.id);
-    assert_eq!(relus[0].command, "claude");
-    assert_eq!(relus[0].args, ["--acp"], "the arguments survive the disk");
+    let read_back = store.external_agents().list().expect("read");
+    assert_eq!(read_back.len(), 1);
+    assert_eq!(read_back[0].id, written.id);
+    assert_eq!(read_back[0].command, "claude");
+    assert_eq!(
+        read_back[0].args,
+        ["--acp"],
+        "the arguments survive the disk"
+    );
 }
 
 /// The table has **no** column where a secret could be stored.
@@ -34,19 +38,19 @@ fn a_declaration_reads_back_identically() {
 #[test]
 fn the_table_has_no_secret_column() {
     let store = Store::open_in_memory().expect("open");
-    let colonnes: Vec<String> = store
+    let columns: Vec<String> = store
         .with_connection(|conn| {
-            let mut requete =
+            let mut query =
                 conn.prepare("SELECT name FROM pragma_table_info('external_agents')")?;
-            let noms = requete.query_map([], |row| row.get(0))?;
-            Ok(noms.collect::<rusqlite::Result<Vec<String>>>()?)
+            let names = query.query_map([], |row| row.get(0))?;
+            Ok(names.collect::<rusqlite::Result<Vec<String>>>()?)
         })
         .expect("read the schema");
 
-    for interdite in ["secret_ref", "secret", "api_key", "token", "password"] {
+    for forbidden in ["secret_ref", "secret", "api_key", "token", "password"] {
         assert!(
-            !colonnes.iter().any(|nom| nom == interdite),
-            "`{interdite}` has no business here: an external agent entrusts no key"
+            !columns.iter().any(|name| name == forbidden),
+            "`{forbidden}` has no business here: an external agent entrusts no key"
         );
     }
 }
@@ -77,22 +81,22 @@ fn an_unreadable_row_is_skipped_without_breaking_the_list() {
     let store = Store::open_in_memory().expect("open");
     store
         .external_agents()
-        .save(&agent("bon", "Bon agent"))
+        .save(&agent("good", "Good agent"))
         .expect("write");
     store
         .with_connection(|conn| {
             conn.execute(
                 "INSERT INTO external_agents (id, label, command, args, env, created_at, updated_at)
-                 VALUES ('casse', 'Cassé', 'claude', 'pas du json', '[]', ?1, ?1)",
+                 VALUES ('broken', 'Broken', 'claude', 'not json', '[]', ?1, ?1)",
                 params![Utc::now()],
             )?;
             Ok(())
         })
         .expect("direct insert");
 
-    let relus = store.external_agents().list().expect("read");
-    assert_eq!(relus.len(), 1, "the healthy row is still served");
-    assert_eq!(relus[0].label, "Bon agent");
+    let read_back = store.external_agents().list().expect("read");
+    assert_eq!(read_back.len(), 1, "the healthy row is still served");
+    assert_eq!(read_back[0].label, "Good agent");
 }
 
 #[test]
@@ -100,21 +104,21 @@ fn removing_a_declaration_leaves_the_others_alone() {
     let store = Store::open_in_memory().expect("open");
     store
         .external_agents()
-        .save(&agent("un", "Un"))
+        .save(&agent("one", "One"))
         .expect("write");
     store
         .external_agents()
-        .save(&agent("deux", "Deux"))
+        .save(&agent("two", "Two"))
         .expect("write");
 
-    let cible = ProviderId::new("un").expect("identifier");
-    assert!(store.external_agents().remove(&cible).expect("removal"));
+    let target = ProviderId::new("one").expect("identifier");
+    assert!(store.external_agents().remove(&target).expect("removal"));
     assert!(
-        !store.external_agents().remove(&cible).expect("removal"),
+        !store.external_agents().remove(&target).expect("removal"),
         "removing twice does not lie on the second pass"
     );
 
-    let restants = store.external_agents().list().expect("read");
-    assert_eq!(restants.len(), 1);
-    assert_eq!(restants[0].label, "Deux");
+    let remaining = store.external_agents().list().expect("read");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].label, "Two");
 }

@@ -287,7 +287,7 @@ mod tests {
 
     #[derive(Debug, thiserror::Error)]
     #[error("the socket was closed by the peer")]
-    struct ErreurDriverFactice;
+    struct FakeDriverError;
 
     #[test]
     fn only_transient_errors_are_retried() {
@@ -313,29 +313,20 @@ mod tests {
 
     #[test]
     fn a_driver_error_follows_the_class_declared_by_the_driver() {
-        let transitoire = OxynError::driver(
-            DriverId::postgres(),
-            ErrorClass::Transient,
-            ErreurDriverFactice,
-        );
-        assert!(transitoire.is_retryable());
-        assert!(transitoire.to_string().contains("postgres"));
-        assert!(transitoire.to_string().contains("closed by the peer"));
+        let transient =
+            OxynError::driver(DriverId::postgres(), ErrorClass::Transient, FakeDriverError);
+        assert!(transient.is_retryable());
+        assert!(transient.to_string().contains("postgres"));
+        assert!(transient.to_string().contains("closed by the peer"));
 
-        let permanente = OxynError::driver(
-            DriverId::postgres(),
-            ErrorClass::Permanent,
-            ErreurDriverFactice,
-        );
-        assert!(!permanente.is_retryable());
+        let permanent =
+            OxynError::driver(DriverId::postgres(), ErrorClass::Permanent, FakeDriverError);
+        assert!(!permanent.is_retryable());
 
-        let ambigue = OxynError::driver(
-            DriverId::sqlite(),
-            ErrorClass::Ambiguous,
-            ErreurDriverFactice,
-        );
+        let ambiguous =
+            OxynError::driver(DriverId::sqlite(), ErrorClass::Ambiguous, FakeDriverError);
         assert!(
-            !ambigue.is_retryable(),
+            !ambiguous.is_retryable(),
             "ambiguity is not retried: the server may have applied the write"
         );
     }
@@ -344,23 +335,15 @@ mod tests {
     fn the_class_is_not_deduced_from_the_message() {
         // Two errors with an identical message, two different classes: that is
         // exactly what a caller parsing the text would miss.
-        let a = OxynError::driver(
-            DriverId::postgres(),
-            ErrorClass::Transient,
-            ErreurDriverFactice,
-        );
-        let b = OxynError::driver(
-            DriverId::postgres(),
-            ErrorClass::Permanent,
-            ErreurDriverFactice,
-        );
+        let a = OxynError::driver(DriverId::postgres(), ErrorClass::Transient, FakeDriverError);
+        let b = OxynError::driver(DriverId::postgres(), ErrorClass::Permanent, FakeDriverError);
         assert_ne!(a.is_retryable(), b.is_retryable());
     }
 
     #[test]
     fn classification_by_family() {
         assert_eq!(
-            OxynError::Connection("coupure".into()).class(),
+            OxynError::Connection("cut off".into()).class(),
             ErrorClass::Transient
         );
         assert_eq!(
@@ -370,11 +353,11 @@ mod tests {
             .class(),
             ErrorClass::Ambiguous
         );
-        let inconnu = OxynError::OutcomeUnknown("connection lost after sending".into());
-        assert_eq!(inconnu.class(), ErrorClass::Ambiguous);
-        assert!(!inconnu.is_retryable());
+        let unknown = OxynError::OutcomeUnknown("connection lost after sending".into());
+        assert_eq!(unknown.class(), ErrorClass::Ambiguous);
+        assert!(!unknown.is_retryable());
         assert_eq!(
-            OxynError::Query("syntaxe".into()).class(),
+            OxynError::Query("syntax".into()).class(),
             ErrorClass::Permanent
         );
     }
@@ -385,12 +368,12 @@ mod tests {
         // will not reappear on the next attempt. It is rendered as `Query`,
         // permanent; `CatalogUnavailable` keeps the meaning of a catalog
         // really unavailable, which may come back.
-        let inconnue = OxynError::Query(
-            "cannot sort a preview on `absente`: the relation does not declare that column".into(),
+        let unknown_column = OxynError::Query(
+            "cannot sort a preview on `missing`: the relation does not declare that column".into(),
         );
-        assert_eq!(inconnue.class(), ErrorClass::Permanent);
-        assert!(!inconnue.is_retryable());
-        assert!(inconnue.is_user_error());
+        assert_eq!(unknown_column.class(), ErrorClass::Permanent);
+        assert!(!unknown_column.is_retryable());
+        assert!(unknown_column.is_user_error());
         assert_eq!(
             OxynError::CatalogUnavailable("introspection in progress".into()).class(),
             ErrorClass::Transient
@@ -420,15 +403,15 @@ mod tests {
 
     #[test]
     fn an_error_is_either_a_usage_error_or_retryable_never_both() {
-        let cas = [
+        let cases = [
             OxynError::Config("missing field".into()),
-            OxynError::Connection("coupure".into()),
+            OxynError::Connection("cut off".into()),
             OxynError::Authentication("refused".into()),
-            OxynError::Query("syntaxe".into()),
+            OxynError::Query("syntax".into()),
             OxynError::Timeout {
                 after: Duration::from_millis(1),
             },
-            OxynError::OutcomeUnknown("inconnu".into()),
+            OxynError::OutcomeUnknown("unknown".into()),
             OxynError::Cancelled,
             OxynError::PolicyDenied { reason: "r".into() },
             OxynError::ApprovalRequired { reason: "r".into() },
@@ -439,10 +422,10 @@ mod tests {
             OxynError::CatalogUnavailable("empty".into()),
             OxynError::Internal("bug".into()),
         ];
-        for erreur in &cas {
+        for error in &cases {
             assert!(
-                !(erreur.is_retryable() && erreur.is_user_error()),
-                "{erreur} cannot be both retryable and a usage error"
+                !(error.is_retryable() && error.is_user_error()),
+                "{error} cannot be both retryable and a usage error"
             );
         }
     }
@@ -451,7 +434,7 @@ mod tests {
     fn an_unreadable_identifier_becomes_a_serialization_error() {
         let err: OxynError = "not-a-uuid"
             .parse::<crate::ids::SessionId>()
-            .expect_err("invalide")
+            .expect_err("invalid")
             .into();
         assert!(matches!(err, OxynError::Serialization(_)));
     }

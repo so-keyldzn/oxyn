@@ -4,7 +4,7 @@ paths:
   - "crates/oxyn-desktop/**"
 ---
 
-<!-- oxyn-translation source=".claude/rules/front.md" sha256="cd54359093ca" -->
+<!-- oxyn-translation source=".claude/rules/front.md" sha256="69ec3af13018" -->
 
 > Traduction française de [.claude/rules/front.md](../../../../.claude/rules/front.md). **La version anglaise fait foi.**
 
@@ -138,7 +138,7 @@ La règle qu'il applique :
 - **il est couvert** si un `*.stories.tsx` du même répertoire l'importe
   (`./<nom>` ou `@/components/oxyn/<nom>`) : ses propres stories d'ordinaire, ou celles de la vue qui
   le rend directement (`result-chart.stories.tsx` pour `assistant-result-chart`) ;
-- **sinon, il est exempté par nom** dans `EXEMPTS` du script, et seulement dans
+- **sinon, il est exempté par nom** dans `EXEMPT` du script, et seulement dans
   deux cas : une pièce qui n'a de sens qu'à l'intérieur de son parent (greffon
   Lexical, tracé d'un graphique), dont l'exemption nomme la story qui la rend ;
   ou une story en attente, dont l'exemption porte un `TODO` daté qui dit ce qui

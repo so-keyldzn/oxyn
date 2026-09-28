@@ -129,13 +129,13 @@ impl SecretStore for KeyringSecretStore {
 
     fn get(&self, reference: &SecretRef) -> Result<Option<SecretString>> {
         match self.entry(reference)?.get_password() {
-            Ok(mut clair) => {
+            Ok(mut plaintext) => {
                 // `keyring` returns a `String` whose capacity and buffer we do not
                 // control. We copy it into an exact allocation — which `SecretString`
                 // will erase on destruction — then erase the original, which would
                 // otherwise stay readable in the heap.
-                let secret = SecretString::from(clair.as_str());
-                clair.zeroize();
+                let secret = SecretString::from(plaintext.as_str());
+                plaintext.zeroize();
                 Ok(Some(secret))
             }
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -197,12 +197,12 @@ fn map_keyring(err: &keyring::Error) -> SecretError {
         K::BadDataFormat(_, _) => SecretError::Malformed {
             detail: "the keychain could not decode what it stores",
         },
-        K::BadStoreFormat(raison) => SecretError::Backend {
-            detail: format!("unreadable credential store: {raison}"),
+        K::BadStoreFormat(reason) => SecretError::Backend {
+            detail: format!("unreadable credential store: {reason}"),
         },
-        K::TooLong(attribute, limite) => SecretError::TooLarge {
+        K::TooLong(attribute, limit) => SecretError::TooLarge {
             attribute: attribute.clone(),
-            limit: *limite,
+            limit: *limit,
         },
         K::Ambiguous(_) => SecretError::Backend {
             detail: "several keychain entries match this reference".into(),
@@ -222,48 +222,54 @@ mod tests {
     /// developer's keychain. Write behavior is covered by `MemorySecretStore`;
     /// what is tested here is the translation of errors, which is the sensitive
     /// part.
-    const SECRET_TEMOIN: &str = "hunter2";
+    const WITNESS_SECRET: &str = "hunter2";
 
     #[test]
     fn offending_bytes_never_leave_the_translation() {
         // This is the leak scenario: the keychain returns non-UTF-8 bytes, and the
         // resulting error carries the stored content.
-        let brut = SECRET_TEMOIN.as_bytes().to_vec();
-        let cas = [
-            keyring::Error::BadEncoding(brut.clone()),
-            keyring::Error::BadDataFormat(brut, Box::new(std::fmt::Error)),
+        let raw = WITNESS_SECRET.as_bytes().to_vec();
+        let cases = [
+            keyring::Error::BadEncoding(raw.clone()),
+            keyring::Error::BadDataFormat(raw, Box::new(std::fmt::Error)),
         ];
 
-        for erreur in &cas {
-            let traduite = map_keyring(erreur);
-            assert!(matches!(traduite, SecretError::Malformed { .. }));
+        for case in &cases {
+            let translated = map_keyring(case);
+            assert!(matches!(translated, SecretError::Malformed { .. }));
 
-            let rendu = traduite.to_string();
-            let debug = format!("{traduite:?}");
-            assert!(!rendu.contains(SECRET_TEMOIN), "secret leaked: {rendu}");
-            assert!(!debug.contains(SECRET_TEMOIN), "secret leaked: {debug}");
+            let rendered = translated.to_string();
+            let debug = format!("{translated:?}");
+            assert!(
+                !rendered.contains(WITNESS_SECRET),
+                "secret leaked: {rendered}"
+            );
+            assert!(!debug.contains(WITNESS_SECRET), "secret leaked: {debug}");
         }
     }
 
     #[test]
     fn a_platform_without_keychain_is_a_missing_capability() {
-        let sans_magasin = map_keyring(&keyring::Error::NoDefaultStore);
-        assert!(matches!(sans_magasin, SecretError::Unavailable { .. }));
+        let no_store = map_keyring(&keyring::Error::NoDefaultStore);
+        assert!(matches!(no_store, SecretError::Unavailable { .. }));
 
-        let hors_plateforme = map_keyring(&keyring::Error::Invalid(
+        let unsupported_platform = map_keyring(&keyring::Error::Invalid(
             "platform".into(),
             "must be macOS, Windows or *nix".into(),
         ));
-        assert!(matches!(hors_plateforme, SecretError::Unavailable { .. }));
+        assert!(matches!(
+            unsupported_platform,
+            SecretError::Unavailable { .. }
+        ));
     }
 
     #[test]
     fn an_access_refusal_differs_from_a_failure() {
-        let verrouille = map_keyring(&keyring::Error::NoStorageAccess(Box::new(
+        let locked = map_keyring(&keyring::Error::NoStorageAccess(Box::new(
             std::io::Error::other("keychain is locked"),
         )));
-        assert!(matches!(verrouille, SecretError::AccessDenied { .. }));
-        assert!(verrouille.to_string().contains("keychain is locked"));
+        assert!(matches!(locked, SecretError::AccessDenied { .. }));
+        assert!(locked.to_string().contains("keychain is locked"));
 
         let panne = map_keyring(&keyring::Error::PlatformFailure(Box::new(
             std::io::Error::other("OSStatus -25300"),
@@ -274,13 +280,13 @@ mod tests {
     #[test]
     fn a_value_too_large_is_named_as_such() {
         // Real case: an SSH private key against a platform limit.
-        let trop_grand = map_keyring(&keyring::Error::TooLong("password".into(), 2560));
-        match trop_grand {
+        let too_large = map_keyring(&keyring::Error::TooLong("password".into(), 2560));
+        match too_large {
             SecretError::TooLarge { attribute, limit } => {
                 assert_eq!(attribute, "password");
                 assert_eq!(limit, 2560);
             }
-            autre => panic!("attendu TooLarge, obtenu {autre:?}"),
+            other => panic!("expected TooLarge, got {other:?}"),
         }
     }
 
@@ -288,13 +294,16 @@ mod tests {
     fn a_refused_parameter_publishes_only_its_name() {
         // The second member of `Invalid` is an explanation from the platform:
         // nothing guarantees it does not quote the refused value.
-        let refuse = map_keyring(&keyring::Error::Invalid(
+        let refused = map_keyring(&keyring::Error::Invalid(
             "password".into(),
-            format!("`{SECRET_TEMOIN}` is not acceptable"),
+            format!("`{WITNESS_SECRET}` is not acceptable"),
         ));
-        let rendu = refuse.to_string();
-        assert!(rendu.contains("password"));
-        assert!(!rendu.contains(SECRET_TEMOIN), "value leaked: {rendu}");
+        let rendered = refused.to_string();
+        assert!(rendered.contains("password"));
+        assert!(
+            !rendered.contains(WITNESS_SECRET),
+            "value leaked: {rendered}"
+        );
     }
 
     #[test]
@@ -309,9 +318,9 @@ mod tests {
 
     #[test]
     fn the_store_debug_shows_only_a_service_name() {
-        let magasin = KeyringSecretStore::new();
-        let rendu = format!("{magasin:?}");
-        assert!(rendu.contains("oxyn"));
-        assert!(!rendu.contains("password"));
+        let store = KeyringSecretStore::new();
+        let rendered = format!("{store:?}");
+        assert!(rendered.contains("oxyn"));
+        assert!(!rendered.contains("password"));
     }
 }

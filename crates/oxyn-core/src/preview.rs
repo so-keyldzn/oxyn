@@ -5,10 +5,10 @@
 //! The **order** is structured: a column is an identifier the driver quotes,
 //! never an expression. Leaving it free would reopen SQL composition on the
 //! wrong side of the boundary, on a string Oxyn would insert into a query it
-//! composes itself ([I-10](../../CLAUDE.md#i-10)).
+//! composes itself ([I-10](../../../CLAUDE.md#i-10)).
 //!
 //! The **predicate**, on the other hand, is SQL the user writes. It is the
-//! `WHERE` field of the mockup (`272:10667`), and [I-10](../../CLAUDE.md#i-10)
+//! `WHERE` field of the mockup (`272:10667`), and [I-10](../../../CLAUDE.md#i-10)
 //! says it unambiguously: "the SQL *the user writes* is sent as is — that is
 //! the feature". What is forbidden is Oxyn concatenating an identifier
 //! **received from the server**; not passing on what a professional typed.
@@ -16,7 +16,7 @@
 //! This predicate is not an open door for all that. The final text is
 //! reclassified by `oxyn-query` and refused if it becomes mutating, the session
 //! is held read-only by the server, and the row bound applies
-//! ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
+//! ([ADR-0020](../../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
 
 use std::collections::HashSet;
 
@@ -89,7 +89,7 @@ pub struct PreviewShape {
     /// three columns ticked does not fetch the other twelve only to throw them
     /// away. Like the order, it is a structured half: **exact names**, which the
     /// driver quotes and refuses when the relation does not declare them, never
-    /// expressions ([I-10](../../CLAUDE.md#i-10)).
+    /// expressions ([I-10](../../../CLAUDE.md#i-10)).
     ///
     /// Read through [`Self::projection`], which deduplicates and bounds it.
     /// Absent from a shape serialized before it, it means "all".
@@ -191,30 +191,30 @@ mod tests {
 
     #[test]
     fn an_empty_or_blank_predicate_filters_nothing() {
-        let vide = PreviewShape {
+        let empty = PreviewShape {
             predicate: Some(String::new()),
             ..PreviewShape::default()
         };
-        assert!(vide.predicate().is_none());
-        assert!(vide.is_plain(), "a cleared field composes no WHERE");
+        assert!(empty.predicate().is_none());
+        assert!(empty.is_plain(), "a cleared field composes no WHERE");
 
-        let blanc = PreviewShape {
+        let blank = PreviewShape {
             predicate: Some("   \n\t ".into()),
             ..PreviewShape::default()
         };
-        assert!(blanc.predicate().is_none());
+        assert!(blank.predicate().is_none());
     }
 
     #[test]
     fn the_user_text_is_not_rewritten() {
         // Surrounding whitespace goes, the rest is intact: no case
         // normalization, no added quotes, no translated operator.
-        let forme = PreviewShape {
+        let shape = PreviewShape {
             predicate: Some("  status = 'active' AND note LIKE '100%'  ".into()),
             ..PreviewShape::default()
         };
         assert_eq!(
-            forme.predicate(),
+            shape.predicate(),
             Some("status = 'active' AND note LIKE '100%'")
         );
     }
@@ -222,16 +222,16 @@ mod tests {
     #[test]
     fn a_preview_without_request_differs_from_a_composed_preview() {
         assert!(PreviewShape::unordered().is_plain());
-        let trie = PreviewShape {
+        let sorted = PreviewShape {
             sort: vec![PreviewSort::ascending("id")],
             ..PreviewShape::default()
         };
-        assert!(!trie.is_plain());
-        let filtre = PreviewShape {
+        assert!(!sorted.is_plain());
+        let filtered = PreviewShape {
             predicate: Some("id > 10".into()),
             ..PreviewShape::default()
         };
-        assert!(!filtre.is_plain());
+        assert!(!filtered.is_plain());
         let page = PreviewShape {
             offset: 200,
             ..PreviewShape::default()
@@ -242,53 +242,56 @@ mod tests {
     #[test]
     fn a_projection_is_deduplicated_in_first_mention_order() {
         assert_eq!(PreviewShape::unordered().projection().ok(), Some(None));
-        let forme = PreviewShape {
+        let shape = PreviewShape {
             columns: Some(vec!["email".into(), "id".into(), "email".into()]),
             ..PreviewShape::default()
         };
-        assert_eq!(forme.projection().ok().flatten(), Some(vec!["email", "id"]));
+        assert_eq!(shape.projection().ok().flatten(), Some(vec!["email", "id"]));
     }
 
     #[test]
     fn an_empty_or_oversized_projection_is_refused() {
         // Empty, it does not mean "all": composing it as `SELECT *` would read
         // what nobody ticked.
-        let vide = PreviewShape {
+        let empty = PreviewShape {
             columns: Some(Vec::new()),
             ..PreviewShape::default()
         };
-        assert!(matches!(vide.projection(), Err(OxynError::Config(_))));
+        assert!(matches!(empty.projection(), Err(OxynError::Config(_))));
 
-        let limite: Vec<String> = (0..MAX_PROJECTED_COLUMNS)
+        let at_limit: Vec<String> = (0..MAX_PROJECTED_COLUMNS)
             .map(|n| format!("c{n}"))
             .collect();
-        let mut trop = limite.clone();
-        trop.push("one more".into());
-        let au_plafond = PreviewShape {
-            columns: Some(limite),
+        let mut too_many = at_limit.clone();
+        too_many.push("one more".into());
+        let at_ceiling = PreviewShape {
+            columns: Some(at_limit),
             ..PreviewShape::default()
         };
-        assert!(au_plafond.projection().is_ok());
-        let dessus = PreviewShape {
-            columns: Some(trop),
+        assert!(at_ceiling.projection().is_ok());
+        let over_ceiling = PreviewShape {
+            columns: Some(too_many),
             ..PreviewShape::default()
         };
-        assert!(matches!(dessus.projection(), Err(OxynError::Config(_))));
+        assert!(matches!(
+            over_ceiling.projection(),
+            Err(OxynError::Config(_))
+        ));
         // The bound counts the names received, duplicates included: a single
         // name repeated endlessly does not slip under it.
-        let repete = PreviewShape {
+        let repeated = PreviewShape {
             columns: Some(vec!["id".to_owned(); MAX_PROJECTED_COLUMNS + 1]),
             ..PreviewShape::default()
         };
-        assert!(matches!(repete.projection(), Err(OxynError::Config(_))));
+        assert!(matches!(repeated.projection(), Err(OxynError::Config(_))));
     }
 
     #[test]
     fn a_serialized_shape_without_projection_reads_every_column() {
-        let ancienne: PreviewShape =
+        let older: PreviewShape =
             serde_json::from_str(r#"{"sort":[],"predicate":null,"offset":0}"#)
                 .expect("shape from before the projection");
-        assert_eq!(ancienne.columns, None);
+        assert_eq!(older.columns, None);
     }
 
     #[test]
@@ -296,17 +299,17 @@ mod tests {
         assert!(!PreviewShape::unordered().needs_total_order());
         // A predicate alone does not change the order: it requires no key, and
         // must therefore not cost a metadata read.
-        let filtre = PreviewShape {
+        let filtered = PreviewShape {
             predicate: Some("id > 10".into()),
             ..PreviewShape::default()
         };
-        assert!(!filtre.needs_total_order());
+        assert!(!filtered.needs_total_order());
 
-        let trie = PreviewShape {
+        let sorted = PreviewShape {
             sort: vec![PreviewSort::ascending("name")],
             ..PreviewShape::default()
         };
-        assert!(trie.needs_total_order(), "from the first page on");
+        assert!(sorted.needs_total_order(), "from the first page on");
         let page = PreviewShape {
             offset: 200,
             ..PreviewShape::default()

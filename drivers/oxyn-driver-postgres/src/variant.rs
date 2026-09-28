@@ -112,28 +112,28 @@ impl PostgresVariant {
             PostgresFlavor::Postgres
         };
 
-        let mut normalisees: Vec<String> = extensions
+        let mut normalized: Vec<String> = extensions
             .into_iter()
-            .map(|nom| nom.trim().to_ascii_lowercase())
-            .filter(|nom| !nom.is_empty())
+            .map(|name| name.trim().to_ascii_lowercase())
+            .filter(|name| !name.is_empty())
             .collect();
-        normalisees.sort_unstable();
-        normalisees.dedup();
+        normalized.sort_unstable();
+        normalized.dedup();
 
         Self {
             flavor,
             banner: banner.to_owned(),
             server_version: server_version.to_owned(),
             major_version: parse_major(server_version),
-            extensions: normalisees,
+            extensions: normalized,
         }
     }
 
     /// Is this extension installed?
     #[must_use]
     pub fn has_extension(&self, name: &str) -> bool {
-        let cherche = name.to_ascii_lowercase();
-        self.extensions.contains(&cherche)
+        let needle = name.to_ascii_lowercase();
+        self.extensions.contains(&needle)
     }
 
     /// The product name to display: `PostgreSQL`, `PostgreSQL + TimescaleDB`…
@@ -143,25 +143,25 @@ impl PostgresVariant {
     /// is installed.
     #[must_use]
     pub fn product(&self) -> String {
-        let mut nom = self.flavor.as_str().to_owned();
-        let mut marques = Vec::new();
+        let mut name = self.flavor.as_str().to_owned();
+        let mut marks = Vec::new();
         if self.has_extension(EXT_TIMESCALEDB) {
-            marques.push("TimescaleDB");
+            marks.push("TimescaleDB");
         }
         if self.has_extension(EXT_VECTOR) {
-            marques.push("pgvector");
+            marks.push("pgvector");
         }
         if self.has_extension(EXT_CITUS) {
-            marques.push("Citus");
+            marks.push("Citus");
         }
         if self.has_extension(EXT_POSTGIS) {
-            marques.push("PostGIS");
+            marks.push("PostGIS");
         }
-        if !marques.is_empty() {
-            nom.push_str(" + ");
-            nom.push_str(&marques.join(", "));
+        if !marks.is_empty() {
+            name.push_str(" + ");
+            name.push_str(&marks.join(", "));
         }
-        nom
+        name
     }
 
     /// The SQL dialect of this session.
@@ -177,23 +177,23 @@ impl PostgresVariant {
     /// extension never has to re-enable what the variant removed.
     #[must_use]
     pub fn capabilities(&self) -> Capabilities {
-        let mut capacites = base_capabilities();
+        let mut capabilities = base_capabilities();
         if self.major_version.is_none_or(|version| version < 12) {
-            capacites.remove(Capabilities::OBJECT_DEFINITION);
+            capabilities.remove(Capabilities::OBJECT_DEFINITION);
         }
 
         if self.flavor == PostgresFlavor::Redshift {
-            capacites.remove(redshift_missing());
+            capabilities.remove(redshift_missing());
         }
 
         if self.has_extension(EXT_TIMESCALEDB) {
-            capacites.insert(Capabilities::TIME_SERIES);
+            capabilities.insert(Capabilities::TIME_SERIES);
         }
         if self.has_extension(EXT_VECTOR) {
-            capacites.insert(Capabilities::VECTOR_SEARCH);
+            capabilities.insert(Capabilities::VECTOR_SEARCH);
         }
 
-        capacites
+        capabilities
     }
 }
 
@@ -310,30 +310,30 @@ pub fn driver_capabilities() -> Capabilities {
 /// Redshift announces `8.0.2`. Only the first number is read, and nothing is
 /// assumed about the rest.
 fn parse_major(server_version: &str) -> Option<u32> {
-    let tete: String = server_version
+    let head: String = server_version
         .trim_start()
         .chars()
         .take_while(char::is_ascii_digit)
         .collect();
-    tete.parse().ok()
+    head.parse().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BANNIERE_PG: &str =
+    const PG_BANNER: &str =
         "PostgreSQL 17.2 on aarch64-apple-darwin, compiled by Apple clang 16.0.0, 64-bit";
-    const BANNIERE_REDSHIFT: &str = "PostgreSQL 8.0.2 on i686-pc-linux-gnu, compiled by GCC gcc (GCC) 3.4.2, Redshift 1.0.75008";
+    const REDSHIFT_BANNER: &str = "PostgreSQL 8.0.2 on i686-pc-linux-gnu, compiled by GCC gcc (GCC) 3.4.2, Redshift 1.0.75008";
 
     #[test]
     fn a_bare_postgres_declares_the_base() {
-        let variante = PostgresVariant::detect(BANNIERE_PG, "17.2", Vec::new());
-        assert_eq!(variante.flavor, PostgresFlavor::Postgres);
-        assert_eq!(variante.major_version, Some(17));
-        assert_eq!(variante.dialect(), SqlDialect::Postgres);
-        assert_eq!(variante.product(), "PostgreSQL");
-        assert_eq!(variante.capabilities(), base_capabilities());
+        let variant = PostgresVariant::detect(PG_BANNER, "17.2", Vec::new());
+        assert_eq!(variant.flavor, PostgresFlavor::Postgres);
+        assert_eq!(variant.major_version, Some(17));
+        assert_eq!(variant.dialect(), SqlDialect::Postgres);
+        assert_eq!(variant.product(), "PostgreSQL");
+        assert_eq!(variant.capabilities(), base_capabilities());
     }
 
     #[test]
@@ -341,15 +341,18 @@ mod tests {
         // "Not knowing how is an acceptable answer; letting the user believe
         // otherwise is not": the session declares neither transactions, nor
         // multiple statements, nor COPY, because it does not implement them.
-        let socle = base_capabilities();
-        for absente in [
+        let base_caps = base_capabilities();
+        for missing in [
             Capabilities::TRANSACTIONS,
             Capabilities::SAVEPOINTS,
             Capabilities::MULTIPLE_STATEMENTS,
             Capabilities::NAMED_CURSORS,
             Capabilities::BULK_LOAD,
         ] {
-            assert!(!socle.contains(absente), "{absente} must not be declared");
+            assert!(
+                !base_caps.contains(missing),
+                "{missing} must not be declared"
+            );
         }
     }
 
@@ -365,79 +368,87 @@ mod tests {
     fn pgvector_opens_vector_search_on_the_session_that_has_it() {
         // Two databases of the same server can differ: that is the whole point
         // of the "capabilities per session" model (ADR-0003).
-        let sans = PostgresVariant::detect(BANNIERE_PG, "17.2", Vec::new());
-        let avec = PostgresVariant::detect(BANNIERE_PG, "17.2", vec!["vector".to_owned()]);
+        let without_vector = PostgresVariant::detect(PG_BANNER, "17.2", Vec::new());
+        let with_vector = PostgresVariant::detect(PG_BANNER, "17.2", vec!["vector".to_owned()]);
 
-        assert!(!sans.capabilities().contains(Capabilities::VECTOR_SEARCH));
-        assert!(avec.capabilities().contains(Capabilities::VECTOR_SEARCH));
-        assert_eq!(avec.product(), "PostgreSQL + pgvector");
+        assert!(
+            !without_vector
+                .capabilities()
+                .contains(Capabilities::VECTOR_SEARCH)
+        );
+        assert!(
+            with_vector
+                .capabilities()
+                .contains(Capabilities::VECTOR_SEARCH)
+        );
+        assert_eq!(with_vector.product(), "PostgreSQL + pgvector");
     }
 
     #[test]
     fn timescaledb_opens_time_series() {
-        let variante = PostgresVariant::detect(
-            BANNIERE_PG,
+        let variant = PostgresVariant::detect(
+            PG_BANNER,
             "16.4",
             vec!["TimescaleDB".to_owned(), "plpgsql".to_owned()],
         );
-        assert!(variante.has_extension(EXT_TIMESCALEDB), "case-insensitive");
-        assert!(variante.capabilities().contains(Capabilities::TIME_SERIES));
-        assert_eq!(variante.product(), "PostgreSQL + TimescaleDB");
+        assert!(variant.has_extension(EXT_TIMESCALEDB), "case-insensitive");
+        assert!(variant.capabilities().contains(Capabilities::TIME_SERIES));
+        assert_eq!(variant.product(), "PostgreSQL + TimescaleDB");
     }
 
     #[test]
     fn citus_is_named_without_changing_capabilities() {
         // Citus distributes tables; it adds no surface Oxyn can use today.
         // Saying so is more honest than inventing a flag.
-        let variante = PostgresVariant::detect(BANNIERE_PG, "17.2", vec!["citus".to_owned()]);
-        assert_eq!(variante.capabilities(), base_capabilities());
-        assert_eq!(variante.product(), "PostgreSQL + Citus");
+        let variant = PostgresVariant::detect(PG_BANNER, "17.2", vec!["citus".to_owned()]);
+        assert_eq!(variant.capabilities(), base_capabilities());
+        assert_eq!(variant.product(), "PostgreSQL + Citus");
     }
 
     #[test]
     fn redshift_is_recognized_by_its_banner_and_loses_what_it_lacks() {
-        let variante = PostgresVariant::detect(BANNIERE_REDSHIFT, "8.0.2", Vec::new());
-        assert_eq!(variante.flavor, PostgresFlavor::Redshift);
-        assert_eq!(variante.dialect(), SqlDialect::Redshift);
-        assert_eq!(variante.product(), "Amazon Redshift");
+        let variant = PostgresVariant::detect(REDSHIFT_BANNER, "8.0.2", Vec::new());
+        assert_eq!(variant.flavor, PostgresFlavor::Redshift);
+        assert_eq!(variant.dialect(), SqlDialect::Redshift);
+        assert_eq!(variant.product(), "Amazon Redshift");
 
-        let capacites = variante.capabilities();
+        let capabilities = variant.capabilities();
         assert!(
-            !capacites.contains(Capabilities::EXPLAIN_ANALYZE),
+            !capabilities.contains(Capabilities::EXPLAIN_ANALYZE),
             "Redshift does not execute the plan it explains"
         );
-        assert!(!capacites.contains(Capabilities::TRIGGERS));
-        assert!(!capacites.contains(Capabilities::CONSTRAINTS));
-        assert!(!capacites.contains(Capabilities::FULL_TEXT_SEARCH));
+        assert!(!capabilities.contains(Capabilities::TRIGGERS));
+        assert!(!capabilities.contains(Capabilities::CONSTRAINTS));
+        assert!(!capabilities.contains(Capabilities::FULL_TEXT_SEARCH));
 
         // What it has, it keeps.
-        assert!(capacites.contains(Capabilities::SERVER_SIDE_CANCEL));
-        assert!(capacites.contains(Capabilities::SQL));
-        assert!(capacites.contains(Capabilities::TABLES));
+        assert!(capabilities.contains(Capabilities::SERVER_SIDE_CANCEL));
+        assert!(capabilities.contains(Capabilities::SQL));
+        assert!(capabilities.contains(Capabilities::TABLES));
         // `ORDER BY`, `WHERE` and `LIMIT … OFFSET` are common grammar: what
         // Redshift truncates is the type catalog, not selection. Removing them
         // would deprive the user of controls that work.
-        assert!(capacites.contains(Capabilities::PREVIEW_SORT));
-        assert!(capacites.contains(Capabilities::PREVIEW_FILTER));
+        assert!(capabilities.contains(Capabilities::PREVIEW_SORT));
+        assert!(capabilities.contains(Capabilities::PREVIEW_FILTER));
         // `TRUNCATE` exists, but commits the transaction and ignores foreign
         // keys: the review must promise neither rollback nor refusal.
-        assert!(capacites.contains(Capabilities::TRUNCATE));
-        assert!(!capacites.contains(Capabilities::TRANSACTIONAL_DDL));
-        assert!(!capacites.contains(Capabilities::RESTRICT_DEPENDENTS));
+        assert!(capabilities.contains(Capabilities::TRUNCATE));
+        assert!(!capabilities.contains(Capabilities::TRANSACTIONAL_DDL));
+        assert!(!capabilities.contains(Capabilities::RESTRICT_DEPENDENTS));
     }
 
     #[test]
     fn an_extension_does_not_cancel_an_absence_of_the_variant() {
         // The order of the computation matters: pgvector on Redshift does not
         // bring `EXPLAIN ANALYZE` back.
-        let variante = PostgresVariant::detect(
-            BANNIERE_REDSHIFT,
+        let variant = PostgresVariant::detect(
+            REDSHIFT_BANNER,
             "8.0.2",
             vec!["vector".to_owned(), "timescaledb".to_owned()],
         );
-        let capacites = variante.capabilities();
-        assert!(capacites.contains(Capabilities::VECTOR_SEARCH));
-        assert!(!capacites.contains(Capabilities::EXPLAIN_ANALYZE));
+        let capabilities = variant.capabilities();
+        assert!(capabilities.contains(Capabilities::VECTOR_SEARCH));
+        assert!(!capabilities.contains(Capabilities::EXPLAIN_ANALYZE));
     }
 
     #[test]
@@ -446,14 +457,14 @@ mod tests {
         assert_eq!(parse_major("16.4 (Debian 16.4-1.pgdg120+1)"), Some(16));
         assert_eq!(parse_major("9.6.24"), Some(9));
         assert_eq!(parse_major(" 15beta1"), Some(15));
-        assert_eq!(parse_major("inconnue"), None, "nothing is guessed");
+        assert_eq!(parse_major("unknown"), None, "nothing is guessed");
         assert_eq!(parse_major(""), None);
     }
 
     #[test]
     fn extensions_are_normalized_and_deduplicated() {
-        let variante = PostgresVariant::detect(
-            BANNIERE_PG,
+        let variant = PostgresVariant::detect(
+            PG_BANNER,
             "17.2",
             vec![
                 "Vector".to_owned(),
@@ -462,7 +473,7 @@ mod tests {
                 "PostGIS".to_owned(),
             ],
         );
-        assert_eq!(variante.extensions, ["postgis", "vector"]);
+        assert_eq!(variant.extensions, ["postgis", "vector"]);
     }
 
     #[test]
@@ -471,19 +482,19 @@ mod tests {
         // session must be able to declare a capability the driver does not
         // announce, otherwise a surface would appear without ever having been
         // planned.
-        let plafond = driver_capabilities();
-        for variante in [
-            PostgresVariant::detect(BANNIERE_PG, "17.2", Vec::new()),
-            PostgresVariant::detect(BANNIERE_PG, "17.2", vec!["vector".to_owned()]),
-            PostgresVariant::detect(BANNIERE_PG, "16.4", vec!["timescaledb".to_owned()]),
-            PostgresVariant::detect(BANNIERE_REDSHIFT, "8.0.2", Vec::new()),
+        let ceiling = driver_capabilities();
+        for variant in [
+            PostgresVariant::detect(PG_BANNER, "17.2", Vec::new()),
+            PostgresVariant::detect(PG_BANNER, "17.2", vec!["vector".to_owned()]),
+            PostgresVariant::detect(PG_BANNER, "16.4", vec!["timescaledb".to_owned()]),
+            PostgresVariant::detect(REDSHIFT_BANNER, "8.0.2", Vec::new()),
         ] {
-            let session = variante.capabilities();
+            let session = variant.capabilities();
             assert!(
-                plafond.contains(session),
+                ceiling.contains(session),
                 "{} declares {} outside the ceiling",
-                variante.product(),
-                session.difference(plafond)
+                variant.product(),
+                session.difference(ceiling)
             );
         }
     }

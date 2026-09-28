@@ -176,12 +176,12 @@ impl Cursor for PostgresCursor {
             return Ok(None);
         }
         match self.events.recv().await {
-            Some(CursorEvent::Batch(lot)) => {
+            Some(CursorEvent::Batch(batch)) => {
                 self.stats.record_batch(
-                    u64::try_from(lot.num_rows()).unwrap_or(u64::MAX),
-                    u64::try_from(lot.get_array_memory_size()).unwrap_or(u64::MAX),
+                    u64::try_from(batch.num_rows()).unwrap_or(u64::MAX),
+                    u64::try_from(batch.get_array_memory_size()).unwrap_or(u64::MAX),
                 );
-                Ok(Some(lot))
+                Ok(Some(batch))
             }
             Some(CursorEvent::Finished {
                 affected_rows,
@@ -193,9 +193,9 @@ impl Cursor for PostgresCursor {
                 }
                 Ok(None)
             }
-            Some(CursorEvent::Failed(erreur)) => {
+            Some(CursorEvent::Failed(error)) => {
                 self.seal(true);
-                Err(*erreur)
+                Err(*error)
             }
             // The channel closes without `Finished` only if the task disappeared
             // without concluding: it is a driver bug, not faulty data.
@@ -291,15 +291,15 @@ pub(crate) struct StreamRequest {
 /// `cancel` is the execution's **own** token, already recorded in the registry:
 /// dropping this cursor fires it, and so does `Session::cancel`.
 pub(crate) fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCursor {
-    let (envoi, reception) = mpsc::channel(1);
+    let (send, reception) = mpsc::channel(1);
 
     let schema = SchemaRef::clone(&request.schema);
     let handle = request.handle;
     let projects_columns = !schema.fields().is_empty();
-    let jeton = cancel.clone();
+    let token = cancel.clone();
 
     let task = tokio::spawn(async move {
-        run(request, jeton, envoi).await;
+        run(request, token, send).await;
     });
 
     PostgresCursor {
@@ -337,18 +337,18 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         handle,
     } = request;
 
-    let mut assembleur = BatchAssembler::new(schema, &decodings);
-    let mut affectees: u64 = 0;
-    let mut produites: usize = 0;
-    let echeance = limits
+    let mut assembler = BatchAssembler::new(schema, &decodings);
+    let mut affected: u64 = 0;
+    let mut produced: usize = 0;
+    let deadline = limits
         .timeout
-        .map(|duree| tokio::time::Instant::now() + duree);
+        .map(|duration| tokio::time::Instant::now() + duration);
 
-    let arret = {
+    let stop = {
         // `Statement::query_with` rather than `sqlx::query_statement_with`: the
         // database type there is the statement's, with no inference to bubble
         // up.
-        let requete = statement.query_with(arguments);
+        let query = statement.query_with(arguments);
         // `fetch_many` is deprecated because multi-statement only ever worked
         // in SQLite. That is not what it is used for here: it is the only stream
         // that also returns the final `QueryResult`, hence the only one that
@@ -361,75 +361,75 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         // API when sqlx exposes the affected row count on `fetch()`. Tracking:
         // https://github.com/launchbadge/sqlx/issues/3108
         #[expect(deprecated, reason = "only stream exposing rows_affected(); see above")]
-        let mut flux = requete.fetch_many(&mut *connection);
+        let mut stream = query.fetch_many(&mut *connection);
 
         loop {
-            let etape = tokio::select! {
+            let step = tokio::select! {
                 // `biased`: an already requested cancellation always wins over
                 // a ready batch. Without it, a fast stream can make the
                 // cancellation wait indefinitely.
                 biased;
-                () = cancel.cancelled() => Etape::Interrompu(Halt::Cancelled),
-                () = attendre(echeance) => Etape::Interrompu(Halt::TimedOut),
-                recu = flux.next() => match recu {
-                    Some(resultat) => Etape::Recu(resultat),
-                    None => Etape::Fin,
+                () = cancel.cancelled() => Step::Interrupted(Halt::Cancelled),
+                () = sleep_until_deadline(deadline) => Step::Interrupted(Halt::TimedOut),
+                received = stream.next() => match received {
+                    Some(result) => Step::Received(result),
+                    None => Step::End,
                 },
             };
 
-            let resultat = match etape {
-                Etape::Fin => break Halt::Exhausted,
-                Etape::Interrompu(raison) => break raison,
-                Etape::Recu(resultat) => resultat,
+            let result = match step {
+                Step::End => break Halt::Exhausted,
+                Step::Interrupted(reason) => break reason,
+                Step::Received(result) => result,
             };
 
-            let element = match resultat {
+            let element = match result {
                 Ok(element) => element,
-                Err(erreur) => {
-                    let oxyn = map_stream_error(&driver, intent, limits.read_only, bound, erreur);
+                Err(error) => {
+                    let oxyn = map_stream_error(&driver, intent, limits.read_only, bound, error);
                     let _ = events.send(CursorEvent::Failed(Box::new(oxyn))).await;
                     break Halt::Failed;
                 }
             };
 
-            let ligne = match element {
+            let row = match element {
                 // End of a statement: the affected row count is the most useful
                 // thing a write has to say.
                 Either::Left(resume) => {
-                    affectees = affectees.saturating_add(resume.rows_affected());
+                    affected = affected.saturating_add(resume.rows_affected());
                     continue;
                 }
-                Either::Right(ligne) => ligne,
+                Either::Right(row) => row,
             };
 
-            if let Err(erreur) = assembleur.push(&ligne) {
-                let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, erreur);
+            if let Err(error) = assembler.push(&row) {
+                let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, error);
                 let _ = events.send(CursorEvent::Failed(Box::new(oxyn))).await;
                 break Halt::Failed;
             }
-            produites = produites.saturating_add(1);
+            produced = produced.saturating_add(1);
 
-            let borne_atteinte = limits.max_rows.is_some_and(|max| produites >= max);
-            let lot_plein =
-                assembleur.bytes() >= BATCH_BYTE_BUDGET || assembleur.rows() >= BATCH_ROW_CEILING;
+            let limit_reached = limits.max_rows.is_some_and(|max| produced >= max);
+            let batch_full =
+                assembler.bytes() >= BATCH_BYTE_BUDGET || assembler.rows() >= BATCH_ROW_CEILING;
 
-            if lot_plein || borne_atteinte {
+            if batch_full || limit_reached {
                 // The token is watched **also** during back-pressure: a grid
                 // that no longer reads would otherwise let `Session::cancel`
                 // wait forever, the query still running on the server.
                 let emission = tokio::select! {
                     biased;
-                    () = cancel.cancelled() => Emission::Annulee,
-                    emission = emettre(&mut assembleur, &driver, &events) => emission,
+                    () = cancel.cancelled() => Emission::Cancelled,
+                    emission = emit(&mut assembler, &driver, &events) => emission,
                 };
                 match emission {
-                    Emission::Poursuivre => {}
-                    Emission::Annulee => break Halt::Cancelled,
-                    Emission::Abandonne => break Halt::Abandoned,
-                    Emission::Echouee => break Halt::Failed,
+                    Emission::Proceed => {}
+                    Emission::Cancelled => break Halt::Cancelled,
+                    Emission::Abandoned => break Halt::Abandoned,
+                    Emission::Failed => break Halt::Failed,
                 }
             }
-            if borne_atteinte {
+            if limit_reached {
                 break Halt::RowLimit;
             }
         }
@@ -442,7 +442,7 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
     statements.forget(handle);
 
     // The stream is dropped: the borrow on the connection is lifted.
-    if arret.needs_server_cancel() {
+    if stop.needs_server_cancel() {
         // A connection whose stream was abandoned may have kept unread bytes:
         // returning it to the pool would desynchronize the next borrower. It is
         // held **until after** the cancellation is sent: as long as it is, no
@@ -450,15 +450,15 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         connection.discard();
         match canceller.cancel_backend(backend_pid).await {
             Ok(()) => verdict.settle(Verdict::Cancelled),
-            Err(erreur) => {
+            Err(error) => {
                 // Reported here, and returned to `Session::cancel` if it is
                 // waiting: a dropped cursor, for its part, has nobody to tell.
                 tracing::warn!(
                     target: "oxyn::driver::postgres",
-                    error = %erreur,
+                    error = %error,
                     "server-side cancellation did not succeed"
                 );
-                verdict.settle(Verdict::CancelFailed(std::sync::Arc::new(erreur)));
+                verdict.settle(Verdict::CancelFailed(std::sync::Arc::new(error)));
             }
         }
     } else {
@@ -470,19 +470,19 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         // than let introspection or another console inherit a state it did not
         // ask for. A task interrupted between two `await`s — runtime shutdown —
         // leaves the borrow dirty too.
-        let mut remises: Vec<(&'static str, &'static str)> = Vec::with_capacity(2);
+        let mut pendings: Vec<(&'static str, &'static str)> = Vec::with_capacity(2);
         if limits.read_only {
             // The transaction opened by `BEGIN READ ONLY` must be closed before
             // returning to the pool: a connection left `idle in transaction`
             // keeps locks and blocks the `VACUUM` of the whole database. The
             // `ROLLBACK` also undoes any `SET` the user's statement may have set
             // inside the transaction — not the context `SET`, set before it.
-            remises.push((
+            pendings.push((
                 SQL_ROLLBACK,
                 "the read-only transaction could not be closed",
             ));
             if restore_context {
-                remises.push((
+                pendings.push((
                     SQL_RESET_SEARCH_PATH,
                     "the session context could not be reset",
                 ));
@@ -500,15 +500,15 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
             // unreliable for the user anyway — the next query may go out on
             // another connection. A console's schema goes through its session
             // context (ADR-0019), which this reset undoes too.
-            remises.push((
+            pendings.push((
                 SQL_RESET_AFTER_WRITE,
                 "the session state could not be reset after a write",
             ));
         }
 
-        let mut remise = !remises.is_empty();
-        for (instruction, echec) in remises {
-            if let Err(erreur) = sqlx::raw_sql(instruction).execute(&mut *connection).await {
+        let mut pending = !pendings.is_empty();
+        for (instruction, failure) in pendings {
+            if let Err(error) = sqlx::raw_sql(instruction).execute(&mut *connection).await {
                 // Translated before being logged, as everywhere else: a raw
                 // `sqlx::Error` can carry the connection URL.
                 tracing::warn!(
@@ -516,21 +516,21 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                     error = %crate::error::map_exec_error(
                         &driver,
                         oxyn_core::StatementIntent::Read,
-                        erreur,
+                        error,
                     ),
-                    "{echec}"
+                    "{failure}"
                 );
-                remise = false;
+                pending = false;
                 break;
             }
         }
-        if remise {
+        if pending {
             connection.restored();
         }
     }
     drop(connection);
 
-    match arret {
+    match stop {
         Halt::Failed => {}
         Halt::Cancelled | Halt::Abandoned => {
             let _ = events
@@ -538,27 +538,27 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                 .await;
         }
         Halt::TimedOut => {
-            let delai = limits.timeout.unwrap_or_default();
+            let delay = limits.timeout.unwrap_or_default();
             // `Timeout` is ambiguous by construction: the server may have
             // applied the write (I-13). `OxynError::class` says so, not this
             // message.
             let _ = events
                 .send(CursorEvent::Failed(Box::new(OxynError::Timeout {
-                    after: delai,
+                    after: delay,
                 })))
                 .await;
         }
         Halt::Exhausted | Halt::RowLimit => {
-            if !assembleur.is_empty()
-                && let Emission::Echouee | Emission::Abandonne =
-                    emettre(&mut assembleur, &driver, &events).await
+            if !assembler.is_empty()
+                && let Emission::Failed | Emission::Abandoned =
+                    emit(&mut assembler, &driver, &events).await
             {
                 return;
             }
             let _ = events
                 .send(CursorEvent::Finished {
-                    affected_rows: affectees,
-                    truncated: arret == Halt::RowLimit,
+                    affected_rows: affected,
+                    truncated: stop == Halt::RowLimit,
                 })
                 .await;
         }
@@ -566,60 +566,60 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
 }
 
 /// What one iteration of the loop produced.
-enum Etape {
+enum Step {
     /// The stream returned an element.
-    Recu(
+    Received(
         std::result::Result<
             Either<sqlx::postgres::PgQueryResult, sqlx::postgres::PgRow>,
             sqlx::Error,
         >,
     ),
     /// The stream is exhausted.
-    Fin,
+    End,
     /// An interruption won the race.
-    Interrompu(Halt),
+    Interrupted(Halt),
 }
 
 /// What emitting a batch gave.
 enum Emission {
     /// The batch went out, carry on.
-    Poursuivre,
+    Proceed,
     /// The token fired while the channel was full.
-    Annulee,
+    Cancelled,
     /// Nobody listens any more: the cursor was dropped.
-    Abandonne,
+    Abandoned,
     /// The batch could not be built; the error is already emitted.
-    Echouee,
+    Failed,
 }
 
 /// Closes the current batch and sends it, honoring the channel's
 /// back-pressure.
-async fn emettre(
-    assembleur: &mut BatchAssembler,
+async fn emit(
+    assembler: &mut BatchAssembler,
     driver: &DriverId,
     events: &mpsc::Sender<CursorEvent>,
 ) -> Emission {
-    let lot = match assembleur.finish() {
-        Ok(lot) => lot,
-        Err(erreur) => {
-            let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, erreur);
+    let batch = match assembler.finish() {
+        Ok(batch) => batch,
+        Err(error) => {
+            let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, error);
             let _ = events.send(CursorEvent::Failed(Box::new(oxyn))).await;
-            return Emission::Echouee;
+            return Emission::Failed;
         }
     };
     // `send` on a full channel **waits**: that is where back-pressure applies,
     // and it is what keeps memory from inflating.
-    if events.send(CursorEvent::Batch(lot)).await.is_err() {
-        return Emission::Abandonne;
+    if events.send(CursorEvent::Batch(batch)).await.is_err() {
+        return Emission::Abandoned;
     }
-    Emission::Poursuivre
+    Emission::Proceed
 }
 
 /// Waits for the deadline, or forever when there is none.
 ///
 /// The instant is **absolute**: recreating this future on every loop turn
 /// therefore does not push the delay back, which a relative duration would.
-async fn attendre(deadline: Option<tokio::time::Instant>) {
+async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(instant) => tokio::time::sleep_until(instant).await,
         None => std::future::pending().await,
@@ -652,15 +652,15 @@ mod tests {
             !Halt::Failed.needs_server_cancel(),
             "the server has already finished"
         );
-        for raison in [
+        for reason in [
             Halt::Cancelled,
             Halt::TimedOut,
             Halt::RowLimit,
             Halt::Abandoned,
         ] {
             assert!(
-                raison.needs_server_cancel(),
-                "{raison:?} leaves a query running"
+                reason.needs_server_cancel(),
+                "{reason:?} leaves a query running"
             );
         }
     }

@@ -46,7 +46,7 @@
 //! use oxyn_core::prelude::*;
 //!
 //! let policy = DefaultPolicy::new();
-//! let connection = ConnectionConfig::new("caisse", DriverId::postgres())
+//! let connection = ConnectionConfig::new("checkout", DriverId::postgres())
 //!     .with_environment(Environment::Production);
 //! policy.register(&connection);
 //!
@@ -54,7 +54,7 @@
 //!     connection: connection.id,
 //!     session: SessionId::new(),
 //!     request: Box::new(
-//!         ExecRequest::new(QueryLanguage::SQL, "DELETE FROM commandes")
+//!         ExecRequest::new(QueryLanguage::SQL, "DELETE FROM orders")
 //!             .with_intent(StatementIntent::Write)
 //!             .with_risk(MutationRisk::UnboundedDelete),
 //!     ),
@@ -156,20 +156,20 @@ mod tests {
     /// command emitted by a test goes through the `PolicyGate`.
     #[test]
     fn a_read_goes_through_the_gate() {
-        let politique = DefaultPolicy::new();
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let policy = DefaultPolicy::new();
+        let connection = ConnectionConfig::new("workshop", DriverId::sqlite())
             .with_environment(Environment::Local);
-        politique.register(&connexion);
+        policy.register(&connection);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: connection.id,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "SELECT 1").with_intent(StatementIntent::Read),
             ),
         };
 
-        let decision = politique.authorize(&Actor::Human, &commande, Environment::Local);
+        let decision = policy.authorize(&Actor::Human, &command, Environment::Local);
         assert_eq!(decision, Decision::Allow);
     }
 
@@ -178,24 +178,24 @@ mod tests {
     /// `WHERE`. Nothing must leave without confirmation.
     #[test]
     fn a_hastily_added_connection_is_treated_as_production() {
-        let politique = DefaultPolicy::new();
+        let policy = DefaultPolicy::new();
         // No `with_environment`: the default applies.
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres());
-        assert!(connexion.is_production());
-        politique.register(&connexion);
+        let connection = ConnectionConfig::new("customer database", DriverId::postgres());
+        assert!(connection.is_production());
+        policy.register(&connection);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: connection.id,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::SQL, "UPDATE clients SET actif = false")
+                ExecRequest::new(QueryLanguage::SQL, "UPDATE customers SET active = false")
                     .with_intent(StatementIntent::Write)
                     .with_risk(MutationRisk::UnboundedUpdate),
             ),
         };
 
         // Even by announcing `Local`, the caller does not lower the protection.
-        let decision = politique.authorize(&Actor::Human, &commande, Environment::Local);
+        let decision = policy.authorize(&Actor::Human, &command, Environment::Local);
         assert!(decision.requires_approval(), "{decision:?}");
     }
 }

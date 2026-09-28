@@ -135,8 +135,8 @@ mod tests {
     fn the_tier_returned_here_is_the_domain_one() {
         // A single definition in the repository: if someone reintroduced a
         // local one, this type equality would no longer compile.
-        let du_domaine: oxyn_core::PrivacyTier = oxyn_core::PrivacyTier::Metadata;
-        let reexporte: PrivacyTier = du_domaine;
-        assert_eq!(reexporte, PrivacyTier::default());
+        let from_domain: oxyn_core::PrivacyTier = oxyn_core::PrivacyTier::Metadata;
+        let reexported: PrivacyTier = from_domain;
+        assert_eq!(reexported, PrivacyTier::default());
     }
 }

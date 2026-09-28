@@ -69,12 +69,12 @@ pub struct ConnectSpec {
     options: PgConnectOptions,
     /// What can be shown, frozen at construction so that `Debug` has nothing to
     /// extract from the options — hence nothing to forget to mask.
-    apercu: Apercu,
+    overview: Overview,
 }
 
 /// The showable part of a connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Apercu {
+struct Overview {
     host: String,
     port: u16,
     database: String,
@@ -111,34 +111,34 @@ impl ConnectSpec {
         let mut database = String::new();
         let mut user = String::new();
         let mut sslmode = PgSslMode::Prefer;
-        let mut sslmode_nom = "prefer";
+        let mut sslmode_name = "prefer";
         let mut application_name = DEFAULT_APPLICATION_NAME.to_owned();
         let mut extras: Vec<(String, String)> = Vec::new();
 
-        for (cle, valeur) in &config.params {
-            match cle.trim().to_ascii_lowercase().as_str() {
-                "host" | "hostname" | "server" => host = valeur.trim().to_owned(),
+        for (key, value) in &config.params {
+            match key.trim().to_ascii_lowercase().as_str() {
+                "host" | "hostname" | "server" => host = value.trim().to_owned(),
                 "port" => {
-                    port = valeur.trim().parse::<u16>().map_err(|_| {
+                    port = value.trim().parse::<u16>().map_err(|_| {
                         OxynError::Config(
                             "parameter `port` expects an integer between 1 and 65535".to_owned(),
                         )
                     })?;
                 }
-                "database" | "dbname" | "db" => database = valeur.trim().to_owned(),
-                "user" | "username" => user = valeur.trim().to_owned(),
+                "database" | "dbname" | "db" => database = value.trim().to_owned(),
+                "user" | "username" => user = value.trim().to_owned(),
                 "sslmode" | "ssl_mode" => {
-                    let (mode, nom) = parse_ssl_mode(valeur.trim())?;
+                    let (mode, name) = parse_ssl_mode(value.trim())?;
                     sslmode = mode;
-                    sslmode_nom = nom;
+                    sslmode_name = name;
                 }
                 "application_name" => {
-                    let demande = valeur.trim();
-                    if !demande.is_empty() {
-                        application_name = demande.to_owned();
+                    let requested = value.trim();
+                    if !requested.is_empty() {
+                        application_name = requested.to_owned();
                     }
                 }
-                _ => extras.push((cle.clone(), valeur.clone())),
+                _ => extras.push((key.clone(), value.clone())),
             }
         }
 
@@ -196,12 +196,12 @@ impl ConnectSpec {
 
         Ok(Self {
             options,
-            apercu: Apercu {
+            overview: Overview {
                 host,
                 port,
                 database,
                 user,
-                sslmode: sslmode_nom,
+                sslmode: sslmode_name,
             },
         })
     }
@@ -218,31 +218,31 @@ impl ConnectSpec {
     /// The host, as the configuration gave it.
     #[must_use]
     pub fn host(&self) -> &str {
-        &self.apercu.host
+        &self.overview.host
     }
 
     /// The port.
     #[must_use]
     pub const fn port(&self) -> u16 {
-        self.apercu.port
+        self.overview.port
     }
 
     /// The target database.
     #[must_use]
     pub fn database(&self) -> &str {
-        &self.apercu.database
+        &self.overview.database
     }
 
     /// The user.
     #[must_use]
     pub fn user(&self) -> &str {
-        &self.apercu.user
+        &self.overview.user
     }
 
     /// The requested TLS mode, under its `libpq` name.
     #[must_use]
     pub const fn ssl_mode(&self) -> &'static str {
-        self.apercu.sslmode
+        self.overview.sslmode
     }
 }
 
@@ -252,11 +252,11 @@ impl fmt::Debug for ConnectSpec {
     /// ([I-03](../../../CLAUDE.md#i-03)).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConnectSpec")
-            .field("host", &self.apercu.host)
-            .field("port", &self.apercu.port)
-            .field("database", &self.apercu.database)
-            .field("user", &self.apercu.user)
-            .field("sslmode", &self.apercu.sslmode)
+            .field("host", &self.overview.host)
+            .field("port", &self.overview.port)
+            .field("database", &self.overview.database)
+            .field("user", &self.overview.user)
+            .field("sslmode", &self.overview.sslmode)
             .field("password", &"<redacted>")
             .finish()
     }
@@ -266,8 +266,8 @@ impl fmt::Debug for ConnectSpec {
 ///
 /// The six names are `libpq`'s, because that is what the user has in their
 /// existing connection files.
-fn parse_ssl_mode(valeur: &str) -> Result<(PgSslMode, &'static str)> {
-    let couple = match valeur.to_ascii_lowercase().as_str() {
+fn parse_ssl_mode(value: &str) -> Result<(PgSslMode, &'static str)> {
+    let pair = match value.to_ascii_lowercase().as_str() {
         "disable" => (PgSslMode::Disable, "disable"),
         "allow" => (PgSslMode::Allow, "allow"),
         "prefer" | "" => (PgSslMode::Prefer, "prefer"),
@@ -282,7 +282,7 @@ fn parse_ssl_mode(valeur: &str) -> Result<(PgSslMode, &'static str)> {
             ));
         }
     };
-    Ok(couple)
+    Ok(pair)
 }
 
 /// Timeout for acquiring a connection from the pool.
@@ -305,14 +305,14 @@ mod tests {
     use super::*;
     use crate::driver::postgres_metadata;
 
-    const MOT_DE_PASSE: &str = "hunter2";
+    const PASSWORD: &str = "hunter2";
 
     fn config() -> ConnectionConfig {
-        ConnectionConfig::new("caisse", DriverId::postgres())
-            .with_param("host", "db.interne")
+        ConnectionConfig::new("shop", DriverId::postgres())
+            .with_param("host", "db.internal")
             .with_param("port", "6543")
-            .with_param("database", "caisse")
-            .with_param("user", "lecture")
+            .with_param("database", "shop")
+            .with_param("user", "read_request")
     }
 
     #[test]
@@ -321,65 +321,66 @@ mod tests {
         let spec = ConnectSpec::from_config(
             &postgres_metadata(),
             &config(),
-            &Credentials::new().with_password(MOT_DE_PASSE),
+            &Credentials::new().with_password(PASSWORD),
         )
         .expect("complete configuration");
 
-        let rendu = format!("{spec:?}");
-        assert!(!rendu.contains(MOT_DE_PASSE), "leak: {rendu}");
-        assert!(rendu.contains("<redacted>"), "{rendu}");
+        let rendered = format!("{spec:?}");
+        assert!(!rendered.contains(PASSWORD), "leak: {rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
 
         // What remains must stay useful for diagnostics.
-        assert!(rendu.contains("db.interne"), "{rendu}");
-        assert!(rendu.contains("6543"), "{rendu}");
-        assert!(rendu.contains("lecture"), "{rendu}");
+        assert!(rendered.contains("db.internal"), "{rendered}");
+        assert!(rendered.contains("6543"), "{rendered}");
+        assert!(rendered.contains("read_request"), "{rendered}");
     }
 
     #[test]
     fn recognized_parameters_reach_sqlx() {
         let spec = ConnectSpec::from_config(&postgres_metadata(), &config(), &Credentials::new())
             .expect("complete configuration");
-        assert_eq!(spec.host(), "db.interne");
+        assert_eq!(spec.host(), "db.internal");
         assert_eq!(spec.port(), 6543);
-        assert_eq!(spec.database(), "caisse");
-        assert_eq!(spec.user(), "lecture");
+        assert_eq!(spec.database(), "shop");
+        assert_eq!(spec.user(), "read_request");
         assert_eq!(spec.ssl_mode(), "prefer");
     }
 
     #[test]
     fn the_default_port_is_the_protocol_s() {
-        let sans_port = ConnectionConfig::new("caisse", DriverId::postgres())
+        let without_port = ConnectionConfig::new("shop", DriverId::postgres())
             .with_param("host", "localhost")
-            .with_param("database", "caisse")
-            .with_param("user", "lecture");
-        let spec = ConnectSpec::from_config(&postgres_metadata(), &sans_port, &Credentials::new())
-            .expect("complete configuration");
+            .with_param("database", "shop")
+            .with_param("user", "read_request");
+        let spec =
+            ConnectSpec::from_config(&postgres_metadata(), &without_port, &Credentials::new())
+                .expect("complete configuration");
         assert_eq!(spec.port(), DEFAULT_PORT);
     }
 
     #[test]
     fn an_unreadable_port_is_refused_with_a_message_that_says_what_to_do() {
-        let mauvais = config().with_param("port", "cinq-mille");
-        let erreur = ConnectSpec::from_config(&postgres_metadata(), &mauvais, &Credentials::new())
+        let bad = config().with_param("port", "five-thousand");
+        let error = ConnectSpec::from_config(&postgres_metadata(), &bad, &Credentials::new())
             .expect_err("refusal expected");
-        assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
-        assert!(erreur.to_string().contains("65535"), "{erreur}");
+        assert!(matches!(error, OxynError::Config(_)), "{error:?}");
+        assert!(error.to_string().contains("65535"), "{error}");
     }
 
     #[test]
     fn an_unknown_sslmode_is_refused_rather_than_silently_downgraded() {
         // Downgrading it to `prefer` would open a connection in clear where the
         // user asked for encryption.
-        let mauvais = config().with_param("sslmode", "peut-etre");
-        let erreur = ConnectSpec::from_config(&postgres_metadata(), &mauvais, &Credentials::new())
+        let bad = config().with_param("sslmode", "maybe");
+        let error = ConnectSpec::from_config(&postgres_metadata(), &bad, &Credentials::new())
             .expect_err("refusal expected");
-        assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
-        assert!(erreur.to_string().contains("verify-full"), "{erreur}");
+        assert!(matches!(error, OxynError::Config(_)), "{error:?}");
+        assert!(error.to_string().contains("verify-full"), "{error}");
     }
 
     #[test]
     fn the_six_libpq_tls_modes_are_accepted() {
-        for nom in [
+        for name in [
             "disable",
             "allow",
             "prefer",
@@ -387,10 +388,11 @@ mod tests {
             "verify-ca",
             "verify-full",
         ] {
-            let avec = config().with_param("sslmode", nom);
-            let spec = ConnectSpec::from_config(&postgres_metadata(), &avec, &Credentials::new())
-                .expect("known mode");
-            assert_eq!(spec.ssl_mode(), nom);
+            let with_mode = config().with_param("sslmode", name);
+            let spec =
+                ConnectSpec::from_config(&postgres_metadata(), &with_mode, &Credentials::new())
+                    .expect("known mode");
+            assert_eq!(spec.ssl_mode(), name);
         }
     }
 
@@ -398,32 +400,32 @@ mod tests {
     fn a_secret_stored_in_the_parameters_is_refused() {
         // The configuration is persisted: a secret has no place in it (I-03).
         // `DriverMetadata::validate` is what refuses, and this module calls it.
-        let fuite = config().with_param("password", MOT_DE_PASSE);
-        let erreur = ConnectSpec::from_config(&postgres_metadata(), &fuite, &Credentials::new())
+        let leak = config().with_param("password", PASSWORD);
+        let error = ConnectSpec::from_config(&postgres_metadata(), &leak, &Credentials::new())
             .expect_err("refusal expected");
-        assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
-        assert!(!erreur.to_string().contains(MOT_DE_PASSE), "{erreur}");
+        assert!(matches!(error, OxynError::Config(_)), "{error:?}");
+        assert!(!error.to_string().contains(PASSWORD), "{error}");
     }
 
     #[test]
     fn a_missing_required_field_is_named() {
-        let sans_base = ConnectionConfig::new("caisse", DriverId::postgres())
+        let without_database = ConnectionConfig::new("shop", DriverId::postgres())
             .with_param("host", "localhost")
-            .with_param("user", "lecture");
-        let erreur =
-            ConnectSpec::from_config(&postgres_metadata(), &sans_base, &Credentials::new())
+            .with_param("user", "read_request");
+        let error =
+            ConnectSpec::from_config(&postgres_metadata(), &without_database, &Credentials::new())
                 .expect_err("refusal expected");
-        assert!(erreur.to_string().contains("database"), "{erreur}");
+        assert!(error.to_string().contains("database"), "{error}");
     }
 
     #[test]
     fn a_configuration_targeting_another_driver_is_refused() {
-        let ailleurs = ConnectionConfig::new("fichier", DriverId::sqlite())
+        let elsewhere = ConnectionConfig::new("fichier", DriverId::sqlite())
             .with_param("host", "localhost")
-            .with_param("database", "caisse")
-            .with_param("user", "lecture");
-        let erreur = ConnectSpec::from_config(&postgres_metadata(), &ailleurs, &Credentials::new())
+            .with_param("database", "shop")
+            .with_param("user", "read_request");
+        let error = ConnectSpec::from_config(&postgres_metadata(), &elsewhere, &Credentials::new())
             .expect_err("refusal expected");
-        assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
+        assert!(matches!(error, OxynError::Config(_)), "{error:?}");
     }
 }

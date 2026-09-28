@@ -161,24 +161,24 @@ impl Driver for PostgresDriver {
                 .test_before_acquire(true)
                 .connect_with(spec.options().clone())
                 .await
-                .map_err(|erreur| map_connect_error(&erreur))
+                .map_err(|error| map_connect_error(&error))
         })
         .await?;
 
-        let variante = match race_cancel(cancel, detect_variant(&pool)).await {
-            Ok(variante) => variante,
-            Err(erreur) => {
+        let variant = match race_cancel(cancel, detect_variant(&pool)).await {
+            Ok(variant) => variant,
+            Err(error) => {
                 // An open pool nobody will hold must be closed: otherwise the
                 // connection stays established on the server.
                 pool.close().await;
-                return Err(erreur);
+                return Err(error);
             }
         };
 
         tracing::debug!(
             target: "oxyn::driver::postgres",
-            produit = %variante.product(),
-            version = %variante.server_version,
+            product = %variant.product(),
+            version = %variant.server_version,
             "session opened"
         );
 
@@ -186,7 +186,7 @@ impl Driver for PostgresDriver {
             self.id(),
             pool,
             spec,
-            variante,
+            variant,
             base,
         )))
     }
@@ -200,35 +200,35 @@ impl Driver for PostgresDriver {
 /// "there are none" — and no optional capability is then enabled, which is the
 /// cautious side.
 async fn detect_variant(pool: &PgPool) -> Result<PostgresVariant> {
-    let identite = sqlx::query(SQL_IDENTITY)
+    let identity = sqlx::query(SQL_IDENTITY)
         .fetch_one(pool)
         .await
-        .map_err(|erreur| map_connect_error(&erreur))?;
+        .map_err(|error| map_connect_error(&error))?;
 
-    let banniere: String = identite
+    let banner: String = identity
         .try_get(0)
-        .map_err(|erreur| map_exec_error(&DriverId::postgres(), StatementIntent::Read, erreur))?;
+        .map_err(|error| map_exec_error(&DriverId::postgres(), StatementIntent::Read, error))?;
 
     let extensions: Vec<String> = match sqlx::query(SQL_EXTENSIONS).fetch_all(pool).await {
-        Ok(lignes) => lignes
+        Ok(rows) => rows
             .iter()
-            .filter_map(|ligne| ligne.try_get::<String, _>(0).ok())
+            .filter_map(|row| row.try_get::<String, _>(0).ok())
             .collect(),
-        Err(erreur) => {
+        Err(error) => {
             // Translated before being logged: `sqlx` sometimes composes its
             // messages with the connection URL, and "no `sqlx::Error` goes out
             // untranslated" is a rule that only holds without exception.
             tracing::debug!(
                 target: "oxyn::driver::postgres",
-                error = %map_connect_error(&erreur),
+                error = %map_connect_error(&error),
                 "pg_extension is unreadable: no extension capability will be declared"
             );
             Vec::new()
         }
     };
 
-    let version = server_version_from_banner(&banniere);
-    Ok(PostgresVariant::detect(&banniere, &version, extensions))
+    let version = server_version_from_banner(&banner);
+    Ok(PostgresVariant::detect(&banner, &version, extensions))
 }
 
 /// Extracts the version number from a `version()` banner.
@@ -242,7 +242,7 @@ fn server_version_from_banner(banner: &str) -> String {
     banner
         .split_whitespace()
         .nth(1)
-        .filter(|mot| mot.starts_with(|c: char| c.is_ascii_digit()))
+        .filter(|word| word.starts_with(|c: char| c.is_ascii_digit()))
         .unwrap_or_default()
         .to_owned()
 }
@@ -264,17 +264,17 @@ mod tests {
             .check()
             .expect("the connection form is consistent");
 
-        let mut registre = DriverRegistry::new();
-        registre
+        let mut registry = DriverRegistry::new();
+        registry
             .register(std::sync::Arc::new(PostgresDriver::new()))
             .expect("registration");
-        assert!(registre.contains(&DriverId::postgres()));
+        assert!(registry.contains(&DriverId::postgres()));
     }
 
     #[test]
     fn the_form_carries_the_expected_fields() {
-        let metadonnees = postgres_metadata();
-        for cle in [
+        let metadata = postgres_metadata();
+        for key in [
             "host",
             "port",
             "database",
@@ -283,38 +283,38 @@ mod tests {
             "sslmode",
             "application_name",
         ] {
-            assert!(metadonnees.field(cle).is_some(), "field `{cle}` missing");
+            assert!(metadata.field(key).is_some(), "field `{key}` missing");
         }
-        assert_eq!(metadonnees.default_port, Some(5432));
+        assert_eq!(metadata.default_port, Some(5432));
     }
 
     #[test]
     fn the_password_is_the_only_secret_field_and_has_no_default() {
         // A default value on a secret field would be written in clear in the
         // binary (I-03).
-        let metadonnees = postgres_metadata();
-        let secrets: Vec<&str> = metadonnees
+        let metadata = postgres_metadata();
+        let secrets: Vec<&str> = metadata
             .secret_fields()
-            .map(|champ| champ.key.as_str())
+            .map(|field| field.key.as_str())
             .collect();
         assert_eq!(secrets, ["password"]);
 
-        let champ = metadonnees
+        let field = metadata
             .field("password")
             .expect("the password field exists");
-        assert!(champ.default.is_none());
-        assert_eq!(champ.kind, FieldKind::Password);
+        assert!(field.default.is_none());
+        assert_eq!(field.kind, FieldKind::Password);
     }
 
     #[test]
     fn the_tls_mode_offers_the_six_libpq_values() {
-        let metadonnees = postgres_metadata();
-        let champ = metadonnees.field("sslmode").expect("the TLS field exists");
-        let FieldKind::Choice(valeurs) = &champ.kind else {
-            panic!("`sslmode` must be a closed choice: {:?}", champ.kind);
+        let metadata = postgres_metadata();
+        let field = metadata.field("sslmode").expect("the TLS field exists");
+        let FieldKind::Choice(values) = &field.kind else {
+            panic!("`sslmode` must be a closed choice: {:?}", field.kind);
         };
         assert_eq!(
-            valeurs,
+            values,
             &[
                 "disable",
                 "allow",
@@ -328,23 +328,29 @@ mod tests {
 
     #[test]
     fn a_valid_connection_configuration_passes_driver_validation() {
-        let metadonnees = postgres_metadata();
-        let connexion = ConnectionConfig::new("caisse", DriverId::postgres())
-            .with_param("host", "interne.example")
-            .with_param("database", "caisse")
+        let metadata = postgres_metadata();
+        let connection = ConnectionConfig::new("shop", DriverId::postgres())
+            .with_param("host", "internal.example")
+            .with_param("database", "shop")
             .with_param("user", "app");
-        metadonnees
-            .validate(&connexion)
+        metadata
+            .validate(&connection)
             .expect("the three required fields are filled in");
     }
 
     #[test]
     fn the_driver_ceiling_contains_sql_and_server_side_cancel() {
-        let capacites = PostgresDriver::new().capabilities();
-        assert!(capacites.contains(Capabilities::SQL));
-        assert!(capacites.contains(Capabilities::SERVER_SIDE_CANCEL));
-        assert!(capacites.contains(Capabilities::VECTOR_SEARCH), "pgvector");
-        assert!(capacites.contains(Capabilities::TIME_SERIES), "TimescaleDB");
+        let capabilities = PostgresDriver::new().capabilities();
+        assert!(capabilities.contains(Capabilities::SQL));
+        assert!(capabilities.contains(Capabilities::SERVER_SIDE_CANCEL));
+        assert!(
+            capabilities.contains(Capabilities::VECTOR_SEARCH),
+            "pgvector"
+        );
+        assert!(
+            capabilities.contains(Capabilities::TIME_SERIES),
+            "TimescaleDB"
+        );
     }
 
     #[test]

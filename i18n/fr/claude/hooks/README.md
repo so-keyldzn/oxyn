@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/hooks/README.md" sha256="46a605f6758b" -->
+<!-- oxyn-translation source=".claude/hooks/README.md" sha256="157aca26a088" -->
 
 > Traduction française de [.claude/hooks/README.md](../../../../.claude/hooks/README.md). **La version anglaise fait foi.**
 
@@ -20,7 +20,7 @@ chaque hook ajouté.
 Sur un `deny`, `permissionDecisionReason` est transmise **à Claude** : elle doit
 donc dire quoi faire à la place. Sur un `ask`, elle va **à l'utilisateur seul** ;
 sans `additionalContext`, Claude voit son action suspendue sans savoir par quoi
-et retente à l'identique. `protocole_hook.demander()` reprend donc la raison dans
+et retente à l'identique. `protocole_hook.ask()` reprend donc la raison dans
 les deux champs.
 
 **2. `systemMessage` est un champ de premier niveau, et `Stop` ne le jette pas.**

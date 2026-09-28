@@ -55,19 +55,19 @@ impl<'a> Providers<'a> {
     /// [`StoreError::Sqlite`] if the read fails.
     pub fn list(&self) -> Result<Vec<AiProviderConfig>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(
+            let mut query = conn.prepare(
                 "SELECT id, kind, label, base_url, model, secret_ref, created_at, updated_at
                  FROM ai_providers ORDER BY label, id",
             )?;
-            let lignes = requete.query_and_then([], depuis_ligne)?;
-            let mut fournisseurs = Vec::new();
-            for ligne in lignes {
-                match ligne? {
-                    Some(config) => fournisseurs.push(config),
+            let rows = query.query_and_then([], from_row)?;
+            let mut providers = Vec::new();
+            for row in rows {
+                match row? {
+                    Some(config) => providers.push(config),
                     None => continue,
                 }
             }
-            Ok(fournisseurs)
+            Ok(providers)
         })
     }
 
@@ -87,11 +87,11 @@ impl<'a> Providers<'a> {
     /// names the reason, never the value; [`StoreError::Sqlite`] if the write
     /// fails.
     pub fn save(&self, config: &AiProviderConfig) -> Result<()> {
-        config.validate().map_err(|erreur| StoreError::Corrupted {
+        config.validate().map_err(|error| StoreError::Corrupted {
             field: "ai_providers",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })?;
-        let maintenant = Utc::now();
+        let now = Utc::now();
         self.store.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO ai_providers
@@ -112,7 +112,7 @@ impl<'a> Providers<'a> {
                     config.model,
                     config.secret_ref,
                     config.created_at,
-                    maintenant,
+                    now,
                 ],
             )?;
             Ok(())
@@ -130,11 +130,11 @@ impl<'a> Providers<'a> {
     /// [`StoreError::Sqlite`] if the deletion fails.
     pub fn remove(&self, id: &ProviderId) -> Result<bool> {
         self.store.with_connection(|conn| {
-            let effacees = conn.execute(
+            let erased = conn.execute(
                 "DELETE FROM ai_providers WHERE id = ?1",
                 params![id.as_str()],
             )?;
-            Ok(effacees > 0)
+            Ok(erased > 0)
         })
     }
 }
@@ -145,7 +145,7 @@ impl<'a> Providers<'a> {
 /// with `Err` is what makes it possible to propagate a real SQLite failure
 /// while skipping a row written by a later version. No message copies the
 /// faulty value (I-03).
-fn depuis_ligne(row: &Row<'_>) -> Result<Option<AiProviderConfig>> {
+fn from_row(row: &Row<'_>) -> Result<Option<AiProviderConfig>> {
     let id: String = row.get("id")?;
     let kind: String = row.get("kind")?;
     let label: String = row.get("label")?;
@@ -205,41 +205,41 @@ mod tests {
         // The table has no `workspace_id`: that is ADR-0023's decision. This
         // test turns red if someone gives it a per-workspace scope.
         let store = Store::open_in_memory().expect("open");
-        let atelier = store.workspaces().create("atelier").expect("workspace");
+        let workshop = store.workspaces().create("workshop").expect("workspace");
         store
             .providers()
             .save(&declaration("ollama", "Ollama"))
             .expect("declaration");
 
-        assert!(store.workspaces().delete(atelier.id).expect("deletion"));
+        assert!(store.workspaces().delete(workshop.id).expect("deletion"));
 
-        let restants = store.providers().list().expect("list");
-        assert_eq!(restants.len(), 1, "a provider serves every window");
-        assert_eq!(restants[0].label, "Ollama");
+        let remaining = store.providers().list().expect("list");
+        assert_eq!(remaining.len(), 1, "a provider serves every window");
+        assert_eq!(remaining[0].label, "Ollama");
     }
 
     #[test]
     fn saving_the_same_identifier_twice_replaces_without_redating() {
         let store = Store::open_in_memory().expect("open");
-        let origine = declaration("ollama", "Ollama");
-        store.providers().save(&origine).expect("declaration");
+        let origin = declaration("ollama", "Ollama");
+        store.providers().save(&origin).expect("declaration");
 
-        let mut corrigee = declaration("ollama", "Ollama du portable");
-        corrigee.model = "qwen2.5-coder".to_owned();
+        let mut corrected = declaration("ollama", "Laptop Ollama");
+        corrected.model = "qwen2.5-coder".to_owned();
         // Even if the caller gets the creation date wrong.
-        corrigee.created_at = Utc::now();
-        store.providers().save(&corrigee).expect("correction");
+        corrected.created_at = Utc::now();
+        store.providers().save(&corrected).expect("correction");
 
-        let liste = store.providers().list().expect("list");
-        assert_eq!(liste.len(), 1, "the write is a replacement, not an insert");
-        assert_eq!(liste[0].label, "Ollama du portable");
-        assert_eq!(liste[0].model, "qwen2.5-coder");
+        let list = store.providers().list().expect("list");
+        assert_eq!(list.len(), 1, "the write is a replacement, not an insert");
+        assert_eq!(list[0].label, "Laptop Ollama");
+        assert_eq!(list[0].model, "qwen2.5-coder");
         assert_eq!(
-            liste[0].created_at.timestamp_millis(),
-            origine.created_at.timestamp_millis(),
+            list[0].created_at.timestamp_millis(),
+            origin.created_at.timestamp_millis(),
             "correcting a model does not redate the declaration"
         );
-        assert!(liste[0].updated_at >= liste[0].created_at);
+        assert!(list[0].updated_at >= list[0].created_at);
     }
 
     #[test]
@@ -275,11 +275,11 @@ mod tests {
         let mut declaration = declaration("openai", "OpenAI");
         declaration.base_url = "https://cle:motdepasse@api.example.com/v1".to_owned();
 
-        let erreur = store
+        let error = store
             .providers()
             .save(&declaration)
             .expect_err("a URL with credentials is not written");
-        assert!(!erreur.to_string().contains("motdepasse"), "{erreur}");
+        assert!(!error.to_string().contains("motdepasse"), "{error}");
         assert!(store.providers().list().expect("list").is_empty());
     }
 
@@ -291,23 +291,26 @@ mod tests {
             .save(&declaration("ollama", "Ollama").with_secret_ref("keychain://oxyn/ollama"))
             .expect("declaration");
 
-        let colonnes: Vec<String> = store
+        let columns: Vec<String> = store
             .with_connection(|conn| {
-                let mut requete =
+                let mut query =
                     conn.prepare("SELECT name FROM pragma_table_info('ai_providers')")?;
-                let noms = requete.query_map([], |row| row.get(0))?;
-                Ok(noms.collect::<rusqlite::Result<Vec<String>>>()?)
+                let names = query.query_map([], |row| row.get(0))?;
+                Ok(names.collect::<rusqlite::Result<Vec<String>>>()?)
             })
             .expect("table schema");
         assert!(
-            !colonnes
+            !columns
                 .iter()
-                .any(|nom| nom == "api_key" || nom == "reach"),
-            "neither key nor classification in the database: {colonnes:?}"
+                .any(|name| name == "api_key" || name == "reach"),
+            "neither key nor classification in the database: {columns:?}"
         );
 
-        let relu = store.providers().list().expect("list").remove(0);
-        assert_eq!(relu.secret_ref.as_deref(), Some("keychain://oxyn/ollama"));
+        let read_back = store.providers().list().expect("list").remove(0);
+        assert_eq!(
+            read_back.secret_ref.as_deref(),
+            Some("keychain://oxyn/ollama")
+        );
     }
 
     #[test]
@@ -341,7 +344,7 @@ mod tests {
             .with_connection(|conn| {
                 conn.execute(
                     "INSERT INTO ai_providers
-                     VALUES ('futur','mistral','Venu du futur','https://api.example.com','m',
+                     VALUES ('future','mistral','From the future','https://api.example.com','m',
                              NULL, ?1, ?1)",
                     params![Utc::now()],
                 )?;
@@ -349,8 +352,8 @@ mod tests {
             })
             .expect("row from a later version");
 
-        let liste = store.providers().list().expect("list");
-        assert_eq!(liste.len(), 1);
-        assert_eq!(liste[0].id, ProviderId::ollama());
+        let list = store.providers().list().expect("list");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, ProviderId::ollama());
     }
 }

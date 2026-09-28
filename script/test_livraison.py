@@ -22,9 +22,9 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "livraison"
-DEPOT = "exemple/oxyn"
+REPO_DIR = "exemple/oxyn"
 
-FAUX_GH = textwrap.dedent(
+FAKE_GH = textwrap.dedent(
     """\
     import json, os, sys
     etat_chemin = os.environ["FAUX_GH_ETAT"]
@@ -71,200 +71,200 @@ FAUX_GH = textwrap.dedent(
 )
 
 
-class Livraison(unittest.TestCase):
+class Delivery(unittest.TestCase):
     def setUp(self) -> None:
-        self._dossier = tempfile.TemporaryDirectory()
-        self.dossier = Path(self._dossier.name)
-        self.faux_gh = self.dossier / "gh"
-        self.faux_gh.write_text(f"#!{sys.executable}\n{FAUX_GH}", encoding="utf-8")
-        self.faux_gh.chmod(0o755)
-        self.etat_chemin = self.dossier / "etat.json"
-        self.config = self.dossier / "tauri.conf.json"
+        self._folder = tempfile.TemporaryDirectory()
+        self.folder = Path(self._folder.name)
+        self.fake_gh = self.folder / "gh"
+        self.fake_gh.write_text(f"#!{sys.executable}\n{FAKE_GH}", encoding="utf-8")
+        self.fake_gh.chmod(0o755)
+        self.path_state = self.folder / "etat.json"
+        self.config = self.folder / "tauri.conf.json"
         self.version("0.0.1")
-        self.ecrire_etat(release=None)
+        self.write_state(release=None)
 
     def tearDown(self) -> None:
-        self._dossier.cleanup()
+        self._folder.cleanup()
 
     def version(self, version: str) -> None:
         self.config.write_text(json.dumps({"version": version}), encoding="utf-8")
 
-    def ecrire_etat(self, release, publier_apres=None, echec_creation=False, echec_envoi=False):
-        etat = {
+    def write_state(self, release, publish_after=None, creation_failure=False, upload_failure=False):
+        state = {
             "release": release,
-            "publier_apres": publier_apres,
-            "echec_creation": echec_creation,
-            "echec_envoi": echec_envoi,
+            "publier_apres": publish_after,
+            "echec_creation": creation_failure,
+            "echec_envoi": upload_failure,
             "lectures": 0,
             "appels": [],
         }
-        self.etat_chemin.write_text(json.dumps(etat), encoding="utf-8")
+        self.path_state.write_text(json.dumps(state), encoding="utf-8")
 
-    def etat(self) -> dict:
-        return json.loads(self.etat_chemin.read_text(encoding="utf-8"))
+    def state(self) -> dict:
+        return json.loads(self.path_state.read_text(encoding="utf-8"))
 
-    def paquet(self, nom: str) -> str:
-        chemin = self.dossier / nom
-        chemin.write_bytes(b"paquet")
-        return str(chemin)
+    def package(self, item_name: str) -> str:
+        path_str = self.folder / item_name
+        path_str.write_bytes(b"paquet")
+        return str(path_str)
 
-    def lancer(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def launch(self, *args: str) -> subprocess.CompletedProcess[str]:
         env = {
             **os.environ,
-            "GH": str(self.faux_gh),
-            "FAUX_GH_ETAT": str(self.etat_chemin),
+            "GH": str(self.fake_gh),
+            "FAUX_GH_ETAT": str(self.path_state),
             "OXYN_CONFIG_TAURI": str(self.config),
         }
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args], capture_output=True, text=True, env=env, check=False
         )
 
-    def verbes(self) -> list[str]:
-        return [appel[1] for appel in self.etat()["appels"]]
+    def verbs(self) -> list[str]:
+        return [call[1] for call in self.state()["appels"]]
 
     # --- #30: the tag carries the version of tauri.conf.json ---------------
 
-    def test_version_normale_cree_un_brouillon_sans_preversion(self) -> None:
-        sortie = self.lancer("brouillon", "v0.0.1", DEPOT)
-        self.assertEqual(sortie.returncode, 0, sortie.stderr)
-        creation = next(a for a in self.etat()["appels"] if a[1] == "create")
+    def test_normal_version_creates_draft_without_prerelease(self) -> None:
+        output = self.launch("brouillon", "v0.0.1", REPO_DIR)
+        self.assertEqual(output.returncode, 0, output.stderr)
+        creation = next(a for a in self.state()["appels"] if a[1] == "create")
         self.assertIn("--draft", creation)
         self.assertIn("--verify-tag", creation)
         self.assertNotIn("--prerelease", creation)
-        self.assertTrue(self.etat()["release"]["isDraft"])
+        self.assertTrue(self.state()["release"]["isDraft"])
 
-    def test_preversion_cree_un_brouillon_marque_preversion(self) -> None:
+    def test_prerelease_creates_a_draft_marked_prerelease(self) -> None:
         self.version("0.1.0-rc.1")
-        sortie = self.lancer("brouillon", "v0.1.0-rc.1", DEPOT)
-        self.assertEqual(sortie.returncode, 0, sortie.stderr)
-        self.assertTrue(self.etat()["release"]["isPrerelease"])
+        output = self.launch("brouillon", "v0.1.0-rc.1", REPO_DIR)
+        self.assertEqual(output.returncode, 0, output.stderr)
+        self.assertTrue(self.state()["release"]["isPrerelease"])
 
-    def test_metadonnees_de_build_ne_font_pas_une_preversion(self) -> None:
+    def test_build_metadata_does_not_make_a_prerelease(self) -> None:
         self.version("1.0.0+build-1")
-        sortie = self.lancer("brouillon", "v1.0.0+build-1", DEPOT)
-        self.assertEqual(sortie.returncode, 0, sortie.stderr)
-        self.assertFalse(self.etat()["release"]["isPrerelease"])
+        output = self.launch("brouillon", "v1.0.0+build-1", REPO_DIR)
+        self.assertEqual(output.returncode, 0, output.stderr)
+        self.assertFalse(self.state()["release"]["isPrerelease"])
 
-    def test_tag_incoherent_echoue_sans_rien_creer(self) -> None:
+    def test_inconsistent_tag_fails_without_creating_anything(self) -> None:
         for tag in ("v9.9.9", "0.0.1", "v0.0.1-rc.1", "v0.0.10"):
             with self.subTest(tag=tag):
-                self.ecrire_etat(release=None)
-                sortie = self.lancer("brouillon", tag, DEPOT)
-                self.assertEqual(sortie.returncode, 1)
-                self.assertIn("expected v0.0.1", sortie.stderr)
-                self.assertEqual(self.etat()["appels"], [], "gh called despite a wrong tag")
+                self.write_state(release=None)
+                output = self.launch("brouillon", tag, REPO_DIR)
+                self.assertEqual(output.returncode, 1)
+                self.assertIn("expected v0.0.1", output.stderr)
+                self.assertEqual(self.state()["appels"], [], "gh called despite a wrong tag")
 
-    def test_preversion_configuree_refuse_le_tag_sans_suffixe(self) -> None:
+    def test_configured_prerelease_refuses_tag_without_suffix(self) -> None:
         self.version("0.1.0-rc.1")
-        sortie = self.lancer("brouillon", "v0.1.0", DEPOT)
-        self.assertEqual(sortie.returncode, 1)
-        self.assertEqual(self.etat()["appels"], [])
+        output = self.launch("brouillon", "v0.1.0", REPO_DIR)
+        self.assertEqual(output.returncode, 1)
+        self.assertEqual(self.state()["appels"], [])
 
-    def test_tag_incoherent_n_envoie_aucun_paquet(self) -> None:
-        self.ecrire_etat(release={"isDraft": True, "assets": []})
-        sortie = self.lancer("deposer", "v9.9.9", DEPOT, self.paquet("Oxyn_0.0.1.dmg"))
-        self.assertEqual(sortie.returncode, 1)
-        self.assertEqual(self.etat()["appels"], [])
+    def test_inconsistent_tag_uploads_no_package(self) -> None:
+        self.write_state(release={"isDraft": True, "assets": []})
+        output = self.launch("deposer", "v9.9.9", REPO_DIR, self.package("Oxyn_0.0.1.dmg"))
+        self.assertEqual(output.returncode, 1)
+        self.assertEqual(self.state()["appels"], [])
 
-    def test_version_renvoyant_a_un_package_json_est_refusee(self) -> None:
+    def test_version_pointing_to_package_json_is_refused(self) -> None:
         self.version("../../apps/desktop/package.json")
-        sortie = self.lancer("brouillon", "v0.0.1", DEPOT)
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("not supported here", sortie.stderr)
+        output = self.launch("brouillon", "v0.0.1", REPO_DIR)
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("not supported here", output.stderr)
 
     # --- #20: nothing touches a published release -------------------------
 
-    def test_relance_sur_une_release_publiee_echoue_au_premier_job(self) -> None:
-        actifs = [{"name": "Oxyn_0.0.1.dmg"}]
-        self.ecrire_etat(release={"isDraft": False, "assets": actifs})
-        sortie = self.lancer("brouillon", "v0.0.1", DEPOT)
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("is published", sortie.stderr)
-        self.assertEqual(self.verbes(), ["view", "view"])
-        self.assertEqual(self.etat()["release"]["assets"], actifs)
+    def test_rerun_on_published_release_fails_at_first_job(self) -> None:
+        assets = [{"name": "Oxyn_0.0.1.dmg"}]
+        self.write_state(release={"isDraft": False, "assets": assets})
+        output = self.launch("brouillon", "v0.0.1", REPO_DIR)
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("is published", output.stderr)
+        self.assertEqual(self.verbs(), ["view", "view"])
+        self.assertEqual(self.state()["release"]["assets"], assets)
 
-    def test_relance_sur_une_release_publiee_n_altere_aucun_actif(self) -> None:
-        actifs = [{"name": "Oxyn_0.0.1.dmg"}]
-        self.ecrire_etat(release={"isDraft": False, "assets": actifs})
+    def test_rerun_on_published_release_alters_no_asset(self) -> None:
+        assets = [{"name": "Oxyn_0.0.1.dmg"}]
+        self.write_state(release={"isDraft": False, "assets": assets})
         # A package absent from the public release: only the status stops it.
-        sortie = self.lancer("deposer", "v0.0.1", DEPOT, self.paquet("oxyn_0.0.1.deb"))
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("is published", sortie.stderr)
-        self.assertNotIn("upload", self.verbes())
-        self.assertEqual(self.etat()["release"]["assets"], actifs)
+        output = self.launch("deposer", "v0.0.1", REPO_DIR, self.package("oxyn_0.0.1.deb"))
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("is published", output.stderr)
+        self.assertNotIn("upload", self.verbs())
+        self.assertEqual(self.state()["release"]["assets"], assets)
 
-    def test_publication_pendant_le_build_empeche_le_depot(self) -> None:
-        self.assertEqual(self.lancer("brouillon", "v0.0.1", DEPOT).returncode, 0)
-        etat = self.etat()
-        etat["release"]["isDraft"] = False
-        etat["appels"] = []
-        self.etat_chemin.write_text(json.dumps(etat), encoding="utf-8")
+    def test_publishing_during_build_prevents_the_upload(self) -> None:
+        self.assertEqual(self.launch("brouillon", "v0.0.1", REPO_DIR).returncode, 0)
+        state = self.state()
+        state["release"]["isDraft"] = False
+        state["appels"] = []
+        self.path_state.write_text(json.dumps(state), encoding="utf-8")
 
-        sortie = self.lancer("deposer", "v0.0.1", DEPOT, self.paquet("Oxyn_0.0.1.dmg"))
-        self.assertEqual(sortie.returncode, 1)
-        self.assertNotIn("upload", self.verbes())
-        self.assertEqual(self.etat()["release"]["assets"], [])
+        output = self.launch("deposer", "v0.0.1", REPO_DIR, self.package("Oxyn_0.0.1.dmg"))
+        self.assertEqual(output.returncode, 1)
+        self.assertNotIn("upload", self.verbs())
+        self.assertEqual(self.state()["release"]["assets"], [])
 
-    def test_statut_relu_avant_chaque_fichier(self) -> None:
+    def test_status_reread_before_each_file(self) -> None:
         # Published after the two reads around the first upload: the first
         # package goes, the second is refused before any upload.
-        self.ecrire_etat(release={"isDraft": True, "assets": []}, publier_apres=2)
-        sortie = self.lancer(
-            "deposer", "v0.0.1", DEPOT, self.paquet("oxyn_0.0.1.deb"), self.paquet("oxyn-0.0.1.rpm")
+        self.write_state(release={"isDraft": True, "assets": []}, publish_after=2)
+        output = self.launch(
+            "deposer", "v0.0.1", REPO_DIR, self.package("oxyn_0.0.1.deb"), self.package("oxyn-0.0.1.rpm")
         )
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("is published", sortie.stderr)
-        self.assertEqual(self.verbes(), ["view", "upload", "view", "view"])
-        self.assertEqual(self.etat()["release"]["assets"], [{"name": "oxyn_0.0.1.deb"}])
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("is published", output.stderr)
+        self.assertEqual(self.verbs(), ["view", "upload", "view", "view"])
+        self.assertEqual(self.state()["release"]["assets"], [{"name": "oxyn_0.0.1.deb"}])
 
-    def test_publication_pendant_l_envoi_arrete_le_depot(self) -> None:
+    def test_publishing_during_upload_stops_the_upload(self) -> None:
         # Published between the read and the end of the first package's upload.
-        self.ecrire_etat(release={"isDraft": True, "assets": []}, publier_apres=1)
-        sortie = self.lancer(
-            "deposer", "v0.0.1", DEPOT, self.paquet("oxyn_0.0.1.deb"), self.paquet("oxyn-0.0.1.rpm")
+        self.write_state(release={"isDraft": True, "assets": []}, publish_after=1)
+        output = self.launch(
+            "deposer", "v0.0.1", REPO_DIR, self.package("oxyn_0.0.1.deb"), self.package("oxyn-0.0.1.rpm")
         )
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("while uploading oxyn_0.0.1.deb", sortie.stderr)
-        self.assertEqual(self.verbes(), ["view", "upload", "view"])
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("while uploading oxyn_0.0.1.deb", output.stderr)
+        self.assertEqual(self.verbs(), ["view", "upload", "view"])
 
-    def test_depot_dans_un_brouillon(self) -> None:
-        self.ecrire_etat(release={"isDraft": True, "assets": []})
-        sortie = self.lancer(
-            "deposer", "v0.0.1", DEPOT, self.paquet("oxyn_0.0.1.deb"), self.paquet("oxyn-0.0.1.rpm")
+    def test_upload_into_a_draft(self) -> None:
+        self.write_state(release={"isDraft": True, "assets": []})
+        output = self.launch(
+            "deposer", "v0.0.1", REPO_DIR, self.package("oxyn_0.0.1.deb"), self.package("oxyn-0.0.1.rpm")
         )
-        self.assertEqual(sortie.returncode, 0, sortie.stderr)
-        noms = [a["name"] for a in self.etat()["release"]["assets"]]
-        self.assertEqual(noms, ["oxyn_0.0.1.deb", "oxyn-0.0.1.rpm"])
+        self.assertEqual(output.returncode, 0, output.stderr)
+        name_list = [a["name"] for a in self.state()["release"]["assets"]]
+        self.assertEqual(name_list, ["oxyn_0.0.1.deb", "oxyn-0.0.1.rpm"])
 
-    def test_aucun_envoi_ne_porte_clobber(self) -> None:
-        self.ecrire_etat(release={"isDraft": True, "assets": []})
-        self.lancer("deposer", "v0.0.1", DEPOT, self.paquet("Oxyn_0.0.1.dmg"))
-        envois = [a for a in self.etat()["appels"] if a[1] == "upload"]
-        self.assertEqual(len(envois), 1)
-        self.assertNotIn("--clobber", envois[0])
+    def test_no_upload_carries_clobber(self) -> None:
+        self.write_state(release={"isDraft": True, "assets": []})
+        self.launch("deposer", "v0.0.1", REPO_DIR, self.package("Oxyn_0.0.1.dmg"))
+        uploads = [a for a in self.state()["appels"] if a[1] == "upload"]
+        self.assertEqual(len(uploads), 1)
+        self.assertNotIn("--clobber", uploads[0])
 
-    def test_fichier_deja_present_n_est_pas_remplace(self) -> None:
-        actifs = [{"name": "Oxyn_0.0.1.dmg"}]
-        self.ecrire_etat(release={"isDraft": True, "assets": actifs})
-        sortie = self.lancer("deposer", "v0.0.1", DEPOT, self.paquet("Oxyn_0.0.1.dmg"))
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("is not replaced", sortie.stderr)
-        self.assertNotIn("upload", self.verbes())
-        self.assertEqual(self.etat()["release"]["assets"], actifs)
+    def test_already_present_file_is_not_replaced(self) -> None:
+        assets = [{"name": "Oxyn_0.0.1.dmg"}]
+        self.write_state(release={"isDraft": True, "assets": assets})
+        output = self.launch("deposer", "v0.0.1", REPO_DIR, self.package("Oxyn_0.0.1.dmg"))
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("is not replaced", output.stderr)
+        self.assertNotIn("upload", self.verbs())
+        self.assertEqual(self.state()["release"]["assets"], assets)
 
-    def test_echec_d_envoi_ne_detruit_aucun_actif(self) -> None:
-        actifs = [{"name": "oxyn_0.0.1.deb"}]
-        self.ecrire_etat(release={"isDraft": True, "assets": actifs}, echec_envoi=True)
-        sortie = self.lancer("deposer", "v0.0.1", DEPOT, self.paquet("oxyn-0.0.1.rpm"))
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("HTTP 502", sortie.stderr)
-        self.assertEqual(self.etat()["release"]["assets"], actifs)
+    def test_upload_failure_destroys_no_asset(self) -> None:
+        assets = [{"name": "oxyn_0.0.1.deb"}]
+        self.write_state(release={"isDraft": True, "assets": assets}, upload_failure=True)
+        output = self.launch("deposer", "v0.0.1", REPO_DIR, self.package("oxyn-0.0.1.rpm"))
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("HTTP 502", output.stderr)
+        self.assertEqual(self.state()["release"]["assets"], assets)
 
-    def test_echec_de_creation_fait_echouer_le_job(self) -> None:
-        self.ecrire_etat(release=None, echec_creation=True)
-        sortie = self.lancer("brouillon", "v0.0.1", DEPOT)
-        self.assertEqual(sortie.returncode, 1)
-        self.assertIn("tag does not exist", sortie.stderr)
+    def test_creation_failure_fails_the_job(self) -> None:
+        self.write_state(release=None, creation_failure=True)
+        output = self.launch("brouillon", "v0.0.1", REPO_DIR)
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("tag does not exist", output.stderr)
 
 
 if __name__ == "__main__":

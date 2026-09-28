@@ -138,7 +138,7 @@ pub struct BatchSink {
 }
 
 impl BatchSink {
-    /// Nouveau puits alimentant `buffer`.
+    /// A new sink feeding `buffer`.
     #[must_use]
     pub fn new(buffer: Arc<ResultBuffer>) -> Self {
         Self {
@@ -237,16 +237,16 @@ impl BatchSink {
             // The block bounds the mutable borrow of `source` by the read
             // future: without it, nothing could touch the source in the
             // branches below.
-            let recu = {
-                let lot = pin!(source.next_batch());
-                let annulation = pin!(ct.cancelled());
-                match select(lot, annulation).await {
-                    Either::Left((recu, _)) => Some(recu),
+            let received = {
+                let batch = pin!(source.next_batch());
+                let cancel = pin!(ct.cancelled());
+                match select(batch, cancel).await {
+                    Either::Left((received, _)) => Some(received),
                     Either::Right(((), _)) => None,
                 }
             };
 
-            let Some(recu) = recu else {
+            let Some(received) = received else {
                 // The read future was just abandoned, perhaps after consuming
                 // bytes from the stream: the source is burnt.
                 self.aborted.store(true, Ordering::SeqCst);
@@ -254,33 +254,33 @@ impl BatchSink {
                 return Ok(SinkOutcome::Cancelled);
             };
 
-            let lot = match recu {
-                Ok(Some(lot)) => lot,
+            let batch = match received {
+                Ok(Some(batch)) => batch,
                 Ok(None) => {
                     self.seal(source, false);
                     return Ok(SinkOutcome::Exhausted);
                 }
-                Err(erreur) if erreur.is_cancelled() => {
+                Err(error) if error.is_cancelled() => {
                     self.seal(source, true);
                     return Ok(SinkOutcome::Cancelled);
                 }
-                Err(erreur) => {
+                Err(error) => {
                     // Rows already received stay readable; the buffer is
                     // closed so that the interface stops waiting for more.
                     self.seal(source, true);
-                    return Err(erreur);
+                    return Err(error);
                 }
             };
 
             if confirming_end {
-                if lot.num_rows() == 0 {
+                if batch.num_rows() == 0 {
                     continue;
                 }
                 self.seal(source, true);
                 return Ok(SinkOutcome::RowLimit);
             }
 
-            match self.buffer.push(lot) {
+            match self.buffer.push(batch) {
                 // Empty batch: the source is allowed to produce one, there is
                 // nothing to report.
                 Ok(None) => {}
@@ -296,16 +296,16 @@ impl BatchSink {
                     });
                 }
                 Err(DataError::Full { .. }) => {
-                    let issue = match self.buffer.pressure() {
+                    let outcome = match self.buffer.pressure() {
                         Pressure::RowLimit => SinkOutcome::RowLimit,
                         _ => SinkOutcome::Saturated,
                     };
                     self.seal(source, true);
-                    return Ok(issue);
+                    return Ok(outcome);
                 }
-                Err(autre) => {
+                Err(other) => {
                     self.seal(source, true);
-                    return Err(autre.into());
+                    return Err(other.into());
                 }
             }
         }
@@ -335,11 +335,11 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("n", DataType::Int32, false)]))
     }
 
-    fn lot(lignes: usize) -> RecordBatch {
-        let valeurs: Vec<i32> = (0..lignes)
+    fn batch_of(rows: usize) -> RecordBatch {
+        let values: Vec<i32> = (0..rows)
             .map(|i| i32::try_from(i).unwrap_or(i32::MAX))
             .collect();
-        RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(valeurs))])
+        RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(values))])
             .expect("the column matches the schema built just above")
     }
 
@@ -347,49 +347,49 @@ mod tests {
     /// it: it is **this counter** that proves back-pressure, not the buffer's
     /// content.
     #[derive(Debug)]
-    struct SourceScriptee {
-        restants: Vec<RecordBatch>,
-        appels: usize,
-        erreur: Option<OxynError>,
+    struct ScriptedSource {
+        remaining: Vec<RecordBatch>,
+        pull_count: usize,
+        error: Option<OxynError>,
     }
 
-    impl SourceScriptee {
-        fn new(lots: Vec<RecordBatch>) -> Self {
-            let mut restants = lots;
-            restants.reverse();
+    impl ScriptedSource {
+        fn new(batches: Vec<RecordBatch>) -> Self {
+            let mut remaining = batches;
+            remaining.reverse();
             Self {
-                restants,
-                appels: 0,
-                erreur: None,
+                remaining,
+                pull_count: 0,
+                error: None,
             }
         }
 
-        fn qui_echoue(erreur: OxynError) -> Self {
+        fn failing(error: OxynError) -> Self {
             Self {
-                restants: Vec::new(),
-                appels: 0,
-                erreur: Some(erreur),
+                remaining: Vec::new(),
+                pull_count: 0,
+                error: Some(error),
             }
         }
     }
 
-    impl BatchSource for SourceScriptee {
+    impl BatchSource for ScriptedSource {
         fn schema(&self) -> SchemaRef {
             schema()
         }
 
         fn next_batch(&mut self) -> BoxFuture<'_, Result<Option<RecordBatch>, OxynError>> {
-            self.appels = self.appels.saturating_add(1);
-            if let Some(erreur) = self.erreur.take() {
-                return Box::pin(async move { Err(erreur) });
+            self.pull_count = self.pull_count.saturating_add(1);
+            if let Some(error) = self.error.take() {
+                return Box::pin(async move { Err(error) });
             }
-            let suivant = self.restants.pop();
-            Box::pin(async move { Ok(suivant) })
+            let next = self.remaining.pop();
+            Box::pin(async move { Ok(next) })
         }
 
         fn stats(&self) -> ExecStats {
             ExecStats {
-                batches: u64::try_from(self.appels).unwrap_or(u64::MAX),
+                batches: u64::try_from(self.pull_count).unwrap_or(u64::MAX),
                 ..ExecStats::default()
             }
         }
@@ -397,36 +397,40 @@ mod tests {
 
     #[test]
     fn an_exhausted_source_closes_the_result() {
-        let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut source = SourceScriptee::new(vec![lot(10), lot(10), lot(5)]);
+        let buf = Arc::new(ResultBuffer::new(schema(), 1 << 20));
+        let sink = BatchSink::new(Arc::clone(&buf));
+        let mut source = ScriptedSource::new(vec![batch_of(10), batch_of(10), batch_of(5)]);
         let ct = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
+        let outcome = block_on(sink.drain(&mut source, &ct)).expect("draining without error");
 
-        assert_eq!(issue, SinkOutcome::Exhausted);
-        assert!(issue.is_complete());
-        assert_eq!(tampon.row_count(), 25);
-        assert!(tampon.is_complete());
-        assert!(!tampon.stats().truncated);
+        assert_eq!(outcome, SinkOutcome::Exhausted);
+        assert!(outcome.is_complete());
+        assert_eq!(buf.row_count(), 25);
+        assert!(buf.is_complete());
+        assert!(!buf.stats().truncated);
     }
 
     #[test]
     fn bounded_preview_confirms_end_without_accepting_extra_rows() {
         for (batches, expected, calls) in [
-            (vec![lot(2)], SinkOutcome::Exhausted, 2),
-            (vec![lot(2), lot(1), lot(10)], SinkOutcome::RowLimit, 2),
-            (vec![lot(3), lot(10)], SinkOutcome::RowLimit, 1),
+            (vec![batch_of(2)], SinkOutcome::Exhausted, 2),
+            (
+                vec![batch_of(2), batch_of(1), batch_of(10)],
+                SinkOutcome::RowLimit,
+                2,
+            ),
+            (vec![batch_of(3), batch_of(10)], SinkOutcome::RowLimit, 1),
         ] {
             let buffer = Arc::new(ResultBuffer::with_limits(
                 schema(),
                 BufferLimits::default().with_max_rows(2_usize),
             ));
             let sink = BatchSink::new(buffer.clone()).with_end_confirmation();
-            let mut source = SourceScriptee::new(batches);
+            let mut source = ScriptedSource::new(batches);
             let outcome = block_on(sink.drain(&mut source, &CancelToken::new())).expect("drain");
             assert_eq!(outcome, expected);
-            assert_eq!(source.appels, calls);
+            assert_eq!(source.pull_count, calls);
             assert_eq!(buffer.row_count(), 2);
             assert_eq!(buffer.stats().truncated, expected == SinkOutcome::RowLimit);
         }
@@ -439,102 +443,102 @@ mod tests {
             BufferLimits::default().with_max_rows(2_usize),
         ));
         let sink = BatchSink::new(buffer.clone()).with_end_confirmation();
-        let mut source = SourceScriptee::new(vec![lot(2)]);
+        let mut source = ScriptedSource::new(vec![batch_of(2)]);
         let cancel = CancelToken::new();
         let outcome =
             block_on(sink.drain_with(&mut source, &cancel, |_| cancel.cancel())).expect("drain");
         assert_eq!(outcome, SinkOutcome::Cancelled);
-        assert_eq!(source.appels, 1);
+        assert_eq!(source.pull_count, 1);
         assert!(buffer.stats().truncated);
     }
 
     #[test]
     fn every_batch_is_reported_as_soon_as_it_arrives() {
-        let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut source = SourceScriptee::new(vec![lot(3), lot(4)]);
+        let buf = Arc::new(ResultBuffer::new(schema(), 1 << 20));
+        let sink = BatchSink::new(Arc::clone(&buf));
+        let mut source = ScriptedSource::new(vec![batch_of(3), batch_of(4)]);
         let ct = CancelToken::new();
 
-        let mut vus = Vec::new();
-        block_on(puits.drain_with(&mut source, &ct, |progres| vus.push(progres)))
+        let mut seen = Vec::new();
+        block_on(sink.drain_with(&mut source, &ct, |progress| seen.push(progress)))
             .expect("draining without error");
 
-        assert_eq!(vus.len(), 2);
-        assert_eq!(vus.first().map(|p| (p.rows, p.total_rows)), Some((3, 3)));
-        assert_eq!(vus.get(1).map(|p| (p.rows, p.total_rows)), Some((4, 7)));
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen.first().map(|p| (p.rows, p.total_rows)), Some((3, 3)));
+        assert_eq!(seen.get(1).map(|p| (p.rows, p.total_rows)), Some((4, 7)));
     }
 
     /// The test that carries the promise: when the buffer refuses, the next
     /// batch **is not requested** from the server.
     #[test]
     fn a_saturated_buffer_stops_requesting_batches() {
-        let tampon = Arc::new(ResultBuffer::with_limits(
+        let buf = Arc::new(ResultBuffer::with_limits(
             schema(),
             BufferLimits::default()
                 .with_memory_budget(1)
                 .without_spill(),
         ));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut source = SourceScriptee::new(vec![lot(10); 50]);
+        let sink = BatchSink::new(Arc::clone(&buf));
+        let mut source = ScriptedSource::new(vec![batch_of(10); 50]);
         let ct = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
+        let outcome = block_on(sink.drain(&mut source, &ct)).expect("draining without error");
 
-        assert_eq!(issue, SinkOutcome::Saturated);
-        assert!(issue.is_truncated());
+        assert_eq!(outcome, SinkOutcome::Saturated);
+        assert!(outcome.is_truncated());
         assert_eq!(
-            source.appels, 1,
+            source.pull_count, 1,
             "a single batch requested: the refusal must come up before the next request"
         );
-        assert!(tampon.stats().truncated);
-        assert!(tampon.is_complete(), "the interface must stop waiting");
+        assert!(buf.stats().truncated);
+        assert!(buf.is_complete(), "the interface must stop waiting");
     }
 
     #[test]
     fn the_row_limit_stops_draining() {
-        let tampon = Arc::new(ResultBuffer::with_limits(
+        let buf = Arc::new(ResultBuffer::with_limits(
             schema(),
             BufferLimits::default().with_max_rows(15_usize),
         ));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut source = SourceScriptee::new(vec![lot(10); 20]);
+        let sink = BatchSink::new(Arc::clone(&buf));
+        let mut source = ScriptedSource::new(vec![batch_of(10); 20]);
         let ct = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
+        let outcome = block_on(sink.drain(&mut source, &ct)).expect("draining without error");
 
-        assert_eq!(issue, SinkOutcome::RowLimit);
-        assert_eq!(tampon.row_count(), 15);
-        assert!(tampon.stats().truncated);
+        assert_eq!(outcome, SinkOutcome::RowLimit);
+        assert_eq!(buf.row_count(), 15);
+        assert!(buf.stats().truncated);
         assert_eq!(
-            source.appels, 2,
+            source.pull_count, 2,
             "two batches are enough to reach 15 rows; the third must not be requested"
         );
     }
 
     #[test]
     fn a_prior_cancellation_requests_no_batch() {
-        let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut source = SourceScriptee::new(vec![lot(10)]);
+        let buf = Arc::new(ResultBuffer::new(schema(), 1 << 20));
+        let sink = BatchSink::new(Arc::clone(&buf));
+        let mut source = ScriptedSource::new(vec![batch_of(10)]);
         let ct = CancelToken::new();
         ct.cancel();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
+        let outcome = block_on(sink.drain(&mut source, &ct)).expect("draining without error");
 
-        assert_eq!(issue, SinkOutcome::Cancelled);
-        assert_eq!(source.appels, 0);
-        assert!(tampon.is_empty());
-        assert!(tampon.stats().truncated);
+        assert_eq!(outcome, SinkOutcome::Cancelled);
+        assert_eq!(source.pull_count, 0);
+        assert!(buf.is_empty());
+        assert!(buf.stats().truncated);
     }
 
     /// Source that never answers, and cancels at the first poll: it is the
     /// server that does not hand back control while the user presses `Esc`.
     #[derive(Debug)]
-    struct SourceMuette {
+    struct SilentSource {
         ct: CancelToken,
     }
 
-    impl BatchSource for SourceMuette {
+    impl BatchSource for SilentSource {
         fn schema(&self) -> SchemaRef {
             schema()
         }
@@ -550,33 +554,33 @@ mod tests {
 
     #[test]
     fn an_in_flight_cancellation_burns_the_source() {
-        let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
-        let puits = BatchSink::new(Arc::clone(&tampon));
+        let buf = Arc::new(ResultBuffer::new(schema(), 1 << 20));
+        let sink = BatchSink::new(Arc::clone(&buf));
         let ct = CancelToken::new();
-        let mut source = SourceMuette { ct: ct.clone() };
+        let mut source = SilentSource { ct: ct.clone() };
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
-        assert_eq!(issue, SinkOutcome::Cancelled);
+        let outcome = block_on(sink.drain(&mut source, &ct)).expect("draining without error");
+        assert_eq!(outcome, SinkOutcome::Cancelled);
 
         // Resuming would read a stream whose decoder may be out of sync.
         let ct2 = CancelToken::new();
-        let reprise = block_on(puits.drain(&mut source, &ct2));
-        assert!(reprise.is_err(), "resuming must be refused");
+        let resumption = block_on(sink.drain(&mut source, &ct2));
+        assert!(resumption.is_err(), "resuming must be refused");
     }
 
     #[test]
     fn a_source_error_propagates_but_closes_the_buffer() {
-        let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut source = SourceScriptee::qui_echoue(OxynError::Query("boom".to_owned()));
+        let buf = Arc::new(ResultBuffer::new(schema(), 1 << 20));
+        let sink = BatchSink::new(Arc::clone(&buf));
+        let mut source = ScriptedSource::failing(OxynError::Query("boom".to_owned()));
         let ct = CancelToken::new();
 
-        let erreur = block_on(puits.drain(&mut source, &ct)).expect_err("the error must propagate");
-        assert!(matches!(erreur, OxynError::Query(_)));
+        let error = block_on(sink.drain(&mut source, &ct)).expect_err("the error must propagate");
+        assert!(matches!(error, OxynError::Query(_)));
         assert!(
-            tampon.is_complete(),
+            buf.is_complete(),
             "without closing, the interface waits for a batch that will not come"
         );
-        assert!(tampon.stats().truncated);
+        assert!(buf.stats().truncated);
     }
 }

@@ -348,19 +348,19 @@ pub(crate) fn classify_json_error(err: &serde_json::Error) -> &'static str {
 /// The truncation respects character boundaries: cutting in the middle of a
 /// UTF-8 code unit would panic, and the body comes from the network (I-09).
 pub(crate) fn sanitize(body: &str, key: Option<&ApiKey>) -> String {
-    let expurge = redact_key(body.trim(), key);
-    if expurge.len() <= MAX_MESSAGE_LEN {
-        return expurge;
+    let scrubbed = redact_key(body.trim(), key);
+    if scrubbed.len() <= MAX_MESSAGE_LEN {
+        return scrubbed;
     }
-    let mut fin = MAX_MESSAGE_LEN;
-    while fin > 0 && !expurge.is_char_boundary(fin) {
-        fin -= 1;
+    let mut end = MAX_MESSAGE_LEN;
+    while end > 0 && !scrubbed.is_char_boundary(end) {
+        end -= 1;
     }
     // `get` and not `[..end]`: the body comes from the network, and no slice
     // indexing must survive on this path (I-09).
-    let mut tronque = expurge.get(..fin).unwrap_or_default().to_owned();
-    tronque.push_str(" […]");
-    tronque
+    let mut truncated = scrubbed.get(..end).unwrap_or_default().to_owned();
+    truncated.push_str(" […]");
+    truncated
 }
 
 impl From<LlmError> for OxynError {
@@ -405,19 +405,19 @@ impl From<LlmError> for OxynError {
 mod tests {
     use super::*;
 
-    fn fournisseur() -> ProviderId {
+    fn provider() -> ProviderId {
         ProviderId::openai()
     }
 
     #[test]
     fn overload_is_transient_refusal_is_not() {
-        // `502` y figure sans source : voir RESEARCH-NOTES.
+        // `502` is listed there without a source: see RESEARCH-NOTES.
         for statut in [408, 429, 500, 502, 503, 529] {
-            let err = LlmError::from_response(fournisseur(), statut, "busy", None);
+            let err = LlmError::from_response(provider(), statut, "busy", None);
             assert!(err.is_retryable(), "HTTP {statut} should be transient");
         }
         for statut in [400, 401, 403, 404, 413, 422, 501] {
-            let err = LlmError::from_response(fournisseur(), statut, "nope", None);
+            let err = LlmError::from_response(provider(), statut, "nope", None);
             assert!(!err.is_retryable(), "HTTP {statut} must not be retried");
         }
     }
@@ -427,8 +427,7 @@ mod tests {
         // Non-standard status, specific to Anthropic. Classifying it permanent
         // would send the user to reconfigure a provider that works.
         let err: OxynError =
-            LlmError::from_response(fournisseur(), 529, r#"{"type":"overloaded_error"}"#, None)
-                .into();
+            LlmError::from_response(provider(), 529, r#"{"type":"overloaded_error"}"#, None).into();
         assert!(err.is_retryable(), "{err}");
     }
 
@@ -436,38 +435,37 @@ mod tests {
     fn a_prompt_too_long_is_not_retried() {
         // `413 request_too_large`: replaying the same request will give the
         // same response, and the user must reduce their context.
-        let err = LlmError::from_response(fournisseur(), 413, "request too large", None);
+        let err = LlmError::from_response(provider(), 413, "request too large", None);
         assert!(!err.is_retryable());
-        let projetee: OxynError = err.into();
-        assert!(!projetee.is_retryable(), "{projetee}");
+        let projected: OxynError = err.into();
+        assert!(!projected.is_retryable(), "{projected}");
     }
 
     #[test]
     fn the_family_survives_the_conversion_to_the_domain() {
-        let transitoire: OxynError =
-            LlmError::from_response(fournisseur(), 429, "rate limited", None).into();
+        let transient: OxynError =
+            LlmError::from_response(provider(), 429, "rate limited", None).into();
         assert!(
-            transitoire.is_retryable(),
-            "a converted 429 must remain retryable: {transitoire}"
+            transient.is_retryable(),
+            "a converted 429 must remain retryable: {transient}"
         );
 
         let permanent: OxynError =
-            LlmError::from_response(fournisseur(), 400, "bad request", None).into();
+            LlmError::from_response(provider(), 400, "bad request", None).into();
         assert!(!permanent.is_retryable());
     }
 
     #[test]
     fn an_authentication_refusal_becomes_an_authentication_error() {
-        let err: OxynError =
-            LlmError::from_response(fournisseur(), 401, "invalid key", None).into();
+        let err: OxynError = LlmError::from_response(provider(), 401, "invalid key", None).into();
         assert!(matches!(err, OxynError::Authentication(_)), "{err}");
         assert!(err.is_user_error());
 
-        let absente: OxynError = LlmError::MissingApiKey {
-            provider: fournisseur(),
+        let absent: OxynError = LlmError::MissingApiKey {
+            provider: provider(),
         }
         .into();
-        assert!(matches!(absente, OxynError::Authentication(_)), "{absente}");
+        assert!(matches!(absent, OxynError::Authentication(_)), "{absent}");
     }
 
     #[test]
@@ -479,23 +477,23 @@ mod tests {
 
     #[test]
     fn the_response_body_is_scrubbed_of_the_key() {
-        let cle = ApiKey::new("sk-tres-secret");
+        let key = ApiKey::new("sk-tres-secret");
         let err = LlmError::from_response(
-            fournisseur(),
+            provider(),
             401,
             r#"{"error":"Incorrect API key provided: sk-tres-secret"}"#,
-            Some(&cle),
+            Some(&key),
         );
-        let rendu = err.to_string();
-        assert!(!rendu.contains("sk-tres-secret"), "{rendu}");
-        assert!(rendu.contains(crate::secret::REDACTED), "{rendu}");
+        let rendered = err.to_string();
+        assert!(!rendered.contains("sk-tres-secret"), "{rendered}");
+        assert!(rendered.contains(crate::secret::REDACTED), "{rendered}");
     }
 
     #[test]
     fn an_outsized_body_is_truncated_without_panicking_on_utf8() {
         // The trap: cutting at 512 bytes in the middle of a multi-byte character.
-        let corps = "é".repeat(600);
-        let err = LlmError::from_response(fournisseur(), 502, &corps, None);
+        let body = "é".repeat(600);
+        let err = LlmError::from_response(provider(), 502, &body, None);
         let LlmError::Http { message, .. } = &err else {
             panic!("unexpected variant");
         };
@@ -510,7 +508,7 @@ mod tests {
 
     #[test]
     fn a_short_body_goes_through_intact() {
-        let err = LlmError::from_response(fournisseur(), 404, "  model not found  ", None);
+        let err = LlmError::from_response(provider(), 404, "  model not found  ", None);
         assert!(err.to_string().contains("model not found"));
     }
 
@@ -518,37 +516,37 @@ mod tests {
     fn only_what_never_went_out_is_retried() {
         // I-13: a response timeout or a cut after sending leave the fate of the
         // request unknown — and it may be billed.
-        let jamais_partie = LlmError::Transport {
-            provider: fournisseur(),
+        let never_sent = LlmError::Transport {
+            provider: provider(),
             detail: "connection timed out".to_owned(),
         };
-        assert_eq!(jamais_partie.class(), ErrorClass::Transient);
-        let projetee: OxynError = jamais_partie.into();
-        assert!(projetee.is_retryable(), "{projetee}");
+        assert_eq!(never_sent.class(), ErrorClass::Transient);
+        let projected: OxynError = never_sent.into();
+        assert!(projected.is_retryable(), "{projected}");
 
-        for partie in [
+        for sent in [
             LlmError::ResponseTimeout {
-                provider: fournisseur(),
+                provider: provider(),
                 after: Duration::from_secs(90),
             },
             LlmError::ConnectionLost {
-                provider: fournisseur(),
+                provider: provider(),
                 detail: "the connection closed before the response arrived",
             },
         ] {
-            assert_eq!(partie.class(), ErrorClass::Ambiguous, "{partie}");
-            assert!(!partie.is_retryable(), "{partie}");
+            assert_eq!(sent.class(), ErrorClass::Ambiguous, "{sent}");
+            assert!(!sent.is_retryable(), "{sent}");
             assert!(
-                partie.to_string().contains("may have been processed"),
-                "{partie}"
+                sent.to_string().contains("may have been processed"),
+                "{sent}"
             );
-            let projetee: OxynError = partie.into();
+            let projected: OxynError = sent.into();
             // The family, not only the absence of retry: a projection to `Io`
             // would be non-retryable, and would still lose the ambiguity.
             assert_eq!(
-                projetee.class(),
+                projected.class(),
                 ErrorClass::Ambiguous,
-                "the ambiguity must survive the boundary: {projetee}"
+                "the ambiguity must survive the boundary: {projected}"
             );
         }
     }
@@ -558,7 +556,7 @@ mod tests {
         // Anthropic: `timeout_error`, "timed out while processing". The
         // response may have been produced and billed: replaying it pays twice.
         let err = LlmError::from_response(
-            fournisseur(),
+            provider(),
             504,
             r#"{"type":"error","error":{"type":"timeout_error"}}"#,
             None,
@@ -566,49 +564,49 @@ mod tests {
         assert_eq!(err.class(), ErrorClass::Ambiguous);
         assert!(!err.is_retryable());
 
-        let projetee: OxynError = err.into();
-        assert_eq!(projetee.class(), ErrorClass::Ambiguous, "{projetee}");
+        let projected: OxynError = err.into();
+        assert_eq!(projected.class(), ErrorClass::Ambiguous, "{projected}");
         assert!(
-            matches!(projetee, OxynError::OutcomeUnknown(_)),
-            "same projection as a response lost with no known duration: {projetee:?}"
+            matches!(projected, OxynError::OutcomeUnknown(_)),
+            "same projection as a response lost with no known duration: {projected:?}"
         );
     }
 
     #[test]
     fn a_projected_500_or_502_remains_retryable() {
         for statut in [500, 502] {
-            let projetee: OxynError =
-                LlmError::from_response(fournisseur(), statut, "oops", None).into();
+            let projected: OxynError =
+                LlmError::from_response(provider(), statut, "oops", None).into();
             assert!(
-                matches!(projetee, OxynError::Connection(_)),
-                "HTTP {statut} : {projetee:?}"
+                matches!(projected, OxynError::Connection(_)),
+                "HTTP {statut} : {projected:?}"
             );
         }
     }
 
     #[test]
     fn a_response_timeout_keeps_the_configured_duration() {
-        let projetee: OxynError = LlmError::ResponseTimeout {
-            provider: fournisseur(),
+        let projected: OxynError = LlmError::ResponseTimeout {
+            provider: provider(),
             after: Duration::from_secs(90),
         }
         .into();
         assert!(
-            matches!(projetee, OxynError::Timeout { after } if after == Duration::from_secs(90)),
-            "{projetee}"
+            matches!(projected, OxynError::Timeout { after } if after == Duration::from_secs(90)),
+            "{projected}"
         );
     }
 
     #[test]
     fn a_connection_lost_after_sending_has_an_unknown_effect() {
-        let projetee: OxynError = LlmError::ConnectionLost {
-            provider: fournisseur(),
+        let projected: OxynError = LlmError::ConnectionLost {
+            provider: provider(),
             detail: "the connection closed before the response arrived",
         }
         .into();
         assert!(
-            matches!(projetee, OxynError::OutcomeUnknown(_)),
-            "{projetee:?}"
+            matches!(projected, OxynError::OutcomeUnknown(_)),
+            "{projected:?}"
         );
     }
 
@@ -619,32 +617,35 @@ mod tests {
     #[tokio::test]
     async fn the_http_stack_classifies_the_missed_connection_and_the_response_timeout() {
         // Closed port: a port is reserved, then released.
-        let libre = std::net::TcpListener::bind("127.0.0.1:0").expect("local port");
-        let adresse = libre.local_addr().expect("local address");
-        drop(libre);
+        let free = std::net::TcpListener::bind("127.0.0.1:0").expect("local port");
+        let address = free.local_addr().expect("local address");
+        drop(free);
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .build()
             .expect("test client");
-        let refus = client
-            .post(format!("http://{adresse}/v1/messages"))
+        let refusal = client
+            .post(format!("http://{address}/v1/messages"))
             .send()
             .await
             .expect_err("nothing listens on this port");
-        let classee = LlmError::from_transport(fournisseur(), &refus, None);
-        assert!(matches!(classee, LlmError::Transport { .. }), "{classee:?}");
+        let classified = LlmError::from_transport(provider(), &refusal, None);
         assert!(
-            !classee.to_string().contains("127.0.0.1"),
-            "the network stack message must not get in: {classee}"
+            matches!(classified, LlmError::Transport { .. }),
+            "{classified:?}"
+        );
+        assert!(
+            !classified.to_string().contains("127.0.0.1"),
+            "the network stack message must not get in: {classified}"
         );
 
         // Listener that accepts and never answers, client with a response timeout.
-        let muet = tokio::net::TcpListener::bind("127.0.0.1:0")
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("local listener");
-        let adresse = muet.local_addr().expect("local address");
-        let garde = tokio::spawn(async move {
-            let (_connexion, _) = muet.accept().await.expect("connection accepted");
+        let address = silent.local_addr().expect("local address");
+        let guard = tokio::spawn(async move {
+            let (_connection, _) = silent.accept().await.expect("connection accepted");
             tokio::time::sleep(Duration::from_secs(5)).await;
         });
         let client = reqwest::Client::builder()
@@ -652,34 +653,37 @@ mod tests {
             .timeout(Duration::from_millis(200))
             .build()
             .expect("test client");
-        let expiree = client
-            .post(format!("http://{adresse}/v1/messages"))
+        let expired = client
+            .post(format!("http://{address}/v1/messages"))
             .body("{}")
             .send()
             .await
             .expect_err("the listener does not answer");
-        garde.abort();
-        let classee =
-            LlmError::from_transport(fournisseur(), &expiree, Some(Duration::from_millis(200)));
+        guard.abort();
+        let classified =
+            LlmError::from_transport(provider(), &expired, Some(Duration::from_millis(200)));
         assert!(
-            matches!(classee, LlmError::ResponseTimeout { after, .. } if after == Duration::from_millis(200)),
-            "a timeout after sending must be ambiguous, with its configured duration: {classee:?}"
+            matches!(classified, LlmError::ResponseTimeout { after, .. } if after == Duration::from_millis(200)),
+            "a timeout after sending must be ambiguous, with its configured duration: {classified:?}"
         );
-        assert!(!classee.to_string().contains("127.0.0.1"), "{classee}");
+        assert!(
+            !classified.to_string().contains("127.0.0.1"),
+            "{classified}"
+        );
 
         // Without a known configured timeout, the duration is not invented.
-        let sans_duree = LlmError::from_transport(fournisseur(), &expiree, None);
+        let without_duration = LlmError::from_transport(provider(), &expired, None);
         assert!(
-            matches!(sans_duree, LlmError::ConnectionLost { .. }),
-            "{sans_duree:?}"
+            matches!(without_duration, LlmError::ConnectionLost { .. }),
+            "{without_duration:?}"
         );
-        assert_eq!(sans_duree.class(), ErrorClass::Ambiguous);
+        assert_eq!(without_duration.class(), ErrorClass::Ambiguous);
     }
 
     #[test]
     fn a_missing_capability_keeps_its_name_in_the_domain() {
         let err: OxynError = LlmError::Unsupported {
-            provider: fournisseur(),
+            provider: provider(),
             capability: "tool_calls".to_owned(),
         }
         .into();

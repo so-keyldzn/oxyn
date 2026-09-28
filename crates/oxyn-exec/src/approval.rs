@@ -176,20 +176,20 @@ impl Queue {
 
     /// Removes the requests stale at `now`, remembering them, and returns them.
     fn purge(&mut self, now: Instant, capacity: usize) -> Vec<PendingCommand> {
-        let perimees: Vec<CommandId> = self
+        let stale: Vec<CommandId> = self
             .pending
             .values()
             .filter(|e| e.is_expired_at(now))
             .map(|e| e.id)
             .collect();
-        let mut retirees = Vec::with_capacity(perimees.len());
-        for id in perimees {
-            if let Some(entree) = self.pending.remove(&id) {
+        let mut removed = Vec::with_capacity(stale.len());
+        for id in stale {
+            if let Some(entry) = self.pending.remove(&id) {
                 self.remember_expired(id, capacity);
-                retirees.push(entree);
+                removed.push(entry);
             }
         }
-        retirees
+        removed
     }
 
     /// Has the identifier expired? Forgotten once read: the "expired" answer is
@@ -250,7 +250,7 @@ impl ApprovalRegistry {
         preview: Option<Preview>,
     ) -> Result<PendingCommand, ApprovalError> {
         let now = Instant::now();
-        let entree = PendingCommand {
+        let entry = PendingCommand {
             id,
             actor,
             command,
@@ -272,8 +272,8 @@ impl ApprovalRegistry {
         if guard.pending.contains_key(&id) {
             return Err(ApprovalError::AlreadyPending);
         }
-        guard.pending.insert(id, entree.clone());
-        Ok(entree)
+        guard.pending.insert(id, entry.clone());
+        Ok(entry)
     }
 
     /// Removes the approved command, if it is still valid.
@@ -294,17 +294,17 @@ impl ApprovalRegistry {
     #[doc(hidden)]
     pub fn take_at(&self, id: CommandId, now: Instant) -> Result<PendingCommand, ApprovalError> {
         let mut guard = self.queue.lock();
-        let Some(entree) = guard.pending.remove(&id) else {
+        let Some(entry) = guard.pending.remove(&id) else {
             return Err(if guard.forget_expired(id) {
                 ApprovalError::Expired { after: self.ttl }
             } else {
                 ApprovalError::Unknown
             });
         };
-        if entree.is_expired_at(now) {
+        if entry.is_expired_at(now) {
             return Err(ApprovalError::Expired { after: self.ttl });
         }
-        Ok(entree)
+        Ok(entry)
     }
 
     /// Removes a request the user answered "no" to.
@@ -324,9 +324,9 @@ impl ApprovalRegistry {
     /// waiting: already decided, or removed.
     pub fn expire(&self, id: CommandId) -> Option<PendingCommand> {
         let mut guard = self.queue.lock();
-        let entree = guard.pending.remove(&id)?;
+        let entry = guard.pending.remove(&id)?;
         guard.remember_expired(id, self.capacity);
-        Some(entree)
+        Some(entry)
     }
 
     /// What is waiting for an answer, without removing anything.
@@ -354,7 +354,7 @@ impl ApprovalRegistry {
         self.queue.lock().pending.len()
     }
 
-    /// Aucune demande en attente ?
+    /// No pending request?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.queue.lock().pending.is_empty()
@@ -384,7 +384,7 @@ mod tests {
         StatementIntent,
     };
 
-    fn commande() -> Command {
+    fn sample_command() -> Command {
         Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
@@ -402,146 +402,153 @@ mod tests {
     #[test]
     fn an_approval_is_used_only_once() {
         // A replayable approval is an approval an agent can replay.
-        let registre = ApprovalRegistry::new();
+        let registry = ApprovalRegistry::new();
         let id = CommandId::new();
-        registre
-            .submit(id, agent(), commande(), "write by an agent", None)
+        registry
+            .submit(id, agent(), sample_command(), "write by an agent", None)
             .expect("the queue is empty");
 
-        assert!(registre.take(id).is_ok());
-        assert_eq!(registre.take(id), Err(ApprovalError::Unknown));
-        assert!(registre.is_empty());
+        assert!(registry.take(id).is_ok());
+        assert_eq!(registry.take(id), Err(ApprovalError::Unknown));
+        assert!(registry.is_empty());
     }
 
     #[test]
     fn a_stale_request_executes_nothing() {
-        let registre = ApprovalRegistry::with_ttl(Duration::ZERO);
+        let registry = ApprovalRegistry::with_ttl(Duration::ZERO);
         let id = CommandId::new();
-        registre
-            .submit(id, agent(), commande(), "write by an agent", None)
+        registry
+            .submit(id, agent(), sample_command(), "write by an agent", None)
             .expect("the queue is empty");
 
-        let issue = registre.take(id);
+        let outcome = registry.take(id);
         assert!(
-            matches!(issue, Err(ApprovalError::Expired { .. })),
-            "{issue:?}"
+            matches!(outcome, Err(ApprovalError::Expired { .. })),
+            "{outcome:?}"
         );
         // And it was removed: it cannot be "caught up".
-        assert!(registre.is_empty());
+        assert!(registry.is_empty());
     }
 
     #[test]
     fn a_stale_approval_becomes_a_denial_not_a_failure() {
-        let erreur: OxynError = ApprovalError::Expired {
+        let error: OxynError = ApprovalError::Expired {
             after: Duration::from_secs(300),
         }
         .into();
-        assert!(matches!(erreur, OxynError::PolicyDenied { .. }));
-        assert!(erreur.is_user_error(), "{erreur:?}");
-        assert!(!erreur.is_retryable(), "a stale approval is not replayed");
+        assert!(matches!(error, OxynError::PolicyDenied { .. }));
+        assert!(error.is_user_error(), "{error:?}");
+        assert!(!error.is_retryable(), "a stale approval is not replayed");
     }
 
     #[test]
     fn the_command_set_aside_is_the_one_that_will_run() {
         // It is stored as is: approving one text and executing another would
         // reopen the gap that reclassification closes.
-        let registre = ApprovalRegistry::new();
+        let registry = ApprovalRegistry::new();
         let id = CommandId::new();
-        let cmd = commande();
-        registre
+        let cmd = sample_command();
+        registry
             .submit(id, Actor::Human, cmd.clone(), "production", None)
             .expect("the queue is empty");
 
-        let reprise = registre.take(id).expect("approval given");
-        assert_eq!(reprise.command, cmd);
-        assert_eq!(reprise.actor, Actor::Human);
+        let resumption = registry.take(id).expect("approval given");
+        assert_eq!(resumption.command, cmd);
+        assert_eq!(resumption.actor, Actor::Human);
     }
 
     #[test]
     fn a_pending_request_is_not_replaced() {
         // Replaced while a dialog shows it, the approval given to what was read
         // would execute something else (ADR-0037).
-        let registre = ApprovalRegistry::new();
+        let registry = ApprovalRegistry::new();
         let id = CommandId::new();
-        let lue = commande();
-        registre
-            .submit(id, Actor::Human, lue.clone(), "production", None)
+        let read_back = sample_command();
+        registry
+            .submit(id, Actor::Human, read_back.clone(), "production", None)
             .expect("the queue is empty");
-        let autre = Command::Execute {
+        let other = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
             request: Box::new(ExecRequest::new(QueryLanguage::SQL, "DROP TABLE audit")),
         };
         assert_eq!(
-            registre
-                .submit(id, Actor::Human, autre, "production", None)
+            registry
+                .submit(id, Actor::Human, other, "production", None)
                 .err(),
             Some(ApprovalError::AlreadyPending)
         );
-        assert_eq!(registre.take(id).expect("approval given").command, lue);
+        assert_eq!(
+            registry.take(id).expect("approval given").command,
+            read_back
+        );
     }
 
     #[test]
     fn approving_does_not_change_the_actor() {
         // An approved agent command stays an agent command: the log must keep
         // saying who wrote it.
-        let registre = ApprovalRegistry::new();
+        let registry = ApprovalRegistry::new();
         let id = CommandId::new();
-        let acteur = agent();
-        registre
-            .submit(id, acteur, commande(), "write by an agent", None)
+        let who = agent();
+        registry
+            .submit(id, who, sample_command(), "write by an agent", None)
             .expect("the queue is empty");
 
-        let reprise = registre.take(id).expect("approval given");
-        assert!(reprise.actor.is_agent());
-        assert_eq!(reprise.actor, acteur);
+        let resumption = registry.take(id).expect("approval given");
+        assert!(resumption.actor.is_agent());
+        assert_eq!(resumption.actor, who);
     }
 
     #[test]
     fn the_queue_is_bounded() {
-        let registre = ApprovalRegistry::new().with_capacity(2);
+        let registry = ApprovalRegistry::new().with_capacity(2);
         for _ in 0..2 {
-            registre
-                .submit(CommandId::new(), agent(), commande(), "motif", None)
+            registry
+                .submit(CommandId::new(), agent(), sample_command(), "motif", None)
                 .expect("under the bound");
         }
-        let issue = registre.submit(CommandId::new(), agent(), commande(), "motif", None);
+        let outcome = registry.submit(CommandId::new(), agent(), sample_command(), "motif", None);
         assert_eq!(
-            issue.err(),
+            outcome.err(),
             Some(ApprovalError::QueueFull { limit: 2 }),
             "the bound must refuse the new request"
         );
-        assert_eq!(registre.len(), 2, "no old one was evicted");
+        assert_eq!(registry.len(), 2, "no old one was evicted");
     }
 
     #[test]
     fn stale_requests_do_not_block_the_queue() {
-        let registre = ApprovalRegistry::with_ttl(Duration::ZERO).with_capacity(1);
-        registre
-            .submit(CommandId::new(), agent(), commande(), "motif", None)
-            .expect("file vide");
+        let registry = ApprovalRegistry::with_ttl(Duration::ZERO).with_capacity(1);
+        registry
+            .submit(CommandId::new(), agent(), sample_command(), "motif", None)
+            .expect("queue not empty");
         // The previous one is stale: it no longer counts in the bound.
-        registre
-            .submit(CommandId::new(), agent(), commande(), "motif", None)
+        registry
+            .submit(CommandId::new(), agent(), sample_command(), "motif", None)
             .expect("the stale one made room");
     }
 
     #[test]
     fn the_sweep_removes_only_stale_ones() {
-        let vivantes = ApprovalRegistry::new();
+        let live = ApprovalRegistry::new();
         let id = CommandId::new();
-        vivantes
-            .submit(id, Actor::Human, commande(), "motif", None)
-            .expect("file vide");
-        assert!(vivantes.sweep().is_empty());
-        assert_eq!(vivantes.len(), 1);
+        live.submit(id, Actor::Human, sample_command(), "motif", None)
+            .expect("queue not empty");
+        assert!(live.sweep().is_empty());
+        assert_eq!(live.len(), 1);
 
-        let mortes = ApprovalRegistry::with_ttl(Duration::ZERO);
-        mortes
-            .submit(CommandId::new(), Actor::Human, commande(), "motif", None)
-            .expect("file vide");
-        assert_eq!(mortes.sweep().len(), 1);
-        assert!(mortes.is_empty());
+        let dead = ApprovalRegistry::with_ttl(Duration::ZERO);
+        dead.submit(
+            CommandId::new(),
+            Actor::Human,
+            sample_command(),
+            "motif",
+            None,
+        )
+        .expect("queue not empty");
+        assert_eq!(dead.sweep().len(), 1);
+        assert!(dead.is_empty());
     }
 
     #[test]
@@ -549,68 +556,68 @@ mod tests {
         // The regression: the next request purged the stale one, and the late
         // approval read "no command is awaiting approval" — a request that
         // would never have existed.
-        let registre = ApprovalRegistry::with_ttl(Duration::ZERO);
-        let perimee = CommandId::new();
-        registre
-            .submit(perimee, agent(), commande(), "motif", None)
-            .expect("file vide");
-        registre
-            .submit(CommandId::new(), agent(), commande(), "motif", None)
+        let registry = ApprovalRegistry::with_ttl(Duration::ZERO);
+        let stale = CommandId::new();
+        registry
+            .submit(stale, agent(), sample_command(), "motif", None)
+            .expect("queue not empty");
+        registry
+            .submit(CommandId::new(), agent(), sample_command(), "motif", None)
             .expect("the stale one made room");
 
-        let issue = registre.take(perimee);
+        let outcome = registry.take(stale);
         assert!(
-            matches!(issue, Err(ApprovalError::Expired { .. })),
-            "{issue:?}"
+            matches!(outcome, Err(ApprovalError::Expired { .. })),
+            "{outcome:?}"
         );
         // Said once: afterwards, nothing waits under this identifier any more.
-        assert_eq!(registre.take(perimee), Err(ApprovalError::Unknown));
+        assert_eq!(registry.take(stale), Err(ApprovalError::Unknown));
     }
 
     #[test]
     fn expiring_removes_the_request_and_the_late_approval_says_so() {
-        let registre = ApprovalRegistry::new();
+        let registry = ApprovalRegistry::new();
         let id = CommandId::new();
-        registre
-            .submit(id, agent(), commande(), "motif", None)
-            .expect("file vide");
+        registry
+            .submit(id, agent(), sample_command(), "motif", None)
+            .expect("queue not empty");
 
-        assert!(registre.expire(id).is_some());
-        assert!(registre.is_empty());
-        assert!(registre.expire(id).is_none(), "already removed");
-        let issue = registre.take(id);
+        assert!(registry.expire(id).is_some());
+        assert!(registry.is_empty());
+        assert!(registry.expire(id).is_none(), "already removed");
+        let outcome = registry.take(id);
         assert!(
-            matches!(issue, Err(ApprovalError::Expired { .. })),
-            "{issue:?}"
+            matches!(outcome, Err(ApprovalError::Expired { .. })),
+            "{outcome:?}"
         );
     }
 
     #[test]
     fn the_memory_of_stale_ones_is_bounded() {
-        let registre = ApprovalRegistry::new().with_capacity(2);
+        let registry = ApprovalRegistry::new().with_capacity(2);
         let ids: Vec<CommandId> = (0..3).map(|_| CommandId::new()).collect();
         for id in &ids {
-            registre
-                .submit(*id, agent(), commande(), "motif", None)
+            registry
+                .submit(*id, agent(), sample_command(), "motif", None)
                 .expect("under the bound");
-            registre.expire(*id);
+            registry.expire(*id);
         }
         // The oldest is forgotten: the bound also applies to memory.
-        assert_eq!(registre.take(ids[0]), Err(ApprovalError::Unknown));
+        assert_eq!(registry.take(ids[0]), Err(ApprovalError::Unknown));
         assert!(matches!(
-            registre.take(ids[2]),
+            registry.take(ids[2]),
             Err(ApprovalError::Expired { .. })
         ));
     }
 
     #[test]
     fn an_explicit_denial_removes_the_request() {
-        let registre = ApprovalRegistry::new();
+        let registry = ApprovalRegistry::new();
         let id = CommandId::new();
-        registre
-            .submit(id, agent(), commande(), "motif", None)
-            .expect("file vide");
-        assert!(registre.reject(id).is_some());
-        assert_eq!(registre.take(id), Err(ApprovalError::Unknown));
+        registry
+            .submit(id, agent(), sample_command(), "motif", None)
+            .expect("queue not empty");
+        assert!(registry.reject(id).is_some());
+        assert_eq!(registry.take(id), Err(ApprovalError::Unknown));
     }
 }

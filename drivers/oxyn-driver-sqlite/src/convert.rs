@@ -208,21 +208,21 @@ impl Observed {
     /// The classes seen, separated by `|`, in lattice order.
     #[must_use]
     pub fn names(self) -> String {
-        let mut sortie = String::new();
-        for (bit, nom) in [
+        let mut joined = String::new();
+        for (bit, class_name) in [
             (Self::INTEGER, "integer"),
             (Self::REAL, "real"),
             (Self::TEXT, "text"),
             (Self::BLOB, "blob"),
         ] {
             if self.0 & bit != 0 {
-                if !sortie.is_empty() {
-                    sortie.push('|');
+                if !joined.is_empty() {
+                    joined.push('|');
                 }
-                sortie.push_str(nom);
+                joined.push_str(class_name);
             }
         }
-        sortie
+        joined
     }
 
     /// The type that holds every class seen without loss.
@@ -497,10 +497,10 @@ fn append_into(
             b.append_value(i as f64);
         }
         (Inner::Utf8(b), ValueRef::Text(bytes)) => {
-            let Ok(texte) = std::str::from_utf8(bytes) else {
+            let Ok(decoded) = std::str::from_utf8(bytes) else {
                 return Err(conflict);
             };
-            b.append_value(texte);
+            b.append_value(decoded);
         }
         (Inner::Utf8(b), ValueRef::Integer(_) | ValueRef::Real(_)) => {
             render(scratch, value);
@@ -548,11 +548,11 @@ mod tests {
     use super::*;
 
     fn observed(values: &[ValueRef<'_>]) -> Observed {
-        let mut vues = Observed::default();
+        let mut seen_classes = Observed::default();
         for value in values {
-            vues.observe(*value);
+            seen_classes.observe(*value);
         }
-        vues
+        seen_classes
     }
 
     fn resolve(values: &[ValueRef<'_>], declared: Option<&str>) -> ColumnPlan {
@@ -617,12 +617,12 @@ mod tests {
 
     #[test]
     fn a_blob_imposes_bytes_on_the_whole_column() {
-        for autre in [
+        for non_blob in [
             ValueRef::Integer(1),
             ValueRef::Real(1.0),
             ValueRef::Text(b"a"),
         ] {
-            let plan = resolve(&[autre, ValueRef::Blob(b"\x00")], None);
+            let plan = resolve(&[non_blob, ValueRef::Blob(b"\x00")], None);
             assert_eq!(
                 plan.kind,
                 ColumnKind::Binary,
@@ -713,19 +713,19 @@ mod tests {
         b.append(ValueRef::Text(b"caf\xc3\xa9")).expect("text");
         b.append(ValueRef::Null).expect("null");
 
-        let colonne = b.finish();
-        let colonne = colonne
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("Utf8 column");
-        assert_eq!(colonne.value(0), "-42");
+        assert_eq!(built_array.value(0), "-42");
         assert_eq!(
-            colonne.value(1),
+            built_array.value(1),
             "0.1",
             "f64's Display renders the shortest form that reads back identically"
         );
-        assert_eq!(colonne.value(2), "café");
-        assert!(colonne.is_null(3));
+        assert_eq!(built_array.value(2), "café");
+        assert!(built_array.is_null(3));
     }
 
     #[test]
@@ -736,12 +736,12 @@ mod tests {
 
         let err = b
             .append(ValueRef::Integer((1_i64 << 53) + 1))
-            .expect_err("refus attendu");
+            .expect_err("expected refusal");
         let SqliteError::ColumnConflict {
             column, resolved, ..
         } = err
         else {
-            panic!("mauvaise variante : {err:?}");
+            panic!("wrong variant: {err:?}");
         };
         assert_eq!((column, resolved), (2, "float64"));
     }
@@ -751,7 +751,7 @@ mod tests {
         let mut b = ColumnBuilder::new(ColumnKind::Utf8, 1, 1);
         let err = b
             .append(ValueRef::Blob(b"\x00\xff"))
-            .expect_err("refus attendu");
+            .expect_err("expected refusal");
         assert!(
             matches!(
                 err,
@@ -770,7 +770,7 @@ mod tests {
         let mut b = ColumnBuilder::new(ColumnKind::Utf8, 0, 1);
         let err = b
             .append(ValueRef::Text(b"\xff"))
-            .expect_err("refus attendu");
+            .expect_err("expected refusal");
         assert!(matches!(err, SqliteError::ColumnConflict { .. }), "{err:?}");
     }
 
@@ -781,12 +781,12 @@ mod tests {
         assert!(b.append(ValueRef::Real(1.0)).is_err());
         assert!(b.append(ValueRef::Blob(b"x")).is_err());
         b.append(ValueRef::Integer(7)).expect("an integer passes");
-        let colonne = b.finish();
-        let colonne = colonne
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<Int64Array>()
             .expect("Int64 column");
-        assert_eq!(colonne.value(0), 7);
+        assert_eq!(built_array.value(0), 7);
     }
 
     #[test]
@@ -797,15 +797,15 @@ mod tests {
         b.append(ValueRef::Integer(12)).expect("integer as bytes");
         b.append(ValueRef::Null).expect("null");
 
-        let colonne = b.finish();
-        let colonne = colonne
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<BinaryArray>()
             .expect("Binary column");
-        assert_eq!(colonne.value(0), b"\x00\xff");
-        assert_eq!(colonne.value(1), b"abc");
-        assert_eq!(colonne.value(2), b"12");
-        assert!(colonne.is_null(3));
+        assert_eq!(built_array.value(0), b"\x00\xff");
+        assert_eq!(built_array.value(1), b"abc");
+        assert_eq!(built_array.value(2), b"12");
+        assert!(built_array.is_null(3));
     }
 
     #[test]
@@ -813,13 +813,13 @@ mod tests {
         let mut b = ColumnBuilder::new(ColumnKind::Float64, 0, 2);
         b.append(ValueRef::Real(1.5)).expect("float");
         b.append(ValueRef::Integer(3)).expect("exact integer");
-        let colonne = b.finish();
-        let colonne = colonne
+        let built_array = b.finish();
+        let built_array = built_array
             .as_any()
             .downcast_ref::<Float64Array>()
             .expect("Float64 column");
-        assert!((colonne.value(0) - 1.5).abs() < f64::EPSILON);
-        assert!((colonne.value(1) - 3.0).abs() < f64::EPSILON);
+        assert!((built_array.value(0) - 1.5).abs() < f64::EPSILON);
+        assert!((built_array.value(1) - 3.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -831,15 +831,15 @@ mod tests {
 
     #[test]
     fn a_value_set_aside_reads_back_identically() {
-        for valeur in [
+        for sample in [
             ValueRef::Null,
             ValueRef::Integer(-1),
             ValueRef::Real(2.5),
             ValueRef::Text(b"\xff non-utf8"),
             ValueRef::Blob(b"\x00"),
         ] {
-            let capturee = ProbeValue::capture(valeur);
-            assert_eq!(capturee.borrow(), valeur);
+            let captured = ProbeValue::capture(sample);
+            assert_eq!(captured.borrow(), sample);
         }
     }
 }

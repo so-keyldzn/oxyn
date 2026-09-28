@@ -107,7 +107,7 @@ bitflags! {
         /// The session can declare where it resolves unqualified names, and
         /// report what the server actually kept. An engine without this
         /// capability shows no context selector: its schemas are qualified in
-        /// the SQL ([ADR-0019](../../docs/adr/0019-contexte-de-session.md)).
+        /// the SQL ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)).
         const SESSION_CONTEXT      = 1 << 31;
         // Bits 16 to 31 of execution are taken; these two continue beyond the
         // languages rather than dislodge one. A flag's number is serialized:
@@ -115,14 +115,14 @@ bitflags! {
         // written somewhere.
         /// The source can **order** a preview read. Absent, the row order stays
         /// the one the engine chooses, and no sort control is offered
-        /// ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
+        /// ([ADR-0020](../../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
         const PREVIEW_SORT         = 1 << 42;
         /// The source can **restrict** a preview read to rows that satisfy a
         /// condition. Separate from sorting: an engine can know how to order
         /// without knowing how to filter, and the reverse.
         const PREVIEW_FILTER       = 1 << 43;
         // What the review of a `DROP`, a `TRUNCATE` or a rename must say about
-        // what goes ([ADR-0042](../../docs/adr/0042-revue-sur-place-des-operations-destructrices.md)).
+        // what goes ([ADR-0042](../../../docs/adr/0042-revue-sur-place-des-operations-destructrices.md)).
         // None is declared without the driver's integration test that proves
         // it against the engine.
         /// The session accepts the `TRUNCATE` statement.
@@ -225,12 +225,12 @@ impl Capabilities {
     /// those alone: a message that repeats everything requested helps nobody
     /// understand what blocks.
     pub fn require(&self, cap: Capabilities) -> Result<()> {
-        let manquantes = cap.difference(*self);
-        if manquantes.is_empty() {
+        let missing = cap.difference(*self);
+        if missing.is_empty() {
             return Ok(());
         }
         Err(OxynError::NotSupported {
-            capability: manquantes.to_string(),
+            capability: missing.to_string(),
         })
     }
 
@@ -255,23 +255,23 @@ impl fmt::Display for Capabilities {
         if self.is_empty() {
             return f.write_str("(none)");
         }
-        let mut premier = true;
-        for (nom, _) in self.iter_names() {
-            if !premier {
+        let mut first = true;
+        for (name, _) in self.iter_names() {
+            if !first {
                 f.write_str(" | ")?;
             }
-            f.write_str(nom)?;
-            premier = false;
+            f.write_str(name)?;
+            first = false;
         }
         // An unnamed bit can only come from `from_bits_retain` on a value read
         // back from a file written by a newer version.
-        let nommees = Self::all().intersection(*self);
-        let inconnues = self.difference(nommees);
-        if !inconnues.is_empty() {
-            if !premier {
+        let named = Self::all().intersection(*self);
+        let unknown = self.difference(named);
+        if !unknown.is_empty() {
+            if !first {
                 f.write_str(" | ")?;
             }
-            write!(f, "(unknown: {:#x})", inconnues.bits())?;
+            write!(f, "(unknown: {:#x})", unknown.bits())?;
         }
         Ok(())
     }
@@ -324,10 +324,10 @@ mod tests {
     #[test]
     fn display_lists_the_active_capabilities() {
         let caps = Capabilities::SQL | Capabilities::TRANSACTIONS;
-        let rendu = caps.to_string();
-        assert!(rendu.contains("SQL"), "{rendu}");
-        assert!(rendu.contains("TRANSACTIONS"), "{rendu}");
-        assert!(rendu.contains(" | "), "{rendu}");
+        let rendered = caps.to_string();
+        assert!(rendered.contains("SQL"), "{rendered}");
+        assert!(rendered.contains("TRANSACTIONS"), "{rendered}");
+        assert!(rendered.contains(" | "), "{rendered}");
         assert_eq!(Capabilities::empty().to_string(), "(none)");
     }
 
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn the_language_mask_covers_every_language() {
-        for langage in [
+        for language in [
             QueryLanguage::SQL,
             QueryLanguage::Cypher,
             QueryLanguage::Gremlin,
@@ -368,22 +368,22 @@ mod tests {
             QueryLanguage::InfluxQl,
             QueryLanguage::Flux,
         ] {
-            let drapeau = Capabilities::for_language(langage);
+            let flag = Capabilities::for_language(language);
             assert!(
-                Capabilities::LANGUAGES.contains(drapeau),
-                "{langage} missing from the LANGUAGES mask"
+                Capabilities::LANGUAGES.contains(flag),
+                "{language} missing from the LANGUAGES mask"
             );
         }
     }
 
     #[test]
     fn flags_do_not_overlap() {
-        let mut vus = 0_u64;
-        for (nom, drapeau) in Capabilities::all().iter_names() {
-            let bits = drapeau.bits();
-            assert_eq!(bits.count_ones(), 1, "{nom} is not a simple flag");
-            assert_eq!(vus & bits, 0, "{nom} reuses a bit already taken");
-            vus |= bits;
+        let mut seen = 0_u64;
+        for (name, flag) in Capabilities::all().iter_names() {
+            let bits = flag.bits();
+            assert_eq!(bits.count_ones(), 1, "{name} is not a simple flag");
+            assert_eq!(seen & bits, 0, "{name} reuses a bit already taken");
+            seen |= bits;
         }
     }
 
@@ -391,8 +391,8 @@ mod tests {
     fn json_round_trip() {
         let caps = Capabilities::SQL | Capabilities::TRANSACTIONS | Capabilities::INDEXES;
         let json = serde_json::to_string(&caps).expect("serialization");
-        let relu: Capabilities = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(caps, relu);
+        let read_back: Capabilities = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(caps, read_back);
     }
 
     /// Two capabilities that share a bit are the same capability.
@@ -408,30 +408,30 @@ mod tests {
     #[test]
     fn no_flag_shares_its_bit_with_another() {
         let source = include_str!("capabilities.rs");
-        let mut vus: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
-        for ligne in source.lines() {
-            let Some((gauche, droite)) = ligne.split_once("= 1 << ") else {
+        let mut seen: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        for line in source.lines() {
+            let Some((left, right)) = line.split_once("= 1 << ") else {
                 continue;
             };
-            let Some(nom) = gauche.trim().strip_prefix("const ") else {
+            let Some(name) = left.trim().strip_prefix("const ") else {
                 continue;
             };
-            let Some(numero) = droite.split(';').next() else {
+            let Some(number) = right.split(';').next() else {
                 continue;
             };
-            let Ok(bit) = numero.trim().parse::<u32>() else {
+            let Ok(bit) = number.trim().parse::<u32>() else {
                 continue;
             };
-            let nom = nom.trim().to_owned();
-            if let Some(precedent) = vus.insert(bit, nom.clone()) {
-                panic!("{nom} and {precedent} share bit {bit}");
+            let name = name.trim().to_owned();
+            if let Some(previous) = seen.insert(bit, name.clone()) {
+                panic!("{name} and {previous} share bit {bit}");
             }
         }
         assert!(
-            vus.len() >= 50,
+            seen.len() >= 50,
             "reading the source found only {} flags: the format changed \
              and this test no longer checks anything",
-            vus.len()
+            seen.len()
         );
     }
 }

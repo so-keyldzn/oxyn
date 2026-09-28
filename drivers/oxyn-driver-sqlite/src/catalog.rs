@@ -724,10 +724,10 @@ pub fn partial_predicate(sql: &str) -> Option<String> {
                 let Some(start) = word.take() else {
                     continue;
                 };
-                let mot_cle = sql
+                let is_where_keyword = sql
                     .get(start..index)
                     .is_some_and(|found| found.eq_ignore_ascii_case("where"));
-                if mot_cle {
+                if is_where_keyword {
                     return sql
                         .get(index..)
                         .map(|rest| rest.trim().to_owned())
@@ -824,7 +824,7 @@ mod tests {
         assert_eq!(referential_action("SET NULL"), ReferentialAction::SetNull);
         assert_eq!(referential_action("NO ACTION"), ReferentialAction::NoAction);
         assert_eq!(
-            referential_action("quelque chose d'inattendu"),
+            referential_action("something unexpected"),
             ReferentialAction::NoAction,
             "the unknown must never propagate a deletion"
         );
@@ -834,18 +834,18 @@ mod tests {
     #[test]
     fn an_empty_path_designates_the_main_database() {
         assert_eq!(SqliteCatalog::database_of(&CatalogPath::empty()), MAIN);
-        let attachee = CatalogPath::for_namespace(None, "archives").expect("valid path");
-        assert_eq!(SqliteCatalog::database_of(&attachee), "archives");
+        let attached_db = CatalogPath::for_namespace(None, "archives").expect("valid path");
+        assert_eq!(SqliteCatalog::database_of(&attached_db), "archives");
     }
 
     #[test]
     fn a_hostile_database_name_is_quoted_before_joining_a_query() {
         // I-10: a database can legally be attached under this name.
-        let cite = quote_identifier(r#"x"; DROP TABLE audit; --"#, QuoteStyle::Double);
-        assert_eq!(cite, r#""x""; DROP TABLE audit; --""#);
+        let quoted = quote_identifier(r#"x"; DROP TABLE audit; --"#, QuoteStyle::Double);
+        assert_eq!(quoted, r#""x""; DROP TABLE audit; --""#);
         assert!(
-            !cite.starts_with('x'),
-            "the name must never come out bare: {cite}"
+            !quoted.starts_with('x'),
+            "the name must never come out bare: {quoted}"
         );
     }
 }

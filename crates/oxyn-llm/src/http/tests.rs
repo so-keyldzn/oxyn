@@ -39,15 +39,15 @@ fn refused(issue: oxyn_core::Result<impl Sized>) -> OxynError {
 
 /// What every refused redirection must hold, whatever the provider.
 fn assert_refused(err: &OxynError, origin: &Server, target: &Server) {
-    let rendu = format!("{err} {err:?}");
+    let rendered = format!("{err} {err:?}");
     assert!(
-        rendu.contains("redirect"),
-        "the message names the cause: {rendu}"
+        rendered.contains("redirect"),
+        "the message names the cause: {rendered}"
     );
-    assert!(!rendu.contains(SENTINEL), "{rendu}");
+    assert!(!rendered.contains(SENTINEL), "{rendered}");
     assert!(
-        !rendu.contains(&target.origin),
-        "the Location header is not repeated: {rendu}"
+        !rendered.contains(&target.origin),
+        "the Location header is not repeated: {rendered}"
     );
     assert!(!err.is_retryable(), "a redirect is fixed by configuration");
     assert_eq!(origin.hits(), 1, "the configured origin was asked once");
@@ -189,16 +189,16 @@ async fn drained(provider: &dyn LlmProvider) -> Vec<crate::types::ChatEvent> {
 /// No event, neither by its text nor by its `Debug`, quotes the key; and the
 /// error is indeed there, otherwise the test would prove nothing.
 fn assert_redacted(events: &[crate::types::ChatEvent]) {
-    let rendu = format!("{events:?}");
-    assert!(!rendu.contains(SENTINEL), "{rendu}");
-    let erreur = events
+    let rendered = format!("{events:?}");
+    assert!(!rendered.contains(SENTINEL), "{rendered}");
+    let error = events
         .iter()
         .find_map(|event| match event {
             crate::types::ChatEvent::Error(message) => Some(message.as_str()),
             _ => None,
         })
         .expect("the streamed error is reported");
-    assert!(erreur.contains("<redacted API key>"), "{erreur}");
+    assert!(error.contains("<redacted API key>"), "{error}");
     assert!(
         matches!(
             events.last(),
@@ -206,7 +206,7 @@ fn assert_redacted(events: &[crate::types::ChatEvent]) {
                 stop_reason: crate::types::StopReason::ProviderError
             })
         ),
-        "{rendu}"
+        "{rendered}"
     );
 }
 
@@ -277,7 +277,7 @@ async fn cancel_ends_the_read_of_an_error_body_that_never_finishes() {
     let server = Server::start(open_body(500, Some(1_000_000), b"partial diagnostic"), true).await;
     let response = headers_of(&server).await;
     let cancel = CancelToken::new();
-    let annule = cancel.clone();
+    let cancelled = cancel.clone();
 
     let (err, ()) = tokio::time::timeout(
         GUARD,
@@ -285,7 +285,7 @@ async fn cancel_ends_the_read_of_an_error_body_that_never_finishes() {
             failure(&ProviderId::openai(), response, None, Some(&cancel)),
             async move {
                 tokio::task::yield_now().await;
-                annule.cancel();
+                cancelled.cancel();
             },
         ),
     )
@@ -326,14 +326,14 @@ async fn an_error_body_is_never_held_past_its_bound() {
     let server = Server::start(open_body(500, None, &big), true).await;
     let response = headers_of(&server).await;
 
-    let lu = tokio::time::timeout(
+    let read = tokio::time::timeout(
         GUARD,
         read_limited(response, MAX_ERROR_BODY_BYTES, GUARD, None),
     )
     .await
     .expect("the bound stops the read");
-    match lu {
-        Read::Overflow(corps) => assert_eq!(corps.len(), MAX_ERROR_BODY_BYTES),
+    match read {
+        Read::Overflow(body) => assert_eq!(body.len(), MAX_ERROR_BODY_BYTES),
         _ => panic!("the bound is reported as such"),
     }
 }
@@ -344,13 +344,13 @@ async fn an_error_body_announced_long_is_read_up_to_its_bound_only() {
     let server = Server::start(open_body(500, Some(1 << 30), &big), true).await;
     let response = headers_of(&server).await;
 
-    let lu = tokio::time::timeout(
+    let read = tokio::time::timeout(
         GUARD,
         read_limited(response, MAX_ERROR_BODY_BYTES, GUARD, None),
     )
     .await
     .expect("the bound stops the read");
-    assert!(matches!(lu, Read::Overflow(corps) if corps.len() == MAX_ERROR_BODY_BYTES));
+    assert!(matches!(read, Read::Overflow(body) if body.len() == MAX_ERROR_BODY_BYTES));
 }
 
 #[tokio::test]
@@ -359,26 +359,29 @@ async fn a_key_cut_by_the_bound_does_not_leave_its_start_behind() {
     let partial = format!("rejected key {}", SENTINEL.get(..12).unwrap_or_default());
     let server = Server::start(open_body(401, Some(10_000), partial.as_bytes()), true).await;
     let response = headers_of(&server).await;
-    let cle = ApiKey::new(SENTINEL);
+    let key = ApiKey::new(SENTINEL);
 
     let err = tokio::time::timeout(
         GUARD,
         failure_within(
             &ProviderId::openai(),
             response,
-            Some(&cle),
+            Some(&key),
             None,
             Duration::from_millis(50),
         ),
     )
     .await
     .expect("the delay bounds the read");
-    let rendu = format!("{err} {err:?}");
+    let rendered = format!("{err} {err:?}");
     assert!(
-        !rendu.contains(SENTINEL.get(..8).unwrap_or_default()),
-        "{rendu}"
+        !rendered.contains(SENTINEL.get(..8).unwrap_or_default()),
+        "{rendered}"
     );
-    assert!(matches!(err, LlmError::Http { status: 401, .. }), "{rendu}");
+    assert!(
+        matches!(err, LlmError::Http { status: 401, .. }),
+        "{rendered}"
+    );
 }
 
 #[tokio::test]
@@ -394,16 +397,19 @@ async fn a_model_list_announced_too_large_is_refused_by_name() {
             .await
             .expect("refused without reading"),
     );
-    let rendu = err.to_string();
-    assert!(rendu.contains("model list"), "{rendu}");
-    assert!(rendu.contains(&MAX_JSON_BODY_BYTES.to_string()), "{rendu}");
+    let rendered = err.to_string();
+    assert!(rendered.contains("model list"), "{rendered}");
+    assert!(
+        rendered.contains(&MAX_JSON_BODY_BYTES.to_string()),
+        "{rendered}"
+    );
 }
 
 #[tokio::test]
 async fn a_model_list_without_length_is_refused_at_the_first_byte_too_many() {
-    let mut liste = b"{\"data\":[".to_vec();
-    liste.extend(std::iter::repeat_n(b' ', 4096));
-    let server = Server::start(open_body(200, None, &liste), true).await;
+    let mut list = b"{\"data\":[".to_vec();
+    list.extend(std::iter::repeat_n(b' ', 4096));
+    let server = Server::start(open_body(200, None, &list), true).await;
     let response = headers_of(&server).await;
 
     let err = tokio::time::timeout(
@@ -442,16 +448,19 @@ async fn an_anthropic_model_list_announced_too_large_is_refused_by_name() {
 #[tokio::test]
 async fn a_model_list_with_too_many_entries_is_refused_by_name() {
     // Minimal entries: the byte bound does not stop them.
-    let mut liste = String::from("{\"data\":[");
-    liste.push_str(&vec!["{}"; super::MAX_MODELS + 1].join(","));
-    liste.push_str("]}");
-    let server = Server::start(open_body(200, Some(liste.len()), liste.as_bytes()), false).await;
+    let mut list = String::from("{\"data\":[");
+    list.push_str(&vec!["{}"; super::MAX_MODELS + 1].join(","));
+    list.push_str("]}");
+    let server = Server::start(open_body(200, Some(list.len()), list.as_bytes()), false).await;
     let provider =
         OpenAiCompatibleProvider::new(ProviderId::openai(), &format!("{}/v1", server.origin))
             .expect("provider");
 
     let err = refused(provider.models().await);
-    let rendu = err.to_string();
-    assert!(rendu.contains(&super::MAX_MODELS.to_string()), "{rendu}");
-    assert!(rendu.contains("model list"), "{rendu}");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains(&super::MAX_MODELS.to_string()),
+        "{rendered}"
+    );
+    assert!(rendered.contains("model list"), "{rendered}");
 }

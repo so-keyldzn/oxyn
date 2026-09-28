@@ -14,13 +14,13 @@
 //!
 //! An adapter that claimed to cover both protocols would be wrong on tool
 //! calls, that is precisely where Oxyn needs them
-//! ([`ARCHITECTURE` §7.5](../../../docs/ARCHITECTURE.md)).
+//! ([`ARCHITECTURE` §7.5](../../../../docs/ARCHITECTURE.md)).
 //!
 //! # Every external fact here is dated and sourced
 //!
 //! Path, headers, API version, event names, field names, stop reason values,
 //! status mapping: checked on **2026-09-16** in the official documentation and
-//! recorded in [`RESEARCH-NOTES`](../../../docs/RESEARCH-NOTES.md) §
+//! recorded in [`RESEARCH-NOTES`](../../../../docs/RESEARCH-NOTES.md) §
 //! "Anthropic provider" (I-12).
 //!
 //! # What is not done, and why
@@ -128,13 +128,13 @@ impl AnthropicProvider {
     /// Unreadable base URL, or HTTP client impossible to build.
     pub fn with_base_url(api_key: impl Into<ApiKey>, base_url: &str) -> Result<Self> {
         let id = ProviderId::anthropic();
-        let analysee = Url::parse(base_url).map_err(|err| LlmError::Config {
+        let parsed = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
         })?;
         let client = http::client(&id)?;
         Ok(Self {
-            base_url: provider::normalize_base_url(analysee),
+            base_url: provider::normalize_base_url(parsed),
             api_key: api_key.into(),
             version: ANTHROPIC_VERSION.to_owned(),
             default_max_tokens: DEFAULT_MAX_TOKENS,
@@ -180,31 +180,30 @@ impl AnthropicProvider {
 
     /// Builds a body, streamed or not.
     fn build_body(&self, request: &ChatRequest, stream: bool) -> Result<Value> {
-        let invalide = |detail: &str| LlmError::Config {
+        let invalid = |detail: &str| LlmError::Config {
             provider: ProviderId::anthropic(),
             detail: detail.to_owned(),
         };
         if request.model.trim().is_empty() {
-            return Err(invalide("no model requested").into());
+            return Err(invalid("no model requested").into());
         }
 
         // Refuse rather than send a conversation from which a reasoning block
         // would have disappeared: the signature would no longer hold.
-        let corps =
-            wire::build_request(request, self.default_max_tokens, stream).map_err(|_| {
-                LlmError::Unsupported {
-                    provider: ProviderId::anthropic(),
-                    capability: "replaying this kind of reasoning block".to_owned(),
-                }
-            })?;
-        let vide = corps
+        let body = wire::build_request(request, self.default_max_tokens, stream).map_err(|_| {
+            LlmError::Unsupported {
+                provider: ProviderId::anthropic(),
+                capability: "replaying this kind of reasoning block".to_owned(),
+            }
+        })?;
+        let empty = body
             .get("messages")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty);
-        if vide {
-            return Err(invalide("no message to send").into());
+        if empty {
+            return Err(invalid("no message to send").into());
         }
-        Ok(corps)
+        Ok(body)
     }
 
     /// Prepares an HTTP request: URL, protocol headers, then the key.
@@ -220,22 +219,22 @@ impl AnthropicProvider {
         &self,
         mut builder: RequestBuilder,
     ) -> std::result::Result<RequestBuilder, LlmError> {
-        for (nom, valeur) in self.headers() {
-            builder = builder.header(nom, valeur);
+        for (header_name, value) in self.headers() {
+            builder = builder.header(header_name, value);
         }
         if self.api_key.is_blank() {
             return Err(LlmError::MissingApiKey {
                 provider: ProviderId::anthropic(),
             });
         }
-        let mut cle =
+        let mut key =
             HeaderValue::from_str(self.api_key.expose()).map_err(|_| LlmError::Config {
                 provider: ProviderId::anthropic(),
                 detail: "the API key contains a character that is not valid in an HTTP header"
                     .to_owned(),
             })?;
-        cle.set_sensitive(true);
-        Ok(builder.header(HeaderName::from_static(API_KEY_HEADER), cle))
+        key.set_sensitive(true);
+        Ok(builder.header(HeaderName::from_static(API_KEY_HEADER), key))
     }
 
     /// Prepares the `POST /v1/messages` of a generation.
@@ -247,10 +246,10 @@ impl AnthropicProvider {
     }
 
     /// Assembles a relative path onto the base URL.
-    fn join(&self, chemin: &str) -> std::result::Result<Url, LlmError> {
-        self.base_url.join(chemin).map_err(|err| LlmError::Config {
+    fn join(&self, path: &str) -> std::result::Result<Url, LlmError> {
+        self.base_url.join(path).map_err(|err| LlmError::Config {
             provider: ProviderId::anthropic(),
-            detail: format!("cannot append path `{chemin}` to the base URL: {err}"),
+            detail: format!("cannot append path `{path}` to the base URL: {err}"),
         })
     }
 
@@ -291,18 +290,18 @@ impl AnthropicProvider {
         // `std::pin::pin!` and not `futures::pin_mut!`: the standard library's
         // pinning introduces no `unsafe` block in this crate, where it is
         // refused.
-        let envoi = pin!(builder.send());
-        let attente = pin!(cancel.cancelled());
-        let reponse = match select(attente, envoi).await {
+        let send = pin!(builder.send());
+        let pending = pin!(cancel.cancelled());
+        let response = match select(pending, send).await {
             Either::Left(((), _)) => return Err(OxynError::Cancelled),
-            Either::Right((resultat, _)) => resultat.map_err(|err| self.transport(&err))?,
+            Either::Right((result, _)) => result.map_err(|err| self.transport(&err))?,
         };
-        if !reponse.status().is_success() {
+        if !response.status().is_success() {
             // Under the same token as the sending: an error body that never
             // ends must not make "Cancel" ineffective.
-            return Err(self.failure(reponse, Some(cancel)).await.into());
+            return Err(self.failure(response, Some(cancel)).await.into());
         }
-        Ok(reponse)
+        Ok(response)
     }
 
     /// Reads a JSON body under a bound, classifying a decoding defect.
@@ -311,10 +310,10 @@ impl AnthropicProvider {
     /// trait. Size and timeout remain bounded.
     async fn read_json<T: serde::de::DeserializeOwned>(
         &self,
-        reponse: reqwest::Response,
+        response: reqwest::Response,
         subject: &str,
     ) -> Result<T> {
-        Ok(http::read_json(&ProviderId::anthropic(), reponse, subject, None).await?)
+        Ok(http::read_json(&ProviderId::anthropic(), response, subject, None).await?)
     }
 }
 
@@ -340,58 +339,61 @@ impl LlmProvider for AnthropicProvider {
     }
 
     async fn models(&self) -> Result<Vec<ModelInfo>> {
-        let mut fiches = Vec::new();
-        let mut apres: Option<String> = None;
+        let mut infos = Vec::new();
+        let mut after: Option<String> = None;
 
         for _ in 0..MAX_MODEL_PAGES {
             let mut url = self.join(MODELS_PATH)?;
             url.query_pairs_mut()
                 .append_pair("limit", &MODELS_PAGE_SIZE.to_string());
-            if let Some(curseur) = &apres {
-                url.query_pairs_mut().append_pair("after_id", curseur);
+            if let Some(cursor) = &after {
+                url.query_pairs_mut().append_pair("after_id", cursor);
             }
 
-            let requete = self.authorize(self.client.get(url))?;
+            let request = self.authorize(self.client.get(url))?;
             // No cancellation here: listing models is a short request, and the
             // trait passes no token.
-            let reponse = requete.send().await.map_err(|err| self.transport(&err))?;
-            if !reponse.status().is_success() {
-                return Err(self.failure(reponse, None).await.into());
+            let response = request.send().await.map_err(|err| self.transport(&err))?;
+            if !response.status().is_success() {
+                return Err(self.failure(response, None).await.into());
             }
 
-            let brut: wire::ModelsResponse = self.read_json(reponse, "model list").await?;
-            let encore = brut.has_more;
-            let dernier = brut.last_id.clone();
-            fiches.extend(wire::parse_models(brut));
+            let raw: wire::ModelsResponse = self.read_json(response, "model list").await?;
+            let more = raw.has_more;
+            let last = raw.last_id.clone();
+            infos.extend(wire::parse_models(raw));
             // Cumulative bound: each page is bounded, not their sum.
-            if fiches.len() > http::MAX_MODELS {
+            if infos.len() > http::MAX_MODELS {
                 return Err(http::too_many_models(&ProviderId::anthropic()).into());
             }
 
             // `last_id` missing while there would be more: stop rather than ask
             // for the same page again forever.
-            match (encore, dernier) {
-                (true, Some(curseur)) => apres = Some(curseur),
+            match (more, last) {
+                (true, Some(cursor)) => after = Some(cursor),
                 _ => break,
             }
         }
 
-        Ok(fiches)
+        Ok(infos)
     }
 
     async fn count_tokens(&self, request: &ChatRequest) -> Result<Option<u32>> {
         // `stream` is refused by this endpoint: the body is therefore built
         // without it, and without `max_tokens` which it does not expect either.
-        let corps = self.build_body(request, false)?;
+        let body = self.build_body(request, false)?;
         let url = self.join(COUNT_TOKENS_PATH)?;
-        let requete = self.authorize(self.client.post(url))?.json(&corps);
+        let http_request = self.authorize(self.client.post(url))?.json(&body);
 
-        let reponse = requete.send().await.map_err(|err| self.transport(&err))?;
-        if !reponse.status().is_success() {
-            return Err(self.failure(reponse, None).await.into());
+        let response = http_request
+            .send()
+            .await
+            .map_err(|err| self.transport(&err))?;
+        if !response.status().is_success() {
+            return Err(self.failure(response, None).await.into());
         }
-        let brut: wire::CountResponse = self.read_json(reponse, "token count").await?;
-        Ok(Some(brut.count()))
+        let raw: wire::CountResponse = self.read_json(response, "token count").await?;
+        Ok(Some(raw.count()))
     }
 
     async fn stream(
@@ -405,15 +407,15 @@ impl LlmProvider for AnthropicProvider {
         // The request is built and validated **before** any network call: a
         // malformed request must report itself as such rather than come back
         // as a `400` a few hundred milliseconds later.
-        let corps = self.wire_request(&request)?;
-        let requete = self.prepared_request()?.json(&corps);
-        let reponse = self.send(requete, cancel).await?;
+        let body = self.wire_request(&request)?;
+        let http_request = self.prepared_request()?.json(&body);
+        let response = self.send(http_request, cancel).await?;
 
-        let octets = reponse
+        let bytes = response
             .bytes_stream()
-            .map(|resultat| resultat.map_err(|err| describe_stream_error(&err)));
+            .map(|result| result.map_err(|err| describe_stream_error(&err)));
         Ok(events_stream(
-            Box::pin(octets),
+            Box::pin(bytes),
             decode::MessageDecoder::new(),
             cancel.clone(),
             Some(self.api_key.clone()),
@@ -430,12 +432,12 @@ mod tests {
     use crate::reasoning::{ReasoningBlock, ReasoningEffort};
     use crate::types::{ChatMessage, ToolCall, ToolSpec};
 
-    fn fournisseur() -> AnthropicProvider {
+    fn provider() -> AnthropicProvider {
         AnthropicProvider::new("sk-ant-test").expect("construction")
     }
 
-    fn corps(requete: &ChatRequest) -> Value {
-        fournisseur().wire_request(requete).expect("valid request")
+    fn body(request: &ChatRequest) -> Value {
+        provider().wire_request(request).expect("valid request")
     }
 
     // ── System instruction, blocks, alternation ────────────────────────────
@@ -444,58 +446,58 @@ mod tests {
     fn the_system_instruction_leaves_the_messages() {
         // The point that distinguishes this protocol: `system` is a field, not
         // a message.
-        let requete = ChatRequest::new(
-            "claude-modele",
+        let request = ChatRequest::new(
+            "claude-model",
             vec![
-                ChatMessage::system("tu es un assistant SQL"),
-                ChatMessage::user("bonjour"),
+                ChatMessage::system("you are a SQL assistant"),
+                ChatMessage::user("hello"),
             ],
         );
-        let corps = corps(&requete);
+        let body = body(&request);
 
-        assert_eq!(corps["system"][0]["type"], "text");
-        assert_eq!(corps["system"][0]["text"], "tu es un assistant SQL");
-        assert_eq!(corps["messages"].as_array().map(Vec::len), Some(1));
-        assert_eq!(corps["messages"][0]["role"], "user");
+        assert_eq!(body["system"][0]["type"], "text");
+        assert_eq!(body["system"][0]["text"], "you are a SQL assistant");
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+        assert_eq!(body["messages"][0]["role"], "user");
     }
 
     #[test]
     fn several_system_instructions_are_concatenated_not_lost() {
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "m",
             vec![
-                ChatMessage::system("règle 1"),
-                ChatMessage::system("règle 2"),
+                ChatMessage::system("rule 1"),
+                ChatMessage::system("rule 2"),
                 ChatMessage::user("go"),
             ],
         );
-        assert_eq!(corps(&requete)["system"][0]["text"], "règle 1\n\nrègle 2");
+        assert_eq!(body(&request)["system"][0]["text"], "rule 1\n\nrule 2");
     }
 
     #[test]
     fn the_content_is_a_list_of_blocks() {
-        let requete = ChatRequest::new("m", vec![ChatMessage::user("bonjour")]);
-        let corps = corps(&requete);
-        assert_eq!(corps["messages"][0]["content"][0]["type"], "text");
-        assert_eq!(corps["messages"][0]["content"][0]["text"], "bonjour");
+        let request = ChatRequest::new("m", vec![ChatMessage::user("hello")]);
+        let body = body(&request);
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "hello");
     }
 
     #[test]
     fn a_tool_call_becomes_a_tool_use_block() {
-        let appel = ToolCall::new("call_1", "execute", json!({"sql": "SELECT 1"}));
-        let requete = ChatRequest::new(
+        let call = ToolCall::new("call_1", "execute", json!({"sql": "SELECT 1"}));
+        let request = ChatRequest::new(
             "m",
             vec![
-                ChatMessage::user("compte les lignes"),
-                ChatMessage::assistant("").with_tool_calls(vec![appel]),
+                ChatMessage::user("count the rows"),
+                ChatMessage::assistant("").with_tool_calls(vec![call]),
             ],
         );
-        let bloc = corps(&requete)["messages"][1]["content"][0].clone();
-        assert_eq!(bloc["type"], "tool_use");
-        assert_eq!(bloc["id"], "call_1");
-        assert_eq!(bloc["name"], "execute");
+        let block = body(&request)["messages"][1]["content"][0].clone();
+        assert_eq!(block["type"], "tool_use");
+        assert_eq!(block["id"], "call_1");
+        assert_eq!(block["name"], "execute");
         assert_eq!(
-            bloc["input"],
+            block["input"],
             json!({"sql": "SELECT 1"}),
             "the input is an object, not a string: this protocol differs from OpenAI"
         );
@@ -503,10 +505,10 @@ mod tests {
 
     #[test]
     fn a_tool_result_becomes_a_user_block() {
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "m",
             vec![
-                ChatMessage::user("compte"),
+                ChatMessage::user("count"),
                 ChatMessage::assistant("").with_tool_calls(vec![ToolCall::new(
                     "call_1",
                     "execute",
@@ -515,18 +517,18 @@ mod tests {
                 ChatMessage::tool_result("call_1", "42"),
             ],
         );
-        let dernier = corps(&requete)["messages"][2].clone();
-        assert_eq!(dernier["role"], "user", "this protocol has no `tool` role");
-        assert_eq!(dernier["content"][0]["type"], "tool_result");
-        assert_eq!(dernier["content"][0]["tool_use_id"], "call_1");
-        assert_eq!(dernier["content"][0]["content"], "42");
+        let last = body(&request)["messages"][2].clone();
+        assert_eq!(last["role"], "user", "this protocol has no `tool` role");
+        assert_eq!(last["content"][0]["type"], "tool_result");
+        assert_eq!(last["content"][0]["tool_use_id"], "call_1");
+        assert_eq!(last["content"][0]["content"], "42");
     }
 
     #[test]
     fn two_consecutive_messages_of_the_same_role_are_merged() {
         // The API requires alternation; two successive tool results are the
         // common case when the model asked for several.
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "m",
             vec![
                 ChatMessage::user("a"),
@@ -534,42 +536,45 @@ mod tests {
                 ChatMessage::tool_result("call_2", "r2"),
             ],
         );
-        let corps = corps(&requete);
-        let messages = corps["messages"].as_array().expect("array");
+        let body = body(&request);
+        let messages = body["messages"].as_array().expect("array");
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert_eq!(messages[0]["content"].as_array().map(Vec::len), Some(3));
     }
 
     #[test]
     fn tools_use_input_schema() {
-        let requete =
+        let request =
             ChatRequest::new("m", vec![ChatMessage::user("a")]).with_tools(vec![ToolSpec::new(
                 "lister",
-                "liste les tables",
+                "list the tables",
                 json!({"type": "object"}),
             )]);
-        let corps = corps(&requete);
-        assert_eq!(corps["tools"][0]["name"], "lister");
-        assert_eq!(corps["tools"][0]["input_schema"]["type"], "object");
+        let body = body(&request);
+        assert_eq!(body["tools"][0]["name"], "lister");
+        assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
         assert!(
-            corps["tools"][0].get("parameters").is_none(),
-            "`parameters` est le nom d'OpenAI, pas celui-ci"
+            body["tools"][0].get("parameters").is_none(),
+            "`parameters` is OpenAI's name, not this one's"
         );
     }
 
     #[test]
     fn the_token_ceiling_is_always_present() {
         // `max_tokens` is mandatory in this protocol.
-        let sans = ChatRequest::new("m", vec![ChatMessage::user("a")]);
-        assert_eq!(corps(&sans)["max_tokens"], json!(DEFAULT_MAX_TOKENS));
+        let without_limit = ChatRequest::new("m", vec![ChatMessage::user("a")]);
+        assert_eq!(
+            body(&without_limit)["max_tokens"],
+            json!(DEFAULT_MAX_TOKENS)
+        );
 
-        let avec = ChatRequest::new("m", vec![ChatMessage::user("a")]).with_max_tokens(128);
-        assert_eq!(corps(&avec)["max_tokens"], json!(128));
+        let with_limit = ChatRequest::new("m", vec![ChatMessage::user("a")]).with_max_tokens(128);
+        assert_eq!(body(&with_limit)["max_tokens"], json!(128));
     }
 
     #[test]
     fn a_request_without_model_or_message_is_refused() {
-        let f = fournisseur();
+        let f = provider();
         assert!(
             f.wire_request(&ChatRequest::new("", vec![ChatMessage::user("a")]))
                 .is_err()
@@ -581,80 +586,80 @@ mod tests {
         );
     }
 
-    // ── Raisonnement ───────────────────────────────────────────────────────
+    // ── Reasoning ──────────────────────────────────────────────────────────
 
     #[test]
     fn effort_goes_through_output_config_and_leaves_the_thinking_mode_alone() {
         // Sending a thinking mode that was not requested would make the request
         // fail on models that do not know it.
-        let requete = ChatRequest::new("m", vec![ChatMessage::user("a")])
+        let request = ChatRequest::new("m", vec![ChatMessage::user("a")])
             .with_reasoning_effort(ReasoningEffort::XHigh);
-        let corps = corps(&requete);
-        assert_eq!(corps["output_config"]["effort"], "xhigh");
-        assert!(corps.get("thinking").is_none(), "{corps}");
+        let body = body(&request);
+        assert_eq!(body["output_config"]["effort"], "xhigh");
+        assert!(body.get("thinking").is_none(), "{body}");
     }
 
     #[test]
     fn a_thinking_budget_requires_the_explicit_mode() {
-        let requete =
+        let request =
             ChatRequest::new("m", vec![ChatMessage::user("a")]).with_reasoning_budget_tokens(8192);
-        let corps = corps(&requete);
-        assert_eq!(corps["thinking"]["type"], "enabled");
-        assert_eq!(corps["thinking"]["budget_tokens"], 8192);
+        let body = body(&request);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 8192);
         assert_eq!(
-            corps["thinking"]["display"], "summarized",
-            "sans cela le raisonnement revient vide"
+            body["thinking"]["display"], "summarized",
+            "without it the reasoning comes back empty"
         );
     }
 
     #[test]
     fn both_settings_coexist() {
-        let requete = ChatRequest::new("m", vec![ChatMessage::user("a")])
+        let request = ChatRequest::new("m", vec![ChatMessage::user("a")])
             .with_reasoning_effort(ReasoningEffort::Low)
             .with_reasoning_budget_tokens(1024);
-        let corps = corps(&requete);
-        assert_eq!(corps["output_config"]["effort"], "low");
-        assert_eq!(corps["thinking"]["budget_tokens"], 1024);
+        let body = body(&request);
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert_eq!(body["thinking"]["budget_tokens"], 1024);
     }
 
     #[test]
     fn a_request_without_reasoning_request_carries_no_trace_of_it() {
-        let corps = corps(&ChatRequest::new("m", vec![ChatMessage::user("a")]));
-        assert!(corps.get("thinking").is_none(), "{corps}");
-        assert!(corps.get("output_config").is_none(), "{corps}");
+        let body = body(&ChatRequest::new("m", vec![ChatMessage::user("a")]));
+        assert!(body.get("thinking").is_none(), "{body}");
+        assert!(body.get("output_config").is_none(), "{body}");
     }
 
     #[test]
     fn reasoning_blocks_go_back_first_and_intact() {
         // The API checks their signature: reordering them, editing them or
         // losing one makes the request refused.
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "m",
             vec![
-                ChatMessage::user("compte"),
-                ChatMessage::assistant("voici")
+                ChatMessage::user("count"),
+                ChatMessage::assistant("here it is")
                     .with_reasoning(vec![
-                        ReasoningBlock::summarized("je réfléchis", Some("SIG".to_owned())),
+                        ReasoningBlock::summarized("I am thinking", Some("SIG".to_owned())),
                         ReasoningBlock::redacted("CHIFFRE"),
                     ])
                     .with_tool_calls(vec![ToolCall::new("c1", "execute", json!({}))]),
             ],
         );
-        let contenu = corps(&requete)["messages"][1]["content"].clone();
-        let blocs = contenu.as_array().expect("array");
+        let content = body(&request)["messages"][1]["content"].clone();
+        let blocks = content.as_array().expect("array");
 
-        assert_eq!(blocs[0]["type"], "thinking");
-        assert_eq!(blocs[0]["thinking"], "je réfléchis");
-        assert_eq!(blocs[0]["signature"], "SIG");
-        assert_eq!(blocs[1]["type"], "redacted_thinking");
-        assert_eq!(blocs[1]["data"], "CHIFFRE");
-        assert_eq!(blocs[2]["type"], "text", "reasoning comes first");
-        assert_eq!(blocs[3]["type"], "tool_use");
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["thinking"], "I am thinking");
+        assert_eq!(blocks[0]["signature"], "SIG");
+        assert_eq!(blocks[1]["type"], "redacted_thinking");
+        assert_eq!(blocks[1]["data"], "CHIFFRE");
+        assert_eq!(blocks[2]["type"], "text", "reasoning comes first");
+        assert_eq!(blocks[3]["type"], "tool_use");
     }
 
     #[test]
     fn a_reasoning_block_without_signature_does_not_carry_the_field() {
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "m",
             vec![
                 ChatMessage::user("a"),
@@ -662,10 +667,10 @@ mod tests {
                     .with_reasoning(vec![ReasoningBlock::summarized("t", None)]),
             ],
         );
-        let bloc = corps(&requete)["messages"][1]["content"][0].clone();
+        let block = body(&request)["messages"][1]["content"][0].clone();
         assert!(
-            bloc.get("signature").is_none(),
-            "un champ vide n'est pas une absence : {bloc}"
+            block.get("signature").is_none(),
+            "an empty field is not an absence: {block}"
         );
     }
 
@@ -673,17 +678,17 @@ mod tests {
 
     #[test]
     fn a_marked_message_carries_the_cache_marker() {
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "m",
             vec![
-                ChatMessage::system("le schéma complet").cached(),
-                ChatMessage::user("et les doublons ?"),
+                ChatMessage::system("the full schema").cached(),
+                ChatMessage::user("and the duplicates?"),
             ],
         );
-        let corps = corps(&requete);
-        assert_eq!(corps["system"][0]["cache_control"]["type"], "ephemeral");
+        let body = body(&request);
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
         assert!(
-            corps["messages"][0]["content"][0]
+            body["messages"][0]["content"][0]
                 .get("cache_control")
                 .is_none(),
             "the question changes at every turn: marking it would be useless"
@@ -693,32 +698,35 @@ mod tests {
     #[test]
     fn the_marker_is_set_on_the_last_block_of_the_message() {
         // A marker closes a prefix; setting it at the head would cache nothing.
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "m",
             vec![
-                ChatMessage::assistant("texte")
+                ChatMessage::assistant("text")
                     .with_tool_calls(vec![ToolCall::new("c1", "execute", json!({}))])
                     .cached(),
                 ChatMessage::user("suite"),
             ],
         );
-        let contenu = corps(&requete)["messages"][0]["content"].clone();
-        let blocs = contenu.as_array().expect("array");
-        assert!(blocs[0].get("cache_control").is_none(), "{blocs:?}");
-        assert_eq!(blocs[blocs.len() - 1]["cache_control"]["type"], "ephemeral");
+        let content = body(&request)["messages"][0]["content"].clone();
+        let blocks = content.as_array().expect("array");
+        assert!(blocks[0].get("cache_control").is_none(), "{blocks:?}");
+        assert_eq!(
+            blocks[blocks.len() - 1]["cache_control"]["type"],
+            "ephemeral"
+        );
     }
 
     #[test]
     fn marked_tools_carry_the_marker_on_the_last_one() {
-        let requete = ChatRequest::new("m", vec![ChatMessage::user("a")])
+        let request = ChatRequest::new("m", vec![ChatMessage::user("a")])
             .with_tools(vec![
-                ToolSpec::new("un", "d1", json!({})),
-                ToolSpec::new("deux", "d2", json!({})),
+                ToolSpec::new("one", "d1", json!({})),
+                ToolSpec::new("two", "d2", json!({})),
             ])
             .with_cached_tools();
-        let corps = corps(&requete);
-        assert!(corps["tools"][0].get("cache_control").is_none());
-        assert_eq!(corps["tools"][1]["cache_control"]["type"], "ephemeral");
+        let body = body(&request);
+        assert!(body["tools"][0].get("cache_control").is_none());
+        assert_eq!(body["tools"][1]["cache_control"]["type"], "ephemeral");
     }
 
     #[test]
@@ -726,62 +734,62 @@ mod tests {
         // Beyond the bound, the API refuses the whole request: Oxyn stops
         // before rather than let a `400` reach the user.
         let mut messages = vec![ChatMessage::system("contexte").cached()];
-        for numero in 0..10 {
-            messages.push(ChatMessage::user(format!("question {numero}")).cached());
-            messages.push(ChatMessage::assistant(format!("réponse {numero}")).cached());
+        for number in 0..10 {
+            messages.push(ChatMessage::user(format!("question {number}")).cached());
+            messages.push(ChatMessage::assistant(format!("answer {number}")).cached());
         }
-        let requete = ChatRequest::new("m", messages)
+        let request = ChatRequest::new("m", messages)
             .with_tools(vec![ToolSpec::new("t", "d", json!({}))])
             .with_cached_tools();
 
-        let marqueurs = compter_marqueurs(&corps(&requete));
+        let markers = count_markers(&body(&request));
         assert!(
-            marqueurs <= wire::MAX_CACHE_BREAKPOINTS,
-            "{marqueurs} markers set"
+            markers <= wire::MAX_CACHE_BREAKPOINTS,
+            "{markers} markers set"
         );
     }
 
     /// Counts the `cache_control`s present anywhere in the body.
-    fn compter_marqueurs(valeur: &Value) -> usize {
-        match valeur {
-            Value::Object(objet) => {
-                let ici = usize::from(objet.contains_key("cache_control"));
-                ici + objet.values().map(compter_marqueurs).sum::<usize>()
+    fn count_markers(value: &Value) -> usize {
+        match value {
+            Value::Object(object) => {
+                let here = usize::from(object.contains_key("cache_control"));
+                here + object.values().map(count_markers).sum::<usize>()
             }
-            Value::Array(items) => items.iter().map(compter_marqueurs).sum(),
+            Value::Array(items) => items.iter().map(count_markers).sum(),
             _ => 0,
         }
     }
 
-    // ── Comptage de jetons ─────────────────────────────────────────────────
+    // ── Token counting ─────────────────────────────────────────────────────
 
     #[test]
     fn the_counting_body_carries_neither_stream_nor_ceiling() {
         // The counting endpoint refuses `stream`.
-        let requete = ChatRequest::new("m", vec![ChatMessage::user("a")]);
-        let corps = fournisseur()
-            .build_body(&requete, false)
+        let request = ChatRequest::new("m", vec![ChatMessage::user("a")]);
+        let body = provider()
+            .build_body(&request, false)
             .expect("valid request");
-        assert!(corps.get("stream").is_none(), "{corps}");
-        assert!(corps.get("max_tokens").is_none(), "{corps}");
-        assert_eq!(corps["model"], "m");
+        assert!(body.get("stream").is_none(), "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
+        assert_eq!(body["model"], "m");
     }
 
     // ── Privacy and headers ────────────────────────────────────────────────
 
     #[test]
     fn debug_does_not_show_the_key() {
-        let rendu = format!("{:?}", AnthropicProvider::new("sk-ant-CECI").expect("ok"));
-        assert!(!rendu.contains("CECI"), "{rendu}");
-        assert!(rendu.contains("<present>"), "{rendu}");
+        let rendered = format!("{:?}", AnthropicProvider::new("sk-ant-THIS").expect("ok"));
+        assert!(!rendered.contains("THIS"), "{rendered}");
+        assert!(rendered.contains("<present>"), "{rendered}");
     }
 
     #[test]
     fn a_key_with_a_line_break_is_refused_without_being_displayed() {
         // A key pasted from a terminal often carries a `\n`.
-        let f = AnthropicProvider::new("sk-ant-avec\nsaut").expect("construction");
+        let f = AnthropicProvider::new("sk-ant-with\nbreak").expect("construction");
         let err = f.prepared_request().expect_err("invalid header");
-        assert!(!err.to_string().contains("sk-ant-avec"), "{err}");
+        assert!(!err.to_string().contains("sk-ant-with"), "{err}");
     }
 
     #[test]
@@ -795,12 +803,12 @@ mod tests {
 
     #[test]
     fn a_prepared_request_builds_with_a_valid_key() {
-        assert!(fournisseur().prepared_request().is_ok());
+        assert!(provider().prepared_request().is_ok());
     }
 
     #[test]
     fn urls_are_assembled() {
-        let f = fournisseur();
+        let f = provider();
         assert_eq!(
             f.messages_url().expect("URL").as_str(),
             "https://api.anthropic.com/v1/messages"
@@ -829,36 +837,39 @@ mod tests {
 
     #[test]
     fn the_headers_carry_the_version() {
-        let f = fournisseur().with_version("2099-01-01");
-        let entetes = f.headers();
+        let f = provider().with_version("2099-01-01");
+        let headers = f.headers();
         assert!(
-            entetes
+            headers
                 .iter()
-                .any(|(nom, valeur)| *nom == "anthropic-version" && valeur == "2099-01-01"),
-            "{entetes:?}"
+                .any(|(header_name, value)| *header_name == "anthropic-version"
+                    && value == "2099-01-01"),
+            "{headers:?}"
         );
         assert!(
-            entetes.iter().all(|(nom, _)| *nom != API_KEY_HEADER),
-            "the key does not go through there: {entetes:?}"
+            headers
+                .iter()
+                .all(|(header_name, _)| *header_name != API_KEY_HEADER),
+            "the key does not go through there: {headers:?}"
         );
     }
 
     #[test]
     fn an_unreadable_base_url_is_a_configuration_error() {
-        let err = AnthropicProvider::with_base_url("sk-ant-test", "pas une url")
-            .expect_err("invalid URL");
+        let err =
+            AnthropicProvider::with_base_url("sk-ant-test", "not a url").expect_err("invalid URL");
         assert!(matches!(err, OxynError::Config(_)), "{err}");
     }
 
-    // ── Annulation avant l'envoi ───────────────────────────────────────────
+    // ── Cancellation before sending───────────────────────────────────────────
 
     #[test]
     fn an_already_cancelled_token_short_circuits_the_call() {
-        let f = fournisseur();
-        let jeton = CancelToken::new();
-        jeton.cancel();
-        let requete = ChatRequest::new("claude-modele", vec![ChatMessage::user("bonjour")]);
-        let issue = futures::executor::block_on(f.stream(requete, &jeton));
+        let f = provider();
+        let token = CancelToken::new();
+        token.cancel();
+        let request = ChatRequest::new("claude-model", vec![ChatMessage::user("hello")]);
+        let issue = futures::executor::block_on(f.stream(request, &token));
         let err = match issue {
             Ok(_) => panic!("cancelled beforehand"),
             Err(err) => err,
@@ -873,8 +884,8 @@ mod tests {
         // The class decides a retry, and it is the caller that decides — never
         // this crate (I-13). The values come from the error table checked on
         // 2026-09-16.
-        let cle = ApiKey::new("sk-ant-test");
-        let cas = [
+        let key = ApiKey::new("sk-ant-test");
+        let cases = [
             (
                 401,
                 r#"{"type":"error","error":{"type":"authentication_error"}}"#,
@@ -901,29 +912,29 @@ mod tests {
                 true,
             ),
         ];
-        for (statut, corps, retentable) in cas {
-            let err = LlmError::from_response(ProviderId::anthropic(), statut, corps, Some(&cle));
-            assert_eq!(err.is_retryable(), retentable, "HTTP {statut} : {err}");
+        for (statut, body, retryable) in cases {
+            let err = LlmError::from_response(ProviderId::anthropic(), statut, body, Some(&key));
+            assert_eq!(err.is_retryable(), retryable, "HTTP {statut} : {err}");
         }
     }
 
     #[test]
     fn an_authentication_refusal_never_copies_the_key() {
         // This provider sometimes copies the received key into its message.
-        let cle = ApiKey::new("sk-ant-api03-TRES-SECRET");
+        let key = ApiKey::new("sk-ant-api03-TRES-SECRET");
         let err = LlmError::from_response(
             ProviderId::anthropic(),
             401,
             r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key: sk-ant-api03-TRES-SECRET"}}"#,
-            Some(&cle),
+            Some(&key),
         );
-        let rendu = err.to_string();
-        assert!(!rendu.contains("TRES-SECRET"), "{rendu}");
-        assert!(rendu.contains(crate::secret::REDACTED), "{rendu}");
+        let rendered = err.to_string();
+        assert!(!rendered.contains("TRES-SECRET"), "{rendered}");
+        assert!(rendered.contains(crate::secret::REDACTED), "{rendered}");
 
-        let projetee: OxynError = err.into();
-        assert!(matches!(projetee, OxynError::Authentication(_)));
-        assert!(!projetee.to_string().contains("TRES-SECRET"));
+        let projected: OxynError = err.into();
+        assert!(matches!(projected, OxynError::Authentication(_)));
+        assert!(!projected.to_string().contains("TRES-SECRET"));
     }
 
     // ── Exact shape of the request ─────────────────────────────────────────
@@ -933,29 +944,29 @@ mod tests {
         // A deliberately readable snapshot rather than a file on the side: what
         // matters is that a change of shape shows **in review**, and a JSON
         // value comparison says exactly what moved.
-        let requete = ChatRequest::new(
-            "claude-modele",
+        let request = ChatRequest::new(
+            "claude-model",
             vec![
-                ChatMessage::system("tu es un assistant SQL").cached(),
-                ChatMessage::user("compte les clients"),
+                ChatMessage::system("you are a SQL assistant").cached(),
+                ChatMessage::user("count the customers"),
             ],
         )
         .with_max_tokens(256)
         .with_tools(vec![ToolSpec::new(
             "execute_query",
-            "exécute une requête",
+            "run a query",
             json!({"type": "object", "properties": {"sql": {"type": "string"}}}),
         )])
         .with_cached_tools()
         .with_reasoning_effort(ReasoningEffort::Medium);
 
         assert_eq!(
-            corps(&requete),
+            body(&request),
             json!({
-                "model": "claude-modele",
+                "model": "claude-model",
                 "tools": [{
                     "name": "execute_query",
-                    "description": "exécute une requête",
+                    "description": "run a query",
                     "input_schema": {
                         "type": "object",
                         "properties": {"sql": {"type": "string"}}
@@ -964,12 +975,12 @@ mod tests {
                 }],
                 "system": [{
                     "type": "text",
-                    "text": "tu es un assistant SQL",
+                    "text": "you are a SQL assistant",
                     "cache_control": {"type": "ephemeral"}
                 }],
                 "messages": [{
                     "role": "user",
-                    "content": [{"type": "text", "text": "compte les clients"}]
+                    "content": [{"type": "text", "text": "count the customers"}]
                 }],
                 "stream": true,
                 "max_tokens": 256,
@@ -987,7 +998,7 @@ mod tests {
         // does not depend on resolution.
         assert!(
             !oxyn_core::PrivacyTier::Local.allows_remote_provider(),
-            "un niveau qui laisserait passer un fournisseur distant ne promettrait plus rien"
+            "a tier that let a remote provider through would promise nothing anymore"
         );
         for niveau in [
             oxyn_core::PrivacyTier::Metadata,
@@ -998,7 +1009,7 @@ mod tests {
 
         // And the default endpoint is not a literal loopback address: nothing
         // here can pass itself off as local.
-        let f = fournisseur();
+        let f = provider();
         let point = f.endpoint().expect("this provider has a URL");
         assert_ne!(
             crate::reach::literal_reach(point),
@@ -1009,9 +1020,9 @@ mod tests {
 
     #[test]
     fn an_invalid_request_reports_itself_before_any_network_call() {
-        let f = fournisseur();
-        let requete = ChatRequest::new("  ", vec![ChatMessage::user("bonjour")]);
-        let issue = futures::executor::block_on(f.stream(requete, &CancelToken::new()));
+        let f = provider();
+        let request = ChatRequest::new("  ", vec![ChatMessage::user("hello")]);
+        let issue = futures::executor::block_on(f.stream(request, &CancelToken::new()));
         let err = match issue {
             Ok(_) => panic!("empty model"),
             Err(err) => err,

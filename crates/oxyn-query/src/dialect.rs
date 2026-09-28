@@ -113,7 +113,7 @@ mod tests {
     /// incomplete `match` or a badly wired grammar breaks here.
     #[test]
     fn every_dialect_can_read_a_select() {
-        for dialecte in [
+        for target_dialect in [
             SqlDialect::Ansi,
             SqlDialect::Postgres,
             SqlDialect::MySql,
@@ -126,28 +126,31 @@ mod tests {
             SqlDialect::BigQuery,
             SqlDialect::Redshift,
         ] {
-            let grammaire = parser_dialect(dialecte);
-            let lu = Parser::parse_sql(grammaire, "SELECT 1");
-            assert!(lu.is_ok(), "{dialecte} cannot read SELECT 1: {lu:?}");
+            let grammar = parser_dialect(target_dialect);
+            let parsed = Parser::parse_sql(grammar, "SELECT 1");
+            assert!(
+                parsed.is_ok(),
+                "{target_dialect} cannot read SELECT 1: {parsed:?}"
+            );
         }
     }
 
     #[test]
     fn the_postgres_grammar_reads_postgres() {
-        let grammaire = parser_dialect(SqlDialect::Postgres);
-        let lu = Parser::parse_sql(grammaire, "SELECT * FROM t WHERE id = $1");
-        assert!(lu.is_ok(), "{lu:?}");
+        let grammar = parser_dialect(SqlDialect::Postgres);
+        let parsed = Parser::parse_sql(grammar, "SELECT * FROM t WHERE id = $1");
+        assert!(parsed.is_ok(), "{parsed:?}");
     }
 
     #[test]
     fn redshift_borrows_the_postgres_grammar() {
         // A `$1` placeholder is only accepted by a PostgreSQL grammar: it is
         // the observable proof of the attachment.
-        let lu = Parser::parse_sql(
+        let parsed = Parser::parse_sql(
             parser_dialect(SqlDialect::Redshift),
             "SELECT * FROM t WHERE id = $1",
         );
-        assert!(lu.is_ok(), "{lu:?}");
+        assert!(parsed.is_ok(), "{parsed:?}");
     }
 
     #[test]

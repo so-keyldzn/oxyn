@@ -388,7 +388,7 @@ fn shutdown(connection: Connection) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn memoire() -> OpenSpec {
+    fn in_memory() -> OpenSpec {
         OpenSpec {
             target: OpenTarget::Memory(oxyn_core::ConnectionId::new()),
             read_only: false,
@@ -397,17 +397,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_task_runs_on_the_worker_thread() {
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("open");
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let reponse: i64 = handle
-            .call(&jeton, |conn: &Connection| {
+        let response: i64 = handle
+            .call(&cancel_token, |conn: &Connection| {
                 conn.query_row("SELECT 40 + 2", [], |row| row.get(0))
                     .map_err(|err| error::engine(err, error::Effect::ReadOnly))
             })
             .await
             .expect("call");
-        assert_eq!(reponse, 42);
+        assert_eq!(response, 42);
 
         handle.close().await.expect("close");
         thread.join().expect("the thread ends");
@@ -415,14 +415,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_task_on_an_already_cancelled_token_does_not_start() {
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("open");
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let enfant = jeton.child();
-        enfant.cancel();
-        let issue: oxyn_core::Result<i64> = handle.call(&enfant, |_: &Connection| Ok(1)).await;
+        let child_token = cancel_token.child();
+        child_token.cancel();
+        let issue: oxyn_core::Result<i64> = handle.call(&child_token, |_: &Connection| Ok(1)).await;
         assert!(
-            issue.expect_err("refus attendu").is_cancelled(),
+            issue.expect_err("expected refusal").is_cancelled(),
             "an already cancelled token must not launch work"
         );
 
@@ -431,16 +431,16 @@ mod tests {
     }
 
     /// A finite series that keeps a statement **active** between two steps.
-    const SUITE: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c \
+    const SERIES: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c \
                          WHERE x < 50000) SELECT x FROM c";
 
-    /// Submits a task that reads one row of [`SUITE`], signals that it is in the
+    /// Submits a task that reads one row of [`SERIES`], signals that it is in the
     /// middle of its statement, waits for the go-ahead, then counts the rest.
     ///
     /// What is guaranteed when `active` answers: the worker thread is executing
     /// this task and its statement is active (`nVdbeActive > 0`). It is the exact
     /// state in which an `sqlite3_interrupt` hits the running statement.
-    fn tache_suspendue(
+    fn suspended_task(
         handle: &WorkerHandle,
     ) -> (
         WorkId,
@@ -448,37 +448,37 @@ mod tests {
         std::sync::mpsc::Sender<()>,
         oneshot::Receiver<Result<i64>>,
     ) {
-        let (active, actif) = oneshot::channel();
-        let (feu_vert, attente) = std::sync::mpsc::channel::<()>();
+        let (active, in_statement) = oneshot::channel();
+        let (go_ahead, wait_rx) = std::sync::mpsc::channel::<()>();
         let (reply, answer) = oneshot::channel();
         let job: Job = Box::new(move |conn: &Connection| {
             let issue = (|| {
                 let mut statement = conn
-                    .prepare(SUITE)
+                    .prepare(SERIES)
                     .map_err(|err| error::engine(err, error::Effect::ReadOnly))?;
                 let mut rows = statement.raw_query();
-                let mut lues = 0_i64;
+                let mut rows_read = 0_i64;
                 let step = |rows: &mut rusqlite::Rows<'_>| {
                     rows.next()
                         .map(|row| row.is_some())
                         .map_err(|err| error::engine(err, error::Effect::ReadOnly))
                 };
                 if step(&mut rows)? {
-                    lues += 1;
+                    rows_read += 1;
                 }
                 let _ = active.send(());
-                let _ = attente.recv();
+                let _ = wait_rx.recv();
                 while step(&mut rows)? {
-                    lues += 1;
+                    rows_read += 1;
                 }
-                Ok(lues)
+                Ok(rows_read)
             })();
             let _ = reply.send(issue);
         });
         let id = handle
             .submit(|id| WorkerCommand::Job(id, job))
             .expect("submission");
-        (id, actif, feu_vert, answer)
+        (id, in_statement, go_ahead, answer)
     }
 
     #[tokio::test]
@@ -487,11 +487,11 @@ mod tests {
         // and the worker thread is already in the next query.
         // `sqlite3_interrupt` targets the connection; without targeting, the next
         // query would die.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("open");
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
         let (reply, answer) = oneshot::channel();
-        let precedente = handle
+        let earlier_task = handle
             .submit(|id| {
                 WorkerCommand::Job(
                     id,
@@ -502,23 +502,25 @@ mod tests {
             })
             .expect("submission");
         handle
-            .await_reply(answer, &jeton, precedente)
+            .await_reply(answer, &cancel_token, earlier_task)
             .await
             .expect("the previous task ends");
 
-        let (suivante, actif, feu_vert, reponse) = tache_suspendue(&handle);
-        actif.await.expect("the next task is in its statement");
-        assert_eq!(handle.running(), Some(suivante));
+        let (following, in_statement, go_ahead, response) = suspended_task(&handle);
+        in_statement
+            .await
+            .expect("the next task is in its statement");
+        assert_eq!(handle.running(), Some(following));
 
         // The previous task's interruption arrives too late.
-        handle.interrupt(precedente);
-        feu_vert.send(()).expect("go-ahead");
+        handle.interrupt(earlier_task);
+        go_ahead.send(()).expect("go-ahead");
 
-        let lues = handle
-            .await_reply(reponse, &jeton, suivante)
+        let rows_read = handle
+            .await_reply(response, &cancel_token, following)
             .await
             .expect("the next task must not be interrupted");
-        assert_eq!(lues, 50_000);
+        assert_eq!(rows_read, 50_000);
 
         handle.close().await.expect("close");
         thread.join().expect("the thread ends");
@@ -528,16 +530,16 @@ mod tests {
     async fn interrupting_the_running_task_stops_it() {
         // The counterpart of the previous test: targeting must not disarm the
         // legitimate interruption.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("open");
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let (en_cours, actif, feu_vert, reponse) = tache_suspendue(&handle);
-        actif.await.expect("the task is in its statement");
+        let (current, in_statement, go_ahead, response) = suspended_task(&handle);
+        in_statement.await.expect("the task is in its statement");
 
-        handle.interrupt(en_cours);
-        feu_vert.send(()).expect("go-ahead");
+        handle.interrupt(current);
+        go_ahead.send(()).expect("go-ahead");
 
-        let issue = handle.await_reply(reponse, &jeton, en_cours).await;
+        let issue = handle.await_reply(response, &cancel_token, current).await;
         assert!(
             matches!(issue, Err(ref err) if err.is_cancelled()),
             "the targeted task must be interrupted: {issue:?}"
@@ -551,21 +553,21 @@ mod tests {
     async fn a_task_abandoned_in_the_queue_is_not_executed() {
         // A tab closed while its query waits its turn: executing it afterwards
         // would occupy the session for nobody.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("open");
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
 
-        let (bloquante, actif, feu_vert, reponse) = tache_suspendue(&handle);
-        actif.await.expect("the worker thread is busy");
+        let (blocker, in_statement, go_ahead, response) = suspended_task(&handle);
+        in_statement.await.expect("the worker thread is busy");
 
-        let executee = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let temoin = Arc::clone(&executee);
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let witness = Arc::clone(&ran);
         let (reply, answer) = oneshot::channel::<Result<()>>();
-        let en_file = handle
+        let queued = handle
             .submit(|id| {
                 WorkerCommand::Job(
                     id,
                     Box::new(move |_: &Connection| {
-                        temoin.store(true, std::sync::atomic::Ordering::SeqCst);
+                        witness.store(true, std::sync::atomic::Ordering::SeqCst);
                         let _ = reply.send(Ok(()));
                     }),
                 )
@@ -573,25 +575,25 @@ mod tests {
             .expect("submission");
         {
             // The future of the wait is destroyed before completing.
-            let mut attente = pin!(handle.await_reply(answer, &jeton, en_file));
-            assert!(futures::poll!(attente.as_mut()).is_pending());
+            let mut wait_rx = pin!(handle.await_reply(answer, &cancel_token, queued));
+            assert!(futures::poll!(wait_rx.as_mut()).is_pending());
         }
 
-        feu_vert.send(()).expect("go-ahead");
+        go_ahead.send(()).expect("go-ahead");
         handle
-            .await_reply(reponse, &jeton, bloquante)
+            .await_reply(response, &cancel_token, blocker)
             .await
             .expect("the blocking task ends");
-        let apres: i64 = handle
-            .call(&jeton, |conn: &Connection| {
+        let after: i64 = handle
+            .call(&cancel_token, |conn: &Connection| {
                 conn.query_row("SELECT 1", [], |row| row.get(0))
                     .map_err(|err| error::engine(err, error::Effect::ReadOnly))
             })
             .await
             .expect("the session answers");
-        assert_eq!(apres, 1);
+        assert_eq!(after, 1);
         assert!(
-            !executee.load(std::sync::atomic::Ordering::SeqCst),
+            !ran.load(std::sync::atomic::Ordering::SeqCst),
             "a task abandoned in the queue must not run"
         );
 
@@ -603,16 +605,16 @@ mod tests {
     async fn the_thread_stops_when_the_session_is_abandoned() {
         // A forgotten session must not leave a thread and a file lock behind
         // it.
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("open");
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
         drop(handle);
         thread.join().expect("the thread ends on its own");
     }
 
     #[tokio::test]
     async fn closing_twice_is_not_an_error() {
-        let jeton = CancelToken::new();
-        let (handle, thread) = spawn(memoire(), &jeton).await.expect("open");
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
         handle.close().await.expect("first close");
         handle
             .close()
@@ -623,14 +625,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_database_in_read_only_is_a_connection_error() {
-        let jeton = CancelToken::new();
+        let cancel_token = CancelToken::new();
         let spec = OpenSpec {
             target: OpenTarget::File(PathBuf::from(
                 "/oxyn-missing/database-that-does-not-exist.sqlite",
             )),
             read_only: true,
         };
-        let err = spawn(spec, &jeton).await.expect_err("ouverture impossible");
+        let err = spawn(spec, &cancel_token).await.expect_err("opening fails");
         assert!(matches!(err, OxynError::Connection(_)), "{err:?}");
         assert!(
             !err.to_string().contains("database-that-does-not-exist"),

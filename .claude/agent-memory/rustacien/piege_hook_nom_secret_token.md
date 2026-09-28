@@ -5,7 +5,7 @@ metadata:
   type: feedback
 ---
 
-`NOM_SECRET` in `.claude/hooks/code_interdit.py` is a pattern on the **type
+`SECRET_NAME` in `.claude/hooks/code_interdit.py` is a pattern on the **type
 name**, not on its fields:
 `Credential|Secret|Password|Passwd|Token|ApiKey|Dsn|ConnectionString`. Any
 `#[derive(..., Debug, ...)]` on a `struct` or `enum` whose name contains one of

@@ -41,11 +41,11 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-FRONT = RACINE / "apps" / "desktop"
-DENY = RACINE / "deny.toml"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FRONT = REPO_ROOT / "apps" / "desktop"
+DENY = REPO_ROOT / "deny.toml"
 CONFIG_NPM = FRONT / "licences-npm.toml"
-MANIFESTE_APP = RACINE / "crates" / "oxyn-desktop" / "Cargo.toml"
+APP_MANIFEST = REPO_ROOT / "crates" / "oxyn-desktop" / "Cargo.toml"
 
 # The version read from the registry and dated in RESEARCH-NOTES (I-12).
 # Another version might produce the same file; nothing guarantees it, and a
@@ -54,85 +54,85 @@ VERSION_CARGO_ABOUT = "0.9.2"
 
 # A license file, whatever the package's convention: `LICENSE`, `license.md`,
 # `LICENCE-MIT`, `COPYING`, `NOTICE`…
-MOTIF_FICHIER_LICENCE = re.compile(r"^(licen[cs]e|copying|notice)([-._].*)?$", re.IGNORECASE)
+LICENSE_FILE_PATTERN = re.compile(r"^(licen[cs]e|copying|notice)([-._].*)?$", re.IGNORECASE)
 
 
 # --- SPDX expressions ----------------------------------------------------------
 
 
-def _jetons(expression: str) -> list[str]:
+def _tokens(expression: str) -> list[str]:
     return re.findall(r"\(|\)|[^\s()]+", expression)
 
 
-def acceptee(expression: str, permises: set[str]) -> bool:
+def accepted(expression: str, allowed: set[str]) -> bool:
     """True if one of the expression's alternatives only uses allowed
     licenses. `A OR B`: one is enough; `A AND B`: both are needed; `A WITH E`
     is a term in its own right, as in `deny.toml`."""
-    jetons = _jetons(expression)
+    tokens = _tokens(expression)
     position = 0
 
-    def terme() -> bool:
+    def term() -> bool:
         nonlocal position
-        if position >= len(jetons):
+        if position >= len(tokens):
             raise ValueError(expression)
-        jeton = jetons[position]
+        token = tokens[position]
         position += 1
-        if jeton == "(":
-            valeur = ou()
-            if position >= len(jetons) or jetons[position] != ")":
+        if token == "(":
+            value = parse_or()
+            if position >= len(tokens) or tokens[position] != ")":
                 raise ValueError(expression)
             position += 1
-            return valeur
-        if position + 1 < len(jetons) and jetons[position] == "WITH":
-            jeton = f"{jeton} WITH {jetons[position + 1]}"
+            return value
+        if position + 1 < len(tokens) and tokens[position] == "WITH":
+            token = f"{token} WITH {tokens[position + 1]}"
             position += 2
-        return jeton in permises
+        return token in allowed
 
-    def et() -> bool:
+    def parse_and() -> bool:
         nonlocal position
-        valeur = terme()
-        while position < len(jetons) and jetons[position] == "AND":
+        value = term()
+        while position < len(tokens) and tokens[position] == "AND":
             position += 1
-            valeur = terme() and valeur
-        return valeur
+            value = term() and value
+        return value
 
-    def ou() -> bool:
+    def parse_or() -> bool:
         nonlocal position
-        valeur = et()
-        while position < len(jetons) and jetons[position] == "OR":
+        value = parse_and()
+        while position < len(tokens) and tokens[position] == "OR":
             position += 1
-            valeur = et() or valeur
-        return valeur
+            value = parse_and() or value
+        return value
 
     try:
-        valeur = ou()
+        value = parse_or()
     except ValueError:
         return False
-    return valeur and position == len(jetons)
+    return value and position == len(tokens)
 
 
 # --- What is accepted -----------------------------------------------------------
 
 
-def licences_de_deny() -> set[str]:
+def deny_licenses() -> set[str]:
     return set(tomllib.loads(DENY.read_text(encoding="utf-8"))["licenses"]["allow"])
 
 
 @dataclass
 class ConfigNpm:
-    permises: set[str]
+    allowed: set[str]
     exceptions: dict[str, set[str]]
     # (name, version) → license: the package does not declare its own, or
     # declares it wrongly. Pinned to a version: a bump requires rereading.
-    precisions: dict[tuple[str, str], str]
+    details: dict[tuple[str, str], str]
 
 
-def lire_config_npm() -> ConfigNpm:
-    brut = tomllib.loads(CONFIG_NPM.read_text(encoding="utf-8"))
+def read_npm_config() -> ConfigNpm:
+    raw = tomllib.loads(CONFIG_NPM.read_text(encoding="utf-8"))
     return ConfigNpm(
-        permises=licences_de_deny() | set(brut.get("allow", [])),
-        exceptions={e["name"]: set(e["allow"]) for e in brut.get("exceptions", [])},
-        precisions={(c["name"], c["version"]): c["license"] for c in brut.get("clarify", [])},
+        allowed=deny_licenses() | set(raw.get("allow", [])),
+        exceptions={e["name"]: set(e["allow"]) for e in raw.get("exceptions", [])},
+        details={(c["name"], c["version"]): c["license"] for c in raw.get("clarify", [])},
     )
 
 
@@ -140,94 +140,94 @@ def lire_config_npm() -> ConfigNpm:
 
 
 @dataclass
-class PaquetNpm:
-    nom: str
+class NpmPackage:
+    item_name: str
     version: str
-    licence: str
-    chemin: Path
+    license_id: str
+    path_str: Path
 
 
-def paquets_npm() -> list[PaquetNpm]:
-    sortie = subprocess.run(
+def npm_packages() -> list[NpmPackage]:
+    output = subprocess.run(
         ["pnpm", "licenses", "list", "--prod", "--json"],
         cwd=FRONT,
         check=True,
         capture_output=True,
         text=True,
     ).stdout
-    paquets: list[PaquetNpm] = []
-    for licence, entrees in json.loads(sortie).items():
-        for entree in entrees:
-            for version, chemin in zip(entree["versions"], entree["paths"], strict=True):
-                paquets.append(PaquetNpm(entree["name"], version, licence, Path(chemin)))
-    return sorted(paquets, key=lambda p: (p.nom, p.version))
+    packages: list[NpmPackage] = []
+    for license_id, entries in json.loads(output).items():
+        for entry in entries:
+            for version, path_str in zip(entry["versions"], entry["paths"], strict=True):
+                packages.append(NpmPackage(entry["name"], version, license_id, Path(path_str)))
+    return sorted(packages, key=lambda p: (p.item_name, p.version))
 
 
-def verifier_npm() -> int:
-    config = lire_config_npm()
-    paquets = paquets_npm()
-    refus: list[str] = []
-    utilisees: set[object] = set()
-    for paquet in paquets:
-        cle = (paquet.nom, paquet.version)
-        licence = config.precisions.get(cle, paquet.licence)
-        if cle in config.precisions:
-            utilisees.add(cle)
-        permises = config.permises | config.exceptions.get(paquet.nom, set())
-        if paquet.nom in config.exceptions:
-            utilisees.add(paquet.nom)
-        if not acceptee(licence, permises):
-            refus.append(f"  {paquet.nom}@{paquet.version}: \"{licence}\"")
+def verify_npm() -> int:
+    config = read_npm_config()
+    packages = npm_packages()
+    refusal: list[str] = []
+    used: set[object] = set()
+    for package in packages:
+        field_key = (package.item_name, package.version)
+        license_id = config.details.get(field_key, package.license_id)
+        if field_key in config.details:
+            used.add(field_key)
+        allowed = config.allowed | config.exceptions.get(package.item_name, set())
+        if package.item_name in config.exceptions:
+            used.add(package.item_name)
+        if not accepted(license_id, allowed):
+            refusal.append(f"  {package.item_name}@{package.version}: \"{license_id}\"")
 
-    perimees = [f"  exception {n}" for n in config.exceptions if n not in utilisees]
-    perimees += [f"  clarify {n}@{v}" for (n, v) in config.precisions if (n, v) not in utilisees]
+    stale = [f"  exception {n}" for n in config.exceptions if n not in used]
+    stale += [f"  clarify {n}@{v}" for (n, v) in config.details if (n, v) not in used]
 
-    if refus:
+    if refusal:
         print("Refused npm licenses (production dependencies of apps/desktop):")
-        print("\n".join(refus))
+        print("\n".join(refusal))
         print(
             "\nA license is accepted in deny.toml, after checking that it is\n"
             "compatible with the GPLv3 (ADR-0044); an exception specific to a package,\n"
             "or a wrongly declared license, in apps/desktop/licences-npm.toml."
         )
-    if perimees:
+    if stale:
         print("Entries of apps/desktop/licences-npm.toml that no longer serve:")
-        print("\n".join(perimees))
-    if refus or perimees:
+        print("\n".join(stale))
+    if refusal or stale:
         return 1
-    print(f"npm licenses: {len(paquets)} production packages, all accepted.")
+    print(f"npm licenses: {len(packages)} production packages, all accepted.")
     return 0
 
 
 # --- The notices --------------------------------------------------------------
 
 
-def _cible_hote() -> str:
-    sortie = subprocess.run(["rustc", "-vV"], check=True, capture_output=True, text=True).stdout
-    for ligne in sortie.splitlines():
-        if ligne.startswith("host: "):
-            return ligne.removeprefix("host: ")
+def _host_target() -> str:
+    output = subprocess.run(["rustc", "-vV"], check=True, capture_output=True, text=True).stdout
+    for line in output.splitlines():
+        if line.startswith("host: "):
+            return line.removeprefix("host: ")
     raise SystemExit("rustc -vV does not give the host target")
 
 
 def mentions_rust() -> list[dict[str, object]]:
     """The dependencies of `oxyn-desktop` for the host target, the one of the
     binary being built, without build or development dependencies."""
-    cible = _cible_hote()
+    target = _host_target()
     # `--frozen` makes the result identical online and offline; it assumes the
     # sources are present, which this `fetch` ensures. Every target: the
     # `cargo metadata` that `cargo about` runs resolves the graph of every
     # platform in the lockfile, and a runner with an empty cache failed on an
     # Android crate.
     subprocess.run(
-        ["cargo", "fetch", "--locked", "--manifest-path", str(MANIFESTE_APP)],
-        cwd=RACINE,
+        ["cargo", "fetch", "--locked", "--manifest-path", str(APP_MANIFEST)],
+        cwd=REPO_ROOT,
         check=True,
     )
-    with tempfile.TemporaryDirectory() as dossier:
-        config = Path(dossier) / "about.toml"
+    with tempfile.TemporaryDirectory() as folder:
+        config = Path(folder) / "about.toml"
         config.write_text(
-            "accepted = " + json.dumps(sorted(licences_de_deny())) + "\n"
+            "accepted = " + json.dumps(sorted(deny_licenses())) + "\n"
             "ignore-build-dependencies = true\n"
             "ignore-dev-dependencies = true\n"
             # Our GPL crates, `publish = false`: same exemption as in
@@ -235,113 +235,113 @@ def mentions_rust() -> list[dict[str, object]]:
             "private = { ignore = true }\n",
             encoding="utf-8",
         )
-        sortie = Path(dossier) / "rust.json"
+        output = Path(folder) / "rust.json"
         subprocess.run(
             [
                 "cargo", "about", "generate", "--format", "json", "--frozen", "--fail",
-                "-c", str(config), "-m", str(MANIFESTE_APP), "--target", cible,
-                "-o", str(sortie),
+                "-c", str(config), "-m", str(APP_MANIFEST), "--target", target,
+                "-o", str(output),
             ],
-            cwd=RACINE,
+            cwd=REPO_ROOT,
             check=True,
         )
-        brut = json.loads(sortie.read_text(encoding="utf-8"))
+        raw = json.loads(output.read_text(encoding="utf-8"))
 
     mentions: list[dict[str, object]] = []
-    for licence in brut["licenses"]:
+    for license_id in raw["licenses"]:
         # The workspace crates have no `source`: they are ours, and NOTICE
         # gives their license.
-        paquets = sorted(
+        packages = sorted(
             {
                 (u["crate"]["name"], u["crate"]["version"])
-                for u in licence["used_by"]
+                for u in license_id["used_by"]
                 if u["crate"].get("source")
             }
         )
-        if paquets:
+        if packages:
             mentions.append(
                 {
-                    "license": licence["id"],
-                    "name": licence["name"],
-                    "text": licence["text"].strip("\n"),
+                    "license": license_id["id"],
+                    "name": license_id["name"],
+                    "text": license_id["text"].strip("\n"),
                     "packages": [
-                        {"ecosystem": "cargo", "name": n, "version": v} for n, v in paquets
+                        {"ecosystem": "cargo", "name": n, "version": v} for n, v in packages
                     ],
                 }
             )
     return mentions
 
 
-def _texte_de_licence(dossier: Path) -> str | None:
-    if not dossier.is_dir():
+def _license_text(folder: Path) -> str | None:
+    if not folder.is_dir():
         return None
-    fichiers = sorted(f for f in dossier.iterdir() if f.is_file() and MOTIF_FICHIER_LICENCE.match(f.name))
-    textes = [f.read_text(encoding="utf-8", errors="replace").strip("\n") for f in fichiers]
-    return "\n\n".join(textes) or None
+    file_list = sorted(f for f in folder.iterdir() if f.is_file() and LICENSE_FILE_PATTERN.match(f.name))
+    texts = [f.read_text(encoding="utf-8", errors="replace").strip("\n") for f in file_list]
+    return "\n\n".join(texts) or None
 
 
 def mentions_npm() -> list[dict[str, object]]:
-    config = lire_config_npm()
-    groupes: dict[tuple[str, str], list[PaquetNpm]] = {}
-    for paquet in paquets_npm():
-        licence = config.precisions.get((paquet.nom, paquet.version), paquet.licence)
+    config = read_npm_config()
+    groups: dict[tuple[str, str], list[NpmPackage]] = {}
+    for package in npm_packages():
+        license_id = config.details.get((package.item_name, package.version), package.license_id)
         # Without a file, the declared expression remains: it is what the
         # package publishes of its license, and hiding it would be worse.
-        texte = _texte_de_licence(paquet.chemin) or f"Licensed under {licence}. The package ships no license file."
-        groupes.setdefault((licence, texte), []).append(paquet)
+        body = _license_text(package.path_str) or f"Licensed under {license_id}. The package ships no license file."
+        groups.setdefault((license_id, body), []).append(package)
     return [
         {
-            "license": licence,
-            "name": licence,
-            "text": texte,
+            "license": license_id,
+            "name": license_id,
+            "text": body,
             "packages": [
-                {"ecosystem": "npm", "name": p.nom, "version": p.version} for p in paquets
+                {"ecosystem": "npm", "name": p.item_name, "version": p.version} for p in packages
             ],
         }
-        for (licence, texte), paquets in groupes.items()
+        for (license_id, body), packages in groups.items()
     ]
 
 
-def generer(sortie: Path, exiger: bool) -> int:
-    outil = shutil.which("cargo-about")
+def generate(output: Path, require: bool) -> int:
+    tool = shutil.which("cargo-about")
     version = (
         subprocess.run(["cargo", "about", "--version"], capture_output=True, text=True).stdout.split()[-1:]
-        if outil
+        if tool
         else []
     )
     if version != [VERSION_CARGO_ABOUT]:
-        trouvee = version[0] if version else "missing"
+        found = version[0] if version else "missing"
         print(
-            f"cargo-about {VERSION_CARGO_ABOUT} required ({trouvee}): the third-party "
+            f"cargo-about {VERSION_CARGO_ABOUT} required ({found}): the third-party "
             "license notices were NOT generated."
         )
         print(f"  To install it: cargo install --locked cargo-about@{VERSION_CARGO_ABOUT}")
-        return 1 if exiger else 0
+        return 1 if require else 0
 
     mentions = mentions_rust() + mentions_npm()
     mentions.sort(key=lambda m: (str(m["license"]).lower(), m["packages"][0]["name"]))  # type: ignore[index]
-    sortie.parent.mkdir(parents=True, exist_ok=True)
-    sortie.write_text(
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
         json.dumps({"version": 1, "notices": mentions}, ensure_ascii=False, indent=1) + "\n",
         encoding="utf-8",
     )
-    paquets = sum(len(m["packages"]) for m in mentions)  # type: ignore[arg-type]
-    print(f"Third-party notices: {paquets} packages, {len(mentions)} texts → {sortie.relative_to(RACINE)}")
+    packages = sum(len(m["packages"]) for m in mentions)  # type: ignore[arg-type]
+    print(f"Third-party notices: {packages} packages, {len(mentions)} texts → {output.relative_to(REPO_ROOT)}")
     return 0
 
 
-def principal(arguments: list[str]) -> int:
+def main(arguments: list[str]) -> int:
     if arguments == ["verifier-npm"]:
-        return verifier_npm()
+        return verify_npm()
     if arguments[:1] == ["generer"]:
-        reste = arguments[1:]
-        exiger = "--exiger" in reste
-        chemins = [a for a in reste if a != "--exiger"]
-        if len(chemins) == 1:
-            return generer((RACINE / chemins[0]).resolve(), exiger)
+        rest = arguments[1:]
+        require = "--exiger" in rest
+        paths = [a for a in rest if a != "--exiger"]
+        if len(paths) == 1:
+            return generate((REPO_ROOT / paths[0]).resolve(), require)
     print(__doc__)
     return 2
 
 
 if __name__ == "__main__":
-    sys.exit(principal(sys.argv[1:]))
+    sys.exit(main(sys.argv[1:]))

@@ -430,83 +430,83 @@ mod tests {
 
     /// A fake component: `prepare` only checks that the file exists, it is
     /// `compile` that would refuse it.
-    const FAUX_COMPOSANT: &[u8] = b"\0asm\x0d\x00\x01\x00";
+    const FAKE_COMPONENT: &[u8] = b"\0asm\x0d\x00\x01\x00";
 
-    fn hote() -> WasmHost {
+    fn wasm_host() -> WasmHost {
         WasmHost::new(HostLimits::default()).expect("the wasmtime engine configures")
     }
 
-    fn registre(racine: &TempDir) -> PluginRegistry {
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        registre
+    fn plugin_registry(root: &TempDir) -> PluginRegistry {
+        let mut plugin_registry = PluginRegistry::new(root.path());
+        plugin_registry.discover().expect("discovery");
+        plugin_registry
     }
 
     #[test]
     fn the_engine_configures_with_fuel_and_epochs() {
-        let hote = hote();
-        assert_eq!(hote.limits(), HostLimits::default());
+        let wasm_host = wasm_host();
+        assert_eq!(wasm_host.limits(), HostLimits::default());
         // `engine()` is what the thread advancing the clock needs.
-        hote.engine().increment_epoch();
+        wasm_host.engine().increment_epoch();
     }
 
     #[test]
     fn an_unapproved_plugin_is_not_prepared() {
         // ADR-0005: dropping a directory grants nothing, and the refusal falls
         // before a single byte of the component is read.
-        let racine = TempDir::new("host-non-approuve");
-        racine.plugin("csv", &export_toml("csv", ""));
-        racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+        let root = TempDir::new("host-unapproved");
+        root.plugin("csv", &export_toml("csv", ""));
+        root.file("csv", "csv.wasm", FAKE_COMPONENT);
 
-        let registre = registre(&racine);
-        let plugin = registre.require("csv").expect("discovered plugin");
-        let err = hote().prepare(plugin).expect_err("refusal expected");
+        let plugin_registry = plugin_registry(&root);
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let err = wasm_host().prepare(plugin).expect_err("refusal expected");
         assert!(matches!(err, PluginError::NotApproved { .. }), "{err}");
         assert!(err.needs_user_decision());
     }
 
     #[test]
     fn a_declarative_agent_never_goes_through_the_host() {
-        let racine = TempDir::new("host-agent");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        let root = TempDir::new("host-agent");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let mut registre = registre(&racine);
-        registre.approve("revue").expect("approval");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("revue").expect("approval");
 
-        let plugin = registre.require("revue").expect("discovered plugin");
-        let err = hote().prepare(plugin).expect_err("refusal expected");
+        let plugin = plugin_registry.require("revue").expect("discovered plugin");
+        let err = wasm_host().prepare(plugin).expect_err("refusal expected");
         assert!(err.to_string().contains("declarative"), "{err}");
     }
 
     #[test]
     fn a_missing_component_is_said_in_one_sentence() {
-        let racine = TempDir::new("host-sans-composant");
-        racine.plugin("csv", &export_toml("csv", ""));
+        let root = TempDir::new("host-without-component");
+        root.plugin("csv", &export_toml("csv", ""));
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approval");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let plugin = registre.require("csv").expect("discovered plugin");
-        let err = hote().prepare(plugin).expect_err("refusal expected");
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let err = wasm_host().prepare(plugin).expect_err("refusal expected");
         assert!(matches!(err, PluginError::Directory { .. }), "{err}");
         assert!(err.to_string().contains("csv.wasm"), "{err}");
     }
 
     #[test]
     fn an_approved_plugin_is_prepared_with_its_permissions() {
-        let racine = TempDir::new("host-approuve");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
-        let attendu = racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+        let root = TempDir::new("host-approved");
+        root.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let wanted = root.file("csv", "csv.wasm", FAKE_COMPONENT);
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approval");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let plugin = registre.require("csv").expect("discovered plugin");
-        let prepare = hote().prepare(plugin).expect("preparation");
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host().prepare(plugin).expect("preparation");
 
         assert_eq!(prepare.id().as_str(), "csv");
         assert_eq!(prepare.kind(), PluginKind::Export);
-        assert_eq!(prepare.component_path(), attendu);
+        assert_eq!(prepare.component_path(), wanted);
         assert!(prepare.permissions().allows_host("a.example", 443));
         assert!(
             !prepare
@@ -517,27 +517,28 @@ mod tests {
 
     #[test]
     fn the_store_carries_fuel_and_permissions() {
-        let racine = TempDir::new("host-magasin");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
-        racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+        let root = TempDir::new("host-approval_store");
+        root.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        root.file("csv", "csv.wasm", FAKE_COMPONENT);
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approval");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let hote = hote();
-        let plugin = registre.require("csv").expect("discovered plugin");
-        let prepare = hote.prepare(plugin).expect("preparation");
-        let store = hote.store(&prepare).expect("store");
+        let wasm_host = wasm_host();
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host.prepare(plugin).expect("preparation");
+        let store = wasm_host.store(&prepare).expect("store");
 
         assert_eq!(
             store.get_fuel().expect("fuel is enabled"),
             HostLimits::default().fuel
         );
-        let etat = store.data();
-        assert_eq!(etat.plugin().as_str(), "csv");
-        etat.authorize_host("a.example", 443)
+        let state = store.data();
+        assert_eq!(state.plugin().as_str(), "csv");
+        state
+            .authorize_host("a.example", 443)
             .expect("host granted in the manifest");
-        let err = etat
+        let err = state
             .authorize_host("exfiltration.example", 443)
             .expect_err("refusal expected");
         assert!(matches!(err, PluginError::PermissionDenied { .. }), "{err}");
@@ -546,48 +547,49 @@ mod tests {
     #[test]
     fn a_file_that_is_not_a_component_is_refused() {
         // "refused with a clear message, never loaded to see."
-        let racine = TempDir::new("host-compilation");
-        racine.plugin("csv", &export_toml("csv", ""));
-        racine.file("csv", "csv.wasm", b"ceci n'est pas du WebAssembly");
+        let root = TempDir::new("host-compilation");
+        root.plugin("csv", &export_toml("csv", ""));
+        root.file("csv", "csv.wasm", b"this is not WebAssembly");
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approval");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let hote = hote();
-        let plugin = registre.require("csv").expect("discovered plugin");
-        let prepare = hote.prepare(plugin).expect("preparation");
-        let err = hote.compile(&prepare).expect_err("refusal expected");
+        let wasm_host = wasm_host();
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host.prepare(plugin).expect("preparation");
+        let err = wasm_host.compile(&prepare).expect_err("refusal expected");
         assert!(matches!(err, PluginError::WasmHost { .. }), "{err}");
     }
 
     #[test]
     fn a_path_outside_the_granted_roots_is_refused() {
-        let racine = TempDir::new("host-fichiers");
-        let manifeste = export_toml("csv", "").replace(
+        let root = TempDir::new("host-files");
+        let manifest_toml = export_toml("csv", "").replace(
             "network = []",
-            "network = []\nfilesystem = [\"/donnees/exports\"]",
+            "network = []\nfilesystem = [\"/data/exports\"]",
         );
-        racine.plugin("csv", &manifeste);
-        racine.file("csv", "csv.wasm", FAUX_COMPOSANT);
+        root.plugin("csv", &manifest_toml);
+        root.file("csv", "csv.wasm", FAKE_COMPONENT);
 
-        let mut registre = registre(&racine);
-        registre.approve("csv").expect("approval");
+        let mut plugin_registry = plugin_registry(&root);
+        plugin_registry.approve("csv").expect("approval");
 
-        let hote = hote();
-        let plugin = registre.require("csv").expect("discovered plugin");
-        let prepare = hote.prepare(plugin).expect("preparation");
-        let store = hote.store(&prepare).expect("store");
-        let etat = store.data();
+        let wasm_host = wasm_host();
+        let plugin = plugin_registry.require("csv").expect("discovered plugin");
+        let prepare = wasm_host.prepare(plugin).expect("preparation");
+        let store = wasm_host.store(&prepare).expect("store");
+        let state = store.data();
 
-        etat.authorize_path(Path::new("/donnees/exports/rapport.csv"))
+        state
+            .authorize_path(Path::new("/data/exports/report.csv"))
             .expect("path under a granted root");
         for refuse in [
             "/etc/passwd",
-            "/donnees/exports/../../etc/passwd",
-            "/donnees/exports-voisin/x",
+            "/data/exports/../../etc/passwd",
+            "/data/exports-neighbor/x",
         ] {
             assert!(
-                etat.authorize_path(Path::new(refuse)).is_err(),
+                state.authorize_path(Path::new(refuse)).is_err(),
                 "{refuse} should be refused"
             );
         }

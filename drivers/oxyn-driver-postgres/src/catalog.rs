@@ -24,7 +24,7 @@
 //! # A connection sees only one database
 //!
 //! PostgreSQL does not allow cross-database introspection: from a connection to
-//! `caisse`, the tables of `entrepot` are inaccessible. Asking for one from the
+//! `shop`, the tables of `entrepot` are inaccessible. Asking for one from the
 //! other returns [`OxynError::CatalogUnavailable`] — not an empty list, which
 //! would claim there is nothing.
 
@@ -244,7 +244,7 @@ impl PostgresCatalog {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        let mut connexion = tokio::select! {
+        let mut connection = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(OxynError::Cancelled),
             connection = self.pool.acquire() =>
@@ -253,35 +253,35 @@ impl PostgresCatalog {
         let pid = tokio::select! {
             biased;
             () = cancel.cancelled() => {
-                connexion.close_on_drop();
+                connection.close_on_drop();
                 return Err(OxynError::Cancelled);
             },
-            pid = backend_pid(&mut connexion) =>
+            pid = backend_pid(&mut connection) =>
                 pid.map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?,
         };
 
-        let mut requete = sqlx::query(sql);
-        for parametre in params {
-            requete = requete.bind(*parametre);
+        let mut query = sqlx::query(sql);
+        for parameter in params {
+            query = query.bind(*parameter);
         }
 
         let issue = tokio::select! {
             biased;
             () = cancel.cancelled() => None,
-            resultat = requete.fetch_all(&mut *connexion) => Some(resultat),
+            result = query.fetch_all(&mut *connection) => Some(result),
         };
 
         match issue {
-            Some(Ok(lignes)) => Ok(lignes),
-            Some(Err(erreur)) => Err(map_exec_error(&self.driver, StatementIntent::Read, erreur)),
+            Some(Ok(rows)) => Ok(rows),
+            Some(Err(error)) => Err(map_exec_error(&self.driver, StatementIntent::Read, error)),
             None => {
                 // The stream was abandoned midway: the connection may carry
                 // unread bytes, it does not go back to the pool.
-                connexion.close_on_drop();
-                if let Err(erreur) = self.canceller.cancel_backend(pid).await {
+                connection.close_on_drop();
+                if let Err(error) = self.canceller.cancel_backend(pid).await {
                     tracing::warn!(
                         target: "oxyn::driver::postgres",
-                        error = %erreur,
+                        error = %error,
                         "introspection could not be cancelled on the server"
                     );
                 }
@@ -363,7 +363,7 @@ impl PostgresCatalog {
     fn check_catalog(&self, catalog: Option<&str>) -> Result<()> {
         match catalog {
             None => Ok(()),
-            Some(nom) if nom == self.database => Ok(()),
+            Some(name) if name == self.database => Ok(()),
             Some(_) => Err(OxynError::CatalogUnavailable(format!(
                 "this session is connected to `{}`; PostgreSQL does not allow \
                  introspecting another database — open a connection to it",
@@ -386,11 +386,11 @@ impl PostgresCatalog {
 
     /// The (schema, relation) pair designated by a path.
     fn require_relation<'a>(&self, path: &'a CatalogPath) -> Result<(&'a str, &'a str)> {
-        let espace = self.require_namespace(path)?;
+        let ns = self.require_namespace(path)?;
         let relation = path.relation().ok_or_else(|| {
             OxynError::CatalogUnavailable("this path does not name a relation".to_owned())
         })?;
-        Ok((espace, relation))
+        Ok((ns, relation))
     }
 }
 
@@ -417,18 +417,18 @@ impl CatalogProvider for PostgresCatalog {
     /// # Errors
     /// Any session error, or [`OxynError::Cancelled`].
     async fn list_catalogs(&self, cancel: &CancelToken) -> Result<Vec<CatalogRef>> {
-        let lignes = self.fetch(cancel, SQL_CATALOGS, &[]).await?;
-        let mut bases = Vec::with_capacity(lignes.len());
-        for ligne in &lignes {
-            let nom: String = read_text(ligne, 0)?;
-            let courante: bool = ligne.try_get(1).unwrap_or(false);
-            let mut base = CatalogRef::new(nom)?;
-            if courante {
+        let rows = self.fetch(cancel, SQL_CATALOGS, &[]).await?;
+        let mut databases = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let name: String = read_text(row, 0)?;
+            let current: bool = row.try_get(1).unwrap_or(false);
+            let mut base = CatalogRef::new(name)?;
+            if current {
                 base = base.with_default();
             }
-            bases.push(base);
+            databases.push(base);
         }
-        Ok(bases)
+        Ok(databases)
     }
 
     /// The schemas of the current database.
@@ -448,23 +448,23 @@ impl CatalogProvider for PostgresCatalog {
         self.check_catalog(catalog)?;
         let parent = CatalogPath::for_catalog(self.database.clone())?;
 
-        let lignes = self.fetch(cancel, SQL_NAMESPACES, &[]).await?;
-        let mut espaces = Vec::with_capacity(lignes.len());
-        for ligne in &lignes {
-            let nom: String = read_text(ligne, 0)?;
-            let commentaire: Option<String> = ligne.try_get(1).unwrap_or(None);
-            let systeme: bool = ligne.try_get(2).unwrap_or(false);
+        let rows = self.fetch(cancel, SQL_NAMESPACES, &[]).await?;
+        let mut namespaces = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let name: String = read_text(row, 0)?;
+            let comment: Option<String> = row.try_get(1).unwrap_or(None);
+            let system: bool = row.try_get(2).unwrap_or(false);
 
-            let mut espace = NamespaceRef::new(parent.clone(), nom)?;
-            if let Some(texte) = commentaire {
-                espace = espace.with_comment(texte);
+            let mut ns = NamespaceRef::new(parent.clone(), name)?;
+            if let Some(text) = comment {
+                ns = ns.with_comment(text);
             }
-            if systeme {
-                espace = espace.with_system();
+            if system {
+                ns = ns.with_system();
             }
-            espaces.push(espace);
+            namespaces.push(ns);
         }
-        Ok(espaces)
+        Ok(namespaces)
     }
 
     /// The relations of a schema.
@@ -477,23 +477,23 @@ impl CatalogProvider for PostgresCatalog {
         namespace: &CatalogPath,
         cancel: &CancelToken,
     ) -> Result<Vec<RelationRef>> {
-        let espace = self.require_namespace(namespace)?;
-        let lignes = self.fetch(cancel, SQL_RELATIONS, &[espace]).await?;
+        let ns = self.require_namespace(namespace)?;
+        let rows = self.fetch(cancel, SQL_RELATIONS, &[ns]).await?;
 
-        let mut relations = Vec::with_capacity(lignes.len());
-        for ligne in &lignes {
-            let nom: String = read_text(ligne, 0)?;
-            let genre: String = read_text(ligne, 1)?;
-            let commentaire: Option<String> = ligne.try_get(2).unwrap_or(None);
+        let mut relations = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let name: String = read_text(row, 0)?;
+            let kind: String = read_text(row, 1)?;
+            let comment: Option<String> = row.try_get(2).unwrap_or(None);
 
-            let Some(genre) = relation_kind(&genre) else {
+            let Some(kind) = relation_kind(&kind) else {
                 // An unknown `relkind` comes from a version newer than this
                 // driver: ignoring it is better than filing it at random.
                 continue;
             };
-            let mut relation = RelationRef::new(namespace.clone(), nom, genre)?;
-            if let Some(texte) = commentaire {
-                relation = relation.with_comment(texte);
+            let mut relation = RelationRef::new(namespace.clone(), name, kind)?;
+            if let Some(text) = comment {
+                relation = relation.with_comment(text);
             }
             relations.push(relation);
         }
@@ -513,65 +513,66 @@ impl CatalogProvider for PostgresCatalog {
         relation: &CatalogPath,
         cancel: &CancelToken,
     ) -> Result<Relation> {
-        let (espace, nom) = self.require_relation(relation)?;
+        let (ns, name) = self.require_relation(relation)?;
 
-        let entetes = self.fetch(cancel, SQL_RELATION, &[espace, nom]).await?;
-        let Some(entete) = entetes.first() else {
+        let headers = self.fetch(cancel, SQL_RELATION, &[ns, name]).await?;
+        let Some(header) = headers.first() else {
             return Err(OxynError::CatalogUnavailable(
                 "this relation does not exist, or the account is not allowed to see it".to_owned(),
             ));
         };
 
-        let genre: String = read_text(entete, 0)?;
-        let commentaire: Option<String> = entete.try_get(1).unwrap_or(None);
-        let estimation: Option<f32> = entete.try_get(2).ok();
+        let kind: String = read_text(header, 0)?;
+        let comment: Option<String> = header.try_get(1).unwrap_or(None);
+        let estimation: Option<f32> = header.try_get(2).ok();
 
-        let mut decrite = Relation::new(nom, relation_kind(&genre).unwrap_or(RelationKind::Table));
-        if let Some(texte) = commentaire {
-            decrite = decrite.with_comment(texte);
+        let mut described_relation =
+            Relation::new(name, relation_kind(&kind).unwrap_or(RelationKind::Table));
+        if let Some(text) = comment {
+            described_relation = described_relation.with_comment(text);
         }
         // `reltuples` is −1 on a table never analyzed: it is "unknown", and
         // announcing it as zero would suggest an empty table.
-        if let Some(lignes) = estimation.filter(|valeur| *valeur >= 0.0) {
+        if let Some(rows) = estimation.filter(|value| *value >= 0.0) {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let arrondi = lignes.round().max(0.0) as u64;
-            decrite = decrite.with_estimated_rows(arrondi);
+            let rounded = rows.round().max(0.0) as u64;
+            described_relation = described_relation.with_estimated_rows(rounded);
         }
 
-        let colonnes = self.fetch(cancel, SQL_FIELDS, &[espace, nom]).await?;
-        let mut champs = Vec::with_capacity(colonnes.len());
-        for ligne in &colonnes {
-            let nom_champ: String = read_text(ligne, 0)?;
-            let rang: i16 = ligne.try_get(1).unwrap_or(0);
-            let brut: String = ligne
+        let columns = self.fetch(cancel, SQL_FIELDS, &[ns, name]).await?;
+        let mut fields = Vec::with_capacity(columns.len());
+        for row in &columns {
+            let field_name: String = read_text(row, 0)?;
+            let rank: i16 = row.try_get(1).unwrap_or(0);
+            let raw_type: String = row
                 .try_get::<Option<String>, _>(2)
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| "unknown".to_owned());
-            let non_nul: bool = ligne.try_get(3).unwrap_or(false);
-            let defaut: Option<String> = ligne.try_get(4).unwrap_or(None);
-            let commentaire: Option<String> = ligne.try_get(5).unwrap_or(None);
-            let cle_primaire: bool = ligne.try_get(6).unwrap_or(false);
+            let non_null: bool = row.try_get(3).unwrap_or(false);
+            let default_value: Option<String> = row.try_get(4).unwrap_or(None);
+            let comment: Option<String> = row.try_get(5).unwrap_or(None);
+            let primary_key: bool = row.try_get(6).unwrap_or(false);
 
             // `attnum` starts at 1; the model's positions start at 0.
-            let position = u32::try_from(rang.max(1).saturating_sub(1)).unwrap_or(0);
-            let mut champ = Field::new(nom_champ, position, logical_type(&brut), brut);
-            if non_nul {
-                champ = champ.not_null();
+            let position = u32::try_from(rank.max(1).saturating_sub(1)).unwrap_or(0);
+            let mut field = Field::new(field_name, position, logical_type(&raw_type), raw_type);
+            if non_null {
+                field = field.not_null();
             }
-            if cle_primaire {
-                champ = champ.primary_key();
+            if primary_key {
+                field = field.primary_key();
             }
-            if let Some(texte) = defaut {
-                champ = champ.with_default(texte);
+            if let Some(text) = default_value {
+                field = field.with_default(text);
             }
-            if let Some(texte) = commentaire {
-                champ = champ.with_comment(texte);
+            if let Some(text) = comment {
+                field = field.with_comment(text);
             }
-            champs.push(champ);
+            fields.push(field);
         }
 
-        Ok(decrite.with_fields(champs))
+        Ok(described_relation.with_fields(fields))
     }
 
     /// The indexes of a relation.
@@ -585,24 +586,24 @@ impl CatalogProvider for PostgresCatalog {
         cancel: &CancelToken,
     ) -> Result<Vec<Index>> {
         self.capabilities.require(Capabilities::INDEXES)?;
-        let (espace, nom) = self.require_relation(relation)?;
-        let lignes = self.fetch(cancel, SQL_INDEXES, &[espace, nom]).await?;
+        let (ns, name) = self.require_relation(relation)?;
+        let rows = self.fetch(cancel, SQL_INDEXES, &[ns, name]).await?;
 
-        let mut index = Vec::with_capacity(lignes.len());
-        for ligne in &lignes {
-            let nom_index: String = read_text(ligne, 0)?;
-            let unique: bool = ligne.try_get(1).unwrap_or(false);
-            let methode: Option<String> = ligne.try_get(2).unwrap_or(None);
-            let predicat: Option<String> = ligne.try_get(3).unwrap_or(None);
-            let colonnes: Vec<String> = ligne.try_get(4).unwrap_or_default();
+        let mut index = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let index_name: String = read_text(row, 0)?;
+            let unique: bool = row.try_get(1).unwrap_or(false);
+            let method: Option<String> = row.try_get(2).unwrap_or(None);
+            let predicate: Option<String> = row.try_get(3).unwrap_or(None);
+            let columns: Vec<String> = row.try_get(4).unwrap_or_default();
 
-            let mut decrit = Index::new(nom_index, colonnes);
+            let mut described = Index::new(index_name, columns);
             if unique {
-                decrit = decrit.unique();
+                described = described.unique();
             }
-            decrit.method = methode;
-            decrit.predicate = predicat;
-            index.push(decrit);
+            described.method = method;
+            described.predicate = predicate;
+            index.push(described);
         }
         Ok(index)
     }
@@ -686,35 +687,35 @@ impl CatalogProvider for PostgresCatalog {
         cancel: &CancelToken,
     ) -> Result<Vec<ForeignKey>> {
         self.capabilities.require(Capabilities::FOREIGN_KEYS)?;
-        let (espace, nom) = self.require_relation(relation)?;
-        let lignes = self.fetch(cancel, SQL_FOREIGN_KEYS, &[espace, nom]).await?;
+        let (ns, name) = self.require_relation(relation)?;
+        let rows = self.fetch(cancel, SQL_FOREIGN_KEYS, &[ns, name]).await?;
 
-        let mut cles = Vec::with_capacity(lignes.len());
-        for ligne in &lignes {
-            let nom_contrainte: String = read_text(ligne, 0)?;
-            let colonnes: Vec<String> = ligne.try_get(1).unwrap_or_default();
-            let espace_cible: String = read_text(ligne, 2)?;
-            let relation_cible: String = read_text(ligne, 3)?;
-            let colonnes_cibles: Vec<String> = ligne.try_get(4).unwrap_or_default();
-            let suppression: String = read_text(ligne, 5)?;
+        let mut keys = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let constraint_name: String = read_text(row, 0)?;
+            let columns: Vec<String> = row.try_get(1).unwrap_or_default();
+            let target_namespace: String = read_text(row, 2)?;
+            let target_relation: String = read_text(row, 3)?;
+            let target_columns: Vec<String> = row.try_get(4).unwrap_or_default();
+            let deletion: String = read_text(row, 5)?;
 
-            let cible = CatalogPath::for_relation(
+            let target = CatalogPath::for_relation(
                 Some(&self.database),
-                Some(&espace_cible),
-                relation_cible,
+                Some(&target_namespace),
+                target_relation,
             )?;
-            let mut cle = ForeignKey::new(
-                nom_contrainte,
-                colonnes,
+            let mut key = ForeignKey::new(
+                constraint_name,
+                columns,
                 ForeignKeyTarget {
-                    relation: cible,
-                    fields: colonnes_cibles,
+                    relation: target,
+                    fields: target_columns,
                 },
             );
-            cle.on_delete = referential_action(&suppression);
-            cles.push(cle);
+            key.on_delete = referential_action(&deletion);
+            keys.push(key);
         }
-        Ok(cles)
+        Ok(keys)
     }
 }
 
@@ -752,7 +753,7 @@ fn read_text(row: &PgRow, ordinal: usize) -> Result<String> {
 /// it.
 #[must_use]
 fn relation_kind(relkind: &str) -> Option<RelationKind> {
-    let genre = match relkind {
+    let kind = match relkind {
         // `r` ordinary, `p` partitioned, `f` foreign: three ways of being a
         // table from the point of view of whoever reads it.
         "r" | "p" | "f" => RelationKind::Table,
@@ -762,7 +763,7 @@ fn relation_kind(relkind: &str) -> Option<RelationKind> {
         "i" | "I" => RelationKind::Index,
         _ => return None,
     };
-    Some(genre)
+    Some(kind)
 }
 
 /// Translates a `pg_constraint` `confdeltype`.
@@ -791,9 +792,9 @@ fn referential_action(confdeltype: &str) -> ReferentialAction {
 /// type: `raw_type` keeps the exact rendering anyway.
 #[must_use]
 pub fn logical_type(raw: &str) -> LogicalType {
-    let normalise = raw.trim().to_ascii_lowercase();
+    let normalized = raw.trim().to_ascii_lowercase();
 
-    if let Some(element) = normalise.strip_suffix("[]") {
+    if let Some(element) = normalized.strip_suffix("[]") {
         return LogicalType::Array(Box::new(logical_type(element)));
     }
 
@@ -802,19 +803,19 @@ pub fn logical_type(raw: &str) -> LogicalType {
     // matters — the time zone — comes after the precision. Losing it would
     // shift the data by two hours without anything reporting it
     // (DRIVER-CONTRACT §7).
-    if normalise.starts_with("timestamp") {
+    if normalized.starts_with("timestamp") {
         return LogicalType::Timestamp {
-            tz: normalise.contains("with time zone"),
+            tz: normalized.contains("with time zone"),
         };
     }
-    if normalise.starts_with("time") {
+    if normalized.starts_with("time") {
         return LogicalType::Time;
     }
 
     // The part before the first parenthesis: `numeric(10,2)` → `numeric`.
-    let (base, parametres) = match normalise.split_once('(') {
-        Some((base, reste)) => (base.trim(), reste.strip_suffix(')').unwrap_or(reste)),
-        None => (normalise.as_str(), ""),
+    let (base, parameters) = match normalized.split_once('(') {
+        Some((base, rest)) => (base.trim(), rest.strip_suffix(')').unwrap_or(rest)),
+        None => (normalized.as_str(), ""),
     };
 
     match base {
@@ -825,7 +826,7 @@ pub fn logical_type(raw: &str) -> LogicalType {
         "real" | "float4" => LogicalType::Float { bits: 32 },
         "double precision" | "float8" => LogicalType::FLOAT64,
         "numeric" | "decimal" => {
-            let (precision, scale) = decimal_params(parametres);
+            let (precision, scale) = decimal_params(parameters);
             LogicalType::Decimal { precision, scale }
         }
         "text" | "character varying" | "varchar" | "character" | "char" | "name" | "citext"
@@ -836,7 +837,7 @@ pub fn logical_type(raw: &str) -> LogicalType {
         "interval" => LogicalType::Interval,
         "json" | "jsonb" => LogicalType::Json,
         "vector" | "halfvec" => LogicalType::Vector {
-            dims: parametres.trim().parse().ok(),
+            dims: parameters.trim().parse().ok(),
         },
         "geometry" | "geography" => LogicalType::Geometry,
         _ => LogicalType::Unknown,
@@ -844,10 +845,10 @@ pub fn logical_type(raw: &str) -> LogicalType {
 }
 
 /// Reads the precision and the scale of a `numeric(p, s)`.
-fn decimal_params(parametres: &str) -> (Option<u16>, Option<i16>) {
-    let mut morceaux = parametres.split(',');
-    let precision = morceaux.next().and_then(|p| p.trim().parse().ok());
-    let scale = morceaux.next().and_then(|s| s.trim().parse().ok());
+fn decimal_params(parameters: &str) -> (Option<u16>, Option<i16>) {
+    let mut parts = parameters.split(',');
+    let precision = parts.next().and_then(|p| p.trim().parse().ok());
+    let scale = parts.next().and_then(|s| s.trim().parse().ok());
     (precision, scale)
 }
 
@@ -876,7 +877,7 @@ mod tests {
     fn introspection_sql_concatenates_no_identifier() {
         // I-10: a table named `"users"; DROP TABLE audit; --` is legal. All the
         // queries that target a named object do so through `$1`/`$2`.
-        for (nom, requete) in [
+        for (name, query) in [
             ("relations", SQL_RELATIONS),
             ("relation", SQL_RELATION),
             ("fields", SQL_FIELDS),
@@ -885,14 +886,14 @@ mod tests {
             ("constraints", SQL_CONSTRAINTS),
         ] {
             assert!(
-                requete.contains("$1"),
-                "{nom}: the schema must be a bound parameter"
+                query.contains("$1"),
+                "{name}: the schema must be a bound parameter"
             );
-            assert!(!requete.contains("{}"), "{nom}: nothing is formatted");
-            assert!(!requete.contains("' ||"), "{nom}: nothing is concatenated");
+            assert!(!query.contains("{}"), "{name}: nothing is formatted");
+            assert!(!query.contains("' ||"), "{name}: nothing is concatenated");
         }
-        for requete in [SQL_CATALOGS, SQL_NAMESPACES] {
-            assert!(!requete.contains("$1"), "these two target nothing named");
+        for query in [SQL_CATALOGS, SQL_NAMESPACES] {
+            assert!(!query.contains("$1"), "these two target nothing named");
         }
     }
 
@@ -900,7 +901,7 @@ mod tests {
     fn introspection_goes_through_pg_catalog_not_information_schema() {
         // Tens of seconds versus tens of milliseconds on a schema with 20,000
         // objects.
-        for requete in [
+        for query in [
             SQL_CATALOGS,
             SQL_NAMESPACES,
             SQL_RELATIONS,
@@ -910,9 +911,9 @@ mod tests {
             SQL_FOREIGN_KEYS,
         ] {
             assert!(
-                !requete.contains("information_schema.")
-                    || requete.contains("nspname = 'information_schema'"),
-                "{requete}"
+                !query.contains("information_schema.")
+                    || query.contains("nspname = 'information_schema'"),
+                "{query}"
             );
         }
     }
@@ -1025,6 +1026,6 @@ mod tests {
         // `raw_type` keeps the exact rendering; inventing a close logical type
         // would make promises the type does not keep.
         assert_eq!(logical_type("hstore"), LogicalType::Unknown);
-        assert_eq!(logical_type("mon_type_maison"), LogicalType::Unknown);
+        assert_eq!(logical_type("my_home_type"), LogicalType::Unknown);
     }
 }

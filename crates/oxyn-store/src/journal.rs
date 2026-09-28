@@ -411,10 +411,9 @@ impl<'a> Journal<'a> {
     /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn recent(&self, limit: usize) -> Result<Vec<JournalEntry>> {
         self.store.with_connection(|conn| {
-            let mut requete =
-                conn.prepare(&format!("{SELECT_COLONNES} ORDER BY id DESC LIMIT ?1"))?;
-            requete
-                .query_and_then(params![limit_to_i64(limit)], depuis_ligne)?
+            let mut query = conn.prepare(&format!("{SELECT_COLUMNS} ORDER BY id DESC LIMIT ?1"))?;
+            query
+                .query_and_then(params![limit_to_i64(limit)], from_row)?
                 .collect()
         })
     }
@@ -432,13 +431,13 @@ impl<'a> Journal<'a> {
         limit: usize,
     ) -> Result<Vec<JournalEntry>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(&format!(
-                "{SELECT_COLONNES} WHERE connection_id = ?1 ORDER BY id DESC LIMIT ?2"
+            let mut query = conn.prepare(&format!(
+                "{SELECT_COLUMNS} WHERE connection_id = ?1 ORDER BY id DESC LIMIT ?2"
             ))?;
-            requete
+            query
                 .query_and_then(
                     params![connection.to_string(), limit_to_i64(limit)],
-                    depuis_ligne,
+                    from_row,
                 )?
                 .collect()
         })
@@ -450,14 +449,11 @@ impl<'a> Journal<'a> {
     /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn for_agent(&self, agent: AgentId, limit: usize) -> Result<Vec<JournalEntry>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(&format!(
-                "{SELECT_COLONNES} WHERE actor_id = ?1 ORDER BY id DESC LIMIT ?2"
+            let mut query = conn.prepare(&format!(
+                "{SELECT_COLUMNS} WHERE actor_id = ?1 ORDER BY id DESC LIMIT ?2"
             ))?;
-            requete
-                .query_and_then(
-                    params![agent.to_string(), limit_to_i64(limit)],
-                    depuis_ligne,
-                )?
+            query
+                .query_and_then(params![agent.to_string(), limit_to_i64(limit)], from_row)?
                 .collect()
         })
     }
@@ -475,15 +471,15 @@ impl<'a> Journal<'a> {
     }
 }
 
-/// The column list, shared by every read so that [`depuis_ligne`] has only
+/// The column list, shared by every read so that [`from_row`] has only
 /// one row shape to know.
-const SELECT_COLONNES: &str = "SELECT id, ts, command_id, actor_kind, actor_id, agent_session_id, \
+const SELECT_COLUMNS: &str = "SELECT id, ts, command_id, actor_kind, actor_id, agent_session_id, \
      connection_id, command_kind, statement, intent, risk, policy_decision, \
      decision_reason, approved_by, duration_ms, rows_affected, error, error_class \
      FROM audit_journal";
 
 /// Rebuilds a [`JournalEntry`] from a row.
-fn depuis_ligne(row: &Row<'_>) -> Result<JournalEntry> {
+fn from_row(row: &Row<'_>) -> Result<JournalEntry> {
     let actor_kind: String = row.get("actor_kind")?;
     let intent: String = row.get("intent")?;
     let risk: String = row.get("risk")?;
@@ -527,12 +523,12 @@ mod tests {
         SessionId,
     };
 
-    fn execution(connection: ConnectionId, texte: &str, intent: StatementIntent) -> Command {
+    fn execution(connection: ConnectionId, text: &str, intent: StatementIntent) -> Command {
         Command::Execute {
             connection,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::SQL, texte)
+                ExecRequest::new(QueryLanguage::SQL, text)
                     .with_intent(intent)
                     .with_params(vec![ScalarValue::Text("hunter2".to_owned())]),
             ),
@@ -542,31 +538,31 @@ mod tests {
     #[test]
     fn the_journal_refuses_updates() {
         let store = Store::open_in_memory().expect("open");
-        let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
+        let command = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
         let id = store
             .journal()
             .append(&JournalRecord::new(
                 &Actor::Human,
-                &commande,
+                &command,
                 &Decision::Allow,
             ))
             .expect("insert");
 
-        let refus = store.with_connection(|conn| {
+        let refusal = store.with_connection(|conn| {
             Ok(conn.execute(
                 "UPDATE audit_journal SET statement = 'SELECT 2' WHERE id = ?1",
                 params![id],
             )?)
         });
-        let erreur = refus.expect_err("an UPDATE must fail");
+        let error = refusal.expect_err("an UPDATE must fail");
         assert!(
-            erreur.to_string().contains("append-only"),
-            "the trigger must be the cause: {erreur}"
+            error.to_string().contains("append-only"),
+            "the trigger must be the cause: {error}"
         );
 
-        let relu = store.journal().recent(1).expect("read back");
+        let read_back = store.journal().recent(1).expect("read back");
         assert_eq!(
-            relu[0].record.statement.as_deref(),
+            read_back[0].record.statement.as_deref(),
             Some("SELECT 1"),
             "the row must not have moved"
         );
@@ -575,16 +571,16 @@ mod tests {
     #[test]
     fn the_journal_refuses_deletions() {
         let store = Store::open_in_memory().expect("open");
-        let commande = execution(
+        let command = execution(
             ConnectionId::new(),
-            "DROP TABLE clients",
+            "DROP TABLE customers",
             StatementIntent::Ddl,
         );
         store
             .journal()
             .append(&JournalRecord::new(
                 &Actor::Human,
-                &commande,
+                &command,
                 &Decision::deny("read-only connection"),
             ))
             .expect("insert");
@@ -593,12 +589,9 @@ mod tests {
             "DELETE FROM audit_journal",
             "DELETE FROM audit_journal WHERE id = 1",
         ] {
-            let refus = store.with_connection(|conn| Ok(conn.execute(sql, [])?));
-            let erreur = refus.expect_err("a DELETE must fail");
-            assert!(
-                erreur.to_string().contains("append-only"),
-                "{sql}: {erreur}"
-            );
+            let refusal = store.with_connection(|conn| Ok(conn.execute(sql, [])?));
+            let error = refusal.expect_err("a DELETE must fail");
+            assert!(error.to_string().contains("append-only"), "{sql}: {error}");
         }
 
         assert_eq!(store.journal().count().expect("count"), 1);
@@ -610,9 +603,9 @@ mod tests {
         // agent attempted.
         let store = Store::open_in_memory().expect("open");
         let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
-        let commande = execution(
+        let command = execution(
             ConnectionId::new(),
-            "GRANT ALL ON clients TO PUBLIC",
+            "GRANT ALL ON customers TO PUBLIC",
             StatementIntent::Grant,
         );
 
@@ -620,41 +613,41 @@ mod tests {
             .journal()
             .append(&JournalRecord::new(
                 &agent,
-                &commande,
+                &command,
                 &Decision::deny("an agent does not change privileges"),
             ))
             .expect("insert");
 
-        let entree = store.journal().recent(10).expect("read back").remove(0);
-        assert_eq!(entree.record.decision, PolicyOutcome::Denied);
-        assert!(entree.record.actor_kind.is_agent());
+        let entry = store.journal().recent(10).expect("read back").remove(0);
+        assert_eq!(entry.record.decision, PolicyOutcome::Denied);
+        assert!(entry.record.actor_kind.is_agent());
         assert_eq!(
-            entree.record.decision_reason.as_deref(),
+            entry.record.decision_reason.as_deref(),
             Some("an agent does not change privileges")
         );
-        assert_eq!(entree.record.intent, StatementIntent::Grant);
-        assert!(entree.record.duration.is_none(), "it was not executed");
+        assert_eq!(entry.record.intent, StatementIntent::Grant);
+        assert!(entry.record.duration.is_none(), "it was not executed");
     }
 
     #[test]
     fn bound_values_do_not_enter_the_journal() {
         // I-03: the query's text is audit material, its bound values are not.
         let store = Store::open_in_memory().expect("open");
-        let commande = execution(
+        let command = execution(
             ConnectionId::new(),
-            "SELECT * FROM comptes WHERE mot_de_passe = $1",
+            "SELECT * FROM accounts WHERE password = $1",
             StatementIntent::Read,
         );
         store
             .journal()
             .append(&JournalRecord::new(
                 &Actor::Human,
-                &commande,
+                &command,
                 &Decision::Allow,
             ))
             .expect("insert");
 
-        let tout: String = store
+        let all: String = store
             .with_connection(|conn| {
                 Ok(conn.query_row(
                     "SELECT group_concat(COALESCE(statement, '') || COALESCE(error, '')) \
@@ -664,66 +657,69 @@ mod tests {
                 )?)
             })
             .expect("raw read");
-        assert!(!tout.contains("hunter2"), "a bound value leaked: {tout}");
+        assert!(!all.contains("hunter2"), "a bound value leaked: {all}");
     }
 
     #[test]
     fn an_entry_round_trips_completely() {
         let store = Store::open_in_memory().expect("open");
-        let connexion = ConnectionId::new();
+        let connection = ConnectionId::new();
         let agent_id = AgentId::new();
         let session = AgentSessionId::new();
-        let commande_id = CommandId::new();
-        let acteur = Actor::agent(agent_id, session);
-        let commande = execution(connexion, "DELETE FROM commandes", StatementIntent::Write);
+        let command_id = CommandId::new();
+        let actor = Actor::agent(agent_id, session);
+        let command = execution(connection, "DELETE FROM orders", StatementIntent::Write);
 
         let record = JournalRecord::new(
-            &acteur,
-            &commande,
+            &actor,
+            &command,
             &Decision::approval(
                 "write requested by an agent",
-                Some(Preview::new("DELETE FROM commandes", "base client")),
+                Some(Preview::new("DELETE FROM orders", "customer db")),
             ),
         )
-        .with_command_id(commande_id)
+        .with_command_id(command_id)
         .approved_by("nicolas")
         .completed(Duration::from_millis(1_234), Some(42));
 
         let id = store.journal().append(&record).expect("insert");
         assert!(id > 0);
 
-        let relu = store
+        let read_back = store
             .journal()
-            .for_connection(connexion, 10)
+            .for_connection(connection, 10)
             .expect("read back")
             .remove(0);
 
-        assert_eq!(relu.id, id);
-        assert_eq!(relu.record.command_id, Some(commande_id));
-        assert_eq!(relu.record.actor_id, Some(agent_id));
-        assert_eq!(relu.record.agent_session, Some(session));
-        assert_eq!(relu.record.connection, Some(connexion));
-        assert_eq!(relu.record.command_kind, "Execute");
+        assert_eq!(read_back.id, id);
+        assert_eq!(read_back.record.command_id, Some(command_id));
+        assert_eq!(read_back.record.actor_id, Some(agent_id));
+        assert_eq!(read_back.record.agent_session, Some(session));
+        assert_eq!(read_back.record.connection, Some(connection));
+        assert_eq!(read_back.record.command_kind, "Execute");
         assert_eq!(
-            relu.record.statement.as_deref(),
-            Some("DELETE FROM commandes")
+            read_back.record.statement.as_deref(),
+            Some("DELETE FROM orders")
         );
-        assert_eq!(relu.record.intent, StatementIntent::Write);
-        assert_eq!(relu.record.decision, PolicyOutcome::ApprovalRequired);
-        assert_eq!(relu.record.approved_by.as_deref(), Some("nicolas"));
-        assert_eq!(relu.record.duration, Some(Duration::from_millis(1_234)));
-        assert_eq!(relu.record.rows_affected, Some(42));
-        assert!(relu.record.error.is_none());
+        assert_eq!(read_back.record.intent, StatementIntent::Write);
+        assert_eq!(read_back.record.decision, PolicyOutcome::ApprovalRequired);
+        assert_eq!(read_back.record.approved_by.as_deref(), Some("nicolas"));
+        assert_eq!(
+            read_back.record.duration,
+            Some(Duration::from_millis(1_234))
+        );
+        assert_eq!(read_back.record.rows_affected, Some(42));
+        assert!(read_back.record.error.is_none());
     }
 
     #[test]
     fn the_declared_risk_is_preserved() {
         let store = Store::open_in_memory().expect("open");
-        let commande = Command::Execute {
+        let command = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::SQL, "TRUNCATE TABLE clients")
+                ExecRequest::new(QueryLanguage::SQL, "TRUNCATE TABLE customers")
                     .with_intent(StatementIntent::Ddl)
                     .with_risk(MutationRisk::Truncate),
             ),
@@ -732,34 +728,35 @@ mod tests {
             .journal()
             .append(&JournalRecord::new(
                 &Actor::Human,
-                &commande,
+                &command,
                 &Decision::approval("TRUNCATE", None),
             ))
             .expect("insert");
 
-        let relu = store.journal().recent(1).expect("read back").remove(0);
-        assert_eq!(relu.record.risk, MutationRisk::Truncate);
+        let read_back = store.journal().recent(1).expect("read back").remove(0);
+        assert_eq!(read_back.record.risk, MutationRisk::Truncate);
     }
 
     #[test]
     fn a_failure_is_logged_without_hiding_the_decision() {
         let store = Store::open_in_memory().expect("open");
-        let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
-        let record = JournalRecord::new(&Actor::Human, &commande, &Decision::Allow)
+        let command = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
+        let record = JournalRecord::new(&Actor::Human, &command, &Decision::Allow)
             .completed(Duration::from_millis(5), None)
             .failed(&OxynError::Query("missing relation".into()));
 
         store.journal().append(&record).expect("insert");
-        let relu = store.journal().recent(1).expect("read back").remove(0);
+        let read_back = store.journal().recent(1).expect("read back").remove(0);
 
-        assert_eq!(relu.record.decision, PolicyOutcome::Allowed);
+        assert_eq!(read_back.record.decision, PolicyOutcome::Allowed);
         assert!(
-            relu.record
+            read_back
+                .record
                 .error
                 .as_deref()
                 .is_some_and(|e| e.contains("missing relation"))
         );
-        assert_eq!(relu.record.error_class, Some(ErrorClass::Permanent));
+        assert_eq!(read_back.record.error_class, Some(ErrorClass::Permanent));
     }
 
     /// An agent write whose effect is unknown stays **expressible** in the
@@ -774,14 +771,14 @@ mod tests {
     #[test]
     fn an_error_class_survives_in_the_audit_trail() {
         let store = Store::open_in_memory().expect("open");
-        let commande = execution(
+        let command = execution(
             ConnectionId::new(),
-            "INSERT INTO commandes (client) VALUES (1)",
+            "INSERT INTO orders (customer) VALUES (1)",
             StatementIntent::Write,
         );
         let record = JournalRecord::new(
             &Actor::agent(AgentId::new(), AgentSessionId::new()),
-            &commande,
+            &command,
             &Decision::Allow,
         )
         .failed(&OxynError::Timeout {
@@ -789,15 +786,19 @@ mod tests {
         });
 
         store.journal().append(&record).expect("insert");
-        let relu = store.journal().recent(1).expect("read back").remove(0);
+        let read_back = store.journal().recent(1).expect("read back").remove(0);
 
-        assert_eq!(relu.record.error_class, Some(ErrorClass::Ambiguous));
+        assert_eq!(read_back.record.error_class, Some(ErrorClass::Ambiguous));
         assert!(
-            !relu.record.error_class.expect("a family").is_retryable(),
+            !read_back
+                .record
+                .error_class
+                .expect("a family")
+                .is_retryable(),
             "an expired `INSERT` is not replayed: the server may have applied it"
         );
         // The bound value did not follow here either (I-03).
-        assert!(!format!("{:?}", relu.record).contains("hunter2"));
+        assert!(!format!("{:?}", read_back.record).contains("hunter2"));
     }
 
     /// A command that succeeds carries no class: there is no error to
@@ -806,16 +807,16 @@ mod tests {
     #[test]
     fn a_successful_command_carries_no_class() {
         let store = Store::open_in_memory().expect("open");
-        let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
-        let record = JournalRecord::new(&Actor::Human, &commande, &Decision::Allow)
+        let command = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
+        let record = JournalRecord::new(&Actor::Human, &command, &Decision::Allow)
             .failed(&OxynError::Query("rejected".into()))
             .completed(Duration::from_millis(3), Some(1));
 
         store.journal().append(&record).expect("insert");
-        let relu = store.journal().recent(1).expect("read back").remove(0);
+        let read_back = store.journal().recent(1).expect("read back").remove(0);
 
-        assert_eq!(relu.record.error_class, None);
-        assert_eq!(relu.record.error, None);
+        assert_eq!(read_back.record.error_class, None);
+        assert_eq!(read_back.record.error, None);
     }
 
     #[test]
@@ -823,20 +824,20 @@ mod tests {
         // That is the property that makes the audit trail useful: erasing the
         // connection does not erase what was done with it.
         let store = Store::open_in_memory().expect("open");
-        let workspace = store.workspaces().create("atelier").expect("workspace");
-        let config = ConnectionConfig::new("base client", DriverId::postgres())
+        let workspace = store.workspaces().create("workshop").expect("workspace");
+        let config = ConnectionConfig::new("customer db", DriverId::postgres())
             .with_environment(Environment::Production);
         store
             .connections()
             .save(workspace.id, &config)
             .expect("write");
 
-        let commande = execution(config.id, "DELETE FROM clients", StatementIntent::Write);
+        let command = execution(config.id, "DELETE FROM customers", StatementIntent::Write);
         store
             .journal()
             .append(&JournalRecord::new(
                 &Actor::Human,
-                &commande,
+                &command,
                 &Decision::approval("production", None),
             ))
             .expect("insert");
@@ -845,26 +846,26 @@ mod tests {
         assert!(store.workspaces().delete(workspace.id).expect("deletion"));
 
         assert_eq!(store.journal().count().expect("count"), 1);
-        let restant = store
+        let remaining = store
             .journal()
             .for_connection(config.id, 10)
             .expect("read back");
-        assert_eq!(restant.len(), 1);
+        assert_eq!(remaining.len(), 1);
         assert_eq!(
-            restant[0].record.statement.as_deref(),
-            Some("DELETE FROM clients")
+            remaining[0].record.statement.as_deref(),
+            Some("DELETE FROM customers")
         );
     }
 
     #[test]
     fn an_unreadable_decision_does_not_count_as_allowed() {
         let store = Store::open_in_memory().expect("open");
-        let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
+        let command = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
         store
             .journal()
             .append(&JournalRecord::new(
                 &Actor::Human,
-                &commande,
+                &command,
                 &Decision::Allow,
             ))
             .expect("insert");
@@ -882,32 +883,32 @@ mod tests {
             })
             .expect("insert");
 
-        let relu = store.journal().recent(1).expect("read back").remove(0);
-        assert_eq!(relu.record.decision, PolicyOutcome::Denied);
-        assert!(relu.record.actor_kind.is_agent());
-        assert_eq!(relu.record.intent, StatementIntent::Unknown);
-        assert!(relu.record.intent.is_mutating());
+        let read_back = store.journal().recent(1).expect("read back").remove(0);
+        assert_eq!(read_back.record.decision, PolicyOutcome::Denied);
+        assert!(read_back.record.actor_kind.is_agent());
+        assert_eq!(read_back.record.intent, StatementIntent::Unknown);
+        assert!(read_back.record.intent.is_mutating());
     }
 
     #[test]
     fn entries_come_out_in_reverse_recording_order() {
         let store = Store::open_in_memory().expect("open");
-        let connexion = ConnectionId::new();
+        let connection = ConnectionId::new();
         for n in 0..5 {
-            let commande = execution(connexion, &format!("SELECT {n}"), StatementIntent::Read);
+            let command = execution(connection, &format!("SELECT {n}"), StatementIntent::Read);
             store
                 .journal()
                 .append(&JournalRecord::new(
                     &Actor::Human,
-                    &commande,
+                    &command,
                     &Decision::Allow,
                 ))
                 .expect("insert");
         }
 
-        let recentes = store.journal().recent(3).expect("read back");
-        assert_eq!(recentes.len(), 3);
-        assert_eq!(recentes[0].record.statement.as_deref(), Some("SELECT 4"));
-        assert_eq!(recentes[2].record.statement.as_deref(), Some("SELECT 2"));
+        let recent = store.journal().recent(3).expect("read back");
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].record.statement.as_deref(), Some("SELECT 4"));
+        assert_eq!(recent[2].record.statement.as_deref(), Some("SELECT 2"));
     }
 }

@@ -244,62 +244,65 @@ mod tests {
 
     #[test]
     fn a_minimal_agent_is_valid() {
-        let registre = ToolRegistry::builtin();
-        spec().validate(&registre).expect("valid declaration");
+        let registry = ToolRegistry::builtin();
+        spec().validate(&registry).expect("valid declaration");
     }
 
     #[test]
     fn an_agent_without_tools_is_legal() {
-        let registre = ToolRegistry::builtin();
-        let sans_outil = AgentSpec::new(AgentId::new(), "Doc", "You describe schemas.");
-        sans_outil.validate(&registre).expect("no tool granted");
-        assert!(!sans_outil.allows(EXECUTE_QUERY));
+        let registry = ToolRegistry::builtin();
+        let without_tool = AgentSpec::new(AgentId::new(), "Doc", "You describe schemas.");
+        without_tool.validate(&registry).expect("no tool granted");
+        assert!(!without_tool.allows(EXECUTE_QUERY));
     }
 
     #[test]
     fn a_declaration_cannot_invent_a_tool() {
         // A specification sometimes comes from a plugin: it restricts the
         // registry's list, it never extends it (PLUGIN-CONTRACT).
-        let registre = ToolRegistry::builtin();
+        let registry = ToolRegistry::builtin();
         let hostile = spec().with_tools(["drop_all_tables"]);
-        let refus = hostile
-            .validate(&registre)
+        let refusal = hostile
+            .validate(&registry)
             .expect_err("tool absent from the registry");
-        assert!(matches!(refus, AiError::UnknownTool { .. }), "{refus:?}");
+        assert!(
+            matches!(refusal, AiError::UnknownTool { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
     fn an_endless_loop_is_refused() {
-        let registre = ToolRegistry::builtin();
-        let refus = spec()
+        let registry = ToolRegistry::builtin();
+        let refusal = spec()
             .with_max_turns(MAX_TURNS_CEILING + 1)
-            .validate(&registre)
+            .validate(&registry)
             .expect_err("beyond the ceiling");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
 
-        let refus = spec()
+        let refusal = spec()
             .with_max_turns(0)
-            .validate(&registre)
+            .validate(&registry)
             .expect_err("zero turns");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
     }
 
     #[test]
     fn a_tool_declared_twice_is_refused() {
-        let registre = ToolRegistry::builtin();
-        let refus = spec()
+        let registry = ToolRegistry::builtin();
+        let refusal = spec()
             .with_tools([EXECUTE_QUERY, EXECUTE_QUERY])
-            .validate(&registre)
+            .validate(&registry)
             .expect_err("duplicate");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
     }
 
     #[test]
     fn an_empty_prompt_is_refused() {
-        let registre = ToolRegistry::builtin();
-        let mut creux = spec();
-        creux.system_prompt = "   ".to_owned();
-        assert!(creux.validate(&registre).is_err());
+        let registry = ToolRegistry::builtin();
+        let mut blank = spec();
+        blank.system_prompt = "   ".to_owned();
+        assert!(blank.validate(&registry).is_err());
     }
 
     #[test]
@@ -313,35 +316,37 @@ mod tests {
             "allowed_tools": ["execute_query", "refresh_catalog"],
             "max_turns": 4
         }"#;
-        let lu = AgentSpec::from_json(json).expect("readable declaration");
-        assert_eq!(lu.name, "Reviewer");
-        assert_eq!(lu.max_turns, 4);
-        assert!(lu.allows(REFRESH_CATALOG));
+        let read_back = AgentSpec::from_json(json).expect("readable declaration");
+        assert_eq!(read_back.name, "Reviewer");
+        assert_eq!(read_back.max_turns, 4);
+        assert!(read_back.allows(REFRESH_CATALOG));
         assert_eq!(
-            lu.context,
+            read_back.context,
             ContextPolicy::default(),
             "missing fields take the cautious default"
         );
-        lu.validate(&ToolRegistry::builtin()).expect("known tools");
+        read_back
+            .validate(&ToolRegistry::builtin())
+            .expect("known tools");
     }
 
     #[test]
     fn a_declaration_reads_back_after_serialization() {
-        let origine = spec()
+        let original = spec()
             .with_description("writes SQL")
             .with_output_schema(serde_json::json!({"type": "object"}));
-        let json = serde_json::to_string(&origine).expect("serialization");
-        let relue = AgentSpec::from_json(&json).expect("deserialization");
-        assert_eq!(relue, origine);
+        let json = serde_json::to_string(&original).expect("serialization");
+        let reread = AgentSpec::from_json(&json).expect("deserialization");
+        assert_eq!(reread, original);
     }
 
     #[test]
     fn an_output_schema_that_is_not_an_object_is_refused() {
-        let registre = ToolRegistry::builtin();
-        let refus = spec()
+        let registry = ToolRegistry::builtin();
+        let refusal = spec()
             .with_output_schema(serde_json::json!("string"))
-            .validate(&registre)
+            .validate(&registry)
             .expect_err("a JSON schema is an object");
-        assert!(matches!(refus, AiError::InvalidSpec(_)), "{refus:?}");
+        assert!(matches!(refusal, AiError::InvalidSpec(_)), "{refusal:?}");
     }
 }

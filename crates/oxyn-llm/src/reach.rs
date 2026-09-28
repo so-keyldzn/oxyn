@@ -80,12 +80,12 @@ impl fmt::Display for Reach {
 /// `host_str` returns an IPv6 between brackets (`[::1]`): they are removed
 /// before parsing.
 fn literal_ip(url: &Url) -> Option<IpAddr> {
-    let hote = url.host_str()?;
-    let nu = hote
+    let host = url.host_str()?;
+    let bare = host
         .strip_prefix('[')
-        .and_then(|reste| reste.strip_suffix(']'))
-        .unwrap_or(hote);
-    nu.parse::<IpAddr>().ok()
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    bare.parse::<IpAddr>().ok()
 }
 
 /// Classifies an endpoint **without a network**, when possible.
@@ -118,26 +118,30 @@ pub fn literal_reach(url: &Url) -> Option<Reach> {
 /// registered and at each change of its configuration, not at each request.
 #[must_use]
 pub fn resolve_reach(url: &Url) -> Reach {
-    if let Some(immediat) = literal_reach(url) {
-        return immediat;
+    if let Some(immediate) = literal_reach(url) {
+        return immediate;
     }
-    let Some(hote) = url.host_str() else {
+    let Some(host) = url.host_str() else {
         return Reach::Unresolved;
     };
     // The port does not matter to resolution; `0` avoids imposing an arbitrary
     // default when the URL carries none and the scheme imposes none.
     let port = url.port_or_known_default().unwrap_or(0);
-    let Ok(adresses) = (hote, port).to_socket_addrs() else {
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
         return Reach::Unresolved;
     };
-    let mut vu = false;
-    for adresse in adresses {
-        vu = true;
-        if !adresse.ip().is_loopback() {
+    let mut seen = false;
+    for address in addresses {
+        seen = true;
+        if !address.ip().is_loopback() {
             return Reach::Remote;
         }
     }
-    if vu { Reach::Local } else { Reach::Unresolved }
+    if seen {
+        Reach::Local
+    } else {
+        Reach::Unresolved
+    }
 }
 
 /// Classifies an endpoint given as a string.
@@ -174,20 +178,20 @@ pub fn endpoint_reach(base_url: &str) -> Reach {
 /// what the natural display of a [`Url`] does.
 #[must_use]
 pub fn redacted(url: &Url) -> String {
-    let mut propre = url.clone();
+    let mut clean = url.clone();
     // `set_username` and `set_password` fail on URLs without an authority
     // (`data:`, `mailto:`): there is then no credential to remove.
-    let _ = propre.set_username("");
-    let _ = propre.set_password(None);
-    propre.to_string()
+    let _ = clean.set_username("");
+    let _ = clean.set_password(None);
+    clean.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn url(brut: &str) -> Url {
-        Url::parse(brut).expect("valid test URL")
+    fn url(raw: &str) -> Url {
+        Url::parse(raw).expect("valid test URL")
     }
 
     #[test]
@@ -250,9 +254,9 @@ mod tests {
     #[test]
     fn an_unreadable_string_gets_no_benefit_of_the_doubt() {
         // The wrong default would be "local", and it would be silent.
-        for brut in ["", "pas une url", "://", "mailto:quelquun@example.com"] {
-            assert_eq!(endpoint_reach(brut), Reach::Unresolved, "{brut}");
-            assert!(endpoint_reach(brut).leaves_machine(), "{brut}");
+        for raw in ["", "not a url", "://", "mailto:someone@example.com"] {
+            assert_eq!(endpoint_reach(raw), Reach::Unresolved, "{raw}");
+            assert!(endpoint_reach(raw).leaves_machine(), "{raw}");
         }
     }
 
@@ -265,11 +269,11 @@ mod tests {
 
     #[test]
     fn the_credentials_of_a_url_are_not_displayed() {
-        let avec = url("https://alice:motdepasse@api.example.com/v1/");
-        let rendu = redacted(&avec);
-        assert!(!rendu.contains("motdepasse"), "{rendu}");
-        assert!(!rendu.contains("alice"), "{rendu}");
-        assert!(rendu.contains("api.example.com"), "{rendu}");
+        let with_credentials = url("https://alice:hunter2@api.example.com/v1/");
+        let rendered = redacted(&with_credentials);
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+        assert!(!rendered.contains("alice"), "{rendered}");
+        assert!(rendered.contains("api.example.com"), "{rendered}");
     }
 
     #[test]

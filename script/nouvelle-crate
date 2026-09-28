@@ -20,17 +20,17 @@ import re
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-MANIFESTE_WORKSPACE = RACINE / "Cargo.toml"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_MANIFEST = REPO_ROOT / "Cargo.toml"
 
-MOTIF_NOM = re.compile(r"^oxyn-[a-z0-9]+(?:-[a-z0-9]+)*$")
+NAME_PATTERN = re.compile(r"^oxyn-[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 # The names the split forbids. It is not a matter of taste: a catch-all crate
 # ends up a dependency of all the others, and the graph we spent time directing
 # stops meaning anything.
-FOURRE_TOUT = {"utils", "util", "common", "commons", "helpers", "misc", "core-utils"}
+CATCH_ALL = {"utils", "util", "common", "commons", "helpers", "misc", "core-utils"}
 
-GABARIT_MANIFESTE = """[package]
+MANIFEST_TEMPLATE = """[package]
 name = "{nom}"
 description = "{description}"
 version.workspace = true
@@ -53,120 +53,120 @@ rstest.workspace = true
 
 # The marker is assembled so that this script does not flag itself to
 # `script/verifier-todo`: it is not remaining work, it is a template.
-GABARIT_LIB = (
+LIB_TEMPLATE = (
     "//! TO"
     + "DO(phase 0) : state what this crate is about, in one sentence,\n"
     + "//! before the first public item.\n"
 )
 
 
-def erreur(message: str) -> None:
+def problem(message: str) -> None:
     print(f"ERROR  {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
-def destination(nom: str) -> Path:
+def destination(item_name: str) -> Path:
     """`drivers/` for a protocol implementation, `crates/` otherwise.
 
     The placement is not cosmetic: `drivers/*` is what lets one say "one driver
     per protocol" and check it at a glance."""
-    if nom.startswith("oxyn-driver-"):
-        return RACINE / "drivers" / nom
-    return RACINE / "crates" / nom
+    if item_name.startswith("oxyn-driver-"):
+        return REPO_ROOT / "drivers" / item_name
+    return REPO_ROOT / "crates" / item_name
 
 
-def rattacher_au_workspace(nom: str, chemin_relatif: str) -> bool:
+def attach_to_workspace(item_name: str, relative_path: str) -> bool:
     """Adds the crate to `[workspace.dependencies]`.
 
     `members = ["crates/*", "drivers/*"]` already takes it as a member; what is
     missing is the entry that lets other crates write `{nom}.workspace = true`.
     Without it, the first internal dependency would be written with a hard-coded
     `path`, and the workspace would stop being the single source of versions."""
-    texte = MANIFESTE_WORKSPACE.read_text(encoding="utf-8")
-    if re.search(rf"^{re.escape(nom)}\s*=", texte, re.MULTILINE):
+    body = WORKSPACE_MANIFEST.read_text(encoding="utf-8")
+    if re.search(rf"^{re.escape(item_name)}\s*=", body, re.MULTILINE):
         return False
 
-    lignes = texte.splitlines(keepends=True)
-    motif = re.compile(r'^(oxyn-[a-z0-9-]+)\s*= \{ path = "([^"]+)"')
+    lines = body.splitlines(keepends=True)
+    pattern = re.compile(r'^(oxyn-[a-z0-9-]+)\s*= \{ path = "([^"]+)"')
     # The entry goes after the last one of the same directory: the block lists
     # `crates/` then `drivers/`, and a driver slipped among the core crates
     # would make the only overview of the workspace we have lie.
-    repertoire = chemin_relatif.split("/", 1)[0]
-    correspondances = [
+    directory = relative_path.split("/", 1)[0]
+    matches = [
         i
-        for i, ligne in enumerate(lignes)
-        if (m := motif.match(ligne)) and m.group(2).startswith(f"{repertoire}/")
+        for i, line in enumerate(lines)
+        if (m := pattern.match(line)) and m.group(2).startswith(f"{directory}/")
     ]
-    derniere = max(correspondances, default=None)
-    if derniere is None:
-        erreur(
+    last_one = max(matches, default=None)
+    if last_one is None:
+        problem(
             "cannot locate the internal crates block in Cargo.toml: "
-            f"add `{nom} = {{ path = \"{chemin_relatif}\" }}` by hand"
+            f"add `{item_name} = {{ path = \"{relative_path}\" }}` by hand"
         )
 
     # The alignment of the block's `=` is kept by hand in this manifest;
     # reproducing it avoids a formatting diff on the next commit.
-    largeur = max(
-        len(motif.match(ligne).group(1)) for ligne in lignes if motif.match(ligne)
+    width = max(
+        len(pattern.match(line).group(1)) for line in lines if pattern.match(line)
     )
-    lignes.insert(
-        derniere + 1,
-        f"{nom.ljust(largeur)} = {{ path = \"{chemin_relatif}\" }}\n",
+    lines.insert(
+        last_one + 1,
+        f"{item_name.ljust(width)} = {{ path = \"{relative_path}\" }}\n",
     )
-    MANIFESTE_WORKSPACE.write_text("".join(lignes), encoding="utf-8")
+    WORKSPACE_MANIFEST.write_text("".join(lines), encoding="utf-8")
     return True
 
 
-def principal(arguments: list[str]) -> int:
+def main(arguments: list[str]) -> int:
     if len(arguments) != 2:
         print(__doc__)
         return 1
 
-    nom, description = arguments
-    if not MOTIF_NOM.match(nom):
-        erreur(
-            f"\"{nom}\": the name must be `oxyn-<subject>`, lowercase, "
+    item_name, description = arguments
+    if not NAME_PATTERN.match(item_name):
+        problem(
+            f"\"{item_name}\": the name must be `oxyn-<subject>`, lowercase, "
             "with hyphens."
         )
-    sujet = nom.removeprefix("oxyn-")
-    if sujet in FOURRE_TOUT:
-        erreur(
-            f"\"{sujet}\" is a catch-all name. A name one cannot choose is a "
+    subject = item_name.removeprefix("oxyn-")
+    if subject in CATCH_ALL:
+        problem(
+            f"\"{subject}\" is a catch-all name. A name one cannot choose is a "
             "split one could not make: name the crate after its subject, or "
             "put the code in an existing crate."
         )
     if not description.strip():
-        erreur(
+        problem(
             "the description is mandatory: it is what says, in "
             "`cargo metadata` and in docs/ARCHITECTURE.md, why this crate "
             "exists on its own."
         )
 
-    racine_crate = destination(nom)
-    if racine_crate.exists():
-        erreur(f"{racine_crate.relative_to(RACINE)} already exists.")
+    crate_root = destination(item_name)
+    if crate_root.exists():
+        problem(f"{crate_root.relative_to(REPO_ROOT)} already exists.")
 
-    (racine_crate / "src").mkdir(parents=True)
-    (racine_crate / "Cargo.toml").write_text(
-        GABARIT_MANIFESTE.format(nom=nom, description=description.strip()),
+    (crate_root / "src").mkdir(parents=True)
+    (crate_root / "Cargo.toml").write_text(
+        MANIFEST_TEMPLATE.format(item_name=item_name, description=description.strip()),
         encoding="utf-8",
     )
-    (racine_crate / "src" / "lib.rs").write_text(GABARIT_LIB, encoding="utf-8")
+    (crate_root / "src" / "lib.rs").write_text(LIB_TEMPLATE, encoding="utf-8")
 
-    relatif = racine_crate.relative_to(RACINE).as_posix()
-    rattachee = rattacher_au_workspace(nom, relatif)
+    relative = crate_root.relative_to(REPO_ROOT).as_posix()
+    attached = attach_to_workspace(item_name, relative)
 
-    print(f"Crate created: {relatif}/")
+    print(f"Crate created: {relative}/")
     print("  Cargo.toml     inherits the workspace lints and versions")
     print("  src/lib.rs     to fill in")
-    if rattachee:
-        print(f"  Cargo.toml     `{nom}` added to [workspace.dependencies]")
+    if attached:
+        print(f"  Cargo.toml     `{item_name}` added to [workspace.dependencies]")
 
     print()
     print("What remains, and needs a choice:")
     print("  1. docs/ARCHITECTURE.md — the crate tree is authoritative there;")
     print("     a crate missing from the document is a divergence, not an oversight.")
-    if nom.startswith("oxyn-driver-"):
+    if item_name.startswith("oxyn-driver-"):
         print("  2. /driver — the driver contract loads the procedure explicitly.")
     else:
         print("  2. /implementer — `paths:` rules do not load when a file is")
@@ -177,4 +177,4 @@ def principal(arguments: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(principal(sys.argv[1:]))
+    raise SystemExit(main(sys.argv[1:]))

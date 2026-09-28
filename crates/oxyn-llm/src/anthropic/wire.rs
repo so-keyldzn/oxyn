@@ -1,7 +1,7 @@
 //! The structures that really travel on the wire, Anthropic side.
 //!
 //! Everything written here is **checked and dated** in
-//! [`RESEARCH-NOTES`](../../../docs/RESEARCH-NOTES.md) § "Anthropic provider"
+//! [`RESEARCH-NOTES`](../../../../docs/RESEARCH-NOTES.md) § "Anthropic provider"
 //! (I-12): paths, headers, event names, field names and enumeration values.
 //! None is written from memory — a plausible and wrong value shows up neither
 //! at compile time, nor in tests, nor in review.
@@ -56,17 +56,17 @@ fn cache_control() -> Value {
 }
 
 /// Sets the cache marker on a block, if the budget allows.
-fn mark_cached(bloc: &mut Value, budget: &mut CacheBudget) {
-    if let Some(objet) = bloc.as_object_mut()
+fn mark_cached(block: &mut Value, budget: &mut CacheBudget) {
+    if let Some(object) = block.as_object_mut()
         && budget.take()
     {
-        objet.insert("cache_control".to_owned(), cache_control());
+        object.insert("cache_control".to_owned(), cache_control());
     }
 }
 
-/// Un bloc de texte.
-fn text_block(texte: &str) -> Value {
-    json!({ "type": "text", "text": texte })
+/// A text block.
+fn text_block(text: &str) -> Value {
+    json!({ "type": "text", "text": text })
 }
 
 /// Gathers the system instructions into a single top-level field.
@@ -76,20 +76,20 @@ fn text_block(texte: &str) -> Value {
 /// a **list of blocks** and not as a string, because a cache marker can only
 /// be set on a block.
 fn system_prompt(messages: &[ChatMessage], budget: &mut CacheBudget) -> Option<Value> {
-    let morceaux: Vec<&ChatMessage> = messages
+    let chunks: Vec<&ChatMessage> = messages
         .iter()
         .filter(|m| m.role == Role::System && !m.content.is_empty())
         .collect();
-    if morceaux.is_empty() {
+    if chunks.is_empty() {
         return None;
     }
-    let cachable = morceaux.iter().any(|m| m.cache_breakpoint);
-    let texte: Vec<&str> = morceaux.iter().map(|m| m.content.as_str()).collect();
-    let mut bloc = text_block(&texte.join("\n\n"));
+    let cachable = chunks.iter().any(|m| m.cache_breakpoint);
+    let text: Vec<&str> = chunks.iter().map(|m| m.content.as_str()).collect();
+    let mut block = text_block(&text.join("\n\n"));
     if cachable {
-        mark_cached(&mut bloc, budget);
+        mark_cached(&mut block, budget);
     }
-    Some(Value::Array(vec![bloc]))
+    Some(Value::Array(vec![block]))
 }
 
 /// Projects the conversation onto the protocol's list of messages.
@@ -106,75 +106,75 @@ fn conversation(
     messages: &[ChatMessage],
     budget: &mut CacheBudget,
 ) -> Result<Vec<Value>, UnrenderableReasoning> {
-    let mut sorties: Vec<(&'static str, Vec<Value>)> = Vec::new();
+    let mut outputs: Vec<(&'static str, Vec<Value>)> = Vec::new();
 
     for message in messages {
-        let (role, mut blocs) = match message.role {
+        let (role, mut blocks) = match message.role {
             Role::System => continue,
             Role::User => ("user", vec![text_block(&message.content)]),
             Role::Tool => {
-                let identifiant = message.tool_call_id.clone().unwrap_or_default();
+                let identifier = message.tool_call_id.clone().unwrap_or_default();
                 (
                     "user",
                     vec![json!({
                         "type": "tool_result",
-                        "tool_use_id": identifiant,
+                        "tool_use_id": identifier,
                         "content": message.content,
                     })],
                 )
             }
             Role::Assistant => {
-                let mut blocs = Vec::new();
+                let mut blocks = Vec::new();
                 // The reasoning blocks first, as they were received.
                 // Reordering them, editing one or losing one makes the request
                 // refused: the API checks their signature.
-                for bloc in &message.reasoning {
-                    blocs.push(reasoning_block(bloc)?);
+                for block in &message.reasoning {
+                    blocks.push(reasoning_block(block)?);
                 }
                 if !message.content.is_empty() {
-                    blocs.push(text_block(&message.content));
+                    blocks.push(text_block(&message.content));
                 }
-                for appel in &message.tool_calls {
-                    blocs.push(json!({
+                for call in &message.tool_calls {
+                    blocks.push(json!({
                         "type": "tool_use",
-                        "id": appel.id,
-                        "name": appel.name,
-                        "input": appel.arguments,
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.arguments,
                     }));
                 }
-                if blocs.is_empty() {
+                if blocks.is_empty() {
                     continue;
                 }
-                ("assistant", blocs)
+                ("assistant", blocks)
             }
         };
 
         // The marker is set on the **last** block of the message: it closes a
         // prefix, it does not open it.
         if message.cache_breakpoint
-            && let Some(dernier) = blocs.last_mut()
+            && let Some(last) = blocks.last_mut()
         {
-            mark_cached(dernier, budget);
+            mark_cached(last, budget);
         }
 
         // `last()` then `last_mut()` in two steps: a `match` on `last_mut()`
         // would keep the mutable borrow alive in the arm that pushes, and the
         // borrow checker refuses it.
-        if sorties
+        if outputs
             .last()
-            .is_some_and(|(precedent, _)| *precedent == role)
+            .is_some_and(|(previous, _)| *previous == role)
         {
-            if let Some((_, accumules)) = sorties.last_mut() {
-                accumules.extend(blocs);
+            if let Some((_, accumulated)) = outputs.last_mut() {
+                accumulated.extend(blocks);
             }
         } else {
-            sorties.push((role, blocs));
+            outputs.push((role, blocks));
         }
     }
 
-    Ok(sorties
+    Ok(outputs
         .into_iter()
-        .map(|(role, blocs)| json!({ "role": role, "content": blocs }))
+        .map(|(role, blocks)| json!({ "role": role, "content": blocks }))
         .collect())
 }
 
@@ -188,16 +188,16 @@ fn conversation(
 pub(crate) struct UnrenderableReasoning;
 
 /// Renders a reasoning block in the protocol's format, **without modifying it**.
-fn reasoning_block(bloc: &ReasoningBlock) -> Result<Value, UnrenderableReasoning> {
-    match bloc {
+fn reasoning_block(block: &ReasoningBlock) -> Result<Value, UnrenderableReasoning> {
+    match block {
         ReasoningBlock::Summarized { text, signature } => {
-            let mut objet = Map::new();
-            objet.insert("type".to_owned(), json!("thinking"));
-            objet.insert("thinking".to_owned(), json!(text));
+            let mut object = Map::new();
+            object.insert("type".to_owned(), json!("thinking"));
+            object.insert("thinking".to_owned(), json!(text));
             if let Some(signature) = signature {
-                objet.insert("signature".to_owned(), json!(signature));
+                object.insert("signature".to_owned(), json!(signature));
             }
-            Ok(Value::Object(objet))
+            Ok(Value::Object(object))
         }
         ReasoningBlock::Redacted { data } => Ok(json!({
             "type": "redacted_thinking",
@@ -207,32 +207,32 @@ fn reasoning_block(bloc: &ReasoningBlock) -> Result<Value, UnrenderableReasoning
     }
 }
 
-/// Projette les outils offerts, marqueur de cache compris.
+/// Projects the offered tools, cache marker included.
 fn tools(request: &ChatRequest, budget: &mut CacheBudget) -> Option<Value> {
     if request.tools.is_empty() {
         return None;
     }
-    let mut outils: Vec<Value> = request
+    let mut tools: Vec<Value> = request
         .tools
         .iter()
-        .map(|outil| {
+        .map(|tool| {
             json!({
-                "name": outil.name,
-                "description": outil.description,
+                "name": tool.name,
+                "description": tool.description,
                 // `input_schema` and not `parameters`: that is the field's
                 // name in this protocol.
-                "input_schema": outil.parameters,
+                "input_schema": tool.parameters,
             })
         })
         .collect();
     // The marker is set on the **last** tool: it covers all the definitions
     // that precede it.
     if request.cache_tools
-        && let Some(dernier) = outils.last_mut()
+        && let Some(last) = tools.last_mut()
     {
-        mark_cached(dernier, budget);
+        mark_cached(last, budget);
     }
-    Some(Value::Array(outils))
+    Some(Value::Array(tools))
 }
 
 /// Builds the body of `POST /v1/messages`.
@@ -248,45 +248,45 @@ pub(crate) fn build_request(
     stream: bool,
 ) -> Result<Value, UnrenderableReasoning> {
     let mut budget = CacheBudget::new();
-    let mut corps = Map::new();
+    let mut body = Map::new();
 
-    corps.insert("model".to_owned(), json!(request.model));
+    body.insert("model".to_owned(), json!(request.model));
     // The order in which the budget is applied follows that of the prefix:
     // tools first, then the system instruction, then the messages. It is the
     // order in which the provider assembles the prompt, hence the one where a
     // marker has a chance to be useful.
-    if let Some(outils) = tools(request, &mut budget) {
-        corps.insert("tools".to_owned(), outils);
+    if let Some(tools) = tools(request, &mut budget) {
+        body.insert("tools".to_owned(), tools);
     }
-    if let Some(consigne) = system_prompt(&request.messages, &mut budget) {
-        corps.insert("system".to_owned(), consigne);
+    if let Some(instruction) = system_prompt(&request.messages, &mut budget) {
+        body.insert("system".to_owned(), instruction);
     }
-    corps.insert(
+    body.insert(
         "messages".to_owned(),
         Value::Array(conversation(&request.messages, &mut budget)?),
     );
 
     if stream {
-        corps.insert("stream".to_owned(), json!(true));
-        corps.insert(
+        body.insert("stream".to_owned(), json!(true));
+        body.insert(
             "max_tokens".to_owned(),
             json!(request.max_tokens.unwrap_or(default_max_tokens)),
         );
     }
     if let Some(temperature) = request.temperature {
-        corps.insert("temperature".to_owned(), json!(temperature));
+        body.insert("temperature".to_owned(), json!(temperature));
     }
 
     // A thinking budget requires the explicit mode; effort alone goes through
     // `output_config` and lets the model decide whether it thinks. Sending a
     // thinking mode that was not requested would make the request fail on
     // models that do not know it.
-    if let Some(budget_jetons) = request.reasoning_budget_tokens {
-        corps.insert(
+    if let Some(token_budget) = request.reasoning_budget_tokens {
+        body.insert(
             "thinking".to_owned(),
             json!({
                 "type": "enabled",
-                "budget_tokens": budget_jetons,
+                "budget_tokens": token_budget,
                 // Without it the reasoning comes back empty: the default of
                 // several models is not to return it.
                 "display": "summarized",
@@ -294,13 +294,13 @@ pub(crate) fn build_request(
         );
     }
     if let Some(effort) = request.reasoning_effort {
-        corps.insert(
+        body.insert(
             "output_config".to_owned(),
             json!({ "effort": effort.as_str() }),
         );
     }
 
-    Ok(Value::Object(corps))
+    Ok(Value::Object(body))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -330,14 +330,14 @@ pub(crate) struct Envelope {
     pub(crate) error: Option<WireError>,
 }
 
-/// La charge de `message_start`.
+/// The payload of `message_start`.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct MessageStart {
     #[serde(default)]
     pub(crate) usage: Option<WireUsage>,
 }
 
-/// Le bloc ouvert par `content_block_start`.
+/// The block opened by `content_block_start`.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct ContentBlock {
     #[serde(default)]
@@ -401,7 +401,7 @@ impl WireUsage {
         clamp_tokens(self.input_tokens)
     }
 
-    /// Jetons produits.
+    /// Tokens produced.
     pub(crate) fn output(&self) -> u32 {
         clamp_tokens(self.output_tokens)
     }
@@ -409,13 +409,13 @@ impl WireUsage {
     /// Tokens written to the cache, when the provider declares it.
     pub(crate) fn cache_write(&self) -> Option<u32> {
         self.cache_creation_input_tokens
-            .map(|brut| clamp_tokens(Some(brut)))
+            .map(|raw| clamp_tokens(Some(raw)))
     }
 
     /// Tokens read from the cache, when the provider declares it.
     pub(crate) fn cache_read(&self) -> Option<u32> {
         self.cache_read_input_tokens
-            .map(|brut| clamp_tokens(Some(brut)))
+            .map(|raw| clamp_tokens(Some(raw)))
     }
 
     /// Does the frame carry usable information?
@@ -434,9 +434,9 @@ impl WireUsage {
 ///
 /// Missing or negative counts as `0` — "not declared" — and an outsized value
 /// saturates rather than overflowing silently (`as` is forbidden).
-fn clamp_tokens(brut: Option<i64>) -> u32 {
-    let valeur = brut.unwrap_or(0).max(0);
-    u32::try_from(valeur).unwrap_or(u32::MAX)
+fn clamp_tokens(raw: Option<i64>) -> u32 {
+    let value = raw.unwrap_or(0).max(0);
+    u32::try_from(value).unwrap_or(u32::MAX)
 }
 
 /// Error carried in the stream, or returned by a failure status.
@@ -452,9 +452,9 @@ impl WireError {
     /// Showable message, never returning an empty string.
     pub(crate) fn describe(&self) -> String {
         match (&self.r#type, &self.message) {
-            (Some(genre), Some(message)) if !message.is_empty() => format!("{message} ({genre})"),
+            (Some(kind), Some(message)) if !message.is_empty() => format!("{message} ({kind})"),
             (_, Some(message)) if !message.is_empty() => message.clone(),
-            (Some(genre), _) => genre.clone(),
+            (Some(kind), _) => kind.clone(),
             _ => "no details given".to_owned(),
         }
     }
@@ -547,52 +547,52 @@ impl EffortCapability {
 }
 
 impl From<WireModel> for ModelInfo {
-    fn from(brut: WireModel) -> Self {
-        let capacites = brut.capabilities.unwrap_or_default();
+    fn from(raw: WireModel) -> Self {
+        let capabilities = raw.capabilities.unwrap_or_default();
 
         // Reasoning is declared through two independent routes: a model that
         // accepts effort can reason, even if it declares no thinking mode.
         // Either one is enough.
-        let reflexion = capacites
+        let thinking = capabilities
             .thinking
             .as_ref()
             .and_then(|t| t.supported)
             .unwrap_or(false);
-        let effort = capacites
+        let effort = capabilities
             .effort
             .as_ref()
             .and_then(|e| e.supported)
             .unwrap_or(false);
-        let raisonnement = if capacites.thinking.is_some() || capacites.effort.is_some() {
-            Support::known(reflexion || effort)
+        let reasoning = if capabilities.thinking.is_some() || capabilities.effort.is_some() {
+            Support::known(thinking || effort)
         } else {
             Support::Unknown
         };
 
-        let mut fiche = Self::new(brut.id);
-        if let Some(nom) = brut.display_name {
-            fiche = fiche.with_display_name(nom);
+        let mut info = Self::new(raw.id);
+        if let Some(display_name) = raw.display_name {
+            info = info.with_display_name(display_name);
         }
-        if let Some(fenetre) = brut.max_input_tokens
-            && fenetre > 0
+        if let Some(window) = raw.max_input_tokens
+            && window > 0
         {
-            fiche = fiche.with_context_window(fenetre);
+            info = info.with_context_window(window);
         }
-        fiche = fiche
-            .with_reasoning_support(raisonnement)
+        info = info
+            .with_reasoning_support(reasoning)
             // The endpoint says nothing about these two. `Unknown` is the only
             // honest answer: every model of this provider accepts them in
             // practice, but "in practice" is not a declaration (I-12).
             .with_tool_support(Support::Unknown)
             .with_streaming_support(Support::Unknown);
-        if let Some(niveaux) = capacites.effort.as_ref().map(EffortCapability::levels)
+        if let Some(niveaux) = capabilities.effort.as_ref().map(EffortCapability::levels)
             && !niveaux.is_empty()
         {
-            fiche = fiche.with_reasoning_efforts(niveaux);
+            info = info.with_reasoning_efforts(niveaux);
         }
         // `cost` stays `None`: this endpoint publishes no price, and a price
         // copied from memory is a plausible and wrong value (I-12).
-        fiche
+        info
     }
 }
 
@@ -600,24 +600,24 @@ impl From<WireModel> for ModelInfo {
 ///
 /// An unreadable entry is **ignored**, not fatal: an exotic model must not
 /// make the twenty others invisible.
-pub(crate) fn parse_models(reponse: ModelsResponse) -> Vec<ModelInfo> {
-    let mut fiches = Vec::with_capacity(reponse.data.len());
-    let mut ignorees = 0_usize;
-    for entree in reponse.data {
-        match serde_json::from_value::<WireModel>(entree) {
-            Ok(brut) => fiches.push(ModelInfo::from(brut)),
-            Err(_) => ignorees += 1,
+pub(crate) fn parse_models(response: ModelsResponse) -> Vec<ModelInfo> {
+    let mut infos = Vec::with_capacity(response.data.len());
+    let mut ignored = 0_usize;
+    for entry in response.data {
+        match serde_json::from_value::<WireModel>(entry) {
+            Ok(raw) => infos.push(ModelInfo::from(raw)),
+            Err(_) => ignored += 1,
         }
     }
-    if ignorees > 0 {
+    if ignored > 0 {
         // The entry's content is not logged.
-        tracing::debug!(ignorees, "unreadable entries in the model list");
+        tracing::debug!(ignored, "unreadable entries in the model list");
     }
-    fiches
+    infos
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Comptage de jetons
+// Token counting
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Body of `POST /v1/messages/count_tokens`.

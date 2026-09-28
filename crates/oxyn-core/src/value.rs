@@ -79,7 +79,7 @@ pub enum ScalarValue {
 impl ScalarValue {
     /// Maximum number of bytes rendered by [`fmt::Display`] for
     /// [`Bytes`](Self::Bytes) before truncation.
-    const APERCU_OCTETS: usize = 32;
+    const PREVIEW_BYTES: usize = 32;
 
     /// Stable name of the type, usable in a message or a type mapping table.
     ///
@@ -130,10 +130,10 @@ impl fmt::Display for ScalarValue {
             Self::Text(t) => f.write_str(t),
             Self::Bytes(b) => {
                 f.write_str("\\x")?;
-                for octet in b.iter().take(Self::APERCU_OCTETS) {
-                    write!(f, "{octet:02x}")?;
+                for byte in b.iter().take(Self::PREVIEW_BYTES) {
+                    write!(f, "{byte:02x}")?;
                 }
-                if b.len() > Self::APERCU_OCTETS {
+                if b.len() > Self::PREVIEW_BYTES {
                     write!(f, "… ({} bytes)", b.len())?;
                 }
                 Ok(())
@@ -150,9 +150,9 @@ impl fmt::Display for ScalarValue {
                 nanos,
             } => {
                 // ISO 8601 form: the three components stay distinct.
-                let secondes = nanos / 1_000_000_000;
-                let reste = (nanos % 1_000_000_000).unsigned_abs();
-                write!(f, "P{months}M{days}DT{secondes}.{reste:09}S")
+                let seconds = nanos / 1_000_000_000;
+                let remainder = (nanos % 1_000_000_000).unsigned_abs();
+                write!(f, "P{months}M{days}DT{seconds}.{remainder:09}S")
             }
             Self::Json(v) => write!(f, "{v}"),
             Self::Array(items) => {
@@ -432,8 +432,8 @@ mod tests {
         assert_eq!(
             ScalarValue::Null.to_string(),
             ScalarValue::Text("NULL".into()).to_string(),
-            "si ces deux rendus divergent un jour, la grille peut cesser de les \
-             distinguer visuellement : c'est elle qui porte la distinction"
+            "if these two renderings ever diverge, the grid may stop telling them \
+             apart visually: the grid is what carries the distinction"
         );
     }
 
@@ -455,30 +455,33 @@ mod tests {
     #[test]
     fn an_instant_renders_in_utc() {
         let ts = DateTime::<Utc>::UNIX_EPOCH;
-        let rendu = ScalarValue::Timestamp(ts).to_string();
-        assert!(rendu.ends_with("+00:00"), "unexpected rendering: {rendu}");
-        assert!(rendu.starts_with("1970-01-01T00:00:00"));
+        let rendered = ScalarValue::Timestamp(ts).to_string();
+        assert!(
+            rendered.ends_with("+00:00"),
+            "unexpected rendering: {rendered}"
+        );
+        assert!(rendered.starts_with("1970-01-01T00:00:00"));
     }
 
     #[test]
     fn a_timestamp_without_time_zone_does_not_invent_one() {
         let naive = DateTime::<Utc>::UNIX_EPOCH.naive_utc();
-        let rendu = ScalarValue::TimestampNaive(naive).to_string();
+        let rendered = ScalarValue::TimestampNaive(naive).to_string();
         assert!(
-            !rendu.contains('+') && !rendu.ends_with('Z'),
-            "a time zone was invented: {rendu}"
+            !rendered.contains('+') && !rendered.ends_with('Z'),
+            "a time zone was invented: {rendered}"
         );
     }
 
     #[test]
     fn bytes_are_truncated_on_display() {
-        let court = ScalarValue::Bytes(vec![0x00, 0x0a, 0xff]);
-        assert_eq!(court.to_string(), "\\x000aff");
+        let short = ScalarValue::Bytes(vec![0x00, 0x0a, 0xff]);
+        assert_eq!(short.to_string(), "\\x000aff");
 
         let long = ScalarValue::Bytes(vec![0xab; 1024]);
-        let rendu = long.to_string();
-        assert!(rendu.contains("1024 bytes"), "rendering: {rendu}");
-        assert!(rendu.len() < 128, "a BLOB must not be rendered in full");
+        let rendered = long.to_string();
+        assert!(rendered.contains("1024 bytes"), "rendering: {rendered}");
+        assert!(rendered.len() < 128, "a BLOB must not be rendered in full");
     }
 
     #[test]
@@ -517,7 +520,7 @@ mod tests {
 
     #[test]
     fn json_round_trip() {
-        let cas = [
+        let cases = [
             ScalarValue::Null,
             ScalarValue::Bool(true),
             ScalarValue::Int64(-42),
@@ -532,10 +535,15 @@ mod tests {
             },
             ScalarValue::Array(vec![ScalarValue::Int64(1)]),
         ];
-        for valeur in cas {
-            let json = serde_json::to_string(&valeur).expect("serialization");
-            let relu: ScalarValue = serde_json::from_str(&json).expect("deserialization");
-            assert_eq!(valeur, relu, "round trip failed for {}", valeur.type_name());
+        for value in cases {
+            let json = serde_json::to_string(&value).expect("serialization");
+            let read_back: ScalarValue = serde_json::from_str(&json).expect("deserialization");
+            assert_eq!(
+                value,
+                read_back,
+                "round trip failed for {}",
+                value.type_name()
+            );
         }
     }
 
@@ -757,7 +765,7 @@ mod tests {
 
     #[test]
     fn parameter_parse_error_never_carries_the_rejected_text() {
-        let sentinel = "S3NT1NELLE";
+        let sentinel = "S3NT1NEL";
         let err = ParameterType::Int64.parse(sentinel).expect_err("invalid");
         assert!(!format!("{err:?}").contains(sentinel));
         assert!(!format!("{err}").contains(sentinel));

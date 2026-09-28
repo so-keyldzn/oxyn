@@ -108,59 +108,59 @@ impl FindOutcome {
 /// resident cells.
 #[must_use]
 pub fn find_rows(buffer: &ResultBuffer, needle: &str, options: &FormatOptions) -> FindOutcome {
-    let aiguille = needle.trim();
-    if aiguille.is_empty() {
+    let query = needle.trim();
+    if query.is_empty() {
         return FindOutcome::default();
     }
-    let aiguille = aiguille.to_lowercase();
+    let query = query.to_lowercase();
 
     // The search applies to the **whole** value, not its display cut at 512
     // characters: a `jsonb` value whose searched identifier falls beyond the
     // cut would give "no match", and the user would conclude that the value
     // is not in their result.
-    let entier = options.clone().with_max_len(0);
+    let integer = options.clone().with_max_len(0);
 
-    let mut trouvees = Vec::new();
-    let mut sautes = 0usize;
-    let mut plafonne = false;
+    let mut found = Vec::new();
+    let mut skipped = 0usize;
+    let mut hit_cap = false;
     for position in 0..buffer.batch_count() {
         let index = BatchIndex::new(position);
         if !buffer.is_resident(index) {
-            sautes += 1;
+            skipped += 1;
             continue;
         }
-        let (Some(lot), Some(depart)) = (buffer.cached_batch(index), buffer.batch_start(index))
+        let (Some(batch), Some(start)) = (buffer.cached_batch(index), buffer.batch_start(index))
         else {
             // Resident when tested, absent when read: the buffer may have
             // spilled in between. Counted as skipped rather than ignored,
             // otherwise the total would lie about what was read.
-            sautes += 1;
+            skipped += 1;
             continue;
         };
-        for ligne in 0..lot.num_rows() {
-            if trouvees.len() >= MATCH_LIMIT {
-                plafonne = true;
+        for row in 0..batch.num_rows() {
+            if found.len() >= MATCH_LIMIT {
+                hit_cap = true;
                 break;
             }
-            let correspond = (0..lot.num_columns()).any(|colonne| {
-                match format_cell(&lot, ligne, colonne, &entier) {
-                    CellValue::Text(texte) => texte.to_lowercase().contains(&aiguille),
-                    CellValue::Truncated { text, .. } => text.to_lowercase().contains(&aiguille),
+            let matches = (0..batch.num_columns()).any(|column| {
+                match format_cell(&batch, row, column, &integer) {
+                    CellValue::Text(txt) => txt.to_lowercase().contains(&query),
+                    CellValue::Truncated { text, .. } => text.to_lowercase().contains(&query),
                     // `Null` and `Unrenderable` match nothing: see the `///`.
                     // An unknown variant neither — inventing a match would be
                     // worse than missing one.
                     _ => false,
                 }
             });
-            if correspond {
-                trouvees.push(depart + ligne);
+            if matches {
+                found.push(start + row);
             }
         }
     }
     FindOutcome {
-        rows: trouvees,
-        skipped_batches: sautes,
-        capped: plafonne,
+        rows: found,
+        skipped_batches: skipped,
+        capped: hit_cap,
     }
 }
 

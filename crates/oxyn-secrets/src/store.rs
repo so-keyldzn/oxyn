@@ -379,23 +379,23 @@ mod tests {
         // Falling back to the derived reference would read *another* secret than
         // the one the file designates. Reading nothing is less serious.
         let cfg = ConnectionConfig::new("customer database", DriverId::postgres())
-            .with_secret_ref("oxyn/connexion/prod-eu");
+            .with_secret_ref("oxyn/connection/prod-eu");
         assert!(SecretRef::for_connection_config(&cfg).is_err());
     }
 
     #[test]
     fn the_canonical_format_round_trips() {
-        for texte in [
+        for text in [
             "oxyn:conn:018f0000-0000-7000-8000-000000000000",
             "oxyn:llm:anthropic",
             "oxyn:llm:azure.openai",
             "oxyn:tunnel_ssh:bastion-eu",
         ] {
-            let reference = SecretRef::parse(texte).expect(texte);
-            assert_eq!(reference.as_str(), texte);
-            assert_eq!(reference.to_string(), texte);
-            let relu: SecretRef = texte.parse().expect("FromStr");
-            assert_eq!(reference, relu);
+            let reference = SecretRef::parse(text).expect(text);
+            assert_eq!(reference.as_str(), text);
+            assert_eq!(reference.to_string(), text);
+            let read_back: SecretRef = text.parse().expect("FromStr");
+            assert_eq!(reference, read_back);
         }
     }
 
@@ -403,29 +403,29 @@ mod tests {
     fn a_reference_from_a_file_cannot_designate_what_it_wants() {
         // Each of these values is plausible in a workspace file written by a third
         // party. All must be refused before reaching the system keychain.
-        for texte in [
+        for text in [
             "",
             "oxyn",
             "oxyn:conn",
             "oxyn:conn:",
-            "oxyn::nom",
-            "autre:conn:nom",
-            "oxyn:conn:nom:supplement",
+            "oxyn::name",
+            "other:conn:name",
+            "oxyn:conn:name:extra",
             "oxyn:conn:name with space",
-            "oxyn:conn:nom\nligne2",
-            "oxyn:conn:nom\u{0}",
-            "oxyn:conn:../../autre",
+            "oxyn:conn:name\nligne2",
+            "oxyn:conn:name\u{0}",
+            "oxyn:conn:../../other",
             "oxyn:conn:..",
             "oxyn:conn:.",
-            "oxyn:conn:-nom",
-            "oxyn:CONN:nom",
-            "oxyn:1conn:nom",
-            "oxyn:conn:nom/chemin",
-            "oxyn:conn:nom;rm -rf",
+            "oxyn:conn:-name",
+            "oxyn:CONN:name",
+            "oxyn:1conn:name",
+            "oxyn:conn:name/path",
+            "oxyn:conn:name;rm -rf",
         ] {
             assert!(
-                SecretRef::parse(texte).is_err(),
-                "{texte:?} should have been refused"
+                SecretRef::parse(text).is_err(),
+                "{text:?} should have been refused"
             );
         }
         assert!(SecretRef::parse(&format!("oxyn:conn:{}", "a".repeat(129))).is_err());
@@ -451,8 +451,8 @@ mod tests {
         let reference = SecretRef::for_provider("ollama").expect("valid");
         let json = serde_json::to_string(&reference).expect("serialization");
         assert_eq!(json, "\"oxyn:llm:ollama\"");
-        let relu: SecretRef = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(relu, reference);
+        let read_back: SecretRef = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(read_back, reference);
         assert!(
             serde_json::from_str::<SecretRef>("\"oxyn:llm:oll ama\"").is_err(),
             "validation must apply to deserialization too"
@@ -480,12 +480,12 @@ mod tests {
             .with_token("sk-witness");
         store.put_bundle(&reference, &bundle).expect("write");
 
-        let relu = store
+        let read_back = store
             .get_bundle(&reference)
             .expect("read")
             .expect("the bundle was just written");
-        assert_eq!(relu.password(), Some("hunter2"));
-        assert_eq!(relu.token(), Some("sk-witness"));
+        assert_eq!(read_back.password(), Some("hunter2"));
+        assert_eq!(read_back.token(), Some("sk-witness"));
     }
 
     #[test]

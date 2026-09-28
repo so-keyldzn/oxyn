@@ -45,7 +45,7 @@ use oxyn_core::query::SqlDialect;
 use serde::{Deserialize, Serialize};
 
 /// Number of nameable levels in a path.
-const PALIERS: usize = 3;
+const TIERS: usize = 3;
 
 /// Failure to parse or build a catalog path.
 ///
@@ -158,23 +158,23 @@ impl QuoteStyle {
 /// out quoted as is. Validation happens when a [`CatalogPath`] is built.
 #[must_use]
 pub fn quote_identifier(name: &str, style: QuoteStyle) -> String {
-    let (ouvrant, fermant) = match style {
+    let (opening, closing) = match style {
         QuoteStyle::Double => ('"', '"'),
         QuoteStyle::Backtick => ('`', '`'),
         QuoteStyle::Bracket => ('[', ']'),
         QuoteStyle::Bare => return name.to_owned(),
     };
     let mut sortie = String::with_capacity(name.len() + 2);
-    sortie.push(ouvrant);
+    sortie.push(opening);
     for c in name.chars() {
         // In all three styles, only the closing character needs doubling — it
         // is the only one that can close the quoting by surprise.
-        if c == fermant {
+        if c == closing {
             sortie.push(c);
         }
         sortie.push(c);
     }
-    sortie.push(fermant);
+    sortie.push(closing);
     sortie
 }
 
@@ -248,8 +248,8 @@ impl CatalogPath {
         namespace: Option<String>,
         relation: Option<String>,
     ) -> Result<Self, CatalogPathError> {
-        for nom in [&catalog, &namespace, &relation].into_iter().flatten() {
-            validate_segment(nom)?;
+        for ident in [&catalog, &namespace, &relation].into_iter().flatten() {
+            validate_segment(ident)?;
         }
         Ok(Self {
             catalog,
@@ -439,10 +439,10 @@ impl CatalogPath {
     /// ```
     /// use oxyn_catalog::path::{CatalogPath, QuoteStyle};
     ///
-    /// let chemin = CatalogPath::for_relation(None, Some("public"), r#"users"; DROP TABLE audit; --"#)
+    /// let item_path = CatalogPath::for_relation(None, Some("public"), r#"users"; DROP TABLE audit; --"#)
     ///     .expect("the name is legal, only hostile");
     /// assert_eq!(
-    ///     chemin.qualify(QuoteStyle::Double),
+    ///     item_path.qualify(QuoteStyle::Double),
     ///     r#""public"."users""; DROP TABLE audit; --""#
     /// );
     /// ```
@@ -475,9 +475,9 @@ impl CatalogPath {
     /// exactly. The empty path contains everything.
     #[must_use]
     pub fn starts_with(&self, prefix: &Self) -> bool {
-        let correspond = |exige: Option<&str>, reel: Option<&str>| match exige {
+        let correspond = |required: Option<&str>, actual: Option<&str>| match required {
             None => true,
-            Some(attendu) => reel == Some(attendu),
+            Some(expected) => actual == Some(expected),
         };
         correspond(prefix.catalog(), self.catalog())
             && correspond(prefix.namespace(), self.namespace())
@@ -487,12 +487,12 @@ impl CatalogPath {
 
 /// Writes a segment, quoted if — and only if — the rendering would stay
 /// ambiguous.
-fn ecrire_segment(f: &mut fmt::Formatter<'_>, nom: &str) -> fmt::Result {
-    if !nom.contains('.') && !nom.contains('"') {
-        return f.write_str(nom);
+fn write_segment(f: &mut fmt::Formatter<'_>, ident: &str) -> fmt::Result {
+    if !ident.contains('.') && !ident.contains('"') {
+        return f.write_str(ident);
     }
     f.write_char('"')?;
-    for c in nom.chars() {
+    for c in ident.chars() {
         if c == '"' {
             f.write_char('"')?;
         }
@@ -509,16 +509,16 @@ impl fmt::Display for CatalogPath {
     /// relation keeps its trailing dots (`base.schema.`). That is what makes
     /// the round trip exact; see the module documentation.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let paliers = [self.catalog(), self.namespace(), self.relation()];
-        let Some(premier) = paliers.iter().position(Option::is_some) else {
+        let tiers = [self.catalog(), self.namespace(), self.relation()];
+        let Some(first) = tiers.iter().position(Option::is_some) else {
             return Ok(());
         };
-        for (i, palier) in paliers.iter().enumerate().skip(premier) {
-            if i > premier {
+        for (i, tier) in tiers.iter().enumerate().skip(first) {
+            if i > first {
                 f.write_char('.')?;
             }
-            if let Some(nom) = palier {
-                ecrire_segment(f, nom)?;
+            if let Some(ident) = tier {
+                write_segment(f, ident)?;
             }
         }
         Ok(())
@@ -526,84 +526,87 @@ impl fmt::Display for CatalogPath {
 }
 
 /// State of the segment parser.
-enum EtatLecture {
+enum ReadState {
     /// Outside a quote.
     Normal,
     /// Inside a quote.
     Cite,
     /// Right after a closed quote: only a separator is acceptable.
-    ApresCitation,
+    AfterQuote,
 }
 
 /// Splits a string into segments, honoring `"…"` quotes.
 ///
 /// Returns `None` for an empty segment, that is a missing level.
-fn decouper(entree: &str) -> Result<Vec<Option<String>>, CatalogPathError> {
-    let mut segments = Vec::with_capacity(PALIERS);
-    let mut courant = String::new();
-    let mut etat = EtatLecture::Normal;
+fn split_segments(entree: &str) -> Result<Vec<Option<String>>, CatalogPathError> {
+    let mut segments = Vec::with_capacity(TIERS);
+    let mut current = String::new();
+    let mut state = ReadState::Normal;
     let mut caracteres = entree.chars().peekable();
 
     while let Some(c) = caracteres.next() {
-        match etat {
-            EtatLecture::Cite => {
+        match state {
+            ReadState::Cite => {
                 if c == '"' {
                     if caracteres.peek() == Some(&'"') {
-                        courant.push('"');
+                        current.push('"');
                         caracteres.next();
                     } else {
-                        etat = EtatLecture::ApresCitation;
+                        state = ReadState::AfterQuote;
                     }
                 } else {
-                    courant.push(c);
+                    current.push(c);
                 }
             }
-            EtatLecture::ApresCitation => {
+            ReadState::AfterQuote => {
                 if c != '.' {
                     return Err(CatalogPathError::new(
                         "a quoted level must be followed by a separator",
                     ));
                 }
-                segments.push(cloturer(&mut courant, true)?);
-                etat = EtatLecture::Normal;
+                segments.push(finish_segment(&mut current, true)?);
+                state = ReadState::Normal;
             }
-            EtatLecture::Normal => match c {
-                '"' if courant.is_empty() => etat = EtatLecture::Cite,
+            ReadState::Normal => match c {
+                '"' if current.is_empty() => state = ReadState::Cite,
                 '"' => {
                     return Err(CatalogPathError::new(
                         "a quote cannot start in the middle of a level",
                     ));
                 }
-                '.' => segments.push(cloturer(&mut courant, false)?),
-                _ => courant.push(c),
+                '.' => segments.push(finish_segment(&mut current, false)?),
+                _ => current.push(c),
             },
         }
     }
 
-    match etat {
-        EtatLecture::Cite => Err(CatalogPathError::new("unterminated quote")),
-        EtatLecture::ApresCitation => {
-            segments.push(cloturer(&mut courant, true)?);
+    match state {
+        ReadState::Cite => Err(CatalogPathError::new("unterminated quote")),
+        ReadState::AfterQuote => {
+            segments.push(finish_segment(&mut current, true)?);
             Ok(segments)
         }
-        EtatLecture::Normal => {
-            segments.push(cloturer(&mut courant, false)?);
+        ReadState::Normal => {
+            segments.push(finish_segment(&mut current, false)?);
             Ok(segments)
         }
     }
 }
 
 /// Closes the current segment.
-fn cloturer(courant: &mut String, etait_cite: bool) -> Result<Option<String>, CatalogPathError> {
-    let valeur = std::mem::take(courant);
-    if valeur.is_empty() {
-        if etait_cite {
+fn finish_segment(
+    current: &mut String,
+    was_quoted: bool,
+) -> Result<Option<String>, CatalogPathError> {
+    let raw_value = std::mem::take(current);
+    if raw_value.is_empty() {
+        if was_quoted {
             return Err(CatalogPathError::new("a quoted level cannot be empty"));
         }
         return Ok(None);
     }
-    validate_segment(&valeur)?;
-    Ok(Some(valeur))
+    validate_segment(&raw_value)?;
+    Ok(Some(raw_value))
 }
 
 impl FromStr for CatalogPath {
@@ -612,18 +615,18 @@ impl FromStr for CatalogPath {
     /// Parses a path by aligning the segments **from the right**: the last
     /// segment is the relation.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let segments = decouper(s)?;
-        if segments.len() > PALIERS {
+        let segments = split_segments(s)?;
+        if segments.len() > TIERS {
             return Err(CatalogPathError::new("more than three levels"));
         }
-        let mut paliers: [Option<String>; PALIERS] = [None, None, None];
-        let decalage = PALIERS - segments.len();
+        let mut tiers: [Option<String>; TIERS] = [None, None, None];
+        let offset = TIERS - segments.len();
         for (i, segment) in segments.into_iter().enumerate() {
-            if let Some(emplacement) = paliers.get_mut(decalage + i) {
+            if let Some(emplacement) = tiers.get_mut(offset + i) {
                 *emplacement = segment;
             }
         }
-        let [catalog, namespace, relation] = paliers;
+        let [catalog, namespace, relation] = tiers;
         Ok(Self {
             catalog,
             namespace,
@@ -652,19 +655,19 @@ mod tests {
 
     /// The table name of [I-10]: legal in PostgreSQL, and a table drop if it
     /// is concatenated.
-    const NOM_HOSTILE: &str = r#"users"; DROP TABLE audit; --"#;
+    const HOSTILE_NAME: &str = r#"users"; DROP TABLE audit; --"#;
 
     #[test]
     fn missing_levels_are_tolerated() {
-        let postgres = CatalogPath::for_relation(Some("caisse"), Some("public"), "clients")
+        let postgres = CatalogPath::for_relation(Some("sales"), Some("public"), "clients")
             .expect("valid path");
         assert_eq!(postgres.depth(), 3);
 
-        let mysql = CatalogPath::for_relation(None, Some("caisse"), "clients").expect("valid");
+        let mysql = CatalogPath::for_relation(None, Some("sales"), "clients").expect("valid");
         assert_eq!(mysql.depth(), 2);
         assert_eq!(mysql.catalog(), None);
 
-        let elasticsearch = CatalogPath::for_relation(None, None, "journaux").expect("valid");
+        let elasticsearch = CatalogPath::for_relation(None, None, "logs").expect("valid");
         assert_eq!(elasticsearch.depth(), 1);
         assert_eq!(elasticsearch.level(), CatalogLevel::Relation);
     }
@@ -672,22 +675,22 @@ mod tests {
     #[test]
     fn the_rendering_is_natural_for_common_cases() {
         assert_eq!(
-            CatalogPath::for_relation(Some("caisse"), Some("public"), "clients")
+            CatalogPath::for_relation(Some("sales"), Some("public"), "clients")
                 .expect("valid")
                 .to_string(),
-            "caisse.public.clients"
+            "sales.public.clients"
         );
         assert_eq!(
-            CatalogPath::for_relation(None, Some("caisse"), "clients")
+            CatalogPath::for_relation(None, Some("sales"), "clients")
                 .expect("valid")
                 .to_string(),
-            "caisse.clients"
+            "sales.clients"
         );
         assert_eq!(
-            CatalogPath::for_relation(None, None, "journaux")
+            CatalogPath::for_relation(None, None, "logs")
                 .expect("valid")
                 .to_string(),
-            "journaux"
+            "logs"
         );
         assert_eq!(CatalogPath::empty().to_string(), "");
     }
@@ -695,21 +698,21 @@ mod tests {
     #[test]
     fn a_hole_in_the_middle_renders_and_reads_back() {
         // Neo4j: a database and a node label, without an intermediate level.
-        let neo4j = CatalogPath::for_relation(Some("graphe"), None, "Personne").expect("valid");
-        assert_eq!(neo4j.to_string(), "graphe..Personne");
+        let neo4j = CatalogPath::for_relation(Some("graph"), None, "Person").expect("valid");
+        assert_eq!(neo4j.to_string(), "graph..Person");
 
-        let relu: CatalogPath = "graphe..Personne".parse().expect("readable");
-        assert_eq!(relu, neo4j);
-        assert_eq!(relu.catalog(), Some("graphe"));
-        assert_eq!(relu.namespace(), None);
+        let reread: CatalogPath = "graph..Person".parse().expect("readable");
+        assert_eq!(reread, neo4j);
+        assert_eq!(reread.catalog(), Some("graph"));
+        assert_eq!(reread.namespace(), None);
     }
 
     #[test]
     fn a_prefix_path_keeps_its_level() {
-        // The case that breaks without the trailing dots: `caisse` alone would
+        // The case that breaks without the trailing dots: `sales` alone would
         // be read back as a relation, and the catalog level would vanish.
-        let catalogue = CatalogPath::for_catalog("caisse").expect("valid");
-        assert_eq!(catalogue.to_string(), "caisse..");
+        let catalogue = CatalogPath::for_catalog("sales").expect("valid");
+        assert_eq!(catalogue.to_string(), "sales..");
         assert_eq!(
             catalogue
                 .to_string()
@@ -718,41 +721,38 @@ mod tests {
             catalogue
         );
 
-        let espace = CatalogPath::for_namespace(Some("caisse"), "public").expect("valid");
-        assert_eq!(espace.to_string(), "caisse.public.");
+        let space = CatalogPath::for_namespace(Some("sales"), "public").expect("valid");
+        assert_eq!(space.to_string(), "sales.public.");
         assert_eq!(
-            espace
-                .to_string()
-                .parse::<CatalogPath>()
-                .expect("read back"),
-            espace
+            space.to_string().parse::<CatalogPath>().expect("read back"),
+            space
         );
 
-        let espace_seul = CatalogPath::for_namespace(None, "public").expect("valid");
-        assert_eq!(espace_seul.to_string(), "public.");
+        let space_only = CatalogPath::for_namespace(None, "public").expect("valid");
+        assert_eq!(space_only.to_string(), "public.");
         assert_eq!(
-            espace_seul
+            space_only
                 .to_string()
                 .parse::<CatalogPath>()
                 .expect("read back"),
-            espace_seul
+            space_only
         );
     }
 
     #[test]
     fn round_trip_over_every_level_arrangement() {
         for catalogue in [None, Some("c")] {
-            for espace in [None, Some("n")] {
+            for space in [None, Some("n")] {
                 for relation in [None, Some("r")] {
-                    let chemin = CatalogPath::from_levels(
+                    let item_path = CatalogPath::from_levels(
                         catalogue.map(str::to_owned),
-                        espace.map(str::to_owned),
+                        space.map(str::to_owned),
                         relation.map(str::to_owned),
                     )
                     .expect("valid");
-                    let rendu = chemin.to_string();
-                    let relu: CatalogPath = rendu.parse().expect("readable");
-                    assert_eq!(relu, chemin, "round trip broken for {rendu:?}");
+                    let rendered = item_path.to_string();
+                    let reread: CatalogPath = rendered.parse().expect("readable");
+                    assert_eq!(reread, item_path, "round trip broken for {rendered:?}");
                 }
             }
         }
@@ -760,36 +760,38 @@ mod tests {
 
     #[test]
     fn a_name_containing_a_dot_is_quoted_when_rendered() {
-        let chemin = CatalogPath::for_relation(None, Some("public"), "ventes.2026").expect("valid");
-        assert_eq!(chemin.to_string(), r#"public."ventes.2026""#);
-        let relu: CatalogPath = chemin.to_string().parse().expect("readable");
-        assert_eq!(relu, chemin);
-        assert_eq!(relu.relation(), Some("ventes.2026"));
+        let item_path =
+            CatalogPath::for_relation(None, Some("public"), "ventes.2026").expect("valid");
+        assert_eq!(item_path.to_string(), r#"public."ventes.2026""#);
+        let reread: CatalogPath = item_path.to_string().parse().expect("readable");
+        assert_eq!(reread, item_path);
+        assert_eq!(reread.relation(), Some("ventes.2026"));
     }
 
     #[test]
     fn a_name_containing_a_double_quote_is_quoted_when_rendered() {
-        let chemin = CatalogPath::for_relation(None, None, NOM_HOSTILE).expect("valid");
-        let relu: CatalogPath = chemin.to_string().parse().expect("readable");
-        assert_eq!(relu, chemin);
-        assert_eq!(relu.relation(), Some(NOM_HOSTILE));
+        let item_path = CatalogPath::for_relation(None, None, HOSTILE_NAME).expect("valid");
+        let reread: CatalogPath = item_path.to_string().parse().expect("readable");
+        assert_eq!(reread, item_path);
+        assert_eq!(reread.relation(), Some(HOSTILE_NAME));
     }
 
     #[test]
     fn qualify_quotes_a_hostile_name() {
         // I-10: SQL composed by Oxyn never concatenates a received identifier.
-        let chemin = CatalogPath::for_relation(None, Some("public"), NOM_HOSTILE).expect("valid");
+        let item_path =
+            CatalogPath::for_relation(None, Some("public"), HOSTILE_NAME).expect("valid");
 
-        let ansi = chemin.qualify(QuoteStyle::Double);
+        let ansi = item_path.qualify(QuoteStyle::Double);
         assert_eq!(ansi, r#""public"."users""; DROP TABLE audit; --""#);
         // The semicolon stays inside the quoting: counted in double quotes, the
         // identifier is whole.
         assert_eq!(ansi.matches('"').count() % 2, 0);
 
-        let mysql = chemin.qualify(QuoteStyle::Backtick);
+        let mysql = item_path.qualify(QuoteStyle::Backtick);
         assert_eq!(mysql, r#"`public`.`users"; DROP TABLE audit; --`"#);
 
-        let tsql = chemin.qualify(QuoteStyle::Bracket);
+        let tsql = item_path.qualify(QuoteStyle::Bracket);
         assert_eq!(tsql, r#"[public].[users"; DROP TABLE audit; --]"#);
     }
 
@@ -803,16 +805,16 @@ mod tests {
 
     #[test]
     fn qualify_ignores_missing_levels() {
-        let neo4j = CatalogPath::for_relation(Some("graphe"), None, "Personne").expect("valid");
+        let neo4j = CatalogPath::for_relation(Some("graph"), None, "Person").expect("valid");
         // No empty `.` in query text: it would be a syntax error, where the
         // reversible rendering needs it.
-        assert_eq!(neo4j.qualify(QuoteStyle::Double), r#""graphe"."Personne""#);
+        assert_eq!(neo4j.qualify(QuoteStyle::Double), r#""graph"."Person""#);
     }
 
     #[test]
     fn qualify_sql_never_leaves_a_bare_name() {
-        let chemin = CatalogPath::for_relation(None, None, NOM_HOSTILE).expect("valid");
-        for dialecte in [
+        let item_path = CatalogPath::for_relation(None, None, HOSTILE_NAME).expect("valid");
+        for sql_dialect in [
             SqlDialect::Ansi,
             SqlDialect::Postgres,
             SqlDialect::MySql,
@@ -825,12 +827,12 @@ mod tests {
             SqlDialect::BigQuery,
             SqlDialect::Redshift,
         ] {
-            let rendu = chemin.qualify_sql(dialecte);
-            assert_ne!(rendu, NOM_HOSTILE, "{dialecte} leaves the name bare");
-            let premier = rendu.chars().next().expect("non-empty rendering");
+            let rendered = item_path.qualify_sql(sql_dialect);
+            assert_ne!(rendered, HOSTILE_NAME, "{sql_dialect} leaves the name bare");
+            let first = rendered.chars().next().expect("non-empty rendering");
             assert!(
-                matches!(premier, '"' | '`' | '['),
-                "{dialecte}: {rendu} does not start with a quote"
+                matches!(first, '"' | '`' | '['),
+                "{sql_dialect}: {rendered} does not start with a quote"
             );
         }
     }
@@ -854,7 +856,7 @@ mod tests {
     #[test]
     fn malformed_paths_are_refused() {
         assert!("a.b.c.d".parse::<CatalogPath>().is_err());
-        assert!(r#""non fermé"#.parse::<CatalogPath>().is_err());
+        assert!(r#""not closed"#.parse::<CatalogPath>().is_err());
         assert!(r#"a"b""#.parse::<CatalogPath>().is_err());
         assert!(r#""a"b"#.parse::<CatalogPath>().is_err());
         assert!(r#""".t"#.parse::<CatalogPath>().is_err());
@@ -863,13 +865,13 @@ mod tests {
     #[test]
     fn parent_climbs_level_by_level() {
         let relation = CatalogPath::for_relation(Some("c"), Some("n"), "r").expect("valid");
-        let espace = relation.parent().expect("a relation has a parent");
-        assert_eq!(espace.level(), CatalogLevel::Namespace);
-        let catalogue = espace.parent().expect("a namespace has a parent");
+        let space = relation.parent().expect("a relation has a parent");
+        assert_eq!(space.level(), CatalogLevel::Namespace);
+        let catalogue = space.parent().expect("a namespace has a parent");
         assert_eq!(catalogue.level(), CatalogLevel::Catalog);
-        let serveur = catalogue.parent().expect("a catalog has a parent");
-        assert!(serveur.is_empty());
-        assert_eq!(serveur.parent(), None);
+        let server = catalogue.parent().expect("a catalog has a parent");
+        assert!(server.is_empty());
+        assert_eq!(server.parent(), None);
     }
 
     #[test]
@@ -878,7 +880,7 @@ mod tests {
         assert!(relation.starts_with(&CatalogPath::empty()));
         assert!(relation.starts_with(&CatalogPath::for_catalog("c").expect("valid")));
         assert!(relation.starts_with(&CatalogPath::for_namespace(Some("c"), "n").expect("valid")));
-        assert!(!relation.starts_with(&CatalogPath::for_catalog("autre").expect("valid")));
+        assert!(!relation.starts_with(&CatalogPath::for_catalog("other").expect("valid")));
     }
 
     #[test]

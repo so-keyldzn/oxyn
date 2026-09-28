@@ -156,7 +156,7 @@ pub struct CancelRegistry {
 }
 
 impl CancelRegistry {
-    /// Registre vide.
+    /// Empty registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -254,12 +254,12 @@ impl CancelRegistry {
             match sessions.get(entry.session) {
                 Some(slot) => match slot.cancel_statement(statement).await {
                     Ok(()) => ServerCancel::Requested,
-                    Err(erreur) => {
+                    Err(err) => {
                         // Logged at `warn` level and not propagated: the caller
                         // just asked for a cancellation, returning an error would
                         // leave it nothing more to do.
                         tracing::warn!(
-                            error = %erreur,
+                            error = %err,
                             "server-side cancellation refused; the statement may still run"
                         );
                         ServerCancel::Failed
@@ -288,11 +288,11 @@ impl CancelRegistry {
         sessions: &SessionRegistry,
         connection: ConnectionId,
     ) -> Vec<CancelReport> {
-        let mut rapports = Vec::new();
+        let mut reports = Vec::new();
         for entry in self.for_connection(connection) {
-            rapports.push(self.cancel(sessions, entry.statement).await);
+            reports.push(self.cancel(sessions, entry.statement).await);
         }
-        rapports
+        reports
     }
 }
 
@@ -300,7 +300,7 @@ impl CancelRegistry {
 mod tests {
     use super::*;
 
-    fn entree(capabilities: Capabilities) -> RunningStatement {
+    fn running_entry(capabilities: Capabilities) -> RunningStatement {
         RunningStatement::new(
             StatementHandle::new(),
             CommandId::new(),
@@ -313,66 +313,67 @@ mod tests {
 
     #[test]
     fn a_cancellation_triggers_the_execution_token() {
-        let registre = CancelRegistry::new();
-        let entree = entree(Capabilities::empty());
-        let jeton = entree.token().clone();
-        let poignee = entree.statement;
-        registre.register(entree);
+        let registry = CancelRegistry::new();
+        let entry = running_entry(Capabilities::empty());
+        let ct = entry.token().clone();
+        let handle = entry.statement;
+        registry.register(entry);
 
-        assert!(!jeton.is_cancelled());
-        let annulee = registre
-            .cancel_client(poignee)
+        assert!(!ct.is_cancelled());
+        let cancelled = registry
+            .cancel_client(handle)
             .expect("the execution is registered");
-        assert!(jeton.is_cancelled());
-        assert!(annulee.is_cancelled());
+        assert!(ct.is_cancelled());
+        assert!(cancelled.is_cancelled());
     }
 
     #[test]
     fn the_entry_survives_cancellation() {
         // `Esc` pressed twice must not produce "unknown execution" while it is
         // still running: it is the draining loop that removes.
-        let registre = CancelRegistry::new();
-        let entree = entree(Capabilities::empty());
-        let poignee = entree.statement;
-        registre.register(entree);
+        let registry = CancelRegistry::new();
+        let entry = running_entry(Capabilities::empty());
+        let handle = entry.statement;
+        registry.register(entry);
 
-        registre.cancel_client(poignee);
-        assert_eq!(registre.len(), 1);
-        assert!(registre.cancel_client(poignee).is_some());
+        registry.cancel_client(handle);
+        assert_eq!(registry.len(), 1);
+        assert!(registry.cancel_client(handle).is_some());
 
-        assert!(registre.finish(poignee).is_some());
-        assert!(registre.is_empty());
-        assert!(registre.finish(poignee).is_none());
+        assert!(registry.finish(handle).is_some());
+        assert!(registry.is_empty());
+        assert!(registry.finish(handle).is_none());
     }
 
     #[test]
     fn cancelling_an_unknown_execution_is_not_an_error() {
-        let registre = CancelRegistry::new();
-        assert!(registre.cancel_client(StatementHandle::new()).is_none());
+        let registry = CancelRegistry::new();
+        assert!(registry.cancel_client(StatementHandle::new()).is_none());
     }
 
     #[test]
     fn the_server_cancel_capability_is_read_on_the_session() {
-        assert!(!entree(Capabilities::SQL).supports_server_cancel());
+        assert!(!running_entry(Capabilities::SQL).supports_server_cancel());
         assert!(
-            entree(Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL).supports_server_cancel()
+            running_entry(Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL)
+                .supports_server_cancel()
         );
     }
 
     #[test]
     fn the_registry_finds_the_executions_of_a_connection() {
-        let registre = CancelRegistry::new();
-        let connexion = ConnectionId::new();
+        let registry = CancelRegistry::new();
+        let conn = ConnectionId::new();
 
         for _ in 0..3 {
-            let mut e = entree(Capabilities::empty());
-            e.connection = connexion;
-            registre.register(e);
+            let mut e = running_entry(Capabilities::empty());
+            e.connection = conn;
+            registry.register(e);
         }
-        registre.register(entree(Capabilities::empty()));
+        registry.register(running_entry(Capabilities::empty()));
 
-        assert_eq!(registre.for_connection(connexion).len(), 3);
-        assert_eq!(registre.len(), 4);
+        assert_eq!(registry.for_connection(conn).len(), 3);
+        assert_eq!(registry.len(), 4);
     }
 
     #[test]

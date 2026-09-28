@@ -430,11 +430,11 @@ struct PreviewSession(Arc<Probe>);
 #[async_trait]
 impl Session for PreviewSession {
     fn capabilities(&self) -> Capabilities {
-        let mut capacites = Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL;
+        let mut caps = Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL;
         if self.0.shapes_previews {
-            capacites |= Capabilities::PREVIEW_SORT | Capabilities::PREVIEW_FILTER;
+            caps |= Capabilities::PREVIEW_SORT | Capabilities::PREVIEW_FILTER;
         }
-        capacites
+        caps
     }
     async fn preview_request(
         &self,
@@ -450,16 +450,16 @@ impl Session for PreviewSession {
         }
         // The predicate is inserted as a real driver does: it is what lets the
         // reclassification be exercised on the final text.
-        let texte = if self.0.mutating {
+        let text = if self.0.mutating {
             "DELETE FROM audit".to_owned()
-        } else if let Some(predicat) = shape.predicate() {
-            format!("SELECT * FROM t WHERE ({predicat}\n)")
+        } else if let Some(pred) = shape.predicate() {
+            format!("SELECT * FROM t WHERE ({pred}\n)")
         } else {
             "SELECT 1".to_owned()
         };
         // Deliberately wrong limits and intent test executor defenses.
         Ok(
-            ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), texte)
+            ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), text)
                 .with_intent(StatementIntent::Read)
                 .with_limits(ExecLimits::unbounded()),
         )
@@ -748,16 +748,16 @@ fn preview_refuses_a_sort_or_predicate_the_session_does_not_declare() {
     let probe = Arc::new(Probe::default());
     let (executor, connection, session) = fake(probe.clone(), None);
 
-    let mut trie = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut trie {
+    let mut sorted = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut sorted {
         shape.sort = vec![oxyn_core::PreviewSort::ascending("id")];
     }
-    let mut filtre = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut filtre {
+    let mut filter = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut filter {
         shape.predicate = Some("id > 10".into());
     }
 
-    for command in [trie, filtre] {
+    for command in [sorted, filter] {
         assert!(matches!(
             block_on(executor.dispatch(Actor::Human, command, &CancelToken::new())),
             Err(OxynError::NotSupported { .. })
@@ -772,11 +772,11 @@ fn preview_refuses_a_sort_or_predicate_the_session_does_not_declare() {
     // The negative test, without which the previous one would pass even if the
     // preview were refused in all circumstances: an empty predicate asks for
     // nothing, so nothing is refused.
-    let mut vide = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut vide {
+    let mut empty = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut empty {
         shape.predicate = Some("   ".into());
     }
-    assert!(block_on(executor.dispatch(Actor::Human, vide, &CancelToken::new())).is_ok());
+    assert!(block_on(executor.dispatch(Actor::Human, empty, &CancelToken::new())).is_ok());
     assert_eq!(probe.prepared.lock().len(), 1);
 }
 
@@ -793,12 +793,12 @@ fn preview_tells_an_unreadable_filter_apart_from_a_write() {
         ..Probe::default()
     });
     let (executor, connection, session) = fake(probe.clone(), None);
-    let mut casse = preview(connection, session, 200);
-    if let Command::PreviewRelation { shape, .. } = &mut casse {
+    let mut broken = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut broken {
         shape.predicate = Some("id >< 3".into());
     }
     let Err(OxynError::PolicyDenied { reason }) =
-        block_on(executor.dispatch(Actor::Human, casse, &CancelToken::new()))
+        block_on(executor.dispatch(Actor::Human, broken, &CancelToken::new()))
     else {
         panic!("an unreadable predicate is refused");
     };

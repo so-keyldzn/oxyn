@@ -1,7 +1,7 @@
 //! The agent runtime: tools, context, privacy.
 //!
 //! "AI is a user of the product, not a layer of the product"
-//! ([ARCHITECTURE](../../docs/ARCHITECTURE.md), constraint no. 4). This crate
+//! ([ARCHITECTURE](../../../docs/ARCHITECTURE.md), constraint no. 4). This crate
 //! is what makes that sentence true in the code: an agent is a configuration
 //! that produces [`Command`](oxyn_core::Command)s carrying `Actor::Agent`, and
 //! nothing more.
@@ -64,20 +64,20 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // The context is built from the local catalog, under the connection's
 //! // tier — never from a global setting.
-//! let catalogue = CatalogCache::new();
-//! let contexte = ContextBuilder::new(&catalogue, PrivacyTier::Metadata)
+//! let catalog = CatalogCache::new();
+//! let context = ContextBuilder::new(&catalog, PrivacyTier::Metadata)
 //!     .focused_on("how many active customers?")
 //!     .build();
 //!
 //! // No row value can leave under this tier.
-//! assert!(!contexte.tier().allows_row_values());
+//! assert!(!context.tier().allows_row_values());
 //!
 //! // The agent is a declaration; its tools are the core's Commands.
 //! let agent = sql_agent();
 //! agent.validate(&ToolRegistry::builtin())?;
 //!
-//! let perimetre = ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL);
-//! let mut conversation = AgentSession::new(&agent, &contexte, perimetre);
+//! let scope = ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL);
+//! let mut conversation = AgentSession::new(&agent, &context, scope);
 //! conversation.ask("how many active customers?");
 //! # Ok(())
 //! # }
@@ -150,7 +150,7 @@ mod tests {
     use crate::untrusted;
 
     /// A minimal catalog, carrying a hostile comment.
-    fn catalogue() -> CatalogCache {
+    fn sample_catalog() -> CatalogCache {
         let mut cache = CatalogCache::new();
         let table =
             CatalogPath::for_relation(None, Some("public"), "clients").expect("valid test path");
@@ -172,8 +172,8 @@ mod tests {
     /// a tool call translated into a `Command`.
     #[test]
     fn an_agents_whole_journey() {
-        let cache = catalogue();
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+        let cache = sample_catalog();
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata)
             .with_samples(vec![RowSample::new(
                 CatalogPath::for_relation(None, Some("public"), "clients").expect("valid path"),
                 vec!["email".to_owned()],
@@ -183,13 +183,13 @@ mod tests {
 
         // The connection's tier dropped the sample: no row value leaves under
         // `Metadata` (ADR-0006).
-        assert_eq!(contexte.dropped_samples(), 1);
-        assert!(!contexte.prompt_block().contains("dupont@example.com"));
+        assert_eq!(context.dropped_samples(), 1);
+        assert!(!context.prompt_block().contains("dupont@example.com"));
 
         // The hostile comment is fenced, neither executed nor obeyed.
-        assert!(contexte.prompt_block().contains("DROP TABLE audit"));
+        assert!(context.prompt_block().contains("DROP TABLE audit"));
         assert_eq!(
-            contexte
+            context
                 .prompt_block()
                 .matches(untrusted::FENCE_OPEN)
                 .count(),
@@ -197,25 +197,26 @@ mod tests {
         );
 
         let agent = sql_agent();
-        let registre = ToolRegistry::builtin();
-        agent.validate(&registre).expect("valid shipped agent");
+        let registry = ToolRegistry::builtin();
+        agent.validate(&registry).expect("valid shipped agent");
 
-        let perimetre = ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL);
-        let mut conversation = AgentSession::new(&agent, &contexte, perimetre.clone());
+        let granted_scope =
+            ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL);
+        let mut conversation = AgentSession::new(&agent, &context, granted_scope.clone());
         conversation.ask("how many customers?");
 
         // What the model would propose becomes a Command, and nothing else.
-        let appel = ToolCall::new(
+        let make_call = ToolCall::new(
             "call_1",
             EXECUTE_QUERY,
             serde_json::json!({"statement": "SELECT count(*) FROM clients"}),
         );
-        let commande = registre
-            .translate(&appel, &agent.allowed_tools, &perimetre)
+        let command = registry
+            .translate(&make_call, &agent.allowed_tools, &granted_scope)
             .expect("granted tool");
-        assert_eq!(commande.name(), "Execute");
-        assert_eq!(commande.target_connection(), Some(perimetre.connection));
-        assert!(!commande.is_mutating());
+        assert_eq!(command.name(), "Execute");
+        assert_eq!(command.target_connection(), Some(granted_scope.connection));
+        assert!(!command.is_mutating());
     }
 
     /// The exit gate of ADR-0006: without a provider, nothing in this crate
@@ -223,14 +224,14 @@ mod tests {
     /// environment variable, or makes a provider.
     #[test]
     fn nothing_leaves_without_a_registered_provider() {
-        let registre = oxyn_llm::ProviderRegistry::new();
-        assert!(registre.is_empty());
+        let registry = oxyn_llm::ProviderRegistry::new();
+        assert!(registry.is_empty());
 
         // Building a context opens no connection and sends nothing: there is
         // no network path in `ContextBuilder`.
-        let cache = catalogue();
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Local).build();
-        assert_eq!(contexte.tier(), PrivacyTier::Local);
-        assert!(!contexte.tier().allows_remote_provider());
+        let cache = sample_catalog();
+        let context = ContextBuilder::new(&cache, PrivacyTier::Local).build();
+        assert_eq!(context.tier(), PrivacyTier::Local);
+        assert!(!context.tier().allows_remote_provider());
     }
 }

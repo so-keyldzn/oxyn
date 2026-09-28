@@ -389,7 +389,7 @@ impl<'a> History<'a> {
     /// [`crate::StoreError::Sqlite`] if the write fails.
     pub fn finish(&self, id: i64, record: &HistoryRecord) -> Result<bool> {
         self.store.with_connection(|conn| {
-            let touchees = conn.execute(
+            let touched = conn.execute(
                 "UPDATE query_history
                     SET status = ?2, duration_ms = ?3, row_count = ?4, error = ?5,
                         error_class = ?6, result_id = ?7, reconciled_at = NULL
@@ -404,7 +404,7 @@ impl<'a> History<'a> {
                     record.result.map(|result| result.to_string()),
                 ],
             )?;
-            Ok(touchees > 0)
+            Ok(touched > 0)
         })
     }
 
@@ -477,11 +477,11 @@ impl<'a> History<'a> {
     /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn recent(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(&format!(
-                "{SELECT_COLONNES} ORDER BY ts DESC, id DESC LIMIT ?1"
+            let mut query = conn.prepare(&format!(
+                "{SELECT_COLUMNS} ORDER BY ts DESC, id DESC LIMIT ?1"
             ))?;
-            requete
-                .query_and_then(params![limit_to_i64(limit)], depuis_ligne)?
+            query
+                .query_and_then(params![limit_to_i64(limit)], from_row)?
                 .collect()
         })
     }
@@ -496,13 +496,13 @@ impl<'a> History<'a> {
         limit: usize,
     ) -> Result<Vec<HistoryEntry>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(&format!(
-                "{SELECT_COLONNES} WHERE connection_id = ?1 ORDER BY ts DESC, id DESC LIMIT ?2"
+            let mut query = conn.prepare(&format!(
+                "{SELECT_COLUMNS} WHERE connection_id = ?1 ORDER BY ts DESC, id DESC LIMIT ?2"
             ))?;
-            requete
+            query
                 .query_and_then(
                     params![connection.to_string(), limit_to_i64(limit)],
-                    depuis_ligne,
+                    from_row,
                 )?
                 .collect()
         })
@@ -517,14 +517,14 @@ impl<'a> History<'a> {
     /// # Errors
     /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn search(&self, needle: &str, limit: usize) -> Result<Vec<HistoryEntry>> {
-        let motif = format!("%{}%", escape_like(needle));
+        let pattern = format!("%{}%", escape_like(needle));
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(&format!(
-                "{SELECT_COLONNES} WHERE statement LIKE ?1 ESCAPE '\\' \
+            let mut query = conn.prepare(&format!(
+                "{SELECT_COLUMNS} WHERE statement LIKE ?1 ESCAPE '\\' \
                  ORDER BY ts DESC, id DESC LIMIT ?2"
             ))?;
-            requete
-                .query_and_then(params![motif, limit_to_i64(limit)], depuis_ligne)?
+            query
+                .query_and_then(params![pattern, limit_to_i64(limit)], from_row)?
                 .collect()
         })
     }
@@ -581,12 +581,12 @@ fn requires_reconciliation(
 }
 
 /// The column list, shared by every read.
-const SELECT_COLONNES: &str = "SELECT id, ts, connection_id, connection_name, actor_kind, \
+const SELECT_COLUMNS: &str = "SELECT id, ts, connection_id, connection_name, actor_kind, \
      actor_id, language, statement, intent, duration_ms, row_count, status, error, error_class, result_id, \
      reconciled_at FROM query_history";
 
 /// Rebuilds a [`HistoryEntry`] from a row.
-fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
+fn from_row(row: &Row<'_>) -> Result<HistoryEntry> {
     let actor_kind: String = row.get("actor_kind")?;
     let language: String = row.get("language")?;
     let intent: String = row.get("intent")?;
@@ -625,8 +625,8 @@ mod tests {
         StatementHandle,
     };
 
-    fn lecture(texte: &str) -> HistoryRecord {
-        HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, texte)
+    fn read_record(text: &str) -> HistoryRecord {
+        HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, text)
             .with_intent(StatementIntent::Read)
     }
 
@@ -641,37 +641,41 @@ mod tests {
     fn an_error_class_survives_reading_back() {
         let store = Store::open_in_memory().expect("open");
         let expire =
-            lecture("INSERT INTO commandes (client) VALUES (1)").failed(&OxynError::Timeout {
+            read_record("INSERT INTO orders (customer) VALUES (1)").failed(&OxynError::Timeout {
                 after: Duration::from_secs(30),
             });
-        let franche = lecture("SELECT * FROM absente").failed(&OxynError::Query(
+        let clear_cut = read_record("SELECT * FROM absente").failed(&OxynError::Query(
             "relation \"absente\" does not exist".into(),
         ));
 
-        store.history().record(&franche).expect("write");
+        store.history().record(&clear_cut).expect("write");
         store.history().record(&expire).expect("write");
-        let relues = store.history().recent(10).expect("read back");
+        let read_back = store.history().recent(10).expect("read back");
 
-        let ambigue = relues
+        let ambiguous = read_back
             .iter()
-            .find(|entree| entree.record.statement.starts_with("INSERT"))
+            .find(|entry| entry.record.statement.starts_with("INSERT"))
             .expect("the expired write");
-        assert_eq!(ambigue.record.error_class, Some(ErrorClass::Ambiguous));
+        assert_eq!(ambiguous.record.error_class, Some(ErrorClass::Ambiguous));
         assert!(
-            !ambigue.record.error_class.expect("a family").is_retryable(),
+            !ambiguous
+                .record
+                .error_class
+                .expect("a family")
+                .is_retryable(),
             "an expired `INSERT` is not replayed: the server may have applied it"
         );
 
-        let permanente = relues
+        let permanent = read_back
             .iter()
-            .find(|entree| entree.record.statement.starts_with("SELECT"))
+            .find(|entry| entry.record.statement.starts_with("SELECT"))
             .expect("the rejected query");
-        assert_eq!(permanente.record.error_class, Some(ErrorClass::Permanent));
+        assert_eq!(permanent.record.error_class, Some(ErrorClass::Permanent));
 
         // The status does not tell them apart: the class carries the
         // information, and it alone.
-        assert_eq!(ambigue.record.status, HistoryStatus::Failed);
-        assert_eq!(permanente.record.status, HistoryStatus::Failed);
+        assert_eq!(ambiguous.record.status, HistoryStatus::Failed);
+        assert_eq!(permanent.record.status, HistoryStatus::Failed);
     }
 
     /// Not knowing means not replaying — in both places where an error's
@@ -680,31 +684,32 @@ mod tests {
     fn an_unknown_class_forbids_retry() {
         // When reading back a value this binary does not know.
         assert_eq!(
-            crate::encoding::error_class_from_text("vaporisée"),
+            crate::encoding::error_class_from_text("vaporised"),
             ErrorClass::Ambiguous
         );
 
         // And on a row written before the column existed: its `None` does not
         // mean "no error", it means "unknown class". Replaying the expired
         // `INSERT` it may carry would create a duplicate.
-        let mut heritee = lecture("INSERT INTO commandes (client) VALUES (1)");
-        heritee.status = HistoryStatus::Failed;
-        heritee.error = Some("timed out after 30s".to_owned());
-        assert_eq!(heritee.error_class, None);
-        assert!(!heritee.is_retryable());
+        let mut inherited = read_record("INSERT INTO orders (customer) VALUES (1)");
+        inherited.status = HistoryStatus::Failed;
+        inherited.error = Some("timed out after 30s".to_owned());
+        assert_eq!(inherited.error_class, None);
+        assert!(!inherited.is_retryable());
 
         // Only the transient class opens a retry.
-        let coupure = lecture("SELECT 1").failed(&OxynError::Connection("disconnected".into()));
-        assert!(coupure.is_retryable());
-        for interdite in [
-            lecture("x").failed(&OxynError::Timeout {
+        let disconnection =
+            read_record("SELECT 1").failed(&OxynError::Connection("disconnected".into()));
+        assert!(disconnection.is_retryable());
+        for forbidden in [
+            read_record("x").failed(&OxynError::Timeout {
                 after: Duration::from_secs(1),
             }),
-            lecture("x").failed(&OxynError::Query("syntax".into())),
-            lecture("x").denied("read-only"),
-            lecture("x").succeeded(Duration::from_millis(1), Some(0)),
+            read_record("x").failed(&OxynError::Query("syntax".into())),
+            read_record("x").denied("read-only"),
+            read_record("x").succeeded(Duration::from_millis(1), Some(0)),
         ] {
-            assert!(!interdite.is_retryable(), "{:?}", interdite.error_class);
+            assert!(!forbidden.is_retryable(), "{:?}", forbidden.error_class);
         }
     }
 
@@ -717,50 +722,53 @@ mod tests {
     /// happen.
     #[test]
     fn a_policy_refusal_is_not_a_failure() {
-        let refus = lecture("DELETE FROM clients").failed(&OxynError::PolicyDenied {
+        let refusal = read_record("DELETE FROM customers").failed(&OxynError::PolicyDenied {
             reason: "read-only".to_owned(),
         });
-        assert_eq!(refus.status, HistoryStatus::Denied);
-        assert_eq!(refus.error_class, Some(ErrorClass::Permanent));
+        assert_eq!(refusal.status, HistoryStatus::Denied);
+        assert_eq!(refusal.error_class, Some(ErrorClass::Permanent));
     }
 
     #[test]
     fn an_execution_round_trips() {
         let store = Store::open_in_memory().expect("open");
-        let connexion = ConnectionId::new();
+        let connection = ConnectionId::new();
         let record = HistoryRecord::new(
             &Actor::Human,
             QueryLanguage::Sql(SqlDialect::Postgres),
-            "SELECT * FROM clients",
+            "SELECT * FROM customers",
         )
-        .on_connection(connexion, "base client")
+        .on_connection(connection, "customer db")
         .with_intent(StatementIntent::Read)
         .succeeded(Duration::from_millis(87), Some(1_204));
 
         let id = store.history().record(&record).expect("write");
-        let relu = store.history().recent(10).expect("read back").remove(0);
+        let read_back = store.history().recent(10).expect("read back").remove(0);
 
-        assert_eq!(relu.id, id);
-        assert_eq!(relu.record.connection, Some(connexion));
-        assert_eq!(relu.record.connection_name.as_deref(), Some("base client"));
+        assert_eq!(read_back.id, id);
+        assert_eq!(read_back.record.connection, Some(connection));
         assert_eq!(
-            relu.record.language,
+            read_back.record.connection_name.as_deref(),
+            Some("customer db")
+        );
+        assert_eq!(
+            read_back.record.language,
             QueryLanguage::Sql(SqlDialect::Postgres),
             "the dialect must survive the round trip"
         );
-        assert_eq!(relu.record.status, HistoryStatus::Succeeded);
-        assert_eq!(relu.record.duration, Some(Duration::from_millis(87)));
-        assert_eq!(relu.record.rows, Some(1_204));
-        assert_eq!(relu.record.actor_kind, ActorKind::Human);
+        assert_eq!(read_back.record.status, HistoryStatus::Succeeded);
+        assert_eq!(read_back.record.duration, Some(Duration::from_millis(87)));
+        assert_eq!(read_back.record.rows, Some(1_204));
+        assert_eq!(read_back.record.actor_kind, ActorKind::Human);
     }
 
     #[test]
     fn an_execution_is_recorded_running_then_completed() {
         let store = Store::open_in_memory().expect("open");
-        let en_cours = lecture("SELECT count(*) FROM ventes");
-        assert_eq!(en_cours.status, HistoryStatus::Running);
+        let in_progress = read_record("SELECT count(*) FROM sales");
+        assert_eq!(in_progress.status, HistoryStatus::Running);
 
-        let id = store.history().record(&en_cours).expect("write");
+        let id = store.history().record(&in_progress).expect("write");
         assert_eq!(
             store.history().recent(1).expect("read back")[0]
                 .record
@@ -768,21 +776,21 @@ mod tests {
             HistoryStatus::Running
         );
 
-        let terminee = en_cours.succeeded(Duration::from_millis(410), Some(3));
-        assert!(store.history().finish(id, &terminee).expect("completion"));
+        let finished = in_progress.succeeded(Duration::from_millis(410), Some(3));
+        assert!(store.history().finish(id, &finished).expect("completion"));
 
-        let relu = store.history().recent(1).expect("read back").remove(0);
-        assert_eq!(relu.id, id);
-        assert_eq!(relu.record.status, HistoryStatus::Succeeded);
-        assert_eq!(relu.record.rows, Some(3));
-        assert_eq!(relu.record.statement, "SELECT count(*) FROM ventes");
+        let read_back = store.history().recent(1).expect("read back").remove(0);
+        assert_eq!(read_back.id, id);
+        assert_eq!(read_back.record.status, HistoryStatus::Succeeded);
+        assert_eq!(read_back.record.rows, Some(3));
+        assert_eq!(read_back.record.statement, "SELECT count(*) FROM sales");
 
         // The same move on the audit journal is impossible: there is no
         // method, and the file itself would refuse it.
         assert!(
             !store
                 .history()
-                .finish(id + 1_000, &terminee)
+                .finish(id + 1_000, &finished)
                 .expect("no row"),
             "a missing row is not silently completed"
         );
@@ -793,38 +801,38 @@ mod tests {
         let store = Store::open_in_memory().expect("open");
         store
             .history()
-            .record(&lecture("SELECT pg_sleep(60)").failed(&OxynError::Cancelled))
+            .record(&read_record("SELECT pg_sleep(60)").failed(&OxynError::Cancelled))
             .expect("write");
         store
             .history()
-            .record(&lecture("SELECT 1/0").failed(&OxynError::Query("division by zero".into())))
+            .record(&read_record("SELECT 1/0").failed(&OxynError::Query("division by zero".into())))
             .expect("write");
 
-        let entrees = store.history().recent(10).expect("read back");
-        let statuts: Vec<HistoryStatus> = entrees.iter().map(|e| e.record.status).collect();
-        assert!(statuts.contains(&HistoryStatus::Cancelled));
-        assert!(statuts.contains(&HistoryStatus::Failed));
+        let entries = store.history().recent(10).expect("read back");
+        let statuses: Vec<HistoryStatus> = entries.iter().map(|e| e.record.status).collect();
+        assert!(statuses.contains(&HistoryStatus::Cancelled));
+        assert!(statuses.contains(&HistoryStatus::Failed));
     }
 
     #[test]
     fn a_search_does_not_interpret_metacharacters() {
         let store = Store::open_in_memory().expect("open");
-        for texte in [
+        for text in [
             "SELECT taux FROM remises WHERE taux = '100%'",
-            "SELECT * FROM clients",
+            "SELECT * FROM customers",
             "SELECT a_b FROM t",
         ] {
-            store.history().record(&lecture(texte)).expect("write");
+            store.history().record(&read_record(text)).expect("write");
         }
 
-        let sur_pourcent = store.history().search("100%", 50).expect("search");
-        assert_eq!(sur_pourcent.len(), 1, "`%` must be literal, not a wildcard");
+        let on_percent = store.history().search("100%", 50).expect("search");
+        assert_eq!(on_percent.len(), 1, "`%` must be literal, not a wildcard");
 
-        let sur_souligne = store.history().search("a_b", 50).expect("search");
-        assert_eq!(sur_souligne.len(), 1, "`_` must be literal");
+        let on_underscore = store.history().search("a_b", 50).expect("search");
+        assert_eq!(on_underscore.len(), 1, "`_` must be literal");
 
-        let rien = store.history().search("a%b", 50).expect("search");
-        assert!(rien.is_empty(), "`a%b` must find nothing literally");
+        let nothing = store.history().search("a%b", 50).expect("search");
+        assert!(nothing.is_empty(), "`a%b` must find nothing literally");
     }
 
     #[test]
@@ -835,13 +843,13 @@ mod tests {
         use oxyn_core::Decision;
 
         let store = Store::open_in_memory().expect("open");
-        let connexion = ConnectionId::new();
+        let connection = ConnectionId::new();
         let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
-        let commande = Command::Execute {
-            connection: connexion,
+        let command = Command::Execute {
+            connection,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::SQL, "DELETE FROM clients")
+                ExecRequest::new(QueryLanguage::SQL, "DELETE FROM customers")
                     .with_intent(StatementIntent::Write),
             ),
         };
@@ -850,20 +858,20 @@ mod tests {
             .journal()
             .append(&JournalRecord::new(
                 &agent,
-                &commande,
+                &command,
                 &Decision::approval("write by an agent", None),
             ))
             .expect("journal");
         store
             .history()
-            .record(&HistoryRecord::from_command(&agent, &commande).expect("an Execute has a text"))
+            .record(&HistoryRecord::from_command(&agent, &command).expect("an Execute has a text"))
             .expect("history");
 
         assert_eq!(store.history().count().expect("count"), 1);
         assert_eq!(store.journal().count().expect("count"), 1);
 
-        let efface = store.history().clear().expect("purge");
-        assert_eq!(efface, 1);
+        let erased = store.history().clear().expect("purge");
+        assert_eq!(erased, 1);
         assert_eq!(store.history().count().expect("count"), 0);
         assert_eq!(
             store.journal().count().expect("count"),
@@ -875,20 +883,23 @@ mod tests {
     #[test]
     fn purging_by_date_only_takes_older_entries() {
         let store = Store::open_in_memory().expect("open");
-        let mut ancienne = lecture("SELECT 'vieux'");
-        ancienne.ts = Utc::now() - chrono::Duration::days(30);
-        store.history().record(&ancienne).expect("write");
+        let mut former = read_record("SELECT 'vieux'");
+        former.ts = Utc::now() - chrono::Duration::days(30);
+        store.history().record(&former).expect("write");
         store
             .history()
-            .record(&lecture("SELECT 'récent'"))
+            .record(&read_record("SELECT 'recent'"))
             .expect("write");
 
-        let coupure = Utc::now() - chrono::Duration::days(7);
-        assert_eq!(store.history().purge_before(coupure).expect("purge"), 1);
+        let disconnection = Utc::now() - chrono::Duration::days(7);
+        assert_eq!(
+            store.history().purge_before(disconnection).expect("purge"),
+            1
+        );
 
-        let restant = store.history().recent(10).expect("read back");
-        assert_eq!(restant.len(), 1);
-        assert_eq!(restant[0].record.statement, "SELECT 'récent'");
+        let remaining = store.history().recent(10).expect("read back");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].record.statement, "SELECT 'recent'");
     }
 
     #[test]
@@ -905,11 +916,11 @@ mod tests {
                 connection: ConnectionId::new(),
             },
         ];
-        for commande in &non_executions {
+        for command in &non_executions {
             assert!(
-                HistoryRecord::from_command(&Actor::Human, commande).is_none(),
+                HistoryRecord::from_command(&Actor::Human, command).is_none(),
                 "`{}` is not a query",
-                commande.name()
+                command.name()
             );
         }
     }
@@ -917,21 +928,24 @@ mod tests {
     #[test]
     fn bound_values_do_not_enter_the_history() {
         let store = Store::open_in_memory().expect("open");
-        let commande = Command::Execute {
+        let command = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM comptes WHERE jeton = $1")
-                    .with_intent(StatementIntent::Read)
-                    .with_params(vec![ScalarValue::Text("hunter2".to_owned())]),
+                ExecRequest::new(
+                    QueryLanguage::SQL,
+                    "SELECT * FROM accounts WHERE token = $1",
+                )
+                .with_intent(StatementIntent::Read)
+                .with_params(vec![ScalarValue::Text("hunter2".to_owned())]),
             ),
         };
         store
             .history()
-            .record(&HistoryRecord::from_command(&Actor::Human, &commande).expect("an Execute"))
+            .record(&HistoryRecord::from_command(&Actor::Human, &command).expect("an Execute"))
             .expect("write");
 
-        let tout: String = store
+        let all: String = store
             .with_connection(|conn| {
                 Ok(conn.query_row(
                     "SELECT group_concat(statement || COALESCE(error, '')) FROM query_history",
@@ -940,26 +954,26 @@ mod tests {
                 )?)
             })
             .expect("raw read");
-        assert!(!tout.contains("hunter2"), "a bound value leaked: {tout}");
+        assert!(!all.contains("hunter2"), "a bound value leaked: {all}");
     }
 
     #[test]
     fn the_history_survives_the_connection_deletion() {
         let store = Store::open_in_memory().expect("open");
-        let connexion = ConnectionId::new();
+        let connection = ConnectionId::new();
         store
             .history()
-            .record(&lecture("SELECT 1").on_connection(connexion, "base disparue"))
+            .record(&read_record("SELECT 1").on_connection(connection, "base disparue"))
             .expect("write");
 
         // No foreign key: the row remains and stays readable.
-        let relu = store
+        let read_back = store
             .history()
-            .for_connection(connexion, 10)
+            .for_connection(connection, 10)
             .expect("read back");
-        assert_eq!(relu.len(), 1);
+        assert_eq!(read_back.len(), 1);
         assert_eq!(
-            relu[0].record.connection_name.as_deref(),
+            read_back[0].record.connection_name.as_deref(),
             Some("base disparue")
         );
     }

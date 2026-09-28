@@ -71,13 +71,13 @@ pub(crate) const MAX_DECODE_ERRORS: usize = 8;
 enum PartialBlock {
     /// Text block: nothing to accumulate, the fragments are emitted on the fly.
     Text,
-    /// Appel d'outil en cours de reconstruction.
+    /// Tool call being reassembled.
     ToolUse {
         id: String,
         name: String,
         arguments: String,
     },
-    /// Raisonnement en cours de reconstruction.
+    /// Reasoning being reassembled.
     Thinking {
         text: String,
         signature: Option<String>,
@@ -123,8 +123,8 @@ impl MessageDecoder {
             return;
         }
 
-        let trame: Envelope = match serde_json::from_str(data) {
-            Ok(trame) => trame,
+        let frame: Envelope = match serde_json::from_str(data) {
+            Ok(frame) => frame,
             Err(err) => {
                 // The faulty frame is not copied: we do not know what a proxy
                 // puts in it.
@@ -143,24 +143,24 @@ impl MessageDecoder {
             }
         };
 
-        let compte = match trame.r#type.as_deref() {
-            Some("content_block_start") => self.on_block_start(&trame, out),
-            Some("content_block_delta") => self.on_block_delta(&trame, out),
+        let count = match frame.r#type.as_deref() {
+            Some("content_block_start") => self.on_block_start(&frame, out),
+            Some("content_block_delta") => self.on_block_delta(&frame, out),
             _ => Ok(()),
         };
-        if let Err(limite) = compte {
-            self.exceed(limite, out);
+        if let Err(limit) = count {
+            self.exceed(limit, out);
             return;
         }
 
-        match trame.r#type.as_deref() {
-            Some("message_start") => self.on_message_start(&trame, out),
+        match frame.r#type.as_deref() {
+            Some("message_start") => self.on_message_start(&frame, out),
             // Handled above, where their cost is counted.
             Some("content_block_start" | "content_block_delta") => {}
-            Some("content_block_stop") => self.on_block_stop(&trame, out),
-            Some("message_delta") => self.on_message_delta(&trame, out),
+            Some("content_block_stop") => self.on_block_stop(&frame, out),
+            Some("message_delta") => self.on_message_delta(&frame, out),
             Some("message_stop") => self.on_message_stop(out),
-            Some("error") => self.on_error(trame.error.as_ref(), out),
+            Some("error") => self.on_error(frame.error.as_ref(), out),
             // `ping` is a connection keep-alive: it has nothing to say.
             Some("ping") => {}
             // The documentation announces that new event types can appear. An
@@ -171,8 +171,8 @@ impl MessageDecoder {
     }
 
     /// `message_start`: the input usage is already known.
-    fn on_message_start(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
-        let Some(usage) = trame.message.as_ref().and_then(|m| m.usage.as_ref()) else {
+    fn on_message_start(&mut self, frame: &Envelope, out: &mut Vec<ChatEvent>) {
+        let Some(usage) = frame.message.as_ref().and_then(|m| m.usage.as_ref()) else {
             return;
         };
         if usage.is_empty() {
@@ -198,35 +198,35 @@ impl MessageDecoder {
     /// The budget this block would exceed; it is then not opened.
     fn on_block_start(
         &mut self,
-        trame: &Envelope,
+        frame: &Envelope,
         out: &mut Vec<ChatEvent>,
     ) -> Result<(), BudgetExceeded> {
-        let Some(index) = trame.index else {
+        let Some(index) = frame.index else {
             return Ok(());
         };
-        let Some(bloc) = trame.content_block.as_ref() else {
+        let Some(block) = frame.content_block.as_ref() else {
             return Ok(());
         };
-        let longueur = |champ: &Option<String>| champ.as_ref().map_or(0, String::len);
-        if bloc.r#type.as_deref() == Some("tool_use") {
+        let length = |field: &Option<String>| field.as_ref().map_or(0, String::len);
+        if block.r#type.as_deref() == Some("tool_use") {
             self.budget.open_tool_call()?;
             self.budget
-                .charge_tool_name(index, 0, longueur(&bloc.name))?;
-            self.budget.charge(longueur(&bloc.id))?;
+                .charge_tool_name(index, 0, length(&block.name))?;
+            self.budget.charge(length(&block.id))?;
         } else {
             self.budget.open_block()?;
             self.budget.charge(
-                longueur(&bloc.thinking)
-                    .saturating_add(longueur(&bloc.signature))
-                    .saturating_add(longueur(&bloc.data)),
+                length(&block.thinking)
+                    .saturating_add(length(&block.signature))
+                    .saturating_add(length(&block.data)),
             )?;
         }
 
-        let partiel = match bloc.r#type.as_deref() {
+        let partial = match block.r#type.as_deref() {
             Some("text") => PartialBlock::Text,
             Some("tool_use") => {
-                let id = bloc.id.clone().unwrap_or_else(|| synthetic_id(index));
-                let name = bloc.name.clone().unwrap_or_default();
+                let id = block.id.clone().unwrap_or_else(|| synthetic_id(index));
+                let name = block.name.clone().unwrap_or_default();
                 if !name.is_empty() {
                     out.push(ChatEvent::ToolCallStarted {
                         index,
@@ -241,18 +241,18 @@ impl MessageDecoder {
                 }
             }
             Some("thinking") => PartialBlock::Thinking {
-                text: bloc.thinking.clone().unwrap_or_default(),
-                signature: bloc.signature.clone(),
+                text: block.thinking.clone().unwrap_or_default(),
+                signature: block.signature.clone(),
             },
             Some("redacted_thinking") => PartialBlock::RedactedThinking {
-                data: bloc.data.clone().unwrap_or_default(),
+                data: block.data.clone().unwrap_or_default(),
             },
             // `server_tool_use`, web search results, blocks to come: they
             // exist, Oxyn offers none of them, and they produce nothing here.
             _ => PartialBlock::Unknown,
         };
-        self.blocks.insert(index, partiel);
-        Self::note_unused(bloc);
+        self.blocks.insert(index, partial);
+        Self::note_unused(block);
         Ok(())
     }
 
@@ -261,7 +261,7 @@ impl MessageDecoder {
     /// Only serves to make the intent explicit to the reader: all the fields
     /// of [`ContentBlock`] are read above, and the one that is not is left
     /// deliberately.
-    const fn note_unused(_bloc: &ContentBlock) {}
+    const fn note_unused(_block: &ContentBlock) {}
 
     /// `content_block_delta`: a fragment arrives for an open block.
     ///
@@ -269,27 +269,27 @@ impl MessageDecoder {
     /// The budget this fragment would exceed; nothing of it is kept then.
     fn on_block_delta(
         &mut self,
-        trame: &Envelope,
+        frame: &Envelope,
         out: &mut Vec<ChatEvent>,
     ) -> Result<(), BudgetExceeded> {
-        let (Some(index), Some(delta)) = (trame.index, trame.delta.as_ref()) else {
+        let (Some(index), Some(delta)) = (frame.index, frame.delta.as_ref()) else {
             return Ok(());
         };
         // A delta targeting a block never opened is ignored: inventing the
         // block would amount to inventing its type, hence the meaning of what
         // is accumulated.
-        let Some(bloc) = self.blocks.get_mut(&index) else {
+        let Some(block) = self.blocks.get_mut(&index) else {
             return Ok(());
         };
         let budget = &mut self.budget;
 
-        match (delta.r#type.as_deref(), bloc) {
+        match (delta.r#type.as_deref(), block) {
             (Some("text_delta"), PartialBlock::Text) => {
-                if let Some(texte) = delta.text.clone()
-                    && !texte.is_empty()
+                if let Some(text) = delta.text.clone()
+                    && !text.is_empty()
                 {
-                    budget.charge(texte.len())?;
-                    out.push(ChatEvent::TextDelta(texte));
+                    budget.charge(text.len())?;
+                    out.push(ChatEvent::TextDelta(text));
                 }
             }
             (Some("input_json_delta"), PartialBlock::ToolUse { arguments, .. }) => {
@@ -320,9 +320,9 @@ impl MessageDecoder {
                 // The signature arrives in one go, just before the block
                 // closes. It is not emitted: it only makes sense at the next
                 // turn, and it is never displayed.
-                if let Some(valeur) = delta.signature.clone() {
-                    budget.charge(valeur.len())?;
-                    *signature = Some(valeur);
+                if let Some(value) = delta.signature.clone() {
+                    budget.charge(value.len())?;
+                    *signature = Some(value);
                 }
             }
             // A delta whose type does not match the block's is an
@@ -333,19 +333,19 @@ impl MessageDecoder {
     }
 
     /// `content_block_stop`: the block is complete.
-    fn on_block_stop(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
-        let Some(index) = trame.index else {
+    fn on_block_stop(&mut self, frame: &Envelope, out: &mut Vec<ChatEvent>) {
+        let Some(index) = frame.index else {
             return;
         };
-        let Some(bloc) = self.blocks.remove(&index) else {
+        let Some(block) = self.blocks.remove(&index) else {
             return;
         };
-        Self::close_block(index, bloc, out);
+        Self::close_block(index, block, out);
     }
 
     /// Closes a block and emits what it produces.
-    fn close_block(index: u32, bloc: PartialBlock, out: &mut Vec<ChatEvent>) {
-        match bloc {
+    fn close_block(index: u32, block: PartialBlock, out: &mut Vec<ChatEvent>) {
+        match block {
             PartialBlock::Text | PartialBlock::Unknown => {}
             PartialBlock::ToolUse {
                 id,
@@ -359,7 +359,7 @@ impl MessageDecoder {
                     return;
                 }
                 match build_tool_call(id, name, &arguments) {
-                    Ok(appel) => out.push(ChatEvent::ToolCallComplete(appel)),
+                    Ok(call) => out.push(ChatEvent::ToolCallComplete(call)),
                     Err(message) => out.push(ChatEvent::Error(message)),
                 }
             }
@@ -379,12 +379,12 @@ impl MessageDecoder {
     }
 
     /// `message_delta`: the stop reason and the cumulative usage.
-    fn on_message_delta(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
-        if let Some(raison) = trame.delta.as_ref().and_then(|d| d.stop_reason.as_deref()) {
+    fn on_message_delta(&mut self, frame: &Envelope, out: &mut Vec<ChatEvent>) {
+        if let Some(reason) = frame.delta.as_ref().and_then(|d| d.stop_reason.as_deref()) {
             // The generation is finished; the stream, not yet.
-            self.stop = Some(stop_reason(raison));
+            self.stop = Some(stop_reason(reason));
         }
-        if let Some(usage) = trame.usage.as_ref()
+        if let Some(usage) = frame.usage.as_ref()
             && !usage.is_empty()
         {
             out.push(ChatEvent::Usage {
@@ -407,8 +407,8 @@ impl MessageDecoder {
     }
 
     /// An error arrived **in** the stream, after a `200` status.
-    fn on_error(&mut self, erreur: Option<&WireError>, out: &mut Vec<ChatEvent>) {
-        let message = erreur.map_or_else(
+    fn on_error(&mut self, error: Option<&WireError>, out: &mut Vec<ChatEvent>) {
+        let message = error.map_or_else(
             || "no details given".to_owned(),
             super::wire::WireError::describe,
         );
@@ -425,8 +425,8 @@ impl MessageDecoder {
     /// The error names the limit; the open blocks are **thrown away** — a cut
     /// tool call is not a proposed action — and the end is a cut: the provider
     /// may have continued, and billed, what we stopped reading (I-13).
-    fn exceed(&mut self, limite: BudgetExceeded, out: &mut Vec<ChatEvent>) {
-        out.push(ChatEvent::Error(limite.to_string()));
+    fn exceed(&mut self, limit: BudgetExceeded, out: &mut Vec<ChatEvent>) {
+        out.push(ChatEvent::Error(limit.to_string()));
         self.discard_open_blocks(out);
         self.stop = Some(StopReason::Interrupted);
         self.emit_done(out);
@@ -442,8 +442,8 @@ impl MessageDecoder {
     /// The text already emitted cannot be taken back; a thrown away tool call
     /// or reasoning is reported, so that its disappearance shows.
     fn discard_open_blocks(&mut self, out: &mut Vec<ChatEvent>) {
-        for (index, bloc) in std::mem::take(&mut self.blocks) {
-            match bloc {
+        for (index, block) in std::mem::take(&mut self.blocks) {
+            match block {
                 PartialBlock::Text | PartialBlock::Unknown => {}
                 PartialBlock::ToolUse { .. } => out.push(ChatEvent::Error(format!(
                     "tool call #{index} was not closed by the provider and was dropped"
@@ -537,7 +537,7 @@ pub(crate) fn stop_reason(raw: &str) -> StopReason {
         "pause_turn" => StopReason::Paused,
         "refusal" => StopReason::Refusal,
         "model_context_window_exceeded" => StopReason::ContextWindowExceeded,
-        autre => StopReason::Other(autre.to_owned()),
+        other => StopReason::Other(other.to_owned()),
     }
 }
 
@@ -552,14 +552,14 @@ fn synthetic_id(index: u32) -> String {
 /// Returns the parse error message — **without** the arguments string, which
 /// is a model output and can copy what it was given.
 fn build_tool_call(id: String, name: String, arguments: &str) -> Result<ToolCall, String> {
-    let brut = arguments.trim();
-    if brut.is_empty() {
+    let raw = arguments.trim();
+    if raw.is_empty() {
         // A tool without parameters: the block opens with `input: {}` and no
         // delta follows.
         return Ok(ToolCall::new(id, name, serde_json::json!({})));
     }
-    match serde_json::from_str::<serde_json::Value>(brut) {
-        Ok(valeur) => Ok(ToolCall::new(id, name, valeur)),
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => Ok(ToolCall::new(id, name, value)),
         Err(err) => Err(format!(
             "cannot read the arguments of tool `{name}`: {} (line {}, column {})",
             classify_json_error(&err),
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn anthropic_stop_reasons_are_translated() {
-        for (brut, attendu) in [
+        for (raw, expected) in [
             ("end_turn", StopReason::EndTurn),
             ("max_tokens", StopReason::MaxTokens),
             ("stop_sequence", StopReason::StopSequence),
@@ -587,30 +587,30 @@ mod tests {
                 StopReason::ContextWindowExceeded,
             ),
         ] {
-            assert_eq!(stop_reason(brut), attendu, "{brut}");
+            assert_eq!(stop_reason(raw), expected, "{raw}");
         }
         assert_eq!(
-            stop_reason("raison_future"),
-            StopReason::Other("raison_future".to_owned()),
-            "la documentation annonce que cette liste peut grandir"
+            stop_reason("future_reason"),
+            StopReason::Other("future_reason".to_owned()),
+            "the documentation says this list may grow"
         );
     }
 
     /// Plays a sequence of `data` fields and returns all the events produced.
-    fn jouer(trames: &[&str]) -> Vec<ChatEvent> {
-        let mut decodeur = MessageDecoder::new();
-        let mut sorties = Vec::new();
-        for trame in trames {
-            decodeur.on_data(trame, &mut sorties);
+    fn play(frames: &[&str]) -> Vec<ChatEvent> {
+        let mut decoder = MessageDecoder::new();
+        let mut outputs = Vec::new();
+        for frame in frames {
+            decoder.on_data(frame, &mut outputs);
         }
-        if !decodeur.finished() {
-            decodeur.finish(&mut sorties);
+        if !decoder.finished() {
+            decoder.finish(&mut outputs);
         }
-        sorties
+        outputs
     }
 
-    fn textes(evenements: &[ChatEvent]) -> String {
-        evenements
+    fn texts(events: &[ChatEvent]) -> String {
+        events
             .iter()
             .filter_map(|e| match e {
                 ChatEvent::TextDelta(t) => Some(t.as_str()),
@@ -619,8 +619,8 @@ mod tests {
             .collect()
     }
 
-    fn raisonnement(evenements: &[ChatEvent]) -> String {
-        evenements
+    fn reasoning(events: &[ChatEvent]) -> String {
+        events
             .iter()
             .filter_map(|e| match e {
                 ChatEvent::ReasoningDelta { text, .. } => Some(text.as_str()),
@@ -629,18 +629,18 @@ mod tests {
             .collect()
     }
 
-    fn appels(evenements: &[ChatEvent]) -> Vec<&ToolCall> {
-        evenements
+    fn calls(events: &[ChatEvent]) -> Vec<&ToolCall> {
+        events
             .iter()
             .filter_map(|e| match e {
-                ChatEvent::ToolCallComplete(appel) => Some(appel),
+                ChatEvent::ToolCallComplete(call) => Some(call),
                 _ => None,
             })
             .collect()
     }
 
-    fn blocs(evenements: &[ChatEvent]) -> Vec<&ReasoningBlock> {
-        evenements
+    fn blocks(events: &[ChatEvent]) -> Vec<&ReasoningBlock> {
+        events
             .iter()
             .filter_map(|e| match e {
                 ChatEvent::ReasoningComplete { block, .. } => Some(block),
@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn a_text_stream_is_reassembled_in_order() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"output_tokens":1}}}"#,
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
             r#"{"type":"ping"}"#,
@@ -662,9 +662,9 @@ mod tests {
             r#"{"type":"message_stop"}"#,
         ]);
 
-        assert_eq!(textes(&evenements), "SELECT 1");
+        assert_eq!(texts(&events), "SELECT 1");
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::EndTurn
             })
@@ -673,54 +673,50 @@ mod tests {
 
     #[test]
     fn a_keep_alive_produces_nothing() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"ping"}"#,
             r#"{"type":"ping"}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert_eq!(
-            evenements.len(),
-            1,
-            "seul `Done` doit rester : {evenements:?}"
-        );
-        assert!(evenements[0].is_terminal());
+        assert_eq!(events.len(), 1, "seul `Done` doit rester : {events:?}");
+        assert!(events[0].is_terminal());
     }
 
     #[test]
     fn done_is_emitted_exactly_once() {
-        let mut decodeur = MessageDecoder::new();
-        let mut sorties = Vec::new();
-        decodeur.on_data(
+        let mut decoder = MessageDecoder::new();
+        let mut outputs = Vec::new();
+        decoder.on_data(
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
-            &mut sorties,
+            &mut outputs,
         );
-        decodeur.on_data(r#"{"type":"message_stop"}"#, &mut sorties);
+        decoder.on_data(r#"{"type":"message_stop"}"#, &mut outputs);
         // The server closes after `message_stop`: `finish` must add nothing.
-        decodeur.finish(&mut sorties);
-        assert_eq!(sorties.iter().filter(|e| e.is_terminal()).count(), 1);
+        decoder.finish(&mut outputs);
+        assert_eq!(outputs.iter().filter(|e| e.is_terminal()).count(), 1);
     }
 
     #[test]
     fn cache_usage_is_reported_both_ways() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"message_start","message":{"usage":{"input_tokens":50,"output_tokens":1,"cache_creation_input_tokens":148,"cache_read_input_tokens":2000}}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
         assert!(
-            evenements.contains(&ChatEvent::Usage {
+            events.contains(&ChatEvent::Usage {
                 prompt_tokens: 50,
                 completion_tokens: 1,
                 cache_write_tokens: Some(148),
                 cache_read_tokens: Some(2000),
                 reasoning_tokens: None,
             }),
-            "{evenements:?}"
+            "{events:?}"
         );
     }
 
     #[test]
     fn an_undeclared_usage_is_not_invented() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
@@ -728,11 +724,9 @@ mod tests {
             cache_write_tokens,
             cache_read_tokens,
             ..
-        }) = evenements
-            .iter()
-            .find(|e| matches!(e, ChatEvent::Usage { .. }))
+        }) = events.iter().find(|e| matches!(e, ChatEvent::Usage { .. }))
         else {
-            panic!("no usage: {evenements:?}");
+            panic!("no usage: {events:?}");
         };
         assert_eq!(*cache_write_tokens, None);
         assert_eq!(*cache_read_tokens, None);
@@ -740,7 +734,7 @@ mod tests {
 
     #[test]
     fn a_fragmented_tool_call_is_reassembled() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01","name":"execute_query","input":{}}}"#,
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}}"#,
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"sql\":"}}"#,
@@ -750,19 +744,19 @@ mod tests {
             r#"{"type":"message_stop"}"#,
         ]);
 
-        let complets = appels(&evenements);
-        assert_eq!(complets.len(), 1, "{evenements:?}");
-        assert_eq!(complets[0].id, "toolu_01");
-        assert_eq!(complets[0].name, "execute_query");
-        assert_eq!(complets[0].arguments["sql"], "SELECT 1");
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 1, "{events:?}");
+        assert_eq!(complete[0].id, "toolu_01");
+        assert_eq!(complete[0].name, "execute_query");
+        assert_eq!(complete[0].arguments["sql"], "SELECT 1");
 
-        assert!(evenements.contains(&ChatEvent::ToolCallStarted {
+        assert!(events.contains(&ChatEvent::ToolCallStarted {
             index: 1,
             id: "toolu_01".to_owned(),
             name: "execute_query".to_owned(),
         }));
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::ToolCalls
             })
@@ -773,7 +767,7 @@ mod tests {
     fn two_tool_blocks_do_not_mix() {
         // This protocol closes a block before opening another, but nothing
         // forces it to: the state is kept by index, not by order of arrival.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"lire"}}"#,
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"ecrire"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"t\":1}"}}"#,
@@ -783,68 +777,68 @@ mod tests {
             r#"{"type":"message_stop"}"#,
         ]);
 
-        let complets = appels(&evenements);
-        assert_eq!(complets.len(), 2, "{evenements:?}");
-        assert_eq!(complets[0].arguments, serde_json::json!({"t": 1}));
-        assert_eq!(complets[1].arguments, serde_json::json!({"u": 2}));
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 2, "{events:?}");
+        assert_eq!(complete[0].arguments, serde_json::json!({"t": 1}));
+        assert_eq!(complete[1].arguments, serde_json::json!({"u": 2}));
     }
 
     #[test]
     fn a_tool_without_arguments_receives_an_empty_object() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"lister","input":{}}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert_eq!(appels(&evenements)[0].arguments, serde_json::json!({}));
+        assert_eq!(calls(&events)[0].arguments, serde_json::json!({}));
     }
 
     #[test]
     fn invalid_arguments_produce_an_error_and_not_a_call() {
         // The fine-grained stream is not validated by the server: the
         // accumulated string may not be JSON.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"execute"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"sql\": \"SELECT secret"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert!(appels(&evenements).is_empty(), "{evenements:?}");
-        let erreur = evenements
+        assert!(calls(&events).is_empty(), "{events:?}");
+        let error = events
             .iter()
             .find_map(|e| match e {
                 ChatEvent::Error(m) => Some(m.as_str()),
                 _ => None,
             })
             .expect("an error must be reported");
-        assert!(erreur.contains("execute"), "{erreur}");
+        assert!(error.contains("execute"), "{error}");
         assert!(
-            !erreur.contains("secret"),
-            "the model output must not be copied: {erreur}"
+            !error.contains("secret"),
+            "the model output must not be copied: {error}"
         );
     }
 
     #[test]
     fn a_reasoning_block_is_reassembled_with_its_signature() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
-            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"je pose 1071 = 2 × 462 + 147"}}"#,
-            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":", puis 462 = 3 × 147 + 21"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"I set 1071 = 2 × 462 + 147"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":", then 462 = 3 × 147 + 21"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqQBCgIYAhIM"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             r#"{"type":"message_stop"}"#,
         ]);
 
         assert_eq!(
-            raisonnement(&evenements),
-            "je pose 1071 = 2 × 462 + 147, puis 462 = 3 × 147 + 21"
+            reasoning(&events),
+            "I set 1071 = 2 × 462 + 147, then 462 = 3 × 147 + 21"
         );
-        let blocs = blocs(&evenements);
-        assert_eq!(blocs.len(), 1, "{evenements:?}");
+        let blocks = blocks(&events);
+        assert_eq!(blocks.len(), 1, "{events:?}");
         assert_eq!(
-            blocs[0],
+            blocks[0],
             &ReasoningBlock::Summarized {
-                text: "je pose 1071 = 2 × 462 + 147, puis 462 = 3 × 147 + 21".to_owned(),
+                text: "I set 1071 = 2 × 462 + 147, then 462 = 3 × 147 + 21".to_owned(),
                 signature: Some("EqQBCgIYAhIM".to_owned()),
             }
         );
@@ -855,7 +849,7 @@ mod tests {
         // The default of several models: the block arrives without text, but
         // with its signature. It must still be rendered, otherwise the next
         // turn is refused.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EosnCkYICxIM"}}"#,
@@ -863,46 +857,46 @@ mod tests {
             r#"{"type":"message_stop"}"#,
         ]);
 
-        assert_eq!(raisonnement(&evenements), "", "nothing to display");
-        let blocs = blocs(&evenements);
-        assert_eq!(blocs.len(), 1, "the block must exist all the same");
-        assert_eq!(blocs[0].display_text(), None);
+        assert_eq!(reasoning(&events), "", "nothing to display");
+        let blocks = blocks(&events);
+        assert_eq!(blocks.len(), 1, "the block must exist all the same");
+        assert_eq!(blocks[0].display_text(), None);
     }
 
     #[test]
     fn an_encrypted_reasoning_produces_no_text() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"EvwBCoYBGAIiQL"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             r#"{"type":"message_stop"}"#,
         ]);
 
-        assert_eq!(raisonnement(&evenements), "");
-        let blocs = blocs(&evenements);
-        assert_eq!(blocs.len(), 1, "{evenements:?}");
-        assert!(blocs[0].is_redacted());
-        assert_eq!(blocs[0].display_text(), None);
+        assert_eq!(reasoning(&events), "");
+        let blocks = blocks(&events);
+        assert_eq!(blocks.len(), 1, "{events:?}");
+        assert!(blocks[0].is_redacted());
+        assert_eq!(blocks[0].display_text(), None);
     }
 
     #[test]
     fn a_cancellation_in_the_middle_of_a_reasoning_returns_no_incomplete_block() {
         // A block without its signature would be refused at the next turn:
         // rendering it would make the following request fail, far from here.
-        let mut decodeur = MessageDecoder::new();
-        let mut sorties = Vec::new();
-        decodeur.on_data(
+        let mut decoder = MessageDecoder::new();
+        let mut outputs = Vec::new();
+        decoder.on_data(
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
-            &mut sorties,
+            &mut outputs,
         );
-        decodeur.on_data(
-            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"je commence à"}}"#,
-            &mut sorties,
+        decoder.on_data(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"I start with"}}"#,
+            &mut outputs,
         );
-        decodeur.cancel(&mut sorties);
+        decoder.cancel(&mut outputs);
 
-        assert!(blocs(&sorties).is_empty(), "{sorties:?}");
+        assert!(blocks(&outputs).is_empty(), "{outputs:?}");
         assert_eq!(
-            sorties.last(),
+            outputs.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::Cancelled
             })
@@ -911,24 +905,24 @@ mod tests {
 
     #[test]
     fn a_cancellation_in_the_middle_of_a_tool_call_proposes_nothing() {
-        let mut decodeur = MessageDecoder::new();
-        let mut sorties = Vec::new();
-        decodeur.on_data(
+        let mut decoder = MessageDecoder::new();
+        let mut outputs = Vec::new();
+        decoder.on_data(
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"drop_table"}}"#,
-            &mut sorties,
+            &mut outputs,
         );
-        decodeur.on_data(
-            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"nom\":"}}"#,
-            &mut sorties,
+        decoder.on_data(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"name\":"}}"#,
+            &mut outputs,
         );
-        decodeur.cancel(&mut sorties);
+        decoder.cancel(&mut outputs);
 
         assert!(
-            appels(&sorties).is_empty(),
-            "a truncated call never becomes a proposed action: {sorties:?}"
+            calls(&outputs).is_empty(),
+            "a truncated call never becomes a proposed action: {outputs:?}"
         );
         assert_eq!(
-            sorties.last(),
+            outputs.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::Cancelled
             })
@@ -937,12 +931,12 @@ mod tests {
 
     #[test]
     fn a_refusal_is_distinct_from_an_end_of_turn() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"message_delta","delta":{"stop_reason":"refusal"}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::Refusal
             })
@@ -951,12 +945,12 @@ mod tests {
 
     #[test]
     fn a_turn_pause_reports_itself_as_incomplete() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"message_delta","delta":{"stop_reason":"pause_turn"}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        let Some(ChatEvent::Done { stop_reason }) = evenements.last() else {
-            panic!("{evenements:?}");
+        let Some(ChatEvent::Done { stop_reason }) = events.last() else {
+            panic!("{events:?}");
         };
         assert_eq!(*stop_reason, StopReason::Paused);
         assert!(stop_reason.is_truncated());
@@ -964,21 +958,21 @@ mod tests {
 
     #[test]
     fn an_error_in_the_stream_is_terminal() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#,
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
         ]);
         assert!(
-            evenements
+            events
                 .iter()
                 .any(|e| matches!(e, ChatEvent::Error(m) if m.contains("Overloaded"))),
-            "{evenements:?}"
+            "{events:?}"
         );
         assert_eq!(
-            evenements.iter().filter(|e| e.is_terminal()).count(),
+            events.iter().filter(|e| e.is_terminal()).count(),
             1,
-            "{evenements:?}"
+            "{events:?}"
         );
     }
 
@@ -987,19 +981,19 @@ mod tests {
         // A load balancer that cuts at its duration limit closes the
         // connection cleanly: no transport error, only a stream that stops.
         // Presenting this text as complete would be lying.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#,
         ]);
-        assert_eq!(textes(&evenements), "a");
-        let Some(ChatEvent::Done { stop_reason }) = evenements.last() else {
-            panic!("the stream must end: {evenements:?}");
+        assert_eq!(texts(&events), "a");
+        let Some(ChatEvent::Done { stop_reason }) = events.last() else {
+            panic!("the stream must end: {events:?}");
         };
         assert_eq!(*stop_reason, StopReason::Interrupted);
         assert!(stop_reason.is_truncated() && stop_reason.is_ambiguous());
         assert!(
-            evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
-            "the cut must show: {evenements:?}"
+            events.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "the cut must show: {events:?}"
         );
     }
 
@@ -1007,14 +1001,14 @@ mod tests {
     fn an_announced_reason_without_message_stop_remains_a_cut() {
         // `message_delta` announces the end of the generation, not that of the
         // message: what followed was not received.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
         ]);
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::Interrupted
             })
@@ -1026,25 +1020,25 @@ mod tests {
         // The trap: the JSON received so far happens to be complete. The model
         // may not have finished — `{"sql":"DELETE FROM t"}` can be the start
         // of `{"sql":"DELETE FROM t", "where": …}`.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"message_start","message":{"usage":{"input_tokens":10}}}"#,
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"execute","input":{}}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"sql\":\"DELETE FROM t\"}"}}"#,
         ]);
         assert!(
-            !evenements
+            !events
                 .iter()
                 .any(|e| matches!(e, ChatEvent::ToolCallComplete(_))),
-            "{evenements:?}"
+            "{events:?}"
         );
         assert!(
-            evenements
+            events
                 .iter()
                 .any(|e| matches!(e, ChatEvent::Error(m) if m.contains("tool call #0"))),
-            "la disparition de l'appel doit se voir : {evenements:?}"
+            "the call vanishing must show: {events:?}"
         );
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::Interrupted
             })
@@ -1054,20 +1048,20 @@ mod tests {
     #[test]
     fn a_block_not_closed_before_message_stop_is_thrown_away() {
         // Server inconsistency: the message says it is finished, the block is not.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"execute","input":{}}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
             r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
         assert!(
-            !evenements
+            !events
                 .iter()
                 .any(|e| matches!(e, ChatEvent::ToolCallComplete(_))),
-            "{evenements:?}"
+            "{events:?}"
         );
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::ToolCalls
             })
@@ -1077,71 +1071,71 @@ mod tests {
     #[test]
     fn an_unknown_event_does_not_break_the_stream() {
         // The documentation announces that new types can appear.
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
-            r#"{"type":"un_evenement_futur","charge":{"quoi":"que ce soit"}}"#,
+            r#"{"type":"a_future_event","payload":{"what":"ever"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert_eq!(textes(&evenements), "a");
+        assert_eq!(texts(&events), "a");
         assert!(
-            !evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
-            "un type inconnu n'est pas une erreur : {evenements:?}"
+            !events.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "an unknown type is not an error: {events:?}"
         );
     }
 
     #[test]
     fn a_block_of_unknown_type_produces_nothing_but_absorbs_its_deltas() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"x\"}"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert!(appels(&evenements).is_empty(), "{evenements:?}");
+        assert!(calls(&events).is_empty(), "{events:?}");
         assert!(
-            !evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
-            "{evenements:?}"
+            !events.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "{events:?}"
         );
     }
 
     #[test]
     fn a_delta_without_an_open_block_is_ignored() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_delta","index":7,"delta":{"type":"text_delta","text":"fantome"}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert_eq!(textes(&evenements), "", "{evenements:?}");
+        assert_eq!(texts(&events), "", "{events:?}");
     }
 
     #[test]
     fn an_isolated_unreadable_frame_does_not_kill_the_stream() {
-        let evenements = jouer(&[
+        let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
-            "{ceci n'est pas du json",
+            "{this is not json",
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"b"}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert_eq!(textes(&evenements), "b");
-        assert!(evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))));
+        assert_eq!(texts(&events), "b");
+        assert!(events.iter().any(|e| matches!(e, ChatEvent::Error(_))));
     }
 
     #[test]
     fn a_series_of_unreadable_frames_gives_up_the_stream() {
-        let mut decodeur = MessageDecoder::new();
-        let mut sorties = Vec::new();
+        let mut decoder = MessageDecoder::new();
+        let mut outputs = Vec::new();
         for _ in 0..MAX_DECODE_ERRORS {
-            decodeur.on_data("pas du json", &mut sorties);
+            decoder.on_data("not json", &mut outputs);
         }
-        assert!(decodeur.finished(), "{sorties:?}");
-        assert!(sorties.last().is_some_and(ChatEvent::is_terminal));
+        assert!(decoder.finished(), "{outputs:?}");
+        assert!(outputs.last().is_some_and(ChatEvent::is_terminal));
     }
 
     /// A real SSE trace, as the documentation publishes it: event names,
     /// interleaved `ping`, blocks opened and closed.
     const TRACE: &str = concat!(
         "event: message_start\n",
-        r#"data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-modele","stop_reason":null,"usage":{"input_tokens":472,"output_tokens":2}}}"#,
+        r#"data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-model","stop_reason":null,"usage":{"input_tokens":472,"output_tokens":2}}}"#,
         "\n\n",
         "event: content_block_start\n",
         r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
@@ -1150,7 +1144,7 @@ mod tests {
         r#"data: {"type": "ping"}"#,
         "\n\n",
         "event: content_block_delta\n",
-        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Je vérifie le café"}}"#,
+        r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I check the café"}}"#,
         "\n\n",
         "event: content_block_stop\n",
         r#"data: {"type":"content_block_stop","index":0}"#,
@@ -1176,15 +1170,15 @@ mod tests {
     );
 
     /// Replays a trace through the real SSE path, with a given split.
-    fn rejouer(morceaux: Vec<bytes::Bytes>) -> Vec<ChatEvent> {
+    fn replay(chunks: Vec<bytes::Bytes>) -> Vec<ChatEvent> {
         use futures::stream::StreamExt as _;
 
-        let octets = morceaux
+        let bytes = chunks
             .into_iter()
             .map(Ok::<bytes::Bytes, String>)
             .collect::<Vec<_>>();
         let flux = crate::stream::events_stream(
-            Box::pin(futures::stream::iter(octets)),
+            Box::pin(futures::stream::iter(bytes)),
             MessageDecoder::new(),
             oxyn_core::CancelToken::new(),
             None,
@@ -1194,15 +1188,15 @@ mod tests {
 
     #[test]
     fn a_real_trace_decodes_in_one_block() {
-        let evenements = rejouer(vec![bytes::Bytes::from_static(TRACE.as_bytes())]);
+        let events = replay(vec![bytes::Bytes::from_static(TRACE.as_bytes())]);
 
-        assert_eq!(textes(&evenements), "Je vérifie le café");
-        let complets = appels(&evenements);
-        assert_eq!(complets.len(), 1, "{evenements:?}");
-        assert_eq!(complets[0].id, "toolu_01");
-        assert_eq!(complets[0].arguments["ville"], "Besançon");
+        assert_eq!(texts(&events), "I check the café");
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 1, "{events:?}");
+        assert_eq!(complete[0].id, "toolu_01");
+        assert_eq!(complete[0].arguments["ville"], "Besançon");
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::ToolCalls
             })
@@ -1214,15 +1208,15 @@ mod tests {
         // The network does not respect frame boundaries, and the trace
         // contains multi-byte characters ("é", "ç"): the only split that
         // covers every case is the one that respects none.
-        let par_octet: Vec<bytes::Bytes> = TRACE
+        let byte_by_byte: Vec<bytes::Bytes> = TRACE
             .as_bytes()
             .iter()
-            .map(|octet| bytes::Bytes::copy_from_slice(&[*octet]))
+            .map(|byte| bytes::Bytes::copy_from_slice(&[*byte]))
             .collect();
 
         assert_eq!(
-            rejouer(par_octet),
-            rejouer(vec![bytes::Bytes::from_static(TRACE.as_bytes())]),
+            replay(byte_by_byte),
+            replay(vec![bytes::Bytes::from_static(TRACE.as_bytes())]),
             "the network split must change nothing"
         );
     }
@@ -1233,26 +1227,26 @@ mod tests {
         // nor in review: the connection drops while the model has started to
         // answer. The server may have finished — and billed — the turn.
         // Replaying would pay twice (I-13).
-        let coupee: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+        let cut: Vec<std::result::Result<bytes::Bytes, String>> = vec![
             Ok(bytes::Bytes::from_static(
                 concat!(
                     "event: content_block_start\n",
                     r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
                     "\n\n",
                     "event: content_block_delta\n",
-                    r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"la table clients "}}"#,
+                    r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"the customers table "}}"#,
                     "\n\n",
                 )
                 .as_bytes(),
             )),
-            // Ni `message_delta`, ni `message_stop` : le transport lâche.
+            // Neither `message_delta` nor `message_stop`: the transport gives out.
             Err("lost the connection while receiving the stream".to_owned()),
         ];
 
-        let evenements = {
+        let events = {
             use futures::stream::StreamExt as _;
             let flux = crate::stream::events_stream(
-                Box::pin(futures::stream::iter(coupee)),
+                Box::pin(futures::stream::iter(cut)),
                 MessageDecoder::new(),
                 oxyn_core::CancelToken::new(),
                 None,
@@ -1262,10 +1256,10 @@ mod tests {
 
         // What was received stays shown: the user sees where it stopped rather
         // than losing the beginning.
-        assert_eq!(textes(&evenements), "la table clients ");
+        assert_eq!(texts(&events), "the customers table ");
 
-        let Some(ChatEvent::Done { stop_reason }) = evenements.last() else {
-            panic!("the stream must end: {evenements:?}");
+        let Some(ChatEvent::Done { stop_reason }) = events.last() else {
+            panic!("the stream must end: {events:?}");
         };
         assert_eq!(*stop_reason, StopReason::Interrupted);
         assert!(
@@ -1277,9 +1271,9 @@ mod tests {
             "the server may have produced the rest: replaying would pay twice (I-13)"
         );
         assert_eq!(
-            evenements.iter().filter(|e| e.is_terminal()).count(),
+            events.iter().filter(|e| e.is_terminal()).count(),
             1,
-            "{evenements:?}"
+            "{events:?}"
         );
     }
 
@@ -1287,7 +1281,7 @@ mod tests {
     fn a_tool_call_cut_by_the_transport_is_never_proposed() {
         // The cut falls in the middle of the arguments. Proposing them would
         // amount to submitting an action whose reach no one knows.
-        let coupee: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+        let cut: Vec<std::result::Result<bytes::Bytes, String>> = vec![
             Ok(bytes::Bytes::from_static(
                 concat!(
                     r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_9","name":"execute_query"}}"#,
@@ -1300,10 +1294,10 @@ mod tests {
             Err("lost the connection while receiving the stream".to_owned()),
         ];
 
-        let evenements = {
+        let events = {
             use futures::stream::StreamExt as _;
             let flux = crate::stream::events_stream(
-                Box::pin(futures::stream::iter(coupee)),
+                Box::pin(futures::stream::iter(cut)),
                 MessageDecoder::new(),
                 oxyn_core::CancelToken::new(),
                 None,
@@ -1312,18 +1306,18 @@ mod tests {
         };
 
         assert!(
-            appels(&evenements).is_empty(),
-            "truncated arguments are not arguments: {evenements:?}"
+            calls(&events).is_empty(),
+            "truncated arguments are not arguments: {events:?}"
         );
         // And the partial SQL must not come out in an error message: what a
         // model writes can copy what it was given.
-        for evenement in &evenements {
-            if let ChatEvent::Error(message) = evenement {
+        for event in &events {
+            if let ChatEvent::Error(message) = event {
                 assert!(!message.contains("DELETE FROM"), "{message}");
             }
         }
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::Interrupted
             })
@@ -1332,15 +1326,15 @@ mod tests {
 
     #[test]
     fn nothing_is_decoded_after_the_end() {
-        let mut decodeur = MessageDecoder::new();
-        let mut sorties = Vec::new();
-        decodeur.on_data(r#"{"type":"message_stop"}"#, &mut sorties);
-        let apres = sorties.len();
-        decodeur.on_data(
+        let mut decoder = MessageDecoder::new();
+        let mut outputs = Vec::new();
+        decoder.on_data(r#"{"type":"message_stop"}"#, &mut outputs);
+        let after = outputs.len();
+        decoder.on_data(
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
-            &mut sorties,
+            &mut outputs,
         );
-        assert_eq!(sorties.len(), apres, "{sorties:?}");
+        assert_eq!(outputs.len(), after, "{outputs:?}");
     }
 }
 

@@ -525,11 +525,11 @@ impl fmt::Display for LogicalType {
             Self::Array(inner) => write!(f, "array<{inner}>"),
             Self::Struct(fields) => {
                 f.write_str("struct<")?;
-                for (i, champ) in fields.iter().enumerate() {
+                for (i, col) in fields.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{}: {}", champ.name, champ.logical_type)?;
+                    write!(f, "{}: {}", col.name, col.logical_type)?;
                 }
                 f.write_str(">")
             }
@@ -697,7 +697,7 @@ impl Relation {
     /// quoted).
     #[must_use]
     pub fn field(&self, name: &str) -> Option<&Field> {
-        self.fields.iter().find(|champ| champ.name == name)
+        self.fields.iter().find(|col| col.name == name)
     }
 
     /// The primary key fields, in position order.
@@ -706,13 +706,13 @@ impl Relation {
     /// relational model.
     #[must_use]
     pub fn primary_key(&self) -> Vec<&Field> {
-        let mut cles: Vec<&Field> = self
+        let mut keys: Vec<&Field> = self
             .fields
             .iter()
-            .filter(|champ| champ.is_primary_key)
+            .filter(|col| col.is_primary_key)
             .collect();
-        cles.sort_by_key(|champ| champ.position);
-        cles
+        keys.sort_by_key(|col| col.position);
+        keys
     }
 
     /// Is the schema of this relation, in whole or in part, **deduced**?
@@ -721,7 +721,7 @@ impl Relation {
     /// a server truth makes people write wrong queries with confidence.
     #[must_use]
     pub fn has_inferred_schema(&self) -> bool {
-        self.fields.iter().any(|champ| champ.inferred)
+        self.fields.iter().any(|col| col.inferred)
     }
 }
 
@@ -974,68 +974,72 @@ mod tests {
     #[test]
     fn the_parent_of_a_relation_cannot_be_a_relation() {
         let relation = CatalogPath::for_relation(None, Some("public"), "clients").expect("valid");
-        assert!(RelationRef::new(relation, "autre", RelationKind::Table).is_err());
+        assert!(RelationRef::new(relation, "other", RelationKind::Table).is_err());
     }
 
     #[test]
     fn the_parent_of_a_namespace_does_not_go_lower() {
-        let espace = CatalogPath::for_namespace(None, "public").expect("valid");
-        assert!(NamespaceRef::new(espace, "autre").is_err());
+        let space = CatalogPath::for_namespace(None, "public").expect("valid");
+        assert!(NamespaceRef::new(space, "other").is_err());
     }
 
     #[test]
     fn the_path_of_a_reference_rebuilds_without_loss() {
-        let parent = CatalogPath::for_namespace(Some("caisse"), "public").expect("valid");
+        let parent = CatalogPath::for_namespace(Some("sales"), "public").expect("valid");
         let relation = RelationRef::new(parent, "ventes.2026", RelationKind::Table).expect("valid");
-        let chemin = relation.path();
-        assert_eq!(chemin.catalog(), Some("caisse"));
-        assert_eq!(chemin.namespace(), Some("public"));
-        assert_eq!(chemin.relation(), Some("ventes.2026"));
+        let item_path = relation.path();
+        assert_eq!(item_path.catalog(), Some("sales"));
+        assert_eq!(item_path.namespace(), Some("public"));
+        assert_eq!(item_path.relation(), Some("ventes.2026"));
     }
 
     #[test]
     fn a_relation_without_intermediate_level_keeps_its_catalog() {
         // Neo4j: database + label, without a namespace.
-        let parent = CatalogPath::for_catalog("graphe").expect("valid");
-        let label = RelationRef::new(parent, "Personne", RelationKind::NodeLabel).expect("valid");
-        assert_eq!(label.path().to_string(), "graphe..Personne");
+        let parent = CatalogPath::for_catalog("graph").expect("valid");
+        let label = RelationRef::new(parent, "Person", RelationKind::NodeLabel).expect("valid");
+        assert_eq!(label.path().to_string(), "graph..Person");
     }
 
     #[test]
     fn an_inferred_schema_declares_itself() {
-        let mongo = Relation::new("commandes", RelationKind::Collection).with_fields(vec![
+        let mongo = Relation::new("orders", RelationKind::Collection).with_fields(vec![
             Field::new("_id", 0, LogicalType::Uuid, "objectId").primary_key(),
-            Field::new("montant", 1, LogicalType::FLOAT64, "double").with_inferred(),
+            Field::new("amount", 1, LogicalType::FLOAT64, "double").with_inferred(),
         ]);
         assert!(
             mongo.has_inferred_schema(),
             "a schema deduced by sampling must be able to say so"
         );
 
-        let postgres = Relation::new("commandes", RelationKind::Table)
-            .with_fields(vec![Field::new("id", 0, LogicalType::INT64, "int8")]);
+        let postgres = Relation::new("orders", RelationKind::Table).with_fields(vec![Field::new(
+            "id",
+            0,
+            LogicalType::INT64,
+            "int8",
+        )]);
         assert!(!postgres.has_inferred_schema());
     }
 
     #[test]
     fn the_primary_key_comes_out_in_position_order() {
-        let relation = Relation::new("lignes", RelationKind::Table).with_fields(vec![
-            Field::new("libelle", 0, LogicalType::Text, "text"),
-            Field::new("ligne", 2, LogicalType::INT32, "int4").primary_key(),
-            Field::new("commande", 1, LogicalType::INT64, "int8").primary_key(),
+        let relation = Relation::new("lines", RelationKind::Table).with_fields(vec![
+            Field::new("caption", 0, LogicalType::Text, "text"),
+            Field::new("line", 2, LogicalType::INT32, "int4").primary_key(),
+            Field::new("order", 1, LogicalType::INT64, "int8").primary_key(),
         ]);
-        let noms: Vec<&str> = relation
+        let names: Vec<&str> = relation
             .primary_key()
             .iter()
-            .map(|champ| champ.name.as_str())
+            .map(|col| col.name.as_str())
             .collect();
-        assert_eq!(noms, ["commande", "ligne"]);
+        assert_eq!(names, ["order", "line"]);
     }
 
     #[test]
     fn a_primary_key_field_is_non_null() {
-        let champ = Field::new("id", 0, LogicalType::INT64, "int8").primary_key();
-        assert!(!champ.nullable);
+        let col = Field::new("id", 0, LogicalType::INT64, "int8").primary_key();
+        assert!(!col.nullable);
     }
 
     #[test]
@@ -1095,20 +1099,20 @@ mod tests {
 
     #[test]
     fn a_mismatched_foreign_key_is_detected() {
-        let cible = ForeignKeyTarget {
+        let target = ForeignKeyTarget {
             relation: CatalogPath::for_relation(None, Some("public"), "clients").expect("valid"),
             fields: vec!["id".to_owned()],
         };
-        let bonne = ForeignKey::new("fk_ok", vec!["client_id".to_owned()], cible.clone());
-        assert!(bonne.is_well_formed());
+        let good = ForeignKey::new("fk_ok", vec!["client_id".to_owned()], target.clone());
+        assert!(good.is_well_formed());
 
-        let mauvaise = ForeignKey::new(
+        let bad = ForeignKey::new(
             "fk_ko",
             vec!["client_id".to_owned(), "site_id".to_owned()],
-            cible,
+            target,
         );
         assert!(
-            !mauvaise.is_well_formed(),
+            !bad.is_well_formed(),
             "two lists of different lengths do not pair positionally"
         );
     }

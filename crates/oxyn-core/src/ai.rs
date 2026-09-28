@@ -208,8 +208,8 @@ impl ProviderId {
         // The first 32 bits of a UUID v4: enough to make a collision unlikely
         // among the few declarations of one machine, without claiming a global
         // uniqueness nobody has any use for here.
-        let empreinte = uuid::Uuid::new_v4().as_u128() >> 96;
-        Self(Arc::from(format!("{}-{empreinte:08x}", kind.as_str())))
+        let suffix = uuid::Uuid::new_v4().as_u128() >> 96;
+        Self(Arc::from(format!("{}-{suffix:08x}", kind.as_str())))
     }
 
     /// Mints the identity of a new **external agent**: `agent-<8 hex digits>`.
@@ -224,8 +224,8 @@ impl ProviderId {
     /// everything that reads this identifier.
     #[must_use]
     pub fn for_new_agent() -> Self {
-        let empreinte = uuid::Uuid::new_v4().as_u128() >> 96;
-        Self(Arc::from(format!("agent-{empreinte:08x}")))
+        let suffix = uuid::Uuid::new_v4().as_u128() >> 96;
+        Self(Arc::from(format!("agent-{suffix:08x}")))
     }
 }
 
@@ -398,7 +398,7 @@ impl AiProviderConfig {
         base_url: impl Into<String>,
         model: impl Into<String>,
     ) -> Self {
-        let maintenant = Utc::now();
+        let now = Utc::now();
         Self {
             id,
             kind,
@@ -406,8 +406,8 @@ impl AiProviderConfig {
             base_url: base_url.into(),
             model: model.into(),
             secret_ref: None,
-            created_at: maintenant,
-            updated_at: maintenant,
+            created_at: now,
+            updated_at: now,
         }
     }
 
@@ -472,7 +472,7 @@ impl AiProviderConfig {
     ///
     /// An unreadable `base_url` on either side is never equal to anything —
     /// in doubt, the key is forgotten, which only costs a retype
-    /// ([I-03](../../CLAUDE.md#i-03)). No I/O, and no URL is ever quoted in a
+    /// ([I-03](../../../CLAUDE.md#i-03)). No I/O, and no URL is ever quoted in a
     /// message, matching `validate_base_url`: an endpoint that fails to
     /// parse says nothing here about what it contains.
     #[must_use]
@@ -542,7 +542,7 @@ pub const MAX_AGENT_ENV_VALUE_BYTES: usize = 4096;
 ///
 /// An external agent has no endpoint, no model, and — above all — no **secret
 /// reference**: it carries its own authentication, and that is the whole point
-/// of the mode ([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
+/// of the mode ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
 /// Fitting it into `AiProviderConfig` would produce a structure half of whose
 /// fields mean nothing depending on the variant, and the question "does this
 /// field count here?" would come up again at every read.
@@ -578,7 +578,7 @@ pub struct ExternalAgentConfig {
     /// **Must not carry a secret**: what the user puts there goes into a
     /// process's environment, visible from the process table on some systems.
     /// An agent that needs a token reads it itself, where it stored it
-    /// ([I-03](../../CLAUDE.md#i-03)).
+    /// ([I-03](../../../CLAUDE.md#i-03)).
     #[serde(default)]
     pub env: Vec<(String, String)>,
     /// Date of the declaration.
@@ -591,15 +591,15 @@ impl ExternalAgentConfig {
     /// Declares an external agent, dated now.
     #[must_use]
     pub fn new(id: ProviderId, label: impl Into<String>, command: impl Into<String>) -> Self {
-        let maintenant = Utc::now();
+        let now = Utc::now();
         Self {
             id,
             label: label.into(),
             command: command.into(),
             args: Vec::new(),
             env: Vec::new(),
-            created_at: maintenant,
-            updated_at: maintenant,
+            created_at: now,
+            updated_at: now,
         }
     }
 
@@ -657,8 +657,8 @@ impl ExternalAgentConfig {
                 "agent has too many environment variables".into(),
             ));
         }
-        if self.env.iter().any(|(nom, _)| {
-            nom.trim().is_empty() || nom.contains('=') || nom.chars().any(char::is_control)
+        if self.env.iter().any(|(name, _)| {
+            name.trim().is_empty() || name.contains('=') || name.chars().any(char::is_control)
         }) {
             return Err(OxynError::Config(
                 "agent environment variable names must be nonempty and free of '=' and control \
@@ -675,7 +675,7 @@ impl ExternalAgentConfig {
         if self
             .env
             .iter()
-            .any(|(_, valeur)| valeur.len() > MAX_AGENT_ENV_VALUE_BYTES)
+            .any(|(_, value)| value.len() > MAX_AGENT_ENV_VALUE_BYTES)
         {
             return Err(OxynError::Config(
                 "agent environment variable value is too long".into(),
@@ -684,7 +684,7 @@ impl ExternalAgentConfig {
         if self
             .env
             .iter()
-            .any(|(_, valeur)| valeur.chars().any(char::is_control))
+            .any(|(_, value)| value.chars().any(char::is_control))
         {
             return Err(OxynError::Config(
                 "agent environment variable values must not contain control characters".into(),
@@ -696,7 +696,7 @@ impl ExternalAgentConfig {
 
 /// **Manual** rendering: environment values are not logged.
 ///
-/// The checkable corollary of [I-03](../../CLAUDE.md#i-03) forbids a derived
+/// The checkable corollary of [I-03](../../../CLAUDE.md#i-03) forbids a derived
 /// `Debug` on a type carrying a secret. `env` *must* not carry one — the
 /// field's documentation says so —, but that is an instruction to the user,
 /// not a guarantee: a `tracing::debug!("{config:?}")` added six months later
@@ -727,18 +727,18 @@ impl fmt::Debug for AiProviderConfig {
     /// executor validates it. A key pasted into the "endpoint" field — the most
     /// ordinary typing mistake there is — therefore lived in memory in a full
     /// `Debug`, and a `tracing::debug!` added six months later was enough to
-    /// log it ([I-03](../../CLAUDE.md#i-03)).
+    /// log it ([I-03](../../../CLAUDE.md#i-03)).
     ///
     /// The host alone keeps the diagnosis — knowing where the requests were
     /// going — without depending on a validation that may not have happened.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hote = url::Url::parse(&self.base_url).ok().map_or_else(
+        let host = url::Url::parse(&self.base_url).ok().map_or_else(
             // An unreadable URL is not shown: what we could not parse is
             // precisely what we do not know the contents of.
             || "<unreadable endpoint>".to_owned(),
             |analysee| match (analysee.host_str(), analysee.port()) {
-                (Some(hote), Some(port)) => format!("{hote}:{port}"),
-                (Some(hote), None) => hote.to_owned(),
+                (Some(host), Some(port)) => format!("{host}:{port}"),
+                (Some(host), None) => host.to_owned(),
                 (None, _) => "<no host>".to_owned(),
             },
         );
@@ -746,7 +746,7 @@ impl fmt::Debug for AiProviderConfig {
             .field("id", &self.id)
             .field("kind", &self.kind)
             .field("label", &self.label)
-            .field("base_url_host", &hote)
+            .field("base_url_host", &host)
             .field("model", &self.model)
             .field(
                 "secret_ref",
@@ -764,7 +764,7 @@ mod tests {
         AiProviderConfig::new(
             ProviderId::ollama(),
             AiProviderKind::OpenAiCompatible,
-            "Ollama du portable",
+            "Laptop Ollama",
             "http://localhost:11434/v1",
             "llama3.2",
         )
@@ -776,13 +776,13 @@ mod tests {
         // refusal is the chosen form — a silent cleanup would give the user
         // back a configuration they did not enter.
         let mut config = ollama();
-        config.base_url = "https://alice:motdepasse@api.example.com/v1".to_owned();
+        config.base_url = "https://alice:p4ssw0rd@api.example.com/v1".to_owned();
 
-        let erreur = config
+        let error = config
             .validate()
             .expect_err("a URL with credentials is not written");
-        let message = erreur.to_string();
-        assert!(!message.contains("motdepasse"), "{message}");
+        let message = error.to_string();
+        assert!(!message.contains("p4ssw0rd"), "{message}");
         assert!(!message.contains("alice"), "{message}");
 
         // A user name alone is enough to refuse: it is already half of a
@@ -804,22 +804,25 @@ mod tests {
             "Claude Code",
             "claude",
         );
-        let avec = |valeur: String| {
+        let with_value = |value: String| {
             let mut agent = base.clone();
-            agent.env = vec![("MODE".to_owned(), valeur)];
+            agent.env = vec![("MODE".to_owned(), value)];
             agent
         };
         assert!(
-            avec("acp".to_owned()).validate().is_ok(),
+            with_value("acp".to_owned()).validate().is_ok(),
             "an ordinary value stays accepted"
         );
 
-        for (cas, valeur) in [
-            ("NUL", "acp\0suite".to_owned()),
-            ("line break", "acp\nsuite".to_owned()),
+        for (case, value) in [
+            ("NUL", "acp\0rest".to_owned()),
+            ("line break", "acp\nrest".to_owned()),
             ("too long", "v".repeat(MAX_AGENT_ENV_VALUE_BYTES + 1)),
         ] {
-            assert!(avec(valeur).validate().is_err(), "{cas} must be refused");
+            assert!(
+                with_value(value).validate().is_err(),
+                "{case} must be refused"
+            );
         }
     }
 
@@ -862,8 +865,8 @@ mod tests {
             "",
             "not a url",
             "/v1/chat",
-            "mailto:quelquun@example.com",
-            "data:text/plain,bonjour",
+            "mailto:someone@example.com",
+            "data:text/plain,hello",
         ] {
             let mut config = ollama();
             config.base_url = brut.to_owned();
@@ -907,13 +910,13 @@ mod tests {
         // a `#[derive(Debug)]`.
         let config = ollama().with_secret_ref("keychain://oxyn/ollama");
 
-        let rendu = format!("{config:?}");
+        let rendered = format!("{config:?}");
         assert!(
-            !rendu.contains("keychain://oxyn/ollama"),
-            "reference leaked: {rendu}"
+            !rendered.contains("keychain://oxyn/ollama"),
+            "reference leaked: {rendered}"
         );
-        assert!(rendu.contains("Ollama du portable"), "{rendu}");
-        assert!(rendu.contains("11434"), "the host stays diagnosable");
+        assert!(rendered.contains("Laptop Ollama"), "{rendered}");
+        assert!(rendered.contains("11434"), "the host stays diagnosable");
 
         // And nothing in the structure can carry the key itself: the only
         // field meant for the keychain is a reference.
@@ -929,11 +932,11 @@ mod tests {
     /// configuration, and `validate` is only called at the other end, in the
     /// executor. In between, a key pasted into the "endpoint" field — the most
     /// common typing mistake — must not be able to reach a log
-    /// ([I-03](../../CLAUDE.md#i-03)).
+    /// ([I-03](../../../CLAUDE.md#i-03)).
     #[test]
     fn a_url_carrying_credentials_is_not_rendered_before_validation() {
         let mut config = ollama();
-        config.base_url = "https://cle:motdepasse@api.example.com/v1".to_owned();
+        config.base_url = "https://login:p4ssw0rd@api.example.com/v1".to_owned();
 
         // The test's premise: this configuration is not validated, and would
         // not be. Without this line, the test would prove the easy case.
@@ -942,12 +945,15 @@ mod tests {
             "validation does refuse a URL carrying credentials"
         );
 
-        let rendu = format!("{config:?}");
-        assert!(!rendu.contains("motdepasse"), "secret leaked: {rendu}");
-        assert!(!rendu.contains("cle:"), "identifier leaked: {rendu}");
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("p4ssw0rd"), "secret leaked: {rendered}");
         assert!(
-            rendu.contains("api.example.com"),
-            "the host stays diagnosable: {rendu}"
+            !rendered.contains("login:"),
+            "identifier leaked: {rendered}"
+        );
+        assert!(
+            rendered.contains("api.example.com"),
+            "the host stays diagnosable: {rendered}"
         );
     }
 
@@ -964,25 +970,25 @@ mod tests {
     fn the_declaration_round_trips_faithfully() {
         let config = ollama().with_secret_ref("keychain://oxyn/ollama");
         let json = serde_json::to_string(&config).expect("serialization");
-        let relu: AiProviderConfig = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(relu, config);
+        let read_back: AiProviderConfig = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(read_back, config);
     }
 
     #[test]
     fn protocol_families_have_a_stable_name() {
         // This name is written to the database and into a provenance:
         // changing it would make what was already written unreadable.
-        for (kind, nom) in [
+        for (kind, name) in [
             (AiProviderKind::Anthropic, "anthropic"),
             (AiProviderKind::OpenAi, "openai"),
             (AiProviderKind::Gemini, "gemini"),
             (AiProviderKind::OpenAiCompatible, "openai_compatible"),
         ] {
-            assert_eq!(kind.as_str(), nom);
-            assert_eq!(nom.parse::<AiProviderKind>(), Ok(kind));
+            assert_eq!(kind.as_str(), name);
+            assert_eq!(name.parse::<AiProviderKind>(), Ok(kind));
             assert_eq!(
                 serde_json::to_string(&kind).expect("serialization"),
-                format!("\"{nom}\"")
+                format!("\"{name}\"")
             );
         }
         assert!("mistral".parse::<AiProviderKind>().is_err());
@@ -1003,7 +1009,7 @@ mod tests {
                 AiProviderKind::OpenAiCompatible,
                 "endpoint",
                 "http://127.0.0.1:8080/v1",
-                "modele",
+                "model",
             );
             assert_eq!(config.kind, AiProviderKind::OpenAiCompatible);
             assert!(config.validate().is_ok());
@@ -1013,10 +1019,10 @@ mod tests {
     #[test]
     fn invalid_identifiers_are_refused() {
         assert!(ProviderId::new("").is_err());
-        assert!(ProviderId::new("OpenAI").is_err(), "majuscules");
+        assert!(ProviderId::new("OpenAI").is_err(), "uppercase");
         assert!(ProviderId::new("1ollama").is_err(), "leading digit");
-        assert!(ProviderId::new("open ai").is_err(), "espace");
-        assert!(ProviderId::new("open.ai").is_err(), "point");
+        assert!(ProviderId::new("open ai").is_err(), "space");
+        assert!(ProviderId::new("open.ai").is_err(), "dot");
         assert!(ProviderId::new("a".repeat(33)).is_err(), "too long");
         assert!(ProviderId::new("a").is_ok());
         assert!(ProviderId::new("lm-studio").is_ok());
@@ -1027,14 +1033,14 @@ mod tests {
     fn the_error_does_not_copy_the_faulty_value() {
         // A malformed provider identifier may be a key pasted into the wrong
         // field (I-03).
-        let err = ProviderId::new("sk-proj-CECINEDOITPASFUIR").expect_err("invalide");
-        let rendu = err.to_string();
-        assert!(!rendu.contains("CECINEDOITPASFUIR"), "{rendu}");
+        let err = ProviderId::new("sk-proj-THISMUSTNOTLEAK").expect_err("invalid");
+        let rendered = err.to_string();
+        assert!(!rendered.contains("THISMUSTNOTLEAK"), "{rendered}");
     }
 
     #[test]
     fn the_constants_are_valid_identifiers() {
-        for nom in [
+        for name in [
             ProviderId::OLLAMA,
             ProviderId::LM_STUDIO,
             ProviderId::LLAMA_CPP,
@@ -1045,7 +1051,7 @@ mod tests {
             ProviderId::GEMINI,
             ProviderId::OPENAI_COMPATIBLE,
         ] {
-            assert!(ProviderId::new(nom).is_ok(), "{nom}");
+            assert!(ProviderId::new(name).is_ok(), "{name}");
         }
     }
 
@@ -1053,8 +1059,8 @@ mod tests {
     fn an_identifier_serializes_as_a_bare_string() {
         let json = serde_json::to_string(&ProviderId::openai()).expect("serialization");
         assert_eq!(json, "\"openai\"");
-        let relu: ProviderId = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(relu, ProviderId::openai());
+        let read_back: ProviderId = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(read_back, ProviderId::openai());
         assert!(serde_json::from_str::<ProviderId>("\"OPENAI\"").is_err());
     }
 
@@ -1062,19 +1068,18 @@ mod tests {
     fn a_new_declaration_gets_a_valid_and_distinct_identity() {
         // The longest family is the one that would overflow if the shape
         // changed: it is the one tested, not the shortest.
-        for famille in [
+        for family in [
             AiProviderKind::OpenAiCompatible,
             AiProviderKind::Anthropic,
             AiProviderKind::OpenAi,
             AiProviderKind::Gemini,
         ] {
-            let frappe = ProviderId::for_new_declaration(famille);
-            ProviderId::new(frappe.as_str()).unwrap_or_else(|erreur| {
-                panic!("identity refused by its own validation: {erreur}")
-            });
+            let minted = ProviderId::for_new_declaration(family);
+            ProviderId::new(minted.as_str())
+                .unwrap_or_else(|error| panic!("identity refused by its own validation: {error}"));
             assert!(
-                frappe.as_str().starts_with(famille.as_str()),
-                "the family stays readable in the keychain: {frappe:?}"
+                minted.as_str().starts_with(family.as_str()),
+                "the family stays readable in the keychain: {minted:?}"
             );
         }
 
@@ -1082,9 +1087,9 @@ mod tests {
         // declarations. The trap this test closes: an identifier derived from
         // the label would turn the second into a silent replacement of the
         // first, keychain key included.
-        let premiere = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
-        let seconde = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
-        assert_ne!(premiere, seconde);
+        let first = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
+        let second = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
+        assert_ne!(first, second);
     }
 
     fn config_with(kind: AiProviderKind, base_url: &str) -> AiProviderConfig {

@@ -61,8 +61,8 @@ pub struct FormatReport {
 /// // A comment suspends reformatting: losing it would be a silent loss of
 /// // work.
 /// assert_eq!(
-///     format("select   1 -- garder", SqlDialect::Postgres),
-///     "select   1 -- garder"
+///     format("select   1 -- keep", SqlDialect::Postgres),
+///     "select   1 -- keep"
 /// );
 /// ```
 #[must_use]
@@ -163,8 +163,8 @@ mod tests {
 
     #[test]
     fn a_batch_is_repunctuated() {
-        let rendu = format("select 1; select 2", SqlDialect::Postgres);
-        assert_eq!(rendu, "SELECT 1;\nSELECT 2;");
+        let output = format("select 1; select 2", SqlDialect::Postgres);
+        assert_eq!(output, "SELECT 1;\nSELECT 2;");
     }
 
     #[test]
@@ -177,19 +177,19 @@ mod tests {
     #[test]
     fn an_unparsable_text_is_rendered_as_is() {
         let source = "SELEKT * FORM t";
-        let rapport = format_report(source, SqlDialect::Postgres);
-        assert_eq!(rapport.text, source);
-        assert_eq!(rapport.reformatted, 0);
-        assert_eq!(rapport.kept_verbatim, 1);
-        assert!(!rapport.changed);
+        let report = format_report(source, SqlDialect::Postgres);
+        assert_eq!(report.text, source);
+        assert_eq!(report.reformatted, 0);
+        assert_eq!(report.kept_verbatim, 1);
+        assert!(!report.changed);
     }
 
     #[test]
     fn an_unparsable_statement_does_not_block_the_others() {
-        let rapport = format_report("select 1; SELEKT 2", SqlDialect::Postgres);
-        assert_eq!(rapport.reformatted, 1);
-        assert_eq!(rapport.kept_verbatim, 1);
-        assert_eq!(rapport.text, "SELECT 1;\nSELEKT 2;");
+        let report = format_report("select 1; SELEKT 2", SqlDialect::Postgres);
+        assert_eq!(report.reformatted, 1);
+        assert_eq!(report.kept_verbatim, 1);
+        assert_eq!(report.text, "SELECT 1;\nSELEKT 2;");
     }
 
     #[test]
@@ -197,29 +197,29 @@ mod tests {
         for source in [
             "select   1 -- note",
             "select   1 /* note */",
-            "-- rien que ceci",
+            "-- nothing but this",
         ] {
-            let rapport = format_report(source, SqlDialect::Postgres);
-            assert_eq!(rapport.text, source, "{source}");
-            assert!(rapport.declined_for_comments, "{source}");
-            assert!(!rapport.changed);
-            assert_eq!(rapport.reformatted, 0);
+            let report = format_report(source, SqlDialect::Postgres);
+            assert_eq!(report.text, source, "{source}");
+            assert!(report.declined_for_comments, "{source}");
+            assert!(!report.changed);
+            assert_eq!(report.reformatted, 0);
         }
     }
 
     #[test]
     fn a_fake_comment_inside_a_string_suspends_nothing() {
-        let rapport = format_report("select   '-- pas un commentaire'", SqlDialect::Postgres);
-        assert!(!rapport.declined_for_comments);
-        assert_eq!(rapport.text, "SELECT '-- pas un commentaire'");
+        let report = format_report("select   '-- not a comment'", SqlDialect::Postgres);
+        assert!(!report.declined_for_comments);
+        assert_eq!(report.text, "SELECT '-- not a comment'");
     }
 
     #[test]
     fn an_empty_text_stays_empty() {
         for source in ["", "   ", ";"] {
-            let rapport = format_report(source, SqlDialect::Postgres);
-            assert_eq!(rapport.text, source, "{source:?}");
-            assert!(!rapport.changed);
+            let report = format_report(source, SqlDialect::Postgres);
+            assert_eq!(report.text, source, "{source:?}");
+            assert!(!report.changed);
         }
     }
 
@@ -234,11 +234,11 @@ mod tests {
             "explain analyze delete from t",
             "grant select on t to r",
         ] {
-            let avant = crate::classify(source, SqlDialect::Postgres);
-            let apres =
+            let before = crate::classify(source, SqlDialect::Postgres);
+            let after =
                 crate::classify(&format(source, SqlDialect::Postgres), SqlDialect::Postgres);
-            assert_eq!(avant.intent, apres.intent, "{source}");
-            assert_eq!(avant.risk, apres.risk, "{source}");
+            assert_eq!(before.intent, after.intent, "{source}");
+            assert_eq!(before.risk, after.risk, "{source}");
         }
     }
 

@@ -13,7 +13,7 @@ use arrow::array::{Array, Int64Array};
 use oxyn_core::{CancelToken, Capabilities, ExecLimits, ExecRequest, QueryLanguage, SqlDialect};
 use oxyn_driver::Session;
 
-use crate::integration::{appliquer, session};
+use crate::integration::{apply, session};
 
 fn writable(sql: &str) -> ExecRequest {
     ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), sql)
@@ -70,14 +70,14 @@ async fn truncate_is_accepted_and_empties_the_table() {
         return;
     };
     assert!(session.capabilities().contains(Capabilities::TRUNCATE));
-    appliquer(&*session, "CREATE TABLE oxyn_ddl_truncate (id integer)").await;
-    appliquer(&*session, "INSERT INTO oxyn_ddl_truncate VALUES (1), (2)").await;
-    appliquer(&*session, "TRUNCATE TABLE oxyn_ddl_truncate").await;
+    apply(&*session, "CREATE TABLE oxyn_ddl_truncate (id integer)").await;
+    apply(&*session, "INSERT INTO oxyn_ddl_truncate VALUES (1), (2)").await;
+    apply(&*session, "TRUNCATE TABLE oxyn_ddl_truncate").await;
     assert_eq!(
         count(&*session, "SELECT count(*) FROM oxyn_ddl_truncate").await,
         0
     );
-    appliquer(&*session, "DROP TABLE oxyn_ddl_truncate").await;
+    apply(&*session, "DROP TABLE oxyn_ddl_truncate").await;
     session.close().await.expect("close");
 }
 
@@ -92,8 +92,8 @@ async fn ddl_follows_the_enclosing_transaction_and_applies_whole_or_not_at_all()
             .capabilities()
             .contains(Capabilities::TRANSACTIONAL_DDL)
     );
-    appliquer(&*session, "CREATE TABLE oxyn_ddl_kept (id integer)").await;
-    appliquer(&*session, "INSERT INTO oxyn_ddl_kept VALUES (1), (2)").await;
+    apply(&*session, "CREATE TABLE oxyn_ddl_kept (id integer)").await;
+    apply(&*session, "INSERT INTO oxyn_ddl_kept VALUES (1), (2)").await;
 
     // A DROP, then a failure in the same transaction: the table comes back.
     assert!(
@@ -122,7 +122,7 @@ async fn ddl_follows_the_enclosing_transaction_and_applies_whole_or_not_at_all()
     assert!(refused(&*session, "DROP TABLE oxyn_ddl_kept, oxyn_ddl_missing").await);
     assert!(exists(&*session, "oxyn_ddl_kept").await);
 
-    appliquer(&*session, "DROP TABLE oxyn_ddl_kept").await;
+    apply(&*session, "DROP TABLE oxyn_ddl_kept").await;
     session.close().await.expect("close");
 }
 
@@ -143,7 +143,7 @@ async fn drop_and_truncate_are_refused_while_another_object_depends_on_the_table
         "CREATE TABLE oxyn_ddl_viewed (id integer)",
         "CREATE VIEW oxyn_ddl_view AS SELECT id FROM oxyn_ddl_viewed",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
 
     assert!(refused(&*session, "DROP TABLE oxyn_ddl_parent").await);
@@ -152,8 +152,8 @@ async fn drop_and_truncate_are_refused_while_another_object_depends_on_the_table
     assert!(exists(&*session, "oxyn_ddl_parent").await);
     assert!(exists(&*session, "oxyn_ddl_viewed").await);
 
-    appliquer(&*session, "DROP TABLE oxyn_ddl_parent CASCADE").await;
-    appliquer(&*session, "DROP TABLE oxyn_ddl_viewed CASCADE").await;
-    appliquer(&*session, "DROP TABLE oxyn_ddl_child").await;
+    apply(&*session, "DROP TABLE oxyn_ddl_parent CASCADE").await;
+    apply(&*session, "DROP TABLE oxyn_ddl_viewed CASCADE").await;
+    apply(&*session, "DROP TABLE oxyn_ddl_child").await;
     session.close().await.expect("close");
 }

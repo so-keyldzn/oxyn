@@ -279,8 +279,8 @@ fn stream_rows(
     let mut remaining = request.limits.max_rows;
     let mut rows = statement.raw_query();
 
-    let sonde = match probe(&mut rows, width, limits, &mut remaining, effect, bound) {
-        Ok(sonde) => sonde,
+    let probed = match probe(&mut rows, width, limits, &mut remaining, effect, bound) {
+        Ok(probed) => probed,
         Err(err) => {
             let _ = start.send(Err(err));
             return;
@@ -289,7 +289,7 @@ fn stream_rows(
 
     let plans: Vec<ColumnPlan> = declared
         .into_iter()
-        .zip(sonde.observed)
+        .zip(probed.observed)
         .map(|((name, declared), observed)| ColumnPlan::resolve(name, declared, observed))
         .collect();
     let schema = schema_of(&plans);
@@ -306,20 +306,20 @@ fn stream_rows(
             );
         }
     }
-    let capacity = sonde.rows.max(64);
+    let capacity = probed.rows.max(64);
     let mut builders: Vec<ColumnBuilder> = plans
         .iter()
         .enumerate()
         .map(|(index, plan)| ColumnBuilder::new(plan.kind, index, capacity))
         .collect();
 
-    let mut finished = sonde.finished;
-    let mut truncated = sonde.truncated;
+    let mut finished = probed.finished;
+    let mut truncated = probed.truncated;
 
-    let first = if sonde.rows == 0 {
+    let first = if probed.rows == 0 {
         Pulled::Done { truncated }
     } else {
-        match assemble(&mut builders, &sonde.values, &schema) {
+        match assemble(&mut builders, &probed.values, &schema) {
             Ok(batch) => Pulled::Batch(batch),
             Err(err) => {
                 let _ = start.send(Err(err));
@@ -369,17 +369,17 @@ fn stream_rows(
         finished = filled.finished;
         truncated |= filled.truncated;
 
-        let epuise = filled.rows == 0;
-        let answer = if epuise {
+        let nothing_left = filled.rows == 0;
+        let answer = if nothing_left {
             Ok(Pulled::Done { truncated })
         } else {
             finish_batch(&mut builders, &schema).map(Pulled::Batch)
         };
         let failed = answer.is_err();
-        // `epuise` joins the two other stop causes for the same reason as
+        // `nothing_left` joins the two other stop causes for the same reason as
         // above: once `Done` is announced, keeping the thread only serves to
         // block the next query.
-        if reply.send(answer).is_err() || failed || epuise {
+        if reply.send(answer).is_err() || failed || nothing_left {
             return;
         }
     }

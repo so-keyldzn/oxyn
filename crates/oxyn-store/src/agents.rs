@@ -55,17 +55,17 @@ impl<'a> ExternalAgents<'a> {
     /// [`StoreError::Sqlite`] if the read fails.
     pub fn list(&self) -> Result<Vec<ExternalAgentConfig>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(
+            let mut query = conn.prepare(
                 "SELECT id, label, command, args, env, created_at, updated_at
                  FROM external_agents ORDER BY label, id",
             )?;
-            let lignes = requete.query_map([], depuis_ligne)?;
+            let rows = query.query_map([], from_row)?;
             let mut agents = Vec::new();
-            for ligne in lignes {
-                match ligne? {
+            for row in rows {
+                match row? {
                     Ok(Some(agent)) => agents.push(agent),
                     Ok(None) => {}
-                    Err(erreur) => return Err(erreur),
+                    Err(error) => return Err(error),
                 }
             }
             Ok(agents)
@@ -82,19 +82,19 @@ impl<'a> ExternalAgents<'a> {
     /// names the reason, never the value; [`StoreError::Sqlite`] if the write
     /// fails.
     pub fn save(&self, agent: &ExternalAgentConfig) -> Result<()> {
-        agent.validate().map_err(|erreur| StoreError::Corrupted {
+        agent.validate().map_err(|error| StoreError::Corrupted {
             field: "external_agents",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })?;
-        let args = serde_json::to_string(&agent.args).map_err(|erreur| StoreError::Corrupted {
+        let args = serde_json::to_string(&agent.args).map_err(|error| StoreError::Corrupted {
             field: "external_agents.args",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })?;
-        let env = serde_json::to_string(&agent.env).map_err(|erreur| StoreError::Corrupted {
+        let env = serde_json::to_string(&agent.env).map_err(|error| StoreError::Corrupted {
             field: "external_agents.env",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })?;
-        let maintenant = Utc::now();
+        let now = Utc::now();
         self.store.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO external_agents
@@ -113,7 +113,7 @@ impl<'a> ExternalAgents<'a> {
                     args,
                     env,
                     agent.created_at,
-                    maintenant,
+                    now,
                 ],
             )?;
             Ok(())
@@ -129,11 +129,11 @@ impl<'a> ExternalAgents<'a> {
     /// [`StoreError::Sqlite`] if the deletion fails.
     pub fn remove(&self, id: &ProviderId) -> Result<bool> {
         self.store.with_connection(|conn| {
-            let effacees = conn.execute(
+            let erased = conn.execute(
                 "DELETE FROM external_agents WHERE id = ?1",
                 params![id.as_str()],
             )?;
-            Ok(effacees > 0)
+            Ok(erased > 0)
         })
     }
 }
@@ -143,8 +143,8 @@ impl<'a> ExternalAgents<'a> {
 /// Returns `Ok(None)` for a row the domain cannot read back: the distinction
 /// with `Err` propagates a real SQLite failure while skipping a row written
 /// by a later version. No message copies the faulty value (I-03).
-fn depuis_ligne(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig>>> {
-    let brut: String = row.get(0)?;
+fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig>>> {
+    let raw: String = row.get(0)?;
     let label: String = row.get(1)?;
     let command: String = row.get(2)?;
     let args: String = row.get(3)?;
@@ -152,7 +152,7 @@ fn depuis_ligne(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentCo
     let created_at = row.get(5)?;
     let updated_at = row.get(6)?;
 
-    let Ok(id) = ProviderId::new(brut) else {
+    let Ok(id) = ProviderId::new(raw) else {
         tracing::warn!("external agent row skipped: unreadable identifier");
         return Ok(Ok(None));
     };
@@ -179,10 +179,10 @@ fn depuis_ligne(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentCo
     // A row that would no longer pass the domain's validation — written by a
     // version whose bounds differed — is skipped rather than returned:
     // offering it would make its launch fail later, far from here.
-    if let Err(erreur) = agent.validate() {
+    if let Err(error) = agent.validate() {
         tracing::warn!(
             agent = %agent.id.as_str(),
-            reason = %erreur,
+            reason = %error,
             "external agent row skipped: declaration is no longer valid"
         );
         return Ok(Ok(None));

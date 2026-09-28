@@ -207,13 +207,13 @@ impl Classification {
 /// use oxyn_query::classify;
 ///
 /// // The trap: `EXPLAIN ANALYZE` really runs what it analyzes.
-/// let lu = classify("EXPLAIN ANALYZE DELETE FROM commandes", SqlDialect::Postgres);
-/// assert_eq!(lu.intent, StatementIntent::Write);
-/// assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
+/// let outcome = classify("EXPLAIN ANALYZE DELETE FROM orders", SqlDialect::Postgres);
+/// assert_eq!(outcome.intent, StatementIntent::Write);
+/// assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
 ///
 /// // Without `ANALYZE`, only the plan is computed.
-/// let lu = classify("EXPLAIN DELETE FROM commandes", SqlDialect::Postgres);
-/// assert_eq!(lu.intent, StatementIntent::Read);
+/// let outcome = classify("EXPLAIN DELETE FROM orders", SqlDialect::Postgres);
+/// assert_eq!(outcome.intent, StatementIntent::Read);
 /// ```
 #[must_use]
 pub fn classify(sql: &str, dialect: SqlDialect) -> Classification {
@@ -951,10 +951,10 @@ mod tests {
         StatementIntent::Write
     )]
     #[case("COPY t FROM '/tmp/x.csv'", StatementIntent::Write)]
-    #[case("SELECT * INTO copie FROM clients", StatementIntent::Ddl)]
-    #[case("SELECT a INTO TEMP copie FROM clients", StatementIntent::Ddl)]
+    #[case("SELECT * INTO backup FROM clients", StatementIntent::Ddl)]
+    #[case("SELECT a INTO TEMP backup FROM clients", StatementIntent::Ddl)]
     #[case(
-        "WITH r AS (SELECT 1) SELECT * INTO copie FROM r",
+        "WITH r AS (SELECT 1) SELECT * INTO backup FROM r",
         StatementIntent::Ddl
     )]
     #[case("CREATE TABLE t (a int)", StatementIntent::Ddl)]
@@ -962,17 +962,17 @@ mod tests {
     #[case("DROP TABLE t", StatementIntent::Ddl)]
     #[case("TRUNCATE TABLE t", StatementIntent::Ddl)]
     #[case("CREATE INDEX i ON t (a)", StatementIntent::Ddl)]
-    #[case("GRANT SELECT ON t TO lecteur", StatementIntent::Grant)]
-    #[case("REVOKE SELECT ON t FROM lecteur", StatementIntent::Grant)]
-    #[case("CREATE ROLE analyste", StatementIntent::Grant)]
-    #[case("ALTER ROLE analyste WITH LOGIN", StatementIntent::Grant)]
-    #[case("SET ROLE analyste", StatementIntent::Grant)]
-    #[case("DROP ROLE analyste", StatementIntent::Grant)]
+    #[case("GRANT SELECT ON t TO reader", StatementIntent::Grant)]
+    #[case("REVOKE SELECT ON t FROM reader", StatementIntent::Grant)]
+    #[case("CREATE ROLE analyst", StatementIntent::Grant)]
+    #[case("ALTER ROLE analyst WITH LOGIN", StatementIntent::Grant)]
+    #[case("SET ROLE analyst", StatementIntent::Grant)]
+    #[case("DROP ROLE analyst", StatementIntent::Grant)]
     #[case("VACUUM FULL", StatementIntent::Unknown)]
-    #[case("ceci n'est pas du SQL", StatementIntent::Unknown)]
-    fn the_rule_table(#[case] sql: &str, #[case] attendu: StatementIntent) {
-        let lu = pg(sql);
-        assert_eq!(lu.intent, attendu, "{sql} → {lu:?}");
+    #[case("this is not SQL", StatementIntent::Unknown)]
+    fn the_rule_table(#[case] sql: &str, #[case] expected: StatementIntent) {
+        let outcome = pg(sql);
+        assert_eq!(outcome.intent, expected, "{sql} → {outcome:?}");
     }
 
     #[test]
@@ -1000,34 +1000,38 @@ mod tests {
     /// I-07, word for word: `EXPLAIN ANALYZE` runs the query it analyzes.
     #[test]
     fn explain_analyze_of_a_delete_is_not_a_read() {
-        let lu = pg("EXPLAIN ANALYZE DELETE FROM commandes");
-        assert_eq!(lu.intent, StatementIntent::Write, "{lu:?}");
-        assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
-        assert!(lu.is_mutating());
-        assert!(!lu.is_read_only());
+        let outcome = pg("EXPLAIN ANALYZE DELETE FROM orders");
+        assert_eq!(outcome.intent, StatementIntent::Write, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
+        assert!(outcome.is_mutating());
+        assert!(!outcome.is_read_only());
     }
 
     /// The PostgreSQL form goes through the options and not the bare keyword.
     #[test]
     fn explain_with_analyze_options_is_not_a_read() {
         for sql in [
-            "EXPLAIN (ANALYZE) DELETE FROM commandes",
-            "EXPLAIN (ANALYZE, VERBOSE) DELETE FROM commandes",
+            "EXPLAIN (ANALYZE) DELETE FROM orders",
+            "EXPLAIN (ANALYZE, VERBOSE) DELETE FROM orders",
             "EXPLAIN (VERBOSE, ANALYZE true) UPDATE t SET a = 1",
         ] {
-            let lu = pg(sql);
-            assert_eq!(lu.intent, StatementIntent::Write, "{sql} → {lu:?}");
+            let outcome = pg(sql);
+            assert_eq!(
+                outcome.intent,
+                StatementIntent::Write,
+                "{sql} → {outcome:?}"
+            );
         }
     }
 
     #[test]
     fn explain_without_analyze_stays_a_read() {
         assert_eq!(
-            pg("EXPLAIN DELETE FROM commandes").intent,
+            pg("EXPLAIN DELETE FROM orders").intent,
             StatementIntent::Read
         );
         assert_eq!(
-            pg("EXPLAIN (VERBOSE) DELETE FROM commandes").intent,
+            pg("EXPLAIN (VERBOSE) DELETE FROM orders").intent,
             StatementIntent::Read
         );
     }
@@ -1035,54 +1039,54 @@ mod tests {
     /// The statement starts with `WITH` and deletes every row.
     #[test]
     fn a_with_that_deletes_is_not_a_read() {
-        let lu =
-            pg("WITH partis AS (DELETE FROM commandes RETURNING *) SELECT count(*) FROM partis");
-        assert_eq!(lu.intent, StatementIntent::Write, "{lu:?}");
-        assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
+        let outcome =
+            pg("WITH removed AS (DELETE FROM orders RETURNING *) SELECT count(*) FROM removed");
+        assert_eq!(outcome.intent, StatementIntent::Write, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
     }
 
     #[test]
     fn a_with_followed_by_a_delete_is_not_a_read() {
-        let lu = pg(
-            "WITH cibles AS (SELECT id FROM t) DELETE FROM u WHERE id IN (SELECT id FROM cibles)",
+        let outcome = pg(
+            "WITH targets AS (SELECT id FROM t) DELETE FROM u WHERE id IN (SELECT id FROM targets)",
         );
-        assert_eq!(lu.intent, StatementIntent::Write, "{lu:?}");
-        assert_eq!(lu.risk, MutationRisk::None, "the DELETE is bounded");
+        assert_eq!(outcome.intent, StatementIntent::Write, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::None, "the DELETE is bounded");
     }
 
     #[test]
     fn a_with_that_updates_is_flagged() {
-        let lu = pg("WITH m AS (UPDATE t SET a = 1 RETURNING *) SELECT * FROM m");
-        assert_eq!(lu.intent, StatementIntent::Write);
-        assert_eq!(lu.risk, MutationRisk::UnboundedUpdate);
+        let outcome = pg("WITH m AS (UPDATE t SET a = 1 RETURNING *) SELECT * FROM m");
+        assert_eq!(outcome.intent, StatementIntent::Write);
+        assert_eq!(outcome.risk, MutationRisk::UnboundedUpdate);
     }
 
     #[test]
     fn invalid_sql_is_unknown_hence_mutating() {
-        let lu = pg("SELEKT * FORM t");
-        assert_eq!(lu.intent, StatementIntent::Unknown);
-        assert!(lu.is_mutating(), "Unknown must count as mutating");
-        assert_eq!(lu.statements.len(), 1);
-        assert_eq!(lu.statements[0].basis, Basis::Unparsed);
-        assert!(lu.statements[0].error.is_some());
-        assert!(!lu.is_fully_understood());
+        let outcome = pg("SELEKT * FORM t");
+        assert_eq!(outcome.intent, StatementIntent::Unknown);
+        assert!(outcome.is_mutating(), "Unknown must count as mutating");
+        assert_eq!(outcome.statements.len(), 1);
+        assert_eq!(outcome.statements[0].basis, Basis::Unparsed);
+        assert!(outcome.statements[0].error.is_some());
+        assert!(!outcome.is_fully_understood());
     }
 
     /// The semicolon of a comment must not fabricate a second statement — and
     /// above all not one that would read as a read.
     #[test]
     fn a_comment_containing_a_semicolon_does_not_cut() {
-        let lu = pg("DELETE FROM t -- garder ; ceci\n");
-        assert_eq!(lu.statements.len(), 1, "{lu:?}");
-        assert_eq!(lu.intent, StatementIntent::Write);
-        assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
+        let outcome = pg("DELETE FROM t -- keep ; this\n");
+        assert_eq!(outcome.statements.len(), 1, "{outcome:?}");
+        assert_eq!(outcome.intent, StatementIntent::Write);
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
     }
 
     #[test]
     fn a_semicolon_inside_a_string_does_not_cut() {
-        let lu = pg("SELECT ';' FROM t");
-        assert_eq!(lu.statements.len(), 1);
-        assert_eq!(lu.intent, StatementIntent::Read);
+        let outcome = pg("SELECT ';' FROM t");
+        assert_eq!(outcome.statements.len(), 1);
+        assert_eq!(outcome.intent, StatementIntent::Read);
     }
 
     // ── Scope detection ──────────────────────────────────────────────────────
@@ -1103,10 +1107,10 @@ mod tests {
     #[case("DELETE FROM t WHERE 2 > 1", MutationRisk::UnboundedDelete)]
     #[case("DELETE FROM t WHERE id = 1", MutationRisk::None)]
     #[case("DELETE FROM t WHERE 1=1 AND id = 2", MutationRisk::None)]
-    #[case("DELETE FROM t WHERE actif", MutationRisk::None)]
+    #[case("DELETE FROM t WHERE active", MutationRisk::None)]
     #[case("DELETE FROM t WHERE 1 = 2", MutationRisk::None)]
-    fn the_scope_of_a_delete(#[case] sql: &str, #[case] attendu: MutationRisk) {
-        assert_eq!(pg(sql).risk, attendu, "{sql}");
+    fn the_scope_of_a_delete(#[case] sql: &str, #[case] expected: MutationRisk) {
+        assert_eq!(pg(sql).risk, expected, "{sql}");
     }
 
     #[rstest]
@@ -1114,8 +1118,8 @@ mod tests {
     #[case("UPDATE t SET a = 1 WHERE 1=1", MutationRisk::UnboundedUpdate)]
     #[case("UPDATE t SET a = 1 WHERE true", MutationRisk::UnboundedUpdate)]
     #[case("UPDATE t SET a = 1 WHERE id = 2", MutationRisk::None)]
-    fn the_scope_of_an_update(#[case] sql: &str, #[case] attendu: MutationRisk) {
-        assert_eq!(pg(sql).risk, attendu, "{sql}");
+    fn the_scope_of_an_update(#[case] sql: &str, #[case] expected: MutationRisk) {
+        assert_eq!(pg(sql).risk, expected, "{sql}");
     }
 
     #[test]
@@ -1129,18 +1133,18 @@ mod tests {
     #[test]
     fn a_homonymous_function_call_triggers_nothing() {
         // `TRUNCATE(x, 2)` is a numeric function, not a table truncation.
-        let lu = classify("SELECT TRUNCATE(1.234, 2)", SqlDialect::MySql);
-        assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
-        assert_eq!(lu.risk, MutationRisk::None);
+        let outcome = classify("SELECT TRUNCATE(1.234, 2)", SqlDialect::MySql);
+        assert_eq!(outcome.intent, StatementIntent::Read, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::None);
     }
 
     /// `SELECT … FOR UPDATE` locks rows without modifying them: the keyword
     /// net must not downgrade it.
     #[test]
     fn a_row_lock_stays_a_read() {
-        let lu = pg("SELECT * FROM t WHERE id = 1 FOR UPDATE");
-        assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
-        assert_eq!(lu.statements[0].basis, Basis::Ast);
+        let outcome = pg("SELECT * FROM t WHERE id = 1 FOR UPDATE");
+        assert_eq!(outcome.intent, StatementIntent::Read, "{outcome:?}");
+        assert_eq!(outcome.statements[0].basis, Basis::Ast);
     }
 
     /// The net does not apply to an `EXPLAIN`, whose form is already settled:
@@ -1148,69 +1152,69 @@ mod tests {
     /// computation.
     #[test]
     fn the_net_spares_an_explain() {
-        let lu = pg("EXPLAIN DELETE FROM commandes");
-        assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
-        assert_eq!(lu.statements[0].basis, Basis::Ast);
+        let outcome = pg("EXPLAIN DELETE FROM orders");
+        assert_eq!(outcome.intent, StatementIntent::Read, "{outcome:?}");
+        assert_eq!(outcome.statements[0].basis, Basis::Ast);
     }
 
     #[test]
     fn a_mutating_keyword_inside_a_string_triggers_nothing() {
-        let lu = pg("SELECT * FROM audit WHERE action = 'DELETE FROM clients'");
-        assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
+        let outcome = pg("SELECT * FROM audit WHERE action = 'DELETE FROM clients'");
+        assert_eq!(outcome.intent, StatementIntent::Read, "{outcome:?}");
     }
 
     // ── Aggregating a batch ──────────────────────────────────────────────────
 
     #[test]
     fn a_batch_takes_the_highest_intent() {
-        let lu = pg("SELECT 1; UPDATE t SET a = 1 WHERE id = 2; SELECT 2");
-        assert_eq!(lu.intent, StatementIntent::Write);
-        assert_eq!(lu.statements.len(), 3);
-        assert_eq!(lu.statements[0].intent, StatementIntent::Read);
-        assert_eq!(lu.statements[1].intent, StatementIntent::Write);
+        let outcome = pg("SELECT 1; UPDATE t SET a = 1 WHERE id = 2; SELECT 2");
+        assert_eq!(outcome.intent, StatementIntent::Write);
+        assert_eq!(outcome.statements.len(), 3);
+        assert_eq!(outcome.statements[0].intent, StatementIntent::Read);
+        assert_eq!(outcome.statements[1].intent, StatementIntent::Write);
     }
 
     #[test]
     fn a_batch_takes_the_most_serious_risk() {
-        let lu = pg("UPDATE t SET a = 1; DROP TABLE u");
-        assert_eq!(lu.intent, StatementIntent::Ddl);
-        assert_eq!(lu.risk, MutationRisk::DropObject);
-        assert_eq!(lu.risky().count(), 2);
+        let outcome = pg("UPDATE t SET a = 1; DROP TABLE u");
+        assert_eq!(outcome.intent, StatementIntent::Ddl);
+        assert_eq!(outcome.risk, MutationRisk::DropObject);
+        assert_eq!(outcome.risky().count(), 2);
     }
 
     #[test]
     fn an_unparsable_statement_contaminates_the_batch() {
-        let lu = pg("SELECT 1; ceci n'est pas du SQL");
-        assert_eq!(lu.intent, StatementIntent::Unknown);
-        assert!(lu.is_mutating());
+        let outcome = pg("SELECT 1; this is not SQL");
+        assert_eq!(outcome.intent, StatementIntent::Unknown);
+        assert!(outcome.is_mutating());
     }
 
     #[test]
     fn unknown_beats_ddl_at_equal_rank() {
-        let lu = pg("DROP TABLE t; ceci n'est pas du SQL");
-        assert_eq!(lu.intent, StatementIntent::Unknown, "{lu:?}");
+        let outcome = pg("DROP TABLE t; this is not SQL");
+        assert_eq!(outcome.intent, StatementIntent::Unknown, "{outcome:?}");
         // The `DROP`'s risk stays visible all the same.
-        assert_eq!(lu.risk, MutationRisk::DropObject);
+        assert_eq!(outcome.risk, MutationRisk::DropObject);
     }
 
     #[test]
     fn grant_beats_everything() {
-        let lu = pg("SELECT 1; DROP TABLE t; GRANT SELECT ON u TO r");
-        assert_eq!(lu.intent, StatementIntent::Grant);
+        let outcome = pg("SELECT 1; DROP TABLE t; GRANT SELECT ON u TO r");
+        assert_eq!(outcome.intent, StatementIntent::Grant);
     }
 
     #[test]
     fn a_transaction_does_not_inflate_a_read() {
-        let lu = pg("BEGIN; SELECT 1; COMMIT");
-        assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
-        assert!(lu.is_read_only());
+        let outcome = pg("BEGIN; SELECT 1; COMMIT");
+        assert_eq!(outcome.intent, StatementIntent::Read, "{outcome:?}");
+        assert!(outcome.is_read_only());
     }
 
     #[test]
     fn a_transaction_does_not_hide_a_write() {
-        let lu = pg("BEGIN; DELETE FROM t; COMMIT");
-        assert_eq!(lu.intent, StatementIntent::Write);
-        assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
+        let outcome = pg("BEGIN; DELETE FROM t; COMMIT");
+        assert_eq!(outcome.intent, StatementIntent::Write);
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
     }
 
     /// Read, yet settling what the session holds: the gate refuses these to
@@ -1220,7 +1224,7 @@ mod tests {
     #[case::begin("BEGIN")]
     #[case::start("START TRANSACTION READ WRITE")]
     #[case::commit("COMMIT")]
-    #[case::commented_commit("/* fin */ commit")]
+    #[case::commented_commit("/* end */ commit")]
     #[case::end("END")]
     #[case::rollback("ROLLBACK")]
     #[case::abort("ABORT")]
@@ -1231,9 +1235,9 @@ mod tests {
     #[case::commit_prepared("COMMIT PREPARED 'x'")]
     #[case::in_a_batch("SELECT 1; ROLLBACK")]
     fn transaction_control_is_flagged(#[case] sql: &str) {
-        let lu = pg(sql);
-        assert!(lu.transaction_control, "{lu:?}");
-        let request = lu.qualify(ExecRequest::new(
+        let outcome = pg(sql);
+        assert!(outcome.transaction_control, "{outcome:?}");
+        let request = outcome.qualify(ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Postgres),
             sql,
         ));
@@ -1265,12 +1269,16 @@ mod tests {
     /// must not open the door.
     #[test]
     fn an_empty_batch_is_unknown() {
-        for sql in ["", "   ", ";;", "-- juste une note"] {
-            let lu = pg(sql);
-            assert_eq!(lu.intent, StatementIntent::Unknown, "{sql:?} → {lu:?}");
-            assert!(lu.is_empty());
-            assert!(lu.is_mutating());
-            assert!(!lu.is_fully_understood());
+        for sql in ["", "   ", ";;", "-- just a note"] {
+            let outcome = pg(sql);
+            assert_eq!(
+                outcome.intent,
+                StatementIntent::Unknown,
+                "{sql:?} → {outcome:?}"
+            );
+            assert!(outcome.is_empty());
+            assert!(outcome.is_mutating());
+            assert!(!outcome.is_fully_understood());
         }
     }
 
@@ -1278,17 +1286,17 @@ mod tests {
 
     #[test]
     fn a_non_sql_language_is_not_guessed() {
-        let lu = classify_language(QueryLanguage::Cypher, "MATCH (n) RETURN n");
-        assert_eq!(lu.intent, StatementIntent::Unknown);
-        assert!(lu.is_mutating());
-        assert_eq!(lu.statements.len(), 1);
-        assert_eq!(lu.statements[0].basis, Basis::Unparsed);
+        let outcome = classify_language(QueryLanguage::Cypher, "MATCH (n) RETURN n");
+        assert_eq!(outcome.intent, StatementIntent::Unknown);
+        assert!(outcome.is_mutating());
+        assert_eq!(outcome.statements.len(), 1);
+        assert_eq!(outcome.statements[0].basis, Basis::Unparsed);
     }
 
     #[test]
     fn declared_sql_goes_through_its_dialect() {
-        let lu = classify_language(QueryLanguage::Sql(SqlDialect::MySql), "SELECT 1");
-        assert_eq!(lu.intent, StatementIntent::Read);
+        let outcome = classify_language(QueryLanguage::Sql(SqlDialect::MySql), "SELECT 1");
+        assert_eq!(outcome.intent, StatementIntent::Read);
     }
 
     // ── Requalification ──────────────────────────────────────────────────────
@@ -1297,19 +1305,19 @@ mod tests {
     /// says otherwise. The text wins.
     #[test]
     fn a_wrongly_declared_intent_is_corrected() {
-        let demande = ExecRequest::new(
+        let requested = ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Postgres),
             "DELETE FROM clients",
         )
         .with_intent(StatementIntent::Read)
         .with_limits(ExecLimits::default());
 
-        let lu = reclassify(&demande);
-        let requalifiee = lu.qualify(demande);
+        let outcome = reclassify(&requested);
+        let requalified = outcome.qualify(requested);
 
-        assert_eq!(requalifiee.intent, StatementIntent::Write);
-        assert_eq!(requalifiee.risk, MutationRisk::UnboundedDelete);
-        assert!(requalifiee.is_mutating());
+        assert_eq!(requalified.intent, StatementIntent::Write);
+        assert_eq!(requalified.risk, MutationRisk::UnboundedDelete);
+        assert!(requalified.is_mutating());
     }
 
     // ── The safety net under the AST ─────────────────────────────────────────
@@ -1325,7 +1333,7 @@ mod tests {
 
     #[test]
     fn the_net_does_not_fire_wrongly() {
-        for (sql, dialecte) in [
+        for (sql, target_dialect) in [
             (
                 "SELECT * FROM audit WHERE action = 'DELETE FROM t'",
                 SqlDialect::Postgres,
@@ -1337,7 +1345,10 @@ mod tests {
             ("SELECT deleted_at, drop_date FROM t", SqlDialect::Postgres),
             (r#"SELECT "delete" FROM t"#, SqlDialect::Postgres),
         ] {
-            assert!(!hides_a_mutation(sql, dialecte), "false positive: {sql}");
+            assert!(
+                !hides_a_mutation(sql, target_dialect),
+                "false positive: {sql}"
+            );
         }
     }
 
@@ -1357,8 +1368,8 @@ mod tests {
     #[test]
     fn the_bounds_lead_back_to_the_statement() {
         let sql = "SELECT 1;\n  DELETE FROM t";
-        let lu = pg(sql);
-        for statement in &lu.statements {
+        let outcome = pg(sql);
+        for statement in &outcome.statements {
             assert_eq!(
                 sql.get(statement.span.clone()),
                 Some(statement.text.as_str())

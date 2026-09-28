@@ -99,20 +99,20 @@ mod tests {
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("nom", DataType::Utf8, true),
+            Field::new("name", DataType::Utf8, true),
         ]))
     }
 
-    fn lot(depart: i32, lignes: usize) -> RecordBatch {
-        let ids: Vec<i32> = (0..lignes)
-            .map(|i| depart.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
+    fn batch_of(start: i32, rows: usize) -> RecordBatch {
+        let ids: Vec<i32> = (0..rows)
+            .map(|i| start.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
             .collect();
-        let noms: Vec<Option<String>> = ids.iter().map(|i| Some(format!("n{i}"))).collect();
+        let names: Vec<Option<String>> = ids.iter().map(|i| Some(format!("n{i}"))).collect();
         RecordBatch::try_new(
             schema(),
             vec![
                 Arc::new(Int32Array::from(ids)),
-                Arc::new(StringArray::from(noms)),
+                Arc::new(StringArray::from(names)),
             ],
         )
         .expect("the columns match the schema built just above")
@@ -120,11 +120,11 @@ mod tests {
 
     /// Simulated cursor: many batches, none of which fits in the budget.
     #[derive(Debug)]
-    struct Curseur {
-        restants: usize,
+    struct CountdownSource {
+        remaining: usize,
     }
 
-    impl BatchSource for Curseur {
+    impl BatchSource for CountdownSource {
         fn schema(&self) -> SchemaRef {
             schema()
         }
@@ -132,14 +132,14 @@ mod tests {
         fn next_batch(
             &mut self,
         ) -> BoxFuture<'_, std::result::Result<Option<RecordBatch>, OxynError>> {
-            let rang = self.restants;
-            self.restants = self.restants.saturating_sub(1);
+            let rank = self.remaining;
+            self.remaining = self.remaining.saturating_sub(1);
             Box::pin(async move {
-                if rang == 0 {
+                if rank == 0 {
                     return Ok(None);
                 }
-                let depart = i32::try_from(rang).unwrap_or(i32::MAX).saturating_mul(100);
-                Ok(Some(lot(depart, 50)))
+                let start = i32::try_from(rank).unwrap_or(i32::MAX).saturating_mul(100);
+                Ok(Some(batch_of(start, 50)))
             })
         }
 
@@ -155,57 +155,54 @@ mod tests {
     /// bounded, nothing is lost, and what is displayed is what is exported.
     #[test]
     fn the_complete_path_fits_in_a_tiny_budget() {
-        let tampon = Arc::new(ResultBuffer::with_limits(
+        let buf = Arc::new(ResultBuffer::with_limits(
             schema(),
             BufferLimits::default().with_memory_budget(2_048),
         ));
-        let puits = BatchSink::new(Arc::clone(&tampon));
-        let mut curseur = Curseur { restants: 40 };
-        let annulation = CancelToken::new();
+        let batch_sink = BatchSink::new(Arc::clone(&buf));
+        let mut cursor = CountdownSource { remaining: 40 };
+        let cancel = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut curseur, &annulation)).expect("drainage");
-        assert_eq!(issue, SinkOutcome::Exhausted);
-        assert!(issue.is_complete());
-        assert_eq!(tampon.row_count(), 40 * 50);
+        let outcome = block_on(batch_sink.drain(&mut cursor, &cancel)).expect("drain");
+        assert_eq!(outcome, SinkOutcome::Exhausted);
+        assert!(outcome.is_complete());
+        assert_eq!(buf.row_count(), 40 * 50);
         assert!(
-            tampon.spilled_batches() > 0,
+            buf.spilled_batches() > 0,
             "the budget must have been exceeded"
         );
         // The memory invariant, in one line: what stays resident never
         // exceeds the budget, whatever the volume that went through.
         assert!(
-            tampon.resident_bytes() <= 2_048,
+            buf.resident_bytes() <= 2_048,
             "{} resident bytes for a budget of 2,048",
-            tampon.resident_bytes()
+            buf.resident_bytes()
         );
 
         // A row taken far into the result is read again without re-execution.
         let options = FormatOptions::default();
-        let (position, decalage) = tampon.locate(1_999).expect("the row exists");
-        let lot = tampon
-            .batch(position)
-            .expect("relecture")
-            .expect("the batch");
-        let cellule = format_cell(&lot, decalage, 1, &options);
+        let (position, offset) = buf.locate(1_999).expect("the row exists");
+        let rb = buf.batch(position).expect("read back").expect("the batch");
+        let value_cell = format_cell(&rb, offset, 1, &options);
         assert!(
-            cellule.text().is_some_and(|t| t.starts_with('n')),
-            "{cellule:?}"
+            value_cell.text().is_some_and(|t| t.starts_with('n')),
+            "{value_cell:?}"
         );
 
         // And what is displayed is what is exported.
-        let mut sortie: Vec<u8> = Vec::new();
-        let resume = export(
-            &tampon,
+        let mut output: Vec<u8> = Vec::new();
+        let summary = export(
+            &buf,
             ExportFormat::Csv,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default(),
-            &annulation,
+            &cancel,
         )
         .expect("export");
-        assert_eq!(resume.rows, 2_000);
+        assert_eq!(summary.rows, 2_000);
 
-        let texte = String::from_utf8(sortie).expect("CSV en UTF-8");
-        let attendu = cellule.text().unwrap_or_default();
-        assert!(texte.contains(attendu), "{attendu} missing from the export");
+        let txt = String::from_utf8(output).expect("CSV in UTF-8");
+        let expected = value_cell.text().unwrap_or_default();
+        assert!(txt.contains(expected), "{expected} missing from the export");
     }
 }

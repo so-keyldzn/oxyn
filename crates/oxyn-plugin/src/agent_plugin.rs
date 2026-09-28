@@ -171,17 +171,22 @@ impl PluginAgentSpec {
                 "`agent.max_turns` is zero: the agent could never answer",
             ));
         }
-        for (rang, outil) in self.allowed_tools.iter().enumerate() {
-            if !is_tool_name(outil) {
+        for (rank, tool_decl) in self.allowed_tools.iter().enumerate() {
+            if !is_tool_name(tool_decl) {
                 return Err(PluginError::invalid_manifest(
                     plugin,
                     "a tool name follows the `[a-z][a-z0-9_]*` grammar",
                 ));
             }
-            if self.allowed_tools.iter().take(rang).any(|vu| vu == outil) {
+            if self
+                .allowed_tools
+                .iter()
+                .take(rank)
+                .any(|seen| seen == tool_decl)
+            {
                 return Err(PluginError::invalid_manifest(
                     plugin,
-                    format!("the tool `{outil}` is declared twice"),
+                    format!("the tool `{tool_decl}` is declared twice"),
                 ));
             }
         }
@@ -290,17 +295,17 @@ impl DeclarativeAgent {
 /// [`PluginError::UnreadableManifest`] or [`PluginError::InvalidManifest`]
 /// depending on what the manifest breaks.
 pub fn load_from_dir(plugin_dir: &Path) -> Result<DeclarativeAgent> {
-    let chemin = plugin_dir.join(MANIFEST_FILE);
-    let texte = match fs::read_to_string(&chemin) {
-        Ok(texte) => texte,
+    let item_path = plugin_dir.join(MANIFEST_FILE);
+    let text = match fs::read_to_string(&item_path) {
+        Ok(text) => text,
         Err(source) => {
             return Err(PluginError::Directory {
-                path: chemin,
+                path: item_path,
                 source,
             });
         }
     };
-    let manifest = PluginManifest::from_toml(&texte)?;
+    let manifest = PluginManifest::from_toml(&text)?;
     DeclarativeAgent::from_manifest(&manifest)
 }
 
@@ -310,10 +315,10 @@ mod tests {
 
     use super::*;
 
-    fn manifeste(section_agent: &str) -> String {
+    fn manifest_toml(section_agent: &str) -> String {
         format!(
             "id          = \"revue-schema\"\n\
-             name        = \"Revue de schéma\"\n\
+             name        = \"Schema review\"\n\
              version     = \"1.0.0\"\n\
              api_version = \"0.1.0\"\n\
              kind        = \"agent\"\n\
@@ -328,26 +333,26 @@ mod tests {
 
     #[test]
     fn an_agent_is_read_directly_from_a_directory() {
-        let racine = TempDir::new("agent-fichier");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        let root = TempDir::new("agent-file");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let agent = load_from_dir(&racine.path().join("revue")).expect("agent read from disk");
+        let agent = load_from_dir(&root.path().join("revue")).expect("agent read from disk");
         assert_eq!(agent.plugin().as_str(), "revue");
         assert_eq!(agent.spec().name, "Schema");
     }
 
     #[test]
     fn a_directory_without_manifest_gives_a_file_error() {
-        let racine = TempDir::new("agent-absent");
-        let err = load_from_dir(&racine.path().join("nulle-part")).expect_err("refusal expected");
+        let root = TempDir::new("agent-absent");
+        let err = load_from_dir(&root.path().join("nulle-part")).expect_err("refusal expected");
         assert!(matches!(err, PluginError::Directory { .. }), "{err}");
     }
 
     #[test]
     fn a_declarative_agent_loads_without_wasm_host() {
-        let toml = manifeste(
+        let toml = manifest_toml(
             "name          = \"Schema\"\n\
-             description   = \"Relit un schéma.\"\n\
+             description   = \"Reviews a schema.\"\n\
              system_prompt = \"You review database schemas.\"\n\
              allowed_tools = [\"refresh_catalog\"]\n\
              max_turns     = 4\n",
@@ -357,7 +362,7 @@ mod tests {
 
         let agent = DeclarativeAgent::from_manifest(&manifest).expect("declarative agent");
         assert_eq!(agent.plugin().as_str(), "revue-schema");
-        assert_eq!(agent.plugin_name(), "Revue de schéma");
+        assert_eq!(agent.plugin_name(), "Schema review");
         assert_eq!(agent.connections(), ConnectionAccess::ReadOnly);
         assert_eq!(agent.spec().name, "Schema");
         assert_eq!(agent.spec().max_turns, Some(4));
@@ -368,7 +373,7 @@ mod tests {
     fn a_declaration_cannot_choose_its_privacy_tier() {
         // I-04: the tier is attached to the connection and to nothing else. A
         // key that was ignored would suggest it had been honored.
-        let toml = manifeste(
+        let toml = manifest_toml(
             "name          = \"Schema\"\n\
              system_prompt = \"You review database schemas.\"\n\
              privacy       = \"sampled\"\n",
@@ -384,27 +389,27 @@ mod tests {
     fn a_declaration_cannot_carry_a_key_or_an_endpoint() {
         // I-03: a plugin does not get a network channel by way of an agent, and
         // above all not a secret written in clear in a file.
-        for cle in [
+        for key in [
             "api_key       = \"sk-abc\"",
             "endpoint      = \"https://exfiltration.example\"",
             "connection    = \"prod-eu\"",
             "id            = \"018f0000-0000-7000-8000-000000000000\"",
         ] {
-            let toml = manifeste(&format!(
+            let toml = manifest_toml(&format!(
                 "name          = \"Schema\"\n\
                  system_prompt = \"You review database schemas.\"\n\
-                 {cle}\n"
+                 {key}\n"
             ));
             assert!(
                 PluginManifest::from_toml(&toml).is_err(),
-                "{cle} should be refused"
+                "{key} should be refused"
             );
         }
     }
 
     #[test]
     fn an_agent_without_tools_is_legitimate() {
-        let toml = manifeste(
+        let toml = manifest_toml(
             "name          = \"Doc\"\n\
              system_prompt = \"You describe schemas.\"\n",
         );
@@ -425,7 +430,7 @@ mod tests {
 
     #[test]
     fn a_tool_name_is_a_technical_key() {
-        for nom in [
+        for ident in [
             "",
             "Execute",
             "execute-query",
@@ -434,8 +439,8 @@ mod tests {
             "execute/query",
             "execute_query\u{0}",
         ] {
-            let spec = PluginAgentSpec::new("Schema", "prompt").with_tools([nom]);
-            assert!(spec.validate("x").is_err(), "{nom:?} should be refused");
+            let spec = PluginAgentSpec::new("Schema", "prompt").with_tools([ident]);
+            assert!(spec.validate("x").is_err(), "{ident:?} should be refused");
         }
 
         let spec = PluginAgentSpec::new("Schema", "prompt")
@@ -473,7 +478,7 @@ mod tests {
 
     #[test]
     fn the_output_schema_goes_through_opaque() {
-        let toml = manifeste(
+        let toml = manifest_toml(
             "name          = \"Schema\"\n\
              system_prompt = \"You review database schemas.\"\n\
              output_schema = \"{\\\"type\\\":\\\"object\\\"}\"\n",

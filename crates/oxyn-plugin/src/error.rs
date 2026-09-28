@@ -228,10 +228,10 @@ mod tests {
         };
         assert!(err.needs_user_decision());
 
-        let domaine: OxynError = err.into();
-        assert!(matches!(domaine, OxynError::ApprovalRequired { .. }));
-        assert!(domaine.is_user_error());
-        assert!(!domaine.is_retryable());
+        let domain: OxynError = err.into();
+        assert!(matches!(domain, OxynError::ApprovalRequired { .. }));
+        assert!(domain.is_user_error());
+        assert!(!domain.is_retryable());
     }
 
     #[test]
@@ -255,9 +255,9 @@ mod tests {
         };
         assert!(!err.needs_user_decision());
 
-        let domaine: OxynError = err.into();
+        let domain: OxynError = err.into();
         assert!(
-            matches!(domaine, OxynError::PolicyDenied { .. }),
+            matches!(domain, OxynError::PolicyDenied { .. }),
             "a refusal displayed as an internal incident reads as an Oxyn bug"
         );
     }
@@ -269,9 +269,9 @@ mod tests {
             declared: PluginVersion::new(0, 9, 0),
             host: PluginVersion::new(0, 1, 0),
         };
-        let rendu = err.to_string();
-        assert!(rendu.contains("0.9.0"), "{rendu}");
-        assert!(rendu.contains("0.1.0"), "{rendu}");
+        let rendered = err.to_string();
+        assert!(rendered.contains("0.9.0"), "{rendered}");
+        assert!(rendered.contains("0.1.0"), "{rendered}");
         assert!(matches!(
             OxynError::from(err),
             OxynError::NotSupported { .. }
@@ -286,8 +286,8 @@ mod tests {
             "PluginId",
             "allowed characters: a-z, 0-9, `-`, `_`",
         ));
-        let rendu = err.to_string();
-        assert!(rendu.contains("PluginId"), "{rendu}");
+        let rendered = err.to_string();
+        assert!(rendered.contains("PluginId"), "{rendered}");
         assert!(matches!(OxynError::from(err), OxynError::Serialization(_)));
     }
 }

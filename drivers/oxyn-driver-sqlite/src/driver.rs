@@ -265,23 +265,23 @@ mod tests {
     #[test]
     fn the_form_fits_in_one_path_field() {
         let driver = SqliteDriver::new();
-        let champs = &driver.metadata().connection_fields;
-        assert_eq!(champs.len(), 1);
-        let champ = champs.first().expect("one field");
-        assert_eq!(champ.key, SqliteDriver::PATH);
-        assert_eq!(champ.kind, FieldKind::Path);
-        assert!(champ.required);
+        let fields = &driver.metadata().connection_fields;
+        assert_eq!(fields.len(), 1);
+        let only_field = fields.first().expect("one field");
+        assert_eq!(only_field.key, SqliteDriver::PATH);
+        assert_eq!(only_field.kind, FieldKind::Path);
+        assert!(only_field.required);
         assert!(
-            champ
+            only_field
                 .help
                 .as_deref()
-                .is_some_and(|aide| aide.contains(SqliteDriver::MEMORY)),
+                .is_some_and(|text| text.contains(SqliteDriver::MEMORY)),
             "the in-memory option must be stated somewhere"
         );
         assert_eq!(
             driver.metadata().secret_fields().count(),
             0,
-            "SQLite n'authentifie personne"
+            "SQLite authenticates nobody"
         );
     }
 
@@ -305,8 +305,8 @@ mod tests {
 
     #[test]
     fn nothing_is_declared_without_a_matching_surface() {
-        let plafond = SqliteDriver::ceiling();
-        for absente in [
+        let declared_ceiling = SqliteDriver::ceiling();
+        for unsupported in [
             Capabilities::COMMENTS,
             Capabilities::PERMISSIONS,
             Capabilities::GRANT_REVOKE,
@@ -321,27 +321,27 @@ mod tests {
             Capabilities::SAVEPOINTS,
         ] {
             assert!(
-                !plafond.contains(absente),
-                "capability declared without a surface: {absente}"
+                !declared_ceiling.contains(unsupported),
+                "capability declared without a surface: {unsupported}"
             );
         }
     }
 
     #[test]
     fn a_read_only_session_removes_writing() {
-        let ecriture = SqliteDriver::session_capabilities(false);
-        assert!(ecriture.contains(Capabilities::DDL | Capabilities::DML));
-        assert!(!ecriture.contains(Capabilities::READ_ONLY_SESSION));
+        let writing = SqliteDriver::session_capabilities(false);
+        assert!(writing.contains(Capabilities::DDL | Capabilities::DML));
+        assert!(!writing.contains(Capabilities::READ_ONLY_SESSION));
 
-        let lecture = SqliteDriver::session_capabilities(true);
-        assert!(lecture.contains(Capabilities::READ_ONLY_SESSION));
+        let read_caps = SqliteDriver::session_capabilities(true);
+        assert!(read_caps.contains(Capabilities::READ_ONLY_SESSION));
         assert!(
-            !lecture.contains(Capabilities::DDL),
+            !read_caps.contains(Capabilities::DDL),
             "a session the engine refuses to write must not say otherwise"
         );
-        assert!(!lecture.contains(Capabilities::DML));
+        assert!(!read_caps.contains(Capabilities::DML));
         assert!(
-            lecture.contains(Capabilities::SQL | Capabilities::TRANSACTIONS),
+            read_caps.contains(Capabilities::SQL | Capabilities::TRANSACTIONS),
             "a read transaction stays possible"
         );
     }
@@ -350,20 +350,20 @@ mod tests {
     fn a_configuration_carrying_a_secret_is_refused() {
         // I-03, made checkable: the workspace file committed by mistake.
         let driver = SqliteDriver::new();
-        let config = ConnectionConfig::new("atelier", DriverId::sqlite())
-            .with_param(SqliteDriver::PATH, "/tmp/atelier.sqlite")
+        let config = ConnectionConfig::new("workshop", DriverId::sqlite())
+            .with_param(SqliteDriver::PATH, "/tmp/workshop.sqlite")
             .with_param("password", "hunter2");
         let err = driver
             .metadata()
             .validate(&config)
-            .expect_err("refus attendu");
+            .expect_err("expected refusal");
         assert!(!err.to_string().contains("hunter2"), "{err}");
     }
 
     #[test]
     fn a_missing_path_is_refused_before_any_opening() {
         let driver = SqliteDriver::new();
-        let config = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let config = ConnectionConfig::new("workshop", DriverId::sqlite())
             .with_environment(Environment::Local);
         let err = driver
             .metadata()

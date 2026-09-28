@@ -109,21 +109,21 @@ async fn failure_within(
     if statut.is_redirection() {
         return LlmError::redirect_refused(id.clone(), statut.as_u16());
     }
-    let corps = match read_limited(response, MAX_ERROR_BODY_BYTES, within, cancel).await {
+    let body = match read_limited(response, MAX_ERROR_BODY_BYTES, within, cancel).await {
         Read::Cancelled => return LlmError::Cancelled,
-        Read::Complete(corps) => corps,
-        Read::Overflow(mut corps) | Read::TimedOut(mut corps) | Read::Broken(mut corps) => {
+        Read::Complete(body) => body,
+        Read::Overflow(mut body) | Read::TimedOut(mut body) | Read::Broken(mut body) => {
             // A cut body can be cut in the middle of a copy of the key: its
             // beginning would escape the scrubbing, which only looks for the
             // whole key. Removing as many bytes as the key has closes this
             // case, at the cost of a few bytes of an already incomplete diagnostic.
-            let marge = key.map_or(0, ApiKey::len);
-            corps.truncate(corps.len().saturating_sub(marge));
-            corps
+            let margin = key.map_or(0, ApiKey::len);
+            body.truncate(body.len().saturating_sub(margin));
+            body
         }
     };
-    let corps = String::from_utf8_lossy(&corps);
-    LlmError::from_response(id.clone(), statut.as_u16(), &corps, key)
+    let body = String::from_utf8_lossy(&body);
+    LlmError::from_response(id.clone(), statut.as_u16(), &body, key)
 }
 
 /// Reads and parses a non-stream JSON body, under [`MAX_JSON_BODY_BYTES`] and
@@ -154,20 +154,20 @@ async fn read_json_within<T: DeserializeOwned>(
     cancel: Option<&CancelToken>,
     limit: usize,
 ) -> Result<T, LlmError> {
-    let trop_grand = || LlmError::Decode {
+    let too_large = || LlmError::Decode {
         provider: id.clone(),
         detail: format!("the {subject} is larger than {limit} bytes; Oxyn refuses to read it"),
     };
     // An announced length beyond the limit is enough: nothing is read.
     if response
         .content_length()
-        .is_some_and(|annonce| usize::try_from(annonce).map_or(true, |n| n > limit))
+        .is_some_and(|announced| usize::try_from(announced).map_or(true, |n| n > limit))
     {
-        return Err(trop_grand());
+        return Err(too_large());
     }
-    let corps = match read_limited(response, limit, JSON_BODY_TIMEOUT, cancel).await {
-        Read::Complete(corps) => corps,
-        Read::Overflow(_) => return Err(trop_grand()),
+    let body = match read_limited(response, limit, JSON_BODY_TIMEOUT, cancel).await {
+        Read::Complete(body) => body,
+        Read::Overflow(_) => return Err(too_large()),
         Read::TimedOut(_) => {
             return Err(LlmError::ConnectionLost {
                 provider: id.clone(),
@@ -182,7 +182,7 @@ async fn read_json_within<T: DeserializeOwned>(
         }
         Read::Cancelled => return Err(LlmError::Cancelled),
     };
-    serde_json::from_slice(&corps).map_err(|err| {
+    serde_json::from_slice(&body).map_err(|err| {
         if err.to_string().starts_with(TOO_MANY_ENTRIES) {
             return too_many_models(id);
         }
@@ -236,8 +236,8 @@ const TOO_MANY_ENTRIES: &str = "oxyn: too many entries";
 pub(crate) fn bounded_entries<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<Value>, D::Error> {
-    struct Bornee;
-    impl<'de> Visitor<'de> for Bornee {
+    struct Bounded;
+    impl<'de> Visitor<'de> for Bounded {
         type Value = Vec<Value>;
 
         fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -245,17 +245,17 @@ pub(crate) fn bounded_entries<'de, D: Deserializer<'de>>(
         }
 
         fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut entrees = Vec::new();
-            while let Some(entree) = seq.next_element::<Value>()? {
-                if entrees.len() >= MAX_MODELS {
+            let mut entries = Vec::new();
+            while let Some(entry) = seq.next_element::<Value>()? {
+                if entries.len() >= MAX_MODELS {
                     return Err(serde::de::Error::custom(TOO_MANY_ENTRIES));
                 }
-                entrees.push(entree);
+                entries.push(entry);
             }
-            Ok(entrees)
+            Ok(entries)
         }
     }
-    deserializer.deserialize_seq(Bornee)
+    deserializer.deserialize_seq(Bounded)
 }
 
 /// The explicit refusal of a model list that is too long.
@@ -289,7 +289,7 @@ enum Read {
     Cancelled,
 }
 
-/// Issue d'une attente de morceau.
+/// Outcome of waiting for a chunk.
 enum Step {
     Cancelled,
     TimedOut,
@@ -309,40 +309,40 @@ async fn read_limited(
     within: Duration,
     cancel: Option<&CancelToken>,
 ) -> Read {
-    let annonce = response
+    let announced = response
         .content_length()
         .and_then(|n| usize::try_from(n).ok());
-    let mut lu = Vec::with_capacity(annonce.unwrap_or(0).min(limit));
-    let mut echeance = pin!(tokio::time::sleep(within));
+    let mut read = Vec::with_capacity(announced.unwrap_or(0).min(limit));
+    let mut deadline = pin!(tokio::time::sleep(within));
     // A fresh token, never cancelled, when the caller has none: a single loop,
     // instead of two that would diverge.
-    let jamais = CancelToken::new();
-    let cancel = cancel.unwrap_or(&jamais);
+    let never = CancelToken::new();
+    let cancel = cancel.unwrap_or(&never);
     loop {
         if cancel.is_cancelled() {
             return Read::Cancelled;
         }
-        let pas = {
-            let attente = pin!(cancel.cancelled());
-            let morceau = pin!(response.chunk());
-            match select(attente, select(echeance.as_mut(), morceau)).await {
+        let step = {
+            let pending = pin!(cancel.cancelled());
+            let chunk = pin!(response.chunk());
+            match select(pending, select(deadline.as_mut(), chunk)).await {
                 Either::Left(((), _)) => Step::Cancelled,
                 Either::Right((Either::Left(((), _)), _)) => Step::TimedOut,
-                Either::Right((Either::Right((morceau, _)), _)) => Step::Chunk(morceau),
+                Either::Right((Either::Right((chunk, _)), _)) => Step::Chunk(chunk),
             }
         };
-        match pas {
+        match step {
             Step::Cancelled => return Read::Cancelled,
-            Step::TimedOut => return Read::TimedOut(lu),
-            Step::Chunk(Err(_)) => return Read::Broken(lu),
-            Step::Chunk(Ok(None)) => return Read::Complete(lu),
-            Step::Chunk(Ok(Some(morceau))) => {
-                let place = limit.saturating_sub(lu.len());
-                if morceau.len() > place {
-                    lu.extend_from_slice(morceau.get(..place).unwrap_or_default());
-                    return Read::Overflow(lu);
+            Step::TimedOut => return Read::TimedOut(read),
+            Step::Chunk(Err(_)) => return Read::Broken(read),
+            Step::Chunk(Ok(None)) => return Read::Complete(read),
+            Step::Chunk(Ok(Some(chunk))) => {
+                let place = limit.saturating_sub(read.len());
+                if chunk.len() > place {
+                    read.extend_from_slice(chunk.get(..place).unwrap_or_default());
+                    return Read::Overflow(read);
                 }
-                lu.extend_from_slice(&morceau);
+                read.extend_from_slice(&chunk);
             }
         }
     }

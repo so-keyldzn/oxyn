@@ -227,7 +227,7 @@ impl PostgresSession {
             self.pool
                 .acquire()
                 .await
-                .map_err(|erreur| map_connect_error(&erreur))
+                .map_err(|error| map_connect_error(&error))
         })
         .await
     }
@@ -261,13 +261,13 @@ impl Session for PostgresSession {
             ));
         }
         if let Some(namespace) = context.namespace() {
-            let mut connexion = self.acquire(cancel).await?;
+            let mut connection = self.acquire(cancel).await?;
             let found: Option<i32> = race_cancel(cancel, async {
                 sqlx::query_scalar(SQL_NAMESPACE_EXISTS)
                     .bind(namespace)
-                    .fetch_optional(&mut *connexion)
+                    .fetch_optional(&mut *connection)
                     .await
-                    .map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))
+                    .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
             })
             .await?;
             if found.is_none() {
@@ -335,12 +335,12 @@ impl Session for PostgresSession {
         // type must be refused without having occupied a connection.
         let arguments = bind_params(&params)?;
 
-        let mut connexion = Lease::new(self.acquire(cancel).await?);
+        let mut connection = Lease::new(self.acquire(cancel).await?);
 
         let pid = race_cancel(cancel, async {
-            backend_pid(&mut connexion)
+            backend_pid(&mut connection)
                 .await
-                .map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))
+                .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
         })
         .await?;
 
@@ -360,23 +360,23 @@ impl Session for PostgresSession {
         let restore_context = self.context_statement().is_some();
         if let Some(statement) = self.context_statement() {
             let sql = AssertSqlSafe(statement).into_sql_str();
-            connexion.taint();
+            connection.taint();
             race_cancel(cancel, async {
                 sqlx::raw_sql(sql)
-                    .execute(&mut *connexion)
+                    .execute(&mut *connection)
                     .await
-                    .map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))
+                    .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
             })
             .await?;
         }
 
         if limits.read_only {
-            connexion.taint();
+            connection.taint();
             race_cancel(cancel, async {
                 sqlx::raw_sql(SQL_BEGIN_READ_ONLY)
-                    .execute(&mut *connexion)
+                    .execute(&mut *connection)
                     .await
-                    .map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))
+                    .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))
             })
             .await?;
         }
@@ -388,7 +388,7 @@ impl Session for PostgresSession {
         let opens_transaction = opens_transaction(&text);
         let sql = AssertSqlSafe(text).into_sql_str();
         let prepare = race_cancel(cancel, async {
-            (&mut *connexion)
+            (&mut *connection)
                 .prepare(sql)
                 .await
                 // `Bound::Internal`, whatever the request's values: `prepare`
@@ -398,13 +398,13 @@ impl Session for PostgresSession {
                 // nothing here, and withholding its message would cost the most
                 // useful diagnostic of a parameterized query: the name of the
                 // object that does not exist.
-                .map_err(|erreur| {
+                .map_err(|error| {
                     map_stream_error(
                         &self.driver,
                         intent,
                         limits.read_only,
                         Bound::Internal,
-                        erreur,
+                        error,
                     )
                 })
         })
@@ -418,7 +418,7 @@ impl Session for PostgresSession {
         // The user's statement is about to run, and it can itself change the
         // session state (`SET standard_conforming_strings = off`): the cursor
         // will decide whether the connection may go back.
-        connexion.taint();
+        connection.taint();
 
         let (schema, decodings) = schema_for(statement.columns());
         let handle = StatementHandle::new();
@@ -426,10 +426,10 @@ impl Session for PostgresSession {
         // execution, but cancelling this one does not cancel the other tabs.
         let execution = cancel.child();
         let verdict = self.statements.register(handle, execution.clone());
-        let curseur = cursor::spawn(
+        let cursor = cursor::spawn(
             StreamRequest {
                 driver: self.driver.clone(),
-                connection: connexion,
+                connection,
                 statement,
                 arguments,
                 bound,
@@ -447,7 +447,7 @@ impl Session for PostgresSession {
             },
             execution,
         );
-        Ok(Box::new(curseur))
+        Ok(Box::new(cursor))
     }
 
     /// Asks the server to interrupt an execution.
@@ -487,17 +487,17 @@ impl Session for PostgresSession {
     /// # Errors
     /// Any transport error. A session whose `ping` fails is considered lost.
     async fn ping(&self) -> Result<Duration> {
-        let depart = Instant::now();
-        let mut connexion = self
+        let start = Instant::now();
+        let mut connection = self
             .pool
             .acquire()
             .await
-            .map_err(|erreur| map_connect_error(&erreur))?;
-        connexion
+            .map_err(|error| map_connect_error(&error))?;
+        connection
             .ping()
             .await
-            .map_err(|erreur| map_connect_error(&erreur))?;
-        Ok(depart.elapsed())
+            .map_err(|error| map_connect_error(&error))?;
+        Ok(start.elapsed())
     }
 
     /// Closes the pool.
@@ -545,8 +545,8 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
     let mut arguments = PgArguments::default();
     arguments.reserve(params.len(), 0);
 
-    for (rang, valeur) in params.iter().enumerate() {
-        let issue = match valeur {
+    for (rank, value) in params.iter().enumerate() {
+        let issue = match value {
             // A `NULL` is encoded by a length of −1, regardless of the type: the
             // type declared here never reaches the server, since the statement
             // is prepared separately and the server inferred its parameters'
@@ -573,7 +573,7 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
                 // refusing says so.
                 if nanos % 1_000 != 0 {
                     return Err(unsupported_param(
-                        rang,
+                        rank,
                         "an interval finer than a microsecond",
                     ));
                 }
@@ -589,12 +589,12 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
             // Binding it as text would work by chance on some columns and fail
             // on others.
             ScalarValue::Decimal(_) => {
-                return Err(unsupported_param(rang, "an exact decimal value"));
+                return Err(unsupported_param(rank, "an exact decimal value"));
             }
             // An empty array has no element type, and a heterogeneous array
             // does not have a single one.
             ScalarValue::Array(_) => {
-                return Err(unsupported_param(rang, "an array"));
+                return Err(unsupported_param(rank, "an array"));
             }
         };
         // The `sqlx` encoder's message is dropped: it is composed from the
@@ -604,8 +604,8 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
         issue.map_err(|_| {
             OxynError::Internal(format!(
                 "parameter ${} of type `{}` could not be encoded",
-                rang.saturating_add(1),
-                valeur.type_name()
+                rank.saturating_add(1),
+                value.type_name()
             ))
         })?;
     }
@@ -616,11 +616,11 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
 ///
 /// Names the parameter's **rank**, never its value
 /// ([I-03](../../../CLAUDE.md#i-03)).
-fn unsupported_param(rang: usize, quoi: &str) -> OxynError {
+fn unsupported_param(rank: usize, what: &str) -> OxynError {
     OxynError::NotSupported {
         capability: format!(
-            "binding {quoi} as parameter ${} — cast it in the query instead",
-            rang.saturating_add(1)
+            "binding {what} as parameter ${} — cast it in the query instead",
+            rank.saturating_add(1)
         ),
     }
 }
@@ -632,8 +632,8 @@ fn unsupported_param(rang: usize, quoi: &str) -> OxynError {
 pub(crate) async fn backend_pid(
     connection: &mut PgConnection,
 ) -> std::result::Result<i32, sqlx::Error> {
-    let ligne = sqlx::query(SQL_BACKEND_PID).fetch_one(connection).await?;
-    ligne.try_get::<i32, _>(0)
+    let row = sqlx::query(SQL_BACKEND_PID).fetch_one(connection).await?;
+    row.try_get::<i32, _>(0)
 }
 
 #[cfg(test)]
@@ -654,11 +654,11 @@ mod tests {
     /// the statement the session **composes**, and composing it needs no
     /// server. The behavior against a real server is exercised by the
     /// `#[ignore]` tests of [`crate::integration`].
-    fn session_hors_ligne() -> PostgresSession {
-        let config = ConnectionConfig::new("essai", DriverId::postgres())
+    fn offline_session() -> PostgresSession {
+        let config = ConnectionConfig::new("trial", DriverId::postgres())
             .with_param("host", "127.0.0.1")
-            .with_param("database", "caisse")
-            .with_param("user", "lecture");
+            .with_param("database", "shop")
+            .with_param("user", "read_request");
         let spec = ConnectSpec::from_config(&postgres_metadata(), &config, &Credentials::new())
             .expect("complete configuration");
         let pool = PgPoolOptions::new()
@@ -669,7 +669,7 @@ mod tests {
             pool,
             spec,
             PostgresVariant::detect("PostgreSQL 17.11", "17.11", Vec::new()),
-            "caisse".to_owned(),
+            "shop".to_owned(),
         )
     }
 
@@ -677,11 +677,11 @@ mod tests {
     ///
     /// `set_context` checks the schema exists, hence needs a connection; this
     /// test is only about composing the statement.
-    fn poser(session: &PostgresSession, contexte: Option<SessionContext>) {
+    fn apply_context(session: &PostgresSession, context: Option<SessionContext>) {
         *session
             .context
             .lock()
-            .expect("no other thread holds this lock") = contexte;
+            .expect("no other thread holds this lock") = context;
     }
 
     #[tokio::test]
@@ -689,7 +689,7 @@ mod tests {
         // The connection stays in the state the server opened it in: setting a
         // `SET` here would be exactly the invisible session state the contract
         // refuses.
-        let session = session_hors_ligne();
+        let session = offline_session();
         assert_eq!(session.context_statement(), None);
     }
 
@@ -697,9 +697,9 @@ mod tests {
     async fn a_declared_namespace_is_quoted_never_concatenated() {
         // I-10: a schema name comes from the catalog, hence from the server. The
         // doubled quote is what separates a `SET` from an arbitrary execution.
-        let session = session_hors_ligne();
+        let session = offline_session();
 
-        poser(
+        apply_context(
             &session,
             Some(SessionContext::new(None, Some("analytics".to_owned()))),
         );
@@ -708,7 +708,7 @@ mod tests {
             Some(r#"SET search_path TO "analytics""#)
         );
 
-        poser(
+        apply_context(
             &session,
             Some(SessionContext::new(
                 None,
@@ -726,9 +726,9 @@ mod tests {
         // Without `TRANSACTIONS`, an accepted `ROLLBACK` would "succeed" on the
         // server without cancelling anything. The refusal goes out before any
         // borrow: the lazy pool never opens a single connection.
-        let session = session_hors_ligne();
+        let session = offline_session();
         assert!(!session.capabilities().contains(Capabilities::TRANSACTIONS));
-        for texte in [
+        for text in [
             "BEGIN",
             "START TRANSACTION",
             "COMMIT",
@@ -740,20 +740,20 @@ mod tests {
             "PREPARE TRANSACTION 'x'",
             "/* annuler */ rollback",
         ] {
-            let demande = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), texte);
-            let erreur = match session.execute(demande, &CancelToken::new()).await {
-                Ok(_) => panic!("`{texte}` must be refused"),
-                Err(erreur) => erreur,
+            let exec_request = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), text);
+            let error = match session.execute(exec_request, &CancelToken::new()).await {
+                Ok(_) => panic!("`{text}` must be refused"),
+                Err(error) => error,
             };
             assert!(
-                matches!(erreur, OxynError::NotSupported { .. }),
-                "`{texte}`: {erreur:?}"
+                matches!(error, OxynError::NotSupported { .. }),
+                "`{text}`: {error:?}"
             );
             assert!(
-                erreur
+                error
                     .to_string()
                     .contains("transactions are not supported in the console yet: each statement commits on its own"),
-                "{erreur}"
+                "{error}"
             );
         }
         assert_eq!(
@@ -768,8 +768,8 @@ mod tests {
         // Setting nothing would leave the pool connection on a previous
         // execution's `search_path`: one query out of two would resolve
         // elsewhere.
-        let session = session_hors_ligne();
-        poser(&session, Some(SessionContext::server_default()));
+        let session = offline_session();
+        apply_context(&session, Some(SessionContext::server_default()));
         assert_eq!(
             session.context_statement().as_deref(),
             Some("SET search_path TO DEFAULT")
@@ -790,7 +790,7 @@ mod tests {
             ScalarValue::Bool(true),
             ScalarValue::Int64(42),
             ScalarValue::Float64(1.5),
-            ScalarValue::Text("caisse".to_owned()),
+            ScalarValue::Text("shop".to_owned()),
             ScalarValue::Bytes(vec![1, 2, 3]),
             ScalarValue::Uuid(uuid::Uuid::nil()),
             ScalarValue::Date(NaiveDate::from_ymd_opt(2026, 9, 5).expect("valid test date")),
@@ -818,24 +818,18 @@ mod tests {
             days: 0,
             nanos: 1,
         }];
-        let erreur = bind_params(&params).expect_err("refusal expected");
-        assert!(
-            matches!(erreur, OxynError::NotSupported { .. }),
-            "{erreur:?}"
-        );
-        assert!(erreur.is_user_error());
+        let error = bind_params(&params).expect_err("refusal expected");
+        assert!(matches!(error, OxynError::NotSupported { .. }), "{error:?}");
+        assert!(error.is_user_error());
     }
 
     #[test]
     fn an_exact_decimal_is_refused_rather_than_bound_as_a_float() {
         // It is the loss the type table forbids in both directions.
         let params = vec![ScalarValue::Decimal("12345678901234567890.12".to_owned())];
-        let erreur = bind_params(&params).expect_err("refusal expected");
-        assert!(
-            matches!(erreur, OxynError::NotSupported { .. }),
-            "{erreur:?}"
-        );
-        assert!(erreur.to_string().contains("$1"), "{erreur}");
+        let error = bind_params(&params).expect_err("refusal expected");
+        assert!(matches!(error, OxynError::NotSupported { .. }), "{error:?}");
+        assert!(error.to_string().contains("$1"), "{error}");
     }
 
     #[test]
@@ -843,18 +837,15 @@ mod tests {
         // I-03: a bound parameter is exactly what is not logged.
         let secret = "4111111111111111";
         let params = vec![ScalarValue::Decimal(secret.to_owned())];
-        let erreur = bind_params(&params).expect_err("refusal expected");
-        assert!(!erreur.to_string().contains(secret), "leak: {erreur}");
+        let error = bind_params(&params).expect_err("refusal expected");
+        assert!(!error.to_string().contains(secret), "leak: {error}");
     }
 
     #[test]
     fn an_array_is_refused_for_lack_of_element_type() {
         let params = vec![ScalarValue::Array(vec![ScalarValue::Int64(1)])];
-        let erreur = bind_params(&params).expect_err("refusal expected");
-        assert!(
-            matches!(erreur, OxynError::NotSupported { .. }),
-            "{erreur:?}"
-        );
+        let error = bind_params(&params).expect_err("refusal expected");
+        assert!(matches!(error, OxynError::NotSupported { .. }), "{error:?}");
     }
 
     #[test]
@@ -864,8 +855,8 @@ mod tests {
             ScalarValue::Int64(1),
             ScalarValue::Decimal("1.5".to_owned()),
         ];
-        let erreur = bind_params(&params).expect_err("refusal expected");
-        assert!(erreur.to_string().contains("$2"), "{erreur}");
+        let error = bind_params(&params).expect_err("refusal expected");
+        assert!(error.to_string().contains("$2"), "{error}");
     }
 
     #[test]

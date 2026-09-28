@@ -250,8 +250,8 @@ impl Default for SplitProfile {
 /// use oxyn_core::SqlDialect;
 /// use oxyn_query::split;
 ///
-/// let lot = "SELECT ';' ; DELETE FROM t; -- ; pas un séparateur";
-/// let fragments = split(lot, SqlDialect::Postgres);
+/// let batch = "SELECT ';' ; DELETE FROM t; -- ; not a separator";
+/// let fragments = split(batch, SqlDialect::Postgres);
 /// assert_eq!(fragments.len(), 2);
 /// assert_eq!(fragments[0].text, "SELECT ';'");
 /// assert_eq!(fragments[1].text, "DELETE FROM t");
@@ -573,9 +573,9 @@ pub fn contains_comment(sql: &str, dialect: SqlDialect) -> bool {
 /// use oxyn_core::SqlDialect;
 /// use oxyn_query::split::words;
 ///
-/// let mots = words("SELECT x /* DROP */ FROM 'DELETE'", SqlDialect::Ansi);
-/// let textes: Vec<&str> = mots.iter().map(|m| m.text).collect();
-/// assert_eq!(textes, ["SELECT", "x", "FROM"]);
+/// let tokens = words("SELECT x /* DROP */ FROM 'DELETE'", SqlDialect::Ansi);
+/// let texts: Vec<&str> = tokens.iter().map(|m| m.text).collect();
+/// assert_eq!(texts, ["SELECT", "x", "FROM"]);
 /// ```
 #[must_use]
 pub fn words(sql: &str, dialect: SqlDialect) -> Vec<Word<'_>> {
@@ -926,7 +926,7 @@ fn push_fragment<'a>(sql: &'a str, range: Range<usize>, flags: Flags, out: &mut 
 mod tests {
     use super::*;
 
-    fn textes(sql: &str, dialect: SqlDialect) -> Vec<String> {
+    fn texts(sql: &str, dialect: SqlDialect) -> Vec<String> {
         split(sql, dialect)
             .into_iter()
             .map(|f| f.text.to_owned())
@@ -1019,8 +1019,8 @@ mod tests {
     #[test]
     fn current_statement_does_not_jump_past_a_leading_comment() {
         for sql in [
-            "SELECT 1; -- commentaire\nDELETE FROM t;",
-            "SELECT 1;-- commentaire\nDELETE FROM t;",
+            "SELECT 1; -- comment\nDELETE FROM t;",
+            "SELECT 1;-- comment\nDELETE FROM t;",
         ] {
             let cursor = sql.find(';').expect("separator") + 1;
             assert_eq!(
@@ -1078,23 +1078,23 @@ mod tests {
     #[test]
     fn a_simple_batch_is_split() {
         assert_eq!(
-            textes("SELECT 1; SELECT 2", SqlDialect::Ansi),
+            texts("SELECT 1; SELECT 2", SqlDialect::Ansi),
             ["SELECT 1", "SELECT 2"]
         );
     }
 
     #[test]
     fn the_last_semicolon_creates_no_empty_fragment() {
-        assert_eq!(textes("SELECT 1;", SqlDialect::Ansi), ["SELECT 1"]);
-        assert_eq!(textes("SELECT 1;;;", SqlDialect::Ansi), ["SELECT 1"]);
-        assert_eq!(textes("  ;  ", SqlDialect::Ansi), Vec::<String>::new());
+        assert_eq!(texts("SELECT 1;", SqlDialect::Ansi), ["SELECT 1"]);
+        assert_eq!(texts("SELECT 1;;;", SqlDialect::Ansi), ["SELECT 1"]);
+        assert_eq!(texts("  ;  ", SqlDialect::Ansi), Vec::<String>::new());
     }
 
     #[test]
     fn a_semicolon_inside_a_string_does_not_separate() {
-        assert_eq!(textes("SELECT ';'", SqlDialect::Ansi), ["SELECT ';'"]);
+        assert_eq!(texts("SELECT ';'", SqlDialect::Ansi), ["SELECT ';'"]);
         assert_eq!(
-            textes("SELECT 'a;b', 'c;d' FROM t", SqlDialect::Ansi),
+            texts("SELECT 'a;b', 'c;d' FROM t", SqlDialect::Ansi),
             ["SELECT 'a;b', 'c;d' FROM t"]
         );
     }
@@ -1102,8 +1102,8 @@ mod tests {
     #[test]
     fn a_doubled_apostrophe_does_not_close_the_string() {
         assert_eq!(
-            textes("SELECT 'l''été ; suite'", SqlDialect::Postgres),
-            ["SELECT 'l''été ; suite'"]
+            texts("SELECT 'it''s naïve ; rest'", SqlDialect::Postgres),
+            ["SELECT 'it''s naïve ; rest'"]
         );
     }
 
@@ -1111,11 +1111,11 @@ mod tests {
     #[test]
     fn a_semicolon_inside_a_comment_does_not_separate() {
         assert_eq!(
-            textes("SELECT 1 -- garder ; ici\n, 2", SqlDialect::Ansi),
-            ["SELECT 1 -- garder ; ici\n, 2"]
+            texts("SELECT 1 -- keep ; here\n, 2", SqlDialect::Ansi),
+            ["SELECT 1 -- keep ; here\n, 2"]
         );
         assert_eq!(
-            textes("SELECT /* ; */ 1", SqlDialect::Ansi),
+            texts("SELECT /* ; */ 1", SqlDialect::Ansi),
             ["SELECT /* ; */ 1"]
         );
     }
@@ -1123,7 +1123,7 @@ mod tests {
     #[test]
     fn a_block_comment_nests_in_postgres() {
         assert_eq!(
-            textes("SELECT /* a /* ; */ ; */ 1", SqlDialect::Postgres),
+            texts("SELECT /* a /* ; */ ; */ 1", SqlDialect::Postgres),
             ["SELECT /* a /* ; */ ; */ 1"]
         );
     }
@@ -1131,15 +1131,15 @@ mod tests {
     #[test]
     fn a_quoted_identifier_does_not_separate() {
         assert_eq!(
-            textes(r#"SELECT "a;b" FROM t"#, SqlDialect::Postgres),
+            texts(r#"SELECT "a;b" FROM t"#, SqlDialect::Postgres),
             [r#"SELECT "a;b" FROM t"#]
         );
         assert_eq!(
-            textes("SELECT `a;b` FROM t", SqlDialect::MySql),
+            texts("SELECT `a;b` FROM t", SqlDialect::MySql),
             ["SELECT `a;b` FROM t"]
         );
         assert_eq!(
-            textes("SELECT [a;b] FROM t", SqlDialect::SqlServer),
+            texts("SELECT [a;b] FROM t", SqlDialect::SqlServer),
             ["SELECT [a;b] FROM t"]
         );
     }
@@ -1149,7 +1149,7 @@ mod tests {
     #[test]
     fn a_dollar_body_does_not_separate() {
         let sql = "CREATE FUNCTION f() RETURNS int AS $$ BEGIN DELETE FROM t; RETURN 1; END $$ LANGUAGE plpgsql; SELECT 2";
-        let fragments = textes(sql, SqlDialect::Postgres);
+        let fragments = texts(sql, SqlDialect::Postgres);
         assert_eq!(fragments.len(), 2, "{fragments:?}");
         assert!(fragments[0].starts_with("CREATE FUNCTION"));
         assert_eq!(fragments[1], "SELECT 2");
@@ -1159,7 +1159,7 @@ mod tests {
     fn a_named_dollar_tag_is_recognized() {
         let sql = "DO $corps$ BEGIN ; END $corps$; SELECT 1";
         assert_eq!(
-            textes(sql, SqlDialect::Postgres),
+            texts(sql, SqlDialect::Postgres),
             ["DO $corps$ BEGIN ; END $corps$", "SELECT 1"]
         );
     }
@@ -1169,7 +1169,7 @@ mod tests {
     #[test]
     fn a_parameter_placeholder_does_not_open_a_body() {
         assert_eq!(
-            textes("SELECT $1; DELETE FROM t", SqlDialect::Postgres),
+            texts("SELECT $1; DELETE FROM t", SqlDialect::Postgres),
             ["SELECT $1", "DELETE FROM t"]
         );
     }
@@ -1179,7 +1179,7 @@ mod tests {
         // `'a\';'` is a single string in MySQL: the backslash protects the
         // apostrophe.
         assert_eq!(
-            textes(r"SELECT 'a\';' , 1", SqlDialect::MySql),
+            texts(r"SELECT 'a\';' , 1", SqlDialect::MySql),
             [r"SELECT 'a\';' , 1"]
         );
     }
@@ -1188,7 +1188,7 @@ mod tests {
     fn postgres_does_not_escape_with_backslash_without_prefix() {
         // Without an `E` prefix, `'a\'` is a complete string: the `;` separates.
         assert_eq!(
-            textes(r"SELECT 'a\'; SELECT 2", SqlDialect::Postgres),
+            texts(r"SELECT 'a\'; SELECT 2", SqlDialect::Postgres),
             [r"SELECT 'a\'", "SELECT 2"]
         );
     }
@@ -1196,29 +1196,29 @@ mod tests {
     #[test]
     fn postgres_escapes_with_the_e_prefix() {
         assert_eq!(
-            textes(r"SELECT E'a\';' , 1", SqlDialect::Postgres),
+            texts(r"SELECT E'a\';' , 1", SqlDialect::Postgres),
             [r"SELECT E'a\';' , 1"]
         );
         // `table_e` must not be taken for a prefix: the `e` is glued to a
         // word.
         assert_eq!(
-            textes(r"SELECT ligne'a\'; SELECT 2", SqlDialect::Postgres),
-            [r"SELECT ligne'a\'", "SELECT 2"]
+            texts(r"SELECT line'a\'; SELECT 2", SqlDialect::Postgres),
+            [r"SELECT line'a\'", "SELECT 2"]
         );
     }
 
     #[test]
     fn mysql_comments_with_the_hash() {
         assert_eq!(
-            textes("SELECT 1 # ; rien\n, 2", SqlDialect::MySql),
-            ["SELECT 1 # ; rien\n, 2"]
+            texts("SELECT 1 # ; nothing\n, 2", SqlDialect::MySql),
+            ["SELECT 1 # ; nothing\n, 2"]
         );
     }
 
     #[test]
     fn an_unclosed_string_merges_rather_than_cuts() {
         // Direction of the error: a single unreadable fragment, hence `Unknown`.
-        let fragments = split("SELECT 'oups ; DELETE FROM t", SqlDialect::Ansi);
+        let fragments = split("SELECT 'oops ; DELETE FROM t", SqlDialect::Ansi);
         assert_eq!(fragments.len(), 1);
     }
 
@@ -1251,51 +1251,51 @@ mod tests {
 
     #[test]
     fn a_batch_of_comments_only_gives_no_statement() {
-        assert!(split("-- rien\n/* rien non plus */", SqlDialect::Ansi).is_empty());
+        assert!(split("-- nothing\n/* nothing either */", SqlDialect::Ansi).is_empty());
         assert!(contains_comment(
-            "-- rien\n/* rien non plus */",
+            "-- nothing\n/* nothing either */",
             SqlDialect::Ansi
         ));
         assert!(!contains_comment(
-            "SELECT '-- pas un commentaire'",
+            "SELECT '-- not a comment'",
             SqlDialect::Ansi
         ));
     }
 
     #[test]
     fn bare_words_ignore_strings_and_comments() {
-        let mots = words(
+        let tokens = words(
             "SELECT x /* DROP */ FROM t WHERE note = 'DELETE FROM u' -- TRUNCATE",
             SqlDialect::Ansi,
         );
-        let textes: Vec<&str> = mots.iter().map(|m| m.text).collect();
-        assert_eq!(textes, ["SELECT", "x", "FROM", "t", "WHERE", "note"]);
+        let texts: Vec<&str> = tokens.iter().map(|m| m.text).collect();
+        assert_eq!(texts, ["SELECT", "x", "FROM", "t", "WHERE", "note"]);
     }
 
     #[test]
     fn a_function_call_is_flagged() {
-        let mots = words(
+        let tokens = words(
             "SELECT TRUNCATE(1.234, 2), truncate  (x)",
             SqlDialect::MySql,
         );
-        let vus: Vec<(&str, bool)> = mots.iter().map(|m| (m.text, m.call)).collect();
+        let seen_tokens: Vec<(&str, bool)> = tokens.iter().map(|m| (m.text, m.call)).collect();
         assert_eq!(
-            vus,
+            seen_tokens,
             [
                 ("SELECT", false),
                 ("TRUNCATE", true),
                 ("truncate", true),
                 ("x", false),
             ],
-            "{mots:?}"
+            "{tokens:?}"
         );
     }
 
     #[test]
     fn word_bounds_designate_the_text() {
-        let sql = "SELECT énergie FROM t";
-        for mot in words(sql, SqlDialect::Ansi) {
-            assert_eq!(sql.get(mot.span.clone()), Some(mot.text));
+        let sql = "SELECT café FROM t";
+        for word in words(sql, SqlDialect::Ansi) {
+            assert_eq!(sql.get(word.span.clone()), Some(word.text));
         }
     }
 }

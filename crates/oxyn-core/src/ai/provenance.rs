@@ -94,14 +94,14 @@ impl Provenance {
     /// [`OxynError::Serialization`] if `serde` fails, which no value built by
     /// this type causes.
     pub fn to_json(&self) -> Result<String> {
-        let rendu =
+        let rendered =
             serde_json::to_string(self).map_err(|err| OxynError::Serialization(err.to_string()))?;
-        if rendu.len() > MAX_PROVENANCE_BYTES {
+        if rendered.len() > MAX_PROVENANCE_BYTES {
             return Err(OxynError::Config(
                 "provenance exceeds its 512-byte budget; the model name is too long".into(),
             ));
         }
-        Ok(rendu)
+        Ok(rendered)
     }
 
     /// Reads back a provenance written by [`to_json`](Self::to_json).
@@ -141,14 +141,14 @@ mod tests {
 
     #[test]
     fn a_plausible_provenance_fits_its_budget() {
-        let rendu = provenance().to_json().expect("serialization");
+        let rendered = provenance().to_json().expect("serialization");
         assert!(
-            rendu.len() <= MAX_PROVENANCE_BYTES,
-            "{} bytes: {rendu}",
-            rendu.len()
+            rendered.len() <= MAX_PROVENANCE_BYTES,
+            "{} bytes: {rendered}",
+            rendered.len()
         );
         assert_eq!(
-            Provenance::from_json(&rendu).expect("relecture").model,
+            Provenance::from_json(&rendered).expect("read back").model,
             "qwen2.5-coder:32b-instruct-q4_K_M"
         );
     }
@@ -157,12 +157,12 @@ mod tests {
     fn no_prompt_reply_url_or_key_goes_in() {
         // ADR-0023: the provenance says where a text comes from, it does not
         // archive the conversation. The test fails if a context field is added.
-        let rendu = provenance().to_json().expect("serialization");
-        let valeur: serde_json::Value = serde_json::from_str(&rendu).expect("JSON object");
-        let objet = valeur.as_object().expect("an object");
-        let mut champs: Vec<&str> = objet.keys().map(String::as_str).collect();
-        champs.sort_unstable();
-        assert_eq!(champs, ["agent", "at", "kind", "model", "session"]);
+        let rendered = provenance().to_json().expect("serialization");
+        let value: serde_json::Value = serde_json::from_str(&rendered).expect("JSON object");
+        let object = value.as_object().expect("an object");
+        let mut fields: Vec<&str> = object.keys().map(String::as_str).collect();
+        fields.sort_unstable();
+        assert_eq!(fields, ["agent", "at", "kind", "model", "session"]);
     }
 
     #[test]
@@ -194,23 +194,23 @@ mod tests {
 
     #[test]
     fn an_oversized_json_is_refused_on_length() {
-        let trop = format!("{{\"model\":\"{}\"}}", "x".repeat(MAX_PROVENANCE_BYTES));
-        let erreur = Provenance::from_json(&trop).expect_err("over budget");
-        let message = erreur.to_string();
+        let oversized = format!("{{\"model\":\"{}\"}}", "x".repeat(MAX_PROVENANCE_BYTES));
+        let error = Provenance::from_json(&oversized).expect_err("over budget");
+        let message = error.to_string();
         assert!(message.contains("512"), "{message}");
         assert!(!message.contains("xxxx"), "the value is not copied");
 
         // And on write: an oversized model name does not produce a column
         // that SQLite's `CHECK` would refuse at the last moment.
-        let mut demesuree = provenance();
-        demesuree.model = "m".repeat(MAX_PROVENANCE_BYTES);
-        assert!(demesuree.to_json().is_err());
+        let mut oversized = provenance();
+        oversized.model = "m".repeat(MAX_PROVENANCE_BYTES);
+        assert!(oversized.to_json().is_err());
     }
 
     #[test]
     fn a_provenance_round_trips_faithfully() {
-        let origine = provenance();
-        let relue = Provenance::from_json(&origine.to_json().expect("write")).expect("read");
-        assert_eq!(relue, origine);
+        let original = provenance();
+        let read_back = Provenance::from_json(&original.to_json().expect("write")).expect("read");
+        assert_eq!(read_back, original);
     }
 }

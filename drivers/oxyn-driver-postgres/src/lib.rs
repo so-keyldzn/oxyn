@@ -162,12 +162,12 @@ mod tests {
     /// one `oxyn-desktop` takes at startup.
     #[test]
     fn the_driver_registers_and_announces_what_it_can_do() {
-        let mut registre = DriverRegistry::new();
-        registre
+        let mut registry = DriverRegistry::new();
+        registry
             .register(Arc::new(PostgresDriver::new()))
             .expect("the driver is consistent");
 
-        let driver = registre
+        let driver = registry
             .require(&DriverId::postgres())
             .expect("it has just been registered");
 

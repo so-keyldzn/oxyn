@@ -122,22 +122,22 @@ impl BufferLimits {
 
     /// Default bounds with a chosen memory budget.
     #[must_use]
-    pub fn with_memory_budget(mut self, octets: usize) -> Self {
-        self.memory_budget = octets;
+    pub fn with_memory_budget(mut self, bytes: usize) -> Self {
+        self.memory_budget = bytes;
         self
     }
 
     /// Bounds the number of rows.
     #[must_use]
-    pub fn with_max_rows(mut self, lignes: impl Into<Option<usize>>) -> Self {
-        self.max_rows = lignes.into();
+    pub fn with_max_rows(mut self, rows: impl Into<Option<usize>>) -> Self {
+        self.max_rows = rows.into();
         self
     }
 
     /// Bounds the spill to disk.
     #[must_use]
-    pub fn with_max_spill_bytes(mut self, octets: impl Into<Option<u64>>) -> Self {
-        self.max_spill_bytes = octets.into();
+    pub fn with_max_spill_bytes(mut self, bytes: impl Into<Option<u64>>) -> Self {
+        self.max_spill_bytes = bytes.into();
         self
     }
 
@@ -231,14 +231,14 @@ impl BufferIndex {
 
         let (keep_rows, truncated) = match limits.max_rows {
             Some(max) => {
-                let reste = max.saturating_sub(self.rows);
-                if reste == 0 {
+                let rest = max.saturating_sub(self.rows);
+                if rest == 0 {
                     return Err(DataError::Full {
                         reason: "row limit reached",
                     });
                 }
-                if rows > reste {
-                    (Some(reste), true)
+                if rows > rest {
+                    (Some(rest), true)
                 } else {
                     (None, false)
                 }
@@ -254,10 +254,10 @@ impl BufferIndex {
                 });
             }
             if let Some(quota) = limits.max_spill_bytes {
-                let projete = self
+                let projected = self
                     .spilled_bytes
                     .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
-                if projete > quota {
+                if projected > quota {
                     return Err(DataError::Full {
                         reason: "spill quota reached",
                     });
@@ -494,7 +494,7 @@ impl ResultBuffer {
         let batch = match plan.keep_rows {
             // An Arrow slice shares its parent's buffers: it frees no memory,
             // it only bounds what is published.
-            Some(lignes) => batch.slice(0, lignes),
+            Some(n_rows) => batch.slice(0, n_rows),
             None => batch,
         };
         let rows = batch.num_rows();
@@ -503,8 +503,8 @@ impl ResultBuffer {
         // Phase 2 — place. Outside any index lock: this is where the scrolling
         // frame budget is at stake.
         let slot = if plan.spill {
-            let fichier = self.spill_file()?;
-            Slot::Spilled(fichier.append(&self.schema, &batch)?)
+            let file = self.spill_file()?;
+            Slot::Spilled(file.append(&self.schema, &batch)?)
         } else {
             Slot::Resident(batch)
         };
@@ -542,18 +542,18 @@ impl ResultBuffer {
     /// anything.
     pub fn mark_complete(&self, stats: ExecStats) {
         let mut index = self.index.write();
-        let compte = index.stats;
+        let count = index.stats;
         index.stats = stats;
         if index.stats.rows == 0 {
-            index.stats.rows = compte.rows;
+            index.stats.rows = count.rows;
         }
         if index.stats.bytes == 0 {
-            index.stats.bytes = compte.bytes;
+            index.stats.bytes = count.bytes;
         }
         if index.stats.batches == 0 {
-            index.stats.batches = compte.batches;
+            index.stats.batches = count.batches;
         }
-        if compte.truncated {
+        if count.truncated {
             index.stats.mark_truncated();
         }
         index.complete = true;
@@ -588,10 +588,10 @@ impl ResultBuffer {
         // assumed ([I-09](../../../CLAUDE.md#i-09)).
         let position = index
             .starts
-            .partition_point(|debut| *debut <= row)
+            .partition_point(|start| *start <= row)
             .checked_sub(1)?;
-        let debut = *index.starts.get(position)?;
-        Some((BatchIndex(position), row.saturating_sub(debut)))
+        let start = *index.starts.get(position)?;
+        Some((BatchIndex(position), row.saturating_sub(start)))
     }
 
     /// The batch at this position.
@@ -619,17 +619,17 @@ impl ResultBuffer {
             let index = self.index.read();
             match index.slots.get(position.get()) {
                 None => return Ok(None),
-                Some(Slot::Resident(lot)) => return Ok(Some(lot.clone())),
+                Some(Slot::Resident(rb)) => return Ok(Some(rb.clone())),
                 Some(Slot::Spilled(reference)) => *reference,
             }
         };
 
-        if let Some(lot) = self.cache.lock().get(position.get()) {
-            return Ok(Some(lot));
+        if let Some(rb) = self.cache.lock().get(position.get()) {
+            return Ok(Some(rb));
         }
 
-        let fichier = self.spill.lock().clone();
-        let Some(fichier) = fichier else {
+        let file = self.spill.lock().clone();
+        let Some(file) = file else {
             // The file does not exist although a batch claims to be stored in
             // it: an internal invariant is broken, never a server input.
             return Err(DataError::Spill(std::io::Error::other(
@@ -637,14 +637,14 @@ impl ResultBuffer {
             )));
         };
 
-        let lot = fichier.read_cancellable(reference, cancel)?;
-        self.check_schema(&lot)?;
+        let rb = file.read_cancellable(reference, cancel)?;
+        self.check_schema(&rb)?;
         let mut cache = self.cache.lock();
         if cancel.is_cancelled() {
             return Err(DataError::Cancelled);
         }
-        cache.insert(position.get(), lot.clone());
-        Ok(Some(lot))
+        cache.insert(position.get(), rb.clone());
+        Ok(Some(rb))
     }
 
     /// Returns an already resident or cached batch without I/O or waiting for a lock.
@@ -712,13 +712,13 @@ impl ResultBuffer {
     #[must_use]
     pub fn batch_rows(&self, position: BatchIndex) -> Option<usize> {
         let index = self.index.read();
-        let debut = *index.starts.get(position.get())?;
-        let fin = position
+        let start = *index.starts.get(position.get())?;
+        let end = position
             .get()
             .checked_add(1)
-            .and_then(|suivant| index.starts.get(suivant).copied())
+            .and_then(|next| index.starts.get(next).copied())
             .unwrap_or(index.rows);
-        Some(fin.saturating_sub(debut))
+        Some(end.saturating_sub(start))
     }
 
     /// Number of the first row of the batch at this position.
@@ -758,12 +758,12 @@ impl ResultBuffer {
         row: usize,
         cancel: &CancelToken,
     ) -> Result<Option<(RecordBatch, usize)>> {
-        let Some((position, decalage)) = self.locate(row) else {
+        let Some((position, offset)) = self.locate(row) else {
             return Ok(None);
         };
         Ok(self
             .batch_cancellable(position, cancel)?
-            .map(|lot| (lot, decalage)))
+            .map(|rb| (rb, offset)))
     }
 
     /// Refuses a batch whose schema is not the buffer's.
@@ -782,13 +782,13 @@ impl ResultBuffer {
 
     /// Returns the spill file, creating it on first need.
     fn spill_file(&self) -> Result<Arc<SpillFile>> {
-        let mut emplacement = self.spill.lock();
-        if let Some(fichier) = emplacement.as_ref() {
-            return Ok(Arc::clone(fichier));
+        let mut location = self.spill.lock();
+        if let Some(file) = location.as_ref() {
+            return Ok(Arc::clone(file));
         }
-        let fichier = Arc::new(SpillFile::create()?);
-        *emplacement = Some(Arc::clone(&fichier));
-        Ok(fichier)
+        let file = Arc::new(SpillFile::create()?);
+        *location = Some(Arc::clone(&file));
+        Ok(file)
     }
 }
 
@@ -822,53 +822,56 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("n", DataType::Int32, false)]))
     }
 
-    fn lot(depart: i32, lignes: usize) -> RecordBatch {
-        let valeurs: Vec<i32> = (0..lignes)
-            .map(|i| depart.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
+    fn batch_of(start: i32, rows: usize) -> RecordBatch {
+        let values: Vec<i32> = (0..rows)
+            .map(|i| start.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
             .collect();
-        RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(valeurs))])
+        RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(values))])
             .expect("the column matches the schema built just above")
     }
 
-    fn valeur(lot: &RecordBatch, ligne: usize) -> i32 {
-        lot.column(0)
+    fn value_at(rb: &RecordBatch, line: usize) -> i32 {
+        rb.column(0)
             .as_any()
             .downcast_ref::<Int32Array>()
             .expect("column 0 is an Int32Array by construction")
-            .value(ligne)
+            .value(line)
     }
 
     #[test]
     fn a_new_buffer_is_empty() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        assert!(tampon.is_empty());
-        assert_eq!(tampon.row_count(), 0);
-        assert_eq!(tampon.batch_count(), 0);
-        assert!(!tampon.is_complete());
-        assert!(tampon.locate(0).is_none());
-        assert!(tampon.has_capacity());
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.row_count(), 0);
+        assert_eq!(buffer.batch_count(), 0);
+        assert!(!buffer.is_complete());
+        assert!(buffer.locate(0).is_none());
+        assert!(buffer.has_capacity());
     }
 
     #[test]
     fn an_empty_batch_is_ignored_without_error() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        assert_eq!(tampon.push(lot(0, 0)).expect("empty batch accepted"), None);
-        assert_eq!(tampon.batch_count(), 0);
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        assert_eq!(
+            buffer.push(batch_of(0, 0)).expect("empty batch accepted"),
+            None
+        );
+        assert_eq!(buffer.batch_count(), 0);
     }
 
     #[test]
     fn a_batch_with_the_wrong_schema_is_refused() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        let autre = Arc::new(Schema::new(vec![Field::new("n", DataType::Utf8, false)]));
-        let mauvais = RecordBatch::try_new(
-            autre,
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        let other = Arc::new(Schema::new(vec![Field::new("n", DataType::Utf8, false)]));
+        let wrong = RecordBatch::try_new(
+            other,
             vec![Arc::new(arrow::array::StringArray::from(vec!["a"]))],
         )
         .expect("batch built for the test");
 
-        match tampon.push(mauvais) {
+        match buffer.push(wrong) {
             Err(DataError::SchemaMismatch { .. }) => {}
-            autre => panic!("attendu SchemaMismatch, obtenu {autre:?}"),
+            other => panic!("expected SchemaMismatch, got {other:?}"),
         }
     }
 
@@ -876,13 +879,13 @@ mod tests {
     /// last row of a batch, first row of the next.
     #[test]
     fn locate_is_exact_on_batch_boundaries() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        for (depart, lignes) in [(0, 3), (100, 1), (200, 4)] {
-            tampon.push(lot(depart, lignes)).expect("batch accepted");
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        for (start, rows) in [(0, 3), (100, 1), (200, 4)] {
+            buffer.push(batch_of(start, rows)).expect("batch accepted");
         }
-        assert_eq!(tampon.row_count(), 8);
+        assert_eq!(buffer.row_count(), 8);
 
-        let attendu = [
+        let expected = [
             (0, 0, 0),
             (1, 0, 1),
             (2, 0, 2), // last row of batch 0
@@ -890,57 +893,57 @@ mod tests {
             (4, 2, 0), // first row of batch 2
             (7, 2, 3), // last row of the result
         ];
-        for (ligne, batch, decalage) in attendu {
+        for (line, batch, offset) in expected {
             assert_eq!(
-                tampon.locate(ligne),
-                Some((BatchIndex::new(batch), decalage)),
-                "row {ligne}"
+                buffer.locate(line),
+                Some((BatchIndex::new(batch), offset)),
+                "row {line}"
             );
         }
-        assert_eq!(tampon.locate(8), None, "a row beyond does not exist");
-        assert_eq!(tampon.locate(usize::MAX), None);
+        assert_eq!(buffer.locate(8), None, "a row beyond does not exist");
+        assert_eq!(buffer.locate(usize::MAX), None);
     }
 
     /// The same walk, but checking the value read back: `locate` can be
     /// consistent with itself and point to the wrong batch.
     #[test]
     fn every_row_reads_back_to_its_value() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        tampon.push(lot(0, 5)).expect("batch accepted");
-        tampon.push(lot(1_000, 5)).expect("batch accepted");
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        buffer.push(batch_of(0, 5)).expect("batch accepted");
+        buffer.push(batch_of(1_000, 5)).expect("batch accepted");
 
-        let attendu: Vec<i32> = (0..5).chain(1_000..1_005).collect();
-        for (ligne, valeur_attendue) in attendu.into_iter().enumerate() {
-            let (lot, decalage) = tampon
-                .row(ligne)
-                .expect("relecture")
+        let expected: Vec<i32> = (0..5).chain(1_000..1_005).collect();
+        for (line, expected_value) in expected.into_iter().enumerate() {
+            let (rb, offset) = buffer
+                .row(line)
+                .expect("read back")
                 .expect("the row exists");
-            assert_eq!(valeur(&lot, decalage), valeur_attendue, "row {ligne}");
+            assert_eq!(value_at(&rb, offset), expected_value, "row {line}");
         }
     }
 
     /// Tiny budget: everything spills, and everything is read back anyway.
     #[test]
     fn a_tiny_budget_spills_everything_without_losing_anything() {
-        let tampon = ResultBuffer::new(schema(), 1);
-        for depart in [0, 100, 200, 300] {
-            tampon.push(lot(depart, 10)).expect("batch accepted");
+        let buffer = ResultBuffer::new(schema(), 1);
+        for start in [0, 100, 200, 300] {
+            buffer.push(batch_of(start, 10)).expect("batch accepted");
         }
 
-        assert_eq!(tampon.spilled_batches(), 4, "no batch fits in memory");
-        assert_eq!(tampon.resident_bytes(), 0);
-        assert!(tampon.spilled_bytes() > 0);
-        assert_eq!(tampon.row_count(), 40);
+        assert_eq!(buffer.spilled_batches(), 4, "no batch fits in memory");
+        assert_eq!(buffer.resident_bytes(), 0);
+        assert!(buffer.spilled_bytes() > 0);
+        assert_eq!(buffer.row_count(), 40);
 
         // Walk out of order, so as not to depend on the cache.
-        for ligne in [39_usize, 0, 25, 10, 9, 30] {
-            let (lot, decalage) = tampon
-                .row(ligne)
+        for line in [39_usize, 0, 25, 10, 9, 30] {
+            let (rb, offset) = buffer
+                .row(line)
                 .expect("reading back from disk")
                 .expect("the row exists");
-            let bloc = i32::try_from(ligne / 10).unwrap_or(0) * 100;
-            let dans_le_bloc = i32::try_from(ligne % 10).unwrap_or(0);
-            assert_eq!(valeur(&lot, decalage), bloc + dans_le_bloc, "row {ligne}");
+            let block = i32::try_from(line / 10).unwrap_or(0) * 100;
+            let in_block = i32::try_from(line % 10).unwrap_or(0);
+            assert_eq!(value_at(&rb, offset), block + in_block, "row {line}");
         }
     }
 
@@ -948,125 +951,125 @@ mod tests {
     /// is what guarantees the fast first display.
     #[test]
     fn the_first_batches_stay_resident() {
-        let echantillon = lot(0, 64);
-        let taille = echantillon.get_array_memory_size();
+        let sample = batch_of(0, 64);
+        let size = sample.get_array_memory_size();
         // Three quarters remain resident: enough for two batches, not three.
-        let tampon = ResultBuffer::new(schema(), taille * 3);
+        let buffer = ResultBuffer::new(schema(), size * 3);
 
-        for depart in [0, 100, 200, 300] {
-            tampon.push(lot(depart, 64)).expect("batch accepted");
+        for start in [0, 100, 200, 300] {
+            buffer.push(batch_of(start, 64)).expect("batch accepted");
         }
 
-        assert_eq!(tampon.batch_count(), 4);
-        assert_eq!(tampon.spilled_batches(), 2, "only the last ones spill");
-        assert!(tampon.is_resident(BatchIndex::new(0)));
-        assert!(tampon.is_resident(BatchIndex::new(1)));
-        assert!(!tampon.is_resident(BatchIndex::new(3)));
+        assert_eq!(buffer.batch_count(), 4);
+        assert_eq!(buffer.spilled_batches(), 2, "only the last ones spill");
+        assert!(buffer.is_resident(BatchIndex::new(0)));
+        assert!(buffer.is_resident(BatchIndex::new(1)));
+        assert!(!buffer.is_resident(BatchIndex::new(3)));
     }
 
     #[test]
     fn forbidden_spilling_produces_back_pressure() {
-        let tampon = ResultBuffer::with_limits(
+        let buffer = ResultBuffer::with_limits(
             schema(),
             BufferLimits::default()
                 .with_memory_budget(1)
                 .without_spill(),
         );
-        match tampon.push(lot(0, 10)) {
+        match buffer.push(batch_of(0, 10)) {
             Err(DataError::Full { reason }) => assert!(reason.contains("spilling is disabled")),
-            autre => panic!("attendu Full, obtenu {autre:?}"),
+            other => panic!("expected Full, got {other:?}"),
         }
-        assert!(tampon.has_capacity(), "nothing has been accepted yet");
+        assert!(buffer.has_capacity(), "nothing has been accepted yet");
     }
 
     #[test]
     fn the_spill_quota_is_respected() {
-        let tampon = ResultBuffer::with_limits(
+        let buffer = ResultBuffer::with_limits(
             schema(),
             BufferLimits::default()
                 .with_memory_budget(1)
                 .with_max_spill_bytes(16_u64),
         );
-        match tampon.push(lot(0, 1_000)) {
+        match buffer.push(batch_of(0, 1_000)) {
             Err(DataError::Full { reason }) => assert_eq!(reason, "spill quota reached"),
-            autre => panic!("attendu Full, obtenu {autre:?}"),
+            other => panic!("expected Full, got {other:?}"),
         }
     }
 
     #[test]
     fn the_row_limit_trims_the_batch_and_declares_truncation() {
-        let tampon =
+        let buffer =
             ResultBuffer::with_limits(schema(), BufferLimits::default().with_max_rows(12_usize));
-        tampon.push(lot(0, 10)).expect("batch accepted");
-        tampon.push(lot(100, 10)).expect("batch trimmed");
+        buffer.push(batch_of(0, 10)).expect("batch accepted");
+        buffer.push(batch_of(100, 10)).expect("batch trimmed");
 
-        assert_eq!(tampon.row_count(), 12);
-        assert!(tampon.stats().truncated);
-        assert!(!tampon.has_capacity());
-        assert_eq!(tampon.remaining_rows(), Some(0));
+        assert_eq!(buffer.row_count(), 12);
+        assert!(buffer.stats().truncated);
+        assert!(!buffer.has_capacity());
+        assert_eq!(buffer.remaining_rows(), Some(0));
 
-        match tampon.push(lot(200, 1)) {
+        match buffer.push(batch_of(200, 1)) {
             Err(DataError::Full { reason }) => assert_eq!(reason, "row limit reached"),
-            autre => panic!("attendu Full, obtenu {autre:?}"),
+            other => panic!("expected Full, got {other:?}"),
         }
     }
 
     #[test]
     fn a_truncation_survives_the_driver_stats() {
-        let tampon =
+        let buffer =
             ResultBuffer::with_limits(schema(), BufferLimits::default().with_max_rows(5_usize));
-        tampon.push(lot(0, 10)).expect("batch trimmed");
-        assert!(tampon.stats().truncated);
+        buffer.push(batch_of(0, 10)).expect("batch trimmed");
+        assert!(buffer.stats().truncated);
 
         // The driver, for its part, saw nothing.
-        tampon.mark_complete(ExecStats {
+        buffer.mark_complete(ExecStats {
             rows: 10,
             truncated: false,
             ..ExecStats::default()
         });
 
         assert!(
-            tampon.stats().truncated,
+            buffer.stats().truncated,
             "a driver must not be able to erase an observed truncation"
         );
     }
 
     #[test]
     fn nothing_is_added_after_closing() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        tampon.push(lot(0, 4)).expect("batch accepted");
-        tampon.mark_complete(ExecStats::default());
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        buffer.push(batch_of(0, 4)).expect("batch accepted");
+        buffer.mark_complete(ExecStats::default());
 
-        assert!(tampon.is_complete());
-        assert!(!tampon.has_capacity());
-        match tampon.push(lot(100, 4)) {
+        assert!(buffer.is_complete());
+        assert!(!buffer.has_capacity());
+        match buffer.push(batch_of(100, 4)) {
             Err(DataError::AlreadyComplete) => {}
-            autre => panic!("attendu AlreadyComplete, obtenu {autre:?}"),
+            other => panic!("expected AlreadyComplete, got {other:?}"),
         }
     }
 
     #[test]
     fn a_missing_position_returns_none() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        tampon.push(lot(0, 2)).expect("batch accepted");
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        buffer.push(batch_of(0, 2)).expect("batch accepted");
         assert!(
-            tampon
+            buffer
                 .batch(BatchIndex::new(7))
                 .expect("no error")
                 .is_none()
         );
-        assert!(tampon.row(99).expect("no error").is_none());
+        assert!(buffer.row(99).expect("no error").is_none());
     }
 
     /// The `Debug` must never print a value from the database
     /// ([I-03](../../../CLAUDE.md#i-03)).
     #[test]
     fn debug_shows_no_value() {
-        let tampon = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
-        tampon.push(lot(424_242, 3)).expect("batch accepted");
-        let rendu = format!("{tampon:?}");
-        assert!(!rendu.contains("424242"), "{rendu}");
-        assert!(rendu.contains("rows: 3"), "{rendu}");
+        let buffer = ResultBuffer::new(schema(), DEFAULT_MEMORY_BUDGET);
+        buffer.push(batch_of(424_242, 3)).expect("batch accepted");
+        let rendered = format!("{buffer:?}");
+        assert!(!rendered.contains("424242"), "{rendered}");
+        assert!(rendered.contains("rows: 3"), "{rendered}");
     }
 
     /// The grid reads while the sink pushes: the buffer must stay consistent,
@@ -1076,30 +1079,30 @@ mod tests {
     fn concurrent_reads_and_writes_stay_consistent() {
         // Budget small enough for almost all batches to spill: the test thus
         // exercises the disk read **during** the disk write.
-        let tampon = Arc::new(ResultBuffer::new(schema(), 128));
-        let ecrivain = Arc::clone(&tampon);
+        let buffer = Arc::new(ResultBuffer::new(schema(), 128));
+        let writer = Arc::clone(&buffer);
 
-        let producteur = std::thread::spawn(move || {
+        let producer = std::thread::spawn(move || {
             for i in 0..64_i32 {
-                ecrivain.push(lot(i * 10, 10)).expect("batch accepted");
+                writer.push(batch_of(i * 10, 10)).expect("batch accepted");
             }
-            ecrivain.mark_complete(ExecStats::default());
+            writer.mark_complete(ExecStats::default());
         });
 
-        while !tampon.is_complete() {
-            let lignes = tampon.row_count();
-            for ligne in (0..lignes).step_by(7) {
-                let (position, decalage) = tampon.locate(ligne).expect("announced row received");
-                let lot = tampon
+        while !buffer.is_complete() {
+            let rows = buffer.row_count();
+            for line in (0..rows).step_by(7) {
+                let (position, offset) = buffer.locate(line).expect("announced row received");
+                let rb = buffer
                     .batch(position)
-                    .expect("relecture")
+                    .expect("read back")
                     .expect("the located batch exists");
-                assert!(decalage < lot.num_rows());
+                assert!(offset < rb.num_rows());
             }
         }
 
-        producteur.join().expect("the producer does not panic");
-        assert_eq!(tampon.row_count(), 640);
+        producer.join().expect("the producer does not panic");
+        assert_eq!(buffer.row_count(), 640);
     }
 }
 

@@ -22,17 +22,17 @@ pub struct TempDir(PathBuf);
 impl TempDir {
     /// Creates a unique directory in the system's temporary directory.
     pub fn new(etiquette: &str) -> Self {
-        static COMPTEUR: AtomicU32 = AtomicU32::new(0);
-        let rang = COMPTEUR.fetch_add(1, Ordering::Relaxed);
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let rank = COUNTER.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |ecart| ecart.as_nanos());
-        let chemin = std::env::temp_dir().join(format!(
-            "oxyn-plugin-{etiquette}-{}-{rang}-{nanos}",
+            .map_or(0, |gap| gap.as_nanos());
+        let item_path = std::env::temp_dir().join(format!(
+            "oxyn-plugin-{etiquette}-{}-{rank}-{nanos}",
             std::process::id()
         ));
-        fs::create_dir_all(&chemin).expect("creating the temporary test directory");
-        Self(chemin)
+        fs::create_dir_all(&item_path).expect("creating the temporary test directory");
+        Self(item_path)
     }
 
     /// The root of the directory.
@@ -41,19 +41,19 @@ impl TempDir {
     }
 
     /// Drops a plugin: a subdirectory and its `plugin.toml`.
-    pub fn plugin(&self, slug: &str, manifeste: &str) {
+    pub fn plugin(&self, slug: &str, manifest_toml: &str) {
         let dossier = self.0.join(slug);
         fs::create_dir_all(&dossier).expect("creating the plugin directory");
-        fs::write(dossier.join(MANIFEST_FILE), manifeste).expect("writing the manifest");
+        fs::write(dossier.join(MANIFEST_FILE), manifest_toml).expect("writing the manifest");
     }
 
     /// Drops any file into a plugin's directory.
-    pub fn file(&self, slug: &str, nom: &str, contenu: &[u8]) -> PathBuf {
+    pub fn file(&self, slug: &str, ident: &str, content: &[u8]) -> PathBuf {
         let dossier = self.0.join(slug);
         fs::create_dir_all(&dossier).expect("creating the plugin directory");
-        let chemin = dossier.join(nom);
-        fs::write(&chemin, contenu).expect("writing the file");
-        chemin
+        let item_path = dossier.join(ident);
+        fs::write(&item_path, content).expect("writing the file");
+        item_path
     }
 }
 
@@ -65,7 +65,7 @@ impl Drop for TempDir {
 }
 
 /// A declarative agent manifest, with the tool list given as is.
-pub fn agent_toml(slug: &str, outils: &str) -> String {
+pub fn agent_toml(slug: &str, tools: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\
          name        = \"Agent {slug}\"\n\
@@ -79,12 +79,12 @@ pub fn agent_toml(slug: &str, outils: &str) -> String {
          [agent]\n\
          name          = \"Schema\"\n\
          system_prompt = \"You review database schemas.\"\n\
-         allowed_tools = [{outils}]\n"
+         allowed_tools = [{tools}]\n"
     )
 }
 
 /// An export format manifest, with the host list given as is.
-pub fn export_toml(slug: &str, reseau: &str) -> String {
+pub fn export_toml(slug: &str, net: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\
          name        = \"Export {slug}\"\n\
@@ -94,7 +94,7 @@ pub fn export_toml(slug: &str, reseau: &str) -> String {
          entrypoint  = \"{slug}.wasm\"\n\
          \n\
          [permissions]\n\
-         network = [{reseau}]\n"
+         network = [{net}]\n"
     )
 }
 

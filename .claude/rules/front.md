@@ -136,7 +136,7 @@ the gate.
   (`./<name>` or `@/components/oxyn/<name>`): its own stories usually, or those
   of the view that renders it directly (`result-chart.stories.tsx` for
   `assistant-result-chart`);
-- **otherwise, it is exempted by name** in the script's `EXEMPTS`, and only in
+- **otherwise, it is exempted by name** in the script's `EXEMPT`, and only in
   two cases: a piece that only makes sense inside its parent (Lexical plugin,
   chart plot), whose exemption names the story that renders it; or a pending
   story, whose exemption carries a dated `TODO` saying what unblocks it. An

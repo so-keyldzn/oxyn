@@ -326,8 +326,8 @@ mod tests {
         // The type's documentation claims it; the compiler checks it.
         // `rusqlite::Connection` is `Send` but not `Sync`: the `Mutex` is what
         // makes `Store` shareable, and removing it would break this test.
-        fn exige_send_sync<T: Send + Sync>() {}
-        exige_send_sync::<Store>();
+        fn requires_send_sync<T: Send + Sync>() {}
+        requires_send_sync::<Store>();
     }
 
     #[test]
@@ -335,33 +335,33 @@ mod tests {
         // SQLite ignores them by default: without this setting, the schema's
         // cascades would be decorative.
         let store = Store::open_in_memory().expect("open");
-        let actif: i64 = store
+        let active: i64 = store
             .with_connection(
                 |conn| Ok(conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?),
             )
             .expect("read the pragma");
-        assert_eq!(actif, 1);
+        assert_eq!(active, 1);
     }
 
     #[test]
     fn a_file_is_created_with_its_directory_and_reopens() {
-        let racine = tempfile::tempdir().expect("temporary directory");
-        let chemin = racine
+        let root = tempfile::tempdir().expect("temporary directory");
+        let path = root
             .path()
             .join("profond")
             .join("etat")
             .join("oxyn.sqlite3");
 
         {
-            let store = Store::open_at(&chemin).expect("first open");
+            let store = Store::open_at(&path).expect("first open");
             store
                 .workspaces()
-                .create("atelier")
+                .create("workshop")
                 .expect("workspace creation");
-            assert_eq!(store.path(), Some(chemin.as_path()));
+            assert_eq!(store.path(), Some(path.as_path()));
         }
 
-        let store = Store::open_at(&chemin).expect("reopen");
+        let store = Store::open_at(&path).expect("reopen");
         assert_eq!(
             store.schema_version().expect("version"),
             schema::latest_version(),
@@ -376,8 +376,8 @@ mod tests {
 
     #[test]
     fn a_file_is_in_wal_mode() {
-        let racine = tempfile::tempdir().expect("temporary directory");
-        let store = Store::open_at(racine.path().join("oxyn.sqlite3")).expect("open");
+        let root = tempfile::tempdir().expect("temporary directory");
+        let store = Store::open_at(root.path().join("oxyn.sqlite3")).expect("open");
         let mode: String = store
             .with_connection(
                 |conn| Ok(conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?),
@@ -389,11 +389,11 @@ mod tests {
     #[test]
     fn debug_does_not_show_the_content() {
         let store = Store::open_in_memory().expect("open");
-        let rendu = format!("{store:?}");
-        assert!(rendu.contains("Store"));
+        let rendered = format!("{store:?}");
+        assert!(rendered.contains("Store"));
         assert!(
-            !rendu.contains("audit_journal"),
-            "Debug must say nothing about the content: {rendu}"
+            !rendered.contains("audit_journal"),
+            "Debug must say nothing about the content: {rendered}"
         );
     }
 
@@ -408,8 +408,8 @@ mod tests {
         conn.execute_batch("CREATE TABLE documents (bloquante INTEGER);")
             .expect("table that will collide");
 
-        let erreur = schema::migrate(&mut conn).expect_err("`documents` already exists");
-        assert!(matches!(erreur, StoreError::Migration { version: 1, .. }));
+        let error = schema::migrate(&mut conn).expect_err("`documents` already exists");
+        assert!(matches!(error, StoreError::Migration { version: 1, .. }));
         assert_eq!(
             schema::current_version(&conn).expect("version"),
             0,

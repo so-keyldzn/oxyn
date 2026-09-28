@@ -29,7 +29,7 @@ use std::fmt::Write as _;
 ///
 /// The bound is not an optimization: `weight` is an `i16`, and a hostile value
 /// of 32,767 would allocate 130 KB of zeros per cell.
-const MAX_GROUPES: usize = 4_096;
+const MAX_GROUPS: usize = 4_096;
 
 /// Bound on the display scale. PostgreSQL limits it to 16,383.
 const MAX_DSCALE: usize = 16_384;
@@ -48,11 +48,11 @@ const BASE: i16 = 10_000;
 /// `-Infinity`.
 #[must_use]
 pub(crate) fn render_binary(bytes: &[u8]) -> Option<String> {
-    let mut lecteur = Lecteur::new(bytes);
-    let ndigits = lecteur.i16()?;
-    let weight = lecteur.i16()?;
-    let sign = lecteur.u16()?;
-    let dscale = lecteur.u16()?;
+    let mut reader = Reader::new(bytes);
+    let ndigits = reader.i16()?;
+    let weight = reader.i16()?;
+    let sign = reader.u16()?;
+    let dscale = reader.u16()?;
 
     match sign {
         0xC000 => return Some("NaN".to_owned()),
@@ -62,8 +62,8 @@ pub(crate) fn render_binary(bytes: &[u8]) -> Option<String> {
         _ => return None,
     }
 
-    let compte = usize::try_from(ndigits).ok()?;
-    if compte > MAX_GROUPES {
+    let count = usize::try_from(ndigits).ok()?;
+    if count > MAX_GROUPS {
         return None;
     }
     let dscale = usize::from(dscale);
@@ -71,65 +71,65 @@ pub(crate) fn render_binary(bytes: &[u8]) -> Option<String> {
         return None;
     }
 
-    let mut groupes = Vec::with_capacity(compte);
-    for _ in 0..compte {
-        let groupe = lecteur.i16()?;
-        if !(0..BASE).contains(&groupe) {
+    let mut groups = Vec::with_capacity(count);
+    for _ in 0..count {
+        let group = reader.i16()?;
+        if !(0..BASE).contains(&group) {
             return None;
         }
-        groupes.push(groupe);
+        groups.push(group);
     }
 
-    let poids = i32::from(weight);
-    if poids > i32::try_from(MAX_GROUPES).ok()? {
+    let weight32 = i32::from(weight);
+    if weight32 > i32::try_from(MAX_GROUPS).ok()? {
         return None;
     }
 
-    let mut sortie = String::with_capacity(dscale + 8);
+    let mut out = String::with_capacity(dscale + 8);
     if sign == 0x4000 {
-        sortie.push('-');
+        out.push('-');
     }
 
     // Integer part: the first group is written without padding, the next ones
     // on four digits — otherwise 1 then 0002 would read 12.
-    if poids < 0 {
-        sortie.push('0');
+    if weight32 < 0 {
+        out.push('0');
     } else {
-        for rang in 0..=poids {
-            let groupe = groupe_at(&groupes, rang);
-            if rang == 0 {
-                let _ = write!(sortie, "{groupe}");
+        for rank in 0..=weight32 {
+            let group = group_at(&groups, rank);
+            if rank == 0 {
+                let _ = write!(out, "{group}");
             } else {
-                let _ = write!(sortie, "{groupe:04}");
+                let _ = write!(out, "{group:04}");
             }
         }
     }
 
     if dscale > 0 {
         let mut fraction = String::with_capacity(dscale + 4);
-        let mut rang = poids.checked_add(1)?;
+        let mut rank = weight32.checked_add(1)?;
         while fraction.len() < dscale {
-            let _ = write!(fraction, "{:04}", groupe_at(&groupes, rang));
-            rang = rang.checked_add(1)?;
+            let _ = write!(fraction, "{:04}", group_at(&groups, rank));
+            rank = rank.checked_add(1)?;
         }
         fraction.truncate(dscale);
-        sortie.push('.');
-        sortie.push_str(&fraction);
+        out.push('.');
+        out.push_str(&fraction);
     }
 
-    Some(sortie)
+    Some(out)
 }
 
-/// The group of rank `rang`, or zero: the groups missing before and after
+/// The group of rank `rank`, or zero: the groups missing before and after
 /// those the server sends are worth zero, which is what allows only the
 /// significant ones to be transmitted.
-fn groupe_at(groupes: &[i16], rang: i32) -> i16 {
-    if rang < 0 {
+fn group_at(groups: &[i16], rank: i32) -> i16 {
+    if rank < 0 {
         return 0;
     }
-    usize::try_from(rang)
+    usize::try_from(rank)
         .ok()
-        .and_then(|index| groupes.get(index).copied())
+        .and_then(|index| groups.get(index).copied())
         .unwrap_or(0)
 }
 
@@ -138,19 +138,19 @@ fn groupe_at(groupes: &[i16], rang: i32) -> i16 {
 /// Written by hand for a specific reason: `bytes::Buf::get_i16` **panics** on a
 /// buffer that is too short, and this buffer comes from the network
 /// ([I-09](../../../CLAUDE.md#i-09)).
-pub(crate) struct Lecteur<'a> {
-    reste: &'a [u8],
+pub(crate) struct Reader<'a> {
+    rest: &'a [u8],
 }
 
-impl<'a> Lecteur<'a> {
+impl<'a> Reader<'a> {
     /// A reader positioned at the start of the slice.
     pub(crate) const fn new(bytes: &'a [u8]) -> Self {
-        Self { reste: bytes }
+        Self { rest: bytes }
     }
 
     /// The bytes not read yet.
-    pub(crate) const fn reste(&self) -> &'a [u8] {
-        self.reste
+    pub(crate) const fn rest(&self) -> &'a [u8] {
+        self.rest
     }
 
     /// Is the slice exhausted?
@@ -159,45 +159,45 @@ impl<'a> Lecteur<'a> {
     /// groups announced by the header. The tests are what check it left nothing
     /// behind.
     #[cfg(test)]
-    pub(crate) const fn est_vide(&self) -> bool {
-        self.reste.is_empty()
+    pub(crate) const fn is_empty(&self) -> bool {
+        self.rest.is_empty()
     }
 
     /// `n` bytes, or `None` if there are not enough.
-    pub(crate) fn prendre(&mut self, n: usize) -> Option<&'a [u8]> {
-        let (debut, suite) = self.reste.split_at_checked(n)?;
-        self.reste = suite;
-        Some(debut)
+    pub(crate) fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let (head, tail) = self.rest.split_at_checked(n)?;
+        self.rest = tail;
+        Some(head)
     }
 
     /// A signed 16-bit integer, big-endian.
     pub(crate) fn i16(&mut self) -> Option<i16> {
-        let octets: [u8; 2] = self.prendre(2)?.try_into().ok()?;
-        Some(i16::from_be_bytes(octets))
+        let bytes: [u8; 2] = self.take(2)?.try_into().ok()?;
+        Some(i16::from_be_bytes(bytes))
     }
 
     /// An unsigned 16-bit integer, big-endian.
     pub(crate) fn u16(&mut self) -> Option<u16> {
-        let octets: [u8; 2] = self.prendre(2)?.try_into().ok()?;
-        Some(u16::from_be_bytes(octets))
+        let bytes: [u8; 2] = self.take(2)?.try_into().ok()?;
+        Some(u16::from_be_bytes(bytes))
     }
 
     /// A signed 32-bit integer, big-endian.
     pub(crate) fn i32(&mut self) -> Option<i32> {
-        let octets: [u8; 4] = self.prendre(4)?.try_into().ok()?;
-        Some(i32::from_be_bytes(octets))
+        let bytes: [u8; 4] = self.take(4)?.try_into().ok()?;
+        Some(i32::from_be_bytes(bytes))
     }
 
     /// An unsigned 32-bit integer, big-endian.
     pub(crate) fn u32(&mut self) -> Option<u32> {
-        let octets: [u8; 4] = self.prendre(4)?.try_into().ok()?;
-        Some(u32::from_be_bytes(octets))
+        let bytes: [u8; 4] = self.take(4)?.try_into().ok()?;
+        Some(u32::from_be_bytes(bytes))
     }
 
     /// A signed 64-bit integer, big-endian.
     pub(crate) fn i64(&mut self) -> Option<i64> {
-        let octets: [u8; 8] = self.prendre(8)?.try_into().ok()?;
-        Some(i64::from_be_bytes(octets))
+        let bytes: [u8; 8] = self.take(8)?.try_into().ok()?;
+        Some(i64::from_be_bytes(bytes))
     }
 }
 
@@ -206,71 +206,71 @@ mod tests {
     use super::*;
 
     /// Builds the binary encoding of a `NUMERIC`, as the server would.
-    fn encoder(weight: i16, sign: u16, dscale: u16, groupes: &[i16]) -> Vec<u8> {
-        let mut octets = Vec::new();
-        let ndigits = i16::try_from(groupes.len()).expect("the test cases are short");
-        octets.extend_from_slice(&ndigits.to_be_bytes());
-        octets.extend_from_slice(&weight.to_be_bytes());
-        octets.extend_from_slice(&sign.to_be_bytes());
-        octets.extend_from_slice(&dscale.to_be_bytes());
-        for groupe in groupes {
-            octets.extend_from_slice(&groupe.to_be_bytes());
+    fn encoder(weight: i16, sign: u16, dscale: u16, groups: &[i16]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let ndigits = i16::try_from(groups.len()).expect("the test cases are short");
+        bytes.extend_from_slice(&ndigits.to_be_bytes());
+        bytes.extend_from_slice(&weight.to_be_bytes());
+        bytes.extend_from_slice(&sign.to_be_bytes());
+        bytes.extend_from_slice(&dscale.to_be_bytes());
+        for group in groups {
+            bytes.extend_from_slice(&group.to_be_bytes());
         }
-        octets
+        bytes
     }
 
     #[test]
     fn a_simple_integer_reads_back() {
         // 1234
-        let octets = encoder(0, 0x0000, 0, &[1234]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("1234"));
+        let bytes = encoder(0, 0x0000, 0, &[1234]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("1234"));
     }
 
     #[test]
     fn the_first_group_is_not_padded_and_the_next_ones_are() {
         // 1 0002 = 10002, not 12.
-        let octets = encoder(1, 0x0000, 0, &[1, 2]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("10002"));
+        let bytes = encoder(1, 0x0000, 0, &[1, 2]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("10002"));
     }
 
     #[test]
     fn an_amount_with_two_decimals_stays_exact() {
         // 1234.56: weight 0, groups [1234, 5600], dscale 2.
-        let octets = encoder(0, 0x0000, 2, &[1234, 5600]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("1234.56"));
+        let bytes = encoder(0, 0x0000, 2, &[1234, 5600]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("1234.56"));
     }
 
     #[test]
     fn the_negative_sign_carries_over() {
-        let octets = encoder(0, 0x4000, 2, &[1234, 5600]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("-1234.56"));
+        let bytes = encoder(0, 0x4000, 2, &[1234, 5600]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("-1234.56"));
     }
 
     #[test]
     fn a_purely_fractional_value_gets_its_leading_zero() {
         // 0.1234: weight -1.
-        let octets = encoder(-1, 0x0000, 4, &[1234]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("0.1234"));
+        let bytes = encoder(-1, 0x0000, 4, &[1234]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("0.1234"));
     }
 
     #[test]
     fn groups_missing_before_the_significant_ones_are_zero() {
         // 0.00001234: weight -2, a single group transmitted.
-        let octets = encoder(-2, 0x0000, 8, &[1234]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("0.00001234"));
+        let bytes = encoder(-2, 0x0000, 8, &[1234]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("0.00001234"));
     }
 
     #[test]
     fn missing_decimals_are_padded_with_zeros() {
         // 12.5 declared with four decimals.
-        let octets = encoder(0, 0x0000, 4, &[12, 5000]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("12.5000"));
+        let bytes = encoder(0, 0x0000, 4, &[12, 5000]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("12.5000"));
     }
 
     #[test]
     fn zero_renders_zero() {
-        let octets = encoder(0, 0x0000, 0, &[]);
-        assert_eq!(render_binary(&octets).as_deref(), Some("0"));
+        let bytes = encoder(0, 0x0000, 0, &[]);
+        assert_eq!(render_binary(&bytes).as_deref(), Some("0"));
     }
 
     #[test]
@@ -278,9 +278,9 @@ mod tests {
         // 12,345,678,901,234,567,890.12345678: 26 significant digits, well
         // beyond the 15 to 17 of an f64. It is the case that motivates this
         // module.
-        let octets = encoder(4, 0x0000, 8, &[1234, 5678, 9012, 3456, 7890, 1234, 5678]);
+        let bytes = encoder(4, 0x0000, 8, &[1234, 5678, 9012, 3456, 7890, 1234, 5678]);
         assert_eq!(
-            render_binary(&octets).as_deref(),
+            render_binary(&bytes).as_deref(),
             Some("12345678901234567890.12345678")
         );
     }
@@ -307,9 +307,9 @@ mod tests {
         // header announces.
         assert_eq!(render_binary(&[]), None);
         assert_eq!(render_binary(&[0, 1, 0, 0]), None);
-        let mut tronque = encoder(0, 0x0000, 0, &[1234]);
-        tronque.pop();
-        assert_eq!(render_binary(&tronque), None);
+        let mut truncated = encoder(0, 0x0000, 0, &[1234]);
+        truncated.pop();
+        assert_eq!(render_binary(&truncated), None);
     }
 
     #[test]
@@ -331,16 +331,16 @@ mod tests {
 
     #[test]
     fn the_reader_never_overflows() {
-        let mut lecteur = Lecteur::new(&[0x00, 0x01, 0x02]);
-        assert_eq!(lecteur.i16(), Some(1));
+        let mut reader = Reader::new(&[0x00, 0x01, 0x02]);
+        assert_eq!(reader.i16(), Some(1));
         assert_eq!(
-            lecteur.i16(),
+            reader.i16(),
             None,
             "one remaining byte does not make an i16"
         );
-        assert_eq!(lecteur.reste(), &[0x02]);
-        assert!(!lecteur.est_vide());
-        assert_eq!(lecteur.prendre(1), Some(&[0x02][..]));
-        assert!(lecteur.est_vide());
+        assert_eq!(reader.rest(), &[0x02]);
+        assert!(!reader.is_empty());
+        assert_eq!(reader.take(1), Some(&[0x02][..]));
+        assert!(reader.is_empty());
     }
 }

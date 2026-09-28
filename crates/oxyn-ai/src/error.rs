@@ -216,25 +216,25 @@ mod tests {
 
     #[test]
     fn a_refusal_stays_a_refusal_after_mapping() {
-        let refus = AiError::ToolNotAllowed {
+        let refusal = AiError::ToolNotAllowed {
             name: "delete_connection".to_owned(),
         };
-        assert!(refus.is_refusal());
-        let projete = OxynError::from(refus);
+        assert!(refusal.is_refusal());
+        let projected = OxynError::from(refusal);
         assert!(
-            matches!(projete, OxynError::PolicyDenied { .. }),
-            "{projete:?}"
+            matches!(projected, OxynError::PolicyDenied { .. }),
+            "{projected:?}"
         );
     }
 
     #[test]
     fn a_local_tier_refuses_a_remote_provider() {
-        let refus = AiError::RemoteProviderRefused {
+        let refusal = AiError::RemoteProviderRefused {
             tier: PrivacyTier::Local,
         };
-        let rendu = refus.to_string();
-        assert!(rendu.contains("local"), "{rendu}");
-        assert!(refus.is_refusal());
+        let rendered = refusal.to_string();
+        assert!(rendered.contains("local"), "{rendered}");
+        assert!(refusal.is_refusal());
     }
 
     #[test]

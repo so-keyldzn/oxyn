@@ -42,133 +42,133 @@ import subprocess
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-CONFIG_TAURI = RACINE / "crates" / "oxyn-desktop" / "tauri.conf.json"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_TAURI = REPO_ROOT / "crates" / "oxyn-desktop" / "tauri.conf.json"
 
 
-class Refus(Exception):
+class Refusal(Exception):
     """A condition of the contract is not met: the job must fail."""
 
 
 def gh(*args: str) -> subprocess.CompletedProcess[str]:
-    commande = [os.environ.get("GH", "gh"), *args]
-    return subprocess.run(commande, capture_output=True, text=True, check=False)
+    command = [os.environ.get("GH", "gh"), *args]
+    return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
-def version_configuree(config: Path) -> str:
+def configured_version(config: Path) -> str:
     try:
         version = json.loads(config.read_text(encoding="utf-8")).get("version")
-    except (OSError, ValueError) as erreur:
-        raise Refus(f"{config} unreadable: {erreur}") from erreur
+    except (OSError, ValueError) as problem:
+        raise Refusal(f"{config} unreadable: {problem}") from problem
     if not isinstance(version, str) or not version:
-        raise Refus(f"{config}: no `version` field")
+        raise Refusal(f"{config}: no `version` field")
     # Tauri also accepts a path to a package.json: the tag would then be
     # compared with a file name.
     if version.endswith(".json"):
-        raise Refus(f"{config}: `version` points to {version}, not supported here")
+        raise Refusal(f"{config}: `version` points to {version}, not supported here")
     return version
 
 
-def verifier_tag(tag: str, config: Path) -> bool:
+def verify_tag(tag: str, config: Path) -> bool:
     """Refuses a tag that is not `v<version>`; says whether it is a prerelease."""
-    version = version_configuree(config)
-    attendu = f"v{version}"
-    if tag != attendu:
-        raise Refus(
+    version = configured_version(config)
+    expected = f"v{version}"
+    if tag != expected:
+        raise Refusal(
             f"tag {tag} does not match version {version} of {config.name}: "
-            f"expected {attendu}. Nothing is created; fix the tag or the version."
+            f"expected {expected}. Nothing is created; fix the tag or the version."
         )
     # The prerelease suffix comes before `+`; a hyphen in the build metadata
     # (`1.0.0+build-1`) does not make a prerelease.
     return "-" in version.split("+", 1)[0]
 
 
-def lire_release(tag: str, depot: str) -> dict | None:
+def read_release(tag: str, repo: str) -> dict | None:
     """The tag's release, or None if it does not exist yet."""
-    vue = gh("release", "view", tag, "--repo", depot, "--json", "isDraft,assets")
-    if vue.returncode != 0:
-        if "release not found" in vue.stderr:
+    view = gh("release", "view", tag, "--repo", repo, "--json", "isDraft,assets")
+    if view.returncode != 0:
+        if "release not found" in view.stderr:
             return None
-        raise Refus(f"cannot read release {tag}: {vue.stderr.strip()}")
+        raise Refusal(f"cannot read release {tag}: {view.stderr.strip()}")
     try:
-        release = json.loads(vue.stdout)
-    except ValueError as erreur:
-        raise Refus(f"unreadable response from gh release view: {erreur}") from erreur
+        release = json.loads(view.stdout)
+    except ValueError as problem:
+        raise Refusal(f"unreadable response from gh release view: {problem}") from problem
     if not isinstance(release, dict) or not isinstance(release.get("isDraft"), bool):
-        raise Refus("gh release view does not say whether the release is a draft")
+        raise Refusal("gh release view does not say whether the release is a draft")
     return release
 
 
-def exiger_brouillon(tag: str, depot: str) -> dict:
-    release = lire_release(tag, depot)
+def require_draft(tag: str, repo: str) -> dict:
+    release = read_release(tag, repo)
     if release is None:
-        raise Refus(f"no release {tag}: the draft job did not create it")
+        raise Refusal(f"no release {tag}: the draft job did not create it")
     if not release["isDraft"]:
-        raise Refus(
+        raise Refusal(
             f"release {tag} is published: no package is uploaded to it. "
             "A published release is not completed by this workflow."
         )
     return release
 
 
-def exiger_brouillon_apres_envoi(tag: str, depot: str) -> bool:
-    release = lire_release(tag, depot)
+def require_draft_after_upload(tag: str, repo: str) -> bool:
+    release = read_release(tag, repo)
     return release is not None and release["isDraft"]
 
 
-def brouillon(tag: str, depot: str, config: Path) -> None:
-    preversion = verifier_tag(tag, config)
-    if lire_release(tag, depot) is None:
+def draft(tag: str, repo: str, config: Path) -> None:
+    prerelease = verify_tag(tag, config)
+    if read_release(tag, repo) is None:
         # `--verify-tag`: the release only attaches to a tag that already
         # exists on the repository, never to a tag gh would create itself.
         options = ["--draft", "--verify-tag", "--generate-notes", "--title", f"Oxyn {tag}"]
-        if preversion:
+        if prerelease:
             options.append("--prerelease")
-        creation = gh("release", "create", tag, "--repo", depot, *options)
+        creation = gh("release", "create", tag, "--repo", repo, *options)
         if creation.returncode != 0:
-            raise Refus(f"cannot create draft {tag}: {creation.stderr.strip()}")
-    exiger_brouillon(tag, depot)
+            raise Refusal(f"cannot create draft {tag}: {creation.stderr.strip()}")
+    require_draft(tag, repo)
     print(f"Draft {tag} ready.")
 
 
-def deposer(tag: str, depot: str, fichiers: list[Path], config: Path) -> None:
-    verifier_tag(tag, config)
-    if not fichiers:
-        raise Refus("no file to upload")
-    for fichier in fichiers:
-        release = exiger_brouillon(tag, depot)
-        presents = {a.get("name") for a in release.get("assets") or [] if isinstance(a, dict)}
-        if fichier.name in presents:
-            raise Refus(
-                f"{fichier.name} is already in draft {tag}: it is not replaced. "
+def upload(tag: str, repo: str, file_list: list[Path], config: Path) -> None:
+    verify_tag(tag, config)
+    if not file_list:
+        raise Refusal("no file to upload")
+    for file_path in file_list:
+        release = require_draft(tag, repo)
+        present = {a.get("name") for a in release.get("assets") or [] if isinstance(a, dict)}
+        if file_path.name in present:
+            raise Refusal(
+                f"{file_path.name} is already in draft {tag}: it is not replaced. "
                 "Delete it from the draft, then rerun the job."
             )
-        envoi = gh("release", "upload", tag, str(fichier), "--repo", depot)
-        if envoi.returncode != 0:
-            raise Refus(f"cannot upload {fichier.name}: {envoi.stderr.strip()}")
+        upload_op = gh("release", "upload", tag, str(file_path), "--repo", repo)
+        if upload_op.returncode != 0:
+            raise Refusal(f"cannot upload {file_path.name}: {upload_op.stderr.strip()}")
         # Removing the file would be one more write on a public release: we
         # stop and say so.
-        if not exiger_brouillon_apres_envoi(tag, depot):
-            raise Refus(
-                f"release {tag} was published while uploading {fichier.name}, "
+        if not require_draft_after_upload(tag, repo):
+            raise Refusal(
+                f"release {tag} was published while uploading {file_path.name}, "
                 "which was added to it; nothing else is uploaded. Check the release."
             )
-        print(f"{fichier.name} uploaded to draft {tag}.")
+        print(f"{file_path.name} uploaded to draft {tag}.")
 
 
 def main(args: list[str]) -> int:
     config = Path(os.environ.get("OXYN_CONFIG_TAURI", CONFIG_TAURI))
     try:
         match args:
-            case ["brouillon", tag, depot]:
-                brouillon(tag, depot, config)
-            case ["deposer", tag, depot, *fichiers]:
-                deposer(tag, depot, [Path(f) for f in fichiers], config)
+            case ["brouillon", tag, repo]:
+                draft(tag, repo, config)
+            case ["deposer", tag, repo, *file_list]:
+                upload(tag, repo, [Path(f) for f in file_list], config)
             case _:
                 print(__doc__, file=sys.stderr)
                 return 2
-    except Refus as refus:
-        print(f"livraison: {refus}", file=sys.stderr)
+    except Refusal as refusal:
+        print(f"livraison: {refusal}", file=sys.stderr)
         return 1
     return 0
 

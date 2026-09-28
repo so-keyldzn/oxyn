@@ -92,7 +92,7 @@ function isDeclared(
  * directories, nothing run — but nothing is declared here on its own: the user
  * reads what was found and confirms, twice, since declaring a program to run
  * also asks in a system dialog
- * ([ADR-0023](../../../../docs/adr/0023-fournisseurs-declares-et-provenance.md),
+ * ([ADR-0023](../../../../../docs/adr/0023-fournisseurs-declares-et-provenance.md),
  * ADR-0026).
  *
  * The user keeps their own subscription: the agent signs its user in itself,

@@ -92,11 +92,11 @@ fn execute(bench: &Bench, text: &str) -> Command {
 async fn run(bench: &Bench, text: &str) -> (Result<Outcome>, Vec<Event>) {
     let mut events = bench.executor.subscribe();
     let id = CommandId::new();
-    let issue = bench
+    let outcome = bench
         .executor
         .dispatch_as(id, Actor::Human, execute(bench, text), &CancelToken::new())
         .await;
-    (issue, announced(&mut events, id))
+    (outcome, announced(&mut events, id))
 }
 
 /// What `id` announced so far; every event is published before `dispatch`
@@ -140,16 +140,16 @@ fn states(bench: &Bench, events: &[Event]) -> Vec<TransactionState> {
 #[tokio::test]
 async fn a_completed_execution_publishes_the_state_before_completed() {
     let bench = bench(SqliteDriver::MEMORY).await;
-    let (issue, events) = run(&bench, "BEGIN").await;
-    assert!(issue.is_ok(), "{issue:?}");
+    let (outcome, events) = run(&bench, "BEGIN").await;
+    assert!(outcome.is_ok(), "{outcome:?}");
     assert_eq!(states(&bench, &events), [TransactionState::Open]);
     assert!(
         matches!(terminal(&events), Some(Event::Completed { .. })),
         "{events:?}"
     );
 
-    let (issue, events) = run(&bench, "COMMIT").await;
-    assert!(issue.is_ok(), "{issue:?}");
+    let (outcome, events) = run(&bench, "COMMIT").await;
+    assert!(outcome.is_ok(), "{outcome:?}");
     assert_eq!(states(&bench, &events), [TransactionState::Idle]);
 }
 
@@ -159,12 +159,12 @@ async fn a_failed_drain_publishes_the_state_before_failed() {
     // error does not end the transaction, and the state says so.
     let bench = bench(SqliteDriver::MEMORY).await;
     run(&bench, "BEGIN").await.0.expect("BEGIN");
-    let (issue, events) = run(
+    let (outcome, events) = run(
         &bench,
         "WITH c(x) AS (VALUES (1), (-9223372036854775808)) SELECT abs(x) FROM c",
     )
     .await;
-    assert!(issue.is_err(), "the overflow fails the drain");
+    assert!(outcome.is_err(), "the overflow fails the drain");
     assert!(
         events
             .iter()
@@ -183,8 +183,8 @@ async fn an_early_failure_of_execute_still_publishes_the_state() {
     // No cursor, no terminal event: the error goes back to the caller. The
     // state is published all the same.
     let bench = bench(SqliteDriver::MEMORY).await;
-    let (issue, events) = run(&bench, "INSERT INTO missing VALUES (1)").await;
-    assert!(issue.is_err());
+    let (outcome, events) = run(&bench, "INSERT INTO missing VALUES (1)").await;
+    assert!(outcome.is_err());
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(states(&bench, &events), [TransactionState::Idle]);
 }
@@ -220,16 +220,16 @@ async fn a_stop_during_a_read_reads_the_state_with_its_own_token() {
     .await
     .expect("the first row arrives at once");
     stop.cancel();
-    let issue = task.await.expect("the task ends");
+    let outcome = task.await.expect("the task ends");
     assert!(
         matches!(
-            issue,
+            outcome,
             Ok(Outcome::Executed {
                 sink: SinkOutcome::Cancelled,
                 ..
             })
         ),
-        "{issue:?}"
+        "{outcome:?}"
     );
     let events = announced(&mut events, id);
     assert_eq!(states(&bench, &events), [TransactionState::Open]);
@@ -276,10 +276,10 @@ async fn a_stop_during_a_write_publishes_the_rollback_sqlite_did() {
     .expect("the endless INSERT starts writing");
     stop.cancel();
 
-    let issue = task.await.expect("the task ends");
+    let outcome = task.await.expect("the task ends");
     assert!(
-        issue.as_ref().is_err_and(OxynError::is_cancelled),
-        "{issue:?}"
+        outcome.as_ref().is_err_and(OxynError::is_cancelled),
+        "{outcome:?}"
     );
     let events = announced(&mut events, id);
     assert_eq!(states(&bench, &events), [TransactionState::Idle]);
@@ -411,8 +411,8 @@ async fn a_session_closing_during_the_read_reports_unknown() {
     .await
     .expect("closing does not wait on the read")
     .expect("the session closes");
-    let issue = task.await.expect("the task ends");
-    assert!(issue.is_err());
+    let outcome = task.await.expect("the task ends");
+    assert!(outcome.is_err());
 
     let events = announced(&mut events, id);
     assert_eq!(
@@ -443,7 +443,7 @@ async fn a_session_without_transactions_publishes_no_state() {
     ));
     let mut events = executor.subscribe();
     let id = CommandId::new();
-    let issue = executor
+    let outcome = executor
         .dispatch_as(
             id,
             Actor::Human,
@@ -455,7 +455,7 @@ async fn a_session_without_transactions_publishes_no_state() {
             &CancelToken::new(),
         )
         .await;
-    assert!(issue.is_err());
+    assert!(outcome.is_err());
     assert!(announced(&mut events, id).is_empty());
 }
 

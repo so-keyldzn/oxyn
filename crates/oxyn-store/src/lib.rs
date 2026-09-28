@@ -145,41 +145,41 @@ mod tests {
     #[test]
     fn a_refused_agent_command_leaves_a_tamper_proof_trace() {
         let store = Store::open_in_memory().expect("open");
-        let atelier = store.workspaces().create("atelier").expect("workspace");
+        let workshop = store.workspaces().create("workshop").expect("workspace");
 
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+        let connection = ConnectionConfig::new("customer db", DriverId::postgres())
             .with_environment(Environment::Production);
         store
             .connections()
-            .save(atelier.id, &connexion)
+            .save(workshop.id, &connection)
             .expect("connection");
 
-        let politique = oxyn_core::DefaultPolicy::new();
-        politique.register(&connexion);
+        let policy = oxyn_core::DefaultPolicy::new();
+        policy.register(&connection);
 
         let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: connection.id,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::SQL, "DELETE FROM clients")
+                ExecRequest::new(QueryLanguage::SQL, "DELETE FROM customers")
                     .with_intent(StatementIntent::Write)
                     .with_risk(MutationRisk::UnboundedDelete),
             ),
         };
 
         // For an agent, production is strictly read-only.
-        let decision = politique.authorize(&agent, &commande, Environment::Production);
+        let decision = policy.authorize(&agent, &command, Environment::Production);
         assert!(decision.is_denied(), "{decision:?}");
 
         store
             .journal()
-            .append(&JournalRecord::new(&agent, &commande, &decision))
+            .append(&JournalRecord::new(&agent, &command, &decision))
             .expect("logging");
         store
             .history()
             .record(
-                &HistoryRecord::from_command(&agent, &commande)
+                &HistoryRecord::from_command(&agent, &command)
                     .expect("an Execute produces a history entry")
                     .denied("production connection"),
             )
@@ -189,11 +189,11 @@ mod tests {
         store.history().clear().expect("purge the history");
         store
             .connections()
-            .delete(connexion.id)
+            .delete(connection.id)
             .expect("delete the connection");
         store
             .workspaces()
-            .delete(atelier.id)
+            .delete(workshop.id)
             .expect("delete the workspace");
 
         assert_eq!(store.journal().count().expect("count"), 1);
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(trace.record.risk, MutationRisk::UnboundedDelete);
         assert_eq!(
             trace.record.statement.as_deref(),
-            Some("DELETE FROM clients")
+            Some("DELETE FROM customers")
         );
     }
 
@@ -214,12 +214,12 @@ mod tests {
         let store = Store::open_in_memory().expect("open");
         let tables: Vec<String> = store
             .with_connection(|conn| {
-                let mut requete = conn.prepare(
+                let mut query = conn.prepare(
                     "SELECT name FROM sqlite_schema WHERE type = 'table' \
                      AND name NOT LIKE 'sqlite_%' ORDER BY name",
                 )?;
-                let noms = requete.query_map([], |row| row.get(0))?;
-                Ok(noms.collect::<rusqlite::Result<Vec<String>>>()?)
+                let names = query.query_map([], |row| row.get(0))?;
+                Ok(names.collect::<rusqlite::Result<Vec<String>>>()?)
             })
             .expect("read the schema");
 

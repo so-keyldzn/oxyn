@@ -179,10 +179,10 @@ mod tests {
 
     #[test]
     fn shipped_agents_are_valid() {
-        let registre = ToolRegistry::builtin();
+        let registry = ToolRegistry::builtin();
         for agent in builtin_agents() {
             agent
-                .validate(&registre)
+                .validate(&registry)
                 .unwrap_or_else(|err| panic!("{}: {err}", agent.name));
         }
     }
@@ -241,10 +241,10 @@ mod tests {
     fn the_seven_remaining_agents_are_named_not_written() {
         // The list of VISION § "Multi-agent architecture" counts nine agents.
         assert_eq!(REMAINING_AGENTS.len() + builtin_agents().len(), 9);
-        for nom in REMAINING_AGENTS {
+        for name in REMAINING_AGENTS {
             assert!(
-                !builtin_agents().iter().any(|agent| agent.name == nom),
-                "{nom} is announced as remaining to be written but is among the shipped agents"
+                !builtin_agents().iter().any(|agent| agent.name == name),
+                "{name} is announced as remaining to be written but is among the shipped agents"
             );
         }
     }

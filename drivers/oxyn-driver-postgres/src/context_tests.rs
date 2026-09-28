@@ -26,23 +26,23 @@ use sqlx::postgres::{PgConnection, PgPool, PgPoolOptions};
 use sqlx::{ConnectOptions as _, Connection as _, Executor as _};
 
 use crate::driver::postgres_metadata;
-use crate::integration::cible;
+use crate::integration::target;
 use crate::options::ConnectSpec;
 use crate::session::PostgresSession;
 use crate::variant::PostgresVariant;
 
 /// Beyond this, a fact expected on the server will not arrive: it is a failure.
-const DELAI_DE_BLOCAGE: Duration = Duration::from_secs(20);
+const BLOCKING_DELAY: Duration = Duration::from_secs(20);
 
 /// The witness table the control connection locks.
-const TEMOIN: &str = "oxyn_etat_temoin";
+const WITNESS: &str = "oxyn_state_witness";
 /// The schema of a console's context.
-const SCHEMA: &str = "oxyn_etat_console";
+const SCHEMA: &str = "oxyn_state_console";
 /// The database set to `standard_conforming_strings = off`.
-const BASE_OFF: &str = "oxyn_etat_scs_off";
+const BASE_OFF: &str = "oxyn_state_scs_off";
 
 /// The probe of review R-1: a read with `on`, a `DELETE` with `off`.
-const SONDE: &str = "WITH c AS (SELECT 'a\\' AS x, '), d AS (DELETE FROM oxyn_etat_comptes \
+const PROBE: &str = "WITH c AS (SELECT 'a\\' AS x, '), d AS (DELETE FROM oxyn_state_accounts \
                      RETURNING 1) SELECT ' AS y) SELECT * FROM c --'";
 
 /// A session on a one-connection pool, the pool itself, and a control
@@ -50,15 +50,15 @@ const SONDE: &str = "WITH c AS (SELECT 'a\\' AS x, '), d AS (DELETE FROM oxyn_et
 ///
 /// `base` replaces the database of the test configuration; `extras` is added to
 /// its parameters, as a user would in their connection.
-async fn banc(
+async fn bench(
     base: Option<&str>,
     extras: &[(&str, &str)],
 ) -> Option<(PostgresSession, PgPool, PgConnection)> {
-    let Some((mut config, identifiants)) = cible() else {
+    let Some((mut config, credentials)) = target() else {
         eprintln!("OXYN_PG_TEST_URL is not set: test skipped");
         return None;
     };
-    let controle = ConnectSpec::from_config(&postgres_metadata(), &config, &identifiants)
+    let control = ConnectSpec::from_config(&postgres_metadata(), &config, &credentials)
         .expect("complete test configuration")
         .options()
         .connect()
@@ -67,79 +67,79 @@ async fn banc(
     if let Some(base) = base {
         config = config.with_param("database", base);
     }
-    for (cle, valeur) in extras {
-        config = config.with_param(*cle, *valeur);
+    for (key, value) in extras {
+        config = config.with_param(*key, *value);
     }
-    let spec = ConnectSpec::from_config(&postgres_metadata(), &config, &identifiants)
+    let spec = ConnectSpec::from_config(&postgres_metadata(), &config, &credentials)
         .expect("complete test configuration");
-    let bassin = PgPoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(1)
         .min_connections(0)
         .test_before_acquire(true)
         .connect_with(spec.options().clone())
         .await
         .expect("the test server must be reachable");
-    let nom = spec.database().to_owned();
+    let name = spec.database().to_owned();
     let session = PostgresSession::new(
         DriverId::postgres(),
-        bassin.clone(),
+        pool.clone(),
         spec,
         PostgresVariant::detect("PostgreSQL", "", Vec::new()),
-        nom,
+        name,
     );
-    Some((session, bassin, controle))
+    Some((session, pool, control))
 }
 
-fn demande(sql: &str, lecture_seule: bool) -> ExecRequest {
-    let limites = ExecLimits::default().with_max_rows(None);
-    let (intention, limites) = if lecture_seule {
-        (StatementIntent::Read, limites)
+fn exec_request(sql: &str, read_only: bool) -> ExecRequest {
+    let limits = ExecLimits::default().with_max_rows(None);
+    let (intention, limits) = if read_only {
+        (StatementIntent::Read, limits)
     } else {
-        (StatementIntent::Write, limites.writable())
+        (StatementIntent::Write, limits.writable())
     };
     ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), sql)
         .with_intent(intention)
-        .with_limits(limites)
+        .with_limits(limits)
 }
 
 /// Executes and drains, returning the number of rows.
-async fn executer(session: &PostgresSession, sql: &str, lecture_seule: bool) -> usize {
-    let mut curseur = session
-        .execute(demande(sql, lecture_seule), &CancelToken::new())
+async fn execute(session: &PostgresSession, sql: &str, read_only: bool) -> usize {
+    let mut cursor = session
+        .execute(exec_request(sql, read_only), &CancelToken::new())
         .await
-        .unwrap_or_else(|erreur| panic!("`{sql}` must be accepted: {erreur}"));
-    let mut lignes = 0;
-    while let Some(lot) = curseur.next_batch().await.expect("stream without error") {
-        lignes += lot.num_rows();
+        .unwrap_or_else(|error| panic!("`{sql}` must be accepted: {error}"));
+    let mut rows = 0;
+    while let Some(batch) = cursor.next_batch().await.expect("stream without error") {
+        rows += batch.num_rows();
     }
-    lignes
+    rows
 }
 
 /// Repeats an observation of the server until it returns something.
-async fn attendre<T>(
-    controle: &mut PgConnection,
-    quoi: &str,
+async fn sleep_until_deadline<T>(
+    control: &mut PgConnection,
+    what: &str,
     observer: impl AsyncFn(&mut PgConnection) -> Option<T>,
 ) -> T {
-    let limite = Instant::now() + DELAI_DE_BLOCAGE;
+    let limit = Instant::now() + BLOCKING_DELAY;
     loop {
-        if let Some(vu) = observer(controle).await {
-            return vu;
+        if let Some(seen) = observer(control).await {
+            return seen;
         }
-        assert!(Instant::now() < limite, "never observed: {quoi}");
+        assert!(Instant::now() < limit, "never observed: {what}");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
 /// The pid of a preparation blocked on the witness table's lock.
-async fn preparation_bloquee(controle: &mut PgConnection) -> i32 {
-    attendre(controle, "a blocked preparation", async |c| {
+async fn blocked_preparation(control: &mut PgConnection) -> i32 {
+    sleep_until_deadline(control, "a blocked preparation", async |c| {
         sqlx::query_scalar::<_, i32>(
             "SELECT l.pid FROM pg_catalog.pg_locks l \
              JOIN pg_catalog.pg_class r ON r.oid = l.relation \
              WHERE NOT l.granted AND r.relname = $1",
         )
-        .bind(TEMOIN)
+        .bind(WITNESS)
         .fetch_optional(c)
         .await
         .expect("reading pg_locks")
@@ -149,51 +149,51 @@ async fn preparation_bloquee(controle: &mut PgConnection) -> i32 {
 
 /// Starts `execute`, lets it block in its preparation, then drops the future.
 /// Returns the pid of the abandoned connection.
-async fn abandonner_pendant_la_preparation(
+async fn abandon_during_preparation(
     session: &PostgresSession,
-    controle: &mut PgConnection,
-    lecture_seule: bool,
+    control: &mut PgConnection,
+    read_only: bool,
 ) -> i32 {
-    controle
-        .execute("BEGIN; LOCK TABLE public.oxyn_etat_temoin IN ACCESS EXCLUSIVE MODE")
+    control
+        .execute("BEGIN; LOCK TABLE public.oxyn_state_witness IN ACCESS EXCLUSIVE MODE")
         .await
         .expect("control lock");
-    let jeton = CancelToken::new();
+    let token = CancelToken::new();
     let pid = {
         let mut execution = Box::pin(session.execute(
-            demande("SELECT x FROM public.oxyn_etat_temoin", lecture_seule),
-            &jeton,
+            exec_request("SELECT x FROM public.oxyn_state_witness", read_only),
+            &token,
         ));
         let pid = tokio::select! {
             issue = &mut execution => panic!(
                 "the execution must not complete under the lock: {}",
                 issue.err().map(|e| e.to_string()).unwrap_or_default()
             ),
-            pid = preparation_bloquee(controle) => pid,
+            pid = blocked_preparation(control) => pid,
         };
         drop(execution);
         pid
     };
-    controle.execute("ROLLBACK").await.expect("lock released");
+    control.execute("ROLLBACK").await.expect("lock released");
     pid
 }
 
-async fn preparer_temoin(controle: &mut PgConnection) {
-    controle
+async fn prepare_witness(control: &mut PgConnection) {
+    control
         .execute(
-            "DROP TABLE IF EXISTS public.oxyn_etat_temoin; \
-             CREATE TABLE public.oxyn_etat_temoin (x int); \
-             DROP SCHEMA IF EXISTS oxyn_etat_console CASCADE; CREATE SCHEMA oxyn_etat_console",
+            "DROP TABLE IF EXISTS public.oxyn_state_witness; \
+             CREATE TABLE public.oxyn_state_witness (x int); \
+             DROP SCHEMA IF EXISTS oxyn_state_console CASCADE; CREATE SCHEMA oxyn_state_console",
         )
         .await
         .expect("setup");
 }
 
-async fn nettoyer_temoin(controle: &mut PgConnection) {
-    let _ = controle
+async fn drop_witness(control: &mut PgConnection) {
+    let _ = control
         .execute(
-            "DROP TABLE IF EXISTS public.oxyn_etat_temoin; \
-             DROP SCHEMA IF EXISTS oxyn_etat_console CASCADE",
+            "DROP TABLE IF EXISTS public.oxyn_state_witness; \
+             DROP SCHEMA IF EXISTS oxyn_state_console CASCADE",
         )
         .await;
 }
@@ -204,10 +204,10 @@ async fn a_future_abandoned_after_the_set_does_not_return_the_context_to_the_poo
     // A-1: console A sets its schema, the user presses Esc after the `SET`. The
     // connection must not go back to the pool with that `search_path`,
     // otherwise the next borrower resolves its names elsewhere.
-    let Some((session, bassin, mut controle)) = banc(None, &[]).await else {
+    let Some((session, pool, mut control)) = bench(None, &[]).await else {
         return;
     };
-    preparer_temoin(&mut controle).await;
+    prepare_witness(&mut control).await;
     session
         .set_context(
             &SessionContext::new(None, Some(SCHEMA.to_owned())),
@@ -216,30 +216,30 @@ async fn a_future_abandoned_after_the_set_does_not_return_the_context_to_the_poo
         .await
         .expect("context");
 
-    let abandonne = abandonner_pendant_la_preparation(&session, &mut controle, false).await;
+    let abandoned = abandon_during_preparation(&session, &mut control, false).await;
 
     // The next borrower, without context: the pool has only one connection.
-    let mut suivante = bassin.acquire().await.expect("next borrow");
-    let chemin: String = sqlx::query_scalar("SHOW search_path")
-        .fetch_one(&mut *suivante)
+    let mut next = pool.acquire().await.expect("next borrow");
+    let path: String = sqlx::query_scalar("SHOW search_path")
+        .fetch_one(&mut *next)
         .await
         .expect("SHOW search_path");
     let pid: i32 = sqlx::query_scalar("SELECT pg_catalog.pg_backend_pid()")
-        .fetch_one(&mut *suivante)
+        .fetch_one(&mut *next)
         .await
         .expect("pid");
-    drop(suivante);
+    drop(next);
     assert!(
-        !chemin.contains(SCHEMA),
-        "the next connection inherits another console's context: {chemin}"
+        !path.contains(SCHEMA),
+        "the next connection inherits another console's context: {path}"
     );
     assert_ne!(
-        pid, abandonne,
+        pid, abandoned,
         "the abandoned connection should have been closed"
     );
 
-    nettoyer_temoin(&mut controle).await;
-    let _ = controle.close().await;
+    drop_witness(&mut control).await;
+    let _ = control.close().await;
     Box::new(session).close().await.expect("closing");
 }
 
@@ -248,39 +248,39 @@ async fn a_future_abandoned_after_the_set_does_not_return_the_context_to_the_poo
 async fn a_future_abandoned_after_begin_read_only_leaves_no_transaction() {
     // A-1, second part: abandoned after `BEGIN READ ONLY`, the connection would
     // go back `idle in transaction`, locks held, `VACUUM` blocked.
-    let Some((session, _bassin, mut controle)) = banc(None, &[]).await else {
+    let Some((session, _pool, mut control)) = bench(None, &[]).await else {
         return;
     };
-    preparer_temoin(&mut controle).await;
+    prepare_witness(&mut control).await;
 
-    let abandonne = abandonner_pendant_la_preparation(&session, &mut controle, true).await;
+    let abandoned = abandon_during_preparation(&session, &mut control, true).await;
 
-    attendre(
-        &mut controle,
+    sleep_until_deadline(
+        &mut control,
         "the abandoned connection closing",
         async |c| {
-            let etat: Option<String> =
+            let state: Option<String> =
                 sqlx::query_scalar("SELECT state FROM pg_catalog.pg_stat_activity WHERE pid = $1")
-                    .bind(abandonne)
+                    .bind(abandoned)
                     .fetch_optional(c)
                     .await
                     .expect("reading pg_stat_activity");
-            etat.is_none().then_some(())
+            state.is_none().then_some(())
         },
     )
     .await;
-    let en_transaction: i64 = sqlx::query_scalar(
+    let in_transaction: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_catalog.pg_stat_activity \
          WHERE state LIKE 'idle in transaction%' AND datname = current_database() \
          AND pid <> pg_catalog.pg_backend_pid()",
     )
-    .fetch_one(&mut controle)
+    .fetch_one(&mut control)
     .await
     .expect("reading pg_stat_activity");
-    assert_eq!(en_transaction, 0, "no connection stays in a transaction");
+    assert_eq!(in_transaction, 0, "no connection stays in a transaction");
 
-    nettoyer_temoin(&mut controle).await;
-    let _ = controle.close().await;
+    drop_witness(&mut control).await;
+    let _ = control.close().await;
     Box::new(session).close().await.expect("closing");
 }
 
@@ -290,32 +290,32 @@ async fn a_database_set_to_off_reads_strings_like_the_splitter() {
     // R-1: on a database with `ALTER DATABASE … SET standard_conforming_strings =
     // off`, and even if the connection asks for it again in its parameters, the
     // probe must stay the read the classifier saw.
-    let Some((_, _, mut controle)) = banc(None, &[]).await else {
+    let Some((_, _, mut control)) = bench(None, &[]).await else {
         return;
     };
-    let _ = controle
-        .execute("DROP DATABASE IF EXISTS oxyn_etat_scs_off WITH (FORCE)")
+    let _ = control
+        .execute("DROP DATABASE IF EXISTS oxyn_state_scs_off WITH (FORCE)")
         .await;
-    controle
-        .execute("CREATE DATABASE oxyn_etat_scs_off")
+    control
+        .execute("CREATE DATABASE oxyn_state_scs_off")
         .await
         .expect("test database");
-    controle
-        .execute("ALTER DATABASE oxyn_etat_scs_off SET standard_conforming_strings = off")
+    control
+        .execute("ALTER DATABASE oxyn_state_scs_off SET standard_conforming_strings = off")
         .await
         .expect("database setting");
 
     {
-        let (preparation, _bassin, _) = banc(Some(BASE_OFF), &[]).await.expect("bench");
-        executer(
+        let (preparation, _pool, _) = bench(Some(BASE_OFF), &[]).await.expect("bench");
+        execute(
             &preparation,
-            "CREATE TABLE oxyn_etat_comptes (x int)",
+            "CREATE TABLE oxyn_state_accounts (x int)",
             false,
         )
         .await;
-        executer(
+        execute(
             &preparation,
-            "INSERT INTO oxyn_etat_comptes VALUES (1), (2), (3)",
+            "INSERT INTO oxyn_state_accounts VALUES (1), (2), (3)",
             false,
         )
         .await;
@@ -325,27 +325,27 @@ async fn a_database_set_to_off_reads_strings_like_the_splitter() {
         // A **fresh** session: no writable execution has gone through its
         // connection yet, so nothing but the opening can have set the setting.
         // Read it first, read-only, then send the probe as the first write.
-        let (session, _bassin, _) = banc(Some(BASE_OFF), &[("standard_conforming_strings", "off")])
+        let (session, _pool, _) = bench(Some(BASE_OFF), &[("standard_conforming_strings", "off")])
             .await
             .expect("bench");
         assert_eq!(
-            reglage(&session).await,
+            setting(&session).await,
             "on",
             "the connection must read strings like the splitter"
         );
-        executer(&session, SONDE, false).await;
+        execute(&session, PROBE, false).await;
         assert_eq!(
-            comptes(&session).await,
+            counts(&session).await,
             3,
             "the probe classified as a read must delete nothing"
         );
         Box::new(session).close().await.expect("closing");
     }
 
-    let _ = controle
-        .execute("DROP DATABASE IF EXISTS oxyn_etat_scs_off WITH (FORCE)")
+    let _ = control
+        .execute("DROP DATABASE IF EXISTS oxyn_state_scs_off WITH (FORCE)")
         .await;
-    let _ = controle.close().await;
+    let _ = control.close().await;
 }
 
 #[tokio::test]
@@ -354,38 +354,38 @@ async fn a_setting_typed_in_a_console_does_not_follow_the_connection() {
     // R-1, through the console: `SET standard_conforming_strings = off` run as
     // is by the user must not apply to the next execution on the same
     // connection.
-    let Some((session, _bassin, mut controle)) = banc(None, &[]).await else {
+    let Some((session, _pool, mut control)) = bench(None, &[]).await else {
         return;
     };
-    controle
+    control
         .execute(
-            "DROP TABLE IF EXISTS public.oxyn_etat_comptes; \
-             CREATE TABLE public.oxyn_etat_comptes (x int); \
-             INSERT INTO public.oxyn_etat_comptes VALUES (1), (2), (3)",
+            "DROP TABLE IF EXISTS public.oxyn_state_accounts; \
+             CREATE TABLE public.oxyn_state_accounts (x int); \
+             INSERT INTO public.oxyn_state_accounts VALUES (1), (2), (3)",
         )
         .await
         .expect("setup");
 
-    for reglage_tape in [
+    for typed_setting in [
         "SET standard_conforming_strings = off",
         "SELECT pg_catalog.set_config('standard_conforming_strings', 'off', false)",
     ] {
-        let avant = pid(&session).await;
-        executer(&session, reglage_tape, false).await;
+        let before = pid(&session).await;
+        execute(&session, typed_setting, false).await;
         assert_eq!(
             pid(&session).await,
-            avant,
+            before,
             "the connection reset to the default must return to the pool"
         );
-        assert_eq!(reglage(&session).await, "on", "after `{reglage_tape}`");
-        executer(&session, SONDE, false).await;
-        assert_eq!(comptes(&session).await, 3, "after `{reglage_tape}`");
+        assert_eq!(setting(&session).await, "on", "after `{typed_setting}`");
+        execute(&session, PROBE, false).await;
+        assert_eq!(counts(&session).await, 3, "after `{typed_setting}`");
     }
 
-    let _ = controle
-        .execute("DROP TABLE IF EXISTS public.oxyn_etat_comptes")
+    let _ = control
+        .execute("DROP TABLE IF EXISTS public.oxyn_state_accounts")
         .await;
-    let _ = controle.close().await;
+    let _ = control.close().await;
     Box::new(session).close().await.expect("closing");
 }
 
@@ -396,27 +396,26 @@ async fn a_search_path_typed_in_a_console_does_not_follow_the_connection() {
     // connection returns to the pool (same pid), but without that path.
     // Otherwise the next borrower — another console, introspection — would
     // resolve its names in someone else's schema.
-    let Some((session, _bassin, mut controle)) = banc(None, &[]).await else {
+    let Some((session, _pool, mut control)) = bench(None, &[]).await else {
         return;
     };
-    preparer_temoin(&mut controle).await;
+    prepare_witness(&mut control).await;
 
-    let avant = pid(&session).await;
-    executer(&session, "SET search_path TO oxyn_etat_console", false).await;
+    let before = pid(&session).await;
+    execute(&session, "SET search_path TO oxyn_state_console", false).await;
     assert_eq!(
         pid(&session).await,
-        avant,
+        before,
         "the connection reset to the default returns to the pool"
     );
-    let chemin =
-        premiere_valeur(&session, "SELECT pg_catalog.current_setting('search_path')").await;
+    let path = first_value(&session, "SELECT pg_catalog.current_setting('search_path')").await;
     assert!(
-        !chemin.contains(SCHEMA),
-        "the `search_path` typed in a console follows the connection: {chemin}"
+        !path.contains(SCHEMA),
+        "the `search_path` typed in a console follows the connection: {path}"
     );
 
-    nettoyer_temoin(&mut controle).await;
-    let _ = controle.close().await;
+    drop_witness(&mut control).await;
+    let _ = control.close().await;
     Box::new(session).close().await.expect("closing");
 }
 
@@ -426,57 +425,57 @@ async fn transaction_control_is_refused_before_the_server() {
     // Each transaction control statement is refused without anything going
     // out: neither a new connection, nor a query visible on the server. The
     // false friends, for their part, run.
-    let Some((session, bassin, mut controle)) = banc(None, &[]).await else {
+    let Some((session, pool, mut control)) = bench(None, &[]).await else {
         return;
     };
-    let pid_avant = pid(&session).await;
-    let connexions_avant = bassin.size();
+    let pid_before = pid(&session).await;
+    let connections_before = pool.size();
 
-    for texte in [
-        "BEGIN /* oxyn_refus_transaction */",
-        "START TRANSACTION /* oxyn_refus_transaction */",
-        "COMMIT /* oxyn_refus_transaction */",
-        "END /* oxyn_refus_transaction */",
-        "ROLLBACK /* oxyn_refus_transaction */",
-        "ABORT /* oxyn_refus_transaction */",
-        "SAVEPOINT s /* oxyn_refus_transaction */",
-        "RELEASE SAVEPOINT s /* oxyn_refus_transaction */",
-        "PREPARE TRANSACTION 'x' /* oxyn_refus_transaction */",
+    for text in [
+        "BEGIN /* oxyn_refused_transaction */",
+        "START TRANSACTION /* oxyn_refused_transaction */",
+        "COMMIT /* oxyn_refused_transaction */",
+        "END /* oxyn_refused_transaction */",
+        "ROLLBACK /* oxyn_refused_transaction */",
+        "ABORT /* oxyn_refused_transaction */",
+        "SAVEPOINT s /* oxyn_refused_transaction */",
+        "RELEASE SAVEPOINT s /* oxyn_refused_transaction */",
+        "PREPARE TRANSACTION 'x' /* oxyn_refused_transaction */",
     ] {
         match session
-            .execute(demande(texte, false), &CancelToken::new())
+            .execute(exec_request(text, false), &CancelToken::new())
             .await
         {
-            Ok(_) => panic!("`{texte}` must be refused before sending"),
-            Err(erreur) => assert!(
-                erreur
+            Ok(_) => panic!("`{text}` must be refused before sending"),
+            Err(error) => assert!(
+                error
                     .to_string()
                     .contains("each statement commits on its own"),
-                "`{texte}`: {erreur}"
+                "`{text}`: {error}"
             ),
         }
     }
 
-    let vues: i64 = sqlx::query_scalar(
+    let seen_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pg_catalog.pg_stat_activity \
-         WHERE query LIKE '%oxyn_refus_transaction%' AND pid <> pg_catalog.pg_backend_pid()",
+         WHERE query LIKE '%oxyn_refused_transaction%' AND pid <> pg_catalog.pg_backend_pid()",
     )
-    .fetch_one(&mut controle)
+    .fetch_one(&mut control)
     .await
     .expect("reading pg_stat_activity");
-    assert_eq!(vues, 0, "no refused statement must reach the server");
-    assert_eq!(bassin.size(), connexions_avant, "no new connection");
+    assert_eq!(seen_count, 0, "no refused statement must reach the server");
+    assert_eq!(pool.size(), connections_before, "no new connection");
     assert_eq!(
         pid(&session).await,
-        pid_avant,
+        pid_before,
         "the previous connection is still in use"
     );
 
     // The false friends run.
-    assert_eq!(executer(&session, "SELECT 'BEGIN'", true).await, 1);
-    executer(&session, "DO $$ BEGIN PERFORM 1; END $$", false).await;
+    assert_eq!(execute(&session, "SELECT 'BEGIN'", true).await, 1);
+    execute(&session, "DO $$ BEGIN PERFORM 1; END $$", false).await;
 
-    let _ = controle.close().await;
+    let _ = control.close().await;
     Box::new(session).close().await.expect("closing");
 }
 
@@ -488,52 +487,52 @@ async fn a_transaction_opened_in_a_console_does_not_return_to_the_pool() {
     // connection —, the connection is closed, neither returned in a transaction
     // nor undone by an implicit `ROLLBACK`. The capability is declared here to
     // reach that path, which the refusal makes unreachable today.
-    let Some((mut session, _bassin, mut controle)) = banc(None, &[]).await else {
+    let Some((mut session, _pool, mut control)) = bench(None, &[]).await else {
         return;
     };
     session.declare_for_test(oxyn_core::Capabilities::TRANSACTIONS);
 
-    for ouverture in [
+    for opening in [
         "BEGIN",
-        "/* ouvre */ start transaction isolation level serializable",
+        "/* opens */ start transaction isolation level serializable",
     ] {
-        let ouvrante: i32 = pid(&session).await.parse().expect("a pid");
-        executer(&session, ouverture, false).await;
-        attendre(
-            &mut controle,
+        let opener: i32 = pid(&session).await.parse().expect("a pid");
+        execute(&session, opening, false).await;
+        sleep_until_deadline(
+            &mut control,
             "the connection in a transaction closing",
             async |c| {
-                let etat: Option<String> = sqlx::query_scalar(
+                let state: Option<String> = sqlx::query_scalar(
                     "SELECT state FROM pg_catalog.pg_stat_activity WHERE pid = $1",
                 )
-                .bind(ouvrante)
+                .bind(opener)
                 .fetch_optional(c)
                 .await
                 .expect("reading pg_stat_activity");
-                etat.is_none().then_some(())
+                state.is_none().then_some(())
             },
         )
         .await;
-        let suivante: i32 = pid(&session).await.parse().expect("a pid");
-        assert_ne!(suivante, ouvrante, "after `{ouverture}`");
-        let en_transaction: i64 = sqlx::query_scalar(
+        let next: i32 = pid(&session).await.parse().expect("a pid");
+        assert_ne!(next, opener, "after `{opening}`");
+        let in_transaction: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_catalog.pg_stat_activity \
              WHERE state LIKE 'idle in transaction%' AND datname = current_database() \
              AND pid <> pg_catalog.pg_backend_pid()",
         )
-        .fetch_one(&mut controle)
+        .fetch_one(&mut control)
         .await
         .expect("reading pg_stat_activity");
-        assert_eq!(en_transaction, 0, "after `{ouverture}`");
+        assert_eq!(in_transaction, 0, "after `{opening}`");
     }
 
-    let _ = controle.close().await;
+    let _ = control.close().await;
     Box::new(session).close().await.expect("closing");
 }
 
 /// `standard_conforming_strings` on the connection the session borrows.
-async fn reglage(session: &PostgresSession) -> String {
-    premiere_valeur(
+async fn setting(session: &PostgresSession) -> String {
+    first_value(
         session,
         "SELECT pg_catalog.current_setting('standard_conforming_strings')",
     )
@@ -541,33 +540,33 @@ async fn reglage(session: &PostgresSession) -> String {
 }
 
 async fn pid(session: &PostgresSession) -> String {
-    premiere_valeur(session, "SELECT pg_catalog.pg_backend_pid()::text").await
+    first_value(session, "SELECT pg_catalog.pg_backend_pid()::text").await
 }
 
-async fn comptes(session: &PostgresSession) -> i64 {
-    premiere_valeur(session, "SELECT count(*)::text FROM oxyn_etat_comptes")
+async fn counts(session: &PostgresSession) -> i64 {
+    first_value(session, "SELECT count(*)::text FROM oxyn_state_accounts")
         .await
         .parse()
         .expect("a count")
 }
 
 /// The first text value of a read.
-async fn premiere_valeur(session: &PostgresSession, sql: &str) -> String {
+async fn first_value(session: &PostgresSession, sql: &str) -> String {
     use arrow::array::{Array, StringArray};
-    let mut curseur = session
-        .execute(demande(sql, true), &CancelToken::new())
+    let mut cursor = session
+        .execute(exec_request(sql, true), &CancelToken::new())
         .await
         .expect("read");
-    let mut valeur = None;
-    while let Some(lot) = curseur.next_batch().await.expect("stream") {
-        if valeur.is_none() && lot.num_rows() > 0 {
-            let colonne = lot
+    let mut value = None;
+    while let Some(batch) = cursor.next_batch().await.expect("stream") {
+        if value.is_none() && batch.num_rows() > 0 {
+            let column = batch
                 .column(0)
                 .as_any()
                 .downcast_ref::<StringArray>()
                 .expect("a text column");
-            valeur = Some(colonne.value(0).to_owned());
+            value = Some(column.value(0).to_owned());
         }
     }
-    valeur.expect("a row")
+    value.expect("a row")
 }

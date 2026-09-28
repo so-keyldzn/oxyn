@@ -284,35 +284,35 @@ mod tests {
         let path = CatalogPath::for_relation(None, Some("db\"; --"), "ta\"ble")
             .expect("legal hostile identifiers");
         let shape = PreviewShape {
-            sort: vec![PreviewSort::ascending("col\"onne")],
+            sort: vec![PreviewSort::ascending("col\"umn")],
             ..PreviewShape::default()
         };
-        let request = request(&path, 200, &shape, &facts(&[("col\"onne", false)])).expect("sort");
+        let request = request(&path, 200, &shape, &facts(&[("col\"umn", false)])).expect("sort");
         assert_eq!(
             request.text,
-            "SELECT * FROM \"db\"\"; --\".\"ta\"\"ble\" ORDER BY \"col\"\"onne\" ASC LIMIT 200"
+            "SELECT * FROM \"db\"\"; --\".\"ta\"\"ble\" ORDER BY \"col\"\"umn\" ASC LIMIT 200"
         );
     }
 
     #[test]
     fn an_unknown_sort_column_is_refused_before_the_engine() {
         let shape = PreviewShape {
-            sort: vec![PreviewSort::ascending("absente")],
+            sort: vec![PreviewSort::ascending("missing")],
             ..PreviewShape::default()
         };
-        let erreur = compose(&shape, &facts(&[("id", true)])).expect_err("refus attendu");
-        refus_permanent(&erreur);
+        let refused_with = compose(&shape, &facts(&[("id", true)])).expect_err("expected refusal");
+        assert_permanent_refusal(&refused_with);
     }
 
     /// A column the relation does not declare will not reappear on the next
     /// attempt: the error is permanent, never `Transient`.
-    fn refus_permanent(erreur: &OxynError) {
+    fn assert_permanent_refusal(refused_with: &OxynError) {
         assert!(
-            matches!(erreur, OxynError::Query(message) if message.contains("absente")),
-            "{erreur}"
+            matches!(refused_with, OxynError::Query(message) if message.contains("missing")),
+            "{refused_with}"
         );
-        assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
-        assert!(!erreur.is_retryable(), "{erreur}");
+        assert_eq!(refused_with.class(), oxyn_core::ErrorClass::Permanent);
+        assert!(!refused_with.is_retryable(), "{refused_with}");
     }
 
     #[test]
@@ -322,19 +322,19 @@ mod tests {
             offset: 200,
             ..PreviewShape::default()
         };
-        let erreur =
-            compose(&shape, &facts(&[("name", false)])).expect_err("pagination impossible");
-        let OxynError::NotSupported { capability } = &erreur else {
-            panic!("refus attendu, obtenu {erreur}");
+        let refused_with =
+            compose(&shape, &facts(&[("name", false)])).expect_err("no pagination possible");
+        let OxynError::NotSupported { capability } = &refused_with else {
+            panic!("expected refusal, got {refused_with}");
         };
         assert!(capability.contains("unique key"), "{capability}");
         // The same relation stays viewable on its first page: that is today's
         // preview, and it has lost nothing.
-        let premiere = PreviewShape {
+        let first_page = PreviewShape {
             sort: vec![PreviewSort::ascending("name")],
             ..PreviewShape::default()
         };
-        assert!(compose(&premiere, &facts(&[("name", false)])).is_ok());
+        assert!(compose(&first_page, &facts(&[("name", false)])).is_ok());
     }
 
     #[test]
@@ -417,18 +417,19 @@ mod tests {
 
     #[test]
     fn an_unknown_projected_column_or_an_empty_projection_is_refused() {
-        let absente = PreviewShape {
-            columns: Some(vec!["id".into(), "absente".into()]),
+        let missing = PreviewShape {
+            columns: Some(vec!["id".into(), "missing".into()]),
             ..PreviewShape::default()
         };
-        let erreur = compose(&absente, &facts(&[("id", true)])).expect_err("refus attendu");
-        refus_permanent(&erreur);
-        let vide = PreviewShape {
+        let refused_with =
+            compose(&missing, &facts(&[("id", true)])).expect_err("expected refusal");
+        assert_permanent_refusal(&refused_with);
+        let no_columns = PreviewShape {
             columns: Some(Vec::new()),
             ..PreviewShape::default()
         };
         assert!(matches!(
-            compose(&vide, &facts(&[("id", true)])),
+            compose(&no_columns, &facts(&[("id", true)])),
             Err(OxynError::Config(_))
         ));
     }

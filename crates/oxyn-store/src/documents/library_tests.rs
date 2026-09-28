@@ -23,7 +23,7 @@ fn setup() -> (Store, WorkspaceId, QueryDocumentUpdate) {
 
 /// The mark **reaches the list**, without opening the document body.
 ///
-/// [UX-SPEC](../../../docs/UX-SPEC.md) wants it "on the tab **and in the
+/// [UX-SPEC](../../../../docs/UX-SPEC.md) wants it "on the tab **and in the
 /// library**". It was only on the tab: `DocumentSummary` carried no provenance
 /// field, so the list could not show it even if it wanted to. Yet the library
 /// is where a text is read again next year, which is exactly the case ADR-0023
@@ -33,7 +33,7 @@ fn the_list_says_what_an_agent_wrote_without_opening_bodies() {
     let (store, workspace, mut update) = setup();
     let cancel = CancelToken::new();
 
-    update.title = "Écrit par un agent".into();
+    update.title = "Written by an agent".into();
     update.provenance = Some(oxyn_core::Provenance::new(
         oxyn_core::AgentId::new(),
         oxyn_core::AgentSessionId::new(),
@@ -45,11 +45,11 @@ fn the_list_says_what_an_agent_wrote_without_opening_bodies() {
         .update_query(workspace, &update, &cancel)
         .expect("write the proposal");
 
-    let mut a_la_main = setup().2;
-    a_la_main.title = "Écrit à la main".into();
+    let mut by_hand = setup().2;
+    by_hand.title = "Written by hand".into();
     store
         .documents()
-        .update_query(workspace, &a_la_main, &cancel)
+        .update_query(workspace, &by_hand, &cancel)
         .expect("write the user's document");
 
     let page = store
@@ -57,20 +57,20 @@ fn the_list_says_what_an_agent_wrote_without_opening_bodies() {
         .page(workspace, &DocumentFilter::default(), &cancel)
         .expect("read the page");
 
-    let marque = page
+    let marked = page
         .entries
         .iter()
-        .find(|entree| entree.title == "Écrit par un agent")
+        .find(|entry| entry.title == "Written by an agent")
         .expect("the agent's document is in the page");
-    let sien = page
+    let its_own = page
         .entries
         .iter()
-        .find(|entree| entree.title == "Écrit à la main")
+        .find(|entry| entry.title == "Written by hand")
         .expect("the user's document is in the page");
 
-    assert!(marque.from_agent, "the list must be able to carry the mark");
+    assert!(marked.from_agent, "the list must be able to carry the mark");
     assert!(
-        !sien.from_agent,
+        !its_own.from_agent,
         "and never invent it: over-marking would pass off a text the user \
          typed themselves as written by an agent"
     );
@@ -86,7 +86,7 @@ fn the_list_says_what_an_agent_wrote_without_opening_bodies() {
 fn an_agent_proposal_is_marked_and_survives_autosave() {
     let (store, workspace, mut update) = setup();
     let cancel = CancelToken::new();
-    let origine = oxyn_core::Provenance::new(
+    let origin = oxyn_core::Provenance::new(
         oxyn_core::AgentId::new(),
         oxyn_core::AgentSessionId::new(),
         oxyn_core::AiProviderKind::Anthropic,
@@ -94,31 +94,34 @@ fn an_agent_proposal_is_marked_and_survives_autosave() {
     );
 
     // The agent proposes, and the console records through the versioned path.
-    update.text = "SELECT count(*) FROM clients".into();
-    update.provenance = Some(origine.clone());
+    update.text = "SELECT count(*) FROM customers".into();
+    update.provenance = Some(origin.clone());
     let document = store
         .documents()
         .update_query(workspace, &update, &cancel)
         .expect("write the proposal");
     assert_eq!(
         document.provenance.as_ref(),
-        Some(&origine),
+        Some(&origin),
         "a text proposed by an agent carries its mark from its first write"
     );
 
     // Then the user types over it: the autosave carries no provenance, and
     // it must not erase the one already there.
     update.revision = 2;
-    update.text = "SELECT count(*) FROM clients WHERE actif".into();
+    update.text = "SELECT count(*) FROM customers WHERE active".into();
     update.provenance = None;
     let document = store
         .documents()
         .update_query(workspace, &update, &cancel)
         .expect("autosave");
-    assert_eq!(document.content, "SELECT count(*) FROM clients WHERE actif");
+    assert_eq!(
+        document.content,
+        "SELECT count(*) FROM customers WHERE active"
+    );
     assert_eq!(
         document.provenance.as_ref(),
-        Some(&origine),
+        Some(&origin),
         "an absent provenance means \"nothing new\", not \"nobody\""
     );
 }

@@ -17,22 +17,22 @@ sys.path.insert(0, str(Path(__file__).parent))
 import protocole_hook as p  # noqa: E402
 
 
-def principal() -> None:
-    evenement = p.lire_evenement()
-    if evenement.get("tool_name") not in ("Write", "Edit", "MultiEdit"):
+def main() -> None:
+    event = p.read_event()
+    if event.get("tool_name") not in ("Write", "Edit", "MultiEdit"):
         p.laisser_passer()
 
-    chemin = p.chemin_outil(evenement)
-    if not chemin.endswith(".rs") or not Path(chemin).is_file():
+    path_str = p.tool_path(event)
+    if not path_str.endswith(".rs") or not Path(path_str).is_file():
         p.laisser_passer()
 
-    outil = shutil.which("rustfmt")
-    if not outil:
+    tool = shutil.which("rustfmt")
+    if not tool:
         p.laisser_passer()
 
     try:
         subprocess.run(
-            [outil, "--edition", "2024", chemin],
+            [tool, "--edition", "2024", path_str],
             capture_output=True,
             timeout=20,
             check=False,
@@ -44,7 +44,7 @@ def principal() -> None:
 
 if __name__ == "__main__":
     try:
-        principal()
+        main()
     except SystemExit:
         raise
     except Exception:

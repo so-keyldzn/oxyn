@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn the_persisted_shape_of_a_stop_reason_is_frozen() {
-        for (raison, attendu) in [
+        for (reason, expected) in [
             (StopReason::EndTurn, json!("EndTurn")),
             (StopReason::MaxTokens, json!("MaxTokens")),
             (StopReason::ToolCalls, json!("ToolCalls")),
@@ -331,44 +331,45 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                serde_json::to_value(&raison).expect("serialization"),
-                attendu,
-                "{raison:?}"
+                serde_json::to_value(&reason).expect("serialization"),
+                expected,
+                "{reason:?}"
             );
-            let relue: StopReason = serde_json::from_value(attendu).expect("deserialization");
-            assert_eq!(relue, raison);
+            let read_back: StopReason = serde_json::from_value(expected).expect("deserialization");
+            assert_eq!(read_back, reason);
         }
     }
 
     #[test]
     fn the_persisted_shape_of_a_reasoning_block_is_frozen() {
-        for (bloc, attendu) in [
+        for (block, expected) in [
             (
-                ReasoningBlock::summarized("je compte", Some("SIG".to_owned())),
-                json!({"kind": "summarized", "text": "je compte", "signature": "SIG"}),
+                ReasoningBlock::summarized("I am counting", Some("SIG".to_owned())),
+                json!({"kind": "summarized", "text": "I am counting", "signature": "SIG"}),
             ),
             (
                 ReasoningBlock::summarized("", None),
                 json!({"kind": "summarized", "text": "", "signature": null}),
             ),
             (
-                ReasoningBlock::redacted("CHIFFRE"),
-                json!({"kind": "redacted", "data": "CHIFFRE"}),
+                ReasoningBlock::redacted("CIPHERTEXT"),
+                json!({"kind": "redacted", "data": "CIPHERTEXT"}),
             ),
         ] {
             assert_eq!(
-                serde_json::to_value(&bloc).expect("serialization"),
-                attendu,
-                "{bloc:?}"
+                serde_json::to_value(&block).expect("serialization"),
+                expected,
+                "{block:?}"
             );
-            let relu: ReasoningBlock = serde_json::from_value(attendu).expect("deserialization");
-            assert_eq!(relu, bloc);
+            let read_back: ReasoningBlock =
+                serde_json::from_value(expected).expect("deserialization");
+            assert_eq!(read_back, block);
         }
     }
 
     #[test]
     fn the_serialized_shape_of_a_role_is_frozen() {
-        for (role, attendu) in [
+        for (role, expected) in [
             (Role::System, "system"),
             (Role::User, "user"),
             (Role::Assistant, "assistant"),
@@ -376,11 +377,11 @@ mod tests {
         ] {
             assert_eq!(
                 serde_json::to_value(role).expect("serialization"),
-                json!(attendu)
+                json!(expected)
             );
             assert_eq!(
                 role.as_str(),
-                attendu,
+                expected,
                 "the wire name and the serde shape coincide"
             );
         }
@@ -414,7 +415,7 @@ mod tests {
         assert!(StopReason::Interrupted.is_ambiguous());
         assert!(StopReason::Interrupted.is_truncated());
 
-        for certaine in [
+        for certain in [
             StopReason::EndTurn,
             StopReason::MaxTokens,
             StopReason::StopSequence,
@@ -428,8 +429,8 @@ mod tests {
             StopReason::Unspecified,
         ] {
             assert!(
-                !certaine.is_ambiguous(),
-                "{certaine:?}: the turn's fate is known, or the caller decided"
+                !certain.is_ambiguous(),
+                "{certain:?}: the turn's fate is known, or the caller decided"
             );
         }
     }
@@ -457,9 +458,9 @@ mod tests {
 
     #[test]
     fn an_encrypted_block_has_nothing_to_show() {
-        let bloc = ReasoningBlock::redacted("EncRypTeD");
-        assert!(bloc.is_redacted());
-        assert_eq!(bloc.display_text(), None);
+        let block = ReasoningBlock::redacted("EncRypTeD");
+        assert!(block.is_redacted());
+        assert_eq!(block.display_text(), None);
     }
 
     #[test]
@@ -467,22 +468,22 @@ mod tests {
         // The common case when the caller did not ask to see the reasoning:
         // the block arrives without text and must still be sent back on the
         // next turn.
-        let bloc = ReasoningBlock::summarized("", Some("sig".to_owned()));
-        assert_eq!(bloc.display_text(), None);
-        assert!(!bloc.is_redacted());
+        let block = ReasoningBlock::summarized("", Some("sig".to_owned()));
+        assert_eq!(block.display_text(), None);
+        assert!(!block.is_redacted());
     }
 
     #[test]
     fn the_debug_does_not_copy_the_opaque_payload() {
-        let rendu = format!(
+        let rendered = format!(
             "{:?}",
-            ReasoningBlock::summarized("j'additionne", Some("SIGNATURE_TRES_LONGUE".to_owned()))
+            ReasoningBlock::summarized("adding it up", Some("VERY_LONG_SIGNATURE".to_owned()))
         );
-        assert!(!rendu.contains("SIGNATURE_TRES_LONGUE"), "{rendu}");
-        assert!(rendu.contains("j'additionne"), "{rendu}");
+        assert!(!rendered.contains("VERY_LONG_SIGNATURE"), "{rendered}");
+        assert!(rendered.contains("adding it up"), "{rendered}");
 
-        let chiffre = format!("{:?}", ReasoningBlock::redacted("CHARGE_CHIFFREE"));
-        assert!(!chiffre.contains("CHARGE_CHIFFREE"), "{chiffre}");
-        assert!(chiffre.contains("opaque"), "{chiffre}");
+        let encrypted = format!("{:?}", ReasoningBlock::redacted("ENCRYPTED_PAYLOAD"));
+        assert!(!encrypted.contains("ENCRYPTED_PAYLOAD"), "{encrypted}");
+        assert!(encrypted.contains("opaque"), "{encrypted}");
     }
 }

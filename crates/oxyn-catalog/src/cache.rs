@@ -54,14 +54,14 @@ mod listing;
 /// refuses it —, so it never collides with a real name. That is what lets
 /// MySQL ("no catalog level") and a really named PostgreSQL database occupy the
 /// same tree without stepping on each other.
-const PALIER_ABSENT: &str = "";
+const MISSING_TIER: &str = "";
 
 const MAX_DEFINITIONS: usize = 16;
 const MAX_DEFINITION_BYTES: usize = 16 * 1024 * 1024;
 
 /// The node key matching an optional level name.
-fn cle(nom: Option<&str>) -> &str {
-    nom.unwrap_or(PALIER_ABSENT)
+fn map_key(ident: Option<&str>) -> &str {
+    ident.unwrap_or(MISSING_TIER)
 }
 
 fn definition_bytes(definition: &RelationDefinition) -> usize {
@@ -74,11 +74,11 @@ fn definition_bytes(definition: &RelationDefinition) -> usize {
 }
 
 /// The level name matching a node key.
-fn depuis_cle(valeur: &str) -> Option<String> {
-    if valeur.is_empty() {
+fn from_key(raw_value: &str) -> Option<String> {
+    if raw_value.is_empty() {
         None
     } else {
-        Some(valeur.to_owned())
+        Some(raw_value.to_owned())
     }
 }
 
@@ -201,7 +201,7 @@ impl Freshness {
             Self::Never => false,
             Self::Invalidated => true,
             Self::Fetched(instant) => match TimeDelta::from_std(ttl) {
-                Ok(limite) => now.signed_duration_since(*instant) > limite,
+                Ok(limit) => now.signed_duration_since(*instant) > limit,
                 // A lifetime beyond `chrono`'s bounds (more than ~584
                 // millennia) makes nothing stale. The other direction would
                 // re-introspect in a loop on an aberrant value.
@@ -385,16 +385,16 @@ impl CatalogScope {
         ) {
             return self == other;
         }
-        let Some(prefixe) = self.path() else {
+        let Some(prefix) = self.path() else {
             return true;
         };
-        let Some(cible) = other.path() else {
+        let Some(target) = other.path() else {
             return false;
         };
         if other.level() < self.level() {
             return false;
         }
-        cible.starts_with(prefixe)
+        target.starts_with(prefix)
     }
 }
 
@@ -402,7 +402,7 @@ impl std::fmt::Display for CatalogScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.path() {
             None => f.write_str("server"),
-            Some(chemin) => write!(f, "{} {chemin}", self.level()),
+            Some(item_path) => write!(f, "{} {item_path}", self.level()),
         }
     }
 }
@@ -443,26 +443,26 @@ impl CatalogCache {
     /// authoritative on its level. Those that remain keep their subtree, hence
     /// their freshness.
     pub fn set_catalogs(&mut self, catalogs: Vec<CatalogRef>) {
-        let mut ancien = std::mem::take(&mut self.catalogs.value);
-        let mut nouveau = IndexMap::with_capacity(catalogs.len());
+        let mut previous = std::mem::take(&mut self.catalogs.value);
+        let mut fresh = IndexMap::with_capacity(catalogs.len());
         for info in catalogs {
-            let cle_noeud = info.name().to_owned();
+            let node_key = info.name().to_owned();
             // `swap_remove` and not `shift_remove`: the original map is thrown
             // away, and an ordered removal would cost one walk per element —
             // quadratic on a server with a thousand databases.
-            let noeud = match ancien.swap_remove(&cle_noeud) {
-                Some(mut existant) => {
-                    existant.info = Some(info);
-                    existant
+            let tree_node = match previous.swap_remove(&node_key) {
+                Some(mut existing) => {
+                    existing.info = Some(info);
+                    existing
                 }
                 None => CatalogNode {
                     info: Some(info),
                     namespaces: Cached::default(),
                 },
             };
-            nouveau.insert(cle_noeud, noeud);
+            fresh.insert(node_key, tree_node);
         }
-        self.catalogs.set(nouveau);
+        self.catalogs.set(fresh);
     }
 
     /// Records the namespaces of a catalog, or of the server when `catalog` is
@@ -473,25 +473,25 @@ impl CatalogCache {
     /// tree therefore cannot diverge.
     pub fn set_namespaces(&mut self, catalog: Option<&str>, namespaces: Vec<NamespaceRef>) {
         let parent = CatalogPath::from_validated(catalog.map(str::to_owned), None, None);
-        let noeud = self.catalog_node_mut(catalog);
-        let mut ancien = std::mem::take(&mut noeud.namespaces.value);
-        let mut nouveau = IndexMap::with_capacity(namespaces.len());
+        let tree_node = self.catalog_node_mut(catalog);
+        let mut previous = std::mem::take(&mut tree_node.namespaces.value);
+        let mut fresh = IndexMap::with_capacity(namespaces.len());
         for mut info in namespaces {
             info.reparent(parent.clone());
-            let cle_noeud = info.name().to_owned();
-            let enfant = match ancien.swap_remove(&cle_noeud) {
-                Some(mut existant) => {
-                    existant.info = Some(info);
-                    existant
+            let node_key = info.name().to_owned();
+            let child = match previous.swap_remove(&node_key) {
+                Some(mut existing) => {
+                    existing.info = Some(info);
+                    existing
                 }
                 None => NamespaceNode {
                     info: Some(info),
                     relations: Cached::default(),
                 },
             };
-            nouveau.insert(cle_noeud, enfant);
+            fresh.insert(node_key, child);
         }
-        noeud.namespaces.set(nouveau);
+        tree_node.namespaces.set(fresh);
     }
 
     /// Records the relations of a namespace.
@@ -510,22 +510,22 @@ impl CatalogCache {
             return Err(CacheError::NotANamespace);
         }
         let parent = namespace.clone();
-        let noeud = self.namespace_node_mut(namespace);
-        let mut ancien = std::mem::take(&mut noeud.relations.value);
-        let mut nouveau = IndexMap::with_capacity(relations.len());
+        let tree_node = self.namespace_node_mut(namespace);
+        let mut previous = std::mem::take(&mut tree_node.relations.value);
+        let mut fresh = IndexMap::with_capacity(relations.len());
         for mut summary in relations {
             summary.reparent(parent.clone());
-            let cle_noeud = summary.name().to_owned();
-            let enfant = match ancien.swap_remove(&cle_noeud) {
-                Some(mut existant) => {
-                    existant.summary = summary;
-                    existant
+            let node_key = summary.name().to_owned();
+            let child = match previous.swap_remove(&node_key) {
+                Some(mut existing) => {
+                    existing.summary = summary;
+                    existing
                 }
                 None => RelationNode::new(summary),
             };
-            nouveau.insert(cle_noeud, enfant);
+            fresh.insert(node_key, child);
         }
-        noeud.relations.set(nouveau);
+        tree_node.relations.set(fresh);
         Ok(())
     }
 
@@ -549,8 +549,8 @@ impl CatalogCache {
     ) -> Result<(), CacheError> {
         crate::nesting::bound(&mut relation.fields);
         let kind = relation.kind;
-        let noeud = self.relation_node_or_create(path, kind)?;
-        noeud.detail.set(Some(relation));
+        let tree_node = self.relation_node_or_create(path, kind)?;
+        tree_node.detail.set(Some(relation));
         Ok(())
     }
 
@@ -703,7 +703,7 @@ impl CatalogCache {
         self.catalogs
             .value
             .values()
-            .filter_map(|noeud| noeud.info.as_ref())
+            .filter_map(|tree_node| tree_node.info.as_ref())
     }
 
     /// The namespaces of a catalog. Empty iterator if the catalog is unknown —
@@ -712,27 +712,27 @@ impl CatalogCache {
     pub fn namespaces(&self, catalog: Option<&str>) -> impl Iterator<Item = &NamespaceRef> + '_ {
         self.catalogs
             .value
-            .get(cle(catalog))
-            .map(|noeud| noeud.namespaces.value.values())
+            .get(map_key(catalog))
+            .map(|tree_node| tree_node.namespaces.value.values())
             .into_iter()
             .flatten()
-            .filter_map(|noeud| noeud.info.as_ref())
+            .filter_map(|tree_node| tree_node.info.as_ref())
     }
 
     /// The relations of a namespace. Empty iterator if the namespace is
     /// unknown.
     pub fn relations(&self, namespace: &CatalogPath) -> impl Iterator<Item = &RelationRef> + '_ {
         self.namespace_node(namespace)
-            .map(|noeud| noeud.relations.value.values())
+            .map(|tree_node| tree_node.relations.value.values())
             .into_iter()
             .flatten()
-            .map(|noeud| &noeud.summary)
+            .map(|tree_node| &tree_node.summary)
     }
 
     /// The summary of a relation.
     #[must_use]
     pub fn relation_summary(&self, path: &CatalogPath) -> Option<&RelationRef> {
-        self.relation_node(path).map(|noeud| &noeud.summary)
+        self.relation_node(path).map(|tree_node| &tree_node.summary)
     }
 
     /// The description of a relation, if it was requested.
@@ -768,7 +768,7 @@ impl CatalogCache {
             .value
             .values()
             .flat_map(|catalogue| catalogue.namespaces.value.values())
-            .flat_map(|espace| espace.relations.value.values())
+            .flat_map(|space| space.relations.value.values())
             .map(|relation| (&relation.summary, relation.detail.value.as_ref()))
     }
 
@@ -792,17 +792,17 @@ impl CatalogCache {
     pub fn freshness(&self, scope: &CatalogScope) -> Freshness {
         match scope {
             CatalogScope::Server => self.catalogs.freshness,
-            CatalogScope::Catalog(chemin) => self
+            CatalogScope::Catalog(item_path) => self
                 .catalogs
                 .value
-                .get(cle(chemin.catalog()))
-                .map_or(Freshness::Never, |noeud| noeud.namespaces.freshness),
-            CatalogScope::Namespace(chemin) => self
-                .namespace_node(chemin)
-                .map_or(Freshness::Never, |noeud| noeud.relations.freshness),
-            CatalogScope::Relation(chemin) => self
-                .relation_node(chemin)
-                .map_or(Freshness::Never, |noeud| noeud.detail.freshness),
+                .get(map_key(item_path.catalog()))
+                .map_or(Freshness::Never, |tree_node| tree_node.namespaces.freshness),
+            CatalogScope::Namespace(item_path) => self
+                .namespace_node(item_path)
+                .map_or(Freshness::Never, |tree_node| tree_node.relations.freshness),
+            CatalogScope::Relation(item_path) => self
+                .relation_node(item_path)
+                .map_or(Freshness::Never, |tree_node| tree_node.detail.freshness),
             CatalogScope::Constraints(path) => self
                 .relation_node(path)
                 .map_or(Freshness::Never, |node| node.constraints.freshness),
@@ -840,42 +840,41 @@ impl CatalogCache {
             return vec![CatalogScope::Server];
         }
 
-        let mut perimes = Vec::new();
-        for (cle_catalogue, catalogue) in &self.catalogs.value {
-            let chemin_catalogue =
-                CatalogPath::from_validated(depuis_cle(cle_catalogue), None, None);
+        let mut stale_ones = Vec::new();
+        for (catalog_key, catalogue) in &self.catalogs.value {
+            let catalog_path = CatalogPath::from_validated(from_key(catalog_key), None, None);
             if catalogue.namespaces.freshness.is_stale_at(now, ttl) {
-                perimes.push(CatalogScope::Catalog(chemin_catalogue));
+                stale_ones.push(CatalogScope::Catalog(catalog_path));
                 continue;
             }
-            for (cle_espace, espace) in &catalogue.namespaces.value {
-                if espace.relations.freshness.is_stale_at(now, ttl) {
-                    perimes.push(CatalogScope::Namespace(CatalogPath::from_validated(
-                        depuis_cle(cle_catalogue),
-                        depuis_cle(cle_espace),
+            for (space_key, space) in &catalogue.namespaces.value {
+                if space.relations.freshness.is_stale_at(now, ttl) {
+                    stale_ones.push(CatalogScope::Namespace(CatalogPath::from_validated(
+                        from_key(catalog_key),
+                        from_key(space_key),
                         None,
                     )));
                     continue;
                 }
-                for relation in espace.relations.value.values() {
+                for relation in space.relations.value.values() {
                     if relation.is_stale_at(now, ttl) {
-                        perimes.push(CatalogScope::Relation(relation.summary.path()));
+                        stale_ones.push(CatalogScope::Relation(relation.summary.path()));
                     } else {
                         if relation.constraints.freshness.is_stale_at(now, ttl) {
-                            perimes.push(CatalogScope::Constraints(relation.summary.path()));
+                            stale_ones.push(CatalogScope::Constraints(relation.summary.path()));
                         }
                         if relation.incoming_keys.freshness.is_stale_at(now, ttl) {
-                            perimes
+                            stale_ones
                                 .push(CatalogScope::IncomingForeignKeys(relation.summary.path()));
                         }
                         if relation.definition.freshness.is_stale_at(now, ttl) {
-                            perimes.push(CatalogScope::Definition(relation.summary.path()));
+                            stale_ones.push(CatalogScope::Definition(relation.summary.path()));
                         }
                     }
                 }
             }
         }
-        perimes
+        stale_ones
     }
 
     // ── Invalidation ────────────────────────────────────────────────────────
@@ -896,14 +895,14 @@ impl CatalogCache {
                     Self::invalidate_catalog(catalogue);
                 }
             }
-            CatalogScope::Catalog(chemin) => {
-                if let Some(catalogue) = self.catalogs.value.get_mut(cle(chemin.catalog())) {
+            CatalogScope::Catalog(item_path) => {
+                if let Some(catalogue) = self.catalogs.value.get_mut(map_key(item_path.catalog())) {
                     Self::invalidate_catalog(catalogue);
                 }
             }
-            CatalogScope::Namespace(chemin) => {
-                if let Some(espace) = self.namespace_node_mut_opt(chemin) {
-                    Self::invalidate_namespace(espace);
+            CatalogScope::Namespace(item_path) => {
+                if let Some(space) = self.namespace_node_mut_opt(item_path) {
+                    Self::invalidate_namespace(space);
                 }
             }
             CatalogScope::Constraints(path) => {
@@ -921,8 +920,8 @@ impl CatalogCache {
                     node.definition.freshness.invalidate();
                 }
             }
-            CatalogScope::Relation(chemin) => {
-                if let Some(relation) = self.relation_node_mut_opt(chemin) {
+            CatalogScope::Relation(item_path) => {
+                if let Some(relation) = self.relation_node_mut_opt(item_path) {
                     relation.invalidate();
                 }
             }
@@ -943,16 +942,18 @@ impl CatalogCache {
         tracing::debug!(scope = %scope, "catalog cache entry removed");
         match scope {
             CatalogScope::Server => *self = Self::new(),
-            CatalogScope::Catalog(chemin) => {
-                self.catalogs.value.shift_remove(cle(chemin.catalog()));
+            CatalogScope::Catalog(item_path) => {
+                self.catalogs
+                    .value
+                    .shift_remove(map_key(item_path.catalog()));
                 self.catalogs.freshness.invalidate();
             }
-            CatalogScope::Namespace(chemin) => {
-                if let Some(catalogue) = self.catalogs.value.get_mut(cle(chemin.catalog())) {
+            CatalogScope::Namespace(item_path) => {
+                if let Some(catalogue) = self.catalogs.value.get_mut(map_key(item_path.catalog())) {
                     catalogue
                         .namespaces
                         .value
-                        .shift_remove(cle(chemin.namespace()));
+                        .shift_remove(map_key(item_path.namespace()));
                     catalogue.namespaces.freshness.invalidate();
                 }
             }
@@ -971,13 +972,13 @@ impl CatalogCache {
                     node.definition = Cached::default();
                 }
             }
-            CatalogScope::Relation(chemin) => {
-                let Some(nom_relation) = chemin.relation().map(str::to_owned) else {
+            CatalogScope::Relation(item_path) => {
+                let Some(relation_name) = item_path.relation().map(str::to_owned) else {
                     return;
                 };
-                if let Some(espace) = self.namespace_node_mut_opt(chemin) {
-                    espace.relations.value.shift_remove(nom_relation.as_str());
-                    espace.relations.freshness.invalidate();
+                if let Some(space) = self.namespace_node_mut_opt(item_path) {
+                    space.relations.value.shift_remove(relation_name.as_str());
+                    space.relations.freshness.invalidate();
                 }
             }
         }
@@ -997,7 +998,7 @@ impl CatalogCache {
         match scope {
             CatalogScope::Server => *self = Self::new(),
             CatalogScope::Catalog(path) => {
-                let key = cle(path.catalog());
+                let key = map_key(path.catalog());
                 if self.catalogs.freshness == Freshness::Never {
                     self.catalogs.value.shift_remove(key);
                 } else if let Some(catalog) = self.catalogs.value.get_mut(key) {
@@ -1005,10 +1006,10 @@ impl CatalogCache {
                 }
             }
             CatalogScope::Namespace(path) => {
-                let Some(catalog) = self.catalogs.value.get_mut(cle(path.catalog())) else {
+                let Some(catalog) = self.catalogs.value.get_mut(map_key(path.catalog())) else {
                     return;
                 };
-                let key = cle(path.namespace());
+                let key = map_key(path.namespace());
                 if catalog.namespaces.freshness == Freshness::Never {
                     catalog.namespaces.value.shift_remove(key);
                 } else if let Some(namespace) = catalog.namespaces.value.get_mut(key) {
@@ -1046,14 +1047,14 @@ impl CatalogCache {
 
     fn invalidate_catalog(catalogue: &mut CatalogNode) {
         catalogue.namespaces.freshness.invalidate();
-        for espace in catalogue.namespaces.value.values_mut() {
-            Self::invalidate_namespace(espace);
+        for space in catalogue.namespaces.value.values_mut() {
+            Self::invalidate_namespace(space);
         }
     }
 
-    fn invalidate_namespace(espace: &mut NamespaceNode) {
-        espace.relations.freshness.invalidate();
-        for relation in espace.relations.value.values_mut() {
+    fn invalidate_namespace(space: &mut NamespaceNode) {
+        space.relations.freshness.invalidate();
+        for relation in space.relations.value.values_mut() {
             relation.invalidate();
         }
     }
@@ -1061,32 +1062,35 @@ impl CatalogCache {
     fn namespace_node(&self, path: &CatalogPath) -> Option<&NamespaceNode> {
         self.catalogs
             .value
-            .get(cle(path.catalog()))?
+            .get(map_key(path.catalog()))?
             .namespaces
             .value
-            .get(cle(path.namespace()))
+            .get(map_key(path.namespace()))
     }
 
     fn namespace_node_mut_opt(&mut self, path: &CatalogPath) -> Option<&mut NamespaceNode> {
         self.catalogs
             .value
-            .get_mut(cle(path.catalog()))?
+            .get_mut(map_key(path.catalog()))?
             .namespaces
             .value
-            .get_mut(cle(path.namespace()))
+            .get_mut(map_key(path.namespace()))
     }
 
     fn relation_node(&self, path: &CatalogPath) -> Option<&RelationNode> {
-        let nom_relation = path.relation()?;
-        self.namespace_node(path)?.relations.value.get(nom_relation)
+        let relation_name = path.relation()?;
+        self.namespace_node(path)?
+            .relations
+            .value
+            .get(relation_name)
     }
 
     fn relation_node_mut_opt(&mut self, path: &CatalogPath) -> Option<&mut RelationNode> {
-        let nom_relation = path.relation()?.to_owned();
+        let relation_name = path.relation()?.to_owned();
         self.namespace_node_mut_opt(path)?
             .relations
             .value
-            .get_mut(nom_relation.as_str())
+            .get_mut(relation_name.as_str())
     }
 
     /// The node of an **already known** relation.
@@ -1107,10 +1111,10 @@ impl CatalogCache {
     /// carry a child, it does not claim to have been listed. Its `info` stays
     /// `None` when the level is missing.
     fn catalog_node_mut(&mut self, catalog: Option<&str>) -> &mut CatalogNode {
-        let info = catalog.map(|nom| CatalogRef::validated(nom.to_owned()));
+        let info = catalog.map(|ident| CatalogRef::validated(ident.to_owned()));
         self.catalogs
             .value
-            .entry(cle(catalog).to_owned())
+            .entry(map_key(catalog).to_owned())
             .or_insert_with(|| CatalogNode {
                 info,
                 namespaces: Cached::default(),
@@ -1122,12 +1126,12 @@ impl CatalogCache {
         let parent = CatalogPath::from_validated(path.catalog().map(str::to_owned), None, None);
         let info = path
             .namespace()
-            .map(|nom| NamespaceRef::validated(parent, nom.to_owned()));
-        let cle_noeud = cle(path.namespace()).to_owned();
+            .map(|ident| NamespaceRef::validated(parent, ident.to_owned()));
+        let node_key = map_key(path.namespace()).to_owned();
         self.catalog_node_mut(path.catalog())
             .namespaces
             .value
-            .entry(cle_noeud)
+            .entry(node_key)
             .or_insert_with(|| NamespaceNode {
                 info,
                 relations: Cached::default(),
@@ -1143,7 +1147,7 @@ impl CatalogCache {
         path: &CatalogPath,
         kind: RelationKind,
     ) -> Result<&mut RelationNode, CacheError> {
-        let Some(nom_relation) = path.relation().map(str::to_owned) else {
+        let Some(relation_name) = path.relation().map(str::to_owned) else {
             return Err(CacheError::NotARelation);
         };
         let parent = CatalogPath::from_validated(
@@ -1151,13 +1155,13 @@ impl CatalogCache {
             path.namespace().map(str::to_owned),
             None,
         );
-        let resume = RelationRef::validated(parent, nom_relation.clone(), kind);
+        let rel_summary = RelationRef::validated(parent, relation_name.clone(), kind);
         Ok(self
             .namespace_node_mut(path)
             .relations
             .value
-            .entry(nom_relation)
-            .or_insert_with(|| RelationNode::new(resume)))
+            .entry(relation_name)
+            .or_insert_with(|| RelationNode::new(rel_summary)))
     }
 }
 
@@ -1169,14 +1173,14 @@ mod tests {
     use crate::DefinitionSource;
     use crate::model::{ConstraintKind, Field, LogicalType};
 
-    const HEURE: Duration = Duration::from_secs(3600);
+    const HOUR: Duration = Duration::from_secs(3600);
 
-    fn chemin(catalogue: Option<&str>, espace: Option<&str>, relation: &str) -> CatalogPath {
-        CatalogPath::for_relation(catalogue, espace, relation).expect("valid path")
+    fn item_path(catalogue: Option<&str>, space: Option<&str>, relation: &str) -> CatalogPath {
+        CatalogPath::for_relation(catalogue, space, relation).expect("valid path")
     }
 
-    fn espace_public() -> CatalogPath {
-        CatalogPath::for_namespace(Some("caisse"), "public").expect("valid path")
+    fn public_space() -> CatalogPath {
+        CatalogPath::for_namespace(Some("sales"), "public").expect("valid path")
     }
 
     fn cache_postgres() -> CatalogCache {
@@ -1186,23 +1190,21 @@ mod tests {
             "17.2",
             Capabilities::SQL | Capabilities::SCHEMAS,
         ));
-        cache.set_catalogs(vec![CatalogRef::new("caisse").expect("valid")]);
+        cache.set_catalogs(vec![CatalogRef::new("sales").expect("valid")]);
         cache.set_namespaces(
-            Some("caisse"),
+            Some("sales"),
             vec![
-                NamespaceRef::new(CatalogPath::for_catalog("caisse").expect("valid"), "public")
+                NamespaceRef::new(CatalogPath::for_catalog("sales").expect("valid"), "public")
                     .expect("valid"),
             ],
         );
-        let espace = espace_public();
+        let space = public_space();
         cache
             .set_relations(
-                &espace,
+                &space,
                 vec![
-                    RelationRef::new(espace.clone(), "clients", RelationKind::Table)
-                        .expect("valid"),
-                    RelationRef::new(espace.clone(), "commandes", RelationKind::Table)
-                        .expect("valid"),
+                    RelationRef::new(space.clone(), "clients", RelationKind::Table).expect("valid"),
+                    RelationRef::new(space.clone(), "orders", RelationKind::Table).expect("valid"),
                 ],
             )
             .expect("a namespace is indeed a namespace");
@@ -1212,7 +1214,7 @@ mod tests {
     #[test]
     fn eviction_drops_contents_but_keeps_the_node_its_parent_listed() {
         let mut cache = cache_postgres();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
             .expect("relation");
@@ -1229,18 +1231,18 @@ mod tests {
             Freshness::Never
         );
 
-        let espace = espace_public();
-        cache.evict(&CatalogScope::Namespace(espace.clone()));
-        assert_eq!(cache.relations(&espace).count(), 0);
-        assert_eq!(cache.namespaces(Some("caisse")).count(), 1);
+        let space = public_space();
+        cache.evict(&CatalogScope::Namespace(space.clone()));
+        assert_eq!(cache.relations(&space).count(), 0);
+        assert_eq!(cache.namespaces(Some("sales")).count(), 1);
         assert_eq!(
-            cache.freshness(&CatalogScope::Namespace(espace)),
+            cache.freshness(&CatalogScope::Namespace(space)),
             Freshness::Never
         );
 
-        let catalogue = CatalogPath::for_catalog("caisse").expect("valid");
+        let catalogue = CatalogPath::for_catalog("sales").expect("valid");
         cache.evict(&CatalogScope::Catalog(catalogue));
-        assert_eq!(cache.namespaces(Some("caisse")).count(), 0);
+        assert_eq!(cache.namespaces(Some("sales")).count(), 0);
         assert_eq!(cache.catalogs().count(), 1);
         assert!(cache.server_info().is_some());
     }
@@ -1248,8 +1250,8 @@ mod tests {
     #[test]
     fn eviction_removes_a_relation_no_listing_carries() {
         let mut cache = CatalogCache::new();
-        let direct = chemin(None, Some("main"), "opened_from_a_tab");
-        let narrow = chemin(None, Some("main"), "with_constraints");
+        let direct = item_path(None, Some("main"), "opened_from_a_tab");
+        let narrow = item_path(None, Some("main"), "with_constraints");
         for path in [&direct, &narrow] {
             cache
                 .set_relation(path, Relation::new("t", RelationKind::Table))
@@ -1346,7 +1348,7 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.server_info(), None);
         assert!(
-            cache.stale(HEURE).is_empty(),
+            cache.stale(HOUR).is_empty(),
             "a level never read is absent, not stale"
         );
     }
@@ -1355,8 +1357,8 @@ mod tests {
     fn the_tree_fills_level_by_level() {
         let cache = cache_postgres();
         assert_eq!(cache.catalogs().count(), 1);
-        assert_eq!(cache.namespaces(Some("caisse")).count(), 1);
-        assert_eq!(cache.relations(&espace_public()).count(), 2);
+        assert_eq!(cache.namespaces(Some("sales")).count(), 1);
+        assert_eq!(cache.relations(&public_space()).count(), 2);
         assert_eq!(cache.relation_count(), 2);
         assert_eq!(
             cache.server_info().map(ToString::to_string).as_deref(),
@@ -1367,12 +1369,12 @@ mod tests {
     #[test]
     fn querying_an_unknown_node_returns_empty_not_an_error() {
         let cache = cache_postgres();
-        assert_eq!(cache.namespaces(Some("inexistant")).count(), 0);
-        let ailleurs = CatalogPath::for_namespace(Some("caisse"), "inexistant").expect("valid");
-        assert_eq!(cache.relations(&ailleurs).count(), 0);
+        assert_eq!(cache.namespaces(Some("nonexistent")).count(), 0);
+        let elsewhere = CatalogPath::for_namespace(Some("sales"), "nonexistent").expect("valid");
+        assert_eq!(cache.relations(&elsewhere).count(), 0);
         assert!(
             cache
-                .relation(&chemin(Some("caisse"), Some("public"), "absente"))
+                .relation(&item_path(Some("sales"), Some("public"), "absent"))
                 .is_none()
         );
     }
@@ -1382,7 +1384,7 @@ mod tests {
         // The search case: a table is described without its schema being
         // listed.
         let mut cache = CatalogCache::new();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
             .expect("the path names a relation");
@@ -1390,7 +1392,7 @@ mod tests {
         assert!(cache.relation(&table).is_some());
         assert_eq!(cache.relation_count(), 1);
         assert!(
-            cache.stale(HEURE).is_empty(),
+            cache.stale(HOUR).is_empty(),
             "the parents created on the way were never read: they are not stale"
         );
     }
@@ -1400,11 +1402,11 @@ mod tests {
         // The kind comes from the description, never from a default: a MongoDB
         // collection displayed as a table would be a wrong interface surface.
         let mut cache = CatalogCache::new();
-        let collection = chemin(None, Some("boutique"), "commandes");
+        let collection = item_path(None, Some("boutique"), "orders");
         cache
             .set_relation(
                 &collection,
-                Relation::new("commandes", RelationKind::Collection),
+                Relation::new("orders", RelationKind::Collection),
             )
             .expect("valid");
         assert_eq!(
@@ -1418,13 +1420,13 @@ mod tests {
         let mut cache = CatalogCache::new();
         let err = cache
             .set_relation(
-                &espace_public(),
+                &public_space(),
                 Relation::new("clients", RelationKind::Table),
             )
             .expect_err("a namespace is not a relation");
         assert_eq!(err, CacheError::NotARelation);
 
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         assert_eq!(
             cache
                 .set_relations(&table, Vec::new())
@@ -1437,7 +1439,7 @@ mod tests {
     fn attaching_indexes_to_an_unknown_relation_is_refused() {
         // Creating it here would force guessing its kind.
         let mut cache = CatalogCache::new();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         assert_eq!(
             cache
                 .set_indexes(&table, Vec::new())
@@ -1449,7 +1451,7 @@ mod tests {
     #[test]
     fn relisting_keeps_the_details_of_remaining_relations() {
         let mut cache = cache_postgres();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache
             .set_relation(
                 &table,
@@ -1462,13 +1464,12 @@ mod tests {
             )
             .expect("valid");
 
-        let espace = espace_public();
+        let space = public_space();
         cache
             .set_relations(
-                &espace,
+                &space,
                 vec![
-                    RelationRef::new(espace.clone(), "clients", RelationKind::Table)
-                        .expect("valid"),
+                    RelationRef::new(space.clone(), "clients", RelationKind::Table).expect("valid"),
                 ],
             )
             .expect("valid");
@@ -1479,7 +1480,7 @@ mod tests {
         );
         assert!(
             cache
-                .relation(&chemin(Some("caisse"), Some("public"), "commandes"))
+                .relation(&item_path(Some("sales"), Some("public"), "orders"))
                 .is_none(),
             "a relation missing from the fresh listing disappears"
         );
@@ -1491,19 +1492,19 @@ mod tests {
         // MySQL has no catalog level. The "missing level" node must not
         // collide with a really named catalog.
         let mut cache = CatalogCache::new();
-        let espace_mysql = CatalogPath::for_namespace(None, "caisse").expect("valid");
+        let mysql_space = CatalogPath::for_namespace(None, "sales").expect("valid");
         cache
             .set_relations(
-                &espace_mysql,
+                &mysql_space,
                 vec![
-                    RelationRef::new(espace_mysql.clone(), "clients", RelationKind::Table)
+                    RelationRef::new(mysql_space.clone(), "clients", RelationKind::Table)
                         .expect("valid"),
                 ],
             )
             .expect("valid");
 
-        assert_eq!(cache.relations(&espace_mysql).count(), 1);
-        let sous_catalogue = CatalogPath::for_namespace(Some("caisse"), "caisse").expect("valid");
+        assert_eq!(cache.relations(&mysql_space).count(), 1);
+        let sous_catalogue = CatalogPath::for_namespace(Some("sales"), "sales").expect("valid");
         assert_eq!(cache.relations(&sous_catalogue).count(), 0);
         assert_eq!(
             cache.catalogs().count(),
@@ -1516,18 +1517,18 @@ mod tests {
     fn an_intermediate_hole_can_be_navigated() {
         // Neo4j: catalog + relation, without a namespace.
         let mut cache = CatalogCache::new();
-        let base = CatalogPath::for_catalog("graphe").expect("valid");
+        let base = CatalogPath::for_catalog("graph").expect("valid");
         cache
             .set_relations(
                 &base,
                 vec![
-                    RelationRef::new(base.clone(), "Personne", RelationKind::NodeLabel)
+                    RelationRef::new(base.clone(), "Person", RelationKind::NodeLabel)
                         .expect("valid"),
                 ],
             )
             .expect("a catalog is an acceptable parent");
 
-        let label = chemin(Some("graphe"), None, "Personne");
+        let label = item_path(Some("graph"), None, "Person");
         assert!(cache.relation_summary(&label).is_some());
         assert_eq!(cache.relations(&base).count(), 1);
         assert_eq!(
@@ -1539,7 +1540,7 @@ mod tests {
     #[test]
     fn what_was_not_read_differs_from_what_is_empty() {
         let mut cache = cache_postgres();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         assert!(
             cache.indexes(&table).is_none(),
             "\"not read\" is not \"no index\""
@@ -1554,12 +1555,12 @@ mod tests {
     fn staleness_follows_the_lifetime() {
         let cache = cache_postgres();
         assert!(
-            cache.stale(HEURE).is_empty(),
+            cache.stale(HOUR).is_empty(),
             "the listings were just written"
         );
-        let perimes = cache.stale_at(Utc::now() + TimeDelta::hours(2), HEURE);
+        let stale_ones = cache.stale_at(Utc::now() + TimeDelta::hours(2), HOUR);
         assert_eq!(
-            perimes,
+            stale_ones,
             vec![CatalogScope::Server],
             "the returned scope is minimal"
         );
@@ -1568,23 +1569,23 @@ mod tests {
     #[test]
     fn staleness_returns_a_minimal_set() {
         let mut cache = cache_postgres();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
             .expect("valid");
 
         cache.invalidate(&CatalogScope::Relation(table.clone()));
         assert_eq!(
-            cache.stale(HEURE),
+            cache.stale(HOUR),
             vec![CatalogScope::Relation(table)],
             "only the invalidated relation is to be reread"
         );
 
         // Invalidating the namespace above absorbs the relation: refreshing the
         // parent refreshes the child.
-        let espace = espace_public();
-        cache.invalidate(&CatalogScope::Namespace(espace.clone()));
-        assert_eq!(cache.stale(HEURE), vec![CatalogScope::Namespace(espace)]);
+        let space = public_space();
+        cache.invalidate(&CatalogScope::Namespace(space.clone()));
+        assert_eq!(cache.stale(HOUR), vec![CatalogScope::Namespace(space)]);
     }
 
     #[test]
@@ -1592,7 +1593,7 @@ mod tests {
         // The tree stays readable during the reread: emptying it at the first
         // ALTER TABLE would make it flicker.
         let mut cache = cache_postgres();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
             .expect("valid");
@@ -1603,13 +1604,13 @@ mod tests {
             cache.freshness(&CatalogScope::Relation(table.clone())),
             Freshness::Invalidated
         );
-        assert!(cache.stale(HEURE).contains(&CatalogScope::Relation(table)));
+        assert!(cache.stale(HOUR).contains(&CatalogScope::Relation(table)));
     }
 
     #[test]
     fn an_invalidation_descends_into_the_subtree() {
         let mut cache = cache_postgres();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
             .expect("valid");
@@ -1620,17 +1621,17 @@ mod tests {
             Freshness::Invalidated,
             "the server invalidation reaches the leaves"
         );
-        assert_eq!(cache.stale(HEURE), vec![CatalogScope::Server]);
+        assert_eq!(cache.stale(HOUR), vec![CatalogScope::Server]);
     }
 
     #[test]
     fn invalidating_what_was_never_read_does_not_make_it_appear() {
         let mut cache = cache_postgres();
         // The relation is in the listing, but was never described.
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache.invalidate(&CatalogScope::Relation(table));
         assert!(
-            cache.stale(HEURE).is_empty(),
+            cache.stale(HOUR).is_empty(),
             "invalidating a description never requested does not put it to work"
         );
     }
@@ -1640,17 +1641,17 @@ mod tests {
         // After a DROP TABLE, the schema's listing became wrong: leaving it
         // fresh would make the table reappear at the next refresh.
         let mut cache = cache_postgres();
-        let table = chemin(Some("caisse"), Some("public"), "clients");
+        let table = item_path(Some("sales"), Some("public"), "clients");
         cache.forget(&CatalogScope::Relation(table.clone()));
 
         assert_eq!(cache.relation_summary(&table), None);
         assert_eq!(cache.relation_count(), 1);
-        let espace = espace_public();
+        let space = public_space();
         assert_eq!(
-            cache.freshness(&CatalogScope::Namespace(espace.clone())),
+            cache.freshness(&CatalogScope::Namespace(space.clone())),
             Freshness::Invalidated
         );
-        assert_eq!(cache.stale(HEURE), vec![CatalogScope::Namespace(espace)]);
+        assert_eq!(cache.stale(HOUR), vec![CatalogScope::Namespace(space)]);
     }
 
     #[test]
@@ -1662,28 +1663,27 @@ mod tests {
 
     #[test]
     fn a_scope_covers_its_descendants() {
-        let table = chemin(Some("caisse"), Some("public"), "clients");
-        let espace = espace_public();
-        let catalogue = CatalogPath::for_catalog("caisse").expect("valid");
+        let table = item_path(Some("sales"), Some("public"), "clients");
+        let space = public_space();
+        let catalogue = CatalogPath::for_catalog("sales").expect("valid");
 
         assert!(CatalogScope::Server.contains(&CatalogScope::Relation(table.clone())));
         assert!(
             CatalogScope::Catalog(catalogue.clone())
-                .contains(&CatalogScope::Namespace(espace.clone()))
+                .contains(&CatalogScope::Namespace(space.clone()))
         );
         assert!(
-            CatalogScope::Namespace(espace.clone())
-                .contains(&CatalogScope::Relation(table.clone()))
+            CatalogScope::Namespace(space.clone()).contains(&CatalogScope::Relation(table.clone()))
         );
 
-        assert!(!CatalogScope::Relation(table).contains(&CatalogScope::Namespace(espace)));
+        assert!(!CatalogScope::Relation(table).contains(&CatalogScope::Namespace(space)));
         assert!(!CatalogScope::Catalog(catalogue).contains(&CatalogScope::Server));
     }
 
     #[test]
     fn a_scope_does_not_cover_a_sibling() {
-        let a = CatalogScope::Namespace(espace_public());
-        let b = CatalogScope::Relation(chemin(Some("caisse"), Some("archives"), "clients"));
+        let a = CatalogScope::Namespace(public_space());
+        let b = CatalogScope::Relation(item_path(Some("sales"), Some("archives"), "clients"));
         assert!(!a.contains(&b));
     }
 
@@ -1694,7 +1694,7 @@ mod tests {
             CatalogScope::Server
         );
         assert_eq!(
-            CatalogScope::of(&chemin(Some("c"), Some("n"), "r")).level(),
+            CatalogScope::of(&item_path(Some("c"), Some("n"), "r")).level(),
             CatalogLevel::Relation
         );
     }
@@ -1704,7 +1704,7 @@ mod tests {
         let cache = cache_postgres();
         assert!(
             cache
-                .stale_at(Utc::now() - TimeDelta::hours(48), HEURE)
+                .stale_at(Utc::now() - TimeDelta::hours(48), HOUR)
                 .is_empty(),
             "an instant before the read does not make the node stale"
         );
@@ -1712,8 +1712,8 @@ mod tests {
 
     #[test]
     fn the_rendering_of_a_scope_names_the_level() {
-        let scope = CatalogScope::Relation(chemin(Some("caisse"), Some("public"), "clients"));
-        assert_eq!(scope.to_string(), "relation caisse.public.clients");
+        let scope = CatalogScope::Relation(item_path(Some("sales"), Some("public"), "clients"));
+        assert_eq!(scope.to_string(), "relation sales.public.clients");
         assert_eq!(CatalogScope::Server.to_string(), "server");
     }
 
@@ -1729,7 +1729,7 @@ mod tests {
     fn bounded_definition_eviction_preserves_relation_details() {
         let mut cache = CatalogCache::new();
         let paths: Vec<_> = (0..17)
-            .map(|index| chemin(None, Some("main"), &format!("relation_{index}")))
+            .map(|index| item_path(None, Some("main"), &format!("relation_{index}")))
             .collect();
         for path in &paths[..16] {
             cache
@@ -1793,7 +1793,7 @@ mod tests {
     fn definition_size_limit_counts_sql_and_notes() {
         let mut cache = CatalogCache::new();
         let paths: Vec<_> = (0..16)
-            .map(|index| chemin(None, Some("main"), &format!("large_{index}")))
+            .map(|index| item_path(None, Some("main"), &format!("large_{index}")))
             .collect();
         for path in &paths {
             cache
@@ -1806,7 +1806,7 @@ mod tests {
                 .set_definition(path, definition_fixture(1_048_576, vec![]))
                 .expect("definition");
         }
-        let extra = chemin(None, Some("main"), "with_notes");
+        let extra = item_path(None, Some("main"), "with_notes");
         cache
             .set_relation(&extra, Relation::new("with_notes", RelationKind::Table))
             .expect("relation");
@@ -1829,7 +1829,7 @@ mod tests {
     fn invalidated_definitions_remain_evictable_and_bounded() {
         let mut cache = CatalogCache::new();
         let paths: Vec<_> = (0..16)
-            .map(|index| chemin(None, Some("main"), &format!("invalidated_{index}")))
+            .map(|index| item_path(None, Some("main"), &format!("invalidated_{index}")))
             .collect();
         for path in &paths {
             cache
@@ -1843,7 +1843,7 @@ mod tests {
                 .expect("definition");
             cache.invalidate(&CatalogScope::Definition(path.clone()));
         }
-        let extra = chemin(None, Some("main"), "after_invalidation");
+        let extra = item_path(None, Some("main"), "after_invalidation");
         cache
             .set_relation(
                 &extra,

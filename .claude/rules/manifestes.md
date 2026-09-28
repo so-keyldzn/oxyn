@@ -60,13 +60,13 @@ would be irreproducible locally: one would discover it exists by seeing it fail.
 
 The split carries the opposite risk: a target added to `qualite` and forgotten
 in the workflow would never run in CI. `make socle` refuses it
-(`controler_couverture_ci`). A new target of the gate is therefore added to both
+(`check_ci_coverage`). A new target of the gate is therefore added to both
 places in the same commit.
 
 On a pull request, the jobs of an untouched area are skipped
 ([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)); on
 `main`, everything runs. A new job that calls `make` is added to the `needs` of
-the aggregate `qualite` job (`controler_agregat_ci`), and a new top-level
+the aggregate `qualite` job (`check_ci_aggregate`), and a new top-level
 directory is classified in `script/zones-ci` — otherwise it triggers everything.
 
 ## Where the mechanizable prohibitions live

@@ -146,7 +146,7 @@ impl FromStr for PluginVersion {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         // Only decimal digits are accepted: `u32::from_str` would accept `+1`,
         // which would let `+1.0.0` pass for a version.
-        fn nombre(part: &str) -> std::result::Result<u32, IdParseError> {
+        fn number(part: &str) -> std::result::Result<u32, IdParseError> {
             if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
                 return Err(IdParseError::new(
                     "PluginVersion",
@@ -167,7 +167,7 @@ impl FromStr for PluginVersion {
                 "expected: `major.minor.patch`",
             ));
         };
-        Ok(Self::new(nombre(major)?, nombre(minor)?, nombre(patch)?))
+        Ok(Self::new(number(major)?, number(minor)?, number(patch)?))
     }
 }
 
@@ -324,14 +324,14 @@ impl Entrypoint {
                 "the path contains a control character",
             ));
         }
-        let candidat = Path::new(&path);
-        if candidat.is_absolute() || candidat.has_root() {
+        let candidate = Path::new(&path);
+        if candidate.is_absolute() || candidate.has_root() {
             return Err(IdParseError::new(
                 "Entrypoint",
                 "the path must be relative to the plugin directory",
             ));
         }
-        if !candidat
+        if !candidate
             .components()
             .all(|c| matches!(c, Component::Normal(_)))
         {
@@ -340,7 +340,7 @@ impl Entrypoint {
                 "the path can contain neither `.` nor `..`",
             ));
         }
-        if candidat.extension().and_then(std::ffi::OsStr::to_str) != Some("wasm") {
+        if candidate.extension().and_then(std::ffi::OsStr::to_str) != Some("wasm") {
             return Err(IdParseError::new(
                 "Entrypoint",
                 "an entrypoint is a `.wasm` component",
@@ -491,8 +491,8 @@ impl HostPort {
     /// `/`, `@`, a space.
     pub fn new(text: impl AsRef<str>) -> std::result::Result<Self, IdParseError> {
         let text = text.as_ref();
-        let (host, port) = if let Some(reste) = text.strip_prefix('[') {
-            let Some((host, port)) = reste.split_once("]:") else {
+        let (host, port) = if let Some(rest) = text.strip_prefix('[') {
+            let Some((host, port)) = rest.split_once("]:") else {
                 return Err(IdParseError::new(
                     "HostPort",
                     "malformed IPv6 address: expected `[address]:port`",
@@ -686,18 +686,18 @@ impl PluginPermissions {
     /// # Errors
     /// [`PluginError::InvalidManifest`] naming the faulty root.
     pub fn validate(&self, plugin: &str) -> Result<()> {
-        for racine in &self.filesystem {
-            if !racine.is_absolute() {
+        for root_dir in &self.filesystem {
+            if !root_dir.is_absolute() {
                 return Err(PluginError::invalid_manifest(
                     plugin,
                     format!(
                         "the file root `{}` must be absolute: \
                          a relative root cannot be shown to the user",
-                        racine.display()
+                        root_dir.display()
                     ),
                 ));
             }
-            if racine
+            if root_dir
                 .components()
                 .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
             {
@@ -706,7 +706,7 @@ impl PluginPermissions {
                     format!(
                         "the file root `{}` contains `.` or `..`: \
                          it does not designate what it shows",
-                        racine.display()
+                        root_dir.display()
                     ),
                 ));
             }
@@ -717,7 +717,9 @@ impl PluginPermissions {
     /// Is this network destination granted?
     #[must_use]
     pub fn allows_host(&self, host: &str, port: u16) -> bool {
-        self.network.iter().any(|accord| accord.matches(host, port))
+        self.network
+            .iter()
+            .any(|allowed| allowed.matches(host, port))
     }
 
     /// Is this path under a granted root?
@@ -735,7 +737,7 @@ impl PluginPermissions {
         }
         self.filesystem
             .iter()
-            .any(|racine| path.starts_with(racine))
+            .any(|root_dir| path.starts_with(root_dir))
     }
 
     /// What `self` asks for that `approved` did not grant, one line per
@@ -746,25 +748,25 @@ impl PluginPermissions {
     /// `exfiltration.example:443`" does.
     #[must_use]
     pub fn additions_over(&self, approved: &Self) -> Vec<String> {
-        let mut ajouts = Vec::new();
-        for accord in &self.network {
-            if !approved.network.contains(accord) {
-                ajouts.push(format!("the host `{accord}`"));
+        let mut additions = Vec::new();
+        for allowed in &self.network {
+            if !approved.network.contains(allowed) {
+                additions.push(format!("the host `{allowed}`"));
             }
         }
-        for racine in &self.filesystem {
+        for root_dir in &self.filesystem {
             if !approved
                 .filesystem
                 .iter()
-                .any(|accorde| racine.starts_with(accorde))
+                .any(|granted_perms| root_dir.starts_with(granted_perms))
             {
-                ajouts.push(format!("the root `{}`", racine.display()));
+                additions.push(format!("the root `{}`", root_dir.display()));
             }
         }
         if self.connections > approved.connections {
-            ajouts.push(format!("the connection access `{}`", self.connections));
+            additions.push(format!("the connection access `{}`", self.connections));
         }
-        ajouts
+        additions
     }
 
     /// Does `self` ask for nothing more than `other`?
@@ -791,27 +793,27 @@ impl PluginPermissions {
         if self.grants_nothing() {
             return vec!["asks for no permission".to_owned()];
         }
-        let mut lignes = Vec::new();
-        for accord in &self.network {
-            lignes.push(format!("reach the network: {accord}"));
+        let mut lines = Vec::new();
+        for allowed in &self.network {
+            lines.push(format!("reach the network: {allowed}"));
         }
-        for racine in &self.filesystem {
-            lignes.push(format!("read and write under: {}", racine.display()));
+        for root_dir in &self.filesystem {
+            lines.push(format!("read and write under: {}", root_dir.display()));
         }
         match self.connections {
             ConnectionAccess::Denied => {}
             ConnectionAccess::ReadOnly => {
-                lignes.push("ask for reads on your connections".to_owned());
+                lines.push("ask for reads on your connections".to_owned());
             }
             ConnectionAccess::ReadWrite => {
-                lignes.push(
+                lines.push(
                     "ask for reads and writes on your connections \
                      (each write remains subject to your approval)"
                         .to_owned(),
                 );
             }
         }
-        lignes
+        lines
     }
 }
 
@@ -1010,11 +1012,11 @@ mod tests {
     /// must work without the `wasm-host` feature.
     const AGENT_TOML: &str = r#"
 id          = "revue-schema"
-name        = "Revue de schéma"
+name        = "Schema review"
 version     = "1.0.0"
 api_version = "0.1.0"
 kind        = "agent"
-description = "Relit un schéma et propose des index."
+description = "Reviews a schema and suggests indexes."
 
 [permissions]
 connections = "read_only"
@@ -1046,15 +1048,15 @@ family       = "analytical"
 
     #[test]
     fn versions_round_trip() {
-        for texte in ["0.0.0", "0.1.0", "1.2.3", "10.20.30"] {
-            let version: PluginVersion = texte.parse().expect("valid version");
-            assert_eq!(version.to_string(), texte);
+        for raw_text in ["0.0.0", "0.1.0", "1.2.3", "10.20.30"] {
+            let version: PluginVersion = raw_text.parse().expect("valid version");
+            assert_eq!(version.to_string(), raw_text);
         }
     }
 
     #[test]
     fn an_off_template_version_is_refused() {
-        for texte in [
+        for raw_text in [
             "",
             "1",
             "1.2",
@@ -1067,8 +1069,8 @@ family       = "analytical"
             "1.2.3+build",
         ] {
             assert!(
-                texte.parse::<PluginVersion>().is_err(),
-                "{texte:?} should be refused"
+                raw_text.parse::<PluginVersion>().is_err(),
+                "{raw_text:?} should be refused"
             );
         }
     }
@@ -1077,24 +1079,24 @@ family       = "analytical"
     fn at_zero_point_x_every_minor_is_a_break() {
         // The contract has no third-party implementation: a plugin built on 0.1
         // can assume nothing of 0.2.
-        let hote = PluginVersion::new(0, 1, 0);
-        assert!(PluginVersion::new(0, 1, 0).is_compatible_with(&hote));
-        assert!(PluginVersion::new(0, 1, 7).is_compatible_with(&hote));
-        assert!(!PluginVersion::new(0, 2, 0).is_compatible_with(&hote));
-        assert!(!PluginVersion::new(0, 0, 9).is_compatible_with(&hote));
-        assert!(!PluginVersion::new(1, 1, 0).is_compatible_with(&hote));
+        let wasm_host = PluginVersion::new(0, 1, 0);
+        assert!(PluginVersion::new(0, 1, 0).is_compatible_with(&wasm_host));
+        assert!(PluginVersion::new(0, 1, 7).is_compatible_with(&wasm_host));
+        assert!(!PluginVersion::new(0, 2, 0).is_compatible_with(&wasm_host));
+        assert!(!PluginVersion::new(0, 0, 9).is_compatible_with(&wasm_host));
+        assert!(!PluginVersion::new(1, 1, 0).is_compatible_with(&wasm_host));
     }
 
     #[test]
     fn after_the_first_major_the_host_can_be_ahead_but_not_behind() {
-        let hote = PluginVersion::new(1, 4, 2);
-        assert!(PluginVersion::new(1, 2, 0).is_compatible_with(&hote));
-        assert!(PluginVersion::new(1, 4, 9).is_compatible_with(&hote));
+        let wasm_host = PluginVersion::new(1, 4, 2);
+        assert!(PluginVersion::new(1, 2, 0).is_compatible_with(&wasm_host));
+        assert!(PluginVersion::new(1, 4, 9).is_compatible_with(&wasm_host));
         assert!(
-            !PluginVersion::new(1, 5, 0).is_compatible_with(&hote),
+            !PluginVersion::new(1, 5, 0).is_compatible_with(&wasm_host),
             "the host does not provide the interfaces this plugin expects"
         );
-        assert!(!PluginVersion::new(2, 0, 0).is_compatible_with(&hote));
+        assert!(!PluginVersion::new(2, 0, 0).is_compatible_with(&wasm_host));
     }
 
     // ── Identifiers and paths ───────────────────────────────────────────────
@@ -1103,10 +1105,10 @@ family       = "analytical"
     fn a_plugin_identifier_cannot_designate_another_directory() {
         // This is the rule that matters: the identifier names a directory and
         // an approval key.
-        for nom in [
+        for ident in [
             "",
             "..",
-            "../voisin",
+            "../neighbor",
             "a/b",
             "a\\b",
             "Plugin",
@@ -1115,21 +1117,21 @@ family       = "analytical"
             "plug in",
             "plugin\0",
         ] {
-            assert!(PluginId::new(nom).is_err(), "{nom:?} should be refused");
+            assert!(PluginId::new(ident).is_err(), "{ident:?} should be refused");
         }
         assert!(PluginId::new("a".repeat(65)).is_err());
 
-        for nom in ["duckdb", "revue-schema", "export_parquet", "mongo2"] {
-            assert!(PluginId::new(nom).is_ok(), "{nom} should be accepted");
+        for ident in ["duckdb", "revue-schema", "export_parquet", "mongo2"] {
+            assert!(PluginId::new(ident).is_ok(), "{ident} should be accepted");
         }
     }
 
     #[test]
     fn an_entrypoint_does_not_leave_the_plugin_directory() {
-        for chemin in [
+        for item_path in [
             "",
             "/usr/lib/evil.wasm",
-            "../voisin/evil.wasm",
+            "../neighbor/evil.wasm",
             "./evil.wasm",
             "sous/../../evil.wasm",
             "..\\evil.wasm",
@@ -1138,8 +1140,8 @@ family       = "analytical"
             "evil.wasm\n",
         ] {
             assert!(
-                Entrypoint::new(chemin).is_err(),
-                "{chemin:?} should be refused"
+                Entrypoint::new(item_path).is_err(),
+                "{item_path:?} should be refused"
             );
         }
 
@@ -1157,30 +1159,40 @@ family       = "analytical"
         // ADR-0005. It is the test that protects the default: a permissive
         // default shows neither at compile time nor in review.
         let toml = r#"
-id          = "vide"
+id          = "empty"
 name        = "Sans permissions"
 version     = "1.0.0"
 api_version = "0.1.0"
 kind        = "export"
-entrypoint  = "vide.wasm"
+entrypoint  = "empty.wasm"
 "#;
-        let manifeste = PluginManifest::from_toml(toml).expect("valid manifest");
-        assert!(manifeste.permissions.grants_nothing());
-        assert_eq!(manifeste.permissions.connections, ConnectionAccess::Denied);
-        assert!(!manifeste.permissions.allows_host("example.com", 443));
-        assert!(!manifeste.permissions.allows_path(Path::new("/etc/passwd")));
-        assert_eq!(manifeste.permissions.summary(), ["asks for no permission"]);
+        let manifest_toml = PluginManifest::from_toml(toml).expect("valid manifest");
+        assert!(manifest_toml.permissions.grants_nothing());
+        assert_eq!(
+            manifest_toml.permissions.connections,
+            ConnectionAccess::Denied
+        );
+        assert!(!manifest_toml.permissions.allows_host("example.com", 443));
+        assert!(
+            !manifest_toml
+                .permissions
+                .allows_path(Path::new("/etc/passwd"))
+        );
+        assert_eq!(
+            manifest_toml.permissions.summary(),
+            ["asks for no permission"]
+        );
     }
 
     #[test]
     fn the_network_is_granted_host_by_host_and_port_by_port() {
-        let accord = HostPort::new("Db.Example.COM:5432").expect("valid host");
-        assert_eq!(accord.host(), "db.example.com");
-        assert_eq!(accord.port(), 5432);
-        assert!(accord.matches("DB.EXAMPLE.com", 5432));
-        assert!(!accord.matches("db.example.com", 5433));
+        let allowed = HostPort::new("Db.Example.COM:5432").expect("valid host");
+        assert_eq!(allowed.host(), "db.example.com");
+        assert_eq!(allowed.port(), 5432);
+        assert!(allowed.matches("DB.EXAMPLE.com", 5432));
+        assert!(!allowed.matches("db.example.com", 5433));
         assert!(
-            !accord.matches("evil.db.example.com", 5432),
+            !allowed.matches("evil.db.example.com", 5432),
             "a grant does not cover subdomains"
         );
     }
@@ -1188,7 +1200,7 @@ entrypoint  = "vide.wasm"
     #[test]
     fn a_network_wildcard_is_refused() {
         // "network access granted host by host, port by port" (ADR-0005).
-        for texte in [
+        for raw_text in [
             "*:443",
             "*.example.com:443",
             "0.0.0.0:443",
@@ -1200,10 +1212,13 @@ entrypoint  = "vide.wasm"
             "http://example.com:443",
             "user@example.com:443",
             "example.com/path:443",
-            "exemplé.fr:443",
-            "exemple.fr:44\u{200b}3",
+            "exämple.com:443",
+            "example.com:44\u{200b}3",
         ] {
-            assert!(HostPort::new(texte).is_err(), "{texte:?} should be refused");
+            assert!(
+                HostPort::new(raw_text).is_err(),
+                "{raw_text:?} should be refused"
+            );
         }
         assert!(HostPort::new("[::1]:6379").is_ok());
         assert_eq!(
@@ -1215,7 +1230,7 @@ entrypoint  = "vide.wasm"
     #[test]
     fn a_relative_or_dotted_file_permission_is_refused() {
         let mut permissions = PluginPermissions {
-            filesystem: vec![PathBuf::from("donnees")],
+            filesystem: vec![PathBuf::from("data")],
             ..PluginPermissions::default()
         };
         assert!(permissions.validate("x").is_err(), "relative root");
@@ -1223,7 +1238,7 @@ entrypoint  = "vide.wasm"
         permissions.filesystem = vec![PathBuf::from("/home/x/../../etc")];
         assert!(permissions.validate("x").is_err(), "root with `..`");
 
-        permissions.filesystem = vec![PathBuf::from("/home/x/donnees")];
+        permissions.filesystem = vec![PathBuf::from("/home/x/data")];
         permissions.validate("x").expect("absolute and clean root");
     }
 
@@ -1235,7 +1250,7 @@ entrypoint  = "vide.wasm"
             filesystem: vec![PathBuf::from("/data")],
             ..PluginPermissions::default()
         };
-        assert!(permissions.allows_path(Path::new("/data/rapport.csv")));
+        assert!(permissions.allows_path(Path::new("/data/report.csv")));
         assert!(!permissions.allows_path(Path::new("/data/../../etc/passwd")));
         assert!(!permissions.allows_path(Path::new("/etc/passwd")));
         assert!(!permissions.allows_path(Path::new("/database/secret")));
@@ -1243,46 +1258,46 @@ entrypoint  = "vide.wasm"
 
     #[test]
     fn widened_permissions_void_the_approval() {
-        let approuve = PluginPermissions {
+        let approved_perms = PluginPermissions {
             network: vec![HostPort::new("a.example:443").expect("host")],
             filesystem: vec![PathBuf::from("/data")],
             connections: ConnectionAccess::ReadOnly,
         };
 
         // Identical, or narrower: the approval holds.
-        assert!(approuve.is_subset_of(&approuve));
-        let plus_etroit = PluginPermissions {
+        assert!(approved_perms.is_subset_of(&approved_perms));
+        let narrower = PluginPermissions {
             network: Vec::new(),
             filesystem: vec![PathBuf::from("/data/sous-dossier")],
             connections: ConnectionAccess::Denied,
         };
-        assert!(plus_etroit.is_subset_of(&approuve));
+        assert!(narrower.is_subset_of(&approved_perms));
 
         // One more host, one more root, write on top: void.
-        for elargi in [
+        for widened in [
             PluginPermissions {
                 network: vec![
                     HostPort::new("a.example:443").expect("host"),
                     HostPort::new("exfiltration.example:443").expect("host"),
                 ],
-                ..approuve.clone()
+                ..approved_perms.clone()
             },
             PluginPermissions {
                 filesystem: vec![PathBuf::from("/data"), PathBuf::from("/home")],
-                ..approuve.clone()
+                ..approved_perms.clone()
             },
             PluginPermissions {
                 connections: ConnectionAccess::ReadWrite,
-                ..approuve.clone()
+                ..approved_perms.clone()
             },
             PluginPermissions {
                 network: vec![HostPort::new("a.example:8443").expect("host")],
-                ..approuve.clone()
+                ..approved_perms.clone()
             },
         ] {
             assert!(
-                !elargi.is_subset_of(&approuve),
-                "{elargi:?} widens the approval"
+                !widened.is_subset_of(&approved_perms),
+                "{widened:?} widens the approval"
             );
         }
     }
@@ -1316,25 +1331,28 @@ netwrok = ["example.com:443"]
             filesystem: vec![PathBuf::from("/data")],
             connections: ConnectionAccess::ReadWrite,
         };
-        let resume = permissions.summary();
-        assert_eq!(resume.len(), 3);
-        assert!(resume[0].contains("a.example:443"), "{resume:?}");
-        assert!(resume[1].contains("/data"), "{resume:?}");
-        assert!(resume[2].contains("approval"), "{resume:?}");
+        let summary_lines = permissions.summary();
+        assert_eq!(summary_lines.len(), 3);
+        assert!(
+            summary_lines[0].contains("a.example:443"),
+            "{summary_lines:?}"
+        );
+        assert!(summary_lines[1].contains("/data"), "{summary_lines:?}");
+        assert!(summary_lines[2].contains("approval"), "{summary_lines:?}");
     }
 
     // ── Manifest ────────────────────────────────────────────────────────────
 
     #[test]
     fn a_declarative_agent_parses_without_wasm_host() {
-        let manifeste = PluginManifest::from_toml(AGENT_TOML).expect("valid manifest");
-        assert_eq!(manifeste.id.as_str(), "revue-schema");
-        assert_eq!(manifeste.kind, PluginKind::Agent);
-        assert!(!manifeste.requires_wasm());
-        assert!(manifeste.is_api_compatible());
-        assert!(manifeste.entrypoint.is_none());
+        let manifest_toml = PluginManifest::from_toml(AGENT_TOML).expect("valid manifest");
+        assert_eq!(manifest_toml.id.as_str(), "revue-schema");
+        assert_eq!(manifest_toml.kind, PluginKind::Agent);
+        assert!(!manifest_toml.requires_wasm());
+        assert!(manifest_toml.is_api_compatible());
+        assert!(manifest_toml.entrypoint.is_none());
 
-        let agent = manifeste.agent.as_ref().expect("agent section");
+        let agent = manifest_toml.agent.as_ref().expect("agent section");
         assert_eq!(agent.name, "Schema");
         assert!(agent.allows("refresh_catalog"));
         assert!(!agent.allows("execute_query"));
@@ -1380,13 +1398,13 @@ netwrok = ["example.com:443"]
 
     #[test]
     fn a_driver_declares_its_protocol_before_any_execution() {
-        let manifeste = PluginManifest::from_toml(DRIVER_TOML).expect("valid manifest");
-        assert!(manifeste.requires_wasm());
-        let driver = manifeste.driver.as_ref().expect("driver section");
+        let manifest_toml = PluginManifest::from_toml(DRIVER_TOML).expect("valid manifest");
+        assert!(manifest_toml.requires_wasm());
+        let driver = manifest_toml.driver.as_ref().expect("driver section");
         assert_eq!(driver.id, DriverId::new("duckdb").expect("identifier"));
         assert_eq!(driver.family, DriverFamily::Analytical);
         assert!(
-            manifeste
+            manifest_toml
                 .permissions
                 .allows_host("catalog.example.com", 443)
         );
@@ -1405,9 +1423,9 @@ netwrok = ["example.com:443"]
 
     #[test]
     fn toml_round_trip() {
-        let manifeste = PluginManifest::from_toml(DRIVER_TOML).expect("valid manifest");
-        let rendu = manifeste.to_toml().expect("render");
-        let relu = PluginManifest::from_toml(&rendu).expect("reread");
-        assert_eq!(relu, manifeste);
+        let manifest_toml = PluginManifest::from_toml(DRIVER_TOML).expect("valid manifest");
+        let rendered = manifest_toml.to_toml().expect("render");
+        let reread = PluginManifest::from_toml(&rendered).expect("reread");
+        assert_eq!(reread, manifest_toml);
     }
 }

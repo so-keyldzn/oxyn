@@ -47,23 +47,23 @@
 //!
 //! # fn main() -> Result<(), oxyn_secrets::SecretError> {
 //! // In production, this is `KeyringSecretStore::new()`.
-//! let trousseau = MemorySecretStore::new();
+//! let keychain = MemorySecretStore::new();
 //!
 //! // The reference derives from the connection identifier: it, and it alone,
 //! // goes into the workspace file.
 //! let reference = SecretRef::for_connection(ConnectionId::new());
 //! assert!(reference.as_str().starts_with("oxyn:conn:"));
 //!
-//! trousseau.put_bundle(
+//! keychain.put_bundle(
 //!     &reference,
 //!     &CredentialBundle::new().with_password("hunter2"),
 //! )?;
 //!
-//! let identifiants = trousseau.get_bundle(&reference)?.expect("written above");
-//! assert_eq!(identifiants.password(), Some("hunter2"));
+//! let credentials = keychain.get_bundle(&reference)?.expect("written above");
+//! assert_eq!(credentials.password(), Some("hunter2"));
 //!
 //! // And nothing escapes through `Debug`.
-//! assert_eq!(format!("{identifiants:?}"), "CredentialBundle(<redacted>)");
+//! assert_eq!(format!("{credentials:?}"), "CredentialBundle(<redacted>)");
 //! # Ok(())
 //! # }
 //! ```
@@ -111,14 +111,14 @@ mod tests {
         // What `oxyn-desktop` does when a connection is created, then at every
         // opening: write the secret under a reference, persist only the reference,
         // read it back, find the secret again.
-        let trousseau = MemorySecretStore::new();
+        let keychain = MemorySecretStore::new();
 
-        let connexion = ConnectionConfig::new("prod-eu", DriverId::postgres())
+        let connection = ConnectionConfig::new("prod-eu", DriverId::postgres())
             .with_environment(Environment::Production)
-            .with_param("host", "db.interne.example");
+            .with_param("host", "db.internal.example");
 
-        let reference = SecretRef::for_connection(connexion.id);
-        trousseau
+        let reference = SecretRef::for_connection(connection.id);
+        keychain
             .put_bundle(
                 &reference,
                 &CredentialBundle::new()
@@ -128,37 +128,38 @@ mod tests {
             .expect("write");
 
         // What goes to disk.
-        let connexion = connexion.with_secret_ref(reference.as_str());
-        let persiste = serde_json::to_string(&connexion).expect("serialization");
+        let connection = connection.with_secret_ref(reference.as_str());
+        let persisted = serde_json::to_string(&connection).expect("serialization");
         assert!(
-            !persiste.contains("hunter2"),
-            "password leaked into the workspace: {persiste}"
+            !persisted.contains("hunter2"),
+            "password leaked into the workspace: {persisted}"
         );
         assert!(
-            !persiste.contains("BEGIN PRIVATE KEY"),
-            "private key leaked into the workspace: {persiste}"
+            !persisted.contains("BEGIN PRIVATE KEY"),
+            "private key leaked into the workspace: {persisted}"
         );
-        assert!(persiste.contains(reference.as_str()));
+        assert!(persisted.contains(reference.as_str()));
 
         // What comes back from it.
-        let relu: ConnectionConfig = serde_json::from_str(&persiste).expect("deserialization");
-        let reference = SecretRef::for_connection_config(&relu).expect("valid reference");
-        let identifiants = trousseau
+        let read_back: ConnectionConfig =
+            serde_json::from_str(&persisted).expect("deserialization");
+        let reference = SecretRef::for_connection_config(&read_back).expect("valid reference");
+        let credentials = keychain
             .get_bundle(&reference)
             .expect("read")
             .expect("the secret was written above");
-        assert_eq!(identifiants.password(), Some("hunter2"));
+        assert_eq!(credentials.password(), Some("hunter2"));
     }
 
     #[test]
     fn a_connection_without_a_secret_is_not_an_error() {
         // SQLite on a file, PostgreSQL over a Unix socket, `~/.pgpass`: most local
         // connections have no secret to store.
-        let trousseau = MemorySecretStore::new();
+        let keychain = MemorySecretStore::new();
         let reference = SecretRef::for_connection(ConnectionId::new());
-        assert!(trousseau.get(&reference).expect("read").is_none());
-        assert!(trousseau.get_bundle(&reference).expect("read").is_none());
-        assert!(trousseau.delete(&reference).is_ok());
+        assert!(keychain.get(&reference).expect("read").is_none());
+        assert!(keychain.get_bundle(&reference).expect("read").is_none());
+        assert!(keychain.delete(&reference).is_ok());
     }
 
     #[test]
@@ -166,8 +167,8 @@ mod tests {
         // The real keychain is not used: we check that both implementations can be
         // substituted behind the trait, which is the only thing an offline test can
         // establish.
-        fn accepte(_: &dyn SecretStore) {}
-        accepte(&MemorySecretStore::new());
-        accepte(&KeyringSecretStore::new());
+        fn accepts(_: &dyn SecretStore) {}
+        accepts(&MemorySecretStore::new());
+        accepts(&KeyringSecretStore::new());
     }
 }

@@ -19,13 +19,13 @@ import re
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-COMPOSANTS = RACINE / "apps" / "desktop" / "src" / "components" / "oxyn"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPONENTS = REPO_ROOT / "apps" / "desktop" / "src" / "components" / "oxyn"
 
 # Pieces that only make sense inside their parent: they are rendered, axe
 # included, by the parent's stories. Each entry names that story; an entry
 # without it would be a hole, not an exemption.
-EXEMPTS = {
+EXEMPT = {
     "assistant-code-block": "rendered by assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
     "assistant-mermaid": "rendered by assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
     "assistant-mention-menu": "Lexical plugin, rendered by assistant-composer.stories.tsx",
@@ -39,51 +39,51 @@ EXEMPTS = {
     "assistant-exchange": "rendered by assistant-view.stories.tsx, until it has its own",
 }
 
-MOTIF_IMPORT = re.compile(
+IMPORT_PATTERN = re.compile(
     r"""from\s+["'](?:\./|@/components/oxyn/)([\w.-]+)["']"""
 )
 
 
-def composants() -> list[str]:
+def components() -> list[str]:
     return sorted(
         f.stem
-        for f in COMPOSANTS.glob("*.tsx")
+        for f in COMPONENTS.glob("*.tsx")
         if not f.name.endswith((".stories.tsx", ".test.tsx"))
     )
 
 
-def importes_par_une_story() -> set[str]:
-    importes: set[str] = set()
-    for story in COMPOSANTS.glob("*.stories.tsx"):
-        importes.update(MOTIF_IMPORT.findall(story.read_text(encoding="utf-8")))
-    return importes
+def imported_by_a_story() -> set[str]:
+    imported: set[str] = set()
+    for story in COMPONENTS.glob("*.stories.tsx"):
+        imported.update(IMPORT_PATTERN.findall(story.read_text(encoding="utf-8")))
+    return imported
 
 
-def principal() -> int:
-    noms = composants()
-    couverts = importes_par_une_story()
-    erreurs = [
-        f"{nom}.tsx: no story imports it — write {nom}.stories.tsx"
-        for nom in noms
-        if nom not in couverts and nom not in EXEMPTS
+def main() -> int:
+    name_list = components()
+    covered_targets = imported_by_a_story()
+    problems = [
+        f"{item_name}.tsx: no story imports it — write {item_name}.stories.tsx"
+        for item_name in name_list
+        if item_name not in covered_targets and item_name not in EXEMPT
     ]
     # An exemption that no longer serves is removed: otherwise it will one day
     # cover, without anyone deciding it, an unrelated component.
-    erreurs += [
-        f"{nom}: stale exemption — the file no longer exists or a story imports it"
-        for nom in EXEMPTS
-        if nom not in noms or nom in couverts
+    problems += [
+        f"{item_name}: stale exemption — the file no longer exists or a story imports it"
+        for item_name in EXEMPT
+        if item_name not in name_list or item_name in covered_targets
     ]
 
-    for message in erreurs:
+    for message in problems:
         print(f"ERROR          {message}")
 
-    if erreurs:
-        print(f"\nStories: {len(erreurs)} component(s) without a story.")
+    if problems:
+        print(f"\nStories: {len(problems)} component(s) without a story.")
         return 1
-    print(f"Stories: {len(noms)} components, each rendered by a story.")
+    print(f"Stories: {len(name_list)} components, each rendered by a story.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(principal())
+    sys.exit(main())

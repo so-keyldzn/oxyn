@@ -40,11 +40,11 @@
 /// `PREPARE name AS …` is **not** concerned: only `PREPARE TRANSACTION` is.
 #[must_use]
 pub(crate) fn controls_transaction(text: &str) -> bool {
-    let mut mots = Words::new(text);
-    let Some(premier) = mots.next() else {
+    let mut words = Words::new(text);
+    let Some(first) = words.next() else {
         return false;
     };
-    let est = |attendu: &str| premier.eq_ignore_ascii_case(attendu);
+    let is_word = |expected: &str| first.eq_ignore_ascii_case(expected);
     if [
         "begin",
         "commit",
@@ -55,14 +55,14 @@ pub(crate) fn controls_transaction(text: &str) -> bool {
         "release",
     ]
     .into_iter()
-    .any(est)
+    .any(is_word)
     {
         return true;
     }
-    if est("start") || est("prepare") {
-        return mots
+    if is_word("start") || is_word("prepare") {
+        return words
             .next()
-            .is_some_and(|suivant| suivant.eq_ignore_ascii_case("transaction"));
+            .is_some_and(|next_word| next_word.eq_ignore_ascii_case("transaction"));
     }
     false
 }
@@ -74,12 +74,12 @@ pub(crate) fn controls_transaction(text: &str) -> bool {
 /// input ([I-09](../../../CLAUDE.md#i-09)).
 #[must_use]
 pub(crate) fn opens_transaction(text: &str) -> bool {
-    let mut mots = Words::new(text);
-    match mots.next() {
-        Some(mot) if mot.eq_ignore_ascii_case("begin") => true,
-        Some(mot) if mot.eq_ignore_ascii_case("start") => mots
+    let mut words = Words::new(text);
+    match words.next() {
+        Some(word) if word.eq_ignore_ascii_case("begin") => true,
+        Some(word) if word.eq_ignore_ascii_case("start") => words
             .next()
-            .is_some_and(|suivant| suivant.eq_ignore_ascii_case("transaction")),
+            .is_some_and(|next_word| next_word.eq_ignore_ascii_case("transaction")),
         _ => false,
     }
 }
@@ -104,13 +104,13 @@ impl<'a> Words<'a> {
             let trimmed = self
                 .rest
                 .trim_start_matches([' ', '\t', '\n', '\r', '\u{000B}', '\u{000C}']);
-            if let Some(apres) = trimmed.strip_prefix("--") {
-                self.rest = apres
+            if let Some(after) = trimmed.strip_prefix("--") {
+                self.rest = after
                     .find(['\n', '\r'])
-                    .map_or("", |fin| apres.get(fin..).unwrap_or(""));
+                    .map_or("", |end| after.get(end..).unwrap_or(""));
             } else if trimmed.starts_with("/*") {
                 match block_comment_end(trimmed) {
-                    Some(apres) => self.rest = apres,
+                    Some(after) => self.rest = after,
                     None => {
                         self.rest = "";
                         return false;
@@ -131,41 +131,41 @@ impl<'a> Iterator for Words<'a> {
         if !self.skip_trivia() {
             return None;
         }
-        let mut caracteres = self.rest.char_indices();
-        let (_, premier) = caracteres.next()?;
-        if !(premier.is_alphabetic() || premier == '_') {
+        let mut characters = self.rest.char_indices();
+        let (_, first) = characters.next()?;
+        if !(first.is_alphabetic() || first == '_') {
             return None;
         }
-        let fin = caracteres
+        let end = characters
             .find(|(_, c)| !(c.is_alphanumeric() || *c == '_' || *c == '$'))
-            .map_or(self.rest.len(), |(indice, _)| indice);
-        let (mot, reste) = self.rest.split_at_checked(fin)?;
-        self.rest = reste;
-        Some(mot)
+            .map_or(self.rest.len(), |(index, _)| index);
+        let (word, rest) = self.rest.split_at_checked(end)?;
+        self.rest = rest;
+        Some(word)
     }
 }
 
 /// What follows a `/* … */` comment at the head of `text`, nesting included.
 fn block_comment_end(text: &str) -> Option<&str> {
-    let mut profondeur = 0_usize;
-    let mut reste = text;
+    let mut depth = 0_usize;
+    let mut rest = text;
     loop {
-        let ouverture = reste.find("/*");
-        let fermeture = reste.find("*/");
-        match (ouverture, fermeture) {
+        let opening = rest.find("/*");
+        let closing = rest.find("*/");
+        match (opening, closing) {
             (Some(o), Some(f)) if o < f => {
-                profondeur = profondeur.saturating_add(1);
-                reste = reste.get(o.saturating_add(2)..)?;
+                depth = depth.saturating_add(1);
+                rest = rest.get(o.saturating_add(2)..)?;
             }
             (Some(o), None) => {
-                profondeur = profondeur.saturating_add(1);
-                reste = reste.get(o.saturating_add(2)..)?;
+                depth = depth.saturating_add(1);
+                rest = rest.get(o.saturating_add(2)..)?;
             }
             (_, Some(f)) => {
-                profondeur = profondeur.checked_sub(1)?;
-                reste = reste.get(f.saturating_add(2)..)?;
-                if profondeur == 0 {
-                    return Some(reste);
+                depth = depth.checked_sub(1)?;
+                rest = rest.get(f.saturating_add(2)..)?;
+                if depth == 0 {
+                    return Some(rest);
                 }
             }
             (None, None) => return None,
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn transaction_control_is_recognized() {
-        for texte in [
+        for text in [
             "BEGIN",
             "start transaction",
             "COMMIT",
@@ -198,17 +198,17 @@ mod tests {
             "/* annuler */ ROLLBACK",
             "-- valider\r\ncommit;",
         ] {
-            assert!(controls_transaction(texte), "{texte:?}");
+            assert!(controls_transaction(text), "{text:?}");
         }
     }
 
     #[test]
     fn transaction_control_false_friends_pass() {
-        for texte in [
+        for text in [
             "SELECT 'BEGIN'",
             "SELECT 'ROLLBACK'",
             "DO $$ BEGIN PERFORM 1; END $$",
-            "PREPARE lecture AS SELECT 1",
+            "PREPARE read_request AS SELECT 1",
             "START",
             "ENDING",
             "commit_log",
@@ -217,13 +217,13 @@ mod tests {
             "\"rollback\"",
             "",
         ] {
-            assert!(!controls_transaction(texte), "{texte:?}");
+            assert!(!controls_transaction(text), "{text:?}");
         }
     }
 
     #[test]
     fn transaction_openings_are_recognized() {
-        for texte in [
+        for text in [
             "BEGIN",
             "begin;",
             "Begin Work",
@@ -231,20 +231,20 @@ mod tests {
             "START TRANSACTION",
             "start   transaction read write",
             "  \n\t BEGIN",
-            "-- ouvrir\nBEGIN",
-            "-- ouvrir\r\nSTART TRANSACTION",
-            "/* commentaire */ begin",
-            "/* a /* imbriqué */ toujours dedans */ BEGIN",
-            "START /* entre */ TRANSACTION",
-            "START\n-- ligne\nTRANSACTION",
+            "-- open\nBEGIN",
+            "-- open\r\nSTART TRANSACTION",
+            "/* comment */ begin",
+            "/* a /* nested */ still inside */ BEGIN",
+            "START /* between */ TRANSACTION",
+            "START\n-- line\nTRANSACTION",
         ] {
-            assert!(opens_transaction(texte), "{texte:?}");
+            assert!(opens_transaction(text), "{text:?}");
         }
     }
 
     #[test]
     fn everything_else_is_not_an_opening() {
-        for texte in [
+        for text in [
             "",
             "   ",
             "SELECT 'BEGIN'",
@@ -259,13 +259,13 @@ mod tests {
             "/* BEGIN */ SELECT 1",
             "-- BEGIN",
             "\"begin\"",
-            "/* jamais fermé BEGIN",
+            "/* never closed BEGIN",
             "/* a /* b */ BEGIN",
             "*/ BEGIN",
             "(BEGIN)",
-            "déjà BEGIN",
+            "café BEGIN",
         ] {
-            assert!(!opens_transaction(texte), "{texte:?}");
+            assert!(!opens_transaction(text), "{text:?}");
         }
     }
 
@@ -274,7 +274,7 @@ mod tests {
         // I-09: the text comes from the user or from an agent. Cuts in the
         // middle of a multi-byte character and orphan markers are the minimal
         // corpus.
-        for texte in [
+        for text in [
             "/",
             "-",
             "*",
@@ -291,7 +291,7 @@ mod tests {
             "/*/*/",
             "BEGIN\u{0}",
         ] {
-            let _ = opens_transaction(texte);
+            let _ = opens_transaction(text);
         }
     }
 }

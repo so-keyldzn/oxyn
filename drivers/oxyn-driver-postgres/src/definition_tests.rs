@@ -1,6 +1,6 @@
 //! Generated DDL is applied only by these explicit isolated-database fixtures.
 
-use crate::integration::{appliquer, session};
+use crate::integration::{apply, session};
 use oxyn_catalog::{CatalogPath, DefinitionSource};
 use oxyn_core::CancelToken;
 use sqlx::{AssertSqlSafe, Connection as _};
@@ -45,7 +45,7 @@ async fn definition_recreates_identity_serial_generated_columns_indexes_and_trig
         r#"ALTER TABLE oxyn_definition."items"";--" DISABLE TRIGGER touch"#,
         r#"INSERT INTO oxyn_definition."items"";--"(email) VALUES ('original')"#,
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
     let path =
         CatalogPath::for_relation(None, Some("oxyn_definition"), "items\";--").expect("path");
@@ -57,7 +57,7 @@ async fn definition_recreates_identity_serial_generated_columns_indexes_and_trig
     assert_eq!(definition.source, DefinitionSource::Reconstructed);
     assert!(definition.sql.contains("CREATE UNIQUE INDEX"));
     assert!(definition.sql.contains("NOT VALID"));
-    appliquer(&*session, r#"DROP TABLE oxyn_definition."items"";--""#).await;
+    apply(&*session, r#"DROP TABLE oxyn_definition."items"";--""#).await;
     let url = std::env::var("OXYN_PG_TEST_URL").expect("isolated test URL");
     let mut control = sqlx::PgConnection::connect(&url)
         .await
@@ -85,7 +85,7 @@ async fn definition_recreates_identity_serial_generated_columns_indexes_and_trig
     .await
     .expect("trigger state");
     assert_eq!(disabled, "D");
-    appliquer(&*session, "DROP SCHEMA oxyn_definition CASCADE").await;
+    apply(&*session, "DROP SCHEMA oxyn_definition CASCADE").await;
 }
 
 #[tokio::test]
@@ -103,7 +103,7 @@ async fn definition_supports_views_materialized_views_sequences_and_partitioned_
         "CREATE MATERIALIZED VIEW oxyn_definition_kinds.m (renamed) AS SELECT 2 WITH NO DATA",
         "CREATE SEQUENCE oxyn_definition_kinds.s AS integer START 15 INCREMENT 5 MINVALUE 10 MAXVALUE 100 CACHE 3 CYCLE",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
     let url = std::env::var("OXYN_PG_TEST_URL").expect("isolated test URL");
     let mut control = sqlx::PgConnection::connect(&url)
@@ -122,7 +122,7 @@ async fn definition_supports_views_materialized_views_sequences_and_partitioned_
             .relation_definition(&path, &CancelToken::new())
             .await
             .expect("native kind");
-        appliquer(
+        apply(
             &*session,
             &format!("DROP {kind} oxyn_definition_kinds.{name}"),
         )
@@ -149,7 +149,7 @@ async fn definition_supports_views_materialized_views_sequences_and_partitioned_
         "ALTER TABLE oxyn_definition_kinds.child ADD CONSTRAINT child_nonnegative CHECK (id >= 0)",
         "CREATE INDEX child_local ON oxyn_definition_kinds.child (tenant)",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
     let child =
         CatalogPath::for_relation(None, Some("oxyn_definition_kinds"), "child").expect("child");
@@ -164,7 +164,7 @@ async fn definition_supports_views_materialized_views_sequences_and_partitioned_
             .contains("PARTITION OF oxyn_definition_kinds.root")
     );
     assert!(definition.sql.contains("FOR VALUES FROM (0) TO (10)"));
-    appliquer(&*session, "DROP TABLE oxyn_definition_kinds.child").await;
+    apply(&*session, "DROP TABLE oxyn_definition_kinds.child").await;
     sqlx::raw_sql(AssertSqlSafe(definition.sql.as_str()))
         .execute(&mut control)
         .await
@@ -203,7 +203,7 @@ async fn definition_supports_views_materialized_views_sequences_and_partitioned_
         "CREATE TABLE oxyn_definition_kinds.subroot PARTITION OF oxyn_definition_kinds.root FOR VALUES FROM(10) TO(20) PARTITION BY RANGE(id)",
         "CREATE TABLE oxyn_definition_kinds.subleaf PARTITION OF oxyn_definition_kinds.subroot FOR VALUES FROM(10) TO(15)",
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
     let subroot =
         CatalogPath::for_relation(None, Some("oxyn_definition_kinds"), "subroot").expect("subroot");
@@ -212,8 +212,8 @@ async fn definition_supports_views_materialized_views_sequences_and_partitioned_
         .relation_definition(&subroot, &CancelToken::new())
         .await
         .expect("subpartition definition");
-    appliquer(&*session, "DROP TABLE oxyn_definition_kinds.subleaf").await;
-    appliquer(&*session, "DROP TABLE oxyn_definition_kinds.subroot").await;
+    apply(&*session, "DROP TABLE oxyn_definition_kinds.subleaf").await;
+    apply(&*session, "DROP TABLE oxyn_definition_kinds.subroot").await;
     sqlx::raw_sql(AssertSqlSafe(definition.sql.as_str()))
         .execute(&mut control)
         .await
@@ -225,7 +225,7 @@ async fn definition_supports_views_materialized_views_sequences_and_partitioned_
             .await
             .expect("subpartition key");
     assert_eq!(key, "RANGE (id)");
-    appliquer(&*session, "DROP SCHEMA oxyn_definition_kinds CASCADE").await;
+    apply(&*session, "DROP SCHEMA oxyn_definition_kinds CASCADE").await;
 }
 
 #[tokio::test]
@@ -243,7 +243,7 @@ async fn definition_recreates_row_security_policies_and_states() {
         r#"CREATE POLICY "only own" ON oxyn_definition_rls."items"";--" AS RESTRICTIVE FOR SELECT TO "oxyn rls role" USING (tenant = current_user)"#,
         r#"CREATE POLICY "public writes" ON oxyn_definition_rls."items"";--" AS PERMISSIVE FOR INSERT TO PUBLIC WITH CHECK (payload <> '')"#,
     ] {
-        appliquer(&*session, sql).await;
+        apply(&*session, sql).await;
     }
     let path =
         CatalogPath::for_relation(None, Some("oxyn_definition_rls"), "items\";--").expect("path");
@@ -255,7 +255,7 @@ async fn definition_recreates_row_security_policies_and_states() {
     assert!(definition.sql.contains("CREATE POLICY \"only own\""));
     assert!(definition.sql.contains("TO \"oxyn rls role\""));
     assert!(definition.sql.contains("FORCE ROW LEVEL SECURITY"));
-    appliquer(&*session, r#"DROP TABLE oxyn_definition_rls."items"";--""#).await;
+    apply(&*session, r#"DROP TABLE oxyn_definition_rls."items"";--""#).await;
     let url = std::env::var("OXYN_PG_TEST_URL").expect("isolated test URL");
     let mut control = sqlx::PgConnection::connect(&url)
         .await
@@ -289,6 +289,6 @@ async fn definition_recreates_row_security_policies_and_states() {
     assert_eq!(policies[1].2, "INSERT");
     assert_eq!(policies[1].3, "public");
     assert_eq!(policies[1].5.as_deref(), Some("(payload <> ''::text)"));
-    appliquer(&*session, "DROP SCHEMA oxyn_definition_rls CASCADE").await;
-    appliquer(&*session, "DROP ROLE \"oxyn rls role\"").await;
+    apply(&*session, "DROP SCHEMA oxyn_definition_rls CASCADE").await;
+    apply(&*session, "DROP ROLE \"oxyn rls role\"").await;
 }

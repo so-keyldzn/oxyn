@@ -145,13 +145,13 @@ impl SpillFile {
         if cancel.is_cancelled() {
             return Err(DataError::Cancelled);
         }
-        let taille = usize::try_from(reference.len).map_err(|_| DataError::Spill(oversized()))?;
-        let mut octets = vec![0_u8; taille];
+        let size = usize::try_from(reference.len).map_err(|_| DataError::Spill(oversized()))?;
+        let mut bytes = vec![0_u8; size];
         {
             let mut file = self.read.lock();
             file.seek(SeekFrom::Start(reference.offset))
                 .map_err(DataError::Spill)?;
-            for chunk in octets.chunks_mut(64 * 1024) {
+            for chunk in bytes.chunks_mut(64 * 1024) {
                 if cancel.is_cancelled() {
                     return Err(DataError::Cancelled);
                 }
@@ -162,8 +162,8 @@ impl SpillFile {
         if cancel.is_cancelled() {
             return Err(DataError::Cancelled);
         }
-        let mut lecteur = StreamReader::try_new(octets.as_slice(), None)?;
-        let lot = lecteur
+        let mut reader = StreamReader::try_new(bytes.as_slice(), None)?;
+        let batch = reader
             .next()
             .transpose()?
             .ok_or_else(|| DataError::Spill(truncated()))?;
@@ -171,16 +171,16 @@ impl SpillFile {
         // The file is ours, but a full disk or a lying file system produces a
         // truncated stream that decodes anyway: without this check, the grid
         // would silently display fewer rows than announced by `locate`.
-        if lot.num_rows() != reference.rows {
+        if batch.num_rows() != reference.rows {
             return Err(DataError::Spill(inconsistent(
                 reference.rows,
-                lot.num_rows(),
+                batch.num_rows(),
             )));
         }
         if cancel.is_cancelled() {
             return Err(DataError::Cancelled);
         }
-        Ok(lot)
+        Ok(batch)
     }
 }
 
@@ -192,9 +192,9 @@ fn truncated() -> std::io::Error {
     std::io::Error::other("spilled batch is missing from the temporary file")
 }
 
-fn inconsistent(attendu: usize, trouve: usize) -> std::io::Error {
+fn inconsistent(expected: usize, found: usize) -> std::io::Error {
     std::io::Error::other(format!(
-        "spilled batch has {trouve} rows, expected {attendu}"
+        "spilled batch has {found} rows, expected {expected}"
     ))
 }
 
@@ -235,10 +235,10 @@ impl SpillCache {
     /// most recently used.
     pub(crate) fn get(&mut self, index: usize) -> Option<RecordBatch> {
         let position = self.entries.iter().position(|(i, _)| *i == index)?;
-        let entree = self.entries.remove(position)?;
-        let lot = entree.1.clone();
-        self.entries.push_back(entree);
-        Some(lot)
+        let entry = self.entries.remove(position)?;
+        let batch = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(batch)
     }
 
     /// Records a rehydrated batch, evicting the oldest one if needed.
@@ -291,20 +291,20 @@ mod tests {
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("nom", DataType::Utf8, true),
+            Field::new("name", DataType::Utf8, true),
         ]))
     }
 
-    fn lot(base: i32, lignes: usize) -> RecordBatch {
-        let ids: Vec<i32> = (0..lignes)
+    fn batch_of(base: i32, rows: usize) -> RecordBatch {
+        let ids: Vec<i32> = (0..rows)
             .map(|i| base.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
             .collect();
-        let noms: Vec<Option<String>> = ids.iter().map(|i| Some(format!("l{i}"))).collect();
+        let names: Vec<Option<String>> = ids.iter().map(|i| Some(format!("l{i}"))).collect();
         RecordBatch::try_new(
             schema(),
             vec![
                 Arc::new(Int32Array::from(ids)),
-                Arc::new(StringArray::from(noms)),
+                Arc::new(StringArray::from(names)),
             ],
         )
         .expect("the columns match the schema built just above")
@@ -312,34 +312,32 @@ mod tests {
 
     #[test]
     fn a_written_batch_reads_back_identically() {
-        let fichier = SpillFile::create().expect("the temporary directory must be accessible");
-        let original = lot(0, 128);
-        let reference = fichier.append(&schema(), &original).expect("batch write");
-        let relu = fichier.read(reference).expect("reading the batch back");
-        assert_eq!(relu, original);
+        let file = SpillFile::create().expect("the temporary directory must be accessible");
+        let original = batch_of(0, 128);
+        let reference = file.append(&schema(), &original).expect("batch write");
+        let reread = file.read(reference).expect("reading the batch back");
+        assert_eq!(reread, original);
     }
 
     /// The case that breaks a naive implementation: several batches in the same
     /// file, read back out of order.
     #[test]
     fn batches_read_back_out_of_order() {
-        let fichier = SpillFile::create().expect("the temporary directory must be accessible");
+        let file = SpillFile::create().expect("the temporary directory must be accessible");
         let schema = schema();
 
-        let lots: Vec<RecordBatch> = (0..5_usize)
-            .map(|i| lot(i32::try_from(i).unwrap_or(0) * 100, 32 + i))
+        let batches: Vec<RecordBatch> = (0..5_usize)
+            .map(|i| batch_of(i32::try_from(i).unwrap_or(0) * 100, 32 + i))
             .collect();
-        let references: Vec<SpillRef> = lots
+        let references: Vec<SpillRef> = batches
             .iter()
-            .map(|l| fichier.append(&schema, l).expect("write"))
+            .map(|l| file.append(&schema, l).expect("write"))
             .collect();
 
         for position in [4_usize, 0, 3, 1, 2, 4] {
-            let attendu = lots.get(position).expect("indice construit ci-dessus");
-            let reference = *references
-                .get(position)
-                .expect("indice construit ci-dessus");
-            assert_eq!(&fichier.read(reference).expect("relecture"), attendu);
+            let expected = batches.get(position).expect("index built above");
+            let reference = *references.get(position).expect("index built above");
+            assert_eq!(&file.read(reference).expect("read back"), expected);
         }
     }
 
@@ -347,27 +345,27 @@ mod tests {
     /// flowing, the user is scrolling.
     #[test]
     fn a_write_does_not_disturb_previous_reads() {
-        let fichier = SpillFile::create().expect("the temporary directory must be accessible");
+        let file = SpillFile::create().expect("the temporary directory must be accessible");
         let schema = schema();
 
-        let premier = lot(0, 16);
-        let r1 = fichier.append(&schema, &premier).expect("write");
-        assert_eq!(fichier.read(r1).expect("relecture"), premier);
+        let first = batch_of(0, 16);
+        let r1 = file.append(&schema, &first).expect("write");
+        assert_eq!(file.read(r1).expect("read back"), first);
 
-        let second = lot(1_000, 64);
-        let r2 = fichier.append(&schema, &second).expect("write");
+        let second = batch_of(1_000, 64);
+        let r2 = file.append(&schema, &second).expect("write");
 
-        assert_eq!(fichier.read(r1).expect("relecture"), premier);
-        assert_eq!(fichier.read(r2).expect("relecture"), second);
+        assert_eq!(file.read(r1).expect("read back"), first);
+        assert_eq!(file.read(r2).expect("read back"), second);
         assert!(r2.byte_len() > r1.byte_len(), "a bigger batch weighs more");
     }
 
     #[test]
     fn the_cache_evicts_the_oldest() {
-        let mut cache = SpillCache::new(retained_size(&lot(0, 1)) * 2);
-        cache.insert(0, lot(0, 1));
-        cache.insert(1, lot(1, 1));
-        cache.insert(2, lot(2, 1));
+        let mut cache = SpillCache::new(retained_size(&batch_of(0, 1)) * 2);
+        cache.insert(0, batch_of(0, 1));
+        cache.insert(1, batch_of(1, 1));
+        cache.insert(2, batch_of(2, 1));
 
         assert!(cache.get(0).is_none(), "the oldest must be evicted");
         assert!(cache.get(1).is_some());
@@ -378,11 +376,11 @@ mod tests {
     /// neighboring batches evicts, in a loop, the one it needs.
     #[test]
     fn an_access_protects_from_eviction() {
-        let mut cache = SpillCache::new(retained_size(&lot(0, 1)) * 2);
-        cache.insert(0, lot(0, 1));
-        cache.insert(1, lot(1, 1));
+        let mut cache = SpillCache::new(retained_size(&batch_of(0, 1)) * 2);
+        cache.insert(0, batch_of(0, 1));
+        cache.insert(1, batch_of(1, 1));
         assert!(cache.get(0).is_some());
-        cache.insert(2, lot(2, 1));
+        cache.insert(2, batch_of(2, 1));
 
         assert!(cache.get(0).is_some(), "the refreshed entry must survive");
         assert!(cache.get(1).is_none());
@@ -391,7 +389,7 @@ mod tests {
     #[test]
     fn a_zero_capacity_cache_keeps_nothing() {
         let mut cache = SpillCache::new(0);
-        cache.insert(0, lot(0, 1));
+        cache.insert(0, batch_of(0, 1));
         assert!(cache.get(0).is_none());
     }
 }

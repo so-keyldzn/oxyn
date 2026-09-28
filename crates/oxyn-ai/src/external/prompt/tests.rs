@@ -9,10 +9,10 @@ use super::*;
 /// ([I-04](../../../../../CLAUDE.md#i-04)).
 #[test]
 fn under_local_no_prompt_is_composed() {
-    let erreur = AgentPrompt::from_user(PrivacyTier::Local, "which tables exist?")
+    let error = AgentPrompt::from_user(PrivacyTier::Local, "which tables exist?")
         .expect_err("a local connection does not talk to an external agent");
 
-    let message = erreur.to_string();
+    let message = error.to_string();
     assert!(message.contains("local-only"), "{message}");
     assert!(
         !message.contains("which tables"),
@@ -23,10 +23,10 @@ fn under_local_no_prompt_is_composed() {
 #[test]
 fn tiers_that_admit_an_agent_compose_the_prompt() {
     for tier in [PrivacyTier::Metadata, PrivacyTier::Sampled] {
-        let invite = AgentPrompt::from_user(tier, "  which tables exist?  ")
+        let launch_request = AgentPrompt::from_user(tier, "  which tables exist?  ")
             .expect("this tier admits an external agent");
         assert_eq!(
-            invite.as_str(),
+            launch_request.as_str(),
             "which tables exist?",
             "the input is passed as is, edge spaces removed"
         );
@@ -36,10 +36,10 @@ fn tiers_that_admit_an_agent_compose_the_prompt() {
 /// An empty question launches no process.
 #[test]
 fn an_empty_question_is_refused() {
-    for vide in ["", "   ", "\n\t "] {
+    for empty in ["", "   ", "\n\t "] {
         assert!(
-            AgentPrompt::from_user(PrivacyTier::Metadata, vide).is_err(),
-            "\"{vide}\" composes no prompt"
+            AgentPrompt::from_user(PrivacyTier::Metadata, empty).is_err(),
+            "\"{empty}\" composes no prompt"
         );
     }
 }
@@ -121,7 +121,7 @@ mod schema {
     fn the_agent_receives_tables_and_columns_under_metadata_and_sampled() {
         let cache = nbc();
         for tier in [PrivacyTier::Metadata, PrivacyTier::Sampled] {
-            let invite = AgentPrompt::with_schema(
+            let launch_request = AgentPrompt::with_schema(
                 tier,
                 "the last 10 rows",
                 &cache,
@@ -130,28 +130,28 @@ mod schema {
                 Vec::new(),
             )
             .expect("this tier admits an external agent");
-            let texte = invite.as_str();
-            for attendu in ["orders", "customers", "placed_at", "total", "REAL", "email"] {
+            let text = launch_request.as_str();
+            for expected in ["orders", "customers", "placed_at", "total", "REAL", "email"] {
                 assert!(
-                    texte.contains(attendu),
-                    "{tier}: \"{attendu}\" is missing\n{texte}"
+                    text.contains(expected),
+                    "{tier}: \"{expected}\" is missing\n{text}"
                 );
             }
             assert!(
-                texte.contains("query language: sql (dialect: sqlite)"),
-                "the language to write in is stated: {texte}"
+                text.contains("query language: sql (dialect: sqlite)"),
+                "the language to write in is stated: {text}"
             );
             assert!(
-                texte.contains(&format!("privacy tier `{tier}`")),
-                "the applied tier is stated: {texte}"
+                text.contains(&format!("privacy tier `{tier}`")),
+                "the applied tier is stated: {text}"
             );
             assert!(
-                texte.ends_with("The user's question:\nthe last 10 rows"),
-                "the question comes last, under its header: {texte}"
+                text.ends_with("The user's question:\nthe last 10 rows"),
+                "the question comes last, under its header: {text}"
             );
-            let contexte = invite.context().expect("a schema is attached");
-            assert_eq!(contexte.tier(), tier);
-            assert_eq!(contexte.relations().len(), 2);
+            let context = launch_request.context().expect("a schema is attached");
+            assert_eq!(context.tier(), tier);
+            assert_eq!(context.relations().len(), 2);
         }
     }
 
@@ -159,7 +159,7 @@ mod schema {
     /// precedes it. A column comment does not close the fence.
     #[test]
     fn the_schema_is_fenced_data_preceded_by_its_instruction() {
-        let invite = AgentPrompt::with_schema(
+        let launch_request = AgentPrompt::with_schema(
             PrivacyTier::Metadata,
             "how many customers?",
             &nbc(),
@@ -168,27 +168,27 @@ mod schema {
             Vec::new(),
         )
         .expect("valid prompt");
-        let texte = invite.as_str();
+        let text = launch_request.as_str();
 
-        let preambule = texte
+        let preamble = text
             .find(untrusted::PREAMBLE)
             .expect("the preamble is there");
         // The preamble names the tags itself: we count after it.
-        let apres = texte
-            .get(preambule + untrusted::PREAMBLE.len()..)
+        let after = text
+            .get(preamble + untrusted::PREAMBLE.len()..)
             .expect("the preamble is a slice of the text");
-        assert_eq!(apres.matches(untrusted::FENCE_OPEN).count(), 1, "{texte}");
-        assert_eq!(apres.matches(untrusted::FENCE_CLOSE).count(), 1, "{texte}");
-        let encadre = preambule
+        assert_eq!(after.matches(untrusted::FENCE_OPEN).count(), 1, "{text}");
+        assert_eq!(after.matches(untrusted::FENCE_CLOSE).count(), 1, "{text}");
+        let fenced = preamble
             + untrusted::PREAMBLE.len()
-            + apres
+            + after
                 .find(untrusted::FENCE_OPEN)
                 .expect("the fence is there");
-        let question = texte
+        let question = text
             .find("how many customers?")
             .expect("the question is there");
-        assert!(preambule < encadre, "the instruction precedes the data");
-        assert!(encadre < question, "the question follows the schema");
+        assert!(preamble < fenced, "the instruction precedes the data");
+        assert!(fenced < question, "the question follows the schema");
     }
 
     /// No row value without an approved sample: the catalog carries none. The
@@ -198,7 +198,7 @@ mod schema {
     #[test]
     fn under_sampled_nothing_but_the_structure_leaves() {
         let cache = nbc();
-        let invite = AgentPrompt::with_schema(
+        let launch_request = AgentPrompt::with_schema(
             PrivacyTier::Sampled,
             "the last 10 rows",
             &cache,
@@ -207,25 +207,27 @@ mod schema {
             Vec::new(),
         )
         .expect("valid prompt");
-        let contexte = invite.context().expect("a schema is attached");
-        assert_eq!(contexte.dropped_samples(), 0, "no sample offered");
+        let context = launch_request.context().expect("a schema is attached");
+        assert_eq!(context.dropped_samples(), 0, "no sample offered");
         assert!(
-            !invite.as_str().contains("row sample approved by the user"),
+            !launch_request
+                .as_str()
+                .contains("row sample approved by the user"),
             "no sample rendered: {}",
-            invite.as_str()
+            launch_request.as_str()
         );
-        let attendu = ContextBuilder::new(&cache, PrivacyTier::Sampled)
+        let expected = ContextBuilder::new(&cache, PrivacyTier::Sampled)
             .with_language(SQLITE)
             .focused_on("the last 10 rows")
             .build();
         assert_eq!(
-            contexte.prompt_block(),
-            attendu.prompt_block(),
+            context.prompt_block(),
+            expected.prompt_block(),
             "the schema is the gateway's, with nothing added"
         );
     }
 
-    fn echantillon() -> crate::RowSample {
+    fn sample() -> crate::RowSample {
         crate::RowSample::new(
             CatalogPath::for_namespace(None, "main")
                 .and_then(|main| main.with_relation("customers"))
@@ -243,36 +245,36 @@ mod schema {
     #[test]
     fn under_sampled_the_approved_sample_leaves_fenced_by_the_gateway() {
         let cache = nbc();
-        let invite = AgentPrompt::with_schema(
+        let launch_request = AgentPrompt::with_schema(
             PrivacyTier::Sampled,
             "how are the emails written?",
             &cache,
             SQLITE,
-            vec![echantillon()],
+            vec![sample()],
             Vec::new(),
         )
         .expect("valid prompt");
-        let texte = invite.as_str();
-        assert!(texte.contains("dupont@example.com"), "{texte}");
-        let valeur = texte
-            .find("dupont@example.com")
-            .expect("the value is there");
-        let ouverture = texte
+        let text = launch_request.as_str();
+        assert!(text.contains("dupont@example.com"), "{text}");
+        let value = text.find("dupont@example.com").expect("the value is there");
+        let opening = text
             .rfind(untrusted::FENCE_OPEN)
             .expect("a fence opens the data");
-        let fermeture = texte
+        let closing = text
             .rfind(untrusted::FENCE_CLOSE)
             .expect("a fence closes the data");
-        assert!(ouverture < valeur && valeur < fermeture, "{texte}");
+        assert!(opening < value && value < closing, "{text}");
 
-        let attendu = ContextBuilder::new(&cache, PrivacyTier::Sampled)
+        let expected = ContextBuilder::new(&cache, PrivacyTier::Sampled)
             .with_language(SQLITE)
             .focused_on("how are the emails written?")
-            .with_samples(vec![echantillon()])
+            .with_samples(vec![sample()])
             .build();
         assert_eq!(
-            invite.context().map(crate::AgentContext::prompt_block),
-            Some(attendu.prompt_block()),
+            launch_request
+                .context()
+                .map(crate::AgentContext::prompt_block),
+            Some(expected.prompt_block()),
             "a single rendering: the gateway's"
         );
     }
@@ -280,18 +282,20 @@ mod schema {
     /// Under `Metadata`, the same call sends no value, and says so.
     #[test]
     fn under_metadata_the_sample_is_dropped_and_counted() {
-        let invite = AgentPrompt::with_schema(
+        let launch_request = AgentPrompt::with_schema(
             PrivacyTier::Metadata,
             "how are the emails written?",
             &nbc(),
             SQLITE,
-            vec![echantillon()],
+            vec![sample()],
             Vec::new(),
         )
         .expect("valid prompt");
-        assert!(!invite.as_str().contains("dupont@example.com"));
+        assert!(!launch_request.as_str().contains("dupont@example.com"));
         assert_eq!(
-            invite.context().map(crate::AgentContext::dropped_samples),
+            launch_request
+                .context()
+                .map(crate::AgentContext::dropped_samples),
             Some(1)
         );
     }
@@ -310,11 +314,11 @@ mod schema {
             .collect();
         cache.set_relations(&main, tables).expect("a namespace");
         for n in 0..10_000 {
-            let nom = format!("t{n:05}");
+            let name = format!("t{n:05}");
             cache
                 .set_relation(
-                    &main.with_relation(&nom).expect("valid path"),
-                    Relation::new(nom.clone(), RelationKind::Table).with_fields(
+                    &main.with_relation(&name).expect("valid path"),
+                    Relation::new(name.clone(), RelationKind::Table).with_fields(
                         (0..40)
                             .map(|c| {
                                 Field::new(format!("column_{c:02}"), c, LogicalType::Text, "TEXT")
@@ -325,7 +329,7 @@ mod schema {
                 .expect("the path names a relation");
         }
 
-        let invite = AgentPrompt::with_schema(
+        let launch_request = AgentPrompt::with_schema(
             PrivacyTier::Metadata,
             "which tables?",
             &cache,
@@ -334,23 +338,23 @@ mod schema {
             Vec::new(),
         )
         .expect("valid prompt");
-        let contexte = invite.context().expect("a schema is attached");
-        let politique = crate::ContextPolicy::default();
-        assert!(contexte.relations().len() <= politique.max_relations);
+        let context = launch_request.context().expect("a schema is attached");
+        let policy = crate::ContextPolicy::default();
+        assert!(context.relations().len() <= policy.max_relations);
         assert!(
-            contexte.estimated_tokens() <= politique.max_context_tokens + 200,
+            context.estimated_tokens() <= policy.max_context_tokens + 200,
             "{} estimated tokens",
-            contexte.estimated_tokens()
+            context.estimated_tokens()
         );
         // The whole text, instructions included, stays of the order of the
         // budget.
         assert!(
-            invite.as_str().len() < 40_000,
+            launch_request.as_str().len() < 40_000,
             "{} bytes",
-            invite.as_str().len()
+            launch_request.as_str().len()
         );
         assert!(
-            invite.as_str().contains("of 10000 known relations"),
+            launch_request.as_str().contains("of 10000 known relations"),
             "the agent knows it only sees a part"
         );
     }
@@ -358,7 +362,7 @@ mod schema {
     /// Under `Local`, the refusal falls before any schema is rendered.
     #[test]
     fn under_local_no_schema_is_rendered() {
-        let erreur = AgentPrompt::with_schema(
+        let error = AgentPrompt::with_schema(
             PrivacyTier::Local,
             "tables?",
             &nbc(),
@@ -367,7 +371,7 @@ mod schema {
             Vec::new(),
         )
         .expect_err("a local connection does not talk to an external agent");
-        let message = erreur.to_string();
+        let message = error.to_string();
         assert!(message.contains("local-only"), "{message}");
         assert!(!message.contains("orders"), "{message}");
     }
@@ -376,7 +380,7 @@ mod schema {
     /// customer database's column names to a log.
     #[test]
     fn the_prompts_debug_shows_neither_the_schema_nor_the_question() {
-        let invite = AgentPrompt::with_schema(
+        let launch_request = AgentPrompt::with_schema(
             PrivacyTier::Metadata,
             "the total of the orders",
             &nbc(),
@@ -385,10 +389,10 @@ mod schema {
             Vec::new(),
         )
         .expect("valid prompt");
-        let rendu = format!("{invite:?}");
+        let rendered = format!("{launch_request:?}");
         for secret in ["orders", "placed_at", "the total of the orders"] {
-            assert!(!rendu.contains(secret), "{rendu}");
+            assert!(!rendered.contains(secret), "{rendered}");
         }
-        assert!(rendu.contains("redacted"), "{rendu}");
+        assert!(rendered.contains("redacted"), "{rendered}");
     }
 }

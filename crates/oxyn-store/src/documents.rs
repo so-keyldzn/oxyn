@@ -82,7 +82,7 @@ impl Document {
     /// Builds a new document, not yet persisted.
     #[must_use]
     pub fn new(workspace: WorkspaceId, title: impl Into<String>, language: QueryLanguage) -> Self {
-        let maintenant = Utc::now();
+        let now = Utc::now();
         Self {
             id: DocumentId::new(),
             workspace,
@@ -90,8 +90,8 @@ impl Document {
             language,
             content: String::new(),
             connection: None,
-            created_at: maintenant,
-            updated_at: maintenant,
+            created_at: now,
+            updated_at: now,
             revision: 0,
             saved_revision: 0,
             is_saved: true,
@@ -150,7 +150,7 @@ impl<'a> Documents<'a> {
     pub fn save(&self, document: &Document) -> Result<()> {
         let language = tag_to_json(&document.language)?;
         let provenance = provenance_to_column(document.provenance.as_ref())?;
-        let maintenant = Utc::now();
+        let now = Utc::now();
 
         self.store.with_connection(|conn| {
             let changed = conn.execute(
@@ -182,7 +182,7 @@ impl<'a> Documents<'a> {
                     document.content,
                     document.connection.map(|id| id.to_string()),
                     document.created_at,
-                    maintenant,
+                    now,
                     provenance,
                 ],
             )?;
@@ -212,9 +212,9 @@ impl<'a> Documents<'a> {
     ) -> Result<Option<Document>> {
         self.store.with_connection_cancellable(cancel, |conn| {
             conn.query_row(
-                &format!("{SELECT_COLONNES} WHERE id = ?1 AND is_deleted=0"),
+                &format!("{SELECT_COLUMNS} WHERE id = ?1 AND is_deleted=0"),
                 params![id.to_string()],
-                |row| Ok(depuis_ligne(row)),
+                |row| Ok(from_row(row)),
             )
             .optional()?
             .transpose()
@@ -227,11 +227,11 @@ impl<'a> Documents<'a> {
     /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn list(&self, workspace: WorkspaceId) -> Result<Vec<Document>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(&format!(
-                "{SELECT_COLONNES} WHERE workspace_id = ?1 AND is_deleted=0 ORDER BY updated_at DESC, id"
+            let mut query = conn.prepare(&format!(
+                "{SELECT_COLUMNS} WHERE workspace_id = ?1 AND is_deleted=0 ORDER BY updated_at DESC, id"
             ))?;
-            requete
-                .query_and_then(params![workspace.to_string()], depuis_ligne)?
+            query
+                .query_and_then(params![workspace.to_string()], from_row)?
                 .collect()
         })
     }
@@ -242,13 +242,13 @@ impl<'a> Documents<'a> {
     /// [`crate::StoreError::Sqlite`] if the deletion fails.
     pub fn delete(&self, id: DocumentId) -> Result<bool> {
         self.store.with_connection(|conn| {
-            let touchees = conn.execute(
+            let touched = conn.execute(
                 "UPDATE documents SET is_deleted=1,is_open=0,is_saved=0,content='',
                  saved_content=NULL,saved_title=NULL,revision=revision+1,saved_revision=revision+1
                  WHERE id=?1 AND is_deleted=0 AND revision<9223372036854775807",
                 params![id.to_string()],
             )?;
-            Ok(touchees > 0)
+            Ok(touched > 0)
         })
     }
 }
@@ -262,14 +262,14 @@ fn provenance_to_column(provenance: Option<&Provenance>) -> Result<Option<String
     provenance
         .map(Provenance::to_json)
         .transpose()
-        .map_err(|erreur| StoreError::Corrupted {
+        .map_err(|error| StoreError::Corrupted {
             field: "documents.provenance",
-            detail: erreur.to_string(),
+            detail: error.to_string(),
         })
 }
 
 /// The column list, shared by every read.
-const SELECT_COLONNES: &str = "SELECT id, workspace_id,
+const SELECT_COLUMNS: &str = "SELECT id, workspace_id,
      CASE WHEN length(CAST(title AS BLOB))<=4096 THEN title ELSE NULL END AS title, language,
      CASE WHEN length(CAST(content AS BLOB))<=1048576 THEN content ELSE NULL END AS content,
      connection_id, created_at, updated_at, revision, saved_revision, is_saved, is_open,
@@ -278,7 +278,7 @@ const SELECT_COLONNES: &str = "SELECT id, workspace_id,
      provenance FROM documents";
 
 /// Rebuilds a [`Document`] from a row.
-fn depuis_ligne(row: &Row<'_>) -> Result<Document> {
+fn from_row(row: &Row<'_>) -> Result<Document> {
     let id: String = row.get("id")?;
     let workspace: String = row.get("workspace_id")?;
     let language: String = row.get("language")?;
@@ -343,18 +343,18 @@ fn depuis_ligne(row: &Row<'_>) -> Result<Document> {
         //
         // The price is accepted: the mark disappears from a document rewritten
         // by this binary. The log says so; the document stays openable.
-        provenance: row
-            .get::<_, Option<String>>("provenance")?
-            .and_then(|brut| match Provenance::from_json(&brut) {
+        provenance: row.get::<_, Option<String>>("provenance")?.and_then(|raw| {
+            match Provenance::from_json(&raw) {
                 Ok(provenance) => Some(provenance),
-                Err(erreur) => {
+                Err(error) => {
                     tracing::warn!(
-                        error = %erreur,
+                        error = %error,
                         "unreadable provenance dropped; the document opens without its mark"
                     );
                     None
                 }
-            }),
+            }
+        }),
     })
 }
 
@@ -365,40 +365,40 @@ mod tests {
         AgentId, AgentSessionId, AiProviderKind, ConnectionConfig, DriverId, SqlDialect,
     };
 
-    fn store_avec_workspace() -> (Store, WorkspaceId) {
+    fn store_with_workspace() -> (Store, WorkspaceId) {
         let store = Store::open_in_memory().expect("open");
-        let workspace = store.workspaces().create("atelier").expect("workspace");
+        let workspace = store.workspaces().create("workshop").expect("workspace");
         (store, workspace.id)
     }
 
     #[test]
     fn a_document_round_trips() {
-        let (store, workspace) = store_avec_workspace();
+        let (store, workspace) = store_with_workspace();
         let document = Document::new(
             workspace,
             "chiffre d'affaires",
             QueryLanguage::Sql(SqlDialect::DuckDb),
         )
-        .with_content("SELECT sum(montant) FROM ventes");
+        .with_content("SELECT sum(amount) FROM sales");
 
         store.documents().save(&document).expect("write");
-        let relu = store
+        let read_back = store
             .documents()
             .get(document.id)
             .expect("read")
             .expect("present");
 
-        assert_eq!(relu.id, document.id);
-        assert_eq!(relu.workspace, workspace);
-        assert_eq!(relu.title, "chiffre d'affaires");
-        assert_eq!(relu.language, QueryLanguage::Sql(SqlDialect::DuckDb));
-        assert_eq!(relu.content, "SELECT sum(montant) FROM ventes");
-        assert!(relu.connection.is_none());
+        assert_eq!(read_back.id, document.id);
+        assert_eq!(read_back.workspace, workspace);
+        assert_eq!(read_back.title, "chiffre d'affaires");
+        assert_eq!(read_back.language, QueryLanguage::Sql(SqlDialect::DuckDb));
+        assert_eq!(read_back.content, "SELECT sum(amount) FROM sales");
+        assert!(read_back.connection.is_none());
     }
 
     #[test]
     fn rewriting_keeps_the_creation_date() {
-        let (store, workspace) = store_avec_workspace();
+        let (store, workspace) = store_with_workspace();
         let mut document = Document::new(workspace, "brouillon", QueryLanguage::SQL);
         store.documents().save(&document).expect("write");
         let creation = store
@@ -412,50 +412,50 @@ mod tests {
         document.created_at = Utc::now(); // even if the caller gets it wrong
         store.documents().save(&document).expect("rewrite");
 
-        let relu = store
+        let read_back = store
             .documents()
             .get(document.id)
             .expect("read")
             .expect("present");
-        assert_eq!(relu.content, "SELECT 1");
+        assert_eq!(read_back.content, "SELECT 1");
         assert_eq!(
-            relu.created_at.timestamp_millis(),
+            read_back.created_at.timestamp_millis(),
             creation.timestamp_millis()
         );
-        assert!(relu.updated_at >= relu.created_at);
+        assert!(read_back.updated_at >= read_back.created_at);
     }
 
     #[test]
     fn deleting_the_connection_does_not_delete_the_document() {
         // Losing a hand-written query because a connection list was cleaned up
         // would be data loss disguised as tidying.
-        let (store, workspace) = store_avec_workspace();
-        let config = ConnectionConfig::new("base client", DriverId::postgres());
+        let (store, workspace) = store_with_workspace();
+        let config = ConnectionConfig::new("customer db", DriverId::postgres());
         store
             .connections()
             .save(workspace, &config)
             .expect("connection");
 
-        let document = Document::new(workspace, "requête du lundi", QueryLanguage::SQL)
-            .with_content("SELECT * FROM clients")
+        let document = Document::new(workspace, "monday query", QueryLanguage::SQL)
+            .with_content("SELECT * FROM customers")
             .on_connection(config.id);
         store.documents().save(&document).expect("write");
 
         assert!(store.connections().delete(config.id).expect("deletion"));
 
-        let relu = store
+        let read_back = store
             .documents()
             .get(document.id)
             .expect("read")
             .expect("the document must survive");
-        assert_eq!(relu.content, "SELECT * FROM clients");
-        assert!(relu.connection.is_none(), "the reference becomes NULL");
+        assert_eq!(read_back.content, "SELECT * FROM customers");
+        assert!(read_back.connection.is_none(), "the reference becomes NULL");
     }
 
     #[test]
     fn deleting_the_workspace_takes_its_documents() {
-        let (store, workspace) = store_avec_workspace();
-        let document = Document::new(workspace, "éphémère", QueryLanguage::SQL);
+        let (store, workspace) = store_with_workspace();
+        let document = Document::new(workspace, "ephemeral", QueryLanguage::SQL);
         store.documents().save(&document).expect("write");
 
         assert!(store.workspaces().delete(workspace).expect("deletion"));
@@ -465,9 +465,9 @@ mod tests {
     #[test]
     fn a_document_without_workspace_is_refused() {
         let store = Store::open_in_memory().expect("open");
-        let orphelin = Document::new(WorkspaceId::new(), "orphelin", QueryLanguage::SQL);
+        let orphan = Document::new(WorkspaceId::new(), "orphelin", QueryLanguage::SQL);
         assert!(
-            store.documents().save(&orphelin).is_err(),
+            store.documents().save(&orphan).is_err(),
             "the foreign key must refuse a nonexistent workspace"
         );
     }
@@ -476,21 +476,21 @@ mod tests {
     /// keystroke. The test turns red if a rewrite erases it.
     #[test]
     fn a_provenance_survives_rewriting_the_content() {
-        let (store, workspace) = store_avec_workspace();
-        let origine = Provenance::new(
+        let (store, workspace) = store_with_workspace();
+        let origin = Provenance::new(
             AgentId::new(),
             AgentSessionId::new(),
             AiProviderKind::OpenAiCompatible,
             "llama3.2",
         );
-        let mut document = Document::new(workspace, "proposé par l'agent", QueryLanguage::SQL)
+        let mut document = Document::new(workspace, "proposed by the agent", QueryLanguage::SQL)
             .with_content("SELECT 1")
-            .with_provenance(origine.clone());
+            .with_provenance(origin.clone());
         store.documents().save(&document).expect("write");
 
         // The user takes the text over, then saves through the library's
         // versioned path.
-        document.content = "SELECT 2 -- réécrit à la main".to_owned();
+        document.content = "SELECT 2 -- rewritten by hand".to_owned();
         store.documents().save(&document).expect("rewrite");
         store
             .documents()
@@ -498,7 +498,7 @@ mod tests {
                 workspace,
                 &oxyn_core::QueryDocumentUpdate {
                     document: document.id,
-                    title: "proposé par l'agent".to_owned(),
+                    title: "proposed by the agent".to_owned(),
                     text: "SELECT 3".to_owned(),
                     language: QueryLanguage::SQL,
                     connection: None,
@@ -514,59 +514,59 @@ mod tests {
             )
             .expect("versioned save");
 
-        let relu = store
+        let read_back = store
             .documents()
             .get(document.id)
             .expect("read")
             .expect("present");
-        assert_eq!(relu.content, "SELECT 3");
+        assert_eq!(read_back.content, "SELECT 3");
         assert_eq!(
-            relu.provenance.as_ref(),
-            Some(&origine),
+            read_back.provenance.as_ref(),
+            Some(&origin),
             "the provenance dates the origin of the text, not the last keystroke"
         );
 
         // And a caller that reads back then rewrites without carrying the
         // provenance does not erase it either: the case of a path that
         // ignores it.
-        let mut sans = relu;
-        sans.provenance = None;
-        sans.revision = 0;
+        let mut without = read_back;
+        without.provenance = None;
+        without.revision = 0;
         store
             .with_connection(|conn| {
                 conn.execute(
                     "UPDATE documents SET revision=0, saved_revision=0 WHERE id=?1",
-                    params![sans.id.to_string()],
+                    params![without.id.to_string()],
                 )?;
                 Ok(())
             })
             .expect("back to an unversioned copy");
-        store.documents().save(&sans).expect("blind rewrite");
+        store.documents().save(&without).expect("blind rewrite");
         assert_eq!(
             store
                 .documents()
-                .get(sans.id)
+                .get(without.id)
                 .expect("read")
                 .expect("present")
                 .provenance,
-            Some(origine)
+            Some(origin)
         );
     }
 
     #[test]
     fn a_document_written_by_the_user_has_no_provenance() {
         // `NULL` means "written by the user", and it is true.
-        let (store, workspace) = store_avec_workspace();
-        let document = Document::new(workspace, "à la main", QueryLanguage::SQL)
-            .with_content("SELECT * FROM ventes");
+        let (store, workspace) = store_with_workspace();
+        let document = Document::new(workspace, "by hand", QueryLanguage::SQL)
+            .with_content("SELECT * FROM sales");
         store.documents().save(&document).expect("write");
 
-        let relu = store
+        let read_back = store
             .documents()
             .get(document.id)
             .expect("read")
             .expect("present");
-        assert_eq!(relu.provenance, None);
+        assert_eq!(read_back.provenance, None);
     }
 
     #[test]
@@ -582,36 +582,32 @@ mod tests {
         // What matters is held another way: **nothing is destroyed**. The
         // value stays in the database, protected by the write's `coalesce`,
         // and a binary that can read it will find it again.
-        let (store, workspace) = store_avec_workspace();
-        let document = Document::new(
-            workspace,
-            "écrit par un Oxyn plus récent",
-            QueryLanguage::SQL,
-        );
+        let (store, workspace) = store_with_workspace();
+        let document = Document::new(workspace, "written by a newer Oxyn", QueryLanguage::SQL);
         store.documents().save(&document).expect("write");
         store
             .with_connection(|conn| {
                 conn.execute(
-                    "UPDATE documents SET provenance='{\"agent\":\"pas-un-uuid\"}' WHERE id=?1",
+                    "UPDATE documents SET provenance='{\"agent\":\"not-a-uuid\"}' WHERE id=?1",
                     params![document.id.to_string()],
                 )?;
                 Ok(())
             })
             .expect("column written by a version this binary does not know");
 
-        let relu = store
+        let read_back = store
             .documents()
             .get(document.id)
             .expect("the document opens despite an unreadable mark")
             .expect("present");
         assert!(
-            relu.provenance.is_none(),
+            read_back.provenance.is_none(),
             "this binary cannot read it, so it claims nothing"
         );
 
         // Nor does it overwrite it when rewriting the document.
-        store.documents().save(&relu).expect("rewrite");
-        let brut: Option<String> = store
+        store.documents().save(&read_back).expect("rewrite");
+        let raw: Option<String> = store
             .with_connection(|conn| {
                 Ok(conn.query_row(
                     "SELECT provenance FROM documents WHERE id=?1",
@@ -621,8 +617,8 @@ mod tests {
             })
             .expect("raw read back");
         assert_eq!(
-            brut.as_deref(),
-            Some("{\"agent\":\"pas-un-uuid\"}"),
+            raw.as_deref(),
+            Some("{\"agent\":\"not-a-uuid\"}"),
             "the value stays in the database: a version that can read it will find it again"
         );
     }
@@ -635,16 +631,16 @@ mod tests {
 
         store
             .documents()
-            .save(&Document::new(a.id, "dans a", QueryLanguage::SQL))
+            .save(&Document::new(a.id, "in a", QueryLanguage::SQL))
             .expect("write");
         store
             .documents()
-            .save(&Document::new(b.id, "dans b", QueryLanguage::SQL))
+            .save(&Document::new(b.id, "in b", QueryLanguage::SQL))
             .expect("write");
 
-        let dans_a = store.documents().list(a.id).expect("list");
-        assert_eq!(dans_a.len(), 1);
-        assert_eq!(dans_a[0].title, "dans a");
+        let in_a = store.documents().list(a.id).expect("list");
+        assert_eq!(in_a.len(), 1);
+        assert_eq!(in_a[0].title, "in a");
     }
 }
 

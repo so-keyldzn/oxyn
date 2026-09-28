@@ -3,8 +3,8 @@
 //! `oxyn-llm` knows how to talk to a model and to nothing else. It knows
 //! neither agents, nor the catalog, nor privacy tiers: it is `oxyn-ai` that
 //! assembles the context and applies the connection's tier
-//! ([I-04](../../CLAUDE.md#i-04)), and the `PolicyGate` that decides what a
-//! response is allowed to trigger ([I-07](../../CLAUDE.md#i-07)). This crate
+//! ([I-04](../../../CLAUDE.md#i-04)), and the `PolicyGate` that decides what a
+//! response is allowed to trigger ([I-07](../../../CLAUDE.md#i-07)). This crate
 //! is a **typed transport**, and this narrow scope is what makes it
 //! reviewable.
 //!
@@ -27,7 +27,7 @@
 //! **No provider is required.** [`ProviderRegistry::default`] is empty, and it
 //! is Oxyn's default installation: the AI workspace is then absent from the
 //! interface and the product remains a complete database client
-//! ([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)). Nothing here probes
+//! ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)). Nothing here probes
 //! the machine looking for a local model, reads an environment variable at
 //! startup, or builds a provider it was not asked for.
 //!
@@ -36,7 +36,7 @@
 //! `llama.cpp`, OpenAI, Azure and OpenRouter. Anthropic and Gemini have their
 //! own: their protocols differ exactly where Oxyn needs them to be exact —
 //! tool calls — and a common adapter would be wrong there
-//! ([`ARCHITECTURE` §7.5](../../docs/ARCHITECTURE.md)).
+//! ([`ARCHITECTURE` §7.5](../../../docs/ARCHITECTURE.md)).
 //!
 //! What they share is **the stream driver**, not the decoding: the guarantee
 //! "exactly one [`ChatEvent::Done`], last, whatever the exit" is held in a
@@ -47,7 +47,7 @@
 //! `Display`; [`ChatMessage`] and [`ChatRequest`] mask their content, because
 //! at the `Sampled` tier that content is made of real rows from the user's
 //! database, and a `tracing::debug!` would write them in clear on disk
-//! ([I-03](../../CLAUDE.md#i-03)). Any response body quoted in an error is
+//! ([I-03](../../../CLAUDE.md#i-03)). Any response body quoted in an error is
 //! truncated and scrubbed of the key.
 //!
 //! **Cancellation goes all the way.** The [`oxyn_core::CancelToken`] passed to
@@ -169,16 +169,16 @@ mod tests {
     #[test]
     fn the_ai_workspace_is_absent_without_configuration() {
         // ADR-0006: this is Oxyn's default state, not a degraded state.
-        let registre = ProviderRegistry::new();
-        assert!(registre.is_empty());
-        assert!(registre.providers().is_empty());
+        let registry = ProviderRegistry::new();
+        assert!(registry.is_empty());
+        assert!(registry.providers().is_empty());
         for id in [
             ProviderId::ollama(),
             ProviderId::openai(),
             ProviderId::anthropic(),
             ProviderId::gemini(),
         ] {
-            assert!(registre.get(&id).is_none(), "{id}");
+            assert!(registry.get(&id).is_none(), "{id}");
         }
     }
 
@@ -186,16 +186,16 @@ mod tests {
     fn a_request_does_not_leak_the_context_into_traces() {
         // The failure I-03 targets: `tracing::debug!("{req:?}")` writing rows
         // of the customer database into a log file.
-        let requete = ChatRequest::new(
+        let request = ChatRequest::new(
             "llama3.2",
             vec![
-                ChatMessage::system("tu réponds en SQL"),
-                ChatMessage::user("le client Dupont, IBAN FR7630006000011234567890189"),
+                ChatMessage::system("you answer in SQL"),
+                ChatMessage::user("customer Dupont, IBAN FR7630006000011234567890189"),
             ],
         );
-        let rendu = format!("{requete:?}");
-        assert!(!rendu.contains("Dupont"), "{rendu}");
-        assert!(!rendu.contains("FR76"), "{rendu}");
+        let rendered = format!("{request:?}");
+        assert!(!rendered.contains("Dupont"), "{rendered}");
+        assert!(!rendered.contains("FR76"), "{rendered}");
     }
 
     #[test]
@@ -210,10 +210,10 @@ mod tests {
             ProviderId::anthropic(),
             ProviderId::gemini(),
         ];
-        let mut vus: Vec<String> = ids.iter().map(ProviderId::to_string).collect();
-        vus.sort_unstable();
-        let compte = vus.len();
-        vus.dedup();
-        assert_eq!(vus.len(), compte, "two providers share a name");
+        let mut seen: Vec<String> = ids.iter().map(ProviderId::to_string).collect();
+        seen.sort_unstable();
+        let count = seen.len();
+        seen.dedup();
+        assert_eq!(seen.len(), count, "two providers share a name");
     }
 }

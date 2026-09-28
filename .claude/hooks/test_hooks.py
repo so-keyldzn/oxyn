@@ -17,141 +17,141 @@ import sys
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
-RACINE = HOOKS.parents[1]
+REPO_ROOT = HOOKS.parents[1]
 
 
-def executer(script: str, evenement: dict) -> tuple[str | None, str]:
+def execute(script: str, event: dict) -> tuple[str | None, str]:
     """Run a hook and return (decision, reason). `None` = let through."""
     r = subprocess.run(
         [sys.executable, str(HOOKS / script)],
-        input=json.dumps(evenement),
+        input=json.dumps(event),
         capture_output=True,
         text=True,
         timeout=30,
-        env={"CLAUDE_PROJECT_DIR": str(RACINE), "PATH": "/usr/bin:/bin:/usr/local/bin"},
+        env={"CLAUDE_PROJECT_DIR": str(REPO_ROOT), "PATH": "/usr/bin:/bin:/usr/local/bin"},
     )
     if r.returncode != 0:
         return ("ERROR", r.stderr.strip()[:300])
     if not r.stdout.strip():
         return (None, "")
     try:
-        charge = json.loads(r.stdout)
+        payload = json.loads(r.stdout)
     except json.JSONDecodeError:
         return ("ERROR", f"non-JSON output: {r.stdout[:200]}")
-    sortie = charge.get("hookSpecificOutput", {})
-    if "systemMessage" in charge and not sortie:
-        return ("message", charge["systemMessage"][:120])
-    return (sortie.get("permissionDecision"), sortie.get("permissionDecisionReason", ""))
+    output = payload.get("hookSpecificOutput", {})
+    if "systemMessage" in payload and not output:
+        return ("message", payload["systemMessage"][:120])
+    return (output.get("permissionDecision"), output.get("permissionDecisionReason", ""))
 
 
-def ecriture(chemin: str, contenu: str) -> dict:
+def write_op(path_str: str, content: str) -> dict:
     return {
         "hook_event_name": "PreToolUse",
         "tool_name": "Write",
-        "tool_input": {"file_path": str(RACINE / chemin), "content": contenu},
+        "tool_input": {"file_path": str(REPO_ROOT / path_str), "content": content},
     }
 
 
-def bash(commande: str) -> dict:
+def bash(command: str) -> dict:
     return {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
-        "tool_input": {"command": commande},
+        "tool_input": {"command": command},
     }
 
 
-CAS: list[tuple[str, str, dict, str | None]] = [
+CASES: list[tuple[str, str, dict, str | None]] = [
     # ---- code_interdit: I-08, Tauri outside oxyn-desktop --------------------
     ("I-08 Tauri caught", "code_interdit.py",
-     ecriture("crates/oxyn-exec/src/lib.rs", "use tauri::State;\n"), "deny"),
+     write_op("crates/oxyn-exec/src/lib.rs", "use tauri::State;\n"), "deny"),
     ("I-08 Tauri caught: plugin", "code_interdit.py",
-     ecriture("crates/oxyn-store/src/lib.rs", "fn a() { tauri_plugin_dialog::init(); }\n"), "deny"),
+     write_op("crates/oxyn-store/src/lib.rs", "fn a() { tauri_plugin_dialog::init(); }\n"), "deny"),
     ("I-08 Tauri false positive: the desktop host is allowed", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/main.rs", "use tauri::Manager;\n"), None),
+     write_op("crates/oxyn-desktop/src/main.rs", "use tauri::Manager;\n"), None),
     ("I-08 Tauri false positive: mention in a comment", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/ids.rs", "// parsed from strings sent by tauri::ipc\npub struct A;\n"), None),
+     write_op("crates/oxyn-core/src/ids.rs", "// parsed from strings sent by tauri::ipc\npub struct A;\n"), None),
     ("I-08 Tauri manifest caught", "code_interdit.py",
-     ecriture("crates/oxyn-core/Cargo.toml", "[dependencies]\ntauri.workspace = true\n"), "deny"),
+     write_op("crates/oxyn-core/Cargo.toml", "[dependencies]\ntauri.workspace = true\n"), "deny"),
     ("I-08 Tauri manifest caught: tauri-build", "code_interdit.py",
-     ecriture("crates/oxyn-exec/Cargo.toml", "[build-dependencies]\ntauri-build.workspace = true\n"), "deny"),
+     write_op("crates/oxyn-exec/Cargo.toml", "[build-dependencies]\ntauri-build.workspace = true\n"), "deny"),
     ("I-08 Tauri manifest false positive: oxyn-desktop", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/Cargo.toml", "[dependencies]\ntauri.workspace = true\n"), None),
+     write_op("crates/oxyn-desktop/Cargo.toml", "[dependencies]\ntauri.workspace = true\n"), None),
 
     # ---- code_interdit: I-05, synchronous Tauri command ---------------------
     ("I-05 synchronous Tauri command", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/commands.rs",
+     write_op("crates/oxyn-desktop/src/commands.rs",
               "#[tauri::command]\npub fn list(backend: State<'_, Backend>) -> Vec<A> {\n    backend.list()\n}\n"), "ask"),
     ("I-05 false positive: async command", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/commands.rs",
+     write_op("crates/oxyn-desktop/src/commands.rs",
               "#[tauri::command]\npub async fn list(backend: State<'_, Backend>) -> Result<Vec<A>, E> {\n    backend.list().await\n}\n"), None),
     ("I-05 false positive: command(async)", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/commands.rs",
+     write_op("crates/oxyn-desktop/src/commands.rs",
               "#[tauri::command(async)]\npub fn list(backend: State<'_, Backend>) -> Vec<A> {\n    backend.list()\n}\n"), None),
 
     # ---- code_interdit: front end, I-01 and raw HTML ------------------------
     ("I-01 invoke outside the IPC client", "code_interdit.py",
-     ecriture("apps/desktop/src/features/workspace/grid.tsx",
+     write_op("apps/desktop/src/features/workspace/grid.tsx",
               'import { invoke } from "@tauri-apps/api/core"\n'), "deny"),
     ("I-01 invoke: multi-line import", "code_interdit.py",
-     ecriture("apps/desktop/src/lib/ipc/consoles.ts",
+     write_op("apps/desktop/src/lib/ipc/consoles.ts",
               'import {\n  Channel,\n  invoke,\n} from "@tauri-apps/api/core"\n'), "deny"),
     ("I-01 invoke: namespace", "code_interdit.py",
-     ecriture("apps/desktop/src/features/a.ts",
+     write_op("apps/desktop/src/features/a.ts",
               'import * as core from "@tauri-apps/api/core"\ncore.invoke("execute")\n'), "deny"),
     ("I-01 false positive: the IPC client is allowed", "code_interdit.py",
-     ecriture("apps/desktop/src/lib/ipc/client.ts",
+     write_op("apps/desktop/src/lib/ipc/client.ts",
               'import { Channel, invoke, isTauri } from "@tauri-apps/api/core"\n'), None),
     ("I-01 false positive: Channel alone", "code_interdit.py",
-     ecriture("apps/desktop/src/lib/ipc/consoles.ts",
+     write_op("apps/desktop/src/lib/ipc/consoles.ts",
               'import { Channel } from "@tauri-apps/api/core"\n'), None),
     ("I-01 false positive: an invoke that is not Tauri", "code_interdit.py",
-     ecriture("apps/desktop/src/features/a.ts", "handlers.invoke(event)\n"), None),
+     write_op("apps/desktop/src/features/a.ts", "handlers.invoke(event)\n"), None),
     ("raw HTML in an Oxyn component", "code_interdit.py",
-     ecriture("apps/desktop/src/components/oxyn/cell.tsx",
+     write_op("apps/desktop/src/components/oxyn/cell.tsx",
               "<td dangerouslySetInnerHTML={{ __html: value }} />\n"), "deny"),
     ("raw HTML false positive: generated shadcn component", "code_interdit.py",
-     ecriture("apps/desktop/src/components/ui/chart.tsx",
+     write_op("apps/desktop/src/components/ui/chart.tsx",
               "<style dangerouslySetInnerHTML={{ __html: css }} />\n"), None),
 
     # ---- code_interdit: I-03, Debug derived on a secret carrier -------------
     ("I-03 Debug caught", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/cfg.rs", "#[derive(Clone, Debug)]\npub struct Credentials { pub pwd: String }\n"), "deny"),
+     write_op("crates/oxyn-core/src/cfg.rs", "#[derive(Clone, Debug)]\npub struct Credentials { pub pwd: String }\n"), "deny"),
     ("I-03 Debug false positive: type without a secret", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/cfg.rs", "#[derive(Clone, Debug)]\npub struct ColumnMeta { pub name: String }\n"), None),
+     write_op("crates/oxyn-core/src/cfg.rs", "#[derive(Clone, Debug)]\npub struct ColumnMeta { pub name: String }\n"), None),
     ("I-03 Debug false positive: secret without Debug", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/cfg.rs", "#[derive(Clone)]\npub struct Credentials { pub pwd: String }\n"), None),
+     write_op("crates/oxyn-core/src/cfg.rs", "#[derive(Clone)]\npub struct Credentials { pub pwd: String }\n"), None),
 
     # ---- code_interdit: I-03, hard-coded secret -----------------------------
     ("I-03 DSN caught", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/main.rs", 'let u = "postgres://bob:s3cr3t@db.prod:5432/app";\n'), "deny"),
+     write_op("crates/oxyn-desktop/src/main.rs", 'let u = "postgres://bob:s3cr3t@db.prod:5432/app";\n'), "deny"),
     ("I-03 DSN false positive: no password", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/main.rs", 'let u = "postgres://localhost:5432/app";\n'), None),
+     write_op("crates/oxyn-desktop/src/main.rs", 'let u = "postgres://localhost:5432/app";\n'), None),
 
     # ---- code_interdit: unsafe and catch-all modules ------------------------
     ("unsafe without SAFETY", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/ffi.rs", "fn a() {\n    unsafe {\n        g();\n    }\n}\n"), "ask"),
+     write_op("crates/oxyn-desktop/src/ffi.rs", "fn a() {\n    unsafe {\n        g();\n    }\n}\n"), "ask"),
     ("unsafe with SAFETY", "code_interdit.py",
-     ecriture("crates/oxyn-desktop/src/ffi.rs", "fn a() {\n    // SAFETY: g() only reads fields initialized by new().\n    unsafe {\n        g();\n    }\n}\n"), None),
+     write_op("crates/oxyn-desktop/src/ffi.rs", "fn a() {\n    // SAFETY: g() only reads fields initialized by new().\n    unsafe {\n        g();\n    }\n}\n"), None),
     ("catch-all module", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/lib.rs", "pub mod utils;\n"), "ask"),
+     write_op("crates/oxyn-core/src/lib.rs", "pub mod utils;\n"), "ask"),
     ("module named after its subject", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/lib.rs", "pub mod identifier;\n"), None),
+     write_op("crates/oxyn-core/src/lib.rs", "pub mod identifier;\n"), None),
 
     # ---- code_interdit: TODO ------------------------------------------------
     ("TODO without a date", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/lib.rs", "// x\npub fn a() {} // TODO revisit\n"), "ask"),
+     write_op("crates/oxyn-core/src/lib.rs", "// x\npub fn a() {} // TODO revisit\n"), "ask"),
     ("dated TODO", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/lib.rs", "pub fn a() {} // TODO(2026-10-01): after ADR-0010\n"), None),
+     write_op("crates/oxyn-core/src/lib.rs", "pub fn a() {} // TODO(2026-10-01): after ADR-0010\n"), None),
     # A plan phase is a deadline just like a date, and it is the form the code
     # uses most. The hook and `script/verifier-todo` must both accept it: this
     # case is what prevents one of them from tightening without the other
     # knowing.
     ("TODO tied to a phase", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/lib.rs", "pub fn a() {} // TODO(phase 2): when the catalog responds\n"), None),
+     write_op("crates/oxyn-core/src/lib.rs", "pub fn a() {} // TODO(phase 2): when the catalog responds\n"), None),
     # False positive seen in real use: a document that *talks about* TODOs
     # legitimately contains some. The check only applies to code.
     ("TODO false positive: documentation talking about TODOs", "code_interdit.py",
-     ecriture(".claude/commands/relire.md", "- an undated `TODO` is reported.\n"), None),
+     write_op(".claude/commands/relire.md", "- an undated `TODO` is reported.\n"), None),
 
     # ---- bash_interdit: workarounds -----------------------------------------
     ("--no-verify", "bash_interdit.py", bash('git commit --no-verify -m "feat: a"'), "deny"),
@@ -189,18 +189,18 @@ CAS: list[tuple[str, str, dict, str | None]] = [
 ]
 
 
-def principal() -> int:
-    echecs = []
-    for intitule, script, evenement, attendu in CAS:
-        obtenu, raison = executer(script, evenement)
-        if obtenu != attendu:
-            echecs.append((intitule, attendu, obtenu, raison))
-            print(f"FAIL   {intitule}\n       expected={attendu} got={obtenu}\n       {raison[:200]}")
+def main() -> int:
+    failures = []
+    for label, script, event, expected in CASES:
+        actual, reason = execute(script, event)
+        if actual != expected:
+            failures.append((label, expected, actual, reason))
+            print(f"FAIL   {label}\n       expected={expected} got={actual}\n       {reason[:200]}")
         else:
-            print(f"ok     {intitule}")
-    print(f"\n{len(CAS) - len(echecs)}/{len(CAS)} cases pass")
-    return 1 if echecs else 0
+            print(f"ok     {label}")
+    print(f"\n{len(CASES) - len(failures)}/{len(CASES)} cases pass")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(principal())
+    sys.exit(main())

@@ -3,8 +3,8 @@
 //!
 //! # Why a table of its own
 //!
-//! `audit_journal` answers « what command was authorised, and to whom ». It
-//! cannot answer « which data from `clients` went to which provider »: its
+//! `audit_journal` answers "what command was authorised, and to whom". It
+//! cannot answer "which data from `customers` went to which provider": its
 //! columns — `command_kind`, the policy triad, `statement`, `rows_affected` —
 //! mean something else, and bending them would make both questions unreadable.
 //! A read of a sample is journalled there as the `PreviewRelation` it is; the
@@ -26,7 +26,7 @@
 //! [`Egress`] exposes [`append`](Egress::append) and reads — no `update`, no
 //! `delete` — and two triggers abort any `UPDATE` or `DELETE`, `sqlite3`
 //! included. An egress record that could be erased would answer the one
-//! question it exists for with « nothing left », which is the worst possible
+//! question it exists for with "nothing left", which is the worst possible
 //! wrong answer. No foreign key either: the record survives the deletion of the
 //! connection, the provider and the conversation it names.
 //!
@@ -55,7 +55,7 @@ pub const MAX_COLUMNS: usize = 256;
 
 /// Longest column name recorded, in bytes.
 ///
-/// Longer than any identifier the supported engines accept. A « name » past it
+/// Longer than any identifier the supported engines accept. A "name" past it
 /// is not a name — it is where a value would be smuggled.
 pub const MAX_COLUMN_NAME_BYTES: usize = 256;
 

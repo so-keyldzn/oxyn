@@ -358,8 +358,8 @@ impl fmt::Debug for ConnectionConfig {
     /// reference are not printed. Only the keys are — knowing that a `host`
     /// parameter exists is useful; knowing which one is not, in a log.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct ClesSeules<'a>(&'a IndexMap<String, String>);
-        impl fmt::Debug for ClesSeules<'_> {
+        struct KeysOnly<'a>(&'a IndexMap<String, String>);
+        impl fmt::Debug for KeysOnly<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_map()
                     .entries(self.0.keys().map(|k| (k, "<redacted>")))
@@ -374,7 +374,7 @@ impl fmt::Debug for ConnectionConfig {
             // The tier is showable, and it must be: an incident is diagnosed
             // by knowing under which tier the connection was running.
             .field("privacy_tier", &self.privacy_tier)
-            .field("params", &ClesSeules(&self.params))
+            .field("params", &KeysOnly(&self.params))
             .field(
                 "secret_ref",
                 &self.secret_ref.as_ref().map(|_| "<redacted reference>"),
@@ -401,7 +401,7 @@ mod tests {
     fn an_environment_missing_from_the_file_means_production() {
         let json = r#"{
             "id": "018f0000-0000-7000-8000-000000000000",
-            "name": "base client",
+            "name": "customer database",
             "driver": "postgres"
         }"#;
         let cfg: ConnectionConfig = serde_json::from_str(json).expect("deserialization");
@@ -419,7 +419,7 @@ mod tests {
         // ADR-0006: the default is safe. A connection whose tier is not filled
         // in is **never** `Sampled` — it is I-02's direction of caution applied
         // to the AI boundary.
-        let cfg = ConnectionConfig::new("base client", DriverId::postgres());
+        let cfg = ConnectionConfig::new("customer database", DriverId::postgres());
         assert_eq!(cfg.privacy_tier, PrivacyTier::Metadata);
         assert!(!cfg.privacy_tier.allows_row_values());
     }
@@ -430,7 +430,7 @@ mod tests {
         // field existed. It must not be read back as `Sampled`.
         let json = r#"{
             "id": "018f0000-0000-7000-8000-000000000000",
-            "name": "base client",
+            "name": "customer database",
             "driver": "postgres"
         }"#;
         let cfg: ConnectionConfig = serde_json::from_str(json).expect("deserialization");
@@ -441,19 +441,18 @@ mod tests {
     fn the_tier_is_persisted_with_the_connection() {
         // The tier belongs to the connection: the round trip must be exact,
         // otherwise a workspace read back would lower — or widen — the protection.
-        for niveau in [
+        for tier in [
             PrivacyTier::Local,
             PrivacyTier::Metadata,
             PrivacyTier::Sampled,
         ] {
-            let cfg =
-                ConnectionConfig::new("sandbox", DriverId::sqlite()).with_privacy_tier(niveau);
+            let cfg = ConnectionConfig::new("sandbox", DriverId::sqlite()).with_privacy_tier(tier);
             let json = serde_json::to_string(&cfg).expect("serialization");
-            let relu: ConnectionConfig = serde_json::from_str(&json).expect("deserialization");
-            assert_eq!(relu.privacy_tier, niveau, "{json}");
-            assert_eq!(niveau.as_str().parse::<PrivacyTier>(), Ok(niveau));
+            let read_back: ConnectionConfig = serde_json::from_str(&json).expect("deserialization");
+            assert_eq!(read_back.privacy_tier, tier, "{json}");
+            assert_eq!(tier.as_str().parse::<PrivacyTier>(), Ok(tier));
         }
-        assert!("confidentiel".parse::<PrivacyTier>().is_err());
+        assert!("confidential".parse::<PrivacyTier>().is_err());
     }
 
     #[test]
@@ -497,8 +496,8 @@ mod tests {
             Environment::Staging,
             Environment::Production,
         ] {
-            let relu: Environment = env.as_str().parse().expect("aller-retour");
-            assert_eq!(env, relu);
+            let read_back: Environment = env.as_str().parse().expect("round trip");
+            assert_eq!(env, read_back);
         }
         assert_eq!(
             "prod"
@@ -506,42 +505,48 @@ mod tests {
                 .expect("abbreviation accepted"),
             Environment::Production
         );
-        assert!("recette".parse::<Environment>().is_err());
+        assert!("uat".parse::<Environment>().is_err());
     }
 
     #[test]
     fn the_debug_leaks_no_parameter_value() {
         let cfg = ConnectionConfig::new("prod-eu", DriverId::postgres())
-            .with_param("host", "db.interne.example")
+            .with_param("host", "db.internal.example")
             .with_param("sslmode", "require")
-            .with_secret_ref("oxyn/connexion/prod-eu");
+            .with_secret_ref("oxyn/connection/prod-eu");
 
-        let rendu = format!("{cfg:?}");
+        let rendered = format!("{cfg:?}");
 
         assert!(
-            !rendu.contains("db.interne.example"),
-            "host leaked: {rendu}"
+            !rendered.contains("db.internal.example"),
+            "host leaked: {rendered}"
         );
-        assert!(!rendu.contains("require"), "value leaked: {rendu}");
+        assert!(!rendered.contains("require"), "value leaked: {rendered}");
         assert!(
-            !rendu.contains("oxyn/connexion/prod-eu"),
-            "secret reference leaked: {rendu}"
+            !rendered.contains("oxyn/connection/prod-eu"),
+            "secret reference leaked: {rendered}"
         );
         assert!(
-            !rendu.contains(&cfg.id.to_string()),
-            "identifier leaked: {rendu}"
+            !rendered.contains(&cfg.id.to_string()),
+            "identifier leaked: {rendered}"
         );
 
         // What remains must remain useful for diagnosis.
-        assert!(rendu.contains("prod-eu"), "the name is showable: {rendu}");
-        assert!(rendu.contains("host"), "the keys are showable: {rendu}");
-        assert!(rendu.contains("postgres"));
+        assert!(
+            rendered.contains("prod-eu"),
+            "the name is showable: {rendered}"
+        );
+        assert!(
+            rendered.contains("host"),
+            "the keys are showable: {rendered}"
+        );
+        assert!(rendered.contains("postgres"));
         // `Production` and not `production`: the derived `Debug` renders the
         // Rust variant name. Lowercase is the serde form
         // (`rename_all = "lowercase"`), which only applies to what is persisted.
         assert!(
-            rendu.contains("Production"),
-            "the environment must stay readable: {rendu}"
+            rendered.contains("Production"),
+            "the environment must stay readable: {rendered}"
         );
     }
 
@@ -552,20 +557,23 @@ mod tests {
         // committed to a team repository from carrying away a production
         // password.
         let cfg = ConnectionConfig::new("prod-eu", DriverId::postgres())
-            .with_param("host", "db.interne.example")
-            .with_secret_ref("oxyn/connexion/prod-eu");
+            .with_param("host", "db.internal.example")
+            .with_secret_ref("oxyn/connection/prod-eu");
 
         let json = serde_json::to_string(&cfg).expect("serialization");
 
         assert!(!json.contains("password"), "suspicious field: {json}");
         assert!(
-            json.contains("oxyn/connexion/prod-eu"),
+            json.contains("oxyn/connection/prod-eu"),
             "the reference is persisted"
         );
 
-        let relu: ConnectionConfig = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(relu, cfg, "the round trip must be faithful");
-        assert_eq!(relu.secret_ref.as_deref(), Some("oxyn/connexion/prod-eu"));
+        let read_back: ConnectionConfig = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(read_back, cfg, "the round trip must be faithful");
+        assert_eq!(
+            read_back.secret_ref.as_deref(),
+            Some("oxyn/connection/prod-eu")
+        );
     }
 
     #[test]
@@ -574,8 +582,8 @@ mod tests {
             .with_param("host", "h")
             .with_param("port", "5432")
             .with_param("dbname", "d");
-        let cles: Vec<_> = cfg.params.keys().map(String::as_str).collect();
-        assert_eq!(cles, ["host", "port", "dbname"]);
+        let keys: Vec<_> = cfg.params.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["host", "port", "dbname"]);
     }
 
     #[test]

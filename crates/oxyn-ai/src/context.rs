@@ -951,20 +951,20 @@ mod tests {
             Capabilities::SQL | Capabilities::SCHEMAS | Capabilities::INDEXES,
         ));
 
-        let espace = CatalogPath::for_namespace(Some("caisse"), "public").expect("valid path");
+        let schema_path = CatalogPath::for_namespace(Some("retail"), "public").expect("valid path");
         cache
             .set_relations(
-                &espace,
+                &schema_path,
                 vec![
-                    RelationRef::new(espace.clone(), "clients", RelationKind::Table)
+                    RelationRef::new(schema_path.clone(), "clients", RelationKind::Table)
                         .expect("valid name"),
-                    RelationRef::new(espace.clone(), "commandes", RelationKind::Table)
+                    RelationRef::new(schema_path.clone(), "purchases", RelationKind::Table)
                         .expect("valid name"),
                 ],
             )
             .expect("a namespace");
 
-        let clients = espace.with_relation("clients").expect("valid path");
+        let clients = schema_path.with_relation("clients").expect("valid path");
         cache
             .set_relation(
                 &clients,
@@ -979,11 +979,11 @@ mod tests {
             )
             .expect("the path names a relation");
 
-        let commandes = espace.with_relation("commandes").expect("valid path");
+        let commands = schema_path.with_relation("purchases").expect("valid path");
         cache
             .set_relation(
-                &commandes,
-                Relation::new("commandes", RelationKind::Table).with_fields(vec![
+                &commands,
+                Relation::new("purchases", RelationKind::Table).with_fields(vec![
                     Field::new("id", 0, LogicalType::INT64, "int8").primary_key(),
                     Field::new("client_id", 1, LogicalType::INT64, "int8").not_null(),
                 ]),
@@ -991,18 +991,18 @@ mod tests {
             .expect("the path names a relation");
         cache
             .set_indexes(
-                &commandes,
+                &commands,
                 vec![Index::new(
-                    "idx_commandes_client",
+                    "idx_purchases_client",
                     vec!["client_id".to_owned()],
                 )],
             )
             .expect("the path names a relation");
         cache
             .set_foreign_keys(
-                &commandes,
+                &commands,
                 vec![ForeignKey::new(
-                    "fk_commandes_client",
+                    "fk_purchases_client",
                     vec!["client_id".to_owned()],
                     ForeignKeyTarget {
                         relation: clients.clone(),
@@ -1015,33 +1015,36 @@ mod tests {
         cache
     }
 
-    fn chemin(relation: &str) -> CatalogPath {
-        CatalogPath::for_relation(Some("caisse"), Some("public"), relation)
+    fn path(relation: &str) -> CatalogPath {
+        CatalogPath::for_relation(Some("retail"), Some("public"), relation)
             .expect("valid test path")
     }
 
     #[test]
     fn the_normalized_ddl_describes_the_chosen_relations() {
         let cache = cache();
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata)
             .with_language(QueryLanguage::Sql(SqlDialect::Postgres))
             .build();
 
-        let bloc = contexte.prompt_block();
+        let block = context.prompt_block();
         assert!(
-            bloc.contains(r#"table "caisse"."public"."clients""#),
-            "{bloc}"
-        );
-        assert!(bloc.contains(r#""id" int8 not null primary key"#), "{bloc}");
-        assert!(bloc.contains("estimated rows: 12000"), "{bloc}");
-        assert!(bloc.contains("PostgreSQL 17.2"), "{bloc}");
-        assert!(
-            bloc.contains(r#"  index "idx_commandes_client" ("client_id")"#),
-            "{bloc}"
+            block.contains(r#"table "retail"."public"."clients""#),
+            "{block}"
         );
         assert!(
-            bloc.contains(r#"references "caisse"."public"."clients" ("id")"#),
-            "{bloc}"
+            block.contains(r#""id" int8 not null primary key"#),
+            "{block}"
+        );
+        assert!(block.contains("estimated rows: 12000"), "{block}");
+        assert!(block.contains("PostgreSQL 17.2"), "{block}");
+        assert!(
+            block.contains(r#"  index "idx_purchases_client" ("client_id")"#),
+            "{block}"
+        );
+        assert!(
+            block.contains(r#"references "retail"."public"."clients" ("id")"#),
+            "{block}"
         );
     }
 
@@ -1050,11 +1053,11 @@ mod tests {
         // A 5,000-table database does not fit in a context window: the
         // selection is a real component (ADR-0006, consequences).
         let cache = cache();
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata)
             .focused_on("clients")
             .build();
-        assert_eq!(contexte.relations(), [chemin("clients")].as_slice());
-        assert!(!contexte.prompt_block().contains("commandes"));
+        assert_eq!(context.relations(), [path("clients")].as_slice());
+        assert!(!context.prompt_block().contains("purchases"));
     }
 
     #[test]
@@ -1062,8 +1065,8 @@ mod tests {
         // THE test of ADR-0006: under `Metadata`, a sample provided by the
         // caller is dropped, and nothing of its content appears anywhere.
         let cache = cache();
-        let echantillon = RowSample::new(
-            chemin("clients"),
+        let sample = RowSample::new(
+            path("clients"),
             vec!["id".to_owned(), "email".to_owned()],
             vec![
                 vec![
@@ -1077,33 +1080,33 @@ mod tests {
             ],
         );
 
-        for niveau in [PrivacyTier::Local, PrivacyTier::Metadata] {
-            let contexte = ContextBuilder::new(&cache, niveau)
-                .with_samples(vec![echantillon.clone()])
+        for tier in [PrivacyTier::Local, PrivacyTier::Metadata] {
+            let context = ContextBuilder::new(&cache, tier)
+                .with_samples(vec![sample.clone()])
                 .build();
-            let bloc = contexte.prompt_block();
-            assert!(!bloc.contains("dupont@example.com"), "{niveau}: {bloc}");
-            assert!(!bloc.contains("FR76"), "{niveau}: {bloc}");
-            assert!(!bloc.contains("4711"), "{niveau}: {bloc}");
-            assert_eq!(contexte.dropped_samples(), 1, "{niveau}");
+            let block = context.prompt_block();
+            assert!(!block.contains("dupont@example.com"), "{tier}: {block}");
+            assert!(!block.contains("FR76"), "{tier}: {block}");
+            assert!(!block.contains("4711"), "{tier}: {block}");
+            assert_eq!(context.dropped_samples(), 1, "{tier}");
             // The schema does leave: `Metadata` is not "nothing leaves".
-            assert!(bloc.contains("clients"), "{niveau}: {bloc}");
+            assert!(block.contains("clients"), "{tier}: {block}");
         }
     }
 
     #[test]
     fn an_approved_sample_leaves_under_sampled() {
         let cache = cache();
-        let echantillon = RowSample::new(
-            chemin("clients"),
+        let sample = RowSample::new(
+            path("clients"),
             vec!["id".to_owned()],
             vec![vec![ScalarValue::Int64(4711)]],
         );
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Sampled)
-            .with_samples(vec![echantillon])
+        let context = ContextBuilder::new(&cache, PrivacyTier::Sampled)
+            .with_samples(vec![sample])
             .build();
-        assert_eq!(contexte.dropped_samples(), 0);
-        assert!(contexte.prompt_block().contains("4711"));
+        assert_eq!(context.dropped_samples(), 0);
+        assert!(context.prompt_block().contains("4711"));
     }
 
     #[test]
@@ -1124,31 +1127,31 @@ mod tests {
             )
             .expect("the path names a relation");
 
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
-        let bloc = contexte.prompt_block();
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+        let block = context.prompt_block();
         assert_eq!(
-            bloc.matches(untrusted::FENCE_CLOSE).count(),
+            block.matches(untrusted::FENCE_CLOSE).count(),
             1,
-            "the comment closed the fence: {bloc}"
+            "the comment closed the fence: {block}"
         );
-        assert_eq!(bloc.matches(untrusted::FENCE_OPEN).count(), 1, "{bloc}");
+        assert_eq!(block.matches(untrusted::FENCE_OPEN).count(), 1, "{block}");
     }
 
     #[test]
     fn the_budget_drops_relations_and_says_so() {
         let cache = cache();
-        let politique = ContextPolicy {
+        let policy = ContextPolicy {
             max_context_tokens: 30,
             ..ContextPolicy::default()
         };
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata)
-            .with_policy(politique)
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_policy(policy)
             .build();
-        assert!(contexte.omitted_relations() > 0, "{contexte:?}");
+        assert!(context.omitted_relations() > 0, "{context:?}");
         assert!(
-            contexte.prompt_block().contains("did not fit"),
+            context.prompt_block().contains("did not fit"),
             "the pruning must be visible: {}",
-            contexte.prompt_block()
+            context.prompt_block()
         );
     }
 
@@ -1157,31 +1160,31 @@ mod tests {
         // A context that changes from one build to the next makes the model's
         // answers irreproducible, hence undebuggable.
         let cache = cache();
-        let premier = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+        let first = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
         let second = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
-        assert_eq!(premier.prompt_block(), second.prompt_block());
-        assert_eq!(premier.relations(), second.relations());
+        assert_eq!(first.prompt_block(), second.prompt_block());
+        assert_eq!(first.relations(), second.relations());
     }
 
     #[test]
     fn an_undescribed_relation_says_so_instead_of_looking_empty() {
         let mut cache = CatalogCache::new();
-        let espace = CatalogPath::for_namespace(None, "public").expect("valid path");
+        let schema_path = CatalogPath::for_namespace(None, "public").expect("valid path");
         cache
             .set_relations(
-                &espace,
+                &schema_path,
                 vec![
-                    RelationRef::new(espace.clone(), "journal", RelationKind::Table)
+                    RelationRef::new(schema_path.clone(), "journal", RelationKind::Table)
                         .expect("valid name"),
                 ],
             )
             .expect("a namespace");
 
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
         assert!(
-            contexte.prompt_block().contains("fields not read yet"),
+            context.prompt_block().contains("fields not read yet"),
             "{}",
-            contexte.prompt_block()
+            context.prompt_block()
         );
     }
 
@@ -1190,11 +1193,14 @@ mod tests {
         // The failure aimed at: `tracing::debug!("{ctx:?}")` writes the customer
         // database's column names to a log file (I-03).
         let cache = cache();
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
-        let rendu = format!("{contexte:?}");
-        assert!(!rendu.contains("clients"), "{rendu}");
-        assert!(rendu.contains("redacted"), "{rendu}");
-        assert!(rendu.contains("Metadata"), "the tier remains diagnosable");
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+        let rendered = format!("{context:?}");
+        assert!(!rendered.contains("clients"), "{rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
+        assert!(
+            rendered.contains("Metadata"),
+            "the tier remains diagnosable"
+        );
     }
 
     #[test]
@@ -1212,12 +1218,12 @@ mod tests {
     #[test]
     fn an_empty_cache_produces_an_honest_context() {
         let cache = CatalogCache::new();
-        let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
-        assert!(contexte.relations().is_empty());
+        let context = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+        assert!(context.relations().is_empty());
         assert!(
-            contexte.prompt_block().contains("Describing 0 of 0"),
+            context.prompt_block().contains("Describing 0 of 0"),
             "{}",
-            contexte.prompt_block()
+            context.prompt_block()
         );
     }
 }

@@ -141,8 +141,8 @@ mod tests {
         // A single definition in the repository: if this re-export became a
         // second definition, persistence and transport would diverge without
         // either of them noticing.
-        let ici: ReasoningBlock = ReasoningBlock::redacted("x");
-        let domaine: oxyn_core::ai::ReasoningBlock = ici.clone();
-        assert_eq!(ici, domaine);
+        let here: ReasoningBlock = ReasoningBlock::redacted("x");
+        let domain: oxyn_core::ai::ReasoningBlock = here.clone();
+        assert_eq!(here, domain);
     }
 }

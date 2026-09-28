@@ -56,8 +56,8 @@ pub use oxyn_core::ai::ProviderId;
 #[must_use]
 pub(crate) fn normalize_base_url(mut url: Url) -> Url {
     if !url.path().ends_with('/') {
-        let chemin = format!("{}/", url.path());
-        url.set_path(&chemin);
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
     }
     url
 }
@@ -189,18 +189,18 @@ impl ProviderRegistry {
         self.write().insert(id, provider)
     }
 
-    /// Retire un fournisseur.
+    /// Removes a provider.
     pub fn remove(&self, id: &ProviderId) -> Option<Arc<dyn LlmProvider>> {
         self.write().remove(id)
     }
 
-    /// Rend un fournisseur inscrit.
+    /// Returns a registered provider.
     #[must_use]
     pub fn get(&self, id: &ProviderId) -> Option<Arc<dyn LlmProvider>> {
         self.read().get(id).map(Arc::clone)
     }
 
-    /// Identifiants inscrits, par ordre stable.
+    /// Registered identifiers, in stable order.
     #[must_use]
     pub fn ids(&self) -> Vec<ProviderId> {
         self.read().keys().cloned().collect()
@@ -212,7 +212,7 @@ impl ProviderRegistry {
         self.read().values().map(Arc::clone).collect()
     }
 
-    /// Nombre de fournisseurs inscrits.
+    /// Number of registered providers.
     #[must_use]
     pub fn len(&self) -> usize {
         self.read().len()
@@ -227,7 +227,7 @@ impl ProviderRegistry {
         self.read().is_empty()
     }
 
-    /// Vide le registre.
+    /// Empties the registry.
     pub fn clear(&self) {
         self.write().clear();
     }
@@ -305,20 +305,20 @@ pub fn build_provider(
             ))
         }
         AiProviderKind::OpenAiCompatible => {
-            let fournisseur = crate::openai_compatible::OpenAiCompatibleProvider::new(
+            let provider = crate::openai_compatible::OpenAiCompatibleProvider::new(
                 ProviderId::openai_compatible(),
                 base_url,
             )?;
             // A given key is presented; its absence cannot be required — that
             // is the case of a local model.
             Ok(Arc::new(match key {
-                Some(key) => fournisseur.with_api_key(key),
-                None => fournisseur,
+                Some(key) => provider.with_api_key(key),
+                None => provider,
             }))
         }
-        autre => Err(LlmError::Unsupported {
+        other => Err(LlmError::Unsupported {
             provider: ProviderId::openai_compatible(),
-            capability: format!("provider family `{autre}`"),
+            capability: format!("provider family `{other}`"),
         }
         .into()),
     }
@@ -338,12 +338,12 @@ fn require_key(id: &ProviderId, key: Option<ApiKey>) -> Result<ApiKey> {
 mod tests {
     use super::*;
 
-    /// Fournisseur de test : n'ouvre aucune connexion.
+    /// Test provider: opens no connection.
     #[derive(Debug)]
-    struct FournisseurFactice(ProviderId);
+    struct FakeProvider(ProviderId);
 
     #[async_trait]
-    impl LlmProvider for FournisseurFactice {
+    impl LlmProvider for FakeProvider {
         fn id(&self) -> ProviderId {
             self.0.clone()
         }
@@ -361,8 +361,8 @@ mod tests {
         }
     }
 
-    fn factice(id: &str) -> Arc<dyn LlmProvider> {
-        Arc::new(FournisseurFactice(
+    fn fake(id: &str) -> Arc<dyn LlmProvider> {
+        Arc::new(FakeProvider(
             ProviderId::new(id).expect("valid test identifier"),
         ))
     }
@@ -370,68 +370,68 @@ mod tests {
     #[test]
     fn a_new_registry_is_empty() {
         // ADR-0006: this is the default installation, not a failure.
-        let registre = ProviderRegistry::default();
-        assert!(registre.is_empty());
-        assert_eq!(registre.len(), 0);
-        assert!(registre.ids().is_empty());
-        assert!(registre.get(&ProviderId::openai()).is_none());
+        let registry = ProviderRegistry::default();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+        assert!(registry.ids().is_empty());
+        assert!(registry.get(&ProviderId::openai()).is_none());
     }
 
     #[test]
     fn a_registered_provider_is_found_again() {
-        let registre = ProviderRegistry::new();
-        assert!(registre.register(factice("ollama")).is_none());
-        assert!(!registre.is_empty());
-        assert!(registre.get(&ProviderId::ollama()).is_some());
-        assert_eq!(registre.ids(), vec![ProviderId::ollama()]);
+        let registry = ProviderRegistry::new();
+        assert!(registry.register(fake("ollama")).is_none());
+        assert!(!registry.is_empty());
+        assert!(registry.get(&ProviderId::ollama()).is_some());
+        assert_eq!(registry.ids(), vec![ProviderId::ollama()]);
     }
 
     #[test]
     fn registering_again_returns_the_previous_one() {
-        let registre = ProviderRegistry::new();
-        registre.register(factice("openai"));
-        let remplace = registre.register(factice("openai"));
+        let registry = ProviderRegistry::new();
+        registry.register(fake("openai"));
+        let replaced = registry.register(fake("openai"));
         assert!(
-            remplace.is_some(),
+            replaced.is_some(),
             "a reconfiguration must be visible to the caller"
         );
-        assert_eq!(registre.len(), 1);
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]
     fn the_order_of_identifiers_is_stable() {
-        let registre = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         for id in ["openrouter", "ollama", "azure-openai", "openai"] {
-            registre.register(factice(id));
+            registry.register(fake(id));
         }
-        let ids: Vec<String> = registre.ids().iter().map(ProviderId::to_string).collect();
+        let ids: Vec<String> = registry.ids().iter().map(ProviderId::to_string).collect();
         assert_eq!(ids, ["azure-openai", "ollama", "openai", "openrouter"]);
     }
 
     #[test]
     fn remove_then_clear() {
-        let registre = ProviderRegistry::new();
-        registre.register(factice("ollama"));
-        registre.register(factice("openai"));
-        assert!(registre.remove(&ProviderId::ollama()).is_some());
-        assert!(registre.remove(&ProviderId::ollama()).is_none());
-        registre.clear();
-        assert!(registre.is_empty());
+        let registry = ProviderRegistry::new();
+        registry.register(fake("ollama"));
+        registry.register(fake("openai"));
+        assert!(registry.remove(&ProviderId::ollama()).is_some());
+        assert!(registry.remove(&ProviderId::ollama()).is_none());
+        registry.clear();
+        assert!(registry.is_empty());
     }
 
     #[test]
     fn a_local_family_builds_without_key() {
         // Ollama, LM Studio, `llama.cpp`: a missing key is the nominal state,
         // not a configuration failure.
-        let fournisseur = build_provider(
+        let provider = build_provider(
             AiProviderKind::OpenAiCompatible,
             "http://localhost:11434/v1",
             None,
         )
         .expect("a local endpoint builds without a key");
-        assert_eq!(fournisseur.id(), ProviderId::openai_compatible());
+        assert_eq!(provider.id(), ProviderId::openai_compatible());
         assert_eq!(
-            fournisseur.endpoint().map(reqwest::Url::as_str),
+            provider.endpoint().map(reqwest::Url::as_str),
             Some("http://localhost:11434/v1/"),
             "the URL is normalized, and nothing was resolved"
         );
@@ -449,20 +449,20 @@ mod tests {
                 "https://generativelanguage.googleapis.com",
             ),
         ] {
-            let erreur =
+            let error =
                 build_provider(kind, base_url, None).expect_err("a remote family requires a key");
             assert!(
-                matches!(erreur, oxyn_core::OxynError::Authentication(_)),
-                "{kind} : {erreur:?}"
+                matches!(error, oxyn_core::OxynError::Authentication(_)),
+                "{kind} : {error:?}"
             );
-            let message = erreur.to_string();
+            let message = error.to_string();
             assert!(message.contains("API key"), "{message}");
 
             // With a key, the same declaration builds.
-            let fournisseur = build_provider(kind, base_url, Some(ApiKey::new("sk-test")))
+            let provider = build_provider(kind, base_url, Some(ApiKey::new("sk-test")))
                 .expect("a remote family builds with its key");
-            let rendu = format!("{fournisseur:?}");
-            assert!(!rendu.contains("sk-test"), "leaked key: {rendu}");
+            let rendered = format!("{provider:?}");
+            assert!(!rendered.contains("sk-test"), "leaked key: {rendered}");
         }
     }
 
@@ -484,12 +484,9 @@ mod tests {
 
     #[test]
     fn an_unreadable_url_is_refused_by_the_factory() {
-        let erreur = build_provider(AiProviderKind::OpenAiCompatible, "pas une url", None)
+        let error = build_provider(AiProviderKind::OpenAiCompatible, "not a url", None)
             .expect_err("unreadable URL");
-        assert!(
-            matches!(erreur, oxyn_core::OxynError::Config(_)),
-            "{erreur}"
-        );
+        assert!(matches!(error, oxyn_core::OxynError::Config(_)), "{error}");
     }
 
     #[test]

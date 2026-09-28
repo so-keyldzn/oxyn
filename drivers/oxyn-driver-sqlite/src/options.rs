@@ -102,18 +102,18 @@ mod tests {
 
     #[test]
     fn defaults_bound_both_dimensions() {
-        let limites = BatchLimits::default();
-        assert_eq!(limites.max_rows(), 8_192);
-        assert!(limites.max_bytes() > 0);
+        let limits = BatchLimits::default();
+        assert_eq!(limits.max_rows(), 8_192);
+        assert!(limits.max_bytes() > 0);
     }
 
     #[test]
     fn a_batch_closes_on_the_first_bound_reached() {
-        let limites = BatchLimits::new().with_max_rows(10).with_max_bytes(100);
-        assert!(!limites.reached(9, 99));
-        assert!(limites.reached(10, 0), "the row bound is enough");
+        let limits = BatchLimits::new().with_max_rows(10).with_max_bytes(100);
+        assert!(!limits.reached(9, 99));
+        assert!(limits.reached(10, 0), "the row bound is enough");
         assert!(
-            limites.reached(1, 100),
+            limits.reached(1, 100),
             "a single one-megabyte row closes the batch"
         );
     }
@@ -121,9 +121,9 @@ mod tests {
     #[test]
     fn a_zero_bound_is_raised_to_one() {
         // A zero-row batch would spin the read loop without advancing.
-        let limites = BatchLimits::new().with_max_rows(0).with_max_bytes(0);
-        assert_eq!(limites.max_rows(), 1);
-        assert_eq!(limites.max_bytes(), 1);
-        assert!(limites.reached(1, 0));
+        let limits = BatchLimits::new().with_max_rows(0).with_max_bytes(0);
+        assert_eq!(limits.max_rows(), 1);
+        assert_eq!(limits.max_bytes(), 1);
+        assert!(limits.reached(1, 0));
     }
 }

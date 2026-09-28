@@ -177,7 +177,7 @@ define_uuid_ids! {
 
     /// A launch of the application. Serves to tell a clean shutdown from a
     /// crash: the row it identifies carries its closing and its heartbeat
-    /// ([ADR-0021](../../docs/adr/0021-marqueur-d-arret.md)).
+    /// ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
     AppSessionId,
 
     /// A conversation thread with the assistant, as persisted and found again
@@ -191,7 +191,7 @@ define_uuid_ids! {
 
     /// A workspace window, chosen by the desktop application and kept from one
     /// launch to the next with its layout
-    /// ([ADR-0043](../../docs/adr/0043-multi-fenetre.md)).
+    /// ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
     WindowId,
 }
 
@@ -332,19 +332,19 @@ mod tests {
 
     #[test]
     fn v7_is_time_ordered() {
-        let mut precedent = ResultId::new();
+        let mut previous = ResultId::new();
         for _ in 0..64 {
-            let suivant = ResultId::new();
-            assert!(precedent <= suivant, "UUID v7 must grow with time");
-            precedent = suivant;
+            let next = ResultId::new();
+            assert!(previous <= next, "UUID v7 must grow with time");
+            previous = next;
         }
     }
 
     #[test]
     fn text_round_trip() {
         let id = CommandId::new();
-        let relu: CommandId = id.to_string().parse().expect("a rendered UUID reads back");
-        assert_eq!(id, relu);
+        let read_back: CommandId = id.to_string().parse().expect("a rendered UUID reads back");
+        assert_eq!(id, read_back);
     }
 
     #[test]
@@ -352,23 +352,23 @@ mod tests {
         let id = DocumentId::new();
         let json = serde_json::to_string(&id).expect("serialization");
         assert_eq!(json, format!("\"{id}\""));
-        let relu: DocumentId = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(id, relu);
+        let read_back: DocumentId = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(id, read_back);
     }
 
     #[test]
     fn a_failed_parse_does_not_copy_the_value() {
-        let erreur = "production-connection-of-the-bank"
+        let error = "production-connection-of-the-bank"
             .parse::<ConnectionId>()
             .expect_err("this is not a UUID");
-        let message = erreur.to_string();
+        let message = error.to_string();
         assert!(!message.contains("bank"), "the faulty value leaked");
-        assert_eq!(erreur.kind(), "ConnectionId");
+        assert_eq!(error.kind(), "ConnectionId");
     }
 
     #[test]
     fn driver_id_accepts_protocol_names() {
-        for nom in [
+        for name in [
             "postgres",
             "mysql",
             "sqlite",
@@ -376,13 +376,13 @@ mod tests {
             "mongo2",
             "sql-server",
         ] {
-            assert!(DriverId::new(nom).is_ok(), "{nom} should be accepted");
+            assert!(DriverId::new(name).is_ok(), "{name} should be accepted");
         }
     }
 
     #[test]
     fn driver_id_refuses_what_is_not_normalized() {
-        for nom in [
+        for name in [
             "",
             "Postgres",
             "2fast",
@@ -390,7 +390,7 @@ mod tests {
             "post/gres",
             "post.gres",
         ] {
-            assert!(DriverId::new(nom).is_err(), "{nom:?} should be refused");
+            assert!(DriverId::new(name).is_err(), "{name:?} should be refused");
         }
         assert!(DriverId::new("a".repeat(33)).is_err());
     }
@@ -399,7 +399,7 @@ mod tests {
     fn driver_id_constants() {
         assert_eq!(DriverId::postgres().as_str(), "postgres");
         assert_eq!(DriverId::sqlite().to_string(), "sqlite");
-        assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valide"));
+        assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valid"));
     }
 
     #[test]

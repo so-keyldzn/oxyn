@@ -47,7 +47,7 @@ use sqlx::Row as _;
 use sqlx::TypeInfo as _;
 use sqlx::postgres::{PgRow, PgValueFormat};
 
-use crate::numeric::{Lecteur, render_binary};
+use crate::numeric::{Reader, render_binary};
 use crate::types::PgDecoding;
 
 /// Microseconds between the Unix epoch and PostgreSQL's (2000-01-01).
@@ -177,19 +177,19 @@ impl BatchAssembler {
             });
         }
 
-        for (ordinal, colonne) in self.columns.iter_mut().enumerate() {
-            let brute = row.try_get_raw(ordinal).map_err(|err| DecodeError::Row {
+        for (ordinal, column) in self.columns.iter_mut().enumerate() {
+            let raw_value = row.try_get_raw(ordinal).map_err(|err| DecodeError::Row {
                 detail: err.to_string(),
             })?;
-            let format = brute.format();
+            let format = raw_value.format();
             // `as_bytes` returns an error on a missing value; that is how `sqlx`
             // distinguishes NULL, not through a variant.
-            let octets = brute.as_bytes().ok();
-            self.bytes = self.bytes.saturating_add(octets.map_or(0, <[u8]>::len));
+            let encoded = raw_value.as_bytes().ok();
+            self.bytes = self.bytes.saturating_add(encoded.map_or(0, <[u8]>::len));
 
             // The type name is composed only on the error path: here, one
             // allocation per cell would cost the budget of a whole result.
-            if let Err(detail) = colonne.append(format, octets) {
+            if let Err(detail) = column.append(format, encoded) {
                 return Err(DecodeError::Value {
                     ordinal,
                     pg_type: sanitize_type(
@@ -212,25 +212,25 @@ impl BatchAssembler {
     /// [`DecodeError::Arrow`] if the built batch does not match the schema —
     /// which would be a driver bug, not faulty data.
     pub fn finish(&mut self) -> Result<RecordBatch, DecodeError> {
-        let mut tableaux = Vec::with_capacity(self.columns.len());
-        for colonne in &mut self.columns {
-            tableaux.push(colonne.finish()?);
+        let mut arrays = Vec::with_capacity(self.columns.len());
+        for column in &mut self.columns {
+            arrays.push(column.finish()?);
         }
-        let lignes = self.rows;
+        let rows = self.rows;
         self.rows = 0;
         self.bytes = 0;
 
         // A result without columns — an `INSERT`, a `SET` — still has a row
         // count, which `try_new` cannot infer from zero columns.
-        if tableaux.is_empty() {
-            let options = RecordBatchOptions::new().with_row_count(Some(lignes));
+        if arrays.is_empty() {
+            let options = RecordBatchOptions::new().with_row_count(Some(rows));
             return Ok(RecordBatch::try_new_with_options(
                 Arc::clone(&self.schema),
-                tableaux,
+                arrays,
                 &options,
             )?);
         }
-        Ok(RecordBatch::try_new(Arc::clone(&self.schema), tableaux)?)
+        Ok(RecordBatch::try_new(Arc::clone(&self.schema), arrays)?)
     }
 }
 
@@ -335,9 +335,9 @@ impl ColumnBuilder {
         if format == PgValueFormat::Text {
             return match self {
                 Self::Text(builder, _) => {
-                    let texte =
+                    let text =
                         std::str::from_utf8(bytes).map_err(|_| "non-UTF-8 text from the server")?;
-                    builder.append_value(texte);
+                    builder.append_value(text);
                     Ok(())
                 }
                 _ => Err("the simple protocol's text format is not decoded"),
@@ -346,20 +346,20 @@ impl ColumnBuilder {
 
         match self {
             Self::Bool(builder) => {
-                let octet = bytes.first().ok_or("empty boolean")?;
-                builder.append_value(*octet != 0);
+                let byte = bytes.first().ok_or("empty boolean")?;
+                builder.append_value(*byte != 0);
             }
             Self::Int16(builder) => builder.append_value(read_i16(bytes)?),
             Self::Int32(builder) => builder.append_value(read_i32(bytes)?),
             Self::Int64(builder) => builder.append_value(read_i64(bytes)?),
             Self::UInt32(builder) => builder.append_value(read_u32(bytes)?),
             Self::Float32(builder) => {
-                let octets: [u8; 4] = bytes.try_into().map_err(|_| "float4 of unexpected size")?;
-                builder.append_value(f32::from_be_bytes(octets));
+                let encoded: [u8; 4] = bytes.try_into().map_err(|_| "float4 of unexpected size")?;
+                builder.append_value(f32::from_be_bytes(encoded));
             }
             Self::Float64(builder) => {
-                let octets: [u8; 8] = bytes.try_into().map_err(|_| "float8 of unexpected size")?;
-                builder.append_value(f64::from_be_bytes(octets));
+                let encoded: [u8; 8] = bytes.try_into().map_err(|_| "float8 of unexpected size")?;
+                builder.append_value(f64::from_be_bytes(encoded));
             }
             Self::Text(builder, source) => {
                 render_text(builder, *source, bytes)?;
@@ -369,7 +369,7 @@ impl ColumnBuilder {
             Self::Time(builder) => builder.append_value(read_time(bytes)?),
             Self::Timestamp(builder) => builder.append_value(read_timestamp(bytes)?),
             Self::Interval(builder) => builder.append_value(read_interval(bytes)?),
-            Self::List(colonne) => colonne.append(bytes)?,
+            Self::List(column) => column.append(bytes)?,
         }
         Ok(())
     }
@@ -390,13 +390,13 @@ impl ColumnBuilder {
             Self::Time(builder) => builder.append_null(),
             Self::Timestamp(builder) => builder.append_null(),
             Self::Interval(builder) => builder.append_null(),
-            Self::List(colonne) => colonne.append_null(),
+            Self::List(column) => column.append_null(),
         }
     }
 
     /// Closes the column and starts over empty.
     fn finish(&mut self) -> Result<ArrayRef, DecodeError> {
-        let tableau: ArrayRef = match self {
+        let array: ArrayRef = match self {
             Self::Bool(builder) => Arc::new(builder.finish()),
             Self::Int16(builder) => Arc::new(builder.finish()),
             Self::Int32(builder) => Arc::new(builder.finish()),
@@ -410,9 +410,9 @@ impl ColumnBuilder {
             Self::Time(builder) => Arc::new(builder.finish()),
             Self::Timestamp(builder) => Arc::new(builder.finish()),
             Self::Interval(builder) => Arc::new(builder.finish()),
-            Self::List(colonne) => colonne.finish()?,
+            Self::List(column) => column.finish()?,
         };
-        Ok(tableau)
+        Ok(array)
     }
 }
 
@@ -441,18 +441,18 @@ impl ListColumn {
 
     /// Closes the column and starts over empty.
     fn finish(&mut self) -> Result<ArrayRef, DecodeError> {
-        let valeurs = self.child.finish()?;
-        let decalages = std::mem::replace(&mut self.offsets, vec![0]);
-        let validite = std::mem::take(&mut self.validity);
+        let values = self.child.finish()?;
+        let offset_values = std::mem::replace(&mut self.offsets, vec![0]);
+        let validity_bits = std::mem::take(&mut self.validity);
         self.elements = 0;
 
-        let tableau = ListArray::try_new(
+        let array = ListArray::try_new(
             Arc::clone(&self.field),
-            OffsetBuffer::new(ScalarBuffer::from(decalages)),
-            valeurs,
-            Some(NullBuffer::from(validite)),
+            OffsetBuffer::new(ScalarBuffer::from(offset_values)),
+            values,
+            Some(NullBuffer::from(validity_bits)),
         )?;
-        Ok(Arc::new(tableau))
+        Ok(Arc::new(array))
     }
 }
 
@@ -464,27 +464,28 @@ fn render_text(
 ) -> Result<(), &'static str> {
     match source {
         TextSource::Raw => {
-            let texte = std::str::from_utf8(bytes).map_err(|_| "non-UTF-8 text from the server")?;
-            builder.append_value(texte);
+            let text = std::str::from_utf8(bytes).map_err(|_| "non-UTF-8 text from the server")?;
+            builder.append_value(text);
         }
         TextSource::Jsonb => {
-            let (version, suite) = bytes.split_first().ok_or("empty jsonb")?;
+            let (version, tail) = bytes.split_first().ok_or("empty jsonb")?;
             if *version != JSONB_VERSION {
                 return Err("unknown jsonb version");
             }
-            let texte = std::str::from_utf8(suite).map_err(|_| "non-UTF-8 jsonb")?;
-            builder.append_value(texte);
+            let text = std::str::from_utf8(tail).map_err(|_| "non-UTF-8 jsonb")?;
+            builder.append_value(text);
         }
         TextSource::Numeric => {
-            let rendu = render_binary(bytes).ok_or("unreadable numeric")?;
-            builder.append_value(&rendu);
+            let rendered = render_binary(bytes).ok_or("unreadable numeric")?;
+            builder.append_value(&rendered);
         }
         TextSource::Uuid => {
-            let octets: [u8; UUID_LEN] = bytes.try_into().map_err(|_| "uuid of unexpected size")?;
-            let identifiant = uuid::Uuid::from_bytes(octets);
-            let mut tampon = uuid::Uuid::encode_buffer();
-            let canonique: &str = identifiant.hyphenated().encode_lower(&mut tampon);
-            builder.append_value(canonique);
+            let encoded: [u8; UUID_LEN] =
+                bytes.try_into().map_err(|_| "uuid of unexpected size")?;
+            let identifier = uuid::Uuid::from_bytes(encoded);
+            let mut buffer = uuid::Uuid::encode_buffer();
+            let canonical: &str = identifier.hyphenated().encode_lower(&mut buffer);
+            builder.append_value(canonical);
         }
         TextSource::TimeTz => {
             builder.append_value(&render_timetz(bytes)?);
@@ -500,69 +501,68 @@ fn render_text(
 /// that shifts data by two hours without anyone seeing it
 /// ([DRIVER-CONTRACT §7](../../../docs/DRIVER-CONTRACT.md)).
 fn render_timetz(bytes: &[u8]) -> Result<String, &'static str> {
-    let mut lecteur = Lecteur::new(bytes);
-    let micros = lecteur.i64().ok_or("truncated timetz")?;
-    let ouest = lecteur.i32().ok_or("timetz without an offset")?;
+    let mut reader = Reader::new(bytes);
+    let micros = reader.i64().ok_or("truncated timetz")?;
+    let west = reader.i32().ok_or("timetz without an offset")?;
 
     if !(0..=86_400_000_000).contains(&micros) {
         return Err("timetz outside the bounds of a day");
     }
-    let secondes = micros / 1_000_000;
-    let reste = micros % 1_000_000;
-    let heures = secondes / 3_600;
-    let minutes = (secondes % 3_600) / 60;
-    let sec = secondes % 60;
+    let seconds = micros / 1_000_000;
+    let rest = micros % 1_000_000;
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    let secs = seconds % 60;
 
-    let est = ouest.checked_neg().ok_or("nonsensical timetz offset")?;
-    let signe = if est < 0 { '-' } else { '+' };
-    let absolu = est.unsigned_abs();
-    let heures_offset = absolu / 3_600;
-    let minutes_offset = (absolu % 3_600) / 60;
+    let east = west.checked_neg().ok_or("nonsensical timetz offset")?;
+    let sign = if east < 0 { '-' } else { '+' };
+    let absolute = east.unsigned_abs();
+    let hours_offset = absolute / 3_600;
+    let minutes_offset = (absolute % 3_600) / 60;
 
-    let mut sortie = String::with_capacity(24);
-    let _ = write!(sortie, "{heures:02}:{minutes:02}:{sec:02}");
-    if reste != 0 {
-        let _ = write!(sortie, ".{reste:06}");
+    let mut out = String::with_capacity(24);
+    let _ = write!(out, "{hours:02}:{minutes:02}:{secs:02}");
+    if rest != 0 {
+        let _ = write!(out, ".{rest:06}");
     }
-    let _ = write!(sortie, "{signe}{heures_offset:02}:{minutes_offset:02}");
-    Ok(sortie)
+    let _ = write!(out, "{sign}{hours_offset:02}:{minutes_offset:02}");
+    Ok(out)
 }
 
 /// A big-endian `int2`.
 fn read_i16(bytes: &[u8]) -> Result<i16, &'static str> {
-    let octets: [u8; 2] = bytes.try_into().map_err(|_| "int2 of unexpected size")?;
-    Ok(i16::from_be_bytes(octets))
+    let encoded: [u8; 2] = bytes.try_into().map_err(|_| "int2 of unexpected size")?;
+    Ok(i16::from_be_bytes(encoded))
 }
 
 /// A big-endian `int4`.
 fn read_i32(bytes: &[u8]) -> Result<i32, &'static str> {
-    let octets: [u8; 4] = bytes.try_into().map_err(|_| "int4 of unexpected size")?;
-    Ok(i32::from_be_bytes(octets))
+    let encoded: [u8; 4] = bytes.try_into().map_err(|_| "int4 of unexpected size")?;
+    Ok(i32::from_be_bytes(encoded))
 }
 
 /// A big-endian `int8`.
 fn read_i64(bytes: &[u8]) -> Result<i64, &'static str> {
-    let octets: [u8; 8] = bytes.try_into().map_err(|_| "int8 of unexpected size")?;
-    Ok(i64::from_be_bytes(octets))
+    let encoded: [u8; 8] = bytes.try_into().map_err(|_| "int8 of unexpected size")?;
+    Ok(i64::from_be_bytes(encoded))
 }
 
 /// A big-endian `oid`.
 fn read_u32(bytes: &[u8]) -> Result<u32, &'static str> {
-    let octets: [u8; 4] = bytes.try_into().map_err(|_| "oid of unexpected size")?;
-    Ok(u32::from_be_bytes(octets))
+    let encoded: [u8; 4] = bytes.try_into().map_err(|_| "oid of unexpected size")?;
+    Ok(u32::from_be_bytes(encoded))
 }
 
 /// A `date`: days since 2000-01-01, brought back to the Unix epoch.
 fn read_date(bytes: &[u8]) -> Result<i32, &'static str> {
-    let jours = read_i32(bytes)?;
-    if jours == i32::MIN || jours == i32::MAX {
+    let days = read_i32(bytes)?;
+    if days == i32::MIN || days == i32::MAX {
         // `infinity` and `-infinity` are legal dates in PostgreSQL. No `Date32`
         // value represents them; rendering them as the extreme date would be
         // wrong, and `NULL` would be a lie.
         return Err("infinite date, not representable as Date32 — cast it to text");
     }
-    jours
-        .checked_add(EPOCH_SHIFT_DAYS)
+    days.checked_add(EPOCH_SHIFT_DAYS)
         .ok_or("date outside the bounds of Date32")
 }
 
@@ -589,14 +589,14 @@ fn read_timestamp(bytes: &[u8]) -> Result<i64, &'static str> {
 
 /// An `interval`: microseconds, days, months — in that order on the wire.
 fn read_interval(bytes: &[u8]) -> Result<IntervalMonthDayNano, &'static str> {
-    let mut lecteur = Lecteur::new(bytes);
-    let micros = lecteur.i64().ok_or("truncated interval")?;
-    let jours = lecteur.i32().ok_or("interval without days")?;
-    let mois = lecteur.i32().ok_or("interval without months")?;
+    let mut reader = Reader::new(bytes);
+    let micros = reader.i64().ok_or("truncated interval")?;
+    let days = reader.i32().ok_or("interval without days")?;
+    let months = reader.i32().ok_or("interval without months")?;
     let nanos = micros
         .checked_mul(1_000)
         .ok_or("interval longer than 292 years in microseconds, not representable")?;
-    Ok(IntervalMonthDayNano::new(mois, jours, nanos))
+    Ok(IntervalMonthDayNano::new(months, days, nanos))
 }
 
 /// Splits a binary PostgreSQL array into elements.
@@ -606,10 +606,10 @@ fn read_interval(bytes: &[u8]) -> Result<IntervalMonthDayNano, &'static str> {
 /// `RowDescription`, which is authoritative, and following the header would let
 /// a server have anything decoded as anything.
 fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static str> {
-    let mut lecteur = Lecteur::new(bytes);
-    let dimensions = lecteur.i32().ok_or("truncated array header")?;
-    let _drapeaux = lecteur.i32().ok_or("truncated array header")?;
-    let _type_element = lecteur.u32().ok_or("truncated array header")?;
+    let mut reader = Reader::new(bytes);
+    let dimensions = reader.i32().ok_or("truncated array header")?;
+    let _flags = reader.i32().ok_or("truncated array header")?;
+    let _element_type = reader.u32().ok_or("truncated array header")?;
 
     if dimensions == 0 {
         return Ok(Vec::new());
@@ -620,28 +620,26 @@ fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static str> {
         return Err("multi-dimensional array, not representable as an Arrow list");
     }
 
-    let longueur = lecteur.i32().ok_or("truncated array dimension")?;
-    let _borne_basse = lecteur.i32().ok_or("truncated array dimension")?;
-    let longueur = usize::try_from(longueur).map_err(|_| "negative array length")?;
+    let length = reader.i32().ok_or("truncated array dimension")?;
+    let _lower_bound = reader.i32().ok_or("truncated array dimension")?;
+    let length = usize::try_from(length).map_err(|_| "negative array length")?;
 
     // Each element costs at least its four length bytes: a value larger than
     // what the buffer can hold is hostile, and `with_capacity` on such a value
     // would exhaust memory.
-    if longueur > lecteur.reste().len() / 4 + 1 {
+    if length > reader.rest().len() / 4 + 1 {
         return Err("array length inconsistent with the buffer received");
     }
 
-    let mut elements = Vec::with_capacity(longueur);
-    for _ in 0..longueur {
-        let taille = lecteur.i32().ok_or("truncated array element")?;
-        if taille == -1 {
+    let mut elements = Vec::with_capacity(length);
+    for _ in 0..length {
+        let size = reader.i32().ok_or("truncated array element")?;
+        if size == -1 {
             elements.push(None);
             continue;
         }
-        let taille = usize::try_from(taille).map_err(|_| "negative element size")?;
-        elements.push(Some(
-            lecteur.prendre(taille).ok_or("truncated array element")?,
-        ));
+        let size = usize::try_from(size).map_err(|_| "negative element size")?;
+        elements.push(Some(reader.take(size).ok_or("truncated array element")?));
     }
     Ok(elements)
 }
@@ -654,42 +652,42 @@ mod tests {
     use super::*;
 
     /// Builds a one-dimensional binary PostgreSQL array.
-    fn tableau(elements: &[Option<&[u8]>]) -> Vec<u8> {
-        let mut octets = Vec::new();
-        octets.extend_from_slice(&1_i32.to_be_bytes());
-        octets.extend_from_slice(&0_i32.to_be_bytes());
-        octets.extend_from_slice(&23_u32.to_be_bytes());
-        octets.extend_from_slice(
+    fn encode_array(elements: &[Option<&[u8]>]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&1_i32.to_be_bytes());
+        encoded.extend_from_slice(&0_i32.to_be_bytes());
+        encoded.extend_from_slice(&23_u32.to_be_bytes());
+        encoded.extend_from_slice(
             &i32::try_from(elements.len())
                 .expect("short test case")
                 .to_be_bytes(),
         );
-        octets.extend_from_slice(&1_i32.to_be_bytes());
+        encoded.extend_from_slice(&1_i32.to_be_bytes());
         for element in elements {
             match element {
-                Some(valeur) => {
-                    octets.extend_from_slice(
-                        &i32::try_from(valeur.len())
+                Some(value) => {
+                    encoded.extend_from_slice(
+                        &i32::try_from(value.len())
                             .expect("short test case")
                             .to_be_bytes(),
                     );
-                    octets.extend_from_slice(valeur);
+                    encoded.extend_from_slice(value);
                 }
-                None => octets.extend_from_slice(&(-1_i32).to_be_bytes()),
+                None => encoded.extend_from_slice(&(-1_i32).to_be_bytes()),
             }
         }
-        octets
+        encoded
     }
 
-    fn colonne(decoding: &PgDecoding) -> ColumnBuilder {
+    fn new_column(decoding: &PgDecoding) -> ColumnBuilder {
         ColumnBuilder::for_decoding(decoding)
     }
 
-    fn texte_rendu(source: TextSource, bytes: &[u8]) -> Result<String, &'static str> {
+    fn rendered_text(source: TextSource, bytes: &[u8]) -> Result<String, &'static str> {
         let mut builder = StringBuilder::new();
         render_text(&mut builder, source, bytes)?;
-        let tableau: StringArray = builder.finish();
-        Ok(tableau.value(0).to_owned())
+        let array: StringArray = builder.finish();
+        Ok(array.value(0).to_owned())
     }
 
     #[test]
@@ -723,8 +721,8 @@ mod tests {
     fn an_infinite_date_is_refused_rather_than_rendered_wrong() {
         // PostgreSQL accepts `infinity`; Date32 does not. Rendering it as the
         // extreme date or as NULL would be a lie about real data.
-        let erreur = read_date(&i32::MAX.to_be_bytes()).expect_err("refusal expected");
-        assert!(erreur.contains("infinite"), "{erreur}");
+        let error = read_date(&i32::MAX.to_be_bytes()).expect_err("refusal expected");
+        assert!(error.contains("infinite"), "{error}");
         assert!(read_date(&i32::MIN.to_be_bytes()).is_err());
     }
 
@@ -749,79 +747,79 @@ mod tests {
     fn an_interval_keeps_its_three_components_distinct() {
         // A month is not 30 days and a day is not 24 hours: merging them would
         // distort any calendar computation.
-        let mut octets = Vec::new();
-        octets.extend_from_slice(&3_600_000_000_i64.to_be_bytes());
-        octets.extend_from_slice(&2_i32.to_be_bytes());
-        octets.extend_from_slice(&14_i32.to_be_bytes());
-        let intervalle = read_interval(&octets).expect("valid interval");
-        assert_eq!(intervalle.months, 14);
-        assert_eq!(intervalle.days, 2);
-        assert_eq!(intervalle.nanoseconds, 3_600_000_000_000);
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&3_600_000_000_i64.to_be_bytes());
+        encoded.extend_from_slice(&2_i32.to_be_bytes());
+        encoded.extend_from_slice(&14_i32.to_be_bytes());
+        let interval = read_interval(&encoded).expect("valid interval");
+        assert_eq!(interval.months, 14);
+        assert_eq!(interval.days, 2);
+        assert_eq!(interval.nanoseconds, 3_600_000_000_000);
     }
 
     #[test]
     fn an_interval_that_overflows_in_nanoseconds_is_refused() {
-        let mut octets = Vec::new();
-        octets.extend_from_slice(&i64::MAX.to_be_bytes());
-        octets.extend_from_slice(&0_i32.to_be_bytes());
-        octets.extend_from_slice(&0_i32.to_be_bytes());
-        assert!(read_interval(&octets).is_err());
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&i64::MAX.to_be_bytes());
+        encoded.extend_from_slice(&0_i32.to_be_bytes());
+        encoded.extend_from_slice(&0_i32.to_be_bytes());
+        assert!(read_interval(&encoded).is_err());
     }
 
     #[test]
     fn a_timetz_offset_changes_sign() {
         // PostgreSQL counts seconds west; ISO 8601 east. A botched inversion
         // shifts the data without anything reporting it.
-        let mut octets = Vec::new();
-        octets.extend_from_slice(&52_200_000_000_i64.to_be_bytes()); // 14:30:00
-        octets.extend_from_slice(&(-7_200_i32).to_be_bytes()); // 7200 s east
-        assert_eq!(render_timetz(&octets).as_deref(), Ok("14:30:00+02:00"));
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&52_200_000_000_i64.to_be_bytes()); // 14:30:00
+        encoded.extend_from_slice(&(-7_200_i32).to_be_bytes()); // 7200 s east
+        assert_eq!(render_timetz(&encoded).as_deref(), Ok("14:30:00+02:00"));
 
-        let mut ouest = Vec::new();
-        ouest.extend_from_slice(&52_200_000_000_i64.to_be_bytes());
-        ouest.extend_from_slice(&18_000_i32.to_be_bytes()); // 5 h west
-        assert_eq!(render_timetz(&ouest).as_deref(), Ok("14:30:00-05:00"));
+        let mut west = Vec::new();
+        west.extend_from_slice(&52_200_000_000_i64.to_be_bytes());
+        west.extend_from_slice(&18_000_i32.to_be_bytes()); // 5 h west
+        assert_eq!(render_timetz(&west).as_deref(), Ok("14:30:00-05:00"));
     }
 
     #[test]
     fn a_timetz_with_microseconds_keeps_them() {
-        let mut octets = Vec::new();
-        octets.extend_from_slice(&52_200_250_000_i64.to_be_bytes());
-        octets.extend_from_slice(&0_i32.to_be_bytes());
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&52_200_250_000_i64.to_be_bytes());
+        encoded.extend_from_slice(&0_i32.to_be_bytes());
         assert_eq!(
-            render_timetz(&octets).as_deref(),
+            render_timetz(&encoded).as_deref(),
             Ok("14:30:00.250000+00:00")
         );
     }
 
     #[test]
     fn a_jsonb_loses_its_version_byte_and_nothing_else() {
-        let mut octets = vec![JSONB_VERSION];
-        octets.extend_from_slice(br#"{"a": 1}"#);
+        let mut encoded = vec![JSONB_VERSION];
+        encoded.extend_from_slice(br#"{"a": 1}"#);
         assert_eq!(
-            texte_rendu(TextSource::Jsonb, &octets).as_deref(),
+            rendered_text(TextSource::Jsonb, &encoded).as_deref(),
             Ok(r#"{"a": 1}"#)
         );
         // An unknown version is refused: the rest is no longer JSON.
-        assert!(texte_rendu(TextSource::Jsonb, &[9, b'{']).is_err());
+        assert!(rendered_text(TextSource::Jsonb, &[9, b'{']).is_err());
     }
 
     #[test]
     fn a_uuid_is_rendered_in_canonical_form() {
-        let octets: [u8; 16] = [
+        let encoded: [u8; 16] = [
             0x67, 0xe5, 0x50, 0x44, 0x10, 0xb1, 0x42, 0x6f, 0x9d, 0x0c, 0x45, 0x1f, 0x8a, 0xd0,
             0x5b, 0x1a,
         ];
         assert_eq!(
-            texte_rendu(TextSource::Uuid, &octets).as_deref(),
+            rendered_text(TextSource::Uuid, &encoded).as_deref(),
             Ok("67e55044-10b1-426f-9d0c-451f8ad05b1a")
         );
-        assert!(texte_rendu(TextSource::Uuid, &octets[..8]).is_err());
+        assert!(rendered_text(TextSource::Uuid, &encoded[..8]).is_err());
     }
 
     #[test]
     fn opaque_binary_is_preserved_even_when_it_is_valid_utf8() {
-        let mut column = colonne(&PgDecoding::Opaque);
+        let mut column = new_column(&PgDecoding::Opaque);
         let bytes = b"\x00\x00\x004";
         column
             .append(PgValueFormat::Binary, Some(bytes))
@@ -842,64 +840,62 @@ mod tests {
 
     #[test]
     fn an_empty_array_and_a_missing_array_are_not_confused() {
-        let mut colonne = colonne(&PgDecoding::List(Box::new(PgDecoding::Int32)));
+        let mut column = new_column(&PgDecoding::List(Box::new(PgDecoding::Int32)));
         // `{}`: zero elements, but the list exists.
-        let vide = tableau(&[]);
-        colonne
-            .append(PgValueFormat::Binary, Some(vide.as_slice()))
+        let empty_array = encode_array(&[]);
+        column
+            .append(PgValueFormat::Binary, Some(empty_array.as_slice()))
             .expect("valid empty array");
         // `NULL`: no list at all.
-        colonne.append(PgValueFormat::Binary, None).expect("null");
+        column.append(PgValueFormat::Binary, None).expect("null");
 
-        let tableau_arrow = colonne.finish().expect("list built");
-        assert_eq!(tableau_arrow.len(), 2);
-        assert!(!tableau_arrow.is_null(0), "{{}} is not NULL");
-        assert!(tableau_arrow.is_null(1));
+        let arrow_array = column.finish().expect("list built");
+        assert_eq!(arrow_array.len(), 2);
+        assert!(!arrow_array.is_null(0), "{{}} is not NULL");
+        assert!(arrow_array.is_null(1));
     }
 
     #[test]
     fn an_integer_array_keeps_its_elements_and_its_holes() {
-        let mut colonne = colonne(&PgDecoding::List(Box::new(PgDecoding::Int32)));
-        let un = 1_i32.to_be_bytes();
-        let trois = 3_i32.to_be_bytes();
-        let octets = tableau(&[Some(&un), None, Some(&trois)]);
-        colonne
-            .append(PgValueFormat::Binary, Some(octets.as_slice()))
+        let mut column = new_column(&PgDecoding::List(Box::new(PgDecoding::Int32)));
+        let one = 1_i32.to_be_bytes();
+        let three = 3_i32.to_be_bytes();
+        let encoded = encode_array(&[Some(&one), None, Some(&three)]);
+        column
+            .append(PgValueFormat::Binary, Some(encoded.as_slice()))
             .expect("valid array");
 
-        let tableau_arrow = colonne.finish().expect("list built");
-        let listes = tableau_arrow
-            .as_list_opt::<i32>()
-            .expect("a column of lists");
-        let premiere = listes.value(0);
-        let entiers = premiere
+        let arrow_array = column.finish().expect("list built");
+        let lists = arrow_array.as_list_opt::<i32>().expect("a column of lists");
+        let first_value = lists.value(0);
+        let integers = first_value
             .as_primitive_opt::<Int32Type>()
             .expect("32-bit integers");
-        assert_eq!(entiers.len(), 3);
-        assert_eq!(entiers.value(0), 1);
-        assert!(entiers.is_null(1), "a NULL element stays NULL");
-        assert_eq!(entiers.value(2), 3);
+        assert_eq!(integers.len(), 3);
+        assert_eq!(integers.value(0), 1);
+        assert!(integers.is_null(1), "a NULL element stays NULL");
+        assert_eq!(integers.value(2), 3);
     }
 
     #[test]
     fn a_multi_dimensional_array_is_refused_not_flattened() {
-        let mut octets = Vec::new();
-        octets.extend_from_slice(&2_i32.to_be_bytes());
-        octets.extend_from_slice(&0_i32.to_be_bytes());
-        octets.extend_from_slice(&23_u32.to_be_bytes());
-        let erreur = split_array(&octets).expect_err("refusal expected");
-        assert!(erreur.contains("dimensional"), "{erreur}");
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&2_i32.to_be_bytes());
+        encoded.extend_from_slice(&0_i32.to_be_bytes());
+        encoded.extend_from_slice(&23_u32.to_be_bytes());
+        let error = split_array(&encoded).expect_err("refusal expected");
+        assert!(error.contains("dimensional"), "{error}");
     }
 
     #[test]
     fn a_hostile_array_length_does_not_exhaust_memory() {
-        let mut octets = Vec::new();
-        octets.extend_from_slice(&1_i32.to_be_bytes());
-        octets.extend_from_slice(&0_i32.to_be_bytes());
-        octets.extend_from_slice(&23_u32.to_be_bytes());
-        octets.extend_from_slice(&i32::MAX.to_be_bytes());
-        octets.extend_from_slice(&1_i32.to_be_bytes());
-        assert!(split_array(&octets).is_err());
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&1_i32.to_be_bytes());
+        encoded.extend_from_slice(&0_i32.to_be_bytes());
+        encoded.extend_from_slice(&23_u32.to_be_bytes());
+        encoded.extend_from_slice(&i32::MAX.to_be_bytes());
+        encoded.extend_from_slice(&1_i32.to_be_bytes());
+        assert!(split_array(&encoded).is_err());
     }
 
     #[test]
@@ -917,21 +913,21 @@ mod tests {
         // An `INSERT` has no column but has affected rows: without
         // `with_row_count`, Arrow would build a zero-row batch.
         let schema = Arc::new(Schema::empty());
-        let mut assembleur = BatchAssembler::new(schema, &[]);
-        assembleur.rows = 3;
-        let lot = assembleur.finish().expect("batch without columns");
-        assert_eq!(lot.num_rows(), 3);
-        assert_eq!(lot.num_columns(), 0);
+        let mut assembler = BatchAssembler::new(schema, &[]);
+        assembler.rows = 3;
+        let batch = assembler.finish().expect("batch without columns");
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 0);
     }
 
     #[test]
     fn the_assembler_starts_over_empty_after_each_batch() {
         let schema = Arc::new(Schema::empty());
-        let mut assembleur = BatchAssembler::new(schema, &[]);
-        assembleur.rows = 5;
-        assembleur.bytes = 4_096;
-        let _ = assembleur.finish().expect("batch without columns");
-        assert!(assembleur.is_empty());
-        assert_eq!(assembleur.bytes(), 0);
+        let mut assembler = BatchAssembler::new(schema, &[]);
+        assembler.rows = 5;
+        assembler.bytes = 4_096;
+        let _ = assembler.finish().expect("batch without columns");
+        assert!(assembler.is_empty());
+        assert_eq!(assembler.bytes(), 0);
     }
 }

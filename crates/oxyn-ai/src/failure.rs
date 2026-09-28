@@ -225,7 +225,7 @@ fn sqlstate(message: &str) -> Option<String> {
     // What follows must close the token: `SQLSTATE 42P01X` is not an SQLSTATE,
     // it is the start of something else.
     match rest.chars().nth(SQLSTATE_LEN) {
-        Some(suivant) if suivant.is_ascii_alphanumeric() => None,
+        Some(next_char) if next_char.is_ascii_alphanumeric() => None,
         _ => Some(code),
     }
 }
@@ -254,22 +254,28 @@ mod tests {
 
     #[test]
     fn under_local_and_metadata_the_server_message_is_not_even_stored() {
-        for niveau in [PrivacyTier::Local, PrivacyTier::Metadata] {
-            let rapport = FailureReport::redact(niveau, ErrorClass::Permanent, MESSAGE_HOSTILE);
-            assert_eq!(rapport.detail(), None, "{niveau}");
+        for tier in [PrivacyTier::Local, PrivacyTier::Metadata] {
+            let report = FailureReport::redact(tier, ErrorClass::Permanent, MESSAGE_HOSTILE);
+            assert_eq!(report.detail(), None, "{tier}");
 
-            let affiche = rapport.to_string();
-            let debogue = format!("{rapport:?}");
-            for rendu in [&affiche, &debogue] {
-                assert!(!rendu.contains("dupont@example.com"), "{niveau}: {rendu}");
-                assert!(!rendu.contains("FR76"), "{niveau}: {rendu}");
-                assert!(!rendu.contains("clients_email_key"), "{niveau}: {rendu}");
+            let displayed = report.to_string();
+            let debug_rendering = format!("{report:?}");
+            for rendered in [&displayed, &debug_rendering] {
+                assert!(
+                    !rendered.contains("dupont@example.com"),
+                    "{tier}: {rendered}"
+                );
+                assert!(!rendered.contains("FR76"), "{tier}: {rendered}");
+                assert!(
+                    !rendered.contains("clients_email_key"),
+                    "{tier}: {rendered}"
+                );
             }
             // What remains must stay useful: otherwise the model blindly retries
             // the same statement.
-            assert!(affiche.contains("SQLSTATE 23505"), "{affiche}");
-            assert!(affiche.contains("class: permanent"), "{affiche}");
-            assert!(affiche.contains("retryable: false"), "{affiche}");
+            assert!(displayed.contains("SQLSTATE 23505"), "{displayed}");
+            assert!(displayed.contains("class: permanent"), "{displayed}");
+            assert!(displayed.contains("retryable: false"), "{displayed}");
         }
     }
 
@@ -277,51 +283,51 @@ mod tests {
     fn under_sampled_the_message_arrives_whole() {
         // The negative test that gives the previous one its meaning: without it,
         // everything could be masked permanently without anything reporting it.
-        let rapport =
+        let report =
             FailureReport::redact(PrivacyTier::Sampled, ErrorClass::Permanent, MESSAGE_HOSTILE);
-        assert_eq!(rapport.detail(), Some(MESSAGE_HOSTILE));
-        assert!(rapport.to_string().contains("dupont@example.com"));
+        assert_eq!(report.detail(), Some(MESSAGE_HOSTILE));
+        assert!(report.to_string().contains("dupont@example.com"));
     }
 
     #[test]
     fn class_and_retryability_survive_the_filtering() {
         // I-13: an ambiguous error is never retried, filtered or not. The
         // retryability is derived from the class, so they cannot diverge.
-        let transitoire = FailureReport::redact(
+        let transient = FailureReport::redact(
             PrivacyTier::Metadata,
             ErrorClass::Transient,
             "server closed the connection unexpectedly",
         );
-        assert_eq!(transitoire.class(), ErrorClass::Transient);
-        assert!(transitoire.is_retryable());
-        assert!(transitoire.to_string().contains("retryable: true"));
+        assert_eq!(transient.class(), ErrorClass::Transient);
+        assert!(transient.is_retryable());
+        assert!(transient.to_string().contains("retryable: true"));
 
-        let ambigue = FailureReport::redact(
+        let ambiguous = FailureReport::redact(
             PrivacyTier::Metadata,
             ErrorClass::Ambiguous,
             "timed out after 30s",
         );
-        assert_eq!(ambigue.class(), ErrorClass::Ambiguous);
+        assert_eq!(ambiguous.class(), ErrorClass::Ambiguous);
         assert!(
-            !ambigue.is_retryable(),
+            !ambiguous.is_retryable(),
             "the server may have applied the write"
         );
-        assert!(ambigue.to_string().contains("class: ambiguous"));
+        assert!(ambiguous.to_string().contains("class: ambiguous"));
     }
 
     #[test]
     fn a_masking_tier_tells_the_model() {
-        let rapport = FailureReport::redact(
+        let report = FailureReport::redact(
             PrivacyTier::Metadata,
             ErrorClass::Permanent,
             "boom (email=x)",
         );
-        let rendu = rapport.to_string();
-        assert!(rendu.contains("withheld"), "{rendu}");
-        assert!(rendu.contains("`metadata`"), "{rendu}");
+        let rendered = report.to_string();
+        assert!(rendered.contains("withheld"), "{rendered}");
+        assert!(rendered.contains("`metadata`"), "{rendered}");
         assert!(
-            rendu.contains("Do not guess"),
-            "a model deprived of information invents it: {rendu}"
+            rendered.contains("Do not guess"),
+            "a model deprived of information invents it: {rendered}"
         );
     }
 
@@ -358,8 +364,8 @@ mod tests {
 
     #[test]
     fn an_empty_message_produces_no_code() {
-        let rapport = FailureReport::redact(PrivacyTier::Metadata, ErrorClass::Permanent, "");
-        assert_eq!(rapport.code(), None);
-        assert!(!rapport.to_string().contains("code:"));
+        let report = FailureReport::redact(PrivacyTier::Metadata, ErrorClass::Permanent, "");
+        assert_eq!(report.code(), None);
+        assert!(!report.to_string().contains("code:"));
     }
 }

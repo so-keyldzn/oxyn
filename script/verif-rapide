@@ -24,22 +24,22 @@ import subprocess
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
-FRONT = RACINE / "apps" / "desktop"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FRONT = REPO_ROOT / "apps" / "desktop"
 
 # A change here modifies how the whole workspace is built or checked: one can
 # no longer reason crate by crate.
-GLOBAUX_RUST = (
+RUST_GLOBALS = (
     "Cargo.toml",
     "Cargo.lock",
     "rust-toolchain.toml",
     "clippy.toml",
     "deny.toml",
 )
-EXTENSIONS_ESLINT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
-MOTIF_NOM = re.compile(r'^name\s*=\s*"([^"]+)"', re.MULTILINE)
+ESLINT_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+NAME_PATTERN = re.compile(r'^name\s*=\s*"([^"]+)"', re.MULTILINE)
 
-LAISSE_A_LA_CI = [
+LEFT_TO_CI = [
     "the crates that depend on the modified crates",
     "cargo doc, cargo deny, and the nextest profile (.config/nextest.toml)",
     "the stories Vitest does not relate to the modified files",
@@ -51,106 +51,106 @@ LAISSE_A_LA_CI = [
 
 def git(*arguments: str) -> str:
     return subprocess.run(
-        ["git", *arguments], cwd=RACINE, check=True, capture_output=True, text=True
+        ["git", *arguments], cwd=REPO_ROOT, check=True, capture_output=True, text=True
     ).stdout
 
 
-def fichiers_modifies(base: str) -> list[str]:
+def modified_files(base: str) -> list[str]:
     # `git diff <base>` compares with the working tree: it counts the index and
     # unstaged changes. Untracked files are added to them.
-    suivis = git("diff", "--name-only", base).splitlines()
-    nouveaux = git("ls-files", "--others", "--exclude-standard").splitlines()
-    return sorted(set(suivis) | set(nouveaux))
+    tracked = git("diff", "--name-only", base).splitlines()
+    new_items = git("ls-files", "--others", "--exclude-standard").splitlines()
+    return sorted(set(tracked) | set(new_items))
 
 
-def crate_de(chemin: str) -> str | None:
+def crate_of(path_str: str) -> str | None:
     """The name of the crate whose `Cargo.toml` is closest to the file."""
-    dossier = (RACINE / chemin).parent
-    while dossier != RACINE and RACINE in dossier.parents:
-        manifeste = dossier / "Cargo.toml"
-        if manifeste.is_file():
-            nom = MOTIF_NOM.search(manifeste.read_text(encoding="utf-8"))
-            return nom.group(1) if nom else None
-        dossier = dossier.parent
+    folder = (REPO_ROOT / path_str).parent
+    while folder != REPO_ROOT and REPO_ROOT in folder.parents:
+        manifest = folder / "Cargo.toml"
+        if manifest.is_file():
+            item_name = NAME_PATTERN.search(manifest.read_text(encoding="utf-8"))
+            return item_name.group(1) if item_name else None
+        folder = folder.parent
     return None
 
 
-def lancer(commande: list[str], dossier: Path = RACINE) -> None:
-    print(f"\n$ {' '.join(commande)}", flush=True)
-    code = subprocess.run(commande, cwd=dossier).returncode
+def launch(command: list[str], folder: Path = REPO_ROOT) -> None:
+    print(f"\n$ {' '.join(command)}", flush=True)
+    code = subprocess.run(command, cwd=folder).returncode
     if code != 0:
-        print(f"\nFailed: {' '.join(commande)} (code {code}).")
+        print(f"\nFailed: {' '.join(command)} (code {code}).")
         sys.exit(code)
 
 
-def controler_rust(fichiers: list[str]) -> None:
-    tout = any(f in GLOBAUX_RUST or f.startswith(".cargo/") for f in fichiers)
-    crates = sorted({c for f in fichiers if (c := crate_de(f))})
-    if not tout and not crates:
+def check_rust(file_list: list[str]) -> None:
+    everything = any(f in RUST_GLOBALS or f.startswith(".cargo/") for f in file_list)
+    crates = sorted({c for f in file_list if (c := crate_of(f))})
+    if not everything and not crates:
         print("\nRust: no crate file modified.")
         return
-    if tout:
+    if everything:
         print("\nRust: a workspace-wide file changed, the whole workspace is checked.")
-        cible = ["--workspace"]
+        target = ["--workspace"]
     else:
         print(f"\nRust: {', '.join(crates)}.")
-        cible = [a for c in crates for a in ("-p", c)]
+        target = [a for c in crates for a in ("-p", c)]
 
-    if (tout or "oxyn-desktop" in crates) and not (FRONT / "dist" / "client").is_dir():
+    if (everything or "oxyn-desktop" in crates) and not (FRONT / "dist" / "client").is_dir():
         print("oxyn-desktop embeds apps/desktop/dist/client, which is missing: run `make front-build`.")
         sys.exit(1)
 
-    lancer(["cargo", "fmt", "--all", "--", "--check"])
-    lancer(["cargo", "clippy", *cible, "--all-targets", "--all-features", "--", "-D", "warnings"])
-    lancer(["cargo", "test", *cible, "--all-features"])
+    launch(["cargo", "fmt", "--all", "--", "--check"])
+    launch(["cargo", "clippy", *target, "--all-targets", "--all-features", "--", "-D", "warnings"])
+    launch(["cargo", "test", *target, "--all-features"])
 
 
-def controler_front(fichiers: list[str], base: str) -> None:
-    prefixe = "apps/desktop/"
-    modifies = [f[len(prefixe):] for f in fichiers if f.startswith(prefixe)]
-    if not modifies:
+def check_front(file_list: list[str], base: str) -> None:
+    prefix = "apps/desktop/"
+    modified = [f[len(prefix):] for f in file_list if f.startswith(prefix)]
+    if not modified:
         print("\nFront end: no file modified.")
         return
-    existants = [f for f in modifies if (FRONT / f).is_file()]
-    print(f"\nFront end: {len(modifies)} file(s) modified.")
+    existing = [f for f in modified if (FRONT / f).is_file()]
+    print(f"\nFront end: {len(modified)} file(s) modified.")
 
     if not (FRONT / "node_modules").is_dir():
-        lancer(["pnpm", "install", "--frozen-lockfile"], FRONT)
-    lancer(["python3", "script/verifier-stories"])
-    lancer(["pnpm", "exec", "tsc", "--noEmit"], FRONT)
-    a_linter = [f for f in existants if f.endswith(EXTENSIONS_ESLINT)]
-    if a_linter:
-        lancer(["pnpm", "exec", "eslint", "--no-warn-ignored", *a_linter], FRONT)
-    if existants:
-        lancer(["pnpm", "exec", "prettier", "--check", "--ignore-unknown", *existants], FRONT)
-    lancer(["pnpm", "exec", "playwright", "install", "chromium"], FRONT)
+        launch(["pnpm", "install", "--frozen-lockfile"], FRONT)
+    launch(["python3", "script/verifier-stories"])
+    launch(["pnpm", "exec", "tsc", "--noEmit"], FRONT)
+    to_lint = [f for f in existing if f.endswith(ESLINT_EXTENSIONS)]
+    if to_lint:
+        launch(["pnpm", "exec", "eslint", "--no-warn-ignored", *to_lint], FRONT)
+    if existing:
+        launch(["pnpm", "exec", "prettier", "--check", "--ignore-unknown", *existing], FRONT)
+    launch(["pnpm", "exec", "playwright", "install", "chromium"], FRONT)
     # `--changed <base>` only runs the test files that import, directly or not,
     # a file modified since the base (vitest 4.1.11, RESEARCH-NOTES § npm
     # packages).
-    lancer(["pnpm", "exec", "vitest", "run", "--changed", base, "--passWithNoTests"], FRONT)
+    launch(["pnpm", "exec", "vitest", "run", "--changed", base, "--passWithNoTests"], FRONT)
 
 
-def principal() -> int:
+def main() -> int:
     try:
         base = git("merge-base", "origin/main", "HEAD").strip()
     except subprocess.CalledProcessError:
         print("origin/main not found: run `git fetch origin main`.")
         return 1
-    fichiers = fichiers_modifies(base)
-    print(f"Base: {base[:12]} (merge-base origin/main HEAD), {len(fichiers)} file(s) modified.")
+    file_list = modified_files(base)
+    print(f"Base: {base[:12]} (merge-base origin/main HEAD), {len(file_list)} file(s) modified.")
     print("Left to CI and to `make qualite`:")
-    for element in LAISSE_A_LA_CI:
+    for element in LEFT_TO_CI:
         print(f"  - {element}")
 
-    lancer(["python3", ".claude/verifier_socle.py"])
-    lancer(["python3", "script/verifier-todo"])
-    controler_rust(fichiers)
-    controler_front(fichiers, base)
+    launch(["python3", ".claude/verifier_socle.py"])
+    launch(["python3", "script/verifier-todo"])
+    check_rust(file_list)
+    check_front(file_list, base)
 
     print("\nQuick check passed. `make qualite` remains the gate.")
     return 0
 
 
 if __name__ == "__main__":
-    os.chdir(RACINE)
-    sys.exit(principal())
+    os.chdir(REPO_ROOT)
+    sys.exit(main())

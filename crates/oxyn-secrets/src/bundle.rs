@@ -205,8 +205,8 @@ impl CredentialBundle {
     /// as they are — they are names chosen by a driver, not secrets.
     #[must_use]
     pub fn filled_fields(&self) -> Vec<&str> {
-        let mut noms = Vec::new();
-        for (present, nom) in [
+        let mut names = Vec::new();
+        for (present, name) in [
             (self.password.is_some(), "password"),
             (self.token.is_some(), "token"),
             (self.tls_client_cert.is_some(), "tls_client_cert"),
@@ -215,11 +215,11 @@ impl CredentialBundle {
             (self.ssh_passphrase.is_some(), "ssh_passphrase"),
         ] {
             if present {
-                noms.push(nom);
+                names.push(name);
             }
         }
-        noms.extend(self.extra.keys().map(String::as_str));
-        noms
+        names.extend(self.extra.keys().map(String::as_str));
+        names
     }
 
     /// Encodes the set as JSON, wrapped in a [`SecretString`].
@@ -296,8 +296,8 @@ impl Zeroize for CredentialBundle {
         // `BTreeMap` has no `Zeroize` implementation: each value is erased in
         // place before the structure is emptied, otherwise `clear()` would merely
         // free buffers that are still readable.
-        for valeur in self.extra.values_mut() {
-            valeur.zeroize();
+        for value in self.extra.values_mut() {
+            value.zeroize();
         }
         self.extra.clear();
     }
@@ -322,10 +322,10 @@ mod tests {
             .with_token("sk-ant-secret")
             .with_ssh_passphrase("phrase de passe");
 
-        let rendu = format!("{bundle:?}");
-        assert_eq!(rendu, "CredentialBundle(<redacted>)");
+        let rendered = format!("{bundle:?}");
+        assert_eq!(rendered, "CredentialBundle(<redacted>)");
         for secret in ["hunter2", "sk-ant-secret", "phrase de passe"] {
-            assert!(!rendu.contains(secret), "secret leaked: {rendu}");
+            assert!(!rendered.contains(secret), "secret leaked: {rendered}");
         }
     }
 
@@ -334,20 +334,20 @@ mod tests {
         // This is the real leak path: nobody writes `{bundle:?}`; `Debug` is
         // derived on a structure that contains one.
         #[derive(Debug)]
-        struct Englobante {
+        struct Enclosing {
             #[allow(dead_code)]
-            nom: &'static str,
+            name: &'static str,
             #[allow(dead_code)]
-            identifiants: CredentialBundle,
+            credentials: CredentialBundle,
         }
 
-        let englobante = Englobante {
-            nom: "prod-eu",
-            identifiants: CredentialBundle::new().with_password("hunter2"),
+        let enclosing = Enclosing {
+            name: "prod-eu",
+            credentials: CredentialBundle::new().with_password("hunter2"),
         };
-        let rendu = format!("{englobante:?}");
-        assert!(!rendu.contains("hunter2"), "secret leaked: {rendu}");
-        assert!(rendu.contains("prod-eu"));
+        let rendered = format!("{enclosing:?}");
+        assert!(!rendered.contains("hunter2"), "secret leaked: {rendered}");
+        assert!(rendered.contains("prod-eu"));
     }
 
     #[test]
@@ -372,19 +372,25 @@ mod tests {
             .with_extra("aws_session_token", "AQoDYXdz");
 
         let json = bundle.to_secret_json().expect("encoding");
-        let relu = CredentialBundle::from_secret_json(&json).expect("decoding");
+        let read_back = CredentialBundle::from_secret_json(&json).expect("decoding");
 
-        assert_eq!(relu.password(), Some("hunter2"));
-        assert_eq!(relu.token(), Some("sk-ant-secret"));
-        assert_eq!(relu.tls_client_cert(), Some("-----BEGIN CERTIFICATE-----"));
-        assert_eq!(relu.tls_client_key(), Some("-----BEGIN PRIVATE KEY-----"));
+        assert_eq!(read_back.password(), Some("hunter2"));
+        assert_eq!(read_back.token(), Some("sk-ant-secret"));
         assert_eq!(
-            relu.ssh_private_key(),
+            read_back.tls_client_cert(),
+            Some("-----BEGIN CERTIFICATE-----")
+        );
+        assert_eq!(
+            read_back.tls_client_key(),
+            Some("-----BEGIN PRIVATE KEY-----")
+        );
+        assert_eq!(
+            read_back.ssh_private_key(),
             Some("-----BEGIN OPENSSH PRIVATE KEY-----")
         );
-        assert_eq!(relu.ssh_passphrase(), Some("phrase"));
-        assert_eq!(relu.extra("aws_session_token"), Some("AQoDYXdz"));
-        assert_eq!(relu.extra("inconnu"), None);
+        assert_eq!(read_back.ssh_passphrase(), Some("phrase"));
+        assert_eq!(read_back.extra("aws_session_token"), Some("AQoDYXdz"));
+        assert_eq!(read_back.extra("unknown"), None);
     }
 
     #[test]
@@ -393,8 +399,8 @@ mod tests {
         let json = bundle.to_secret_json().expect("encoding");
         assert_eq!(json.expose_secret(), r#"{"password":"hunter2"}"#);
 
-        let vide = CredentialBundle::new().to_secret_json().expect("encoding");
-        assert_eq!(vide.expose_secret(), "{}");
+        let empty = CredentialBundle::new().to_secret_json().expect("encoding");
+        assert_eq!(empty.expose_secret(), "{}");
     }
 
     #[test]
@@ -408,8 +414,8 @@ mod tests {
 
     #[test]
     fn what_is_not_a_bundle_is_refused_without_being_copied() {
-        for contenu in ["hunter2", "[]", "{\"password\": 42}", ""] {
-            let secret = SecretString::from(contenu);
+        for content in ["hunter2", "[]", "{\"password\": 42}", ""] {
+            let secret = SecretString::from(content);
             let err = CredentialBundle::from_secret_json(&secret)
                 .expect_err("this is not a valid bundle");
             assert!(matches!(err, SecretError::Malformed { .. }));

@@ -19,7 +19,7 @@ pub(crate) type Received = Arc<Mutex<Vec<String>>>;
 /// As long as `hold` is not released, the connection stays open after the
 /// response: that is what simulates a body that never ends.
 pub(crate) struct Server {
-    /// `http://127.0.0.1:<port>`, sans barre finale.
+    /// `http://127.0.0.1:<port>`, without a trailing slash.
     pub(crate) origin: String,
     /// Everything received, one entry per request.
     pub(crate) received: Received,
@@ -77,30 +77,31 @@ impl Server {
 
 /// Reads the headers, then the body announced by `content-length`.
 async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
-    let mut lu = Vec::new();
-    let mut tampon = [0_u8; 4096];
-    while let Ok(n) = socket.read(&mut tampon).await {
+    let mut read = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    while let Ok(n) = socket.read(&mut buffer).await {
         if n == 0 {
             break;
         }
-        lu.extend_from_slice(tampon.get(..n).unwrap_or_default());
-        let texte = String::from_utf8_lossy(&lu).into_owned();
-        if let Some(fin) = texte.find("\r\n\r\n") {
-            let attendu = texte
+        read.extend_from_slice(buffer.get(..n).unwrap_or_default());
+        let text = String::from_utf8_lossy(&read).into_owned();
+        if let Some(end) = text.find("\r\n\r\n") {
+            let expected = text
                 .lines()
-                .find_map(|ligne| {
-                    let (nom, valeur) = ligne.split_once(':')?;
-                    nom.eq_ignore_ascii_case("content-length")
-                        .then(|| valeur.trim().parse::<usize>().ok())
+                .find_map(|line| {
+                    let (header_name, value) = line.split_once(':')?;
+                    header_name
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
                         .flatten()
                 })
                 .unwrap_or(0);
-            if lu.len() >= fin + 4 + attendu {
+            if read.len() >= end + 4 + expected {
                 break;
             }
         }
     }
-    String::from_utf8_lossy(&lu).into_owned()
+    String::from_utf8_lossy(&read).into_owned()
 }
 
 /// A redirection response to `location`.

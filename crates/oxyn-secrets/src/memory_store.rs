@@ -207,10 +207,16 @@ mod tests {
             .put(&reference, SecretString::from("sk-ant-secret"))
             .expect("write");
 
-        let rendu = format!("{store:?}");
-        assert!(!rendu.contains("sk-ant-secret"), "secret leaked: {rendu}");
-        assert!(!rendu.contains("anthropic"), "reference leaked: {rendu}");
-        assert!(rendu.contains('1'), "the count stays useful: {rendu}");
+        let rendered = format!("{store:?}");
+        assert!(
+            !rendered.contains("sk-ant-secret"),
+            "secret leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("anthropic"),
+            "reference leaked: {rendered}"
+        );
+        assert!(rendered.contains('1'), "the count stays useful: {rendered}");
     }
 
     #[test]
@@ -219,8 +225,8 @@ mod tests {
         // thread (I-05): it must be `Send + Sync`. And it is held behind
         // `Arc<dyn SecretStore>`: the trait must stay object-safe, default methods
         // included.
-        fn exige_send_sync<T: Send + Sync>() {}
-        exige_send_sync::<MemorySecretStore>();
+        fn requires_send_sync<T: Send + Sync>() {}
+        requires_send_sync::<MemorySecretStore>();
 
         let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
         let reference = reference();
@@ -231,9 +237,9 @@ mod tests {
             )
             .expect("write");
 
-        let partage = Arc::clone(&store);
+        let shared = Arc::clone(&store);
         let lu = std::thread::spawn(move || {
-            partage
+            shared
                 .get_bundle(&reference)
                 .expect("read")
                 .expect("written before the thread starts")

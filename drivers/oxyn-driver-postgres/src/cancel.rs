@@ -120,13 +120,13 @@ impl StatementRegistry {
         };
         token.cancel();
         let issue = match verdict.wait_for(Option::is_some).await {
-            Ok(rendu) => rendu.clone(),
+            Ok(rendered) => rendered.clone(),
             // The task disappeared without ruling: there is nothing left to cut.
             Err(_) => None,
         };
         match issue {
-            Some(Verdict::CancelFailed(erreur)) => {
-                Err(OxynError::driver(driver.clone(), erreur.class(), erreur))
+            Some(Verdict::CancelFailed(error)) => {
+                Err(OxynError::driver(driver.clone(), error.class(), error))
             }
             Some(Verdict::Finished | Verdict::Cancelled) | None => Ok(()),
         }
@@ -182,23 +182,23 @@ impl BackendCanceller {
         #[cfg(test)]
         self.pass_gate(backend_pid).await;
 
-        let mut connexion = self
+        let mut connection = self
             .spec
             .options()
             .connect()
             .await
-            .map_err(|erreur| map_connect_error(&erreur))?;
+            .map_err(|error| map_connect_error(&error))?;
 
         let issue = sqlx::query(SQL_CANCEL_BACKEND)
             .bind(backend_pid)
-            .fetch_optional(&mut connexion)
+            .fetch_optional(&mut connection)
             .await;
 
         // Closed in every case: this connection has no further use, and letting
         // it go would open one per cancellation.
-        let _ = connexion.close().await;
+        let _ = connection.close().await;
 
-        issue.map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))?;
+        issue.map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
         Ok(())
     }
 }
@@ -221,14 +221,14 @@ pub(crate) mod tests_gate {
         /// Arms the barrier: the next cancellation signals the pid it targets,
         /// then waits for the green light.
         pub(crate) fn hold_next_cancel(&self) -> (oneshot::Receiver<i32>, oneshot::Sender<()>) {
-            let (reached, atteinte) = oneshot::channel();
-            let (feu_vert, proceed) = oneshot::channel();
+            let (reached, reached_rx) = oneshot::channel();
+            let (proceed_tx, proceed) = oneshot::channel();
             *self
                 .gate
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(CancelGate { reached, proceed });
-            (atteinte, feu_vert)
+            (reached_rx, proceed_tx)
         }
 
         pub(super) async fn pass_gate(&self, backend_pid: i32) {
@@ -253,19 +253,19 @@ mod tests {
     fn a_finished_execution_does_not_stay_in_the_registry() {
         // Without that removal, a session open for a day accumulates one entry
         // per executed query.
-        let registre = StatementRegistry::default();
+        let registry = StatementRegistry::default();
         let handle = StatementHandle::new();
-        let _verdict = registre.register(handle, CancelToken::new());
-        assert_eq!(registre.len(), 1);
-        registre.forget(handle);
-        assert_eq!(registre.len(), 0);
+        let _verdict = registry.register(handle, CancelToken::new());
+        assert_eq!(registry.len(), 1);
+        registry.forget(handle);
+        assert_eq!(registry.len(), 0);
     }
 
     #[tokio::test]
     async fn cancelling_an_unknown_execution_must_cost_nothing() {
         // "Cancelling an already finished statement is not an error."
-        let registre = StatementRegistry::default();
-        registre
+        let registry = StatementRegistry::default();
+        registry
             .cancel(&DriverId::postgres(), StatementHandle::new())
             .await
             .expect("nothing to cancel");
@@ -276,45 +276,45 @@ mod tests {
         // The cancellation does not go out from here: the task holding the
         // connection sends it. `cancel` must therefore wake it, then return
         // what it observed — not an assumed success.
-        let registre = Arc::new(StatementRegistry::default());
-        let visee = StatementHandle::new();
-        let voisine = StatementHandle::new();
-        let jeton = CancelToken::new();
-        let jeton_voisin = CancelToken::new();
-        let verdict = registre.register(visee, jeton.clone());
-        let _verdict_voisin = registre.register(voisine, jeton_voisin.clone());
+        let registry = Arc::new(StatementRegistry::default());
+        let target_handle = StatementHandle::new();
+        let neighbor = StatementHandle::new();
+        let token = CancelToken::new();
+        let neighbor_token = CancelToken::new();
+        let verdict = registry.register(target_handle, token.clone());
+        let _neighbor_verdict = registry.register(neighbor, neighbor_token.clone());
 
-        let tache = tokio::spawn({
-            let jeton = jeton.clone();
+        let task = tokio::spawn({
+            let token = token.clone();
             async move {
-                jeton.cancelled().await;
+                token.cancelled().await;
                 verdict.settle(Verdict::CancelFailed(Arc::new(OxynError::Connection(
                     "refused".to_owned(),
                 ))));
             }
         });
 
-        let issue = registre.cancel(&DriverId::postgres(), visee).await;
-        let erreur = match issue {
+        let issue = registry.cancel(&DriverId::postgres(), target_handle).await;
+        let error = match issue {
             Ok(()) => panic!("the task's failure must surface"),
-            Err(erreur) => erreur,
+            Err(error) => error,
         };
-        assert_eq!(erreur.class(), oxyn_core::ErrorClass::Transient);
-        assert!(jeton.is_cancelled());
+        assert_eq!(error.class(), oxyn_core::ErrorClass::Transient);
+        assert!(token.is_cancelled());
         assert!(
-            !jeton_voisin.is_cancelled(),
+            !neighbor_token.is_cancelled(),
             "only the targeted execution is cancelled"
         );
-        tache.await.expect("the task rules");
+        task.await.expect("the task rules");
     }
 
     #[tokio::test]
     async fn a_task_gone_without_verdict_does_not_block_the_cancellation() {
-        let registre = StatementRegistry::default();
+        let registry = StatementRegistry::default();
         let handle = StatementHandle::new();
-        let verdict = registre.register(handle, CancelToken::new());
+        let verdict = registry.register(handle, CancelToken::new());
         drop(verdict);
-        registre
+        registry
             .cancel(&DriverId::postgres(), handle)
             .await
             .expect("nothing left to cut");

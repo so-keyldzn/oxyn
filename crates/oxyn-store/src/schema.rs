@@ -79,8 +79,8 @@ CREATE TABLE workspaces (
     updated_at TEXT NOT NULL
 ) STRICT;
 
--- `params` est un objet JSON de valeurs NON secrètes ; `secret_ref` est une
--- référence au trousseau du système, jamais le secret (SECURITY, I-03).
+-- `params` is a JSON object of NON-secret values; `secret_ref` is a
+-- reference to the system keychain, never the secret (SECURITY, I-03).
 CREATE TABLE connections (
     id           TEXT PRIMARY KEY NOT NULL,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -96,9 +96,9 @@ CREATE TABLE connections (
 
 CREATE INDEX connections_by_workspace ON connections (workspace_id, name);
 
--- `connection_id` n'a volontairement PAS de clé étrangère : supprimer une
--- connexion n'efface pas ce que l'utilisateur a exécuté avec elle. Le nom est
--- recopié pour que l'historique reste lisible après cette suppression.
+-- `connection_id` deliberately has NO foreign key: deleting a connection
+-- does not erase what the user ran with it. The name is copied so that the
+-- history stays readable after that deletion.
 CREATE TABLE query_history (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ts              TEXT NOT NULL,
@@ -118,10 +118,10 @@ CREATE TABLE query_history (
 CREATE INDEX query_history_by_ts ON query_history (ts DESC);
 CREATE INDEX query_history_by_connection ON query_history (connection_id, ts DESC);
 
--- APPEND-ONLY. Aucune clé étrangère non plus : la piste d'audit survit à la
--- suppression de la connexion, du workspace et de l'agent qu'elle incrimine.
--- AUTOINCREMENT plutôt que le rowid nu : un identifiant réutilisé permettrait
--- à une ligne d'en usurper une autre dans une piste d'audit.
+-- APPEND-ONLY. No foreign key either: the audit trail survives the deletion
+-- of the connection, the workspace and the agent it implicates.
+-- AUTOINCREMENT rather than the bare rowid: a reused identifier would let one
+-- row impersonate another in an audit trail.
 CREATE TABLE audit_journal (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     ts               TEXT NOT NULL,
@@ -495,8 +495,8 @@ const M0012_AI_EGRESS: &str = "CREATE TABLE ai_egress (
     source          TEXT NOT NULL
         CHECK(length(CAST(source AS BLOB)) BETWEEN 1 AND 1024),
     columns         TEXT NOT NULL
-        -- json_array_length rend 0 pour tout ce qui n'est pas un tableau :
-        -- `BETWEEN 1` exige donc un tableau non vide, sans clause json_type.
+        -- json_array_length returns 0 for anything that is not an array:
+        -- `BETWEEN 1` therefore requires a non-empty array, with no json_type clause.
         CHECK(json_valid(columns)
               AND json_array_length(columns) BETWEEN 1 AND 256
               AND length(CAST(columns AS BLOB)) <= 131072),
@@ -845,7 +845,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
 #[must_use]
 pub fn latest_version() -> u32 {
     match MIGRATIONS.last() {
-        Some(derniere) => derniere.version,
+        Some(last) => last.version,
         // Unreachable as long as `MIGRATIONS` is not empty, but an `expect`
         // here would panic when the application opens.
         None => 0,
@@ -859,20 +859,20 @@ pub fn latest_version() -> u32 {
 /// # Errors
 /// [`StoreError::Sqlite`] if the tracking table is unreadable.
 pub fn current_version(conn: &Connection) -> Result<u32> {
-    let suivi_present: i64 = conn.query_row(
+    let tracking_present: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'schema_version'",
         [],
         |row| row.get(0),
     )?;
-    if suivi_present == 0 {
+    if tracking_present == 0 {
         return Ok(0);
     }
 
     // `MAX()` always returns a row, `NULL` on an empty table.
-    let brut = conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+    let raw = conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
         row.get::<_, Option<i64>>(0)
     })?;
-    Ok(brut.map_or(0, |v| u32::try_from(v).unwrap_or(u32::MAX)))
+    Ok(raw.map_or(0, |v| u32::try_from(v).unwrap_or(u32::MAX)))
 }
 
 /// Applies the missing migrations.
@@ -889,16 +889,16 @@ pub fn current_version(conn: &Connection) -> Result<u32> {
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(SCHEMA_VERSION_TABLE)?;
 
-    let actuelle = current_version(conn)?;
-    let cible = latest_version();
-    if actuelle > cible {
+    let current = current_version(conn)?;
+    let target = latest_version();
+    if current > target {
         return Err(StoreError::SchemaTooRecent {
-            found: actuelle,
-            supported: cible,
+            found: current,
+            supported: target,
         });
     }
 
-    for migration in MIGRATIONS.iter().filter(|m| m.version > actuelle) {
+    for migration in MIGRATIONS.iter().filter(|m| m.version > current) {
         let tx = conn.transaction()?;
         tx.execute_batch(migration.sql)
             .map_err(|source| StoreError::Migration {
@@ -965,7 +965,7 @@ pub(crate) fn file_at_version(path: &std::path::Path, version: u32) -> Connectio
 mod tests {
     use super::*;
 
-    fn base_migree() -> Connection {
+    fn migrated_db() -> Connection {
         let mut conn = Connection::open_in_memory().expect("an in-memory database always opens");
         migrate(&mut conn).expect("the initial schema applies");
         conn
@@ -973,16 +973,16 @@ mod tests {
 
     #[test]
     fn migration_numbers_are_unique_and_increasing() {
-        let mut precedent = 0;
+        let mut previous = 0;
         for migration in MIGRATIONS {
             assert!(
-                migration.version > precedent,
+                migration.version > previous,
                 "migration `{}` breaks the order",
                 migration.name
             );
-            precedent = migration.version;
+            previous = migration.version;
         }
-        assert_eq!(latest_version(), precedent);
+        assert_eq!(latest_version(), previous);
     }
 
     #[test]
@@ -990,18 +990,18 @@ mod tests {
         let mut conn = Connection::open_in_memory().expect("in-memory database");
 
         migrate(&mut conn).expect("first application");
-        let apres_une = current_version(&conn).expect("readable version");
-        assert_eq!(apres_une, latest_version());
+        let after_one = current_version(&conn).expect("readable version");
+        assert_eq!(after_one, latest_version());
 
         migrate(&mut conn).expect("second application");
         migrate(&mut conn).expect("third application");
-        assert_eq!(current_version(&conn).expect("readable version"), apres_une);
+        assert_eq!(current_version(&conn).expect("readable version"), after_one);
 
-        let lignes: i64 = conn
+        let rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
             .expect("count");
         assert_eq!(
-            lignes,
+            rows,
             i64::from(latest_version()),
             "a migration must be recorded only once"
         );
@@ -1029,8 +1029,8 @@ mod tests {
         conn.execute(
             "INSERT INTO query_history
                  (ts, actor_kind, language, statement, intent, status, error)
-             VALUES (?1, 'human', '\"sql\"', 'INSERT INTO commandes VALUES (1)', 'write',
-                     'failed', 'délai dépassé après 30s')",
+             VALUES (?1, 'human', '\"sql\"', 'INSERT INTO orders VALUES (1)', 'write',
+                     'failed', 'timed out after 30s')",
             rusqlite::params![chrono::Utc::now()],
         )
         .expect("a row written by the previous version");
@@ -1038,7 +1038,7 @@ mod tests {
             "INSERT INTO audit_journal
                  (ts, actor_kind, command_kind, intent, risk, policy_decision, error)
              VALUES (?1, 'agent', 'Execute', 'write', '\"none\"', 'allow',
-                     'délai dépassé après 30s')",
+                     'timed out after 30s')",
             rusqlite::params![chrono::Utc::now()],
         )
         .expect("an audit entry written by the previous version");
@@ -1123,7 +1123,7 @@ mod tests {
             .expect("record");
         }
         conn.execute_batch(
-            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+            "INSERT INTO workspaces VALUES('workspace','Workshop','2026-09-10','2026-09-10');
              INSERT INTO documents (id,workspace_id,title,language,content,created_at,updated_at)
              VALUES('document','workspace','Rapport','\"sql\"','SELECT 1','2026-09-10','2026-09-10');",
         )
@@ -1131,21 +1131,21 @@ mod tests {
 
         migrate(&mut conn).expect("upgrade to the current version");
 
-        let (contenu, provenance): (String, Option<String>) = conn
+        let (content, provenance): (String, Option<String>) = conn
             .query_row("SELECT content, provenance FROM documents", [], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })
             .expect("the document survived");
-        assert_eq!(contenu, "SELECT 1");
+        assert_eq!(content, "SELECT 1");
         assert_eq!(provenance, None, "an earlier row belongs to no agent");
 
-        let trop_gros = format!("{{\"model\":\"{}\"}}", "x".repeat(512));
-        let refus = conn.execute(
+        let too_big = format!("{{\"model\":\"{}\"}}", "x".repeat(512));
+        let refusal = conn.execute(
             "UPDATE documents SET provenance = ?1 WHERE id = 'document'",
-            rusqlite::params![trop_gros],
+            rusqlite::params![too_big],
         );
         assert!(
-            refus.is_err(),
+            refusal.is_err(),
             "the 512-byte budget must hold in the file, not only in the code"
         );
     }
@@ -1176,10 +1176,10 @@ mod tests {
             .expect("record");
         }
         conn.execute_batch(
-            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+            "INSERT INTO workspaces VALUES('workspace','Workshop','2026-09-10','2026-09-10');
              INSERT INTO connections (id,workspace_id,name,driver,environment,params,read_only,
                                       created_at,updated_at)
-             VALUES('connexion','workspace','base client','postgres','production','{}',0,
+             VALUES('connexion','workspace','customer db','postgres','production','{}',0,
                     '2026-09-10','2026-09-10');
              INSERT INTO documents (id,workspace_id,title,language,content,created_at,updated_at)
              VALUES('document','workspace','Rapport','\"sql\"','SELECT 1','2026-09-10','2026-09-10');
@@ -1193,7 +1193,7 @@ mod tests {
         migrate(&mut conn).expect("upgrade to the current version");
         assert_eq!(current_version(&conn).expect("version"), latest_version());
 
-        for (table, attendu) in [
+        for (table, expected) in [
             ("workspaces", 1),
             ("connections", 1),
             ("documents", 1),
@@ -1203,12 +1203,12 @@ mod tests {
             ("ai_conversations", 0),
             ("ai_conversation_turns", 0),
         ] {
-            let lignes: i64 = conn
+            let rows: i64 = conn
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
                     row.get(0)
                 })
                 .expect("count");
-            assert_eq!(lignes, attendu, "table `{table}`");
+            assert_eq!(rows, expected, "table `{table}`");
         }
 
         // And the new table is usable right away, foreign key to the existing
@@ -1217,7 +1217,7 @@ mod tests {
             "INSERT INTO ai_conversations
                  (id, workspace_id, destination_kind, destination_label, title,
                   created_at, updated_at)
-             VALUES ('fil','workspace','provider','Anthropic','Un fil','2026-09-16','2026-09-16')",
+             VALUES ('thread','workspace','provider','Anthropic','A thread','2026-09-16','2026-09-16')",
             [],
         )
         .expect("the thread is written in the migrated schema");
@@ -1230,10 +1230,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory");
         let mut conn = file_at_version(&dir.path().join("v14.sqlite3"), 14);
         conn.execute_batch(
-            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+            "INSERT INTO workspaces VALUES('workspace','Workshop','2026-09-10','2026-09-10');
              INSERT INTO connections (id,workspace_id,name,driver,environment,params,read_only,
                                       created_at,updated_at)
-             VALUES('connexion','workspace','base client','postgres','production','{}',0,
+             VALUES('connexion','workspace','customer db','postgres','production','{}',0,
                     '2026-09-10','2026-09-10');
              INSERT INTO catalog_cache (connection_id,payload,refreshed_at)
              VALUES('connexion','{}','2026-09-10');",
@@ -1250,10 +1250,10 @@ mod tests {
             )
             .expect("query the schema");
         assert_eq!(table, 0, "the table without a caller has left the file");
-        let connexions: i64 = conn
+        let connection_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM connections", [], |row| row.get(0))
             .expect("count");
-        assert_eq!(connexions, 1);
+        assert_eq!(connection_count, 1);
     }
 
     /// `IF EXISTS`: a table already removed by hand does not prevent opening.
@@ -1270,23 +1270,23 @@ mod tests {
 
     #[test]
     fn a_schema_from_the_future_is_refused() {
-        let mut conn = base_migree();
+        let mut conn = migrated_db();
         conn.execute(
             "INSERT INTO schema_version (version, name, applied_at) VALUES (?1, ?2, ?3)",
-            rusqlite::params![9_999_i64, "venue-du-futur", chrono::Utc::now()],
+            rusqlite::params![9_999_i64, "from-the-future", chrono::Utc::now()],
         )
         .expect("insert");
 
-        let erreur = migrate(&mut conn).expect_err("the future does not apply backwards");
+        let error = migrate(&mut conn).expect_err("the future does not apply backwards");
         assert!(matches!(
-            erreur,
+            error,
             StoreError::SchemaTooRecent { found: 9_999, .. }
         ));
     }
 
     #[test]
     fn the_expected_tables_exist() {
-        let conn = base_migree();
+        let conn = migrated_db();
         for table in [
             "workspaces",
             "connections",
@@ -1302,21 +1302,21 @@ mod tests {
             "ai_conversation_nodes",
             "schema_version",
         ] {
-            let presente: i64 = conn
+            let present: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = ?1",
                     [table],
                     |row| row.get(0),
                 )
                 .expect("query the schema");
-            assert_eq!(presente, 1, "table `{table}` missing");
+            assert_eq!(present, 1, "table `{table}` missing");
         }
     }
 
     #[test]
     fn the_domain_tables_are_strict() {
         // Without STRICT, SQLite stores a string in an INTEGER column.
-        let conn = base_migree();
+        let conn = migrated_db();
         for table in [
             "workspaces",
             "connections",
@@ -1342,16 +1342,16 @@ mod tests {
 
     #[test]
     fn the_tamper_proofing_triggers_exist() {
-        let conn = base_migree();
-        for declencheur in ["audit_journal_forbid_update", "audit_journal_forbid_delete"] {
+        let conn = migrated_db();
+        for trigger in ["audit_journal_forbid_update", "audit_journal_forbid_delete"] {
             let present: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name = ?1",
-                    [declencheur],
+                    [trigger],
                     |row| row.get(0),
                 )
                 .expect("query the schema");
-            assert_eq!(present, 1, "trigger `{declencheur}` missing");
+            assert_eq!(present, 1, "trigger `{trigger}` missing");
         }
     }
 }

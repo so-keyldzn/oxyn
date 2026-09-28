@@ -130,7 +130,7 @@ mod tests {
 
     /// The dummy password used everywhere in the leak tests. It has no chance of
     /// appearing in a message by accident.
-    const SECRET_TEMOIN: &str = "correct-horse-battery-staple";
+    const WITNESS_SECRET: &str = "correct-horse-battery-staple";
 
     #[test]
     fn unreadable_content_cannot_carry_a_secret() {
@@ -140,22 +140,22 @@ mod tests {
         let err = SecretError::Malformed {
             detail: SecretError::NOT_A_BUNDLE,
         };
-        assert!(!err.to_string().contains(SECRET_TEMOIN));
-        assert!(!format!("{err:?}").contains(SECRET_TEMOIN));
+        assert!(!err.to_string().contains(WITNESS_SECRET));
+        assert!(!format!("{err:?}").contains(WITNESS_SECRET));
     }
 
     #[test]
     fn translation_to_the_domain_keeps_the_register() {
-        let verrouille = SecretError::AccessDenied {
+        let locked = SecretError::AccessDenied {
             detail: "keychain locked".into(),
         };
-        let domaine = OxynError::from(verrouille);
+        let domain = OxynError::from(locked);
         assert!(
-            domaine.is_user_error(),
+            domain.is_user_error(),
             "a locked keychain is resolved by a user action"
         );
         assert!(
-            !domaine.is_retryable(),
+            !domain.is_retryable(),
             "replaying without the user unlocking is pointless"
         );
 
@@ -167,11 +167,11 @@ mod tests {
             OxynError::NotSupported { .. }
         ));
 
-        let illisible = SecretError::Malformed {
+        let unreadable = SecretError::Malformed {
             detail: SecretError::NOT_UTF8,
         };
         assert!(matches!(
-            OxynError::from(illisible),
+            OxynError::from(unreadable),
             OxynError::Serialization(_)
         ));
 
@@ -185,7 +185,7 @@ mod tests {
     fn no_translation_copies_the_stored_content() {
         // Every variant, translated, then read back: the witness secret cannot
         // appear anywhere, because no variant has a field it could have entered.
-        let cas = [
+        let cases = [
             SecretError::Unavailable {
                 detail: "unsupported platform".into(),
             },
@@ -206,11 +206,11 @@ mod tests {
                 detail: "empty segment",
             },
         ];
-        for erreur in cas {
-            let rendu = erreur.to_string();
-            let traduit = OxynError::from(erreur).to_string();
-            assert!(!rendu.contains(SECRET_TEMOIN), "{rendu}");
-            assert!(!traduit.contains(SECRET_TEMOIN), "{traduit}");
+        for case in cases {
+            let rendered = case.to_string();
+            let translated = OxynError::from(case).to_string();
+            assert!(!rendered.contains(WITNESS_SECRET), "{rendered}");
+            assert!(!translated.contains(WITNESS_SECRET), "{translated}");
         }
     }
 }

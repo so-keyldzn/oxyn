@@ -49,9 +49,9 @@
 //! use oxyn_plugin::{ConnectionAccess, DeclarativeAgent, PluginKind, PluginManifest};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let texte = r#"
+//! let text = r#"
 //! id          = "revue-schema"
-//! name        = "Revue de schéma"
+//! name        = "Schema review"
 //! version     = "1.0.0"
 //! api_version = "0.1.0"
 //! kind        = "agent"
@@ -65,13 +65,13 @@
 //! allowed_tools = ["refresh_catalog"]
 //! "#;
 //!
-//! let manifeste = PluginManifest::from_toml(texte)?;
-//! assert_eq!(manifeste.kind, PluginKind::Agent);
+//! let manifest_toml = PluginManifest::from_toml(text)?;
+//! assert_eq!(manifest_toml.kind, PluginKind::Agent);
 //!
 //! // No third-party code will run: the `wasm-host` feature is not involved.
-//! assert!(!manifeste.requires_wasm());
+//! assert!(!manifest_toml.requires_wasm());
 //!
-//! let agent = DeclarativeAgent::from_manifest(&manifeste)?;
+//! let agent = DeclarativeAgent::from_manifest(&manifest_toml)?;
 //! assert_eq!(agent.connections(), ConnectionAccess::ReadOnly);
 //! assert!(agent.spec().allows("refresh_catalog"));
 //! assert!(!agent.spec().allows("execute_query"));
@@ -117,20 +117,20 @@ mod tests {
     /// does on the way.
     #[test]
     fn the_path_of_a_plugin_provided_agent() {
-        let racine = TempDir::new("trajet");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let root = TempDir::new("trajet");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        root.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut plugin_registry = PluginRegistry::new(root.path());
+        plugin_registry.discover().expect("discovery");
 
         // 1. Two plugins are installed, none is authorized.
-        assert_eq!(registre.len(), 2);
-        assert_eq!(registre.approved().count(), 0);
-        assert!(registre.declarative_agents().is_empty());
+        assert_eq!(plugin_registry.len(), 2);
+        assert_eq!(plugin_registry.approved().count(), 0);
+        assert!(plugin_registry.declarative_agents().is_empty());
 
         // 2. What is shown to the user before they approve.
-        let resume = registre
+        let summary_lines = plugin_registry
             .require("csv")
             .expect("discovered plugin")
             .manifest()
@@ -138,26 +138,26 @@ mod tests {
             .permissions
             .summary();
         assert!(
-            resume.iter().any(|l| l.contains("a.example:443")),
-            "{resume:?}"
+            summary_lines.iter().any(|l| l.contains("a.example:443")),
+            "{summary_lines:?}"
         );
 
         // 3. The user approves the agent only.
-        registre.approve("revue").expect("approval");
-        registre.save().expect("writing the approvals");
+        plugin_registry.approve("revue").expect("approval");
+        plugin_registry.save().expect("writing the approvals");
 
-        let agents = registre.declarative_agents();
+        let agents = plugin_registry.declarative_agents();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].plugin().as_str(), "revue");
         assert_eq!(agents[0].connections(), ConnectionAccess::ReadOnly);
 
         // 4. The approved agent runs no code: phase 4 is not a condition for
         //    using it.
-        let revue = registre.require("revue").expect("discovered plugin");
+        let revue = plugin_registry.require("revue").expect("discovered plugin");
         assert!(!revue.manifest().expect("manifest").requires_wasm());
 
         // 5. And the other plugin got nothing.
-        let csv = registre.require("csv").expect("discovered plugin");
+        let csv = plugin_registry.require("csv").expect("discovered plugin");
         assert!(csv.effective_permissions().is_err());
         assert_eq!(*csv.state(), PluginState::Installed);
     }
@@ -166,18 +166,18 @@ mod tests {
     /// domain: it is what the interface displays.
     #[test]
     fn a_plugin_error_keeps_its_meaning_in_the_domain() {
-        let racine = TempDir::new("erreurs");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        let root = TempDir::new("errors");
+        root.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut plugin_registry = PluginRegistry::new(root.path());
+        plugin_registry.discover().expect("discovery");
 
-        let plugin = registre.require("revue").expect("discovered plugin");
+        let plugin = plugin_registry.require("revue").expect("discovered plugin");
         let err = plugin
             .effective_permissions()
             .expect_err("the plugin is not approved");
-        let domaine = oxyn_core::OxynError::from(err);
-        assert!(domaine.is_user_error());
-        assert!(!domaine.is_retryable());
+        let domain = oxyn_core::OxynError::from(err);
+        assert!(domain.is_user_error());
+        assert!(!domain.is_retryable());
     }
 }

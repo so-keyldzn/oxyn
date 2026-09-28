@@ -778,11 +778,11 @@ mod tests {
         ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL)
     }
 
-    fn appel(nom: &str, args: serde_json::Value) -> ToolCall {
-        ToolCall::new("call_1", nom, args)
+    fn make_call(name: &str, args: serde_json::Value) -> ToolCall {
+        ToolCall::new("call_1", name, args)
     }
 
-    fn tous() -> Vec<String> {
+    fn all_command_names() -> Vec<String> {
         ToolRegistry::builtin()
             .names()
             .into_iter()
@@ -794,7 +794,7 @@ mod tests {
     fn every_tool_produces_a_core_command() {
         // I-01: there is no second API for the AI. Each tool names the
         // `Command` variant it produces, and that variant exists.
-        let noms_de_commandes = [
+        let command_names = [
             "Connect",
             "Disconnect",
             "Execute",
@@ -809,12 +809,12 @@ mod tests {
             "UpdateConnection",
             "DeleteConnection",
         ];
-        for outil in &ToolRegistry::builtin().tools {
+        for tool in &ToolRegistry::builtin().tools {
             assert!(
-                noms_de_commandes.contains(&outil.command()),
+                command_names.contains(&tool.command()),
                 "the tool \"{}\" claims to produce \"{}\", which is not a Command",
-                outil.name(),
-                outil.command()
+                tool.name(),
+                tool.command()
             );
         }
     }
@@ -824,24 +824,24 @@ mod tests {
         // An agent that could create a connection to the host of its choice
         // would have an exfiltration channel. These commands have no tool:
         // that is stronger than a PolicyGate refusal.
-        let registre = ToolRegistry::builtin();
-        for interdit in [
+        let registry = ToolRegistry::builtin();
+        for forbidden in [
             "create_connection",
             "update_connection",
             "delete_connection",
             "export",
             "cancel",
         ] {
-            assert!(!registre.contains(interdit), "{interdit}");
+            assert!(!registry.contains(forbidden), "{forbidden}");
         }
-        for outil in &registre.tools {
+        for tool in &registry.tools {
             assert!(
-                !outil.command().contains("Connection"),
+                !tool.command().contains("Connection"),
                 "{} produces {}",
-                outil.name(),
-                outil.command()
+                tool.name(),
+                tool.command()
             );
-            assert_ne!(outil.command(), "Export");
+            assert_ne!(tool.command(), "Export");
         }
     }
 
@@ -859,25 +859,25 @@ mod tests {
     /// rather than contradicting it silently.
     #[test]
     fn schema_change_is_not_a_tool() {
-        let registre = ToolRegistry::builtin();
-        for interdit in [
+        let registry = ToolRegistry::builtin();
+        for forbidden in [
             "propose_change",
             "alter_table",
             "create_table",
             "drop_table",
             "apply_ddl",
         ] {
-            assert!(!registre.contains(interdit), "{interdit}");
+            assert!(!registry.contains(forbidden), "{forbidden}");
         }
         // And by the produced command, so that renaming the tool is not enough
         // to slip through.
-        for outil in &registre.tools {
-            for marque in ["Ddl", "Alter", "Schema", "Propose"] {
+        for tool in &registry.tools {
+            for marker in ["Ddl", "Alter", "Schema", "Propose"] {
                 assert!(
-                    !outil.command().contains(marque),
+                    !tool.command().contains(marker),
                     "{} produces {}, which touches the schema",
-                    outil.name(),
-                    outil.command()
+                    tool.name(),
+                    tool.command()
                 );
             }
         }
@@ -888,8 +888,8 @@ mod tests {
     /// the gate refuses it on production; no tool reaches the review.
     #[test]
     fn object_operations_are_not_tools() {
-        let registre = ToolRegistry::builtin();
-        for interdit in [
+        let registry = ToolRegistry::builtin();
+        for forbidden in [
             "review_object_operation",
             "run_object_operation",
             "drop_object",
@@ -897,16 +897,16 @@ mod tests {
             "rename_object",
             "rename_table",
         ] {
-            assert!(!registre.contains(interdit), "{interdit}");
+            assert!(!registry.contains(forbidden), "{forbidden}");
         }
-        for outil in &registre.tools {
-            for marque in ["Drop", "Truncate", "Rename", "ObjectOperation"] {
+        for tool in &registry.tools {
+            for marker in ["Drop", "Truncate", "Rename", "ObjectOperation"] {
                 assert!(
-                    !outil.name().to_lowercase().contains(&marque.to_lowercase())
-                        && !outil.command().contains(marque),
+                    !tool.name().to_lowercase().contains(&marker.to_lowercase())
+                        && !tool.command().contains(marker),
                     "{} reaches {}, an object operation",
-                    outil.name(),
-                    outil.command()
+                    tool.name(),
+                    tool.command()
                 );
             }
         }
@@ -914,22 +914,28 @@ mod tests {
 
     #[test]
     fn a_tool_outside_the_allowlist_is_refused() {
-        let registre = ToolRegistry::builtin();
-        let call = appel(REFRESH_CATALOG, json!({}));
-        let refus = registre
+        let registry = ToolRegistry::builtin();
+        let call = make_call(REFRESH_CATALOG, json!({}));
+        let refusal = registry
             .translate(&call, &[EXECUTE_QUERY.to_owned()], &scope())
             .expect_err("the tool is not granted");
-        assert!(matches!(refus, AiError::ToolNotAllowed { .. }), "{refus:?}");
+        assert!(
+            matches!(refusal, AiError::ToolNotAllowed { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
     fn an_unknown_tool_is_refused_before_the_allowlist() {
-        let registre = ToolRegistry::builtin();
-        let call = appel("drop_everything", json!({"target": "*"}));
-        let refus = registre
-            .translate(&call, &tous(), &scope())
+        let registry = ToolRegistry::builtin();
+        let call = make_call("drop_everything", json!({"target": "*"}));
+        let refusal = registry
+            .translate(&call, &all_command_names(), &scope())
             .expect_err("the tool does not exist");
-        assert!(matches!(refus, AiError::UnknownTool { .. }), "{refus:?}");
+        assert!(
+            matches!(refusal, AiError::UnknownTool { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
@@ -937,61 +943,65 @@ mod tests {
         // The failure aimed at: a model that targets a connection other than
         // the one opened by the user, and exfiltrates from one database to
         // another.
-        let registre = ToolRegistry::builtin();
-        let perimetre = scope();
-        let call = appel(
+        let registry = ToolRegistry::builtin();
+        let granted_scope = scope();
+        let call = make_call(
             EXECUTE_QUERY,
             json!({
                 "statement": "SELECT 1",
                 "connection": "00000000-0000-0000-0000-000000000000",
             }),
         );
-        let refus = registre
-            .translate(&call, &tous(), &perimetre)
+        let refusal = registry
+            .translate(&call, &all_command_names(), &granted_scope)
             .expect_err("`connection` is not in the schema");
         assert!(
-            matches!(refus, AiError::InvalidArguments { .. }),
-            "{refus:?}"
+            matches!(refusal, AiError::InvalidArguments { .. }),
+            "{refusal:?}"
         );
 
         // And the legitimate call does target the imposed scope.
-        let call = appel(EXECUTE_QUERY, json!({"statement": "SELECT 1"}));
-        let commande = registre
-            .translate(&call, &tous(), &perimetre)
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "SELECT 1"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &granted_scope)
             .expect("valid call");
-        assert_eq!(commande.target_connection(), Some(perimetre.connection));
+        assert_eq!(command.target_connection(), Some(granted_scope.connection));
     }
 
     #[test]
     fn the_model_cannot_declare_itself_read_only() {
         // The failure aimed at: a model that attaches `read_only: true` to a
         // DELETE to pass itself off as a read before the PolicyGate.
-        let registre = ToolRegistry::builtin();
-        let call = appel(
+        let registry = ToolRegistry::builtin();
+        let call = make_call(
             EXECUTE_QUERY,
-            json!({"statement": "DELETE FROM commandes", "read_only": true}),
+            json!({"statement": "DELETE FROM purchases", "read_only": true}),
         );
-        assert!(registre.translate(&call, &tous(), &scope()).is_err());
+        assert!(
+            registry
+                .translate(&call, &all_command_names(), &scope())
+                .is_err()
+        );
 
         // Without the field, the classification decides alone — and it sees a
         // DELETE without WHERE.
-        let call = appel(EXECUTE_QUERY, json!({"statement": "DELETE FROM commandes"}));
-        let commande = registre
-            .translate(&call, &tous(), &scope())
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "DELETE FROM purchases"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
             .expect("valid call");
-        assert_eq!(commande.intent(), StatementIntent::Write);
-        assert_eq!(commande.mutation_risk(), MutationRisk::UnboundedDelete);
-        assert!(commande.is_mutating());
+        assert_eq!(command.intent(), StatementIntent::Write);
+        assert_eq!(command.mutation_risk(), MutationRisk::UnboundedDelete);
+        assert!(command.is_mutating());
     }
 
     #[test]
     fn a_read_stays_bounded_as_read_only() {
-        let registre = ToolRegistry::builtin();
-        let call = appel(EXECUTE_QUERY, json!({"statement": "SELECT * FROM clients"}));
-        let commande = registre
-            .translate(&call, &tous(), &scope())
+        let registry = ToolRegistry::builtin();
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "SELECT * FROM clients"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
             .expect("valid call");
-        let Command::Execute { request, .. } = commande else {
+        let Command::Execute { request, .. } = command else {
             panic!("execute_query must produce Command::Execute");
         };
         assert!(request.limits.read_only);
@@ -1003,43 +1013,45 @@ mod tests {
     fn an_unreadable_text_is_treated_as_mutating() {
         // "When in doubt, protect": what cannot be analyzed is `Unknown`, which
         // counts as mutating, hence submitted to approval.
-        let registre = ToolRegistry::builtin();
-        let call = appel(EXECUTE_QUERY, json!({"statement": "SELEKT * FORM t"}));
-        let commande = registre
-            .translate(&call, &tous(), &scope())
+        let registry = ToolRegistry::builtin();
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "SELEKT * FORM t"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
             .expect("valid call");
-        assert_eq!(commande.intent(), StatementIntent::Unknown);
-        assert!(commande.is_mutating());
+        assert_eq!(command.intent(), StatementIntent::Unknown);
+        assert!(command.is_mutating());
     }
 
     #[test]
     fn an_empty_statement_is_refused() {
-        let registre = ToolRegistry::builtin();
-        let call = appel(EXECUTE_QUERY, json!({"statement": "   \n  "}));
-        let refus = registre
-            .translate(&call, &tous(), &scope())
+        let registry = ToolRegistry::builtin();
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "   \n  "}));
+        let refusal = registry
+            .translate(&call, &all_command_names(), &scope())
             .expect_err("empty statement");
         assert!(
-            matches!(refus, AiError::InvalidArguments { .. }),
-            "{refus:?}"
+            matches!(refusal, AiError::InvalidArguments { .. }),
+            "{refusal:?}"
         );
     }
 
     #[test]
     fn a_tool_without_arguments_accepts_null() {
         // Several providers pass `null` instead of `{}`.
-        let registre = ToolRegistry::builtin();
-        let call = appel(REFRESH_CATALOG, serde_json::Value::Null);
-        let commande = registre
-            .translate(&call, &tous(), &scope())
+        let registry = ToolRegistry::builtin();
+        let call = make_call(REFRESH_CATALOG, serde_json::Value::Null);
+        let command = registry
+            .translate(&call, &all_command_names(), &scope())
             .expect("valid call");
-        assert_eq!(commande.name(), "RefreshCatalog");
+        assert_eq!(command.name(), "RefreshCatalog");
     }
 
     #[test]
     fn schemas_can_be_passed_to_a_provider() {
-        let registre = ToolRegistry::builtin();
-        let specs = registre.specs_for(&tous()).expect("known tools");
+        let registry = ToolRegistry::builtin();
+        let specs = registry
+            .specs_for(&all_command_names())
+            .expect("known tools");
         assert_eq!(specs.len(), 4);
         for spec in &specs {
             let params = &spec.parameters;
@@ -1071,8 +1083,8 @@ mod tests {
     fn the_search_bound_is_announced_to_the_model() {
         // The failure aimed at: an agent that does not see the bound exceeds
         // it, gets refused, and does not know by how much to shorten.
-        let registre = ToolRegistry::builtin();
-        let specs = registre
+        let registry = ToolRegistry::builtin();
+        let specs = registry
             .specs_for(&[DESCRIBE_SCHEMA.to_owned()])
             .expect("known tool");
         let description = specs
@@ -1086,12 +1098,20 @@ mod tests {
         );
 
         // And the announced bound is the one that refuses.
-        let juste = "a".repeat(MAX_CATALOG_FOCUS_BYTES);
-        let call = appel(DESCRIBE_SCHEMA, json!({ "search": juste }));
-        assert!(registre.translate(&call, &tous(), &scope()).is_ok());
-        let trop = "é".repeat(MAX_CATALOG_FOCUS_BYTES / 2 + 1);
-        let call = appel(DESCRIBE_SCHEMA, json!({ "search": trop }));
-        assert!(registre.translate(&call, &tous(), &scope()).is_err());
+        let exact_fit = "a".repeat(MAX_CATALOG_FOCUS_BYTES);
+        let call = make_call(DESCRIBE_SCHEMA, json!({ "search": exact_fit }));
+        assert!(
+            registry
+                .translate(&call, &all_command_names(), &scope())
+                .is_ok()
+        );
+        let too_long = "é".repeat(MAX_CATALOG_FOCUS_BYTES / 2 + 1);
+        let call = make_call(DESCRIBE_SCHEMA, json!({ "search": too_long }));
+        assert!(
+            registry
+                .translate(&call, &all_command_names(), &scope())
+                .is_err()
+        );
     }
 
     #[test]
@@ -1103,65 +1123,70 @@ mod tests {
             .specs_for(&[REQUEST_SAMPLE.to_owned()])
             .expect("known tool");
         let schema = &specs.first().expect("a tool").parameters;
-        let pointe = |pointer: &str| schema.pointer(pointer).cloned();
+        let at_pointer = |pointer: &str| schema.pointer(pointer).cloned();
         assert_eq!(
-            pointe("/properties/rows/minimum"),
+            at_pointer("/properties/rows/minimum"),
             Some(json!(1)),
             "{schema}"
         );
         assert_eq!(
-            pointe("/properties/rows/maximum"),
+            at_pointer("/properties/rows/maximum"),
             Some(json!(MAX_SAMPLE_ROWS)),
             "{schema}"
         );
         assert_eq!(
-            pointe("/properties/columns/maxItems"),
+            at_pointer("/properties/columns/maxItems"),
             Some(json!(MAX_SAMPLE_COLUMNS)),
             "{schema}"
         );
-        let decrit = |champ: &str| {
+        let description_of = |field: &str| {
             schema
-                .pointer(&format!("/properties/{champ}/description"))
+                .pointer(&format!("/properties/{field}/description"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_owned()
         };
-        for champ in ["relation", "namespace", "columns"] {
+        for field in ["relation", "namespace", "columns"] {
             assert!(
-                decrit(champ).contains(&format!("at most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8"))
-                    || decrit(champ)
+                description_of(field)
+                    .contains(&format!("at most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8"))
+                    || description_of(field)
                         .contains(&format!("At most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8")),
-                "{champ}: {}",
-                decrit(champ)
+                "{field}: {}",
+                description_of(field)
             );
         }
         assert!(
-            decrit("columns").contains(&format!("At most {MAX_SAMPLE_COLUMNS} columns")),
+            description_of("columns").contains(&format!("At most {MAX_SAMPLE_COLUMNS} columns")),
             "{}",
-            decrit("columns")
+            description_of("columns")
         );
         assert!(
-            decrit("rows").contains(&format!(
+            description_of("rows").contains(&format!(
                 "{DEFAULT_SAMPLE_ROWS} when omitted, from 1 to {MAX_SAMPLE_ROWS}"
             )),
             "{}",
-            decrit("rows")
+            description_of("rows")
         );
 
         // And the announced bounds are the ones that refuse.
-        assert!(demande(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS })).is_ok());
-        assert!(demande(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS + 1 })).is_err());
-        assert!(demande(json!({ "relation": "t", "rows": 0 })).is_err());
-        let colonnes = |n: usize| (0..n).map(|i| format!("c{i}")).collect::<Vec<_>>();
+        assert!(sample_request(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS })).is_ok());
+        assert!(sample_request(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS + 1 })).is_err());
+        assert!(sample_request(json!({ "relation": "t", "rows": 0 })).is_err());
+        let columns = |n: usize| (0..n).map(|i| format!("c{i}")).collect::<Vec<_>>();
         assert!(
-            demande(json!({ "relation": "t", "columns": colonnes(MAX_SAMPLE_COLUMNS) })).is_ok()
+            sample_request(json!({ "relation": "t", "columns": columns(MAX_SAMPLE_COLUMNS) }))
+                .is_ok()
         );
         assert!(
-            demande(json!({ "relation": "t", "columns": colonnes(MAX_SAMPLE_COLUMNS + 1) }))
+            sample_request(json!({ "relation": "t", "columns": columns(MAX_SAMPLE_COLUMNS + 1) }))
                 .is_err()
         );
-        assert!(demande(json!({ "relation": "a".repeat(MAX_SAMPLE_NAME_BYTES) })).is_ok());
-        assert!(demande(json!({ "relation": "é".repeat(MAX_SAMPLE_NAME_BYTES / 2 + 1) })).is_err());
+        assert!(sample_request(json!({ "relation": "a".repeat(MAX_SAMPLE_NAME_BYTES) })).is_ok());
+        assert!(
+            sample_request(json!({ "relation": "é".repeat(MAX_SAMPLE_NAME_BYTES / 2 + 1) }))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1169,21 +1194,21 @@ mod tests {
         // The public API that returns a bare `Command` must not return a
         // sample's read: that would be a read of values without the approval
         // screen, within reach of any caller of the crate.
-        let call = appel(REQUEST_SAMPLE, json!({ "relation": "customers" }));
-        let refus = ToolRegistry::builtin()
-            .translate(&call, &tous(), &scope())
+        let call = make_call(REQUEST_SAMPLE, json!({ "relation": "customers" }));
+        let refusal = ToolRegistry::builtin()
+            .translate(&call, &all_command_names(), &scope())
             .expect_err("no command for a sample");
         assert!(
-            matches!(&refus, AiError::ToolNotAllowed { name } if name == REQUEST_SAMPLE),
-            "{refus:?}"
+            matches!(&refusal, AiError::ToolNotAllowed { name } if name == REQUEST_SAMPLE),
+            "{refusal:?}"
         );
         // `request`, on the other hand, returns the request to have approved.
-        assert!(demande(json!({ "relation": "customers" })).is_ok());
+        assert!(sample_request(json!({ "relation": "customers" })).is_ok());
     }
 
-    fn demande(args: serde_json::Value) -> Result<SampleAsk, AiError> {
-        let call = appel(REQUEST_SAMPLE, args);
-        match ToolRegistry::builtin().request(&call, &tous(), &scope())? {
+    fn sample_request(args: serde_json::Value) -> Result<SampleAsk, AiError> {
+        let call = make_call(REQUEST_SAMPLE, args);
+        match ToolRegistry::builtin().request(&call, &all_command_names(), &scope())? {
             ToolRequest::Sample(ask) => Ok(ask),
             ToolRequest::Dispatch(command) => {
                 panic!("request_sample must ask for an approval, not {command:?}")
@@ -1193,7 +1218,7 @@ mod tests {
 
     #[test]
     fn a_requested_sample_is_a_bounded_read_to_approve() {
-        let ask = demande(json!({"relation": "clients"})).expect("valid call");
+        let ask = sample_request(json!({"relation": "clients"})).expect("valid call");
         assert_eq!(ask.rows(), DEFAULT_SAMPLE_ROWS, "the default value");
         assert!(ask.columns.is_empty(), "all, at the user's choice");
         assert!(!ask.command.is_mutating());
@@ -1206,37 +1231,43 @@ mod tests {
             "neither filter nor order: the agent writes no predicate"
         );
 
-        let ask = demande(json!({"relation": "clients", "rows": MAX_SAMPLE_ROWS}))
+        let ask = sample_request(json!({"relation": "clients", "rows": MAX_SAMPLE_ROWS}))
             .expect("the ceiling is allowed");
         assert_eq!(ask.rows(), MAX_SAMPLE_ROWS);
-        for trop in [0, MAX_SAMPLE_ROWS + 1] {
-            let refus =
-                demande(json!({"relation": "clients", "rows": trop})).expect_err("out of bounds");
-            assert!(matches!(refus, AiError::InvalidArguments { .. }), "{trop}");
+        for too_long in [0, MAX_SAMPLE_ROWS + 1] {
+            let refusal = sample_request(json!({"relation": "clients", "rows": too_long}))
+                .expect_err("out of bounds");
+            assert!(
+                matches!(refusal, AiError::InvalidArguments { .. }),
+                "{too_long}"
+            );
         }
     }
 
     #[test]
     fn the_model_chooses_neither_the_connection_nor_a_filter_for_a_sample() {
-        for invente in [
+        for invented in [
             json!({"relation": "clients", "connection": "00000000-0000-0000-0000-000000000000"}),
             json!({"relation": "clients", "predicate": "1=1"}),
             json!({"relation": "clients", "approved": true}),
         ] {
-            let refus = demande(invente.clone()).expect_err("field outside the schema");
+            let refusal = sample_request(invented.clone()).expect_err("field outside the schema");
             assert!(
-                matches!(refus, AiError::InvalidArguments { .. }),
-                "{invente}"
+                matches!(refusal, AiError::InvalidArguments { .. }),
+                "{invented}"
             );
         }
-        let perimetre = scope();
-        let call = appel(REQUEST_SAMPLE, json!({"relation": "clients"}));
+        let granted_scope = scope();
+        let call = make_call(REQUEST_SAMPLE, json!({"relation": "clients"}));
         let Ok(ToolRequest::Sample(ask)) =
-            ToolRegistry::builtin().request(&call, &tous(), &perimetre)
+            ToolRegistry::builtin().request(&call, &all_command_names(), &granted_scope)
         else {
             panic!("valid call");
         };
-        assert_eq!(ask.command.target_connection(), Some(perimetre.connection));
+        assert_eq!(
+            ask.command.target_connection(),
+            Some(granted_scope.connection)
+        );
     }
 
     /// I-10: a hostile name stays **data**. It travels in the command's
@@ -1245,7 +1276,7 @@ mod tests {
     #[test]
     fn a_hostile_name_stays_a_field_and_enters_no_statement() {
         let hostile = r#"users"; DROP TABLE audit; --"#;
-        let ask = demande(json!({
+        let ask = sample_request(json!({
             "relation": hostile,
             "namespace": hostile,
             "columns": [hostile, "email", "email"],
@@ -1279,17 +1310,20 @@ mod tests {
             json!({"relation": "clients", "columns": [""]}),
             json!({"relation": "clients", "columns": vec!["c"; MAX_SAMPLE_COLUMNS + 1]}),
         ] {
-            assert!(demande(args.clone()).is_err(), "{args}");
+            assert!(sample_request(args.clone()).is_err(), "{args}");
         }
     }
 
     #[test]
     fn a_tool_unknown_to_the_allowlist_fails_at_declaration() {
-        let registre = ToolRegistry::builtin();
-        let refus = registre
+        let registry = ToolRegistry::builtin();
+        let refusal = registry
             .specs_for(&["drop_everything".to_owned()])
             .expect_err("tool absent from the registry");
-        assert!(matches!(refus, AiError::UnknownTool { .. }), "{refus:?}");
+        assert!(
+            matches!(refusal, AiError::UnknownTool { .. }),
+            "{refusal:?}"
+        );
     }
 
     #[test]
@@ -1297,16 +1331,16 @@ mod tests {
         // Mongo is not analyzed by oxyn-query: the classification returns
         // `Unknown`, hence mutating, hence approval. It is the intended
         // behavior as long as no analyzer exists for that language.
-        let registre = ToolRegistry::builtin();
-        let perimetre = ToolScope::new(
+        let registry = ToolRegistry::builtin();
+        let granted_scope = ToolScope::new(
             ConnectionId::new(),
             SessionId::new(),
             QueryLanguage::MongoQuery,
         );
-        let call = appel(EXECUTE_QUERY, json!({"statement": "db.clients.find({})"}));
-        let commande = registre
-            .translate(&call, &tous(), &perimetre)
+        let call = make_call(EXECUTE_QUERY, json!({"statement": "db.clients.find({})"}));
+        let command = registry
+            .translate(&call, &all_command_names(), &granted_scope)
             .expect("valid call");
-        assert!(commande.is_mutating());
+        assert!(command.is_mutating());
     }
 }

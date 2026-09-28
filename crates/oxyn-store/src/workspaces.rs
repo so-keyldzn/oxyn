@@ -28,12 +28,12 @@ impl Workspace {
     /// Builds a new workspace, not yet persisted.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
-        let maintenant = Utc::now();
+        let now = Utc::now();
         Self {
             id: WorkspaceId::new(),
             name: name.into(),
-            created_at: maintenant,
-            updated_at: maintenant,
+            created_at: now,
+            updated_at: now,
         }
     }
 }
@@ -95,7 +95,7 @@ impl<'a> Workspaces<'a> {
             conn.query_row(
                 "SELECT id, name, created_at, updated_at FROM workspaces WHERE id = ?1",
                 params![id.to_string()],
-                |row| Ok(depuis_ligne(row)),
+                |row| Ok(from_row(row)),
             )
             .optional()?
             .transpose()
@@ -108,11 +108,11 @@ impl<'a> Workspaces<'a> {
     /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn list(&self) -> Result<Vec<Workspace>> {
         self.store.with_connection(|conn| {
-            let mut requete = conn.prepare(
+            let mut query = conn.prepare(
                 "SELECT id, name, created_at, updated_at FROM workspaces ORDER BY name, id",
             )?;
-            let lignes = requete.query_and_then([], depuis_ligne)?;
-            lignes.collect()
+            let rows = query.query_and_then([], from_row)?;
+            rows.collect()
         })
     }
 
@@ -129,17 +129,17 @@ impl<'a> Workspaces<'a> {
     /// [`crate::StoreError::Sqlite`] if the deletion fails.
     pub fn delete(&self, id: WorkspaceId) -> Result<bool> {
         self.store.with_connection(|conn| {
-            let touchees = conn.execute(
+            let touched = conn.execute(
                 "DELETE FROM workspaces WHERE id = ?1",
                 params![id.to_string()],
             )?;
-            Ok(touchees > 0)
+            Ok(touched > 0)
         })
     }
 }
 
 /// Rebuilds a [`Workspace`] from a row.
-fn depuis_ligne(row: &Row<'_>) -> Result<Workspace> {
+fn from_row(row: &Row<'_>) -> Result<Workspace> {
     let id: String = row.get("id")?;
     Ok(Workspace {
         id: parse_id(&id, "workspaces.id")?,
@@ -156,42 +156,42 @@ mod tests {
     #[test]
     fn a_workspace_round_trips() {
         let store = Store::open_in_memory().expect("open");
-        let cree = store.workspaces().create("atelier").expect("creation");
+        let created = store.workspaces().create("workshop").expect("creation");
 
-        let relu = store
+        let read_back = store
             .workspaces()
-            .get(cree.id)
+            .get(created.id)
             .expect("read")
             .expect("the workspace exists");
-        assert_eq!(relu.id, cree.id);
-        assert_eq!(relu.name, "atelier");
+        assert_eq!(read_back.id, created.id);
+        assert_eq!(read_back.name, "workshop");
         // Timestamps are serialized through SQLite: the comparison holds to
         // the millisecond, not to the nanosecond.
         assert_eq!(
-            relu.created_at.timestamp_millis(),
-            cree.created_at.timestamp_millis()
+            read_back.created_at.timestamp_millis(),
+            created.created_at.timestamp_millis()
         );
     }
 
     #[test]
     fn renaming_does_not_change_the_creation_date() {
         let store = Store::open_in_memory().expect("open");
-        let mut workspace = store.workspaces().create("avant").expect("creation");
+        let mut workspace = store.workspaces().create("before").expect("creation");
         let creation = workspace.created_at;
 
-        workspace.name = "après".to_owned();
+        workspace.name = "after".to_owned();
         workspace.updated_at = Utc::now();
         workspace.created_at = Utc::now(); // even if the caller gets it wrong
         store.workspaces().save(&workspace).expect("update");
 
-        let relu = store
+        let read_back = store
             .workspaces()
             .get(workspace.id)
             .expect("read")
             .expect("present");
-        assert_eq!(relu.name, "après");
+        assert_eq!(read_back.name, "after");
         assert_eq!(
-            relu.created_at.timestamp_millis(),
+            read_back.created_at.timestamp_millis(),
             creation.timestamp_millis()
         );
     }
@@ -217,16 +217,16 @@ mod tests {
     #[test]
     fn the_list_is_ordered_by_name() {
         let store = Store::open_in_memory().expect("open");
-        for nom in ["gamma", "alpha", "beta"] {
-            store.workspaces().create(nom).expect("creation");
+        for name in ["gamma", "alpha", "beta"] {
+            store.workspaces().create(name).expect("creation");
         }
-        let noms: Vec<String> = store
+        let names: Vec<String> = store
             .workspaces()
             .list()
             .expect("list")
             .into_iter()
             .map(|w| w.name)
             .collect();
-        assert_eq!(noms, ["alpha", "beta", "gamma"]);
+        assert_eq!(names, ["alpha", "beta", "gamma"]);
     }
 }

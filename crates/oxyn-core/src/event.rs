@@ -58,7 +58,7 @@ pub enum Event {
         ///
         /// This is what lets a view know that a refresh makes sense: a write or
         /// a DDL makes what is shown stale, a read does not
-        /// ([ADR-0022](../../docs/adr/0022-rafraichissement-automatique.md)).
+        /// ([ADR-0022](../../../docs/adr/0022-rafraichissement-automatique.md)).
         /// The event does not say **which object** changed: the classifier does
         /// not name tables, and claiming otherwise would produce wrong
         /// invalidations in both directions.
@@ -94,7 +94,7 @@ pub enum Event {
     CatalogUpdated,
 
     /// The session's transaction state, observed at the end of an execution
-    /// ([ADR-0039](../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
+    /// ([ADR-0039](../../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
     ///
     /// It belongs to the **session**, not to the command: the interface stores
     /// the last value received per session and never deduces it from the
@@ -161,10 +161,10 @@ mod tests {
 
     #[test]
     fn the_terminal_events_are_the_three_expected() {
-        let resultat = ResultId::new();
+        let result_id = ResultId::new();
         assert!(
             Event::Completed {
-                result: resultat,
+                result: result_id,
                 stats: ExecStats::default(),
                 intent: StatementIntent::Read,
             }
@@ -172,14 +172,14 @@ mod tests {
         );
         assert!(
             Event::Failed {
-                error: "boum".into(),
+                error: "boom".into(),
                 retryable: false,
             }
             .is_terminal()
         );
         assert!(Event::Cancelled.is_terminal());
 
-        assert!(!Event::SchemaReady { result: resultat }.is_terminal());
+        assert!(!Event::SchemaReady { result: result_id }.is_terminal());
         assert!(!Event::Progress { rows: 10 }.is_terminal());
         assert!(!Event::CatalogUpdated.is_terminal());
         assert!(
@@ -194,8 +194,8 @@ mod tests {
 
     #[test]
     fn a_failure_carries_the_error_class() {
-        let transitoire = Event::failed(&OxynError::Connection("network down".into()));
-        let Event::Failed { retryable, error } = transitoire else {
+        let transient = Event::failed(&OxynError::Connection("network down".into()));
+        let Event::Failed { retryable, error } = transient else {
             panic!("wrong variant");
         };
         assert!(retryable, "a network outage is retryable");
@@ -204,10 +204,10 @@ mod tests {
             "the server's message is shown"
         );
 
-        let ambigu = Event::failed(&OxynError::Timeout {
+        let ambiguous = Event::failed(&OxynError::Timeout {
             after: Duration::from_secs(30),
         });
-        let Event::Failed { retryable, .. } = ambigu else {
+        let Event::Failed { retryable, .. } = ambiguous else {
             panic!("wrong variant");
         };
         assert!(
@@ -218,14 +218,14 @@ mod tests {
 
     #[test]
     fn the_concerned_result_can_be_found() {
-        let resultat = ResultId::new();
+        let result_id = ResultId::new();
         assert_eq!(
             Event::BatchReady {
-                result: resultat,
+                result: result_id,
                 rows: 1_024,
             }
             .result(),
-            Some(resultat)
+            Some(result_id)
         );
         assert_eq!(Event::Cancelled.result(), None);
     }
@@ -235,13 +235,13 @@ mod tests {
         let evt = Event::ApprovalRequested {
             command: CommandId::new(),
             reason: "TRUNCATE: empties the whole table".into(),
-            preview: Some(Preview::new("TRUNCATE audit", "caisse")),
+            preview: Some(Preview::new("TRUNCATE audit", "checkout")),
         };
         let Event::ApprovalRequested { preview, .. } = &evt else {
             panic!("wrong variant");
         };
         let preview = preview.as_ref().expect("preview expected");
-        assert_eq!(preview.connection, "caisse");
+        assert_eq!(preview.connection, "checkout");
         assert!(
             !evt.is_terminal(),
             "the execution is not closed, it is waiting"
@@ -259,8 +259,8 @@ mod tests {
         assert_eq!(json["event"], "transaction_state");
         assert_eq!(json["state"], "unknown");
         assert_eq!(json["session"], session.to_string());
-        let relu: Event = serde_json::from_value(json).expect("deserialization");
-        assert_eq!(relu, evt);
+        let read_back: Event = serde_json::from_value(json).expect("deserialization");
+        assert_eq!(read_back, evt);
     }
 
     #[test]
@@ -280,7 +280,7 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&evt).expect("serialization");
-        let relu: Event = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(evt, relu);
+        let read_back: Event = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(evt, read_back);
     }
 }

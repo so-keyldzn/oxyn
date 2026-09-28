@@ -57,7 +57,7 @@ impl ExecStats {
     #[must_use]
     pub fn client_time(&self) -> Option<Duration> {
         self.server_time
-            .and_then(|serveur| self.total_time.checked_sub(serveur))
+            .and_then(|server| self.total_time.checked_sub(server))
     }
 
     /// No row produced.
@@ -119,11 +119,11 @@ mod tests {
         };
         assert_eq!(stats.client_time(), None);
 
-        let sans_serveur = ExecStats {
+        let without_server = ExecStats {
             total_time: Duration::from_millis(5),
             ..ExecStats::default()
         };
-        assert_eq!(sans_serveur.client_time(), None);
+        assert_eq!(without_server.client_time(), None);
     }
 
     #[test]

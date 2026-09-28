@@ -27,7 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-RACINE = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # The check covers code and tooling, not documents: `docs/` and `.claude/*.md`
 # *describe* the convention, they do not violate it by quoting it. It is the
@@ -37,75 +37,75 @@ SUFFIXES = {".rs", ".py", ".toml", ".yml", ".yaml", ".sh", ".json", ".wit", ".sq
 # Two files carry the marker because they *are* the check: the hook that
 # refuses it on write, and its test. Exempting them is accurate; rewriting them
 # to work around this script would make the hook unreadable.
-EXEMPTS = {
+EXEMPT = {
     ".claude/hooks/code_interdit.py",
     ".claude/hooks/test_hooks.py",
 }
 
 # The word is assembled instead of written, so that this file does not flag
 # itself and does not have to exempt itself — an exemption is a permanent hole.
-MARQUE = "TO" + "DO"
-INTERDITS = ("FIX" + "ME", "XX" + "X", "HA" + "CK")
+MARK = "TO" + "DO"
+FORBIDDEN = ("FIX" + "ME", "XX" + "X", "HA" + "CK")
 
-MOTIF_MARQUE = re.compile(r"\b" + MARQUE + r"\b\s*(?:\(([^)]*)\))?")
-MOTIF_JUSTIFICATION = re.compile(r"\d{4}-\d{2}-\d{2}|phase\s+\d+", re.IGNORECASE)
+MARK_PATTERN = re.compile(r"\b" + MARK + r"\b\s*(?:\(([^)]*)\))?")
+JUSTIFICATION_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}|phase\s+\d+", re.IGNORECASE)
 # The word boundaries are not decorative: without them, the `XXXX` that marks a
 # placeholder in the ADR templates would be taken for a marker.
-MOTIF_INTERDIT = re.compile(r"\b(?:" + "|".join(INTERDITS) + r")\b")
+FORBIDDEN_PATTERN = re.compile(r"\b(?:" + "|".join(FORBIDDEN) + r")\b")
 
 
-def _fichiers_suivis() -> list[Path]:
+def _tracked_files() -> list[Path]:
     """Only files tracked by git count: `target/` holds thousands, and an
     untracked file commits nobody."""
-    sortie = subprocess.run(
+    output = subprocess.run(
         ["git", "ls-files", "-z"],
-        cwd=RACINE,
+        cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    noms = [nom for nom in sortie.split("\0") if nom and nom not in EXEMPTS]
-    chemins = (RACINE / nom for nom in noms)
-    return [c for c in chemins if c.suffix in SUFFIXES and c.is_file()]
+    name_list = [item_name for item_name in output.split("\0") if item_name and item_name not in EXEMPT]
+    paths = (REPO_ROOT / item_name for item_name in name_list)
+    return [c for c in paths if c.suffix in SUFFIXES and c.is_file()]
 
 
-def controler(fichier: Path) -> list[str]:
-    erreurs = []
-    rel = fichier.relative_to(RACINE)
+def run_checks(file_path: Path) -> list[str]:
+    problems = []
+    rel = file_path.relative_to(REPO_ROOT)
     try:
-        lignes = fichier.read_text(encoding="utf-8").splitlines()
+        lines = file_path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError:
         return []
 
-    for numero, ligne in enumerate(lignes, start=1):
-        for interdit in MOTIF_INTERDIT.finditer(ligne):
-            erreurs.append(
-                f"{rel}:{numero}: \"{interdit.group(0)}\" — use "
-                f"{MARQUE}(YYYY-MM-DD) or {MARQUE}(phase N), which say when"
+    for number, line in enumerate(lines, start=1):
+        for forbidden in FORBIDDEN_PATTERN.finditer(line):
+            problems.append(
+                f"{rel}:{number}: \"{forbidden.group(0)}\" — use "
+                f"{MARK}(YYYY-MM-DD) or {MARK}(phase N), which say when"
             )
-        for marque in MOTIF_MARQUE.finditer(ligne):
-            contenu = marque.group(1) or ""
-            if not MOTIF_JUSTIFICATION.search(contenu):
-                erreurs.append(
-                    f"{rel}:{numero}: {MARQUE} without a date or a phase — "
-                    f"expected {MARQUE}(YYYY-MM-DD, what unblocks it) "
-                    f"or {MARQUE}(phase N)"
+        for mark in MARK_PATTERN.finditer(line):
+            content = mark.group(1) or ""
+            if not JUSTIFICATION_PATTERN.search(content):
+                problems.append(
+                    f"{rel}:{number}: {MARK} without a date or a phase — "
+                    f"expected {MARK}(YYYY-MM-DD, what unblocks it) "
+                    f"or {MARK}(phase N)"
                 )
-    return erreurs
+    return problems
 
 
-def principal() -> int:
-    erreurs = [e for fichier in _fichiers_suivis() for e in controler(fichier)]
+def main() -> int:
+    problems = [e for file_path in _tracked_files() for e in run_checks(file_path)]
 
-    for message in erreurs:
+    for message in problems:
         print(f"ERROR          {message}")
 
-    if erreurs:
-        print(f"\n{MARQUE}: {len(erreurs)} marker(s) without a deadline.")
+    if problems:
+        print(f"\n{MARK}: {len(problems)} marker(s) without a deadline.")
         return 1
-    print(f"{MARQUE}: every marker is dated.")
+    print(f"{MARK}: every marker is dated.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(principal())
+    sys.exit(main())

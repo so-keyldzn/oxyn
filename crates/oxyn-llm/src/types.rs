@@ -50,7 +50,7 @@ pub use oxyn_core::ai::{Role, StopReason};
 /// text. See the module note.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
-    /// Qui parle.
+    /// Who is speaking.
     pub role: Role,
     /// The text. Empty is legitimate for an assistant turn that only calls
     /// tools.
@@ -110,13 +110,13 @@ impl ChatMessage {
         }
     }
 
-    /// Consigne de cadrage.
+    /// Framing instruction.
     #[must_use]
     pub fn system(content: impl Into<String>) -> Self {
         Self::new(Role::System, content)
     }
 
-    /// Tour de l'utilisateur.
+    /// User turn.
     #[must_use]
     pub fn user(content: impl Into<String>) -> Self {
         Self::new(Role::User, content)
@@ -243,7 +243,7 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    /// Construit un appel d'outil.
+    /// Builds a tool call.
     #[must_use]
     pub fn new(
         id: impl Into<String>,
@@ -282,7 +282,7 @@ pub struct ChatRequest {
     /// [`LlmProvider::stream`](crate::provider::LlmProvider::stream) is today
     /// the only call path and always streams: this flag records the intent
     /// for a non-streamed path, should one appear. It disables nothing.
-    #[serde(default = "vrai")]
+    #[serde(default = "default_true")]
     pub stream: bool,
     /// How much work the model is asked for. `None` leaves the provider's
     /// default, which is not the same everywhere.
@@ -312,7 +312,7 @@ pub struct ChatRequest {
 }
 
 /// Default value of [`ChatRequest::stream`] at deserialization.
-const fn vrai() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -347,14 +347,14 @@ impl ChatRequest {
         self
     }
 
-    /// Fixe le plafond de jetons produits.
+    /// Sets the ceiling on produced tokens.
     #[must_use]
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);
         self
     }
 
-    /// Fixe l'effort de raisonnement.
+    /// Sets the reasoning effort.
     #[must_use]
     pub const fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
         self.reasoning_effort = Some(effort);
@@ -453,7 +453,7 @@ pub enum ChatEvent {
         /// Position of the block in the turn. Two reasoning blocks can follow
         /// each other around a tool call.
         index: u32,
-        /// Morceau de texte, brut.
+        /// Raw text chunk.
         text: String,
     },
     /// A reasoning block is complete.
@@ -483,7 +483,7 @@ pub enum ChatEvent {
     Usage {
         /// Input tokens billed, outside the cache.
         prompt_tokens: u32,
-        /// Jetons produits.
+        /// Tokens produced.
         completion_tokens: u32,
         /// Tokens **written** to the prefix cache.
         cache_write_tokens: Option<u32>,
@@ -524,7 +524,7 @@ impl ChatEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Support {
-    /// Le fournisseur l'annonce.
+    /// The provider announces it.
     Yes,
     /// The provider announces the opposite.
     No,
@@ -556,7 +556,7 @@ impl Support {
         matches!(self, Self::No)
     }
 
-    /// Nom stable, pour l'affichage et l'audit.
+    /// Stable name, for display and audit.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -652,7 +652,7 @@ impl ModelInfo {
         }
     }
 
-    /// Donne un nom montrable distinct de l'identifiant.
+    /// Gives a displayable name distinct from the identifier.
     #[must_use]
     pub fn with_display_name(mut self, name: impl Into<String>) -> Self {
         self.display_name = name.into();
@@ -715,12 +715,12 @@ mod tests {
         // The targeted failure: `tracing::debug!("{msg:?}")` writes a row of
         // the customer database into a log file (I-03).
         let msg = ChatMessage::user("client 4711, IBAN FR76 3000 6000 0112 3456 7890 189");
-        let rendu = format!("{msg:?}");
-        assert!(!rendu.contains("FR76"), "{rendu}");
-        assert!(!rendu.contains("4711"), "{rendu}");
-        assert!(rendu.contains("masked"), "{rendu}");
+        let rendered = format!("{msg:?}");
+        assert!(!rendered.contains("FR76"), "{rendered}");
+        assert!(!rendered.contains("4711"), "{rendered}");
+        assert!(rendered.contains("masked"), "{rendered}");
         assert!(
-            rendu.contains("User"),
+            rendered.contains("User"),
             "the role remains useful for diagnosis"
         );
     }
@@ -730,47 +730,50 @@ mod tests {
         let req = ChatRequest::new(
             "gpt-4o-mini",
             vec![
-                ChatMessage::system("tu es un assistant SQL"),
+                ChatMessage::system("you are a SQL assistant"),
                 ChatMessage::user("SELECT * FROM patients WHERE hiv_status = true"),
             ],
         )
         .with_tools(vec![ToolSpec::new(
             "execute",
-            "exécute une requête",
+            "run a query",
             serde_json::json!({"type": "object"}),
         )]);
 
-        let rendu = format!("{req:?}");
-        assert!(!rendu.contains("hiv_status"), "{rendu}");
-        assert!(!rendu.contains("patients"), "{rendu}");
-        assert!(rendu.contains("gpt-4o-mini"), "the model remains visible");
-        assert!(rendu.contains("execute"), "tool names remain visible");
+        let rendered = format!("{req:?}");
+        assert!(!rendered.contains("hiv_status"), "{rendered}");
+        assert!(!rendered.contains("patients"), "{rendered}");
+        assert!(
+            rendered.contains("gpt-4o-mini"),
+            "the model remains visible"
+        );
+        assert!(rendered.contains("execute"), "tool names remain visible");
     }
 
     #[test]
     fn a_tool_message_carries_the_call_identifier() {
-        let msg = ChatMessage::tool_result("call_42", "3 lignes");
+        let msg = ChatMessage::tool_result("call_42", "3 rows");
         assert_eq!(msg.role, Role::Tool);
         assert_eq!(msg.tool_call_id.as_deref(), Some("call_42"));
     }
 
     #[test]
     fn an_unknown_capability_neither_promises_nor_hides() {
-        let inconnue = Support::default();
-        assert_eq!(inconnue, Support::Unknown);
-        assert!(!inconnue.is_yes());
-        assert!(!inconnue.is_no());
+        let unknown = Support::default();
+        assert_eq!(unknown, Support::Unknown);
+        assert!(!unknown.is_yes());
+        assert!(!unknown.is_no());
         assert!(Support::known(true).is_yes());
         assert!(Support::known(false).is_no());
     }
 
     #[test]
     fn a_model_record_asserts_nothing_by_default() {
-        let fiche = ModelInfo::new("llama3.2");
-        assert_eq!(fiche.display_name, "llama3.2");
-        assert_eq!(fiche.context_window, None);
-        assert_eq!(fiche.supports_tools, Support::Unknown);
-        assert_eq!(fiche.cost, None);
+        let info = ModelInfo::new("llama3.2");
+        assert_eq!(info.display_name, "llama3.2");
+        assert_eq!(info.context_window, None);
+        assert_eq!(info.supports_tools, Support::Unknown);
+        assert_eq!(info.cost, None);
     }
 
     #[test]
@@ -790,10 +793,10 @@ mod tests {
 
     #[test]
     fn a_serialized_request_reads_back() {
-        let req = ChatRequest::new("m", vec![ChatMessage::user("bonjour")]).with_max_tokens(64);
+        let req = ChatRequest::new("m", vec![ChatMessage::user("hello")]).with_max_tokens(64);
         let json = serde_json::to_string(&req).expect("serialization");
-        let relue: ChatRequest = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(relue, req);
+        let reread_request: ChatRequest = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(reread_request, req);
     }
 
     #[test]
@@ -820,8 +823,8 @@ mod tests {
         assert_eq!(json["reasoning_budget_tokens"], 8192);
         assert_eq!(json["cache_tools"], true);
 
-        let relue: ChatRequest = serde_json::from_value(json).expect("deserialization");
-        assert_eq!(relue, req);
+        let reread_request: ChatRequest = serde_json::from_value(json).expect("deserialization");
+        assert_eq!(reread_request, req);
     }
 
     #[test]
@@ -837,18 +840,18 @@ mod tests {
 
     #[test]
     fn a_reasoning_block_attaches_to_the_assistant_turn() {
-        let blocs = vec![
-            ReasoningBlock::summarized("je compte", Some("sig".to_owned())),
+        let blocks = vec![
+            ReasoningBlock::summarized("I count", Some("sig".to_owned())),
             ReasoningBlock::redacted("chiffre"),
         ];
-        let msg = ChatMessage::assistant("42").with_reasoning(blocs.clone());
-        assert_eq!(msg.reasoning, blocs);
+        let msg = ChatMessage::assistant("42").with_reasoning(blocks.clone());
+        assert_eq!(msg.reasoning, blocks);
 
         // The turn serializes and reads back identically: that is the
         // condition for the next turn to be accepted.
         let json = serde_json::to_string(&msg).expect("serialization");
-        let relu: ChatMessage = serde_json::from_str(&json).expect("deserialization");
-        assert_eq!(relu.reasoning, blocs);
+        let reread_message: ChatMessage = serde_json::from_str(&json).expect("deserialization");
+        assert_eq!(reread_message.reasoning, blocks);
     }
 
     #[test]
@@ -856,23 +859,23 @@ mod tests {
         // A reasoning block repeats what was given to the model — at the
         // `Sampled` tier, database rows (I-03).
         let msg = ChatMessage::assistant("ok").with_reasoning(vec![ReasoningBlock::summarized(
-            "la table patients a une colonne hiv_status",
+            "the patients table has an hiv_status column",
             None,
         )]);
-        let rendu = format!("{msg:?}");
-        assert!(!rendu.contains("hiv_status"), "{rendu}");
-        assert!(rendu.contains("reasoning"), "{rendu}");
+        let rendered = format!("{msg:?}");
+        assert!(!rendered.contains("hiv_status"), "{rendered}");
+        assert!(rendered.contains("reasoning"), "{rendered}");
     }
 
     #[test]
     fn a_message_marked_stable_stays_so_after_serialization() {
-        let msg = ChatMessage::system("contexte du schéma").cached();
+        let msg = ChatMessage::system("schema context").cached();
         assert!(msg.cache_breakpoint);
         let json = serde_json::to_value(&msg).expect("serialization");
         assert_eq!(json["cache_breakpoint"], true);
 
-        let ordinaire = ChatMessage::user("et les doublons ?");
-        let json = serde_json::to_value(&ordinaire).expect("serialization");
+        let ordinary = ChatMessage::user("and the duplicates?");
+        let json = serde_json::to_value(&ordinary).expect("serialization");
         assert!(
             json.get("cache_breakpoint").is_none(),
             "a false flag does not go out: {json}"
@@ -881,11 +884,11 @@ mod tests {
 
     #[test]
     fn a_model_record_asserts_nothing_about_reasoning_by_default() {
-        let fiche = ModelInfo::new("llama3.2");
-        assert_eq!(fiche.supports_reasoning, Support::Unknown);
-        assert!(fiche.reasoning_efforts.is_empty());
+        let info = ModelInfo::new("llama3.2");
+        assert_eq!(info.supports_reasoning, Support::Unknown);
+        assert!(info.reasoning_efforts.is_empty());
 
-        let declaree = ModelInfo::new("m")
+        let declared = ModelInfo::new("m")
             .with_reasoning_support(Support::Yes)
             .with_reasoning_efforts(vec![
                 ReasoningEffort::High,
@@ -893,7 +896,7 @@ mod tests {
                 ReasoningEffort::High,
             ]);
         assert_eq!(
-            declaree.reasoning_efforts,
+            declared.reasoning_efforts,
             vec![ReasoningEffort::Low, ReasoningEffort::High],
             "the list is sorted and deduplicated: it is shown as is"
         );
@@ -901,7 +904,7 @@ mod tests {
 
     #[test]
     fn an_undeclared_usage_is_distinct_from_zero() {
-        let evenement = ChatEvent::Usage {
+        let event = ChatEvent::Usage {
             prompt_tokens: 10,
             completion_tokens: 2,
             cache_write_tokens: None,
@@ -912,7 +915,7 @@ mod tests {
             cache_write_tokens,
             cache_read_tokens,
             ..
-        } = evenement
+        } = event
         else {
             panic!("unexpected variant");
         };

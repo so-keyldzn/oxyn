@@ -40,23 +40,23 @@
 //! use oxyn_core::{DriverId, MutationRisk, StatementIntent};
 //! use oxyn_query::{classify, dialect_for, format};
 //!
-//! let dialecte = dialect_for(&DriverId::postgres());
+//! let sql_dialect = dialect_for(&DriverId::postgres());
 //!
 //! // The trap SECURITY asks to test explicitly.
-//! let lu = classify("EXPLAIN ANALYZE DELETE FROM commandes", dialecte);
-//! assert_eq!(lu.intent, StatementIntent::Write);
-//! assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
+//! let parsed = classify("EXPLAIN ANALYZE DELETE FROM orders", sql_dialect);
+//! assert_eq!(parsed.intent, StatementIntent::Write);
+//! assert_eq!(parsed.risk, MutationRisk::UnboundedDelete);
 //!
 //! // A trivially true `WHERE` bounds nothing.
-//! let lu = classify("UPDATE clients SET actif = false WHERE 1=1", dialecte);
-//! assert_eq!(lu.risk, MutationRisk::UnboundedUpdate);
+//! let parsed = classify("UPDATE clients SET active = false WHERE 1=1", sql_dialect);
+//! assert_eq!(parsed.risk, MutationRisk::UnboundedUpdate);
 //!
 //! // What does not parse is mutating, not "probably harmless".
-//! let lu = classify("SELEKT * FORM t", dialecte);
-//! assert_eq!(lu.intent, StatementIntent::Unknown);
-//! assert!(lu.is_mutating());
+//! let parsed = classify("SELEKT * FORM t", sql_dialect);
+//! assert_eq!(parsed.intent, StatementIntent::Unknown);
+//! assert!(parsed.is_mutating());
 //!
-//! assert_eq!(format("select   1", dialecte), "SELECT 1");
+//! assert_eq!(format("select   1", sql_dialect), "SELECT 1");
 //! ```
 
 pub mod classify;
@@ -88,29 +88,29 @@ mod tests {
     /// command is not trustworthy — checked end to end with the real types.
     #[test]
     fn an_agent_cannot_declare_itself_read_only() {
-        let politique = DefaultPolicy::new();
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+        let policy = DefaultPolicy::new();
+        let conn_config = ConnectionConfig::new("customer db", DriverId::postgres())
             .with_environment(Environment::Production);
-        politique.register(&connexion);
+        policy.register(&conn_config);
 
         // The agent declares a read. The text says otherwise.
-        let demande = ExecRequest::new(
+        let requested = ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Postgres),
-            "WITH partis AS (DELETE FROM commandes RETURNING *) SELECT count(*) FROM partis",
+            "WITH removed AS (DELETE FROM orders RETURNING *) SELECT count(*) FROM removed",
         )
         .with_intent(StatementIntent::Read);
 
-        let requalifiee = reclassify(&demande).qualify(demande);
-        assert_eq!(requalifiee.intent, StatementIntent::Write);
-        assert_eq!(requalifiee.risk, MutationRisk::UnboundedDelete);
+        let requalified = reclassify(&requested).qualify(requested);
+        assert_eq!(requalified.intent, StatementIntent::Write);
+        assert_eq!(requalified.risk, MutationRisk::UnboundedDelete);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let order = Command::Execute {
+            connection: conn_config.id,
             session: SessionId::new(),
-            request: Box::new(requalifiee),
+            request: Box::new(requalified),
         };
         let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
-        let decision = politique.authorize(&agent, &commande, Environment::Production);
+        let decision = policy.authorize(&agent, &order, Environment::Production);
 
         assert!(decision.is_denied(), "{decision:?}");
     }
@@ -118,24 +118,24 @@ mod tests {
     /// The same path for a real read: nothing must be asked.
     #[test]
     fn a_read_stays_a_read_up_to_the_gate() {
-        let politique = DefaultPolicy::new();
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let policy = DefaultPolicy::new();
+        let conn_config = ConnectionConfig::new("workshop", DriverId::sqlite())
             .with_environment(Environment::Local);
-        politique.register(&connexion);
+        policy.register(&conn_config);
 
-        let demande = ExecRequest::new(
+        let requested = ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Sqlite),
-            "SELECT nom FROM clients WHERE id = 1",
+            "SELECT name FROM clients WHERE id = 1",
         );
-        let requalifiee = reclassify(&demande).qualify(demande);
-        assert_eq!(requalifiee.intent, StatementIntent::Read);
+        let requalified = reclassify(&requested).qualify(requested);
+        assert_eq!(requalified.intent, StatementIntent::Read);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let order = Command::Execute {
+            connection: conn_config.id,
             session: SessionId::new(),
-            request: Box::new(requalifiee),
+            request: Box::new(requalified),
         };
-        let decision = politique.authorize(&Actor::Human, &commande, Environment::Local);
+        let decision = policy.authorize(&Actor::Human, &order, Environment::Local);
         assert_eq!(decision, Decision::Allow);
     }
 
@@ -143,8 +143,8 @@ mod tests {
     /// "empty batch = `Unknown`" closes.
     #[test]
     fn an_empty_batch_does_not_pass_for_a_read() {
-        let lu = classify("", SqlDialect::Postgres);
-        assert!(lu.is_mutating());
-        assert!(!lu.is_read_only());
+        let parsed = classify("", SqlDialect::Postgres);
+        assert!(parsed.is_mutating());
+        assert!(!parsed.is_read_only());
     }
 }

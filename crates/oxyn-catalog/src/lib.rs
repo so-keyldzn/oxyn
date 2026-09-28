@@ -52,11 +52,11 @@
 //! let mut cache = CatalogCache::new();
 //!
 //! // A partial insertion: a table is described without its schema being listed.
-//! let table = CatalogPath::for_relation(Some("caisse"), Some("public"), "clients")?;
+//! let table = CatalogPath::for_relation(Some("sales"), Some("public"), "clients")?;
 //! cache.set_relation(&table, Relation::new("clients", RelationKind::Table))?;
 //!
 //! // The SQL composed by Oxyn always quotes its identifiers.
-//! assert_eq!(table.qualify(QuoteStyle::Double), r#""caisse"."public"."clients""#);
+//! assert_eq!(table.qualify(QuoteStyle::Double), r#""sales"."public"."clients""#);
 //!
 //! // After a DDL, the subtree is marked for rereading — without losing what it knows.
 //! cache.invalidate(&CatalogScope::Relation(table.clone()));
@@ -106,24 +106,24 @@ mod tests {
             Capabilities::SQL | Capabilities::SCHEMAS | Capabilities::INDEXES,
         ));
 
-        let espace = CatalogPath::for_namespace(Some("caisse"), "public").expect("valid path");
+        let space = CatalogPath::for_namespace(Some("sales"), "public").expect("valid path");
         cache
             .set_relations(
-                &espace,
+                &space,
                 vec![
-                    RelationRef::new(espace.clone(), "commandes", RelationKind::Table)
+                    RelationRef::new(space.clone(), "orders", RelationKind::Table)
                         .expect("valid name"),
-                    RelationRef::new(espace.clone(), "clients", RelationKind::Table)
+                    RelationRef::new(space.clone(), "clients", RelationKind::Table)
                         .expect("valid name"),
                 ],
             )
             .expect("a namespace");
 
-        let commandes = espace.with_relation("commandes").expect("valid path");
+        let orders = space.with_relation("orders").expect("valid path");
         cache
             .set_relation(
-                &commandes,
-                Relation::new("commandes", RelationKind::Table).with_fields(vec![
+                &orders,
+                Relation::new("orders", RelationKind::Table).with_fields(vec![
                     Field::new("id", 0, LogicalType::INT64, "int8").primary_key(),
                     Field::new("client_id", 1, LogicalType::INT64, "int8").not_null(),
                 ]),
@@ -131,17 +131,17 @@ mod tests {
             .expect("the path names a relation");
 
         // The search finds the table by its name, and the other by its field.
-        let resultats = search(&cache, "client", &SearchOptions::default());
-        let noms: Vec<Option<&str>> = resultats.iter().map(|hit| hit.path.relation()).collect();
-        assert_eq!(noms, [Some("clients"), Some("commandes")]);
+        let results = search(&cache, "client", &SearchOptions::default());
+        let names: Vec<Option<&str>> = results.iter().map(|hit| hit.path.relation()).collect();
+        assert_eq!(names, [Some("clients"), Some("orders")]);
 
         // An ALTER TABLE issued from Oxyn: the subtree is to be reread, but it
         // stays readable in the meantime.
-        cache.invalidate(&CatalogScope::Relation(commandes.clone()));
-        assert!(cache.relation(&commandes).is_some());
+        cache.invalidate(&CatalogScope::Relation(orders.clone()));
+        assert!(cache.relation(&orders).is_some());
         assert_eq!(
             cache.stale(Duration::from_secs(3600)),
-            vec![CatalogScope::Relation(commandes)]
+            vec![CatalogScope::Relation(orders)]
         );
     }
 }

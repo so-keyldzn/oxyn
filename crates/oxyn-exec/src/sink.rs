@@ -191,7 +191,7 @@ impl DispatchReport {
     pub fn decided(command: CommandId, decided: &oxyn_core::Result<Outcome>) -> Self {
         match decided {
             Ok(outcome) => Self::from_outcome(command, outcome),
-            Err(erreur) => Self::from_error(command, erreur),
+            Err(error) => Self::from_error(command, error),
         }
     }
 
@@ -238,9 +238,9 @@ impl DispatchReport {
                 reason: reason.clone(),
             },
 
-            autre => Self::Completed {
+            other => Self::Completed {
                 command,
-                summary: summarize(autre),
+                summary: summarize(other),
                 stats: None,
                 result: None,
             },
@@ -349,21 +349,21 @@ impl ExecutorSink {
         // when nothing reaches the executor: it is the correlation key with the
         // log.
         let id = CommandId::new();
-        if let Some(refus) = self.reject_impersonation(id, &actor) {
-            return refus;
+        if let Some(refusal) = self.reject_impersonation(id, &actor) {
+            return refusal;
         }
 
         match self.executor.dispatch_as(id, actor, command, cancel).await {
             Ok(outcome) => DispatchReport::from_outcome(id, &outcome),
-            Err(erreur) => DispatchReport::from_error(id, &erreur),
+            Err(error) => DispatchReport::from_error(id, &error),
         }
     }
 
     /// Refuses a command whose actor is not the sink's.
     fn reject_impersonation(&self, id: CommandId, actor: &Actor) -> Option<DispatchReport> {
         let (agent, session) = self.bound?;
-        let attendu = Actor::agent(agent, session);
-        if *actor == attendu {
+        let expected = Actor::agent(agent, session);
+        if *actor == expected {
             return None;
         }
         Some(DispatchReport::Denied {
@@ -396,31 +396,31 @@ mod tests {
 
     use super::*;
 
-    fn banc(connexion: &ConnectionConfig) -> Arc<Executor> {
+    fn harness(connection: &ConnectionConfig) -> Arc<Executor> {
         let store = Arc::new(Store::open_in_memory().expect("in-memory local state"));
-        let atelier = store.workspaces().create("tests").expect("workspace");
+        let setup = store.workspaces().create("tests").expect("workspace");
         store
             .connections()
-            .save(atelier.id, connexion)
-            .expect("connexion");
+            .save(setup.id, connection)
+            .expect("connection");
 
-        let politique = Arc::new(DefaultPolicy::new());
-        politique.register(connexion);
-        let politique: Arc<dyn PolicyGate> = politique;
+        let policy = Arc::new(DefaultPolicy::new());
+        policy.register(connection);
+        let policy: Arc<dyn PolicyGate> = policy;
 
-        let executeur = Executor::builder(store, politique)
-            .with_workspace(atelier.id)
+        let exec = Executor::builder(store, policy)
+            .with_workspace(setup.id)
             .build();
-        executeur.register_connection(connexion);
-        Arc::new(executeur)
+        exec.register_connection(connection);
+        Arc::new(exec)
     }
 
-    fn execution(connexion: ConnectionId, texte: &str) -> Command {
+    fn execution(conn: ConnectionId, text: &str) -> Command {
         Command::Execute {
-            connection: connexion,
+            connection: conn,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), texte).with_limits(
+                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), text).with_limits(
                     ExecLimits::default()
                         .writable()
                         .with_timeout(None::<Duration>),
@@ -431,32 +431,24 @@ mod tests {
 
     #[test]
     fn an_agent_cannot_impersonate_the_user() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let puits =
-            ExecutorSink::for_agent(banc(&connexion), AgentId::new(), AgentSessionId::new());
+        let sink =
+            ExecutorSink::for_agent(harness(&connection), AgentId::new(), AgentSessionId::new());
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::Human,
-            execution(connexion.id, "DELETE FROM clients"),
+            execution(connection.id, "DELETE FROM clients"),
             &CancelToken::new(),
         ));
 
         assert!(
-            matches!(rapport, DispatchReport::Denied { .. }),
-            "{rapport:?}"
+            matches!(report, DispatchReport::Denied { .. }),
+            "{report:?}"
         );
-        assert!(!rapport.took_effect());
+        assert!(!report.took_effect());
         // And nothing reached the executor: the log is empty.
-        assert_eq!(
-            puits
-                .executor()
-                .store()
-                .journal()
-                .count()
-                .expect("comptage"),
-            0
-        );
+        assert_eq!(sink.executor().store().journal().count().expect("count"), 0);
     }
 
     #[test]
@@ -464,30 +456,30 @@ mod tests {
         // The proof: an agent asking for a DELETE in production receives a
         // denial written by the `PolicyGate`, and the log keeps its trace —
         // exactly as if the interface had submitted the command.
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let executeur = banc(&connexion);
+        let exec = harness(&connection);
         let agent = AgentId::new();
         let session = AgentSessionId::new();
-        let puits = ExecutorSink::for_agent(Arc::clone(&executeur), agent, session);
+        let sink = ExecutorSink::for_agent(Arc::clone(&exec), agent, session);
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::agent(agent, session),
-            execution(connexion.id, "DELETE FROM clients"),
+            execution(connection.id, "DELETE FROM clients"),
             &CancelToken::new(),
         ));
 
-        let DispatchReport::Denied { reason, .. } = &rapport else {
-            panic!("{rapport:?}");
+        let DispatchReport::Denied { reason, .. } = &report else {
+            panic!("{report:?}");
         };
         assert!(reason.contains("production"), "{reason}");
-        assert_eq!(executeur.store().journal().count().expect("comptage"), 1);
+        assert_eq!(exec.store().journal().count().expect("count"), 1);
 
-        let trace = executeur
+        let trace = exec
             .store()
             .journal()
             .for_agent(agent, 1)
-            .expect("relecture")
+            .expect("read back")
             .pop()
             .expect("an entry attributed to the agent");
         assert_eq!(trace.record.intent, StatementIntent::Write);
@@ -495,25 +487,27 @@ mod tests {
 
     #[test]
     fn an_agent_write_outside_production_is_returned_as_pending() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::postgres())
+        let connection = ConnectionConfig::new("atelier", DriverId::postgres())
             .with_environment(Environment::Development);
         let agent = AgentId::new();
         let session = AgentSessionId::new();
-        let puits = ExecutorSink::for_agent(banc(&connexion), agent, session);
+        let sink = ExecutorSink::for_agent(harness(&connection), agent, session);
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::agent(agent, session),
-            execution(connexion.id, "UPDATE clients SET actif = true WHERE id = 1"),
+            execution(
+                connection.id,
+                "UPDATE clients SET active = true WHERE id = 1",
+            ),
             &CancelToken::new(),
         ));
 
-        let DispatchReport::AwaitingApproval { command, .. } = rapport else {
-            panic!("{rapport:?}");
+        let DispatchReport::AwaitingApproval { command, .. } = report else {
+            panic!("{report:?}");
         };
         // The returned identifier is the one under which the approval will be given.
         assert!(
-            puits
-                .executor()
+            sink.executor()
                 .approvals()
                 .pending()
                 .iter()
@@ -524,20 +518,20 @@ mod tests {
     #[test]
     fn a_failure_is_an_answer_to_the_model_not_an_incident() {
         // No session is open: execution fails after the gate.
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
         let agent = AgentId::new();
         let session = AgentSessionId::new();
-        let puits = ExecutorSink::for_agent(banc(&connexion), agent, session);
+        let sink = ExecutorSink::for_agent(harness(&connection), agent, session);
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::agent(agent, session),
-            execution(connexion.id, "SELECT 1"),
+            execution(connection.id, "SELECT 1"),
             &CancelToken::new(),
         ));
 
-        let DispatchReport::Failed { class, .. } = rapport else {
-            panic!("{rapport:?}");
+        let DispatchReport::Failed { class, .. } = report else {
+            panic!("{report:?}");
         };
         assert!(
             class.is_retryable(),
@@ -547,20 +541,20 @@ mod tests {
 
     #[test]
     fn an_open_sink_passes_the_actor_as_is() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let puits = ExecutorSink::new(banc(&connexion));
+        let sink = ExecutorSink::new(harness(&connection));
 
-        let rapport = block_on(puits.dispatch(
+        let report = block_on(sink.dispatch(
             Actor::Human,
-            execution(connexion.id, "SELECT 1"),
+            execution(connection.id, "SELECT 1"),
             &CancelToken::new(),
         ));
         // The gate allowed it (read, local connection): the failure comes from
         // the absence of a session, not from a denial.
         assert!(
-            matches!(rapport, DispatchReport::Failed { .. }),
-            "{rapport:?}"
+            matches!(report, DispatchReport::Failed { .. }),
+            "{report:?}"
         );
     }
 }

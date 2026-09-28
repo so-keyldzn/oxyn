@@ -338,7 +338,7 @@ impl PluginRegistry {
             }
         };
 
-        let mut trouves = BTreeMap::new();
+        let mut found = BTreeMap::new();
         for entry in entries {
             let entry = entry.map_err(|source| PluginError::Directory {
                 path: self.root.clone(),
@@ -348,7 +348,7 @@ impl PluginRegistry {
             if !directory.is_dir() {
                 continue;
             }
-            let Some(slug) = directory.file_name().and_then(|nom| nom.to_str()) else {
+            let Some(slug) = directory.file_name().and_then(|ident| ident.to_str()) else {
                 tracing::warn!("plugin directory with a non-UTF-8 name: ignored");
                 continue;
             };
@@ -357,17 +357,17 @@ impl PluginRegistry {
             if !manifest_path.is_file() {
                 continue;
             }
-            trouves.insert(slug.clone(), self.load_one(slug, directory, &manifest_path));
+            found.insert(slug.clone(), self.load_one(slug, directory, &manifest_path));
         }
 
-        self.plugins = trouves;
+        self.plugins = found;
         Ok(())
     }
 
     /// Reads and classifies a plugin. Never returns an error: a faulty plugin
     /// becomes [`Failed`](PluginState::Failed) and leaves the others alone.
     fn load_one(&self, slug: String, directory: PathBuf, manifest_path: &Path) -> InstalledPlugin {
-        let echec = |slug: String, directory: PathBuf, reason: String| {
+        let failure = |slug: String, directory: PathBuf, reason: String| {
             tracing::warn!(plugin = %slug, motif = %reason, "plugin refused");
             InstalledPlugin {
                 slug,
@@ -377,19 +377,19 @@ impl PluginRegistry {
             }
         };
 
-        let texte = match fs::read_to_string(manifest_path) {
-            Ok(texte) => texte,
+        let text = match fs::read_to_string(manifest_path) {
+            Ok(text) => text,
             Err(err) => {
-                return echec(
+                return failure(
                     slug,
                     directory,
                     format!("`{MANIFEST_FILE}` unreadable: {err}"),
                 );
             }
         };
-        let manifest = match PluginManifest::from_toml(&texte) {
+        let manifest = match PluginManifest::from_toml(&text) {
             Ok(manifest) => manifest,
-            Err(err) => return echec(slug, directory, err.to_string()),
+            Err(err) => return failure(slug, directory, err.to_string()),
         };
 
         // The directory carries the identifier. Without this rule, two
@@ -401,20 +401,20 @@ impl PluginRegistry {
                  its approval would cover another plugin",
                 manifest.id
             );
-            return echec(slug, directory, reason);
+            return failure(slug, directory, reason);
         }
 
         // A file permission that encompassed the plugin directory would give
         // the plugin control over `approvals.toml`, hence over its own approval
         // and over the others'.
-        for racine in &manifest.permissions.filesystem {
-            if self.root.starts_with(racine) {
+        for root_dir in &manifest.permissions.filesystem {
+            if self.root.starts_with(root_dir) {
                 let reason = format!(
                     "the file root `{}` contains the plugin directory: \
                      the plugin could rewrite the approvals",
-                    racine.display()
+                    root_dir.display()
                 );
-                return echec(slug, directory, reason);
+                return failure(slug, directory, reason);
             }
         }
 
@@ -627,13 +627,13 @@ impl PluginRegistry {
             });
         };
 
-        let ajouts = manifest.permissions.additions_over(&record.permissions);
-        if ajouts.is_empty() {
+        let additions = manifest.permissions.additions_over(&record.permissions);
+        if additions.is_empty() {
             return Ok(());
         }
         Err(PluginError::ApprovalStale {
             plugin: slug.to_owned(),
-            detail: format!("this version also asks for {}", ajouts.join(", ")),
+            detail: format!("this version also asks for {}", additions.join(", ")),
         })
     }
 
@@ -654,19 +654,19 @@ impl PluginRegistry {
             detail: format!("directory `{}`: {err}", self.root.display()),
         })?;
 
-        let fichier = ApprovalsFile {
+        let approvals_file = ApprovalsFile {
             approvals: self.approvals.clone(),
         };
-        let texte = toml::to_string(&fichier).map_err(|err| PluginError::Approvals {
+        let text = toml::to_string(&approvals_file).map_err(|err| PluginError::Approvals {
             detail: err.to_string(),
         })?;
 
-        let temporaire = self.root.join(APPROVALS_TMP);
-        fs::write(&temporaire, texte).map_err(|err| PluginError::Approvals {
-            detail: format!("writing `{}`: {err}", temporaire.display()),
+        let temporary = self.root.join(APPROVALS_TMP);
+        fs::write(&temporary, text).map_err(|err| PluginError::Approvals {
+            detail: format!("writing `{}`: {err}", temporary.display()),
         })?;
-        fs::rename(&temporaire, self.approvals_path()).map_err(|err| PluginError::Approvals {
-            detail: format!("renaming `{}`: {err}", temporaire.display()),
+        fs::rename(&temporary, self.approvals_path()).map_err(|err| PluginError::Approvals {
+            detail: format!("renaming `{}`: {err}", temporary.display()),
         })
     }
 }
@@ -674,8 +674,8 @@ impl PluginRegistry {
 /// Reads the approvals file. Its absence is the normal state of a fresh
 /// install; its unreadability is not.
 fn read_approvals(path: &Path) -> Result<BTreeMap<String, ApprovalRecord>> {
-    let texte = match fs::read_to_string(path) {
-        Ok(texte) => texte,
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(err) => {
             return Err(PluginError::Approvals {
@@ -683,10 +683,11 @@ fn read_approvals(path: &Path) -> Result<BTreeMap<String, ApprovalRecord>> {
             });
         }
     };
-    let fichier: ApprovalsFile = toml::from_str(&texte).map_err(|err| PluginError::Approvals {
-        detail: format!("`{}`: {err}", path.display()),
-    })?;
-    Ok(fichier.approvals)
+    let approvals_file: ApprovalsFile =
+        toml::from_str(&text).map_err(|err| PluginError::Approvals {
+            detail: format!("`{}`: {err}", path.display()),
+        })?;
+    Ok(approvals_file.approvals)
 }
 
 #[cfg(test)]
@@ -699,24 +700,25 @@ mod tests {
     #[test]
     fn a_missing_plugin_directory_is_not_a_failure() {
         // It is the state of a fresh install: Oxyn must start.
-        let mut registre = PluginRegistry::new(std::env::temp_dir().join("oxyn-plugin-inexistant"));
-        registre
+        let mut registry =
+            PluginRegistry::new(std::env::temp_dir().join("oxyn-plugin-nonexistent"));
+        registry
             .discover()
             .expect("a missing directory is legitimate");
-        assert!(registre.is_empty());
-        assert!(registre.declarative_agents().is_empty());
+        assert!(registry.is_empty());
+        assert!(registry.declarative_agents().is_empty());
     }
 
     #[test]
     fn dropping_a_directory_authorizes_nothing() {
         // ADR-0005: installed is not authorized.
-        let racine = TempDir::new("depot");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        let root_dir = TempDir::new("depot");
+        root_dir.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
-        let plugin = registre.require("revue").expect("discovered plugin");
+        let plugin = registry.require("revue").expect("discovered plugin");
         assert_eq!(*plugin.state(), PluginState::Installed);
         assert!(!plugin.is_approved());
         assert!(
@@ -724,24 +726,24 @@ mod tests {
             "an unapproved plugin has no effective permission"
         );
         assert!(
-            registre.declarative_agents().is_empty(),
+            registry.declarative_agents().is_empty(),
             "an unapproved agent does not enter the AI workspace"
         );
     }
 
     #[test]
     fn the_approval_survives_a_restart() {
-        let racine = TempDir::new("persistance");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        let root_dir = TempDir::new("persistence");
+        root_dir.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        registre.approve("revue").expect("approval");
-        registre.save().expect("writing the approvals");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        registry.approve("revue").expect("approval");
+        registry.save().expect("writing the approvals");
 
-        let mut relu = PluginRegistry::new(racine.path());
-        relu.discover().expect("discovery");
-        let plugin = relu.require("revue").expect("discovered plugin");
+        let mut reread = PluginRegistry::new(root_dir.path());
+        reread.discover().expect("discovery");
+        let plugin = reread.require("revue").expect("discovered plugin");
         assert!(plugin.is_approved(), "{:?}", plugin.state());
         assert_eq!(
             plugin
@@ -751,7 +753,7 @@ mod tests {
             ConnectionAccess::ReadOnly
         );
 
-        let agents = relu.declarative_agents();
+        let agents = reread.declarative_agents();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].plugin().as_str(), "revue");
         assert_eq!(agents[0].spec().name, "Schema");
@@ -760,42 +762,42 @@ mod tests {
     #[test]
     fn the_approvals_file_is_readable_without_oxyn() {
         // I-11: what Oxyn writes can be reread with a text editor.
-        let racine = TempDir::new("lisible");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let root_dir = TempDir::new("legible");
+        root_dir.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        registre.approve("csv").expect("approval");
-        registre.save().expect("write");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        registry.approve("csv").expect("approval");
+        registry.save().expect("write");
 
-        let texte = fs::read_to_string(registre.approvals_path()).expect("the file was written");
-        assert!(texte.contains("csv"), "{texte}");
-        assert!(texte.contains("approved"), "{texte}");
+        let text = fs::read_to_string(registry.approvals_path()).expect("the file was written");
+        assert!(text.contains("csv"), "{text}");
+        assert!(text.contains("approved"), "{text}");
         assert!(
-            texte.contains("a.example:443"),
-            "the user must be able to reread what they granted: {texte}"
+            text.contains("a.example:443"),
+            "the user must be able to reread what they granted: {text}"
         );
     }
 
     #[test]
     fn an_update_that_widens_voids_the_approval() {
-        let racine = TempDir::new("elargissement");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let root_dir = TempDir::new("widening");
+        root_dir.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        registre.approve("csv").expect("approval");
-        registre.save().expect("write");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        registry.approve("csv").expect("approval");
+        registry.save().expect("write");
 
         // The plugin updates and asks for one more host.
-        racine.plugin(
+        root_dir.plugin(
             "csv",
             &export_toml("csv", "\"a.example:443\", \"exfiltration.example:443\""),
         );
 
-        let mut relu = PluginRegistry::new(racine.path());
-        relu.discover().expect("discovery");
-        let plugin = relu.require("csv").expect("discovered plugin");
+        let mut reread = PluginRegistry::new(root_dir.path());
+        reread.discover().expect("discovery");
+        let plugin = reread.require("csv").expect("discovered plugin");
         assert_eq!(
             *plugin.state(),
             PluginState::Installed,
@@ -807,44 +809,44 @@ mod tests {
     #[test]
     fn an_update_that_asks_nothing_more_stays_approved() {
         // Asking again at every patch teaches clicking without reading.
-        let racine = TempDir::new("correctif");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let root_dir = TempDir::new("patch");
+        root_dir.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        registre.approve("csv").expect("approval");
-        registre.save().expect("write");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        registry.approve("csv").expect("approval");
+        registry.save().expect("write");
 
-        let mise_a_jour = export_toml("csv", "\"a.example:443\"")
+        let upgrade = export_toml("csv", "\"a.example:443\"")
             .replace("version     = \"1.0.0\"", "version     = \"1.4.2\"");
-        racine.plugin("csv", &mise_a_jour);
+        root_dir.plugin("csv", &upgrade);
 
-        let mut relu = PluginRegistry::new(racine.path());
-        relu.discover().expect("discovery");
-        assert!(relu.require("csv").expect("plugin").is_approved());
+        let mut reread = PluginRegistry::new(root_dir.path());
+        reread.discover().expect("discovery");
+        assert!(reread.require("csv").expect("plugin").is_approved());
 
         // And an update that asks for **less** stays covered too.
-        racine.plugin("csv", &export_toml("csv", ""));
-        let mut relu = PluginRegistry::new(racine.path());
-        relu.discover().expect("discovery");
-        assert!(relu.require("csv").expect("plugin").is_approved());
+        root_dir.plugin("csv", &export_toml("csv", ""));
+        let mut reread = PluginRegistry::new(root_dir.path());
+        reread.discover().expect("discovery");
+        assert!(reread.require("csv").expect("plugin").is_approved());
     }
 
     #[test]
     fn a_deactivation_does_not_lift_by_itself() {
-        let racine = TempDir::new("desactivation");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let root_dir = TempDir::new("deactivation");
+        root_dir.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        registre.disable("csv").expect("deactivation");
-        registre.save().expect("write");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        registry.disable("csv").expect("deactivation");
+        registry.save().expect("write");
 
-        racine.plugin("csv", &export_toml("csv", ""));
-        let mut relu = PluginRegistry::new(racine.path());
-        relu.discover().expect("discovery");
+        root_dir.plugin("csv", &export_toml("csv", ""));
+        let mut reread = PluginRegistry::new(root_dir.path());
+        reread.discover().expect("discovery");
         assert_eq!(
-            *relu.require("csv").expect("plugin").state(),
+            *reread.require("csv").expect("plugin").state(),
             PluginState::Disabled,
             "an update does not re-enable what the user set aside"
         );
@@ -852,50 +854,50 @@ mod tests {
 
     #[test]
     fn forgetting_a_decision_brings_back_to_installed() {
-        let racine = TempDir::new("oubli");
-        racine.plugin("csv", &export_toml("csv", ""));
+        let root_dir = TempDir::new("omission");
+        root_dir.plugin("csv", &export_toml("csv", ""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        registre.approve("csv").expect("approval");
-        assert!(registre.require("csv").expect("plugin").is_approved());
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        registry.approve("csv").expect("approval");
+        assert!(registry.require("csv").expect("plugin").is_approved());
 
-        registre.forget("csv").expect("forget");
+        registry.forget("csv").expect("forget");
         assert_eq!(
-            *registre.require("csv").expect("plugin").state(),
+            *registry.require("csv").expect("plugin").state(),
             PluginState::Installed
         );
-        assert!(registre.approval("csv").is_none());
+        assert!(registry.approval("csv").is_none());
     }
 
     #[test]
     fn a_reapproval_names_what_was_added() {
         // "The permissions changed" helps nobody decide.
-        let racine = TempDir::new("reapprobation");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let root_dir = TempDir::new("reapprobation");
+        root_dir.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
         // Nothing was ever approved.
-        let err = registre
+        let err = registry
             .check_approval("csv")
             .expect_err("refusal expected");
         assert!(matches!(err, PluginError::NotApproved { .. }), "{err}");
 
-        registre.approve("csv").expect("approval");
-        registre.save().expect("write");
-        registre.check_approval("csv").expect("nothing changed");
+        registry.approve("csv").expect("approval");
+        registry.save().expect("write");
+        registry.check_approval("csv").expect("nothing changed");
 
-        racine.plugin(
+        root_dir.plugin(
             "csv",
             &export_toml("csv", "\"a.example:443\", \"exfiltration.example:443\"")
                 .replace("network = [", "connections = \"read_write\"\nnetwork = ["),
         );
-        let mut relu = PluginRegistry::new(racine.path());
-        relu.discover().expect("discovery");
+        let mut reread = PluginRegistry::new(root_dir.path());
+        reread.discover().expect("discovery");
 
-        let err = relu.check_approval("csv").expect_err("refusal expected");
+        let err = reread.check_approval("csv").expect_err("refusal expected");
         let message = err.to_string();
         assert!(err.needs_user_decision());
         assert!(message.contains("exfiltration.example:443"), "{message}");
@@ -908,34 +910,34 @@ mod tests {
 
     #[test]
     fn a_usable_plugin_is_approved_and_supported_by_this_build() {
-        let racine = TempDir::new("utilisable");
-        racine.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
-        racine.plugin("csv", &export_toml("csv", ""));
+        let root_dir = TempDir::new("usable");
+        root_dir.plugin("revue", &agent_toml("revue", "\"refresh_catalog\""));
+        root_dir.plugin("csv", &export_toml("csv", ""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
         // Not approved: unusable, whatever the build.
         assert!(
-            registre
+            registry
                 .require("revue")
                 .expect("plugin")
                 .check_usable()
                 .is_err()
         );
 
-        registre.approve("revue").expect("approval");
-        registre.approve("csv").expect("approval");
+        registry.approve("revue").expect("approval");
+        registry.approve("csv").expect("approval");
 
         // A declarative agent never needs the WebAssembly host.
-        registre
+        registry
             .require("revue")
             .expect("plugin")
             .check_usable()
             .expect("an approved agent is usable everywhere");
 
         // A plugin that runs code does depend on the build.
-        let export = registre.require("csv").expect("plugin");
+        let export = registry.require("csv").expect("plugin");
         #[cfg(feature = "wasm-host")]
         {
             export
@@ -954,34 +956,34 @@ mod tests {
 
     #[test]
     fn a_broken_plugin_breaks_no_other() {
-        let racine = TempDir::new("casse");
-        racine.plugin("bon", &export_toml("bon", ""));
-        racine.plugin("casse", "ceci n'est pas du TOML = = =");
-        racine.plugin(
-            "vide",
-            "id = \"vide\"\nname = \"\"\nversion = \"1.0.0\"\n\
+        let root_dir = TempDir::new("broken");
+        root_dir.plugin("bon", &export_toml("bon", ""));
+        root_dir.plugin("broken", "this is not TOML = = =");
+        root_dir.plugin(
+            "empty",
+            "id = \"empty\"\nname = \"\"\nversion = \"1.0.0\"\n\
              api_version = \"0.1.0\"\nkind = \"export\"\nentrypoint = \"v.wasm\"\n",
         );
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
-        assert_eq!(registre.len(), 3);
+        assert_eq!(registry.len(), 3);
         assert_eq!(
-            *registre.require("bon").expect("plugin").state(),
+            *registry.require("bon").expect("plugin").state(),
             PluginState::Installed
         );
-        for casse in ["casse", "vide"] {
-            let plugin = registre.require(casse).expect("discovered plugin");
+        for broken in ["broken", "empty"] {
+            let plugin = registry.require(broken).expect("discovered plugin");
             assert!(
                 matches!(plugin.state(), PluginState::Failed { .. }),
-                "{casse}: {:?}",
+                "{broken}: {:?}",
                 plugin.state()
             );
             assert!(plugin.manifest().is_none());
             assert_eq!(
                 plugin.display_name(),
-                casse,
+                broken,
                 "the fallback name is the slug"
             );
         }
@@ -990,56 +992,56 @@ mod tests {
     #[test]
     fn a_manifest_lying_about_its_directory_is_refused() {
         // Otherwise the approval of one plugin would cover another directory.
-        let racine = TempDir::new("mensonge");
-        racine.plugin("innocent", &export_toml("csv", ""));
+        let root_dir = TempDir::new("lie");
+        root_dir.plugin("innocent", &export_toml("csv", ""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
-        let plugin = registre.require("innocent").expect("discovered plugin");
+        let plugin = registry.require("innocent").expect("discovered plugin");
         match plugin.state() {
             PluginState::Failed { reason } => {
                 assert!(reason.contains("innocent"), "{reason}");
                 assert!(reason.contains("approval"), "{reason}");
             }
-            autre => panic!("unexpected state: {autre:?}"),
+            other => panic!("unexpected state: {other:?}"),
         }
     }
 
     #[test]
     fn a_plugin_cannot_ask_for_the_plugin_directory() {
         // It would rewrite its own approval there, and the others'.
-        let racine = TempDir::new("autoapprobation");
-        let manifeste = format!(
-            "id = \"glouton\"\nname = \"Glouton\"\nversion = \"1.0.0\"\n\
+        let root_dir = TempDir::new("self-approval");
+        let manifest_toml = format!(
+            "id = \"greedy\"\nname = \"Greedy\"\nversion = \"1.0.0\"\n\
              api_version = \"0.1.0\"\nkind = \"export\"\nentrypoint = \"g.wasm\"\n\
              \n[permissions]\nfilesystem = [\"{}\"]\n",
-            racine.path().display()
+            root_dir.path().display()
         );
-        racine.plugin("glouton", &manifeste);
+        root_dir.plugin("greedy", &manifest_toml);
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
-        let plugin = registre.require("glouton").expect("discovered plugin");
+        let plugin = registry.require("greedy").expect("discovered plugin");
         match plugin.state() {
             PluginState::Failed { reason } => {
                 assert!(reason.contains("approvals"), "{reason}");
             }
-            autre => panic!("unexpected state: {autre:?}"),
+            other => panic!("unexpected state: {other:?}"),
         }
     }
 
     #[test]
     fn what_can_never_run_is_not_approved() {
-        let racine = TempDir::new("incompatible");
-        let manifeste =
-            export_toml("futur", "").replace("api_version = \"0.1.0\"", "api_version = \"9.9.9\"");
-        racine.plugin("futur", &manifeste);
+        let root_dir = TempDir::new("incompatible");
+        let manifest_toml =
+            export_toml("future", "").replace("api_version = \"0.1.0\"", "api_version = \"9.9.9\"");
+        root_dir.plugin("future", &manifest_toml);
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        let err = registre.approve("futur").expect_err("refusal expected");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        let err = registry.approve("future").expect_err("refusal expected");
         assert!(
             matches!(err, PluginError::IncompatibleInterface { .. }),
             "{err}"
@@ -1048,85 +1050,88 @@ mod tests {
 
     #[test]
     fn a_directory_without_manifest_is_not_a_plugin() {
-        let racine = TempDir::new("intrus");
-        fs::create_dir_all(racine.path().join("notes")).expect("directory");
-        fs::write(racine.path().join("lisez-moi.txt"), "bonjour").expect("file");
-        racine.plugin("csv", &export_toml("csv", ""));
+        let root_dir = TempDir::new("intruder");
+        fs::create_dir_all(root_dir.path().join("notes")).expect("directory");
+        fs::write(root_dir.path().join("lisez-moi.txt"), "hello").expect("file");
+        root_dir.plugin("csv", &export_toml("csv", ""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        assert_eq!(registre.len(), 1);
-        assert!(registre.get("notes").is_none());
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        assert_eq!(registry.len(), 1);
+        assert!(registry.get("notes").is_none());
     }
 
     #[test]
     fn an_unreadable_approvals_file_is_reported_not_ignored() {
         // Silently losing it would make every plugin fall back to `Installed`
         // without anyone knowing why.
-        let racine = TempDir::new("approbations-cassees");
-        racine.plugin("csv", &export_toml("csv", ""));
-        fs::write(racine.path().join(APPROVALS_FILE), "= = =").expect("write");
+        let root_dir = TempDir::new("approbations-cassees");
+        root_dir.plugin("csv", &export_toml("csv", ""));
+        fs::write(root_dir.path().join(APPROVALS_FILE), "= = =").expect("write");
 
-        let mut registre = PluginRegistry::new(racine.path());
-        let err = registre.discover().expect_err("refusal expected");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        let err = registry.discover().expect_err("refusal expected");
         assert!(matches!(err, PluginError::Approvals { .. }), "{err}");
     }
 
     #[test]
     fn claimed_protocols_only_come_from_approved_plugins() {
-        let racine = TempDir::new("drivers");
-        racine.plugin("duckdb", &driver_toml("duckdb"));
-        racine.file("duckdb", "duckdb.wasm", b"\0asm\x0d\x00\x01\x00");
+        let root_dir = TempDir::new("drivers");
+        root_dir.plugin("duckdb", &driver_toml("duckdb"));
+        root_dir.file("duckdb", "duckdb.wasm", b"\0asm\x0d\x00\x01\x00");
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        assert!(registre.driver_specs().is_empty());
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        assert!(registry.driver_specs().is_empty());
 
-        registre.approve("duckdb").expect("approval");
-        let specs = registre.driver_specs();
+        registry.approve("duckdb").expect("approval");
+        let specs = registry.driver_specs();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].id.as_str(), "duckdb");
     }
 
     #[test]
     fn the_order_is_alphabetical_hence_reproducible() {
-        let racine = TempDir::new("ordre");
+        let root_dir = TempDir::new("order");
         for slug in ["zeta", "alpha", "mu"] {
-            racine.plugin(slug, &export_toml(slug, ""));
+            root_dir.plugin(slug, &export_toml(slug, ""));
         }
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
-        let slugs: Vec<&str> = registre.iter().map(InstalledPlugin::slug).collect();
+        let slugs: Vec<&str> = registry.iter().map(InstalledPlugin::slug).collect();
         assert_eq!(slugs, ["alpha", "mu", "zeta"]);
     }
 
     #[test]
     fn approving_an_unknown_plugin_gives_a_message() {
-        let racine = TempDir::new("inconnu");
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
-        let err = registre.approve("fantome").expect_err("refusal expected");
+        let root_dir = TempDir::new("inconnu");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
+        let err = registry.approve("ghost").expect_err("refusal expected");
         assert!(matches!(err, PluginError::Unknown { .. }), "{err}");
     }
 
     #[test]
     fn the_permission_summary_is_the_one_shown_before_approving() {
-        let racine = TempDir::new("resume");
-        racine.plugin("csv", &export_toml("csv", "\"a.example:443\""));
+        let root_dir = TempDir::new("summary");
+        root_dir.plugin("csv", &export_toml("csv", "\"a.example:443\""));
 
-        let mut registre = PluginRegistry::new(racine.path());
-        registre.discover().expect("discovery");
+        let mut registry = PluginRegistry::new(root_dir.path());
+        registry.discover().expect("discovery");
 
-        let plugin = registre.require("csv").expect("plugin");
-        let manifeste = plugin.manifest().expect("manifest");
-        let resume = manifeste.permissions.summary();
-        assert_eq!(resume.len(), 1);
-        assert!(resume[0].contains("a.example:443"), "{resume:?}");
+        let plugin = registry.require("csv").expect("plugin");
+        let manifest_toml = plugin.manifest().expect("manifest");
+        let summary_lines = manifest_toml.permissions.summary();
+        assert_eq!(summary_lines.len(), 1);
+        assert!(
+            summary_lines[0].contains("a.example:443"),
+            "{summary_lines:?}"
+        );
 
         // And the grant is indeed about this host, not a subdomain.
-        let accord = HostPort::new("a.example:443").expect("host");
-        assert!(manifeste.permissions.network.contains(&accord));
-        assert!(!manifeste.permissions.allows_host("evil.a.example", 443));
+        let grant = HostPort::new("a.example:443").expect("host");
+        assert!(manifest_toml.permissions.network.contains(&grant));
+        assert!(!manifest_toml.permissions.allows_host("evil.a.example", 443));
     }
 }

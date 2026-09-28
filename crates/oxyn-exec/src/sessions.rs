@@ -387,7 +387,7 @@ pub struct SessionRegistry {
 }
 
 impl SessionRegistry {
-    /// Registre vide.
+    /// Empty registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -428,12 +428,12 @@ impl SessionRegistry {
     /// entrusted with an execution.
     pub fn drain_connection(&self, connection: ConnectionId) -> Vec<Arc<SessionSlot>> {
         let mut guard = self.sessions.write();
-        let visees: Vec<SessionId> = guard
+        let targeted: Vec<SessionId> = guard
             .values()
             .filter(|s| s.connection() == connection)
             .map(|s| s.id())
             .collect();
-        visees
+        targeted
             .into_iter()
             .filter_map(|id| guard.remove(&id))
             .collect()
@@ -450,7 +450,7 @@ impl SessionRegistry {
         self.sessions.read().len()
     }
 
-    /// Aucune session ouverte ?
+    /// No open session?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sessions.read().is_empty()
@@ -465,19 +465,19 @@ mod tests {
     #[test]
     fn the_empty_resolver_claims_nothing() {
         let config = ConnectionConfig::new("atelier", DriverId::sqlite());
-        let identifiants = NoCredentials
+        let credentials = NoCredentials
             .resolve(&config)
             .expect("the empty resolver never fails");
-        assert!(identifiants.is_empty());
+        assert!(credentials.is_empty());
         assert_eq!(NoCredentials.name(), "no-credentials");
     }
 
     #[test]
     fn an_empty_registry_finds_nothing() {
-        let registre = SessionRegistry::new();
-        assert!(registre.is_empty());
-        assert!(registre.get(SessionId::new()).is_none());
-        assert!(registre.drain_connection(ConnectionId::new()).is_empty());
+        let registry = SessionRegistry::new();
+        assert!(registry.is_empty());
+        assert!(registry.get(SessionId::new()).is_none());
+        assert!(registry.drain_connection(ConnectionId::new()).is_empty());
     }
 
     #[test]
@@ -541,7 +541,7 @@ mod tests {
     fn a_closed_session_is_a_transient_error() {
         // The right follow-up is to reopen: the interface must be able to offer
         // it without parsing the message.
-        let erreur = session_closed();
-        assert!(erreur.is_retryable(), "{erreur:?}");
+        let error = session_closed();
+        assert!(error.is_retryable(), "{error:?}");
     }
 }

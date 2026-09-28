@@ -79,7 +79,7 @@ impl std::fmt::Display for Actor {
     /// an interface message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Human => f.write_str("humain"),
+            Self::Human => f.write_str("human"),
             Self::Agent { .. } => f.write_str("agent"),
         }
     }
@@ -283,7 +283,7 @@ pub enum Command {
         /// Empty for the automatic preview of a table just selected. The driver
         /// refuses what it cannot do rather than ignore it: a silently dropped
         /// filter would return rows the user believes excluded
-        /// ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
+        /// ([ADR-0020](../../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
         shape: PreviewShape,
     },
 
@@ -469,7 +469,7 @@ pub enum Command {
     ///
     /// Nothing is saved and no session outlives the command: it answers "would
     /// this connection open?" before the user commits to it (UX-SPEC,
-    /// « Navigation du premier workspace »). It reaches the server, so the
+    /// « First workspace navigation »). It reaches the server, so the
     /// `PolicyGate` refuses it to an [`Actor::Agent`]: an agent that could
     /// point it at the host of its choice would hold an exfiltration channel,
     /// the same one [`CreateConnection`](Self::CreateConnection) guards.
@@ -496,7 +496,7 @@ pub enum Command {
     ///
     /// This is what decides whether the AI workspace exists at all: an empty
     /// list is the default installation, not a failure
-    /// ([ADR-0023](../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+    /// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
     /// It resolves no name and reports no reach — a stored classification would
     /// be yesterday's DNS answer applied to today's request.
     ListAiProviders,
@@ -515,7 +515,7 @@ pub enum Command {
     /// Separate from [`ListAiProviders`](Self::ListAiProviders) because the two
     /// declarations have nothing in common: an external agent has no endpoint,
     /// no model, and above all **no secret reference**
-    /// ([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
+    /// ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
     ListExternalAgents,
 
     /// Declare an external agent, or replace the declaration bearing its
@@ -899,9 +899,9 @@ mod tests {
     fn displaying_an_actor_does_not_show_its_conversation() {
         let session = AgentSessionId::new();
         let agent = Actor::agent(AgentId::new(), session);
-        let rendu = agent.to_string();
-        assert_eq!(rendu, "agent");
-        assert!(!rendu.contains(&session.to_string()));
+        let rendered = agent.to_string();
+        assert_eq!(rendered, "agent");
+        assert!(!rendered.contains(&session.to_string()));
     }
 
     #[test]
@@ -938,7 +938,7 @@ mod tests {
         let cmd = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
-            request: Box::new(ExecRequest::new(QueryLanguage::SQL, "CALL faire_le_truc()")),
+            request: Box::new(ExecRequest::new(QueryLanguage::SQL, "CALL do_the_thing()")),
         };
         assert_eq!(cmd.intent(), StatementIntent::Unknown);
         assert!(cmd.is_mutating(), "when in doubt, we protect");
@@ -977,7 +977,7 @@ mod tests {
 
     #[test]
     fn connection_management_is_treated_as_ddl() {
-        let cfg = ConnectionConfig::new("nouvelle", DriverId::postgres());
+        let cfg = ConnectionConfig::new("new", DriverId::postgres());
         let cmd = Command::CreateConnection {
             config: Box::new(cfg.clone()),
         };
@@ -995,7 +995,7 @@ mod tests {
         use crate::{DefaultPolicy, Environment, PolicyGate};
 
         let config = ConnectionConfig::new("to test", DriverId::postgres())
-            .with_secret_ref("keychain://oxyn/essai");
+            .with_secret_ref("keychain://oxyn/trial");
         let cmd = Command::TestConnection {
             config: Box::new(config.clone()),
         };
@@ -1022,7 +1022,7 @@ mod tests {
 
         // I-03: the reference is not in the `Debug`, and a round trip keeps
         // the command whole.
-        assert!(!format!("{cmd:?}").contains("keychain://oxyn/essai"));
+        assert!(!format!("{cmd:?}").contains("keychain://oxyn/trial"));
         let json = serde_json::to_string(&cmd).expect("serializable command");
         assert_eq!(
             serde_json::from_str::<Command>(&json).expect("typed round trip"),
@@ -1047,7 +1047,7 @@ mod tests {
         // Without it, the PolicyGate could not find the environment marking
         // or the read-only flag.
         let c = ConnectionId::new();
-        let commandes = [
+        let commands = [
             Command::Connect { connection: c },
             Command::Disconnect { connection: c },
             Command::RefreshCatalog { connection: c },
@@ -1063,7 +1063,7 @@ mod tests {
             },
             execute(StatementIntent::Read, MutationRisk::None),
         ];
-        for cmd in commandes {
+        for cmd in commands {
             assert!(cmd.touches_database(), "{}", cmd.name());
             assert!(
                 cmd.target_connection().is_some(),
@@ -1093,28 +1093,26 @@ mod tests {
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(QueryLanguage::SQL, "INSERT INTO t VALUES ($1)").with_params(
-                    vec![crate::value::ScalarValue::Text(
-                        "secret-de-l-utilisateur".into(),
-                    )],
+                    vec![crate::value::ScalarValue::Text("the-users-secret".into())],
                 ),
             ),
         };
-        let rendu = format!("{cmd:?}");
+        let rendered = format!("{cmd:?}");
         assert!(
-            !rendu.contains("secret-de-l-utilisateur"),
-            "bound value leaked: {rendu}"
+            !rendered.contains("the-users-secret"),
+            "bound value leaked: {rendered}"
         );
 
         // The `Debug` is only one of the six channels. A workspace file is
         // another, and a protection that only holds on the first would be
         // defeated by the first caller that persists a command.
-        let ecrit = serde_json::to_string(&cmd).expect("serializable command");
+        let written = serde_json::to_string(&cmd).expect("serializable command");
         assert!(
-            !ecrit.contains("secret-de-l-utilisateur"),
-            "bound value written to a file: {ecrit}"
+            !written.contains("the-users-secret"),
+            "bound value written to a file: {written}"
         );
-        let relue: Command = serde_json::from_str(&ecrit).expect("readable command");
-        let Command::Execute { request, .. } = &relue else {
+        let read_back: Command = serde_json::from_str(&written).expect("readable command");
+        let Command::Execute { request, .. } = &read_back else {
             panic!("the variant is kept")
         };
         assert!(
@@ -1132,7 +1130,7 @@ mod tests {
         let config = AiProviderConfig::new(
             ProviderId::ollama(),
             AiProviderKind::OpenAiCompatible,
-            "Ollama du portable",
+            "Laptop Ollama",
             "http://localhost:11434/v1",
             "llama3.2",
         );
@@ -1203,26 +1201,30 @@ mod tests {
                 .with_secret_ref("keychain://oxyn/openai"),
             ),
         };
-        let rendu = format!("{cmd:?}");
+        let rendered = format!("{cmd:?}");
         assert!(
-            !rendu.contains("keychain://oxyn/openai"),
-            "reference leaked: {rendu}"
+            !rendered.contains("keychain://oxyn/openai"),
+            "reference leaked: {rendered}"
         );
-        assert!(rendu.contains("api.openai.com"), "{rendu}");
+        assert!(rendered.contains("api.openai.com"), "{rendered}");
     }
 
     #[test]
     fn audit_names_are_unique() {
         let c = ConnectionId::new();
-        let noms = [
+        let names = [
             Command::Connect { connection: c }.name(),
             Command::Disconnect { connection: c }.name(),
             execute(StatementIntent::Read, MutationRisk::None).name(),
             Command::DeleteConnection { connection: c }.name(),
         ];
-        let mut tries: Vec<&str> = noms.to_vec();
-        tries.sort_unstable();
-        tries.dedup();
-        assert_eq!(tries.len(), noms.len(), "two commands carry the same name");
+        let mut sorted: Vec<&str> = names.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            names.len(),
+            "two commands carry the same name"
+        );
     }
 }

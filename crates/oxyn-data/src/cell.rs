@@ -94,7 +94,7 @@ impl CellValue<'_> {
     #[must_use]
     pub fn text(&self) -> Option<&str> {
         match self {
-            Self::Text(texte) | Self::Truncated { text: texte, .. } => Some(texte),
+            Self::Text(txt) | Self::Truncated { text: txt, .. } => Some(txt),
             Self::Null | Self::Unrenderable { .. } => None,
         }
     }
@@ -103,7 +103,7 @@ impl CellValue<'_> {
     #[must_use]
     pub fn display_with<'b>(&'b self, opts: &'b FormatOptions) -> &'b str {
         match self {
-            Self::Text(texte) | Self::Truncated { text: texte, .. } => texte,
+            Self::Text(txt) | Self::Truncated { text: txt, .. } => txt,
             Self::Null => &opts.null_text,
             Self::Unrenderable { reason } => reason,
         }
@@ -117,7 +117,7 @@ impl CellValue<'_> {
     pub fn into_owned(self) -> CellValue<'static> {
         match self {
             Self::Null => CellValue::Null,
-            Self::Text(texte) => CellValue::Text(Cow::Owned(texte.into_owned())),
+            Self::Text(txt) => CellValue::Text(Cow::Owned(txt.into_owned())),
             Self::Truncated { text, full_bytes } => CellValue::Truncated {
                 text: Cow::Owned(text.into_owned()),
                 full_bytes,
@@ -227,15 +227,15 @@ impl FormatOptions {
 
     /// Changes the replacement text of absent values.
     #[must_use]
-    pub fn with_null_text(mut self, texte: impl Into<Cow<'static, str>>) -> Self {
-        self.null_text = texte.into();
+    pub fn with_null_text(mut self, txt: impl Into<Cow<'static, str>>) -> Self {
+        self.null_text = txt.into();
         self
     }
 
     /// Changes the timestamp pattern.
     #[must_use]
-    pub fn with_timestamp_format(mut self, motif: impl Into<Option<Cow<'static, str>>>) -> Self {
-        self.timestamp_format = motif.into();
+    pub fn with_timestamp_format(mut self, pattern: impl Into<Option<Cow<'static, str>>>) -> Self {
+        self.timestamp_format = pattern.into();
         self
     }
 
@@ -263,12 +263,12 @@ impl FormatOptions {
     /// list or a struct. A null cell never reaches this path: it returns
     /// [`CellValue::Null`].
     fn arrow(&self) -> ArrowFormatOptions<'_> {
-        let motif = self.timestamp_format.as_deref();
+        let pattern = self.timestamp_format.as_deref();
         ArrowFormatOptions::new()
             .with_display_error(false)
             .with_null(&self.null_text)
-            .with_timestamp_format(motif)
-            .with_timestamp_tz_format(motif)
+            .with_timestamp_format(pattern)
+            .with_timestamp_tz_format(pattern)
     }
 }
 
@@ -288,16 +288,16 @@ pub fn format_cell<'a>(
     col: usize,
     opts: &FormatOptions,
 ) -> CellValue<'a> {
-    let Some(colonne) = batch.columns().get(col) else {
+    let Some(column) = batch.columns().get(col) else {
         return unrenderable("column index out of range");
     };
-    if row >= colonne.len() {
+    if row >= column.len() {
         return unrenderable("row index out of range");
     }
-    if colonne.is_null(row) {
+    if column.is_null(row) {
         return CellValue::Null;
     }
-    format_value(&**colonne, row, opts)
+    format_value(&**column, row, opts)
 }
 
 /// Renders a non-null value of any Arrow array.
@@ -323,7 +323,7 @@ pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) 
         DataType::Null => CellValue::Null,
 
         DataType::Boolean => match array.as_boolean_opt() {
-            Some(valeurs) => CellValue::Text(Cow::Borrowed(if valeurs.value(row) {
+            Some(values) => CellValue::Text(Cow::Borrowed(if values.value(row) {
                 "true"
             } else {
                 "false"
@@ -344,43 +344,43 @@ pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) 
         DataType::UInt64 => integer::<UInt64Type>(array, row, opts),
 
         DataType::Utf8 => match array.as_string_opt::<i32>() {
-            Some(valeurs) => finish(Cow::Borrowed(valeurs.value(row)), opts.max_len),
+            Some(values) => finish(Cow::Borrowed(values.value(row)), opts.max_len),
             None => delegate(array, row, opts),
         },
         DataType::LargeUtf8 => match array.as_string_opt::<i64>() {
-            Some(valeurs) => finish(Cow::Borrowed(valeurs.value(row)), opts.max_len),
+            Some(values) => finish(Cow::Borrowed(values.value(row)), opts.max_len),
             None => delegate(array, row, opts),
         },
         DataType::Utf8View => match array.as_string_view_opt() {
-            Some(valeurs) => finish(Cow::Borrowed(valeurs.value(row)), opts.max_len),
+            Some(values) => finish(Cow::Borrowed(values.value(row)), opts.max_len),
             None => delegate(array, row, opts),
         },
 
         DataType::Binary => match array.as_binary_opt::<i32>() {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
         DataType::LargeBinary => match array.as_binary_opt::<i64>() {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
         DataType::BinaryView => match array.as_binary_view_opt() {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
         DataType::FixedSizeBinary(_) => match array
             .as_any()
             .downcast_ref::<arrow::array::FixedSizeBinaryArray>()
         {
-            Some(valeurs) => binary(valeurs.value(row), opts),
+            Some(values) => binary(values.value(row), opts),
             None => delegate(array, row, opts),
         },
 
         // `value_as_string` places the decimal point according to the column's
         // scale. Formatting the underlying integer would display 12345 for 123.45.
         DataType::Decimal128(_, _) => match array.as_primitive_opt::<Decimal128Type>() {
-            Some(valeurs) => finish(
-                Cow::Owned(group(valeurs.value_as_string(row), opts.number_grouping)),
+            Some(values) => finish(
+                Cow::Owned(group(values.value_as_string(row), opts.number_grouping)),
                 opts.max_len,
             ),
             None => delegate(array, row, opts),
@@ -399,12 +399,12 @@ where
     T::Native: std::fmt::Display,
 {
     match array.as_primitive_opt::<T>() {
-        Some(valeurs) => {
-            let mut texte = String::new();
-            if write!(texte, "{}", valeurs.value(row)).is_err() {
+        Some(values) => {
+            let mut txt = String::new();
+            if write!(txt, "{}", values.value(row)).is_err() {
                 return unrenderable("integer formatting failed");
             }
-            finish(Cow::Owned(group(texte, opts.number_grouping)), opts.max_len)
+            finish(Cow::Owned(group(txt, opts.number_grouping)), opts.max_len)
         }
         None => delegate(array, row, opts),
     }
@@ -422,9 +422,9 @@ where
 /// possible exponent intact: `-1234.5678` becomes `-1 234.5678`, never
 /// `-1 234.567 8`. Grouping after the decimal point is a typographic mistake
 /// that makes the decimals unreadable.
-fn group(texte: String, mode: NumberGrouping) -> String {
+fn group(txt: String, mode: NumberGrouping) -> String {
     if matches!(mode, NumberGrouping::None) {
-        return texte;
+        return txt;
     }
     // The integer part stops at the first character that is not a digit,
     // skipping a leading sign. A text without digits — which should not
@@ -435,44 +435,43 @@ fn group(texte: String, mode: NumberGrouping) -> String {
     // slicing proven right today becomes a panic at the first type whose
     // Arrow formatter returns something other than what is assumed here
     // ([I-09](../../../CLAUDE.md#i-09)).
-    let debut = usize::from(texte.starts_with(['-', '+']));
-    let Some(reste) = texte.get(debut..) else {
-        return texte;
+    let start = usize::from(txt.starts_with(['-', '+']));
+    let Some(rest) = txt.get(start..) else {
+        return txt;
     };
-    let chiffres = reste.bytes().take_while(u8::is_ascii_digit).count();
-    if chiffres <= 3 {
-        return texte;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits <= 3 {
+        return txt;
     }
-    let fin = debut.saturating_add(chiffres);
-    let (Some(signe), Some(entier), Some(suite)) =
-        (texte.get(..debut), texte.get(debut..fin), texte.get(fin..))
+    let end = start.saturating_add(digits);
+    let (Some(sign), Some(int_value), Some(suite)) =
+        (txt.get(..start), txt.get(start..end), txt.get(end..))
     else {
-        return texte;
+        return txt;
     };
 
-    let mut sortie =
-        String::with_capacity(texte.len() + (chiffres / 3) * GROUP_SEPARATOR.len_utf8());
-    sortie.push_str(signe);
-    for (rang, chiffre) in entier.chars().enumerate() {
+    let mut output = String::with_capacity(txt.len() + (digits / 3) * GROUP_SEPARATOR.len_utf8());
+    output.push_str(sign);
+    for (rank, digit) in int_value.chars().enumerate() {
         // A separator falls where a multiple of three digits remains to be
         // written, never at the head of the number.
-        if rang > 0 && (chiffres - rang).is_multiple_of(3) {
-            sortie.push(GROUP_SEPARATOR);
+        if rank > 0 && (digits - rank).is_multiple_of(3) {
+            output.push(GROUP_SEPARATOR);
         }
-        sortie.push(chiffre);
+        output.push(digit);
     }
-    sortie.push_str(suite);
-    sortie
+    output.push_str(suite);
+    output
 }
 
 /// Hands over to Arrow's formatters.
 fn delegate<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) -> CellValue<'a> {
     let options = opts.arrow();
-    let Ok(formateur) = ArrayFormatter::try_new(array, &options) else {
+    let Ok(formatter) = ArrayFormatter::try_new(array, &options) else {
         return unrenderable("unsupported column type");
     };
-    match formateur.value(row).try_to_string() {
-        Ok(texte) => finish(Cow::Owned(texte), opts.max_len),
+    match formatter.value(row).try_to_string() {
+        Ok(txt) => finish(Cow::Owned(txt), opts.max_len),
         Err(_) => unrenderable("value could not be formatted"),
     }
 }
@@ -481,62 +480,62 @@ fn delegate<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) -> CellV
 ///
 /// Encodes only the bytes that will be shown: converting 4 MB of BLOB to
 /// hexadecimal to display 512 characters of it would cost the whole frame.
-fn binary<'a>(octets: &[u8], opts: &FormatOptions) -> CellValue<'a> {
+fn binary<'a>(bytes: &[u8], opts: &FormatOptions) -> CellValue<'a> {
     if matches!(opts.binary_display, BinaryDisplay::Size) {
-        return CellValue::Text(Cow::Owned(human_size(octets.len())));
+        return CellValue::Text(Cow::Owned(human_size(bytes.len())));
     }
 
     // A little more than the limit, so that `finish` **observes** the overflow
     // instead of assuming it.
-    let utiles = match opts.binary_display {
+    let useful = match opts.binary_display {
         BinaryDisplay::Base64 if opts.max_len > 0 => {
             // Three source bytes give four characters; staying on a multiple
             // of three avoids emitting `=` padding in the middle of a value
             // that continues.
-            octets.len().min((opts.max_len / 4 + 1) * 3)
+            bytes.len().min((opts.max_len / 4 + 1) * 3)
         }
-        BinaryDisplay::Hex if opts.max_len > 0 => octets.len().min(opts.max_len / 2 + 1),
-        _ => octets.len(),
+        BinaryDisplay::Hex if opts.max_len > 0 => bytes.len().min(opts.max_len / 2 + 1),
+        _ => bytes.len(),
     };
 
-    let Some(debut) = octets.get(..utiles) else {
+    let Some(start) = bytes.get(..useful) else {
         return unrenderable("binary slice out of range");
     };
 
-    let mut texte = String::with_capacity(utiles.saturating_mul(2));
+    let mut txt = String::with_capacity(useful.saturating_mul(2));
     match opts.binary_display {
-        BinaryDisplay::Base64 => push_base64(&mut texte, debut),
+        BinaryDisplay::Base64 => push_base64(&mut txt, start),
         _ => {
-            for octet in debut {
-                push_hex(&mut texte, *octet);
+            for byte in start {
+                push_hex(&mut txt, *byte);
             }
         }
     }
 
     // `full_bytes` counts the bytes of the value, not the characters of its
     // encoding: it is the BLOB size the user wants to know.
-    let complet = octets.len();
-    match finish(Cow::Owned(texte), opts.max_len) {
+    let complete = bytes.len();
+    match finish(Cow::Owned(txt), opts.max_len) {
         CellValue::Truncated { text, .. } => CellValue::Truncated {
             text,
-            full_bytes: complet,
+            full_bytes: complete,
         },
-        CellValue::Text(text) if utiles < complet => CellValue::Truncated {
+        CellValue::Text(text) if useful < complete => CellValue::Truncated {
             text,
-            full_bytes: complet,
+            full_bytes: complete,
         },
-        autre => autre,
+        other => other,
     }
 }
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
-fn push_hex(sortie: &mut String, octet: u8) {
-    let haut = usize::from(octet >> 4);
-    let bas = usize::from(octet & 0x0f);
-    if let (Some(a), Some(b)) = (HEX.get(haut), HEX.get(bas)) {
-        sortie.push(char::from(*a));
-        sortie.push(char::from(*b));
+fn push_hex(output: &mut String, byte: u8) {
+    let high = usize::from(byte >> 4);
+    let low = usize::from(byte & 0x0f);
+    if let (Some(a), Some(b)) = (HEX.get(high), HEX.get(low)) {
+        output.push(char::from(*a));
+        output.push(char::from(*b));
     }
 }
 
@@ -547,23 +546,23 @@ const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 /// Written by hand: the only alternative would be a direct dependency for
 /// twenty lines, which the dependency policy discourages
 /// ([SECURITY](../../../docs/SECURITY.md#dependencies)).
-fn push_base64(sortie: &mut String, octets: &[u8]) {
-    for morceau in octets.chunks(3) {
-        let a = morceau.first().copied().unwrap_or(0);
-        let b = morceau.get(1).copied().unwrap_or(0);
-        let c = morceau.get(2).copied().unwrap_or(0);
-        let bloc = (u32::from(a) << 16) | (u32::from(b) << 8) | u32::from(c);
+fn push_base64(output: &mut String, bytes: &[u8]) {
+    for chunk in bytes.chunks(3) {
+        let a = chunk.first().copied().unwrap_or(0);
+        let b = chunk.get(1).copied().unwrap_or(0);
+        let c = chunk.get(2).copied().unwrap_or(0);
+        let block = (u32::from(a) << 16) | (u32::from(b) << 8) | u32::from(c);
 
         // 1 source byte → 2 characters then "=="; 2 bytes → 3 then "=".
-        let significatifs = morceau.len().saturating_add(1).min(4);
-        for rang in 0..4_usize {
-            if rang < significatifs {
-                let index = usize::try_from((bloc >> (18 - rang * 6)) & 0x3f).unwrap_or(0);
-                if let Some(caractere) = BASE64.get(index) {
-                    sortie.push(char::from(*caractere));
+        let significant = chunk.len().saturating_add(1).min(4);
+        for rank in 0..4_usize {
+            if rank < significant {
+                let index = usize::try_from((block >> (18 - rank * 6)) & 0x3f).unwrap_or(0);
+                if let Some(character) = BASE64.get(index) {
+                    output.push(char::from(*character));
                 }
             } else {
-                sortie.push('=');
+                output.push('=');
             }
         }
     }
@@ -574,57 +573,57 @@ fn push_base64(sortie: &mut String, octets: &[u8]) {
 /// Computed in integers: `usize as f64` loses precision beyond 2^53 and the
 /// repository rule forbids silent `as` conversions
 /// ([rust.md](../../../.claude/rules/rust.md)).
-fn human_size(octets: usize) -> String {
-    const UNITES: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut valeur = octets;
-    let mut reste = 0_usize;
-    let mut rang = 0_usize;
-    while valeur >= 1024 && rang + 1 < UNITES.len() {
-        reste = valeur % 1024;
-        valeur /= 1024;
-        rang += 1;
+fn human_size(bytes: usize) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes;
+    let mut rest = 0_usize;
+    let mut rank = 0_usize;
+    while value >= 1024 && rank + 1 < UNITS.len() {
+        rest = value % 1024;
+        value /= 1024;
+        rank += 1;
     }
-    let unite = UNITES.get(rang).copied().unwrap_or("B");
-    if rang == 0 {
-        format!("<{valeur} {unite}>")
+    let unit = UNITS.get(rank).copied().unwrap_or("B");
+    if rank == 0 {
+        format!("<{value} {unit}>")
     } else {
-        let dixiemes = reste.saturating_mul(10) / 1024;
-        format!("<{valeur}.{dixiemes} {unite}>")
+        let tenths = rest.saturating_mul(10) / 1024;
+        format!("<{value}.{tenths} {unit}>")
     }
 }
 
 /// Cuts the value if it exceeds `max_len` characters.
-fn finish(texte: Cow<'_, str>, max_len: usize) -> CellValue<'_> {
+fn finish(txt: Cow<'_, str>, max_len: usize) -> CellValue<'_> {
     // O(1) fast path: fewer bytes than allowed characters, so a fortiori fewer
     // characters.
-    if max_len == 0 || texte.len() <= max_len {
-        return CellValue::Text(texte);
+    if max_len == 0 || txt.len() <= max_len {
+        return CellValue::Text(txt);
     }
-    let Some((coupe, _)) = texte.char_indices().nth(max_len) else {
-        return CellValue::Text(texte);
+    let Some((cut, _)) = txt.char_indices().nth(max_len) else {
+        return CellValue::Text(txt);
     };
-    let full_bytes = texte.len();
-    match texte {
-        Cow::Borrowed(valeur) => match valeur.get(..coupe) {
-            Some(debut) => CellValue::Truncated {
-                text: Cow::Borrowed(debut),
+    let full_bytes = txt.len();
+    match txt {
+        Cow::Borrowed(value) => match value.get(..cut) {
+            Some(start) => CellValue::Truncated {
+                text: Cow::Borrowed(start),
                 full_bytes,
             },
             None => unrenderable("truncation landed inside a character"),
         },
-        Cow::Owned(mut valeur) => {
-            valeur.truncate(coupe);
+        Cow::Owned(mut value) => {
+            value.truncate(cut);
             CellValue::Truncated {
-                text: Cow::Owned(valeur),
+                text: Cow::Owned(value),
                 full_bytes,
             }
         }
     }
 }
 
-const fn unrenderable<'a>(raison: &'static str) -> CellValue<'a> {
+const fn unrenderable<'a>(why: &'static str) -> CellValue<'a> {
     CellValue::Unrenderable {
-        reason: Cow::Borrowed(raison),
+        reason: Cow::Borrowed(why),
     }
 }
 
@@ -666,16 +665,16 @@ const ZONE_MAX_CHARS: usize = 64;
 
 #[must_use]
 pub fn timestamp_display(schema: &Schema) -> TimestampDisplay {
-    let mut vu: Option<&str> = None;
-    for champ in schema.fields() {
+    let mut seen: Option<&str> = None;
+    for field in schema.fields() {
         // Only the top level: a zone buried in a struct or a list is not what
         // the footer is describing, and claiming it would overstate.
-        let DataType::Timestamp(_, Some(zone)) = champ.data_type() else {
+        let DataType::Timestamp(_, Some(zone)) = field.data_type() else {
             continue;
         };
-        match vu {
-            None => vu = Some(zone.as_ref()),
-            Some(deja) if deja == zone.as_ref() => {}
+        match seen {
+            None => seen = Some(zone.as_ref()),
+            Some(already) if already == zone.as_ref() => {}
             Some(_) => return TimestampDisplay::Mixed,
         }
     }
@@ -686,18 +685,18 @@ pub fn timestamp_display(schema: &Schema) -> TimestampDisplay {
     // or one carrying a direction mark, would push it out of the frame or
     // scramble its reading. A real time zone fits well within the bound —
     // `America/Argentina/ComodRivadavia` is 32 characters.
-    vu.map_or(TimestampDisplay::Absent, |zone| {
-        let propre: String = zone
+    seen.map_or(TimestampDisplay::Absent, |zone| {
+        let clean: String = zone
             .chars()
-            .filter(|caractere| !caractere.is_control())
+            .filter(|character| !character.is_control())
             .take(ZONE_MAX_CHARS)
             .collect();
-        if propre.is_empty() {
+        if clean.is_empty() {
             // Nothing nameable: stay silent rather than display an empty string
             // after "Display timezone".
             TimestampDisplay::Absent
         } else {
-            TimestampDisplay::Uniform(propre)
+            TimestampDisplay::Uniform(clean)
         }
     })
 }
@@ -715,36 +714,36 @@ mod tests {
 
     use super::*;
 
-    fn rendu(array: Arc<dyn Array>, opts: &FormatOptions) -> CellValue<'static> {
+    fn render(array: Arc<dyn Array>, opts: &FormatOptions) -> CellValue<'static> {
         // `into_owned` detaches the value from the array, which dies at the end
         // of the call: it is the price of a test helper, not of the rendering path.
         format_value(array.as_ref(), 0, opts).into_owned()
     }
 
-    fn texte(array: Arc<dyn Array>) -> String {
+    fn as_text(array: Arc<dyn Array>) -> String {
         let opts = FormatOptions::default();
-        rendu(array, &opts)
+        render(array, &opts)
             .text()
             .map(str::to_owned)
-            .unwrap_or_else(|| "<non rendu>".to_owned())
+            .unwrap_or_else(|| "<not rendered>".to_owned())
     }
 
     #[test]
     fn grouping_off_touches_nothing() {
         // It is the default, hence the hot path: what the server sent comes out
         // as is, whatever the number of digits.
-        for valeur in ["0", "-7", "1234567", "-1234567.89", "abc"] {
+        for value in ["0", "-7", "1234567", "-1234567.89", "abc"] {
             assert_eq!(
-                group(valeur.to_owned(), NumberGrouping::None),
-                valeur,
-                "{valeur}"
+                group(value.to_owned(), NumberGrouping::None),
+                value,
+                "{value}"
             );
         }
     }
 
     #[test]
     fn thousands_grouping_respects_sign_and_decimals() {
-        let cas = [
+        let case = [
             ("0", "0"),
             ("999", "999"),
             ("1000", "1\u{a0}000"),
@@ -767,11 +766,11 @@ mod tests {
             ("日本語", "日本語"),
             ("+日本", "+日本"),
         ];
-        for (entree, attendu) in cas {
+        for (entry, expected) in case {
             assert_eq!(
-                group(entree.to_owned(), NumberGrouping::Thousands),
-                attendu,
-                "{entree}"
+                group(entry.to_owned(), NumberGrouping::Thousands),
+                expected,
+                "{entry}"
             );
         }
     }
@@ -779,19 +778,19 @@ mod tests {
     #[test]
     fn integers_and_decimals_follow_the_setting() {
         let opts = FormatOptions::default().with_number_grouping(NumberGrouping::Thousands);
-        let entiers = Arc::new(Int64Array::from(vec![Some(-4_823_917)])) as Arc<dyn Array>;
+        let integers = Arc::new(Int64Array::from(vec![Some(-4_823_917)])) as Arc<dyn Array>;
         assert_eq!(
-            rendu(entiers, &opts),
+            render(integers, &opts),
             CellValue::Text(Cow::Owned("-4\u{a0}823\u{a0}917".to_owned()))
         );
 
         // `value_as_string` places the decimal point; grouping must stop
         // before it.
-        let decimaux = Decimal128Array::from(vec![Some(123_456_789_i128)])
+        let decimals = Decimal128Array::from(vec![Some(123_456_789_i128)])
             .with_precision_and_scale(12, 2)
             .expect("valid precision and scale for a test literal");
         assert_eq!(
-            rendu(Arc::new(decimaux), &opts),
+            render(Arc::new(decimals), &opts),
             CellValue::Text(Cow::Owned("1\u{a0}234\u{a0}567.89".to_owned()))
         );
     }
@@ -802,10 +801,10 @@ mod tests {
         // unreadable. That is what `#[serde(default)]` guarantees, and it is
         // the kind of guarantee that is lost at the first field added without
         // thinking about it.
-        let ancien =
+        let old =
             r#"{"max_len":512,"null_text":"NULL","timestamp_format":null,"binary_display":"Hex"}"#;
         let options: FormatOptions =
-            serde_json::from_str(ancien).expect("an earlier document stays readable");
+            serde_json::from_str(old).expect("an earlier document stays readable");
         assert_eq!(options.number_grouping, NumberGrouping::None);
     }
 
@@ -825,21 +824,21 @@ mod tests {
 
     #[test]
     fn integers_of_every_width_render() {
-        assert_eq!(texte(Arc::new(Int32Array::from(vec![-42]))), "-42");
+        assert_eq!(as_text(Arc::new(Int32Array::from(vec![-42]))), "-42");
         assert_eq!(
-            texte(Arc::new(Int64Array::from(vec![i64::MIN]))),
+            as_text(Arc::new(Int64Array::from(vec![i64::MIN]))),
             i64::MIN.to_string()
         );
-        assert_eq!(texte(Arc::new(UInt8Array::from(vec![255_u8]))), "255");
+        assert_eq!(as_text(Arc::new(UInt8Array::from(vec![255_u8]))), "255");
     }
 
     #[test]
     fn text_is_borrowed_not_copied() {
-        let array = StringArray::from(vec![Some("bonjour")]);
+        let array = StringArray::from(vec![Some("hello")]);
         let opts = FormatOptions::default();
         match format_value(&array, 0, &opts) {
-            CellValue::Text(Cow::Borrowed(valeur)) => assert_eq!(valeur, "bonjour"),
-            autre => panic!("expected a borrow, got {autre:?}"),
+            CellValue::Text(Cow::Borrowed(value)) => assert_eq!(value, "hello"),
+            other => panic!("expected a borrow, got {other:?}"),
         }
     }
 
@@ -855,9 +854,9 @@ mod tests {
     fn the_null_string_is_not_an_absent_value() {
         let array = StringArray::from(vec![Some("NULL")]);
         let opts = FormatOptions::default();
-        let valeur = format_value(&array, 0, &opts);
-        assert!(!valeur.is_null());
-        assert_eq!(valeur.text(), Some("NULL"));
+        let value = format_value(&array, 0, &opts);
+        assert!(!value.is_null());
+        assert_eq!(value.text(), Some("NULL"));
     }
 
     #[test]
@@ -870,7 +869,7 @@ mod tests {
                 assert_eq!(text, "éàéàé");
                 assert_eq!(full_bytes, 20);
             }
-            autre => panic!("attendu Truncated, obtenu {autre:?}"),
+            other => panic!("expected Truncated, got {other:?}"),
         }
     }
 
@@ -879,9 +878,9 @@ mod tests {
         let long = "x".repeat(10_000);
         let array = StringArray::from(vec![Some(long.as_str())]);
         let opts = FormatOptions::default().with_max_len(0);
-        let valeur = format_value(&array, 0, &opts);
-        assert!(!valeur.is_truncated());
-        assert_eq!(valeur.text().map(str::len), Some(10_000));
+        let value = format_value(&array, 0, &opts);
+        assert!(!value.is_truncated());
+        assert_eq!(value.text().map(str::len), Some(10_000));
     }
 
     #[test]
@@ -895,25 +894,25 @@ mod tests {
     fn binary_renders_as_base64() {
         let opts = FormatOptions::default().with_binary_display(BinaryDisplay::Base64);
         // The three remainder lengths, which are the three padding cases.
-        for (entree, attendu) in [
+        for (entry, expected) in [
             (b"Hello".as_slice(), "SGVsbG8="),
             (b"Hell".as_slice(), "SGVsbA=="),
             (b"Hel".as_slice(), "SGVs"),
         ] {
-            let array = BinaryArray::from(vec![Some(entree)]);
+            let array = BinaryArray::from(vec![Some(entry)]);
             assert_eq!(
                 format_value(&array, 0, &opts).text(),
-                Some(attendu),
+                Some(expected),
                 "input of {} bytes",
-                entree.len()
+                entry.len()
             );
         }
     }
 
     #[test]
     fn a_large_binary_renders_as_a_size() {
-        let gros = vec![0_u8; 3_500_000];
-        let array = BinaryArray::from(vec![Some(gros.as_slice())]);
+        let large = vec![0_u8; 3_500_000];
+        let array = BinaryArray::from(vec![Some(large.as_slice())]);
         let opts = FormatOptions::default().with_binary_display(BinaryDisplay::Size);
         assert_eq!(format_value(&array, 0, &opts).text(), Some("<3.3 MiB>"));
     }
@@ -922,15 +921,15 @@ mod tests {
     /// to display 32 characters of it.
     #[test]
     fn a_large_hexadecimal_binary_encodes_only_what_is_shown() {
-        let gros = vec![0xab_u8; 1_000_000];
-        let array = BinaryArray::from(vec![Some(gros.as_slice())]);
+        let large = vec![0xab_u8; 1_000_000];
+        let array = BinaryArray::from(vec![Some(large.as_slice())]);
         let opts = FormatOptions::default().with_max_len(32);
         match format_value(&array, 0, &opts) {
             CellValue::Truncated { text, full_bytes } => {
                 assert!(text.len() <= 40, "{} characters produced", text.len());
                 assert_eq!(full_bytes, 1_000_000);
             }
-            autre => panic!("attendu Truncated, obtenu {autre:?}"),
+            other => panic!("expected Truncated, got {other:?}"),
         }
     }
 
@@ -939,26 +938,26 @@ mod tests {
         let array = Decimal128Array::from(vec![Some(12_345_i128)])
             .with_precision_and_scale(10, 2)
             .expect("valid precision and scale for 12345");
-        assert_eq!(texte(Arc::new(array)), "123.45");
+        assert_eq!(as_text(Arc::new(array)), "123.45");
     }
 
     #[test]
     fn floats_follow_the_arrow_convention() {
         // `ryu`, like the export: 1.0 and not 1.
-        assert_eq!(texte(Arc::new(Float64Array::from(vec![1.0_f64]))), "1.0");
-        assert_eq!(texte(Arc::new(Float64Array::from(vec![0.5_f64]))), "0.5");
+        assert_eq!(as_text(Arc::new(Float64Array::from(vec![1.0_f64]))), "1.0");
+        assert_eq!(as_text(Arc::new(Float64Array::from(vec![0.5_f64]))), "0.5");
     }
 
     #[test]
     fn dates_and_times_render() {
         // 2021-01-01 = 18,628 days after the epoch.
         assert_eq!(
-            texte(Arc::new(Date32Array::from(vec![18_628]))),
+            as_text(Arc::new(Date32Array::from(vec![18_628]))),
             "2021-01-01"
         );
-        let heure = Time64MicrosecondArray::from(vec![3_661_000_000_i64]);
-        let rendu = texte(Arc::new(heure));
-        assert!(rendu.starts_with("01:01:01"), "{rendu}");
+        let hour = Time64MicrosecondArray::from(vec![3_661_000_000_i64]);
+        let rendered = as_text(Arc::new(hour));
+        assert!(rendered.starts_with("01:01:01"), "{rendered}");
     }
 
     /// The time zone is not decorative: the same value displayed without an
@@ -967,9 +966,9 @@ mod tests {
     fn a_timestamp_with_a_time_zone_carries_its_offset() {
         let array =
             TimestampMillisecondArray::from(vec![1_609_459_200_000_i64]).with_timezone("+02:00");
-        let rendu = texte(Arc::new(array));
-        assert!(rendu.starts_with("2021-01-01T02:00:00"), "{rendu}");
-        assert!(rendu.contains("+02:00"), "{rendu}");
+        let rendered = as_text(Arc::new(array));
+        assert!(rendered.starts_with("2021-01-01T02:00:00"), "{rendered}");
+        assert!(rendered.contains("+02:00"), "{rendered}");
     }
 
     #[test]
@@ -999,28 +998,34 @@ mod tests {
         ]);
         // The exact form belongs to Arrow; what is checked here is that the
         // nested column is rendered rather than declared unrecoverable.
-        let rendu = texte(Arc::new(array));
-        assert!(rendu.starts_with('['), "{rendu}");
-        assert!(rendu.contains('1') && rendu.contains('2'), "{rendu}");
-        assert!(rendu.ends_with(']'), "{rendu}");
+        let rendered = as_text(Arc::new(array));
+        assert!(rendered.starts_with('['), "{rendered}");
+        assert!(
+            rendered.contains('1') && rendered.contains('2'),
+            "{rendered}"
+        );
+        assert!(rendered.ends_with(']'), "{rendered}");
     }
 
     #[test]
     fn a_struct_renders() {
-        let champs = Fields::from(vec![
+        let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Utf8, false),
         ]);
         let array = StructArray::new(
-            champs,
+            fields,
             vec![
                 Arc::new(Int32Array::from(vec![7])),
                 Arc::new(StringArray::from(vec!["sept"])),
             ],
             None,
         );
-        let rendu = texte(Arc::new(array));
-        assert!(rendu.contains('7') && rendu.contains("sept"), "{rendu}");
+        let rendered = as_text(Arc::new(array));
+        assert!(
+            rendered.contains('7') && rendered.contains("sept"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -1053,18 +1058,14 @@ mod tests {
     fn format_cell_goes_through_the_batch() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("nom", DataType::Utf8, true),
-            Field::new(
-                "quand",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("at", DataType::Timestamp(TimeUnit::Millisecond, None), true),
         ]));
         let batch = RecordBatch::try_new(
             schema,
             vec![
                 Arc::new(Int32Array::from(vec![1, 2])),
-                Arc::new(StringArray::from(vec![Some("un"), None])),
+                Arc::new(StringArray::from(vec![Some("one"), None])),
                 Arc::new(TimestampMillisecondArray::from(vec![Some(0), None])),
             ],
         )
@@ -1072,7 +1073,7 @@ mod tests {
         let opts = FormatOptions::default();
 
         assert_eq!(format_cell(&batch, 0, 0, &opts).text(), Some("1"));
-        assert_eq!(format_cell(&batch, 0, 1, &opts).text(), Some("un"));
+        assert_eq!(format_cell(&batch, 0, 1, &opts).text(), Some("one"));
         assert!(format_cell(&batch, 1, 1, &opts).is_null());
         assert!(format_cell(&batch, 1, 2, &opts).is_null());
         assert_eq!(
@@ -1082,7 +1083,7 @@ mod tests {
     }
 
     /// A schema with one timestamp column, with or without a time zone.
-    fn schema_horodate(zones: &[Option<&str>]) -> Schema {
+    fn timestamp_schema(zones: &[Option<&str>]) -> Schema {
         Schema::new(
             zones
                 .iter()
@@ -1107,12 +1108,12 @@ mod tests {
         );
         // The common PostgreSQL case: `timestamptz` arrives in UTC.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[Some("UTC"), Some("UTC")])),
+            timestamp_display(&timestamp_schema(&[Some("UTC"), Some("UTC")])),
             TimestampDisplay::Uniform("UTC".to_owned())
         );
         // Two different zones: naming one would wrongly describe the other.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[Some("UTC"), Some("+02:00")])),
+            timestamp_display(&timestamp_schema(&[Some("UTC"), Some("+02:00")])),
             TimestampDisplay::Mixed
         );
     }
@@ -1124,19 +1125,19 @@ mod tests {
         // information the server did not send, and the value itself renders
         // without `Z` or offset — the two must stay consistent.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[None, None])),
+            timestamp_display(&timestamp_schema(&[None, None])),
             TimestampDisplay::Absent
         );
         // Mixed with a column that does carry one: only that one counts.
         assert_eq!(
-            timestamp_display(&schema_horodate(&[None, Some("UTC")])),
+            timestamp_display(&timestamp_schema(&[None, Some("UTC")])),
             TimestampDisplay::Uniform("UTC".to_owned())
         );
     }
 
     #[test]
     fn the_null_replacement_text_is_configurable() {
-        let opts = FormatOptions::default().with_null_text("(vide)");
-        assert_eq!(CellValue::Null.display_with(&opts), "(vide)");
+        let opts = FormatOptions::default().with_null_text("(empty)");
+        assert_eq!(CellValue::Null.display_with(&opts), "(empty)");
     }
 }

@@ -158,32 +158,32 @@ mod tests {
 
     #[test]
     fn a_secret_refusal_only_shows_the_key() {
-        let erreur = StoreError::SecretInParams {
+        let error = StoreError::SecretInParams {
             key: "password".to_owned(),
         };
-        let message = erreur.to_string();
+        let message = error.to_string();
         assert!(message.contains("password"), "the key must be named");
         assert!(!message.contains("hunter2"), "no value may appear here");
     }
 
     #[test]
     fn a_secret_in_the_parameters_is_a_configuration_error() {
-        let erreur: OxynError = StoreError::SecretInParams {
+        let error: OxynError = StoreError::SecretInParams {
             key: "api_key".to_owned(),
         }
         .into();
-        assert!(matches!(erreur, OxynError::Config(_)));
-        assert!(erreur.is_user_error(), "the user can correct it");
-        assert!(!erreur.is_retryable(), "retrying changes nothing");
+        assert!(matches!(error, OxynError::Config(_)));
+        assert!(error.is_user_error(), "the user can correct it");
+        assert!(!error.is_retryable(), "retrying changes nothing");
     }
 
     #[test]
     fn a_too_recent_schema_is_not_retried() {
-        let erreur: OxynError = StoreError::SchemaTooRecent {
+        let error: OxynError = StoreError::SchemaTooRecent {
             found: 9,
             supported: 1,
         }
         .into();
-        assert!(!erreur.is_retryable());
+        assert!(!error.is_retryable());
     }
 }

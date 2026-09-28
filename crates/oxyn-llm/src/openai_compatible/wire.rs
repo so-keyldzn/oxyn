@@ -122,12 +122,12 @@ impl ChatCompletionRequest {
                 let tool_calls: Vec<WireToolCall> = message
                     .tool_calls
                     .iter()
-                    .map(|appel| WireToolCall {
-                        id: appel.id.clone(),
+                    .map(|call| WireToolCall {
+                        id: call.id.clone(),
                         kind: "function",
                         function: WireFunctionCall {
-                            name: appel.name.clone(),
-                            arguments: arguments_to_string(&appel.arguments),
+                            name: call.name.clone(),
+                            arguments: arguments_to_string(&call.arguments),
                         },
                     })
                     .collect();
@@ -148,12 +148,12 @@ impl ChatCompletionRequest {
         let tools = request
             .tools
             .iter()
-            .map(|outil| WireTool {
+            .map(|tool| WireTool {
                 kind: "function",
                 function: WireFunctionDef {
-                    name: outil.name.clone(),
-                    description: outil.description.clone(),
-                    parameters: outil.parameters.clone(),
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    parameters: tool.parameters.clone(),
                 },
             })
             .collect();
@@ -311,14 +311,14 @@ impl WireUsage {
     /// nothing. Displaying "0 tokens read from cache" would suggest a cache
     /// that does not work.
     pub(crate) fn cache_read(&self) -> Option<u32> {
-        let brut = self.prompt_tokens_details.as_ref()?.cached_tokens?;
-        Some(clamp_tokens(Some(brut)))
+        let raw = self.prompt_tokens_details.as_ref()?.cached_tokens?;
+        Some(clamp_tokens(Some(raw)))
     }
 
     /// Reasoning tokens, same rule.
     pub(crate) fn reasoning(&self) -> Option<u32> {
-        let brut = self.completion_tokens_details.as_ref()?.reasoning_tokens?;
-        Some(clamp_tokens(Some(brut)))
+        let raw = self.completion_tokens_details.as_ref()?.reasoning_tokens?;
+        Some(clamp_tokens(Some(raw)))
     }
 }
 
@@ -326,9 +326,9 @@ impl WireUsage {
 ///
 /// Missing or negative counts as `0` — "not declared" — and an outsized value
 /// saturates rather than overflowing silently (`as` is forbidden).
-fn clamp_tokens(brut: Option<i64>) -> u32 {
-    let valeur = brut.unwrap_or(0).max(0);
-    u32::try_from(valeur).unwrap_or(u32::MAX)
+fn clamp_tokens(raw: Option<i64>) -> u32 {
+    let value = raw.unwrap_or(0).max(0);
+    u32::try_from(value).unwrap_or(u32::MAX)
 }
 
 /// Error carried in the stream.
@@ -401,43 +401,43 @@ struct WirePricing {
 }
 
 impl From<WireModel> for ModelInfo {
-    fn from(brut: WireModel) -> Self {
-        let contexte = brut
+    fn from(raw: WireModel) -> Self {
+        let context = raw
             .context_length
-            .or_else(|| brut.top_provider.as_ref().and_then(|t| t.context_length));
+            .or_else(|| raw.top_provider.as_ref().and_then(|t| t.context_length));
 
         // The provider says nothing about tools in most cases: `Unknown` is
         // then the only honest answer.
-        let outils = match &brut.supported_parameters {
-            Some(parametres) => Support::known(parametres.iter().any(|p| p == "tools")),
+        let tools = match &raw.supported_parameters {
+            Some(parameters) => Support::known(parameters.iter().any(|p| p == "tools")),
             None => Support::Unknown,
         };
         // Same rule for reasoning: the gateway that publishes the list of its
         // parameters includes `reasoning_effort` in it when the model accepts
         // it.
-        let raisonnement = match &brut.supported_parameters {
-            Some(parametres) => Support::known(
-                parametres
+        let reasoning = match &raw.supported_parameters {
+            Some(parameters) => Support::known(
+                parameters
                     .iter()
                     .any(|p| p == "reasoning_effort" || p == "reasoning"),
             ),
             None => Support::Unknown,
         };
 
-        let mut fiche = Self::new(brut.id);
-        if let Some(nom) = brut.name {
-            fiche = fiche.with_display_name(nom);
+        let mut info = Self::new(raw.id);
+        if let Some(display_name) = raw.name {
+            info = info.with_display_name(display_name);
         }
-        if let Some(fenetre) = contexte {
-            fiche = fiche.with_context_window(fenetre);
+        if let Some(window) = context {
+            info = info.with_context_window(window);
         }
-        fiche = fiche
-            .with_tool_support(outils)
-            .with_reasoning_support(raisonnement);
-        if let Some(cout) = brut.pricing.and_then(|p| p.into_cost()) {
-            fiche = fiche.with_cost(cout);
+        info = info
+            .with_tool_support(tools)
+            .with_reasoning_support(reasoning);
+        if let Some(cost) = raw.pricing.and_then(|p| p.into_cost()) {
+            info = info.with_cost(cost);
         }
-        fiche
+        info
     }
 }
 
@@ -451,41 +451,41 @@ impl WirePricing {
     /// rejecting any negative remains prudent in both cases, since displaying
     /// `-1,000,000` would be worse than displaying nothing.
     fn into_cost(self) -> Option<Cost> {
-        let entree = parse_price(self.prompt.as_deref())?;
-        let sortie = parse_price(self.completion.as_deref())?;
+        let entry = parse_price(self.prompt.as_deref())?;
+        let output = parse_price(self.completion.as_deref())?;
         Some(Cost::new(
-            entree * 1_000_000.0,
-            sortie * 1_000_000.0,
+            entry * 1_000_000.0,
+            output * 1_000_000.0,
             OPENROUTER_CURRENCY,
         ))
     }
 }
 
 /// Parses a per-token price. Rejects the missing, the unreadable and the negative.
-fn parse_price(brut: Option<&str>) -> Option<f64> {
-    let valeur: f64 = brut?.trim().parse().ok()?;
-    (valeur.is_finite() && valeur >= 0.0).then_some(valeur)
+fn parse_price(raw: Option<&str>) -> Option<f64> {
+    let value: f64 = raw?.trim().parse().ok()?;
+    (value.is_finite() && value >= 0.0).then_some(value)
 }
 
 /// Parses the model list, entry by entry.
 ///
 /// An unreadable entry is **ignored**, not fatal: an endpoint that publishes
 /// an exotic model must not make the twenty others invisible.
-pub(crate) fn parse_models(reponse: ModelsResponse) -> Vec<ModelInfo> {
-    let mut fiches = Vec::with_capacity(reponse.data.len());
-    let mut ignorees = 0_usize;
-    for entree in reponse.data {
-        match serde_json::from_value::<WireModel>(entree) {
-            Ok(brut) => fiches.push(ModelInfo::from(brut)),
-            Err(_) => ignorees += 1,
+pub(crate) fn parse_models(response: ModelsResponse) -> Vec<ModelInfo> {
+    let mut infos = Vec::with_capacity(response.data.len());
+    let mut ignored = 0_usize;
+    for entry in response.data {
+        match serde_json::from_value::<WireModel>(entry) {
+            Ok(raw) => infos.push(ModelInfo::from(raw)),
+            Err(_) => ignored += 1,
         }
     }
-    if ignorees > 0 {
+    if ignored > 0 {
         // The entry's content is not logged: we do not know what a third-party
         // endpoint puts in it.
-        tracing::debug!(ignorees, "unreadable entries in the model list");
+        tracing::debug!(ignored, "unreadable entries in the model list");
     }
-    fiches
+    infos
 }
 
 /// Rebuilds a complete tool call from its fragments.
@@ -498,13 +498,13 @@ pub(crate) fn build_tool_call(
     name: String,
     arguments: &str,
 ) -> Result<ToolCall, String> {
-    let brut = arguments.trim();
-    if brut.is_empty() {
+    let raw = arguments.trim();
+    if raw.is_empty() {
         // A tool without parameters: the model sometimes sends nothing at all.
         return Ok(ToolCall::new(id, name, serde_json::json!({})));
     }
-    match serde_json::from_str::<serde_json::Value>(brut) {
-        Ok(valeur) => Ok(ToolCall::new(id, name, valeur)),
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value) => Ok(ToolCall::new(id, name, value)),
         Err(err) => Err(format!(
             "cannot read the arguments of tool `{name}`: {} (line {}, column {})",
             classify_label(&err),
@@ -533,27 +533,27 @@ mod tests {
     use super::*;
     use crate::types::{ChatMessage, ToolSpec};
 
-    fn serialise(requete: &ChatCompletionRequest) -> serde_json::Value {
-        serde_json::to_value(requete).expect("request serialization")
+    fn serialise(request: &ChatCompletionRequest) -> serde_json::Value {
+        serde_json::to_value(request).expect("request serialization")
     }
 
     #[test]
     fn a_minimal_request_carries_only_what_is_needed() {
-        let req = ChatRequest::new("llama3.2", vec![ChatMessage::user("bonjour")]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
+        let req = ChatRequest::new("llama3.2", vec![ChatMessage::user("hello")]);
+        let body = serialise(&ChatCompletionRequest::from_request(&req, false, false));
 
-        assert_eq!(corps["model"], "llama3.2");
-        assert_eq!(corps["stream"], true);
-        assert_eq!(corps["messages"][0]["role"], "user");
-        assert_eq!(corps["messages"][0]["content"], "bonjour");
+        assert_eq!(body["model"], "llama3.2");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "hello");
         assert!(
-            corps.get("tools").is_none(),
+            body.get("tools").is_none(),
             "an empty tools array must not go out: some servers refuse it"
         );
-        assert!(corps.get("temperature").is_none());
-        assert!(corps.get("max_tokens").is_none());
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("max_tokens").is_none());
         assert!(
-            corps.get("stream_options").is_none(),
+            body.get("stream_options").is_none(),
             "local servers do not know stream_options"
         );
     }
@@ -561,8 +561,8 @@ mod tests {
     #[test]
     fn the_usage_request_is_explicit() {
         let req = ChatRequest::new("gpt-4o-mini", vec![ChatMessage::user("a")]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, true, false));
-        assert_eq!(corps["stream_options"]["include_usage"], true);
+        let body = serialise(&ChatCompletionRequest::from_request(&req, true, false));
+        assert_eq!(body["stream_options"]["include_usage"], true);
     }
 
     #[test]
@@ -570,50 +570,47 @@ mod tests {
         let req =
             ChatRequest::new("m", vec![ChatMessage::user("a")]).with_tools(vec![ToolSpec::new(
                 "execute_query",
-                "exécute une requête",
+                "run a query",
                 serde_json::json!({"type": "object", "properties": {}}),
             )]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
-        assert_eq!(corps["tools"][0]["type"], "function");
-        assert_eq!(corps["tools"][0]["function"]["name"], "execute_query");
-        assert_eq!(
-            corps["tools"][0]["function"]["parameters"]["type"],
-            "object"
-        );
+        let body = serialise(&ChatCompletionRequest::from_request(&req, false, false));
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["function"]["name"], "execute_query");
+        assert_eq!(body["tools"][0]["function"]["parameters"]["type"], "object");
     }
 
     #[test]
     fn call_arguments_go_out_as_a_json_string() {
         // The protocol detail that gets missed: `arguments` is a string.
-        let appel = ToolCall::new("call_1", "execute", serde_json::json!({"sql": "SELECT 1"}));
+        let call = ToolCall::new("call_1", "execute", serde_json::json!({"sql": "SELECT 1"}));
         let req = ChatRequest::new(
             "m",
-            vec![ChatMessage::assistant("").with_tool_calls(vec![appel])],
+            vec![ChatMessage::assistant("").with_tool_calls(vec![call])],
         );
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
-        let arguments = &corps["messages"][0]["tool_calls"][0]["function"]["arguments"];
+        let body = serialise(&ChatCompletionRequest::from_request(&req, false, false));
+        let arguments = &body["messages"][0]["tool_calls"][0]["function"]["arguments"];
         assert!(arguments.is_string(), "{arguments}");
         assert_eq!(arguments.as_str(), Some(r#"{"sql":"SELECT 1"}"#));
     }
 
     #[test]
     fn an_assistant_turn_without_text_sends_no_empty_content() {
-        let appel = ToolCall::new("call_1", "execute", serde_json::json!({}));
+        let call = ToolCall::new("call_1", "execute", serde_json::json!({}));
         let req = ChatRequest::new(
             "m",
-            vec![ChatMessage::assistant("").with_tool_calls(vec![appel])],
+            vec![ChatMessage::assistant("").with_tool_calls(vec![call])],
         );
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
-        assert!(corps["messages"][0].get("content").is_none());
+        let body = serialise(&ChatCompletionRequest::from_request(&req, false, false));
+        assert!(body["messages"][0].get("content").is_none());
     }
 
     #[test]
     fn a_tool_message_carries_its_identifier() {
-        let req = ChatRequest::new("m", vec![ChatMessage::tool_result("call_1", "42 lignes")]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
-        assert_eq!(corps["messages"][0]["role"], "tool");
-        assert_eq!(corps["messages"][0]["tool_call_id"], "call_1");
-        assert_eq!(corps["messages"][0]["content"], "42 lignes");
+        let req = ChatRequest::new("m", vec![ChatMessage::tool_result("call_1", "42 rows")]);
+        let body = serialise(&ChatCompletionRequest::from_request(&req, false, false));
+        assert_eq!(body["messages"][0]["role"], "tool");
+        assert_eq!(body["messages"][0]["tool_call_id"], "call_1");
+        assert_eq!(body["messages"][0]["content"], "42 rows");
     }
 
     #[test]
@@ -650,87 +647,87 @@ mod tests {
         };
         assert!(variable.into_cost().is_none());
 
-        let illisible = WirePricing {
+        let unreadable = WirePricing {
             prompt: Some("gratuit".to_owned()),
             completion: Some("0".to_owned()),
         };
-        assert!(illisible.into_cost().is_none());
+        assert!(unreadable.into_cost().is_none());
     }
 
     #[test]
     fn a_per_token_price_becomes_a_per_million_price() {
-        let tarif = WirePricing {
+        let price = WirePricing {
             prompt: Some("0.0000005".to_owned()),
             completion: Some("0.0000015".to_owned()),
         }
         .into_cost()
         .expect("readable price");
-        assert!((tarif.input_per_million - 0.5).abs() < 1e-9, "{tarif:?}");
-        assert!((tarif.output_per_million - 1.5).abs() < 1e-9, "{tarif:?}");
+        assert!((price.input_per_million - 0.5).abs() < 1e-9, "{price:?}");
+        assert!((price.output_per_million - 1.5).abs() < 1e-9, "{price:?}");
     }
 
     #[test]
     fn an_unreadable_model_entry_does_not_lose_the_others() {
-        let reponse: ModelsResponse =
+        let response: ModelsResponse =
             serde_json::from_str(r#"{"data":[{"id":"bon"},{"pas_d_id":true},{"id":"aussi-bon"}]}"#)
                 .expect("list tolerated");
-        let fiches = parse_models(reponse);
-        let ids: Vec<&str> = fiches.iter().map(|f| f.id.as_str()).collect();
+        let infos = parse_models(response);
+        let ids: Vec<&str> = infos.iter().map(|f| f.id.as_str()).collect();
         assert_eq!(ids, ["bon", "aussi-bon"]);
     }
 
     #[test]
     fn a_model_without_metadata_asserts_nothing() {
-        let reponse: ModelsResponse =
+        let response: ModelsResponse =
             serde_json::from_str(r#"{"data":[{"id":"llama3.2"}]}"#).expect("list tolerated");
-        let fiches = parse_models(reponse);
-        assert_eq!(fiches[0].context_window, None);
-        assert_eq!(fiches[0].supports_tools, Support::Unknown);
-        assert_eq!(fiches[0].display_name, "llama3.2");
+        let infos = parse_models(response);
+        assert_eq!(infos[0].context_window, None);
+        assert_eq!(infos[0].supports_tools, Support::Unknown);
+        assert_eq!(infos[0].display_name, "llama3.2");
     }
 
     #[test]
     fn a_model_that_declares_its_parameters_is_believed() {
-        let reponse: ModelsResponse = serde_json::from_str(
+        let response: ModelsResponse = serde_json::from_str(
             r#"{"data":[
                 {"id":"a","supported_parameters":["tools","temperature"],"context_length":128000},
                 {"id":"b","supported_parameters":["temperature"]}
             ]}"#,
         )
         .expect("list tolerated");
-        let fiches = parse_models(reponse);
-        assert_eq!(fiches[0].supports_tools, Support::Yes);
-        assert_eq!(fiches[0].context_window, Some(128_000));
-        assert_eq!(fiches[1].supports_tools, Support::No);
+        let infos = parse_models(response);
+        assert_eq!(infos[0].supports_tools, Support::Yes);
+        assert_eq!(infos[0].context_window, Some(128_000));
+        assert_eq!(infos[1].supports_tools, Support::No);
     }
 
     #[test]
     fn the_main_provider_window_serves_as_fallback() {
-        let reponse: ModelsResponse =
+        let response: ModelsResponse =
             serde_json::from_str(r#"{"data":[{"id":"a","top_provider":{"context_length":8192}}]}"#)
                 .expect("list tolerated");
-        assert_eq!(parse_models(reponse)[0].context_window, Some(8192));
+        assert_eq!(parse_models(response)[0].context_window, Some(8192));
     }
 
     #[test]
     fn missing_arguments_count_as_an_empty_object() {
-        let appel = build_tool_call("c1".to_owned(), "ping".to_owned(), "  ")
+        let call = build_tool_call("c1".to_owned(), "ping".to_owned(), "  ")
             .expect("a tool without parameters is legitimate");
-        assert_eq!(appel.arguments, serde_json::json!({}));
+        assert_eq!(call.arguments, serde_json::json!({}));
     }
 
     #[test]
     fn truncated_arguments_produce_an_error_without_copying_them() {
-        let erreur = build_tool_call(
+        let error = build_tool_call(
             "c1".to_owned(),
             "execute".to_owned(),
             r#"{"sql": "SELECT secret FROM"#,
         )
         .expect_err("truncated JSON");
-        assert!(erreur.contains("execute"), "{erreur}");
+        assert!(error.contains("execute"), "{error}");
         assert!(
-            !erreur.contains("secret"),
-            "the model output must not be copied: {erreur}"
+            !error.contains("secret"),
+            "the model output must not be copied: {error}"
         );
     }
 

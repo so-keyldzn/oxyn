@@ -120,7 +120,7 @@ mod tests {
 
     use super::*;
 
-    fn stocke(value: &ScalarValue) -> Result<Value, SqliteError> {
+    fn stored(value: &ScalarValue) -> Result<Value, SqliteError> {
         to_storage(value, 1)
     }
 
@@ -128,18 +128,18 @@ mod tests {
     fn a_boolean_becomes_an_integer() {
         // SQLite has no boolean type: `0` and `1` are the convention.
         assert_eq!(
-            stocke(&ScalarValue::Bool(true)).expect("bound"),
+            stored(&ScalarValue::Bool(true)).expect("bound"),
             Value::Integer(1)
         );
         assert_eq!(
-            stocke(&ScalarValue::Bool(false)).expect("bound"),
+            stored(&ScalarValue::Bool(false)).expect("bound"),
             Value::Integer(0)
         );
     }
 
     #[test]
     fn a_decimal_does_not_go_through_a_float() {
-        let value = stocke(&ScalarValue::Decimal("0.10".to_owned())).expect("bound");
+        let value = stored(&ScalarValue::Decimal("0.10".to_owned())).expect("bound");
         assert_eq!(
             value,
             Value::Text("0.10".to_owned()),
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn bytes_stay_bytes() {
         // A BLOB is not rendered as text "at best": it stays opaque.
-        let value = stocke(&ScalarValue::Bytes(vec![0x00, 0xff, 0x80])).expect("bound");
+        let value = stored(&ScalarValue::Bytes(vec![0x00, 0xff, 0x80])).expect("bound");
         assert_eq!(value, Value::Blob(vec![0x00, 0xff, 0x80]));
     }
 
@@ -158,7 +158,7 @@ mod tests {
     fn an_interval_and_an_array_are_refused_not_encoded() {
         // SQLite has neither; encoding them would produce a value no query could
         // read back.
-        for valeur in [
+        for sample in [
             ScalarValue::Interval {
                 months: 1,
                 days: 0,
@@ -166,11 +166,11 @@ mod tests {
             },
             ScalarValue::Array(vec![ScalarValue::Int64(1)]),
         ] {
-            let err = stocke(&valeur).expect_err("refus attendu");
+            let err = stored(&sample).expect_err("expected refusal");
             assert!(
                 matches!(err, SqliteError::Parameter { .. }),
                 "{err:?} for {}",
-                valeur.type_name()
+                sample.type_name()
             );
         }
     }
@@ -180,9 +180,9 @@ mod tests {
         let conn = Connection::open_in_memory().expect("in-memory database");
         let mut stmt = conn.prepare("SELECT ?1, ?2").expect("preparation");
 
-        let err = bind(&mut stmt, &[ScalarValue::Int64(1)]).expect_err("refus attendu");
+        let err = bind(&mut stmt, &[ScalarValue::Int64(1)]).expect_err("expected refusal");
         let SqliteError::ParameterCount { expected, given } = err else {
-            panic!("mauvaise variante : {err:?}");
+            panic!("wrong variant: {err:?}");
         };
         assert_eq!((expected, given), (2, 1));
     }
@@ -204,14 +204,14 @@ mod tests {
         .expect("binding");
         stmt.raw_execute().expect("insertion");
 
-        let reste: i64 = conn
+        let remaining: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name = 'audit'",
                 [],
                 |row| row.get(0),
             )
             .expect("count");
-        assert_eq!(reste, 1, "the audit table was dropped");
+        assert_eq!(remaining, 1, "the audit table was dropped");
     }
 
     // The temporal variants, `Uuid` and `Json` of `ScalarValue` are not covered

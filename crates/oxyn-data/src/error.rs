@@ -125,8 +125,8 @@ impl DataError {
 }
 
 impl From<DataError> for OxynError {
-    fn from(erreur: DataError) -> Self {
-        match erreur {
+    fn from(error: DataError) -> Self {
+        match error {
             DataError::Cancelled => Self::Cancelled,
             DataError::Io(source) => Self::Io(source),
             DataError::Spill(source) => Self::Io(source),
@@ -137,13 +137,13 @@ impl From<DataError> for OxynError {
             // in `Internal` would hide that they come from received data, and
             // therefore that they may happen again at the next execution of the
             // same query.
-            autre @ (DataError::Arrow(_) | DataError::SchemaMismatch { .. }) => {
-                Self::Serialization(autre.to_string())
+            other @ (DataError::Arrow(_) | DataError::SchemaMismatch { .. }) => {
+                Self::Serialization(other.to_string())
             }
             // A refusal of use, not a bug: `Internal` would present it as a
             // defect of Oxyn.
-            autre @ DataError::TruncatedResult => Self::Config(autre.to_string()),
-            autre => Self::Internal(autre.to_string()),
+            other @ DataError::TruncatedResult => Self::Config(other.to_string()),
+            other => Self::Internal(other.to_string()),
         }
     }
 }
@@ -154,16 +154,16 @@ mod tests {
 
     #[test]
     fn a_cancellation_stays_a_cancellation_after_conversion() {
-        let erreur: OxynError = DataError::Cancelled.into();
-        assert!(erreur.is_cancelled());
+        let error: OxynError = DataError::Cancelled.into();
+        assert!(error.is_cancelled());
     }
 
     #[test]
     fn a_missing_format_becomes_a_missing_capability() {
-        let erreur: OxynError = DataError::UnsupportedFormat { format: "parquet" }.into();
-        match erreur {
+        let error: OxynError = DataError::UnsupportedFormat { format: "parquet" }.into();
+        match error {
             OxynError::NotSupported { capability } => assert_eq!(capability, "export:parquet"),
-            autre => panic!("variante inattendue : {autre:?}"),
+            other => panic!("unexpected variant: {other:?}"),
         }
     }
 
@@ -171,10 +171,10 @@ mod tests {
     /// query will produce the same inconsistent schema.
     #[test]
     fn a_schema_defect_is_not_replayable() {
-        let erreur = DataError::SchemaMismatch {
+        let error = DataError::SchemaMismatch {
             expected: "a: Int32".into(),
             found: "a: Utf8".into(),
         };
-        assert!(!erreur.is_retryable());
+        assert!(!error.is_retryable());
     }
 }

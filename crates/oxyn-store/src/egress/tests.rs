@@ -9,22 +9,22 @@ use crate::Store;
 use oxyn_core::{ConnectionConfig, DriverId, WorkspaceId};
 
 /// A migrated store, a workspace, a connection.
-fn decor() -> (Store, WorkspaceId, ConnectionId) {
+fn fixture() -> (Store, WorkspaceId, ConnectionId) {
     let store = Store::open_in_memory().expect("open");
-    let workspace = store.workspaces().create("atelier").expect("workspace").id;
-    let connexion = ConnectionConfig::new("base client", DriverId::postgres());
+    let workspace = store.workspaces().create("workshop").expect("workspace").id;
+    let connection = ConnectionConfig::new("customer db", DriverId::postgres());
     store
         .connections()
-        .save(workspace, &connexion)
+        .save(workspace, &connection)
         .expect("connection");
-    (store, workspace, connexion.id)
+    (store, workspace, connection.id)
 }
 
 /// An ordinary egress: five rows of two columns to a provider.
-fn sortie(connexion: ConnectionId) -> EgressRecord {
+fn egress_record(connection: ConnectionId) -> EgressRecord {
     EgressRecord::new(
-        connexion,
-        "ventes.public.clients",
+        connection,
+        "sales.public.customers",
         vec!["email".into(), "pays".into()],
         5,
         ProviderId::new("anthropic-1a2b3c4d").expect("identifier"),
@@ -33,25 +33,25 @@ fn sortie(connexion: ConnectionId) -> EgressRecord {
 }
 
 /// Every entry of a connection, page by page.
-fn toutes(store: &Store, connexion: ConnectionId) -> Vec<EgressEntry> {
-    let mut entrees = Vec::new();
-    let mut avant = None;
+fn all_of_them(store: &Store, connection: ConnectionId) -> Vec<EgressEntry> {
+    let mut entries = Vec::new();
+    let mut before = None;
     loop {
         let page = store
             .egress()
-            .for_connection(connexion, avant, 2)
+            .for_connection(connection, before, 2)
             .expect("page");
-        entrees.extend(page.entries);
+        entries.extend(page.entries);
         match page.next {
-            Some(suivant) => avant = Some(suivant),
-            None => return entrees,
+            Some(next) => before = Some(next),
+            None => return entries,
         }
     }
 }
 
 /// Runs SQL outside the API, as `sqlite3` would.
-fn sql(store: &Store, requete: &str) -> Result<usize> {
-    store.with_connection(|conn| Ok(conn.execute(requete, [])?))
+fn sql(store: &Store, query: &str) -> Result<usize> {
+    store.with_connection(|conn| Ok(conn.execute(query, [])?))
 }
 
 // --- Round trip -------------------------------------------------------------
@@ -59,67 +59,82 @@ fn sql(store: &Store, requete: &str) -> Result<usize> {
 /// An egress read back is the egress written, field by field.
 #[test]
 fn an_egress_read_back_is_the_egress_written() {
-    let (store, _, connexion) = decor();
-    let commande = CommandId::new();
-    let fil = ConversationId::new();
-    let ecrite = sortie(connexion)
-        .read_by(commande)
-        .with_model("un-modele")
-        .in_conversation(fil, Some(3));
+    let (store, _, connection) = fixture();
+    let command = CommandId::new();
+    let thread = ConversationId::new();
+    let written_one = egress_record(connection)
+        .read_by(command)
+        .with_model("a-model")
+        .in_conversation(thread, Some(3));
 
-    let id = store.egress().append(&ecrite).expect("write");
-    let relues = toutes(&store, connexion);
-    assert_eq!(relues.len(), 1);
-    assert_eq!(relues[0].id, id);
-    assert!(relues[0].record == ecrite, "{:?}", relues[0].record);
+    let id = store.egress().append(&written_one).expect("write");
+    let read_back = all_of_them(&store, connection);
+    assert_eq!(read_back.len(), 1);
+    assert_eq!(read_back[0].id, id);
+    assert!(
+        read_back[0].record == written_one,
+        "{:?}",
+        read_back[0].record
+    );
 }
 
 /// An external agent has no model, and its reach is unknowable.
 #[test]
 fn an_egress_to_an_external_agent_reads_back_without_a_model() {
-    let (store, _, connexion) = decor();
-    let ecrite = EgressRecord::new(
-        connexion,
-        "clients",
+    let (store, _, connection) = fixture();
+    let written_one = EgressRecord::new(
+        connection,
+        "customers",
         vec!["id".into()],
         1,
         ProviderId::new("agent-9f3a7c21").expect("identifier"),
         EgressReach::Unresolved,
     );
-    store.egress().append(&ecrite).expect("write");
-    let relue = &toutes(&store, connexion)[0].record;
-    assert_eq!(relue.model, None);
-    assert!(relue.reach.leaves_machine(), "unknown counts as remote");
+    store.egress().append(&written_one).expect("write");
+    let read_back = &all_of_them(&store, connection)[0].record;
+    assert_eq!(read_back.model, None);
+    assert!(read_back.reach.leaves_machine(), "unknown counts as remote");
 }
 
 /// Reading is paginated, bounded, most recent first, and does not mix
 /// connections.
 #[test]
 fn reading_is_paginated_and_per_connection() {
-    let (store, workspace, connexion) = decor();
-    let autre = ConnectionConfig::new("autre base", DriverId::sqlite());
+    let (store, workspace, connection) = fixture();
+    let other = ConnectionConfig::new("autre base", DriverId::sqlite());
     store
         .connections()
-        .save(workspace, &autre)
+        .save(workspace, &other)
         .expect("connection");
     let mut ids = Vec::new();
     for _ in 0..5 {
-        ids.push(store.egress().append(&sortie(connexion)).expect("write"));
+        ids.push(
+            store
+                .egress()
+                .append(&egress_record(connection))
+                .expect("write"),
+        );
     }
-    store.egress().append(&sortie(autre.id)).expect("write");
+    store
+        .egress()
+        .append(&egress_record(other.id))
+        .expect("write");
 
-    let relues: Vec<i64> = toutes(&store, connexion).iter().map(|e| e.id).collect();
+    let read_back: Vec<i64> = all_of_them(&store, connection)
+        .iter()
+        .map(|e| e.id)
+        .collect();
     ids.reverse();
-    assert_eq!(relues, ids, "all of them, once, most recent first");
+    assert_eq!(read_back, ids, "all of them, once, most recent first");
 
     let page = store
         .egress()
-        .for_connection(connexion, None, 0)
+        .for_connection(connection, None, 0)
         .expect("page");
     assert_eq!(page.entries.len(), 1, "a zero `limit` counts as one");
     let page = store
         .egress()
-        .for_connection(connexion, None, u16::MAX)
+        .for_connection(connection, None, u16::MAX)
         .expect("page");
     assert_eq!(page.entries.len(), 5);
     assert_eq!(page.next, None, "no empty page after the last one");
@@ -134,8 +149,11 @@ fn reading_is_paginated_and_per_connection() {
 /// question it exists for.
 #[test]
 fn the_egress_journal_is_not_erased() {
-    let (store, workspace, connexion) = decor();
-    store.egress().append(&sortie(connexion)).expect("write");
+    let (store, workspace, connection) = fixture();
+    store
+        .egress()
+        .append(&egress_record(connection))
+        .expect("write");
 
     assert!(
         sql(&store, "UPDATE ai_egress SET row_count = 0").is_err(),
@@ -146,10 +164,10 @@ fn the_egress_journal_is_not_erased() {
         "DELETE refused"
     );
 
-    store.connections().delete(connexion).expect("deletion");
+    store.connections().delete(connection).expect("deletion");
     store.workspaces().delete(workspace).expect("deletion");
     assert_eq!(
-        toutes(&store, connexion).len(),
+        all_of_them(&store, connection).len(),
         1,
         "the entry survives the connection and the workspace"
     );
@@ -160,63 +178,63 @@ fn the_egress_journal_is_not_erased() {
 /// The API refuses what does not fit, without writing anything and without quoting the value.
 #[test]
 fn the_api_refuses_what_exceeds_its_bounds() {
-    let (store, _, connexion) = decor();
-    let temoin = "valeur-temoin-alice@example.test";
-    let refus: Vec<(&str, EgressRecord)> = vec![
+    let (store, _, connection) = fixture();
+    let canary = "valeur-temoin-alice@example.test";
+    let refusal: Vec<(&str, EgressRecord)> = vec![
         ("empty source", {
-            let mut r = sortie(connexion);
+            let mut r = egress_record(connection);
             r.source.clear();
             r
         }),
         ("source too long", {
-            let mut r = sortie(connexion);
+            let mut r = egress_record(connection);
             r.source = "s".repeat(MAX_SOURCE_BYTES + 1);
             r
         }),
         ("no column", {
-            let mut r = sortie(connexion);
+            let mut r = egress_record(connection);
             r.columns.clear();
             r
         }),
         ("too many columns", {
-            let mut r = sortie(connexion);
+            let mut r = egress_record(connection);
             r.columns = (0..=MAX_COLUMNS).map(|i| format!("c{i}")).collect();
             r
         }),
         ("empty name", {
-            let mut r = sortie(connexion);
+            let mut r = egress_record(connection);
             r.columns.push(String::new());
             r
         }),
         ("name too long", {
-            let mut r = sortie(connexion);
+            let mut r = egress_record(connection);
             r.columns.push("n".repeat(MAX_COLUMN_NAME_BYTES + 1));
             r
         }),
         ("row pasted as a name", {
-            let mut r = sortie(connexion);
-            r.columns.push(format!("{temoin}\tFR\n"));
+            let mut r = egress_record(connection);
+            r.columns.push(format!("{canary}\tFR\n"));
             r
         }),
         ("too many rows", {
-            let mut r = sortie(connexion);
+            let mut r = egress_record(connection);
             r.rows = MAX_ROWS + 1;
             r
         }),
         (
             "model too long",
-            sortie(connexion).with_model("m".repeat(MAX_MODEL_BYTES + 1)),
+            egress_record(connection).with_model("m".repeat(MAX_MODEL_BYTES + 1)),
         ),
     ];
-    for (cas, record) in refus {
-        let erreur = store.egress().append(&record).expect_err(cas);
+    for (case, record) in refusal {
+        let error = store.egress().append(&record).expect_err(case);
         assert!(
-            !erreur.to_string().contains(temoin),
-            "{cas}: the message quotes the value: {erreur}"
+            !error.to_string().contains(canary),
+            "{case}: the message quotes the value: {error}"
         );
     }
     assert!(
-        toutes(&store, connexion).is_empty(),
+        all_of_them(&store, connection).is_empty(),
         "no refusal writes anything"
     );
 }
@@ -225,64 +243,64 @@ fn the_api_refuses_what_exceeds_its_bounds() {
 /// and in particular refuses a value stored in the column list.
 #[test]
 fn the_file_refuses_a_value_disguised_as_a_column_name() {
-    let (store, _, connexion) = decor();
-    let inserer = |columns: &str, rows: i64, source: &str| {
+    let (store, _, connection) = fixture();
+    let insert_row = |columns: &str, rows: i64, source: &str| {
         store.with_connection(|conn| {
             Ok(conn.execute(
                 "INSERT INTO ai_egress
                      (ts, connection_id, source, columns, row_count, recipient_id, reach)
                  VALUES (?1, ?2, ?3, ?4, ?5, 'anthropic-1a2b3c4d', 'remote')",
-                rusqlite::params![Utc::now(), connexion.to_string(), source, columns, rows],
+                rusqlite::params![Utc::now(), connection.to_string(), source, columns, rows],
             )?)
         })
     };
 
-    inserer(r#"["email"]"#, 5, "clients").expect("the accepted form passes");
+    insert_row(r#"["email"]"#, 5, "customers").expect("the accepted form passes");
     let long = "n".repeat(MAX_COLUMN_NAME_BYTES + 1);
-    let trop: Vec<String> = (0..=MAX_COLUMNS).map(|i| format!("c{i}")).collect();
-    for (cas, columns, rows, source) in [
-        ("a number", "[42]".to_owned(), 5, "clients"),
+    let too_many: Vec<String> = (0..=MAX_COLUMNS).map(|i| format!("c{i}")).collect();
+    for (case, columns, rows, source) in [
+        ("a number", "[42]".to_owned(), 5, "customers"),
         (
             "an object",
             r#"[{"email":"alice@example.test"}]"#.to_owned(),
             5,
-            "clients",
+            "customers",
         ),
         (
             "a nested array",
             r#"[["alice@example.test"]]"#.to_owned(),
             5,
-            "clients",
+            "customers",
         ),
-        ("an empty name", r#"[""]"#.to_owned(), 5, "clients"),
-        ("a name too long", format!(r#"["{long}"]"#), 5, "clients"),
-        ("not an array", r#""email""#.to_owned(), 5, "clients"),
+        ("an empty name", r#"[""]"#.to_owned(), 5, "customers"),
+        ("a name too long", format!(r#"["{long}"]"#), 5, "customers"),
+        ("not an array", r#""email""#.to_owned(), 5, "customers"),
         (
             "an object instead of an array",
             r#"{"email":"alice@example.test"}"#.to_owned(),
             5,
-            "clients",
+            "customers",
         ),
-        ("not JSON", "email, pays".to_owned(), 5, "clients"),
-        ("no column", "[]".to_owned(), 5, "clients"),
+        ("not JSON", "email, pays".to_owned(), 5, "customers"),
+        ("no column", "[]".to_owned(), 5, "customers"),
         (
             "too many columns",
-            serde_json::to_string(&trop).expect("encoding"),
+            serde_json::to_string(&too_many).expect("encoding"),
             5,
-            "clients",
+            "customers",
         ),
         (
             "too many rows",
             r#"["email"]"#.to_owned(),
             i64::from(MAX_ROWS) + 1,
-            "clients",
+            "customers",
         ),
-        ("negative rows", r#"["email"]"#.to_owned(), -1, "clients"),
+        ("negative rows", r#"["email"]"#.to_owned(), -1, "customers"),
         ("empty source", r#"["email"]"#.to_owned(), 5, ""),
     ] {
         assert!(
-            inserer(&columns, rows, source).is_err(),
-            "{cas} must be refused"
+            insert_row(&columns, rows, source).is_err(),
+            "{case} must be refused"
         );
     }
 }
@@ -294,7 +312,7 @@ fn the_file_refuses_a_value_disguised_as_a_column_name() {
 /// would leave anyway if the caller does not stop the send.
 #[test]
 fn the_file_bounds_are_the_code_bounds() {
-    let (store, _, _) = decor();
+    let (store, _, _) = fixture();
     let schema: String = store
         .with_connection(|conn| {
             Ok(conn.query_row(
@@ -304,7 +322,7 @@ fn the_file_bounds_are_the_code_bounds() {
             )?)
         })
         .expect("schema");
-    for attendu in [
+    for expected in [
         format!("BETWEEN 1 AND {MAX_SOURCE_BYTES}"),
         format!("BETWEEN 1 AND {MAX_COLUMNS}"),
         format!("NOT BETWEEN 1 AND {MAX_COLUMN_NAME_BYTES}"),
@@ -312,8 +330,8 @@ fn the_file_bounds_are_the_code_bounds() {
         format!("<= {MAX_MODEL_BYTES}"),
     ] {
         assert!(
-            schema.contains(&attendu),
-            "bound missing from the file: {attendu}"
+            schema.contains(&expected),
+            "bound missing from the file: {expected}"
         );
     }
 }
@@ -327,16 +345,16 @@ fn the_file_bounds_are_the_code_bounds() {
 /// silently.
 #[test]
 fn the_table_has_no_column_for_a_value() {
-    let (store, _, _) = decor();
-    let colonnes: Vec<String> = store
+    let (store, _, _) = fixture();
+    let columns: Vec<String> = store
         .with_connection(|conn| {
-            let mut requete = conn.prepare("SELECT name FROM pragma_table_info('ai_egress')")?;
-            let noms = requete.query_map([], |row| row.get(0))?;
-            Ok(noms.collect::<rusqlite::Result<Vec<String>>>()?)
+            let mut query = conn.prepare("SELECT name FROM pragma_table_info('ai_egress')")?;
+            let names = query.query_map([], |row| row.get(0))?;
+            Ok(names.collect::<rusqlite::Result<Vec<String>>>()?)
         })
         .expect("schema");
     assert_eq!(
-        colonnes,
+        columns,
         [
             "id",
             "ts",
@@ -357,14 +375,14 @@ fn the_table_has_no_column_for_a_value() {
 /// `Debug` shows the source and the column names, nothing else.
 #[test]
 fn debug_shows_the_source_and_the_names_only() {
-    let connexion = ConnectionId::new();
-    let record = sortie(connexion).with_model("modele-temoin");
-    let rendu = format!("{record:?}");
-    assert!(rendu.contains("ventes.public.clients"), "{rendu}");
-    assert!(rendu.contains("email"), "{rendu}");
-    assert!(!rendu.contains(&connexion.to_string()), "{rendu}");
-    assert!(!rendu.contains("anthropic-1a2b3c4d"), "{rendu}");
-    assert!(!rendu.contains("modele-temoin"), "{rendu}");
+    let connection = ConnectionId::new();
+    let record = egress_record(connection).with_model("modele-temoin");
+    let rendered = format!("{record:?}");
+    assert!(rendered.contains("sales.public.customers"), "{rendered}");
+    assert!(rendered.contains("email"), "{rendered}");
+    assert!(!rendered.contains(&connection.to_string()), "{rendered}");
+    assert!(!rendered.contains("anthropic-1a2b3c4d"), "{rendered}");
+    assert!(!rendered.contains("modele-temoin"), "{rendered}");
 }
 
 // --- Migration ----------------------------------------------------------------
@@ -374,35 +392,35 @@ fn debug_shows_the_source_and_the_names_only() {
 /// that populated itself would invent a history.
 #[test]
 fn a_v11_local_state_opens_and_gains_an_empty_journal() {
-    let racine = tempfile::tempdir().expect("temporary directory");
-    let chemin = racine.path().join("oxyn.sqlite3");
-    let connexion = ConnectionId::new();
+    let root = tempfile::tempdir().expect("temporary directory");
+    let path = root.path().join("oxyn.sqlite3");
+    let connection = ConnectionId::new();
     {
-        let conn = crate::schema::file_at_version(&chemin, 11);
-        let atelier = oxyn_core::WorkspaceId::new();
+        let conn = crate::schema::file_at_version(&path, 11);
+        let workshop = oxyn_core::WorkspaceId::new();
         // The exact form rusqlite writes for a `DateTime<Utc>`.
-        let quand = Utc::now().format("%F %T%.f%:z");
+        let when = Utc::now().format("%F %T%.f%:z");
         conn.execute_batch(&format!(
-            "INSERT INTO workspaces VALUES ('{atelier}', 'atelier', '{quand}', '{quand}');
+            "INSERT INTO workspaces VALUES ('{workshop}', 'workshop', '{when}', '{when}');
              INSERT INTO connections
                  (id, workspace_id, name, driver, environment, params, read_only,
                   created_at, updated_at)
-             VALUES ('{connexion}', '{atelier}', 'base client', 'postgres', 'production', '{{}}', 0,
-                     '{quand}', '{quand}');"
+             VALUES ('{connection}', '{workshop}', 'customer db', 'postgres', 'production', '{{}}', 0,
+                     '{when}', '{when}');"
         ))
         .expect("state from an earlier version");
     }
 
-    let store = Store::open_at(&chemin).expect("upgrade to the current version");
+    let store = Store::open_at(&path).expect("upgrade to the current version");
     assert_eq!(
         store.schema_version().expect("version"),
         crate::latest_schema_version()
     );
     assert_eq!(store.workspaces().list().expect("list").len(), 1);
-    assert!(toutes(&store, connexion).is_empty());
+    assert!(all_of_them(&store, connection).is_empty());
     store
         .egress()
-        .append(&sortie(connexion))
+        .append(&egress_record(connection))
         .expect("the migrated journal is usable");
 }
 
@@ -411,19 +429,19 @@ fn a_v11_local_state_opens_and_gains_an_empty_journal() {
 /// An unreadable reach reads back as "unknown", never "local".
 #[test]
 fn an_unreadable_reach_never_becomes_local() {
-    let (store, _, connexion) = decor();
+    let (store, _, connection) = fixture();
     store
         .with_connection(|conn| {
             conn.execute(
                 "INSERT INTO ai_egress
                      (ts, connection_id, source, columns, row_count, recipient_id, reach)
-                 VALUES (?1, ?2, 'clients', '[\"email\"]', 5, 'anthropic-1a2b3c4d', 'lan')",
-                rusqlite::params![Utc::now(), connexion.to_string()],
+                 VALUES (?1, ?2, 'customers', '[\"email\"]', 5, 'anthropic-1a2b3c4d', 'lan')",
+                rusqlite::params![Utc::now(), connection.to_string()],
             )?;
             Ok(())
         })
         .expect("row written outside Oxyn");
-    let relue = &toutes(&store, connexion)[0].record;
-    assert_eq!(relue.reach, EgressReach::Unresolved);
-    assert!(relue.reach.leaves_machine());
+    let read_back = &all_of_them(&store, connection)[0].record;
+    assert_eq!(read_back.reach, EgressReach::Unresolved);
+    assert!(read_back.reach.leaves_machine());
 }

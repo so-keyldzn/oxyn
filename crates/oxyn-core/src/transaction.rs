@@ -33,15 +33,15 @@ mod tests {
 
     #[test]
     fn states_travel_in_snake_case() {
-        for (etat, attendu) in [
+        for (state, expected) in [
             (TransactionState::Idle, "\"idle\""),
             (TransactionState::Open, "\"open\""),
             (TransactionState::Unknown, "\"unknown\""),
         ] {
-            let json = serde_json::to_string(&etat).expect("serialization");
-            assert_eq!(json, attendu);
-            let relu: TransactionState = serde_json::from_str(&json).expect("deserialization");
-            assert_eq!(relu, etat);
+            let json = serde_json::to_string(&state).expect("serialization");
+            assert_eq!(json, expected);
+            let read_back: TransactionState = serde_json::from_str(&json).expect("deserialization");
+            assert_eq!(read_back, state);
         }
     }
 }

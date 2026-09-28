@@ -26,31 +26,31 @@ MESSAGE = (
 )
 
 
-def _marqueur(identifiant: str) -> Path:
-    sur = re.sub(r"[^A-Za-z0-9_.-]", "_", identifiant)[:80] or "session"
-    return Path(tempfile.gettempdir()) / f"oxyn-rappel-qualite-{sur}"
+def _marker(identifier: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", identifier)[:80] or "session"
+    return Path(tempfile.gettempdir()) / f"oxyn-rappel-qualite-{safe_id}"
 
 
-def principal() -> None:
-    evenement = p.lire_evenement()
-    identifiant = str(evenement.get("session_id") or "")
-    if not identifiant:
+def main() -> None:
+    event = p.read_event()
+    identifier = str(event.get("session_id") or "")
+    if not identifier:
         p.laisser_passer()
 
-    marqueur = _marqueur(identifiant)
-    if marqueur.exists():
+    marker = _marker(identifier)
+    if marker.exists():
         p.laisser_passer()
     try:
-        marqueur.touch()
+        marker.touch()
     except OSError:
         p.laisser_passer()
 
-    p.message_systeme(MESSAGE)
+    p.system_message(MESSAGE)
 
 
 if __name__ == "__main__":
     try:
-        principal()
+        main()
     except SystemExit:
         raise
     except Exception:

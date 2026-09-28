@@ -48,7 +48,7 @@ impl Documents<'_> {
             if let Some((owner, deleted)) = prior {
                 if owner != workspace.to_string() { return Err(invalid("document belongs to another workspace")); }
                 if deleted { return Err(invalid("document was deleted; save a new copy")); }
-                let current = transaction.query_row(&format!("{SELECT_COLONNES} WHERE id=?1"), [update.document.to_string()], |row| Ok(depuis_ligne(row)))??;
+                let current = transaction.query_row(&format!("{SELECT_COLUMNS} WHERE id=?1"), [update.document.to_string()], |row| Ok(from_row(row)))??;
                 if update.expected_revision.is_some_and(|expected| expected != current.revision) { return Err(invalid("document revision changed; preserve a new copy")); }
                 if current.connection != update.connection || current.language != update.language { return Err(invalid("document connection or language changed; save a new copy")); }
                 if current.revision == update.revision && (current.content != update.text || current.title != update.title || current.is_open != update.is_open) {
@@ -69,7 +69,7 @@ impl Documents<'_> {
                 transaction.execute("INSERT INTO documents (id,workspace_id,title,language,content,connection_id,created_at,updated_at,revision,saved_revision,is_saved,is_open,saved_content,saved_title,provenance)
                     VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,?10,?11,?12,?13,?14)", params![update.document.to_string(), workspace.to_string(), update.title, language, update.text, update.connection.map(|id| id.to_string()), Utc::now(), revision, if update.save_named { revision } else { 0 }, update.save_named, update.is_open, update.save_named.then_some(&update.text), update.save_named.then_some(&update.title), provenance])?;
             }
-            let document = transaction.query_row(&format!("{SELECT_COLONNES} WHERE id=?1"), [update.document.to_string()], |row| Ok(depuis_ligne(row)))??;
+            let document = transaction.query_row(&format!("{SELECT_COLUMNS} WHERE id=?1"), [update.document.to_string()], |row| Ok(from_row(row)))??;
             transaction.commit()?;
             Ok(document)
         })
@@ -117,7 +117,7 @@ impl Documents<'_> {
         }
         self.store.with_connection_cancellable(cancel, |connection| {
             let transaction = connection.unchecked_transaction()?;
-            let current = transaction.query_row(&format!("{SELECT_COLONNES} WHERE id=?1 AND workspace_id=?2 AND is_deleted=0"), params![document.to_string(), workspace.to_string()], |row| Ok(depuis_ligne(row))).optional()?.transpose()?;
+            let current = transaction.query_row(&format!("{SELECT_COLUMNS} WHERE id=?1 AND workspace_id=?2 AND is_deleted=0"), params![document.to_string(), workspace.to_string()], |row| Ok(from_row(row))).optional()?.transpose()?;
             let Some(current) = current else {
                 let exists: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM documents WHERE id=?1)", [document.to_string()], |row| row.get(0))?;
                 if exists || expected.is_some_and(|revision| revision != 0) || (!discard && !delete) { return Err(invalid("document is not in the expected state")); }

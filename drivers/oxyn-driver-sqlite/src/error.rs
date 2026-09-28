@@ -326,7 +326,7 @@ mod tests {
 
     use super::*;
 
-    fn echec(code: ErrorCode) -> rusqlite::Error {
+    fn failure_with(code: ErrorCode) -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(
             ffi::Error {
                 code,
@@ -338,34 +338,37 @@ mod tests {
 
     /// An engine failure whose message quotes a bound value, as
     /// `RAISE(ABORT, 'balance: ' || NEW.amount)` does.
-    fn echec_bavard() -> rusqlite::Error {
+    fn chatty_failure() -> rusqlite::Error {
         rusqlite::Error::SqliteFailure(
             ffi::Error {
                 code: ErrorCode::ConstraintViolation,
                 // `SQLITE_CONSTRAINT_TRIGGER`.
                 extended_code: 1_811,
             },
-            Some("balance: S3NT1NELLE-42".to_owned()),
+            Some("balance: S3NT1N3L-42".to_owned()),
         )
     }
 
     #[test]
     fn a_lock_is_transient_a_syntax_error_is_not() {
         assert_eq!(
-            classify(&echec(ErrorCode::DatabaseBusy)),
+            classify(&failure_with(ErrorCode::DatabaseBusy)),
             ErrorClass::Transient
         );
         assert_eq!(
-            classify(&echec(ErrorCode::DatabaseLocked)),
+            classify(&failure_with(ErrorCode::DatabaseLocked)),
             ErrorClass::Transient
         );
-        assert_eq!(classify(&echec(ErrorCode::Unknown)), ErrorClass::Permanent);
         assert_eq!(
-            classify(&echec(ErrorCode::ConstraintViolation)),
+            classify(&failure_with(ErrorCode::Unknown)),
             ErrorClass::Permanent
         );
         assert_eq!(
-            classify(&echec(ErrorCode::DatabaseCorrupt)),
+            classify(&failure_with(ErrorCode::ConstraintViolation)),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            classify(&failure_with(ErrorCode::DatabaseCorrupt)),
             ErrorClass::Permanent,
             "a corrupted database is not repaired by retrying"
         );
@@ -373,7 +376,10 @@ mod tests {
 
     #[test]
     fn an_interrupted_read_is_a_cancellation() {
-        let err = engine(echec(ErrorCode::OperationInterrupted), Effect::ReadOnly);
+        let err = engine(
+            failure_with(ErrorCode::OperationInterrupted),
+            Effect::ReadOnly,
+        );
         assert!(err.is_cancelled(), "{err:?}");
         assert!(!err.is_retryable());
     }
@@ -382,7 +388,10 @@ mod tests {
     fn an_interrupted_write_is_ambiguous_and_is_not_retried() {
         // I-13: the server may have applied it. Replaying creates a silent
         // duplicate in the user's data.
-        let err = engine(echec(ErrorCode::OperationInterrupted), Effect::Mutating);
+        let err = engine(
+            failure_with(ErrorCode::OperationInterrupted),
+            Effect::Mutating,
+        );
         assert_eq!(err.class(), ErrorClass::Ambiguous, "{err:?}");
         assert!(!err.is_retryable());
         assert!(
@@ -394,22 +403,22 @@ mod tests {
     #[test]
     fn an_offending_path_never_comes_out_in_the_message() {
         // I-03: the file path is a connection parameter value.
-        let secret = PathBuf::from("/Users/quelqu-un/bases/clients-2026.sqlite");
+        let secret = PathBuf::from("/Users/someone/databases/clients-2026.sqlite");
         let err = engine(
             rusqlite::Error::InvalidPath(secret.clone()),
             Effect::ReadOnly,
         );
-        let rendu = format!("{err}");
-        assert!(!rendu.contains("clients-2026"), "path leaked: {rendu}");
-        assert!(!rendu.contains("quelqu-un"), "path leaked: {rendu}");
+        let shown = format!("{err}");
+        assert!(!shown.contains("clients-2026"), "path leaked: {shown}");
+        assert!(!shown.contains("someone"), "path leaked: {shown}");
 
-        let rendu = format!("{}", open(rusqlite::Error::InvalidPath(secret)));
-        assert!(!rendu.contains("clients-2026"), "path leaked: {rendu}");
+        let shown = format!("{}", open(rusqlite::Error::InvalidPath(secret)));
+        assert!(!shown.contains("clients-2026"), "path leaked: {shown}");
     }
 
     #[test]
     fn an_engine_error_carries_the_driver_name() {
-        let err = engine(echec(ErrorCode::Unknown), Effect::ReadOnly);
+        let err = engine(failure_with(ErrorCode::Unknown), Effect::ReadOnly);
         assert!(err.to_string().contains("sqlite"), "{err}");
         assert!(err.to_string().contains("engine message"), "{err}");
     }
@@ -423,19 +432,19 @@ mod tests {
             resolved: "int64",
             found: "blob",
         };
-        let rendu = err.to_string();
-        assert!(rendu.contains("#3"), "{rendu}");
-        assert!(rendu.contains("int64") && rendu.contains("blob"), "{rendu}");
+        let shown = err.to_string();
+        assert!(shown.contains("#3"), "{shown}");
+        assert!(shown.contains("int64") && shown.contains("blob"), "{shown}");
     }
 
     #[test]
     fn the_engine_message_is_withheld_as_soon_as_a_value_was_bound() {
         // I-03: this message is displayed, logged and persisted by the history.
         // SQLite copies into it what was just bound.
-        let err = engine_bound(echec_bavard(), Effect::Mutating, Bound::Caller);
-        for rendu in [format!("{err}"), format!("{err:?}")] {
-            assert!(!rendu.contains("S3NT1NELLE-42"), "bound value: {rendu}");
-            assert!(!rendu.contains("balance"), "engine message: {rendu}");
+        let err = engine_bound(chatty_failure(), Effect::Mutating, Bound::Caller);
+        for shown in [format!("{err}"), format!("{err:?}")] {
+            assert!(!shown.contains("S3NT1N3L-42"), "bound value: {shown}");
+            assert!(!shown.contains("balance"), "engine message: {shown}");
         }
         // The withdrawal is stated, rather than suggesting a silent error.
         assert!(err.to_string().contains("withheld"), "{err}");
@@ -447,11 +456,11 @@ mod tests {
     fn without_bound_value_the_engine_message_passes_unchanged() {
         // Oxyn's audience reads its engine's messages; a reassuring paraphrase would
         // be a defect.
-        let err = engine_bound(echec_bavard(), Effect::Mutating, Bound::Internal);
-        assert!(err.to_string().contains("balance: S3NT1NELLE-42"), "{err}");
+        let err = engine_bound(chatty_failure(), Effect::Mutating, Bound::Internal);
+        assert!(err.to_string().contains("balance: S3NT1N3L-42"), "{err}");
         assert_eq!(
             err.to_string(),
-            engine(echec_bavard(), Effect::Mutating).to_string(),
+            engine(chatty_failure(), Effect::Mutating).to_string(),
             "`engine` is the case without bound value"
         );
     }
@@ -460,37 +469,41 @@ mod tests {
     fn withholding_the_message_changes_neither_family_nor_cancellation() {
         // The class is read from the result code, taken before dropping the
         // original error: withholding it must move nothing.
-        for (code, attendue) in [
+        for (code, expected_class) in [
             (ErrorCode::DatabaseBusy, ErrorClass::Transient),
             (ErrorCode::ConstraintViolation, ErrorClass::Permanent),
         ] {
-            let err = engine_bound(echec(code), Effect::Mutating, Bound::Caller);
-            assert_eq!(err.class(), attendue, "{err:?}");
+            let err = engine_bound(failure_with(code), Effect::Mutating, Bound::Caller);
+            assert_eq!(err.class(), expected_class, "{err:?}");
         }
 
-        let lecture = engine_bound(
-            echec(ErrorCode::OperationInterrupted),
+        let interrupted_read = engine_bound(
+            failure_with(ErrorCode::OperationInterrupted),
             Effect::ReadOnly,
             Bound::Caller,
         );
-        assert!(lecture.is_cancelled(), "{lecture:?}");
+        assert!(interrupted_read.is_cancelled(), "{interrupted_read:?}");
 
         // I-13: an interrupted write stays ambiguous, hence not replayable.
-        let ecriture = engine_bound(
-            echec(ErrorCode::OperationInterrupted),
+        let interrupted_write = engine_bound(
+            failure_with(ErrorCode::OperationInterrupted),
             Effect::Mutating,
             Bound::Caller,
         );
-        assert_eq!(ecriture.class(), ErrorClass::Ambiguous, "{ecriture:?}");
-        assert!(!ecriture.is_retryable());
-        assert!(!format!("{ecriture:?}").contains("engine message"));
+        assert_eq!(
+            interrupted_write.class(),
+            ErrorClass::Ambiguous,
+            "{interrupted_write:?}"
+        );
+        assert!(!interrupted_write.is_retryable());
+        assert!(!format!("{interrupted_write:?}").contains("engine message"));
     }
 
     #[test]
     fn a_request_without_parameter_withholds_nothing() {
         assert_eq!(Bound::of(&[]), Bound::Internal);
         assert_eq!(
-            Bound::of(&[ScalarValue::Text("S3NT1NELLE-42".to_owned())]),
+            Bound::of(&[ScalarValue::Text("S3NT1N3L-42".to_owned())]),
             Bound::Caller
         );
     }
@@ -514,19 +527,19 @@ mod tests {
         );
         assert!(usage.to_string().contains('3'));
 
-        let moteur = hide(
+        let engine_failure = hide(
             rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(19),
-                Some("CHECK constraint failed: S3NT1NELLE-42".to_owned()),
+                Some("CHECK constraint failed: S3NT1N3L-42".to_owned()),
             ),
             Some(rusqlite::ffi::Error::new(19)),
             Bound::Caller,
         );
-        let rendu = format!("{moteur} {moteur:?}");
+        let shown = format!("{engine_failure} {engine_failure:?}");
         assert!(
-            !rendu.contains("S3NT1NELLE"),
-            "the engine text does not come out: {rendu}"
+            !shown.contains("S3NT1N3L"),
+            "the engine text does not come out: {shown}"
         );
-        assert!(rendu.contains("19"), "the result code survives: {rendu}");
+        assert!(shown.contains("19"), "the result code survives: {shown}");
     }
 }

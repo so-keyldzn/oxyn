@@ -89,7 +89,7 @@ pub(crate) trait EventDecoder: Send {
     /// The caller cancelled.
     fn cancel(&mut self, out: &mut Vec<ChatEvent>);
 
-    /// Le transport a rompu en cours de flux.
+    /// The transport broke mid-stream.
     fn transport_error(&mut self, detail: String, out: &mut Vec<ChatEvent>);
 }
 
@@ -125,7 +125,7 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
     cancel: CancelToken,
     key: Option<ApiKey>,
 ) -> BoxStream<'static, ChatEvent> {
-    let etat = StreamState {
+    let state = StreamState {
         bytes,
         sse: SseDecoder::new(),
         decoder,
@@ -135,80 +135,83 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
         finished: false,
     };
 
-    futures::stream::unfold(etat, |mut etat| async move {
+    futures::stream::unfold(state, |mut state| async move {
         loop {
-            if let Some(evenement) = etat.pending.pop_front() {
-                return Some((evenement, etat));
+            if let Some(event) = state.pending.pop_front() {
+                return Some((event, state));
             }
-            if etat.finished {
+            if state.finished {
                 return None;
             }
 
-            let mut sorties = Vec::new();
+            let mut outputs = Vec::new();
 
             // Check before the wait: an already cancelled token must not make
             // one more chunk be read.
-            if etat.cancel.is_cancelled() {
-                etat.decoder.cancel(&mut sorties);
-                etat.finished = true;
-                let cle = etat.key.as_ref();
-                etat.pending
-                    .extend(sorties.into_iter().map(|evenement| redact(evenement, cle)));
+            if state.cancel.is_cancelled() {
+                state.decoder.cancel(&mut outputs);
+                state.finished = true;
+                let scrub_key = state.key.as_ref();
+                state
+                    .pending
+                    .extend(outputs.into_iter().map(|event| redact(event, scrub_key)));
                 continue;
             }
 
-            let pas = {
-                let attente = pin!(etat.cancel.cancelled());
-                let suivant = pin!(etat.bytes.next());
-                match select(attente, suivant).await {
+            let step = {
+                let pending = pin!(state.cancel.cancelled());
+                let next = pin!(state.bytes.next());
+                match select(pending, next).await {
                     Either::Left(((), _)) => Step::Cancelled,
-                    Either::Right((morceau, _)) => Step::Chunk(morceau),
+                    Either::Right((chunk, _)) => Step::Chunk(chunk),
                 }
             };
 
-            match pas {
+            match step {
                 Step::Cancelled => {
                     // The read future is dropped here. No resumption is
                     // attempted: an SSE decoder that lost bytes is out of
                     // sync, and a generation is restarted, it is not
                     // resumed.
-                    etat.decoder.cancel(&mut sorties);
-                    etat.finished = true;
+                    state.decoder.cancel(&mut outputs);
+                    state.finished = true;
                 }
                 Step::Chunk(None) => {
-                    etat.sse.finish();
-                    drain(&mut etat, &mut sorties);
-                    etat.decoder.finish(&mut sorties);
-                    etat.finished = true;
+                    state.sse.finish();
+                    drain(&mut state, &mut outputs);
+                    state.decoder.finish(&mut outputs);
+                    state.finished = true;
                 }
                 Step::Chunk(Some(Err(detail))) => {
-                    etat.decoder.transport_error(detail, &mut sorties);
-                    etat.finished = true;
+                    state.decoder.transport_error(detail, &mut outputs);
+                    state.finished = true;
                 }
-                Step::Chunk(Some(Ok(morceau))) => {
+                Step::Chunk(Some(Ok(chunk))) => {
                     // The accumulation is taken out of the `match`: a borrow
                     // taken in the judged expression would stay alive during
                     // the arms, which borrow the state again.
-                    let accumulation = etat.sse.push(&morceau);
+                    let accumulation = state.sse.push(&chunk);
                     match accumulation {
                         Ok(()) => {
-                            drain(&mut etat, &mut sorties);
-                            if etat.decoder.is_done() {
-                                etat.finished = true;
+                            drain(&mut state, &mut outputs);
+                            if state.decoder.is_done() {
+                                state.finished = true;
                             }
                         }
-                        Err(depassement) => {
-                            etat.decoder
-                                .transport_error(depassement.to_string(), &mut sorties);
-                            etat.finished = true;
+                        Err(overflow) => {
+                            state
+                                .decoder
+                                .transport_error(overflow.to_string(), &mut outputs);
+                            state.finished = true;
                         }
                     }
                 }
             }
 
-            let cle = etat.key.as_ref();
-            etat.pending
-                .extend(sorties.into_iter().map(|evenement| redact(evenement, cle)));
+            let scrub_key = state.key.as_ref();
+            state
+                .pending
+                .extend(outputs.into_iter().map(|event| redact(event, scrub_key)));
         }
     })
     .boxed()
@@ -218,24 +221,24 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
 ///
 /// Only [`ChatEvent::Error`] becomes a displayed message: the model's text is
 /// content, not a diagnostic, and it does not have to be rewritten.
-fn redact(evenement: ChatEvent, cle: Option<&ApiKey>) -> ChatEvent {
-    match evenement {
-        ChatEvent::Error(message) => ChatEvent::Error(sanitize(&message, cle)),
-        autre => autre,
+fn redact(event: ChatEvent, key: Option<&ApiKey>) -> ChatEvent {
+    match event {
+        ChatEvent::Error(message) => ChatEvent::Error(sanitize(&message, key)),
+        other => other,
     }
 }
 
 /// Drains the SSE decoder into the protocol decoder.
-fn drain<D: EventDecoder>(etat: &mut StreamState<D>, sorties: &mut Vec<ChatEvent>) {
+fn drain<D: EventDecoder>(state: &mut StreamState<D>, outputs: &mut Vec<ChatEvent>) {
     loop {
         // `let … else` rather than `while let`: the borrow of the SSE decoder
         // ends at the end of the statement, before the protocol decoder is
         // borrowed in turn.
-        let Some(trame) = etat.sse.next_frame() else {
+        let Some(frame) = state.sse.next_frame() else {
             return;
         };
-        etat.decoder.on_frame(&trame, sorties);
-        if etat.decoder.is_done() {
+        state.decoder.on_frame(&frame, outputs);
+        if state.decoder.is_done() {
             return;
         }
     }
@@ -304,7 +307,7 @@ mod tests {
         }
     }
 
-    fn morceaux(parts: &[&'static str]) -> ByteStream {
+    fn chunks(parts: &[&'static str]) -> ByteStream {
         let items: Vec<std::result::Result<Bytes, String>> = parts
             .iter()
             .map(|p| Ok(Bytes::from_static(p.as_bytes())))
@@ -312,22 +315,22 @@ mod tests {
         Box::pin(futures::stream::iter(items))
     }
 
-    fn collecter(flux: BoxStream<'static, ChatEvent>) -> Vec<ChatEvent> {
+    fn collect(flux: BoxStream<'static, ChatEvent>) -> Vec<ChatEvent> {
         futures::executor::block_on(flux.collect())
     }
 
-    fn jouer(parts: &[&'static str], jeton: CancelToken) -> Vec<ChatEvent> {
-        collecter(events_stream(morceaux(parts), Echo::default(), jeton, None))
+    fn play(parts: &[&'static str], token: CancelToken) -> Vec<ChatEvent> {
+        collect(events_stream(chunks(parts), Echo::default(), token, None))
     }
 
     #[test]
     fn a_complete_stream_becomes_events() {
-        let evenements = jouer(
+        let events = play(
             &["data: a\n\n", "data: b\n\n", "data: fin\n\n"],
             CancelToken::new(),
         );
         assert_eq!(
-            evenements,
+            events,
             vec![
                 ChatEvent::TextDelta("a".to_owned()),
                 ChatEvent::TextDelta("b".to_owned()),
@@ -342,9 +345,9 @@ mod tests {
     /// decoder's business, tested in each protocol module.
     #[test]
     fn a_stream_closed_without_end_marker_still_ends() {
-        let evenements = jouer(&["data: a\n\n"], CancelToken::new());
+        let events = play(&["data: a\n\n"], CancelToken::new());
         assert_eq!(
-            evenements.last(),
+            events.last(),
             Some(&ChatEvent::Done {
                 stop_reason: StopReason::Unspecified
             })
@@ -353,24 +356,24 @@ mod tests {
 
     #[test]
     fn an_empty_stream_still_produces_an_end() {
-        let evenements = jouer(&[], CancelToken::new());
-        assert_eq!(evenements.len(), 1, "{evenements:?}");
-        assert!(evenements[0].is_terminal());
+        let events = play(&[], CancelToken::new());
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(events[0].is_terminal());
     }
 
     #[test]
     fn done_is_emitted_only_once_even_with_frames_after() {
-        let evenements = jouer(&["data: fin\n\n", "data: fantome\n\n"], CancelToken::new());
-        assert_eq!(evenements.len(), 1, "{evenements:?}");
-        assert!(evenements[0].is_terminal());
+        let events = play(&["data: fin\n\n", "data: fantome\n\n"], CancelToken::new());
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(events[0].is_terminal());
     }
 
     #[test]
     fn an_already_cancelled_token_reads_no_chunk() {
-        let jeton = CancelToken::new();
-        jeton.cancel();
+        let token = CancelToken::new();
+        token.cancel();
         assert_eq!(
-            jouer(&["data: a\n\n"], jeton),
+            play(&["data: a\n\n"], token),
             vec![ChatEvent::Done {
                 stop_reason: StopReason::Cancelled
             }]
@@ -379,23 +382,18 @@ mod tests {
 
     #[test]
     fn a_cancellation_mid_stream_stops_the_reading() {
-        let jeton = CancelToken::new();
-        let declencheur = jeton.clone();
-        let octets = futures::stream::iter(vec!["data: a\n\n", "data: b\n\n"]).map(
-            move |morceau| -> std::result::Result<Bytes, String> {
-                declencheur.cancel();
-                Ok(Bytes::from_static(morceau.as_bytes()))
+        let token = CancelToken::new();
+        let trigger = token.clone();
+        let bytes = futures::stream::iter(vec!["data: a\n\n", "data: b\n\n"]).map(
+            move |chunk| -> std::result::Result<Bytes, String> {
+                trigger.cancel();
+                Ok(Bytes::from_static(chunk.as_bytes()))
             },
         );
 
-        let evenements = collecter(events_stream(
-            Box::pin(octets),
-            Echo::default(),
-            jeton,
-            None,
-        ));
+        let events = collect(events_stream(Box::pin(bytes), Echo::default(), token, None));
         assert_eq!(
-            evenements,
+            events,
             vec![
                 ChatEvent::TextDelta("a".to_owned()),
                 ChatEvent::Done {
@@ -408,23 +406,20 @@ mod tests {
 
     #[test]
     fn a_transport_break_ends_cleanly() {
-        let octets = futures::stream::iter(vec![
+        let bytes = futures::stream::iter(vec![
             Ok(Bytes::from_static(b"data: a\n\n")),
             Err("lost the connection while receiving the stream".to_owned()),
         ]);
-        let evenements = collecter(events_stream(
-            Box::pin(octets),
+        let events = collect(events_stream(
+            Box::pin(bytes),
             Echo::default(),
             CancelToken::new(),
             None,
         ));
-        assert_eq!(
-            evenements.first(),
-            Some(&ChatEvent::TextDelta("a".to_owned()))
-        );
+        assert_eq!(events.first(), Some(&ChatEvent::TextDelta("a".to_owned())));
         assert!(
-            evenements.last().is_some_and(ChatEvent::is_terminal),
-            "{evenements:?}"
+            events.last().is_some_and(ChatEvent::is_terminal),
+            "{events:?}"
         );
     }
 
@@ -433,21 +428,21 @@ mod tests {
         // A faulty server that never sends a line ending must not make memory
         // swell without limit: the decoder bounds it, and the stream ends on
         // an error followed by `Done`.
-        let deluge: Vec<std::result::Result<Bytes, String>> = vec![Ok(Bytes::from(vec![
+        let flood: Vec<std::result::Result<Bytes, String>> = vec![Ok(Bytes::from(vec![
             b'x';
             crate::sse::DEFAULT_BUFFER_LIMIT
                 + 1
         ]))];
-        let evenements = collecter(events_stream(
-            Box::pin(futures::stream::iter(deluge)),
+        let events = collect(events_stream(
+            Box::pin(futures::stream::iter(flood)),
             Echo::default(),
             CancelToken::new(),
             None,
         ));
         assert!(
-            evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
-            "{evenements:?}"
+            events.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "{events:?}"
         );
-        assert!(evenements.last().is_some_and(ChatEvent::is_terminal));
+        assert!(events.last().is_some_and(ChatEvent::is_terminal));
     }
 }

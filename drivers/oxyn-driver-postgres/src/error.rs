@@ -182,11 +182,11 @@ fn map_bound_error(
     if sqlstate_of(&err).as_deref() == Some(SQLSTATE_QUERY_CANCELED) {
         return OxynError::Cancelled;
     }
-    if let Some(erreur) = as_config_error(&err) {
-        return erreur;
+    if let Some(error) = as_config_error(&err) {
+        return error;
     }
-    let classe = classify(&err, intent);
-    OxynError::driver(driver.clone(), classe, wrap(err, bound))
+    let class = classify(&err, intent);
+    OxynError::driver(driver.clone(), class, wrap(err, bound))
 }
 
 /// Translates an `sqlx` error that occurred **while opening a session**.
@@ -196,8 +196,8 @@ fn map_bound_error(
 /// is fixed in the form, the other is not.
 #[must_use]
 pub(crate) fn map_connect_error(err: &sqlx::Error) -> OxynError {
-    if let Some(erreur) = as_config_error(err) {
-        return erreur;
+    if let Some(error) = as_config_error(err) {
+        return error;
     }
     match sqlstate_of(err) {
         Some(code) if code.starts_with(SQLSTATE_CLASS_AUTHORIZATION) => {
@@ -258,8 +258,8 @@ fn classify_sqlstate(code: Option<&str>, transport: ErrorClass) -> ErrorClass {
         // The server stopped midway: like a cut.
         SQLSTATE_ADMIN_SHUTDOWN | SQLSTATE_CRASH_SHUTDOWN => transport,
 
-        autre if autre.starts_with(SQLSTATE_CLASS_CONNECTION) => transport,
-        autre if autre.starts_with(SQLSTATE_CLASS_RESOURCES) => ErrorClass::Transient,
+        other if other.starts_with(SQLSTATE_CLASS_CONNECTION) => transport,
+        other if other.starts_with(SQLSTATE_CLASS_RESOURCES) => ErrorClass::Transient,
 
         // Syntax, missing object, violated constraint, rights, read-only
         // transaction: display it, do not retry.
@@ -291,7 +291,7 @@ pub(crate) fn sqlstate_of(err: &sqlx::Error) -> Option<String> {
 fn message_of(err: &sqlx::Error) -> String {
     match err {
         sqlx::Error::Database(base) => base.message().to_owned(),
-        autre => autre.to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -369,20 +369,20 @@ mod tests {
     /// `sqlx` does not allow building a `PgDatabaseError` from outside; the
     /// trait is therefore implemented, which is enough for `classify`.
     #[derive(Debug)]
-    struct BaseFactice {
+    struct FakeDatabase {
         code: &'static str,
         message: &'static str,
     }
 
-    impl std::fmt::Display for BaseFactice {
+    impl std::fmt::Display for FakeDatabase {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str(self.message)
         }
     }
 
-    impl std::error::Error for BaseFactice {}
+    impl std::error::Error for FakeDatabase {}
 
-    impl DatabaseError for BaseFactice {
+    impl DatabaseError for FakeDatabase {
         fn message(&self) -> &str {
             self.message
         }
@@ -408,14 +408,14 @@ mod tests {
         }
     }
 
-    fn erreur_serveur(code: &'static str) -> sqlx::Error {
-        sqlx::Error::Database(Box::new(BaseFactice {
+    fn server_error(code: &'static str) -> sqlx::Error {
+        sqlx::Error::Database(Box::new(FakeDatabase {
             code,
             message: "fake error",
         }))
     }
 
-    fn coupure() -> sqlx::Error {
+    fn cut() -> sqlx::Error {
         sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset))
     }
 
@@ -424,7 +424,7 @@ mod tests {
         // It is the most important test of the module: classified transient,
         // this error produces a silent duplicate in the user's data (I-13).
         assert_eq!(
-            classify(&coupure(), StatementIntent::Write),
+            classify(&cut(), StatementIntent::Write),
             ErrorClass::Ambiguous
         );
         assert!(!ErrorClass::Ambiguous.is_retryable());
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn a_cut_during_a_read_is_transient() {
         assert_eq!(
-            classify(&coupure(), StatementIntent::Read),
+            classify(&cut(), StatementIntent::Read),
             ErrorClass::Transient
         );
     }
@@ -443,7 +443,7 @@ mod tests {
         // `ExecRequest`'s default: a statement no analyzer could classify may
         // write.
         assert_eq!(
-            classify(&coupure(), StatementIntent::Unknown),
+            classify(&cut(), StatementIntent::Unknown),
             ErrorClass::Ambiguous
         );
     }
@@ -451,12 +451,12 @@ mod tests {
     #[test]
     fn a_deadlock_is_retried() {
         assert_eq!(
-            classify(&erreur_serveur(SQLSTATE_DEADLOCK), StatementIntent::Write),
+            classify(&server_error(SQLSTATE_DEADLOCK), StatementIntent::Write),
             ErrorClass::Transient
         );
         assert_eq!(
             classify(
-                &erreur_serveur(SQLSTATE_SERIALIZATION_FAILURE),
+                &server_error(SQLSTATE_SERIALIZATION_FAILURE),
                 StatementIntent::Write
             ),
             ErrorClass::Transient
@@ -467,17 +467,17 @@ mod tests {
     fn a_syntax_error_is_never_retried() {
         // 42601: syntax_error.
         assert_eq!(
-            classify(&erreur_serveur("42601"), StatementIntent::Read),
+            classify(&server_error("42601"), StatementIntent::Read),
             ErrorClass::Permanent
         );
         // 42P01: undefined_table.
         assert_eq!(
-            classify(&erreur_serveur("42P01"), StatementIntent::Read),
+            classify(&server_error("42P01"), StatementIntent::Read),
             ErrorClass::Permanent
         );
         // 23505: unique_violation.
         assert_eq!(
-            classify(&erreur_serveur("23505"), StatementIntent::Write),
+            classify(&server_error("23505"), StatementIntent::Write),
             ErrorClass::Permanent
         );
     }
@@ -486,11 +486,11 @@ mod tests {
     fn a_cut_announced_by_the_server_follows_the_intent() {
         // 08006: connection_failure.
         assert_eq!(
-            classify(&erreur_serveur("08006"), StatementIntent::Read),
+            classify(&server_error("08006"), StatementIntent::Read),
             ErrorClass::Transient
         );
         assert_eq!(
-            classify(&erreur_serveur("08006"), StatementIntent::Write),
+            classify(&server_error("08006"), StatementIntent::Write),
             ErrorClass::Ambiguous
         );
     }
@@ -506,35 +506,38 @@ mod tests {
 
     #[test]
     fn a_cancellation_confirmed_by_the_server_is_not_a_failure() {
-        let erreur = map_exec_error(
+        let error = map_exec_error(
             &DriverId::postgres(),
             StatementIntent::Read,
-            erreur_serveur(SQLSTATE_QUERY_CANCELED),
+            server_error(SQLSTATE_QUERY_CANCELED),
         );
-        assert!(erreur.is_cancelled(), "{erreur:?}");
+        assert!(error.is_cancelled(), "{error:?}");
     }
 
     #[test]
     fn a_credentials_refusal_is_distinguished_from_an_unreachable_server() {
         // 28P01: invalid_password. One is fixed in the form.
-        let refus = map_connect_error(&erreur_serveur("28P01"));
-        assert!(matches!(refus, OxynError::Authentication(_)), "{refus:?}");
-        assert!(refus.is_user_error());
-
-        let injoignable = map_connect_error(&coupure());
+        let refusal = map_connect_error(&server_error("28P01"));
         assert!(
-            matches!(injoignable, OxynError::Connection(_)),
-            "{injoignable:?}"
+            matches!(refusal, OxynError::Authentication(_)),
+            "{refusal:?}"
         );
-        assert!(injoignable.is_retryable());
+        assert!(refusal.is_user_error());
+
+        let unreachable = map_connect_error(&cut());
+        assert!(
+            matches!(unreachable, OxynError::Connection(_)),
+            "{unreachable:?}"
+        );
+        assert!(unreachable.is_retryable());
     }
 
     #[test]
     fn a_missing_database_is_a_configuration_error() {
-        let erreur = map_connect_error(&erreur_serveur("3D000"));
-        assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
+        let error = map_connect_error(&server_error("3D000"));
+        assert!(matches!(error, OxynError::Config(_)), "{error:?}");
         assert!(
-            !erreur.is_retryable(),
+            !error.is_retryable(),
             "replaying will not create the database"
         );
     }
@@ -542,20 +545,20 @@ mod tests {
     #[test]
     fn the_class_crosses_the_wrapping_up_to_the_caller() {
         // The caller reads `ErrorClass`, it does not re-read the message.
-        let erreur = map_exec_error(&DriverId::postgres(), StatementIntent::Write, coupure());
-        assert_eq!(erreur.class(), ErrorClass::Ambiguous);
-        assert!(!erreur.is_retryable());
+        let error = map_exec_error(&DriverId::postgres(), StatementIntent::Write, cut());
+        assert_eq!(error.class(), ErrorClass::Ambiguous);
+        assert!(!error.is_retryable());
     }
 
     #[test]
     fn the_sqlstate_stays_readable_without_parsing_the_message() {
-        let erreur = map_exec_error(
+        let error = map_exec_error(
             &DriverId::postgres(),
             StatementIntent::Read,
-            erreur_serveur("42P01"),
+            server_error("42P01"),
         );
-        let OxynError::Driver { source, .. } = &erreur else {
-            panic!("expected a driver error: {erreur:?}");
+        let OxynError::Driver { source, .. } = &error else {
+            panic!("expected a driver error: {error:?}");
         };
         let postgres = source
             .downcast_ref::<PostgresError>()
@@ -566,26 +569,26 @@ mod tests {
 
     #[test]
     fn a_read_only_transaction_refusal_is_recognized() {
-        assert!(is_read_only_rejection(&erreur_serveur(
+        assert!(is_read_only_rejection(&server_error(
             SQLSTATE_READ_ONLY_TRANSACTION
         )));
-        assert!(!is_read_only_rejection(&erreur_serveur("42601")));
+        assert!(!is_read_only_rejection(&server_error("42601")));
     }
 
     #[test]
     fn a_write_refused_by_the_bounds_names_the_bounds_not_the_rights() {
         // Without this message, the user concludes to a rights defect on their
         // database and goes to see their administrator.
-        let erreur = map_stream_error(
+        let error = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Write,
             true,
             Bound::Internal,
-            erreur_serveur(SQLSTATE_READ_ONLY_TRANSACTION),
+            server_error(SQLSTATE_READ_ONLY_TRANSACTION),
         );
-        assert!(matches!(erreur, OxynError::Query(_)), "{erreur:?}");
-        assert!(erreur.to_string().contains("read-only"), "{erreur}");
-        assert!(erreur.is_user_error());
+        assert!(matches!(error, OxynError::Query(_)), "{error:?}");
+        assert!(error.to_string().contains("read-only"), "{error}");
+        assert!(error.is_user_error());
     }
 
     #[test]
@@ -593,22 +596,22 @@ mod tests {
         // The database can be read-only for its own reasons — a standby, a
         // `default_transaction_read_only`. It is then not for Oxyn to claim the
         // refusal.
-        let erreur = map_stream_error(
+        let error = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Write,
             false,
             Bound::Internal,
-            erreur_serveur(SQLSTATE_READ_ONLY_TRANSACTION),
+            server_error(SQLSTATE_READ_ONLY_TRANSACTION),
         );
-        assert!(matches!(erreur, OxynError::Driver { .. }), "{erreur:?}");
+        assert!(matches!(error, OxynError::Driver { .. }), "{error:?}");
     }
 
     /// A server error whose primary message quotes a bound value, as an
     /// invalid cast of `$1` does.
-    fn erreur_bavarde() -> sqlx::Error {
-        sqlx::Error::Database(Box::new(BaseFactice {
+    fn chatty_error() -> sqlx::Error {
+        sqlx::Error::Database(Box::new(FakeDatabase {
             code: "22P02",
-            message: "invalid input syntax for type integer: \"S3NT1NELLE-42\"",
+            message: "invalid input syntax for type integer: \"S3NT1N3L-42\"",
         }))
     }
 
@@ -617,22 +620,22 @@ mod tests {
         // I-03: this message is displayed, and persisted by
         // `HistoryRecord::failed` and `JournalRecord::failed`, which call
         // `error.to_string()`.
-        let erreur = map_stream_error(
+        let error = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Read,
             false,
             Bound::Caller,
-            erreur_bavarde(),
+            chatty_error(),
         );
-        for rendu in [format!("{erreur}"), format!("{erreur:?}")] {
-            assert!(!rendu.contains("S3NT1NELLE-42"), "bound value: {rendu}");
-            assert!(!rendu.contains("invalid input syntax"), "{rendu}");
+        for rendered in [format!("{error}"), format!("{error:?}")] {
+            assert!(!rendered.contains("S3NT1N3L-42"), "bound value: {rendered}");
+            assert!(!rendered.contains("invalid input syntax"), "{rendered}");
         }
-        assert!(erreur.to_string().contains("withheld"), "{erreur}");
+        assert!(error.to_string().contains("withheld"), "{error}");
         // The SQLSTATE survives: it is a code, it quotes nothing.
-        assert!(erreur.to_string().contains("22P02"), "{erreur}");
-        let OxynError::Driver { source, .. } = &erreur else {
-            panic!("expected a driver error: {erreur:?}");
+        assert!(error.to_string().contains("22P02"), "{error}");
+        let OxynError::Driver { source, .. } = &error else {
+            panic!("expected a driver error: {error:?}");
         };
         let postgres = source
             .downcast_ref::<PostgresError>()
@@ -644,18 +647,18 @@ mod tests {
     fn without_bound_value_the_server_message_passes_unchanged() {
         // Oxyn's audience reads PostgreSQL's messages: a reassuring paraphrase
         // would be a defect.
-        let erreur = map_stream_error(
+        let error = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Read,
             false,
             Bound::Internal,
-            erreur_bavarde(),
+            chatty_error(),
         );
         assert!(
-            erreur
+            error
                 .to_string()
                 .contains("invalid input syntax for type integer"),
-            "{erreur}"
+            "{error}"
         );
     }
 
@@ -663,54 +666,54 @@ mod tests {
     fn withholding_the_message_changes_neither_the_family_nor_the_cancellation() {
         // The family is read from the SQLSTATE and the intent, not from the
         // message.
-        let coupure_en_ecriture = map_stream_error(
+        let cut_while_writing = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Write,
             false,
             Bound::Caller,
-            coupure(),
+            cut(),
         );
-        assert_eq!(coupure_en_ecriture.class(), ErrorClass::Ambiguous);
-        assert!(!coupure_en_ecriture.is_retryable(), "I-13");
+        assert_eq!(cut_while_writing.class(), ErrorClass::Ambiguous);
+        assert!(!cut_while_writing.is_retryable(), "I-13");
 
-        let interblocage = map_stream_error(
+        let deadlock = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Write,
             false,
             Bound::Caller,
-            erreur_serveur(SQLSTATE_DEADLOCK),
+            server_error(SQLSTATE_DEADLOCK),
         );
-        assert_eq!(interblocage.class(), ErrorClass::Transient);
+        assert_eq!(deadlock.class(), ErrorClass::Transient);
 
-        let annulee = map_stream_error(
+        let cancelled = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Read,
             false,
             Bound::Caller,
-            erreur_serveur(SQLSTATE_QUERY_CANCELED),
+            server_error(SQLSTATE_QUERY_CANCELED),
         );
-        assert!(annulee.is_cancelled(), "{annulee:?}");
+        assert!(cancelled.is_cancelled(), "{cancelled:?}");
     }
 
     #[test]
     fn an_encoder_error_is_withheld_like_the_server_s() {
         // The encoder composes its message from the value it refused.
-        let erreur = map_stream_error(
+        let error = map_stream_error(
             &DriverId::postgres(),
             StatementIntent::Read,
             false,
             Bound::Caller,
-            sqlx::Error::Encode("`S3NT1NELLE-42` is out of range".into()),
+            sqlx::Error::Encode("`S3NT1N3L-42` is out of range".into()),
         );
-        assert!(!erreur.to_string().contains("S3NT1NELLE-42"), "{erreur}");
-        assert!(erreur.to_string().contains("withheld"), "{erreur}");
+        assert!(!error.to_string().contains("S3NT1N3L-42"), "{error}");
+        assert!(error.to_string().contains("withheld"), "{error}");
     }
 
     #[test]
     fn a_request_without_parameters_withholds_nothing() {
         assert_eq!(Bound::of(&[]), Bound::Internal);
         assert_eq!(
-            Bound::of(&[oxyn_core::ScalarValue::Text("S3NT1NELLE-42".to_owned())]),
+            Bound::of(&[oxyn_core::ScalarValue::Text("S3NT1N3L-42".to_owned())]),
             Bound::Caller
         );
     }

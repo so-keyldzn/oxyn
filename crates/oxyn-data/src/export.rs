@@ -74,15 +74,15 @@ impl ExportOptions {
 
     /// Changes the text of absent values.
     #[must_use]
-    pub fn with_null_text(mut self, texte: impl Into<Cow<'static, str>>) -> Self {
-        self.null_text = texte.into();
+    pub fn with_null_text(mut self, text: impl Into<Cow<'static, str>>) -> Self {
+        self.null_text = text.into();
         self
     }
 
     /// Changes the timestamp pattern.
     #[must_use]
-    pub fn with_timestamp_format(mut self, motif: impl Into<Option<Cow<'static, str>>>) -> Self {
-        self.timestamp_format = motif.into();
+    pub fn with_timestamp_format(mut self, pattern: impl Into<Option<Cow<'static, str>>>) -> Self {
+        self.timestamp_format = pattern.into();
         self
     }
 
@@ -162,53 +162,53 @@ pub fn export<W: Write>(
     let source = Source {
         buffer,
         ct,
-        lots: buffer.batch_count(),
+        batch_count: buffer.batch_count(),
     };
-    let mut compteur = CountingWriter::new(writer);
+    let mut counter = CountingWriter::new(writer);
 
-    let mut resume = match format {
-        ExportFormat::Csv => ecrire_delimite(&source, &mut compteur, opts, b',')?,
-        ExportFormat::Tsv => ecrire_delimite(&source, &mut compteur, opts, b'\t')?,
+    let mut summary = match format {
+        ExportFormat::Csv => write_delimited(&source, &mut counter, opts, b',')?,
+        ExportFormat::Tsv => write_delimited(&source, &mut counter, opts, b'\t')?,
         ExportFormat::JsonLines => {
-            let mut sortie = LineDelimitedWriter::new(&mut compteur);
-            let resume =
-                source.pour_chaque_lot(|lot| sortie.write(lot).map_err(DataError::from))?;
-            sortie.finish()?;
-            resume
+            let mut output = LineDelimitedWriter::new(&mut counter);
+            let summary =
+                source.for_each_batch(|batch| output.write(batch).map_err(DataError::from))?;
+            output.finish()?;
+            summary
         }
         ExportFormat::Json => {
-            let mut sortie = ArrayWriter::new(&mut compteur);
-            let resume =
-                source.pour_chaque_lot(|lot| sortie.write(lot).map_err(DataError::from))?;
+            let mut output = ArrayWriter::new(&mut counter);
+            let summary =
+                source.for_each_batch(|batch| output.write(batch).map_err(DataError::from))?;
             // Without `finish`, the JSON array is never closed: the file is
             // unreadable and nothing reported it.
-            sortie.finish()?;
-            resume
+            output.finish()?;
+            summary
         }
         ExportFormat::ArrowIpc => {
-            let mut sortie = IpcFileWriter::try_new(&mut compteur, buffer.schema().as_ref())?;
-            let resume =
-                source.pour_chaque_lot(|lot| sortie.write(lot).map_err(DataError::from))?;
+            let mut output = IpcFileWriter::try_new(&mut counter, buffer.schema().as_ref())?;
+            let summary =
+                source.for_each_batch(|batch| output.write(batch).map_err(DataError::from))?;
             // The footer carries the block index: without it, the file is not
             // an Arrow file.
-            sortie.finish()?;
-            resume
+            output.finish()?;
+            summary
         }
         // TODO(phase 1, opened on 2026-09-05): Parquet waits for the `parquet`
         // crate to be added to the workspace manifest; SQL waits for
         // identifier quoting from `oxyn-query` (I-10); Markdown waits for the
         // formatting decided by the interface. None of the three is missing
         // code here: each waits for a dependency that does not exist yet.
-        autre => {
+        other => {
             return Err(DataError::UnsupportedFormat {
-                format: autre.extension(),
+                format: other.extension(),
             });
         }
     };
 
-    compteur.flush()?;
-    resume.bytes = compteur.bytes;
-    Ok(resume)
+    counter.flush()?;
+    summary.bytes = counter.bytes;
+    Ok(summary)
 }
 
 /// Refuses what [`export`] would refuse, without writing anything.
@@ -239,36 +239,36 @@ pub fn ensure_exportable(buffer: &ResultBuffer, opts: &ExportOptions) -> Result<
 struct Source<'a> {
     buffer: &'a ResultBuffer,
     ct: &'a CancelToken,
-    lots: usize,
+    batch_count: usize,
 }
 
 impl Source<'_> {
     /// Reads the snapshot's batches back and passes them to `ecrire`, checking
     /// cancellation between each.
-    fn pour_chaque_lot<F>(&self, mut ecrire: F) -> Result<ExportSummary>
+    fn for_each_batch<F>(&self, mut emit: F) -> Result<ExportSummary>
     where
         F: FnMut(&RecordBatch) -> Result<()>,
     {
-        let mut resume = ExportSummary::default();
-        for position in 0..self.lots {
+        let mut summary = ExportSummary::default();
+        for position in 0..self.batch_count {
             // Between two batches, not in the middle: a file cut in the middle
             // of encoding cannot be recovered, whereas a file cut on a batch
             // boundary is a valid prefix.
             if self.ct.is_cancelled() {
                 return Err(DataError::Cancelled);
             }
-            let Some(lot) = self.buffer.batch(BatchIndex::new(position))? else {
+            let Some(rb) = self.buffer.batch(BatchIndex::new(position))? else {
                 // The number of batches was read before the loop; a gap
                 // signals a broken invariant, not a normal race.
                 return Err(DataError::Spill(std::io::Error::other(
                     "a batch vanished from the buffer during export",
                 )));
             };
-            ecrire(&lot)?;
-            resume.rows = resume.rows.saturating_add(lot.num_rows());
-            resume.batches = resume.batches.saturating_add(1);
+            emit(&rb)?;
+            summary.rows = summary.rows.saturating_add(rb.num_rows());
+            summary.batches = summary.batches.saturating_add(1);
         }
-        Ok(resume)
+        Ok(summary)
     }
 }
 
@@ -276,24 +276,24 @@ impl Source<'_> {
 ///
 /// `arrow::csv::Writer` flushes its internal buffer at every batch written: an
 /// output abandoned halfway stays a valid prefix.
-fn ecrire_delimite<W: Write>(
+fn write_delimited<W: Write>(
     source: &Source<'_>,
-    sortie: &mut CountingWriter<W>,
+    output: &mut CountingWriter<W>,
     opts: &ExportOptions,
-    delimiteur: u8,
+    delimiter: u8,
 ) -> Result<ExportSummary> {
-    let mut constructeur = CsvWriterBuilder::new()
+    let mut builder = CsvWriterBuilder::new()
         .with_header(opts.header)
-        .with_delimiter(delimiteur)
+        .with_delimiter(delimiter)
         .with_null(opts.null_text.as_ref().to_owned());
-    if let Some(motif) = opts.timestamp_format.as_deref() {
-        constructeur = constructeur
-            .with_timestamp_format(motif.to_owned())
-            .with_timestamp_tz_format(motif.to_owned());
+    if let Some(pattern) = opts.timestamp_format.as_deref() {
+        builder = builder
+            .with_timestamp_format(pattern.to_owned())
+            .with_timestamp_tz_format(pattern.to_owned());
     }
 
-    let mut ecrivain = constructeur.build(sortie);
-    source.pour_chaque_lot(|lot| ecrivain.write(lot).map_err(DataError::from))
+    let mut writer = builder.build(output);
+    source.for_each_batch(|batch| writer.write(batch).map_err(DataError::from))
 }
 
 /// Writer that counts what goes through it.
@@ -314,11 +314,11 @@ impl<W: Write> CountingWriter<W> {
 
 impl<W: Write> Write for CountingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let ecrits = self.inner.write(buf)?;
+        let written = self.inner.write(buf)?;
         self.bytes = self
             .bytes
-            .saturating_add(u64::try_from(ecrits).unwrap_or(u64::MAX));
-        Ok(ecrits)
+            .saturating_add(u64::try_from(written).unwrap_or(u64::MAX));
+        Ok(written)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -341,15 +341,15 @@ mod tests {
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
-            Field::new("nom", DataType::Utf8, true),
+            Field::new("name", DataType::Utf8, true),
         ]))
     }
 
-    fn lot(depart: i32, lignes: usize) -> RecordBatch {
-        let ids: Vec<i32> = (0..lignes)
-            .map(|i| depart.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
+    fn batch_of(start: i32, rows: usize) -> RecordBatch {
+        let ids: Vec<i32> = (0..rows)
+            .map(|i| start.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)))
             .collect();
-        let noms: Vec<Option<String>> = ids
+        let names: Vec<Option<String>> = ids
             .iter()
             .map(|i| {
                 if i % 2 == 0 {
@@ -363,7 +363,7 @@ mod tests {
             schema(),
             vec![
                 Arc::new(Int32Array::from(ids)),
-                Arc::new(StringArray::from(noms)),
+                Arc::new(StringArray::from(names)),
             ],
         )
         .expect("the columns match the schema built just above")
@@ -372,209 +372,209 @@ mod tests {
     /// Closed buffer, with a budget so small that everything spilled to disk:
     /// it is the case that matters, since the export must read back from the
     /// temporary file.
-    fn tampon_deborde() -> ResultBuffer {
-        let tampon =
+    fn spilled_buffer() -> ResultBuffer {
+        let buffer =
             ResultBuffer::with_limits(schema(), BufferLimits::default().with_memory_budget(1));
-        tampon.push(lot(0, 3)).expect("batch accepted");
-        tampon.push(lot(100, 2)).expect("batch accepted");
-        tampon.mark_complete(ExecStats::default());
-        assert_eq!(tampon.spilled_batches(), 2);
-        tampon
+        buffer.push(batch_of(0, 3)).expect("batch accepted");
+        buffer.push(batch_of(100, 2)).expect("batch accepted");
+        buffer.mark_complete(ExecStats::default());
+        assert_eq!(buffer.spilled_batches(), 2);
+        buffer
     }
 
     fn exporter(format: ExportFormat, opts: &ExportOptions) -> (String, ExportSummary) {
-        let tampon = tampon_deborde();
-        let mut sortie: Vec<u8> = Vec::new();
-        let resume = export(&tampon, format, &mut sortie, opts, &CancelToken::new())
+        let buffer = spilled_buffer();
+        let mut output: Vec<u8> = Vec::new();
+        let summary = export(&buffer, format, &mut output, opts, &CancelToken::new())
             .expect("export without error");
         (
-            String::from_utf8(sortie).expect("the tested formats are UTF-8"),
-            resume,
+            String::from_utf8(output).expect("the tested formats are UTF-8"),
+            summary,
         )
     }
 
     #[test]
     fn csv_carries_its_header_and_all_its_rows() {
-        let (texte, resume) = exporter(ExportFormat::Csv, &ExportOptions::default());
-        let lignes: Vec<&str> = texte.lines().collect();
+        let (text, summary) = exporter(ExportFormat::Csv, &ExportOptions::default());
+        let row_count: Vec<&str> = text.lines().collect();
 
-        assert_eq!(lignes.first(), Some(&"id,nom"));
-        assert_eq!(lignes.len(), 6, "a header and five rows: {texte}");
-        assert_eq!(resume.rows, 5);
-        assert_eq!(resume.batches, 2);
-        assert!(resume.bytes > 0);
+        assert_eq!(row_count.first(), Some(&"id,name"));
+        assert_eq!(row_count.len(), 6, "a header and five rows: {text}");
+        assert_eq!(summary.rows, 5);
+        assert_eq!(summary.batches, 2);
+        assert!(summary.bytes > 0);
     }
 
     /// Spilling to disk must change nothing in the exported content.
     #[test]
     fn the_export_reads_back_spilled_batches() {
-        let (texte, _) = exporter(ExportFormat::Csv, &ExportOptions::default());
-        for attendu in ["0,n0", "1,", "2,n2", "100,n100", "101,"] {
-            assert!(texte.contains(attendu), "{attendu} missing from:\n{texte}");
+        let (text, _) = exporter(ExportFormat::Csv, &ExportOptions::default());
+        for expected in ["0,n0", "1,", "2,n2", "100,n100", "101,"] {
+            assert!(text.contains(expected), "{expected} missing from:\n{text}");
         }
     }
 
     #[test]
     fn tsv_uses_the_tab() {
-        let (texte, _) = exporter(ExportFormat::Tsv, &ExportOptions::default());
-        assert!(texte.starts_with("id\tnom"), "{texte}");
+        let (text, _) = exporter(ExportFormat::Tsv, &ExportOptions::default());
+        assert!(text.starts_with("id\tname"), "{text}");
     }
 
     #[test]
     fn the_header_is_optional() {
-        let (texte, _) = exporter(
+        let (text, _) = exporter(
             ExportFormat::Csv,
             &ExportOptions::default().with_header(false),
         );
-        assert!(!texte.starts_with("id,nom"), "{texte}");
-        assert_eq!(texte.lines().count(), 5);
+        assert!(!text.starts_with("id,name"), "{text}");
+        assert_eq!(text.lines().count(), 5);
     }
 
     #[test]
     fn the_absent_value_text_is_configurable() {
-        let (texte, _) = exporter(
+        let (text, _) = exporter(
             ExportFormat::Csv,
             &ExportOptions::default().with_null_text("\\N"),
         );
-        assert!(texte.contains("1,\\N"), "{texte}");
+        assert!(text.contains("1,\\N"), "{text}");
     }
 
     #[test]
     fn json_lines_produces_one_object_per_row() {
-        let (texte, resume) = exporter(ExportFormat::JsonLines, &ExportOptions::default());
-        let lignes: Vec<&str> = texte.lines().filter(|l| !l.is_empty()).collect();
-        assert_eq!(lignes.len(), 5, "{texte}");
+        let (text, summary) = exporter(ExportFormat::JsonLines, &ExportOptions::default());
+        let row_count: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(row_count.len(), 5, "{text}");
         assert!(
-            lignes.first().is_some_and(|l| l.starts_with('{')),
-            "{texte}"
+            row_count.first().is_some_and(|l| l.starts_with('{')),
+            "{text}"
         );
-        assert_eq!(resume.rows, 5);
+        assert_eq!(summary.rows, 5);
     }
 
     #[test]
     fn json_produces_a_closed_array() {
-        let (texte, _) = exporter(ExportFormat::Json, &ExportOptions::default());
-        assert!(texte.starts_with('['), "{texte}");
-        assert!(texte.trim_end().ends_with(']'), "{texte}");
+        let (text, _) = exporter(ExportFormat::Json, &ExportOptions::default());
+        assert!(text.starts_with('['), "{text}");
+        assert!(text.trim_end().ends_with(']'), "{text}");
     }
 
     /// The Arrow IPC round trip is the only export that converts nothing: what
     /// comes out must be exactly what went in.
     #[test]
     fn arrow_ipc_makes_an_exact_round_trip() {
-        let tampon = tampon_deborde();
-        let mut sortie: Vec<u8> = Vec::new();
-        let resume = export(
-            &tampon,
+        let buffer = spilled_buffer();
+        let mut output: Vec<u8> = Vec::new();
+        let summary = export(
+            &buffer,
             ExportFormat::ArrowIpc,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default(),
             &CancelToken::new(),
         )
         .expect("export without error");
-        assert_eq!(resume.rows, 5);
+        assert_eq!(summary.rows, 5);
 
-        let lecteur = FileReader::try_new(std::io::Cursor::new(sortie), None)
+        let reader = FileReader::try_new(std::io::Cursor::new(output), None)
             .expect("the written file must be a valid Arrow file");
-        assert_eq!(lecteur.schema().fields(), schema().fields());
+        assert_eq!(reader.schema().fields(), schema().fields());
 
-        let relus: Vec<RecordBatch> = lecteur
+        let reread: Vec<RecordBatch> = reader
             .collect::<std::result::Result<Vec<_>, _>>()
             .expect("reading batches back");
-        assert_eq!(relus.len(), 2);
-        assert_eq!(relus.first(), Some(&lot(0, 3)));
-        assert_eq!(relus.get(1), Some(&lot(100, 2)));
+        assert_eq!(reread.len(), 2);
+        assert_eq!(reread.first(), Some(&batch_of(0, 3)));
+        assert_eq!(reread.get(1), Some(&batch_of(100, 2)));
     }
 
     #[test]
     fn parquet_is_refused_explicitly() {
-        let tampon = tampon_deborde();
-        let mut sortie: Vec<u8> = Vec::new();
+        let buffer = spilled_buffer();
+        let mut output: Vec<u8> = Vec::new();
         match export(
-            &tampon,
+            &buffer,
             ExportFormat::Parquet,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default(),
             &CancelToken::new(),
         ) {
             Err(DataError::UnsupportedFormat { format }) => assert_eq!(format, "parquet"),
-            autre => panic!("attendu UnsupportedFormat, obtenu {autre:?}"),
+            other => panic!("expected UnsupportedFormat, got {other:?}"),
         }
-        assert!(sortie.is_empty(), "nothing must be written");
+        assert!(output.is_empty(), "nothing must be written");
     }
 
     /// The failure mode to avoid: a partial file that looks complete.
     #[test]
     fn a_result_in_progress_is_not_exported_by_accident() {
-        let tampon = ResultBuffer::new(schema(), 1 << 20);
-        tampon.push(lot(0, 3)).expect("batch accepted");
-        let mut sortie: Vec<u8> = Vec::new();
+        let buffer = ResultBuffer::new(schema(), 1 << 20);
+        buffer.push(batch_of(0, 3)).expect("batch accepted");
+        let mut output: Vec<u8> = Vec::new();
 
         match export(
-            &tampon,
+            &buffer,
             ExportFormat::Csv,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default(),
             &CancelToken::new(),
         ) {
             Err(DataError::IncompleteResult) => {}
-            autre => panic!("attendu IncompleteResult, obtenu {autre:?}"),
+            other => panic!("expected IncompleteResult, got {other:?}"),
         }
 
         // Declared explicitly, it is allowed.
-        let resume = export(
-            &tampon,
+        let summary = export(
+            &buffer,
             ExportFormat::Csv,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default().allowing_incomplete(),
             &CancelToken::new(),
         )
         .expect("explicit export of a partial result");
-        assert_eq!(resume.rows, 3);
+        assert_eq!(summary.rows, 3);
     }
 
     /// Closed but truncated: the case nothing on screen tells from a whole
     /// result. No option allows it, not even `allowing_incomplete`.
     #[test]
     fn a_truncated_result_never_exports() {
-        let tampon = tampon_deborde();
-        tampon.mark_truncated();
+        let buffer = spilled_buffer();
+        buffer.mark_truncated();
 
         for opts in [
             ExportOptions::default(),
             ExportOptions::default().allowing_incomplete(),
         ] {
-            let mut sortie: Vec<u8> = Vec::new();
+            let mut output: Vec<u8> = Vec::new();
             match export(
-                &tampon,
+                &buffer,
                 ExportFormat::Csv,
-                &mut sortie,
+                &mut output,
                 &opts,
                 &CancelToken::new(),
             ) {
                 Err(DataError::TruncatedResult) => {}
-                autre => panic!("expected TruncatedResult, got {autre:?}"),
+                other => panic!("expected TruncatedResult, got {other:?}"),
             }
-            assert!(sortie.is_empty(), "nothing may be written");
+            assert!(output.is_empty(), "nothing may be written");
         }
     }
 
     #[test]
     fn a_cancellation_interrupts_the_export() {
-        let tampon = tampon_deborde();
+        let buffer = spilled_buffer();
         let ct = CancelToken::new();
         ct.cancel();
-        let mut sortie: Vec<u8> = Vec::new();
+        let mut output: Vec<u8> = Vec::new();
 
         match export(
-            &tampon,
+            &buffer,
             ExportFormat::Csv,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default(),
             &ct,
         ) {
             Err(DataError::Cancelled) => {}
-            autre => panic!("attendu Cancelled, obtenu {autre:?}"),
+            other => panic!("expected Cancelled, got {other:?}"),
         }
     }
 
@@ -584,7 +584,7 @@ mod tests {
         // between this list and `export`'s `match` breaks nothing here: it
         // breaks three clicks later, after the user named their file, and
         // leaves an empty file behind.
-        let tampon = tampon_deborde();
+        let buffer = spilled_buffer();
         for format in [
             ExportFormat::Csv,
             ExportFormat::Tsv,
@@ -595,19 +595,19 @@ mod tests {
             ExportFormat::Sql,
             ExportFormat::Markdown,
         ] {
-            let mut sortie: Vec<u8> = Vec::new();
-            let ecrit = export(
-                &tampon,
+            let mut output: Vec<u8> = Vec::new();
+            let written = export(
+                &buffer,
                 format,
-                &mut sortie,
+                &mut output,
                 &ExportOptions::default(),
                 &CancelToken::new(),
             )
             .is_ok();
             assert_eq!(
-                ecrit,
+                written,
                 is_supported(format),
-                "{format} : `is_supported` dit {}, `export` dit {ecrit}",
+                "{format} : `is_supported` dit {}, `export` dit {written}",
                 is_supported(format)
             );
         }
@@ -615,21 +615,21 @@ mod tests {
 
     #[test]
     fn an_empty_result_produces_an_empty_file_not_an_error() {
-        let tampon = ResultBuffer::new(schema(), 1 << 20);
-        tampon.mark_complete(ExecStats::default());
-        let mut sortie: Vec<u8> = Vec::new();
+        let buffer = ResultBuffer::new(schema(), 1 << 20);
+        buffer.mark_complete(ExecStats::default());
+        let mut output: Vec<u8> = Vec::new();
 
-        let resume = export(
-            &tampon,
+        let summary = export(
+            &buffer,
             ExportFormat::Csv,
-            &mut sortie,
+            &mut output,
             &ExportOptions::default(),
             &CancelToken::new(),
         )
         .expect("export without error");
 
-        assert_eq!(resume.rows, 0);
-        assert_eq!(resume.batches, 0);
-        assert!(sortie.is_empty());
+        assert_eq!(summary.rows, 0);
+        assert_eq!(summary.batches, 0);
+        assert!(output.is_empty());
     }
 }

@@ -82,13 +82,13 @@ impl CancelToken {
 
         // The lock is released before going down: recursing under a parent
         // lock would bring nothing and freezes the tree during propagation.
-        let enfants = {
+        let children = {
             let mut guard = inner.children.lock();
             std::mem::take(&mut *guard)
         };
-        for faible in enfants {
-            if let Some(enfant) = faible.upgrade() {
-                Self::cancel_inner(&enfant);
+        for weak in children {
+            if let Some(child) = weak.upgrade() {
+                Self::cancel_inner(&child);
             }
         }
     }
@@ -111,16 +111,16 @@ impl CancelToken {
             return;
         }
         loop {
-            let mut attente = pin!(self.inner.notify.notified());
+            let mut waiting = pin!(self.inner.notify.notified());
             // Registration must come before re-reading the flag. Without
             // `enable()`, `notified()` only registers on the first poll, and a
             // cancellation occurring between the re-read and the poll would wake
             // nobody.
-            attente.as_mut().enable();
+            waiting.as_mut().enable();
             if self.is_cancelled() {
                 return;
             }
-            attente.await;
+            waiting.await;
             if self.is_cancelled() {
                 return;
             }
@@ -137,22 +137,22 @@ impl CancelToken {
     /// cancelled.
     #[must_use]
     pub fn child(&self) -> Self {
-        let enfant = Arc::new(Inner::new());
+        let child = Arc::new(Inner::new());
 
         let mut guard = self.inner.children.lock();
         // Purge finished children: otherwise a long-running session would
         // accumulate one `Weak` per executed query.
-        guard.retain(|faible| faible.strong_count() > 0);
+        guard.retain(|weak| weak.strong_count() > 0);
 
         if self.inner.cancelled.load(Ordering::SeqCst) {
             // No need to register it: propagation already happened.
-            enfant.cancelled.store(true, Ordering::SeqCst);
+            child.cancelled.store(true, Ordering::SeqCst);
         } else {
-            guard.push(Arc::downgrade(&enfant));
+            guard.push(Arc::downgrade(&child));
         }
         drop(guard);
 
-        Self { inner: enfant }
+        Self { inner: child }
     }
 
     /// Number of children still alive. For tests and diagnostics only.
@@ -163,7 +163,7 @@ impl CancelToken {
             .children
             .lock()
             .iter()
-            .filter(|faible| faible.strong_count() > 0)
+            .filter(|weak| weak.strong_count() > 0)
             .count()
     }
 }
@@ -194,45 +194,45 @@ mod tests {
     /// The crate does not have tokio's `rt` feature: hence no
     /// `#[tokio::test]` here. `Notify` is an ordinary synchronization
     /// primitive, it requires no executor.
-    fn sonder<F: Future>(mut futur: std::pin::Pin<&mut F>) -> Poll<F::Output> {
+    fn poll_once<F: Future>(mut future: std::pin::Pin<&mut F>) -> Poll<F::Output> {
         let mut cx = Context::from_waker(Waker::noop());
-        futur.as_mut().poll(&mut cx)
+        future.as_mut().poll(&mut cx)
     }
 
     #[test]
     fn a_new_token_is_not_cancelled() {
-        let jeton = CancelToken::new();
-        assert!(!jeton.is_cancelled());
+        let token = CancelToken::new();
+        assert!(!token.is_cancelled());
     }
 
     #[test]
     fn cancelling_is_visible_and_idempotent() {
-        let jeton = CancelToken::new();
-        jeton.cancel();
-        assert!(jeton.is_cancelled());
-        jeton.cancel();
-        assert!(jeton.is_cancelled());
+        let token = CancelToken::new();
+        token.cancel();
+        assert!(token.is_cancelled());
+        token.cancel();
+        assert!(token.is_cancelled());
     }
 
     #[test]
     fn a_clone_shares_the_state() {
-        let jeton = CancelToken::new();
-        let clone = jeton.clone();
+        let token = CancelToken::new();
+        let clone = token.clone();
         clone.cancel();
-        assert!(jeton.is_cancelled(), "a clone is a view, not a copy");
+        assert!(token.is_cancelled(), "a clone is a view, not a copy");
     }
 
     #[test]
     fn waiting_after_a_cancellation_already_happened_does_not_block() {
         // The case that turns a cancellation into a deadlock: waiting for a
         // signal that was already emitted.
-        let jeton = CancelToken::new();
-        jeton.cancel();
+        let token = CancelToken::new();
+        token.cancel();
 
-        let attente = jeton.cancelled();
-        let mut attente = pin!(attente);
+        let waiting = token.cancelled();
+        let mut waiting = pin!(waiting);
         assert_eq!(
-            sonder(attente.as_mut()),
+            poll_once(waiting.as_mut()),
             Poll::Ready(()),
             "cancelled() must return immediately"
         );
@@ -240,14 +240,14 @@ mod tests {
 
     #[test]
     fn waiting_before_the_cancellation_wakes_up() {
-        let jeton = CancelToken::new();
-        let attente = jeton.cancelled();
-        let mut attente = pin!(attente);
+        let token = CancelToken::new();
+        let waiting = token.cancelled();
+        let mut waiting = pin!(waiting);
 
-        assert_eq!(sonder(attente.as_mut()), Poll::Pending);
-        jeton.cancel();
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Pending);
+        token.cancel();
         assert_eq!(
-            sonder(attente.as_mut()),
+            poll_once(waiting.as_mut()),
             Poll::Ready(()),
             "a cancellation occurring during the wait must wake it"
         );
@@ -257,37 +257,37 @@ mod tests {
     fn a_cancellation_between_two_polls_is_not_lost() {
         // The targeted window: the future is created, the cancellation
         // occurs, and only then does the first poll take place.
-        let jeton = CancelToken::new();
-        let attente = jeton.cancelled();
-        let mut attente = pin!(attente);
-        jeton.cancel();
-        assert_eq!(sonder(attente.as_mut()), Poll::Ready(()));
+        let token = CancelToken::new();
+        let waiting = token.cancelled();
+        let mut waiting = pin!(waiting);
+        token.cancel();
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Ready(()));
     }
 
     #[test]
     fn cancelling_the_parent_cancels_the_child() {
         let parent = CancelToken::new();
-        let enfant = parent.child();
-        let petit_enfant = enfant.child();
+        let child = parent.child();
+        let grandchild = child.child();
 
         parent.cancel();
 
-        assert!(enfant.is_cancelled());
-        assert!(petit_enfant.is_cancelled(), "propagation must be deep");
+        assert!(child.is_cancelled());
+        assert!(grandchild.is_cancelled(), "propagation must be deep");
     }
 
     #[test]
     fn cancelling_the_child_leaves_the_parent_intact() {
         let parent = CancelToken::new();
-        let enfant = parent.child();
-        let frere = parent.child();
+        let child = parent.child();
+        let sibling = parent.child();
 
-        enfant.cancel();
+        child.cancel();
 
-        assert!(enfant.is_cancelled());
+        assert!(child.is_cancelled());
         assert!(!parent.is_cancelled(), "cancellation never goes up");
         assert!(
-            !frere.is_cancelled(),
+            !sibling.is_cancelled(),
             "cancellation does not travel sideways"
         );
     }
@@ -296,34 +296,34 @@ mod tests {
     fn a_child_of_an_already_cancelled_parent_is_born_cancelled() {
         let parent = CancelToken::new();
         parent.cancel();
-        let enfant = parent.child();
-        assert!(enfant.is_cancelled());
+        let child = parent.child();
+        assert!(child.is_cancelled());
 
-        let attente = enfant.cancelled();
-        let mut attente = pin!(attente);
-        assert_eq!(sonder(attente.as_mut()), Poll::Ready(()));
+        let waiting = child.cancelled();
+        let mut waiting = pin!(waiting);
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Ready(()));
     }
 
     #[test]
     fn a_waiting_child_is_woken_by_the_parent() {
         let parent = CancelToken::new();
-        let enfant = parent.child();
+        let child = parent.child();
 
-        let attente = enfant.cancelled();
-        let mut attente = pin!(attente);
-        assert_eq!(sonder(attente.as_mut()), Poll::Pending);
+        let waiting = child.cancelled();
+        let mut waiting = pin!(waiting);
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Pending);
 
         parent.cancel();
-        assert_eq!(sonder(attente.as_mut()), Poll::Ready(()));
+        assert_eq!(poll_once(waiting.as_mut()), Poll::Ready(()));
     }
 
     #[test]
     fn finished_children_do_not_accumulate() {
         let parent = CancelToken::new();
         for _ in 0..100 {
-            let ephemere = parent.child();
-            assert!(!ephemere.is_cancelled());
-            // `ephemere` is dropped here: its weak reference becomes dead.
+            let short_lived = parent.child();
+            assert!(!short_lived.is_cancelled());
+            // `short_lived` is dropped here: its weak reference becomes dead.
         }
         assert_eq!(
             parent.live_children(),
@@ -334,9 +334,9 @@ mod tests {
 
     #[test]
     fn the_debug_only_shows_the_state() {
-        let jeton = CancelToken::new();
-        let rendu = format!("{jeton:?}");
-        assert!(rendu.contains("cancelled"), "{rendu}");
-        assert!(rendu.contains("false"), "{rendu}");
+        let token = CancelToken::new();
+        let rendered = format!("{token:?}");
+        assert!(rendered.contains("cancelled"), "{rendered}");
+        assert!(rendered.contains("false"), "{rendered}");
     }
 }

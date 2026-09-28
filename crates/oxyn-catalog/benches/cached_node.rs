@@ -25,7 +25,7 @@ use oxyn_catalog::{CatalogCache, CatalogPath, NamespaceRef, RelationKind, Relati
 use std::hint::black_box;
 
 /// A cache populated with a schema of `relations` tables.
-fn cache_peuple(relations: usize) -> (CatalogCache, CatalogPath) {
+fn populated_cache(relations: usize) -> (CatalogCache, CatalogPath) {
     let mut cache = CatalogCache::new();
     let namespace = CatalogPath::for_namespace(None, "public").expect("namespace path");
 
@@ -35,10 +35,10 @@ fn cache_peuple(relations: usize) -> (CatalogCache, CatalogPath) {
     );
 
     let tables = (0..relations)
-        .map(|rang| {
+        .map(|rank| {
             RelationRef::new(
                 namespace.clone(),
-                format!("table_{rang:05}"),
+                format!("table_{rank:05}"),
                 RelationKind::Table,
             )
             .expect("relation")
@@ -52,22 +52,22 @@ fn cache_peuple(relations: usize) -> (CatalogCache, CatalogPath) {
     // read path did not match the write path — and it would announce 12 ns for
     // ten thousand relations, which would pass for an excellent result. A
     // bench that measures nothing is worse than no bench.
-    let vus = cache.relations(&namespace).count();
+    let seen = cache.relations(&namespace).count();
     assert_eq!(
-        vus, relations,
-        "the bench must read the {relations} relations it wrote, not {vus}"
+        seen, relations,
+        "the bench must read the {relations} relations it wrote, not {seen}"
     );
 
     (cache, namespace)
 }
 
-fn developper_un_noeud(c: &mut Criterion) {
-    let mut groupe = c.benchmark_group("cached_node");
+fn expand_a_node(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cached_node");
 
     for relations in [100usize, 1_000, 10_000] {
-        let (cache, namespace) = cache_peuple(relations);
+        let (cache, namespace) = populated_cache(relations);
 
-        groupe.bench_with_input(
+        group.bench_with_input(
             BenchmarkId::new("relations", relations),
             &relations,
             |b, _| {
@@ -92,20 +92,20 @@ fn developper_un_noeud(c: &mut Criterion) {
 
         // `of` picks the variant from the level of the path: impossible to get
         // wrong, unlike a direct construction.
-        let portee = oxyn_catalog::CatalogScope::of(&namespace);
-        groupe.bench_with_input(
+        let scope = oxyn_catalog::CatalogScope::of(&namespace);
+        group.bench_with_input(
             BenchmarkId::new("freshness", relations),
             &relations,
             |b, _| {
                 // Read before every display: it decides whether the node makes
                 // do with the cache or starts an introspection again.
-                b.iter(|| black_box(cache.freshness(black_box(&portee))));
+                b.iter(|| black_box(cache.freshness(black_box(&scope))));
             },
         );
     }
 
-    groupe.finish();
+    group.finish();
 }
 
-criterion_group!(benches, developper_un_noeud);
+criterion_group!(benches, expand_a_node);
 criterion_main!(benches);

@@ -4,11 +4,11 @@ use super::*;
 use crate::privacy::PrivacyTier;
 use oxyn_core::{ExternalAgentConfig, ProviderId};
 
-fn agent(commande: &str, args: &[&str]) -> ExternalAgentConfig {
+fn agent(command: &str, args: &[&str]) -> ExternalAgentConfig {
     ExternalAgentConfig::new(
         ProviderId::new("agent").expect("a valid identifier"),
         "Agent",
-        commande,
+        command,
     )
     .with_args(args.iter().copied())
 }
@@ -66,7 +66,7 @@ fn an_invalid_declaration_launches_nothing() {
 /// silently, and a test `match` that enumerates forces coming back here.
 #[test]
 fn no_system_access_is_granted() {
-    for genre in [
+    for kind in [
         ToolKind::Read,
         ToolKind::Search,
         ToolKind::Edit,
@@ -77,8 +77,8 @@ fn no_system_access_is_granted() {
         ToolKind::Other,
     ] {
         assert!(
-            permission_for(genre).is_refused(),
-            "{genre:?} must never be granted: Oxyn is a database workbench"
+            permission_for(kind).is_refused(),
+            "{kind:?} must never be granted: Oxyn is a database workbench"
         );
     }
 }
@@ -98,10 +98,10 @@ fn what_stays_in_the_agent_is_granted() {
 /// The reason goes **to the agent**: without it, the agent rephrases its
 /// request indefinitely. And it is displayed, so it must not copy a file path
 /// or an identifier coming from the request
-/// ([I-03](../../../CLAUDE.md#i-03)).
+/// ([I-03](../../../../CLAUDE.md#i-03)).
 #[test]
 fn every_refusal_says_why_without_quoting_the_request() {
-    for genre in [
+    for kind in [
         ToolKind::Read,
         ToolKind::Edit,
         ToolKind::Delete,
@@ -111,19 +111,19 @@ fn every_refusal_says_why_without_quoting_the_request() {
         ToolKind::Search,
         ToolKind::Other,
     ] {
-        let PermissionVerdict::Refused(raison) = permission_for(genre) else {
-            panic!("{genre:?} should be refused");
+        let PermissionVerdict::Refused(reason) = permission_for(kind) else {
+            panic!("{kind:?} should be refused");
         };
         assert!(
-            raison.len() > 20 && raison.ends_with('.'),
-            "{genre:?}: a reason reads as a sentence, {raison:?}"
+            reason.len() > 20 && reason.ends_with('.'),
+            "{kind:?}: a reason reads as a sentence, {reason:?}"
         );
         // The reason is a constant: it cannot carry a value coming from the
         // request. This test holds that by forbidding the formatting marks
         // someone would one day be tempted to slip in.
         assert!(
-            !raison.contains('{') && !raison.contains('}'),
-            "{genre:?}: a reason is not composed, {raison:?}"
+            !reason.contains('{') && !reason.contains('}'),
+            "{kind:?}: a reason is not composed, {reason:?}"
         );
     }
 }
@@ -154,18 +154,19 @@ fn options() -> Vec<PermissionOption> {
 /// will refuse every time.
 #[test]
 fn oxyn_is_cautious_when_allowing_and_decisive_when_refusing() {
-    let toutes = options();
+    let all_options = options();
 
-    let accorde = option_for(&PermissionVerdict::Granted, &toutes).expect("an allow option");
+    let granted = option_for(&PermissionVerdict::Granted, &all_options).expect("an allow option");
     assert_eq!(
-        accorde.kind,
+        granted.kind,
         PermissionOptionKind::AllowOnce,
         "never \"allow always\": the user did not decide it"
     );
 
-    let refuse = option_for(&PermissionVerdict::Refused("non"), &toutes).expect("a reject option");
+    let rejected =
+        option_for(&PermissionVerdict::Refused("non"), &all_options).expect("a reject option");
     assert_eq!(
-        refuse.kind,
+        rejected.kind,
         PermissionOptionKind::RejectAlways,
         "what Oxyn refuses, it will always refuse: asking again makes the conversation go round in circles"
     );
@@ -178,7 +179,7 @@ fn oxyn_is_cautious_when_allowing_and_decisive_when_refusing() {
 /// only honest outcome.
 #[test]
 fn no_suitable_option_is_replaced_by_its_opposite() {
-    let seulement_accord: Vec<PermissionOption> = options()
+    let grant_only: Vec<PermissionOption> = options()
         .into_iter()
         .filter(|option| {
             matches!(
@@ -188,11 +189,11 @@ fn no_suitable_option_is_replaced_by_its_opposite() {
         })
         .collect();
     assert!(
-        option_for(&PermissionVerdict::Refused("non"), &seulement_accord).is_none(),
+        option_for(&PermissionVerdict::Refused("non"), &grant_only).is_none(),
         "a refusal is never satisfied by an allow option"
     );
 
-    let seulement_refus: Vec<PermissionOption> = options()
+    let refusal_only: Vec<PermissionOption> = options()
         .into_iter()
         .filter(|option| {
             matches!(
@@ -202,7 +203,7 @@ fn no_suitable_option_is_replaced_by_its_opposite() {
         })
         .collect();
     assert!(
-        option_for(&PermissionVerdict::Granted, &seulement_refus).is_none(),
+        option_for(&PermissionVerdict::Granted, &refusal_only).is_none(),
         "a grant is never satisfied by a reject option"
     );
 
@@ -212,12 +213,12 @@ fn no_suitable_option_is_replaced_by_its_opposite() {
 /// Failing "reject always", "reject once" will do.
 #[test]
 fn a_refusal_settles_for_a_one_time_reject_if_that_is_all_there_is() {
-    let ponctuel: Vec<PermissionOption> = options()
+    let one_shot: Vec<PermissionOption> = options()
         .into_iter()
         .filter(|option| option.kind != PermissionOptionKind::RejectAlways)
         .collect();
-    let choisi = option_for(&PermissionVerdict::Refused("non"), &ponctuel).expect("a refusal");
-    assert_eq!(choisi.kind, PermissionOptionKind::RejectOnce);
+    let chosen = option_for(&PermissionVerdict::Refused("non"), &one_shot).expect("a refusal");
+    assert_eq!(chosen.kind, PermissionOptionKind::RejectOnce);
 }
 
 /// The tier is checked **before** the process is launched.
@@ -237,32 +238,32 @@ fn a_refusal_settles_for_a_one_time_reject_if_that_is_all_there_is() {
 /// relative to it that the order matters.
 #[test]
 fn the_local_tier_refuses_before_even_launching_the_process() {
-    let inexistant = agent("/oxyn/ce-programme-nexiste-pas", &["--acp"]);
+    let missing = agent("/oxyn/this-program-does-not-exist", &["--acp"]);
 
     // The prompt is composed under a tier that admits it, then presented to
     // `run_turn` under `Local`: it is **defense in depth** being tested here.
     // Since ADR-0027, `AgentPrompt::from_user` would already refuse under
     // `Local` — but `run_turn` must not rely on its caller.
-    let invite =
+    let launch_request =
         super::prompt::AgentPrompt::from_user(PrivacyTier::Metadata, "which tables exist?")
             .expect("this tier admits an external agent");
 
-    let refus = futures::executor::block_on(super::turn::run_turn(
-        &inexistant,
+    let refusal = futures::executor::block_on(super::turn::run_turn(
+        &missing,
         PrivacyTier::Local,
-        &invite,
+        &launch_request,
         &oxyn_core::CancelToken::new(),
         std::sync::Arc::new(()),
     ))
     .expect_err("a local connection cannot talk to an external agent");
 
-    let message = refus.to_string();
+    let message = refusal.to_string();
     assert!(
         message.contains("local-only"),
         "the refusal must bear on the tier, not on the launch: {message}"
     );
     assert!(
-        !message.contains("nexiste-pas"),
+        !message.contains("does-not-exist"),
         "a tier refusal does not quote the command: {message}"
     );
 }
@@ -282,25 +283,25 @@ fn the_local_tier_refuses_before_even_launching_the_process() {
 /// `connect_with` and return an error, not `Cancelled`.
 #[test]
 fn an_already_cancelled_turn_launches_nothing() {
-    let inexistant = agent("/oxyn/ce-programme-nexiste-pas", &["--acp"]);
-    let jeton = oxyn_core::CancelToken::new();
-    jeton.cancel();
+    let missing = agent("/oxyn/this-program-does-not-exist", &["--acp"]);
+    let token = oxyn_core::CancelToken::new();
+    token.cancel();
 
-    let invite =
+    let launch_request =
         super::prompt::AgentPrompt::from_user(PrivacyTier::Metadata, "which tables exist?")
             .expect("valid prompt");
 
-    let fin = futures::executor::block_on(super::turn::run_turn(
-        &inexistant,
+    let header_end = futures::executor::block_on(super::turn::run_turn(
+        &missing,
         PrivacyTier::Metadata,
-        &invite,
-        &jeton,
+        &launch_request,
+        &token,
         std::sync::Arc::new(()),
     ))
     .expect("a cancellation is an end of turn, not an error");
 
     assert_eq!(
-        fin,
+        header_end,
         super::turn::TurnEnd::Cancelled,
         "a cancelled turn says it is cancelled, and above all does not launch the program"
     );
@@ -309,17 +310,17 @@ fn an_already_cancelled_turn_launches_nothing() {
 /// An invalid declaration is refused before the launch too.
 #[test]
 fn an_invalid_declaration_is_refused_before_the_launch() {
-    let vide = agent("", &[]);
-    let invite = super::prompt::AgentPrompt::from_user(PrivacyTier::Metadata, "hello")
+    let empty = agent("", &[]);
+    let launch_request = super::prompt::AgentPrompt::from_user(PrivacyTier::Metadata, "hello")
         .expect("valid prompt");
 
-    let erreur = futures::executor::block_on(super::turn::run_turn(
-        &vide,
+    let error = futures::executor::block_on(super::turn::run_turn(
+        &empty,
         PrivacyTier::Metadata,
-        &invite,
+        &launch_request,
         &oxyn_core::CancelToken::new(),
         std::sync::Arc::new(()),
     ))
     .expect_err("an empty command does not launch");
-    assert!(erreur.to_string().contains("command"), "{erreur}");
+    assert!(error.to_string().contains("command"), "{error}");
 }

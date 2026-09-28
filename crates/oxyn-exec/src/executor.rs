@@ -482,13 +482,13 @@ impl Executor {
                 // vice versa — unchanged by this move to the blocking pool.
                 if self
                     .write_audit(move |store| {
-                        if let Err(erreur) = store.journal().append(&record) {
-                            tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
+                        if let Err(err) = store.journal().append(&record) {
+                            tracing::error!(error = %err, command = %id, "policy decision could not be journaled");
                         }
                         if let Some(entry) = denied
-                            && let Err(erreur) = store.history().record(&entry)
+                            && let Err(err) = store.history().record(&entry)
                         {
-                            tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
+                            tracing::error!(error = %err, "a denied statement could not be recorded in the query history");
                         }
                     })
                     .await
@@ -520,9 +520,9 @@ impl Executor {
                     })
                     .await
                     .and_then(|inner| inner);
-                if let Err(erreur) = write {
-                    tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
-                    return Err(erreur);
+                if let Err(err) = write {
+                    tracing::error!(error = %err, command = %id, "policy decision could not be journaled");
+                    return Err(err);
                 }
                 // If the caller drops this future right here, the decision
                 // stays in the journal with no approval request pending:
@@ -531,20 +531,20 @@ impl Executor {
                 //
                 // Nothing is executed. The command set aside is the one the
                 // gate saw — reclassified — not the original text.
-                let attente = self.approvals.submit(id, actor, command, reason, preview)?;
+                let pending = self.approvals.submit(id, actor, command, reason, preview)?;
                 self.events.publish(
                     id,
                     connection,
                     Event::ApprovalRequested {
                         command: id,
-                        reason: attente.reason.clone(),
-                        preview: attente.preview.clone(),
+                        reason: pending.reason.clone(),
+                        preview: pending.preview.clone(),
                     },
                 );
                 Ok(Outcome::NeedsApproval {
                     command: id,
-                    reason: attente.reason,
-                    preview: attente.preview,
+                    reason: pending.reason,
+                    preview: pending.preview,
                 })
             }
 
@@ -576,21 +576,21 @@ impl Executor {
         command: CommandId,
         cancel: &CancelToken,
     ) -> Result<Outcome> {
-        let mut attente = self.approvals.take(command)?;
-        let connection = attente.command.target_connection();
+        let mut pending = self.approvals.take(command)?;
+        let connection = pending.command.target_connection();
 
         // The connection may have been marked production while waiting.
-        let env = self.environment_of(&attente.command);
-        let retained = self.policy.retained_environment(&attente.command, env);
-        attente.command = bounded_to(attente.command, retained);
-        let decision = self.policy.authorize(&attente.actor, &attente.command, env);
+        let env = self.environment_of(&pending.command);
+        let retained = self.policy.retained_environment(&pending.command, env);
+        pending.command = bounded_to(pending.command, retained);
+        let decision = self.policy.authorize(&pending.actor, &pending.command, env);
 
         if let Decision::Deny { reason } = &decision {
             let reason = reason.clone();
             let record =
-                decision_record(command, &attente.actor, &attente.command, &decision, None);
+                decision_record(command, &pending.actor, &pending.command, &decision, None);
             let denied = self
-                .history_record(&attente.actor, &attente.command)
+                .history_record(&pending.actor, &pending.command)
                 .map(|entry| entry.denied(reason.clone()));
             // The late denial is logged too: it is even the most interesting
             // trace of all, since an approval had been given.
@@ -598,13 +598,13 @@ impl Executor {
             // denial in `dispatch_as`.
             if self
                 .write_audit(move |store| {
-                    if let Err(erreur) = store.journal().append(&record) {
-                        tracing::error!(error = %erreur, command = %command, "late denial could not be journaled");
+                    if let Err(err) = store.journal().append(&record) {
+                        tracing::error!(error = %err, command = %command, "late denial could not be journaled");
                     }
                     if let Some(entry) = denied
-                        && let Err(erreur) = store.history().record(&entry)
+                        && let Err(err) = store.history().record(&entry)
                     {
-                        tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
+                        tracing::error!(error = %err, "a denied statement could not be recorded in the query history");
                     }
                 })
                 .await
@@ -622,12 +622,12 @@ impl Executor {
             return Ok(Outcome::Denied { command, reason });
         }
 
-        // No more destructuring of `attente` before execution: `run` writes
+        // No more destructuring of `pending` before execution: `run` writes
         // the decision itself, as the first operation of its window.
         self.run(
             command,
-            &attente.actor,
-            &attente.command,
+            &pending.actor,
+            &pending.command,
             &decision,
             cancel,
             Some(approved_by),
@@ -683,9 +683,9 @@ impl Executor {
                 Ok(
                     starting.and_then(|record| match store.history().record(&record) {
                         Ok(history_id) => Some((history_id, record)),
-                        Err(erreur) => {
+                        Err(err) => {
                             tracing::error!(
-                                error = %erreur,
+                                error = %err,
                                 "a submitted statement could not be recorded in the query history"
                             );
                             None
@@ -696,34 +696,34 @@ impl Executor {
             .await
             .and_then(|inner| inner);
 
-        let en_cours = match write {
-            Ok(en_cours) => en_cours,
-            Err(erreur) => {
-                tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
+        let in_progress = match write {
+            Ok(in_progress) => in_progress,
+            Err(err) => {
+                tracing::error!(error = %err, command = %id, "policy decision could not be journaled");
                 // Nothing ran: there is no outcome to write, and no hole in
                 // the audit trail to leave behind.
                 guard.settle();
-                return Err(erreur);
+                return Err(err);
             }
         };
 
-        let debut = Instant::now();
-        let issue = self.execute_command(id, command, cancel).await;
+        let start = Instant::now();
+        let result_outcome = self.execute_command(id, command, cancel).await;
         guard.settle();
-        let duree = debut.elapsed();
+        let duration = start.elapsed();
 
         let mut outcome = outcome_record(
             id,
             actor,
             command,
-            duree,
-            issue.as_ref().ok().and_then(Outcome::rows),
+            duration,
+            result_outcome.as_ref().ok().and_then(Outcome::rows),
             approved_by,
         );
-        if let Err(erreur) = &issue {
-            outcome = outcome.failed(erreur);
+        if let Err(err) = &result_outcome {
+            outcome = outcome.failed(err);
         }
-        let finishing = finished_history_record(en_cours, &issue, duree);
+        let finishing = finished_history_record(in_progress, &result_outcome, duration);
 
         // Submitted right away, with no `.await` between `guard.settle()`
         // above and this call: the window `OutcomeGuard` covers stays
@@ -731,9 +731,9 @@ impl Executor {
         // and the moment this operation is queued.
         let written = self
             .write_audit(move |store| {
-                if let Err(erreur) = store.journal().append(&outcome) {
+                if let Err(err) = store.journal().append(&outcome) {
                     tracing::error!(
-                        error = %erreur,
+                        error = %err,
                         command = %id,
                         "failed to journal the outcome of a command that already ran"
                     );
@@ -742,8 +742,8 @@ impl Executor {
                 match store.history().finish(history_id, &record) {
                     Ok(true) => Some(record.status),
                     Ok(false) => None,
-                    Err(erreur) => {
-                        tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
+                    Err(err) => {
+                        tracing::error!(error = %err, "the outcome of a statement could not be written to the query history");
                         None
                     }
                 }
@@ -762,7 +762,7 @@ impl Executor {
             }
         }
 
-        issue
+        result_outcome
     }
 
     /// The dispatch proper.
@@ -1022,7 +1022,7 @@ impl Executor {
                 let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
                     OxynError::Config("export requires the application runtime".into())
                 })?;
-                let resume = runtime
+                let summary = runtime
                     .spawn_blocking(move || -> Result<_> {
                         // Never `File::create`: it would truncate the file already
                         // there before knowing whether the export succeeds.
@@ -1038,8 +1038,8 @@ impl Executor {
                     .map_err(|_| OxynError::Internal("export worker stopped".into()))??;
                 Ok(Outcome::Exported {
                     result: *result,
-                    rows: resume.rows,
-                    bytes: resume.bytes,
+                    rows: summary.rows,
+                    bytes: summary.bytes,
                 })
             }
 
@@ -1304,9 +1304,9 @@ impl Executor {
             Command::RemoveAiProvider { id } => {
                 let store = self.store.clone();
                 let provider = id.clone();
-                let cible = id.clone();
+                let dest = id.clone();
                 let existed = self
-                    .local_worker(cancel, move |_cancel| store.providers().remove(&cible))
+                    .local_worker(cancel, move |_cancel| store.providers().remove(&dest))
                     .await?;
                 Ok(Outcome::AiProviderRemoved { provider, existed })
             }
@@ -1327,21 +1327,19 @@ impl Executor {
                 agent.validate()?;
                 let store = self.store.clone();
                 let declaration = (**agent).clone();
-                let identite = declaration.id.clone();
+                let identity = declaration.id.clone();
                 self.local_worker(cancel, move |_cancel| {
                     store.external_agents().save(&declaration)
                 })
                 .await?;
-                Ok(Outcome::ExternalAgentSaved { agent: identite })
+                Ok(Outcome::ExternalAgentSaved { agent: identity })
             }
             Command::RemoveExternalAgent { id } => {
                 let store = self.store.clone();
                 let agent = id.clone();
-                let cible = id.clone();
+                let dest = id.clone();
                 let existed = self
-                    .local_worker(cancel, move |_cancel| {
-                        store.external_agents().remove(&cible)
-                    })
+                    .local_worker(cancel, move |_cancel| store.external_agents().remove(&dest))
                     .await?;
                 Ok(Outcome::ExternalAgentRemoved { agent, existed })
             }
@@ -1390,10 +1388,10 @@ impl Executor {
         cancel: &CancelToken,
     ) -> Result<Outcome> {
         let session = self.open_driver_session(config, cancel).await?;
-        if let Err(erreur) = session.close().await {
+        if let Err(err) = session.close().await {
             // The opening succeeded, which is what was asked; a refused close
             // frees the local resources all the same.
-            tracing::warn!(error = %erreur, "the server refused a clean close of a test session");
+            tracing::warn!(error = %err, "the server refused a clean close of a test session");
         }
         Ok(Outcome::ConnectionTested {
             connection: config.id,
@@ -1433,10 +1431,10 @@ impl Executor {
         }
         let mut closed = 0;
         for slot in self.sessions.drain_connection(connection) {
-            if let Err(erreur) = slot.close().await {
+            if let Err(err) = slot.close().await {
                 // Local resources are released in every case; a closing refused
                 // by the server cannot be made up for.
-                tracing::warn!(error = %erreur, "the server refused a clean session close");
+                tracing::warn!(error = %err, "the server refused a clean session close");
             }
             closed += 1;
         }
@@ -1739,7 +1737,7 @@ impl Executor {
         self.events
             .publish(id, Some(connection), Event::SchemaReady { result });
 
-        let issue = self
+        let outcome = self
             .drain(
                 Coordinates {
                     command: id,
@@ -1755,16 +1753,16 @@ impl Executor {
             .await;
 
         // An abandonment — timeout or cancellation — must reach the server.
-        let interrompue = matches!(issue, Ok(SinkOutcome::Cancelled))
-            || matches!(issue, Err(OxynError::Timeout { .. }));
-        if interrompue {
+        let interrupted = matches!(outcome, Ok(SinkOutcome::Cancelled))
+            || matches!(outcome, Err(OxynError::Timeout { .. }));
+        if interrupted {
             self.running.cancel(&self.sessions, statement).await;
         }
         Ok(Drained {
             result,
             statement,
             buffer,
-            issue,
+            outcome,
         })
     }
 
@@ -1834,11 +1832,11 @@ impl Executor {
             result,
             statement,
             buffer,
-            issue,
+            outcome,
         } = run?;
         self.prune_results();
 
-        match issue {
+        match outcome {
             Ok(sink) => {
                 let stats = buffer.stats();
                 if sink != SinkOutcome::Cancelled && intent == oxyn_core::StatementIntent::Ddl {
@@ -1866,10 +1864,10 @@ impl Executor {
                     sink,
                 })
             }
-            Err(erreur) => {
+            Err(error) => {
                 self.events
-                    .publish(id, Some(connection), Event::failed(&erreur));
-                Err(erreur)
+                    .publish(id, Some(connection), Event::failed(&error));
+                Err(error)
             }
         }
     }
@@ -1918,7 +1916,7 @@ impl Executor {
 
         match tokio::time::timeout_at(deadline.at, sink.drain_with(&mut source, ct, on_batch)).await
         {
-            Ok(issue) => issue,
+            Ok(outcome) => outcome,
             Err(_) => {
                 // The draining future was just abandoned, perhaps after
                 // consuming bytes from the stream: the cursor is burnt. The
@@ -2102,8 +2100,8 @@ impl Executor {
             .cancel_connection(&self.sessions, connection)
             .await;
         for slot in self.sessions.drain_connection(connection) {
-            if let Err(erreur) = slot.close().await {
-                tracing::warn!(error = %erreur, "the server refused a clean session close");
+            if let Err(err) = slot.close().await {
+                tracing::warn!(error = %err, "the server refused a clean session close");
             }
         }
         let store = Arc::clone(&self.store);
@@ -2243,7 +2241,7 @@ impl Executor {
             Command::CreateConnection { config }
             | Command::UpdateConnection { config }
             | Command::TestConnection { config } => config.environment,
-            autre => autre
+            other => other
                 .target_connection()
                 .and_then(|id| self.connections.read().get(&id).map(|c| c.environment))
                 .unwrap_or_default(),
@@ -2374,11 +2372,11 @@ impl Executor {
         }
         let sessions = self.sessions.drain_all();
         for slot in &sessions {
-            for entree in self.running.for_session(slot.id()) {
-                entree.token().cancel();
+            for entry in self.running.for_session(slot.id()) {
+                entry.token().cancel();
             }
-            if let Err(erreur) = slot.close().await {
-                tracing::warn!(error = %erreur, "the server refused a clean session close");
+            if let Err(err) = slot.close().await {
+                tracing::warn!(error = %err, "the server refused a clean session close");
             }
         }
         // Again, last: closing may have abandoned more, and nothing after this
@@ -2439,8 +2437,8 @@ fn append_outcomes(store: &Store, records: std::collections::VecDeque<JournalRec
     for record in records {
         match store.journal().append(&record) {
             Ok(_) => written += 1,
-            Err(erreur) => tracing::error!(
-                error = %erreur,
+            Err(err) => tracing::error!(
+                error = %err,
                 command = ?record.command_id,
                 "failed to journal the outcome of an abandoned command"
             ),
@@ -2474,12 +2472,12 @@ fn decision_record(
 ///
 /// Pure, for the same reason as [`decision_record`].
 fn finished_history_record(
-    en_cours: Option<(i64, HistoryRecord)>,
-    issue: &Result<Outcome>,
+    in_progress: Option<(i64, HistoryRecord)>,
+    result_outcome: &Result<Outcome>,
     duration: Duration,
 ) -> Option<(i64, HistoryRecord)> {
-    let (id, record) = en_cours?;
-    let mut record = match issue {
+    let (id, record) = in_progress?;
+    let mut record = match result_outcome {
         // An interrupted draining returns `Ok`: the command did not fail, but
         // it did not return its whole result. Classifying it "succeeded" would
         // make a truncated result read as a complete one.
@@ -2491,15 +2489,15 @@ fn finished_history_record(
             .succeeded(duration, Some(stats.rows))
             .failed(&OxynError::Cancelled),
         Ok(outcome) => record.succeeded(duration, outcome.rows()),
-        Err(erreur) => {
+        Err(error) => {
             // A failure has a duration too: "timed out after 30 s" and
             // "rejected in 2 ms" do not describe the same incident.
-            let mut echouee = record.failed(erreur);
-            echouee.duration = Some(duration);
-            echouee
+            let mut failure = record.failed(error);
+            failure.duration = Some(duration);
+            failure
         }
     };
-    if let Ok(Outcome::Executed { result, .. }) = issue {
+    if let Ok(Outcome::Executed { result, .. }) = result_outcome {
         record.result = Some(*result);
     }
     Some((id, record))
@@ -2585,7 +2583,7 @@ struct Drained {
     statement: StatementHandle,
     buffer: Arc<ResultBuffer>,
     /// How the drain ended: `Err` for a failure, `Ok(Cancelled)` for a Stop.
-    issue: Result<SinkOutcome>,
+    outcome: Result<SinkOutcome>,
 }
 
 /// Reclassifies an execution command from its text alone.
@@ -2608,7 +2606,7 @@ fn reclassified(command: Command) -> Command {
                 request: Box::new(classification.qualify(*request)),
             }
         }
-        autre => autre,
+        other => other,
     }
 }
 
@@ -2636,7 +2634,7 @@ fn bounded_to(command: Command, env: Environment) -> Command {
                 request,
             }
         }
-        autre => autre,
+        other => other,
     }
 }
 
@@ -2770,41 +2768,41 @@ mod tests {
     /// session. No driver is registered — the tests that follow are about what
     /// happens **before** a driver is reached, and that is precisely what
     /// matters.
-    struct Banc {
-        executeur: Executor,
-        politique: Arc<DefaultPolicy>,
+    struct Harness {
+        executor: Executor,
+        policy: Arc<DefaultPolicy>,
         store: Arc<Store>,
     }
 
-    impl Banc {
-        fn new(connexion: &ConnectionConfig) -> Self {
+    impl Harness {
+        fn new(connection: &ConnectionConfig) -> Self {
             let store = Arc::new(Store::open_in_memory().expect("in-memory local state"));
-            let atelier = store
+            let setup = store
                 .workspaces()
                 .create("tests")
                 .expect("workspace creation");
             store
                 .connections()
-                .save(atelier.id, connexion)
+                .save(setup.id, connection)
                 .expect("saving the connection");
 
-            let politique = Arc::new(DefaultPolicy::new());
-            politique.register(connexion);
+            let policy = Arc::new(DefaultPolicy::new());
+            policy.register(connection);
 
-            // `politique.clone()` and not `Arc::clone(&politique)`: the function
+            // `policy.clone()` and not `Arc::clone(&policy)`: the function
             // form resolves `T` from the expected type — hence `dyn PolicyGate` —
             // and demands a `&Arc<dyn PolicyGate>` before any coercion. In method
             // syntax, `T` comes from the receiver, and the obtained
             // `Arc<DefaultPolicy>` coerces at assignment.
-            let gate: Arc<dyn PolicyGate> = politique.clone();
-            let executeur = Executor::builder(Arc::clone(&store), gate)
-                .with_workspace(atelier.id)
+            let gate: Arc<dyn PolicyGate> = policy.clone();
+            let executor = Executor::builder(Arc::clone(&store), gate)
+                .with_workspace(setup.id)
                 .build();
-            executeur.register_connection(connexion);
+            executor.register_connection(connection);
 
             Self {
-                executeur,
-                politique,
+                executor,
+                policy,
                 store,
             }
         }
@@ -2814,12 +2812,12 @@ mod tests {
         Actor::agent(AgentId::new(), AgentSessionId::new())
     }
 
-    fn execution(connexion: ConnectionId, texte: &str, intent: StatementIntent) -> Command {
+    fn execution(conn: ConnectionId, text: &str, intent: StatementIntent) -> Command {
         Command::Execute {
-            connection: connexion,
+            connection: conn,
             session: SessionId::new(),
             request: Box::new(
-                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), texte)
+                ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), text)
                     .with_intent(intent)
                     .with_limits(
                         ExecLimits::default()
@@ -2844,26 +2842,23 @@ mod tests {
     /// agent had declared.
     #[test]
     fn an_agent_cannot_delete_on_a_production_connection() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let banc = Banc::new(&connexion);
-        let mut evenements = banc.executeur.subscribe();
+        let bench = Harness::new(&connection);
+        let mut events = bench.executor.subscribe();
 
         // The agent declares itself read-only.
-        let commande = execution(
-            connexion.id,
+        let cmd = execution(
+            connection.id,
             "DELETE FROM clients WHERE 1=1",
             StatementIntent::Read,
         );
 
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
-        )
-        .expect("a denial is not a failure");
+        let outcome = block_on(bench.executor.dispatch(agent(), cmd, &CancelToken::new()))
+            .expect("a denial is not a failure");
 
-        let Outcome::Denied { command, reason } = issue else {
-            panic!("an agent must be refused on a production connection: {issue:?}");
+        let Outcome::Denied { command, reason } = outcome else {
+            panic!("an agent must be refused on a production connection: {outcome:?}");
         };
         assert!(
             reason.contains("production"),
@@ -2872,12 +2867,12 @@ mod tests {
 
         // Nothing awaits approval: it is a refusal, not a confirmation.
         assert!(
-            banc.executeur.approvals().is_empty(),
+            bench.executor.approvals().is_empty(),
             "a denial puts nothing on hold for approval"
         );
 
         // The log saw the **real** intent, not the declared one.
-        let trace = banc
+        let trace = bench
             .store
             .journal()
             .recent(1)
@@ -2899,9 +2894,12 @@ mod tests {
         );
 
         // And the interface learns it through the channel, not by polling a state.
-        let recu = evenements.try_recv().expect("an event was emitted");
-        assert_eq!(recu.command, command);
-        assert!(matches!(recu.event, Event::Failed { .. }), "{recu:?}");
+        let received = events.try_recv().expect("an event was emitted");
+        assert_eq!(received.command, command);
+        assert!(
+            matches!(received.event, Event::Failed { .. }),
+            "{received:?}"
+        );
     }
 
     /// **A denied command leaves a trace.**
@@ -2911,36 +2909,41 @@ mod tests {
     #[test]
     fn the_log_holds_an_entry_even_when_the_command_is_denied() {
         // Read-only connection: the refusal applies to a human too.
-        let connexion = ConnectionConfig::new("replica", DriverId::postgres())
+        let connection = ConnectionConfig::new("replica", DriverId::postgres())
             .with_environment(Environment::Local)
             .read_only();
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
         assert_eq!(
-            banc.store.journal().count().expect("comptage"),
+            bench.store.journal().count().expect("count"),
             0,
             "the log starts empty"
         );
 
-        let commande = execution(connexion.id, "DROP TABLE clients", StatementIntent::Unknown);
-        let issue = block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        let command = execution(
+            connection.id,
+            "DROP TABLE clients",
+            StatementIntent::Unknown,
+        );
+        let outcome = block_on(
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
         .expect("a denial is not a failure");
-        assert!(issue.is_denied(), "{issue:?}");
-        assert!(!issue.took_effect());
+        assert!(outcome.is_denied(), "{outcome:?}");
+        assert!(!outcome.took_effect());
 
         assert_eq!(
-            banc.store.journal().count().expect("comptage"),
+            bench.store.journal().count().expect("count"),
             1,
             "a denied command is logged like the others"
         );
-        let trace = banc
+        let trace = bench
             .store
             .journal()
             .recent(1)
-            .expect("relecture")
+            .expect("read back")
             .pop()
             .expect("one entry");
         assert_eq!(trace.record.decision, PolicyOutcome::Denied);
@@ -2955,57 +2958,54 @@ mod tests {
                 .record
                 .decision_reason
                 .as_deref()
-                .is_some_and(|motif| motif.contains("read-only")),
+                .is_some_and(|pattern| pattern.contains("read-only")),
             "{:?}",
             trace.record.decision_reason
         );
 
         // And the trace survives what the user can erase.
-        banc.store.history().clear().expect("purging the history");
-        assert_eq!(banc.store.journal().count().expect("comptage"), 1);
+        bench.store.history().clear().expect("purging the history");
+        assert_eq!(bench.store.journal().count().expect("count"), 1);
     }
 
     // ── The rest of the sequence ────────────────────────────────────────────
 
     #[test]
     fn an_agent_write_outside_production_waits_for_approval_and_executes_nothing() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::postgres())
+        let conn = ConnectionConfig::new("atelier", DriverId::postgres())
             .with_environment(Environment::Development);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        let commande = execution(
-            connexion.id,
-            "UPDATE clients SET actif = true WHERE id = 1",
+        let cmd = execution(
+            conn.id,
+            "UPDATE clients SET active = true WHERE id = 1",
             StatementIntent::Read,
         );
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
-        )
-        .expect("an approval request is not a failure");
+        let outcome = block_on(bench.executor.dispatch(agent(), cmd, &CancelToken::new()))
+            .expect("an approval request is not a failure");
 
         let Outcome::NeedsApproval {
             command, preview, ..
-        } = issue
+        } = outcome
         else {
-            panic!("an agent write must request an approval: {issue:?}");
+            panic!("an agent write must request an approval: {outcome:?}");
         };
 
         // The preview names the connection, never its identifier.
         let preview = preview.expect("a preview");
         assert_eq!(preview.connection, "atelier");
-        assert!(!preview.connection.contains(&connexion.id.to_string()));
+        assert!(!preview.connection.contains(&conn.id.to_string()));
 
         // Nothing was executed: no session was even looked for.
-        assert_eq!(banc.executeur.approvals().len(), 1);
-        assert!(banc.executeur.running().is_empty());
+        assert_eq!(bench.executor.approvals().len(), 1);
+        assert!(bench.executor.running().is_empty());
 
         // And the trace of the request is already in the log.
-        let trace = banc
+        let trace = bench
             .store
             .journal()
             .recent(1)
-            .expect("relecture")
+            .expect("read back")
             .pop()
             .expect("one entry");
         assert_eq!(trace.record.decision, PolicyOutcome::ApprovalRequired);
@@ -3014,22 +3014,19 @@ mod tests {
 
     #[test]
     fn an_unknown_or_stale_approval_executes_nothing() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
-        let issue = block_on(banc.executeur.approve(
+        let outcome = block_on(bench.executor.approve(
             "nicolas",
             CommandId::new(),
             &CancelToken::new(),
         ));
-        let erreur = issue.expect_err("a moot approval is refused");
-        assert!(
-            matches!(erreur, OxynError::PolicyDenied { .. }),
-            "{erreur:?}"
-        );
+        let error = outcome.expect_err("a moot approval is refused");
+        assert!(matches!(error, OxynError::PolicyDenied { .. }), "{error:?}");
         assert_eq!(
-            banc.store.journal().count().expect("comptage"),
+            bench.store.journal().count().expect("count"),
             0,
             "nothing went through the gate: there is nothing to log"
         );
@@ -3039,66 +3036,62 @@ mod tests {
     fn an_approval_does_not_survive_a_stricter_marking() {
         // The connection is open when the approval is requested, marked
         // read-only when it is given. The late refusal wins over the approval.
-        let connexion = ConnectionConfig::new("atelier", DriverId::postgres())
+        let connection = ConnectionConfig::new("atelier", DriverId::postgres())
             .with_environment(Environment::Development);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
-        let commande = execution(
-            connexion.id,
-            "UPDATE clients SET actif = true WHERE id = 1",
+        let cmd = execution(
+            connection.id,
+            "UPDATE clients SET active = true WHERE id = 1",
             StatementIntent::Write,
         );
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
-        )
-        .expect("approval request");
-        let Outcome::NeedsApproval { command, .. } = issue else {
-            panic!("{issue:?}");
+        let outcome = block_on(bench.executor.dispatch(agent(), cmd, &CancelToken::new()))
+            .expect("approval request");
+        let Outcome::NeedsApproval { command, .. } = outcome else {
+            panic!("{outcome:?}");
         };
 
         // Meanwhile, the user marks the connection read-only.
-        let stricte = connexion.clone().read_only();
-        banc.politique.register(&stricte);
-        banc.executeur.register_connection(&stricte);
+        let strict = connection.clone().read_only();
+        bench.policy.register(&strict);
+        bench.executor.register_connection(&strict);
 
-        let issue = block_on(
-            banc.executeur
+        let outcome = block_on(
+            bench
+                .executor
                 .approve("nicolas", command, &CancelToken::new()),
         )
         .expect("a late denial is not a failure");
-        assert!(issue.is_denied(), "{issue:?}");
+        assert!(outcome.is_denied(), "{outcome:?}");
     }
 
     #[test]
     fn a_write_under_read_only_limits_is_refused() {
         // `ExecLimits::default()` is read-only: writing is always an explicit
         // request. It is the last barrier before the driver.
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: conn.id,
             session: SessionId::new(),
             request: Box::new(ExecRequest::new(
                 QueryLanguage::Sql(SqlDialect::Sqlite),
-                "INSERT INTO clients (nom) VALUES ('x')",
+                "INSERT INTO clients (name) VALUES ('x')",
             )),
         };
 
-        let erreur = block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        let error = block_on(
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
         .expect_err("the inconsistency is settled on the cautious side");
-        assert!(
-            matches!(erreur, OxynError::PolicyDenied { .. }),
-            "{erreur:?}"
-        );
+        assert!(matches!(error, OxynError::PolicyDenied { .. }), "{error:?}");
 
         // Two entries: the policy decision, then the outcome.
-        assert_eq!(banc.store.journal().count().expect("comptage"), 2);
+        assert_eq!(bench.store.journal().count().expect("count"), 2);
     }
 
     #[test]
@@ -3106,75 +3099,76 @@ mod tests {
         // The gate allows; execution fails because no session is open. What
         // this test checks is that the failure comes **after** the gate, and
         // that both log entries are written.
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Unknown);
-        let erreur = block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Unknown);
+        let err = block_on(
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
         .expect_err("no session is open");
-        assert!(matches!(erreur, OxynError::Connection(_)), "{erreur:?}");
+        assert!(matches!(err, OxynError::Connection(_)), "{err:?}");
 
-        let entrees = banc.store.journal().recent(2).expect("relecture");
-        assert_eq!(entrees.len(), 2, "decision before, outcome after");
+        let entries = bench.store.journal().recent(2).expect("read back");
+        assert_eq!(entries.len(), 2, "decision before, outcome after");
         assert!(
-            entrees
+            entries
                 .iter()
                 .all(|e| e.record.decision == PolicyOutcome::Allowed),
             "the read was indeed authorized"
         );
         assert!(
-            entrees.iter().any(|e| e.record.error.is_some()),
+            entries.iter().any(|e| e.record.error.is_some()),
             "the execution failure is in the log"
         );
     }
 
     #[test]
     fn a_connection_unknown_to_the_executor_counts_as_production() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        banc.executeur.forget_connection(connexion.id);
+        let bench = Harness::new(&connection);
+        bench.executor.forget_connection(connection.id);
 
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Read);
         assert_eq!(
-            banc.executeur.environment_of(&commande),
+            bench.executor.environment_of(&command),
             Environment::Production
         );
     }
 
     #[test]
     fn the_executor_debug_shows_no_content() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
-            .with_param("host", "interne.example");
-        let banc = Banc::new(&connexion);
-        let rendu = format!("{:?}", banc.executeur);
-        assert!(!rendu.contains("interne.example"), "{rendu}");
-        assert!(rendu.contains("DefaultPolicy"), "{rendu}");
+        let connection = ConnectionConfig::new("base client", DriverId::postgres())
+            .with_param("host", "internal.example");
+        let bench = Harness::new(&connection);
+        let rendered = format!("{:?}", bench.executor);
+        assert!(!rendered.contains("internal.example"), "{rendered}");
+        assert!(rendered.contains("DefaultPolicy"), "{rendered}");
     }
 
     #[test]
     fn a_cancellation_is_always_allowed() {
         // Refusing a cancellation protects nothing and leaves a query running.
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+        let conn = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        let issue = block_on(banc.executeur.dispatch(
+        let outcome = block_on(bench.executor.dispatch(
             agent(),
             Command::Cancel {
-                connection: connexion.id,
+                connection: conn.id,
                 statement: StatementHandle::new(),
             },
             &CancelToken::new(),
         ))
         .expect("cancelling is not refused");
 
-        let Outcome::Cancelled { report } = issue else {
-            panic!("{issue:?}");
+        let Outcome::Cancelled { report } = outcome else {
+            panic!("{outcome:?}");
         };
         assert!(!report.was_running, "the target execution does not exist");
     }
@@ -3186,17 +3180,17 @@ mod tests {
     /// It only serves to prove the history's nominal path: without an
     /// execution that succeeds, the `succeeded` row exists in no test, and it
     /// is exactly the one that was missing until now.
-    struct SessionFactice;
+    struct StubSession;
 
     #[async_trait::async_trait]
-    impl oxyn_driver::Session for SessionFactice {
+    impl oxyn_driver::Session for StubSession {
         fn capabilities(&self) -> Capabilities {
             Capabilities::SQL | Capabilities::TABLES
         }
         async fn execute(&self, _: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
-            Ok(Box::new(CurseurFactice {
+            Ok(Box::new(FakeCursor {
                 handle: StatementHandle::new(),
-                rendu: false,
+                rendered: false,
                 stats: ExecStats::default(),
             }))
         }
@@ -3214,38 +3208,38 @@ mod tests {
         }
     }
 
-    struct CurseurFactice {
+    struct FakeCursor {
         handle: StatementHandle,
-        rendu: bool,
+        rendered: bool,
         stats: ExecStats,
     }
 
-    fn schema_factice() -> arrow::datatypes::SchemaRef {
+    fn fake_schema() -> arrow::datatypes::SchemaRef {
         Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
         ]))
     }
 
     #[async_trait::async_trait]
-    impl Cursor for CurseurFactice {
+    impl Cursor for FakeCursor {
         fn handle(&self) -> StatementHandle {
             self.handle
         }
         fn schema(&self) -> arrow::datatypes::SchemaRef {
-            schema_factice()
+            fake_schema()
         }
         async fn next_batch(&mut self) -> Result<Option<arrow::record_batch::RecordBatch>> {
-            if self.rendu {
+            if self.rendered {
                 return Ok(None);
             }
-            self.rendu = true;
-            let lot = arrow::record_batch::RecordBatch::try_new(
-                schema_factice(),
+            self.rendered = true;
+            let batch = arrow::record_batch::RecordBatch::try_new(
+                fake_schema(),
                 vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2]))],
             )
             .expect("the column matches the schema built just above");
             self.stats.record_batch(2, 0);
-            Ok(Some(lot))
+            Ok(Some(batch))
         }
         fn stats(&self) -> ExecStats {
             self.stats
@@ -3258,16 +3252,16 @@ mod tests {
     /// query returned does not answer the question it is asked.
     #[test]
     fn a_successful_execution_is_recorded_with_its_duration_and_rows() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        let session = banc
-            .executeur
+        let bench = Harness::new(&conn);
+        let session = bench
+            .executor
             .sessions
-            .insert(SessionSlot::new(connexion.id, Box::new(SessionFactice)));
+            .insert(SessionSlot::new(conn.id, Box::new(StubSession)));
 
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: conn.id,
             session: session.id(),
             request: Box::new(
                 ExecRequest::new(
@@ -3281,34 +3275,35 @@ mod tests {
             ),
         };
         block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
         .expect("the execution succeeds");
 
-        let entree = banc
+        let entry = bench
             .store
             .history()
             .recent(10)
             .expect("reading the history back")
             .pop()
             .expect("an execution leaves an entry");
-        assert_eq!(entree.record.status, HistoryStatus::Succeeded);
-        assert_eq!(entree.record.rows, Some(2));
-        assert!(entree.record.duration.is_some(), "a duration is measured");
-        assert_eq!(entree.record.statement, "SELECT id FROM clients");
+        assert_eq!(entry.record.status, HistoryStatus::Succeeded);
+        assert_eq!(entry.record.rows, Some(2));
+        assert!(entry.record.duration.is_some(), "a duration is measured");
+        assert_eq!(entry.record.statement, "SELECT id FROM clients");
         // The name is copied to survive the connection's deletion.
-        assert_eq!(entree.record.connection_name.as_deref(), Some("atelier"));
-        assert!(entree.record.error.is_none());
+        assert_eq!(entry.record.connection_name.as_deref(), Some("atelier"));
+        assert!(entry.record.error.is_none());
     }
 
     /// The `HistoryRecorded` received so far, without waiting.
-    fn inscriptions_annoncees(
-        evenements: &mut tokio::sync::broadcast::Receiver<crate::events::ExecEvent>,
+    fn announced_registrations(
+        received_events: &mut tokio::sync::broadcast::Receiver<crate::events::ExecEvent>,
     ) -> Vec<Option<ConnectionId>> {
-        std::iter::from_fn(|| evenements.try_recv().ok())
-            .filter(|recu| recu.event == Event::HistoryRecorded)
-            .map(|recu| recu.connection)
+        std::iter::from_fn(|| received_events.try_recv().ok())
+            .filter(|received| received.event == Event::HistoryRecorded)
+            .map(|received| received.connection)
             .collect()
     }
 
@@ -3319,18 +3314,18 @@ mod tests {
     /// progress".
     #[test]
     fn a_successful_read_announces_its_history_record() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        let session = banc
-            .executeur
+        let bench = Harness::new(&conn);
+        let session = bench
+            .executor
             .sessions
-            .insert(SessionSlot::new(connexion.id, Box::new(SessionFactice)));
-        let mut evenements = banc.executeur.subscribe();
+            .insert(SessionSlot::new(conn.id, Box::new(StubSession)));
+        let mut events = bench.executor.subscribe();
 
-        for acteur in [Actor::Human, agent()] {
-            let commande = Command::Execute {
-                connection: connexion.id,
+        for actor in [Actor::Human, agent()] {
+            let command = Command::Execute {
+                connection: conn.id,
                 session: session.id(),
                 request: Box::new(
                     ExecRequest::new(
@@ -3341,25 +3336,22 @@ mod tests {
                     .with_limits(ExecLimits::default().with_timeout(None::<Duration>)),
                 ),
             };
-            block_on(
-                banc.executeur
-                    .dispatch(acteur, commande, &CancelToken::new()),
-            )
-            .expect("the execution succeeds");
+            block_on(bench.executor.dispatch(actor, command, &CancelToken::new()))
+                .expect("the execution succeeds");
 
             assert_eq!(
-                inscriptions_annoncees(&mut evenements),
-                vec![Some(connexion.id)],
+                announced_registrations(&mut events),
+                vec![Some(conn.id)],
                 "one announcement per successful execution, attached to its connection"
             );
-            let entree = banc
+            let entry = bench
                 .store
                 .history()
                 .recent(1)
-                .expect("relecture")
+                .expect("read back")
                 .pop()
                 .expect("an execution leaves an entry");
-            assert_eq!(entree.record.status, HistoryStatus::Succeeded);
+            assert_eq!(entry.record.status, HistoryStatus::Succeeded);
         }
     }
 
@@ -3367,19 +3359,20 @@ mod tests {
     /// teaches nothing the displayed error does not already say.
     #[test]
     fn a_failure_announces_no_record() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
-        let mut evenements = banc.executeur.subscribe();
+        let bench = Harness::new(&connection);
+        let mut events = bench.executor.subscribe();
 
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Read);
         block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect_err("aucune session sous cet identifiant");
+        .expect_err("no session under this identifier");
 
-        assert!(inscriptions_annoncees(&mut evenements).is_empty());
+        assert!(announced_registrations(&mut events).is_empty());
     }
 
     /// **An execution that fails leaves the error, not a silence.**
@@ -3389,31 +3382,32 @@ mod tests {
     /// effect is unknown (I-13).
     #[test]
     fn a_failure_is_recorded_with_its_error_and_family() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&connection);
 
         // No session is open: execution fails before the driver.
-        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        let command = execution(connection.id, "SELECT 1", StatementIntent::Read);
         block_on(
-            banc.executeur
-                .dispatch(Actor::Human, commande, &CancelToken::new()),
+            bench
+                .executor
+                .dispatch(Actor::Human, command, &CancelToken::new()),
         )
-        .expect_err("aucune session sous cet identifiant");
+        .expect_err("no session under this identifier");
 
-        let entree = banc
+        let entry = bench
             .store
             .history()
             .recent(10)
-            .expect("relecture")
+            .expect("read back")
             .pop()
             .expect("a failure leaves an entry");
-        assert_eq!(entree.record.status, HistoryStatus::Failed);
-        assert!(entree.record.error.is_some(), "the error is kept");
-        assert!(entree.record.duration.is_some(), "a failure has a duration");
+        assert_eq!(entry.record.status, HistoryStatus::Failed);
+        assert!(entry.record.error.is_some(), "the error is kept");
+        assert!(entry.record.duration.is_some(), "a failure has a duration");
         // The family is kept as data, never inferred from the message.
         assert_eq!(
-            entree.record.error_class,
+            entry.record.error_class,
             Some(ErrorClass::Transient),
             "a missing session is reopened: it is transient"
         );
@@ -3425,42 +3419,43 @@ mod tests {
     /// query they did run.
     #[test]
     fn a_denial_is_recorded_with_its_reason_and_no_bound_value() {
-        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+        let conn = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
         // The secret travels as a bound value, never in the text (I-03).
-        let commande = Command::Execute {
-            connection: connexion.id,
+        let command = Command::Execute {
+            connection: conn.id,
             session: SessionId::new(),
             request: Box::new(
                 ExecRequest::new(
                     QueryLanguage::Sql(SqlDialect::Postgres),
-                    "DELETE FROM clients WHERE jeton = $1",
+                    "DELETE FROM clients WHERE token = $1",
                 )
                 .with_intent(StatementIntent::Read)
                 .with_params(vec![oxyn_core::ScalarValue::Text(
-                    "hunter2-le-secret".to_owned(),
+                    "hunter2-the-secret".to_owned(),
                 )])
                 .with_limits(ExecLimits::default().writable()),
             ),
         };
-        let issue = block_on(
-            banc.executeur
-                .dispatch(agent(), commande, &CancelToken::new()),
+        let outcome = block_on(
+            bench
+                .executor
+                .dispatch(agent(), command, &CancelToken::new()),
         )
         .expect("a denial is not a failure");
-        assert!(issue.is_denied(), "{issue:?}");
+        assert!(outcome.is_denied(), "{outcome:?}");
 
-        let entrees = banc.store.history().recent(10).expect("relecture");
-        assert_eq!(entrees.len(), 1, "one denial, one row — not two");
-        let record = &entrees[0].record;
+        let entries = bench.store.history().recent(10).expect("read back");
+        assert_eq!(entries.len(), 1, "one denial, one row — not two");
+        let record = &entries[0].record;
         assert_eq!(record.status, HistoryStatus::Denied);
         assert!(
             record
                 .error
                 .as_deref()
-                .is_some_and(|motif| motif.contains("production")),
+                .is_some_and(|pattern| pattern.contains("production")),
             "{:?}",
             record.error
         );
@@ -3479,23 +3474,23 @@ mod tests {
     /// unreadable; they stay in the log, which records them all.
     #[test]
     fn a_command_that_is_not_an_execution_does_not_touch_history() {
-        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+        let conn = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
-        let banc = Banc::new(&connexion);
+        let bench = Harness::new(&conn);
 
-        block_on(banc.executeur.dispatch(
+        block_on(bench.executor.dispatch(
             Actor::Human,
             Command::Cancel {
-                connection: connexion.id,
+                connection: conn.id,
                 statement: StatementHandle::new(),
             },
             &CancelToken::new(),
         ))
         .expect("cancelling is not refused");
 
-        assert_eq!(banc.store.history().count().expect("comptage"), 0);
+        assert_eq!(bench.store.history().count().expect("count"), 0);
         assert!(
-            banc.store.journal().count().expect("comptage") > 0,
+            bench.store.journal().count().expect("count") > 0,
             "the log, for its part, records them all"
         );
     }

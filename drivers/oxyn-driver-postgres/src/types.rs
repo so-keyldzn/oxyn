@@ -234,10 +234,10 @@ impl PgDecoding {
 /// extension type whose OID varies from one installation to another.
 #[must_use]
 pub fn decoding_for(ty: &PgTypeInfo) -> PgDecoding {
-    if let Some(brut) = ty.oid()
-        && let Some(decodage) = decoding_for_oid(brut.0)
+    if let Some(raw_type) = ty.oid()
+        && let Some(decoding) = decoding_for_oid(raw_type.0)
     {
-        return decodage;
+        return decoding;
     }
 
     match ty.kind() {
@@ -252,8 +252,8 @@ pub fn decoding_for(ty: &PgTypeInfo) -> PgDecoding {
 }
 
 /// Decoding of a built-in type, recognized by its OID.
-fn decoding_for_oid(brut: u32) -> Option<PgDecoding> {
-    let decodage = match brut {
+fn decoding_for_oid(raw_type: u32) -> Option<PgDecoding> {
+    let decoding = match raw_type {
         oid::BOOL => PgDecoding::Bool,
         oid::INT2 => PgDecoding::Int16,
         oid::INT4 => PgDecoding::Int32,
@@ -290,7 +290,7 @@ fn decoding_for_oid(brut: u32) -> Option<PgDecoding> {
         oid::VOID => PgDecoding::Opaque,
         _ => return None,
     };
-    Some(decodage)
+    Some(decoding)
 }
 
 /// Decoding of an extension type, recognized by its name.
@@ -319,30 +319,28 @@ fn decoding_for_name(name: &str) -> PgDecoding {
 /// `text` even though both are `Utf8` columns.
 #[must_use]
 pub fn schema_for(columns: &[PgColumn]) -> (SchemaRef, Vec<PgDecoding>) {
-    let mut champs = Vec::with_capacity(columns.len());
-    let mut decodages = Vec::with_capacity(columns.len());
+    let mut fields = Vec::with_capacity(columns.len());
+    let mut decodings = Vec::with_capacity(columns.len());
 
-    for colonne in columns {
-        let type_info = colonne.type_info();
-        let decodage = decoding_for(type_info);
+    for column in columns {
+        let type_info = column.type_info();
+        let decoding = decoding_for(type_info);
 
-        let mut metadonnees = HashMap::with_capacity(2);
-        metadonnees.insert(META_PG_TYPE.to_owned(), type_info.name().to_owned());
-        if decodage.is_opaque() {
+        let mut metadata = HashMap::with_capacity(2);
+        metadata.insert(META_PG_TYPE.to_owned(), type_info.name().to_owned());
+        if decoding.is_opaque() {
             // Keep the original type attached to the raw binary payload.
-            metadonnees.insert(META_FALLBACK.to_owned(), "opaque".to_owned());
+            metadata.insert(META_FALLBACK.to_owned(), "opaque".to_owned());
         }
 
         // Every column is declared nullable: the server can return `NULL` in a
         // `NOT NULL` column as soon as an outer join comes into play, and a
         // schema that forbade it would make building the batch fail.
-        champs.push(
-            Field::new(colonne.name(), decodage.arrow_type(), true).with_metadata(metadonnees),
-        );
-        decodages.push(decodage);
+        fields.push(Field::new(column.name(), decoding.arrow_type(), true).with_metadata(metadata));
+        decodings.push(decoding);
     }
 
-    (Arc::new(Schema::new(champs)), decodages)
+    (Arc::new(Schema::new(fields)), decodings)
 }
 
 #[cfg(test)]
@@ -362,10 +360,10 @@ mod tests {
     #[test]
     fn numeric_never_becomes_a_float() {
         // The loss would be silent and would affect amounts.
-        let decodage = decoding_for_oid(oid::NUMERIC).expect("numeric is a built-in type");
-        assert_eq!(decodage, PgDecoding::Numeric);
-        assert_eq!(decodage.arrow_type(), DataType::Utf8);
-        assert_ne!(decodage.arrow_type(), DataType::Float64);
+        let decoding = decoding_for_oid(oid::NUMERIC).expect("numeric is a built-in type");
+        assert_eq!(decoding, PgDecoding::Numeric);
+        assert_eq!(decoding.arrow_type(), DataType::Utf8);
+        assert_ne!(decoding.arrow_type(), DataType::Float64);
     }
 
     #[test]
@@ -391,9 +389,9 @@ mod tests {
 
     #[test]
     fn an_array_becomes_a_list_of_the_same_element() {
-        let liste = PgDecoding::List(Box::new(PgDecoding::Int32));
+        let list = PgDecoding::List(Box::new(PgDecoding::Int32));
         assert_eq!(
-            liste.arrow_type(),
+            list.arrow_type(),
             DataType::List(Arc::new(Field::new("item", DataType::Int32, true)))
         );
     }
@@ -402,12 +400,12 @@ mod tests {
     fn the_list_field_type_is_the_one_the_decoder_builds() {
         // The name `item` is not decorative: `RecordBatch::try_new` compares
         // the schema field to that of the built array, and rejects the gap.
-        let DataType::List(champ) = PgDecoding::List(Box::new(PgDecoding::Text)).arrow_type()
+        let DataType::List(field) = PgDecoding::List(Box::new(PgDecoding::Text)).arrow_type()
         else {
             panic!("a list must produce a DataType::List");
         };
-        assert_eq!(champ.name(), "item");
-        assert!(champ.is_nullable(), "an array element can be NULL");
+        assert_eq!(field.name(), "item");
+        assert!(field.is_nullable(), "an array element can be NULL");
     }
 
     #[test]

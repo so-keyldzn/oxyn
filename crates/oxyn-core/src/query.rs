@@ -499,36 +499,36 @@ mod tests {
 
     #[test]
     fn an_unqualified_request_is_mutating() {
-        let demande = ExecRequest::new(QueryLanguage::SQL, "SELECT 1");
+        let request = ExecRequest::new(QueryLanguage::SQL, "SELECT 1");
         assert!(
-            demande.is_mutating(),
+            request.is_mutating(),
             "without a declared intent, we protect"
         );
     }
 
     #[test]
     fn an_inconsistent_declaration_is_settled_on_the_cautious_side() {
-        let demande = ExecRequest::new(QueryLanguage::SQL, "TRUNCATE t")
+        let request = ExecRequest::new(QueryLanguage::SQL, "TRUNCATE t")
             .with_intent(StatementIntent::Read)
             .with_risk(MutationRisk::Truncate);
         assert!(
-            demande.is_mutating(),
+            request.is_mutating(),
             "a reported risk prevails over a read intent"
         );
     }
 
     #[test]
     fn the_debug_masks_bound_values() {
-        let demande = ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM users WHERE ssn = $1")
+        let request = ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM users WHERE ssn = $1")
             .with_params(vec![ScalarValue::Text("123-45-6789".into())]);
-        let rendu = format!("{demande:?}");
+        let rendered = format!("{request:?}");
         assert!(
-            !rendu.contains("123-45-6789"),
-            "a bound value leaked into the Debug: {rendu}"
+            !rendered.contains("123-45-6789"),
+            "a bound value leaked into the Debug: {rendered}"
         );
-        assert!(rendu.contains("1 redacted bound value(s)"));
+        assert!(rendered.contains("1 redacted bound value(s)"));
         assert!(
-            rendu.contains("SELECT * FROM users"),
+            rendered.contains("SELECT * FROM users"),
             "the shape of the query stays loggable"
         );
     }
