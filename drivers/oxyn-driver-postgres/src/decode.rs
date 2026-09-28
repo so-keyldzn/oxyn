@@ -192,17 +192,23 @@ impl BatchAssembler {
 
             // The type name is composed only on the error path: here, one
             // allocation per cell would cost the budget of a whole result.
-            if let Err(detail) = column.append(format, encoded) {
-                return Err(DecodeError::Value {
-                    ordinal,
-                    pg_type: sanitize_type(
-                        row.columns()
-                            .get(ordinal)
-                            .map_or("unknown", |c| c.type_info().name()),
-                    ),
-                    detail,
-                });
-            }
+            let produced = match column.append(format, encoded) {
+                Ok(produced) => produced,
+                Err(detail) => {
+                    return Err(DecodeError::Value {
+                        ordinal,
+                        pg_type: sanitize_type(
+                            row.columns()
+                                .get(ordinal)
+                                .map_or("unknown", |c| c.type_info().name()),
+                        ),
+                        detail,
+                    });
+                }
+            };
+            // A rendered value's text can be far larger than its bytes on the
+            // wire: the batch budget counts what is **held**, not what arrived.
+            self.bytes = self.bytes.saturating_add(produced);
         }
 
         self.rows = self.rows.saturating_add(1);
@@ -319,7 +325,7 @@ impl ColumnBuilder {
             PgDecoding::Rendered(_)
             | PgDecoding::Range(_)
             | PgDecoding::Multirange(_)
-            | PgDecoding::Record => Self::Rendered {
+            | PgDecoding::Record(_) => Self::Rendered {
                 builder: StringBuilder::new(),
                 decoding: decoding.clone(),
                 scratch: String::new(),
@@ -343,10 +349,17 @@ impl ColumnBuilder {
     }
 
     /// Adds a value, or `NULL` when `bytes` is absent.
-    fn append(&mut self, format: PgValueFormat, bytes: Option<&[u8]>) -> Result<(), &'static str> {
+    ///
+    /// Returns the bytes of text a rendered column **produced**, beyond those
+    /// received: the batch budget must see them.
+    fn append(
+        &mut self,
+        format: PgValueFormat,
+        bytes: Option<&[u8]>,
+    ) -> Result<usize, &'static str> {
         let Some(bytes) = bytes else {
             self.append_null();
-            return Ok(());
+            return Ok(0);
         };
 
         // The driver uses only the extended protocol, where the server always
@@ -359,12 +372,13 @@ impl ColumnBuilder {
                     let text =
                         std::str::from_utf8(bytes).map_err(|_| "non-UTF-8 text from the server")?;
                     builder.append_value(text);
-                    Ok(())
+                    Ok(0)
                 }
                 _ => Err("the simple protocol's text format is not decoded"),
             };
         }
 
+        let mut produced = 0;
         match self {
             Self::Bool(builder) => {
                 let byte = bytes.first().ok_or("empty boolean")?;
@@ -397,15 +411,16 @@ impl ColumnBuilder {
                 scratch.clear();
                 crate::render::value::value(decoding, bytes, scratch, 0)?;
                 builder.append_value(scratch.as_str());
+                produced = scratch.len();
             }
             Self::Binary(builder) => builder.append_value(bytes),
             Self::Date(builder) => builder.append_value(read_date(bytes)?),
             Self::Time(builder) => builder.append_value(read_time(bytes)?),
             Self::Timestamp(builder) => builder.append_value(read_timestamp(bytes)?),
             Self::Interval(builder) => builder.append_value(read_interval(bytes)?),
-            Self::List(column) => column.append(bytes)?,
+            Self::List(column) => produced = column.append(bytes)?,
         }
-        Ok(())
+        Ok(produced)
     }
 
     /// Adds a missing value.
@@ -454,10 +469,11 @@ impl ColumnBuilder {
 
 impl ListColumn {
     /// Adds a one-dimensional PostgreSQL array.
-    fn append(&mut self, bytes: &[u8]) -> Result<(), &'static str> {
+    fn append(&mut self, bytes: &[u8]) -> Result<usize, &'static str> {
         let elements = split_array(bytes)?;
+        let mut produced: usize = 0;
         for element in elements {
-            self.child.append(PgValueFormat::Binary, element)?;
+            produced = produced.saturating_add(self.child.append(PgValueFormat::Binary, element)?);
             self.elements = self
                 .elements
                 .checked_add(1)
@@ -465,7 +481,7 @@ impl ListColumn {
         }
         self.offsets.push(self.elements);
         self.validity.push(true);
-        Ok(())
+        Ok(produced)
     }
 
     /// Adds a missing list. `NULL` and `{}` are not the same: the first has no

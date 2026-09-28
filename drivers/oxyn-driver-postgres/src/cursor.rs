@@ -307,8 +307,11 @@ pub(crate) enum Source {
 /// call waits for it, or for the end of the stream.
 ///
 /// `cancel` is the execution's **own** token, already recorded in the registry:
-/// dropping this cursor fires it, and so does `Session::cancel` — including
-/// while this call waits for the schema, since the cursor already exists then.
+/// dropping this cursor fires it, and so does `Session::cancel`. While this
+/// call waits for the schema, the caller does not hold the handle yet, so
+/// `Session::cancel` cannot reach it; two things still do: the caller's token,
+/// whose child `cancel` is, and dropping this future, which drops the cursor
+/// already built here.
 pub(crate) async fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCursor {
     let (send, reception) = mpsc::channel(1);
 

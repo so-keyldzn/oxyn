@@ -23,7 +23,9 @@ pub(crate) fn float8(value: f64, out: &mut String) {
     } else if value.is_infinite() {
         out.push_str(if value < 0.0 { "-Infinity" } else { "Infinity" });
     } else {
-        layout(&format!("{value:e}"), FLOAT8_FIXED_END, out);
+        let mut scientific = Scientific::default();
+        let _ = write!(scientific, "{value:e}");
+        layout(scientific.as_str(), FLOAT8_FIXED_END, out);
     }
 }
 
@@ -37,7 +39,37 @@ pub(crate) fn float4(value: f32, out: &mut String) {
     } else if value.is_infinite() {
         out.push_str(if value < 0.0 { "-Infinity" } else { "Infinity" });
     } else {
-        layout(&format!("{value:e}"), FLOAT4_FIXED_END, out);
+        let mut scientific = Scientific::default();
+        let _ = write!(scientific, "{value:e}");
+        layout(scientific.as_str(), FLOAT4_FIXED_END, out);
+    }
+}
+
+/// Rust's `{:e}` of one finite float, on the stack: a cell must not cost an
+/// allocation. The longest `f64` form, `-2.2250738585072014e-308`, is 24
+/// bytes; a longer write is cut, and `layout` then writes what it received.
+#[derive(Default)]
+struct Scientific {
+    bytes: [u8; 32],
+    len: usize,
+}
+
+impl Scientific {
+    fn as_str(&self) -> &str {
+        self.bytes
+            .get(..self.len)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .unwrap_or_default()
+    }
+}
+
+impl std::fmt::Write for Scientific {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let end = self.len.checked_add(text.len()).ok_or(std::fmt::Error)?;
+        let slot = self.bytes.get_mut(self.len..end).ok_or(std::fmt::Error)?;
+        slot.copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
     }
 }
 
@@ -60,15 +92,21 @@ fn layout(scientific: &str, fixed_end: i32, out: &mut String) {
         out.push_str(scientific);
         return;
     };
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    // `d` or `d.ddd`: the digits are the mantissa without its point, kept on
+    // the stack like the form they come from.
+    let mut digits = Scientific::default();
+    for part in mantissa.split('.') {
+        let _ = digits.write_str(part);
+    }
+    let digits = digits.as_str();
 
     if negative {
         out.push('-');
     }
     if (FIXED_MIN_EXPONENT..fixed_end).contains(&exponent) {
-        fixed(&digits, exponent, out);
+        fixed(digits, exponent, out);
     } else {
-        exponential(&digits, exponent, out);
+        exponential(digits, exponent, out);
     }
 }
 

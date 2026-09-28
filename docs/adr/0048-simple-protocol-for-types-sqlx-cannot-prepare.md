@@ -27,8 +27,10 @@ These are not exotic: `SELECT * FROM pg_class` carries `relacl`
 ## Decision
 
 1. When `prepare` fails on `sqlx`'s type resolution, or when the described
-   result has a column whose type has no binary output (`aclitem`,
-   `gtsvector`, their arrays, a domain over them), **and the request has no
+   result has a column whose type has no binary output — `aclitem`,
+   `gtsvector`, or a type that holds one: an array, a domain, a range, a
+   composite with such a field (`SELECT n FROM pg_namespace n`) —, **and the
+   request has no
    bound parameter**, the driver runs the same text through `sqlx::raw_sql`,
    the **simple** protocol, where the server sends every value as text.
 2. The result's columns are then all `Utf8`: the text the server printed,
@@ -53,8 +55,9 @@ Two facts make this safe:
 
 ## Consequences
 
-**Positive.** Every type the server can send reaches the grid: multiranges,
-catalog queries on `pg_class`, `pg_rewrite`, `pg_statistic_ext_data`.
+**Positive.** Without bound parameters, every type the server can send
+reaches the grid: multiranges, catalog queries on `pg_class`, `pg_rewrite`,
+`pg_statistic_ext_data`.
 
 **Negative.**
 

@@ -214,8 +214,14 @@ fn push_clock(micros: i64, out: &mut String) {
 fn push_seconds(seconds: u64, fraction: u64, out: &mut String) {
     let _ = write!(out, "{seconds:02}");
     if fraction != 0 {
-        let digits = format!("{fraction:0FRACTION_DIGITS$}");
-        let _ = write!(out, ".{}", digits.trim_end_matches('0'));
+        // Trailing zeros dropped by arithmetic, not by trimming a formatted
+        // copy: a cell must not cost an allocation.
+        let (mut fraction, mut width) = (fraction, FRACTION_DIGITS);
+        while fraction % 10 == 0 && width > 1 {
+            fraction /= 10;
+            width -= 1;
+        }
+        let _ = write!(out, ".{fraction:0width$}");
     }
 }
 

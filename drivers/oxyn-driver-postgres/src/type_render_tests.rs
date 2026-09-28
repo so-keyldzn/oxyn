@@ -77,6 +77,21 @@ const CASES: &[(&str, &str)] = &[
         "ROW('67e55044-10b1-426f-9d0c-451f8ad05b1a'::uuid)",
     ),
     ("jsonb in record", "ROW('{\"a\": [1, 2]}'::jsonb)"),
+    (
+        "multirange in record",
+        "ROW(int4multirange(int4range(1, 5), int4range(7, 9)))",
+    ),
+    ("2-D array in record", "ROW(ARRAY[[1, 2], [3, NULL]])"),
+    ("lower bound in record", "ROW('[0:1]={a,b}'::text[])"),
+    (
+        "box array in record",
+        "ROW(ARRAY['((1,1),(0,0))'::box, '((2,2),(1,1))'])",
+    ),
+    (
+        "named composite of domains",
+        "(SELECT t FROM information_schema.tables t \
+          ORDER BY table_schema, table_name LIMIT 1)",
+    ),
 ];
 
 fn read(sql: &str) -> ExecRequest {
@@ -223,6 +238,12 @@ async fn what_sqlx_cannot_prepare_arrives_as_the_servers_text() {
             "{[1,5),[7,9)}",
         ),
         ("SELECT relacl FROM pg_class WHERE relname = 'pg_class'", ""),
+        // An `aclitem[]` inside a row: `record_send` fails on the field.
+        (
+            "SELECT n FROM pg_namespace n WHERE nspname = 'pg_catalog'",
+            "",
+        ),
+        ("SELECT c FROM pg_class c WHERE relname = 'pg_class'", ""),
         (
             "SELECT ev_action IS NOT NULL AS present, ev_action \
              FROM pg_rewrite LIMIT 1",

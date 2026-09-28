@@ -12,6 +12,7 @@
 //! ([I-09](../../../CLAUDE.md#i-09)), and an error is a `&'static str` that
 //! never repeats the value ([I-03](../../../CLAUDE.md#i-03)).
 
+pub(crate) mod array;
 pub(crate) mod datetime;
 pub(crate) mod float;
 pub(crate) mod geometry;

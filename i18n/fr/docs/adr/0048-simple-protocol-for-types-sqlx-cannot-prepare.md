@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md" sha256="fd73c91c13d8" -->
+<!-- oxyn-translation source="docs/adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md" sha256="3909a2a21034" -->
 
 > Traduction française de [docs/adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md](../../../../docs/adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md). **La version anglaise fait foi.**
 
@@ -32,8 +32,10 @@ Rien d'exotique : `SELECT * FROM pg_class` porte `relacl` (`aclitem[]`) et
 ## Décision
 
 1. Quand `prepare` échoue sur la résolution de types de `sqlx`, ou quand le
-   résultat décrit a une colonne dont le type n'a pas de sortie binaire
-   (`aclitem`, `gtsvector`, leurs tableaux, un domaine sur eux), **et que la
+   résultat décrit a une colonne dont le type n'a pas de sortie binaire —
+   `aclitem`, `gtsvector`, ou un type qui en contient un : tableau, domaine,
+   plage, composite qui en a un champ (`SELECT n FROM pg_namespace n`) —,
+   **et que la
    requête n'a aucun paramètre lié**, le driver exécute le même texte par
    `sqlx::raw_sql`, le protocole **simple**, où le serveur envoie toutes les
    valeurs en texte.
@@ -60,9 +62,9 @@ Deux faits rendent cela sûr :
 
 ## Conséquences
 
-**Positives.** Tout type que le serveur peut envoyer atteint la grille :
-multi-plages, requêtes sur le catalogue `pg_class`, `pg_rewrite`,
-`pg_statistic_ext_data`.
+**Positives.** Sans paramètre lié, tout type que le serveur peut envoyer
+atteint la grille : multi-plages, requêtes sur le catalogue `pg_class`,
+`pg_rewrite`, `pg_statistic_ext_data`.
 
 **Négatives.**
 

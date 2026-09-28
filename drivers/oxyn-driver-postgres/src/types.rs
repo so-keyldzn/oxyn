@@ -33,8 +33,8 @@
 //! | `timetz` | `Utf8` | none: time and offset rendered as is |
 //! | `interval` | `Interval(MonthDayNano)` | beyond ±292 years of microsecond component, the conversion to nanoseconds overflows: decoding **fails** instead of truncating |
 //! | `money` | `Binary` | raw representation retained; the currency depends on `lc_monetary`, which is not transmitted |
-//! | arrays with more than one dimension | — | not representable by an Arrow list: decoding **fails** rather than silently flattening |
-//! | `record`, composite types | `Utf8` | the structure is not split into an Arrow `Struct`: text as `record_out` prints it. A field whose type is not built in (an enum, a domain, an extension type) keeps its bytes as `\\x…` |
+//! | a column array with more than one dimension | — | not representable by an Arrow list: decoding **fails** rather than silently flattening. Nested in a record or a range, it is text like `array_out` prints it, shape and lower bounds included |
+//! | `record`, composite types | `Utf8` | the structure is not split into an Arrow `Struct`: text as `record_out` prints it. In a named composite — a table's row, a `CREATE TYPE` — every field is rendered with the decoding `sqlx` resolved, domains and enums included; in an anonymous `record` (`ROW(…)`), a field whose type is not built in keeps its bytes as `\\x…` |
 //! | `inet`, `cidr`, `macaddr`, `macaddr8`, `bit`, `varbit`, geometric types, `pg_lsn`, `tid`, `pg_snapshot`, `txid_snapshot`, `tsvector`, `tsquery`, ranges | `Utf8` | none: the text the server prints, rebuilt from the binary layout (`render` module) |
 //! | `timestamptz` inside a range or a record | `Utf8` | printed in UTC (`+00`), whatever the session's `TimeZone` |
 //! | `reg*` (`regclass`, `regtype`…), `xid`, `cid` | `UInt32` | the OID, not the name: resolving it needs the catalog, and `::text` in SQL gives it |
@@ -237,8 +237,12 @@ pub enum PgDecoding {
     /// A multirange (PostgreSQL 14+), rendered as text.
     Multirange(Box<PgDecoding>),
     /// A `record` or a composite type, rendered as text. The wire carries the
-    /// type of each field, which decides how it is rendered.
-    Record,
+    /// type OID of each field. For a named composite, `sqlx` resolved its
+    /// fields at `prepare`: a field whose wire OID matches is rendered with
+    /// that decoding, which reaches a domain, an `enum` or a nested composite.
+    /// Any other field — all of them for an anonymous `record` — is rendered
+    /// by its OID, built-in types only.
+    Record(Box<[(u32, PgDecoding)]>),
     /// `jsonb`: a version byte (equal to 1) then UTF-8.
     Jsonb,
     /// `numeric`: its own binary format, rendered as exact decimal.
@@ -332,7 +336,7 @@ impl PgDecoding {
             | Self::Rendered(_)
             | Self::Range(_)
             | Self::Multirange(_)
-            | Self::Record => DataType::Utf8,
+            | Self::Record(_) => DataType::Utf8,
             Self::Bytes | Self::Opaque => DataType::Binary,
             Self::Date => DataType::Date32,
             Self::Time => DataType::Time64(TimeUnit::Microsecond),
@@ -378,8 +382,14 @@ pub fn decoding_for(ty: &PgTypeInfo) -> PgDecoding {
         PgTypeKind::Enum(_) => PgDecoding::Text,
         PgTypeKind::Range(element) => PgDecoding::Range(Box::new(decoding_for(element))),
         // A composite's binary form is the same as an anonymous `record`'s:
-        // each field carries its own type OID.
-        PgTypeKind::Composite(_) => PgDecoding::Record,
+        // each field carries its own type OID, and the resolved fields say
+        // how to render the ones that are not built in.
+        PgTypeKind::Composite(fields) => PgDecoding::Record(
+            fields
+                .iter()
+                .filter_map(|(_, field)| Some((field.oid()?.0, decoding_for(field))))
+                .collect(),
+        ),
         _ => decoding_for_name(ty.name()),
     }
 }
@@ -438,7 +448,7 @@ pub(crate) fn decoding_for_oid(raw_type: u32) -> Option<PgDecoding> {
         oid::PG_SNAPSHOT | oid::TXID_SNAPSHOT => PgDecoding::Rendered(TextFormat::Snapshot),
         oid::TSVECTOR => PgDecoding::Rendered(TextFormat::TsVector),
         oid::TSQUERY => PgDecoding::Rendered(TextFormat::TsQuery),
-        oid::RECORD => PgDecoding::Record,
+        oid::RECORD => PgDecoding::Record(Box::default()),
         oid::JSONB => PgDecoding::Jsonb,
         oid::BYTEA => PgDecoding::Bytes,
         oid::UUID => PgDecoding::Uuid,
@@ -527,6 +537,12 @@ const BUILTIN_ARRAYS: &[(u32, u32)] = &[
     (4192, 4191),
     (5039, 5038),
     (271, 5069),
+    (6150, 4451),
+    (6151, 4532),
+    (6152, 4533),
+    (6153, 4534),
+    (6155, 4535),
+    (6157, 4536),
 ];
 
 /// The built-in range types and their element: `(range OID, element OID)`.
@@ -537,6 +553,19 @@ const BUILTIN_RANGES: &[(u32, u32)] = &[
     (3910, oid::TIMESTAMPTZ),
     (3912, oid::DATE),
     (3926, oid::INT8),
+];
+
+/// The built-in multirange types and their element: `(multirange OID,
+/// element OID)`, from `pg_type.dat` and `pg_range.dat` of `REL_18_STABLE`,
+/// read on 2026-09-28. A column of these never reaches the typed path
+/// (ADR-0048); a record field does.
+const BUILTIN_MULTIRANGES: &[(u32, u32)] = &[
+    (4451, oid::INT4),
+    (4532, oid::NUMERIC),
+    (4533, oid::TIMESTAMP),
+    (4534, oid::TIMESTAMPTZ),
+    (4535, oid::DATE),
+    (4536, oid::INT8),
 ];
 
 /// Decoding of a built-in type known only by its OID, arrays and ranges
@@ -554,10 +583,15 @@ pub(crate) fn decoding_for_builtin_oid(raw_type: u32) -> Option<PgDecoding> {
             *element,
         )?)));
     }
-    let (_, element) = BUILTIN_RANGES
+    if let Some((_, element)) = BUILTIN_RANGES.iter().find(|(range, _)| *range == raw_type) {
+        return Some(PgDecoding::Range(Box::new(decoding_for_oid(*element)?)));
+    }
+    let (_, element) = BUILTIN_MULTIRANGES
         .iter()
-        .find(|(range, _)| *range == raw_type)?;
-    Some(PgDecoding::Range(Box::new(decoding_for_oid(*element)?)))
+        .find(|(multirange, _)| *multirange == raw_type)?;
+    Some(PgDecoding::Multirange(Box::new(decoding_for_oid(
+        *element,
+    )?)))
 }
 
 /// The built-in types without a binary output function (`typsend = 0`), read
@@ -567,7 +601,10 @@ pub(crate) fn decoding_for_builtin_oid(raw_type: u32) -> Option<PgDecoding> {
 const NO_BINARY_OUTPUT: &[u32] = &[1033, 1034, 3642, 3644];
 
 /// Does a result column need the text format, the server having no binary
-/// form for its type? Follows a domain to its base type.
+/// form for its type? Follows a domain to its base type, and descends into
+/// arrays, ranges and composites: `record_send` and `array_send` call the
+/// send function of every element, so one `aclitem` field makes the whole
+/// row unsendable — `SELECT c FROM pg_class c` included.
 ///
 /// Called on a prepared statement's columns only: `sqlx` has resolved every
 /// type there. On an unresolved one — what the simple protocol yields —
@@ -580,8 +617,11 @@ pub(crate) fn lacks_binary_output(ty: &PgTypeInfo) -> bool {
         return true;
     }
     match ty.kind() {
-        PgTypeKind::Domain(base) => lacks_binary_output(base),
-        _ => false,
+        PgTypeKind::Domain(base) | PgTypeKind::Array(base) | PgTypeKind::Range(base) => {
+            lacks_binary_output(base)
+        }
+        PgTypeKind::Composite(fields) => fields.iter().any(|(_, field)| lacks_binary_output(field)),
+        PgTypeKind::Simple | PgTypeKind::Pseudo | PgTypeKind::Enum(_) => false,
     }
 }
 

@@ -17,6 +17,27 @@ use crate::types::{PgDecoding, TextFormat, decoding_for_builtin_oid};
 /// following it would exhaust the stack — an abort that no `Result` catches.
 pub(crate) const MAX_DEPTH: usize = 32;
 
+/// The largest text one value may render to.
+///
+/// Depth alone does not bound the size: each level of quoting doubles the
+/// quotes and backslashes of the level below, so a record nested thirty times
+/// around one `"` — a few hundred bytes on the wire, and a plain
+/// `SELECT ROW(ROW(…))` — would render to gigabytes and get the process killed
+/// ([I-09](../../../../CLAUDE.md#i-09)). A value this large is refused with an
+/// error the user can read; casting it to `text` in SQL still works.
+pub(crate) const MAX_RENDERED_BYTES: usize = 16 * 1024 * 1024;
+
+/// Refuses a rendering that went past [`MAX_RENDERED_BYTES`].
+///
+/// Called after every nested part, so that a hostile value stops growing at
+/// the first part past the bound, not after the last.
+pub(crate) fn bounded(out: &str) -> Rendered {
+    if out.len() > MAX_RENDERED_BYTES {
+        return Err("rendered value larger than 16 MiB: cast it to text in the query");
+    }
+    Ok(())
+}
+
 /// Appends the text of a value of this decoding.
 pub(crate) fn value(
     decoding: &PgDecoding,
@@ -103,10 +124,10 @@ pub(crate) fn value(
         PgDecoding::Rendered(format) => rendered(*format, bytes, out)?,
         PgDecoding::Range(element) => super::range::range(element, bytes, out, depth)?,
         PgDecoding::Multirange(element) => super::range::multirange(element, bytes, out, depth)?,
-        PgDecoding::Record => super::record::record(bytes, out, depth)?,
-        PgDecoding::List(element) => array(element, bytes, out, depth)?,
+        PgDecoding::Record(fields) => super::record::record(fields, bytes, out, depth)?,
+        PgDecoding::List(element) => super::array::array(element, bytes, out, depth)?,
     }
-    Ok(())
+    bounded(out)
 }
 
 /// Appends the text of a value known only by its type OID, as a record field is.
@@ -179,49 +200,4 @@ fn timetz(bytes: &[u8], out: &mut String) -> Rendered {
 /// would not read back.
 pub(crate) const fn is_pg_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C')
-}
-
-/// A one-dimensional array the way `array_out` prints it: `{a,b,NULL}`.
-fn array(element: &PgDecoding, bytes: &[u8], out: &mut String, depth: usize) -> Rendered {
-    let elements = crate::decode::split_array(bytes)?;
-    let mut scratch = String::new();
-    out.push('{');
-    for (rank, item) in elements.iter().enumerate() {
-        if rank > 0 {
-            out.push(',');
-        }
-        match item {
-            None => out.push_str("NULL"),
-            Some(item) => {
-                scratch.clear();
-                value(element, item, &mut scratch, depth)?;
-                quote_array_element(&scratch, out);
-            }
-        }
-    }
-    out.push('}');
-    Ok(())
-}
-
-/// Quotes an array element when `array_out` would: empty, the word `NULL`, or
-/// a character that the array syntax reads — braces, quote, comma, backslash,
-/// whitespace.
-fn quote_array_element(text: &str, out: &mut String) {
-    let needs_quotes = text.is_empty()
-        || text.eq_ignore_ascii_case("NULL")
-        || text
-            .chars()
-            .any(|c| matches!(c, '{' | '}' | '"' | ',' | '\\') || is_pg_space(c));
-    if !needs_quotes {
-        out.push_str(text);
-        return;
-    }
-    out.push('"');
-    for c in text.chars() {
-        if matches!(c, '"' | '\\') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out.push('"');
 }

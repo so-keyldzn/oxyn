@@ -1,7 +1,7 @@
 //! Ranges and multiranges, the way `range_out` and `multirange_out` print them.
 
 use super::Rendered;
-use super::value::{is_pg_space, value};
+use super::value::{bounded, is_pg_space, value};
 use crate::numeric::Reader;
 use crate::types::PgDecoding;
 
@@ -70,6 +70,7 @@ pub(crate) fn multirange(
         let length = usize::try_from(length).map_err(|_| "negative range length")?;
         let encoded = reader.take(length).ok_or("truncated multirange")?;
         range(element, encoded, out, depth)?;
+        bounded(out)?;
     }
     out.push('}');
     Ok(())
@@ -89,7 +90,7 @@ fn bound(
     scratch.clear();
     value(element, encoded, scratch, depth)?;
     quote_bound(scratch, out);
-    Ok(())
+    bounded(out)
 }
 
 /// Quotes a bound when it is empty or holds a character of the range syntax —
