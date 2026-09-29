@@ -77,12 +77,11 @@ SELECT name, kind, fields,
 FROM declared ORDER BY name, kind, fields LIMIT 1025
 "#;
 
-/// The databases accessible on this server.
+/// The database of the session.
 const SQL_CATALOGS: &str = "\
-SELECT d.datname::text, (d.datname = current_database()) \
+SELECT d.datname::text \
 FROM pg_catalog.pg_database d \
-WHERE d.datallowconn AND NOT d.datistemplate \
-ORDER BY d.datname";
+WHERE d.datname = current_database()";
 
 /// The schemas of the current database, with their comment and whether they
 /// are system schemas.
@@ -408,11 +407,11 @@ impl CatalogProvider for PostgresCatalog {
         ))
     }
 
-    /// The server's databases.
+    /// The session's database, and only it.
     ///
-    /// All are listed, but only one can be introspected: the session's. The
-    /// others appear so that the user knows they exist and can open a
-    /// connection to them.
+    /// PostgreSQL cannot introspect another database from this session: the
+    /// server's other databases, listed here, were nodes that failed on click
+    /// and let a user who named one database believe Oxyn ignored it.
     ///
     /// # Errors
     /// Any session error, or [`OxynError::Cancelled`].
@@ -421,12 +420,7 @@ impl CatalogProvider for PostgresCatalog {
         let mut databases = Vec::with_capacity(rows.len());
         for row in &rows {
             let name: String = read_text(row, 0)?;
-            let current: bool = row.try_get(1).unwrap_or(false);
-            let mut base = CatalogRef::new(name)?;
-            if current {
-                base = base.with_default();
-            }
-            databases.push(base);
+            databases.push(CatalogRef::new(name)?.with_default());
         }
         Ok(databases)
     }
