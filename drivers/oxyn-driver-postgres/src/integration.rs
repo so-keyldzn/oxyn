@@ -349,14 +349,15 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
         .await
         .expect("unmodified user SQL");
     let schema = raw.schema();
-    assert_eq!(schema.field(0).data_type(), &DataType::Binary);
-    assert_eq!(
+    // The user's own SQL is not rewritten: a `regproc` is the OID the server
+    // sent, as a number. The preview above composes `::text` and gets the name.
+    assert_eq!(schema.field(0).data_type(), &DataType::UInt32);
+    assert!(
         schema
             .field(0)
             .metadata()
             .get(crate::META_FALLBACK)
-            .map(String::as_str),
-        Some("opaque")
+            .is_none()
     );
     assert!(
         schema
@@ -373,10 +374,9 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
     assert_eq!(
         batch
             .column(0)
-            .as_binary_opt::<i32>()
-            .expect("binary")
+            .as_primitive::<arrow::datatypes::UInt32Type>()
             .value(0),
-        52_u32.to_be_bytes()
+        52
     );
     assert!(raw.next_batch().await.expect("end").is_none());
 

@@ -17,12 +17,14 @@
 //! PostgreSQL type — sanitized — and what was wrong. Never the data
 //! ([I-03](../../../CLAUDE.md#i-03)).
 //!
-//! **An unknown type does not make the query fail.** It becomes text if it is
-//! valid UTF-8, a hexadecimal transcription otherwise. The only values that
-//! really make a row fail are those Arrow cannot represent *without lying*: an
-//! infinite date, an interval longer than 292 years in microseconds, a
-//! multi-dimensional array. Rendering them `NULL` would be a silent lie about
-//! real data.
+//! **An unknown type does not make the row fail.** It keeps its bytes, as an
+//! Arrow `Binary` column marked `opaque`, with its PostgreSQL type name in the
+//! metadata ([`crate::types`]): valid UTF-8 is no evidence that a layout is
+//! text. A built-in type with a documented layout is rendered as the text the
+//! server prints (`render` module). The only values that really make a row
+//! fail are those Arrow cannot represent *without lying*: an infinite date, an
+//! interval longer than 292 years in microseconds, a multi-dimensional array.
+//! Rendering them `NULL` would be a silent lie about real data.
 //!
 //! # Batch sizing
 //!
@@ -38,6 +40,7 @@ use arrow::array::{
     ArrayRef, BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder,
     Int16Builder, Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, ListArray,
     StringBuilder, Time64MicrosecondBuilder, TimestampMicrosecondBuilder, UInt32Builder,
+    UInt64Builder,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{Field, FieldRef, IntervalMonthDayNano, SchemaRef};
@@ -48,6 +51,7 @@ use sqlx::TypeInfo as _;
 use sqlx::postgres::{PgRow, PgValueFormat};
 
 use crate::numeric::{Reader, render_binary};
+use crate::render::value::MAX_RENDERED_BYTES;
 use crate::types::PgDecoding;
 
 /// Microseconds between the Unix epoch and PostgreSQL's (2000-01-01).
@@ -177,6 +181,11 @@ impl BatchAssembler {
             });
         }
 
+        // The bound of one rendered value holds per value; the batch is cut only
+        // after the whole row. Without a bound across the row, 1,600 columns of
+        // nested records would each render up to the per-value limit before
+        // the cursor could cut anything (I-06).
+        let mut rendered: usize = 0;
         for (ordinal, column) in self.columns.iter_mut().enumerate() {
             let raw_value = row.try_get_raw(ordinal).map_err(|err| DecodeError::Row {
                 detail: err.to_string(),
@@ -189,17 +198,32 @@ impl BatchAssembler {
 
             // The type name is composed only on the error path: here, one
             // allocation per cell would cost the budget of a whole result.
-            if let Err(detail) = column.append(format, encoded) {
-                return Err(DecodeError::Value {
-                    ordinal,
-                    pg_type: sanitize_type(
-                        row.columns()
-                            .get(ordinal)
-                            .map_or("unknown", |c| c.type_info().name()),
-                    ),
-                    detail,
-                });
-            }
+            let appended = column.append(format, encoded).and_then(|produced| {
+                rendered = rendered.saturating_add(produced);
+                if rendered > MAX_RENDERED_BYTES {
+                    return Err(
+                        "row rendered larger than 16 MiB: cast its values to text in the query",
+                    );
+                }
+                Ok(produced)
+            });
+            let produced = match appended {
+                Ok(produced) => produced,
+                Err(detail) => {
+                    return Err(DecodeError::Value {
+                        ordinal,
+                        pg_type: sanitize_type(
+                            row.columns()
+                                .get(ordinal)
+                                .map_or("unknown", |c| c.type_info().name()),
+                        ),
+                        detail,
+                    });
+                }
+            };
+            // A rendered value's text can be far larger than its bytes on the
+            // wire: the batch budget counts what is **held**, not what arrived.
+            self.bytes = self.bytes.saturating_add(produced);
         }
 
         self.rows = self.rows.saturating_add(1);
@@ -243,10 +267,19 @@ enum ColumnBuilder {
     Int32(Int32Builder),
     Int64(Int64Builder),
     UInt32(UInt32Builder),
+    UInt64(UInt64Builder),
     Float32(Float32Builder),
     Float64(Float64Builder),
     /// All `Utf8` columns, distinguished by how the text is obtained.
     Text(StringBuilder, TextSource),
+    /// A `Utf8` column whose text [`crate::render`] rebuilds from a binary
+    /// layout. The scratch buffer is reused from one value to the next: an
+    /// allocation per cell would cost the budget of a whole result.
+    Rendered {
+        builder: StringBuilder,
+        decoding: PgDecoding,
+        scratch: String,
+    },
     Binary(BinaryBuilder),
     Date(Date32Builder),
     Time(Time64MicrosecondBuilder),
@@ -296,6 +329,7 @@ impl ColumnBuilder {
             PgDecoding::Int32 => Self::Int32(Int32Builder::new()),
             PgDecoding::Int64 => Self::Int64(Int64Builder::new()),
             PgDecoding::UInt32 => Self::UInt32(UInt32Builder::new()),
+            PgDecoding::UInt64 => Self::UInt64(UInt64Builder::new()),
             PgDecoding::Float32 => Self::Float32(Float32Builder::new()),
             PgDecoding::Float64 => Self::Float64(Float64Builder::new()),
             PgDecoding::Text => Self::Text(StringBuilder::new(), TextSource::Raw),
@@ -303,6 +337,14 @@ impl ColumnBuilder {
             PgDecoding::Numeric => Self::Text(StringBuilder::new(), TextSource::Numeric),
             PgDecoding::Uuid => Self::Text(StringBuilder::new(), TextSource::Uuid),
             PgDecoding::TimeTz => Self::Text(StringBuilder::new(), TextSource::TimeTz),
+            PgDecoding::Rendered(_)
+            | PgDecoding::Range(_)
+            | PgDecoding::Multirange(_)
+            | PgDecoding::Record(_) => Self::Rendered {
+                builder: StringBuilder::new(),
+                decoding: decoding.clone(),
+                scratch: String::new(),
+            },
             PgDecoding::Opaque | PgDecoding::Bytes => Self::Binary(BinaryBuilder::new()),
             PgDecoding::Date => Self::Date(Date32Builder::new()),
             PgDecoding::Time => Self::Time(Time64MicrosecondBuilder::new()),
@@ -322,10 +364,17 @@ impl ColumnBuilder {
     }
 
     /// Adds a value, or `NULL` when `bytes` is absent.
-    fn append(&mut self, format: PgValueFormat, bytes: Option<&[u8]>) -> Result<(), &'static str> {
+    ///
+    /// Returns the bytes of text a rendered column **produced**, beyond those
+    /// received: the batch budget must see them.
+    fn append(
+        &mut self,
+        format: PgValueFormat,
+        bytes: Option<&[u8]>,
+    ) -> Result<usize, &'static str> {
         let Some(bytes) = bytes else {
             self.append_null();
-            return Ok(());
+            return Ok(0);
         };
 
         // The driver uses only the extended protocol, where the server always
@@ -334,16 +383,17 @@ impl ColumnBuilder {
         // refuse it rather than guess.
         if format == PgValueFormat::Text {
             return match self {
-                Self::Text(builder, _) => {
+                Self::Text(builder, _) | Self::Rendered { builder, .. } => {
                     let text =
                         std::str::from_utf8(bytes).map_err(|_| "non-UTF-8 text from the server")?;
                     builder.append_value(text);
-                    Ok(())
+                    Ok(0)
                 }
                 _ => Err("the simple protocol's text format is not decoded"),
             };
         }
 
+        let mut produced = 0;
         match self {
             Self::Bool(builder) => {
                 let byte = bytes.first().ok_or("empty boolean")?;
@@ -353,6 +403,10 @@ impl ColumnBuilder {
             Self::Int32(builder) => builder.append_value(read_i32(bytes)?),
             Self::Int64(builder) => builder.append_value(read_i64(bytes)?),
             Self::UInt32(builder) => builder.append_value(read_u32(bytes)?),
+            Self::UInt64(builder) => {
+                let encoded: [u8; 8] = bytes.try_into().map_err(|_| "xid8 of unexpected size")?;
+                builder.append_value(u64::from_be_bytes(encoded));
+            }
             Self::Float32(builder) => {
                 let encoded: [u8; 4] = bytes.try_into().map_err(|_| "float4 of unexpected size")?;
                 builder.append_value(f32::from_be_bytes(encoded));
@@ -364,14 +418,24 @@ impl ColumnBuilder {
             Self::Text(builder, source) => {
                 render_text(builder, *source, bytes)?;
             }
+            Self::Rendered {
+                builder,
+                decoding,
+                scratch,
+            } => {
+                scratch.clear();
+                crate::render::value::value(decoding, bytes, scratch, 0)?;
+                builder.append_value(scratch.as_str());
+                produced = scratch.len();
+            }
             Self::Binary(builder) => builder.append_value(bytes),
             Self::Date(builder) => builder.append_value(read_date(bytes)?),
             Self::Time(builder) => builder.append_value(read_time(bytes)?),
             Self::Timestamp(builder) => builder.append_value(read_timestamp(bytes)?),
             Self::Interval(builder) => builder.append_value(read_interval(bytes)?),
-            Self::List(column) => column.append(bytes)?,
+            Self::List(column) => produced = column.append(bytes)?,
         }
-        Ok(())
+        Ok(produced)
     }
 
     /// Adds a missing value.
@@ -382,9 +446,10 @@ impl ColumnBuilder {
             Self::Int32(builder) => builder.append_null(),
             Self::Int64(builder) => builder.append_null(),
             Self::UInt32(builder) => builder.append_null(),
+            Self::UInt64(builder) => builder.append_null(),
             Self::Float32(builder) => builder.append_null(),
             Self::Float64(builder) => builder.append_null(),
-            Self::Text(builder, _) => builder.append_null(),
+            Self::Text(builder, _) | Self::Rendered { builder, .. } => builder.append_null(),
             Self::Binary(builder) => builder.append_null(),
             Self::Date(builder) => builder.append_null(),
             Self::Time(builder) => builder.append_null(),
@@ -402,9 +467,10 @@ impl ColumnBuilder {
             Self::Int32(builder) => Arc::new(builder.finish()),
             Self::Int64(builder) => Arc::new(builder.finish()),
             Self::UInt32(builder) => Arc::new(builder.finish()),
+            Self::UInt64(builder) => Arc::new(builder.finish()),
             Self::Float32(builder) => Arc::new(builder.finish()),
             Self::Float64(builder) => Arc::new(builder.finish()),
-            Self::Text(builder, _) => Arc::new(builder.finish()),
+            Self::Text(builder, _) | Self::Rendered { builder, .. } => Arc::new(builder.finish()),
             Self::Binary(builder) => Arc::new(builder.finish()),
             Self::Date(builder) => Arc::new(builder.finish()),
             Self::Time(builder) => Arc::new(builder.finish()),
@@ -418,10 +484,11 @@ impl ColumnBuilder {
 
 impl ListColumn {
     /// Adds a one-dimensional PostgreSQL array.
-    fn append(&mut self, bytes: &[u8]) -> Result<(), &'static str> {
+    fn append(&mut self, bytes: &[u8]) -> Result<usize, &'static str> {
         let elements = split_array(bytes)?;
+        let mut produced: usize = 0;
         for element in elements {
-            self.child.append(PgValueFormat::Binary, element)?;
+            produced = produced.saturating_add(self.child.append(PgValueFormat::Binary, element)?);
             self.elements = self
                 .elements
                 .checked_add(1)
@@ -429,7 +496,7 @@ impl ListColumn {
         }
         self.offsets.push(self.elements);
         self.validity.push(true);
-        Ok(())
+        Ok(produced)
     }
 
     /// Adds a missing list. `NULL` and `{}` are not the same: the first has no
@@ -605,7 +672,7 @@ fn read_interval(bytes: &[u8]) -> Result<IntervalMonthDayNano, &'static str> {
 /// type announced in the header is **ignored**: the decoding plan comes from the
 /// `RowDescription`, which is authoritative, and following the header would let
 /// a server have anything decoded as anything.
-fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static str> {
+pub(crate) fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static str> {
     let mut reader = Reader::new(bytes);
     let dimensions = reader.i32().ok_or("truncated array header")?;
     let _flags = reader.i32().ok_or("truncated array header")?;

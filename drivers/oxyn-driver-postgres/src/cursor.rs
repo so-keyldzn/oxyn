@@ -27,7 +27,10 @@
 
 use std::time::Instant;
 
-use arrow::datatypes::SchemaRef;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::StreamExt as _;
@@ -36,9 +39,10 @@ use oxyn_core::{
     StatementIntent,
 };
 use oxyn_driver::Cursor;
-use sqlx::postgres::{PgArguments, PgStatement};
+use sqlx::postgres::{PgArguments, PgRow, PgStatement};
+use sqlx::{Column as _, Row as _, SqlStr, TypeInfo as _};
 use sqlx::{Either, Statement as _};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::cancel::{BackendCanceller, StatementRegistry, Verdict, VerdictSender};
@@ -46,7 +50,7 @@ use crate::decode::BatchAssembler;
 use crate::error::{Bound, map_stream_error};
 use crate::lease::Lease;
 use crate::session::{SQL_RESET_AFTER_WRITE, SQL_RESET_SEARCH_PATH, SQL_ROLLBACK};
-use crate::types::PgDecoding;
+use crate::types::{META_FALLBACK, META_PG_TYPE, PgDecoding};
 
 /// Accumulated bytes beyond which a batch is closed and emitted.
 ///
@@ -236,10 +240,8 @@ pub(crate) struct StreamRequest {
     /// already marked dirty: it goes back only if the task resets it to the
     /// default.
     pub(crate) connection: Lease,
-    /// The prepared statement: it is what gave the schema.
-    pub(crate) statement: PgStatement,
-    /// The bound parameters, already encoded.
-    pub(crate) arguments: PgArguments,
+    /// Where the rows come from.
+    pub(crate) source: Source,
     /// Were there caller values among them?
     ///
     /// Recorded by the session before `arguments` is moved into `query_with`:
@@ -247,7 +249,8 @@ pub(crate) struct StreamRequest {
     /// longer says, here, where its bytes come from
     /// ([I-03](../../../CLAUDE.md#i-03)).
     pub(crate) bound: Bound,
-    /// The batches' schema, known before the first row.
+    /// The batches' schema, known before the first row — except for
+    /// [`Source::Simple`], whose cursor learns it at the first row.
     pub(crate) schema: SchemaRef,
     /// The decoding plan, aligned with the schema.
     pub(crate) decodings: Vec<PgDecoding>,
@@ -282,28 +285,54 @@ pub(crate) struct StreamRequest {
     pub(crate) handle: StatementHandle,
 }
 
+/// Where an execution's rows come from.
+pub(crate) enum Source {
+    /// The extended protocol: the prepared statement, which gave the schema,
+    /// and the bound parameters, already encoded.
+    Prepared {
+        statement: PgStatement,
+        arguments: PgArguments,
+    },
+    /// The simple protocol, for a statement `sqlx` cannot prepare or whose
+    /// result has no binary form (ADR-0048). No parameter, every value as
+    /// text, and the schema learnt at the first row.
+    Simple { sql: SqlStr },
+}
+
 /// Starts the stream and returns the cursor that drains it.
 ///
-/// The call returns immediately: the schema is already known — it comes from
-/// the prepared statement — so the grid draws its columns while the first row
-/// is still travelling.
+/// For a prepared statement the call returns at once: the schema is already
+/// known, so the grid draws its columns while the first row is still
+/// travelling. The simple protocol gives the columns with the first row: the
+/// call waits for it, or for the end of the stream.
 ///
 /// `cancel` is the execution's **own** token, already recorded in the registry:
-/// dropping this cursor fires it, and so does `Session::cancel`.
-pub(crate) fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCursor {
+/// dropping this cursor fires it, and so does `Session::cancel`. While this
+/// call waits for the schema, the caller does not hold the handle yet, so
+/// `Session::cancel` cannot reach it; two things still do: the caller's token,
+/// whose child `cancel` is, and dropping this future, which drops the cursor
+/// already built here.
+pub(crate) async fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCursor {
     let (send, reception) = mpsc::channel(1);
 
     let schema = SchemaRef::clone(&request.schema);
     let handle = request.handle;
-    let projects_columns = !schema.fields().is_empty();
     let token = cancel.clone();
+    let (schema_sender, schema_reception) = match request.source {
+        Source::Prepared { .. } => (None, None),
+        Source::Simple { .. } => {
+            let (sender, reception) = oneshot::channel();
+            (Some(sender), Some(reception))
+        }
+    };
 
     let task = tokio::spawn(async move {
-        run(request, token, send).await;
+        run(request, token, send, schema_sender).await;
     });
 
-    PostgresCursor {
+    let mut cursor = PostgresCursor {
         handle,
+        projects_columns: !schema.fields().is_empty(),
         schema,
         events: reception,
         cancel,
@@ -311,18 +340,54 @@ pub(crate) fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCurs
         stats: ExecStats::default(),
         started: Instant::now(),
         finished: false,
-        projects_columns,
+    };
+    if let Some(reception) = schema_reception {
+        // A task that ends without a row — an error, a cancellation, an empty
+        // result — drops the sender: the cursor then has no columns, and its
+        // events say why.
+        if let Ok(learnt) = reception.await {
+            cursor.projects_columns = !learnt.fields().is_empty();
+            cursor.schema = learnt;
+        }
     }
+    cursor
+}
+
+/// The schema of a simple-protocol result: every column is the server's text.
+///
+/// Built from names and OIDs only. The typed decoding would call
+/// `PgTypeInfo::kind`, which **panics** on the unresolved types this protocol
+/// yields (ADR-0048).
+fn text_schema(row: &PgRow) -> (SchemaRef, Vec<PgDecoding>) {
+    let mut fields = Vec::with_capacity(row.columns().len());
+    for column in row.columns() {
+        let type_info = column.type_info();
+        let pg_type = match (type_info.name(), type_info.oid()) {
+            ("?", Some(raw_type)) => format!("oid {}", raw_type.0),
+            (name, _) => name.to_owned(),
+        };
+        let metadata = HashMap::from([
+            (META_PG_TYPE.to_owned(), pg_type),
+            (META_FALLBACK.to_owned(), "text".to_owned()),
+        ]);
+        fields.push(Field::new(column.name(), DataType::Utf8, true).with_metadata(metadata));
+    }
+    let decodings = vec![PgDecoding::Text; fields.len()];
+    (Arc::new(Schema::new(fields)), decodings)
 }
 
 /// The body of the stream task.
 #[allow(clippy::too_many_lines)]
-async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<CursorEvent>) {
+async fn run(
+    request: StreamRequest,
+    cancel: CancelToken,
+    events: mpsc::Sender<CursorEvent>,
+    mut schema_sender: Option<oneshot::Sender<SchemaRef>>,
+) {
     let StreamRequest {
         driver,
         mut connection,
-        statement,
-        arguments,
+        source,
         bound,
         restore_context,
         opens_transaction,
@@ -348,7 +413,6 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         // `Statement::query_with` rather than `sqlx::query_statement_with`: the
         // database type there is the statement's, with no inference to bubble
         // up.
-        let query = statement.query_with(arguments);
         // `fetch_many` is deprecated because multi-statement only ever worked
         // in SQLite. That is not what it is used for here: it is the only stream
         // that also returns the final `QueryResult`, hence the only one that
@@ -360,8 +424,20 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         // TODO(2026-12-01, oxyn-driver-postgres): go back to a non-deprecated
         // API when sqlx exposes the affected row count on `fetch()`. Tracking:
         // https://github.com/launchbadge/sqlx/issues/3108
-        #[expect(deprecated, reason = "only stream exposing rows_affected(); see above")]
-        let mut stream = query.fetch_many(&mut *connection);
+        // Declared before the stream, which borrows it.
+        let statement: PgStatement;
+        let mut stream = match source {
+            Source::Prepared {
+                statement: prepared,
+                arguments,
+            } => {
+                statement = prepared;
+                #[expect(deprecated, reason = "only stream exposing rows_affected(); see above")]
+                let stream = statement.query_with(arguments).fetch_many(&mut *connection);
+                stream
+            }
+            Source::Simple { sql } => sqlx::raw_sql(sql).fetch_many(&mut *connection),
+        };
 
         loop {
             let step = tokio::select! {
@@ -401,6 +477,14 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                 }
                 Either::Right(row) => row,
             };
+
+            // The simple protocol's first row brings the columns: the cursor
+            // waiting in `spawn` gets them, and the assembler starts on them.
+            if let Some(sender) = schema_sender.take() {
+                let (learnt, plan) = text_schema(&row);
+                assembler = BatchAssembler::new(SchemaRef::clone(&learnt), &plan);
+                let _ = sender.send(learnt);
+            }
 
             if let Err(error) = assembler.push(&row) {
                 let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, error);

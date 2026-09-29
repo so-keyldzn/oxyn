@@ -50,3 +50,22 @@ export const WithoutTheRelationRead: Story = {
     await expect(canvas.queryByText(/None/)).toBeNull()
   },
 }
+
+/** A `NOT NULL` kept as a column attribute says so, not « Unnamed ». */
+export const NotNullWithoutAName: Story = {
+  args: {
+    constraints: [
+      {
+        name: "",
+        kind: "not_null",
+        fields: ["amount"],
+        expression: "NOT NULL",
+        validated: true,
+      },
+    ],
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Column attribute")).toBeVisible()
+    await expect(canvas.queryByText("Unnamed")).toBeNull()
+  },
+}

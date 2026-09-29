@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="6753b2a97adb" -->
+<!-- oxyn-translation source="docs/README.md" sha256="0f4da01aa634" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -82,6 +82,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0045](adr/0045-ci-selective-sur-les-pull-requests.md) | Sur une pull request, la CI saute les jobs dont la zone n'est pas touchée ; sur `main`, tout tourne | accepté |
 | [0046](adr/0046-workspaces-retenus-restent-connectes.md) | Un workspace de connexion retenu garde ses sessions ouvertes, dans la limite de huit par fenêtre | accepté |
 | [0047](adr/0047-english-as-the-repository-language.md) | L'anglais est la langue du dépôt ; le français vit dans des miroirs dont l'anglais fait foi | accepté |
+| [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | Une instruction que sqlx ne sait pas préparer, ou dont le résultat n'a pas de forme binaire, passe par le protocole simple, en texte | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

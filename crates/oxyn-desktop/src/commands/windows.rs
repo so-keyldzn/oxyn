@@ -387,7 +387,14 @@ pub(crate) async fn close_now(app: AppHandle, backend: Backend, window: WindowKe
     {
         tracing::warn!(%error, "a closed window could not be destroyed");
     }
-    forget_window(&app, &label);
+    // On the main thread, as the menu requires: from this task, the menu
+    // setters wait for the main thread, which may be waiting for the menu —
+    // the other window's focus or this one's `Destroyed` — and both freeze.
+    let main = app.clone();
+    let forgotten = label.clone();
+    if let Err(error) = app.run_on_main_thread(move || forget_window(&main, &forgotten)) {
+        tracing::warn!(%error, "a closed window's menu state could not be forgotten");
+    }
     // Closed while others stay: the next launch does not bring it back.
     backend.remove_layout(window).await;
     backend.release_window(window).await;

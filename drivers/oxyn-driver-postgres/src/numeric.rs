@@ -199,6 +199,25 @@ impl<'a> Reader<'a> {
         let bytes: [u8; 8] = self.take(8)?.try_into().ok()?;
         Some(i64::from_be_bytes(bytes))
     }
+
+    /// One byte.
+    pub(crate) fn u8(&mut self) -> Option<u8> {
+        let (first, tail) = self.rest.split_first()?;
+        self.rest = tail;
+        Some(*first)
+    }
+
+    /// An unsigned 64-bit integer, big-endian.
+    pub(crate) fn u64(&mut self) -> Option<u64> {
+        let bytes: [u8; 8] = self.take(8)?.try_into().ok()?;
+        Some(u64::from_be_bytes(bytes))
+    }
+
+    /// A `float8`, big-endian.
+    pub(crate) fn f64(&mut self) -> Option<f64> {
+        let bytes: [u8; 8] = self.take(8)?.try_into().ok()?;
+        Some(f64::from_be_bytes(bytes))
+    }
 }
 
 #[cfg(test)]

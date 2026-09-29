@@ -335,6 +335,20 @@ pub(crate) fn is_read_only_rejection(err: &sqlx::Error) -> bool {
 const READ_ONLY_MESSAGE: &str = "this execution is bounded to read-only: \
                                  the server rejected a statement that writes";
 
+/// Did `prepare` fail because `sqlx` could not describe a result type?
+///
+/// After Describe, `sqlx` 0.9 reads `pg_type` for every OID it does not know
+/// and refuses `typtype = 'm'` (multiranges) and `typcategory = 'Z'`
+/// (`pg_node_tree`…): the error names the `pg_type` column it could not decode.
+/// Nothing ran on the server (ADR-0048).
+pub(crate) fn is_unresolvable_type(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::ColumnDecode { index, .. }
+            if index.contains("typtype") || index.contains("typcategory")
+    )
+}
+
 /// Translates an execution error taking into account the requested bounds and
 /// the bound values.
 ///
