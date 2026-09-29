@@ -440,6 +440,7 @@ pub struct MenuBar {
 
 /// A native entry the front may switch.
 #[cfg(target_os = "macos")]
+#[derive(Clone)]
 enum NativeItem {
     Plain(tauri::menu::MenuItem<tauri::Wry>),
     Check(tauri::menu::CheckMenuItem<tauri::Wry>),
@@ -562,14 +563,24 @@ impl MenuBar {
 
     /// Called on the main thread by a synchronous command or the event loop:
     /// only `muda` setters, no I/O ([I-05](../../../CLAUDE.md#i-05)).
+    ///
+    /// The entries are copied out of the lock before any setter: off the main
+    /// thread a setter waits for it, and a main thread waiting for this lock
+    /// would never answer.
     fn apply_changes(&self, changes: Vec<Change>) {
         #[cfg(target_os = "macos")]
         {
-            let items = self.items.lock();
-            for change in changes {
-                let Some(item) = items.get(&change.id) else {
-                    continue;
-                };
+            let targets: Vec<(Change, NativeItem)> = {
+                let items = self.items.lock();
+                changes
+                    .into_iter()
+                    .filter_map(|change| {
+                        let item = items.get(&change.id)?.clone();
+                        Some((change, item))
+                    })
+                    .collect()
+            };
+            for (change, item) in targets {
                 // A setter that fails leaves that entry as it was; the next
                 // context change sends its state again.
                 let applied = match item {
