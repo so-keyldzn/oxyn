@@ -22,12 +22,14 @@
 //! capability brings up a surface that does not work.
 
 use async_trait::async_trait;
-use oxyn_core::{CancelToken, Capabilities, ConnectionConfig, DriverId, Result, StatementIntent};
+use oxyn_core::{
+    CancelToken, Capabilities, ConnectionConfig, DriverId, OxynError, Result, StatementIntent,
+};
 use oxyn_driver::{
     ConnectionField, Credentials, Driver, DriverFamily, DriverMetadata, FieldKind, Session,
 };
-use sqlx::Row as _;
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use sqlx::{ConnectOptions as _, Connection as _, Row as _};
 
 use crate::error::{map_connect_error, map_exec_error};
 use crate::options::{
@@ -134,14 +136,11 @@ impl Driver for PostgresDriver {
     /// Opens a pool, detects the variant, and returns the session.
     ///
     /// # Errors
-    /// Full paths: `OxynError` is not imported in this module, and an intra-doc
-    /// link does not resolve on a name absent from the scope.
-    ///
-    /// [`oxyn_core::OxynError::Config`] if the configuration is incomplete or
-    /// carries a secret; [`oxyn_core::OxynError::Authentication`] if the server
-    /// refuses the credentials; [`oxyn_core::OxynError::Connection`] if it is
-    /// unreachable; [`oxyn_core::OxynError::Cancelled`] if `cancel` fires during
-    /// the handshake.
+    /// [`OxynError::Config`] if the configuration is incomplete or carries a
+    /// secret; [`OxynError::Authentication`] if the server refuses the
+    /// credentials; [`OxynError::Connection`] if it is unreachable, with the
+    /// network's reason rather than the pool's timeout;
+    /// [`OxynError::Cancelled`] if `cancel` fires during the handshake.
     async fn connect(
         &self,
         config: &ConnectionConfig,
@@ -151,8 +150,8 @@ impl Driver for PostgresDriver {
         let spec = ConnectSpec::from_config(&self.metadata, config, credentials)?;
         let base = spec.database().to_owned();
 
-        let pool = race_cancel(cancel, async {
-            PgPoolOptions::new()
+        let opened = race_cancel(cancel, async {
+            Ok(PgPoolOptions::new()
                 .max_connections(MAX_CONNECTIONS)
                 .min_connections(0)
                 .acquire_timeout(ACQUIRE_TIMEOUT)
@@ -160,10 +159,19 @@ impl Driver for PostgresDriver {
                 // fail here, not in the middle of the user's query.
                 .test_before_acquire(true)
                 .connect_with(spec.options().clone())
-                .await
-                .map_err(|error| map_connect_error(&error))
+                .await)
         })
         .await?;
+        let pool = match opened {
+            Ok(pool) => pool,
+            // `sqlx` retries a refused connection until the deadline, then
+            // reports only the timeout: « pool timed out » when the tunnel is
+            // down tells the user nothing they can act on.
+            Err(sqlx::Error::PoolTimedOut) => {
+                return Err(race_cancel(cancel, timeout_cause(spec.options())).await?);
+            }
+            Err(error) => return Err(map_connect_error(&error)),
+        };
 
         let variant = match race_cancel(cancel, detect_variant(&pool)).await {
             Ok(variant) => variant,
@@ -190,6 +198,24 @@ impl Driver for PostgresDriver {
             base,
         )))
     }
+}
+
+/// Why opening the pool timed out: one direct attempt, without the pool's
+/// retries, whose error is the server's or the network's own.
+///
+/// Only on the failure path: probing on every connect would cost a second
+/// handshake to everyone for the benefit of an error message.
+async fn timeout_cause(options: &PgConnectOptions) -> Result<OxynError> {
+    let attempt = tokio::time::timeout(ACQUIRE_TIMEOUT, options.connect()).await;
+    Ok(match attempt {
+        Ok(Err(error)) => map_connect_error(&error),
+        Ok(Ok(connection)) => {
+            // The server answers now: the timeout was a moment's congestion.
+            let _ = connection.close().await;
+            map_connect_error(&sqlx::Error::PoolTimedOut)
+        }
+        Err(_) => map_connect_error(&sqlx::Error::PoolTimedOut),
+    })
 }
 
 /// Asks the server for its identity and its extensions.
