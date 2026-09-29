@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="8cc99a501016" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="24f5d465e388" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1882,3 +1882,29 @@ driver) ; une différence est indiquée dans la ligne. Tout entier et tout
 | `time` | `i64` microsecondes depuis minuit, `24:00:00` admis | `HH:MM:SS`, puis `.` et jusqu'à 6 chiffres de fraction **sans zéros finaux** (`AppendSeconds`), rien si la fraction est nulle | [date.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/date.c) `time_out` ; [datetime.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/datetime.c) `EncodeTimeOnly`, `AppendSeconds` |
 | `timestamp`, `timestamptz` | `i64` microsecondes depuis le 2000-01-01 (UTC pour `timestamptz`) ; `i64::MIN` / `i64::MAX` = `-infinity` / `infinity` | découpé par division euclidienne en jour julien et heure du jour (`timestamp2tm`), puis (ISO) `AAAA-MM-JJ HH:MM:SS[.frac]` ; `timestamptz` ajoute ensuite le décalage de session — avec `TimeZone = 'UTC'`, `+00` (`EncodeTimezone` n'écrit `:MM` que pour une minute non nulle) ; ` BC` vient **en dernier**, après le décalage | [timestamp.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/timestamp.c) `timestamp_out`, `timestamp2tm` ; [datetime.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/datetime.c) `EncodeDateTime`, `EncodeTimezone` |
 | `interval` | `i64` microsecondes, `i32` jours, `i32` mois ; les trois à leur minimum / maximum = `-infinity` / `infinity` (**PostgreSQL 17+** ; un seul champ extrême reste fini) | `IntervalStyle = 'postgres'` (défaut) : années = mois / 12, mois = mois % 12 (troncature), puis `N year(s)`, `N mon(s)`, `N day(s)` pour les champs non nuls (pluriel sauf pour 1, `+` devant un champ positif qui suit un négatif) ; puis `[-\|+]HH:MM:SS[.frac]` si l'heure est non nulle ou si rien n'a été écrit, `-` si une partie horaire est négative | [timestamp.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/timestamp.c) `interval_out`, `interval2itm` ; [datetime.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/datetime.c) `EncodeInterval`, `AddPostgresIntPart` ; [timestamp.h](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/include/datatype/timestamp.h) `INTERVAL_NOBEGIN` |
+
+## Lecture du YAML des fichiers d'agents — vérifié le 2026-09-29
+
+Relevé pour l'[ADR-0049](adr/0049-agents-declared-as-markdown-files.md), sur
+l'API de crates.io et dans les sources de `serde-saphyr` 1.3.0
+(`src/de/budget.rs`, `src/de/options.rs`, `README.md`).
+
+| Crate | Dernière version stable | Publiée / mise à jour | État | Source |
+|---|---|---|---|---|
+| `serde-saphyr` | `1.3.0`, MIT OR Apache-2.0, `rust-version = "1.89"` | 2026-09-16 | maintenue ; une lecture sans panique est un objectif affiché ; aucune construction d'objet pilotée par les tags | API crates.io ; [dépôt](https://github.com/bourumir-wyngs/serde-saphyr) |
+| `serde_yaml` | `0.9.34+deprecated` | 2024-03-25 | dépréciée par son auteur | API crates.io |
+| `serde_yml` | `0.0.13` | 2026-05-27 | sa propre description : « DEPRECATED — unmaintained », une cale de compatibilité | API crates.io |
+| `serde_norway` | `0.9.42` | 2024-12-21 | fork de `serde_yaml`, aucune version depuis | API crates.io |
+| `toml` (déjà dans le workspace en `0.9.8`) | `1.1.6+spec-1.1.0` | — | le format de repli de l'ADR-0049 | API crates.io |
+
+Réglages de `serde-saphyr` 1.3.0 sur lesquels s'appuie l'ADR-0049 :
+
+| Réglage | Défaut | Sens |
+|---|---|---|
+| `Budget::max_anchors`, `Budget::max_aliases` | 50 000 chacun | `0` refuse la première ancre / le premier alias |
+| `Budget::max_reader_input_bytes` | 256 Mio | ne s'applique qu'à une entrée lue par un lecteur, pas à une `&str` — le plafond de 64 Kio est vérifié par l'appelant |
+| `Options::merge_keys` | `MergeKeyPolicy::Merge` | `Error` refuse `<<` |
+| `Options::duplicate_keys` | `DuplicateKeyPolicy::Error` | une clé répétée est une erreur |
+| `Options::strict_booleans` | `false` : `yes`/`no`/`on`/`off` lus comme booléens | `true` n'accepte que `true` / `false` |
+| `Options::reject_unsupported_tags` | `false` | `true` refuse un tag inconnu |
+| `!include` | seulement avec la fonctionnalité `include` et un résolveur | laissé désactivé |

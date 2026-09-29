@@ -1873,3 +1873,29 @@ supports); a difference is stated in the row. Every integer and every
 | `time` | `i64` microseconds since midnight, `24:00:00` allowed | `HH:MM:SS`, then `.` and up to 6 fraction digits **without trailing zeros** (`AppendSeconds`), nothing if the fraction is 0 | [date.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/date.c) `time_out`; [datetime.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/datetime.c) `EncodeTimeOnly`, `AppendSeconds` |
 | `timestamp`, `timestamptz` | `i64` microseconds since 2000-01-01 (UTC for `timestamptz`); `i64::MIN` / `i64::MAX` = `-infinity` / `infinity` | split by Euclidean division into a Julian day and a time of day (`timestamp2tm`), then (ISO) `YYYY-MM-DD HH:MM:SS[.frac]`; `timestamptz` then appends the session offset — with `TimeZone = 'UTC'`, `+00` (`EncodeTimezone` prints `:MM` only for a non-zero minute); ` BC` comes **last**, after the offset | [timestamp.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/timestamp.c) `timestamp_out`, `timestamp2tm`; [datetime.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/datetime.c) `EncodeDateTime`, `EncodeTimezone` |
 | `interval` | `i64` microseconds, `i32` days, `i32` months; all three at their minimum / maximum = `-infinity` / `infinity` (**PostgreSQL 17+**; a single extreme field is finite) | `IntervalStyle = 'postgres'` (default): years = months / 12, months = months % 12 (truncating), then `N year(s)`, `N mon(s)`, `N day(s)` for non-zero fields (plural unless 1, `+` before a positive field that follows a negative one); then `[-\|+]HH:MM:SS[.frac]` if the time is non-zero or nothing was printed, `-` if any time part is negative | [timestamp.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/timestamp.c) `interval_out`, `interval2itm`; [datetime.c](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/backend/utils/adt/datetime.c) `EncodeInterval`, `AddPostgresIntPart`; [timestamp.h](https://github.com/postgres/postgres/blob/REL_18_STABLE/src/include/datatype/timestamp.h) `INTERVAL_NOBEGIN` |
+
+## YAML parsing for agent files — checked on 2026-09-29
+
+Read for [ADR-0049](adr/0049-agents-declared-as-markdown-files.md), on the
+crates.io API and in the sources of `serde-saphyr` 1.3.0
+(`src/de/budget.rs`, `src/de/options.rs`, `README.md`).
+
+| Crate | Latest stable | Published / updated | State | Source |
+|---|---|---|---|---|
+| `serde-saphyr` | `1.3.0`, MIT OR Apache-2.0, `rust-version = "1.89"` | 2026-09-16 | maintained; panic-free parsing is a stated goal; no tag-driven object construction | crates.io API; [repository](https://github.com/bourumir-wyngs/serde-saphyr) |
+| `serde_yaml` | `0.9.34+deprecated` | 2024-03-25 | deprecated by its author | crates.io API |
+| `serde_yml` | `0.0.13` | 2026-05-27 | its own description: "DEPRECATED — unmaintained", a compatibility shim | crates.io API |
+| `serde_norway` | `0.9.42` | 2024-12-21 | fork of `serde_yaml`, no release since | crates.io API |
+| `toml` (already in the workspace at `0.9.8`) | `1.1.6+spec-1.1.0` | — | the fallback format of ADR-0049 | crates.io API |
+
+`serde-saphyr` 1.3.0 settings ADR-0049 relies on:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Budget::max_anchors`, `Budget::max_aliases` | 50,000 each | `0` refuses the first anchor / alias |
+| `Budget::max_reader_input_bytes` | 256 MiB | applies to reader input only, not to a `&str` — the 64 KiB cap is checked by the caller |
+| `Options::merge_keys` | `MergeKeyPolicy::Merge` | `Error` refuses `<<` |
+| `Options::duplicate_keys` | `DuplicateKeyPolicy::Error` | a repeated key is an error |
+| `Options::strict_booleans` | `false`: `yes`/`no`/`on`/`off` read as booleans | `true` accepts only `true` / `false` |
+| `Options::reject_unsupported_tags` | `false` | `true` refuses an unknown tag |
+| `!include` | only with the `include` feature and a resolver | left off |

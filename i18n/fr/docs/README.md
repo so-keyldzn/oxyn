@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="0f4da01aa634" -->
+<!-- oxyn-translation source="docs/README.md" sha256="10395e5ccc57" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -83,6 +83,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0046](adr/0046-workspaces-retenus-restent-connectes.md) | Un workspace de connexion retenu garde ses sessions ouvertes, dans la limite de huit par fenêtre | accepté |
 | [0047](adr/0047-english-as-the-repository-language.md) | L'anglais est la langue du dépôt ; le français vit dans des miroirs dont l'anglais fait foi | accepté |
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | Une instruction que sqlx ne sait pas préparer, ou dont le résultat n'a pas de forme binaire, passe par le protocole simple, en texte | accepté |
+| [0049](adr/0049-agents-declared-as-markdown-files.md) | Un agent est un fichier Markdown à en-tête YAML, ciblé par dialecte, rempli seulement par une liste fermée de variables | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
