@@ -26,6 +26,19 @@ export function validationLabel(validated: boolean | null) {
 }
 
 /**
+ * A constraint the database keeps without a name. A `NOT NULL` is the usual
+ * one — before PostgreSQL 18 it is a column attribute, not a named constraint
+ * — and « Unnamed » on every row read as missing data.
+ */
+function UnnamedConstraint({ kind }: { kind: string }) {
+  return (
+    <span className="text-muted-foreground">
+      {kind === "not_null" ? "Column attribute" : "Unnamed"}
+    </span>
+  )
+}
+
+/**
  * The constraints of a relation, and what the relation read already says
  * about nullability and unique indexes.
  *
@@ -66,7 +79,7 @@ export function RelationConstraints({
                   direction and are never markup. */}
               <TableCell dir="auto" className="font-medium">
                 {constraint.name || (
-                  <span className="text-muted-foreground">Unnamed</span>
+                  <UnnamedConstraint kind={constraint.kind} />
                 )}
               </TableCell>
               <TableCell>
