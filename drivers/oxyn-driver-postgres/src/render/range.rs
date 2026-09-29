@@ -26,6 +26,11 @@ pub(crate) fn range(
     let mut reader = Reader::new(bytes);
     let flags = reader.u8().ok_or("empty range")?;
     if flags & EMPTY != 0 {
+        // An empty range carries nothing more: bytes after the flag are a
+        // malformed value, and showing `empty` would hide it.
+        if bytes.len() != 1 {
+            return Err("empty range followed by data");
+        }
         out.push_str("empty");
         return Ok(());
     }
@@ -114,4 +119,28 @@ fn quote_bound(text: &str, out: &mut String) {
         out.push(c);
     }
     out.push('"');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_range_is_the_flag_alone() {
+        let mut out = String::new();
+        range(&PgDecoding::Int32, &[EMPTY], &mut out, 0).expect("a plain empty range");
+        assert_eq!(out, "empty");
+    }
+
+    #[test]
+    fn an_empty_range_followed_by_data_is_refused() {
+        // A bound after `EMPTY` is malformed: shown as `empty`, it would read
+        // as a plausible value the server never sent.
+        let mut bytes = vec![EMPTY];
+        bytes.extend_from_slice(&4_i32.to_be_bytes());
+        bytes.extend_from_slice(&1_i32.to_be_bytes());
+        let mut out = String::new();
+        assert!(range(&PgDecoding::Int32, &bytes, &mut out, 0).is_err());
+        assert!(out.is_empty());
+    }
 }

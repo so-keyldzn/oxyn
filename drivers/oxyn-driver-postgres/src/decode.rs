@@ -51,6 +51,7 @@ use sqlx::TypeInfo as _;
 use sqlx::postgres::{PgRow, PgValueFormat};
 
 use crate::numeric::{Reader, render_binary};
+use crate::render::value::MAX_RENDERED_BYTES;
 use crate::types::PgDecoding;
 
 /// Microseconds between the Unix epoch and PostgreSQL's (2000-01-01).
@@ -180,6 +181,11 @@ impl BatchAssembler {
             });
         }
 
+        // The bound of one rendered value holds per value; the batch is cut only
+        // after the whole row. Without a bound across the row, 1,600 columns of
+        // nested records would each render up to the per-value limit before
+        // the cursor could cut anything (I-06).
+        let mut rendered: usize = 0;
         for (ordinal, column) in self.columns.iter_mut().enumerate() {
             let raw_value = row.try_get_raw(ordinal).map_err(|err| DecodeError::Row {
                 detail: err.to_string(),
@@ -192,7 +198,16 @@ impl BatchAssembler {
 
             // The type name is composed only on the error path: here, one
             // allocation per cell would cost the budget of a whole result.
-            let produced = match column.append(format, encoded) {
+            let appended = column.append(format, encoded).and_then(|produced| {
+                rendered = rendered.saturating_add(produced);
+                if rendered > MAX_RENDERED_BYTES {
+                    return Err(
+                        "row rendered larger than 16 MiB: cast its values to text in the query",
+                    );
+                }
+                Ok(produced)
+            });
+            let produced = match appended {
                 Ok(produced) => produced,
                 Err(detail) => {
                     return Err(DecodeError::Value {
