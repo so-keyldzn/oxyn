@@ -21,6 +21,8 @@
 //! what it can do would mean declaring capabilities by guesswork — and a wrong
 //! capability brings up a surface that does not work.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, OxynError, Result, StatementIntent,
@@ -200,13 +202,18 @@ impl Driver for PostgresDriver {
     }
 }
 
+/// How long [`timeout_cause`] may add to a connect that already waited
+/// [`ACQUIRE_TIMEOUT`]. A refused connection answers at once; a server that
+/// drops packets would otherwise double the wait for the same « timed out ».
+const TIMEOUT_CAUSE_BUDGET: Duration = Duration::from_secs(3);
+
 /// Why opening the pool timed out: one direct attempt, without the pool's
 /// retries, whose error is the server's or the network's own.
 ///
 /// Only on the failure path: probing on every connect would cost a second
 /// handshake to everyone for the benefit of an error message.
 async fn timeout_cause(options: &PgConnectOptions) -> Result<OxynError> {
-    let attempt = tokio::time::timeout(ACQUIRE_TIMEOUT, options.connect()).await;
+    let attempt = tokio::time::timeout(TIMEOUT_CAUSE_BUDGET, options.connect()).await;
     Ok(match attempt {
         Ok(Err(error)) => map_connect_error(&error),
         Ok(Ok(connection)) => {
