@@ -44,12 +44,14 @@ use oxyn_driver::{Cursor, Session};
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgArguments, PgConnection, PgPool, Postgres};
 use sqlx::{Arguments as _, AssertSqlSafe, Connection as _, Executor as _};
-use sqlx::{Row as _, SqlSafeStr as _, Statement as _};
+use sqlx::{Column as _, Row as _, SqlSafeStr as _, Statement as _};
 
 use crate::cancel::{BackendCanceller, StatementRegistry};
 use crate::catalog::PostgresCatalog;
-use crate::cursor::{self, StreamRequest};
-use crate::error::{Bound, map_connect_error, map_exec_error, map_stream_error};
+use crate::cursor::{self, Source, StreamRequest};
+use crate::error::{
+    Bound, is_unresolvable_type, map_connect_error, map_exec_error, map_stream_error,
+};
 use crate::lease::Lease;
 use crate::options::ConnectSpec;
 use crate::transaction_text::{controls_transaction, opens_transaction};
@@ -61,7 +63,7 @@ use crate::transaction_text::{controls_transaction, opens_transaction};
 /// its own.
 const TRANSACTIONS_REFUSED: &str = "TRANSACTIONS (transactions are not supported in the console \
                                     yet: each statement commits on its own)";
-use crate::types::schema_for;
+use crate::types::{lacks_binary_output, schema_for};
 use crate::variant::PostgresVariant;
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
 use oxyn_driver::SessionContext;
@@ -386,41 +388,69 @@ impl Session for PostgresSession {
         // what I-10 guards. Nothing is concatenated here: the text is only
         // read, to know whether its connection can be returned.
         let opens_transaction = opens_transaction(&text);
+        // Kept for the simple protocol (ADR-0048): `prepare` consumes the text,
+        // and `SqlStr` is not `Clone`. One copy per statement, not per row.
+        let fallback_text = text.clone();
         let sql = AssertSqlSafe(text).into_sql_str();
-        let prepare = race_cancel(cancel, async {
-            (&mut *connection)
-                .prepare(sql)
-                .await
-                // `Bound::Internal`, whatever the request's values: `prepare`
-                // only issues Parse and Describe, which carry the SQL text and
-                // the parameters' OIDs — never their content, which only goes
-                // out at Bind, in `cursor.rs`. The server can therefore quote
-                // nothing here, and withholding its message would cost the most
-                // useful diagnostic of a parameterized query: the name of the
-                // object that does not exist.
-                .map_err(|error| {
-                    map_stream_error(
-                        &self.driver,
-                        intent,
-                        limits.read_only,
-                        Bound::Internal,
-                        error,
-                    )
-                })
-        })
-        .await;
+        let prepared =
+            race_cancel(cancel, async { Ok((&mut *connection).prepare(sql).await) }).await?;
 
-        // A failed preparation closes the connection if it is already dirty:
-        // the transaction opened above would keep locks and block the `VACUUM`
-        // of the whole database, and a console's `search_path` would leave with
-        // it. A typo in a table name in a writable console is enough.
-        let statement = prepare?;
+        // ADR-0048: a statement `sqlx` cannot prepare, or whose result has a
+        // type the server cannot send in binary, runs in the simple protocol.
+        // Nothing has run yet — `prepare` only sends Parse and Describe — and
+        // the server's Parse accepted the text, which it refuses when it holds
+        // more than one command: the simple protocol, which would run several,
+        // receives one.
+        let source = match prepared {
+            Ok(statement)
+                if !statement
+                    .columns()
+                    .iter()
+                    .any(|c| lacks_binary_output(c.type_info())) =>
+            {
+                Source::Prepared {
+                    statement,
+                    arguments,
+                }
+            }
+            Ok(_) => simple_source(params.is_empty(), fallback_text, NO_BINARY_OUTPUT)?,
+            Err(error) if is_unresolvable_type(&error) => {
+                simple_source(params.is_empty(), fallback_text, UNRESOLVABLE_TYPE)?
+            }
+            // A failed preparation closes the connection if it is already
+            // dirty: the transaction opened above would keep locks and block
+            // the `VACUUM` of the whole database, and a console's `search_path`
+            // would leave with it. A typo in a table name in a writable console
+            // is enough.
+            //
+            // `Bound::Internal`, whatever the request's values: `prepare` only
+            // issues Parse and Describe, which carry the SQL text and the
+            // parameters' OIDs — never their content, which only goes out at
+            // Bind, in `cursor.rs`. The server can therefore quote nothing
+            // here, and withholding its message would cost the most useful
+            // diagnostic of a parameterized query: the name of the object that
+            // does not exist.
+            Err(error) => {
+                return Err(map_stream_error(
+                    &self.driver,
+                    intent,
+                    limits.read_only,
+                    Bound::Internal,
+                    error,
+                ));
+            }
+        };
         // The user's statement is about to run, and it can itself change the
         // session state (`SET standard_conforming_strings = off`): the cursor
         // will decide whether the connection may go back.
         connection.taint();
 
-        let (schema, decodings) = schema_for(statement.columns());
+        // The simple protocol gives the column list with the first row: its
+        // cursor learns the schema there.
+        let (schema, decodings) = match &source {
+            Source::Prepared { statement, .. } => schema_for(statement.columns()),
+            Source::Simple { .. } => (Arc::new(arrow::datatypes::Schema::empty()), Vec::new()),
+        };
         let handle = StatementHandle::new();
         // A **child** of the caller's token: cancelling the caller cancels this
         // execution, but cancelling this one does not cancel the other tabs.
@@ -430,8 +460,7 @@ impl Session for PostgresSession {
             StreamRequest {
                 driver: self.driver.clone(),
                 connection,
-                statement,
-                arguments,
+                source,
                 bound,
                 restore_context,
                 opens_transaction,
@@ -446,7 +475,8 @@ impl Session for PostgresSession {
                 handle,
             },
             execution,
-        );
+        )
+        .await;
         Ok(Box::new(cursor))
     }
 
@@ -513,6 +543,30 @@ impl Session for PostgresSession {
         self.pool.close().await;
         Ok(())
     }
+}
+
+/// Why a statement goes through the simple protocol: `sqlx` cannot prepare it.
+const UNRESOLVABLE_TYPE: &str = "a result type the client library cannot describe \
+    (a multirange, or an internal type such as `pg_node_tree`)";
+/// Why a statement goes through the simple protocol: the server cannot send one
+/// of its result columns in binary.
+const NO_BINARY_OUTPUT: &str = "a result type PostgreSQL cannot send in binary \
+    (`aclitem`, `gtsvector`)";
+
+/// The simple-protocol source, or the refusal when the request has bound
+/// parameters: that protocol cannot carry them, and dropping them would run
+/// another statement than the one asked for.
+fn simple_source(unbound: bool, text: String, cause: &str) -> Result<Source> {
+    if unbound {
+        return Ok(Source::Simple {
+            sql: AssertSqlSafe(text).into_sql_str(),
+        });
+    }
+    Err(OxynError::NotSupported {
+        capability: format!(
+            "bound parameters with {cause}: cast that column to `text` in the query (ADR-0048)"
+        ),
+    })
 }
 
 /// Races a future against cancellation.

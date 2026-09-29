@@ -78,6 +78,7 @@ To locate the boards and their states before implementation, see
 | [0045](adr/0045-ci-selective-sur-les-pull-requests.md) | On a pull request, CI skips the jobs whose area is not touched; on `main`, everything runs | accepted |
 | [0046](adr/0046-workspaces-retenus-restent-connectes.md) | A retained connection workspace keeps its sessions open, up to eight per window | accepted |
 | [0047](adr/0047-english-as-the-repository-language.md) | English is the repository language; French lives in authoritative-English mirrors | accepted |
+| [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | A statement sqlx cannot prepare, or whose result has no binary form, runs in the simple protocol, as text | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 
