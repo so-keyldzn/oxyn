@@ -119,9 +119,15 @@ export const results = {
       limit,
     }),
 
-  /** The columns of a held result, known before its first rows; `null` once expired. */
-  resultColumns: (result: string) =>
-    call("result_columns", z.array(ResultColumn).nullable(), { result }),
+  /**
+   * The columns of a held result, known before its first rows; `null` once
+   * expired. Refused, like a page, when the result is another connection's.
+   */
+  resultColumns: (connection: string, result: string) =>
+    call("result_columns", z.array(ResultColumn).nullable(), {
+      connection,
+      result,
+    }),
 
   forgetResult: (result: string) => call("forget_result", Nothing, { result }),
 
@@ -158,12 +164,14 @@ export const results = {
 
   /** `null` when the result has expired. */
   findInResult: (
+    connection: string,
     result: string,
     needle: string,
     from: number,
     forward: boolean
   ) =>
     call("find_in_result", FindAnswer.nullable(), {
+      connection,
       result,
       needle,
       from,
@@ -172,6 +180,7 @@ export const results = {
 
   /** `null` when the result has expired. */
   findMatchesInWindow: (
+    connection: string,
     result: string,
     needle: string,
     offset: number,
@@ -180,7 +189,7 @@ export const results = {
     call(
       "find_matches_in_window",
       z.array(z.number().int().nonnegative()).nullable(),
-      { result, needle, offset, limit }
+      { connection, result, needle, offset, limit }
     ),
 
   /** `null` when the result has expired. Cancel with `cancel(commandId)`. */

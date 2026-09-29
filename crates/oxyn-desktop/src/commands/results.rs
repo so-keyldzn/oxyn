@@ -46,9 +46,11 @@ pub async fn read_result_page(
 pub async fn result_columns(
     webview: Webview,
     backend: State<'_, Backend>,
+    connection: String,
     result: String,
 ) -> Result<Option<Vec<ResultColumn>>, IpcError> {
-    Ok(backend.result_columns(readable(&backend, &webview, &result)?))
+    let result = readable(&backend, &webview, &result)?;
+    backend.result_columns(parse("connection", &connection)?, result)
 }
 
 #[tauri::command]
@@ -188,14 +190,17 @@ pub async fn copy_result_rows(
 pub async fn find_in_result(
     webview: Webview,
     backend: State<'_, Backend>,
+    connection: String,
     result: String,
     needle: String,
     from: usize,
     forward: bool,
 ) -> Result<Option<FindAnswer>, IpcError> {
+    let result = readable(&backend, &webview, &result)?;
     backend
         .find_in_result(
-            readable(&backend, &webview, &result)?,
+            parse("connection", &connection)?,
+            result,
             needle,
             from,
             forward,
@@ -208,14 +213,17 @@ pub async fn find_in_result(
 pub async fn find_matches_in_window(
     webview: Webview,
     backend: State<'_, Backend>,
+    connection: String,
     result: String,
     needle: String,
     offset: usize,
     limit: usize,
 ) -> Result<Option<Vec<usize>>, IpcError> {
+    let result = readable(&backend, &webview, &result)?;
     backend
         .find_matches_in_window(
-            readable(&backend, &webview, &result)?,
+            parse("connection", &connection)?,
+            result,
             needle,
             offset,
             limit,

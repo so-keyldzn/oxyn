@@ -120,10 +120,11 @@ export function usePreview({
   )
   const streaming = progress?.result ?? null
   const streamColumns = useQuery({
-    queryKey: ["result-columns", streaming] as const,
+    queryKey: ["result-columns", open.connection, streaming] as const,
     enabled: streaming !== null,
     staleTime: Number.POSITIVE_INFINITY,
-    queryFn: () => (streaming ? results.resultColumns(streaming) : null),
+    queryFn: () =>
+      streaming ? results.resultColumns(open.connection, streaming) : null,
   })
   const live = React.useMemo<ResultState>(
     () =>
