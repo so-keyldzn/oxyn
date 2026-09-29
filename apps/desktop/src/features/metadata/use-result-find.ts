@@ -12,7 +12,7 @@ import type { FindAnswer } from "@/lib/ipc/results"
  * which rows around it matched, so the grid marks them without holding fifty
  * thousand row numbers in the webview.
  */
-export function useResultFind(result: string | null) {
+export function useResultFind(connection: string, result: string | null) {
   const [answer, setAnswer] = React.useState<FindAnswer | null>(null)
   const [needle, setNeedle] = React.useState<string | null>(null)
   const [searching, setSearching] = React.useState(false)
@@ -51,6 +51,7 @@ export function useResultFind(result: string | null) {
     setNeedle(text)
     try {
       const found = await results.findInResult(
+        connection,
         result,
         text,
         from,
@@ -69,6 +70,7 @@ export function useResultFind(result: string | null) {
         setReveal({ row, key: mine })
         const offset = Math.max(0, row - MAX_PAGE_ROWS / 2)
         const around = await results.findMatchesInWindow(
+          connection,
           result,
           text,
           offset,

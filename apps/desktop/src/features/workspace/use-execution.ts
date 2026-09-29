@@ -74,9 +74,12 @@ export function stateFromOutcome(outcome: CommandOutcome): {
  * its late answer (docs/UX-SPEC.md, « Data of a selected table »).
  */
 export function useExecution({
+  connection,
   serverCancel,
   initial = null,
 }: {
+  /** The connection the slot's results belong to: every read names it. */
+  connection: string
   serverCancel: boolean
   /**
    * The result a console moved from another window shows: read again from
@@ -127,7 +130,7 @@ export function useExecution({
     if (streaming === null || streamed?.result === streaming) return
     let left = false
     void results
-      .resultColumns(streaming)
+      .resultColumns(connection, streaming)
       .then((columns) => {
         // `null`: the result expired before its columns were read. The
         // outcome still carries them, so nothing is said here.
@@ -137,7 +140,7 @@ export function useExecution({
     return () => {
       left = true
     }
-  }, [streaming, streamed])
+  }, [connection, streaming, streamed])
 
   const release = () => {
     if (heldResult.current) {

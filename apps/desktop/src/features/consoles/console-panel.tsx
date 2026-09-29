@@ -150,6 +150,7 @@ export function ConsolePanel({
   const doc = useConsoleDocument({ seed, connection: origin })
   const capabilities = session?.capabilities ?? NO_CAPABILITIES
   const execution = useExecution({
+    connection: open.connection,
     serverCancel: capabilities.includes("SERVER_SIDE_CANCEL"),
     initial: initialResult,
   })
@@ -488,7 +489,7 @@ export function ConsolePanel({
   const cancel = React.useCallback(() => latest.current.execution.cancel(), [])
   const retry = React.useCallback(() => void latest.current.run(), [])
 
-  const find = useResultFind(resultId)
+  const find = useResultFind(open.connection, resultId)
   // The hook rebuilds its callbacks on every render; the result area must not
   // re-render on every keystroke in the editor (PERFORMANCE), so the console
   // hands the panel stable ones.

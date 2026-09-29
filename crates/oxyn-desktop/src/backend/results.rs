@@ -319,11 +319,17 @@ impl Backend {
     /// The columns of a result, known from its schema — before its first rows.
     ///
     /// Lets the grid draw a result while it streams (UX-SPEC, « States of a
-    /// view »). `None` when the result is not, or no longer, held.
-    #[must_use]
-    pub fn result_columns(&self, result: ResultId) -> Option<Vec<ResultColumn>> {
-        let buffer = self.inner.executor.result(result)?;
-        Some(
+    /// view »). `None` when the result is not, or no longer, held. Refused,
+    /// like a page, when the result belongs to another connection.
+    pub fn result_columns(
+        &self,
+        connection: ConnectionId,
+        result: ResultId,
+    ) -> Result<Option<Vec<ResultColumn>>, IpcError> {
+        let Some(buffer) = self.inner.executor.result_on(connection, result)? else {
+            return Ok(None);
+        };
+        Ok(Some(
             buffer
                 .schema()
                 .fields()
@@ -334,7 +340,7 @@ impl Backend {
                     nullable: field.is_nullable(),
                 })
                 .collect(),
-        )
+        ))
     }
 
     /// One view stops reading `result`.
@@ -415,15 +421,17 @@ impl Backend {
     ///
     /// Searches the batches in memory only and says how many it skipped
     /// (`oxyn_data::find`); a search never reads the disk nor filters the rows.
-    /// `None` when the result has expired.
+    /// `None` when the result has expired; refused, like a page, when it
+    /// belongs to another connection.
     pub async fn find_in_result(
         &self,
+        connection: ConnectionId,
         result: ResultId,
         needle: String,
         from: usize,
         forward: bool,
     ) -> Result<Option<FindAnswer>, IpcError> {
-        let Some(outcome) = self.find(result, needle).await? else {
+        let Some(outcome) = self.find(connection, result, needle).await? else {
             return Ok(None);
         };
         Ok(Some(FindAnswer::of(&outcome, from, forward)))
@@ -432,12 +440,13 @@ impl Backend {
     /// The matching rows inside one window, for the grid to mark.
     pub async fn find_matches_in_window(
         &self,
+        connection: ConnectionId,
         result: ResultId,
         needle: String,
         offset: usize,
         limit: usize,
     ) -> Result<Option<Vec<usize>>, IpcError> {
-        let Some(outcome) = self.find(result, needle).await? else {
+        let Some(outcome) = self.find(connection, result, needle).await? else {
             return Ok(None);
         };
         Ok(Some(matches_in_window(
@@ -505,15 +514,19 @@ impl Backend {
     }
 
     /// The search outcome for `needle`, computed once per result and size.
+    ///
+    /// Ownership is checked before the remembered outcomes are looked at: an
+    /// answer kept from the owner's search must not reach another connection.
     async fn find(
         &self,
+        connection: ConnectionId,
         result: ResultId,
         needle: String,
     ) -> Result<Option<Arc<FindOutcome>>, IpcError> {
         if needle.len() > MAX_NEEDLE_BYTES {
             return Err(IpcError::invalid("This search text is too long"));
         }
-        let Some(buffer) = self.inner.executor.result(result) else {
+        let Some(buffer) = self.inner.executor.result_on(connection, result)? else {
             return Ok(None);
         };
         let rows = buffer.row_count();
@@ -881,7 +894,10 @@ mod tests {
         };
         let result: ResultId = result.parse().expect("result id");
 
-        let columns = backend.result_columns(result).expect("held");
+        let columns = backend
+            .result_columns(connection, result)
+            .expect("owned")
+            .expect("held");
         assert_eq!(
             columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
             ["x", "label", "literal"]
@@ -896,7 +912,7 @@ mod tests {
         assert_eq!(page.rows.len(), 10);
 
         let answer = runtime
-            .block_on(backend.find_in_result(result, "NEEDLE".into(), 0, true))
+            .block_on(backend.find_in_result(connection, result, "NEEDLE".into(), 0, true))
             .expect("search")
             .expect("held");
         assert_eq!(
@@ -904,12 +920,18 @@ mod tests {
             (3, Some(999), Some(1))
         );
         let back = runtime
-            .block_on(backend.find_in_result(result, "NEEDLE".into(), 999, false))
+            .block_on(backend.find_in_result(connection, result, "NEEDLE".into(), 999, false))
             .expect("search")
             .expect("held");
         assert_eq!(back.row, Some(2999), "backward wraps to the last match");
         let window = runtime
-            .block_on(backend.find_matches_in_window(result, "needle".into(), 1000, 1000))
+            .block_on(backend.find_matches_in_window(
+                connection,
+                result,
+                "needle".into(),
+                1000,
+                1000,
+            ))
             .expect("search")
             .expect("held");
         assert_eq!(window, vec![1999]);
@@ -933,14 +955,19 @@ mod tests {
         );
 
         backend.forget_result(result);
-        assert!(backend.result_columns(result).is_none());
+        assert!(
+            backend
+                .result_columns(connection, result)
+                .expect("owned")
+                .is_none()
+        );
         assert!(matches!(
             runtime.block_on(backend.read_result_page(connection, result, 0, 10)),
             Ok(ResultWindow::Expired)
         ));
         assert!(
             runtime
-                .block_on(backend.find_in_result(result, "needle".into(), 0, true))
+                .block_on(backend.find_in_result(connection, result, "needle".into(), 0, true))
                 .expect("no error")
                 .is_none()
         );

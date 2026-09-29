@@ -34,7 +34,7 @@ describe("useExecution lifecycle", () => {
   it("cancels a running command when its view goes, and forgets its late result", async () => {
     let answer: (outcome: CommandOutcome) => void = () => undefined
     const { result, unmount } = renderHook(() =>
-      useExecution({ serverCancel: true })
+      useExecution({ connection: "c", serverCancel: true })
     )
     act(() =>
       result.current.start(
@@ -53,7 +53,7 @@ describe("useExecution lifecycle", () => {
 
   it("refuses an approval still pending when its view goes", async () => {
     const { result, unmount } = renderHook(() =>
-      useExecution({ serverCancel: true })
+      useExecution({ connection: "c", serverCancel: true })
     )
     await act(async () =>
       result.current.start(() =>
@@ -71,7 +71,9 @@ describe("useExecution lifecycle", () => {
   })
 
   it("sends Stop once, however often it is pressed", () => {
-    const { result } = renderHook(() => useExecution({ serverCancel: true }))
+    const { result } = renderHook(() =>
+      useExecution({ connection: "c", serverCancel: true })
+    )
     act(() => result.current.start(() => new Promise(() => undefined)))
     act(() => result.current.cancel())
     act(() => result.current.cancel())

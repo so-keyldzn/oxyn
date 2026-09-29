@@ -538,7 +538,9 @@ export function useConsoles({
   }) => {
     try {
       const document = await library.openDocument(moved.document)
-      const shown = moved.result ? await handedResult(moved.result) : null
+      const shown = moved.result
+        ? await handedResult(open.connection, moved.result)
+        : null
       await add(
         open.console,
         {
@@ -713,8 +715,11 @@ export function useConsoles({
 }
 
 /** What the panel draws for a moved result; its columns read again. */
-async function handedResult(handed: HandedResult): Promise<ResultState | null> {
-  const columns = await results.resultColumns(handed.result)
+async function handedResult(
+  connection: string,
+  handed: HandedResult
+): Promise<ResultState | null> {
+  const columns = await results.resultColumns(connection, handed.result)
   // Expired meanwhile: the console arrives without it, like any released
   // result, and the hold taken for this window is let go.
   if (!columns) {

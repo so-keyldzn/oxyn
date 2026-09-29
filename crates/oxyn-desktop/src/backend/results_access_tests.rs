@@ -158,3 +158,80 @@ fn another_connection_is_refused_alike_in_memory_in_the_cache_and_on_disk() {
     }
     assert_eq!(sql_runs(&backend), runs, "reading a page runs no SQL");
 }
+
+/// The page refusal, for a read that is not a page.
+fn refused<T: std::fmt::Debug>(read: Result<Option<T>, crate::ipc::IpcError>) -> String {
+    match read {
+        Err(error) => error.message,
+        Ok(answer) => panic!("read by another connection: {answer:?}"),
+    }
+}
+
+#[test]
+fn another_connection_is_refused_the_columns_as_it_is_a_page() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let owner = ids(&open(&runtime, &backend, "owner"));
+    let (other, _) = ids(&open(&runtime, &backend, "other"));
+    let result = run(&runtime, &backend, owner, "SELECT 1 AS x");
+    let Err(page) = runtime.block_on(backend.read_result_page(other, result, 0, 1)) else {
+        panic!("a page is refused to another connection");
+    };
+
+    assert_eq!(refused(backend.result_columns(other, result)), page.message);
+    let columns = backend
+        .result_columns(owner.0, result)
+        .expect("the owner reads")
+        .expect("held");
+    assert_eq!(
+        columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["x"]
+    );
+}
+
+#[test]
+fn another_connection_is_refused_a_search_even_one_already_remembered() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let owner = ids(&open(&runtime, &backend, "owner"));
+    let (other, _) = ids(&open(&runtime, &backend, "other"));
+    let result = run(
+        &runtime,
+        &backend,
+        owner,
+        "SELECT 'hay' AS label UNION ALL SELECT 'needle'",
+    );
+    let Err(page) = runtime.block_on(backend.read_result_page(other, result, 0, 1)) else {
+        panic!("a page is refused to another connection");
+    };
+
+    // The owner searches first: the outcome is remembered, and must not
+    // answer the other connection.
+    let answer = runtime
+        .block_on(backend.find_in_result(owner.0, result, "needle".into(), 0, true))
+        .expect("the owner searches")
+        .expect("held");
+    assert_eq!((answer.total, answer.row), (1, Some(1)));
+    let matches = runtime
+        .block_on(backend.find_matches_in_window(owner.0, result, "needle".into(), 0, 10))
+        .expect("the owner searches")
+        .expect("held");
+    assert_eq!(matches, vec![1]);
+
+    assert_eq!(
+        refused(runtime.block_on(backend.find_in_result(other, result, "needle".into(), 0, true))),
+        page.message
+    );
+    assert_eq!(
+        refused(runtime.block_on(backend.find_matches_in_window(
+            other,
+            result,
+            "needle".into(),
+            0,
+            10
+        ))),
+        page.message
+    );
+}
