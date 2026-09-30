@@ -1,3 +1,6 @@
+import { readIdentifierChain } from "@/lib/sql-identifiers"
+import type { IdentifierQuote } from "@/lib/sql-identifiers"
+
 // A model's answer, parsed into a tree the renderer draws with React text.
 //
 // Why not a Markdown library: every one of them ends in HTML, then relies on a
@@ -114,42 +117,15 @@ export function isErdBlock(block: Block): block is CodeBlock {
   )
 }
 
-/**
- * Splits `schema.table` on the dots outside double quotes, as SQL spells a
- * qualified name: `"a.b".c` is two segments, and `""` inside quotes is one
- * quote. `null` for a name that is not one — an empty segment, an open quote.
- */
-function erdSegments(name: string): Array<string> | null {
-  const segments: Array<string> = []
-  let current = ""
-  let quoted = false
-  let wasQuoted = false
-  for (let index = 0; index < name.length; index += 1) {
-    const char = name[index]
-    if (quoted) {
-      if (char === '"' && name[index + 1] === '"') {
-        current += '"'
-        index += 1
-      } else if (char === '"') {
-        quoted = false
-      } else {
-        current += char
-      }
-    } else if (char === '"') {
-      quoted = true
-      wasQuoted = true
-    } else if (char === ".") {
-      if (current === "") return null
-      segments.push(current)
-      current = ""
-      wasQuoted = false
-    } else {
-      current += char
-    }
-  }
-  if (quoted || (current === "" && !wasQuoted)) return null
-  segments.push(current)
-  return segments
+/** Unlike cursor navigation, an ERD line must be a complete qualified name. */
+function erdSegments(
+  name: string,
+  identifierQuote: IdentifierQuote
+): Array<string> | null {
+  const chain = readIdentifierChain(name, 0, identifierQuote)
+  return chain?.end === name.length
+    ? chain.parts.map((part) => part.text)
+    : null
 }
 
 /**
@@ -159,7 +135,10 @@ function erdSegments(name: string): Array<string> | null {
  * and a trailing `;` or `,` a model tends to add. Beyond `ERD_MAX_NAMES`, the
  * names are counted in `dropped` so the diagram can say it is partial.
  */
-export function parseErdNames(text: string): {
+export function parseErdNames(
+  text: string,
+  identifierQuote: IdentifierQuote = '"'
+): {
   names: Array<ErdName>
   dropped: number
 } {
@@ -180,7 +159,7 @@ export function parseErdNames(text: string): {
       line.length > ERD_MAX_LINE
     )
       continue
-    const segments = erdSegments(line)
+    const segments = erdSegments(line, identifierQuote)
     if (segments === null) continue
     // `catalog.schema.table`: the catalog is the connection's, not the model's.
     const relation = segments.at(-1) ?? ""

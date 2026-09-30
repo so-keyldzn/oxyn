@@ -88,6 +88,7 @@ function EntryView({
   onCopy,
   renderToolRows,
   renderErd,
+  identifierQuote,
 }: {
   entry: Entry
   openSql: (sql: string) => void
@@ -95,6 +96,7 @@ function EntryView({
   onReview: (entry: ToolCallEntry) => void
   onCopy: (text: string) => Promise<boolean> | boolean
   renderToolRows?: AssistantViewProps["renderToolRows"]
+  identifierQuote?: AssistantViewProps["identifierQuote"]
   renderErd?: AssistantViewProps["renderErd"]
 }) {
   switch (entry.kind) {
@@ -108,6 +110,7 @@ function EntryView({
               openSqlDisabledReason={openSqlDisabledReason}
               onCopy={onCopy}
               renderErd={renderErd}
+              identifierQuote={identifierQuote}
             />
           </MessageContent>
         </Message>
@@ -260,6 +263,7 @@ export function ExchangeView({
             onCopy={view.onCopy}
             renderToolRows={view.renderToolRows}
             renderErd={view.renderErd}
+            identifierQuote={view.identifierQuote}
           />
         )
         // A right click on any part of the answer acts on the whole answer,

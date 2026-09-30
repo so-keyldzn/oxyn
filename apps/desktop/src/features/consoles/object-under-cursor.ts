@@ -5,14 +5,8 @@
 
 import type { CatalogAddress, CatalogNode } from "@/lib/ipc/types"
 
-/** One part of a dotted name: `public`, or `"Order Lines"` without quotes. */
-export interface NamePart {
-  text: string
-  /** Written between identifier quotes: compared exactly, case included. */
-  quoted: boolean
-}
-
-const WORD = /[\p{L}\p{N}_$]/u
+import { readIdentifierChain } from "@/lib/sql-identifiers"
+import type { IdentifierQuote, NamePart } from "@/lib/sql-identifiers"
 
 /**
  * The dotted name that covers `offset` in `text` — `orders`, `public.orders`,
@@ -23,7 +17,7 @@ const WORD = /[\p{L}\p{N}_$]/u
 export function nameAt(
   text: string,
   offset: number,
-  identifierQuote: '"' | "`" = '"'
+  identifierQuote: IdentifierQuote = '"'
 ): Array<NamePart> | null {
   const lineStart = text.lastIndexOf("\n", offset - 1) + 1
   const newline = text.indexOf("\n", offset)
@@ -46,7 +40,7 @@ export function nameAt(
       continue
     }
     const start = index
-    const parts = readChain(line, index, identifierQuote)
+    const parts = readIdentifierChain(line, index, identifierQuote)
     if (parts === null) {
       index += 1
       continue
@@ -56,55 +50,6 @@ export function nameAt(
     if (at >= start && at <= parts.end) return parts.parts
   }
   return null
-}
-
-/** A chain of parts separated by dots, starting at `index`. */
-function readChain(line: string, index: number, identifierQuote: string) {
-  const parts: Array<NamePart> = []
-  let position = index
-  for (;;) {
-    const part = readPart(line, position, identifierQuote)
-    if (part === null) break
-    parts.push(part.part)
-    position = part.end
-    if (line[position] !== ".") break
-    // A dot followed by nothing that names is not part of the name.
-    if (readPart(line, position + 1, identifierQuote) === null) break
-    position += 1
-  }
-  return parts.length === 0 ? null : { parts, end: position }
-}
-
-function readPart(line: string, index: number, identifierQuote: string) {
-  if (line[index] === identifierQuote) {
-    let text = ""
-    let position = index + 1
-    while (position < line.length) {
-      if (line[position] === identifierQuote) {
-        // A doubled delimiter is a quote inside the name.
-        if (line[position + 1] === identifierQuote) {
-          text += identifierQuote
-          position += 2
-          continue
-        }
-        return text === ""
-          ? null
-          : { part: { text, quoted: true }, end: position + 1 }
-      }
-      text += line[position]
-      position += 1
-    }
-    return null
-  }
-  let position = index
-  while (position < line.length && WORD.test(line[position] ?? ""))
-    position += 1
-  // A number is not a name.
-  if (position === index || /^\p{N}/u.test(line[index] ?? "")) return null
-  return {
-    part: { text: line.slice(index, position), quoted: false },
-    end: position,
-  }
 }
 
 function same(part: NamePart, name: string | null) {

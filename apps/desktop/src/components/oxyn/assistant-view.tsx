@@ -1,4 +1,5 @@
 import * as React from "react"
+import type { IdentifierQuote } from "@/lib/sql-identifiers"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { SparklesIcon } from "@hugeicons/core-free-icons"
 
@@ -90,6 +91,7 @@ const EXAMPLES = [
 
 export interface AssistantViewProps {
   connectionName: string
+  identifierQuote?: IdentifierQuote
   environment: Environment
   tier: PrivacyTier
   entry: AssistantEntry

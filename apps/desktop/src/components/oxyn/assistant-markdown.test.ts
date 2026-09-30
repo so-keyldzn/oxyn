@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { identifierQuoteForDriver } from "@/lib/sql-identifiers"
 
 import {
   ERD_MAX_NAMES,
@@ -110,6 +111,48 @@ describe("an erd block", () => {
       ["shop", 'say "hi"'],
       ["public", "items"],
     ])
+  })
+
+  it.each(["postgres", "sqlite"])("keeps %s identifier quoting", (driver) => {
+    expect(
+      parseErdNames(
+        '"Sales"."Q1.totals"\nshop."say ""hi"""',
+        identifierQuoteForDriver(driver)
+      ).names
+    ).toEqual([
+      {
+        namespace: "Sales",
+        relation: "Q1.totals",
+        written: '"Sales"."Q1.totals"',
+      },
+      { namespace: "shop", relation: 'say "hi"', written: 'shop."say ""hi"""' },
+    ])
+  })
+
+  it("reads MySQL quoted qualifiers, spaces, dots and doubled backticks", () => {
+    const source = [
+      "`archive`.`order lines`",
+      "`Sales`.`Q1.totals`",
+      "shop.`say ``hi```",
+      "shop.orders",
+    ].join("\n")
+    expect(
+      parseErdNames(source, identifierQuoteForDriver("mysql")).names.map(
+        ({ namespace, relation }) => [namespace, relation]
+      )
+    ).toEqual([
+      ["archive", "order lines"],
+      ["Sales", "Q1.totals"],
+      ["shop", "say `hi`"],
+      ["shop", "orders"],
+    ])
+  })
+
+  it("never resolves fragments of invalid MySQL names or double-quoted strings", () => {
+    expect(
+      parseErdNames('`open\na..b\n`archive`.\n"orders"\n`orders`tail', "`")
+        .names
+    ).toEqual([])
   })
 
   it("drops a line that is not a name, and counts the surplus", () => {

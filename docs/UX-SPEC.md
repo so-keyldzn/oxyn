@@ -1251,8 +1251,9 @@ as text.
 ### An `erd` block is drawn from the catalog, not from the answer
 
 A fenced code block of language `erd` in an answer lists table names, one per
-line, possibly qualified `schema.table` (SQL quoting included:
-`"Ventes"."T1.totaux"`). Once the block is **closed**, the panel draws it as a
+line, possibly qualified `schema.table`, using the connection dialect's
+identifier quoting (for example `"Ventes"."T1.totaux"` for PostgreSQL/SQLite,
+or `` `Ventes`.`T1.totaux` `` for MySQL/MariaDB). Once the block is **closed**, the panel draws it as a
 diagram; while the answer is being written, it stays text — a diagram redrawn
 at every arriving name would read as a defect.
 
