@@ -21,8 +21,11 @@
 
 use std::borrow::Cow;
 use std::io::Write;
+use std::sync::Arc;
 
+use arrow::array::ArrayRef;
 use arrow::csv::WriterBuilder as CsvWriterBuilder;
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::FileWriter as IpcFileWriter;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
@@ -171,15 +174,21 @@ pub fn export<W: Write>(
         ExportFormat::Tsv => write_delimited(&source, &mut counter, opts, b'\t')?,
         ExportFormat::JsonLines => {
             let mut output = LineDelimitedWriter::new(&mut counter);
-            let summary =
-                source.for_each_batch(|batch| output.write(batch).map_err(DataError::from))?;
+            let summary = source.for_each_batch(|batch| {
+                output
+                    .write(&*durations_as_text(batch)?)
+                    .map_err(DataError::from)
+            })?;
             output.finish()?;
             summary
         }
         ExportFormat::Json => {
             let mut output = ArrayWriter::new(&mut counter);
-            let summary =
-                source.for_each_batch(|batch| output.write(batch).map_err(DataError::from))?;
+            let summary = source.for_each_batch(|batch| {
+                output
+                    .write(&*durations_as_text(batch)?)
+                    .map_err(DataError::from)
+            })?;
             // Without `finish`, the JSON array is never closed: the file is
             // unreadable and nothing reported it.
             output.finish()?;
@@ -293,7 +302,53 @@ fn write_delimited<W: Write>(
     }
 
     let mut writer = builder.build(output);
-    source.for_each_batch(|batch| writer.write(batch).map_err(DataError::from))
+    source.for_each_batch(|batch| {
+        writer
+            .write(&*durations_as_text(batch)?)
+            .map_err(DataError::from)
+    })
+}
+
+/// `batch` with its duration columns rewritten as the grid's text.
+///
+/// The text formats only: Arrow's CSV and JSON writers write a duration in
+/// ISO 8601 (`-PT3023999S`), which is neither what the grid shows nor what a
+/// MySQL `TIME` reads back from. Arrow IPC keeps the native type — it is the
+/// format that converts nothing.
+///
+/// Borrows the batch when it has no duration column, which is almost always:
+/// the copy is paid only by the results that need it, once per batch, never
+/// per value. Only top-level columns: a duration inside a struct or a list
+/// stays Arrow's, since CSV refuses nested columns anyway.
+fn durations_as_text(batch: &RecordBatch) -> Result<Cow<'_, RecordBatch>> {
+    let schema = batch.schema();
+    if !schema
+        .fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Duration(_)))
+    {
+        return Ok(Cow::Borrowed(batch));
+    }
+    let mut fields = Vec::with_capacity(schema.fields().len());
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
+    for (field, column) in schema.fields().iter().zip(batch.columns()) {
+        match crate::duration::as_text_column(column.as_ref()) {
+            Some(text) => {
+                // Name, nullability and metadata kept: only the type changes.
+                fields.push(Arc::new(
+                    Field::new(field.name(), DataType::Utf8, field.is_nullable())
+                        .with_metadata(field.metadata().clone()),
+                ));
+                columns.push(Arc::new(text));
+            }
+            None => {
+                fields.push(Arc::clone(field));
+                columns.push(Arc::clone(column));
+            }
+        }
+    }
+    let schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    Ok(Cow::Owned(RecordBatch::try_new(schema, columns)?))
 }
 
 /// Writer that counts what goes through it.
@@ -611,6 +666,158 @@ mod tests {
                 is_supported(format)
             );
         }
+    }
+
+    /// Every Arrow type the MySQL driver emits (ADR-0050), one column each.
+    fn mysql_buffer() -> ResultBuffer {
+        use arrow::array::{
+            BinaryArray, Date32Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
+            Float32Array, Float64Array, Int8Array, Int16Array, Int64Array,
+            TimestampMicrosecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+        };
+        use arrow::datatypes::{TimeUnit, i256};
+
+        let wide =
+            i256::from_string("12345678901234567890123456789012345123456789012345678901234567890")
+                .expect("65 digits fit in 256 bits");
+        let geometry = std::collections::HashMap::from([(
+            "oxyn:mysql_type".to_owned(),
+            "GEOMETRY".to_owned(),
+        )]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i8", DataType::Int8, true),
+            Field::new("i16", DataType::Int16, true),
+            Field::new("i32", DataType::Int32, true),
+            Field::new("i64", DataType::Int64, true),
+            Field::new("u8", DataType::UInt8, true),
+            Field::new("year", DataType::UInt16, true),
+            Field::new("u32", DataType::UInt32, true),
+            Field::new("bit", DataType::UInt64, true),
+            Field::new("f32", DataType::Float32, true),
+            Field::new("f64", DataType::Float64, true),
+            Field::new("d128", DataType::Decimal128(10, 2), true),
+            Field::new("d256", DataType::Decimal256(65, 30), true),
+            Field::new("d256_whole", DataType::Decimal256(65, 0), true),
+            Field::new("day", DataType::Date32, true),
+            Field::new(
+                "datetime",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("time", DataType::Duration(TimeUnit::Microsecond), true),
+            Field::new("text", DataType::Utf8, true),
+            Field::new("geom", DataType::Binary, true).with_metadata(geometry),
+        ]));
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Int8Array::from(vec![Some(-128), None])),
+            Arc::new(Int16Array::from(vec![Some(-32_768), None])),
+            Arc::new(Int32Array::from(vec![Some(i32::MIN), None])),
+            Arc::new(Int64Array::from(vec![Some(i64::MIN), None])),
+            Arc::new(UInt8Array::from(vec![Some(255), None])),
+            Arc::new(UInt16Array::from(vec![Some(2155), None])),
+            Arc::new(UInt32Array::from(vec![Some(u32::MAX), None])),
+            Arc::new(UInt64Array::from(vec![Some(u64::MAX), None])),
+            Arc::new(Float32Array::from(vec![Some(1.5), None])),
+            Arc::new(Float64Array::from(vec![Some(-0.25), None])),
+            Arc::new(
+                Decimal128Array::from(vec![Some(12_345), None])
+                    .with_precision_and_scale(10, 2)
+                    .expect("valid DECIMAL(10, 2)"),
+            ),
+            Arc::new(
+                Decimal256Array::from(vec![Some(wide.wrapping_neg()), None])
+                    .with_precision_and_scale(65, 30)
+                    .expect("valid DECIMAL(65, 30)"),
+            ),
+            Arc::new(
+                Decimal256Array::from(vec![Some(wide), None])
+                    .with_precision_and_scale(65, 0)
+                    .expect("valid DECIMAL(65, 0)"),
+            ),
+            Arc::new(Date32Array::from(vec![Some(18_628), None])),
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(0), None])),
+            Arc::new(TimestampMicrosecondArray::from(vec![Some(0), None]).with_timezone("UTC")),
+            Arc::new(DurationMicrosecondArray::from(vec![
+                Some(-3_020_399_000_000),
+                None,
+            ])),
+            Arc::new(StringArray::from(vec![Some("x"), None])),
+            Arc::new(BinaryArray::from(vec![Some(b"\x01".as_slice()), None])),
+        ];
+        let buffer = ResultBuffer::new(Arc::clone(&schema), 1 << 20);
+        buffer
+            .push(RecordBatch::try_new(schema, columns).expect("columns match the schema"))
+            .expect("batch accepted");
+        buffer.mark_complete(ExecStats::default());
+        buffer
+    }
+
+    fn export_text(buffer: &ResultBuffer, format: ExportFormat) -> String {
+        let mut output: Vec<u8> = Vec::new();
+        export(
+            buffer,
+            format,
+            &mut output,
+            &ExportOptions::default(),
+            &CancelToken::new(),
+        )
+        .unwrap_or_else(|error| panic!("{format} exports every MySQL type: {error}"));
+        String::from_utf8(output).expect("text formats are UTF-8")
+    }
+
+    #[test]
+    fn every_mysql_type_exports_in_every_text_format() {
+        let buffer = mysql_buffer();
+        let negative = "-12345678901234567890123456789012345.123456789012345678901234567890";
+        let whole = "12345678901234567890123456789012345123456789012345678901234567890";
+        for format in [ExportFormat::Csv, ExportFormat::Tsv] {
+            let text = export_text(&buffer, format);
+            // The grid's text, not ISO 8601's `-PT3023999S`.
+            assert!(text.contains("-838:59:59.000000"), "{format}: {text}");
+            assert!(!text.contains("PT"), "{format}: {text}");
+            assert!(text.contains(negative), "{format}: {text}");
+            assert!(text.contains(whole), "{format}: {text}");
+        }
+        for format in [ExportFormat::Json, ExportFormat::JsonLines] {
+            let text = export_text(&buffer, format);
+            // A string in JSON, like every text the grid shows.
+            assert!(
+                text.contains(r#""time":"-838:59:59.000000""#),
+                "{format}: {text}"
+            );
+            // Decimals stay bare numbers, digit for digit.
+            assert!(
+                text.contains(&format!(r#""d256":{negative}"#)),
+                "{format}: {text}"
+            );
+            assert!(
+                text.contains(&format!(r#""d256_whole":{whole}"#)),
+                "{format}: {text}"
+            );
+        }
+    }
+
+    /// Arrow IPC converts nothing: the duration stays a duration.
+    #[test]
+    fn arrow_ipc_keeps_mysql_types_native() {
+        let buffer = mysql_buffer();
+        let mut output: Vec<u8> = Vec::new();
+        export(
+            &buffer,
+            ExportFormat::ArrowIpc,
+            &mut output,
+            &ExportOptions::default(),
+            &CancelToken::new(),
+        )
+        .expect("export without error");
+        let reader = FileReader::try_new(std::io::Cursor::new(output), None)
+            .expect("the written file must be a valid Arrow file");
+        assert_eq!(&reader.schema(), buffer.schema());
     }
 
     #[test]
