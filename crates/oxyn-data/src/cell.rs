@@ -1016,6 +1016,7 @@ mod tests {
             Some(43_384_500_000),
             Some(i64::MIN),
             None,
+            Some(443_045_250_000),
         ]);
         let opts = FormatOptions::default();
         for (row, expected) in [
@@ -1024,6 +1025,7 @@ mod tests {
             (2, "00:00:00.000000"),
             (3, "12:03:04.500000"),
             (4, "-2562047788:00:54.775808"),
+            (6, "123:04:05.250000"),
         ] {
             assert_eq!(format_value(&array, row, &opts).text(), Some(expected));
         }
