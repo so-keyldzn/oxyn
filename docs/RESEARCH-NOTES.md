@@ -1922,6 +1922,13 @@ For [ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md).
 | `KILL QUERY` ends the running statement and keeps the connection; the flag is read after each block of rows; without `CONNECTION_ADMIN` or `SUPER`, only one's own threads | cancellation from a second connection of the same account | [kill](https://dev.mysql.com/doc/refman/8.4/en/kill.html) |
 | `READ ONLY` access mode prohibits DDL and DML on permanent tables; DML on `TEMPORARY` tables stays allowed | the observation below shows no temporary table can be created in that mode | [set-transaction](https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html) |
 | `oxyn-query` at `origin/main` of 2026-09-30, `SqlDialect::MySql`: `CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM t; END` splits into three fragments; `/*!80000 DELETE FROM t */` classifies `Unknown` with no fragment; `SELECT 1 /*!80000 ; DELETE FROM t */` classifies `Write` / `UnboundedDelete` | the scanner must learn MySQL compound bodies before the driver ships | probe run against `oxyn_query::split` and `classify` |
+| Pinned: `mysql_async` `=0.37.1` and `mysql_common` `=0.37.3`, both MIT OR Apache-2.0, checked on crates.io on 2026-09-30 | the workspace pins both; `mysql_common` 0.38 is a separate upgrade | crates.io API |
+| `mysql_common` 0.37.3 panics on data: `Value::deserialize_bin` ends in `unimplemented!` for type codes 17, 18, 19, 20 and 243 (`src/value/mod.rs:449`); `FromRow` panics on a conversion failure (`src/row/convert/mod.rs:84`); `Value::as_sql` overflows on a hostile `Time` | the driver refuses those codes before the first row, reads through `Row` and raw values only, and never calls `as_sql` | source at 0.37.3 |
+| `mysql_common`'s `ParsedNamedParams` rewrites `:name` into `?` in any statement text it is handed | the driver refuses a text the library would rewrite instead of sending something other than what the user wrote | source at 0.37.3 `src/named_params.rs` |
+| `mysql_async` 0.37.1 `is_last_result_set_packet` indexes `packet[0]` (`src/queryable/mod.rs:47,49`) | an empty packet from the server panics inside the library: residual risk, not reachable from the driver | source at 0.37.1 |
+| `mysql_async` 0.37.1: `Opts`, `OptsBuilder` and `Conn` derive `Debug` over fields that hold the password | no driver type derives `Debug` over them; hand-written `Debug` everywhere ([I-03](../CLAUDE.md#i-03)) | `src/opts/mod.rs`, `src/conn/mod.rs` |
+| `mysql_async` 0.37.1 reads `MYSQL_ASYNC_BUFFER_POOL_CAP`, `MYSQL_ASYNC_BUFFER_SIZE_CAP` and `MYSQL_ASYNC_BUFFER_INIT_CAP` from the environment (`src/buffer_pool.rs:21-31`) | the only environment reads in the driver's dependency path; they size buffers, never behavior | source at 0.37.1 |
+| `mysql_async` 0.37.1: `exec` given a `&str` prepares an implicit statement that is never closed when `stmt_cache_size` is `0`; `Conn::disconnect` and `Drop` drain pending results before closing | the driver prepares, executes and closes explicitly; a connection whose results would panic in the drain is leaked, not dropped | `src/queryable/mod.rs`, `src/conn/mod.rs` |
 
 ### Observed against the servers — 2026-09-30
 
@@ -1947,3 +1954,13 @@ gave identical results.
 | `0000-00-00`, `2024-00-15` in `DATE`/`DATETIME`/`TIMESTAMP` under `sql_mode = ''`; `TIME '-838:59:59'` | decoded as `Value::Date` / `Value::Time`, no error | same |
 | `KILL QUERY` from a second connection of an account granted only `SELECT` | `OK`; the victim gets 1317 (70100); its connection runs `SELECT 7` next. An interrupted `SLEEP()` returns 1 instead of failing | same |
 | `LOAD DATA LOCAL INFILE '/etc/hosts'` with `local_infile = 1` and no handler | client error "Handler is not specified"; 0 rows; the connection is closed | same |
+
+The driver's integration tests (`drivers/oxyn-driver-mysql/src/integration.rs`),
+run on 2026-09-30 against `mysql:8.4` (8.4.11), `mysql:9.7` (9.7.2) and
+`mariadb:11.8` (11.8.9), observed in addition:
+
+| Observation | MySQL 8.4 / 9.7 | MariaDB 11.8 |
+|---|---|---|
+| `START TRANSACTION`; `INSERT` a row; a long `SELECT` interrupted by `KILL QUERY`; `COMMIT` on the same connection | the `SELECT` fails with 1317; `SERVER_STATUS_IN_TRANS` stays set; after `COMMIT` the row is there: `KILL QUERY` leaves the transaction open | same |
+| `KILL QUERY` sent before the victim's `COM_STMT_EXECUTE` is written | the kill finds nothing to interrupt, and the statement then runs to its end (8.4.11) | not probed |
+| Prepare `CALL p()` for a procedure that returns a result set | 0 columns at prepare; the columns arrive with the execute | same |

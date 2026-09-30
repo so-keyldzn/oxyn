@@ -1,6 +1,7 @@
 # ADR-0050 — The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends
 
-**Status:** proposed · **Date:** 2026-09-30
+**Status:** accepted · **Date:** 2026-09-30 · **Amended:** 2026-09-30 (point 7, before
+acceptance)
 
 ## Context
 
@@ -121,14 +122,30 @@ wire, and how values become Arrow. Checked on 2026-09-30
    `TIMESTAMP` arrives in UTC, and `SET NAMES utf8mb4`. TLS is required
    (`SslOpts` present, certificate verified) unless the connection's
    environment is `Environment::Local`.
-7. **Cancellation is `KILL QUERY <Conn::id()>` from a second connection of the
-   same account**, sent by the stream task while it holds the targeted `Conn`,
-   which is then closed — the rule of the PostgreSQL driver's `cancel.rs`, for
-   the same reason: the id names a connection, not a statement. When the cursor
-   stops reading for good — row bound reached, result abandoned —, the driver
-   cancels the same way instead of leaving the server blocked until
-   `net_write_timeout`. `SERVER_SIDE_CANCEL` is declared per session only if the
-   second connection opens.
+7. **Cancellation is `KILL QUERY <id>` from a second connection of the same
+   account**, `id` being the connection's `CONNECTION_ID()` read at opening,
+   sent by the stream task while it holds the targeted `Conn` — the rule of the
+   PostgreSQL driver's `cancel.rs`, for the same reason: the id names a
+   connection, not a statement. The task then **keeps reading the targeted
+   statement**, and keeps the connection only when the server answers
+   `ER_QUERY_INTERRUPTED` (1317) on that very statement: the kill is then
+   spent, and the connection — with the user's open transaction, which
+   `KILL QUERY` leaves open — serves the next statement. A natural end,
+   another error, or no answer within five seconds means the kill cannot be
+   proven spent: the task sends `KILL CONNECTION <id>`, which ends a statement
+   the query kill missed, and the connection is closed; the session then
+   reports its transaction state as unknown and the cursor says the open
+   transaction was rolled back. When the cursor stops reading for good — row
+   bound reached, result abandoned —, the driver cancels the same way instead
+   of leaving the server blocked until `net_write_timeout`; at the row bound it
+   first reads ahead a bounded number of rows, so a result the server has
+   already finished sending needs no kill. `SERVER_SIDE_CANCEL` is declared per
+   session only if the second connection opens.
+
+   *Amended before acceptance:* the first text closed the connection after
+   every kill. With one connection per session (point 1), that rolled back the
+   user's open transaction each time a console result was truncated by the row
+   bound or a tab was closed — uncommitted writes discarded without a word.
 8. **Transaction state** ([ADR-0039](0039-etat-de-transaction-d-une-session.md))
    is read from `SERVER_STATUS_IN_TRANS` after each statement — the server says
    it, the driver does not infer it from the text.
@@ -192,6 +209,16 @@ wire, and how values become Arrow. Checked on 2026-09-30
   sees; and a server that asks costs the session its connection.
 * **−** A MariaDB `VECTOR` is shown as raw bytes, without the marking a MySQL
   one gets.
+* **−** `mysql_async` rewrites `:name` outside strings and comments into a
+  placeholder before preparing, so the server would prepare another statement
+  than the one written — `lbl:begin` in a routine is one. The driver refuses
+  such a text instead of sending it changed; the user adds a space after the
+  colon.
+* **−** `mysql_common` 0.37.3 panics decoding the server's internal type codes
+  (`TIMESTAMP2`, `DATETIME2`, `TIME2`, `TYPED_ARRAY`, `UNKNOWN`) in the binary
+  protocol. A well-behaved server never sends them; the driver checks each
+  result set's columns before its first row and refuses such a result. What it
+  cannot guard is recorded in [RESEARCH-NOTES](../RESEARCH-NOTES.md#mysql-protocol-and-client-libraries--checked-on-2026-09-30).
 
 **Exit cost:** moderate. Replacing `mysql_async` rewrites the session, the
 cursor and the decoding — about the size of the PostgreSQL driver's

@@ -1,10 +1,11 @@
-<!-- oxyn-translation source="docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md" sha256="79786a4a0b79" -->
+<!-- oxyn-translation source="docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md" sha256="f23fd2bf4f79" -->
 
 > Traduction française de [docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md](../../../../docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md). **La version anglaise fait foi.**
 
 # ADR-0050 — Le driver MySQL repose sur `mysql_async`, prépare d'abord chaque instruction, et décode tout type que le serveur envoie
 
-**Statut :** proposé · **Date :** 2026-09-30
+**Statut :** accepté · **Date :** 2026-09-30 · **Amendé :** 2026-09-30 (point 7, avant
+l'acceptation)
 
 ## Contexte
 
@@ -137,14 +138,33 @@ l'Arrow. Vérifié le 2026-09-30 ([RESEARCH-NOTES](../RESEARCH-NOTES.md)) :
    pour qu'un `TIMESTAMP` arrive en UTC, et `SET NAMES utf8mb4`. TLS est exigé
    (`SslOpts` présent, certificat vérifié) sauf si l'environnement de la
    connexion est `Environment::Local`.
-7. **L'annulation est `KILL QUERY <Conn::id()>` depuis une seconde connexion
-   du même compte**, envoyée par la tâche de flux pendant qu'elle tient le
-   `Conn` visé, fermé ensuite — la règle du `cancel.rs` du driver PostgreSQL,
-   pour la même raison : l'identifiant nomme une connexion, pas une
-   instruction. Quand le curseur cesse de lire pour de bon — borne de lignes
-   atteinte, résultat abandonné —, le driver annule de la même façon au lieu de
-   laisser le serveur bloqué jusqu'à `net_write_timeout`. `SERVER_SIDE_CANCEL`
-   n'est déclaré pour une session que si la seconde connexion s'ouvre.
+7. **L'annulation est `KILL QUERY <id>` depuis une seconde connexion du même
+   compte**, `id` étant le `CONNECTION_ID()` de la connexion lu à l'ouverture,
+   envoyée par la tâche de flux pendant qu'elle tient le `Conn` visé — la règle
+   du `cancel.rs` du driver PostgreSQL, pour la même raison : l'identifiant
+   nomme une connexion, pas une instruction. La tâche **continue ensuite de
+   lire l'instruction visée**, et ne garde la connexion que si le serveur
+   répond `ER_QUERY_INTERRUPTED` (1317) sur cette instruction même : le kill
+   est alors consommé, et la connexion — avec la transaction ouverte de
+   l'utilisateur, que `KILL QUERY` laisse ouverte — sert l'instruction
+   suivante. Une fin naturelle, une autre erreur, ou aucune réponse en cinq
+   secondes signifient que le kill ne peut pas être prouvé consommé : la tâche
+   envoie `KILL CONNECTION <id>`, qui termine une instruction que le kill de
+   requête a manquée, et la connexion est fermée ; la session rapporte alors
+   son état de transaction comme inconnu et le curseur dit que la transaction
+   ouverte a été annulée. Quand le curseur cesse de lire pour de bon — borne de
+   lignes atteinte, résultat abandonné —, le driver annule de la même façon au
+   lieu de laisser le serveur bloqué jusqu'à `net_write_timeout` ; à la borne
+   de lignes, il lit d'abord un nombre borné de lignes d'avance, pour qu'un
+   résultat que le serveur a déjà fini d'envoyer n'ait besoin d'aucun kill.
+   `SERVER_SIDE_CANCEL` n'est déclaré pour une session que si la seconde
+   connexion s'ouvre.
+
+   *Amendé avant l'acceptation :* le premier texte fermait la connexion après
+   chaque kill. Avec une connexion par session (point 1), cela annulait la
+   transaction ouverte de l'utilisateur chaque fois qu'un résultat de console
+   était tronqué par la borne de lignes ou qu'un onglet était fermé — des
+   écritures non validées perdues sans un mot.
 8. **L'état de transaction**
    ([ADR-0039](0039-etat-de-transaction-d-une-session.md)) est lu dans
    `SERVER_STATUS_IN_TRANS` après chaque instruction — le serveur le dit, le
@@ -216,6 +236,17 @@ l'Arrow. Vérifié le 2026-09-30 ([RESEARCH-NOTES](../RESEARCH-NOTES.md)) :
   la session.
 * **−** Un `VECTOR` de MariaDB s'affiche en octets bruts, sans le marquage
   qu'obtient celui de MySQL.
+* **−** `mysql_async` réécrit `:name` hors des chaînes et des commentaires en
+  paramètre avant de préparer, si bien que le serveur préparerait une autre
+  instruction que celle écrite — `lbl:begin` dans une routine en est une. Le
+  driver refuse un tel texte au lieu de l'envoyer modifié ; l'utilisateur
+  ajoute une espace après les deux-points.
+* **−** `mysql_common` 0.37.3 panique en décodant les codes de type internes du
+  serveur (`TIMESTAMP2`, `DATETIME2`, `TIME2`, `TYPED_ARRAY`, `UNKNOWN`) dans
+  le protocole binaire. Un serveur correct ne les envoie jamais ; le driver
+  vérifie les colonnes de chaque jeu de résultats avant sa première ligne et
+  refuse un tel résultat. Ce qu'il ne peut pas garder est consigné dans
+  [RESEARCH-NOTES](../RESEARCH-NOTES.md#protocole-mysql-et-bibliothèques-clientes--vérifié-le-2026-09-30).
 
 **Coût de sortie :** modéré. Remplacer `mysql_async` réécrit la session, le
 curseur et le décodage — à peu près la taille de `session.rs`, `cursor.rs` et

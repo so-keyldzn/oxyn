@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="ffbe9bc40136" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0b025c5244ca" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1931,6 +1931,13 @@ Pour l'[ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md).
 | `KILL QUERY` termine l'instruction en cours et garde la connexion ; le drapeau est lu après chaque bloc de lignes ; sans `CONNECTION_ADMIN` ni `SUPER`, seulement ses propres threads | annulation depuis une seconde connexion du même compte | [kill](https://dev.mysql.com/doc/refman/8.4/en/kill.html) |
 | Le mode d'accès `READ ONLY` interdit DDL et DML sur les tables permanentes ; le DML sur les tables `TEMPORARY` reste permis | l'observation ci-dessous montre qu'aucune table temporaire ne peut être créée dans ce mode | [set-transaction](https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html) |
 | `oxyn-query` sur `origin/main` du 2026-09-30, `SqlDialect::MySql` : `CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM t; END` se découpe en trois fragments ; `/*!80000 DELETE FROM t */` est classé `Unknown` sans fragment ; `SELECT 1 /*!80000 ; DELETE FROM t */` est classé `Write` / `UnboundedDelete` | le scanner doit apprendre les corps composés de MySQL avant que le driver parte | sonde exécutée contre `oxyn_query::split` et `classify` |
+| Épinglés : `mysql_async` `=0.37.1` et `mysql_common` `=0.37.3`, tous deux MIT OR Apache-2.0, vérifiés sur crates.io le 2026-09-30 | le workspace épingle les deux ; `mysql_common` 0.38 est une montée de version à part | API crates.io |
+| `mysql_common` 0.37.3 panique sur des données : `Value::deserialize_bin` finit en `unimplemented!` pour les codes de type 17, 18, 19, 20 et 243 (`src/value/mod.rs:449`) ; `FromRow` panique sur un échec de conversion (`src/row/convert/mod.rs:84`) ; `Value::as_sql` déborde sur un `Time` hostile | le driver refuse ces codes avant la première ligne, lit uniquement par `Row` et valeurs brutes, et n'appelle jamais `as_sql` | source en 0.37.3 |
+| `ParsedNamedParams` de `mysql_common` réécrit `:name` en `?` dans tout texte d'instruction qu'on lui remet | le driver refuse un texte que la bibliothèque réécrirait plutôt que d'envoyer autre chose que ce que l'utilisateur a écrit | source en 0.37.3 `src/named_params.rs` |
+| `is_last_result_set_packet` de `mysql_async` 0.37.1 indexe `packet[0]` (`src/queryable/mod.rs:47,49`) | un paquet vide venu du serveur panique dans la bibliothèque : risque résiduel, hors de portée du driver | source en 0.37.1 |
+| `mysql_async` 0.37.1 : `Opts`, `OptsBuilder` et `Conn` dérivent `Debug` sur des champs qui portent le mot de passe | aucun type du driver ne dérive `Debug` par-dessus ; `Debug` écrit à la main partout ([I-03](../CLAUDE.md#i-03)) | `src/opts/mod.rs`, `src/conn/mod.rs` |
+| `mysql_async` 0.37.1 lit `MYSQL_ASYNC_BUFFER_POOL_CAP`, `MYSQL_ASYNC_BUFFER_SIZE_CAP` et `MYSQL_ASYNC_BUFFER_INIT_CAP` dans l'environnement (`src/buffer_pool.rs:21-31`) | les seules lectures d'environnement sur le chemin de dépendances du driver ; elles dimensionnent des tampons, jamais un comportement | source en 0.37.1 |
+| `mysql_async` 0.37.1 : `exec` appelé avec un `&str` prépare une instruction implicite jamais fermée quand `stmt_cache_size` vaut `0` ; `Conn::disconnect` et `Drop` vident les résultats en attente avant de fermer | le driver prépare, exécute et ferme explicitement ; une connexion dont les résultats paniqueraient pendant la vidange est abandonnée (fuite), pas détruite | `src/queryable/mod.rs`, `src/conn/mod.rs` |
 
 ### Observé contre les serveurs — 2026-09-30
 
@@ -1956,3 +1963,13 @@ Une sonde sur `mysql_async` 0.37.1 (fonctionnalités par défaut désactivées,
 | `0000-00-00`, `2024-00-15` en `DATE`/`DATETIME`/`TIMESTAMP` sous `sql_mode = ''` ; `TIME '-838:59:59'` | décodés en `Value::Date` / `Value::Time`, sans erreur | idem |
 | `KILL QUERY` depuis une seconde connexion d'un compte qui n'a que `SELECT` | `OK` ; la victime reçoit 1317 (70100) ; sa connexion exécute ensuite `SELECT 7`. Un `SLEEP()` interrompu renvoie 1 au lieu d'échouer | idem |
 | `LOAD DATA LOCAL INFILE '/etc/hosts'` avec `local_infile = 1` et sans gestionnaire | erreur client « Handler is not specified » ; 0 ligne ; la connexion est fermée | idem |
+
+Les tests d'intégration du driver (`drivers/oxyn-driver-mysql/src/integration.rs`),
+exécutés le 2026-09-30 contre `mysql:8.4` (8.4.11), `mysql:9.7` (9.7.2) et
+`mariadb:11.8` (11.8.9), ont observé en plus :
+
+| Observation | MySQL 8.4 / 9.7 | MariaDB 11.8 |
+|---|---|---|
+| `START TRANSACTION` ; `INSERT` d'une ligne ; un long `SELECT` interrompu par `KILL QUERY` ; `COMMIT` sur la même connexion | le `SELECT` échoue en 1317 ; `SERVER_STATUS_IN_TRANS` reste levé ; après `COMMIT` la ligne est là : `KILL QUERY` laisse la transaction ouverte | idem |
+| `KILL QUERY` envoyé avant que le `COM_STMT_EXECUTE` de la victime soit écrit | le kill ne trouve rien à interrompre, et l'instruction s'exécute ensuite jusqu'au bout (8.4.11) | non sondé |
+| Préparer `CALL p()` pour une procédure qui renvoie un jeu de résultats | 0 colonne à la préparation ; les colonnes arrivent avec l'exécution | idem |
