@@ -1899,3 +1899,51 @@ crates.io API and in the sources of `serde-saphyr` 1.3.0
 | `Options::strict_booleans` | `false`: `yes`/`no`/`on`/`off` read as booleans | `true` accepts only `true` / `false` |
 | `Options::reject_unsupported_tags` | `false` | `true` refuses an unknown tag |
 | `!include` | only with the `include` feature and a resolver | left off |
+
+## MySQL protocol and client libraries — checked on 2026-09-30
+
+For [ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md).
+
+| Fact | Consequence | Source |
+|---|---|---|
+| MySQL LTS lines: 8.4 (8.4.11, EOL 2032-04-30) and 9.7 (9.7.2, released 2026-04-21, EOL 2034-04-30); 8.0 (8.0.46) reached EOL on 2026-04-30. The `trunk` branch reads 26.10.0, "INNOVATION", previous LTS 9.7.0 | the driver is tested on 8.4 and 9.7 | [endoflife.date/mysql](https://endoflife.date/mysql); [MYSQL_VERSION](https://github.com/mysql/mysql-server/blob/trunk/MYSQL_VERSION) |
+| MariaDB LTS lines: 11.8 (11.8.9, EOL 2028-06-04) and 12.3 (12.3.3, EOL 2029-06-12); 13.0 (13.0.2) is a short-term release | the driver is tested on 11.8 and 12.3 | [endoflife.date/mariadb](https://endoflife.date/mariadb) |
+| `MYSQL_TYPE_VECTOR = 242`; `Field_vector::type()` returns it, so a `VECTOR` column is announced with that code | a client must know code 242 | [field_types.h](https://github.com/mysql/mysql-server/blob/trunk/include/field_types.h), [field.h](https://github.com/mysql/mysql-server/blob/trunk/sql/field.h) |
+| `sqlx` 0.9.0 and `sqlx-mysql` 0.9.0 are the latest releases (2026-05-21). `ColumnType::try_from_u16` has no arm for 0xf2 and returns `unknown column type`; `main` is the same | `sqlx-mysql` fails a result holding a `VECTOR` | `sqlx-mysql` 0.9.0 `src/protocol/text/column.rs`; [main](https://github.com/launchbadge/sqlx/blob/main/sqlx-mysql/src/protocol/text/column.rs) |
+| `sqlx-mysql` 0.9.0: `MySqlTypeInfo` keeps type, flags, collation and `max_size`, not `decimals`; `MySqlValueRef::as_bytes` and `MySqlConnection::in_transaction` are `pub(crate)`; `AuthPlugin` knows `mysql_native_password`, `caching_sha2_password`, `sha256_password`, `mysql_clear_password` only | no `DECIMAL` scale, no MariaDB `client_ed25519`/`parsec` | `src/type_info.rs`, `src/value.rs`, `src/connection/mod.rs`, `src/protocol/auth.rs` |
+| `sqlx-mysql`'s full `caching_sha2_password` authentication: over TLS, the password in the clear inside the tunnel; without TLS, the `rsa` feature, which pulls `rsa` 0.10.0-rc.18 (latest stable 0.9.10); RUSTSEC-2023-0071 (Marvin attack) lists `patched = []` | `sqlx-mysql` without TLS needs an unpatched advisory | `src/connection/auth.rs`; crates.io API; RustSec advisory database |
+| `mysql_async` 0.37.1 (2026-09-01, MIT OR Apache-2.0) depends on `mysql_common` ^0.37.1 (latest 0.37.x: 0.37.3; latest: 0.38.2, 2026-07-24). `mysql_common` 0.37 has `MYSQL_TYPE_VECTOR`, `Column::decimals`, `column_length`, `character_set`, `flags`, and the `client_ed25519` / `client_parsec` features, which `mysql_async` re-exports. Its RSA uses `num-bigint`, not the `rsa` crate | `mysql_async` reads every column and authenticates MariaDB's plugins | [mysql_async Cargo.toml](https://github.com/blackbeam/mysql_async/blob/v0.37.1/Cargo.toml); [rust_mysql_common](https://github.com/blackbeam/rust_mysql_common) `src/constants.rs`, `src/packets/mod.rs`, `Cargo.toml` |
+| `mysql_async` features: `default-rustls` = `rustls-tls` + `aws-lc-rs` + `tls12`; `Conn::id()`, `Conn::last_ok_packet()` are public; with `stmt_cache_size` at `0`, "you must close statements manually" | TLS on the workspace's provider; `KILL QUERY` target; transaction status from the server | `Cargo.toml`, `src/conn/mod.rs`, `src/opts/mod.rs` at v0.37.1 |
+| `sqlx-mysql` announces `MULTI_STATEMENTS`, `MULTI_RESULTS`, `PS_MULTI_RESULTS` unconditionally (`src/connection/stream.rs`); `mysql_async` announces `CLIENT_MULTI_STATEMENTS` and `CLIENT_LOCAL_FILES` unconditionally (`Opts::get_capabilities`); neither sends `COM_SET_OPTION` | `COM_QUERY` runs a multi-statement text whatever the library; with `mysql_async`, only the missing handler refuses a `LOCAL INFILE` request | `sqlx-mysql` 0.9.0; [opts/mod.rs](https://github.com/blackbeam/mysql_async/blob/master/src/opts/mod.rs) |
+| MySQL 8.4 `Prepared_statement::prepare` sets `m_lip.multi_statements = false` before `parse_sql`; the grammar then accepts only `END_OF_INPUT` after `;`. `ER_UNSUPPORTED_PS` is raised later, in `prepare_query` | a multi-statement text fails the prepare with 1064 before any 1295 | [sql_prepare.cc](https://github.com/mysql/mysql-server/blob/8.4/sql/sql_prepare.cc), [sql_yacc.yy](https://github.com/mysql/mysql-server/blob/8.4/sql/sql_yacc.yy) `sql_statement` |
+| `prepare_query`'s switch accepts, among others, `SET` (`SQLCOM_SET_OPTION`), `CREATE VIEW` (not `ALTER VIEW`), `COMMIT`, `ROLLBACK`, DDL on tables and indexes, DML, `CALL`, `SHOW`; the `default` arm refuses the rest with 1295 — `BEGIN`, `SAVEPOINT`, `USE`, `LOCK TABLES`, routine, trigger and event creation, `LOAD DATA`, `XA`. The manual's list is narrower than the code | the text fallback serves a closed set of statements | same; [sql-prepared-statements](https://dev.mysql.com/doc/refman/8.4/en/sql-prepared-statements.html) |
+| `ER_UNSUPPORTED_PS` 1295 (HY000); `ER_PARSE_ERROR` 1064 (42000); `ER_QUERY_INTERRUPTED` 1317 (70100) | 1295 alone opens the fallback | [server-error-reference](https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html) |
+| `net_write_timeout` defaults to 60 s: the server aborts a write the client does not read; `max_execution_time` applies to `SELECT` only; `time_zone` defaults to `SYSTEM` | cancel an abandoned result; set `time_zone` per session | [server-system-variables](https://dev.mysql.com/doc/refman/8.4/en/server-system-variables.html) |
+| `KILL QUERY` ends the running statement and keeps the connection; the flag is read after each block of rows; without `CONNECTION_ADMIN` or `SUPER`, only one's own threads | cancellation from a second connection of the same account | [kill](https://dev.mysql.com/doc/refman/8.4/en/kill.html) |
+| `READ ONLY` access mode prohibits DDL and DML on permanent tables; DML on `TEMPORARY` tables stays allowed | the observation below shows no temporary table can be created in that mode | [set-transaction](https://dev.mysql.com/doc/refman/8.4/en/set-transaction.html) |
+| `oxyn-query` at `origin/main` of 2026-09-30, `SqlDialect::MySql`: `CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM t; END` splits into three fragments; `/*!80000 DELETE FROM t */` classifies `Unknown` with no fragment; `SELECT 1 /*!80000 ; DELETE FROM t */` classifies `Write` / `UnboundedDelete` | the scanner must learn MySQL compound bodies before the driver ships | probe run against `oxyn_query::split` and `classify` |
+
+### Observed against the servers — 2026-09-30
+
+A probe on `mysql_async` 0.37.1 (default features off, `minimal-rust`), run
+against the official Docker images `mysql:8.4` (8.4.11), `mysql:9.7` (9.7.2),
+`mariadb:11.8` (11.8.9) and `mariadb:12.3` (12.3.3). The two MariaDB versions
+gave identical results.
+
+| Probe | MySQL 8.4 / 9.7 | MariaDB 11.8 / 12.3 |
+|---|---|---|
+| Prepare `SELECT 1; DROP TABLE b`, `USE t; DROP TABLE b`, `START TRANSACTION; DROP TABLE b`, `CREATE TRIGGER … SET @z = 1; DROP TABLE b`, `SELECT 1 /*!; DROP TABLE b */` | 1064 each; `b` still exists | same |
+| Prepare `CREATE TRIGGER`, `CREATE PROCEDURE … BEGIN …; END`, `USE`, `START TRANSACTION`, `BEGIN`, `SAVEPOINT`, `LOCK TABLES`, `ALTER VIEW`, `LOAD DATA` | 1295 | prepared |
+| Prepare `SET @x = 1`, `CREATE VIEW`, `COMMIT`, `EXPLAIN SELECT` | prepared | prepared |
+| `SELECT 1; SELECT 2` through `COM_QUERY` | two result sets | two result sets |
+| `SET SESSION TRANSACTION READ ONLY`, then `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `DROP TABLE`, `TRUNCATE`, `ALTER TABLE`, `RENAME TABLE`, `CREATE INDEX`, `CREATE TEMPORARY TABLE`, text or prepared | 1792 (25006) each; `SELECT` runs | same |
+| `SERVER_STATUS_IN_TRANS` in `last_ok_packet()` after `START TRANSACTION` | set | set |
+| `VECTOR(3)` | 8.4: syntax error; 9.7: type 242, charset 63, length 12, `decimals` 31, bytes `00 00 80 3f …` | `VAR_STRING` (253), charset 63, length 12 |
+| `JSON` | type 245, charset 63, flags `BLOB` and `BINARY` | `BLOB` (252), charset 224 (`utf8mb4`), flags `BLOB` and `BINARY` |
+| `POINT` | type 255, 4-byte SRID then WKB | same |
+| `DECIMAL(10,2)`, `(65,30)`, `(10,0) UNSIGNED`, `(5,5)`: length / `decimals` | 12/2, 67/30, 10/0, 7/5; values as decimal text | same |
+| `TINYINT(1)` holding 100 | `Int(100)`, length 1 | same |
+| `BIT(12)` holding `b'101'` | 2 bytes, big-endian | same |
+| `0000-00-00`, `2024-00-15` in `DATE`/`DATETIME`/`TIMESTAMP` under `sql_mode = ''`; `TIME '-838:59:59'` | decoded as `Value::Date` / `Value::Time`, no error | same |
+| `KILL QUERY` from a second connection of an account granted only `SELECT` | `OK`; the victim gets 1317 (70100); its connection runs `SELECT 7` next. An interrupted `SLEEP()` returns 1 instead of failing | same |
+| `LOAD DATA LOCAL INFILE '/etc/hosts'` with `local_infile = 1` and no handler | client error "Handler is not specified"; 0 rows; the connection is closed | same |

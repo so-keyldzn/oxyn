@@ -2073,7 +2073,12 @@ passes entirely on the three drivers, server-side cancellation included.
 decision of 2026-09-24. Phase 3 has a batch dated 2026-10-31 at the latest
 (below); the MySQL driver is written right after, through
 [`/driver`](../.claude/commands/driver.md) and its checklist,
-`KILL QUERY` included. **Reason:** phase 3 is under way and has a dated
+`KILL QUERY` included, on the choices of
+[ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md). It waits on one
+`oxyn-query` change — **to be written**: the MySQL scanner keeps a `BEGIN … END`
+body of `CREATE PROCEDURE`, `FUNCTION`, `TRIGGER` and `EVENT` as one fragment,
+and honors `DELIMITER` as a batch directive; today the body is cut at its first
+`;`. **Reason:** phase 3 is under way and has a dated
 deadline; opening a third protocol at the same time would scatter the work,
 whereas two delivered drivers, PostgreSQL and SQLite, are enough to test the traits of
 [`oxyn-driver`](../crates/oxyn-driver/src/traits.rs). As long as MySQL is missing, the

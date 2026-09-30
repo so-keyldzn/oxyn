@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="f35b66c29b55" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="17dc319b656e" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2078,7 +2078,12 @@ passe intégralement sur les trois drivers, annulation côté serveur comprise.
 décision du 2026-09-24. La phase 3 a un lot daté au plus tard au 2026-10-31
 (ci-dessous) ; le driver MySQL s'écrit juste après, par
 [`/driver`](../claude/commands/driver.md) et sa liste de contrôle,
-`KILL QUERY` compris. **Raison :** la phase 3 est engagée et a une échéance
+`KILL QUERY` compris, sur les choix de
+[ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md). Il attend un
+changement d'`oxyn-query` — **à écrire** : le scanner MySQL garde en un seul
+fragment le corps `BEGIN … END` de `CREATE PROCEDURE`, `FUNCTION`, `TRIGGER` et
+`EVENT`, et honore `DELIMITER` comme directive du lot ; aujourd'hui le corps est
+coupé à son premier `;`. **Raison :** la phase 3 est engagée et a une échéance
 datée ; ouvrir un troisième protocole en même temps disperserait le travail,
 alors que deux drivers livrés, PostgreSQL et SQLite, suffisent à éprouver les traits de
 [`oxyn-driver`](../../../crates/oxyn-driver/src/traits.rs). Tant que MySQL manque, la
