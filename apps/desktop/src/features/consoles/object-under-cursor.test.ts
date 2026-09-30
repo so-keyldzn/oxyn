@@ -62,6 +62,62 @@ describe("the name under the cursor", () => {
   })
 })
 
+describe("MySQL names under the cursor", () => {
+  it("keeps the qualifier when the schema has not been loaded", () => {
+    const sql = "SELECT * FROM `archive`.`orders`"
+    const parts = nameAt(sql, sql.indexOf("orders") + 2, "`")
+    expect(parts).toEqual([
+      { text: "archive", quoted: true },
+      { text: "orders", quoted: true },
+    ])
+    expect(loadedObject([relation("shop", "orders")], parts ?? [])).toBeNull()
+    expect(loadedObject(tree, parts ?? [])).toEqual({
+      catalog: null,
+      namespace: "archive",
+      relation: "orders",
+    })
+  })
+
+  it("keeps spaces and doubled backticks inside one name", () => {
+    const sql = "SELECT * FROM `order lines`"
+    expect(nameAt(sql, sql.indexOf("lines"), "`")).toEqual([
+      { text: "order lines", quoted: true },
+    ])
+    expect(nameAt("`a``b`", 2, "`")).toEqual([{ text: "a`b", quoted: true }])
+  })
+
+  it.each([
+    'WHERE status = "orders"',
+    'WHERE status = "a""orders"',
+    String.raw`WHERE status = "a\"orders"`,
+    "WHERE status = 'orders'",
+  ])("opens no object inside the string %s", (sql) => {
+    expect(nameAt(sql, sql.indexOf("orders") + 2, "`")).toBeNull()
+  })
+
+  it("still reads the name after a string", () => {
+    const sql = 'SELECT "orders" FROM `archive`.`orders`'
+    expect(nameAt(sql, sql.lastIndexOf("orders") + 2, "`")).toEqual([
+      { text: "archive", quoted: true },
+      { text: "orders", quoted: true },
+    ])
+  })
+})
+
+describe.each(["PostgreSQL", "SQLite"])("%s identifier quoting", () => {
+  it("keeps double-quoted qualified names, spaces and doubled quotes", () => {
+    const sql = 'SELECT * FROM "archive"."Order Lines"'
+    expect(nameAt(sql, sql.indexOf("Lines"), '"')).toEqual([
+      { text: "archive", quoted: true },
+      { text: "Order Lines", quoted: true },
+    ])
+    expect(nameAt('"a""b"', 2, '"')).toEqual([{ text: 'a"b', quoted: true }])
+    expect(nameAt('"orders"', 2, '"')).toEqual([
+      { text: "orders", quoted: true },
+    ])
+  })
+})
+
 describe("the loaded object a name resolves to", () => {
   it("resolves a qualified name, without case when unquoted", () => {
     expect(

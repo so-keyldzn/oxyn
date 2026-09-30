@@ -619,7 +619,7 @@ export function ConsolePanel({
   const editorMenu: SqlEditorMenu = {
     onRun: (runTarget) => void run(runTarget),
     objectAt: (text, offset) => {
-      const parts = nameAt(text, offset)
+      const parts = nameAt(text, offset, open.driver === "mysql" ? "`" : '"')
       const tree = queryClient.getQueryData<Array<CatalogNode>>([
         "catalog",
         open.connection,

@@ -313,11 +313,12 @@ export const ReadOnlyTakesNoName: Story = {
 
 const mysqlEditor = fn<(view: EditorView) => void>()
 
-/** Hash comments and backtick identifiers must use MySQL's parser. */
+/** MySQL's default escaping must not turn the following SQL into a string. */
 export const MySQL: Story = {
   args: {
     driver: "mysql",
-    value: "# Inventory\nSELECT `quantity` FROM `inventory` LIMIT 10;",
+    value:
+      "# Inventory\nSELECT 'it\\'s' AS note, `quantity` FROM `inventory` LIMIT 10;",
     onEditor: mysqlEditor,
   },
   play: async ({ args }) => {
@@ -331,5 +332,12 @@ export const MySQL: Story = {
       syntaxTree(view.state).resolveInner(args.value.indexOf("quantity") + 1)
         .name
     ).toBe("QuotedIdentifier")
+    const tree = syntaxTree(view.state)
+    const string = tree.resolveInner(args.value.indexOf("it") + 1)
+    await expect(string.name).toBe("String")
+    await expect(args.value.slice(string.from, string.to)).toBe("'it\\'s'")
+    await expect(tree.resolveInner(args.value.indexOf("AS") + 1).name).toBe(
+      "Keyword"
+    )
   },
 }

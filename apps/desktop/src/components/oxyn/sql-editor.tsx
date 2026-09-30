@@ -3,6 +3,7 @@ import CodeMirror from "@uiw/react-codemirror"
 import {
   MySQL,
   PostgreSQL,
+  SQLDialect,
   SQLite,
   StandardSQL,
   sql,
@@ -26,7 +27,7 @@ function dialectFor(driver: string) {
     case "postgres":
       return PostgreSQL
     case "mysql":
-      return MySQL
+      return SQLDialect.define({ ...MySQL.spec, backslashEscapes: true })
     case "sqlite":
       return SQLite
     default:

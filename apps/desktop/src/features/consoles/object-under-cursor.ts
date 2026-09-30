@@ -8,7 +8,7 @@ import type { CatalogAddress, CatalogNode } from "@/lib/ipc/types"
 /** One part of a dotted name: `public`, or `"Order Lines"` without quotes. */
 export interface NamePart {
   text: string
-  /** Written between double quotes: compared exactly, case included. */
+  /** Written between identifier quotes: compared exactly, case included. */
   quoted: boolean
 }
 
@@ -20,15 +20,33 @@ const WORD = /[\p{L}\p{N}_$]/u
  *
  * Only the offset's line is read: a SQL name never spans lines.
  */
-export function nameAt(text: string, offset: number): Array<NamePart> | null {
+export function nameAt(
+  text: string,
+  offset: number,
+  identifierQuote: '"' | "`" = '"'
+): Array<NamePart> | null {
   const lineStart = text.lastIndexOf("\n", offset - 1) + 1
   const newline = text.indexOf("\n", offset)
   const line = text.slice(lineStart, newline < 0 ? text.length : newline)
   const at = offset - lineStart
   let index = 0
   while (index < line.length) {
+    const quote = line[index]
+    // A MySQL double-quoted string must not resolve to a loaded table.
+    if (quote === "'" || (quote === '"' && identifierQuote === "`")) {
+      index += 1
+      while (index < line.length) {
+        if (line[index] === "\\" && identifierQuote === "`") index += 2
+        else if (line[index] === quote) {
+          index += 1
+          if (line[index] !== quote) break
+          index += 1
+        } else index += 1
+      }
+      continue
+    }
     const start = index
-    const parts = readChain(line, index)
+    const parts = readChain(line, index, identifierQuote)
     if (parts === null) {
       index += 1
       continue
@@ -41,31 +59,31 @@ export function nameAt(text: string, offset: number): Array<NamePart> | null {
 }
 
 /** A chain of parts separated by dots, starting at `index`. */
-function readChain(line: string, index: number) {
+function readChain(line: string, index: number, identifierQuote: string) {
   const parts: Array<NamePart> = []
   let position = index
   for (;;) {
-    const part = readPart(line, position)
+    const part = readPart(line, position, identifierQuote)
     if (part === null) break
     parts.push(part.part)
     position = part.end
     if (line[position] !== ".") break
     // A dot followed by nothing that names is not part of the name.
-    if (readPart(line, position + 1) === null) break
+    if (readPart(line, position + 1, identifierQuote) === null) break
     position += 1
   }
   return parts.length === 0 ? null : { parts, end: position }
 }
 
-function readPart(line: string, index: number) {
-  if (line[index] === '"') {
+function readPart(line: string, index: number, identifierQuote: string) {
+  if (line[index] === identifierQuote) {
     let text = ""
     let position = index + 1
     while (position < line.length) {
-      if (line[position] === '"') {
-        // `""` is a quote inside the name.
-        if (line[position + 1] === '"') {
-          text += '"'
+      if (line[position] === identifierQuote) {
+        // A doubled delimiter is a quote inside the name.
+        if (line[position + 1] === identifierQuote) {
+          text += identifierQuote
           position += 2
           continue
         }
