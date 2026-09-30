@@ -53,7 +53,12 @@ export const UnknownDriver: Story = {
       postgresDriver,
       mysqlDriver,
       sqliteDriver,
-      { ...postgresDriver, id: "warehouse", displayName: "Warehouse" },
+      {
+        ...postgresDriver,
+        id: "warehouse",
+        displayName: "Warehouse",
+        aliases: [],
+      },
     ],
   },
 }
@@ -137,5 +142,28 @@ export const MySQL: Story = {
     await expect(choice).toHaveTextContent("port 3306")
     await userEvent.click(choice)
     await expect(args.onChoose).toHaveBeenCalledWith(mysqlDriver)
+  },
+}
+
+/** Products sharing a protocol must lead to that protocol's connection form. */
+export const ProductAliases: Story = {
+  args: { drivers: catalogueDrivers, prominent: true },
+  play: async ({ canvas, args }) => {
+    const search = canvas.getByRole("combobox")
+    await userEvent.type(search, "maria")
+    await expect(canvas.getAllByRole("option")).toHaveLength(1)
+    await expect(canvas.getByText("MariaDB")).toBeVisible()
+    await userEvent.click(canvas.getByRole("option", { name: /MySQL/ }))
+    await expect(args.onChoose).toHaveBeenLastCalledWith(mysqlDriver)
+  },
+}
+
+export const PostgreSQLAliases: Story = {
+  args: { drivers: catalogueDrivers, prominent: true },
+  play: async ({ canvas, args }) => {
+    await userEvent.type(canvas.getByRole("combobox"), "redshift")
+    await expect(canvas.getAllByRole("option")).toHaveLength(1)
+    await userEvent.click(canvas.getByRole("option", { name: /PostgreSQL/ }))
+    await expect(args.onChoose).toHaveBeenLastCalledWith(postgresDriver)
   },
 }

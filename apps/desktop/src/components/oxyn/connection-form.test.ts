@@ -5,6 +5,7 @@ import type { DriverChoice } from "@/lib/ipc/types"
 
 const postgres: DriverChoice = {
   id: "postgres",
+  aliases: ["Redshift", "TimescaleDB", "pgvector"],
   displayName: "PostgreSQL",
   family: "relational",
   defaultPort: 5432,

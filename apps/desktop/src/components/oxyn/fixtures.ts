@@ -13,6 +13,7 @@ import type {
 
 export const postgresDriver: DriverChoice = {
   id: "postgres",
+  aliases: ["Redshift", "TimescaleDB", "pgvector"],
   displayName: "PostgreSQL",
   family: "relational",
   defaultPort: 5432,
@@ -79,6 +80,7 @@ export const postgresDriver: DriverChoice = {
 
 export const mysqlDriver: DriverChoice = {
   id: "mysql",
+  aliases: ["MariaDB"],
   displayName: "MySQL",
   family: "relational",
   defaultPort: 3306,
@@ -145,6 +147,7 @@ export const mysqlDriver: DriverChoice = {
 
 export const sqliteDriver: DriverChoice = {
   id: "sqlite",
+  aliases: [],
   displayName: "SQLite",
   family: "embedded",
   defaultPort: null,
@@ -437,8 +440,8 @@ export const catalogueDrivers: Array<DriverChoice> = [
     ] as const
   ).map(([id, displayName, family, defaultPort]): DriverChoice =>
     id === "duckdb"
-      ? { ...sqliteDriver, id, displayName, family }
-      : { ...postgresDriver, id, displayName, family, defaultPort }
+      ? { ...sqliteDriver, id, displayName, family, aliases: [] }
+      : { ...postgresDriver, id, displayName, family, defaultPort, aliases: [] }
   ),
   sqliteDriver,
 ]
