@@ -61,6 +61,7 @@ impl Default for MysqlDriver {
 pub fn mysql_metadata() -> DriverMetadata {
     DriverMetadata::new(DriverId::mysql(), "MySQL", DriverFamily::Relational)
         .with_default_port(DEFAULT_PORT)
+        .with_alias("MariaDB")
         .with_fields([
             ConnectionField::new("host", "Host", FieldKind::Text)
                 .required()
@@ -171,6 +172,7 @@ mod tests {
         assert_eq!(metadata.display_name, "MySQL");
         assert_eq!(metadata.family, DriverFamily::Relational);
         assert_eq!(metadata.default_port, Some(3306));
+        assert_eq!(metadata.aliases, ["MariaDB"]);
         let fields: Vec<(&str, &FieldKind, bool, Option<&str>)> = metadata
             .connection_fields
             .iter()

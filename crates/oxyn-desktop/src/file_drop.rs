@@ -264,6 +264,7 @@ mod tests {
             display_name: "SQLite".to_owned(),
             family: "relational".to_owned(),
             default_port: None,
+            aliases: Vec::new(),
             fields: vec![FormField {
                 key: "path".to_owned(),
                 label: "Database file".to_owned(),
