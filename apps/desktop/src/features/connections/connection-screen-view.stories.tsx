@@ -10,6 +10,7 @@ import {
 } from "@/components/oxyn/connection-fixtures"
 import {
   catalogueDrivers,
+  mysqlDriver,
   postgresDriver,
   sqliteDriver,
 } from "@/components/oxyn/fixtures"
@@ -111,7 +112,7 @@ const meta = {
   ],
   args: {
     connections: summaries,
-    drivers: [postgresDriver, sqliteDriver],
+    drivers: [postgresDriver, mysqlDriver, sqliteDriver],
     driver: null,
     onChooseDriver: fn(),
     onLeaveDriver: fn(),

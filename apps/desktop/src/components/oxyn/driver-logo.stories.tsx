@@ -69,3 +69,26 @@ export const Dark: Story = {
     ).toHaveLength(2)
   },
 }
+
+export const MySQL: Story = {
+  args: { driver: "mysql" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const marks = canvasElement.querySelectorAll('svg[viewBox="0 0 256 252"]')
+    await expect(marks).toHaveLength(2)
+    await expect(marks[0]).toBeVisible()
+    await expect(marks[1]).not.toBeVisible()
+    for (const mark of marks)
+      await expect(mark).toHaveAttribute("aria-hidden", "true")
+  },
+}
+
+export const MySQLDark: Story = {
+  args: { driver: "mysql" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    const marks = canvasElement.querySelectorAll('svg[viewBox="0 0 256 252"]')
+    await expect(marks[0]).not.toBeVisible()
+    await expect(marks[1]).toBeVisible()
+  },
+}

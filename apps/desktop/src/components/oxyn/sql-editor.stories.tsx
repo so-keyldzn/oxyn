@@ -1,4 +1,6 @@
 import * as React from "react"
+import { syntaxTree } from "@codemirror/language"
+import type { EditorView } from "@codemirror/view"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
@@ -306,5 +308,28 @@ export const ReadOnlyTakesNoName: Story = {
       y: editor.getBoundingClientRect().top + 12,
     }
     await expect(zoneHandleAt("editor", point)?.insertAt).toBeUndefined()
+  },
+}
+
+const mysqlEditor = fn<(view: EditorView) => void>()
+
+/** Hash comments and backtick identifiers must use MySQL's parser. */
+export const MySQL: Story = {
+  args: {
+    driver: "mysql",
+    value: "# Inventory\nSELECT `quantity` FROM `inventory` LIMIT 10;",
+    onEditor: mysqlEditor,
+  },
+  play: async ({ args }) => {
+    await waitFor(() => expect(args.onEditor).toHaveBeenCalled())
+    const view = mysqlEditor.mock.calls[0]?.[0]
+    if (!view) throw new Error("the SQL editor is mounted")
+    await expect(syntaxTree(view.state).resolveInner(2).name).toBe(
+      "LineComment"
+    )
+    await expect(
+      syntaxTree(view.state).resolveInner(args.value.indexOf("quantity") + 1)
+        .name
+    ).toBe("QuotedIdentifier")
   },
 }

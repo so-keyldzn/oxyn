@@ -181,7 +181,7 @@ export const ManyConnections: Story = {
 
     // Location and driver match as well as the name.
     await userEvent.type(filter, "scratch.sqlite")
-    await expect(canvas.getAllByRole("listitem")).toHaveLength(7)
+    await expect(canvas.getAllByRole("listitem")).toHaveLength(6)
     await expect(canvas.queryByRole("button", { name: /Show all/ })).toBeNull()
 
     await userEvent.clear(filter)
@@ -342,5 +342,22 @@ export const OpeningAFoldedConnection: Story = {
     await expect(
       canvas.getByRole("button", { name: /Cancel opening/ })
     ).toBeVisible()
+  },
+}
+
+export const MySQL: Story = {
+  play: async ({ canvas, args }) => {
+    const connection = canvas.getByRole("button", { name: /inventory/ })
+    await expect(connection).toHaveTextContent("MySQL")
+    await expect(connection).toHaveTextContent(
+      "mysql.internal:3306 / inventory"
+    )
+    await expect(
+      connection.querySelector('svg[viewBox="0 0 256 252"]')
+    ).toHaveAttribute("aria-hidden", "true")
+    await userEvent.click(connection)
+    await expect(args.onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ driver: "mysql", name: "inventory" })
+    )
   },
 }

@@ -77,6 +77,72 @@ export const postgresDriver: DriverChoice = {
   ],
 }
 
+export const mysqlDriver: DriverChoice = {
+  id: "mysql",
+  displayName: "MySQL",
+  family: "relational",
+  defaultPort: 3306,
+  fields: [
+    {
+      key: "host",
+      label: "Host",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: "localhost",
+      help: null,
+    },
+    {
+      key: "port",
+      label: "Port",
+      kind: { type: "number" },
+      required: false,
+      secret: false,
+      default: "3306",
+      help: null,
+    },
+    {
+      key: "database",
+      label: "Database",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: null,
+    },
+    {
+      key: "user",
+      label: "User",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: null,
+      help: null,
+    },
+    {
+      key: "password",
+      label: "Password",
+      kind: { type: "password" },
+      required: false,
+      secret: true,
+      default: null,
+      help: "Stored in the system keyring.",
+    },
+    {
+      key: "sslmode",
+      label: "TLS mode",
+      kind: {
+        type: "choice",
+        options: ["verify-full", "require", "prefer", "disable"],
+      },
+      required: false,
+      secret: false,
+      default: "verify-full",
+      help: null,
+    },
+  ],
+}
+
 export const sqliteDriver: DriverChoice = {
   id: "sqlite",
   displayName: "SQLite",
@@ -126,6 +192,14 @@ export const savedConnections: Array<SavedConnection> = [
     name: "scratch.sqlite",
     driver: "sqlite",
     environment: "local",
+    readOnly: false,
+    privacyTier: "metadata",
+  },
+  {
+    id: "018f0000-0000-7000-8000-000000000004",
+    name: "inventory",
+    driver: "mysql",
+    environment: "development",
     readOnly: false,
     privacyTier: "metadata",
   },
@@ -333,14 +407,13 @@ export const invoicesDetail: RelationDetail = {
 /**
  * The catalogue docs/VISION.md aims at, as a build registering all of it
  * would list it: the start screen must stay a launcher at that size. Fields
- * are borrowed from the two real drivers, by how each one is reached.
+ * are borrowed from the real drivers, by how each one is reached.
  */
 export const catalogueDrivers: Array<DriverChoice> = [
   postgresDriver,
+  mysqlDriver,
   ...(
     [
-      ["mysql", "MySQL", "relational", 3306],
-      ["mariadb", "MariaDB", "relational", 3306],
       ["sqlserver", "SQL Server", "relational", 1433],
       ["oracle", "Oracle", "relational", 1521],
       ["duckdb", "DuckDB", "analytical", null],

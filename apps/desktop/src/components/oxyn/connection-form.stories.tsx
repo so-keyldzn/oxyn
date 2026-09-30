@@ -2,7 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { ConnectionForm } from "./connection-form"
-import { postgresDriver, savedConnections, sqliteDriver } from "./fixtures"
+import {
+  mysqlDriver,
+  postgresDriver,
+  savedConnections,
+  sqliteDriver,
+} from "./fixtures"
 import type { ConnectionDetails } from "@/lib/ipc/settings"
 
 const billing: ConnectionDetails = {
@@ -329,4 +334,49 @@ export const Narrow: Story = {
       </div>
     ),
   ],
+}
+
+/** MySQL and MariaDB share one driver; the default TLS mode verifies the peer. */
+export const MySQL: Story = {
+  args: { driver: mysqlDriver },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByLabelText(/^Host/)).toHaveValue("localhost")
+    await expect(canvas.getByLabelText(/^Port/)).toHaveValue("3306")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(canvas.getByLabelText(/^Database/)).not.toHaveAttribute(
+      "aria-required",
+      "true"
+    )
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await expect(canvas.getByRole("button", { name: "Connect" })).toBeDisabled()
+    await userEvent.type(canvas.getByLabelText(/^Name/), "inventory")
+    await userEvent.type(canvas.getByLabelText(/^User/), "app")
+    const password = canvas.getByLabelText(/^Password/)
+    await expect(password).toHaveAttribute("type", "password")
+    await expect(password).toHaveAccessibleDescription(
+      "Stored in the system keyring."
+    )
+    await userEvent.type(password, "story-password")
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: "production",
+          values: expect.objectContaining({
+            host: "localhost",
+            port: "3306",
+            sslmode: "verify-full",
+          }),
+          secrets: { password: "story-password" },
+        })
+      )
+    )
+    await expect(args.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    )
+  },
 }
