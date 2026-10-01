@@ -181,7 +181,7 @@ impl Session for MysqlSession {
     ///
     /// Returns once the server answered the execution, whose columns are the
     /// schema: a prepare's columns may be missing or differ from the rows'
-    /// (see [`cursor::spawn`]).
+    /// (the stream task's `cursor::spawn` explains when).
     ///
     /// # Errors
     /// [`OxynError::NotSupported`] for a language other than MySQL's SQL, a
