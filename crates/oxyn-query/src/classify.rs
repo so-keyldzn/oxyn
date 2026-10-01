@@ -987,6 +987,63 @@ mod tests {
         );
     }
 
+    /// Creating a program runs none of its body: the `DELETE` inside is not
+    /// the batch's. `sqlparser` reads MySQL triggers, not procedures, functions
+    /// or events: those are `Unknown`, which the gate treats as `Ddl`.
+    #[rstest]
+    #[case::procedure("CREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM t; END")]
+    #[case::delimited(
+        "DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; DELETE FROM t; END$$\nDELIMITER ;"
+    )]
+    #[case::function(
+        "CREATE DEFINER = `root`@`localhost` FUNCTION f() RETURNS INT BEGIN DELETE FROM t; RETURN 1; END"
+    )]
+    #[case::event("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO BEGIN DELETE FROM t; END")]
+    #[case::trigger(
+        "CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW BEGIN DELETE FROM audit; END"
+    )]
+    fn a_mysql_program_is_not_the_delete_of_its_body(#[case] sql: &str) {
+        let outcome = classify(sql, SqlDialect::MySql);
+        assert_eq!(outcome.statements.len(), 1, "{outcome:?}");
+        assert!(
+            matches!(
+                outcome.intent,
+                StatementIntent::Ddl | StatementIntent::Unknown
+            ),
+            "{outcome:?}"
+        );
+        assert_eq!(outcome.risk, MutationRisk::None, "{outcome:?}");
+        assert!(outcome.is_mutating());
+    }
+
+    #[test]
+    fn a_mysql_trigger_is_ddl() {
+        let outcome = classify(
+            "CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW BEGIN DELETE FROM audit; END",
+            SqlDialect::MySql,
+        );
+        assert_eq!(outcome.intent, StatementIntent::Ddl, "{outcome:?}");
+    }
+
+    /// What the program's body does is what a `CALL` does: the call stays
+    /// `Unknown`, whatever the batch around it.
+    #[test]
+    fn a_mysql_call_is_unknown() {
+        let outcome = classify(
+            "CREATE PROCEDURE p() BEGIN DELETE FROM t; END; CALL p()",
+            SqlDialect::MySql,
+        );
+        assert_eq!(outcome.statements.len(), 2, "{outcome:?}");
+        assert_eq!(outcome.statements[1].intent, StatementIntent::Unknown);
+    }
+
+    #[test]
+    fn a_mysql_batch_is_still_split() {
+        let outcome = classify("SELECT 1; DELETE FROM t", SqlDialect::MySql);
+        assert_eq!(outcome.statements.len(), 2, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
+    }
+
     #[test]
     fn rename_is_ddl() {
         assert_eq!(

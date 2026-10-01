@@ -80,7 +80,7 @@ To locate the boards and their states before implementation, see
 | [0047](adr/0047-english-as-the-repository-language.md) | English is the repository language; French lives in authoritative-English mirrors | accepted |
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | A statement sqlx cannot prepare, or whose result has no binary form, runs in the simple protocol, as text | accepted |
 | [0049](adr/0049-agents-declared-as-markdown-files.md) | An agent is a Markdown file with a YAML front matter, targeted by dialect, filled only from a closed list of variables | proposed |
-| [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends | proposed |
+| [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

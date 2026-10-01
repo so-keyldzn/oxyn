@@ -2,6 +2,9 @@ import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { DatabaseIcon } from "@hugeicons/core-free-icons"
 
+import { cn } from "@/lib/utils"
+
+import { MysqlIconLight } from "@/components/ui/svgs/mysqlIconLight"
 import { Postgresql } from "@/components/ui/svgs/postgresql"
 import { Sqlite } from "@/components/ui/svgs/sqlite"
 
@@ -29,6 +32,16 @@ function SqliteMark(props: React.SVGProps<SVGSVGElement>) {
   )
 }
 
+/** The token overrides svgl's fixed fill so one mark follows both themes. */
+function MysqlMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return (
+    <MysqlIconLight
+      {...props}
+      className={cn(className, "[&_path]:fill-(--driver-mysql)")}
+    />
+  )
+}
+
 /**
  * The official marks, from the svgl registry (`shadcn add @svgl/<name>`),
  * keyed by driver id. A driver per protocol (ADR-0003): Redshift reaches
@@ -36,6 +49,7 @@ function SqliteMark(props: React.SVGProps<SVGSVGElement>) {
  */
 const logos: Partial<Record<string, Logo>> = {
   postgres: Postgresql,
+  mysql: MysqlMark,
   sqlite: SqliteMark,
 }
 

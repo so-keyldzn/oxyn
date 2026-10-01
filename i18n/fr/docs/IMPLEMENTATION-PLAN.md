@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="17dc319b656e" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="f16cc2539b8a" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2065,8 +2065,9 @@ confirme ou amende les budgets par un ADR.
 
 ## Phase 2 — Les protocoles qui comptent
 
-- `oxyn-driver-postgres`, `oxyn-driver-mysql` — **ce dernier reporté**, voir
-  ci-dessous ;
+- `oxyn-driver-postgres`, `oxyn-driver-mysql` — **les deux existent** ; le
+  driver MySQL, qui sert aussi MariaDB, depuis le 2026-09-30, sur les choix
+  d'[ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) ;
 - `oxyn-catalog` : introspection, cache, arborescence ;
 - marquage d'environnement des connexions et stockage au trousseau
   ([SECURITY](SECURITY.md)).
@@ -2074,21 +2075,20 @@ confirme ou amende les budgets par un ADR.
 **Porte de sortie** : la [liste de contrôle driver](../claude/checklists/revue-driver.md)
 passe intégralement sur les trois drivers, annulation côté serveur comprise.
 
-**`oxyn-driver-mysql` est reporté après la porte de sortie de la phase 3** —
-décision du 2026-09-24. La phase 3 a un lot daté au plus tard au 2026-10-31
-(ci-dessous) ; le driver MySQL s'écrit juste après, par
-[`/driver`](../claude/commands/driver.md) et sa liste de contrôle,
-`KILL QUERY` compris, sur les choix de
-[ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md). Il attend un
-changement d'`oxyn-query` — **à écrire** : le scanner MySQL garde en un seul
-fragment le corps `BEGIN … END` de `CREATE PROCEDURE`, `FUNCTION`, `TRIGGER` et
-`EVENT`, et honore `DELIMITER` comme directive du lot ; aujourd'hui le corps est
-coupé à son premier `;`. **Raison :** la phase 3 est engagée et a une échéance
-datée ; ouvrir un troisième protocole en même temps disperserait le travail,
-alors que deux drivers livrés, PostgreSQL et SQLite, suffisent à éprouver les traits de
-[`oxyn-driver`](../../../crates/oxyn-driver/src/traits.rs). Tant que MySQL manque, la
-porte de sortie de la phase 2 n'est **pas franchie** : elle nomme trois drivers,
-et ce report ne la réduit pas à deux.
+**`oxyn-driver-mysql` existe depuis le 2026-09-30.** Il a été écrit par
+[`/driver`](../claude/commands/driver.md) et sa liste de contrôle, `KILL QUERY`
+compris ; ses tests d'intégration passent contre MySQL 8.4 et 9.7 et MariaDB
+11.8. Son préalable dans `oxyn-query` est **fait** : le scanner MySQL garde en
+un seul fragment le corps `BEGIN … END` de `CREATE PROCEDURE`, `FUNCTION`,
+`TRIGGER` et `EVENT`, et honore `DELIMITER` comme directive du lot. La porte de
+sortie de la phase 2 nomme trois drivers ; les trois existent, et elle est
+franchie une fois la liste de contrôle parcourue sur chacun d'eux en revue.
+
+*Historique.* Le 2026-09-24, le driver MySQL avait été reporté après la porte
+de sortie de la phase 3 : la phase 3 était engagée avec une échéance datée, et
+deux drivers livrés, PostgreSQL et SQLite, suffisaient à éprouver les traits
+d'[`oxyn-driver`](../../../crates/oxyn-driver/src/traits.rs). Le report a pris
+fin avec ADR-0050 le 2026-09-30.
 
 **Proposé — le client SQL qui se suffit à lui-même.** Rangé ici le 2026-09-25
 depuis l'ancien §11 d'ARCHITECTURE, qui le plaçait avant l'IA : à ce stade,

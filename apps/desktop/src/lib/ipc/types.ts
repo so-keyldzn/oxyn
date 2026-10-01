@@ -56,6 +56,7 @@ export type FormField = z.infer<typeof FormField>
 
 export const DriverChoice = z.object({
   id: z.string(),
+  aliases: z.array(z.string()),
   displayName: z.string(),
   family: z.string(),
   defaultPort: z.number().int().nullable(),

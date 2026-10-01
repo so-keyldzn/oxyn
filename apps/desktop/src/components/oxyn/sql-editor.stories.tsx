@@ -1,4 +1,6 @@
 import * as React from "react"
+import { syntaxTree } from "@codemirror/language"
+import type { EditorView } from "@codemirror/view"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
@@ -306,5 +308,36 @@ export const ReadOnlyTakesNoName: Story = {
       y: editor.getBoundingClientRect().top + 12,
     }
     await expect(zoneHandleAt("editor", point)?.insertAt).toBeUndefined()
+  },
+}
+
+const mysqlEditor = fn<(view: EditorView) => void>()
+
+/** MySQL's default escaping must not turn the following SQL into a string. */
+export const MySQL: Story = {
+  args: {
+    driver: "mysql",
+    value:
+      "# Inventory\nSELECT 'it\\'s' AS note, `quantity` FROM `inventory` LIMIT 10;",
+    onEditor: mysqlEditor,
+  },
+  play: async ({ args }) => {
+    await waitFor(() => expect(args.onEditor).toHaveBeenCalled())
+    const view = mysqlEditor.mock.calls[0]?.[0]
+    if (!view) throw new Error("the SQL editor is mounted")
+    await expect(syntaxTree(view.state).resolveInner(2).name).toBe(
+      "LineComment"
+    )
+    await expect(
+      syntaxTree(view.state).resolveInner(args.value.indexOf("quantity") + 1)
+        .name
+    ).toBe("QuotedIdentifier")
+    const tree = syntaxTree(view.state)
+    const string = tree.resolveInner(args.value.indexOf("it") + 1)
+    await expect(string.name).toBe("String")
+    await expect(args.value.slice(string.from, string.to)).toBe("'it\\'s'")
+    await expect(tree.resolveInner(args.value.indexOf("AS") + 1).name).toBe(
+      "Keyword"
+    )
   },
 }

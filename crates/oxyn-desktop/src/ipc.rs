@@ -70,6 +70,9 @@ pub struct DriverChoice {
     pub family: String,
     pub default_port: Option<u16>,
     pub fields: Vec<FormField>,
+    /// Other product names the driver serves, so that searching "MariaDB"
+    /// finds MySQL.
+    pub aliases: Vec<String>,
 }
 
 /// One field of a driver's connection form, in the driver's order.
@@ -110,6 +113,7 @@ impl DriverChoice {
                 .iter()
                 .map(FormField::of)
                 .collect(),
+            aliases: metadata.aliases.clone(),
         }
     }
 }
@@ -650,6 +654,31 @@ mod tests {
             "secret default sent to the webview: {json}"
         );
         assert!(json.contains("localhost"));
+    }
+
+    #[test]
+    fn each_driver_is_findable_by_the_products_it_serves() {
+        use oxyn_driver::Driver as _;
+
+        let sqlite = oxyn_driver_sqlite::SqliteDriver::new();
+        for (metadata, expected) in [
+            (oxyn_driver_mysql::mysql_metadata(), vec!["MariaDB"]),
+            (
+                oxyn_driver_postgres::postgres_metadata(),
+                vec!["Redshift", "TimescaleDB", "pgvector"],
+            ),
+            (sqlite.metadata().clone(), vec![]),
+        ] {
+            let choice = DriverChoice::of(&metadata);
+            assert_eq!(choice.aliases, expected, "{}", choice.id);
+            let json = serde_json::to_value(&choice).expect("serializable");
+            assert_eq!(
+                json["aliases"],
+                serde_json::json!(expected),
+                "{}",
+                choice.id
+            );
+        }
     }
 
     #[test]

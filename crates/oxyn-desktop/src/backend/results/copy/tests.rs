@@ -566,3 +566,101 @@ fn a_number_is_written_bare_only_when_it_is_one() {
         assert!(!is_number(not_one), "{not_one:?}");
     }
 }
+
+/// A MySQL `DECIMAL(65, 30)`, a `DECIMAL(65, 0)` and a `TIME`, as the MySQL
+/// driver emits them (ADR-0050). Two rows; the second is null everywhere.
+fn mysql_buffer() -> ResultBuffer {
+    use arrow::array::{Decimal256Array, DurationMicrosecondArray};
+    use arrow::datatypes::{TimeUnit, i256};
+
+    let wide =
+        i256::from_string("12345678901234567890123456789012345123456789012345678901234567890")
+            .expect("65 digits fit in 256 bits");
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("amount", DataType::Decimal256(65, 30), true),
+        Field::new("whole", DataType::Decimal256(65, 0), true),
+        Field::new("elapsed", DataType::Duration(TimeUnit::Microsecond), true),
+    ]));
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(
+            Decimal256Array::from(vec![Some(wide.wrapping_neg()), None])
+                .with_precision_and_scale(65, 30)
+                .expect("valid DECIMAL(65, 30)"),
+        ),
+        Arc::new(
+            Decimal256Array::from(vec![Some(wide), None])
+                .with_precision_and_scale(65, 0)
+                .expect("valid DECIMAL(65, 0)"),
+        ),
+        Arc::new(DurationMicrosecondArray::from(vec![
+            Some(-3_020_399_000_000),
+            None,
+        ])),
+    ];
+    let buffer = ResultBuffer::new(schema.clone(), 1024 * 1024);
+    buffer
+        .push(RecordBatch::try_new(schema, columns).expect("a consistent batch"))
+        .expect("push");
+    buffer.mark_complete(ExecStats::default());
+    buffer
+}
+
+const WIDE_NEGATIVE: &str = "-12345678901234567890123456789012345.123456789012345678901234567890";
+const WIDE_WHOLE: &str = "12345678901234567890123456789012345123456789012345678901234567890";
+
+fn copy_mysql(spec: &CopySpec, sql: Option<&SqlTarget>) -> String {
+    compose(&mysql_buffer(), spec, sql, &options())
+        .unwrap_or_else(|error| panic!("{:?} copies: {}", spec.format, error.message))
+}
+
+#[test]
+fn a_wide_decimal_and_a_time_copy_as_text_digit_for_digit() {
+    let tsv = copy_mysql(&spec(CopyRowsFormat::Tsv, 0, 2, &[0, 1, 2]), None);
+    assert_eq!(
+        tsv,
+        format!("amount\twhole\telapsed\n{WIDE_NEGATIVE}\t{WIDE_WHOLE}\t-838:59:59.000000\n\t\t")
+    );
+    let csv = copy_mysql(&spec(CopyRowsFormat::Csv, 0, 1, &[2, 0]), None);
+    assert_eq!(
+        csv,
+        format!("elapsed,amount\n-838:59:59.000000,{WIDE_NEGATIVE}")
+    );
+
+    let json = copy_mysql(&spec(CopyRowsFormat::Json, 0, 2, &[0, 1, 2]), None);
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    // Strings, as for `Decimal128`: a JSON number of 65 digits is read back
+    // as a float by most consumers.
+    assert_eq!(parsed[0]["amount"], WIDE_NEGATIVE);
+    assert_eq!(parsed[0]["whole"], WIDE_WHOLE);
+    assert_eq!(parsed[0]["elapsed"], "-838:59:59.000000");
+    assert!(parsed[1]["elapsed"].is_null());
+
+    let markdown = copy_mysql(&spec(CopyRowsFormat::Markdown, 0, 1, &[2]), None);
+    assert_eq!(markdown, "| elapsed |\n| --- |\n| -838:59:59.000000 |");
+}
+
+#[test]
+fn a_wide_decimal_is_a_bare_number_and_a_time_a_string_literal_in_sql() {
+    let insert = copy_mysql(
+        &spec(CopyRowsFormat::Insert, 0, 2, &[0, 1, 2]),
+        Some(&target(SqlDialect::MySql)),
+    );
+    assert!(
+        insert.contains(&format!(
+            "VALUES ({WIDE_NEGATIVE}, {WIDE_WHOLE}, '-838:59:59.000000');"
+        )),
+        "{insert}"
+    );
+    assert!(insert.ends_with("VALUES (NULL, NULL, NULL);"), "{insert}");
+
+    let list = copy_mysql(
+        &spec(CopyRowsFormat::InList, 0, 2, &[2]),
+        Some(&target(SqlDialect::MySql)),
+    );
+    assert_eq!(list, "('-838:59:59.000000', NULL)");
+    let numbers = copy_mysql(
+        &spec(CopyRowsFormat::InList, 0, 1, &[0]),
+        Some(&target(SqlDialect::Postgres)),
+    );
+    assert_eq!(numbers, format!("({WIDE_NEGATIVE})"));
+}

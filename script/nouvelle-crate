@@ -31,7 +31,7 @@ NAME_PATTERN = re.compile(r"^oxyn-[a-z0-9]+(?:-[a-z0-9]+)*$")
 CATCH_ALL = {"utils", "util", "common", "commons", "helpers", "misc", "core-utils"}
 
 MANIFEST_TEMPLATE = """[package]
-name = "{nom}"
+name = "{item_name}"
 description = "{description}"
 version.workspace = true
 edition.workspace = true
@@ -79,7 +79,7 @@ def attach_to_workspace(item_name: str, relative_path: str) -> bool:
     """Adds the crate to `[workspace.dependencies]`.
 
     `members = ["crates/*", "drivers/*"]` already takes it as a member; what is
-    missing is the entry that lets other crates write `{nom}.workspace = true`.
+    missing is the entry that lets other crates write `{item_name}.workspace = true`.
     Without it, the first internal dependency would be written with a hard-coded
     `path`, and the workspace would stop being the single source of versions."""
     body = WORKSPACE_MANIFEST.read_text(encoding="utf-8")

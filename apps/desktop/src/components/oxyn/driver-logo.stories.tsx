@@ -69,3 +69,32 @@ export const Dark: Story = {
     ).toHaveLength(2)
   },
 }
+
+export const MySQL: Story = {
+  args: { driver: "mysql" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const marks = canvasElement.querySelectorAll('svg[viewBox="0 0 256 252"]')
+    await expect(marks).toHaveLength(1)
+    const svg = logo(canvasElement)
+    await expect(svg).toBeVisible()
+    await expect(svg).toHaveAttribute("aria-hidden", "true")
+    // axe does not measure decorative SVG fills; check both paths in-browser.
+    for (const path of svg.querySelectorAll("path"))
+      await expect(getComputedStyle(path).fill).toBe("rgb(0, 84, 107)")
+  },
+}
+
+export const MySQLDark: Story = {
+  args: { driver: "mysql" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    const marks = canvasElement.querySelectorAll('svg[viewBox="0 0 256 252"]')
+    await expect(marks).toHaveLength(1)
+    const svg = logo(canvasElement)
+    await expect(svg).toBeVisible()
+    await expect(svg).toHaveAttribute("aria-hidden", "true")
+    for (const path of svg.querySelectorAll("path"))
+      await expect(getComputedStyle(path).fill).toBe("rgb(255, 255, 255)")
+  },
+}

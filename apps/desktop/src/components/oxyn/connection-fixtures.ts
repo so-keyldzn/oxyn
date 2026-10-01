@@ -34,6 +34,16 @@ export const summaries: Array<ConnectionSummary> = [
     readOnly: false,
     privacyTier: "sampled",
   },
+  {
+    id: "018f0000-0000-7000-8000-000000000004",
+    name: "inventory",
+    driver: "mysql",
+    driverName: "MySQL",
+    location: "mysql.internal:3306 / inventory",
+    environment: "development",
+    readOnly: false,
+    privacyTier: "metadata",
+  },
 ]
 
 /** Two connections with one name: only the location tells them apart. */

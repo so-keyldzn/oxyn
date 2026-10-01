@@ -4,7 +4,7 @@ argument-hint: "<protocole ou crate, ex. postgres>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Skill, WebFetch
 ---
 
-<!-- oxyn-translation source=".claude/commands/driver.md" sha256="a288177fe5bb" -->
+<!-- oxyn-translation source=".claude/commands/driver.md" sha256="c40e1446246a" -->
 
 > Traduction française de [.claude/commands/driver.md](../../../../.claude/commands/driver.md). **La version anglaise fait foi.**
 
@@ -98,7 +98,10 @@ Enfin, lancer l'agent `relecteur-invariants` sur le résultat.
 ## Rappels
 
 - un driver ne dépend que d'`oxyn-core`, `oxyn-driver`, `oxyn-data` et
-  `oxyn-catalog` ;
+  `oxyn-catalog`, plus `oxyn-query` quand il doit découper ce que son serveur ne
+  peut pas prouver lui-même être une seule instruction — c'est le cas du driver
+  MySQL
+  ([ADR-0050](../../../../docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md)) ;
 - un driver ne retente jamais tout seul : la politique de reprise appartient à
   l'appelant, seul à savoir si l'opération est rejouable ;
 - ne pas savoir faire est une réponse acceptable, la déclarer en capacité ;

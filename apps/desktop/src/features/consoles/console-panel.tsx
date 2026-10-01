@@ -28,6 +28,7 @@ import type {
   ConsoleActivity,
 } from "@/features/consoles/console-model"
 import { registerDraftFlush } from "@/features/consoles/draft-registry"
+import { identifierQuoteForDriver } from "@/lib/sql-identifiers"
 import { loadedObject, nameAt } from "@/features/consoles/object-under-cursor"
 import { useConsoleDocument } from "@/features/consoles/use-console-document"
 import type { ConsoleSeed } from "@/features/consoles/use-console-document"
@@ -619,7 +620,7 @@ export function ConsolePanel({
   const editorMenu: SqlEditorMenu = {
     onRun: (runTarget) => void run(runTarget),
     objectAt: (text, offset) => {
-      const parts = nameAt(text, offset)
+      const parts = nameAt(text, offset, identifierQuoteForDriver(open.driver))
       const tree = queryClient.getQueryData<Array<CatalogNode>>([
         "catalog",
         open.connection,

@@ -55,6 +55,7 @@
 
 pub mod buffer;
 pub mod cell;
+mod duration;
 pub mod error;
 pub mod export;
 pub mod export_file;

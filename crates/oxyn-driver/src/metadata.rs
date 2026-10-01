@@ -235,6 +235,12 @@ pub struct DriverMetadata {
     pub default_port: Option<u16>,
     /// The connection form fields, in input order.
     pub connection_fields: Vec<ConnectionField>,
+    /// The other product names this driver serves because they speak its
+    /// protocol (ADR-0003): "MariaDB" for MySQL. For search only — a user
+    /// looking for MariaDB must find the driver that opens it, and the
+    /// driver's identity stays its protocol.
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 impl DriverMetadata {
@@ -247,7 +253,15 @@ impl DriverMetadata {
             family,
             default_port: None,
             connection_fields: Vec::new(),
+            aliases: Vec::new(),
         }
+    }
+
+    /// Adds a product name the driver serves, for search.
+    #[must_use]
+    pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
+        self.aliases.push(alias.into());
+        self
     }
 
     /// Sets the protocol's default port.

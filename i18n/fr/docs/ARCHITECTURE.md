@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="9fc3cebbfe47" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="6e180841302c" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -132,7 +132,7 @@ vers la webview ([I-03](../CLAUDE.md#i-03)) ; des tests d'`ipc.rs` le vérifient
 
 ## 3. Le workspace Cargo
 
-14 crates, telles qu'elles existent, plus le front `apps/desktop`
+15 crates, telles qu'elles existent, plus le front `apps/desktop`
 ([§2 bis](#2-bis-linterface-tauri)) :
 
 ```
@@ -157,7 +157,9 @@ oxyn/
 │   └── oxyn-desktop/             # binaire `oxyn-desktop` : hôte Tauri et pont IPC (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
-│   └── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
+│   ├── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
+│   └── oxyn-driver-mysql/        # couvre aussi MariaDB (ADR-0050) ; dépend
+│                                 #   d'oxyn-query pour découper ce que MySQL ne prépare pas
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
 └── docs/
@@ -1063,8 +1065,8 @@ Les phases, leur ordre, leurs portes de sortie et l'état de chacune vivent dans
 [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-0--charpente), qui fait autorité
 dessus. Ce document en portait un second découpage, numéroté autrement ; il a été
 retiré le 2026-09-25, parce que deux phasages divergent — c'était déjà le cas — et
-qu'un lecteur ne peut pas savoir lequel croire. Le report de MySQL/MariaDB et son
-calendrier sont à la
+qu'un lecteur ne peut pas savoir lequel croire. Le driver MySQL/MariaDB, reporté
+puis livré, est à la
 [phase 2 du plan](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent) ; le
 critère du `SELECT` de 10 M de lignes, à sa
 [phase 1](IMPLEMENTATION-PLAN.md#phase-1--premier-trajet-visible). Ce que ses phases

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="6b59614697c1" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="56047d50a507" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1304,8 +1304,10 @@ c'est une entrée hostile, rendue comme du texte.
 ### Un bloc `erd` se dessine depuis le catalogue, pas depuis la réponse
 
 Un bloc de code clôturé de langage `erd` dans une réponse liste des noms de
-tables, un par ligne, éventuellement qualifiés `schema.table` (citations SQL
-comprises : `"Ventes"."T1.totaux"`). Une fois le bloc **fermé**, le panneau le
+tables, un par ligne, éventuellement qualifiés `schema.table`, avec les
+délimiteurs d'identifiants du dialecte de la connexion (par exemple
+`"Ventes"."T1.totaux"` pour PostgreSQL/SQLite, ou `` `Ventes`.`T1.totaux` ``
+pour MySQL/MariaDB). Une fois le bloc **fermé**, le panneau le
 dessine en diagramme ; tant que la réponse s'écrit, il reste du texte — un
 diagramme redessiné à chaque nom arrivé se lirait comme un défaut.
 

@@ -5,14 +5,8 @@
 
 import type { CatalogAddress, CatalogNode } from "@/lib/ipc/types"
 
-/** One part of a dotted name: `public`, or `"Order Lines"` without quotes. */
-export interface NamePart {
-  text: string
-  /** Written between double quotes: compared exactly, case included. */
-  quoted: boolean
-}
-
-const WORD = /[\p{L}\p{N}_$]/u
+import { readIdentifierChain } from "@/lib/sql-identifiers"
+import type { IdentifierQuote, NamePart } from "@/lib/sql-identifiers"
 
 /**
  * The dotted name that covers `offset` in `text` — `orders`, `public.orders`,
@@ -20,15 +14,33 @@ const WORD = /[\p{L}\p{N}_$]/u
  *
  * Only the offset's line is read: a SQL name never spans lines.
  */
-export function nameAt(text: string, offset: number): Array<NamePart> | null {
+export function nameAt(
+  text: string,
+  offset: number,
+  identifierQuote: IdentifierQuote = '"'
+): Array<NamePart> | null {
   const lineStart = text.lastIndexOf("\n", offset - 1) + 1
   const newline = text.indexOf("\n", offset)
   const line = text.slice(lineStart, newline < 0 ? text.length : newline)
   const at = offset - lineStart
   let index = 0
   while (index < line.length) {
+    const quote = line[index]
+    // A MySQL double-quoted string must not resolve to a loaded table.
+    if (quote === "'" || (quote === '"' && identifierQuote === "`")) {
+      index += 1
+      while (index < line.length) {
+        if (line[index] === "\\" && identifierQuote === "`") index += 2
+        else if (line[index] === quote) {
+          index += 1
+          if (line[index] !== quote) break
+          index += 1
+        } else index += 1
+      }
+      continue
+    }
     const start = index
-    const parts = readChain(line, index)
+    const parts = readIdentifierChain(line, index, identifierQuote)
     if (parts === null) {
       index += 1
       continue
@@ -38,55 +50,6 @@ export function nameAt(text: string, offset: number): Array<NamePart> | null {
     if (at >= start && at <= parts.end) return parts.parts
   }
   return null
-}
-
-/** A chain of parts separated by dots, starting at `index`. */
-function readChain(line: string, index: number) {
-  const parts: Array<NamePart> = []
-  let position = index
-  for (;;) {
-    const part = readPart(line, position)
-    if (part === null) break
-    parts.push(part.part)
-    position = part.end
-    if (line[position] !== ".") break
-    // A dot followed by nothing that names is not part of the name.
-    if (readPart(line, position + 1) === null) break
-    position += 1
-  }
-  return parts.length === 0 ? null : { parts, end: position }
-}
-
-function readPart(line: string, index: number) {
-  if (line[index] === '"') {
-    let text = ""
-    let position = index + 1
-    while (position < line.length) {
-      if (line[position] === '"') {
-        // `""` is a quote inside the name.
-        if (line[position + 1] === '"') {
-          text += '"'
-          position += 2
-          continue
-        }
-        return text === ""
-          ? null
-          : { part: { text, quoted: true }, end: position + 1 }
-      }
-      text += line[position]
-      position += 1
-    }
-    return null
-  }
-  let position = index
-  while (position < line.length && WORD.test(line[position] ?? ""))
-    position += 1
-  // A number is not a name.
-  if (position === index || /^\p{N}/u.test(line[index] ?? "")) return null
-  return {
-    part: { text: line.slice(index, position), quoted: false },
-    end: position,
-  }
 }
 
 function same(part: NamePart, name: string | null) {

@@ -51,7 +51,9 @@ enum Kind {
     Float,
     Decimal,
     Text,
-    /// Dates, times and timestamps: written as text, which every dialect casts.
+    /// Dates, times, timestamps and durations: written as text, which every
+    /// dialect casts. A duration is a MySQL `TIME` — `'-838:59:59.000000'` is
+    /// its own literal —, and the same text is a PostgreSQL `interval`.
     Temporal,
     /// Anything else — binary, nested, intervals: shown by the grid, never
     /// guessed into a SQL literal.
@@ -78,7 +80,8 @@ impl Kind {
             | DataType::Date64
             | DataType::Time32(_)
             | DataType::Time64(_)
-            | DataType::Timestamp(_, _) => Self::Temporal,
+            | DataType::Timestamp(_, _)
+            | DataType::Duration(_) => Self::Temporal,
             _ => Self::Other,
         }
     }

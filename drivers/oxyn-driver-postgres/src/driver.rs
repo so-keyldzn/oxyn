@@ -83,6 +83,9 @@ impl Default for PostgresDriver {
 pub fn postgres_metadata() -> DriverMetadata {
     DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)
         .with_default_port(DEFAULT_PORT)
+        .with_alias("Redshift")
+        .with_alias("TimescaleDB")
+        .with_alias("pgvector")
         .with_fields([
             ConnectionField::new("host", "Host", FieldKind::Text)
                 .required()

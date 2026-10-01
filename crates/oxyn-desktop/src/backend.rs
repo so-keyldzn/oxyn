@@ -23,6 +23,7 @@ use oxyn_core::{
 };
 use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
+use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
 use oxyn_driver_sqlite::SqliteDriver;
 use oxyn_exec::{DispatchReport, ExecEvent, Executor, Outcome, PendingCommand};
@@ -250,6 +251,9 @@ impl Backend {
         drivers
             .register(Arc::new(PostgresDriver::new()))
             .context("registering the PostgreSQL driver")?;
+        drivers
+            .register(Arc::new(MysqlDriver::new()))
+            .context("registering the MySQL driver")?;
         tracing::info!(drivers = drivers.len(), "driver registry ready");
         let drivers = Arc::new(drivers);
 

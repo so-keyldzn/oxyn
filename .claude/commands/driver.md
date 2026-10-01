@@ -96,7 +96,9 @@ Finally, run the `relecteur-invariants` agent on the result.
 ## Reminders
 
 - a driver depends only on `oxyn-core`, `oxyn-driver`, `oxyn-data` and
-  `oxyn-catalog`;
+  `oxyn-catalog`, plus `oxyn-query` when it must split what its server cannot
+  prove to be a single statement itself — the MySQL driver does
+  ([ADR-0050](../../docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md));
 - a driver never retries on its own: the retry policy belongs to the caller,
   the only one that knows whether the operation can be replayed;
 - not knowing how is an acceptable answer, declared as a capability; pretending

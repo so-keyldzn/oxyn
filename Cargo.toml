@@ -41,6 +41,7 @@ oxyn-ai       = { path = "crates/oxyn-ai" }
 oxyn-plugin   = { path = "crates/oxyn-plugin" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
+oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
 
 # --- foundation --------------------------------------------------------------
 anyhow        = "1.0.104"
@@ -102,6 +103,18 @@ zeroize       = "1.9.0"
 sqlx          = { version = "0.9.0", default-features = false, features = [
     "runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "chrono", "uuid", "json",
 ] }
+# MySQL and MariaDB (ADR-0050): `sqlx-mysql` fails a whole result on a `VECTOR`
+# column and drops a `DECIMAL`'s scale. `default-rustls` is `rustls` on
+# aws-lc-rs, the provider above; `client_ed25519` and `client_parsec` are
+# MariaDB's authentication plugins. Exact version: the driver guards against
+# library behaviors observed on this release (RESEARCH-NOTES, 2026-09-30).
+mysql_async   = { version = "=0.37.1", default-features = false, features = [
+    "default-rustls", "client_ed25519", "client_parsec",
+] }
+# The release `mysql_async` resolves to, named so that the driver can ask its
+# named-parameter parser whether a text would be rewritten before it is
+# prepared (ADR-0050). Exact: the guard is only right for this parser.
+mysql_common  = { version = "=0.37.3", default-features = false }
 
 # --- AI ----------------------------------------------------------------------
 # reqwest 0.13 renamed the `rustls-tls` feature to `rustls`.

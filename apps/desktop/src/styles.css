@@ -143,6 +143,8 @@
 }
 
 :root {
+  /* Match the official mark on each surface without duplicating the SVG. */
+  --driver-mysql: #00546b;
   --radius: 0.5rem;
 
   /* Surface ladder: shell (`--sidebar`) < panel < card < popover. */
@@ -209,6 +211,7 @@
 }
 
 .dark {
+  --driver-mysql: #fff;
   --background: oklch(0.185 0.022 212);
   --foreground: oklch(0.93 0.02 190);
   --card: oklch(0.215 0.026 210);

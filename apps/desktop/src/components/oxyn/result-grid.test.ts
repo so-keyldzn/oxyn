@@ -95,7 +95,7 @@ describe("isNumericType", () => {
     for (const type of [
       "Utf8",
       "Interval(DayTime)",
-      "Timestamp(Microsecond, None)",
+      "Timestamp(µs)",
       "Binary",
     ]) {
       expect(isNumericType(type)).toBe(false)

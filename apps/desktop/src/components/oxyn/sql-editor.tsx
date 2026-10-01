@@ -1,6 +1,13 @@
 import * as React from "react"
 import CodeMirror from "@uiw/react-codemirror"
-import { PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql"
+import {
+  MySQL,
+  PostgreSQL,
+  SQLDialect,
+  SQLite,
+  StandardSQL,
+  sql,
+} from "@codemirror/lang-sql"
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { Prec } from "@codemirror/state"
 import type { EditorSelection } from "@codemirror/state"
@@ -19,6 +26,8 @@ function dialectFor(driver: string) {
   switch (driver) {
     case "postgres":
       return PostgreSQL
+    case "mysql":
+      return SQLDialect.define({ ...MySQL.spec, backslashEscapes: true })
     case "sqlite":
       return SQLite
     default:

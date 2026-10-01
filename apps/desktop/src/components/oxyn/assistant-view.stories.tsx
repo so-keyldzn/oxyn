@@ -5,6 +5,7 @@ import { visibleAssistantField } from "./assistant-composer"
 import { AssistantToolRows } from "./assistant-tool-rows"
 import { invoiceColumns, syntheticPages } from "./fixtures"
 import { AssistantView } from "./assistant-view"
+import type { ErdRequest } from "./assistant-markdown-model"
 import type { PlanEntry } from "./assistant-plan"
 import type { AssistantSource } from "./assistant-sources"
 import type { ContextPin } from "./assistant-context-pins"
@@ -1450,5 +1451,48 @@ export const AnsweredWithRows: Story = {
       await within(call).findByRole("grid", { name: "Rows the query returned" })
     ).toBeVisible()
     await expect(within(call).getByText("Acme SA")).toBeVisible()
+  },
+}
+
+/** The session's quoting must reach even an ERD nested in a quoted answer. */
+export const MySQLDiagramNames: Story = {
+  args: {
+    identifierQuote: "`",
+    state: assistantState(
+      threadOfEvents([
+        {
+          question: "Show the order tables",
+          events: [
+            started,
+            {
+              kind: "textDelta",
+              text: "> ```erd\n> `archive`.`order lines`\n> ```",
+            },
+            answered,
+          ],
+        },
+      ])
+    ),
+    renderErd: fn((request: ErdRequest) => (
+      <p>
+        {request.names
+          .map((name) => `${name.namespace} / ${name.relation}`)
+          .join(", ")}
+      </p>
+    )),
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByText("archive / order lines")).toBeVisible()
+    await expect(args.renderErd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        names: [
+          {
+            namespace: "archive",
+            relation: "order lines",
+            written: "`archive`.`order lines`",
+          },
+        ],
+      })
+    )
   },
 }

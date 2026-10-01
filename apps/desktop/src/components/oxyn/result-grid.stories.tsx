@@ -573,3 +573,45 @@ export const ComfortableDensity: Story = {
     await expect(getComputedStyle(gutter).fontSize).toBe("12px")
   },
 }
+
+/**
+ * Arrow Display headers and Rust-formatted cells stay text, without JS coercion.
+ * JSON keeps MySQL's normalization (key order and spaces) and its exact integer.
+ */
+export const MySQLTypes: Story = {
+  args: {
+    resultKey: "story-mysql-types",
+    columns: [
+      { name: "unsigned_id", dataType: "UInt64", nullable: false },
+      { name: "amount", dataType: "Decimal256(65, 30)", nullable: false },
+      { name: "elapsed", dataType: "Duration(µs)", nullable: false },
+      { name: "embedding", dataType: "Binary", nullable: false },
+      { name: "document", dataType: "Utf8", nullable: false },
+    ],
+    rowCount: 1,
+    fetchPage: pagesOf(
+      1,
+      (_, column) =>
+        [
+          "18446744073709551615",
+          "12345678901234567890123456789012345.123456789012345678901234567890",
+          "-838:59:59.000000",
+          "0000803f0000004000004040",
+          '{"exact": 18446744073709551615, "engine": "MySQL"}',
+        ][column] ?? null,
+      5
+    ),
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Duration(µs)")).toBeInTheDocument()
+    for (const value of [
+      "18446744073709551615",
+      "12345678901234567890123456789012345.123456789012345678901234567890",
+      "-838:59:59.000000",
+      "0000803f0000004000004040",
+      '{"exact": 18446744073709551615, "engine": "MySQL"}',
+    ]) {
+      await expect(await canvas.findByText(value)).toBeInTheDocument()
+    }
+  },
+}

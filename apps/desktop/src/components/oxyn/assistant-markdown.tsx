@@ -14,6 +14,7 @@ import type {
 } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantMermaid } from "@/components/oxyn/assistant-mermaid"
 import { Separator } from "@/components/ui/separator"
+import type { IdentifierQuote } from "@/lib/sql-identifiers"
 import { cn } from "@/lib/utils"
 
 function InlineContent({ nodes }: { nodes: Array<Inline> }) {
@@ -81,16 +82,18 @@ function InlineContent({ nodes }: { nodes: Array<Inline> }) {
 function ErdBlock({
   block,
   renderErd,
+  identifierQuote = '"',
 }: {
   block: Extract<Block, { type: "code" }>
   renderErd: (request: ErdRequest) => React.ReactNode
+  identifierQuote?: IdentifierQuote
 }) {
   // Parsed once per text: a closed block no longer changes while the rest of
   // the answer streams.
   const request = React.useMemo(() => {
-    const { names, dropped } = parseErdNames(block.text)
+    const { names, dropped } = parseErdNames(block.text, identifierQuote)
     return { names, ignoredNames: dropped, source: block.text }
-  }, [block.text])
+  }, [block.text, identifierQuote])
   return <>{renderErd(request)}</>
 }
 
@@ -100,12 +103,14 @@ function Blocks({
   openSqlDisabledReason,
   onCopy,
   renderErd,
+  identifierQuote = '"',
 }: {
   blocks: Array<Block>
   onOpenSql?: (sql: string) => void
   openSqlDisabledReason?: string | null
   onCopy?: (text: string) => Promise<boolean> | boolean
   renderErd?: (request: ErdRequest) => React.ReactNode
+  identifierQuote?: IdentifierQuote
 }) {
   return (
     <>
@@ -136,7 +141,12 @@ function Blocks({
             // a diagram of the tables named so far.
             if (renderErd && isErdBlock(block))
               return (
-                <ErdBlock key={index} block={block} renderErd={renderErd} />
+                <ErdBlock
+                  key={index}
+                  block={block}
+                  renderErd={renderErd}
+                  identifierQuote={identifierQuote}
+                />
               )
             // Closed only, for the same reason; and loaded only then.
             if (isMermaidBlock(block))
@@ -176,7 +186,11 @@ function Blocks({
                 key={index}
                 className="flex flex-col gap-2 border-l-2 pl-3 text-muted-foreground"
               >
-                <Blocks blocks={block.blocks} renderErd={renderErd} />
+                <Blocks
+                  blocks={block.blocks}
+                  renderErd={renderErd}
+                  identifierQuote={identifierQuote}
+                />
               </blockquote>
             )
           case "rule":
@@ -237,6 +251,7 @@ export function AssistantMarkdown({
   openSqlDisabledReason,
   onCopy,
   renderErd,
+  identifierQuote = '"',
   className,
 }: {
   text: string
@@ -250,6 +265,7 @@ export function AssistantMarkdown({
    * catalog. Without it the block stays code, as any other.
    */
   renderErd?: (request: ErdRequest) => React.ReactNode
+  identifierQuote?: IdentifierQuote
   className?: string
 }) {
   const blocks = React.useMemo(() => parseMarkdown(text), [text])
@@ -267,6 +283,7 @@ export function AssistantMarkdown({
         openSqlDisabledReason={openSqlDisabledReason}
         onCopy={onCopy}
         renderErd={renderErd}
+        identifierQuote={identifierQuote}
       />
     </div>
   )

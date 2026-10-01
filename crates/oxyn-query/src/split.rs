@@ -12,7 +12,10 @@
 //!
 //! Each of these lines is **one** statement. The scanner of this module
 //! therefore recognizes, without building an AST: strings, quoted identifiers,
-//! `--`, `#`, `/* */` comments, and PostgreSQL `$$ … $$` bodies.
+//! `--`, `#`, `/* */` comments, and PostgreSQL `$$ … $$` bodies. What MySQL
+//! adds on top — `BEGIN … END` bodies of stored programs and the `mysql`
+//! client's `DELIMITER` line — depends on words, not bytes, and lives in the
+//! private `mysql` submodule.
 //!
 //! # The direction of the error
 //!
@@ -28,6 +31,8 @@ use std::ops::Range;
 use oxyn_core::SqlDialect;
 
 use crate::{QueryError, validate};
+
+mod mysql;
 
 /// A statement isolated in a batch.
 ///
@@ -46,7 +51,8 @@ pub struct Fragment<'a> {
     /// AST does not keep comments, so a fragment that carries some is not
     /// reformatted.
     pub has_comment: bool,
-    /// The fragment ended with an explicit `;` in the batch.
+    /// The fragment ended with an explicit `;` in the batch — or, in MySQL,
+    /// with the delimiter a `DELIMITER` line set.
     pub terminated: bool,
     /// A line comment in this fragment holds a lone `\r` followed by text, in a
     /// dialect whose lexer was not checked ([`LineCommentEnd::Unverified`]).
@@ -246,6 +252,10 @@ impl Default for SplitProfile {
 /// dropped: they have nothing to run. A comment that **precedes** a statement
 /// stays attached to it; it is indeed its text.
 ///
+/// In [`SqlDialect::MySql`], the `BEGIN … END` body of a stored program stays
+/// in its `CREATE` statement, and a `DELIMITER` line is honored as the `mysql`
+/// client does: it changes what ends a statement and belongs to no fragment.
+///
 /// ```
 /// use oxyn_core::SqlDialect;
 /// use oxyn_query::split;
@@ -258,7 +268,11 @@ impl Default for SplitProfile {
 /// ```
 #[must_use]
 pub fn split(sql: &str, dialect: SqlDialect) -> Vec<Fragment<'_>> {
-    split_with(sql, SplitProfile::for_dialect(dialect))
+    if dialect == SqlDialect::MySql {
+        mysql::split(sql)
+    } else {
+        split_with(sql, SplitProfile::for_dialect(dialect))
+    }
 }
 
 /// Returns the complete statement under the cursor, or nothing in a separator.
@@ -266,7 +280,8 @@ pub fn split(sql: &str, dialect: SqlDialect) -> Vec<Fragment<'_>> {
 /// The cursor is a UTF-8 byte index. A position in the middle of a character,
 /// in a separator or in whitespace outside a statement selects nothing. The
 /// fragment is validated before being returned: an incomplete text cannot be
-/// run as the "current statement".
+/// run as the "current statement". A MySQL stored program, which the parser
+/// cannot read, is returned when its body is closed and refused otherwise.
 pub fn current_statement(
     sql: &str,
     dialect: SqlDialect,
@@ -319,6 +334,13 @@ pub fn current_statement(
                 message: "SQLite trigger body is incomplete".into(),
             });
         }
+    } else if let Some(complete) = mysql_program(fragment, dialect) {
+        if !complete {
+            return Err(QueryError::Selection {
+                cursor: cursor_byte,
+                message: "MySQL stored program body is not closed where the statement ends".into(),
+            });
+        }
     } else {
         validate(fragment.text, dialect).map_err(|error| match error {
             QueryError::Syntax { message, span } => QueryError::Syntax {
@@ -330,6 +352,17 @@ pub fn current_statement(
         })?;
     }
     Ok(Some(fragment.clone()))
+}
+
+/// Is the fragment a MySQL stored program, and is its body complete?
+///
+/// `None` sends the fragment to the parser's validation. So does an unreadable
+/// comment: [`validate`] refuses it, and skipping the parser must not skip that.
+fn mysql_program(fragment: &Fragment<'_>, dialect: SqlDialect) -> Option<bool> {
+    if dialect != SqlDialect::MySql || fragment.unreadable_comment {
+        return None;
+    }
+    mysql::program_is_complete(fragment.text)
 }
 
 fn starts_with_comment(sql: &str, dialect: SqlDialect) -> bool {
@@ -509,6 +542,10 @@ fn end_closes_trigger(sql: &str, from: usize) -> bool {
 }
 
 /// Splits a batch with an explicit lexical profile.
+///
+/// A profile carries lexical facts only: the MySQL stored program bodies and
+/// `DELIMITER` lines are honored by [`split`] with [`SqlDialect::MySql`], not
+/// here.
 #[must_use]
 pub fn split_with(sql: &str, profile: SplitProfile) -> Vec<Fragment<'_>> {
     let mut fragments = Vec::new();
@@ -625,7 +662,7 @@ enum Tok {
     /// ([`LineCommentEnd::Unverified`]): it may hold a statement, so it counts
     /// as code and makes its fragment unreadable.
     UnreadableComment,
-    /// The statement separator.
+    /// The statement separator: `;`, or what a MySQL `DELIMITER` line chose.
     Semicolon,
     /// Everything else: punctuation, operators, numbers.
     Symbol,
@@ -637,74 +674,107 @@ enum Tok {
 /// three copies of this loop would end up diverging, and it would be the one
 /// holding the safety net that diverged.
 fn scan(sql: &str, profile: SplitProfile, on: &mut dyn FnMut(Tok, Range<usize>)) {
-    let b = sql.as_bytes();
-    let mut i = 0usize;
+    for (token, span) in Scanner::new(sql, profile) {
+        on(token, span);
+    }
+}
 
-    while let Some(&c) = b.get(i) {
-        match c {
-            b'-' if b.get(i + 1) == Some(&b'-') => {
-                let (end, token) = skip_line_comment(b, i + 2, profile.line_comment_end);
-                on(token, i..end);
-                i = end;
-            }
-            b'#' if profile.hash_line_comments => {
-                let (end, token) = skip_line_comment(b, i + 1, profile.line_comment_end);
-                on(token, i..end);
-                i = end;
-            }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                let end = skip_block_comment(b, i, profile.nested_block_comments);
-                on(Tok::Comment, i..end);
-                i = end;
-            }
-            b'\'' => {
-                let escapes = profile.backslash_escapes
-                    || (profile.escape_string_prefix && has_escape_prefix(b, i));
-                let end = skip_quoted(b, i, b'\'', escapes);
-                on(Tok::Quoted, i..end);
-                i = end;
-            }
-            b'"' => {
-                let end = skip_quoted(b, i, b'"', profile.backslash_escapes);
-                on(Tok::Quoted, i..end);
-                i = end;
-            }
-            b'`' if profile.backtick_quotes => {
-                let end = skip_quoted(b, i, b'`', false);
-                on(Tok::Quoted, i..end);
-                i = end;
-            }
-            b'[' if profile.bracket_quotes => {
-                let end = skip_bracket(b, i);
-                on(Tok::Quoted, i..end);
-                i = end;
-            }
-            b'$' if profile.dollar_quotes => match skip_dollar_quoted(b, i) {
-                Some(end) => {
-                    on(Tok::Quoted, i..end);
-                    i = end;
-                }
-                None => {
-                    // A lone `$`: a `$1` parameter placeholder, or an operator.
-                    on(Tok::Symbol, i..i + 1);
-                    i += 1;
-                }
-            },
-            b';' => {
-                on(Tok::Semicolon, i..i + 1);
-                i += 1;
-            }
-            _ if is_word_start(c) => {
-                let end = skip_word(b, i);
-                on(Tok::Word, i..end);
-                i = end;
-            }
-            _ if c.is_ascii_whitespace() => i += 1,
-            _ => {
-                on(Tok::Symbol, i..i + 1);
-                i += 1;
-            }
+/// The scanner, as an iterator a caller can steer.
+///
+/// The MySQL batch needs what a callback cannot give: looking one word ahead
+/// (`END IF` closes what `END` alone does not), and changing what ends a
+/// statement in the middle of the text (`DELIMITER`). Both are done by the
+/// [`mysql`] module on this same scanner, not on a copy of its loop.
+#[derive(Clone)]
+struct Scanner<'a> {
+    sql: &'a str,
+    /// Byte index of the next element to read.
+    at: usize,
+    profile: SplitProfile,
+    /// What ends a statement: `;`, unless a MySQL `DELIMITER` line chose
+    /// otherwise. Never empty: an empty terminator would match forever.
+    terminator: &'a [u8],
+}
+
+impl<'a> Scanner<'a> {
+    const fn new(sql: &'a str, profile: SplitProfile) -> Self {
+        Self {
+            sql,
+            at: 0,
+            profile,
+            terminator: b";",
         }
+    }
+
+    fn at_terminator(&self) -> bool {
+        !self.terminator.is_empty()
+            && self
+                .sql
+                .as_bytes()
+                .get(self.at..)
+                .is_some_and(|rest| rest.starts_with(self.terminator))
+    }
+}
+
+impl Iterator for Scanner<'_> {
+    type Item = (Tok, Range<usize>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let b = self.sql.as_bytes();
+        while let Some(&c) = b.get(self.at) {
+            let start = self.at;
+            if c.is_ascii_whitespace() {
+                self.at += 1;
+                continue;
+            }
+            // The terminator is looked for before anything else, as the `mysql`
+            // client does: with `DELIMITER //`, `//` ends the statement.
+            let (token, end) = if self.at_terminator() {
+                (Tok::Semicolon, start + self.terminator.len())
+            } else {
+                lex(b, start, c, self.profile)
+            };
+            self.at = end;
+            return Some((token, start..end));
+        }
+        None
+    }
+}
+
+/// The element that starts at `i`, whose first byte is `c`, and where it ends.
+fn lex(b: &[u8], i: usize, c: u8, profile: SplitProfile) -> (Tok, usize) {
+    match c {
+        b'-' if b.get(i + 1) == Some(&b'-') => {
+            let (end, token) = skip_line_comment(b, i + 2, profile.line_comment_end);
+            (token, end)
+        }
+        b'#' if profile.hash_line_comments => {
+            let (end, token) = skip_line_comment(b, i + 1, profile.line_comment_end);
+            (token, end)
+        }
+        b'/' if b.get(i + 1) == Some(&b'*') => (
+            Tok::Comment,
+            skip_block_comment(b, i, profile.nested_block_comments),
+        ),
+        b'\'' => {
+            let escapes = profile.backslash_escapes
+                || (profile.escape_string_prefix && has_escape_prefix(b, i));
+            (Tok::Quoted, skip_quoted(b, i, b'\'', escapes))
+        }
+        b'"' => (
+            Tok::Quoted,
+            skip_quoted(b, i, b'"', profile.backslash_escapes),
+        ),
+        b'`' if profile.backtick_quotes => (Tok::Quoted, skip_quoted(b, i, b'`', false)),
+        b'[' if profile.bracket_quotes => (Tok::Quoted, skip_bracket(b, i)),
+        // A lone `$` is a `$1` parameter placeholder, or an operator.
+        b'$' if profile.dollar_quotes => {
+            skip_dollar_quoted(b, i).map_or((Tok::Symbol, i + 1), |end| (Tok::Quoted, end))
+        }
+        _ if is_word_start(c) => (Tok::Word, skip_word(b, i)),
+        // A `;` the terminator did not match is only punctuation: under
+        // `DELIMITER $$`, it separates the statements of a body.
+        _ => (Tok::Symbol, i + 1),
     }
 }
 

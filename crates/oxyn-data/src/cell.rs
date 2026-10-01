@@ -26,18 +26,24 @@
 //! these same formatters. Two implementations would diverge within a few
 //! months, and the user would only find out by comparing an exported file to
 //! their screen.
+//!
+//! Durations are the exception, and the export follows it: Arrow writes them
+//! in ISO 8601, and both paths go through the crate's `duration` module
+//! instead.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
-    DataType, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, UInt8Type,
-    UInt16Type, UInt32Type, UInt64Type,
+    DataType, Decimal128Type, Decimal256Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow::util::display::{ArrayFormatter, FormatOptions as ArrowFormatOptions};
 use serde::{Deserialize, Serialize};
+
+use crate::duration;
 
 /// Length beyond which a cell is cut for display.
 ///
@@ -385,8 +391,31 @@ pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) 
             ),
             None => delegate(array, row, opts),
         },
+        // MySQL sends `DECIMAL` up to 65 digits: beyond 38 it arrives here, and
+        // is rendered from the exact integer and scale, like `Decimal128` —
+        // never through a float, which keeps 17 significant digits.
+        DataType::Decimal256(_, _) => match array.as_primitive_opt::<Decimal256Type>() {
+            Some(values) => finish(
+                Cow::Owned(group(values.value_as_string(row), opts.number_grouping)),
+                opts.max_len,
+            ),
+            None => delegate(array, row, opts),
+        },
 
-        // Dates, times, timestamps, durations, intervals, lists, structs,
+        // Not delegated: Arrow writes ISO 8601 (`-PT3023999S`), and a MySQL
+        // `TIME` is read as `-838:59:59`. See `crate::duration`.
+        DataType::Duration(_) => match duration::value_at(array, row) {
+            Some((value, unit)) => {
+                let mut txt = String::new();
+                if duration::write(&mut txt, value, unit).is_err() {
+                    return unrenderable("duration formatting failed");
+                }
+                finish(Cow::Owned(txt), opts.max_len)
+            }
+            None => delegate(array, row, opts),
+        },
+
+        // Dates, times, timestamps, intervals, lists, structs,
         // maps, dictionaries, floats: see the note at the top of the module.
         _ => delegate(array, row, opts),
     }
@@ -706,11 +735,11 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float64Array, Int32Array,
-        Int64Array, ListArray, StringArray, StructArray, Time64MicrosecondArray,
-        TimestampMillisecondArray, UInt8Array,
+        BinaryArray, BooleanArray, Date32Array, Decimal128Array, Decimal256Array,
+        DurationMicrosecondArray, Float64Array, Int32Array, Int64Array, ListArray, StringArray,
+        StructArray, Time64MicrosecondArray, TimestampMillisecondArray, UInt8Array,
     };
-    use arrow::datatypes::{Field, Fields, Schema, TimeUnit};
+    use arrow::datatypes::{Field, Fields, Schema, TimeUnit, i256};
 
     use super::*;
 
@@ -939,6 +968,68 @@ mod tests {
             .with_precision_and_scale(10, 2)
             .expect("valid precision and scale for 12345");
         assert_eq!(as_text(Arc::new(array)), "123.45");
+    }
+
+    /// A MySQL `DECIMAL(65, 30)`: 65 exact digits, which a float would round
+    /// after the seventeenth.
+    #[test]
+    fn a_wide_decimal_keeps_every_digit() {
+        let digits = "12345678901234567890123456789012345123456789012345678901234567890";
+        let magnitude = i256::from_string(digits).expect("65 digits fit in 256 bits");
+        let array = Decimal256Array::from(vec![Some(magnitude), Some(magnitude.wrapping_neg())])
+            .with_precision_and_scale(65, 30)
+            .expect("valid precision and scale for a MySQL DECIMAL(65, 30)");
+        let opts = FormatOptions::default();
+        assert_eq!(
+            format_value(&array, 0, &opts).text(),
+            Some("12345678901234567890123456789012345.123456789012345678901234567890")
+        );
+        assert_eq!(
+            format_value(&array, 1, &opts).text(),
+            Some("-12345678901234567890123456789012345.123456789012345678901234567890")
+        );
+
+        let whole = Decimal256Array::from(vec![Some(magnitude)])
+            .with_precision_and_scale(65, 0)
+            .expect("valid precision and scale for a MySQL DECIMAL(65, 0)");
+        assert_eq!(as_text(Arc::new(whole)), digits);
+
+        // Grouping stops at the decimal point, as for `Decimal128`.
+        let grouped = FormatOptions::default().with_number_grouping(NumberGrouping::Thousands);
+        let small = Decimal256Array::from(vec![Some(i256::from_i128(-123_456_789))])
+            .with_precision_and_scale(40, 2)
+            .expect("valid precision and scale for a test literal");
+        assert_eq!(
+            format_value(&small, 0, &grouped).text(),
+            Some("-1\u{a0}234\u{a0}567.89")
+        );
+    }
+
+    /// A MySQL `TIME` renders as MySQL prints it, not as ISO 8601.
+    #[test]
+    fn a_mysql_time_renders_as_hours_minutes_seconds() {
+        let bound = 3_020_399_000_000_i64;
+        let array = DurationMicrosecondArray::from(vec![
+            Some(-bound),
+            Some(bound),
+            Some(0),
+            Some(43_384_500_000),
+            Some(i64::MIN),
+            None,
+            Some(443_045_250_000),
+        ]);
+        let opts = FormatOptions::default();
+        for (row, expected) in [
+            (0, "-838:59:59.000000"),
+            (1, "838:59:59.000000"),
+            (2, "00:00:00.000000"),
+            (3, "12:03:04.500000"),
+            (4, "-2562047788:00:54.775808"),
+            (6, "123:04:05.250000"),
+        ] {
+            assert_eq!(format_value(&array, row, &opts).text(), Some(expected));
+        }
+        assert!(format_value(&array, 5, &opts).is_null());
     }
 
     #[test]

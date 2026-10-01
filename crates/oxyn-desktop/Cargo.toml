@@ -24,6 +24,7 @@ oxyn-core.workspace = true
 oxyn-catalog.workspace = true
 oxyn-data.workspace = true
 oxyn-driver.workspace = true
+oxyn-driver-mysql.workspace = true
 oxyn-driver-postgres.workspace = true
 oxyn-driver-sqlite.workspace = true
 oxyn-exec.workspace = true

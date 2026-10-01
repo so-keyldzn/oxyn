@@ -129,11 +129,23 @@ function DriverSearch({
               <CommandItem
                 key={driver.id}
                 value={driver.id}
-                keywords={[driver.displayName, driver.family]}
+                keywords={[
+                  driver.displayName,
+                  driver.family,
+                  ...driver.aliases,
+                ]}
                 onSelect={() => onChoose(driver)}
               >
                 <DriverLogo driver={driver.id} className="size-4" />
                 <span className="truncate">{driver.displayName}</span>
+                {driver.aliases.length > 0 ? (
+                  <span
+                    className="truncate text-xs text-muted-foreground"
+                    title={driver.aliases.join(", ")}
+                  >
+                    {driver.aliases.join(", ")}
+                  </span>
+                ) : null}
                 <CommandShortcut className="tracking-normal tabular-nums">
                   {reach(driver)}
                 </CommandShortcut>
@@ -263,6 +275,9 @@ export function DriverChoices({
                   </span>
                 </ButtonItemTitle>
                 <ButtonItemDescription className="truncate text-xs tabular-nums">
+                  {driver.aliases.length > 0
+                    ? `${driver.aliases.join(", ")} · `
+                    : ""}
                   {driver.family} · {reach(driver)}
                 </ButtonItemDescription>
               </ButtonItemContent>

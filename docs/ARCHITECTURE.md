@@ -127,7 +127,7 @@ to the webview ([I-03](../CLAUDE.md#i-03)); tests in `ipc.rs` check it.
 
 ## 3. The Cargo workspace
 
-14 crates, as they exist, plus the `apps/desktop` front end
+15 crates, as they exist, plus the `apps/desktop` front end
 ([§2 bis](#2-bis-the-tauri-interface)):
 
 ```
@@ -152,7 +152,9 @@ oxyn/
 │   └── oxyn-desktop/             # `oxyn-desktop` binary: Tauri host and IPC bridge (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embedded
-│   └── oxyn-driver-postgres/     # also covers Redshift, TimescaleDB, pgvector
+│   ├── oxyn-driver-postgres/     # also covers Redshift, TimescaleDB, pgvector
+│   └── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
+│                                 #   oxyn-query to split what MySQL cannot prepare
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/
@@ -1058,8 +1060,8 @@ The phases, their order, their exit gates and the state of each live in
 [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-0--framework), which is authoritative
 on them. This document carried a second split, numbered differently; it was
 removed on 2026-09-25, because two phasings diverge — it was already the case — and
-a reader cannot know which one to believe. The postponement of MySQL/MariaDB and its
-schedule are in
+a reader cannot know which one to believe. The MySQL/MariaDB driver, postponed
+then delivered, is in
 [phase 2 of the plan](IMPLEMENTATION-PLAN.md#phase-2--the-protocols-that-matter); the
 criterion of the 10 M-row `SELECT`, in its
 [phase 1](IMPLEMENTATION-PLAN.md#phase-1--first-visible-path). What its phases
