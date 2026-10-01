@@ -231,9 +231,7 @@ impl Session for MysqlSession {
                     .find(|column| panics_in_binary_protocol(column.column_type()))
                 {
                     let name = column.name_str().into_owned();
-                    if let Some(conn) = lease.conn() {
-                        let _ = conn.close(statement).await;
-                    }
+                    lease.close_statement(statement).await;
                     if limits.read_only {
                         self.restore_read_write(&mut lease).await;
                     }

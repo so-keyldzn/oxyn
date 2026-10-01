@@ -29,6 +29,7 @@ use oxyn_core::StatementIntent;
 use oxyn_core::{CancelToken, Capabilities, ExecRequest, OxynError, PreviewShape, Result};
 
 use crate::connection::{Shared, value_text, value_u64};
+use crate::error::map_exec_error;
 use crate::types::panics_in_binary_protocol;
 use crate::variant::MysqlVariant;
 
@@ -104,6 +105,12 @@ impl MysqlCatalog {
 
     /// Runs one introspection query: prepared, executed with bound values,
     /// closed, and cancellable on the server.
+    ///
+    /// The prepare and the execution are two operations, so that the
+    /// statement outlives an execution that fails or is cancelled: a
+    /// cancellation proven spent keeps the connection (ADR-0050 §7), and a
+    /// statement left open on it would count against
+    /// `max_prepared_stmt_count` until the session ends.
     async fn rows(
         &self,
         sql: &'static str,
@@ -111,48 +118,58 @@ impl MysqlCatalog {
         cancel: &CancelToken,
     ) -> Result<Vec<Vec<Option<Value>>>> {
         let mut lease = self.shared.lease(cancel).await?;
+        let statement = self
+            .shared
+            .prepare(&mut lease, cancel, sql.to_owned())
+            .await?
+            .map_err(|error| map_exec_error(&self.shared.driver, StatementIntent::Read, &error))?;
         let introspected = self
             .shared
-            .run(&mut lease, cancel, StatementIntent::Read, |conn| {
-                Box::pin(async move {
-                    let statement = conn.prep(sql).await?;
-                    let mut result = conn
-                        .exec_iter(&statement, Params::Positional(params))
-                        .await?;
-                    // Reading or draining a row of such a set panics the
-                    // library: it is refused before either, like the cursor's.
-                    if let Some(column) = result
-                        .columns_ref()
-                        .iter()
-                        .find(|column| panics_in_binary_protocol(column.column_type()))
-                    {
-                        return Ok(Introspected::Refused(format!(
-                            "column `{}`, of a type internal to the server",
-                            column.name_str()
-                        )));
-                    }
-                    let rows = result.collect::<Row>().await?;
-                    if !result.is_empty() {
-                        // A second result set was never asked for, and its
-                        // columns are unchecked: it is not drained either.
-                        return Ok(Introspected::Refused("a second result set".to_owned()));
-                    }
-                    drop(result);
-                    conn.close(statement).await?;
-                    Ok(Introspected::Rows(rows))
-                })
+            .run(&mut lease, cancel, StatementIntent::Read, {
+                let statement = statement.clone();
+                move |conn| {
+                    Box::pin(async move {
+                        let mut result = conn
+                            .exec_iter(&statement, Params::Positional(params))
+                            .await?;
+                        // Reading or draining a row of such a set panics the
+                        // library: it is refused before either, like the
+                        // cursor's.
+                        if let Some(column) = result
+                            .columns_ref()
+                            .iter()
+                            .find(|column| panics_in_binary_protocol(column.column_type()))
+                        {
+                            return Ok(Introspected::Refused(format!(
+                                "column `{}`, of a type internal to the server",
+                                column.name_str()
+                            )));
+                        }
+                        let rows = result.collect::<Row>().await?;
+                        if !result.is_empty() {
+                            // A second result set was never asked for, and its
+                            // columns are unchecked: it is not drained either.
+                            return Ok(Introspected::Refused("a second result set".to_owned()));
+                        }
+                        Ok(Introspected::Rows(rows))
+                    })
+                }
             })
-            .await?;
-        match introspected {
-            Introspected::Rows(rows) => Ok(rows.into_iter().map(Row::unwrap_raw).collect()),
-            Introspected::Refused(what) => {
+            .await;
+        let rows = match introspected {
+            Ok(Introspected::Refused(what)) => {
+                // Closing would first drain the pending result, which panics.
                 lease.abandon();
-                Err(OxynError::CatalogUnavailable(format!(
-                    "the server answered an introspection query with {what}; the client library \
-                     cannot read it, and the connection was abandoned"
-                )))
+                return Err(OxynError::CatalogUnavailable(format!(
+                    "the server answered an introspection query with {what}; the client \
+                     library cannot read it, and the connection was abandoned"
+                )));
             }
-        }
+            Ok(Introspected::Rows(rows)) => Ok(rows),
+            Err(error) => Err(error),
+        };
+        lease.close_statement(statement).await;
+        rows.map(|rows| rows.into_iter().map(Row::unwrap_raw).collect())
     }
 
     /// The first row of `SHOW CREATE …`, composed with quoted names.

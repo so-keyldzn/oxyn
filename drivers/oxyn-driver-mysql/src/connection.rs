@@ -247,6 +247,22 @@ impl Link {
         }
     }
 
+    /// Closes a prepared statement, or the connection when that fails.
+    ///
+    /// With the statement cache disabled, closing is the driver's job
+    /// (ADR-0050 §2): a statement left open counts against the server's
+    /// `max_prepared_stmt_count` for the life of the connection. A connection
+    /// that cannot close it is not trusted with the next statement, and
+    /// discarding it frees the statement with it.
+    pub(crate) async fn close_statement(&mut self, statement: Statement) {
+        let Some(conn) = self.conn() else {
+            return;
+        };
+        if conn.close(statement).await.is_err() {
+            self.discard();
+        }
+    }
+
     /// Says goodbye to the server (`COM_QUIT`) and releases the connection.
     ///
     /// # Errors

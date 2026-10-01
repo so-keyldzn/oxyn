@@ -29,8 +29,8 @@
 //! on: 1064 before 1295, read-only refusals, `LOCAL INFILE` refused, zero
 //! dates, `DECIMAL(65,30)`, `BIGINT UNSIGNED`, `VECTOR`, `CALL` with two
 //! result sets, the transaction state, the transaction kept across a proven
-//! kill (ADR-0050 §7 as amended), and the single error of an execution that
-//! loses its transaction.
+//! kill (ADR-0050 §7 as amended), the single error of an execution that loses
+//! its transaction, and the statements an introspection closes.
 
 use std::time::Duration;
 
@@ -1080,6 +1080,59 @@ async fn introspection_walks_databases_relations_and_keys() {
         apply(&*session, sql).await;
     }
     apply(&*session, &format!("DROP TABLE {quoted}")).await;
+    session.close().await.expect("close");
+}
+
+/// The statements prepared on the whole server, read from `observer` — whose
+/// own read is one of them, every time.
+async fn prepared_statements(observer: &dyn Session) -> u64 {
+    let table = if is_mariadb(observer).await {
+        "information_schema.GLOBAL_STATUS"
+    } else {
+        "performance_schema.global_status"
+    };
+    first(
+        observer,
+        &format!("SELECT VARIABLE_VALUE FROM {table} WHERE VARIABLE_NAME = 'Prepared_stmt_count'"),
+    )
+    .await
+    .parse()
+    .expect("a count")
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_failing_introspection_leaves_no_statement_open() {
+    // The execution fails after the prepare, on a connection that is kept:
+    // the statement must be closed all the same, or each failure holds one
+    // against `max_prepared_stmt_count` until the session ends. Counted on
+    // the whole server: run on a server of its own.
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    let connection = first(&*session, "SELECT CONNECTION_ID()").await;
+    let before = prepared_statements(&*observer).await;
+    // Accepted at prepare, refused at execute by both servers (1104).
+    apply(&*session, "SET SESSION max_join_size = 1").await;
+    let database = CatalogPath::for_namespace(None, "t").expect("path");
+    for _ in 0..5 {
+        let refused = session
+            .catalog()
+            .list_relations(&database, &CancelToken::new())
+            .await;
+        assert!(refused.is_err(), "the server refuses the execution");
+    }
+    apply(&*session, "SET SESSION max_join_size = DEFAULT").await;
+    assert_eq!(
+        first(&*session, "SELECT CONNECTION_ID()").await,
+        connection,
+        "the connection was kept through the failures"
+    );
+    assert_eq!(prepared_statements(&*observer).await, before);
+    observer.close().await.expect("close");
     session.close().await.expect("close");
 }
 
