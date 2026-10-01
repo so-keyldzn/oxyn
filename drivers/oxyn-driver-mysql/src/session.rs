@@ -216,15 +216,7 @@ impl Session for MysqlSession {
                 .await?;
         }
 
-        let prepared = self
-            .shared
-            .run_raw(&mut lease, cancel, {
-                // Owned by the future: the operation may outlive this frame's
-                // borrow while a cancellation is settled.
-                let sql = text.clone();
-                move |conn| Box::pin(conn.prep(sql))
-            })
-            .await;
+        let prepared = self.shared.prepare(&mut lease, cancel, text.clone()).await;
         let source = match prepared {
             Err(error) => {
                 if limits.read_only {

@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use futures::future::BoxFuture;
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable as _;
-use mysql_async::{Conn, DriverError, Error as MyError, Opts, Row, Value};
+use mysql_async::{Conn, DriverError, Error as MyError, Opts, Row, Statement, Value};
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
 use oxyn_core::{CancelToken, DriverId, OxynError, Result, StatementIntent, TransactionState};
 use tokio::sync::OwnedMutexGuard;
@@ -201,6 +201,12 @@ impl Link {
             Some(_) => TransactionState::Idle,
             None => TransactionState::Unknown,
         };
+    }
+
+    /// Puts back the state observed before an exchange whose answer the
+    /// library misreads as an OK packet: see [`Shared::prepare`].
+    pub(crate) const fn keep_transaction(&mut self, state: TransactionState) {
+        self.tx = state;
     }
 
     /// Asks the server for its status with `COM_PING`, whose OK packet carries
@@ -446,6 +452,35 @@ impl Shared {
                 Err(OxynError::Cancelled)
             }
         }
+    }
+
+    /// Prepares `sql` as [`Self::run_raw`] runs any operation, without the
+    /// transaction state learning anything from the answer.
+    ///
+    /// The library records the answer to `COM_STMT_PREPARE` as an OK packet
+    /// and reads status flags from the statement's own fields: inside an open
+    /// transaction they say none is open (observed against MySQL 8.4 on
+    /// 2026-10-01). A prepare neither opens nor ends a transaction, so the
+    /// state observed before it stands — otherwise the loss of the
+    /// connection in the statement that follows would be reported as if no
+    /// transaction had been open.
+    ///
+    /// # Errors
+    /// Those of [`Self::run_raw`].
+    pub(crate) async fn prepare(
+        &self,
+        lease: &mut Lease,
+        cancel: &CancelToken,
+        sql: String,
+    ) -> Result<std::result::Result<Statement, MyError>> {
+        let before = lease.transaction();
+        let prepared = self
+            .run_raw(lease, cancel, move |conn| Box::pin(conn.prep(sql)))
+            .await;
+        if matches!(prepared, Ok(Ok(_))) {
+            lease.keep_transaction(before);
+        }
+        prepared
     }
 }
 

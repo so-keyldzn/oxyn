@@ -353,7 +353,7 @@ async fn run(
         binary: matches!(source, Source::Prepared { .. }),
     };
 
-    let (stop, statement) = match lease.conn() {
+    let (stop, statement, sent) = match lease.conn() {
         // Cancelled before anything was sent: nothing runs, nothing to kill.
         Some(_) if pump.cancel.is_cancelled() => (
             Halt::Cancelled,
@@ -361,13 +361,14 @@ async fn run(
                 Source::Prepared { statement, .. } => Some(statement),
                 Source::Text { .. } => None,
             },
+            false,
         ),
         None => {
             pump.fail(OxynError::Connection(
                 "the connection to the server is closed".to_owned(),
             ))
             .await;
-            (Halt::Failed, None)
+            (Halt::Failed, None, false)
         }
         Some(conn) => match source {
             Source::Prepared {
@@ -377,11 +378,11 @@ async fn run(
             } => {
                 let started = conn.exec_iter(&statement, params);
                 let stop = pump.execute(started, call).await;
-                (stop, Some(statement))
+                (stop, Some(statement), true)
             }
             Source::Text { sql } => {
                 let started = conn.query_iter(sql);
-                (pump.execute(started, false).await, None)
+                (pump.execute(started, false).await, None, true)
             }
         },
     };
@@ -396,7 +397,7 @@ async fn run(
     }
 
     let lost = pump
-        .settle_connection(&mut lease, statement, restore_read_write, before)
+        .settle_connection(&mut lease, statement, restore_read_write, before, sent)
         .await;
     drop(lease);
     pump.conclude(stop, lost).await;
@@ -751,6 +752,7 @@ impl Pump {
         statement: Option<Statement>,
         restore_read_write: bool,
         before: TransactionState,
+        sent: bool,
     ) -> bool {
         let unproven = !matches!(self.kill, None | Some(Ok(DrainVerdict::Consumed)));
         if self.poisoned {
@@ -771,7 +773,10 @@ impl Pump {
         if self.kill.is_some() {
             // Consumed: the error packet erased the last status.
             lease.refresh().await;
-        } else {
+        } else if sent {
+            // Unsent, the last packet is still the prepare's, which says
+            // nothing of the transaction (see `Shared::prepare`): the state
+            // observed before stands.
             lease.record_status();
         }
         let mut healthy = true;
