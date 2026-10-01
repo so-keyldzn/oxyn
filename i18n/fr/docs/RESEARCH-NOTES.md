@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0b025c5244ca" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="18f061a5ecd7" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1973,3 +1973,53 @@ exécutés le 2026-09-30 contre `mysql:8.4` (8.4.11), `mysql:9.7` (9.7.2) et
 | `START TRANSACTION` ; `INSERT` d'une ligne ; un long `SELECT` interrompu par `KILL QUERY` ; `COMMIT` sur la même connexion | le `SELECT` échoue en 1317 ; `SERVER_STATUS_IN_TRANS` reste levé ; après `COMMIT` la ligne est là : `KILL QUERY` laisse la transaction ouverte | idem |
 | `KILL QUERY` envoyé avant que le `COM_STMT_EXECUTE` de la victime soit écrit | le kill ne trouve rien à interrompre, et l'instruction s'exécute ensuite jusqu'au bout (8.4.11) | non sondé |
 | Préparer `CALL p()` pour une procédure qui renvoie un jeu de résultats | 0 colonne à la préparation ; les colonnes arrivent avec l'exécution | idem |
+
+### Métadonnées de préparation et état de transaction — observé le 2026-10-01
+
+**Un défaut de `mysql_async` 0.37.1.** Tout paquet lu hors d'un résultat en
+cours passe par `Conn::handle_packet` (`src/conn/mod.rs:874`), qui le lit comme
+un paquet OK et, quand la lecture réussit, le conserve avec `handle_ok`
+(`src/conn/mod.rs:306`). Un `COM_STMT_PREPARE_OK` commence par `0x00` comme un
+paquet OK : il est conservé comme dernier paquet OK, avec des « drapeaux
+d'état » lus dans les octets de l'identifiant de l'instruction et du nombre de
+colonnes. Contre MySQL 8.4.11, une préparation dans une transaction ouverte
+faisait dire à `last_ok_packet()` qu'aucune n'était ouverte. Le driver garde
+l'état observé avant une préparation réussie (`Shared::prepare`), et un
+curseur annulé avant d'avoir envoyé son instruction ne lit pas ce paquet comme
+un état.
+
+**`mysql_async` réécrit les colonnes d'une instruction après son exécution.**
+`Statement::columns()` lu après `exec_iter` renvoie les colonnes de
+l'exécution (`update_columns_metadata`, `src/queryable/stmt.rs:235`) : celles
+de la préparation doivent être lues avant d'exécuter pour les comparer.
+
+Les colonnes de la préparation contre celles de l'exécution, par `Conn::prep`
+puis `exec_iter`, décodées dans les types du driver, sur `mysql:8.4` (8.4.11),
+`mysql:9.7` (9.7.2) et `mariadb:11.8` (11.8.9) :
+
+| Instruction | MySQL 8.4 / 9.7 | MariaDB 11.8 |
+|---|---|---|
+| `SHOW PROCESSLIST`, `SHOW FULL PROCESSLIST`, `SHOW ENGINES`, `SHOW PLUGINS`, `SHOW PRIVILEGES`, `SHOW ENGINE INNODB STATUS`, `SHOW PROFILES` | 0 colonne à la préparation ; 8 (liste des processus), 6, 5, 3, 3, 3 à l'exécution | idem, 9 pour la liste des processus |
+| `OPTIMIZE`, `ANALYZE`, `REPAIR`, `CHECKSUM TABLE`, `EXPLAIN SELECT`, `EXPLAIN FORMAT=JSON`, `SHOW CREATE TABLE`, `SHOW CREATE DATABASE`, `SHOW GRANTS`, `SHOW BINARY LOG STATUS` | 0 colonne à la préparation ; les colonnes à l'exécution (`EXPLAIN` : 12 en 8.4, 1 en 9.7) | identiques à la préparation et à l'exécution |
+| `CHECK TABLE`, `SHOW WARNINGS`, `SHOW ERRORS` | 1295 à la préparation : le protocole texte les exécute | `CHECK TABLE` identique à la préparation et à l'exécution ; `SHOW WARNINGS`, `SHOW ERRORS` : 0 colonne à la préparation, 3 à l'exécution |
+| `SHOW INDEX` | `Seq_in_index` : `Int64` à la préparation, `Int32` à l'exécution | identiques à la préparation et à l'exécution |
+| `SHOW TABLE STATUS` | `Version` : `Int64` à la préparation, `Int32` à l'exécution | identiques à la préparation et à l'exécution |
+| `SELECT ? AS x` exécuté avec un entier | `Text` à la préparation, `Int64` à l'exécution | `Binary` à la préparation, `Int64` à l'exécution ; de même `SELECT ? + 1` (`Float64`) et `COALESCE(?, 1)` (`Int32`) |
+| `SHOW STATUS`, `SHOW VARIABLES`, `SHOW COLLATION`, `SHOW OPEN TABLES`, `SHOW EVENTS`, `SELECT 1` | identiques à la préparation et à l'exécution | identiques |
+
+Le driver apprend donc le schéma de chaque résultat de son exécution, jamais
+de la préparation. `execute` rend la main une fois que le serveur a répondu à
+l'exécution, et le moment diffère selon le serveur : un `COUNT(*)` sur une
+jointure croisée de dix fois dix lignes n'a répondu que lorsque `KILL QUERY`
+l'a terminé, après 4 s, sur MySQL 8.4 et 9.7, de même qu'une jointure à dix
+voies en flux ; une jointure à sept voies de lignes de 200 octets a répondu en
+45 ms. Sur MariaDB, la jointure à dix voies en flux a répondu en 13 ms.
+Jusque-là, l'exécution s'arrête par son jeton.
+
+**Une instruction en échec garde la transaction.** Dans une transaction
+ouverte, un `INSERT` refusé en 1062 à l'exécution et un `SELECT` refusé en
+1146 à la préparation laissent `SERVER_STATUS_IN_TRANS` levé dans le paquet OK
+du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
+sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
+paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
+par `COM_PING`.

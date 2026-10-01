@@ -1964,3 +1964,50 @@ run on 2026-09-30 against `mysql:8.4` (8.4.11), `mysql:9.7` (9.7.2) and
 | `START TRANSACTION`; `INSERT` a row; a long `SELECT` interrupted by `KILL QUERY`; `COMMIT` on the same connection | the `SELECT` fails with 1317; `SERVER_STATUS_IN_TRANS` stays set; after `COMMIT` the row is there: `KILL QUERY` leaves the transaction open | same |
 | `KILL QUERY` sent before the victim's `COM_STMT_EXECUTE` is written | the kill finds nothing to interrupt, and the statement then runs to its end (8.4.11) | not probed |
 | Prepare `CALL p()` for a procedure that returns a result set | 0 columns at prepare; the columns arrive with the execute | same |
+
+### Prepare metadata and transaction status — observed on 2026-10-01
+
+**A `mysql_async` 0.37.1 defect.** Every packet read outside a pending result
+goes through `Conn::handle_packet` (`src/conn/mod.rs:874`), which parses it as
+an OK packet and, when that succeeds, stores it with `handle_ok`
+(`src/conn/mod.rs:306`). A `COM_STMT_PREPARE_OK` starts with `0x00` like an OK
+packet: it is stored as the last OK packet, with "status flags" read from the
+statement id and column count bytes. Against MySQL 8.4.11, a prepare inside an
+open transaction made `last_ok_packet()` say none was open. The driver keeps
+the state observed before a successful prepare (`Shared::prepare`), and a
+cursor cancelled before it sent its statement does not read that packet as a
+status.
+
+**`mysql_async` rewrites a statement's columns after its execution.**
+`Statement::columns()` read after `exec_iter` returns the execution's columns
+(`update_columns_metadata`, `src/queryable/stmt.rs:235`): the prepare's must be
+read before executing to compare them.
+
+The prepare's columns against the execution's, through `Conn::prep` then
+`exec_iter`, decoded into the driver's types, on `mysql:8.4` (8.4.11),
+`mysql:9.7` (9.7.2) and `mariadb:11.8` (11.8.9):
+
+| Statement | MySQL 8.4 / 9.7 | MariaDB 11.8 |
+|---|---|---|
+| `SHOW PROCESSLIST`, `SHOW FULL PROCESSLIST`, `SHOW ENGINES`, `SHOW PLUGINS`, `SHOW PRIVILEGES`, `SHOW ENGINE INNODB STATUS`, `SHOW PROFILES` | 0 columns at prepare; 8 (processlist), 6, 5, 3, 3, 3 at execution | same, 9 for the process list |
+| `OPTIMIZE`, `ANALYZE`, `REPAIR`, `CHECKSUM TABLE`, `EXPLAIN SELECT`, `EXPLAIN FORMAT=JSON`, `SHOW CREATE TABLE`, `SHOW CREATE DATABASE`, `SHOW GRANTS`, `SHOW BINARY LOG STATUS` | 0 columns at prepare; the columns at execution (`EXPLAIN`: 12 on 8.4, 1 on 9.7) | identical at prepare and execution |
+| `CHECK TABLE`, `SHOW WARNINGS`, `SHOW ERRORS` | 1295 at prepare: the text protocol runs them | `CHECK TABLE` identical at prepare and execution; `SHOW WARNINGS`, `SHOW ERRORS`: 0 columns at prepare, 3 at execution |
+| `SHOW INDEX` | `Seq_in_index`: `Int64` at prepare, `Int32` at execution | identical at prepare and execution |
+| `SHOW TABLE STATUS` | `Version`: `Int64` at prepare, `Int32` at execution | identical at prepare and execution |
+| `SELECT ? AS x` executed with an integer | `Text` at prepare, `Int64` at execution | `Binary` at prepare, `Int64` at execution; also `SELECT ? + 1` (`Float64`) and `COALESCE(?, 1)` (`Int32`) |
+| `SHOW STATUS`, `SHOW VARIABLES`, `SHOW COLLATION`, `SHOW OPEN TABLES`, `SHOW EVENTS`, `SELECT 1` | identical at prepare and execution | identical |
+
+The driver therefore learns every result's schema from its execution, never
+from the prepare. `execute` returns once the server answered the execution,
+and the moment differs per server: a `COUNT(*)` over a ten-way cross join of
+ten rows answered only when `KILL QUERY` ended it, after 4 s, on MySQL 8.4 and
+9.7, as did a streaming ten-way join; a seven-way join of 200-byte rows
+answered in 45 ms. On MariaDB the streaming ten-way join answered in 13 ms.
+Until then, the execution is stopped through its token.
+
+**A failing statement keeps the transaction.** In an open transaction, an
+`INSERT` refused with 1062 at execution and a `SELECT` refused with 1146 at
+prepare leave `SERVER_STATUS_IN_TRANS` set in the next `COM_PING` OK packet,
+and the row inserted before them is there after `COMMIT`, on all three
+servers. `mysql_async` forgets the last OK packet on an error packet
+(`handle_err`, `src/conn/mod.rs:313`): the driver asks again with `COM_PING`.
