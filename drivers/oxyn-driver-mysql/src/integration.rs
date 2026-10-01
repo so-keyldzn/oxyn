@@ -31,7 +31,8 @@
 //! result sets, the transaction state, the transaction kept across a proven
 //! kill (ADR-0050 §7 as amended), the single error of an execution that loses
 //! its transaction, the statements an introspection closes, the columns only
-//! the execution gives, and the transaction kept across a failing statement.
+//! the execution gives, the transaction kept across a failing statement, and
+//! the bound on a kill the server accepts and never answers.
 
 use std::time::Duration;
 
@@ -1408,4 +1409,115 @@ async fn a_failing_statement_keeps_the_open_transaction() {
     apply(&*session, "DROP TABLE oxyn_tx_failing").await;
     observer.close().await.expect("close");
     session.close().await.expect("close");
+}
+
+/// Relays one connection to `upstream`, until the client sends a `KILL`: from
+/// then on nothing more is forwarded, either way, and the sockets stay open.
+/// The server accepted the connection and the login, then answers nothing —
+/// what no real server can be asked to do on cue. `stalled` says the `KILL`
+/// was reached. Plain text only: the relay reads the packets.
+async fn relay_until_kill(
+    client: tokio::net::TcpStream,
+    upstream: tokio::net::TcpStream,
+    stalled: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<()> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let (mut from_client, mut to_client) = client.into_split();
+    let (mut from_server, mut to_server) = upstream.into_split();
+    let answers = tokio::io::copy(&mut from_server, &mut to_client);
+    let requests = async {
+        let mut pending = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = from_client.read(&mut chunk).await?;
+            if read == 0 {
+                return Ok(());
+            }
+            pending.extend_from_slice(chunk.get(..read).unwrap_or_default());
+            while let Some(length) = whole_packet(&pending) {
+                let packet: Vec<u8> = pending.drain(..length).collect();
+                // Four header bytes, then `COM_QUERY` (3) and its text.
+                if packet.get(4..9) == Some(b"\x03KILL".as_slice()) {
+                    stalled.store(true, std::sync::atomic::Ordering::SeqCst);
+                    std::future::pending::<()>().await;
+                }
+                to_server.write_all(&packet).await?;
+            }
+        }
+    };
+    let (answered, requested) = tokio::join!(answers, requests);
+    answered.and(requested)
+}
+
+/// The length of the first complete packet of `bytes`, header included.
+fn whole_packet(bytes: &[u8]) -> Option<usize> {
+    let [low, middle, high, _sequence, ..] = *bytes else {
+        return None;
+    };
+    let length = 4 + (usize::from(low) | usize::from(middle) << 8 | usize::from(high) << 16);
+    (bytes.len() >= length).then_some(length)
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_kill_the_server_never_answers_ends_within_its_bound() {
+    let Some((mut config, credentials)) = target() else {
+        eprintln!("{VARIABLE} is not set: test skipped");
+        return;
+    };
+    let host = config.params.get("host").cloned().unwrap_or_default();
+    let port = config.params.get("port").cloned().unwrap_or_default();
+    let upstream = format!("{host}:{port}");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a local port");
+    let relay_port = listener.local_addr().expect("a bound listener").port();
+    let stalled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let relay = tokio::spawn({
+        let stalled = std::sync::Arc::clone(&stalled);
+        async move {
+            let (client, _) = listener.accept().await?;
+            let upstream = tokio::net::TcpStream::connect(upstream).await?;
+            relay_until_kill(client, upstream, &stalled).await
+        }
+    });
+    config
+        .params
+        .insert("host".to_owned(), "127.0.0.1".to_owned());
+    config
+        .params
+        .insert("port".to_owned(), relay_port.to_string());
+    config
+        .params
+        .insert("sslmode".to_owned(), "disable".to_owned());
+    let spec = crate::options::ConnectSpec::from_config(
+        &crate::driver::mysql_metadata(),
+        &config,
+        &credentials,
+    )
+    .expect("the test configuration, moved to the relay");
+    let bound = Duration::from_secs(2);
+    let killer = crate::cancel::Killer::new(spec, DriverId::mysql()).within(bound);
+
+    let started = std::time::Instant::now();
+    // The id is never read: the relay keeps the `KILL` from the server.
+    let issue = killer.kill_query(1).await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        stalled.load(std::sync::atomic::Ordering::SeqCst),
+        "the killing connection logged in and sent its KILL through the relay"
+    );
+    assert!(
+        elapsed < bound + Duration::from_secs(1),
+        "the kill ends with its bound, not with the server: {elapsed:?}"
+    );
+    let error = refusal(issue, "a KILL nobody answers is not a success");
+    assert!(
+        matches!(error, OxynError::Timeout { .. }),
+        "an unanswered KILL may have been applied: {error}"
+    );
+    assert_eq!(error.class(), ErrorClass::Ambiguous);
+    relay.abort();
 }

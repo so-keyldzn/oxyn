@@ -30,6 +30,7 @@ use std::time::Duration;
 use mysql_async::prelude::Queryable as _;
 use oxyn_core::{CancelToken, DriverId, OxynError, Result, StatementHandle, StatementIntent};
 use tokio::sync::watch;
+use tokio::time::{Instant, timeout_at};
 
 use crate::connection::connect_bare;
 use crate::error::map_exec_error;
@@ -42,8 +43,14 @@ use crate::options::ConnectSpec;
 /// connection is closed rather than trusted.
 pub(crate) const DRAIN_BOUND: Duration = Duration::from_secs(5);
 
-/// How long opening the killing connection may take.
-const KILL_CONNECT_BOUND: Duration = Duration::from_secs(10);
+/// How long a whole kill may take: opening the killing connection, sending
+/// `KILL`, and closing that connection.
+///
+/// One deadline for the three steps, not one per step: a server that accepts
+/// the connection and then stops answering would otherwise hold
+/// `Session::cancel`, the executor's timeout and the session's connection
+/// forever, the stream task waiting on the kill while it holds it.
+const KILL_BOUND: Duration = Duration::from_secs(10);
 
 /// Was the kill's effect observed on the targeted statement?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,19 +70,35 @@ pub(crate) enum DrainVerdict {
 pub(crate) struct Killer {
     spec: ConnectSpec,
     driver: DriverId,
+    bound: Duration,
 }
 
 impl Killer {
     pub(crate) const fn new(spec: ConnectSpec, driver: DriverId) -> Self {
-        Self { spec, driver }
+        Self {
+            spec,
+            driver,
+            bound: KILL_BOUND,
+        }
+    }
+
+    /// The same killer with a shorter bound, so a test proves it without
+    /// waiting [`KILL_BOUND`].
+    #[cfg(test)]
+    pub(crate) const fn within(mut self, bound: Duration) -> Self {
+        self.bound = bound;
+        self
     }
 
     /// Checks that a second connection of this account opens, which is what
     /// `SERVER_SIDE_CANCEL` promises (ADR-0050 §7).
     pub(crate) async fn probe(&self) -> bool {
-        match tokio::time::timeout(KILL_CONNECT_BOUND, connect_bare(&self.spec)).await {
+        let deadline = Instant::now() + self.bound;
+        match timeout_at(deadline, connect_bare(&self.spec)).await {
             Ok(Ok(conn)) => {
-                let _ = conn.disconnect().await;
+                // The connection opened: that is the answer. A close that
+                // stalls only drops it unacknowledged.
+                let _ = timeout_at(deadline, conn.disconnect()).await;
                 true
             }
             _ => false,
@@ -92,7 +115,10 @@ impl Killer {
     ///
     /// # Errors
     /// [`OxynError::Connection`] if the second connection does not open in
-    /// time, or the server's refusal.
+    /// time; [`OxynError::Timeout`] — ambiguous — if the server does not
+    /// answer the `KILL` itself in time: it may or may not have applied it,
+    /// so the caller treats the kill as unproven, never as done; or the
+    /// server's refusal.
     pub(crate) async fn kill_query(&self, id: u64) -> Result<()> {
         self.send(kill_statement(id)).await
     }
@@ -113,16 +139,22 @@ impl Killer {
     }
 
     async fn send(&self, statement: String) -> Result<()> {
-        let mut conn = tokio::time::timeout(KILL_CONNECT_BOUND, connect_bare(&self.spec))
+        let deadline = Instant::now() + self.bound;
+        let mut conn = timeout_at(deadline, connect_bare(&self.spec))
             .await
             .map_err(|_| {
                 OxynError::Connection(
                     "the connection that sends KILL did not open in time".to_owned(),
                 )
             })??;
-        let issue = conn.query_drop(statement).await;
-        // Closed in every case: it has no further use.
-        let _ = conn.disconnect().await;
+        let Ok(issue) = timeout_at(deadline, conn.query_drop(statement)).await else {
+            // The `KILL` left: the server may have applied it. Dropping the
+            // connection gives it up without waiting for a polite close.
+            return Err(OxynError::Timeout { after: self.bound });
+        };
+        // Closed in every case, it has no further use — but never past the
+        // deadline: the answer to the kill is known, the close adds nothing.
+        let _ = timeout_at(deadline, conn.disconnect()).await;
         issue.map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, &error))
     }
 }
