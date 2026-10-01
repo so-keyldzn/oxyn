@@ -517,6 +517,9 @@ fn micros_since_epoch(value: &Value) -> Result<i64, Refusal> {
     Ok(NaiveDateTime::new(date, time).and_utc().timestamp_micros())
 }
 
+/// The largest `TIME` magnitude MySQL and MariaDB store, `838:59:59.000000`.
+const MAX_TIME_MICROS: u64 = (838 * 3_600 + 59 * 60 + 59) * 1_000_000;
+
 /// A `TIME` as signed microseconds: its range is ±838:59:59, not a day.
 fn time_micros(value: &Value) -> Result<i64, Refusal> {
     let (negative, hours, minutes, seconds, micros) = match value {
@@ -537,6 +540,11 @@ fn time_micros(value: &Value) -> Result<i64, Refusal> {
             (negative, u64::from(hours), minutes, seconds, micros)
         }
     };
+    // Out-of-range components are refused rather than carried: the arithmetic
+    // below would turn `00:60:00` into a plausible `01:00:00`.
+    if minutes > 59 || seconds > 59 || micros > 999_999 {
+        return Err(NOT_A_TIME);
+    }
     let total = hours
         .checked_mul(3_600)
         .and_then(|s| s.checked_add(u64::from(minutes).checked_mul(60)?))
@@ -544,6 +552,9 @@ fn time_micros(value: &Value) -> Result<i64, Refusal> {
         .and_then(|s| s.checked_mul(1_000_000))
         .and_then(|us| us.checked_add(u64::from(micros)))
         .ok_or(NOT_A_TIME)?;
+    if total > MAX_TIME_MICROS {
+        return Err(NOT_A_TIME);
+    }
     let magnitude = i64::try_from(total).map_err(|_| NOT_A_TIME)?;
     Ok(if negative { -magnitude } else { magnitude })
 }
@@ -643,6 +654,28 @@ mod tests {
                 .downcast_ref::<DurationMicrosecondArray>()
                 .expect("Duration");
             assert_eq!(column.value(0), expected);
+        }
+    }
+
+    #[test]
+    fn a_malformed_time_is_refused_rather_than_normalized() {
+        // `00:60:00` must not become `01:00:00`, nor `839:00:00` a duration
+        // MySQL cannot store: a broken server is reported, not rewritten.
+        for value in [
+            Value::Time(false, 0, 0, 60, 0, 0),
+            Value::Time(false, 0, 0, 0, 60, 0),
+            Value::Time(false, 0, 0, 0, 0, 1_000_000),
+            Value::Time(false, 34, 23, 0, 0, 0),
+            Value::Time(true, 34, 22, 59, 59, 1),
+            Value::Bytes(b"00:60:00".to_vec()),
+            Value::Bytes(b"00:00:60".to_vec()),
+            Value::Bytes(b"839:00:00".to_vec()),
+            Value::Bytes(b"-838:59:59.000001".to_vec()),
+        ] {
+            assert!(
+                one(MyDecoding::Time, value.clone()).is_err(),
+                "{value:?} must be refused"
+            );
         }
     }
 
