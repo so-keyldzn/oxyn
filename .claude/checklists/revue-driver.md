@@ -11,7 +11,9 @@ failure that will not show in tests.
 - [ ] It really is a new **protocol**, and not a product speaking an already
       implemented protocol (Redshift ≡ PostgreSQL, MariaDB ≡ MySQL, OpenSearch ≡
       Elasticsearch)
-- [ ] The crate only depends on `oxyn-core`, `oxyn-driver`, `oxyn-data` and `oxyn-catalog`
+- [ ] The crate only depends on `oxyn-core`, `oxyn-driver`, `oxyn-data` and `oxyn-catalog`,
+      plus `oxyn-query` only to split what the server cannot prove to be a single
+      statement ([ADR-0050](../../docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md))
 - [ ] No dependency on another driver
 
 ## Robustness

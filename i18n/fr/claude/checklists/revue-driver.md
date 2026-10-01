@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/checklists/revue-driver.md" sha256="034b54504d87" -->
+<!-- oxyn-translation source=".claude/checklists/revue-driver.md" sha256="dbc4e7b77b7f" -->
 
 > Traduction française de [.claude/checklists/revue-driver.md](../../../../.claude/checklists/revue-driver.md). **La version anglaise fait foi.**
 
@@ -15,7 +15,9 @@ correspond à une panne qui ne se verra pas en test.
 - [ ] C'est bien un **protocole** nouveau, et non un produit parlant un protocole
       déjà implémenté (Redshift ≡ PostgreSQL, MariaDB ≡ MySQL, OpenSearch ≡
       Elasticsearch)
-- [ ] La crate ne dépend que d'`oxyn-core`, `oxyn-driver`, `oxyn-data` et `oxyn-catalog`
+- [ ] La crate ne dépend que d'`oxyn-core`, `oxyn-driver`, `oxyn-data` et `oxyn-catalog`,
+      plus `oxyn-query` seulement pour découper ce que le serveur ne peut pas prouver
+      être une seule instruction ([ADR-0050](../../../../docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md))
 - [ ] Aucune dépendance vers un autre driver
 
 ## Robustesse
