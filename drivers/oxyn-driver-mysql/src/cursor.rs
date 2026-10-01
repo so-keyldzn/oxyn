@@ -49,7 +49,7 @@ use crate::connection::Lease;
 use crate::decode::BatchAssembler;
 use crate::error::{Bound, MysqlError, is_query_interrupted, map_stream_error};
 use crate::session::SQL_READ_WRITE;
-use crate::types::{MyDecoding, panics_in_binary_protocol, schema_for, type_name};
+use crate::types::{panics_in_binary_protocol, schema_for, type_name};
 
 /// Accumulated bytes beyond which a batch is closed and emitted — in bytes,
 /// not rows: a thousand one-megabyte BLOBs make a gigabyte.
@@ -200,7 +200,7 @@ impl MysqlCursor {
 
 /// Where an execution's rows come from.
 pub(crate) enum Source {
-    /// The prepared statement (ADR-0050 §2), which gave the schema.
+    /// The prepared statement (ADR-0050 §2).
     Prepared {
         statement: Statement,
         params: Params,
@@ -208,7 +208,7 @@ pub(crate) enum Source {
         call: bool,
     },
     /// The text protocol, after a 1295 on a text split into exactly one
-    /// statement (ADR-0050 §3). The schema is learnt from the result.
+    /// statement (ADR-0050 §3).
     Text { sql: String },
 }
 
@@ -219,8 +219,6 @@ pub(crate) struct StreamRequest {
     pub(crate) lease: Lease,
     pub(crate) source: Source,
     pub(crate) bound: Bound,
-    pub(crate) schema: SchemaRef,
-    pub(crate) decodings: Vec<MyDecoding>,
     pub(crate) limits: ExecLimits,
     pub(crate) intent: StatementIntent,
     /// Was `SET SESSION TRANSACTION READ ONLY` issued for this execution?
@@ -231,23 +229,20 @@ pub(crate) struct StreamRequest {
     pub(crate) handle: StatementHandle,
 }
 
-/// Starts the stream and returns the cursor that drains it.
+/// Starts the stream and returns the cursor that drains it, once the server
+/// answered the execution: its first result set's columns are the schema, and
+/// a statement without one leaves it empty.
 ///
-/// A prepared statement already gave the schema: the call returns at once. The
-/// text protocol gives it with the result: the call waits for it.
+/// The schema is never taken from the prepare. MySQL announces no columns at
+/// prepare for `SHOW PROCESSLIST`, `OPTIMIZE TABLE`, `EXPLAIN` and others, and
+/// other types than the rows carry for `SHOW INDEX` or a `SELECT ?` bound to a
+/// number; MariaDB does the same for some (RESEARCH-NOTES, 2026-10-01). The
+/// execution's columns are what the rows are, so they alone describe them.
 pub(crate) async fn spawn(request: StreamRequest, cancel: CancelToken) -> MysqlCursor {
     let (send, reception) = mpsc::channel(1);
-    let schema = SchemaRef::clone(&request.schema);
     let handle = request.handle;
     let token = cancel.clone();
-    let (schema_sender, schema_reception) = match request.source {
-        // A `CALL` prepares without columns: the procedure's result says them.
-        Source::Prepared { call: false, .. } => (None, None),
-        Source::Prepared { call: true, .. } | Source::Text { .. } => {
-            let (sender, reception) = oneshot::channel();
-            (Some(sender), Some(reception))
-        }
-    };
+    let (schema_sender, schema_reception) = oneshot::channel();
 
     let task = tokio::spawn(async move {
         run(request, token, send, schema_sender).await;
@@ -255,8 +250,8 @@ pub(crate) async fn spawn(request: StreamRequest, cancel: CancelToken) -> MysqlC
 
     let mut cursor = MysqlCursor {
         handle,
-        projects_columns: !schema.fields().is_empty(),
-        schema,
+        projects_columns: false,
+        schema: Arc::new(arrow::datatypes::Schema::empty()),
         events: reception,
         cancel,
         task,
@@ -264,17 +259,12 @@ pub(crate) async fn spawn(request: StreamRequest, cancel: CancelToken) -> MysqlC
         started: Instant::now(),
         finished: false,
     };
-    if let Some(reception) = schema_reception
-        && let Ok((learnt, _)) = reception.await
-    {
+    if let Ok(learnt) = schema_reception.await {
         cursor.projects_columns = !learnt.fields().is_empty();
         cursor.schema = learnt;
     }
     cursor
 }
-
-/// The schema a result gives, and how its values are decoded.
-type LearntSchema = (SchemaRef, Vec<MyDecoding>);
 
 /// The state of the stream loop, handed from stage to stage.
 struct Pump {
@@ -282,9 +272,8 @@ struct Pump {
     cancel: CancelToken,
     deadline: Option<tokio::time::Instant>,
     events: mpsc::Sender<CursorEvent>,
-    schema_sender: Option<oneshot::Sender<LearntSchema>>,
+    schema_sender: Option<oneshot::Sender<SchemaRef>>,
     assembler: BatchAssembler,
-    decodings: Vec<MyDecoding>,
     limits: ExecLimits,
     intent: StatementIntent,
     bound: Bound,
@@ -316,15 +305,13 @@ async fn run(
     request: StreamRequest,
     cancel: CancelToken,
     events: mpsc::Sender<CursorEvent>,
-    schema_sender: Option<oneshot::Sender<LearntSchema>>,
+    schema_sender: oneshot::Sender<SchemaRef>,
 ) {
     let StreamRequest {
         driver,
         mut lease,
         source,
         bound,
-        schema,
-        decodings,
         limits,
         intent,
         restore_read_write,
@@ -342,9 +329,8 @@ async fn run(
             .timeout
             .map(|duration| tokio::time::Instant::now() + duration),
         events,
-        schema_sender,
-        assembler: BatchAssembler::new(schema, &decodings),
-        decodings,
+        schema_sender: Some(schema_sender),
+        assembler: BatchAssembler::new(Arc::new(arrow::datatypes::Schema::empty()), &[]),
         limits,
         intent,
         bound,
@@ -517,10 +503,10 @@ impl Pump {
                     return reason;
                 }
                 Flow::KillFailed(reason) => return reason,
-                Flow::Refuse { error, close } => {
+                Flow::Refuse(error) => {
                     let until = tokio::time::Instant::now() + DRAIN_BOUND;
                     let _ = drain_all(&mut result, until, self.binary).await;
-                    self.close |= close;
+                    self.close = true;
                     self.fail(error);
                     return Halt::Failed;
                 }
@@ -559,17 +545,14 @@ impl Pump {
             self.extra_sets = self.extra_sets.saturating_add(1);
             if !call {
                 // ADR-0050 §5: the server ran more than Oxyn sent.
-                return Flow::Refuse {
-                    error: OxynError::driver(
-                        self.driver.clone(),
-                        ErrorClass::Permanent,
-                        MysqlError::protocol(
-                            "the server returned a second result for a single statement: it \
-                             ran more than Oxyn sent; the connection was closed",
-                        ),
+                return Flow::Refuse(OxynError::driver(
+                    self.driver.clone(),
+                    ErrorClass::Permanent,
+                    MysqlError::protocol(
+                        "the server returned a second result for a single statement: it ran \
+                         more than Oxyn sent; the connection was closed",
                     ),
-                    close: true,
-                };
+                ));
             }
             // A procedure's further result: counted, not shown.
             return match self.skip_set(set).await {
@@ -581,20 +564,7 @@ impl Pump {
         if let Some(sender) = self.schema_sender.take() {
             let (learnt, plan) = schema_for(columns);
             self.assembler = BatchAssembler::new(SchemaRef::clone(&learnt), &plan);
-            self.decodings.clone_from(&plan);
-            let _ = sender.send((learnt, plan));
-        } else if !plan_matches(&self.decodings, columns) {
-            return Flow::Refuse {
-                error: OxynError::driver(
-                    self.driver.clone(),
-                    ErrorClass::Permanent,
-                    MysqlError::protocol(
-                        "the result's columns changed between prepare and execute; run the \
-                         statement again",
-                    ),
-                ),
-                close: false,
-            };
+            let _ = sender.send(learnt);
         }
         match self.rows(set).await {
             Ok(()) => Flow::Shown,
@@ -914,12 +884,6 @@ fn terminal_error(
     }
 }
 
-/// Does a result set's column list still match the plan decided at prepare?
-fn plan_matches(plan: &[MyDecoding], columns: &[mysql_async::Column]) -> bool {
-    let (_, actual) = schema_for(columns);
-    actual == plan
-}
-
 /// Refuses a binary result set carrying a type the library panics on.
 fn refuse_internal_types(columns: &[mysql_async::Column], binary: bool) -> Option<OxynError> {
     if !binary {
@@ -1027,9 +991,8 @@ enum Flow {
     Killed(Halt, Option<DrainVerdict>),
     /// The kill could not go out.
     KillFailed(Halt),
-    /// The result is refused: drain it, emit the error, and close the
-    /// connection when `close`.
-    Refuse { error: OxynError, close: bool },
+    /// The result is refused: drain it, emit the error, close the connection.
+    Refuse(OxynError),
 }
 
 /// What emitting a batch gave.
@@ -1087,26 +1050,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_plan_decided_at_prepare_is_compared_with_the_executed_columns() {
-        let columns = [Column::new(ColumnType::MYSQL_TYPE_LONGLONG)];
-        let (_, plan) = schema_for(&columns);
-        assert!(plan_matches(&plan, &columns));
-        assert!(!plan_matches(
-            &plan,
-            &[Column::new(ColumnType::MYSQL_TYPE_DOUBLE)]
-        ));
-        assert!(!plan_matches(&plan, &[]));
-    }
-
-    /// A pump as `run` builds it for a statement whose schema comes with its
-    /// result — the text protocol, or a prepared `CALL`.
+    /// A pump as `run` builds it, before the result gave its schema.
     fn pump_awaiting_its_schema(
         intent: StatementIntent,
     ) -> (
         Pump,
         mpsc::Receiver<CursorEvent>,
-        oneshot::Receiver<LearntSchema>,
+        oneshot::Receiver<SchemaRef>,
     ) {
         let spec = crate::options::ConnectSpec::from_config(
             &crate::driver::mysql_metadata(),
@@ -1126,7 +1076,6 @@ mod tests {
             events,
             schema_sender: Some(schema_sender),
             assembler: BatchAssembler::new(Arc::new(arrow::datatypes::Schema::empty()), &[]),
-            decodings: Vec::new(),
             limits: ExecLimits::default(),
             intent,
             bound: Bound::Internal,

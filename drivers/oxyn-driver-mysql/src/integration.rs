@@ -30,7 +30,8 @@
 //! dates, `DECIMAL(65,30)`, `BIGINT UNSIGNED`, `VECTOR`, `CALL` with two
 //! result sets, the transaction state, the transaction kept across a proven
 //! kill (ADR-0050 §7 as amended), the single error of an execution that loses
-//! its transaction, and the statements an introspection closes.
+//! its transaction, the statements an introspection closes, and the columns
+//! only the execution gives.
 
 use std::time::Duration;
 
@@ -58,11 +59,54 @@ const DIGITS: &str = "WITH d AS (SELECT 0 AS i UNION ALL SELECT 1 UNION ALL SELE
      UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9)";
 
 /// A statement that runs for minutes, marked so the process list finds it.
+///
+/// An aggregate: its columns come with its only row, at the end — MySQL sends
+/// nothing before, so `execute` waits until then.
 fn long_count() -> String {
     format!(
         "{DIGITS} SELECT COUNT(*) AS oxyn_long_marker \
          FROM d a, d b, d c, d e, d f, d g, d h, d j, d k, d l"
     )
+}
+
+/// Two gigabytes of rows that start at once: `execute` returns with their
+/// columns, and the server then waits on the reader. Marked as
+/// [`long_count`].
+fn long_rows() -> String {
+    format!(
+        "{DIGITS} SELECT a.i, REPEAT('x', 200) AS oxyn_long_marker \
+         FROM d a, d b, d c, d e, d f, d g, d h"
+    )
+}
+
+/// The batches a cursor still holds, then the error it ends on.
+async fn end_of(cursor: &mut Box<dyn oxyn_driver::Cursor>) -> Result<(), OxynError> {
+    while cursor.next_batch().await?.is_some() {}
+    Ok(())
+}
+
+/// Runs `request` and fires its execution token once `observer` saw the
+/// long statement run — while `execute` may still wait for the result's
+/// columns, which is when the interface's Stop reaches it. Returns how many
+/// long statements ran, and how the execution ended.
+async fn cancel_through_the_token(
+    session: &dyn Session,
+    observer: &dyn Session,
+    request: ExecRequest,
+) -> (u64, Result<(), OxynError>) {
+    let token = CancelToken::new();
+    let executing = async {
+        let mut cursor = session.execute(request, &token).await?;
+        end_of(&mut cursor).await
+    };
+    let cancelling = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let running = running_long(observer).await;
+        token.cancel();
+        running
+    };
+    let (ended, running) = futures::future::join(executing, cancelling).await;
+    (running, ended)
 }
 
 /// The test configuration, or `None` when no server is declared.
@@ -291,15 +335,16 @@ async fn cancellation_stops_the_statement_in_the_server_process_list() {
         return;
     };
     let before = first(&*session, "SELECT CONNECTION_ID()").await;
+    // Through the handle, once the rows flow.
     let mut cursor = session
-        .execute(read_request(&long_count()), &CancelToken::new())
+        .execute(read_request(&long_rows()), &CancelToken::new())
         .await
         .expect("execution");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(running_long(&*observer).await, 1, "the statement runs");
 
     session.cancel(cursor.handle()).await.expect("cancellation");
-    let issue = cursor.next_batch().await;
+    let issue = end_of(&mut cursor).await;
     assert!(
         matches!(issue, Err(ref error) if error.is_cancelled()),
         "the cursor reports the cancellation: {issue:?}"
@@ -310,7 +355,20 @@ async fn cancellation_stops_the_statement_in_the_server_process_list() {
         0,
         "the server still runs the cancelled statement"
     );
-    // The kill was proven spent (1317): the connection was kept.
+    // Through the token, before the result gave its columns.
+    let (running, issue) =
+        cancel_through_the_token(&*session, &*observer, read_request(&long_count())).await;
+    assert_eq!(running, 1, "the aggregate runs");
+    assert!(
+        matches!(issue, Err(ref error) if error.is_cancelled()),
+        "the execution reports the cancellation: {issue:?}"
+    );
+    assert_eq!(
+        settled_long(&*observer).await,
+        0,
+        "the server still runs the cancelled aggregate"
+    );
+    // Both kills were proven spent (1317): the connection was kept.
     assert_eq!(first(&*session, "SELECT CONNECTION_ID()").await, before);
     observer.close().await.expect("close");
     session.close().await.expect("close");
@@ -327,7 +385,7 @@ async fn dropping_cursors_stops_their_statements() {
     };
     for _ in 0..5 {
         let cursor = session
-            .execute(read_request(&long_count()), &CancelToken::new())
+            .execute(read_request(&long_rows()), &CancelToken::new())
             .await
             .expect("execution");
         drop(cursor);
@@ -358,12 +416,12 @@ async fn a_cancelled_statement_keeps_the_open_transaction() {
     apply(&*session, "INSERT INTO oxyn_tx_cancel VALUES (1)").await;
     // Not bounded to read-only: that bound is refused inside a transaction.
     let mut cursor = session
-        .execute(write_request(&long_count()), &CancelToken::new())
+        .execute(write_request(&long_rows()), &CancelToken::new())
         .await
         .expect("execution");
     tokio::time::sleep(Duration::from_millis(300)).await;
     session.cancel(cursor.handle()).await.expect("cancellation");
-    assert!(cursor.next_batch().await.is_err());
+    assert!(end_of(&mut cursor).await.is_err());
     drop(cursor);
     assert_eq!(
         session.transaction_state(&CancelToken::new()).await,
@@ -897,19 +955,21 @@ async fn the_transaction_state_is_the_servers() {
     assert_eq!(state().await, TransactionState::Idle, "after rollback");
 
     // An interrupted autocommit write: the server rolled the statement back.
+    // A write answers only once done: its token stops it.
+    let Some(observer) = self::session().await else {
+        return;
+    };
     apply(&*session, "DROP TABLE IF EXISTS oxyn_tx_write").await;
     apply(&*session, "CREATE TABLE oxyn_tx_write (n BIGINT)").await;
     let long_write = format!(
-        "INSERT INTO oxyn_tx_write {DIGITS} SELECT a.i FROM d a, d b, d c, d e, d f, d g, d h, d j"
+        "INSERT INTO oxyn_tx_write {DIGITS} SELECT a.i AS oxyn_long_marker \
+         FROM d a, d b, d c, d e, d f, d g, d h, d j"
     );
-    let mut cursor = session
-        .execute(write_request(&long_write), &CancelToken::new())
-        .await
-        .expect("execution");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    session.cancel(cursor.handle()).await.expect("cancellation");
-    assert!(cursor.next_batch().await.is_err());
-    drop(cursor);
+    let (running, issue) =
+        cancel_through_the_token(&*session, &*observer, write_request(&long_write)).await;
+    assert_eq!(running, 1, "the write runs");
+    assert!(issue.is_err(), "the write was interrupted");
+    observer.close().await.expect("close");
     assert_eq!(
         state().await,
         TransactionState::Idle,
@@ -1201,5 +1261,93 @@ async fn affected_rows_are_the_servers_count() {
     assert_eq!(cursor.stats().rows, 3);
     drop(cursor);
     apply(&*session, "DROP TABLE oxyn_affected").await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn statements_whose_columns_come_with_the_execution_return_their_rows() {
+    // MySQL prepares these without columns, or with other types than the
+    // rows carry (`SHOW INDEX`, `SHOW TABLE STATUS`); MariaDB some of them.
+    // The execution's columns are the schema (RESEARCH-NOTES, 2026-10-01).
+    let Some(session) = session().await else {
+        return;
+    };
+    apply(&*session, "DROP TABLE IF EXISTS oxyn_meta").await;
+    apply(
+        &*session,
+        "CREATE TABLE oxyn_meta (id INT PRIMARY KEY, n INT)",
+    )
+    .await;
+    apply(&*session, "INSERT INTO oxyn_meta VALUES (1, 2)").await;
+    for sql in [
+        "SHOW PROCESSLIST",
+        "SHOW FULL PROCESSLIST",
+        "SHOW STATUS LIKE 'Uptime'",
+        "SHOW VARIABLES LIKE 'version'",
+        "SHOW GRANTS",
+        "SHOW ENGINES",
+        "SHOW CREATE TABLE oxyn_meta",
+        "SHOW INDEX FROM oxyn_meta",
+        "SHOW TABLE STATUS",
+        "EXPLAIN SELECT * FROM oxyn_meta",
+        "CHECK TABLE oxyn_meta",
+        "ANALYZE TABLE oxyn_meta",
+        "REPAIR TABLE oxyn_meta",
+        "OPTIMIZE TABLE oxyn_meta",
+        "CHECKSUM TABLE oxyn_meta",
+    ] {
+        let mut cursor = session
+            .execute(write_request(sql), &CancelToken::new())
+            .await
+            .unwrap_or_else(|error| panic!("`{sql}`: {error}"));
+        let schema = cursor.schema();
+        assert!(
+            !schema.fields().is_empty(),
+            "`{sql}`: a schema before the rows"
+        );
+        let mut rows = 0;
+        while let Some(batch) = cursor
+            .next_batch()
+            .await
+            .unwrap_or_else(|error| panic!("`{sql}`: {error}"))
+        {
+            assert_eq!(batch.schema(), schema, "`{sql}`: the announced schema");
+            rows += batch.num_rows();
+        }
+        assert!(rows > 0, "`{sql}`: rows");
+    }
+    let batches = run(&*session, read_request("SHOW CREATE TABLE oxyn_meta"))
+        .await
+        .expect("SHOW CREATE TABLE");
+    let ddl = batches
+        .first()
+        .map(|batch| array_value_to_string(batch.column(1), 0).expect("printable"))
+        .expect("one batch");
+    assert!(ddl.contains("CREATE TABLE"), "{ddl}");
+    apply(&*session, "DROP TABLE oxyn_meta").await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_bound_value_types_its_column_as_the_execution_does() {
+    // Prepared, `?` is a string (MySQL) or bytes (MariaDB); executed with a
+    // number, the column is a `BIGINT`.
+    let Some(session) = session().await else {
+        return;
+    };
+    let batches = run(
+        &*session,
+        read_request("SELECT ? AS x").with_params(vec![ScalarValue::Int64(5)]),
+    )
+    .await
+    .expect("execution");
+    let batch = batches.first().expect("one batch");
+    assert_eq!(batch.schema().field(0).data_type(), &DataType::Int64);
+    assert_eq!(
+        array_value_to_string(batch.column(0), 0).expect("printable"),
+        "5"
+    );
     session.close().await.expect("close");
 }

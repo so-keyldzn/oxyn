@@ -37,7 +37,7 @@ use crate::connection::{Lease, Shared, race_cancel, use_statement};
 use crate::cursor::{self, Source, StreamRequest};
 use crate::error::{Bound, is_unsupported_prepare, map_stream_error};
 use crate::params::bind_params;
-use crate::types::{panics_in_binary_protocol, schema_for};
+use crate::types::panics_in_binary_protocol;
 use crate::variant::MysqlVariant;
 
 /// Bounds the following transactions to reading. A literal.
@@ -179,8 +179,9 @@ impl Session for MysqlSession {
 
     /// Prepares, then starts the stream.
     ///
-    /// Returns as soon as the schema is known — from the prepare, or with the
-    /// result in the text protocol.
+    /// Returns once the server answered the execution, whose columns are the
+    /// schema: a prepare's columns may be missing or differ from the rows'
+    /// (see [`cursor::spawn`]).
     ///
     /// # Errors
     /// [`OxynError::NotSupported`] for a language other than MySQL's SQL, a
@@ -281,10 +282,6 @@ impl Session for MysqlSession {
             }
         };
 
-        let (schema, decodings) = match &source {
-            Source::Prepared { statement, .. } => schema_for(&statement.columns()),
-            Source::Text { .. } => (Arc::new(arrow::datatypes::Schema::empty()), Vec::new()),
-        };
         let handle = StatementHandle::new();
         // A child: cancelling the caller cancels this execution, not the
         // other way round.
@@ -296,8 +293,6 @@ impl Session for MysqlSession {
                 lease,
                 source,
                 bound,
-                schema,
-                decodings,
                 limits,
                 intent,
                 restore_read_write: read_only,
