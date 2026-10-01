@@ -754,9 +754,17 @@ impl Pump {
             lease.discard();
             return lost;
         }
-        if self.kill.is_some() {
-            // Consumed: the error packet erased the last status.
+        if sent && (self.kill.is_some() || self.failure.is_some()) {
+            // An error packet — the consumed kill's, or the statement's own —
+            // erased the last status, and an error that keeps the connection
+            // leaves an open transaction open: the server says which, as
+            // `Link::after_error` asks it after any other operation.
             lease.refresh().await;
+            if lease.conn().is_none() {
+                // The ping found the connection gone, and the transaction
+                // with it: `discard` made the state unknown.
+                return before == TransactionState::Open;
+            }
         } else if sent {
             // Unsent, the last packet is still the prepare's, which says
             // nothing of the transaction (see `Shared::prepare`): the state

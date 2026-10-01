@@ -30,8 +30,8 @@
 //! dates, `DECIMAL(65,30)`, `BIGINT UNSIGNED`, `VECTOR`, `CALL` with two
 //! result sets, the transaction state, the transaction kept across a proven
 //! kill (ADR-0050 §7 as amended), the single error of an execution that loses
-//! its transaction, the statements an introspection closes, and the columns
-//! only the execution gives.
+//! its transaction, the statements an introspection closes, the columns only
+//! the execution gives, and the transaction kept across a failing statement.
 
 use std::time::Duration;
 
@@ -1349,5 +1349,63 @@ async fn a_bound_value_types_its_column_as_the_execution_does() {
         array_value_to_string(batch.column(0), 0).expect("printable"),
         "5"
     );
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_failing_statement_keeps_the_open_transaction() {
+    // A server error that keeps the connection leaves the transaction open:
+    // the state is asked of the server, not left unknown.
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    let state = || async { session.transaction_state(&CancelToken::new()).await };
+    apply(&*session, "DROP TABLE IF EXISTS oxyn_tx_failing").await;
+    apply(
+        &*session,
+        "CREATE TABLE oxyn_tx_failing (id INT PRIMARY KEY)",
+    )
+    .await;
+    apply(&*session, "START TRANSACTION").await;
+    apply(&*session, "INSERT INTO oxyn_tx_failing VALUES (1)").await;
+    // Fails at execution, in the cursor.
+    let duplicate = refusal(
+        run(
+            &*session,
+            write_request("INSERT INTO oxyn_tx_failing VALUES (1)"),
+        )
+        .await,
+        "a duplicate key is refused",
+    );
+    assert_eq!(server_code(&duplicate), Some(1062), "{duplicate}");
+    assert_eq!(
+        state().await,
+        TransactionState::Open,
+        "after a duplicate key"
+    );
+    // Fails at prepare.
+    let missing = refusal(
+        run(&*session, write_request("SELECT * FROM oxyn_no_such_table")).await,
+        "a missing table is refused",
+    );
+    assert_eq!(server_code(&missing), Some(1146), "{missing}");
+    assert_eq!(
+        state().await,
+        TransactionState::Open,
+        "after a missing table"
+    );
+    apply(&*session, "COMMIT").await;
+    assert_eq!(state().await, TransactionState::Idle, "after COMMIT");
+    assert_eq!(
+        first(&*observer, "SELECT COUNT(*) FROM oxyn_tx_failing").await,
+        "1",
+        "the row written before the failures is committed"
+    );
+    apply(&*session, "DROP TABLE oxyn_tx_failing").await;
+    observer.close().await.expect("close");
     session.close().await.expect("close");
 }
