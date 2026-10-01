@@ -28,8 +28,9 @@
 //! the result would not fit in memory** — and the observations ADR-0050 rests
 //! on: 1064 before 1295, read-only refusals, `LOCAL INFILE` refused, zero
 //! dates, `DECIMAL(65,30)`, `BIGINT UNSIGNED`, `VECTOR`, `CALL` with two
-//! result sets, the transaction state, and the transaction kept across a
-//! proven kill (ADR-0050 §7 as amended).
+//! result sets, the transaction state, the transaction kept across a proven
+//! kill (ADR-0050 §7 as amended), and the single error of an execution that
+//! loses its transaction.
 
 use std::time::Duration;
 
@@ -434,6 +435,119 @@ async fn a_row_bound_inside_a_transaction_truncates_and_keeps_it() {
     assert!(cursor.stats().truncated);
     drop(cursor);
     apply(&*session, "DROP TABLE oxyn_tx_bound").await;
+    observer.close().await.expect("close");
+    session.close().await.expect("close");
+}
+
+/// Runs `sql` in an open transaction, kills the connection from `observer`
+/// while the statement waits on the server — before it gave any schema — and
+/// returns every error the execution reported.
+///
+/// The execution must conclude within a bound: it used to wait on itself,
+/// the stream task blocked on a second terminal event while `execute` waited
+/// for the schema the task still held.
+async fn errors_after_a_kill_mid_transaction(
+    session: &dyn Session,
+    observer: &dyn Session,
+    sql: &str,
+) -> Vec<OxynError> {
+    apply(session, "DROP TABLE IF EXISTS oxyn_tx_lost").await;
+    apply(session, "CREATE TABLE oxyn_tx_lost (id INT PRIMARY KEY)").await;
+    // Read before the transaction: a read-only bound is refused inside one.
+    let id = first(session, "SELECT CONNECTION_ID()").await;
+    apply(session, "START TRANSACTION").await;
+    apply(session, "INSERT INTO oxyn_tx_lost VALUES (1)").await;
+    let killing = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        apply(observer, &format!("KILL {id}")).await;
+    };
+    let executing = async {
+        let mut errors = Vec::new();
+        match session
+            .execute(write_request(sql), &CancelToken::new())
+            .await
+        {
+            Err(error) => errors.push(error),
+            Ok(mut cursor) => loop {
+                match cursor.next_batch().await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(error) => errors.push(error),
+                }
+            },
+        }
+        errors
+    };
+    let (errors, ()) = tokio::time::timeout(
+        Duration::from_secs(20),
+        futures::future::join(executing, killing),
+    )
+    .await
+    .expect("the execution concludes instead of waiting on itself");
+    assert_eq!(
+        session.transaction_state(&CancelToken::new()).await,
+        TransactionState::Unknown,
+        "the transaction went with the connection"
+    );
+    apply(session, "DROP TABLE oxyn_tx_lost").await;
+    errors
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_call_failing_before_its_schema_in_a_transaction_ends_on_one_error() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    apply(&*session, "DROP PROCEDURE IF EXISTS oxyn_sleepy").await;
+    apply(
+        &*session,
+        "CREATE PROCEDURE oxyn_sleepy() BEGIN DO SLEEP(30); SELECT 1 AS a; END",
+    )
+    .await;
+    let errors =
+        errors_after_a_kill_mid_transaction(&*session, &*observer, "CALL oxyn_sleepy()").await;
+    let [error] = errors.as_slice() else {
+        panic!("exactly one error expected: {errors:?}");
+    };
+    assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
+    apply(&*session, "DROP PROCEDURE oxyn_sleepy").await;
+    observer.close().await.expect("close");
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_text_statement_failing_in_a_transaction_ends_on_one_error() {
+    // MySQL cannot prepare `LOCK TABLES` (1295): it runs through the text
+    // protocol, whose schema comes with the result. It commits the open
+    // transaction, then waits on the observer's lock until the kill — the
+    // case the transaction's loss is reported as an unknown outcome for.
+    // Should a server prepare it, the same path runs in the binary protocol.
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    apply(&*observer, "DROP TABLE IF EXISTS oxyn_lock_held").await;
+    apply(&*observer, "CREATE TABLE oxyn_lock_held (id INT)").await;
+    apply(&*observer, "LOCK TABLES oxyn_lock_held WRITE").await;
+    let errors = errors_after_a_kill_mid_transaction(
+        &*session,
+        &*observer,
+        "LOCK TABLES oxyn_lock_held READ",
+    )
+    .await;
+    apply(&*observer, "UNLOCK TABLES").await;
+    apply(&*observer, "DROP TABLE oxyn_lock_held").await;
+    let [error] = errors.as_slice() else {
+        panic!("exactly one error expected: {errors:?}");
+    };
+    assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
     observer.close().await.expect("close");
     session.close().await.expect("close");
 }

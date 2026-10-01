@@ -91,7 +91,7 @@ enum Halt {
     TimedOut,
     /// The cursor was dropped.
     Abandoned,
-    /// An error was met and already emitted.
+    /// An error was met and recorded.
     Failed,
 }
 
@@ -273,13 +273,16 @@ pub(crate) async fn spawn(request: StreamRequest, cancel: CancelToken) -> MysqlC
     cursor
 }
 
+/// The schema a result gives, and how its values are decoded.
+type LearntSchema = (SchemaRef, Vec<MyDecoding>);
+
 /// The state of the stream loop, handed from stage to stage.
 struct Pump {
     driver: DriverId,
     cancel: CancelToken,
     deadline: Option<tokio::time::Instant>,
     events: mpsc::Sender<CursorEvent>,
-    schema_sender: Option<oneshot::Sender<(SchemaRef, Vec<MyDecoding>)>>,
+    schema_sender: Option<oneshot::Sender<LearntSchema>>,
     assembler: BatchAssembler,
     decodings: Vec<MyDecoding>,
     limits: ExecLimits,
@@ -302,6 +305,10 @@ struct Pump {
     poisoned: bool,
     /// Binary protocol (prepared) or text protocol (the 1295 fallback)?
     binary: bool,
+    /// The first error met, held back until [`Pump::conclude`]: a failure
+    /// that costs the connection is reported as the transaction's loss
+    /// instead, and a channel of one slot has room for one terminal event.
+    failure: Option<OxynError>,
 }
 
 /// The body of the stream task.
@@ -309,7 +316,7 @@ async fn run(
     request: StreamRequest,
     cancel: CancelToken,
     events: mpsc::Sender<CursorEvent>,
-    schema_sender: Option<oneshot::Sender<(SchemaRef, Vec<MyDecoding>)>>,
+    schema_sender: Option<oneshot::Sender<LearntSchema>>,
 ) {
     let StreamRequest {
         driver,
@@ -351,6 +358,7 @@ async fn run(
         close: false,
         poisoned: false,
         binary: matches!(source, Source::Prepared { .. }),
+        failure: None,
     };
 
     let (stop, statement, sent) = match lease.conn() {
@@ -366,8 +374,7 @@ async fn run(
         None => {
             pump.fail(OxynError::Connection(
                 "the connection to the server is closed".to_owned(),
-            ))
-            .await;
+            ));
             (Halt::Failed, None, false)
         }
         Some(conn) => match source {
@@ -404,9 +411,10 @@ async fn run(
 }
 
 impl Pump {
-    /// Emits an error and marks the stream failed.
-    async fn fail(&mut self, error: OxynError) {
-        let _ = self.events.send(CursorEvent::Failed(Box::new(error))).await;
+    /// Records an error; the first one is the cause, what follows its
+    /// consequence.
+    fn fail(&mut self, error: OxynError) {
+        self.failure.get_or_insert(error);
     }
 
     /// Sends the statement and reads its result.
@@ -430,7 +438,7 @@ impl Pump {
             outcome = &mut started => match outcome {
                 Ok(result) => return self.read(result, call).await,
                 Err(error) => {
-                    self.fail_with(&error).await;
+                    self.fail_with(&error);
                     return Halt::Failed;
                 }
             },
@@ -493,7 +501,7 @@ impl Pump {
                 Flow::End => break,
                 Flow::Failed => return Halt::Failed,
                 Flow::Error(error) => {
-                    self.fail_with(&error).await;
+                    self.fail_with(&error);
                     return Halt::Failed;
                 }
                 Flow::Interrupt(reason) => return self.interrupt(&mut result, reason).await,
@@ -513,7 +521,7 @@ impl Pump {
                     let until = tokio::time::Instant::now() + DRAIN_BOUND;
                     let _ = drain_all(&mut result, until, self.binary).await;
                     self.close |= close;
-                    self.fail(error).await;
+                    self.fail(error);
                     return Halt::Failed;
                 }
             }
@@ -544,7 +552,7 @@ impl Pump {
             // Reading one row would panic the library, and so would draining
             // it: the connection is abandoned as it stands.
             self.poisoned = true;
-            self.fail(refusal).await;
+            self.fail(refusal);
             return Flow::Failed;
         }
         if !first {
@@ -626,7 +634,7 @@ impl Pump {
             let row = match received {
                 None => return Ok(()),
                 Some(Err(error)) => {
-                    self.fail_with(&error).await;
+                    self.fail_with(&error);
                     return Err(Halt::Failed);
                 }
                 Some(Ok(row)) => row,
@@ -645,8 +653,7 @@ impl Pump {
                     self.driver.clone(),
                     ErrorClass::Permanent,
                     error,
-                ))
-                .await;
+                ));
                 return Err(Halt::Failed);
             }
             self.produced = self.produced.saturating_add(1);
@@ -659,13 +666,20 @@ impl Pump {
                 let emission = tokio::select! {
                     biased;
                     () = self.cancel.cancelled() => Emission::Cancelled,
-                    emission = emit(&mut self.assembler, &self.driver, &self.events) => emission,
+                    emission = emit(&mut self.assembler, &self.events) => emission,
                 };
                 match emission {
                     Emission::Proceed => {}
                     Emission::Cancelled => return Err(Halt::Cancelled),
                     Emission::Abandoned => return Err(Halt::Abandoned),
-                    Emission::Failed => return Err(Halt::Failed),
+                    Emission::Failed(error) => {
+                        self.fail(OxynError::driver(
+                            self.driver.clone(),
+                            ErrorClass::Permanent,
+                            error,
+                        ));
+                        return Err(Halt::Failed);
+                    }
                 }
             }
         }
@@ -687,7 +701,7 @@ impl Pump {
                 None => return None,
                 Some(Ok(_)) => {}
                 Some(Err(error)) => {
-                    self.fail_with(&error).await;
+                    self.fail_with(&error);
                     return Some(Halt::Failed);
                 }
             }
@@ -730,7 +744,7 @@ impl Pump {
         self.kill = Some(Ok(verdict));
     }
 
-    async fn fail_with(&mut self, error: &MyError) {
+    fn fail_with(&mut self, error: &MyError) {
         let mapped = map_stream_error(
             &self.driver,
             self.intent,
@@ -741,7 +755,7 @@ impl Pump {
         if crate::error::breaks_connection(error) {
             self.close = true;
         }
-        self.fail(mapped).await;
+        self.fail(mapped);
     }
 
     /// Leaves the connection as the next operation may find it, and says
@@ -801,64 +815,102 @@ impl Pump {
         false
     }
 
-    /// Emits the last event.
+    /// Emits the last event — exactly one, whatever went wrong before.
     async fn conclude(mut self, stop: Halt, lost: bool) {
-        if lost && self.intent != StatementIntent::Read {
+        // `spawn` may still be waiting for the schema of a statement that
+        // failed before giving one: it must learn there is none before the
+        // terminal event is queued, or it would never read the channel.
+        drop(self.schema_sender.take());
+        let failure = self.failure.take();
+        if let Some(error) = terminal_error(
+            &self.driver,
+            self.intent,
+            self.limits.timeout,
+            stop,
+            lost,
+            failure,
+        ) {
+            let _ = self.events.send(CursorEvent::Failed(Box::new(error))).await;
+            return;
+        }
+        if !matches!(stop, Halt::Exhausted | Halt::RowLimit) {
+            return;
+        }
+        if !self.assembler.is_empty() {
+            match emit(&mut self.assembler, &self.events).await {
+                Emission::Proceed | Emission::Cancelled => {}
+                Emission::Abandoned => return,
+                Emission::Failed(error) => {
+                    let error =
+                        OxynError::driver(self.driver.clone(), ErrorClass::Permanent, error);
+                    let _ = self.events.send(CursorEvent::Failed(Box::new(error))).await;
+                    return;
+                }
+            }
+        }
+        if self.extra_sets > 0 {
+            tracing::info!(
+                target: "oxyn::driver::mysql",
+                extra_result_sets = self.extra_sets,
+                "a CALL returned more than one result set; only the first is shown"
+            );
+        }
+        let _ = self
+            .events
+            .send(CursorEvent::Finished {
+                affected_rows: self.affected,
+                truncated: stop == Halt::RowLimit || self.truncated || self.extra_sets > 0,
+            })
+            .await;
+    }
+}
+
+/// The one error an execution ends on, or `None` when it ends on its rows.
+///
+/// A lost transaction outranks the failure that cost the connection: it is
+/// what the user must act upon, and the failure is kept in its message.
+fn terminal_error(
+    driver: &DriverId,
+    intent: StatementIntent,
+    timeout: Option<std::time::Duration>,
+    stop: Halt,
+    lost: bool,
+    failure: Option<OxynError>,
+) -> Option<OxynError> {
+    if lost {
+        let cause = failure
+            .map(|error| format!(" The statement had failed first: {error}"))
+            .unwrap_or_default();
+        return Some(if intent == StatementIntent::Read {
+            OxynError::driver(
+                driver.clone(),
+                ErrorClass::Permanent,
+                MysqlError::protocol(format!(
+                    "the connection had to be closed, and the server rolled back the \
+                     transaction that was open on it: nothing of it was committed.{cause}"
+                )),
+            )
+        } else {
             // The interrupted statement may itself have ended the transaction
             // — a `COMMIT`, a DDL's implicit commit — before the connection
             // closed: claiming a rollback would invite a replay.
-            self.fail(OxynError::OutcomeUnknown(
+            OxynError::OutcomeUnknown(format!(
                 "the connection had to be closed while a transaction was open on it: the \
                  server either rolled the transaction back or the interrupted statement \
-                 committed it; check the data before running it again"
-                    .to_owned(),
+                 committed it; check the data before running it again.{cause}"
             ))
-            .await;
-            return;
-        }
-        if lost {
-            self.fail(OxynError::driver(
-                self.driver.clone(),
-                ErrorClass::Permanent,
-                MysqlError::protocol(
-                    "the connection had to be closed, and the server rolled back the \
-                     transaction that was open on it: nothing of it was committed",
-                ),
-            ))
-            .await;
-            return;
-        }
-        match stop {
-            Halt::Failed => {}
-            Halt::Cancelled | Halt::Abandoned => self.fail(OxynError::Cancelled).await,
-            Halt::TimedOut => {
-                let after = self.limits.timeout.unwrap_or_default();
-                // Ambiguous by construction: a write may have been applied.
-                self.fail(OxynError::Timeout { after }).await;
-            }
-            Halt::Exhausted | Halt::RowLimit => {
-                if !self.assembler.is_empty()
-                    && let Emission::Failed | Emission::Abandoned =
-                        emit(&mut self.assembler, &self.driver, &self.events).await
-                {
-                    return;
-                }
-                if self.extra_sets > 0 {
-                    tracing::info!(
-                        target: "oxyn::driver::mysql",
-                        extra_result_sets = self.extra_sets,
-                        "a CALL returned more than one result set; only the first is shown"
-                    );
-                }
-                let _ = self
-                    .events
-                    .send(CursorEvent::Finished {
-                        affected_rows: self.affected,
-                        truncated: stop == Halt::RowLimit || self.truncated || self.extra_sets > 0,
-                    })
-                    .await;
-            }
-        }
+        });
+    }
+    if failure.is_some() {
+        return failure;
+    }
+    match stop {
+        Halt::Cancelled | Halt::Abandoned => Some(OxynError::Cancelled),
+        // Ambiguous by construction: a write may have been applied.
+        Halt::TimedOut => Some(OxynError::Timeout {
+            after: timeout.unwrap_or_default(),
+        }),
+        Halt::Failed | Halt::Exhausted | Halt::RowLimit => None,
     }
 }
 
@@ -985,23 +1037,16 @@ enum Emission {
     Proceed,
     Cancelled,
     Abandoned,
-    Failed,
+    /// The batch could not be closed; the caller reports it.
+    Failed(arrow::error::ArrowError),
 }
 
 /// Closes the current batch and sends it, honoring the channel's
 /// back-pressure.
-async fn emit(
-    assembler: &mut BatchAssembler,
-    driver: &DriverId,
-    events: &mpsc::Sender<CursorEvent>,
-) -> Emission {
+async fn emit(assembler: &mut BatchAssembler, events: &mpsc::Sender<CursorEvent>) -> Emission {
     let batch = match assembler.finish() {
         Ok(batch) => batch,
-        Err(error) => {
-            let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, error);
-            let _ = events.send(CursorEvent::Failed(Box::new(oxyn))).await;
-            return Emission::Failed;
-        }
+        Err(error) => return Emission::Failed(error),
     };
     if events.send(CursorEvent::Batch(batch)).await.is_err() {
         return Emission::Abandoned;
@@ -1024,6 +1069,7 @@ mod tests {
 
     use mysql_async::Column;
     use mysql_async::consts::ColumnType;
+    use std::time::Duration;
 
     #[test]
     fn a_binary_result_with_an_internal_type_is_refused_before_any_row() {
@@ -1051,5 +1097,123 @@ mod tests {
             &[Column::new(ColumnType::MYSQL_TYPE_DOUBLE)]
         ));
         assert!(!plan_matches(&plan, &[]));
+    }
+
+    /// A pump as `run` builds it for a statement whose schema comes with its
+    /// result — the text protocol, or a prepared `CALL`.
+    fn pump_awaiting_its_schema(
+        intent: StatementIntent,
+    ) -> (
+        Pump,
+        mpsc::Receiver<CursorEvent>,
+        oneshot::Receiver<LearntSchema>,
+    ) {
+        let spec = crate::options::ConnectSpec::from_config(
+            &crate::driver::mysql_metadata(),
+            &oxyn_core::ConnectionConfig::new("trial", DriverId::mysql())
+                .with_param("host", "127.0.0.1")
+                .with_param("user", "app")
+                .with_environment(oxyn_core::Environment::Local),
+            &oxyn_driver::Credentials::new(),
+        )
+        .expect("a complete configuration");
+        let (events, reception) = mpsc::channel(1);
+        let (schema_sender, schema_reception) = oneshot::channel();
+        let pump = Pump {
+            driver: DriverId::mysql(),
+            cancel: CancelToken::new(),
+            deadline: None,
+            events,
+            schema_sender: Some(schema_sender),
+            assembler: BatchAssembler::new(Arc::new(arrow::datatypes::Schema::empty()), &[]),
+            decodings: Vec::new(),
+            limits: ExecLimits::default(),
+            intent,
+            bound: Bound::Internal,
+            killer: Arc::new(Killer::new(spec, DriverId::mysql())),
+            id: 0,
+            produced: 0,
+            affected: 0,
+            extra_sets: 0,
+            truncated: false,
+            kill: None,
+            close: true,
+            poisoned: false,
+            binary: false,
+            failure: None,
+        };
+        (pump, reception, schema_reception)
+    }
+
+    #[tokio::test]
+    async fn a_failure_before_the_schema_that_loses_the_transaction_ends_on_one_error() {
+        // The path that deadlocked: the statement fails before its schema,
+        // the connection goes with the open transaction, and `spawn` — which
+        // reads the channel only once the schema is settled — waits on it.
+        let (mut pump, mut events, schema) = pump_awaiting_its_schema(StatementIntent::Write);
+        pump.fail(OxynError::Connection("lost mid-statement".to_owned()));
+        let task = tokio::spawn(pump.conclude(Halt::Failed, true));
+        let reader = async {
+            assert!(
+                schema.await.is_err(),
+                "no schema: the statement never gave one"
+            );
+            let mut received = Vec::new();
+            while let Some(event) = events.recv().await {
+                received.push(event);
+            }
+            received
+        };
+        let received = tokio::time::timeout(Duration::from_secs(5), reader)
+            .await
+            .expect("the execution concludes instead of waiting on itself");
+        task.await.expect("the task ends");
+        let [CursorEvent::Failed(error)] = received.as_slice() else {
+            panic!("exactly one terminal event expected: {received:?}");
+        };
+        assert!(matches!(**error, OxynError::OutcomeUnknown(_)), "{error:?}");
+        assert!(error.to_string().contains("lost mid-statement"), "{error}");
+    }
+
+    #[test]
+    fn the_first_failure_is_the_one_reported_when_the_transaction_survives() {
+        let (mut pump, _events, _schema) = pump_awaiting_its_schema(StatementIntent::Read);
+        pump.fail(OxynError::Query("the cause".to_owned()));
+        pump.fail(OxynError::Query("a consequence".to_owned()));
+        let error = terminal_error(
+            &pump.driver,
+            pump.intent,
+            None,
+            Halt::Failed,
+            false,
+            pump.failure.take(),
+        )
+        .expect("an error");
+        assert!(error.to_string().contains("the cause"), "{error}");
+        let lost = terminal_error(
+            &DriverId::mysql(),
+            StatementIntent::Read,
+            None,
+            Halt::Cancelled,
+            true,
+            None,
+        )
+        .expect("an error");
+        assert_eq!(
+            lost.class(),
+            ErrorClass::Permanent,
+            "a read commits nothing"
+        );
+        assert!(
+            terminal_error(
+                &DriverId::mysql(),
+                StatementIntent::Read,
+                None,
+                Halt::Exhausted,
+                false,
+                None,
+            )
+            .is_none()
+        );
     }
 }
