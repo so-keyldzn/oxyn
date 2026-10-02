@@ -13,11 +13,32 @@ describe("stateFromOutcome", () => {
       complete: false,
       cancelled: false,
       truncated: true,
+      rowLimitUnverified: false,
     })
     expect(state).toMatchObject({
       status: "populated",
       truncated: true,
       complete: false,
+    })
+  })
+
+  it("keeps an unverified row-limit stop incomplete", () => {
+    const { state } = stateFromOutcome({
+      type: "executed",
+      result: "r",
+      columns: [{ name: "id", dataType: "Int64", nullable: false }],
+      rows: 10_000,
+      elapsedMs: 40,
+      complete: false,
+      cancelled: false,
+      truncated: true,
+      rowLimitUnverified: true,
+    })
+    expect(state).toMatchObject({
+      status: "populated",
+      complete: false,
+      truncated: true,
+      rowLimitUnverified: true,
     })
   })
 

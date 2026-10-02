@@ -87,7 +87,8 @@ enum CursorEvent {
 enum Halt {
     /// The server has nothing more to send.
     Exhausted,
-    /// [`ExecLimits::max_rows`] is reached.
+    /// [`ExecLimits::max_rows`] is reached: a row beyond it was received and
+    /// dropped, or, for a mutating statement, none was asked for.
     RowLimit,
     /// The cancellation token fired.
     Cancelled,
@@ -269,6 +270,14 @@ pub(crate) struct StreamRequest {
     pub(crate) opens_transaction: bool,
     /// The execution's bounds.
     pub(crate) limits: ExecLimits,
+    /// May row N + 1 be read to tell exactly N rows from more than N?
+    ///
+    /// Only for a statement that does not mutate, the rule the executor applies
+    /// to its own end probe. Reading that row adds no effect here — `Execute`
+    /// goes out without a row limit, and a `RETURNING` runs whole before its
+    /// first row — but a write is not proven whole by its driver either: it
+    /// stops at N, and its result stays truncated.
+    pub(crate) confirm_end: bool,
     /// The intent, which decides the class of transport errors.
     pub(crate) intent: StatementIntent,
     /// The pid of the server process that executes, for cancellation.
@@ -394,6 +403,7 @@ async fn run(
         schema,
         decodings,
         limits,
+        confirm_end,
         intent,
         backend_pid,
         canceller,
@@ -486,6 +496,15 @@ async fn run(
                 let _ = sender.send(learnt);
             }
 
+            // One row beyond the bound: the result is really longer. It is
+            // neither decoded nor kept; reading it, under the same token and
+            // deadline as every other row, is what tells exactly N rows from
+            // more than N. Only a statement that may be read past its bound
+            // gets here: the others stopped at N, below.
+            if limits.max_rows.is_some_and(|max| produced >= max) {
+                break Halt::RowLimit;
+            }
+
             if let Err(error) = assembler.push(&row) {
                 let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, error);
                 let _ = events.send(CursorEvent::Failed(Box::new(oxyn))).await;
@@ -513,7 +532,7 @@ async fn run(
                     Emission::Failed => break Halt::Failed,
                 }
             }
-            if limit_reached {
+            if limit_reached && !confirm_end {
                 break Halt::RowLimit;
             }
         }

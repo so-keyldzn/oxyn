@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="7f5a97c5b037" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="8406412691aa" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -363,9 +363,15 @@ selon [ADR-0013](adr/0013-preferences-workspace.md). Une erreur de sauvegarde
 laisse le réglage appliqué localement et affiche une action de reprise
 explicite ; elle n'annonce jamais une sauvegarde réussie.
 
-Une valeur absente utilise le jeton `null` et le repère `∅ NULL`. Une chaîne
-contenant le texte `NULL`, ou l'expression SQL `NULL` d'une valeur par défaut
-dans Structure, conserve son traitement de texte ou de code.
+Une valeur absente utilise le jeton `null` et un repère, `∅ NULL` par
+défaut : le repère de valeur manquante de Paramètres → Formats, une
+préférence sauvegardée selon [ADR-0013](adr/0013-preferences-workspace.md),
+le remplace dans les cellules de la grille et dans `Inspect full value`, pour
+un résultat déjà affiché comme pour le suivant, sans rien réexécuter. Le
+repère n'est que dessiné : la valeur reste une valeur absente, et ni le SQL ni
+un fichier exporté ne le contiennent. Une chaîne contenant le texte `NULL` ou
+le repère lui-même, ou l'expression SQL `NULL` d'une valeur par défaut dans
+Structure, conserve son traitement de texte ou de code.
 
 Les pièces jointes de contexte IA conservent leur nom sur une seule ligne,
 avec une ellipse de fin si nécessaire. Le nom complet reste consultable dans

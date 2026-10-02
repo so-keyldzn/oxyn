@@ -476,9 +476,7 @@ impl Backend {
             }
             Outcome::ConnectionSaved { .. } => {
                 inner.policy.register(&config);
-                self.open_session(config, &cancel)
-                    .await
-                    .map(ConnectResponse::Open)
+                Ok(self.open_saved(config, &cancel).await)
             }
             Outcome::Denied { reason, .. } => Err(IpcError::invalid(reason)),
             _ => Err(IpcError::invalid("The connection was not saved")),
@@ -605,9 +603,24 @@ impl Backend {
             _ => return Err(IpcError::invalid("The connection was not saved")),
         }
         inner.policy.register(&config);
-        self.open_session(config, &cancel)
-            .await
-            .map(|open| Some(ConnectResponse::Open(open)))
+        Ok(Some(self.open_saved(config, &cancel).await))
+    }
+
+    /// Opens a connection just saved.
+    ///
+    /// A failed opening does not unsave it: the answer names the saved
+    /// connection, so that connecting again from the same form edits it
+    /// rather than saving one more.
+    async fn open_saved(&self, config: ConnectionConfig, cancel: &CancelToken) -> ConnectResponse {
+        let saved = ipc::SavedConnection::of(&config);
+        match self.open_session(config, cancel).await {
+            Ok(open) => ConnectResponse::Open(open),
+            Err(error) => ConnectResponse::Saved {
+                connection: saved,
+                message: error.message,
+                retryable: error.retryable,
+            },
+        }
     }
 
     /// Opens a session on a connection the store already knows.
@@ -927,6 +940,7 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
             complete: matches!(sink, SinkOutcome::Exhausted),
             cancelled: matches!(sink, SinkOutcome::Cancelled),
             truncated: stats.truncated,
+            row_limit_unverified: matches!(sink, SinkOutcome::RowLimitUnverified),
         },
         Outcome::NeedsApproval {
             command,
@@ -1025,6 +1039,7 @@ mod tests {
                         _ => panic!("an approved connection opens"),
                     }
                 }
+                ConnectResponse::Saved { message, .. } => panic!("not opened: {message}"),
             }
         })
     }
@@ -1248,6 +1263,75 @@ mod tests {
             backend.saved_connections().expect("list").is_empty(),
             "testing saves nothing"
         );
+    }
+
+    /// The form's retry after a save whose opening failed: what the front
+    /// does with the saved id — the edit, then the reopening — never saves a
+    /// second connection, and the corrected one opens under the same id.
+    #[test]
+    fn a_retried_failed_opening_keeps_one_saved_connection() {
+        use crate::ipc::settings::{ConnectionChange, ConnectionEdit};
+
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let unreachable = directory.path().join("missing").join("db.sqlite");
+        let mut draft = draft(Environment::Local);
+        draft
+            .values
+            .insert("path".to_owned(), unreachable.display().to_string());
+        let edit = |path: &std::path::Path| ConnectionEdit {
+            name: draft.name.clone(),
+            environment: draft.environment,
+            privacy_tier: draft.privacy_tier,
+            read_only: draft.read_only,
+            values: [("path".to_owned(), path.display().to_string())]
+                .into_iter()
+                .collect(),
+            secrets: BTreeMap::new(),
+        };
+
+        let response = runtime
+            .block_on(backend.connect(CommandId::new(), draft.clone()))
+            .expect("a saved connection that does not open is an answer");
+        let ConnectResponse::Saved {
+            connection,
+            message,
+            ..
+        } = response
+        else {
+            panic!("no directory holds the file: {response:?}");
+        };
+        assert!(message.contains(&draft.name), "{message}");
+        let id: ConnectionId = connection.id.parse().expect("connection id");
+
+        // Retried unchanged: the saved connection is edited, and fails again.
+        let change = runtime
+            .block_on(backend.update_connection(CommandId::new(), id, edit(&unreachable)))
+            .expect("edited");
+        assert!(
+            matches!(change, Some(ConnectionChange::Saved { .. })),
+            "{change:?}"
+        );
+        assert!(
+            runtime
+                .block_on(backend.reconnect(CommandId::new(), id))
+                .is_err()
+        );
+        let saved = backend.saved_connections().expect("list");
+        assert_eq!(saved.len(), 1, "one connection, however many retries");
+
+        // Corrected, it opens under the identity it was saved with.
+        let corrected = directory.path().join("db.sqlite");
+        runtime
+            .block_on(backend.update_connection(CommandId::new(), id, edit(&corrected)))
+            .expect("edited");
+        let open = runtime
+            .block_on(backend.reconnect(CommandId::new(), id))
+            .expect("the corrected connection opens");
+        assert_eq!(open.connection, connection.id);
+        assert_eq!(backend.saved_connections().expect("list").len(), 1);
     }
 
     #[test]

@@ -50,6 +50,7 @@ fn open(
             .expect("connects")
         {
             ConnectResponse::Open(open) => open,
+            ConnectResponse::Saved { message, .. } => panic!("not opened: {message}"),
             ConnectResponse::Approval { command, .. } => {
                 match backend
                     .decide_connection(command.parse().expect("minted id"), true)
@@ -2946,3 +2947,6 @@ mod history;
 
 /// I-03: a provider's streamed error reaches the webview without the key.
 mod provider_errors;
+
+/// An external agent's abandoned query stops on a real PostgreSQL server.
+mod server_cancel;

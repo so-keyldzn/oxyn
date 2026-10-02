@@ -52,8 +52,32 @@ export const ReadOnlyReplica: Story = {
 }
 export const ReadOnlySession: Story = {
   args: {
-    environment: "staging",
-    capabilities: [...postgres, "READ_ONLY_SESSION"],
+    connectionName: "fixtures.db",
+    driver: "sqlite",
+    environment: "local",
+    // SQLite opened read-only: the flag kept, both writes dropped.
+    capabilities: ["EXPLAIN", "AFFECTED_ROWS", "READ_ONLY_SESSION"],
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Read only")).toBeVisible()
+  },
+}
+/** The server can enforce read-only; this writable session does not. */
+export const WritableSession: Story = {
+  args: {
+    environment: "development",
+    capabilities: [...postgres, "DML", "DDL", "READ_ONLY_SESSION"],
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByText("Read only")).toBeNull()
+  },
+}
+/** The connection is marked read-only: the session's writes do not matter. */
+export const ConfiguredReadOnly: Story = {
+  args: {
+    environment: "development",
+    readOnly: true,
+    capabilities: [...postgres, "DML", "DDL", "READ_ONLY_SESSION"],
   },
   play: async ({ canvas }) => {
     await expect(canvas.getByText("Read only")).toBeVisible()

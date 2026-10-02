@@ -438,20 +438,73 @@ export const ProductionApproval: Story = {
     submitting: true,
     approval: {
       command: "018f0000-0000-7000-8000-00000000c0de",
-      reason: 'DDL operation on "billing", marked production',
-      preview: {
-        statement: "CreateConnection",
-        connection: "billing",
-        estimatedRows: null,
-      },
-      name: "billing",
+      kind: "create",
+      reason: 'ddl operation on "billing", marked production',
+      connectionName: "billing",
       environment: "production",
     },
   },
   play: async () => {
     const dialog = within(document.body)
     const cancel = await dialog.findByRole("button", { name: "Cancel" })
-    await waitFor(() => expect(cancel).toHaveFocus())
+    await waitFor(() => expect(cancel).toHaveFocus(), { timeout: 3000 })
+    // What is approved is a saved connection, named as typed: not a
+    // statement, not rows, not an « unknown connection ».
+    // The dialog animates in: wait for it rather than read its first frame.
+    await waitFor(() =>
+      expect(
+        dialog.getByRole("heading", { name: "Confirm the new connection" })
+      ).toBeVisible()
+    )
+    await waitFor(() =>
+      expect(
+        dialog.getByRole("button", { name: "Save and connect to billing" })
+      ).toBeVisible()
+    )
+    const review = dialog.getByRole("alertdialog")
+    await expect(review).toHaveTextContent(
+      "Approving saves billing with this marking, then connects to it."
+    )
+    await expect(review).not.toHaveTextContent(/unknown connection/)
+    await expect(review).not.toHaveTextContent(/Statement to approve/)
+    await expect(review).not.toHaveTextContent(/affected rows/)
+  },
+}
+
+/**
+ * Saved, then not opened: the form says the connection exists, and that
+ * connecting again updates it rather than saving a second one.
+ */
+export const SavedButNotOpened: Story = {
+  args: {
+    driver: postgresDriver,
+    saved: {
+      id: "018f0000-0000-7000-8000-0000000b1111",
+      name: "billing",
+      driver: "postgres",
+      environment: "production",
+      readOnly: false,
+      privacyTier: "metadata",
+      values: {
+        host: "db.internal",
+        port: "5432",
+        database: "billing",
+        user: "app",
+      },
+      hasStoredSecrets: true,
+    },
+    formError: {
+      message:
+        'opening a session on "billing": TLS mode disable is accepted only on a connection marked Local',
+      retryable: false,
+    },
+  },
+  play: async ({ canvas }) => {
+    const alert = await canvas.findByRole("alert")
+    await expect(alert).toHaveTextContent("Saved, but not connected")
+    await expect(alert).toHaveTextContent(
+      "billing is saved in this workspace. Connecting again updates it"
+    )
   },
 }
 

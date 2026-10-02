@@ -1,8 +1,18 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, userEvent } from "storybook/test"
+import { expect, userEvent, within } from "storybook/test"
 
 import { AboutSettings } from "./about-settings"
+import type { BuildIdentity } from "@/lib/ipc/about"
 import type { ThirdPartyNotice } from "@/lib/third-party-licenses"
+
+const identity = {
+  version: "0.0.1",
+  revision: "8359edb9ecae7f7bc5fa0fd0006b48634a2694c6",
+  modified: false,
+  os: "macos",
+  arch: "aarch64",
+  profile: "release",
+} satisfies BuildIdentity
 
 const MIT_TEXT = `MIT License
 
@@ -56,11 +66,59 @@ const meta = {
       </div>
     ),
   ],
-  args: { licenses: { status: "ready", notices } },
+  args: { identity, licenses: { status: "ready", notices } },
 } satisfies Meta<typeof AboutSettings>
 
 export default meta
 type Story = StoryObj<typeof meta>
+
+/** A release built from a clean checkout: every line says what it is. */
+export const BuildRecorded: Story = {
+  play: async ({ canvas }) => {
+    const build = canvas.getByRole("region", { name: "Build" })
+    await expect(build).toHaveTextContent("Version0.0.1")
+    await expect(build).toHaveTextContent(`Source revision${identity.revision}`)
+    await expect(build).toHaveTextContent("Modified sourcesNo")
+    await expect(build).toHaveTextContent("Platformmacos aarch64")
+    await expect(build).toHaveTextContent("BuildRelease")
+
+    // Reached from the keyboard, ahead of the licenses.
+    await userEvent.tab()
+    await expect(
+      canvas.getByRole("button", { name: "Copy diagnostic info" })
+    ).toHaveFocus()
+  },
+}
+
+/**
+ * Built from an archive, without git: the revision is not guessed. And an
+ * identity that could not be read at all leaves every line « Unknown ».
+ */
+export const BuildUnrecorded: Story = {
+  args: {
+    identity: {
+      ...identity,
+      revision: null,
+      modified: null,
+      profile: "development",
+    },
+  },
+  play: async ({ canvas }) => {
+    const build = canvas.getByRole("region", { name: "Build" })
+    await expect(build).toHaveTextContent("Source revisionUnknown")
+    await expect(build).toHaveTextContent("Modified sourcesUnknown")
+    await expect(build).toHaveTextContent("BuildDevelopment")
+  },
+}
+
+export const BuildUnreadable: Story = {
+  args: { identity: null },
+  play: async ({ canvas }) => {
+    const build = canvas.getByRole("region", { name: "Build" })
+    await expect(build).toHaveTextContent("Version")
+    await expect(within(build).getAllByText("Unknown")).toHaveLength(5)
+  },
+}
 
 /** The GPL asks for the license and the absence of warranty to be shown. */
 export const Populated: Story = {
@@ -83,13 +141,6 @@ export const Populated: Story = {
 }
 
 /** The running version, read from the backend (ADR-0051). */
-export const WithVersion: Story = {
-  args: { version: "1.4.0" },
-  play: async ({ canvas }) => {
-    await expect(canvas.getByText("Version 1.4.0")).toBeVisible()
-  },
-}
-
 export const Filtered: Story = {
   play: async ({ canvas }) => {
     const filter = canvas.getByRole("searchbox", {

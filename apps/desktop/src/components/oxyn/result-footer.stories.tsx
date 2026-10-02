@@ -80,6 +80,27 @@ export const Truncated: Story = {
   },
 }
 
+/** A write stopped at its limit: no read beyond it, so no claim either way. */
+export const RowLimitUnverified: Story = {
+  args: {
+    state: {
+      status: "done",
+      rows: 10_000,
+      elapsedMs: 840,
+      truncated: true,
+      cancelled: false,
+      rowLimitUnverified: true,
+    },
+  },
+  play: async ({ canvas }) => {
+    const status = canvas.getByRole("status")
+    await expect(status).toHaveTextContent(
+      "Row limit reached · 10,000 rows shown, completeness not verified · 840 ms"
+    )
+    await expect(status).not.toHaveTextContent(/not the whole result/)
+  },
+}
+
 export const Cancelled: Story = {
   args: {
     state: {

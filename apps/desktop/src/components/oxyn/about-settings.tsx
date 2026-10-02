@@ -1,14 +1,22 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Alert02Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
+import {
+  Alert02Icon,
+  ArrowRight01Icon,
+  Copy01Icon,
+} from "@hugeicons/core-free-icons"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { Spinner } from "@/components/ui/spinner"
+import { copyToClipboard } from "@/features/metadata/clipboard"
+import { diagnosticRows, diagnosticText } from "@/lib/diagnostic-info"
+import type { BuildIdentity } from "@/lib/ipc/about"
 import type { ThirdPartyNotice } from "@/lib/third-party-licenses"
 
 import { TextInput } from "./text-field"
@@ -111,23 +119,61 @@ function ThirdPartyList({ notices }: { notices: Array<ThirdPartyNotice> }) {
 }
 
 /**
+ * Which build is running, to quote in a bug report: the copy is the lines on
+ * screen, composed here — no request, nothing read from the machine.
+ */
+function BuildIdentityBlock({ identity }: { identity: BuildIdentity | null }) {
+  return (
+    <section
+      aria-labelledby="about-build"
+      className="flex flex-col items-start gap-3"
+    >
+      <h3 id="about-build" className="text-sm font-medium">
+        Build
+      </h3>
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+        {diagnosticRows(identity).map(([label, value]) => (
+          <React.Fragment key={label}>
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="min-w-0 font-mono break-all">{value}</dd>
+          </React.Fragment>
+        ))}
+      </dl>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() =>
+          void copyToClipboard(diagnosticText(identity), "Diagnostic info")
+        }
+      >
+        <HugeiconsIcon
+          icon={Copy01Icon}
+          strokeWidth={2}
+          data-icon="inline-start"
+        />
+        Copy diagnostic info
+      </Button>
+    </section>
+  )
+}
+
+/**
  * Who holds the copyright, under which licenses Oxyn is distributed, and the
  * licenses of the packages it ships (ADR-0044). The GPL asks an interactive
  * program to show its license and the absence of warranty: this is where.
  */
 export function AboutSettings({
+  identity,
   licenses,
-  version,
 }: {
+  /** `null` when it could not be read: every line then says « Unknown ». */
+  identity: BuildIdentity | null
   licenses: ThirdPartyLicensesState
-  /** The running version, once the backend said it. */
-  version?: string | null
 }) {
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-2 text-sm">
         <h3 className="font-medium">Oxyn</h3>
-        {version ? <p>Version {version}</p> : null}
         <p>Copyright 2026 Nicolas Boromée</p>
         <p className="text-muted-foreground">
           Oxyn is free software, distributed under the GNU General Public
@@ -140,6 +186,8 @@ export function AboutSettings({
           law.
         </p>
       </section>
+
+      <BuildIdentityBlock identity={identity} />
 
       <section className="flex flex-col gap-3">
         <h3 className="text-sm font-medium">Third-party licenses</h3>

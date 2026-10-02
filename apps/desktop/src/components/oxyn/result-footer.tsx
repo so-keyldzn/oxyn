@@ -19,6 +19,8 @@ export type ResultFooterState =
       elapsedMs?: number | null
       truncated: boolean
       cancelled: boolean
+      /** Stopped at the row limit before the end of the stream was seen. */
+      rowLimitUnverified?: boolean
     }
 
 /** « 840 ms », « 12.4 s », « 3 min 05 s ». Pure, so it is tested. */
@@ -47,6 +49,13 @@ export function footerSummary(state: ResultFooterState): {
   if (state.cancelled) {
     return {
       text: `Cancelled · ${rows(state.rows)} shown, not the whole result${elapsed}`,
+      warning: true,
+    }
+  }
+  if (state.truncated && state.rowLimitUnverified) {
+    // Rows may or may not follow: asserting either would be false.
+    return {
+      text: `Row limit reached · ${rows(state.rows)} shown, completeness not verified${elapsed}`,
       warning: true,
     }
   }

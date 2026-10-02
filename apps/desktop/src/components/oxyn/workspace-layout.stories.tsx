@@ -380,6 +380,130 @@ export const CompactSidePanel: Story = {
   },
 }
 
+/**
+ * The screen's `useCompact` reads the window; here the same 1200 px threshold
+ * is read on the frame's measured width, so the play resizes a real box and
+ * the layout crosses the threshold as a window would.
+ */
+function ResizingWorkspace(args: React.ComponentProps<typeof WorkspaceLayout>) {
+  const frame = React.useRef<HTMLDivElement>(null)
+  const [compact, setCompact] = React.useState(false)
+  React.useLayoutEffect(() => {
+    const element = frame.current
+    if (!element) return
+    const observer = new ResizeObserver(() =>
+      setCompact(element.getBoundingClientRect().width < 1200)
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  // The wide preference comes back on widening; the overlay starts closed.
+  const [inspectorOpen, setInspectorOpen] = React.useState(
+    args.asideOpen ?? false
+  )
+  return (
+    <div
+      ref={frame}
+      data-testid="resizing-frame"
+      className="h-[640px] w-[1280px] overflow-hidden border"
+    >
+      <WorkspaceLayout
+        {...args}
+        compact={compact}
+        asideOpen={compact ? false : inspectorOpen}
+        onAsideOpenChange={compact ? fn() : setInspectorOpen}
+        tabs={
+          <WorkspaceTabs
+            tabs={tabs}
+            onClose={fn()}
+            onNewConsole={fn()}
+            onCancelOpening={fn()}
+          />
+        }
+        statusBar={null}
+      >
+        <TabsContent value="console:1" keepMounted className="h-full p-3">
+          <label className="flex flex-col gap-1 text-sm">
+            Draft
+            <textarea className="border px-2" aria-label="Console draft" />
+          </label>
+        </TabsContent>
+      </WorkspaceLayout>
+    </div>
+  )
+}
+
+async function resizeAcrossTheThreshold(
+  canvas: ReturnType<typeof within>,
+  expectAside: () => Promise<void>
+) {
+  const frame = canvas.getByTestId("resizing-frame")
+  const draft = canvas.getByLabelText("Console draft")
+  await userEvent.type(draft, "SELECT 1")
+  const bar = within(barOf(frame))
+  const sidebar = frame.querySelector('[data-slot="sidebar"]')
+
+  for (const width of [1050, 1280, 1050, 1280, 1199, 1200]) {
+    frame.style.width = `${width}px`
+    await waitFor(() =>
+      expect(sidebar).toHaveAttribute(
+        "data-state",
+        width < 1200 ? "collapsed" : "expanded"
+      )
+    )
+    // Still the same draft element: the workspace was never remounted.
+    await expect(canvas.getByLabelText("Console draft")).toBe(draft)
+    await expect(draft).toHaveValue("SELECT 1")
+    await expect(bar.getByText("billing primary")).toBeVisible()
+  }
+  await expectAside()
+}
+
+/**
+ * Narrowing below 1200 px unmounts the resizable column; widening mounts it
+ * again, and the group knows it a render later. Driving it before then threw
+ * « Panel constraints not found for Panel aside » and lost the workspace.
+ */
+export const ResizeAcrossCompactWithSidePanelOpen: Story = {
+  args: WithSidePanel.args,
+  render: ResizingWorkspace,
+  play: async ({ canvas }) => {
+    await resizeAcrossTheThreshold(canvas, async () => {
+      await expectAsideWidth(asidePanelOf(canvas), 280)
+      await expect(canvas.getByText("Row 12 of invoices")).toBeVisible()
+    })
+  },
+}
+
+/**
+ * The column's width is a pixel preference: a narrower window, or the sidebar
+ * still sliding open after a return to wide mode, takes room from the work
+ * area, not from the column.
+ */
+export const SidePanelKeepsItsWidthWhenTheWorkspaceNarrows: Story = {
+  args: WithSidePanel.args,
+  render: ResizingWorkspace,
+  play: async ({ canvas }) => {
+    const panel = asidePanelOf(canvas)
+    await expectAsideWidth(panel, 280)
+    canvas.getByTestId("resizing-frame").style.width = "1210px"
+    await expectAsideWidth(panel, 280)
+  },
+}
+
+export const ResizeAcrossCompactWithSidePanelClosed: Story = {
+  args: { ...WithSidePanel.args, asideOpen: false },
+  render: ResizingWorkspace,
+  play: async ({ canvas }) => {
+    await resizeAcrossTheThreshold(canvas, async () => {
+      await expect(canvas.getByText("Row 12 of invoices")).not.toBeVisible()
+      await expect(
+        canvas.getByRole("button", { name: "Toggle side panel" })
+      ).toHaveAttribute("aria-pressed", "false")
+    })
+  },
+}
+
 export const NoTab: Story = {
   parameters: { noTab: true },
   args: {

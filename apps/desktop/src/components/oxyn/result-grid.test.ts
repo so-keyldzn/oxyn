@@ -116,6 +116,15 @@ describe("estimateWidth", () => {
     const long: Array<Cell> = ["x".repeat(10_000)]
     expect(estimateWidth(column, long)).toBe(MAX_AUTO_WIDTH)
   })
+
+  it("sizes a NULL-only column for the saved marker", () => {
+    const nulls: Array<Cell> = [null, null]
+    const marker = "<value not provided by the server>"
+    const short = estimateWidth(column, nulls)
+    const long = estimateWidth(column, nulls, undefined, marker)
+    expect(long).toBeGreaterThan(short)
+    expect(long).toBe(estimateWidth(column, [marker]))
+  })
 })
 
 describe("fillPage", () => {

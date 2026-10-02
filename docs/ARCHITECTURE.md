@@ -239,8 +239,24 @@ confirm that the cursor of the already-limited query is exhausted. The `ResultBu
 strictly keeps the requested limit: a non-empty extra batch is
 thrown away and leaves the result truncated; only a real end of stream allows
 exporting the preview. This confirmation remains cancellable and under the
-execution's timeout. Draining an ordinary SQL query keeps its
-conservative stop as soon as its receive limit is reached.
+execution's timeout.
+
+An ordinary statement classified as a read gets the same confirmation at its
+receive limit (`ExecLimits::max_rows`, 10,000 by default): at most one more
+batch of the **same** cursor is read and discarded — never a replay of the SQL —
+under the same cancellation and the same deadline. Exactly N rows followed by
+the end of the stream is a whole, exportable result; a non-empty batch beyond N
+leaves it truncated. A driver that applies `max_rows` itself says the same
+thing: PostgreSQL, MySQL and SQLite read one row past the bound, drop it, and
+mark the result truncated only if that row exists. A mutating statement is not read past its limit, since
+asking the server for one more batch would extend its side effects: the stop is
+`SinkOutcome::RowLimitUnverified`, shown as `Row limit reached · completeness
+not verified` rather than as missing rows, and stays non-exportable like any
+result not proven whole. The PostgreSQL and SQLite drivers apply the same rule
+to their own bound and stop a mutating statement at N without reading row
+N + 1. The MySQL driver keeps reading past the bound: its protocol leaves no
+statement paused with rows unread, and the alternative to draining the set is
+killing the write in flight.
 
 PostgreSQL preparation examines the column types, including domain
 bases and array elements. Types without binary output, internal

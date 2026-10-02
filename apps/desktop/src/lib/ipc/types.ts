@@ -150,6 +150,13 @@ export const ConnectResponse = z.discriminatedUnion("type", [
     reason: z.string(),
     preview: ApprovalPreview.nullable(),
   }),
+  /** Saved, not opened: connecting again updates `connection`. */
+  z.object({
+    type: z.literal("saved"),
+    connection: SavedConnection,
+    message: z.string(),
+    retryable: z.boolean(),
+  }),
 ])
 export type ConnectResponse = z.infer<typeof ConnectResponse>
 
@@ -190,6 +197,7 @@ export const CommandOutcome = z.discriminatedUnion("type", [
     complete: z.boolean(),
     cancelled: z.boolean(),
     truncated: z.boolean(),
+    rowLimitUnverified: z.boolean(),
   }),
   z.object({
     type: z.literal("needsApproval"),

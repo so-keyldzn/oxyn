@@ -431,7 +431,7 @@ export function WorkspaceScreen({
       registerWorkspaceConsoles(open.session, {
         connection: open.name,
         costs: () => windowCloseRef.current.costs(),
-        closeAll: () => windowCloseRef.current.closeAll(),
+        closeAll: (signal) => windowCloseRef.current.closeAll(signal),
       }),
     [open.session, open.name]
   )

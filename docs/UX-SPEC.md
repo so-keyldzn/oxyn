@@ -339,9 +339,14 @@ preferences, according to [ADR-0013](adr/0013-preferences-workspace.md). A save
 error leaves the setting applied locally and shows an explicit retry action; it
 never announces a successful save.
 
-A missing value uses the `null` token and the `∅ NULL` marker. A string
-containing the text `NULL`, or the SQL expression `NULL` of a default value in
-Structure, keeps its text or code treatment.
+A missing value uses the `null` token and a marker, `∅ NULL` by default: the
+missing value marker of Settings → Formats, a preference saved according to
+[ADR-0013](adr/0013-preferences-workspace.md), replaces it in the grid cells
+and in `Inspect full value`, for a result already shown as for the next one,
+without running anything again. The marker is drawn only: the value stays an
+absent value, and neither the SQL nor an exported file contains it. A string
+containing the text `NULL` or the marker itself, or the SQL expression `NULL`
+of a default value in Structure, keeps its text or code treatment.
 
 AI context attachments keep their name on a single line, with a trailing
 ellipsis if needed. The full name remains viewable in the attached sources and
