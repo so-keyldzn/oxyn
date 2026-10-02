@@ -26,6 +26,7 @@ import {
   SettingsDialog,
   openSettings,
 } from "@/features/settings/settings-dialog"
+import { PreferredNullText } from "@/features/settings/preferred-null-text"
 import { useAppearance } from "@/features/settings/use-appearance"
 import { useResultFormatRefresh } from "@/features/settings/use-result-format-refresh"
 import { RouteError, RouteNotFound } from "@/features/workspace/route-failures"
@@ -97,35 +98,37 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <Toaster>
-          <div className="flex h-full min-h-0 flex-col">
-            {/* Windows and Linux: the first row, under the system title bar.
+        <PreferredNullText>
+          <Toaster>
+            <div className="flex h-full min-h-0 flex-col">
+              {/* Windows and Linux: the first row, under the system title bar.
                 macOS has its native bar, built in Rust (ADR-0041). */}
-            {client && platform === "other" ? <AppMenubarHost /> : null}
-            <div className="min-h-0 flex-1">
-              <Outlet />
-              {/* Above the routes: the start screen does not destroy them.
+              {client && platform === "other" ? <AppMenubarHost /> : null}
+              <div className="min-h-0 flex-1">
+                <Outlet />
+                {/* Above the routes: the start screen does not destroy them.
                   Inside the query provider: each workspace's panels ask the
                   backend which providers exist. */}
-              <WorkspaceHost onOpenSettings={() => openSettings()} />
+                <WorkspaceHost onOpenSettings={() => openSettings()} />
+              </div>
             </div>
-          </div>
-          {/* Once, for every screen: ⌘, opens it from the start screen too.
+            {/* Once, for every screen: ⌘, opens it from the start screen too.
               An edit of an open connection hands back its new marking, which
               its workspace takes, shown or hidden, without closing a console
               (I-04). */}
-          <SettingsDialog
-            sections={AI_SECTIONS}
-            openConnections={workspaces}
-            onOpenConnectionChanged={refreshConnection}
-          />
-          {/* An exit held by an open transaction asks here (ADR-0043). */}
-          <ExitTransactionsHost />
-          {/* The close of this window, when it is not the last (ADR-0043). */}
-          <CloseWindowHost />
-          {/* ⌘K, ⌘P and ⌘/ from every screen, through the registry. */}
-          <ActionOverlays />
-        </Toaster>
+            <SettingsDialog
+              sections={AI_SECTIONS}
+              openConnections={workspaces}
+              onOpenConnectionChanged={refreshConnection}
+            />
+            {/* An exit held by an open transaction asks here (ADR-0043). */}
+            <ExitTransactionsHost />
+            {/* The close of this window, when it is not the last (ADR-0043). */}
+            <CloseWindowHost />
+            {/* ⌘K, ⌘P and ⌘/ from every screen, through the registry. */}
+            <ActionOverlays />
+          </Toaster>
+        </PreferredNullText>
       </TooltipProvider>
       <TanStackDevtools
         config={{ position: "bottom-left", hideUntilHover: true }}
