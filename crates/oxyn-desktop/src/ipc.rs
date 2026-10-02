@@ -754,4 +754,5 @@ pub mod object_operations;
 pub mod recovery;
 pub mod results;
 pub mod settings;
+pub mod updates;
 pub mod windows;
