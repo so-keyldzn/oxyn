@@ -90,8 +90,17 @@ pub trait BatchSource: Send {
 pub enum SinkOutcome {
     /// The source is exhausted: the result is complete.
     Exhausted,
-    /// [`BufferLimits::max_rows`](crate::BufferLimits) is reached.
+    /// [`BufferLimits::max_rows`](crate::BufferLimits) is reached and rows
+    /// beyond it were received: the result is certainly incomplete.
     RowLimit,
+    /// [`BufferLimits::max_rows`](crate::BufferLimits) is reached before the
+    /// end of the stream was observed: rows may or may not be missing.
+    ///
+    /// The sink says so when it was not asked to
+    /// [confirm the end](BatchSink::with_end_confirmation), or when the source
+    /// timed out while confirming it. It is still not a whole result: what is
+    /// not proven complete is not exported.
+    RowLimitUnverified,
     /// The buffer is saturated: memory budget reached, spilling forbidden or
     /// capped.
     Saturated,
@@ -106,7 +115,7 @@ impl SinkOutcome {
         matches!(self, Self::Exhausted)
     }
 
-    /// Are rows missing?
+    /// May rows be missing?
     #[must_use]
     pub const fn is_truncated(self) -> bool {
         !self.is_complete()
@@ -148,10 +157,13 @@ impl BatchSink {
         }
     }
 
-    /// Probes for end-of-stream at the row limit of an already bounded preview.
+    /// Probes for end-of-stream at the row limit, on the same source.
     ///
     /// At most one nonempty batch is read and discarded beyond the buffer limit.
     /// Cancellation and the caller's timeout still apply; no extra rows are stored.
+    /// The probe makes the server produce one more batch: the caller only asks
+    /// for it where that has no side effect. Without it, a stop at the limit is
+    /// [`SinkOutcome::RowLimitUnverified`].
     #[must_use]
     pub fn with_end_confirmation(mut self) -> Self {
         self.confirm_end_at_limit = true;
@@ -218,14 +230,16 @@ impl BatchSink {
             // answer has somewhere to go.
             let confirming_end = match self.buffer.pressure() {
                 Pressure::Ready => false,
-                Pressure::RowLimit
-                    if self.confirm_end_at_limit && !self.buffer.stats().truncated =>
-                {
-                    true
-                }
-                Pressure::RowLimit => {
+                // The buffer already dropped rows of a batch that crossed the
+                // limit: the truncation is observed, there is nothing to probe.
+                Pressure::RowLimit if self.buffer.stats().truncated => {
                     self.seal(source, true);
                     return Ok(SinkOutcome::RowLimit);
+                }
+                Pressure::RowLimit if self.confirm_end_at_limit => true,
+                Pressure::RowLimit => {
+                    self.seal(source, true);
+                    return Ok(SinkOutcome::RowLimitUnverified);
                 }
                 Pressure::Saturated => {
                     self.seal(source, true);
@@ -258,11 +272,25 @@ impl BatchSink {
                 Ok(Some(batch)) => batch,
                 Ok(None) => {
                     self.seal(source, false);
-                    return Ok(SinkOutcome::Exhausted);
+                    // A driver bounded by `ExecLimits::max_rows` ends its
+                    // stream there and says in its stats whether rows were
+                    // left behind: the end of *that* stream is not the end of
+                    // the result.
+                    return Ok(if source.stats().truncated {
+                        SinkOutcome::RowLimit
+                    } else {
+                        SinkOutcome::Exhausted
+                    });
                 }
                 Err(error) if error.is_cancelled() => {
                     self.seal(source, true);
                     return Ok(SinkOutcome::Cancelled);
+                }
+                // The N rows arrived; only the answer about the next one did
+                // not. That is a limit left unverified, not a failed read.
+                Err(OxynError::Timeout { .. }) if confirming_end => {
+                    self.seal(source, true);
+                    return Ok(SinkOutcome::RowLimitUnverified);
                 }
                 Err(error) => {
                     // Rows already received stay readable; the buffer is
@@ -351,6 +379,8 @@ mod tests {
         remaining: Vec<RecordBatch>,
         pull_count: usize,
         error: Option<OxynError>,
+        /// A driver that capped the stream itself and left rows behind.
+        truncated: bool,
     }
 
     impl ScriptedSource {
@@ -361,6 +391,7 @@ mod tests {
                 remaining,
                 pull_count: 0,
                 error: None,
+                truncated: false,
             }
         }
 
@@ -369,6 +400,7 @@ mod tests {
                 remaining: Vec::new(),
                 pull_count: 0,
                 error: Some(error),
+                truncated: false,
             }
         }
     }
@@ -390,6 +422,7 @@ mod tests {
         fn stats(&self) -> ExecStats {
             ExecStats {
                 batches: u64::try_from(self.pull_count).unwrap_or(u64::MAX),
+                truncated: self.truncated,
                 ..ExecStats::default()
             }
         }
@@ -434,6 +467,109 @@ mod tests {
             assert_eq!(buffer.row_count(), 2);
             assert_eq!(buffer.stats().truncated, expected == SinkOutcome::RowLimit);
         }
+    }
+
+    /// Issue #122: at the receive limit N, only an observed end of stream
+    /// makes a result whole; N + 1 rows and more stay truncated.
+    #[test]
+    fn the_end_probe_tells_exactly_n_rows_from_more() {
+        const N: usize = 10;
+        for (total, expected) in [
+            (N - 1, SinkOutcome::Exhausted),
+            (N, SinkOutcome::Exhausted),
+            (N + 1, SinkOutcome::RowLimit),
+            (N * 50, SinkOutcome::RowLimit),
+        ] {
+            let buffer = Arc::new(ResultBuffer::with_limits(
+                schema(),
+                BufferLimits::default().with_max_rows(N),
+            ));
+            let sink = BatchSink::new(buffer.clone()).with_end_confirmation();
+            // Batches that land exactly on the limit: the probe is the only
+            // way to know what follows.
+            let batches = (0..total)
+                .step_by(5)
+                .map(|start| batch_of((total - start).min(5)))
+                .collect();
+            let mut source = ScriptedSource::new(batches);
+            let outcome = block_on(sink.drain(&mut source, &CancelToken::new())).expect("drain");
+            assert_eq!(outcome, expected, "{total} rows");
+            assert_eq!(buffer.row_count(), total.min(N), "{total} rows");
+            assert_eq!(
+                buffer.stats().truncated,
+                outcome.is_truncated(),
+                "{total} rows"
+            );
+            assert!(source.pull_count <= N / 5 + 1, "one batch probed at most");
+        }
+    }
+
+    /// The driver applies `ExecLimits::max_rows` too: it ends its stream at
+    /// the bound and says whether rows were left behind.
+    #[test]
+    fn the_end_of_a_capped_stream_is_not_the_end_of_the_result() {
+        let buffer = Arc::new(ResultBuffer::with_limits(
+            schema(),
+            BufferLimits::default().with_max_rows(10_usize),
+        ));
+        let sink = BatchSink::new(buffer.clone()).with_end_confirmation();
+        let mut source = ScriptedSource::new(vec![batch_of(5), batch_of(5)]);
+        source.truncated = true;
+        let outcome = block_on(sink.drain(&mut source, &CancelToken::new())).expect("drain");
+        assert_eq!(outcome, SinkOutcome::RowLimit);
+        assert!(buffer.stats().truncated);
+    }
+
+    /// Rows up to the limit, then a server that times out before saying
+    /// whether more follow.
+    struct SlowTail {
+        served: bool,
+    }
+
+    impl BatchSource for SlowTail {
+        fn schema(&self) -> SchemaRef {
+            schema()
+        }
+
+        fn next_batch(&mut self) -> BoxFuture<'_, Result<Option<RecordBatch>, OxynError>> {
+            if std::mem::replace(&mut self.served, true) {
+                return Box::pin(async {
+                    Err(OxynError::Timeout {
+                        after: std::time::Duration::from_secs(30),
+                    })
+                });
+            }
+            Box::pin(async { Ok(Some(batch_of(2))) })
+        }
+    }
+
+    #[test]
+    fn a_probe_cut_by_the_timeout_leaves_the_limit_unverified_not_failed() {
+        let buffer = Arc::new(ResultBuffer::with_limits(
+            schema(),
+            BufferLimits::default().with_max_rows(2_usize),
+        ));
+        let sink = BatchSink::new(buffer.clone()).with_end_confirmation();
+        let mut source = SlowTail { served: false };
+        let outcome = block_on(sink.drain(&mut source, &CancelToken::new())).expect("drain");
+        assert_eq!(outcome, SinkOutcome::RowLimitUnverified);
+        assert_eq!(buffer.row_count(), 2);
+        assert!(buffer.stats().truncated, "never presented as whole");
+    }
+
+    #[test]
+    fn without_the_probe_a_stop_at_the_limit_is_not_called_missing_rows() {
+        let buffer = Arc::new(ResultBuffer::with_limits(
+            schema(),
+            BufferLimits::default().with_max_rows(10_usize),
+        ));
+        let sink = BatchSink::new(buffer.clone());
+        let mut source = ScriptedSource::new(vec![batch_of(5), batch_of(5)]);
+        let outcome = block_on(sink.drain(&mut source, &CancelToken::new())).expect("drain");
+        assert_eq!(outcome, SinkOutcome::RowLimitUnverified);
+        assert!(outcome.is_truncated(), "unverified is never complete");
+        assert_eq!(source.pull_count, 2, "no read beyond the limit");
+        assert!(buffer.stats().truncated);
     }
 
     #[test]

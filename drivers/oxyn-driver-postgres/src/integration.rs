@@ -777,6 +777,35 @@ async fn the_row_bound_truncates_and_says_so() {
     session.close().await.expect("close");
 }
 
+/// Issue #122: exactly N rows end the stream like N - 1 do; only a row N + 1
+/// makes the result truncated, and it is never handed out.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn the_row_bound_reads_one_row_ahead_before_saying_truncated() {
+    let Some(session) = session().await else {
+        return;
+    };
+    for (count, truncated) in [(999, false), (1_000, false), (1_001, true)] {
+        let exec_request = ExecRequest::new(
+            QueryLanguage::Sql(SqlDialect::Postgres),
+            format!("SELECT i FROM generate_series(1, {count}) AS s(i)"),
+        )
+        .with_intent(StatementIntent::Read)
+        .with_limits(ExecLimits::default().with_max_rows(Some(1_000)));
+
+        let mut cursor = session
+            .execute(exec_request, &CancelToken::new())
+            .await
+            .expect("execution");
+        let (rows, _) = drain(&mut cursor).await;
+
+        assert_eq!(rows, count.min(1_000), "{count} rows");
+        assert_eq!(cursor.stats().truncated, truncated, "{count} rows");
+    }
+
+    session.close().await.expect("close");
+}
+
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn read_only_is_enforced_by_the_server() {

@@ -87,7 +87,7 @@ enum CursorEvent {
 enum Halt {
     /// The server has nothing more to send.
     Exhausted,
-    /// [`ExecLimits::max_rows`] is reached.
+    /// A row beyond [`ExecLimits::max_rows`] was received, and dropped.
     RowLimit,
     /// The cancellation token fired.
     Cancelled,
@@ -486,6 +486,14 @@ async fn run(
                 let _ = sender.send(learnt);
             }
 
+            // One row beyond the bound: the result is really longer. It is
+            // neither decoded nor kept; reading it, under the same token and
+            // deadline as every other row, is what tells exactly N rows from
+            // more than N.
+            if limits.max_rows.is_some_and(|max| produced >= max) {
+                break Halt::RowLimit;
+            }
+
             if let Err(error) = assembler.push(&row) {
                 let oxyn = OxynError::driver(driver.clone(), ErrorClass::Permanent, error);
                 let _ = events.send(CursorEvent::Failed(Box::new(oxyn))).await;
@@ -512,9 +520,6 @@ async fn run(
                     Emission::Abandoned => break Halt::Abandoned,
                     Emission::Failed => break Halt::Failed,
                 }
-            }
-            if limit_reached {
-                break Halt::RowLimit;
             }
         }
     };

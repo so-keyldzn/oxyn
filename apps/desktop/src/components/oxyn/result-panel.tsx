@@ -69,6 +69,8 @@ export type ResultState =
       complete: boolean
       truncated: boolean
       cancelled: boolean
+      /** Stopped at the row limit before the end of the stream was seen. */
+      rowLimitUnverified?: boolean
       elapsedMs?: number
     }
   | { status: "empty"; message: string }
@@ -359,6 +361,7 @@ export const ResultPanel = React.memo(function ResultPanel({
             elapsedMs: state.elapsedMs,
             truncated: state.truncated,
             cancelled: state.cancelled,
+            rowLimitUnverified: state.rowLimitUnverified,
           }}
           note={footerNote}
           actions={actions}

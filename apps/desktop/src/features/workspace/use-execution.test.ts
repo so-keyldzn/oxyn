@@ -21,6 +21,26 @@ describe("stateFromOutcome", () => {
     })
   })
 
+  it("keeps an unverified row-limit stop incomplete", () => {
+    const { state } = stateFromOutcome({
+      type: "executed",
+      result: "r",
+      columns: [{ name: "id", dataType: "Int64", nullable: false }],
+      rows: 10_000,
+      elapsedMs: 40,
+      complete: false,
+      cancelled: false,
+      truncated: true,
+      rowLimitUnverified: true,
+    })
+    expect(state).toMatchObject({
+      status: "populated",
+      complete: false,
+      truncated: true,
+      rowLimitUnverified: true,
+    })
+  })
+
   it("holds a production write for review instead of running it", () => {
     const { state, approval } = stateFromOutcome({
       type: "needsApproval",

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="a12bd5a80f50" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="9260fa609e90" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -227,8 +227,21 @@ confirmer l'épuisement du curseur de la requête déjà limitée. Le `ResultBuf
 conserve strictement la limite demandée : un lot supplémentaire non vide est
 jeté et laisse le résultat tronqué ; seule une fin réelle du flux permet
 l'export de l'aperçu. Cette confirmation reste annulable et sous le délai de
-l'exécution. Le drainage d'une requête SQL ordinaire conserve son arrêt
-conservateur dès que sa limite de réception est atteinte.
+l'exécution.
+
+Une instruction ordinaire classée comme lecture reçoit la même confirmation à
+sa limite de réception (`ExecLimits::max_rows`, 10 000 par défaut) : au plus un
+lot de plus du **même** curseur est lu puis jeté — jamais une réexécution du
+SQL —, sous la même annulation et le même délai. Exactement N lignes suivies de
+la fin du flux forment un résultat entier, exportable ; un lot non vide au-delà
+de N le laisse tronqué. Un pilote qui applique lui-même `max_rows` dit la même
+chose : PostgreSQL, MySQL et SQLite lisent une ligne au-delà de la borne, la
+jettent, et ne marquent le résultat tronqué que si cette ligne existe. Une
+instruction mutante n'est pas lue au-delà de sa
+limite, car demander un lot de plus au serveur prolongerait ses effets de bord :
+l'arrêt est `SinkOutcome::RowLimitUnverified`, affiché `Row limit reached ·
+completeness not verified` plutôt que comme des lignes manquantes, et reste non
+exportable comme tout résultat dont l'intégralité n'est pas prouvée.
 
 La préparation PostgreSQL examine les types des colonnes, y compris les bases
 de domaines et les éléments de tableaux. Les types sans sortie binaire, les

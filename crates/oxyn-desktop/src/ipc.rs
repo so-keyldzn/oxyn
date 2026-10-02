@@ -324,6 +324,9 @@ pub enum CommandOutcome {
         complete: bool,
         cancelled: bool,
         truncated: bool,
+        /// Stopped at the row limit before the end of the stream was seen:
+        /// rows may or may not be missing, and the result is not whole.
+        row_limit_unverified: bool,
     },
     #[serde(rename_all = "camelCase")]
     NeedsApproval {
