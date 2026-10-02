@@ -12,8 +12,8 @@ mod capabilities;
 use std::sync::Arc;
 
 use oxyn_core::{
-    Actor, CancelToken, Capabilities, Command, CommandId, ConnectionId, ExecRequest, OxynError,
-    QueryLanguage, SessionId,
+    Actor, CancelToken, Command, CommandId, ConnectionId, ExecRequest, OxynError, QueryLanguage,
+    SessionId,
 };
 use oxyn_exec::Outcome;
 
@@ -22,7 +22,7 @@ use super::documents::Writers;
 use super::exit::{ConsoleTransactions, ExitHold};
 use super::recovery::LocalWork;
 use crate::ipc::consoles::{
-    ConsoleRun, ConsoleSession, ContextOutcome, RunTarget, SessionPlace, bind,
+    ConsoleRun, ConsoleSession, ContextOutcome, RunTarget, SessionPlace, bind, refuses_writes,
 };
 use crate::ipc::{self, CommandOutcome, IpcError};
 
@@ -168,7 +168,7 @@ impl Backend {
         Ok(ConsoleSession {
             session: session.to_string(),
             capabilities: ipc::capability_names(capabilities),
-            read_only: read_only || capabilities.contains(Capabilities::READ_ONLY_SESSION),
+            read_only: refuses_writes(read_only, capabilities),
             transaction_state: transaction_state.into(),
         })
     }

@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use oxyn_core::{ParameterType, ScalarValue};
+use oxyn_core::{Capabilities, ParameterType, ScalarValue};
 use serde::{Deserialize, Serialize};
 
 /// A console's own session, opened beside the catalog's
@@ -26,6 +26,20 @@ pub struct ConsoleSession {
     /// What the session reported at opening; execution events carry it on
     /// ([ADR-0039](../../../../docs/adr/0039-etat-de-transaction-d-une-session.md) §4).
     pub transaction_state: super::TransactionStateView,
+}
+
+/// Whether a session refuses writes: the connection is marked so, or the
+/// session declares `READ_ONLY_SESSION` **and** has dropped `DML` and `DDL`.
+///
+/// `READ_ONLY_SESSION` alone says the server *can* enforce read-only;
+/// PostgreSQL and MySQL declare it beside `DML` and `DDL` on a writable
+/// session. Reading it as a state marks every one of them READ ONLY while
+/// their writes commit. SQLite, opened read-only by the user or the file
+/// system, keeps the flag and removes both writes: that is the state.
+pub fn refuses_writes(configured: bool, capabilities: Capabilities) -> bool {
+    configured
+        || (capabilities.contains(Capabilities::READ_ONLY_SESSION)
+            && !capabilities.intersects(Capabilities::DML | Capabilities::DDL))
 }
 
 /// Where a session resolves unqualified names, as the session reports it.
@@ -329,5 +343,41 @@ mod tests {
             serde_json::from_str(r#"[{"type":"timestampNaive","text":"2024-01-15T10:00:00"}]"#)
                 .expect("valid input");
         assert!(bind(&parsed).is_ok());
+    }
+
+    /// SQLite's read-only session, as `SqliteDriver::session_capabilities`
+    /// builds it: the flag kept, both writes removed.
+    fn sqlite_read_only() -> Capabilities {
+        oxyn_driver_sqlite::driver::SqliteDriver::ceiling()
+            .difference(Capabilities::DML | Capabilities::DDL)
+    }
+
+    #[test]
+    fn a_writable_server_session_is_not_marked_read_only() {
+        for (driver, capabilities) in [
+            (
+                "postgres",
+                oxyn_driver_postgres::variant::base_capabilities(),
+            ),
+            ("mysql", oxyn_driver_mysql::variant::base_capabilities()),
+        ] {
+            assert!(
+                capabilities.contains(
+                    Capabilities::DML | Capabilities::DDL | Capabilities::READ_ONLY_SESSION
+                ),
+                "{driver} declares the ability to enforce read-only beside its writes"
+            );
+            assert!(!refuses_writes(false, capabilities), "{driver}");
+            assert!(refuses_writes(true, capabilities), "{driver}");
+        }
+    }
+
+    #[test]
+    fn a_read_only_sqlite_session_stays_marked() {
+        assert!(refuses_writes(false, sqlite_read_only()));
+        assert!(refuses_writes(true, sqlite_read_only()));
+        let writable = oxyn_driver_sqlite::driver::SqliteDriver::ceiling()
+            .difference(Capabilities::READ_ONLY_SESSION);
+        assert!(!refuses_writes(false, writable));
     }
 }
