@@ -1,3 +1,5 @@
+import * as React from "react"
+
 import type { Cell } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 
@@ -16,12 +18,19 @@ export function formatBytes(bytes: number) {
 }
 
 /**
+ * The marker of an absent value, as the preferences set it (ADR-0013); `∅ NULL`
+ * until they say otherwise. Carried apart from the cell: a NULL crosses the IPC
+ * as NULL and only its drawing takes the marker.
+ */
+export const NullTextContext = React.createContext("∅ NULL")
+
+/**
  * One formatted cell. Rendered as text only — never as HTML — whatever the
  * server sent: a cell value is the first place an XSS in the webview would
  * come from (docs/adr/0029-interface-tauri-shadcn.md).
  *
- * An absent value is `∅ NULL` in its own token, never the word alone: a text
- * column may literally contain « NULL ». A value Rust cut keeps its text and a
+ * An absent value is the preferred marker in its own token, never plain text: a
+ * text column may literally contain « NULL » or the marker itself. A value Rust cut keeps its text and a
  * size marker; the CSS ellipsis is then the only ellipsis drawn.
  */
 export function CellValue({
@@ -34,13 +43,14 @@ export function CellValue({
   /** The full text, when the caller knows the column is too narrow for it. */
   title?: string
 }) {
+  const nullText = React.useContext(NullTextContext)
   if (cell === null) {
     return (
       <span
         className={cn("shrink-0 text-null select-none", className)}
         data-null
       >
-        ∅ NULL
+        {nullText}
       </span>
     )
   }

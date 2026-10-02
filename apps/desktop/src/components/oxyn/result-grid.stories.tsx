@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { invoiceColumns, syntheticPages } from "./fixtures"
+import { NullTextContext } from "./cell-value"
 import { centerOf, drag } from "./pointer-drag-fixtures"
 import { ResultGrid } from "./result-grid"
 import type { FetchPage } from "./result-grid"
@@ -362,6 +363,43 @@ export const NullIsNotTheWordNull: Story = {
     for (const element of literal) {
       await expect(element).not.toHaveAttribute("data-null")
     }
+  },
+}
+
+const missingColumns: Array<ResultColumn> = [
+  { name: "missing_value", dataType: "Null", nullable: true },
+  { name: "note", dataType: "Utf8", nullable: true },
+]
+
+/**
+ * The marker saved in Settings → Formats draws the absent values; a text equal
+ * to that marker stays text, without the absent-value token.
+ */
+export const SavedNullMarker: Story = {
+  decorators: [
+    (Story) => (
+      <NullTextContext value="<MISSING>">
+        <Story />
+      </NullTextContext>
+    ),
+  ],
+  args: {
+    resultKey: "story-null-marker",
+    columns: missingColumns,
+    rowCount: 1,
+    fetchPage: pagesOf(
+      1,
+      (_, column) => (column === 0 ? null : "<MISSING>"),
+      2
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    await waitFor(() =>
+      expect(canvasElement.querySelector("[data-null]")).not.toBeNull()
+    )
+    const absent = canvasElement.querySelectorAll("[data-null]")
+    await expect(absent).toHaveLength(1)
+    await expect(absent[0]).toHaveTextContent(/^<MISSING>$/)
   },
 }
 
