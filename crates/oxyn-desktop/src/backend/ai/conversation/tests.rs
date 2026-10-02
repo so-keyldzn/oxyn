@@ -2946,3 +2946,6 @@ mod history;
 
 /// I-03: a provider's streamed error reaches the webview without the key.
 mod provider_errors;
+
+/// An external agent's abandoned query stops on a real PostgreSQL server.
+mod server_cancel;
