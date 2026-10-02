@@ -1,11 +1,13 @@
 //! What kind of installation runs, and whether it can replace itself.
 //!
 //! Pure: the build, the platform, the executable's path and `$APPIMAGE` are
-//! passed in, and so is the test of a folder's write access — the only
-//! reading of the disk, done once at launch.
+//! passed in. The one reading of the disk — whether the installation's
+//! folder can be written — is left to the caller, on the blocking pool once
+//! an update is downloaded: at launch, on the main thread, a slow or
+//! unreachable network home would hold the first window back (I-05).
 
 use std::ffi::OsStr;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use crate::ipc::updates::DisabledReason;
 
@@ -41,11 +43,12 @@ pub(crate) struct Probe<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Installation {
-    /// A macOS `.app` bundle. `writable` when its folder lets Oxyn swap it
-    /// without an administrator: only then does quitting install.
-    MacBundle { writable: bool },
-    /// A Linux AppImage, replaced in place.
-    AppImage { writable: bool },
+    /// A macOS `.app` bundle. Quitting installs only where `quit_folder`, its
+    /// folder, lets Oxyn swap it without an administrator; `None` where it
+    /// never can.
+    MacBundle { quit_folder: Option<PathBuf> },
+    /// A Linux AppImage, replaced in place, on the same terms.
+    AppImage { quit_folder: Option<PathBuf> },
     /// Nothing Oxyn replaces itself.
     Unsupported(DisabledReason),
 }
@@ -58,10 +61,14 @@ impl Installation {
         }
     }
 
-    pub(crate) const fn installs_on_quit(&self) -> bool {
+    /// The folder whose write access decides whether quitting installs,
+    /// tried by [`folder_is_writable`]. `None`: quitting never installs.
+    pub(crate) fn quit_folder(&self) -> Option<&Path> {
         match self {
-            Self::MacBundle { writable } | Self::AppImage { writable } => *writable,
-            Self::Unsupported(_) => false,
+            Self::MacBundle { quit_folder } | Self::AppImage { quit_folder } => {
+                quit_folder.as_deref()
+            }
+            Self::Unsupported(_) => None,
         }
     }
 }
@@ -72,20 +79,23 @@ impl Installation {
 /// another tree. On Linux only an AppImage replaces itself; a deb or an rpm
 /// belongs to the package manager. On macOS, an app run from a disk image
 /// (`/Volumes`) or translocated by Gatekeeper is never written to on quit.
-pub(crate) fn classify(probe: Probe<'_>, writable: impl Fn(&Path) -> bool) -> Installation {
+pub(crate) fn classify(probe: Probe<'_>) -> Installation {
     if probe.debug_build {
         return Installation::Unsupported(DisabledReason::Dev);
     }
     match probe.platform {
         Platform::Linux => match probe.appimage.filter(|path| !path.is_empty()) {
             Some(image) => Installation::AppImage {
-                writable: Path::new(image).parent().is_some_and(&writable),
+                quit_folder: Path::new(image).parent().map(Path::to_path_buf),
             },
             None => Installation::Unsupported(DisabledReason::PackageManager),
         },
         Platform::MacOs => match bundle_of(probe.executable) {
             Some(bundle) => Installation::MacBundle {
-                writable: !read_only_location(bundle) && bundle.parent().is_some_and(&writable),
+                quit_folder: bundle
+                    .parent()
+                    .filter(|_| !read_only_location(bundle))
+                    .map(Path::to_path_buf),
             },
             // A binary outside a bundle: `cargo run` of a release build.
             None => Installation::Unsupported(DisabledReason::Dev),

@@ -29,8 +29,8 @@ impl Failure {
         }
     }
 
-    /// The manifest points the archive somewhere else than github.com, or
-    /// over plain HTTP: refused before any byte is asked for, and not
+    /// The manifest points the archive somewhere else than the project's
+    /// GitHub releases, or over plain HTTP: refused before any byte is asked for, and not
     /// retried, since the manifest will say the same.
     pub(crate) fn foreign_asset() -> Self {
         Self {
@@ -39,6 +39,20 @@ impl Failure {
                 "The update manifest points outside Oxyn's GitHub releases. Nothing was downloaded."
                     .into(),
             retryable: false,
+        }
+    }
+
+    /// The archive passed `limit` bytes, announced or received: stopped
+    /// before its signature could be checked. Retryable — a release fixed
+    /// meanwhile is fetched by the next try.
+    pub(crate) fn oversized(limit: u64) -> Self {
+        Self {
+            kind: UpdateErrorKind::Server,
+            message: format!(
+                "The update is larger than the {} MiB Oxyn accepts. It was not downloaded.",
+                limit / (1024 * 1024)
+            ),
+            retryable: true,
         }
     }
 }

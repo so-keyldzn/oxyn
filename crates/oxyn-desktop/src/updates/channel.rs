@@ -10,12 +10,24 @@ pub(crate) const STABLE_MANIFEST: &str =
 /// The release pages' prefix, completed by a validated version.
 const RELEASE_PAGE: &str = "https://github.com/so-keyldzn/oxyn/releases/tag/v";
 
-/// Whether an archive may be downloaded from `url`. The plugin enforces
-/// HTTPS on the endpoint only, not on the URL the manifest announces; the
-/// signature still guards the bytes, this guards where they are asked from.
-/// GitHub redirects the download to its storage, which `reqwest` follows.
+/// The path every release asset of the project starts with. A test holds
+/// [`STABLE_MANIFEST`] and the release page to it, so that renaming the
+/// repository cannot leave one of them behind.
+pub(crate) const RELEASES: &str = "/so-keyldzn/oxyn/releases/";
+
+/// Whether an archive may be downloaded from `url`: an asset of one of the
+/// project's releases. The plugin enforces HTTPS on the endpoint only, not
+/// on the URL the manifest announces; the signature still guards the bytes,
+/// this guards where they are asked from — not another repository's asset,
+/// of whatever size. GitHub redirects the download to its storage, which
+/// `reqwest` follows over HTTPS only.
 pub(crate) fn is_release_asset(url: &tauri::Url) -> bool {
-    url.scheme() == "https" && url.host_str() == Some("github.com")
+    url.scheme() == "https"
+        && url.host_str() == Some("github.com")
+        && url
+            .path()
+            .strip_prefix(RELEASES)
+            .is_some_and(|asset| asset.starts_with("download/"))
 }
 
 /// The page of `version`'s release. `None` unless `version` is a plain

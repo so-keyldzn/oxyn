@@ -10,7 +10,6 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -83,7 +82,7 @@ pub(crate) fn take_notice(folder: &Path, current_version: &str) -> Option<Update
 /// A verified update, its bytes, and where to record the outcome.
 pub(crate) struct Install {
     pub(crate) update: Update,
-    pub(crate) bytes: Arc<[u8]>,
+    pub(crate) bytes: Vec<u8>,
     pub(crate) from: String,
     pub(crate) folder: Option<PathBuf>,
 }
@@ -102,12 +101,12 @@ impl Install {
     /// Replaces the installation, then records the outcome. Blocking and
     /// without a time limit — interrupted midway, the swap could leave no
     /// application at all — so never on the main thread, except through
-    /// [`Self::run_within`]. An error is recorded, never raised: the exit
-    /// goes on.
+    /// [`Self::run_within`], which says when cutting it is safe. An error is
+    /// recorded, never raised: the exit goes on.
     pub(crate) fn run(self) {
         let to = self.update.version.clone();
         let started = Instant::now();
-        let outcome = match self.update.install(&*self.bytes) {
+        let outcome = match self.update.install(&self.bytes) {
             Ok(()) => {
                 tracing::info!(
                     from = %self.from,
@@ -144,10 +143,32 @@ impl Install {
     /// [`Self::run`] on a thread of its own, waited for at most `grace`.
     ///
     /// For the exits that run on the main thread: past `grace` the thread is
-    /// left to finish while the process ends. The plugin asks macOS for an
-    /// administrator on the main thread, which then waits here: that request
-    /// only follows a refused move of the bundle, before anything was moved.
+    /// left behind while the process ends. Cutting it is safe only where the
+    /// swap is short, so this installs on macOS alone. There, the plugin
+    /// (2.13.1, `install_inner`) extracts the whole archive into a temporary
+    /// folder first — nearly all the time, which leaves the bundle untouched
+    /// if cut — then renames the bundle into a temporary backup and the
+    /// extracted copy onto it: two renames on one disk, microseconds apart.
+    /// Cut between them, `/Applications` lacks Oxyn.app until the backup is
+    /// moved back from `$TMPDIR`; a wait without limit would not remove that
+    /// window, and would hold a Dock Quit or a logout on a stuck disk.
+    ///
+    /// On Linux the plugin moves the AppImage aside, then writes the new one
+    /// over seconds: cut there, it leaves a truncated image. Linux exits go
+    /// through the ordered shutdown, which waits for the end; this one keeps
+    /// the update for the next launch, which downloads it again.
+    ///
+    /// The plugin asks macOS for an administrator on the main thread, which
+    /// then waits here: that request only follows a refused move of the
+    /// bundle, before anything was moved.
     pub(crate) fn run_within(self, grace: Duration) {
+        if !cfg!(target_os = "macos") {
+            tracing::warn!(
+                version = %self.update.version,
+                "an exit without the ordered shutdown does not install the update"
+            );
+            return;
+        }
         let (done, finished) = mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("oxyn-update-install".into())

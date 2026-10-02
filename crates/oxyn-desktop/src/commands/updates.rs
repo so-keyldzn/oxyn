@@ -98,6 +98,12 @@ pub async fn set_automatic_updates(
 /// launch. Without `confirmed`, statements or exports running anywhere stop
 /// it with `busy`; an open transaction still asks, with the `restart` scope.
 ///
+/// `confirmed` is the webview's word, not a proof: a script there can skip
+/// the `busy` dialog. Kept so, since that script can already stop the same
+/// work through `request_exit`; what it adds is a restart into an update
+/// whose signature was already verified. No transaction is committed or
+/// rolled back unasked.
+///
 /// # Errors
 /// No update is ready.
 #[tauri::command]

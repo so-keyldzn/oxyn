@@ -343,18 +343,15 @@ fn a_development_build_never_updates() {
         ..probe(Platform::MacOs, BUNDLED, None)
     };
     assert_eq!(
-        classify(debug, |_| true),
+        classify(debug),
         Installation::Unsupported(DisabledReason::Dev)
     );
     assert_eq!(
-        classify(
-            probe(
-                Platform::MacOs,
-                "/Users/me/oxyn/target/release/oxyn-desktop",
-                None
-            ),
-            |_| true
-        ),
+        classify(probe(
+            Platform::MacOs,
+            "/Users/me/oxyn/target/release/oxyn-desktop",
+            None
+        )),
         Installation::Unsupported(DisabledReason::Dev),
         "a binary outside a bundle"
     );
@@ -364,63 +361,75 @@ fn a_development_build_never_updates() {
 fn on_linux_only_an_appimage_updates_itself() {
     let executable = "/usr/bin/oxyn-desktop";
     assert_eq!(
-        classify(probe(Platform::Linux, executable, None), |_| true),
+        classify(probe(Platform::Linux, executable, None)),
         Installation::Unsupported(DisabledReason::PackageManager)
     );
     assert_eq!(
-        classify(probe(Platform::Linux, executable, Some("")), |_| true),
+        classify(probe(Platform::Linux, executable, Some(""))),
         Installation::Unsupported(DisabledReason::PackageManager),
         "an empty APPIMAGE is no image"
     );
-    let image = Some("/home/me/Applications/Oxyn.AppImage");
+    let image = classify(probe(
+        Platform::Linux,
+        executable,
+        Some("/home/me/Applications/Oxyn.AppImage"),
+    ));
     assert_eq!(
-        classify(probe(Platform::Linux, executable, image), |folder| {
-            folder == Path::new("/home/me/Applications")
-        }),
-        Installation::AppImage { writable: true }
+        image.quit_folder(),
+        Some(Path::new("/home/me/Applications"))
     );
+    assert_eq!(image.blocked(), None);
     assert_eq!(
-        classify(probe(Platform::Linux, executable, image), |_| false),
-        Installation::AppImage { writable: false }
-    );
-    assert_eq!(
-        classify(probe(Platform::Other, executable, None), |_| true),
+        classify(probe(Platform::Other, executable, None)),
         Installation::Unsupported(DisabledReason::PackageManager)
     );
 }
 
 #[test]
 fn a_mac_bundle_installs_on_quit_only_where_it_can_be_written() {
-    let applications = |folder: &Path| folder == Path::new("/Applications");
-    let installed = classify(probe(Platform::MacOs, BUNDLED, None), applications);
-    assert_eq!(installed, Installation::MacBundle { writable: true });
-    assert!(installed.installs_on_quit());
+    let installed = classify(probe(Platform::MacOs, BUNDLED, None));
+    assert_eq!(installed.quit_folder(), Some(Path::new("/Applications")));
     assert_eq!(installed.blocked(), None);
 
+    let mounted = classify(probe(
+        Platform::MacOs,
+        "/Volumes/Oxyn/Oxyn.app/Contents/MacOS/oxyn-desktop",
+        None,
+    ));
     assert_eq!(
-        classify(probe(Platform::MacOs, BUNDLED, None), |_| false),
-        Installation::MacBundle { writable: false },
-        "a folder the user cannot write"
-    );
-    assert_eq!(
-        classify(
-            probe(
-                Platform::MacOs,
-                "/Volumes/Oxyn/Oxyn.app/Contents/MacOS/oxyn-desktop",
-                None
-            ),
-            |_| true
-        ),
-        Installation::MacBundle { writable: false },
+        mounted,
+        Installation::MacBundle { quit_folder: None },
         "a mounted disk image"
     );
     let translocated =
         "/private/var/folders/x/T/AppTranslocation/1234/d/Oxyn.app/Contents/MacOS/oxyn-desktop";
     assert_eq!(
-        classify(probe(Platform::MacOs, translocated, None), |_| true),
-        Installation::MacBundle { writable: false },
+        classify(probe(Platform::MacOs, translocated, None)),
+        Installation::MacBundle { quit_folder: None },
         "a translocated app"
     );
+}
+
+#[test]
+fn quitting_installs_once_the_folder_proves_writable_after_the_download() {
+    let folder = tempfile::tempdir().expect("temporary directory");
+    let probed = |quit_folder| {
+        let updates = Updates::assemble(
+            "0.0.2".into(),
+            true,
+            false,
+            &Installation::MacBundle { quit_folder },
+            None,
+            None,
+        );
+        runtime().block_on(updates.shared.installs_on_quit())
+    };
+    assert!(probed(Some(folder.path().to_path_buf())));
+    assert!(
+        !probed(Some(folder.path().join("missing"))),
+        "a folder the user cannot write"
+    );
+    assert!(!probed(None), "a read-only location is never tried");
 }
 
 #[test]
@@ -477,7 +486,9 @@ fn oxyn_updates_off_locks_updates() {
         "0.0.2".into(),
         true,
         true,
-        &Installation::MacBundle { writable: true },
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
         None,
         None,
     );
@@ -511,7 +522,9 @@ fn turning_automatic_updates_off_is_saved_then_published() {
         "0.0.2".into(),
         true,
         false,
-        &Installation::MacBundle { writable: true },
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
         Some(folder.path().to_path_buf()),
         None,
     );
@@ -531,7 +544,9 @@ fn turning_automatic_updates_off_is_saved_then_published() {
         "0.0.2".into(),
         true,
         false,
-        &Installation::MacBundle { writable: true },
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
         None,
         None,
     );
@@ -564,6 +579,61 @@ fn an_archive_is_only_asked_from_github_over_https() {
     ));
     assert!(!asset("https://github.com.evil.example/x.tar.gz"));
     assert!(!asset("https://evil.example/github.com/x.tar.gz"));
+    assert!(
+        !asset("https://github.com/someone/else/releases/download/v1/huge.tar.gz"),
+        "another repository's release"
+    );
+    assert!(
+        !asset("https://github.com/so-keyldzn/oxyn/archive/refs/tags/v0.0.3.tar.gz"),
+        "not a release asset"
+    );
+    assert!(
+        !asset("https://github.com/so-keyldzn/oxyn/releases/download/../../../else/x.tar.gz"),
+        "a path that climbs out, resolved by the parser"
+    );
+    assert!(!asset(
+        "https://github.com/so-keyldzn/oxyn/releases/download/%2e%2e/%2e%2e/%2e%2e/else/x.tar.gz"
+    ));
+}
+
+#[test]
+fn the_endpoint_and_the_release_page_share_the_assets_prefix() {
+    let in_releases = |url: &str| {
+        tauri::Url::parse(url)
+            .expect("a URL")
+            .path()
+            .starts_with(channel::RELEASES)
+    };
+    assert!(in_releases(channel::STABLE_MANIFEST));
+    assert!(in_releases(
+        &channel::release_page("0.0.3").expect("a semantic version")
+    ));
+}
+
+// ---- Download limit ------------------------------------------------------------------
+
+#[test]
+fn a_download_stops_past_its_limit_received_or_announced() {
+    use super::{DOWNLOAD_LIMIT, exceeds_download_limit};
+    assert!(
+        !exceeds_download_limit(89_414_136, Some(89_414_136)),
+        "today's AppImage"
+    );
+    assert!(!exceeds_download_limit(DOWNLOAD_LIMIT, None));
+    assert!(exceeds_download_limit(DOWNLOAD_LIMIT + 1, None));
+    assert!(
+        exceeds_download_limit(1, Some(DOWNLOAD_LIMIT + 1)),
+        "an announced length stops the first chunk"
+    );
+    assert!(exceeds_download_limit(u64::MAX, None));
+}
+
+#[test]
+fn an_oversized_archive_is_a_server_failure_worth_retrying() {
+    let failure = super::failure::Failure::oversized(super::DOWNLOAD_LIMIT);
+    assert_eq!(failure.kind, UpdateErrorKind::Server);
+    assert!(failure.retryable);
+    assert!(failure.message.contains("256 MiB"), "{}", failure.message);
 }
 
 #[test]
@@ -751,7 +821,9 @@ fn the_notice_speaks_once_and_only_of_this_version() {
         "0.0.3".into(),
         true,
         false,
-        &Installation::MacBundle { writable: true },
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
         None,
         Some(UpdateNotice::Installed {
             from: "0.0.2".into(),
@@ -769,7 +841,9 @@ fn updates_with(machine: Machine) -> Updates {
         "0.0.2".into(),
         true,
         false,
-        &Installation::MacBundle { writable: true },
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
         None,
         None,
     );

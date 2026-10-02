@@ -43,8 +43,24 @@ use crate::ipc::updates::{DisabledReason, RestartOutcome, UpdateNotice, UpdateSn
 
 /// How long a check may take. The manifest is a few hundred bytes; the
 /// download that may follow has no such limit — a slow link must not lose
-/// it — and is cancelled by the user instead.
+/// it — only [`STALL_TIMEOUT`] and [`DOWNLOAD_LIMIT`].
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a request may go without receiving a byte. Per read, not per
+/// request: a slow link that progresses keeps its download; a stream that
+/// stopped — a captive portal, a proxy holding the answer — fails as
+/// `offline` instead of leaving `downloading` on for the session, which
+/// keeps the scheduler from checking again.
+const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The largest archive Oxyn downloads. The plugin keeps the whole body in
+/// memory before checking its signature, so an unverified asset must not
+/// choose that size. The largest archive published, the v0.0.1 AppImage,
+/// weighs 89,414,136 bytes (2026-10-02): this leaves three times that, on
+/// the order of a result's memory budget (PERFORMANCE). The buffer grows by
+/// doubling, so at most about twice this is held, briefly, before the
+/// refusal.
+const DOWNLOAD_LIMIT: u64 = 256 * 1024 * 1024;
 
 /// How often a download's progress reaches the windows: four times a second.
 const PROGRESS_PERIOD: Duration = Duration::from_millis(250);
@@ -85,7 +101,8 @@ struct Shared {
     restart: AtomicBool,
     /// Exports being written, across every window.
     exports: AtomicUsize,
-    installs_on_quit: bool,
+    /// See [`Installation::quit_folder`]: tried once a download is verified.
+    quit_folder: Option<PathBuf>,
     /// `app_config_dir()`: the preference and the notice. `None` when the
     /// system gives no configuration folder.
     folder: Option<PathBuf>,
@@ -94,12 +111,17 @@ struct Shared {
 
 struct Pending {
     update: Update,
-    bytes: Option<Arc<[u8]>>,
+    bytes: Option<Vec<u8>>,
 }
 
 impl Updates {
     /// Reads the preference, the previous exit's notice, `OXYN_UPDATES` and
     /// the installation — once, before the window, like the workspace.
+    ///
+    /// Two files of at most 64 KiB in the configuration folder, which the
+    /// workspace's own launch reads too: the first snapshot needs them. The
+    /// installation's folder, which may sit on a slow network mount, is not
+    /// touched here (I-05): its write access is tried after a download.
     ///
     /// `identifier` is the application's: the folder is the one Tauri's
     /// `app_config_dir()` resolves, available before the application exists.
@@ -108,15 +130,12 @@ impl Updates {
         let locked = preference::locked(std::env::var_os(preference::LOCK_VARIABLE).as_deref());
         let executable = std::env::current_exe().unwrap_or_default();
         let appimage = std::env::var_os("APPIMAGE");
-        let installation = installation::classify(
-            Probe {
-                debug_build: cfg!(debug_assertions),
-                platform: Platform::current(),
-                executable: &executable,
-                appimage: appimage.as_deref(),
-            },
-            installation::folder_is_writable,
-        );
+        let installation = installation::classify(Probe {
+            debug_build: cfg!(debug_assertions),
+            platform: Platform::current(),
+            executable: &executable,
+            appimage: appimage.as_deref(),
+        });
         let automatic = folder.as_deref().is_none_or(preference::read);
         let notice = folder
             .as_deref()
@@ -158,7 +177,7 @@ impl Updates {
                 last_success: Mutex::new(None),
                 restart: AtomicBool::new(false),
                 exports: AtomicUsize::new(0),
-                installs_on_quit: installation.installs_on_quit(),
+                quit_folder: installation.quit_folder().map(PathBuf::from),
                 folder,
                 notice: Mutex::new(notice),
             }),
@@ -457,32 +476,52 @@ impl Shared {
             return;
         };
         let reporter = Arc::clone(&self);
+        // The plugin reads the body to its end before returning: an archive
+        // too large is stopped by dropping its download, which closes the
+        // connection.
+        let oversized = Arc::new(Notify::new());
+        let too_large = Arc::clone(&oversized);
         let mut received: u64 = 0;
         let mut reported: Option<Instant> = None;
-        let downloaded = update
-            .download(
-                move |chunk, total| {
-                    received = received.saturating_add(u64::try_from(chunk).unwrap_or(u64::MAX));
-                    if reported.is_none_or(|at| at.elapsed() >= PROGRESS_PERIOD) {
-                        reported = Some(Instant::now());
-                        reporter.progress(ticket, received, total);
-                    }
-                },
-                || {},
-            )
-            .await;
-        let bytes = match downloaded {
-            Ok(bytes) => Arc::<[u8]>::from(bytes),
-            Err(error) => {
+        let download = update.download(
+            move |chunk, total| {
+                received = received.saturating_add(u64::try_from(chunk).unwrap_or(u64::MAX));
+                if exceeds_download_limit(received, total) {
+                    too_large.notify_one();
+                } else if reported.is_none_or(|at| at.elapsed() >= PROGRESS_PERIOD) {
+                    reported = Some(Instant::now());
+                    reporter.progress(ticket, received, total);
+                }
+            },
+            || {},
+        );
+        let downloaded = tokio::select! {
+            biased;
+            () = oversized.notified() => Err(Failure::oversized(DOWNLOAD_LIMIT)),
+            downloaded = download => downloaded.map_err(|error| Failure::of(&error)),
+        };
+        // The last chunk may cross the limit in the poll that ends the
+        // download: the length is checked again.
+        let bytes = downloaded.and_then(|bytes| {
+            let length = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            if exceeds_download_limit(length, None) {
+                Err(Failure::oversized(DOWNLOAD_LIMIT))
+            } else {
+                Ok(bytes)
+            }
+        });
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(failure) => {
                 *self.pending.lock() = None;
-                return self.fail(ticket, Failure::of(&error));
+                return self.fail(ticket, failure);
             }
         };
         let ready = Downloaded {
             notes: update.body.as_deref().map(state::cap_notes),
             date: published_at(&update.raw_json),
             ready_at: timestamp(Utc::now()),
-            install_on_quit: self.installs_on_quit,
+            install_on_quit: self.installs_on_quit().await,
         };
         if let Some(pending) = self.pending.lock().as_mut() {
             pending.bytes = Some(bytes);
@@ -492,6 +531,18 @@ impl Shared {
             tracing::info!(version = %update.version, "update downloaded and verified");
             self.publish(&machine);
         }
+    }
+
+    /// Whether quitting can install here: the installation's folder is tried
+    /// on the blocking pool, now rather than at launch, where a slow mount
+    /// would have held the first window back (I-05).
+    async fn installs_on_quit(&self) -> bool {
+        let Some(folder) = self.quit_folder.clone() else {
+            return false;
+        };
+        tauri::async_runtime::spawn_blocking(move || installation::folder_is_writable(&folder))
+            .await
+            .unwrap_or(false)
     }
 
     fn progress(&self, ticket: Ticket, received: u64, total: Option<u64>) {
@@ -519,8 +570,24 @@ impl Shared {
     }
 }
 
-/// Asks the stable channel's manifest. The plugin's own errors are logged by
-/// it at `debug`, the manifest included: never at a level a release keeps.
+/// Whether an archive of `received` bytes so far, announced at `announced`,
+/// passes [`DOWNLOAD_LIMIT`]. An announced length too large stops the
+/// download at its first chunk.
+fn exceeds_download_limit(received: u64, announced: Option<u64>) -> bool {
+    received > DOWNLOAD_LIMIT || announced.is_some_and(|total| total > DOWNLOAD_LIMIT)
+}
+
+/// Asks the stable channel's manifest.
+///
+/// The plugin logs through `log`, which the subscriber's bridge sends to the
+/// journal: the manifest it parsed at `debug`, a failed request or an
+/// unreadable manifest at `error` — so an offline laptop leaves an `error`
+/// line beside this module's `info`. Nothing secret is in them: a public
+/// URL, an HTTP error.
+///
+/// The client the plugin builds serves the check and the download alike:
+/// HTTPS only, redirects to GitHub's storage included, and
+/// [`STALL_TIMEOUT`] between two reads.
 async fn fetch(app: &AppHandle) -> Result<Option<Update>, Failure> {
     let failure = |error: tauri_plugin_updater::Error| {
         tracing::info!(%error, "update check");
@@ -531,7 +598,12 @@ async fn fetch(app: &AppHandle) -> Result<Option<Update>, Failure> {
     let updater = app
         .updater_builder()
         .endpoints(vec![endpoint])
-        .and_then(|builder| builder.timeout(CHECK_TIMEOUT).build())
+        .and_then(|builder| {
+            builder
+                .timeout(CHECK_TIMEOUT)
+                .configure_client(|client| client.https_only(true).read_timeout(STALL_TIMEOUT))
+                .build()
+        })
         .map_err(failure)?;
     match updater.check().await.map_err(failure)? {
         Some(update) if !channel::is_release_asset(&update.download_url) => {
