@@ -394,21 +394,24 @@ fn a_forced_exit_warns_of_each_open_transaction_and_records_the_close() {
     // The console answers before the follower applies `BEGIN`'s state, and
     // the forced exit reads without draining: on a loaded machine it would
     // read the transaction as not begun yet. A quit comes long after the
-    // statement; this lets the follower catch up, without waiting in the
-    // reading under test.
-    let settled = bench.runtime.block_on(
-        bench
-            .backend
-            .inner
-            .workbench
-            .consoles
-            .settled(Duration::from_secs(10)),
-    );
+    // statement; this waits for the follower itself to publish the state,
+    // never drains in its place: without a follower, nothing changes.
+    let consoles = &bench.backend.inner.workbench.consoles;
+    let applied = bench.runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !consoles
+                .now()
+                .iter()
+                .all(|entry| entry.state == TransactionState::Open)
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+    });
     assert!(
-        settled
-            .iter()
-            .all(|entry| entry.state == TransactionState::Open),
-        "the follower let the registry be drained"
+        applied.is_ok(),
+        "the follower never applied the transaction's state"
     );
     assert_eq!(bench.backend.warn_forced_exit_transactions(), 1);
     let _guard = bench.runtime.enter();
