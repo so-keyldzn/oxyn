@@ -92,7 +92,9 @@ pub fn explain_sql(text: &str, dialect: SqlDialect) -> Result<String, &'static s
         return Err("This statement already starts with EXPLAIN.");
     }
     let prefix = match dialect {
-        SqlDialect::Postgres | SqlDialect::Redshift => "EXPLAIN ",
+        // MySQL's plain EXPLAIN plans without running, `DELETE` included; only
+        // `EXPLAIN ANALYZE` executes, and it is never added.
+        SqlDialect::Postgres | SqlDialect::Redshift | SqlDialect::MySql => "EXPLAIN ",
         SqlDialect::Sqlite => "EXPLAIN QUERY PLAN ",
         _ => return Err("Explain is unavailable for this SQL dialect."),
     };
@@ -136,5 +138,15 @@ mod tests {
         );
         assert!(explain_sql("SELECT 1; DELETE FROM t", SqlDialect::Postgres).is_err());
         assert!(explain_sql("EXPLAIN SELECT 1", SqlDialect::Postgres).is_err());
+    }
+
+    #[test]
+    fn mysql_is_explained_without_analyze() {
+        assert_eq!(
+            explain_sql("SELECT * FROM `produits`", SqlDialect::MySql).as_deref(),
+            Ok("EXPLAIN SELECT * FROM `produits`")
+        );
+        assert!(explain_sql("SELECT 1; DELETE FROM t", SqlDialect::MySql).is_err());
+        assert!(explain_sql("explain SELECT 1", SqlDialect::MySql).is_err());
     }
 }
