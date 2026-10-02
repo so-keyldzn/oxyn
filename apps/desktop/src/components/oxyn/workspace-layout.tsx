@@ -43,6 +43,8 @@ export type LeftView = "catalog" | "library"
  */
 export const ASIDE_WIDTH = { initial: 280, min: 240, max: 480 } as const
 
+const ASIDE_PANEL_ID = "aside"
+
 function boundedAsideWidth(width: number) {
   return Math.min(ASIDE_WIDTH.max, Math.max(ASIDE_WIDTH.min, Math.round(width)))
 }
@@ -182,22 +184,28 @@ export function WorkspaceLayout({
   const [compactOpen, setCompactOpen] = React.useState(false)
   React.useEffect(() => setCompactOpen(false), [compact])
 
+  // The resizable column only exists in wide mode. When it comes back, its
+  // handle is filled at once but the group derives its constraints a render
+  // later: until then `expand`, `collapse` and `isCollapsed` throw « Panel
+  // constraints not found ». The group's layout names it once it has them.
+  const [asideRegistered, setAsideRegistered] = React.useState(false)
+
   const asidePanel = usePanelRef()
   React.useEffect(() => {
     const panel = asidePanel.current
-    if (compact || !panel) return
+    if (!asideRegistered || !panel) return
     if (asideOpen) panel.expand()
     else panel.collapse()
-  }, [asideOpen, compact, asidePanel])
+  }, [asideOpen, asideRegistered, asidePanel])
 
   // `defaultSize` only counts at mount: a width read or restored later
   // reaches the open column here.
   const width = boundedAsideWidth(asideWidth)
   React.useEffect(() => {
     const panel = asidePanel.current
-    if (compact || !asideOpen || !panel || panel.isCollapsed()) return
+    if (!asideRegistered || !asideOpen || !panel || panel.isCollapsed()) return
     if (Math.round(panel.getSize().inPixels) !== width) panel.resize(width)
-  }, [width, asideOpen, compact, asidePanel])
+  }, [width, asideOpen, asideRegistered, asidePanel])
 
   // The layout settles once the pointer is released or a key has resized,
   // never per frame. The width is the panel's measured one, read on the next
@@ -358,6 +366,9 @@ export function WorkspaceLayout({
             <ResizablePanelGroup
               orientation="horizontal"
               className="min-h-0 flex-1"
+              onLayoutChange={(layout) =>
+                setAsideRegistered(ASIDE_PANEL_ID in layout)
+              }
               onLayoutChanged={(_layout, meta) => commitAsideWidth(meta)}
             >
               {/* Unit-less sizes are percentages: the work area keeps at
@@ -374,13 +385,16 @@ export function WorkspaceLayout({
                     className={cn(!asideOpen && "hidden")}
                   />
                   <ResizablePanel
-                    id="aside"
+                    id={ASIDE_PANEL_ID}
                     panelRef={asidePanel}
                     collapsible
                     collapsedSize="0px"
                     defaultSize={asideOpen ? `${width}px` : "0px"}
                     minSize={`${ASIDE_WIDTH.min}px`}
                     maxSize={`${ASIDE_WIDTH.max}px`}
+                    // The saved width is in pixels: a narrower group, or the
+                    // sidebar still sliding open, takes room from the work area.
+                    groupResizeBehavior="preserve-pixel-size"
                     onResize={(_size, _id, previous) => {
                       // Not on mount: the column is then drawn from the
                       // preference, and reporting it would save a width
