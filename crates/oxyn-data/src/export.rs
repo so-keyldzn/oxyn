@@ -27,7 +27,7 @@ use arrow::array::ArrayRef;
 use arrow::csv::WriterBuilder as CsvWriterBuilder;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::FileWriter as IpcFileWriter;
-use arrow::json::{ArrayWriter, LineDelimitedWriter};
+use arrow::json::{ArrayWriter, LineDelimitedWriter, WriterBuilder as JsonWriterBuilder};
 use arrow::record_batch::RecordBatch;
 use oxyn_core::{CancelToken, ExportFormat};
 use serde::{Deserialize, Serialize};
@@ -173,7 +173,13 @@ pub fn export<W: Write>(
         ExportFormat::Csv => write_delimited(&source, &mut counter, opts, b',')?,
         ExportFormat::Tsv => write_delimited(&source, &mut counter, opts, b'\t')?,
         ExportFormat::JsonLines => {
-            let mut output = LineDelimitedWriter::new(&mut counter);
+            // Explicit nulls: Arrow's default drops every null property, so a
+            // column NULL in every row vanishes from the file although the
+            // grid and CSV show it, and an SQL `NULL` reads as a missing key
+            // (UX-SPEC, "Columns and value inspection").
+            let mut output: LineDelimitedWriter<_> = JsonWriterBuilder::new()
+                .with_explicit_nulls(true)
+                .build(&mut counter);
             let summary = source.for_each_batch(|batch| {
                 output
                     .write(&*durations_as_text(batch)?)
@@ -183,7 +189,10 @@ pub fn export<W: Write>(
             summary
         }
         ExportFormat::Json => {
-            let mut output = ArrayWriter::new(&mut counter);
+            // Explicit nulls, as for JSON Lines.
+            let mut output: ArrayWriter<_> = JsonWriterBuilder::new()
+                .with_explicit_nulls(true)
+                .build(&mut counter);
             let summary = source.for_each_batch(|batch| {
                 output
                     .write(&*durations_as_text(batch)?)
@@ -818,6 +827,71 @@ mod tests {
         let reader = FileReader::try_new(std::io::Cursor::new(output), None)
             .expect("the written file must be a valid Arrow file");
         assert_eq!(&reader.schema(), buffer.schema());
+    }
+
+    /// A NULL is written `null`, never dropped: a column NULL in every row
+    /// stays in every record, and `""` stays distinct from `null`. Parsed
+    /// back over two batches, in both JSON formats.
+    #[test]
+    fn json_keeps_null_properties_and_all_null_columns() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("note", DataType::Utf8, true),
+            Field::new("optional", DataType::Utf8, true),
+        ]));
+        let batch = |ids: Vec<i32>, notes: Vec<Option<&str>>| {
+            let empty: Vec<Option<&str>> = vec![None; ids.len()];
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(ids)),
+                    Arc::new(StringArray::from(notes)),
+                    Arc::new(StringArray::from(empty)),
+                ],
+            )
+            .expect("the columns match the schema")
+        };
+        let buffer = ResultBuffer::new(Arc::clone(&schema), 1 << 20);
+        buffer
+            .push(batch(vec![1, 2], vec![Some("a"), Some("")]))
+            .expect("batch accepted");
+        buffer
+            .push(batch(vec![3, 4], vec![None, Some("d")]))
+            .expect("batch accepted");
+        buffer.mark_complete(ExecStats::default());
+
+        for format in [ExportFormat::Json, ExportFormat::JsonLines] {
+            let text = export_text(&buffer, format);
+            let records: Vec<serde_json::Value> = if format == ExportFormat::Json {
+                serde_json::from_str(&text).expect("a JSON array")
+            } else {
+                text.lines()
+                    .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
+                    .collect()
+            };
+            assert_eq!(records.len(), 4, "{format}: {text}");
+            for record in &records {
+                let keys: Vec<&str> = record
+                    .as_object()
+                    .expect("each record is an object")
+                    .keys()
+                    .map(String::as_str)
+                    .collect();
+                assert_eq!(keys, ["id", "note", "optional"], "{format}: {text}");
+                assert_eq!(record["optional"], serde_json::Value::Null, "{format}");
+            }
+            let notes: Vec<&serde_json::Value> = records.iter().map(|r| &r["note"]).collect();
+            assert_eq!(
+                notes,
+                [
+                    &serde_json::json!("a"),
+                    &serde_json::json!(""),
+                    &serde_json::Value::Null,
+                    &serde_json::json!("d"),
+                ],
+                "{format}: {text}"
+            );
+        }
     }
 
     #[test]
