@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="3693343cbcf0" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="bd8c00710236" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -303,19 +303,21 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    est une constante compilée dans `oxyn-desktop` (`updates/channel.rs`),
    récupérée en HTTPS seulement — le plugin refuse tout autre schéma dans un
    build de release. Ce contrôle couvre l'endpoint, pas l'`url` d'archive que
-   nomme le manifeste : ce qui rend l'archive digne de confiance, c'est sa
-   signature, pas son transport. L'archive n'est installée que si sa signature
+   nomme le manifeste : Oxyn refuse une archive dont l'URL n'est pas
+   `https://github.com/…` avant d'en demander un octet
+   (`channel::is_release_asset`), et ce qui rend l'archive digne de confiance
+   reste sa signature, pas son transport. L'archive n'est installée que si sa signature
    minisign correspond à la clé publique compilée, et que la version signée
    avec elle égale celle qu'annonce le manifeste (`requireSignedVersion`) ;
    une version qui n'est pas strictement supérieure à celle qui tourne n'est
    jamais proposée. Les notes de version sont plafonnées à 4 Kio, coupées sur
    une frontière de caractère, et rendues en texte brut. La webview ne fournit
-   jamais d'URL, de chemin ni de version : le plugin de mise à jour et
-   `tauri-plugin-opener` ne sont utilisés que depuis Rust,
-   `capabilities/main.json` n'accorde de permission à aucun des deux — un
-   test refuse une permission `updater:` —, et la page de release ouverte
-   dans le navigateur est un préfixe fixe suivi d'une version que Rust a
-   validée comme semver. Le manifeste lui-même n'est pas signé : qui contrôle
+   jamais d'URL, de chemin ni de version : le plugin de mise à jour n'est
+   piloté que depuis Rust, `tauri-plugin-opener` n'est même pas enregistré —
+   Rust appelle sa fonction libre `open_url` —, `capabilities/main.json`
+   n'accorde aucune permission `updater:` ni `opener:` et un test y veille, et
+   la page de release ouverte dans le navigateur est un préfixe fixe suivi
+   d'une version que Rust a validée comme semver. Le manifeste lui-même n'est pas signé : qui contrôle
    l'endpoint peut retenir les mises à jour, pas livrer du code.
 
 ## Politique `unsafe`

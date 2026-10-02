@@ -296,18 +296,21 @@ What enters Oxyn and is untrusted, in order of underestimation:
    The endpoint is a constant compiled into `oxyn-desktop`
    (`updates/channel.rs`), fetched over HTTPS only — the plugin refuses
    anything else in a release build. That check covers the endpoint, not the
-   archive `url` the manifest names: what makes the archive trustworthy is its
-   signature, not its transport. The archive is installed only if its
+   archive `url` the manifest names: Oxyn refuses an archive whose URL is not
+   `https://github.com/…` before asking for a byte
+   (`channel::is_release_asset`), and what makes the archive trustworthy is
+   still its signature, not its transport. The archive is installed only if its
    minisign signature matches the public key compiled in, and the version
    signed with it matches the version the manifest announces
    (`requireSignedVersion`); a version not strictly greater than the running
    one is never offered. Release notes are capped at 4 KiB, cut on a
    character boundary, and rendered as plain text. The webview never supplies
-   a URL, a path or a version: the updater plugin and `tauri-plugin-opener`
-   are used from Rust only, `capabilities/main.json` grants neither of them a
-   permission — a test refuses an `updater:` one —, and the release page
-   opened in the browser is a fixed prefix followed by a version Rust
-   validated as semver. The manifest itself is not signed: whoever controls
+   a URL, a path or a version: the updater plugin is driven from Rust only,
+   `tauri-plugin-opener` is not even registered — Rust calls its free
+   function `open_url` —, `capabilities/main.json` grants no `updater:` nor
+   `opener:` permission and a test keeps it so, and the release page opened
+   in the browser is a fixed prefix followed by a version Rust validated as
+   semver. The manifest itself is not signed: whoever controls
    the endpoint can withhold updates, not ship code.
 
 ## `unsafe` policy

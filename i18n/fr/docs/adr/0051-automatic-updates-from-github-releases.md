@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="801552aea14e" -->
+<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="e75a9c3a7769" -->
 
 > Traduction française de [docs/adr/0051-automatic-updates-from-github-releases.md](../../../../docs/adr/0051-automatic-updates-from-github-releases.md). **La version anglaise fait foi.**
 
@@ -63,9 +63,11 @@ Vérifié le 2026-10-02 dans les sources des versions concernées
 ### 1. La mise à jour vit en Rust, dans `oxyn-desktop`, et la webview ne l'appelle jamais
 
 `tauri-plugin-updater` est une dépendance du seul `oxyn-desktop`
-([I-08](../../CLAUDE.md#i-08)), sans fonctionnalités par défaut : il n'apporte
-aucune pile TLS à lui et utilise le `reqwest` que le workspace construit déjà,
-sur `rustls` avec le fournisseur `aws-lc-rs` des drivers.
+([I-08](../../CLAUDE.md#i-08)), avec `default-features = false` et **aucune**
+fonctionnalité TLS : son `rustls-tls` tirerait `ring` et l'installerait comme
+`CryptoProvider` par défaut du processus, sous les drivers. Il réutilise le
+`reqwest` qu'`oxyn-llm` construit déjà sur `rustls` avec `aws-lc-rs` ;
+`cargo tree` ne montre ni `ring` ni nouveau doublon.
 Son paquet JavaScript `@tauri-apps/plugin-updater` n'est pas installé, et
 `capabilities/main.json` n'accorde **aucune** permission `updater:*` — un test
 d'`oxyn-desktop` en refuse une. La webview n'atteint la mise à jour que par
@@ -82,10 +84,11 @@ déclencher. Le précédent est la barre de menus et l'arrêt ordonné
 plus par le bus ([I-01](../../CLAUDE.md#i-01) porte sur les chemins
 d'exécution vers un driver).
 
-La page de release s'ouvre dans le navigateur du système par
-`tauri-plugin-opener`, lui aussi utilisé depuis Rust seulement, sans
-capability : son URL est un préfixe fixe suivi d'une version que Rust a
-validée comme semver. Le plugin est pris plutôt que de lancer `open` ou
+La page de release s'ouvre dans le navigateur du système par la fonction
+libre `open_url` de `tauri-plugin-opener`, appelée depuis Rust ; le plugin
+opener n'est **pas enregistré** — aucun gestionnaire JavaScript, aucune
+commande, aucune capability. L'URL est un préfixe fixe suivi d'une version que
+Rust a validée comme semver. Le plugin est pris plutôt que de lancer `open` ou
 `xdg-open` à la main : sa crate `open` parcourt déjà dans l'ordre les lanceurs
 Linux (`xdg-open`, `gio`, `gnome-open`, `kde-open`, WSL), empêche un argument
 commençant par `-` d'être lu comme une option, et détache le processus
@@ -135,28 +138,49 @@ personne avant que le mainteneur publie.
 * **Vérifie** 60 s après le lancement, puis toutes les 24 h, sur
   `tauri::async_runtime` ([I-05](../../CLAUDE.md#i-05)). L'échéance se calcule
   à l'horloge murale, relue toutes les heures — un sommeil de 24 h se
-  figerait pendant la veille de la machine.
+  figerait pendant la veille de la machine. Une vérification est bornée à
+  **30 s** ; cette borne n'atteint pas le téléchargement, que le plugin lance
+  sans délai maximal (`Update.timeout` vaut `None`) : une liaison lente ne
+  doit pas le perdre. `cancel_update` interrompt la tâche, et la requête HTTP
+  avec elle.
 * **Télécharge** en arrière-plan quand les mises à jour automatiques sont
   actives. Les octets restent **en mémoire** ; la signature est vérifiée par
   le plugin avant que rien ne soit gardé. Après un plantage ou une fermeture
-  sans installation, le téléchargement recommence simplement.
+  sans installation, le téléchargement recommence simplement. Une archive dont
+  l'URL n'est pas `https://github.com/…` est refusée avant qu'un octet soit
+  demandé, en `error{server, retryable: false}` : le plugin n'impose HTTPS
+  qu'à l'endpoint.
 * **Installe à la fermeture**, jamais en forçant une relance. Une action
   « Restart now » est proposée ; elle lance l'arrêt ordonné, puis installe,
   puis appelle `request_restart()` — jamais `restart()`. La fermeture est
   inscrite avant l'installation, si bien que la relance n'affiche pas d'écran
   de récupération. `cancel_exit` efface l'intention de relance, sinon un ⌘Q
   ultérieur relancerait.
+* **« Restart now » nomme le travail qu'il arrêterait.** `restart_to_update`
+  répond `busy{running, exports}` tant que des instructions tournent ou que
+  des exports s'écrivent dans une fenêtre ; les exports sont comptés par une
+  garde autour de l'export. Une fois confirmée, la sortie n'attend pas un
+  export : sa destination garde son contenu précédent, et un
+  `.oxyn-export-*.part` égaré peut rester à côté.
 * **Le Quit du Dock et la fermeture de session** (`RunEvent::Exit`)
-  installent aussi, après le départ des fenêtres, si bien que le thread
-  principal ne fige rien de visible.
+  installent aussi, après le départ des fenêtres, sur un thread auxiliaire que
+  le thread principal attend au plus **10 s** — mesuré le 2026-10-02,
+  l'extraction de l'archive de 12 Mo d'un bundle de 25 Mo prend 0,6 s. Passé
+  ce délai, le processus se termine sans attendre davantage ; 10 s est une
+  borne pour un disque lent, pas une durée attendue.
 * **Là où Oxyn ne peut pas écrire** (le `.app` dans un dossier qui
-  n'appartient pas à l'utilisateur), rien n'est installé à la fermeture :
-  l'invite administrateur n'apparaît qu'après un clic sur « Restart now ».
+  n'appartient pas à l'utilisateur, sur une image montée sous `/Volumes`, ou
+  déplacé par la translocation de Gatekeeper), rien n'est installé à la
+  fermeture : l'invite administrateur n'apparaît qu'après un clic sur
+  « Restart now ».
 * **Une opération à la fois.** Une vérification pendant `checking`,
   `downloading` ou `ready` ne fait rien ; `ready` dure jusqu'à la relance.
-* **Échecs.** Un échec réseau en arrière-plan est silencieux et retenté à
-  l'échéance suivante ; un échec de signature ou d'installation est toujours
-  affiché.
+* **Échecs.** Un échec réseau ou serveur en arrière-plan est gardé en
+  `error{offline|server, retryable: true}`, affiché dans les Réglages et nulle
+  part ailleurs, et retenté à l'échéance suivante ; un échec de signature ou
+  d'installation est toujours affiché.
+* **Le mode automatique coupé** repose dans `disabled{user}` ; une
+  vérification manuelle part encore de là.
 * **Les notes de version** sont plafonnées à 4 Kio, coupées sur une frontière
   de caractère ([I-09](../../CLAUDE.md#i-09)), et rendues en texte brut.
 

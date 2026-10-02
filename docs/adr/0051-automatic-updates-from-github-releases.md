@@ -58,9 +58,11 @@ Checked on 2026-10-02 in the sources of the versions concerned
 ### 1. The updater lives in Rust, in `oxyn-desktop`, and the webview never calls it
 
 `tauri-plugin-updater` is a dependency of `oxyn-desktop` alone
-([I-08](../../CLAUDE.md#i-08)), without default features: it brings no TLS
-stack of its own and uses the `reqwest` the workspace already builds, on
-`rustls` with the drivers' `aws-lc-rs` provider.
+([I-08](../../CLAUDE.md#i-08)), with `default-features = false` and **no**
+TLS feature: its `rustls-tls` would pull `ring` and install it as the
+process's default `CryptoProvider`, under the drivers. It reuses the
+`reqwest` that `oxyn-llm` already builds on `rustls` with `aws-lc-rs`;
+`cargo tree` shows no `ring` and no new duplicate.
 Its JavaScript package `@tauri-apps/plugin-updater` is not installed, and
 `capabilities/main.json` grants **no** `updater:*` permission — a test of
 `oxyn-desktop` refuses one. The webview reaches the updater only through
@@ -76,9 +78,10 @@ ordered exit ([ADR-0041](0041-registre-d-actions-menus-et-raccourcis.md),
 the bus either ([I-01](../../CLAUDE.md#i-01) is about execution paths to a
 driver).
 
-The release page opens in the system browser through `tauri-plugin-opener`,
-also used from Rust only, with no capability: its URL is a fixed prefix
-followed by a version Rust validated as semver. The plugin is taken rather
+The release page opens in the system browser through `tauri-plugin-opener`'s
+free function `open_url`, called from Rust; the opener plugin is **not
+registered** — no JavaScript handler, no command, no capability. The URL is a
+fixed prefix followed by a version Rust validated as semver. The plugin is taken rather
 than spawning `open` or `xdg-open` by hand: its `open` crate already walks the
 Linux launchers in order (`xdg-open`, `gio`, `gnome-open`, `kde-open`, WSL),
 protects an argument starting with `-` from being read as an option, and
@@ -124,25 +127,43 @@ ignores drafts, nothing is offered to anyone before the maintainer publishes.
 * **Checks** 60 s after launch, then every 24 h, on `tauri::async_runtime`
   ([I-05](../../CLAUDE.md#i-05)). The due date is computed against the wall
   clock, re-read every hour — a 24 h sleep would stall through the machine's
-  sleep.
+  sleep. A check is bounded by **30 s**; that bound does not reach the
+  download, which the plugin starts with no timeout (`Update.timeout` is
+  `None`): a slow link must not lose it. `cancel_update` aborts the task, and
+  the HTTP request with it.
 * **Downloads** in the background when automatic updates are on. The bytes
   stay **in memory**; the signature is verified by the plugin before anything
   is kept. After a crash or a quit without install, the download simply starts
-  again.
+  again. An archive whose URL is not `https://github.com/…` is refused before
+  any byte is asked for, as `error{server, retryable: false}`: the plugin only
+  enforces HTTPS on the endpoint.
 * **Installs on quit**, never by forcing a restart. A "Restart now" action is
   offered; it runs the ordered exit, then installs, then calls
   `request_restart()` — never `restart()`. The close is recorded before the
   install, so the relaunch shows no recovery screen. `cancel_exit` clears the
   restart intention, otherwise a later ⌘Q would relaunch.
+* **"Restart now" names the work it would stop.** `restart_to_update`
+  answers `busy{running, exports}` while statements run or exports are being
+  written in any window; exports are counted by a guard around the export.
+  Confirmed, the exit does not wait for an export: its destination keeps its
+  previous content, and a stray `.oxyn-export-*.part` may remain beside it.
 * **The Dock's Quit and logout** (`RunEvent::Exit`) also install, after the
-  windows are gone, so the main thread freezes nothing visible.
-* **Where Oxyn cannot write** (the `.app` in a folder the user does not own),
+  windows are gone, on a helper thread the main thread waits for at most
+  **10 s** — measured on 2026-10-02, extracting the 12 MB archive of a 25 MB
+  bundle takes 0.6 s. Past that bound the process ends without waiting
+  further; 10 s is a bound for a slow disk, not an expected duration.
+* **Where Oxyn cannot write** (the `.app` in a folder the user does not own,
+  on a mounted image under `/Volumes`, or translocated by Gatekeeper),
   nothing is installed on quit: the administrator prompt only ever appears
   after a click on "Restart now".
 * **One operation at a time.** A check during `checking`, `downloading` or
   `ready` does nothing; `ready` lasts until the restart.
-* **Failures.** A network failure in the background is silent and retried at
-  the next due date; a signature or install failure is always shown.
+* **Failures.** A network or server failure in the background is kept as
+  `error{offline|server, retryable: true}`, shown in Settings and nowhere
+  else, and retried at the next due date; a signature or install failure is
+  always shown.
+* **Automatic off** rests in `disabled{user}`; a manual check still runs
+  from there.
 * **Release notes** are capped at 4 KiB, cut on a character boundary
   ([I-09](../../CLAUDE.md#i-09)), and rendered as plain text.
 

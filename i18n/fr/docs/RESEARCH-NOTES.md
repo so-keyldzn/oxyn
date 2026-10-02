@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="956e2177e268" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="98f9f4a60a5a" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -91,8 +91,15 @@ fait passer `tauri` de 2.11.5 à 2.12.1 et `tauri-build` de 2.6.3 à 2.7.1
 (publiés le 2026-09-30), et avec eux `tao` 0.35.3 → 0.37.1, `wry` 0.55.1 →
 0.57.0, `muda` 0.19.3 → 0.20.0 dans `Cargo.lock`. Une ligne alpha 3.0.0 existe
 pour `tauri` et pour les deux plugins : non prise. Le plugin de mise à jour est
-déclaré sans fonctionnalités par défaut, donc sans `rustls-tls`,
-`system-proxy` ni `zip`. Son paquet npm `@tauri-apps/plugin-updater` (2.13.1)
+déclaré avec `default-features = false` et aucune fonctionnalité TLS, donc
+sans `rustls-tls`, `system-proxy` ni `zip` : son `rustls-tls` active
+`reqwest/rustls-no-provider` plus sa propre dépendance `rustls`, qui tirerait
+`ring` et l'installerait comme `CryptoProvider` par défaut du processus. Il
+réutilise le `reqwest` 0.13.4 qu'`oxyn-llm` construit sur `rustls` avec
+`aws-lc-rs` ; le 2026-10-02, `cargo tree -p oxyn-desktop -i ring` n'affiche
+rien, et le graphe garde un seul `reqwest` et un seul `rustls` (0.23.45). Le
+plugin opener n'est pas enregistré : Rust appelle sa fonction libre
+`open_url`, qui n'a besoin d'aucun `AppHandle`. Son paquet npm `@tauri-apps/plugin-updater` (2.13.1)
 et la crate `tauri-plugin-process` (2.4.0) ne sont **délibérément pas pris** :
 la webview ne pilote jamais la mise à jour, et Rust relance par
 `AppHandle::request_restart`. Sources : API crates.io
@@ -245,7 +252,8 @@ Lus dans les crates publiées — `tauri-plugin-updater` 2.13.1 et
 | Fait | Conséquence | Source |
 |---|---|---|
 | Manifeste statique : `version` (un `v` initial est retiré), `notes`, `pub_date`, et `platforms` qui associe une clé à `url` et `signature`. Sans cible fixée par l'application, la clé cherchée est `{os}-{arch}-{installer}` puis `{os}-{arch}` ; `os` vaut `darwin` sur macOS, `installer` vaut `app` pour un `.app` ou un DMG, `appimage`, `deb`, `rpm` | `latest.json` porte `darwin-aarch64` et `linux-x86_64-appimage` ; un `linux-x86_64` seul correspondrait aussi à une installation deb ou rpm | [updater.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/updater/src/updater.rs), `RemoteRelease`, `get_urls`, `Installer::name`, `updater_os` |
-| Un endpoint dont le schéma n'est pas `https` est refusé par `InsecureTransportProtocol` dans un build de release (un avertissement en debug), sauf `dangerousInsecureTransportProtocol`. Le contrôle ne couvre que les endpoints, pas l'`url` du manifeste | L'endpoint est HTTPS par construction ; l'intégrité de l'archive repose sur sa signature | [config.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/updater/src/config.rs), `validate_endpoints` |
+| Un endpoint dont le schéma n'est pas `https` est refusé par `InsecureTransportProtocol` dans un build de release (un avertissement en debug), sauf `dangerousInsecureTransportProtocol`. Le contrôle ne couvre que les endpoints, pas l'`url` du manifeste | L'endpoint est HTTPS par construction ; Oxyn refuse lui-même une URL d'archive qui n'est pas `https://github.com/…` ; l'intégrité de l'archive repose sur sa signature | [config.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/updater/src/config.rs), `validate_endpoints` |
+| `UpdaterBuilder::timeout` s'applique à la requête de vérification ; l'`Update` que rend `check` porte `timeout: None`, si bien que `download` tourne sans délai maximal tant que `Update::timeout` n'est pas posé | La borne de 30 s d'Oxyn ne couvre que la vérification ; le téléchargement prend fin par `cancel_update`, qui interrompt sa tâche | updater.rs, `Updater::check` (le littéral `Update { … timeout: None … }`), `Update::download` |
 | `download` lit toute l'archive dans un `Vec<u8>`, puis vérifie la signature minisign contre `pubkey` avant de la rendre. La signature couvre les octets de l'archive et son commentaire de confiance ; le manifeste n'est pas signé | Les octets restent en mémoire, déjà vérifiés ; qui sert le manifeste choisit quelle archive signée est proposée | updater.rs, `Update::download`, `verify_signature` |
 | `requireSignedVersion` (par défaut `false`) : après la vérification de signature, le champ `version:` du commentaire de confiance doit égaler la version annoncée, comparée en semver ; absent, l'archive est refusée (`MissingSignedVersion`), différent, `SignedVersionMismatch` | Mis à `true` : un manifeste forgé ne peut pas associer une version plus haute à une archive signée plus ancienne | config.rs, `require_signed_version` ; updater.rs, `verify_signed_version` |
 | La CLI Tauri écrit `timestamp:…\tfile:…` dans le commentaire de confiance et, depuis 2.12.0, y ajoute `\tversion:<version de l'app>` au bundling (`sign_file(…, Some(settings.version_string()))`) ; 2.11.4 n'écrit aucune version | La CLI est épinglée en 2.12.1 ; une archive signée par une CLI plus ancienne serait refusée | [updater_signature.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-cli/src/helpers/updater_signature.rs), `sign_file` ; `crates/tauri-cli/src/bundle.rs` ligne 312 |
@@ -256,7 +264,7 @@ Lus dans les crates publiées — `tauri-plugin-updater` 2.13.1 et
 | L'archive de mise à jour macOS est le `.app` produit par `bundle_project` — signé, notarisé et agrafé là — mis en `.tar.gz` par `bundle_update_macos` ; l'AppImage, le deb et le rpm sont signés tels quels | L'archive contient l'app agrafée ; `script/apple-release verify` le contrôle | [macos/app.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-bundler/src/bundle/macos/app.rs), [bundle.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-bundler/src/bundle.rs), [updater_bundle.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-bundler/src/bundle/updater_bundle.rs) |
 | `AppHandle::restart()` ne rend jamais la main : sur le thread principal, il relance aussitôt en sautant les événements de sortie ; ailleurs, il demande la sortie et dort indéfiniment. `request_restart()` pose le drapeau de relance et demande une sortie avec `RESTART_EXIT_CODE`, qui passe par `ExitRequested` et `Exit`, puis relance | « Restart now » appelle `request_restart()` après l'arrêt ordonné | [app.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri/src/app.rs), `restart`, `request_restart` |
 | `tauri build` s'arrête quand la crate `tauri` et `@tauri-apps/api` diffèrent de version majeure ou mineure, sauf `--ignore-version-mismatches` | Les deux montent ensemble | `crates/tauri-cli/src/build.rs`, `info/plugins.rs`, `check_mismatched_packages` |
-| `open_url` appelle `that_detached` de la crate `open` ; `open` 5.4.4 essaie, sous Linux, `xdg-open`, `gio open`, `gnome-open`, `kde-open` (et WSL d'abord sous WSL), préfixe de `./` un argument qui commence par `-`, et lance détaché | La page de release s'ouvre par le plugin, depuis Rust | [open.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/opener/src/open.rs) ; `open` 5.4.4 `src/unix.rs` |
+| `open_url` appelle `that_detached` de la crate `open` ; `open` 5.4.4 essaie, sous Linux, `xdg-open`, `gio open`, `gnome-open`, `kde-open` (et WSL d'abord sous WSL), préfixe de `./` un argument qui commence par `-`, et lance détaché | La page de release s'ouvre par la fonction libre `open_url`, depuis Rust, sans enregistrer le plugin | [open.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/opener/src/open.rs) ; `open` 5.4.4 `src/unix.rs` |
 | « Get the latest release » : « the most recent non-prerelease, non-draft release, sorted by the `created_at` attribute » ; `/releases/latest/download/<asset>` pointe vers un fichier de la dernière release | Un brouillon n'est jamais proposé ; c'est la publication qui propose la mise à jour | [REST releases](https://docs.github.com/en/rest/releases/releases#get-the-latest-release), [liens vers les releases](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases) |
 
 ## GPUI
