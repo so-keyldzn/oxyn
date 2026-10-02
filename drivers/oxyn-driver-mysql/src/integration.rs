@@ -29,7 +29,8 @@
 //! on: 1064 before 1295, read-only refusals, `LOCAL INFILE` refused, zero
 //! dates, `DECIMAL(65,30)`, `BIGINT UNSIGNED`, `VECTOR`, `CALL` with two
 //! result sets, the transaction state, the transaction kept across a proven
-//! kill (ADR-0050 §7 as amended), the single error of an execution that loses
+//! kill (ADR-0050 §7 as amended), a MariaDB write returning rows past its
+//! bound drained rather than killed, the single error of an execution that loses
 //! its transaction, the statements an introspection closes, the columns only
 //! the execution gives, the transaction kept across a failing statement, and
 //! the bound on a kill the server accepts and never answers.
@@ -494,6 +495,64 @@ async fn a_row_bound_inside_a_transaction_truncates_and_keeps_it() {
     assert!(cursor.stats().truncated);
     drop(cursor);
     apply(&*session, "DROP TABLE oxyn_tx_bound").await;
+    observer.close().await.expect("close");
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_write_returning_past_its_bound_is_drained_not_killed() {
+    let Some(session) = session().await else {
+        return;
+    };
+    if !is_mariadb(&*session).await {
+        eprintln!("only MariaDB returns rows from a write: test skipped");
+        return;
+    }
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    apply(&*session, "DROP TABLE IF EXISTS oxyn_write_bound").await;
+    apply(
+        &*session,
+        "CREATE TABLE oxyn_write_bound (id INT PRIMARY KEY)",
+    )
+    .await;
+    // Far more rows than the read-ahead a read gets past its bound: a kill
+    // would roll this autocommit statement back while 100 of its rows are
+    // shown.
+    let request = ExecRequest::new(
+        LANGUAGE,
+        "INSERT INTO oxyn_write_bound (id) SELECT seq FROM seq_1_to_100000 RETURNING id",
+    )
+    .with_intent(StatementIntent::Write)
+    .with_limits(
+        ExecLimits::default()
+            .writable()
+            .with_max_rows(100)
+            .with_timeout(None),
+    );
+    let mut cursor = session
+        .execute(request, &CancelToken::new())
+        .await
+        .expect("execution");
+    let mut rows = 0;
+    while let Some(batch) = cursor
+        .next_batch()
+        .await
+        .expect("a drained write is no error")
+    {
+        rows += batch.num_rows();
+    }
+    assert_eq!(rows, 100);
+    assert!(cursor.stats().truncated, "the bound says so");
+    drop(cursor);
+    assert_eq!(
+        first(&*observer, "SELECT COUNT(*) FROM oxyn_write_bound").await,
+        "100000",
+        "the write ran whole"
+    );
+    apply(&*session, "DROP TABLE oxyn_write_bound").await;
     observer.close().await.expect("close");
     session.close().await.expect("close");
 }

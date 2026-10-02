@@ -252,11 +252,35 @@ mark the result truncated only if that row exists. A mutating statement is not r
 asking the server for one more batch would extend its side effects: the stop is
 `SinkOutcome::RowLimitUnverified`, shown as `Row limit reached · completeness
 not verified` rather than as missing rows, and stays non-exportable like any
-result not proven whole. The PostgreSQL and SQLite drivers apply the same rule
-to their own bound and stop a mutating statement at N without reading row
-N + 1. The MySQL driver keeps reading past the bound: its protocol leaves no
-statement paused with rows unread, and the alternative to draining the set is
-killing the write in flight.
+result not proven whole. The SQLite driver applies the same rule to its own
+bound and stops a mutating statement at N without reading row N + 1. The
+PostgreSQL and MySQL drivers keep reading past the bound: their protocols leave
+no statement paused with rows unread, and the alternative to draining the set
+is killing the write in flight — on PostgreSQL an autocommit statement commits
+only once its last row is sent, so a cut write is rolled back while N of its
+rows are on screen. PostgreSQL and MySQL drain the rest without decoding or
+keeping it, under the same cancellation and deadline, until the statement ends —
+MySQL's read-ahead and kill at the bound are a read's alone; PostgreSQL also
+holds the batch that reaches N until then. A drain cut by cancellation or the
+deadline ends on an ambiguous error, never on a finished result.
+
+The executor keeps a write's cursor until its driver concludes. Its sink stores
+nothing past the limit and probes for nothing, but it reads the cursor to its
+end instead of dropping it at N, and it does not race the cursor against a
+Stop: the driver watches the same token, stops the server and says how the
+write ended. A Stop therefore ends a write on the driver's verdict, which the
+executor does not second-guess — `Cancelled`, an ambiguous `OutcomeUnknown` or
+`Timeout`, or `Completed` when the write ended before the Stop reached it. The
+wait is bounded by what is left of the deadline and by a ten-second grace after
+the Stop; past it, or when the caller abandons the execution, the outcome is
+`OutcomeUnknown`, never a cancellation (I-13). A read keeps letting go at once.
+The verdict is only as sound as the driver's: MySQL answers `Cancelled` for a
+write only once the server reported the kill on that very statement, but
+PostgreSQL still answers it for a write stopped before any of its rows arrived
+— any write without `RETURNING` — without reading the server's answer to its
+cancel request, and SQLite answers it as soon as its token fires, even after a
+`RETURNING` that already made all its changes at its first step. Both are
+known gaps, not guarantees.
 
 PostgreSQL preparation examines the column types, including domain
 bases and array elements. Types without binary output, internal
