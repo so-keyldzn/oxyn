@@ -171,7 +171,7 @@ fn main() -> Result<()> {
             commands::recovery::request_exit,
             // Files dropped from the system (ADR-0041, point 9)
             commands::file_drops::subscribe_file_drops,
-            // Settings: preferences and saved-connection management
+            // Settings: preferences, saved-connection management, About
             commands::settings::read_preferences,
             commands::settings::write_preferences,
             commands::settings::connection_details,
@@ -179,6 +179,7 @@ fn main() -> Result<()> {
             commands::settings::delete_connection,
             commands::settings::decide_connection_change,
             commands::settings::connection_marking,
+            commands::about::build_identity,
             // The restored object tab
             commands::location::read_object_location,
             commands::location::write_object_location,
