@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="1827fb64fe14" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="26083dbafe2a" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -241,12 +241,18 @@ instruction mutante n'est pas lue au-delà de sa
 limite, car demander un lot de plus au serveur prolongerait ses effets de bord :
 l'arrêt est `SinkOutcome::RowLimitUnverified`, affiché `Row limit reached ·
 completeness not verified` plutôt que comme des lignes manquantes, et reste non
-exportable comme tout résultat dont l'intégralité n'est pas prouvée. Les pilotes
-PostgreSQL et SQLite appliquent la même règle à leur propre borne et arrêtent
-une instruction mutante à N sans lire la ligne N + 1. Le pilote MySQL continue
-de lire au-delà de la borne : son protocole ne laisse aucune instruction en
-pause avec des lignes non lues, et l'alternative à la lecture du jeu de
-résultats est de tuer l'écriture en cours.
+exportable comme tout résultat dont l'intégralité n'est pas prouvée. Le pilote
+SQLite applique la même règle à sa propre borne et arrête une instruction
+mutante à N sans lire la ligne N + 1. Les pilotes PostgreSQL et MySQL
+continuent de lire au-delà de la borne : leurs protocoles ne laissent aucune
+instruction en pause avec des lignes non lues, et l'alternative à la lecture du
+jeu de résultats est de tuer l'écriture en cours — sur PostgreSQL, une
+instruction en autocommit ne valide qu'une fois sa dernière ligne envoyée, si
+bien qu'une écriture coupée est annulée alors que N de ses lignes sont à
+l'écran. PostgreSQL vide le reste sans le décoder ni le garder, sous la même
+annulation et le même délai, jusqu'au `CommandComplete`, et retient jusque-là le
+lot qui atteint N ; un vidage coupé par l'annulation ou le délai se termine sur
+une erreur ambiguë, jamais sur un résultat terminé.
 
 La préparation PostgreSQL examine les types des colonnes, y compris les bases
 de domaines et les éléments de tableaux. Les types sans sortie binaire, les

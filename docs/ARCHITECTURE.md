@@ -235,11 +235,16 @@ mark the result truncated only if that row exists. A mutating statement is not r
 asking the server for one more batch would extend its side effects: the stop is
 `SinkOutcome::RowLimitUnverified`, shown as `Row limit reached · completeness
 not verified` rather than as missing rows, and stays non-exportable like any
-result not proven whole. The PostgreSQL and SQLite drivers apply the same rule
-to their own bound and stop a mutating statement at N without reading row
-N + 1. The MySQL driver keeps reading past the bound: its protocol leaves no
-statement paused with rows unread, and the alternative to draining the set is
-killing the write in flight.
+result not proven whole. The SQLite driver applies the same rule to its own
+bound and stops a mutating statement at N without reading row N + 1. The
+PostgreSQL and MySQL drivers keep reading past the bound: their protocols leave
+no statement paused with rows unread, and the alternative to draining the set
+is killing the write in flight — on PostgreSQL an autocommit statement commits
+only once its last row is sent, so a cut write is rolled back while N of its
+rows are on screen. PostgreSQL drains the rest without decoding or keeping it,
+under the same cancellation and deadline, until `CommandComplete`, and holds the
+batch that reaches N until then; a drain cut by cancellation or the deadline
+ends on an ambiguous error, never on a finished result.
 
 PostgreSQL preparation examines the column types, including domain
 bases and array elements. Types without binary output, internal
