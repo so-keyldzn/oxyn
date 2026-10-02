@@ -20,6 +20,11 @@
 # macOS delivery requires Developer ID signing and Apple notarization; missing
 # credentials fail closed. Setup and manual launch: docs/RELEASE.md.
 #
+# Automatic updates (ADR-0051): the macOS archive and the AppImage are signed
+# with the updater key, and the last job, `manifeste`, writes `latest.json`
+# from the signatures actually in the draft. A missing key, the placeholder
+# public key, or a missing archive or signature fail closed.
+#
 # Versions of the actions and tools: docs/RESEARCH-NOTES.md, § CI and GitHub
 # delivery.
 name: livraison
@@ -77,12 +82,18 @@ jobs:
         include:
           - os: macos-latest
             # The workspace target is at the root, not under the crate.
-            paquets: target/release/bundle/dmg/*.dmg
+            paquets: |
+              target/release/bundle/dmg/*.dmg
+              target/release/bundle/updater/*.app.tar.gz
+              target/release/bundle/updater/*.app.tar.gz.sig
           - os: ubuntu-24.04
+            # The deb and rpm signatures are not uploaded: those installs
+            # are updated by their package manager.
             paquets: |
               target/release/bundle/deb/*.deb
               target/release/bundle/rpm/*.rpm
               target/release/bundle/appimage/*.AppImage
+              target/release/bundle/appimage/*.AppImage.sig
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
 
@@ -105,6 +116,12 @@ jobs:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python3 script/apple-release check
+
+      - name: Check the updater signing key before installing dependencies
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: python3 script/livraison cle
 
       - name: Install Tauri's system libraries
         if: runner.os == 'Linux'
@@ -150,14 +167,22 @@ jobs:
 
       - name: Build Linux packages in release mode
         if: runner.os == 'Linux'
-        # The same target as locally: `make desktop PROFIL=release`.
-        run: make desktop PROFIL=release
+        # The same target as locally: `make desktop PROFIL=release`, plus the
+        # signed updater artifacts.
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: make desktop PROFIL=release MISE_A_JOUR=1
 
       - name: Build, sign and notarize macOS packages
         if: runner.os == 'macOS'
         # Tauri imports the certificate into its temporary keychain. Pass
         # credentials through the environment, never interpolate them into shell.
+        # `apple-release build` runs `make desktop PROFIL=release MISE_A_JOUR=1`
+        # with this environment, the updater key included.
         env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -172,6 +197,21 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python3 script/apple-release verify
+
+      - name: Name the verified macOS updater archive after its version
+        if: runner.os == 'macOS'
+        # Tauri names it `Oxyn.app.tar.gz`, without version or architecture.
+        # Its signature covers the content, not the name. The tag is
+        # `v<version>`, checked by the draft job.
+        run: |
+          set -euo pipefail
+          archive=target/release/bundle/macos/Oxyn.app.tar.gz
+          staged="target/release/bundle/updater/Oxyn_${RELEASE_TAG#v}_aarch64.app.tar.gz"
+          test -f "$archive" && test -f "$archive.sig"
+          rm -rf target/release/bundle/updater
+          mkdir -p target/release/bundle/updater
+          cp "$archive" "$staged"
+          cp "$archive.sig" "$staged.sig"
 
       - name: Upload the packages to the draft
         env:
@@ -189,3 +229,21 @@ jobs:
             exit 1
           fi
           python3 script/livraison deposer "$RELEASE_TAG" "$GITHUB_REPOSITORY" "${fichiers[@]}"
+
+  # The only job that uploads `latest.json`, and only once every package job
+  # succeeded. It holds no secret: it reads public signatures.
+  manifeste:
+    needs: paquets
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+
+      - name: Write the update manifest and upload it to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 script/livraison manifeste "$RELEASE_TAG" "$GITHUB_REPOSITORY"

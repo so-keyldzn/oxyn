@@ -68,8 +68,9 @@ def build(environment: dict[str, str]) -> None:
         child_environment.pop("APPLE_ID", None)
         child_environment.pop("APPLE_PASSWORD", None)
         child_environment["APPLE_API_KEY_PATH"] = str(key)
+        # The updater signing key reaches Tauri through this same environment.
         result = subprocess.run(
-            ["make", "desktop", "PROFIL=release"], cwd=ROOT, env=child_environment, check=False
+            ["make", "desktop", "PROFIL=release", "MISE_A_JOUR=1"], cwd=ROOT, env=child_environment, check=False
         )
         if result.returncode:
             raise Refusal("signed macOS build failed; no package may be uploaded")
@@ -77,10 +78,24 @@ def build(environment: dict[str, str]) -> None:
 
 def verify(bundle: Path, team: str) -> None:
     apps = sorted((bundle / "macos").glob("*.app"))
+    archives = sorted((bundle / "macos").glob("*.app.tar.gz"))
     dmgs = sorted((bundle / "dmg").glob("*.dmg"))
-    if len(apps) != 1 or len(dmgs) != 1:
-        raise Refusal("expected exactly one .app and one .dmg in target/release/bundle")
-    for package in [*apps, *dmgs]:
+    if len(apps) != 1 or len(archives) != 1 or len(dmgs) != 1:
+        raise Refusal("expected exactly one .app, one .app.tar.gz and one .dmg in target/release/bundle")
+    verify_packages([*apps, *dmgs], team)
+    # The updater installs the archive, not the DMG: what it carries must pass
+    # the same checks, stapled ticket included, or an update would install an
+    # application Gatekeeper refuses.
+    with tempfile.TemporaryDirectory(prefix="oxyn-updater-") as directory:
+        run("tar", "-xzf", str(archives[0]), "-C", directory)
+        extracted = sorted(Path(directory).glob("*.app"))
+        if len(extracted) != 1 or extracted[0].name != apps[0].name:
+            raise Refusal("the updater archive must hold exactly the built .app")
+        verify_packages(extracted, team)
+
+
+def verify_packages(packages: list[Path], team: str) -> None:
+    for package in packages:
         run("codesign", "--verify", "--deep", "--strict", str(package))
         details = run("codesign", "--display", "--verbose=4", str(package))
         lines = details.splitlines()

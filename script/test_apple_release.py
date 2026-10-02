@@ -23,9 +23,24 @@ class AppleRelease(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.bundle = Path(self.directory.name)
         (self.bundle / "macos/Oxyn.app").mkdir(parents=True)
+        (self.bundle / "macos/Oxyn.app.tar.gz").touch()
         (self.bundle / "dmg").mkdir()
         (self.bundle / "dmg/Oxyn.dmg").touch()
         self.details = "TeamIdentifier=0123456789\nAuthority=Developer ID Application: Fixture\nCodeDirectory v=20500 flags=0x10000(runtime)\n"
+        self.extracted = []
+
+    def tools(self, archive_content=("Oxyn.app",), refuse=lambda args: False):
+        """Simulated Apple tools; `tar` extracts `archive_content`."""
+        def command(*args):
+            if refuse(args):
+                raise APPLE.Refusal("simulated tool failure")
+            if args[0] == "tar":
+                destination = Path(args[args.index("-C") + 1])
+                for name in archive_content:
+                    (destination / name).mkdir()
+                    self.extracted.append(destination / name)
+            return self.details
+        return command
 
     def test_each_missing_credential_is_refused_without_its_value(self):
         for name in APPLE.REQUIRED:
@@ -47,12 +62,40 @@ class AppleRelease(unittest.TestCase):
             APPLE.check(self.environment | {"APPLE_TEAM_ID": "invalid"})
 
     def test_signed_notarized_app_and_signed_dmg_are_both_verified(self):
-        with patch.object(APPLE, "run", return_value=self.details) as run:
+        with patch.object(APPLE, "run", side_effect=self.tools()) as run:
             APPLE.verify(self.bundle, "0123456789")
         commands = [call.args for call in run.call_args_list]
-        self.assertEqual(sum(args[:2] == ("codesign", "--verify") for args in commands), 2)
+        self.assertEqual(sum(args[:2] == ("codesign", "--verify") for args in commands), 3)
         self.assertIn(("xcrun", "stapler", "validate", str(self.bundle / "macos/Oxyn.app")), commands)
         self.assertIn(("spctl", "--assess", "--type", "execute", str(self.bundle / "macos/Oxyn.app")), commands)
+
+    def test_updater_archive_content_passes_the_same_checks(self):
+        with patch.object(APPLE, "run", side_effect=self.tools()) as run:
+            APPLE.verify(self.bundle, "0123456789")
+        commands = [call.args for call in run.call_args_list]
+        self.assertIn(("tar", "-xzf", str(self.bundle / "macos/Oxyn.app.tar.gz")), [args[:3] for args in commands])
+        [extracted] = self.extracted
+        for check in [("codesign", "--verify", "--deep", "--strict"), ("xcrun", "stapler", "validate"), ("spctl", "--assess", "--type", "execute")]:
+            self.assertIn((*check, str(extracted)), commands)
+        self.assertFalse(extracted.exists(), "extraction directory left behind")
+
+    def test_unstapled_or_unsigned_archive_content_is_refused(self):
+        for tool in ["xcrun", "codesign"]:
+            def refuse(args, tool=tool):
+                return args[0] == tool and any("oxyn-updater-" in arg for arg in args)
+            with self.subTest(tool=tool), patch.object(APPLE, "run", side_effect=self.tools(refuse=refuse)), self.assertRaises(APPLE.Refusal):
+                APPLE.verify(self.bundle, "0123456789")
+
+    def test_archive_without_exactly_the_built_app_is_refused(self):
+        for content in [(), ("Other.app",), ("Oxyn.app", "Second.app")]:
+            with self.subTest(content=content), patch.object(APPLE, "run", side_effect=self.tools(archive_content=content)), self.assertRaises(APPLE.Refusal):
+                APPLE.verify(self.bundle, "0123456789")
+
+    def test_missing_updater_archive_is_refused(self):
+        (self.bundle / "macos/Oxyn.app.tar.gz").unlink()
+        with patch.object(APPLE, "run", side_effect=self.tools()) as run, self.assertRaises(APPLE.Refusal):
+            APPLE.verify(self.bundle, "0123456789")
+        run.assert_not_called()
 
     def test_unsigned_wrong_team_and_missing_runtime_are_refused(self):
         for details in ["Signature=adhoc", self.details.replace("0123456789", "9876543210"), self.details.replace("runtime", "none")]:
@@ -87,7 +130,9 @@ class AppleRelease(unittest.TestCase):
         for status in [0, 1]:
             paths = []
             def invoke(*args, **kwargs):
+                self.assertEqual(args[0], ["make", "desktop", "PROFIL=release", "MISE_A_JOUR=1"])
                 environment = kwargs["env"]
+                self.assertEqual(environment["TAURI_SIGNING_PRIVATE_KEY"], "fixture-updater-key")
                 self.assertNotIn("APPLE_API_PRIVATE_KEY", environment)
                 self.assertNotIn("APPLE_ID", environment)
                 self.assertNotIn("APPLE_PASSWORD", environment)
@@ -96,7 +141,7 @@ class AppleRelease(unittest.TestCase):
                 self.assertEqual(key.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(key.read_text(), "fixture-not-a-credential")
                 return subprocess.CompletedProcess([], status)
-            environment = self.environment | {"RUNNER_TEMP": self.directory.name, "APPLE_ID": "inherited", "APPLE_PASSWORD": "inherited"}
+            environment = self.environment | {"RUNNER_TEMP": self.directory.name, "APPLE_ID": "inherited", "APPLE_PASSWORD": "inherited", "TAURI_SIGNING_PRIVATE_KEY": "fixture-updater-key"}
             with self.subTest(status=status), patch.object(APPLE.subprocess, "run", side_effect=invoke):
                 if status:
                     with self.assertRaises(APPLE.Refusal):

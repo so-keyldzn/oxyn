@@ -74,7 +74,7 @@
     "@tanstack/react-query-devtools": "5.102.8",
     "@tanstack/react-router-devtools": "1.167.2",
     "@tanstack/router-plugin": "1.168.38",
-    "@tauri-apps/cli": "2.11.4",
+    "@tauri-apps/cli": "2.12.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",
     "@types/node": "26.5.1",

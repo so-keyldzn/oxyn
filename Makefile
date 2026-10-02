@@ -61,10 +61,19 @@ desktop-dev: $(TAURI)
 # A published binary always ships its third-party notices, regenerated: without
 # them, it would violate the licenses of what it redistributes. `--exiger` makes
 # publishing fail if `cargo-about` is missing.
+#
+# `MISE_A_JOUR=1` also produces the signed updater artifacts (ADR-0051). It
+# needs the updater private key, which only the release secrets hold: without
+# it, a local release build stays possible.
 desktop: $(TAURI)
 ifeq ($(PROFIL),release)
 	@python3 script/licences-tierces generer --exiger $(MENTIONS)
+ifeq ($(MISE_A_JOUR),1)
+	@python3 script/livraison cle
+	cd crates/oxyn-desktop && ../../$(TAURI) build -c tauri.updater.json5
+else
 	cd crates/oxyn-desktop && ../../$(TAURI) build
+endif
 else
 	cd crates/oxyn-desktop && ../../$(TAURI) build --debug --no-bundle
 endif
