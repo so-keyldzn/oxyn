@@ -213,11 +213,12 @@ describe("the web bar of Windows and Linux", () => {
     expect(ids?.slice(-2)).toEqual(["app.settings", "app.quit"])
   })
 
-  it("has a Help menu with Documentation and Keyboard shortcuts", () => {
+  it("has a Help menu with Documentation, Keyboard shortcuts and Check for updates", () => {
     const help = menus.find((menu) => menu.id === "help")
     expect(help?.groups.flat().map((item) => item.id)).toEqual([
       "help.documentation",
       "help.shortcuts",
+      "app.checkForUpdates",
     ])
   })
 

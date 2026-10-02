@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="2a97f422dec9" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="8406412691aa" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -174,6 +174,60 @@ lui-même. Seul l'humain acquitte — un agent n'a rien inspecté, et le
 aucune base et ne rejoue rien ; l'écriture reste consultable, marquée
 « Reconciled ».
 
+## Mises à jour
+
+**Une mise à jour n'interrompt jamais le travail.** Oxyn vérifie environ une
+minute après le lancement, puis toutes les 24 heures, sur le seul canal stable,
+et télécharge en arrière-plan
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)).
+Une mise à jour téléchargée s'installe **quand l'utilisateur quitte** ; Oxyn ne
+redémarre jamais de lui-même. D'ici là, la fenêtre affiche `Update ready` dans
+la barre d'état, ou dans la barre de titre de l'écran d'accueil — pas de toast
+après le premier, pas d'écran au démarrage. Au bout de sept jours, l'indicateur
+prend une bordure et le popover dit depuis quand la mise à jour est
+téléchargée ; il n'ajoute rien d'autre. Sous 1200 px, il reste, en icône avec
+son libellé pour les technologies d'assistance : c'est une action en attente,
+pas une information secondaire.
+
+**Un échec en arrière-plan est silencieux ; un échec demandé ne l'est pas.** Une
+vérification automatique qui échoue (pas de réseau, erreur du serveur)
+n'affiche rien hors de Réglages ▸ Updates, où le dernier résultat reste lisible
+avec son message. `Check for updates…` (dans le menu Oxyn sous macOS, dans Help
+sous Windows et Linux) ouvre Réglages ▸ Updates et lance une vérification.
+Cette vue a les cinq états d'une vue ; la vérification et le téléchargement
+s'annulent, et l'annulation arrête le transfert. Un échec de vérification de
+signature est toujours affiché : la mise à jour est écartée, rien n'est
+installé, et la page de la release est proposée pour télécharger Oxyn à la
+main.
+
+**`Restart now` est la fermeture ordonnée, suivie d'une relance.** Si rien ne
+tourne, il ne demande rien. Si une requête tourne ou qu'un export est en cours,
+une confirmation les nomme, dit que la requête est annulée sur le serveur et
+que l'export s'arrête et que sa destination garde son contenu précédent, et
+donne le focus à `Later`. Une transaction ouverte retient ensuite le
+redémarrage comme la sortie (« Fenêtres »), avec `Cancel` au focus ; annuler
+garde la mise à jour pour la prochaine fermeture. Les brouillons sont écrits et
+l'arrêt est enregistré : les consoles reviennent dans leurs fenêtres, hors
+ligne. Une installation échouée est dite une fois au lancement suivant, et les
+Réglages la gardent.
+
+**Réglages ▸ Updates s'applique à l'ordinateur, pas au workspace**, et le dit.
+La vue montre la version, la dernière vérification et l'interrupteur
+`Download and install updates automatically`. Le couper arrête un
+téléchargement et écarte une mise à jour pas encore installée ; `Check now`
+reste disponible. Un enregistrement échoué laisse le réglage appliqué pour la
+session et propose `Save again`. Là où Oxyn n'installe pas ses propres mises à
+jour, la vue dit pourquoi et ne propose aucune action : `Updates are managed by
+your package manager` (.deb et .rpm), `Updates are turned off by your
+administrator`, `Updates are turned off in development builds`. Une
+vérification n'envoie que la version, le système d'exploitation et
+l'architecture.
+
+**Après une mise à jour**, la première fenêtre ouverte dit une fois
+`Oxyn updated to 1.4.0`, avec `What's new`, qui ouvre la page de la release
+dans le navigateur du système. Les notes de version sont affichées en texte
+brut.
+
 ## Écran d'accueil
 
 Avant toute connexion, l'écran porte une barre de titre d'une seule rangée : la
@@ -264,6 +318,9 @@ Les sous-onglets `Data` et `Structure` restent visibles ; `Indexes`,
 l'environnement et le niveau IA restent visibles dans la barre supérieure.
 La barre d'état garde connexion et état d'exécution ; les informations
 secondaires telles que le fuseau et la sauvegarde passent dans les détails.
+L'indicateur de mise à jour fait exception : il reste, en icône avec une
+infobulle et son libellé complet pour les technologies d'assistance, parce que
+c'est une action en attente (« Mises à jour »).
 
 L'action `Inspect row` ouvre l'inspecteur à la demande en panneau superposé,
 sans réduire davantage la grille. En largeur normale, la poignée de l'inspecteur
@@ -366,13 +423,13 @@ volerait un caractère.
 
 | Menu | Entrées |
 |---|---|
-| `Oxyn` (macOS) | `About Oxyn`, `Settings…` `⌘,`, `Hide Oxyn`, `Quit Oxyn` `⌘Q` |
+| `Oxyn` (macOS) | `About Oxyn`, `Check for updates…`, `Settings…` `⌘,`, `Hide Oxyn`, `Quit Oxyn` `⌘Q` |
 | `File` | `New console` `⌘T`, `New window`, `New connection…`, `Open from library…`, `Open Recent ▸`, `Save` `⌘S`, `Save as…`, `Close tab` `⌘W`, `Export…`, et sous Windows et Linux `Settings…` `Ctrl+,` puis `Exit` `Ctrl+Q` |
 | `Edit` | `Undo`, `Redo`, `Cut`, `Copy`, `Paste`, `Select All`, `Find` `⌘F` |
 | `View` | `Toggle sidebar` `⌘B`, `Toggle side panel` `⌘⌥B`, `Assistant`, `Text size ▸`, `Enter full screen`, `Theme ▸` |
 | `Query` | `Run` `⌘↵`, `Run all` `⌘⇧↵`, `Explain`, `Cancel` `Esc`, `Format` |
 | `Window` | les fenêtres ouvertes, et les entrées de fenêtre du système |
-| `Help` | `Documentation`, `Keyboard shortcuts` `⌘/` |
+| `Help` | `Documentation`, `Keyboard shortcuts` `⌘/`, et sous Windows et Linux `Check for updates…` |
 
 Ce que ces entrées font est écrit ailleurs, et le menu n'y ajoute rien :
 

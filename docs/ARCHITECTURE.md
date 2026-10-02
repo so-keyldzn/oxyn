@@ -75,8 +75,17 @@ crates/oxyn-desktop/              # the Tauri host, `oxyn-desktop` binary
 ├── src/catalog.rs                # catalog tree and expansion command
 ├── src/credentials.rs            # the only point that reads or writes the keychain
 ├── src/menu.rs                   # native macOS bar, read from the front end's manifest; no Command
-├── capabilities/main.json        # webview permissions
-└── tauri.conf.json               # production CSP; tauri.dev.json5 relaxes it in dev
+├── src/updates.rs + updates/     # self-update from the GitHub Releases (ADR-0051); no Command
+│   ├── state.rs                  #   the state machine, pure, tested without Tauri
+│   ├── channel.rs                #   the only endpoint, the release page, the release-asset check
+│   ├── installation.rs           #   macOS bundle, AppImage, or why not (deb/rpm, dev, read-only)
+│   ├── preference.rs             #   updates.json and the OXYN_UPDATES lock
+│   ├── schedule.rs               #   when the next check is due, against the wall clock
+│   ├── failure.rs                #   the plugin's errors, classified
+│   ├── apply.rs                  #   the install at the exit, and update-notice.json for the next launch
+│   └── tests.rs
+├── capabilities/main.json        # webview permissions — none for the updater or the opener
+└── tauri.conf.json               # production CSP, updater public key; tauri.dev.json5 relaxes it in dev
 ```
 
 Each domain — consoles, metadata, results, library, recovery,
@@ -90,6 +99,14 @@ settings, AI — has its file in each of the three directories `commands/`,
 only write outside the bus — the secrets of a connection draft — goes through
 `credentials.rs`: one keychain call per driver would be as many places to
 audit instead of one ([I-03](../CLAUDE.md#i-03)).
+
+**Two subjects are plumbing, not `Command`s**: the menu bar
+([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)) and updates
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). Neither
+reaches a driver. The updater is driven from Rust alone: its commands
+(`commands/updates.rs`, `ipc/updates.rs`) take no URL, path or version, and
+the webview holds no `updater:` permission. `tauri-plugin-opener` is not
+registered at all: `open_release_page` calls its free function `open_url`.
 
 **A `Command` is only born in `backend.rs`, `backend/` and `catalog.rs`.** The
 front end cannot build any: it only has `invoke`, and a single module
@@ -1070,6 +1087,19 @@ global executors are not in the graph, checked with
 as an external agent is declared, and [I-05](../CLAUDE.md#i-05) applies to both
 reactors. Details and measurement in
 [RESEARCH-NOTES](RESEARCH-NOTES.md#agent-client-protocol--check-of-2026-09-14).
+
+**Updates run beside the backend, never on the main thread while a window
+exists** ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)):
+
+| Step | Where |
+|---|---|
+| Schedule — 60 s after launch, then due every 24 h | one task on `tauri::async_runtime`, woken every hour or by a manual check (`Notify`); the due date is read against the wall clock, so the machine's sleep does not stretch it |
+| Check and download | one operation task at a time on `tauri::async_runtime`, which `cancel_update` aborts with its HTTP request; the check is bounded by 30 s, the download only by 60 s without a byte and by 256 MiB; the archive stays in memory, its signature verified by the plugin before it is kept, then the installation's folder probed for writing on the blocking pool — the launch only reads two files of at most 64 KiB; progress throttled to four events per second on the `subscribe_updates` `Channel` |
+| Install, after ⌘Q, Oxyn's Quit or "Restart now" | `begin_exit`, after `backend.shutdown()`: windows hidden, `install` in `spawn_blocking` with no timeout, a failure logged without holding the exit, the journal flushed, then `request_restart()` or `exit(0)` |
+| Install, after the Dock's Quit or logout | macOS only — on Linux, cutting the AppImage's rewrite would leave a truncated image, so such an exit installs nothing. `RunEvent::Exit`: a helper thread, `oxyn-update-install`, that the main thread waits for at most 10 s — the windows are already gone, so the wait freezes nothing ([I-05](../CLAUDE.md#i-05)); 0.6 s measured on 2026-10-02 for the 12 MB archive of a 25 MB bundle |
+
+`request_restart()` goes through `RunEvent::ExitRequested` like any exit; the
+handler lets it through because the ordered shutdown has already finished.
 
 * **The main thread does no I/O and never waits for a lock held by a task.**
   Shared state is read through `Arc<ResultBuffer>`.

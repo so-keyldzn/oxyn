@@ -11,6 +11,12 @@ therefore live here, tested by `script/test_livraison.py`.
                                                  finds the draft
     livraison deposer <tag> <repo> <file>…       uploads each file to the draft,
                                                  one by one
+    livraison cle                                checks the updater signing key
+                                                 before an hour of build
+    livraison signer <tag> <file>…               signs each updater artifact,
+                                                 after the build
+    livraison manifeste <tag> <repo>             verifies the draft's archives,
+                                                 writes latest.json, uploads it
 
 **The tag.** It is exactly `v` followed by the configured version, prerelease
 suffix included: `0.1.0-rc.1` ⇔ `v0.1.0-rc.1`. Nothing is silently corrected —
@@ -31,19 +37,69 @@ that fails — or a publication landing between the check and the upload —
 leaves a public release without its package. Replacing a package of a draft is
 a decision: delete it from the draft by hand, then rerun the job.
 
-`gh` is read from `$GH` if set — that is what lets the tests simulate it.
+**The updater key** (ADR-0051). Tauri signs the updater artifacts with the
+private key of `TAURI_SIGNING_PRIVATE_KEY`, protected by
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the application checks them against the
+public key of `tauri.conf.json`. `cle` refuses an empty secret and the
+placeholder public key, naming the variables, never printing a value (I-03).
+
+**Signing is its own step** (SECURITY, the updater signing key). `tauri build`
+runs every `build.rs`, proc-macro and Vite plugin of the dependency graph: the
+key in its environment would be readable by any of them. The build therefore
+runs without the key and produces no updater signature; `signer` then runs
+only the pinned `tauri signer sign`, with `--app-version` so that the
+signature's trusted comment carries the version, as `tauri build` writes it.
+The CLI's output is not relayed: it is the one process that holds the key.
+
+**The manifest.** `latest.json` is what every installed Oxyn reads. It is
+written last, from the signatures actually uploaded to the draft, and only if
+the draft holds exactly one macOS archive and one AppImage, each with its
+signature: a manifest pointing to a missing file would make every update fail.
+Each signature must verify its archive, as downloaded from the draft, with
+the public key of `tauri.conf.json` — checked by a pinned `minisign -V`
+(`$MINISIGN`): the CLI only warns when the private key does not match that
+public key, and a rerun can pair an archive of one run with the signature of
+another. Either would publish a release every installed Oxyn refuses as a
+signature failure, indistinguishable from an attack. Only then is the
+signature's version read: it must be the released version, which
+`tauri-cli` ≥ 2.12.0 writes into the trusted comment.
+Its platform keys are the ones `tauri-plugin-updater` 2.13.1 looks up,
+`{os}-{arch}-{installer}` then `{os}-{arch}`: `darwin-aarch64` and
+`linux-x86_64-appimage`. A bare `linux-x86_64` would also be offered to the
+deb and rpm installs, which have no archive to apply it to.
+
+`gh`, the Tauri CLI and `minisign` are read from `$GH`, `$TAURI` and
+`$MINISIGN` if set — that is what lets the tests simulate them.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_TAURI = REPO_ROOT / "crates" / "oxyn-desktop" / "tauri.conf.json"
+TAURI_CLI = REPO_ROOT / "apps" / "desktop" / "node_modules" / ".bin" / "tauri"
+KEY_VARIABLES = ("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+PUBKEY_PLACEHOLDER = "REPLACE_WITH_UPDATER_PUBLIC_KEY"
+MANIFEST = "latest.json"
+REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+# Platform key of the manifest → (suffix of its kind of asset, exact suffix).
+# Counting on the kind, not the exact suffix, is what refuses a second macOS
+# archive that would have been named for another architecture.
+PLATFORMS = {
+    "darwin-aarch64": (".app.tar.gz", "_aarch64.app.tar.gz"),
+    "linux-x86_64-appimage": (".AppImage", ".AppImage"),
+}
 
 
 class Refusal(Exception):
@@ -156,6 +212,182 @@ def upload(tag: str, repo: str, file_list: list[Path], config: Path) -> None:
         print(f"{file_path.name} uploaded to draft {tag}.")
 
 
+def updater_pubkey(config: Path) -> str:
+    """The minisign public key file every installed Oxyn verifies against."""
+    try:
+        settings = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as problem:
+        raise Refusal(f"{config} unreadable: {problem}") from problem
+    pubkey = ((settings.get("plugins") or {}).get("updater") or {}).get("pubkey")
+    if not isinstance(pubkey, str) or not pubkey.strip() or pubkey == PUBKEY_PLACEHOLDER:
+        raise Refusal(
+            f"{config.name}: plugins.updater.pubkey is not set; "
+            "paste the public key generated by `tauri signer generate`"
+        )
+    # A minisign public key file, base64-encoded: what `tauri signer generate`
+    # prints. Anything else would sign archives no installed Oxyn accepts.
+    try:
+        decoded = base64.b64decode(pubkey, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        decoded = ""
+    if not decoded.startswith("untrusted comment:"):
+        raise Refusal(f"{config.name}: plugins.updater.pubkey is not a minisign public key")
+    return decoded
+
+
+def check_key(environment: dict[str, str], config: Path) -> None:
+    missing = [name for name in KEY_VARIABLES if not environment.get(name, "").strip()]
+    if missing:
+        raise Refusal("missing GitHub Actions secrets: " + ", ".join(missing))
+    updater_pubkey(config)
+    print("Updater signing key present: " + ", ".join(KEY_VARIABLES) + ".")
+
+
+def sign(tag: str, file_list: list[Path], environment: dict[str, str], config: Path) -> None:
+    """Signs each updater artifact for the configured version, after the build."""
+    verify_tag(tag, config)
+    check_key(environment, config)
+    version = configured_version(config)
+    if not file_list:
+        raise Refusal("no updater artifact to sign")
+    tauri = environment.get("TAURI", str(TAURI_CLI))
+    for file_path in file_list:
+        if not file_path.is_file():
+            raise Refusal(f"{file_path} does not exist: the build did not produce it")
+        signature_path = file_path.with_name(f"{file_path.name}.sig")
+        signature_path.unlink(missing_ok=True)
+        command = [tauri, "signer", "sign", "--app-version", version, str(file_path)]
+        try:
+            signing = subprocess.run(command, capture_output=True, text=True, env=environment, check=False)
+        except OSError as problem:
+            raise Refusal(f"cannot run the Tauri CLI: {problem.strerror}") from problem
+        if signing.returncode != 0:
+            raise Refusal(f"tauri signer sign failed for {file_path.name}; its output is not relayed")
+        read_signature(file_path.parent, file_path.name, version)
+        print(f"{file_path.name} signed for version {version}.")
+
+
+def download_url(repo: str, tag: str, asset: str) -> str:
+    return f"https://github.com/{repo}/releases/download/{quote(tag, safe='')}/{quote(asset, safe='')}"
+
+
+def decode_signature(directory: Path, asset: str) -> tuple[str, str]:
+    """The `.sig` of `asset` as written by Tauri, and the minisign file it encodes."""
+    try:
+        signature = (directory / f"{asset}.sig").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError) as problem:
+        raise Refusal(f"signature of {asset} not found: {problem}") from problem
+    if not signature:
+        raise Refusal(f"{asset}.sig is empty")
+    try:
+        content = base64.b64decode(signature, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as problem:
+        raise Refusal(f"{asset}.sig is not a Tauri signature") from problem
+    return signature, content
+
+
+def verify_signature(directory: Path, asset: str, pubkey: str, minisign: str) -> None:
+    """Refuses an archive its `.sig` does not sign with the committed public key."""
+    _, content = decode_signature(directory, asset)
+    public = directory / "oxyn-updater.pub"
+    public.write_text(pubkey, encoding="utf-8")
+    minisig = directory / f"{asset}.minisig"
+    minisig.write_text(content, encoding="utf-8")
+    command = [minisign, "-V", "-q", "-p", str(public), "-m", str(directory / asset), "-x", str(minisig)]
+    try:
+        verification = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError as problem:
+        raise Refusal(f"cannot run minisign: {problem.strerror}") from problem
+    if verification.returncode != 0:
+        raise Refusal(
+            f"{asset}.sig does not verify {asset} with the public key of tauri.conf.json "
+            f"({verification.stderr.strip() or 'minisign refused it'}): every installed Oxyn "
+            "would refuse this update. Check the key pair, or rebuild the pair from one run."
+        )
+
+
+def read_signature(directory: Path, asset: str, version: str) -> str:
+    """The signature of `asset`, refused unless it was signed for `version`.
+
+    The application sets `requireSignedVersion`: it rejects an archive whose
+    signed trusted comment does not carry the announced version. Checking it
+    here turns an unusable release into a failed job instead of an update
+    that every installed Oxyn refuses. The comment is trusted only once
+    `verify_signature` has accepted it.
+    """
+    signature, content = decode_signature(directory, asset)
+    comments = [
+        line.removeprefix("trusted comment: ")
+        for line in content.splitlines()
+        if line.startswith("trusted comment: ")
+    ]
+    if len(comments) != 1:
+        raise Refusal(f"{asset}.sig is not a Tauri signature")
+    signed = [f.removeprefix("version:") for f in comments[0].split("\t") if f.startswith("version:")]
+    if signed != [version]:
+        raise Refusal(
+            f"{asset}.sig is signed for version {signed[0] if signed else 'none'}, "
+            f"not {version}: the application would refuse it (requireSignedVersion)."
+        )
+    return signature
+
+
+def write_manifest(tag: str, repo: str, config: Path, now: datetime) -> dict:
+    """The manifest of the draft's archives, or a refusal; uploads nothing."""
+    if not REPO_PATTERN.fullmatch(repo):
+        raise Refusal(f"{repo} is not an owner/name repository")
+    verify_tag(tag, config)
+    version = configured_version(config)
+    pubkey = updater_pubkey(config)
+    release = require_draft(tag, repo)
+    names = {a.get("name") for a in release.get("assets") or [] if isinstance(a, dict)}
+    names.discard(None)
+    if MANIFEST in names:
+        raise Refusal(f"{MANIFEST} is already in draft {tag}: it is not replaced.")
+    archives = {}
+    for platform, (kind, suffix) in PLATFORMS.items():
+        found = sorted(n for n in names if n.endswith(kind))
+        if len(found) != 1 or not found[0].endswith(suffix):
+            raise Refusal(
+                f"draft {tag} must hold exactly one *{suffix} for {platform}, "
+                f"found {found or 'none'}; no manifest is written."
+            )
+        if f"{found[0]}.sig" not in names:
+            raise Refusal(f"{found[0]}.sig is missing from draft {tag}; no manifest is written.")
+        archives[platform] = found[0]
+    # The archives too: what is verified is the bytes every installed Oxyn
+    # will download, not the files a package job had on its disk.
+    patterns = [option for asset in archives.values() for option in ("--pattern", asset)]
+    with tempfile.TemporaryDirectory(prefix="oxyn-manifeste-") as folder:
+        download = gh(
+            "release", "download", tag, "--repo", repo, "--pattern", "*.sig", *patterns, "--dir", folder
+        )
+        if download.returncode != 0:
+            raise Refusal(f"cannot download the archives and signatures of {tag}: {download.stderr.strip()}")
+        minisign = os.environ.get("MINISIGN", "minisign")
+        platforms = {}
+        for platform, asset in archives.items():
+            verify_signature(Path(folder), asset, pubkey, minisign)
+            platforms[platform] = {
+                "url": download_url(repo, tag, asset),
+                "signature": read_signature(Path(folder), asset, version),
+            }
+    return {
+        "version": version,
+        "notes": f"Oxyn {version}",
+        "pub_date": now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "platforms": platforms,
+    }
+
+
+def publish_manifest(tag: str, repo: str, config: Path) -> None:
+    manifest = write_manifest(tag, repo, config, datetime.now(timezone.utc))
+    with tempfile.TemporaryDirectory(prefix="oxyn-manifeste-") as folder:
+        path = Path(folder) / MANIFEST
+        path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        upload(tag, repo, [path], config)
+
+
 def main(args: list[str]) -> int:
     config = Path(os.environ.get("OXYN_CONFIG_TAURI", CONFIG_TAURI))
     try:
@@ -164,6 +396,12 @@ def main(args: list[str]) -> int:
                 draft(tag, repo, config)
             case ["deposer", tag, repo, *file_list]:
                 upload(tag, repo, [Path(f) for f in file_list], config)
+            case ["cle"]:
+                check_key(dict(os.environ), config)
+            case ["signer", tag, *file_list]:
+                sign(tag, [Path(f) for f in file_list], dict(os.environ), config)
+            case ["manifeste", tag, repo]:
+                publish_manifest(tag, repo, config)
             case _:
                 print(__doc__, file=sys.stderr)
                 return 2

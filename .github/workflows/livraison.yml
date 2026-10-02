@@ -20,6 +20,18 @@
 # macOS delivery requires Developer ID signing and Apple notarization; missing
 # credentials fail closed. Setup and manual launch: docs/RELEASE.md.
 #
+# Automatic updates (ADR-0051): the macOS archive and the AppImage are signed
+# with the updater key, in a step of their own after the build — the key never
+# reaches `tauri build`, its build scripts or its npm code. The last job,
+# `manifeste`, verifies each archive of the draft against its signature and the
+# committed public key, then writes `latest.json`. A missing key, the
+# placeholder public key, a missing archive or signature, or a signature that
+# does not verify fail closed.
+#
+# The signing secrets live in the `release` environment, which only `v*` tags
+# may deploy to (docs/RELEASE.md, § Updater signing key): a workflow pushed on
+# a branch cannot read them.
+#
 # Versions of the actions and tools: docs/RESEARCH-NOTES.md, § CI and GitHub
 # delivery.
 name: livraison
@@ -71,18 +83,31 @@ jobs:
 
   paquets:
     needs: brouillon
+    # The only job that reads the signing secrets. Its deployment rule admits
+    # `v*` tags alone, so a manual run must be started from the tag.
+    environment: release
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             # The workspace target is at the root, not under the crate.
-            paquets: target/release/bundle/dmg/*.dmg
+            paquets: |
+              target/release/bundle/dmg/*.dmg
+              target/release/bundle/updater/*.app.tar.gz
+              target/release/bundle/updater/*.app.tar.gz.sig
+            # Exactly one file each: a glob that matches nothing stays
+            # literal, and `signer` refuses a file that does not exist.
+            a_signer: target/release/bundle/updater/*_aarch64.app.tar.gz
           - os: ubuntu-24.04
+            # deb and rpm are not signed for the updater: those installs are
+            # updated by their package manager.
             paquets: |
               target/release/bundle/deb/*.deb
               target/release/bundle/rpm/*.rpm
               target/release/bundle/appimage/*.AppImage
+              target/release/bundle/appimage/*.AppImage.sig
+            a_signer: target/release/bundle/appimage/*.AppImage
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
 
@@ -105,6 +130,12 @@ jobs:
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python3 script/apple-release check
+
+      - name: Check the updater signing key before installing dependencies
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: python3 script/livraison cle
 
       - name: Install Tauri's system libraries
         if: runner.os == 'Linux'
@@ -150,13 +181,17 @@ jobs:
 
       - name: Build Linux packages in release mode
         if: runner.os == 'Linux'
-        # The same target as locally: `make desktop PROFIL=release`.
+        # The same target as locally: `make desktop PROFIL=release`. No
+        # secret: the AppImage is signed for the updater in a later step.
         run: make desktop PROFIL=release
 
       - name: Build, sign and notarize macOS packages
         if: runner.os == 'macOS'
         # Tauri imports the certificate into its temporary keychain. Pass
         # credentials through the environment, never interpolate them into shell.
+        # `apple-release build` runs `make desktop PROFIL=release`, then writes
+        # the updater archive from the stapled `.app`; the updater key is not
+        # in this step.
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -172,6 +207,29 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python3 script/apple-release verify
+
+      - name: Name the verified macOS updater archive after its version
+        if: runner.os == 'macOS'
+        # `apple-release build` names it `Oxyn.app.tar.gz`, without version or
+        # architecture. The tag is `v<version>`, checked by the draft job.
+        run: |
+          set -euo pipefail
+          archive=target/release/bundle/macos/Oxyn.app.tar.gz
+          staged="target/release/bundle/updater/Oxyn_${RELEASE_TAG#v}_aarch64.app.tar.gz"
+          test -f "$archive"
+          rm -rf target/release/bundle/updater
+          mkdir -p target/release/bundle/updater
+          cp "$archive" "$staged"
+
+      - name: Sign the updater artifact
+        # The only step after the key check that holds the updater key. It
+        # runs the pinned `tauri signer sign`, and no build code.
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          A_SIGNER: ${{ matrix.a_signer }}
+        # Unquoted on purpose: the pattern expands to the built file.
+        run: python3 script/livraison signer "$RELEASE_TAG" $A_SIGNER
 
       - name: Upload the packages to the draft
         env:
@@ -189,3 +247,34 @@ jobs:
             exit 1
           fi
           python3 script/livraison deposer "$RELEASE_TAG" "$GITHUB_REPOSITORY" "${fichiers[@]}"
+
+  # The only job that uploads `latest.json`, and only once every package job
+  # succeeded. It holds no secret: it reads public archives and signatures.
+  manifeste:
+    needs: paquets
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+
+      - name: Install minisign to verify the updater signatures
+        # minisign 0.12, Linux archive checksum recorded in RESEARCH-NOTES
+        # (§ Tauri updater contracts). Its author's signature was checked once,
+        # when the checksum was recorded; the checksum pins those bytes.
+        run: |
+          set -euo pipefail
+          archive=minisign-0.12-linux.tar.gz
+          curl -LsSf -o "$RUNNER_TEMP/$archive" "https://github.com/jedisct1/minisign/releases/download/0.12/$archive"
+          echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/minisign"
+          tar xzf "$RUNNER_TEMP/$archive" --strip-components=2 -C "$RUNNER_TEMP/minisign" minisign-linux/x86_64/minisign
+          echo "MINISIGN=$RUNNER_TEMP/minisign/minisign" >> "$GITHUB_ENV"
+
+      - name: Verify the archives, write the update manifest and upload it to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 script/livraison manifeste "$RELEASE_TAG" "$GITHUB_REPOSITORY"

@@ -134,11 +134,20 @@ toml          = "0.9.8"
 
 # --- UI ----------------------------------------------------------------------
 # Tauri is a dependency of oxyn-desktop only: the isolation rule of ADR-0001,
-# carried over by ADR-0029. Versions read on crates.io on 2026-09-15, see
-# RESEARCH-NOTES.
-tauri               = "2.11.5"
-tauri-build         = "2.6.3"
+# carried over by ADR-0029. Versions read on crates.io on 2026-10-02, see
+# RESEARCH-NOTES: 2.12 is the floor of the updater and opener plugins below.
+tauri               = "2.12.1"
+tauri-build         = "2.7.1"
 tauri-plugin-dialog = "2.7.3"
+# Automatic updates (ADR-0051), driven from Rust only: no TLS feature of its
+# own. `rustls-tls` would bring `ring` and install it as the process's default
+# provider; the `reqwest` it shares with `oxyn-llm` already has `rustls` on
+# aws-lc-rs, the provider of the drivers. `zip` is only for Windows and
+# gzipped AppImages: the macOS archive's `tar` and `flate2` are unconditional.
+tauri-plugin-updater = { version = "2.13.1", default-features = false }
+# The release page in the system browser, called from Rust: the webview is
+# granted none of its commands.
+tauri-plugin-opener = "2.7.0"
 # The startup failure dialog, shown before the Tauri application exists. Same
 # version as the one `tauri-plugin-dialog` pulls (Cargo.lock): a single `rfd`
 # in the graph. See RESEARCH-NOTES.

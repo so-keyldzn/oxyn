@@ -140,6 +140,7 @@ export const Populated: Story = {
   },
 }
 
+/** The running version, read from the backend (ADR-0051). */
 export const Filtered: Story = {
   play: async ({ canvas }) => {
     const filter = canvas.getByRole("searchbox", {

@@ -82,6 +82,7 @@ To locate the boards and their states before implementation, see
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | A statement sqlx cannot prepare, or whose result has no binary form, runs in the simple protocol, as text | accepted |
 | [0049](adr/0049-agents-declared-as-markdown-files.md) | An agent is a Markdown file with a YAML front matter, targeted by dialect, filled only from a closed list of variables | proposed |
 | [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends | accepted |
+| [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn updates itself from the GitHub Releases, in Rust only, and installs on quit | proposed |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

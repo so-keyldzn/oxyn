@@ -85,6 +85,8 @@ impl WindowKey {
 pub(crate) enum Stream {
     Events,
     RefreshSignals,
+    /// The update's state (ADR-0051).
+    Updates,
 }
 
 /// Where a window's close stands. « The last window » is decided on it: a
