@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="c3f5df1a210c" -->
+<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="fff6968fb442" -->
 
 > Traduction française de [docs/adr/0051-automatic-updates-from-github-releases.md](../../../../docs/adr/0051-automatic-updates-from-github-releases.md). **La version anglaise fait foi.**
 
@@ -116,11 +116,13 @@ permettra d'ajouter un canal bêta sans toucher au reste.
 l'environnement GitHub `release`, vers lequel seuls les tags `v*` peuvent
 déployer, et dans deux sauvegardes hors ligne
 ([RELEASE](../RELEASE.md#clé-de-signature-des-mises-à-jour),
-[I-03](../../CLAUDE.md#i-03)). Tant que le mainteneur n'a pas collé la vraie
-clé publique, `tauri.conf.json` porte la valeur de substitution
-`REPLACE_WITH_UPDATER_PUBLIC_KEY` : le workflow de livraison la refuse avant
-de construire (`script/livraison cle`) et avant d'écrire un manifeste, et un
-build qui la porte refuse toute mise à jour comme un échec de signature.
+[I-03](../../CLAUDE.md#i-03)). La clé en service, d'identifiant minisign
+`F7DFD985E0B86DFC`, a été générée par le mainteneur le 2026-10-02. Si
+`tauri.conf.json` portait de nouveau la valeur de substitution
+`REPLACE_WITH_UPDATER_PUBLIC_KEY` — un fork, une clé en cours de
+remplacement —, le workflow de livraison la refuse avant de construire
+(`script/livraison cle`) et avant d'écrire un manifeste, et un build qui la
+porte refuse toute mise à jour comme un échec de signature.
 
 ### 3. Les artefacts sont signés après le build, et vérifiés avant le manifeste
 
