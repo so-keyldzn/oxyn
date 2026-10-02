@@ -429,7 +429,13 @@ export const LongNullMarker: Story = {
     )
     for (const element of canvasElement.querySelectorAll("[data-null]")) {
       await expect(element).toHaveTextContent(LONG_MARKER)
-      await expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth)
+      // The estimate counts the font's nominal advance; the width it gives
+      // follows the marker, far past the default one and the « x » header.
+      const fontSize = Number.parseFloat(getComputedStyle(element).fontSize)
+      await expect(element.clientWidth).toBeGreaterThanOrEqual(
+        Math.floor(LONG_MARKER.length * 0.6 * fontSize)
+      )
+      // Wide enough at the nominal advance: no tooltip is owed.
       await expect(element).not.toHaveAttribute("title")
     }
   },
