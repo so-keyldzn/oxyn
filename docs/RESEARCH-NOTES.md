@@ -228,13 +228,26 @@ Source: [Apple API key help](https://developer.apple.com/help/app-store-connect/
 
 ## Wasmtime security patch — checked on 2026-10-02
 
-The workspace now requires Wasmtime **48.0.3**, with its matching Cranelift
-0.135.3 family in `Cargo.lock`. The crates.io sparse index lists 48.0.3 as
-not yanked, with Rust 1.95.0 still its minimum. This patch fixes the fuel
-accounting advisories RUSTSEC-2026-0315 and RUSTSEC-2026-0316 that blocked
-`make qualite` on 48.0.1; no advisory is ignored to permit delivery.
+The workspace now requires Wasmtime **48.0.5**, with its matching Cranelift
+0.135.5 family in `Cargo.lock`. The crates.io sparse index lists 48.0.5 as
+not yanked, with Rust 1.95.0 still its minimum; 49.0.2 requires Rust 1.96.0,
+above the workspace's `rust-version` floor of 1.95 (the pinned 1.98.1
+toolchain would build it, but the declared minimum would become false).
+
+- 48.0.3 fixed the fuel accounting advisories RUSTSEC-2026-0315 and
+  RUSTSEC-2026-0316 that blocked `make qualite` on 48.0.1.
+- 48.0.4 fixes RUSTSEC-2026-0325 (GHSA-cfhf-m2cr-62wj), RUSTSEC-2026-0326
+  (GHSA-hw8m-q44c-ggrf) and RUSTSEC-2026-0327 (GHSA-32h6-97mm-8q3c, rated
+  critical), all three published on 2026-10-02 with
+  `>= 48.0.4, < 49.0.0` or `>= 49.0.2` as patched ranges. 48.0.5 only
+  republishes the release artifacts 48.0.4 failed to ship, so it is the
+  version taken.
+
+No advisory is ignored to permit delivery.
 Sources: [registry index](https://index.crates.io/wa/sm/wasmtime),
-[48.0.3 release notes](https://github.com/bytecodealliance/wasmtime/releases/tag/v48.0.3).
+[RUSTSEC-2026-0327](https://rustsec.org/advisories/RUSTSEC-2026-0327),
+[GHSA-32h6-97mm-8q3c](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-32h6-97mm-8q3c),
+[48.0.5 release notes](https://github.com/bytecodealliance/wasmtime/releases/tag/v48.0.5).
 
 ## Tauri updater contracts — checked on 2026-10-02
 
