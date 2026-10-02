@@ -29,6 +29,8 @@ import {
 import { PreferredNullText } from "@/features/settings/preferred-null-text"
 import { useAppearance } from "@/features/settings/use-appearance"
 import { useResultFormatRefresh } from "@/features/settings/use-result-format-refresh"
+import { UpdateHost } from "@/features/updates/update-host"
+import { subscribeToUpdates } from "@/features/updates/update-store"
 import { RouteError, RouteNotFound } from "@/features/workspace/route-failures"
 import { WorkspaceHost } from "@/features/workspace/workspace-host"
 import { CloseWindowHost } from "@/features/windows/close-window-host"
@@ -89,6 +91,8 @@ function RootComponent() {
     // This window's own notices: its close, a connection or the preferences
     // changed by another window (ADR-0043).
     subscribeToWindowSignals()
+    // Where the update stands, pushed by Rust on every change (ADR-0051).
+    subscribeToUpdates()
   }, [])
 
   // Nothing of the webview shows: no page menu, reload, zoom or history
@@ -123,6 +127,9 @@ function RootComponent() {
             />
             {/* An exit held by an open transaction asks here (ADR-0043). */}
             <ExitTransactionsHost />
+            {/* `Check for updates…`, the update toasts, and the confirmation
+                of `Restart now` (ADR-0051). */}
+            <UpdateHost />
             {/* The close of this window, when it is not the last (ADR-0043). */}
             <CloseWindowHost />
             {/* ⌘K, ⌘P and ⌘/ from every screen, through the registry. */}

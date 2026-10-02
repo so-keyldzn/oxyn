@@ -53,6 +53,9 @@ pub enum ExitScope {
     Application,
     /// The close of this window, which is not the last.
     Window,
+    /// The application's exit to install an update, then start again
+    /// ([ADR-0051](../../../../docs/adr/0051-automatic-updates-from-github-releases.md)).
+    Restart,
 }
 
 /// A console session whose transaction holds the exit.

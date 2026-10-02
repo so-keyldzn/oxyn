@@ -11,6 +11,7 @@ import {
   retrySavingPreferences,
 } from "@/features/settings/preferences"
 import { SettingsDialogView } from "@/features/settings/settings-dialog-view"
+import { UpdatesSection } from "@/features/updates/updates-section"
 import type { SettingsSection } from "@/features/settings/settings-dialog-view"
 import type { PreferencesChange } from "@/lib/ipc/settings"
 import type { OpenConnection } from "@/lib/ipc/types"
@@ -108,6 +109,8 @@ export function SettingsDialog({
       }
       sections={[
         ...sections,
+        // The computer's, not the workspace's: the section says so.
+        { id: "updates", label: "Updates", content: <UpdatesSection /> },
         { id: "about", label: "About", content: <AboutSection /> },
       ]}
       unsavedEdit={unsavedEdit}

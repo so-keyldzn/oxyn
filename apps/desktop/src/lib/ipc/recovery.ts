@@ -29,8 +29,11 @@ export const ExitTransaction = z.object({
 })
 export type ExitTransaction = z.infer<typeof ExitTransaction>
 
-/** What an open transaction holds: the application's exit, or this window's close. */
-export const ExitScope = z.enum(["application", "window"])
+/**
+ * What an open transaction holds: the application's exit, this window's
+ * close, or the restart that installs an update (ADR-0051).
+ */
+export const ExitScope = z.enum(["application", "window", "restart"])
 export type ExitScope = z.infer<typeof ExitScope>
 
 export const ShutdownSignal = z.discriminatedUnion("type", [

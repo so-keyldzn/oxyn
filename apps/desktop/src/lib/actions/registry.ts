@@ -217,6 +217,17 @@ export const behaviours: Record<string, ActionBehaviour> = {
     },
     run: (context) => context.sources.settings?.actions.open(),
   },
+  // Opens Settings ▸ Updates, where the result is shown, and checks when no
+  // operation is under way (ADR-0051).
+  "app.checkForUpdates": {
+    enabled: (context) => {
+      if (context.modal) return DIALOG_OPEN
+      const updates = context.sources.updates
+      if (!updates) return "absent"
+      return updates.state.off === null ? true : { reason: updates.state.off }
+    },
+    run: (context) => context.sources.updates?.actions.checkForUpdates(),
+  },
   // The same ordered exit as ⌘Q and the window's close button: drafts are
   // flushed and the close recorded before the process ends (ADR-0038). On
   // macOS the native Quit is handled in Rust; this path is the menu bar of
