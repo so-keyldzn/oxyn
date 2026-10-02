@@ -136,22 +136,38 @@ export const OneMillionRows: Story = {
   },
 }
 
+/**
+ * 500 pages rather than 5 000: past about 20 million pixels of scroll, axe's
+ * contrast check — run after every story — took three times longer than
+ * anywhere above it, and on a loaded runner that alone passed the story's
+ * budget. What the jump proves does not depend on the size beyond « far more
+ * pages than are ever drawn ».
+ */
+const JUMP_ROWS = 100_000
+const jumpPages = fn(syntheticPages(JUMP_ROWS))
+
 export const JumpToTheEnd: Story = {
-  args: { resultKey: "story-jump" },
+  args: { resultKey: "story-jump", rowCount: JUMP_ROWS, fetchPage: jumpPages },
   play: async ({ canvas }) => {
     const grid = canvas.getByRole("grid")
     grid.focus()
     await userEvent.keyboard(`{${modKey}>}{End}{/${modKey}}`)
-    // The last page is fetched directly, without loading what lies before.
     // By its row header: the text alone also matches that row's `id` cell,
     // which holds the same number, and the query then fails as ambiguous.
     await waitFor(
       () =>
         expect(
-          canvas.getByRole("rowheader", { name: "Row 1000000" })
+          canvas.getByRole("rowheader", { name: `Row ${JUMP_ROWS}` })
         ).toBeVisible(),
       { timeout: 3000 }
     )
+    // The last page is fetched directly, without loading what lies before:
+    // every page asked is one of the first or one of the last.
+    const offsets = jumpPages.mock.calls.map(([offset]) => offset)
+    await expect(offsets).toContain(JUMP_ROWS - 200)
+    await expect(
+      offsets.filter((offset) => offset >= 1_000 && offset < JUMP_ROWS - 1_000)
+    ).toEqual([])
   },
 }
 
