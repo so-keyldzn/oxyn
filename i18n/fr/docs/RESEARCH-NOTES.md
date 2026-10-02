@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="5d2e95f3656b" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="863038734815" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -203,14 +203,25 @@ Source : [aide Apple sur les clés API](https://developer.apple.com/help/app-sto
 
 ## Correctif de sécurité Wasmtime — vérifié le 2026-10-02
 
-Le workspace exige désormais Wasmtime **48.0.3**, avec la famille Cranelift
-0.135.3 correspondante dans `Cargo.lock`. L'index sparse de crates.io indique
-que 48.0.3 n'est pas retirée et conserve Rust 1.95.0 comme minimum. Ce correctif
-résout les avis de comptabilité du carburant RUSTSEC-2026-0315 et
-RUSTSEC-2026-0316 qui bloquaient `make qualite` sur 48.0.1 ; aucun avis n'est
-ignoré pour permettre la livraison. Sources :
+Le workspace exige désormais Wasmtime **48.0.5**, avec la famille Cranelift
+0.135.5 correspondante dans `Cargo.lock`. L'index sparse de crates.io indique
+que 48.0.5 n'est pas retirée et conserve Rust 1.95.0 comme minimum ; 49.0.2
+exige Rust 1.96.0, au-dessus de la chaîne d'outils épinglée.
+
+- 48.0.3 a résolu les avis de comptabilité du carburant RUSTSEC-2026-0315 et
+  RUSTSEC-2026-0316 qui bloquaient `make qualite` sur 48.0.1.
+- 48.0.4 résout RUSTSEC-2026-0325 (GHSA-cfhf-m2cr-62wj), RUSTSEC-2026-0326
+  (GHSA-hw8m-q44c-ggrf) et RUSTSEC-2026-0327 (GHSA-32h6-97mm-8q3c, classé
+  critique), tous trois publiés le 2026-10-02 avec
+  `>= 48.0.4, < 49.0.0` ou `>= 49.0.2` comme plages corrigées. 48.0.5 ne fait
+  que republier les artefacts que 48.0.4 n'a pas livrés : c'est la version
+  retenue.
+
+Aucun avis n'est ignoré pour permettre la livraison. Sources :
 [index du registre](https://index.crates.io/wa/sm/wasmtime),
-[notes de version 48.0.3](https://github.com/bytecodealliance/wasmtime/releases/tag/v48.0.3).
+[RUSTSEC-2026-0327](https://rustsec.org/advisories/RUSTSEC-2026-0327),
+[GHSA-32h6-97mm-8q3c](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-32h6-97mm-8q3c),
+[notes de version 48.0.5](https://github.com/bytecodealliance/wasmtime/releases/tag/v48.0.5).
 
 ## GPUI
 
