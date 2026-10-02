@@ -144,6 +144,7 @@ pub struct BatchSink {
     /// Resuming after that would read an out-of-sync stream: the sink refuses.
     aborted: AtomicBool,
     confirm_end_at_limit: bool,
+    awaits_terminal_outcome: bool,
 }
 
 impl BatchSink {
@@ -154,7 +155,30 @@ impl BatchSink {
             buffer,
             aborted: AtomicBool::new(false),
             confirm_end_at_limit: false,
+            awaits_terminal_outcome: false,
         }
+    }
+
+    /// Reads the source to its own end, whatever stops the result.
+    ///
+    /// For a statement whose effect survives a stop — a write. Abandoning its
+    /// source on a cancellation, or once the buffer is full, would throw away
+    /// the one answer that says whether the write was applied, and would cut
+    /// the drain some drivers need to commit it. In this mode:
+    ///
+    /// * the token is not raced against the source: the driver watches it,
+    ///   stops the server, and ends on its own verdict — a source error
+    ///   [`OxynError::is_cancelled`] becomes [`SinkOutcome::Cancelled`], an
+    ///   ambiguous one stays an error, and a statement that ended first ends as
+    ///   if nothing had been asked;
+    /// * once the buffer stops taking rows, the rest is read and discarded.
+    ///
+    /// **The caller bounds the wait**, as it bounds every other: this sink
+    /// applies no timeout (see the module note).
+    #[must_use]
+    pub fn awaiting_terminal_outcome(mut self) -> Self {
+        self.awaits_terminal_outcome = true;
+        self
     }
 
     /// Probes for end-of-stream at the row limit, on the same source.
@@ -218,6 +242,9 @@ impl BatchSink {
             return Err(OxynError::Internal(
                 "batch source was abandoned mid-flight and cannot be resumed".to_owned(),
             ));
+        }
+        if self.awaits_terminal_outcome {
+            return self.drain_to_end(source, on_batch).await;
         }
 
         loop {
@@ -335,6 +362,89 @@ impl BatchSink {
                     self.seal(source, true);
                     return Err(other.into());
                 }
+            }
+        }
+    }
+
+    /// The loop of [`awaiting_terminal_outcome`](Self::awaiting_terminal_outcome).
+    async fn drain_to_end<F>(
+        &self,
+        source: &mut dyn BatchSource,
+        mut on_batch: F,
+    ) -> Result<SinkOutcome, OxynError>
+    where
+        F: FnMut(BatchProgress),
+    {
+        // Why the buffer stopped taking rows, once it did; and a failure to
+        // store, reported only after the source has said how it ended.
+        let mut stopped: Option<SinkOutcome> = None;
+        let mut store_failure: Option<OxynError> = None;
+        loop {
+            if stopped.is_none() && store_failure.is_none() {
+                stopped = match self.buffer.pressure() {
+                    Pressure::Ready => None,
+                    Pressure::RowLimit if self.buffer.stats().truncated => {
+                        Some(SinkOutcome::RowLimit)
+                    }
+                    Pressure::RowLimit => Some(SinkOutcome::RowLimitUnverified),
+                    Pressure::Saturated => Some(SinkOutcome::Saturated),
+                    Pressure::Complete => return Ok(SinkOutcome::Exhausted),
+                };
+            }
+
+            let batch = match source.next_batch().await {
+                Ok(Some(batch)) => batch,
+                Ok(None) => {
+                    let truncated = stopped.is_some() || source.stats().truncated;
+                    self.seal(source, truncated);
+                    if let Some(failure) = store_failure {
+                        return Err(failure);
+                    }
+                    return Ok(stopped.unwrap_or(if truncated {
+                        SinkOutcome::RowLimit
+                    } else {
+                        SinkOutcome::Exhausted
+                    }));
+                }
+                Err(error) if error.is_cancelled() => {
+                    self.seal(source, true);
+                    return Ok(SinkOutcome::Cancelled);
+                }
+                Err(error) => {
+                    self.seal(source, true);
+                    return Err(error);
+                }
+            };
+
+            if store_failure.is_some() {
+                continue;
+            }
+            if let Some(outcome) = stopped {
+                // A row the limit kept out: the result is certainly cut.
+                if outcome == SinkOutcome::RowLimitUnverified && batch.num_rows() > 0 {
+                    stopped = Some(SinkOutcome::RowLimit);
+                }
+                continue;
+            }
+
+            match self.buffer.push(batch) {
+                Ok(None) => {}
+                Ok(Some(index)) => {
+                    let rows = self.buffer.batch_rows(index).unwrap_or(0);
+                    let total_rows = self.buffer.row_count();
+                    on_batch(BatchProgress {
+                        index,
+                        rows,
+                        total_rows,
+                    });
+                }
+                Err(DataError::Full { .. }) => {
+                    stopped = Some(match self.buffer.pressure() {
+                        Pressure::RowLimit => SinkOutcome::RowLimit,
+                        _ => SinkOutcome::Saturated,
+                    });
+                }
+                Err(other) => store_failure = Some(other.into()),
             }
         }
     }
@@ -570,6 +680,49 @@ mod tests {
         assert!(outcome.is_truncated(), "unverified is never complete");
         assert_eq!(source.pull_count, 2, "no read beyond the limit");
         assert!(buffer.stats().truncated);
+    }
+
+    #[test]
+    fn a_write_is_read_to_its_end_past_the_limit_and_past_a_stop() {
+        let buffer = Arc::new(ResultBuffer::with_limits(
+            schema(),
+            BufferLimits::default().with_max_rows(5_usize),
+        ));
+        let sink = BatchSink::new(buffer.clone()).awaiting_terminal_outcome();
+        let mut source = ScriptedSource::new(vec![batch_of(5), batch_of(5), batch_of(0)]);
+        let cancel = CancelToken::new();
+        // The Stop lands with the first batch: the source still decides.
+        let outcome =
+            block_on(sink.drain_with(&mut source, &cancel, |_| cancel.cancel())).expect("drain");
+        assert_eq!(
+            outcome,
+            SinkOutcome::RowLimit,
+            "a row past the limit was seen"
+        );
+        assert_eq!(source.pull_count, 4, "read to the end of the stream");
+        assert_eq!(buffer.row_count(), 5, "nothing stored past the limit");
+        assert!(buffer.is_complete());
+    }
+
+    #[test]
+    fn a_write_ends_on_its_source_verdict() {
+        for (error, cancelled) in [
+            (OxynError::Cancelled, true),
+            (OxynError::OutcomeUnknown("cut".to_owned()), false),
+        ] {
+            let buffer = Arc::new(ResultBuffer::new(schema(), 1 << 20));
+            let sink = BatchSink::new(buffer.clone()).awaiting_terminal_outcome();
+            let cancel = CancelToken::new();
+            cancel.cancel();
+            let issue = block_on(sink.drain(&mut ScriptedSource::failing(error), &cancel));
+            if cancelled {
+                assert_eq!(issue.expect("a proven stop"), SinkOutcome::Cancelled);
+            } else {
+                let error = issue.expect_err("an ambiguous end stays an error");
+                assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
+            }
+            assert!(buffer.is_complete());
+        }
     }
 
     #[test]

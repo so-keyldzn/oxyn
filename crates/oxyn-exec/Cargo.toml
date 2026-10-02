@@ -42,5 +42,6 @@ rstest.workspace = true
 # Stop-during-a-write test waits on it, not on a delay.
 tempfile.workspace = true
 # Only the test binary needs more than one worker thread: the abandonment
-# tests race a real blocking-pool write against a dropped future.
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+# tests race a real blocking-pool write against a dropped future. A paused
+# clock lets a test reach the grace a stopped write is given without waiting it.
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }

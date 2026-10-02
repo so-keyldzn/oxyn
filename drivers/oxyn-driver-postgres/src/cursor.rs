@@ -525,9 +525,10 @@ async fn run(
             let batch_full =
                 assembler.bytes() >= BATCH_BYTE_BUDGET || assembler.rows() >= BATCH_ROW_CEILING;
             // A write's batch that reaches the bound is held until the drain
-            // ends. The executor stops reading at N and drops the cursor, which
-            // cancels the token: emitted now, row N would cut the very drain
-            // that keeps the write from being rolled back.
+            // ends. A consumer that stops reading at N and drops the cursor
+            // cancels the token: emitted now, row N would let it cut the very
+            // drain that keeps the write from being rolled back. The executor
+            // reads a write to its end, but the cursor does not rely on it.
             let held = limit_reached && !confirm_end;
 
             if (batch_full || limit_reached) && !held {

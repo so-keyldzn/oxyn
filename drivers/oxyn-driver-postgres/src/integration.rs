@@ -898,7 +898,7 @@ async fn a_write_past_the_row_bound_is_drained_and_committed() {
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn a_write_cut_during_its_drain_is_ambiguous() {
-    const WRITTEN: usize = 400_000;
+    const WRITTEN: usize = 1_000;
     let Some(session) = session().await else {
         return;
     };
@@ -908,6 +908,26 @@ async fn a_write_cut_during_its_drain_is_ambiguous() {
         "CREATE TABLE oxyn_row_bound_cut (i integer)",
     )
     .await;
+    // The window that makes the cut ambiguous, held open: every row is sent,
+    // the commit is not made yet. A deferred trigger runs at the commit, after
+    // the last row. Waiting on the rows themselves raced the driver, which
+    // drains a write without back-pressure.
+    apply(
+        session.as_ref(),
+        "CREATE OR REPLACE FUNCTION oxyn_row_bound_linger() RETURNS trigger \
+         LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(30); RETURN NULL; END $$",
+    )
+    .await;
+    apply(
+        session.as_ref(),
+        "CREATE CONSTRAINT TRIGGER oxyn_row_bound_linger AFTER INSERT ON oxyn_row_bound_cut \
+         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.i = 1) \
+         EXECUTE FUNCTION oxyn_row_bound_linger()",
+    )
+    .await;
+    let Some(witness) = self::session().await else {
+        return;
+    };
 
     let token = CancelToken::new();
     let mut cursor = session
@@ -916,7 +936,7 @@ async fn a_write_cut_during_its_drain_is_ambiguous() {
                 &format!(
                     "INSERT INTO oxyn_row_bound_cut \
                      SELECT i FROM generate_series(1, {WRITTEN}) AS s(i) \
-                     RETURNING i, repeat('x', 2000)"
+                     RETURNING i"
                 ),
                 10,
             ),
@@ -925,26 +945,21 @@ async fn a_write_cut_during_its_drain_is_ambiguous() {
         .await
         .expect("execution");
 
-    // A `RETURNING` runs whole before its first row: a server waiting on the
-    // client to read is sending, so the drain is under way.
-    let Some(witness) = self::session().await else {
-        return;
-    };
-    let mut sending = false;
-    for _ in 0..3_000 {
+    let mut lingering = false;
+    for _ in 0..1_000 {
         let waiting = first_text(
             witness.as_ref(),
             "SELECT count(*)::text FROM pg_stat_activity \
-             WHERE wait_event = 'ClientWrite' AND query LIKE 'INSERT INTO oxyn_row_bound_cut%'",
+             WHERE wait_event = 'PgSleep' AND query LIKE 'INSERT INTO oxyn_row_bound_cut%'",
         )
         .await;
         if waiting != "0" {
-            sending = true;
+            lingering = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(sending, "the server never started sending the rows");
+    assert!(lingering, "the write never reached its commit");
     token.cancel();
 
     let error = refusal(cursor.next_batch().await, "a cut drain must not finish");
@@ -966,6 +981,7 @@ async fn a_write_cut_during_its_drain_is_ambiguous() {
     witness.close().await.expect("close");
 
     apply(session.as_ref(), "DROP TABLE oxyn_row_bound_cut").await;
+    apply(session.as_ref(), "DROP FUNCTION oxyn_row_bound_linger()").await;
     session.close().await.expect("close");
 }
 
