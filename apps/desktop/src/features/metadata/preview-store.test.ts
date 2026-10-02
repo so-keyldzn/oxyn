@@ -21,6 +21,7 @@ const executed = (result: string, rows = 3): CommandOutcome => ({
   complete: true,
   cancelled: false,
   truncated: false,
+  rowLimitUnverified: false,
 })
 
 /** A backend whose answers the test releases by hand. */

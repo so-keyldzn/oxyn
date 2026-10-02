@@ -44,6 +44,7 @@ vi.mock("@/lib/ipc/consoles", async () => {
           complete: true,
           cancelled: false,
           truncated: false,
+          rowLimitUnverified: false,
         })
       },
     },

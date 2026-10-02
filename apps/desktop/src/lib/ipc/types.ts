@@ -197,6 +197,7 @@ export const CommandOutcome = z.discriminatedUnion("type", [
     complete: z.boolean(),
     cancelled: z.boolean(),
     truncated: z.boolean(),
+    rowLimitUnverified: z.boolean(),
   }),
   z.object({
     type: z.literal("needsApproval"),

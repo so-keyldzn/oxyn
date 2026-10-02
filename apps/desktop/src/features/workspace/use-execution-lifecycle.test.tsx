@@ -26,6 +26,7 @@ const executed: CommandOutcome = {
   complete: true,
   cancelled: false,
   truncated: false,
+  rowLimitUnverified: false,
 }
 
 afterEach(() => vi.clearAllMocks())
