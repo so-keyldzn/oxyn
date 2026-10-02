@@ -48,14 +48,24 @@ export function subscribeToUpdates() {
   if (subscribed) return
   subscribed = true
   // Subscribed first: a change between the read and the subscription would
-  // otherwise be lost until the next one.
-  void updates.subscribe(receive).catch((error: unknown) => {
-    subscribed = false
-    console.error(`Could not follow the updates: ${message(error)}`)
-  })
+  // otherwise be lost until the next one. The read only seeds the store: its
+  // answer can arrive after a channel message newer than it — `ready` landing
+  // while the window opens — and must not put `downloading` back.
+  let heard = false
+  void updates
+    .subscribe((snapshot) => {
+      heard = true
+      receive(snapshot)
+    })
+    .catch((error: unknown) => {
+      subscribed = false
+      console.error(`Could not follow the updates: ${message(error)}`)
+    })
   void updates
     .state()
-    .then(receive)
+    .then((snapshot) => {
+      if (!heard) receive(snapshot)
+    })
     .catch((error: unknown) => {
       console.error(`Could not read the update state: ${message(error)}`)
     })
