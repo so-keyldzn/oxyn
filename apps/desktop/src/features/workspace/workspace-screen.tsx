@@ -71,6 +71,7 @@ import {
   publishWorkspaceDocuments,
   withdrawWorkspaceDocuments,
 } from "@/features/windows/window-consoles"
+import { UpdateIndicatorHost } from "@/features/updates/update-indicator-host"
 import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { useActionSource } from "@/lib/actions/context"
@@ -794,6 +795,7 @@ export function WorkspaceScreen({
             execution={
               work.entries.length === 0 ? { status: "idle" } : work.summary
             }
+            update={<UpdateIndicatorHost />}
           />
         }
       >

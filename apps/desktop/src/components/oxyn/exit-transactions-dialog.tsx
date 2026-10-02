@@ -37,7 +37,8 @@ const WORDS = {
         ? "Quit with an open transaction?"
         : "Quit with open transactions?",
     nothing: "No transaction is open any more. Cancel, then quit again.",
-    ask: "Commit or roll back to quit. Cancel keeps Oxyn open, with every transaction as it is.",
+    ask: () =>
+      "Commit or roll back to quit. Cancel keeps Oxyn open, with every transaction as it is.",
   },
   window: {
     title: (count: number) =>
@@ -46,7 +47,19 @@ const WORDS = {
         : "Close this window with open transactions?",
     nothing:
       "No transaction is open any more. Cancel, then close the window again.",
-    ask: "Commit or roll back to close this window. Cancel keeps it open, with every transaction as it is.",
+    ask: () =>
+      "Commit or roll back to close this window. Cancel keeps it open, with every transaction as it is.",
+  },
+  restart: {
+    title: (count: number) =>
+      count === 1
+        ? "Restart with an open transaction?"
+        : "Restart with open transactions?",
+    nothing: "No transaction is open any more. Cancel, then restart again.",
+    // The restart installs an update; cancelling keeps it for the next quit
+    // (ADR-0051).
+    ask: (version: string | null) =>
+      `Commit or roll back to restart and install ${version === null ? "the update" : `Oxyn ${version}`}. Cancel keeps Oxyn open, with every transaction as it is; the update still installs when you quit.`,
   },
 } as const
 
@@ -63,6 +76,7 @@ const WORDS = {
 export function ExitTransactionsDialog({
   rows,
   scope = "application",
+  version = null,
   busy = null,
   error = null,
   commitBlocked = false,
@@ -74,9 +88,12 @@ export function ExitTransactionsDialog({
   rows: ReadonlyArray<ExitTransactionRow> | null
   /**
    * What the transactions hold: quitting Oxyn, or closing this window, which
-   * is not the last (ADR-0043). Only the words change.
+   * is not the last (ADR-0043), or the restart that installs an update
+   * (ADR-0051). Only the words change.
    */
-  scope?: "application" | "window"
+  scope?: "application" | "window" | "restart"
+  /** The version a `restart` installs. */
+  version?: string | null
   busy?: "commit" | "rollback" | null
   /** The last failure, as the server said it. */
   error?: string | null
@@ -114,7 +131,7 @@ export function ExitTransactionsDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>{WORDS[scope].title(count)}</AlertDialogTitle>
           <AlertDialogDescription>
-            {nothing ? WORDS[scope].nothing : WORDS[scope].ask}
+            {nothing ? WORDS[scope].nothing : WORDS[scope].ask(version)}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {nothing ? null : (

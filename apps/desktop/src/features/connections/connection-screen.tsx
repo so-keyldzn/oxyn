@@ -7,6 +7,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { toast } from "@/components/ui/toast"
 import { ConnectionScreenView } from "@/features/connections/connection-screen-view"
+import { UpdateIndicatorHost } from "@/features/updates/update-indicator-host"
 import type { PendingConnectionApproval } from "@/features/connections/connection-screen-view"
 import type { ConnectionPrefill } from "@/components/oxyn/connection-form"
 import { copyConnection } from "@/features/connections/copy-connection"
@@ -428,6 +429,7 @@ export function ConnectionScreen() {
         leftOpen ? () => void navigate({ to: "/workspace" }) : undefined
       }
       onOpenLocalWork={() => void navigate({ to: "/recovery" })}
+      updateIndicator={<UpdateIndicatorHost />}
     />
   )
 }

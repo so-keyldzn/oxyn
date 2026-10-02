@@ -1,3 +1,4 @@
+import type * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
@@ -150,6 +151,7 @@ export function StatusBar({
   readOnly,
   execution,
   capabilities,
+  update,
 }: {
   connectionName: string
   driver: string
@@ -157,6 +159,11 @@ export function StatusBar({
   readOnly: boolean
   execution: ExecutionSummary
   capabilities?: Array<string>
+  /**
+   * A downloaded update or a failed one (ADR-0051), at the right end; absent
+   * when nothing is pending. It stays at reduced width, as an icon.
+   */
+  update?: React.ReactNode
 }) {
   // A session may refuse writes on its own, a replica for instance.
   const refusesWrites =
@@ -256,9 +263,10 @@ export function StatusBar({
       <span role="status" aria-live="polite" className="sr-only">
         {spoken}
       </span>
-      {capabilities ? (
-        <div className="ml-auto shrink-0">
-          <SessionDetails capabilities={capabilities} />
+      {update || capabilities ? (
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {update}
+          {capabilities ? <SessionDetails capabilities={capabilities} /> : null}
         </div>
       ) : null}
     </div>

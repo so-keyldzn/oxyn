@@ -82,6 +82,14 @@ export const Populated: Story = {
   },
 }
 
+/** The running version, read from the backend (ADR-0051). */
+export const WithVersion: Story = {
+  args: { version: "1.4.0" },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Version 1.4.0")).toBeVisible()
+  },
+}
+
 export const Filtered: Story = {
   play: async ({ canvas }) => {
     const filter = canvas.getByRole("searchbox", {

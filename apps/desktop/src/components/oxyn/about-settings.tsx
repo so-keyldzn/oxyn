@@ -117,13 +117,17 @@ function ThirdPartyList({ notices }: { notices: Array<ThirdPartyNotice> }) {
  */
 export function AboutSettings({
   licenses,
+  version,
 }: {
   licenses: ThirdPartyLicensesState
+  /** The running version, once the backend said it. */
+  version?: string | null
 }) {
   return (
     <div className="flex flex-col gap-6">
       <section className="flex flex-col gap-2 text-sm">
         <h3 className="font-medium">Oxyn</h3>
+        {version ? <p>Version {version}</p> : null}
         <p>Copyright 2026 Nicolas Boromée</p>
         <p className="text-muted-foreground">
           Oxyn is free software, distributed under the GNU General Public

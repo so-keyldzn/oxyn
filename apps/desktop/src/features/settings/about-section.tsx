@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
+import { useStore } from "@tanstack/react-store"
 
 import { AboutSettings } from "@/components/oxyn/about-settings"
 import type { ThirdPartyLicensesState } from "@/components/oxyn/about-settings"
+import { updateStore } from "@/features/updates/update-store"
 import { loadThirdPartyLicenses } from "@/lib/third-party-licenses"
 
 /**
@@ -16,6 +18,11 @@ export function AboutSection() {
     staleTime: Infinity,
     retry: false,
   })
+  // The running version, as the backend reports it with the update state.
+  const version = useStore(
+    updateStore,
+    (view) => view.snapshot?.currentVersion ?? null
+  )
 
   const licenses: ThirdPartyLicensesState = query.isPending
     ? { status: "loading" }
@@ -25,5 +32,5 @@ export function AboutSection() {
         ? { status: "missing" }
         : { status: "ready", notices: query.data }
 
-  return <AboutSettings licenses={licenses} />
+  return <AboutSettings licenses={licenses} version={version} />
 }

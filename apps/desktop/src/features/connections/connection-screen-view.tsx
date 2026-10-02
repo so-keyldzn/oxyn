@@ -127,6 +127,8 @@ export interface ConnectionScreenViewProps {
   /** Absent when no workspace stayed open: the action is then not shown. */
   onReturnToWorkspace?: () => void
   onOpenLocalWork?: () => void
+  /** A downloaded or failed update (ADR-0051); absent when nothing is pending. */
+  updateIndicator?: React.ReactNode
 }
 
 /**
@@ -183,6 +185,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     onDecide,
     onReturnToWorkspace,
     onOpenLocalWork,
+    updateIndicator,
   } = props
   const busy = opening !== null || submitting || testing
   const firstLaunch = connections?.length === 0 && !connectionsError
@@ -302,6 +305,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
           )}
         </div>
         <div className="ml-auto flex items-center gap-1">
+          {updateIndicator}
           {onOpenLocalWork ? (
             <Button
               variant="ghost"
