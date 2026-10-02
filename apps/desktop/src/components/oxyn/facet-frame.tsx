@@ -103,7 +103,10 @@ export function FacetFrame({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 text-xs">
+      {/* The bar wraps at the width of its own panel, not the window's: with
+          the catalog, the inspector and the definition open, a panel can be
+          under 300 px, and an action pushed past its edge is clipped. */}
+      <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1 text-xs">
         <Badge variant={stale ? "outline" : "secondary"}>
           {freshnessLabel(freshness)}
         </Badge>
@@ -119,7 +122,7 @@ export function FacetFrame({
             (docs/UX-SPEC.md, « Scope of Run in a SQL console »): one button whose meaning
             flips is a missed click away from restarting what was to be
             stopped. The one with nothing to do is dimmed and inert. */}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {hasValue ? actions : null}
           <Button
             size="sm"
