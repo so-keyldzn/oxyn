@@ -40,6 +40,19 @@ workspace is a **reference** to the secret, never the secret.
 committed by the user to their team's repository, because the
 file looked like mere configuration.
 
+### The updater signing key
+
+The minisign private key that signs updates is a secret of the **release**,
+not of a user: it lives only in the `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` Actions secrets, scoped to the steps that
+build, and in two offline backups. It is never in the repository, a log, a
+chat or the clipboard; scripts name the variables, never their values. Only
+its public half is committed, in `tauri.conf.json`. Procedure, rotation and
+loss: [RELEASE](RELEASE.md#updater-signing-key).
+
+**Concrete failure:** the key pasted into a chat to "set up the secret", and
+anyone who reads that log can sign an update every installed copy accepts.
+
 ### A secret does not follow its connection elsewhere
 
 A secret entered for one destination is never presented to another one that
@@ -276,6 +289,26 @@ What enters Oxyn and is untrusted, in order of underestimation:
    the user validates it. The `subscribe_file_drops` command takes no
    path: the webview cannot request reading a file of its
    choice, and the front end only receives a text or a form value.
+8. **The update manifest and archive.** What
+   `https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json`
+   returns, and the archive it points to, become code run with the user's
+   rights ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)).
+   The endpoint is a constant compiled into `oxyn-desktop`
+   (`updates/channel.rs`), fetched over HTTPS only — the plugin refuses
+   anything else in a release build. That check covers the endpoint, not the
+   archive `url` the manifest names: what makes the archive trustworthy is its
+   signature, not its transport. The archive is installed only if its
+   minisign signature matches the public key compiled in, and the version
+   signed with it matches the version the manifest announces
+   (`requireSignedVersion`); a version not strictly greater than the running
+   one is never offered. Release notes are capped at 4 KiB, cut on a
+   character boundary, and rendered as plain text. The webview never supplies
+   a URL, a path or a version: the updater plugin and `tauri-plugin-opener`
+   are used from Rust only, `capabilities/main.json` grants neither of them a
+   permission — a test refuses an `updater:` one —, and the release page
+   opened in the browser is a fixed prefix followed by a version Rust
+   validated as semver. The manifest itself is not signed: whoever controls
+   the endpoint can withhold updates, not ship code.
 
 ## `unsafe` policy
 

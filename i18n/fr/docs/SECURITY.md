@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="50e0ff8f6c44" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="3693343cbcf0" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -43,6 +43,21 @@ workspace, c'est une **référence** au secret, jamais le secret.
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le
 fichier avait l'air d'être une simple configuration.
+
+### La clé de signature des mises à jour
+
+La clé privée minisign qui signe les mises à jour est un secret de la
+**livraison**, pas d'un utilisateur : elle ne vit que dans les secrets Actions
+`TAURI_SIGNING_PRIVATE_KEY` et `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, limités aux
+étapes qui construisent, et dans deux sauvegardes hors ligne. Elle n'est jamais
+dans le dépôt, un journal, une conversation ou le presse-papiers ; les scripts
+nomment les variables, jamais leurs valeurs. Seule sa moitié publique est
+committée, dans `tauri.conf.json`. Procédure, renouvellement et perte :
+[RELEASE](RELEASE.md#clé-de-signature-des-mises-à-jour).
+
+**Panne concrète :** la clé collée dans une conversation « pour configurer le
+secret », et quiconque lit ce journal peut signer une mise à jour que toute
+copie installée accepte.
 
 ### Un secret ne suit pas sa connexion ailleurs
 
@@ -280,6 +295,28 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    l'utilisateur la valide. La commande `subscribe_file_drops` ne prend aucun
    chemin : la webview ne peut pas demander la lecture d'un fichier de son
    choix, et le front ne reçoit qu'un texte ou une valeur de formulaire.
+8. **Le manifeste et l'archive de mise à jour.** Ce que renvoie
+   `https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json`,
+   et l'archive vers laquelle il pointe, deviennent du code exécuté avec les
+   droits de l'utilisateur
+   ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). L'endpoint
+   est une constante compilée dans `oxyn-desktop` (`updates/channel.rs`),
+   récupérée en HTTPS seulement — le plugin refuse tout autre schéma dans un
+   build de release. Ce contrôle couvre l'endpoint, pas l'`url` d'archive que
+   nomme le manifeste : ce qui rend l'archive digne de confiance, c'est sa
+   signature, pas son transport. L'archive n'est installée que si sa signature
+   minisign correspond à la clé publique compilée, et que la version signée
+   avec elle égale celle qu'annonce le manifeste (`requireSignedVersion`) ;
+   une version qui n'est pas strictement supérieure à celle qui tourne n'est
+   jamais proposée. Les notes de version sont plafonnées à 4 Kio, coupées sur
+   une frontière de caractère, et rendues en texte brut. La webview ne fournit
+   jamais d'URL, de chemin ni de version : le plugin de mise à jour et
+   `tauri-plugin-opener` ne sont utilisés que depuis Rust,
+   `capabilities/main.json` n'accorde de permission à aucun des deux — un
+   test refuse une permission `updater:` —, et la page de release ouverte
+   dans le navigateur est un préfixe fixe suivi d'une version que Rust a
+   validée comme semver. Le manifeste lui-même n'est pas signé : qui contrôle
+   l'endpoint peut retenir les mises à jour, pas livrer du code.
 
 ## Politique `unsafe`
 
