@@ -75,8 +75,17 @@ crates/oxyn-desktop/              # the Tauri host, `oxyn-desktop` binary
 ├── src/catalog.rs                # catalog tree and expansion command
 ├── src/credentials.rs            # the only point that reads or writes the keychain
 ├── src/menu.rs                   # native macOS bar, read from the front end's manifest; no Command
-├── capabilities/main.json        # webview permissions
-└── tauri.conf.json               # production CSP; tauri.dev.json5 relaxes it in dev
+├── src/updates.rs + updates/     # self-update from the GitHub Releases (ADR-0051); no Command
+│   ├── state.rs                  #   the state machine, pure, tested without Tauri
+│   ├── channel.rs                #   the only endpoint, the release page, the release-asset check
+│   ├── installation.rs           #   macOS bundle, AppImage, or why not (deb/rpm, dev, read-only)
+│   ├── preference.rs             #   updates.json and the OXYN_UPDATES lock
+│   ├── schedule.rs               #   when the next check is due, against the wall clock
+│   ├── failure.rs                #   the plugin's errors, classified
+│   ├── apply.rs                  #   the install at the exit, and update-notice.json for the next launch
+│   └── tests.rs
+├── capabilities/main.json        # webview permissions — none for the updater or the opener
+└── tauri.conf.json               # production CSP, updater public key; tauri.dev.json5 relaxes it in dev
 ```
 
 Each domain — consoles, metadata, results, library, recovery,
@@ -90,6 +99,14 @@ settings, AI — has its file in each of the three directories `commands/`,
 only write outside the bus — the secrets of a connection draft — goes through
 `credentials.rs`: one keychain call per driver would be as many places to
 audit instead of one ([I-03](../CLAUDE.md#i-03)).
+
+**Two subjects are plumbing, not `Command`s**: the menu bar
+([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)) and updates
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). Neither
+reaches a driver. The updater is driven from Rust alone: its commands
+(`commands/updates.rs`, `ipc/updates.rs`) take no URL, path or version, and
+the webview holds no `updater:` permission. `tauri-plugin-opener` is not
+registered at all: `open_release_page` calls its free function `open_url`.
 
 **A `Command` is only born in `backend.rs`, `backend/` and `catalog.rs`.** The
 front end cannot build any: it only has `invoke`, and a single module
@@ -235,11 +252,35 @@ mark the result truncated only if that row exists. A mutating statement is not r
 asking the server for one more batch would extend its side effects: the stop is
 `SinkOutcome::RowLimitUnverified`, shown as `Row limit reached · completeness
 not verified` rather than as missing rows, and stays non-exportable like any
-result not proven whole. The PostgreSQL and SQLite drivers apply the same rule
-to their own bound and stop a mutating statement at N without reading row
-N + 1. The MySQL driver keeps reading past the bound: its protocol leaves no
-statement paused with rows unread, and the alternative to draining the set is
-killing the write in flight.
+result not proven whole. The SQLite driver applies the same rule to its own
+bound and stops a mutating statement at N without reading row N + 1. The
+PostgreSQL and MySQL drivers keep reading past the bound: their protocols leave
+no statement paused with rows unread, and the alternative to draining the set
+is killing the write in flight — on PostgreSQL an autocommit statement commits
+only once its last row is sent, so a cut write is rolled back while N of its
+rows are on screen. PostgreSQL and MySQL drain the rest without decoding or
+keeping it, under the same cancellation and deadline, until the statement ends —
+MySQL's read-ahead and kill at the bound are a read's alone; PostgreSQL also
+holds the batch that reaches N until then. A drain cut by cancellation or the
+deadline ends on an ambiguous error, never on a finished result.
+
+The executor keeps a write's cursor until its driver concludes. Its sink stores
+nothing past the limit and probes for nothing, but it reads the cursor to its
+end instead of dropping it at N, and it does not race the cursor against a
+Stop: the driver watches the same token, stops the server and says how the
+write ended. A Stop therefore ends a write on the driver's verdict, which the
+executor does not second-guess — `Cancelled`, an ambiguous `OutcomeUnknown` or
+`Timeout`, or `Completed` when the write ended before the Stop reached it. The
+wait is bounded by what is left of the deadline and by a ten-second grace after
+the Stop; past it, or when the caller abandons the execution, the outcome is
+`OutcomeUnknown`, never a cancellation (I-13). A read keeps letting go at once.
+The verdict is only as sound as the driver's: MySQL answers `Cancelled` for a
+write only once the server reported the kill on that very statement, but
+PostgreSQL still answers it for a write stopped before any of its rows arrived
+— any write without `RETURNING` — without reading the server's answer to its
+cancel request, and SQLite answers it as soon as its token fires, even after a
+`RETURNING` that already made all its changes at its first step. Both are
+known gaps, not guarantees.
 
 PostgreSQL preparation examines the column types, including domain
 bases and array elements. Types without binary output, internal
@@ -1046,6 +1087,19 @@ global executors are not in the graph, checked with
 as an external agent is declared, and [I-05](../CLAUDE.md#i-05) applies to both
 reactors. Details and measurement in
 [RESEARCH-NOTES](RESEARCH-NOTES.md#agent-client-protocol--check-of-2026-09-14).
+
+**Updates run beside the backend, never on the main thread while a window
+exists** ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)):
+
+| Step | Where |
+|---|---|
+| Schedule — 60 s after launch, then due every 24 h | one task on `tauri::async_runtime`, woken every hour or by a manual check (`Notify`); the due date is read against the wall clock, so the machine's sleep does not stretch it |
+| Check and download | one operation task at a time on `tauri::async_runtime`, which `cancel_update` aborts with its HTTP request; the check is bounded by 30 s, the download only by 60 s without a byte and by 256 MiB; the archive stays in memory, its signature verified by the plugin before it is kept, then the installation's folder probed for writing on the blocking pool — the launch only reads two files of at most 64 KiB; progress throttled to four events per second on the `subscribe_updates` `Channel` |
+| Install, after ⌘Q, Oxyn's Quit or "Restart now" | `begin_exit`, after `backend.shutdown()`: windows hidden, `install` in `spawn_blocking` with no timeout, a failure logged without holding the exit, the journal flushed, then `request_restart()` or `exit(0)` |
+| Install, after the Dock's Quit or logout | macOS only — on Linux, cutting the AppImage's rewrite would leave a truncated image, so such an exit installs nothing. `RunEvent::Exit`: a helper thread, `oxyn-update-install`, that the main thread waits for at most 10 s — the windows are already gone, so the wait freezes nothing ([I-05](../CLAUDE.md#i-05)); 0.6 s measured on 2026-10-02 for the 12 MB archive of a 25 MB bundle |
+
+`request_restart()` goes through `RunEvent::ExitRequested` like any exit; the
+handler lets it through because the ordered shutdown has already finished.
 
 * **The main thread does no I/O and never waits for a lock held by a task.**
   Shared state is read through `Arc<ResultBuffer>`.

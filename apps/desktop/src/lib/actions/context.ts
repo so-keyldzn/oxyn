@@ -132,6 +132,11 @@ export interface ActionSources {
   workspace?: Source<WorkspaceState, WorkspaceActions>
   console?: Source<ConsoleState, ConsoleActions>
   settings?: Source<Record<string, never>, { open: () => void }>
+  /**
+   * `Check for updates…` (ADR-0051). `off` is why Oxyn does not update itself
+   * in this installation; `null` when it does.
+   */
+  updates?: Source<{ off: string | null }, { checkForUpdates: () => void }>
   navigation?: Source<Record<string, never>, { back: () => void }>
   /** The web menu bar of Windows and Linux. */
   menubar?: Source<Record<string, never>, { focus: () => void }>

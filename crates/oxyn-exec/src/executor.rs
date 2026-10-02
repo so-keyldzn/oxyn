@@ -1653,6 +1653,7 @@ impl Executor {
         // Captured before `request` is moved into `slot.execute`: it is the
         // only signal kept from the executed text (I-10).
         let intent = request.intent;
+        let mutating = request.is_mutating();
         // A **child** token: cancelling this execution does not cancel the tab
         // that started it, whereas cancelling the tab does cancel it.
         let ct = cancel.child();
@@ -1660,8 +1661,13 @@ impl Executor {
         let operation = async {
             // Armed before the driver is called: a caller that drops this future
             // at any `.await` below never reaches the cleanup written after it.
-            let mut guard =
-                AbandonGuard::new(&self.running, &self.events, id, connection, ct.clone());
+            let mut guard = AbandonGuard::new(
+                &self.running,
+                &self.events,
+                id,
+                connection,
+                (ct.clone(), mutating),
+            );
             let run = self
                 .run_statement(&slot, id, request, &ct, preview_limit, &mut guard)
                 .await;
@@ -1756,9 +1762,13 @@ impl Executor {
             .await;
 
         // An abandonment — timeout or cancellation — must reach the server.
-        // A confirming drain only ends unverified when its probe timed out.
+        // A confirming drain only ends unverified when its probe timed out. A
+        // write whose outcome is unknown may still be running.
         let interrupted = matches!(outcome, Ok(SinkOutcome::Cancelled))
-            || matches!(outcome, Err(OxynError::Timeout { .. }))
+            || matches!(
+                outcome,
+                Err(OxynError::Timeout { .. } | OxynError::OutcomeUnknown(_))
+            )
             || (confirm_end && matches!(outcome, Ok(SinkOutcome::RowLimitUnverified)));
         if interrupted {
             self.running.cancel(&self.sessions, statement).await;
@@ -1884,6 +1894,12 @@ impl Executor {
     /// cancellation. A timeout set lower would only abandon the future. It is
     /// the deadline of the whole execution, armed before `execute`: draining
     /// only has what is left of it.
+    ///
+    /// A read hands back control as soon as it is stopped. A write is read to
+    /// its driver's verdict, the only one that knows whether the server
+    /// applied it, within what is left of the deadline and at most
+    /// [`WRITE_SETTLE_GRACE`] after the Stop; past that, its outcome is
+    /// [`OxynError::OutcomeUnknown`], never a cancellation.
     async fn drain(
         &self,
         coords: Coordinates,
@@ -1894,10 +1910,13 @@ impl Executor {
         confirm_end: bool,
     ) -> Result<SinkOutcome> {
         let sink = BatchSink::new(Arc::clone(buffer));
+        // What may not be read past its limit is a write, and a write's stop
+        // must not be announced before its driver says how it ended: a Stop
+        // shown as harmless invites running it again (I-13).
         let sink = if confirm_end {
             sink.with_end_confirmation()
         } else {
-            sink
+            sink.awaiting_terminal_outcome()
         };
         let mut source = cursor;
         let events = &self.events;
@@ -1915,32 +1934,41 @@ impl Executor {
             );
         };
 
-        let Some(deadline) = deadline else {
-            return sink.drain_with(&mut source, ct, on_batch).await;
+        // The block ends the borrow the draining future holds on `source`.
+        let ending = {
+            let drained = sink.drain_with(&mut source, ct, on_batch);
+            tokio::select! {
+                biased;
+                outcome = drained => return outcome,
+                () = expiry(deadline) => Ending::Expired,
+                // Only a write waits for its driver past a Stop; a read hands
+                // back control at once.
+                () = unsettled_stop(ct, !confirm_end) => Ending::Unsettled,
+            }
         };
 
-        match tokio::time::timeout_at(deadline.at, sink.drain_with(&mut source, ct, on_batch)).await
-        {
-            Ok(outcome) => outcome,
-            Err(_) => {
-                // Read before closing: a buffer already at its row limit was
-                // only waiting for the end-of-stream probe.
-                let at_limit = buffer.pressure() == Pressure::RowLimit;
-                // The draining future was just abandoned, perhaps after
-                // consuming bytes from the stream: the cursor is burnt. The
-                // buffer is closed so that the interface stops waiting — what
-                // was already received stays readable, and marked truncated.
-                buffer.mark_truncated();
-                buffer.mark_complete(BatchSource::stats(&source));
-                if at_limit {
-                    // Every row the limit allows arrived in time: the read
-                    // succeeded, only its completeness is unknown.
-                    return Ok(SinkOutcome::RowLimitUnverified);
-                }
-                Err(OxynError::Timeout {
-                    after: deadline.after,
-                })
-            }
+        // Read before closing: a buffer already at its row limit was only
+        // waiting for the end-of-stream probe.
+        let at_limit = buffer.pressure() == Pressure::RowLimit;
+        // The draining future was just abandoned, perhaps after consuming
+        // bytes from the stream: the cursor is burnt. The buffer is closed so
+        // that the interface stops waiting — what was already received stays
+        // readable, and marked truncated.
+        buffer.mark_truncated();
+        buffer.mark_complete(BatchSource::stats(&source));
+        match ending {
+            // Every row the limit allows arrived in time: the read succeeded,
+            // only its completeness is unknown. Not a write's: past its rows,
+            // it was still being drained to its commit.
+            Ending::Expired if at_limit && confirm_end => Ok(SinkOutcome::RowLimitUnverified),
+            Ending::Expired => Err(OxynError::Timeout {
+                after: deadline.map(|deadline| deadline.after).unwrap_or_default(),
+            }),
+            Ending::Unsettled => Err(OxynError::OutcomeUnknown(format!(
+                "the write was stopped, and its driver did not say within {} s whether the \
+                 server applied it; check the data before running it again",
+                WRITE_SETTLE_GRACE.as_secs()
+            ))),
         }
     }
 
@@ -2572,6 +2600,42 @@ impl Deadline {
         let at = tokio::time::Instant::now().checked_add(after)?;
         Some(Self { after, at })
     }
+}
+
+/// How long a stopped write may take to say how it ended.
+///
+/// Past a Stop, a write's driver stops the server and waits for its answer:
+/// the PostgreSQL cancellation request, the MySQL kill drained for
+/// `ER_QUERY_INTERRUPTED` within its own five seconds. The bound sits above
+/// those, so that it only fires for a driver that no longer answers — and then
+/// the outcome is reported as unknown, never as cancelled (I-13).
+const WRITE_SETTLE_GRACE: Duration = Duration::from_secs(10);
+
+/// Why a drain was abandoned before its source ended.
+enum Ending {
+    /// The execution's deadline elapsed.
+    Expired,
+    /// A write was stopped and its driver did not conclude within
+    /// [`WRITE_SETTLE_GRACE`].
+    Unsettled,
+}
+
+/// Resolves at `deadline`, never without one.
+async fn expiry(deadline: Option<Deadline>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline.at).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Resolves [`WRITE_SETTLE_GRACE`] after `ct` fires, never when `bounded` is
+/// false.
+async fn unsettled_stop(ct: &CancelToken, bounded: bool) {
+    if !bounded {
+        return std::future::pending().await;
+    }
+    ct.cancelled().await;
+    tokio::time::sleep(WRITE_SETTLE_GRACE).await;
 }
 
 /// What a draining event must name for the interface to know which tab to
@@ -3568,3 +3632,7 @@ mod production_read_tests;
 #[cfg(test)]
 #[path = "agent_transaction_tests.rs"]
 mod agent_transaction_tests;
+
+#[cfg(test)]
+#[path = "stopped_write_tests.rs"]
+mod stopped_write_tests;

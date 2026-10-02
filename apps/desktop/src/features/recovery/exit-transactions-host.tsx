@@ -9,6 +9,7 @@ import {
   resolveExit,
   shownTransactions,
 } from "@/features/recovery/exit-transactions"
+import { updateStore } from "@/features/updates/update-store"
 import { transactionStates } from "@/lib/ipc/events"
 
 /**
@@ -20,10 +21,13 @@ export function ExitTransactionsHost() {
   const labels = useStore(consoleLabels)
   const live = useStore(transactionStates)
   const shown = hold ? shownTransactions(hold, labels, live) : null
+  // What a `restart` installs (ADR-0051).
+  const update = useStore(updateStore, (view) => view.snapshot?.state)
   return (
     <ExitTransactionsDialog
       rows={shown}
       scope={hold?.scope ?? "application"}
+      version={update?.type === "ready" ? update.version : null}
       busy={hold?.busy ?? null}
       error={hold?.error ?? null}
       commitBlocked={hold && shown ? commitBlocked(hold, shown) : false}

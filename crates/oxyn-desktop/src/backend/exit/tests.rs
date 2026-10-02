@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use oxyn_core::{CommandId, ConnectionId, Environment, SessionId};
+use oxyn_core::{CommandId, ConnectionId, Environment, SessionId, TransactionState};
 use parking_lot::Mutex;
 use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -391,6 +391,28 @@ fn a_forced_exit_warns_of_each_open_transaction_and_records_the_close() {
     let bench = bench();
     bench.ok("BEGIN");
     bench.ok("INSERT INTO parent VALUES (1)");
+    // The console answers before the follower applies `BEGIN`'s state, and
+    // the forced exit reads without draining: on a loaded machine it would
+    // read the transaction as not begun yet. A quit comes long after the
+    // statement; this waits for the follower itself to publish the state,
+    // never drains in its place: without a follower, nothing changes.
+    let consoles = &bench.backend.inner.workbench.consoles;
+    let applied = bench.runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !consoles
+                .now()
+                .iter()
+                .all(|entry| entry.state == TransactionState::Open)
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+    });
+    assert!(
+        applied.is_ok(),
+        "the follower never applied the transaction's state"
+    );
     assert_eq!(bench.backend.warn_forced_exit_transactions(), 1);
     let _guard = bench.runtime.enter();
     assert!(bench.backend.close_on_forced_exit(Duration::from_secs(10)));

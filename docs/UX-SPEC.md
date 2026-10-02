@@ -166,6 +166,53 @@ acknowledges — an agent has inspected nothing, and the `PolicyGate` refuses
 it. The acknowledgment is dated in the local state, touches no database and
 replays nothing; the write remains viewable, marked "Reconciled".
 
+## Updates
+
+**An update never interrupts work.** Oxyn checks about a minute after launch,
+then every 24 hours, on the stable channel only, and downloads in the
+background ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). A
+downloaded update installs **when the user quits**; Oxyn never restarts on its
+own. Until then the window shows `Update ready` in the status bar, or in the
+home screen's title bar — no toast after the first one, no screen at startup.
+After seven days, the indicator gains a border and the popover says how long
+ago the update was downloaded; it adds nothing else. Below 1200 px it stays, as
+an icon with its label for assistive technology: it is a pending action, not
+secondary information.
+
+**A background failure is silent; a requested one is not.** A failed automatic
+check (no network, server error) shows nothing outside Settings ▸ Updates,
+where the last result stays readable with its message. `Check for updates…` (in
+the Oxyn menu on macOS, in Help on Windows and Linux) opens Settings ▸ Updates
+and starts a check. That view has the five states of a view; the check and the
+download can be cancelled, and cancelling stops the transfer. A failed
+signature verification is always shown: the update is discarded, nothing is
+installed, and the release page is offered so the user can download Oxyn
+manually.
+
+**`Restart now` is the ordered quit, followed by a relaunch.** With nothing
+running, it does not ask. If a query is running or an export is in progress, a
+confirmation names them, says the query is cancelled on the server and the
+export stops and its destination keeps its previous content, and focuses
+`Later`. An open transaction then holds the restart like the exit ("Windows"),
+with `Cancel` focused; cancelling keeps the update for the next quit. The
+drafts are written and the shutdown is recorded: the consoles come back in
+their windows, offline. A failed installation is said once at the next launch,
+and Settings keeps it.
+
+**Settings ▸ Updates applies to the computer, not to the workspace**, and says
+so. It shows the version, the last check and the switch `Download and install
+updates automatically`. Turning it off stops a download and discards an update
+that is not installed yet; `Check now` stays available. A failed save leaves
+the setting applied for the session and offers `Save again`. Where Oxyn does
+not install its own updates, the view says why and offers no action: `Updates
+are managed by your package manager` (.deb and .rpm), `Updates are turned off
+by your administrator`, `Updates are turned off in development builds`. A check
+sends only the version, the operating system and the architecture.
+
+**After an update**, the first window to open says once `Oxyn updated to
+1.4.0`, with `What's new`, which opens the release page in the system browser.
+Release notes are shown as plain text.
+
 ## Home screen
 
 Before any connection, the screen carries a single-row title bar: the Oxyn
@@ -249,7 +296,9 @@ The `Data` and `Structure` sub-tabs stay visible; `Indexes`, `Constraints`,
 `Relations` and `DDL` move into the `More` menu. The connection, the
 environment and the AI tier stay visible in the top bar. The status bar keeps
 connection and execution state; secondary information such as the time zone
-and saving moves to the details.
+and saving moves to the details. The update indicator is the exception: it
+stays, as an icon with a tooltip and its full label for assistive technology,
+because it is a pending action ("Updates").
 
 The `Inspect row` action opens the inspector on demand as an overlay panel,
 without shrinking the grid further. At normal width, the inspector's handle
@@ -348,13 +397,13 @@ steal a character.
 
 | Menu | Entries |
 |---|---|
-| `Oxyn` (macOS) | `About Oxyn`, `Settings…` `⌘,`, `Hide Oxyn`, `Quit Oxyn` `⌘Q` |
+| `Oxyn` (macOS) | `About Oxyn`, `Check for updates…`, `Settings…` `⌘,`, `Hide Oxyn`, `Quit Oxyn` `⌘Q` |
 | `File` | `New console` `⌘T`, `New window`, `New connection…`, `Open from library…`, `Open Recent ▸`, `Save` `⌘S`, `Save as…`, `Close tab` `⌘W`, `Export…`, and on Windows and Linux `Settings…` `Ctrl+,` then `Exit` `Ctrl+Q` |
 | `Edit` | `Undo`, `Redo`, `Cut`, `Copy`, `Paste`, `Select All`, `Find` `⌘F` |
 | `View` | `Toggle sidebar` `⌘B`, `Toggle side panel` `⌘⌥B`, `Assistant`, `Text size ▸`, `Enter full screen`, `Theme ▸` |
 | `Query` | `Run` `⌘↵`, `Run all` `⌘⇧↵`, `Explain`, `Cancel` `Esc`, `Format` |
 | `Window` | the open windows, and the system's window entries |
-| `Help` | `Documentation`, `Keyboard shortcuts` `⌘/` |
+| `Help` | `Documentation`, `Keyboard shortcuts` `⌘/`, and on Windows and Linux `Check for updates…` |
 
 What these entries do is written elsewhere, and the menu adds nothing to it:
 

@@ -59,8 +59,9 @@ pub const BATCH_BYTE_BUDGET: usize = 1 << 20;
 /// columns still reach the screen quickly.
 pub const BATCH_ROW_CEILING: usize = 8_192;
 
-/// How much of a result the task reads past the row bound, discarding it,
-/// before it concludes more is coming and kills the statement.
+/// How much of a read's result the task reads past the row bound, discarding
+/// it, before it concludes more is coming and kills the statement. A write is
+/// never killed at its bound: it is drained to its end.
 ///
 /// A result a few rows longer than the bound has usually been sent whole
 /// already: reading it out costs little, where a kill arriving after the
@@ -612,6 +613,13 @@ impl Pump {
             if self.produced >= self.limits.max_rows.unwrap_or(usize::MAX) {
                 // One row beyond the bound: the result is really longer.
                 self.truncated = true;
+                // A write is drained to its end, under the same token and
+                // deadline, neither decoded nor kept: killing it here would
+                // roll back an autocommit statement whose first rows the user
+                // is shown, and report nothing.
+                if self.intent.is_mutating() {
+                    continue;
+                }
                 return if read_ahead(set).await {
                     Ok(())
                 } else {
@@ -800,11 +808,13 @@ impl Pump {
         // terminal event is queued, or it would never read the channel.
         drop(self.schema_sender.take());
         let failure = self.failure.take();
+        // Nothing was sent, or the kill was answered on the statement itself.
+        let stop_proven = matches!(self.kill, None | Some(Ok(DrainVerdict::Consumed)));
         if let Some(error) = terminal_error(
             &self.driver,
             self.intent,
             self.limits.timeout,
-            stop,
+            (stop, stop_proven),
             lost,
             failure,
         ) {
@@ -847,11 +857,15 @@ impl Pump {
 ///
 /// A lost transaction outranks the failure that cost the connection: it is
 /// what the user must act upon, and the failure is kept in its message.
+///
+/// `stop` comes with whether it is proven to have reached the statement: a
+/// write stopped by a kill the server did not answer on that very statement —
+/// or that never went out — may have run to its end and committed.
 fn terminal_error(
     driver: &DriverId,
     intent: StatementIntent,
     timeout: Option<std::time::Duration>,
-    stop: Halt,
+    (stop, stop_proven): (Halt, bool),
     lost: bool,
     failure: Option<OxynError>,
 ) -> Option<OxynError> {
@@ -883,6 +897,15 @@ fn terminal_error(
         return failure;
     }
     match stop {
+        // Not `Cancelled`: that would read as "nothing happened" and invite
+        // running the write again (I-13).
+        Halt::Cancelled | Halt::Abandoned if intent.is_mutating() && !stop_proven => {
+            Some(OxynError::OutcomeUnknown(
+                "the write was stopped, but the server did not confirm it interrupted it: \
+                 it may have run to its end; check the data before running it again"
+                    .to_owned(),
+            ))
+        }
         Halt::Cancelled | Halt::Abandoned => Some(OxynError::Cancelled),
         // Ambiguous by construction: a write may have been applied.
         Halt::TimedOut => Some(OxynError::Timeout {
@@ -1141,7 +1164,7 @@ mod tests {
             &pump.driver,
             pump.intent,
             None,
-            Halt::Failed,
+            (Halt::Failed, true),
             false,
             pump.failure.take(),
         )
@@ -1151,7 +1174,7 @@ mod tests {
             &DriverId::mysql(),
             StatementIntent::Read,
             None,
-            Halt::Cancelled,
+            (Halt::Cancelled, true),
             true,
             None,
         )
@@ -1166,11 +1189,43 @@ mod tests {
                 &DriverId::mysql(),
                 StatementIntent::Read,
                 None,
-                Halt::Exhausted,
+                (Halt::Exhausted, true),
                 false,
                 None,
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn a_stopped_write_is_cancelled_only_when_the_server_confirmed_the_kill() {
+        let stopped = |intent, proven| {
+            terminal_error(
+                &DriverId::mysql(),
+                intent,
+                None,
+                (Halt::Cancelled, proven),
+                false,
+                None,
+            )
+            .expect("a stop is an error")
+        };
+        // The kill missed, or never went out: the write may have committed.
+        let unknown = stopped(StatementIntent::Write, false);
+        assert!(
+            matches!(unknown, OxynError::OutcomeUnknown(_)),
+            "{unknown:?}"
+        );
+        assert!(!unknown.is_retryable(), "never replayed (I-13)");
+        // `ER_QUERY_INTERRUPTED` on the statement itself: nothing applied.
+        assert!(matches!(
+            stopped(StatementIntent::Write, true),
+            OxynError::Cancelled
+        ));
+        // A read has nothing to commit.
+        assert!(matches!(
+            stopped(StatementIntent::Read, false),
+            OxynError::Cancelled
+        ));
     }
 }

@@ -80,6 +80,30 @@ export const ClosingOneWindow: Story = {
   },
 }
 
+/**
+ * `Restart now` held by a transaction (ADR-0051): the same decision, naming
+ * the version it installs, and cancelling keeps the update for the next quit.
+ */
+export const RestartScope: Story = {
+  args: { scope: "restart", version: "1.4.0" },
+  play: async ({ args }) => {
+    const dialog = await screen.findByRole("alertdialog")
+    await expect(dialog).toHaveTextContent("Restart with an open transaction?")
+    await expect(dialog).toHaveTextContent(
+      "Commit or roll back to restart and install Oxyn 1.4.0."
+    )
+    await expect(dialog).toHaveTextContent(
+      "the update still installs when you quit."
+    )
+    await expect(dialog).not.toHaveTextContent("Quit with")
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onCommit).not.toHaveBeenCalled()
+    await expect(args.onCancel).toHaveBeenCalled()
+  },
+}
+
 export const SeveralWithUnknownState: Story = {
   args: { rows: [INVOICES, DRAFT] },
   play: async ({ args }) => {

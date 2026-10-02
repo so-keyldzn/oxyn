@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="e282ba6b7df9" -->
+<!-- oxyn-translation source="docs/README.md" sha256="c8bc2406d054" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -86,6 +86,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | Une instruction que sqlx ne sait pas préparer, ou dont le résultat n'a pas de forme binaire, passe par le protocole simple, en texte | accepté |
 | [0049](adr/0049-agents-declared-as-markdown-files.md) | Un agent est un fichier Markdown à en-tête YAML, ciblé par dialecte, rempli seulement par une liste fermée de variables | proposé |
 | [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | Le driver MySQL repose sur `mysql_async`, prépare d'abord chaque instruction, et décode tout type que le serveur envoie | accepté |
+| [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn se met à jour depuis les GitHub Releases, en Rust seulement, et installe à la fermeture | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

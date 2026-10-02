@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="1827fb64fe14" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="aed2577e6989" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -80,8 +80,17 @@ crates/oxyn-desktop/              # l'hôte Tauri, binaire `oxyn-desktop`
 ├── src/catalog.rs                # arbre du catalogue et commande d'expansion
 ├── src/credentials.rs            # le seul point qui lit ou écrit le trousseau
 ├── src/menu.rs                   # barre native macOS, lue au manifeste du front ; aucune Command
-├── capabilities/main.json        # permissions de la webview
-└── tauri.conf.json               # CSP de production ; tauri.dev.json5 la relâche en dev
+├── src/updates.rs + updates/     # mise à jour depuis les GitHub Releases (ADR-0051) ; aucune Command
+│   ├── state.rs                  #   la machine d'états, pure, testée sans Tauri
+│   ├── channel.rs                #   le seul endpoint, la page de release, le contrôle d'asset de release
+│   ├── installation.rs           #   bundle macOS, AppImage, ou pourquoi pas (deb/rpm, dev, lecture seule)
+│   ├── preference.rs             #   updates.json et le verrou OXYN_UPDATES
+│   ├── schedule.rs               #   l'échéance de la prochaine vérification, à l'horloge murale
+│   ├── failure.rs                #   les erreurs du plugin, classées
+│   ├── apply.rs                  #   l'installation à la sortie, et update-notice.json pour le lancement suivant
+│   └── tests.rs
+├── capabilities/main.json        # permissions de la webview — aucune pour la mise à jour ni l'opener
+└── tauri.conf.json               # CSP de production, clé publique de mise à jour ; tauri.dev.json5 la relâche en dev
 ```
 
 Chaque domaine — consoles, métadonnées, résultats, bibliothèque, reprise,
@@ -95,6 +104,15 @@ réglages, IA — a son fichier dans chacun des trois répertoires `commands/`,
 seule écriture hors bus — les secrets d'un brouillon de connexion — passe par
 `credentials.rs` : un appel au trousseau par driver serait autant d'endroits à
 auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)).
+
+**Deux sujets sont de la plomberie, pas des `Command`** : la barre de menus
+([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)) et les mises
+à jour ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)).
+Aucun des deux n'atteint un driver. La mise à jour est pilotée depuis Rust
+seul : ses commandes (`commands/updates.rs`, `ipc/updates.rs`) ne prennent ni
+URL, ni chemin, ni version, et la webview ne détient aucune permission
+`updater:`. `tauri-plugin-opener` n'est pas enregistré du tout :
+`open_release_page` appelle sa fonction libre `open_url`.
 
 **Une `Command` ne naît que dans `backend.rs`, `backend/` et `catalog.rs`.** Le
 front ne peut en construire aucune : il n'a que `invoke`, et un seul module
@@ -241,12 +259,39 @@ instruction mutante n'est pas lue au-delà de sa
 limite, car demander un lot de plus au serveur prolongerait ses effets de bord :
 l'arrêt est `SinkOutcome::RowLimitUnverified`, affiché `Row limit reached ·
 completeness not verified` plutôt que comme des lignes manquantes, et reste non
-exportable comme tout résultat dont l'intégralité n'est pas prouvée. Les pilotes
-PostgreSQL et SQLite appliquent la même règle à leur propre borne et arrêtent
-une instruction mutante à N sans lire la ligne N + 1. Le pilote MySQL continue
-de lire au-delà de la borne : son protocole ne laisse aucune instruction en
-pause avec des lignes non lues, et l'alternative à la lecture du jeu de
-résultats est de tuer l'écriture en cours.
+exportable comme tout résultat dont l'intégralité n'est pas prouvée. Le pilote
+SQLite applique la même règle à sa propre borne et arrête une instruction
+mutante à N sans lire la ligne N + 1. Les pilotes PostgreSQL et MySQL
+continuent de lire au-delà de la borne : leurs protocoles ne laissent aucune
+instruction en pause avec des lignes non lues, et l'alternative à la lecture du
+jeu de résultats est de tuer l'écriture en cours — sur PostgreSQL, une
+instruction en autocommit ne valide qu'une fois sa dernière ligne envoyée, si
+bien qu'une écriture coupée est annulée alors que N de ses lignes sont à
+l'écran. PostgreSQL et MySQL vident le reste sans le décoder ni le garder, sous
+la même annulation et le même délai, jusqu'à la fin de l'instruction — la
+lecture anticipée et le kill de MySQL à la borne ne valent que pour une
+lecture ; PostgreSQL retient en outre jusque-là le lot qui atteint N. Un vidage
+coupé par l'annulation ou le délai se termine sur une erreur ambiguë, jamais
+sur un résultat terminé.
+
+L'exécuteur garde le curseur d'une écriture jusqu'à ce que son pilote conclue.
+Son puits ne stocke rien au-delà de la limite et ne sonde rien, mais il lit le
+curseur jusqu'au bout au lieu de le lâcher à N, et il ne met pas le curseur en
+concurrence avec un Stop : le pilote surveille le même jeton, arrête le serveur
+et dit comment l'écriture s'est terminée. Un Stop termine donc une écriture sur
+le verdict du pilote, que l'exécuteur ne remet pas en cause — `Cancelled`, un
+`OutcomeUnknown` ou un `Timeout` ambigu, ou `Completed` quand l'écriture s'est
+terminée avant que le Stop ne l'atteigne. L'attente est bornée par ce qui reste
+de l'échéance et par une grâce de dix secondes après le Stop ; au-delà, ou
+quand l'appelant abandonne l'exécution, l'issue est `OutcomeUnknown`, jamais
+une annulation (I-13). Une lecture continue de lâcher prise aussitôt. Le
+verdict ne vaut que ce que vaut celui du pilote : MySQL ne répond `Cancelled`
+pour une écriture qu'une fois le kill signalé par le serveur sur cette
+instruction même, mais PostgreSQL le répond encore pour une écriture arrêtée
+avant qu'aucune de ses lignes n'arrive — toute écriture sans `RETURNING` — sans
+lire la réponse du serveur à sa demande d'annulation, et SQLite le répond dès
+que son jeton se déclenche, même après un `RETURNING` qui a déjà fait tous ses
+changements à son premier pas. Ce sont deux lacunes connues, pas des garanties.
 
 La préparation PostgreSQL examine les types des colonnes, y compris les bases
 de domaines et les éléments de tableaux. Les types sans sortie binaire, les
@@ -1054,6 +1099,20 @@ exécuteurs globaux ne sont pas dans le graphe, vérifié par
 qu'un agent externe est déclaré, et [I-05](../CLAUDE.md#i-05) vaut pour les deux
 réacteurs. Détail et mesure dans
 [RESEARCH-NOTES](RESEARCH-NOTES.md#agent-client-protocol--vérification-du-2026-09-14).
+
+**Les mises à jour tournent à côté du backend, jamais sur le thread principal
+tant qu'une fenêtre existe**
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) :
+
+| Étape | Où |
+|---|---|
+| Planification — 60 s après le lancement, puis échéance toutes les 24 h | une tâche sur `tauri::async_runtime`, réveillée toutes les heures ou par une vérification manuelle (`Notify`) ; l'échéance se lit à l'horloge murale, si bien que la veille de la machine ne l'allonge pas |
+| Vérification et téléchargement | une tâche d'opération à la fois sur `tauri::async_runtime`, que `cancel_update` interrompt avec sa requête HTTP ; la vérification est bornée à 30 s, le téléchargement seulement par 60 s sans un octet et par 256 Mio ; l'archive reste en mémoire, sa signature vérifiée par le plugin avant d'être gardée, puis le dossier de l'installation sondé en écriture sur le pool bloquant — le lancement ne lit que deux fichiers d'au plus 64 Kio ; progression limitée à quatre événements par seconde sur le `Channel` de `subscribe_updates` |
+| Installation, après ⌘Q, le Quit d'Oxyn ou « Restart now » | `begin_exit`, après `backend.shutdown()` : fenêtres masquées, `install` dans `spawn_blocking` sans délai maximal, un échec journalisé sans retenir la sortie, le journal vidé, puis `request_restart()` ou `exit(0)` |
+| Installation, après le Quit du Dock ou la fermeture de session | macOS seulement — sous Linux, couper la réécriture de l'AppImage laisserait une image tronquée, si bien qu'une telle sortie n'installe rien. `RunEvent::Exit` : un thread auxiliaire, `oxyn-update-install`, que le thread principal attend au plus 10 s — les fenêtres sont déjà parties, l'attente ne fige donc rien ([I-05](../CLAUDE.md#i-05)) ; 0,6 s mesurée le 2026-10-02 pour l'archive de 12 Mo d'un bundle de 25 Mo |
+
+`request_restart()` passe par `RunEvent::ExitRequested` comme toute sortie ;
+le gestionnaire le laisse passer parce que l'arrêt ordonné est déjà terminé.
 
 * **Le thread principal ne fait aucune I/O et n'attend jamais un verrou tenu par une tâche.**
   L'état partagé se lit via `Arc<ResultBuffer>`.
