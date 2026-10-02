@@ -90,7 +90,18 @@ export function surfaces(capabilities: ReadonlyArray<string>) {
   }))
 }
 
-/** Whether the session itself refuses writes, whatever the connection says. */
+/**
+ * Whether the session itself refuses writes, whatever the connection says.
+ *
+ * `READ_ONLY_SESSION` alone is the server's *ability* to enforce read-only:
+ * a writable PostgreSQL or MySQL session declares it beside `DML` and `DDL`.
+ * Only a session that also dropped both writes, SQLite opened read-only for
+ * instance, refuses them — the same rule as `refuses_writes` in the bridge.
+ */
 export function isReadOnlySession(capabilities: ReadonlyArray<string>) {
-  return capabilities.includes("READ_ONLY_SESSION")
+  return (
+    capabilities.includes("READ_ONLY_SESSION") &&
+    !capabilities.includes("DML") &&
+    !capabilities.includes("DDL")
+  )
 }
