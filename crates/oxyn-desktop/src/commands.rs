@@ -270,6 +270,7 @@ pub fn subscribe_events(
     Ok(())
 }
 
+pub mod about;
 pub mod ai;
 pub mod consoles;
 pub mod file_drops;
