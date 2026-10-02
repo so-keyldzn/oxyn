@@ -35,6 +35,8 @@ oxyn-store.workspace = true
 anyhow.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
+# The update's timestamps, written as RFC 3339 for the front (ADR-0051).
+chrono.workspace = true
 # The log directory, resolved before the Tauri application exists.
 directories.workspace = true
 parking_lot.workspace = true
@@ -44,6 +46,8 @@ serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true
+tauri-plugin-updater.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
 tracing.workspace = true
