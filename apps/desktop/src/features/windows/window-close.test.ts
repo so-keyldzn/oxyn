@@ -17,6 +17,8 @@ const backend = vi.hoisted(() => ({
   flushed: 0,
   /** What happened, in order: the backend must hear of the close last. */
   log: [] as Array<string>,
+  /** The drafts' flush; a test holds it to cancel meanwhile. */
+  flush: () => Promise.resolve(true),
 }))
 
 vi.mock("@/lib/ipc/recovery", () => ({
@@ -46,7 +48,7 @@ vi.mock("@/features/consoles/draft-registry", () => ({
   flushAllDrafts: () => {
     backend.flushed += 1
     backend.log.push("flush")
-    return Promise.resolve(true)
+    return backend.flush()
   },
 }))
 
@@ -62,6 +64,16 @@ function workspace(
       return Promise.resolve()
     },
   }
+}
+
+/** Holds the drafts' flush until the test answers it. */
+function holdFlush() {
+  let finish = (_flushed: boolean) => {}
+  backend.flush = () =>
+    new Promise<boolean>((resolve) => {
+      finish = resolve
+    })
+  return (flushed: boolean) => finish(flushed)
 }
 
 const UNSAVED = {
@@ -83,6 +95,7 @@ describe("closing a window that is not the last", () => {
       confirmed: 0,
       flushed: 0,
       log: [],
+      flush: () => Promise.resolve(true),
     })
   })
 
@@ -139,6 +152,69 @@ describe("closing a window that is not the last", () => {
     expect(windowClose.state).toBeNull()
     expect(backend.cancelled).toBe(1)
     expect(backend.log).toEqual([])
+  })
+
+  it("closes no console after Cancel while the drafts flush", async () => {
+    unregister.push(
+      registerWorkspaceConsoles("a", workspace("billing", [UNSAVED]))
+    )
+    const finish = holdFlush()
+    onCloseRequested()
+    const pending = closeWindow()
+    cancelWindowClose()
+    finish(true)
+    await pending
+    expect(backend.cancelled).toBe(1)
+    expect(backend.log).toEqual(["flush"])
+    expect(backend.confirmed).toBe(0)
+  })
+
+  it("starts no further workspace once Cancel stops the closing one", async () => {
+    let finish = () => {}
+    let signal: AbortSignal | undefined
+    unregister.push(
+      registerWorkspaceConsoles("a", {
+        ...workspace("billing", [UNSAVED]),
+        closeAll: (given) => {
+          signal = given
+          backend.log.push("close billing")
+          return new Promise((resolve) => {
+            finish = resolve
+          })
+        },
+      })
+    )
+    unregister.push(registerWorkspaceConsoles("b", workspace("analytics", [])))
+    onCloseRequested()
+    const pending = closeWindow()
+    await vi.waitFor(() => expect(backend.log).toContain("close billing"))
+    cancelWindowClose()
+    expect(signal?.aborted).toBe(true)
+    finish()
+    await pending
+    expect(backend.log).toEqual(["flush", "close billing"])
+    expect(backend.confirmed).toBe(0)
+  })
+
+  it("lets a cancelled close touch nothing of the next one", async () => {
+    unregister.push(
+      registerWorkspaceConsoles("a", workspace("billing", [UNSAVED]))
+    )
+    const finishOld = holdFlush()
+    onCloseRequested()
+    const old = closeWindow()
+    cancelWindowClose()
+
+    const finishNew = holdFlush()
+    onCloseRequested()
+    const next = closeWindow()
+    finishOld(true)
+    await old
+    expect(backend.log).toEqual(["flush", "flush"])
+
+    finishNew(true)
+    await next
+    expect(backend.log).toEqual(["flush", "flush", "close billing", "confirm"])
   })
 
   it("forgets a workspace that unmounted", () => {
