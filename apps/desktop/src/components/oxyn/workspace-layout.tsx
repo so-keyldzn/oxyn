@@ -392,6 +392,9 @@ export function WorkspaceLayout({
                     defaultSize={asideOpen ? `${width}px` : "0px"}
                     minSize={`${ASIDE_WIDTH.min}px`}
                     maxSize={`${ASIDE_WIDTH.max}px`}
+                    // The saved width is in pixels: a narrower group, or the
+                    // sidebar still sliding open, takes room from the work area.
+                    groupResizeBehavior="preserve-pixel-size"
                     onResize={(_size, _id, previous) => {
                       // Not on mount: the column is then drawn from the
                       // preference, and reporting it would save a width
