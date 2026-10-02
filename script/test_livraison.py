@@ -47,6 +47,7 @@ SIGNATURES = {
     f"{MAC_ARCHIVE}.sig": signature("Oxyn.app.tar.gz") + "\n",
     f"{APPIMAGE}.sig": signature(APPIMAGE),
 }
+ARCHIVES = {MAC_ARCHIVE: "macOS archive", APPIMAGE: "AppImage"}
 UPDATER_ASSETS = [
     {"name": "Oxyn_0.0.1_aarch64.dmg"},
     {"name": MAC_ARCHIVE},
@@ -102,15 +103,65 @@ FAKE_GH = textwrap.dedent(
                 etat["manifeste"] = json.load(f)
         sortir(0)
     if verbe == "download":
-        # Writes the draft's signatures whose asset is present.
+        # Writes the draft's files, present and matching a `--pattern`.
+        import fnmatch
         dossier = reste[reste.index("--dir") + 1]
+        motifs = [reste[i + 1] for i, option in enumerate(reste) if option == "--pattern"]
         presents = {a["name"] for a in release["assets"]}
-        for nom, contenu in etat["signatures"].items():
-            if nom in presents:
+        for nom, contenu in {**etat["archives"], **etat["signatures"]}.items():
+            if nom in presents and any(fnmatch.fnmatchcase(nom, m) for m in motifs):
                 with open(os.path.join(dossier, nom), "w", encoding="utf-8") as f:
                     f.write(contenu)
         sortir(0)
     sortir(2, "unexpected verb")
+    """
+)
+
+# A `minisign -V` that accepts an archive unless it was tampered with, and only
+# with the public key of the fixture: the real cryptography is minisign's.
+FAKE_MINISIGN = textwrap.dedent(
+    """\
+    import json, os, sys
+    args = sys.argv[1:]
+    with open(os.environ["FAUX_MINISIGN_JOURNAL"], "a", encoding="utf-8") as f:
+        f.write(json.dumps(args) + "\\n")
+    valeur = lambda option: args[args.index(option) + 1]
+    if args[:2] != ["-V", "-q"]:
+        sys.exit("unexpected mode")
+    with open(valeur("-p"), encoding="utf-8") as f:
+        if f.read() != os.environ["FAUX_MINISIGN_CLE"]:
+            sys.exit("Signature key id in the signature is not the expected one")
+    try:
+        with open(valeur("-m"), encoding="utf-8") as f:
+            archive = f.read()
+        open(valeur("-x"), encoding="utf-8").close()
+    except OSError as e:
+        sys.exit(str(e))
+    if archive.startswith("tampered"):
+        sys.exit("Signature verification failed")
+    """
+)
+
+# `tauri signer sign`, writing `<file>.sig` as tauri-cli 2.12.1 does.
+FAKE_TAURI = textwrap.dedent(
+    """\
+    import base64, json, os, sys
+    args = sys.argv[1:]
+    with open(os.environ["FAUX_TAURI_JOURNAL"], "a", encoding="utf-8") as f:
+        f.write(json.dumps({"args": args, "cle": "TAURI_SIGNING_PRIVATE_KEY" in os.environ}) + "\\n")
+    mode = os.environ.get("FAUX_TAURI_MODE", "ok")
+    if mode == "echec":
+        sys.exit("failed to decode secret key " + os.environ.get("TAURI_SIGNING_PRIVATE_KEY", ""))
+    if mode == "rien":
+        sys.exit(0)
+    version = args[args.index("--app-version") + 1]
+    if mode == "autre_version":
+        version = "0.0.0"
+    fichier = args[-1]
+    contenu = ("untrusted comment: signature from tauri secret key\\nRUQfixture\\n"
+               f"trusted comment: timestamp:1790000000\\tfile:{os.path.basename(fichier)}\\tversion:{version}\\nfixture\\n")
+    with open(fichier + ".sig", "w", encoding="ascii") as f:
+        f.write(base64.b64encode(contenu.encode()).decode())
     """
 )
 
@@ -122,6 +173,14 @@ class Delivery(unittest.TestCase):
         self.fake_gh = self.folder / "gh"
         self.fake_gh.write_text(f"#!{sys.executable}\n{FAKE_GH}", encoding="utf-8")
         self.fake_gh.chmod(0o755)
+        self.fake_minisign = self.folder / "minisign"
+        self.fake_minisign.write_text(f"#!{sys.executable}\n{FAKE_MINISIGN}", encoding="utf-8")
+        self.fake_minisign.chmod(0o755)
+        self.minisign_log = self.folder / "minisign.log"
+        self.fake_tauri = self.folder / "tauri"
+        self.fake_tauri.write_text(f"#!{sys.executable}\n{FAKE_TAURI}", encoding="utf-8")
+        self.fake_tauri.chmod(0o755)
+        self.tauri_log = self.folder / "tauri.log"
         self.path_state = self.folder / "etat.json"
         self.config = self.folder / "tauri.conf.json"
         self.version("0.0.1")
@@ -145,6 +204,7 @@ class Delivery(unittest.TestCase):
             "lectures": 0,
             "appels": [],
             "signatures": SIGNATURES,
+            "archives": ARCHIVES,
         }
         self.path_state.write_text(json.dumps(state), encoding="utf-8")
 
@@ -161,6 +221,11 @@ class Delivery(unittest.TestCase):
             **{k: v for k, v in os.environ.items() if k not in KEY_SECRETS},
             "GH": str(self.fake_gh),
             "FAUX_GH_ETAT": str(self.path_state),
+            "MINISIGN": str(self.fake_minisign),
+            "FAUX_MINISIGN_JOURNAL": str(self.minisign_log),
+            "FAUX_MINISIGN_CLE": base64.b64decode(PUBKEY).decode(),
+            "TAURI": str(self.fake_tauri),
+            "FAUX_TAURI_JOURNAL": str(self.tauri_log),
             "OXYN_CONFIG_TAURI": str(self.config),
             **variables,
         }
@@ -391,6 +456,13 @@ class Delivery(unittest.TestCase):
         self.assertNotIn("--clobber", upload_calls[0])
         download = next(a for a in self.state()["appels"] if a[1] == "download")
         self.assertIn("*.sig", download)
+        # Each archive is downloaded and verified with the committed key.
+        self.assertIn(MAC_ARCHIVE, download)
+        self.assertIn(APPIMAGE, download)
+        verified = [json.loads(line) for line in self.minisign_log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(
+            sorted(Path(args[args.index("-m") + 1]).name for args in verified), sorted([MAC_ARCHIVE, APPIMAGE])
+        )
 
     def test_manifest_urls_are_quoted(self) -> None:
         self.version("1.0.0+build-1")
@@ -403,6 +475,7 @@ class Delivery(unittest.TestCase):
             f"{MAC_ARCHIVE}.sig": signature("Oxyn.app.tar.gz", signed),
             f"{appimage}.sig": signature(appimage, signed),
         }
+        state["archives"] = {MAC_ARCHIVE: "macOS archive", appimage: "AppImage"}
         self.path_state.write_text(json.dumps(state), encoding="utf-8")
         output = self.launch("manifeste", "v1.0.0+build-1", REPO_DIR)
         self.assertEqual(output.returncode, 0, output.stderr)
@@ -438,7 +511,7 @@ class Delivery(unittest.TestCase):
 
     def test_signature_not_downloaded_or_invalid_writes_no_manifest(self) -> None:
         cases = (
-            (None, "not downloaded"),
+            (None, "not found"),
             ("", "is empty"),
             ("not base64!", "not a Tauri signature"),
             (base64.b64encode(b"no trusted comment").decode(), "not a Tauri signature"),
@@ -482,6 +555,105 @@ class Delivery(unittest.TestCase):
         self.assert_no_manifest(self.launch("manifeste", "v9.9.9", REPO_DIR), "expected v0.0.1")
         self.assert_no_manifest(self.launch("manifeste", "v0.0.1", "exemple/oxyn/../x"), "not an owner/name")
         self.assertEqual(self.state()["appels"], [])
+
+    # --- the signature verifies the draft's archive with the committed key -
+
+    def with_archives(self, **archives: str) -> None:
+        self.write_state(release={"isDraft": True, "assets": list(UPDATER_ASSETS)})
+        state = self.state()
+        state["archives"] = {**ARCHIVES, **archives}
+        self.path_state.write_text(json.dumps(state), encoding="utf-8")
+
+    def test_archive_its_signature_does_not_verify_writes_no_manifest(self) -> None:
+        # A rerun pairing one run's archive with another run's signature.
+        for asset in (MAC_ARCHIVE, APPIMAGE):
+            with self.subTest(asset=asset):
+                self.with_archives(**{asset: "tampered bytes"})
+                self.assert_no_manifest(self.launch("manifeste", "v0.0.1", REPO_DIR), "does not verify")
+
+    def test_signature_of_another_key_writes_no_manifest(self) -> None:
+        # The secret regenerated without pasting its public half: tauri-cli
+        # only warns, the fleet would refuse every archive.
+        other = base64.b64encode(b"untrusted comment: minisign public key: FEDCBA9876543210\nRWQother\n").decode()
+        self.version("0.0.1", pubkey=other)
+        self.with_archives()
+        self.assert_no_manifest(self.launch("manifeste", "v0.0.1", REPO_DIR), "not the expected one")
+
+    def test_archive_missing_from_the_download_writes_no_manifest(self) -> None:
+        self.write_state(release={"isDraft": True, "assets": list(UPDATER_ASSETS)})
+        state = self.state()
+        state["archives"] = {MAC_ARCHIVE: "macOS archive"}
+        self.path_state.write_text(json.dumps(state), encoding="utf-8")
+        self.assert_no_manifest(self.launch("manifeste", "v0.0.1", REPO_DIR), "does not verify")
+
+    def test_placeholder_key_or_missing_minisign_writes_no_manifest(self) -> None:
+        self.version("0.0.1", pubkey="REPLACE_WITH_UPDATER_PUBLIC_KEY")
+        self.with_archives()
+        self.assert_no_manifest(self.launch("manifeste", "v0.0.1", REPO_DIR), "pubkey is not set")
+        self.version("0.0.1")
+        output = self.launch("manifeste", "v0.0.1", REPO_DIR, MINISIGN=str(self.folder / "absent"))
+        self.assert_no_manifest(output, "cannot run minisign")
+
+    def test_version_is_read_only_from_a_verified_signature(self) -> None:
+        # Tampered and signed for another version: the verification speaks first.
+        self.with_archives(**{MAC_ARCHIVE: "tampered bytes"})
+        state = self.state()
+        state["signatures"][f"{MAC_ARCHIVE}.sig"] = signature("Oxyn.app.tar.gz", "\tversion:0.0.0")
+        self.path_state.write_text(json.dumps(state), encoding="utf-8")
+        self.assert_no_manifest(self.launch("manifeste", "v0.0.1", REPO_DIR), "does not verify")
+
+    # --- signing is a step of its own, after the build ---------------------
+
+    def tauri_calls(self) -> list[dict]:
+        if not self.tauri_log.exists():
+            return []
+        return [json.loads(line) for line in self.tauri_log.read_text(encoding="utf-8").splitlines()]
+
+    def test_sign_binds_each_artifact_to_the_version_without_printing_the_key(self) -> None:
+        files = [self.package(MAC_ARCHIVE), self.package(APPIMAGE)]
+        output = self.launch("signer", "v0.0.1", *files, **self.secrets())
+        self.assertEqual(output.returncode, 0, output.stderr)
+        self.assertEqual(
+            [call["args"] for call in self.tauri_calls()],
+            [["signer", "sign", "--app-version", "0.0.1", file] for file in files],
+        )
+        self.assertTrue(all(call["cle"] for call in self.tauri_calls()))
+        for file in files:
+            self.assertTrue(Path(f"{file}.sig").is_file())
+        self.assertNotIn(FIXTURE_SECRET, output.stdout + output.stderr)
+
+    def test_sign_refuses_before_running_the_cli(self) -> None:
+        file = self.package(APPIMAGE)
+        cases = (
+            (("signer", "v0.0.1", file), {}, "missing GitHub Actions secrets"),
+            (("signer", "v9.9.9", file), self.secrets(), "expected v0.0.1"),
+            (("signer", "v0.0.1", str(self.folder / "absent.AppImage")), self.secrets(), "does not exist"),
+            (("signer", "v0.0.1"), self.secrets(), "no updater artifact"),
+        )
+        for args, variables, reason in cases:
+            with self.subTest(reason=reason):
+                output = self.launch(*args, **variables)
+                self.assertEqual(output.returncode, 1)
+                self.assertIn(reason, output.stderr)
+                self.assertEqual(self.tauri_calls(), [])
+
+    def test_sign_failure_is_reported_without_relaying_the_cli_output(self) -> None:
+        file = self.package(APPIMAGE)
+        output = self.launch("signer", "v0.0.1", file, FAUX_TAURI_MODE="echec", **self.secrets())
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("tauri signer sign failed", output.stderr)
+        self.assertNotIn(FIXTURE_SECRET, output.stdout + output.stderr)
+
+    def test_sign_refuses_a_missing_stale_or_unbound_signature(self) -> None:
+        file = self.package(APPIMAGE)
+        # A signature left by an earlier run is not taken for this one.
+        Path(f"{file}.sig").write_text(signature(APPIMAGE), encoding="ascii")
+        output = self.launch("signer", "v0.0.1", file, FAUX_TAURI_MODE="rien", **self.secrets())
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("not found", output.stderr)
+        output = self.launch("signer", "v0.0.1", file, FAUX_TAURI_MODE="autre_version", **self.secrets())
+        self.assertEqual(output.returncode, 1)
+        self.assertIn("signed for version 0.0.0", output.stderr)
 
 
 if __name__ == "__main__":

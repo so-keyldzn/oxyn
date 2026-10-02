@@ -62,18 +62,14 @@ desktop-dev: $(TAURI)
 # them, it would violate the licenses of what it redistributes. `--exiger` makes
 # publishing fail if `cargo-about` is missing.
 #
-# `MISE_A_JOUR=1` also produces the signed updater artifacts (ADR-0051). It
-# needs the updater private key, which only the release secrets hold: without
-# it, a local release build stays possible.
+# No build signs the updater artifacts (ADR-0051): `tauri build` runs every
+# build.rs and Vite plugin, which must never see the updater private key. The
+# release workflow signs them afterwards, in a step of its own
+# (`script/livraison signer`).
 desktop: $(TAURI)
 ifeq ($(PROFIL),release)
 	@python3 script/licences-tierces generer --exiger $(MENTIONS)
-ifeq ($(MISE_A_JOUR),1)
-	@python3 script/livraison cle
-	cd crates/oxyn-desktop && ../../$(TAURI) build -c tauri.updater.json5
-else
 	cd crates/oxyn-desktop && ../../$(TAURI) build
-endif
 else
 	cd crates/oxyn-desktop && ../../$(TAURI) build --debug --no-bundle
 endif

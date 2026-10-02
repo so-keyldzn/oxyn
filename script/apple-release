@@ -3,6 +3,14 @@
 
 Tauri owns certificate import, signing and notarization. The API key exists
 only in a private temporary file during the build; diagnostics omit values.
+
+The build also writes the updater archive (ADR-0051), `Oxyn.app.tar.gz`, from
+the `.app` Tauri signed, notarized and stapled. Tauri would write it only with
+the updater private key in the environment of the whole build; the archive is
+therefore made here, the way `tauri-bundler` 2.10.1 makes it — the `.app`
+directory at the root, symbolic links kept as links — and signed in a later
+step that alone holds the key (`script/livraison signer`). `verify` checks the
+`.app` it contains like the one beside it.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +33,7 @@ REQUIRED = (
     "APPLE_API_PRIVATE_KEY",
     "APPLE_TEAM_ID",
 )
+UPDATER_KEY = ("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
 
 
 class Refusal(Exception):
@@ -68,12 +78,28 @@ def build(environment: dict[str, str]) -> None:
         child_environment.pop("APPLE_ID", None)
         child_environment.pop("APPLE_PASSWORD", None)
         child_environment["APPLE_API_KEY_PATH"] = str(key)
-        # The updater signing key reaches Tauri through this same environment.
-        result = subprocess.run(
-            ["make", "desktop", "PROFIL=release", "MISE_A_JOUR=1"], cwd=ROOT, env=child_environment, check=False
-        )
+        # The build runs every build.rs and Vite plugin: the updater key must
+        # not be in its environment, even if a step passed it by mistake.
+        for name in UPDATER_KEY:
+            child_environment.pop(name, None)
+        result = subprocess.run(["make", "desktop", "PROFIL=release"], cwd=ROOT, env=child_environment, check=False)
         if result.returncode:
             raise Refusal("signed macOS build failed; no package may be uploaded")
+    archive(ROOT / "target/release/bundle")
+
+
+def archive(bundle: Path) -> Path:
+    """Writes the updater archive of the built `.app`, beside it."""
+    apps = sorted((bundle / "macos").glob("*.app"))
+    if len(apps) != 1:
+        raise Refusal("expected exactly one .app in target/release/bundle/macos")
+    destination = apps[0].with_name(f"{apps[0].name}.tar.gz")
+    destination.unlink(missing_ok=True)
+    # `add` keeps symbolic links as links: following one would copy a
+    # framework's `Versions/Current` twice and break the code signature.
+    with tarfile.open(destination, "w:gz") as output:
+        output.add(apps[0], arcname=apps[0].name)
+    return destination
 
 
 def verify(bundle: Path, team: str) -> None:

@@ -5,6 +5,7 @@ import importlib.machinery
 import importlib.util
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -126,13 +127,54 @@ class AppleRelease(unittest.TestCase):
             APPLE.run("codesign", "--verify", "fixture.app")
         self.assertNotIn("fixture-sensitive-output", str(raised.exception))
 
+    def built_app(self) -> Path:
+        """An `.app` shaped like Tauri's: an executable, a framework's links."""
+        (self.bundle / "macos/Oxyn.app.tar.gz").unlink()
+        app = self.bundle / "macos/Oxyn.app"
+        (app / "Contents/MacOS").mkdir(parents=True)
+        executable = app / "Contents/MacOS/oxyn"
+        executable.write_bytes(b"binary")
+        executable.chmod(0o755)
+        versions = app / "Contents/Frameworks/Fixture.framework/Versions"
+        (versions / "A").mkdir(parents=True)
+        (versions / "A/Fixture").write_bytes(b"library")
+        (versions / "Current").symlink_to("A")
+        return app
+
+    def test_updater_archive_holds_the_app_at_its_root_with_links_kept(self):
+        self.built_app()
+        archive = APPLE.archive(self.bundle)
+        self.assertEqual(archive, self.bundle / "macos/Oxyn.app.tar.gz")
+        with tarfile.open(archive) as content:
+            members = {member.name: member for member in content.getmembers()}
+        # The plugin drops the first component of every entry and installs
+        # the rest as the new `.app`: everything must sit under `Oxyn.app`.
+        self.assertTrue(all(name == "Oxyn.app" or name.startswith("Oxyn.app/") for name in members), members)
+        self.assertTrue(members["Oxyn.app"].isdir())
+        self.assertEqual(members["Oxyn.app/Contents/MacOS/oxyn"].mode & 0o777, 0o755)
+        current = members["Oxyn.app/Contents/Frameworks/Fixture.framework/Versions/Current"]
+        self.assertTrue(current.issym())
+        self.assertEqual(current.linkname, "A")
+
+    def test_updater_archive_replaces_a_stale_one_and_refuses_an_ambiguous_bundle(self):
+        self.built_app()
+        stale = self.bundle / "macos/Oxyn.app.tar.gz"
+        stale.write_bytes(b"stale")
+        APPLE.archive(self.bundle)
+        self.assertTrue(tarfile.is_tarfile(stale))
+        (self.bundle / "macos/Second.app").mkdir()
+        with self.assertRaises(APPLE.Refusal):
+            APPLE.archive(self.bundle)
+
     def test_build_key_is_private_and_removed_on_success_and_failure(self):
         for status in [0, 1]:
             paths = []
             def invoke(*args, **kwargs):
-                self.assertEqual(args[0], ["make", "desktop", "PROFIL=release", "MISE_A_JOUR=1"])
+                self.assertEqual(args[0], ["make", "desktop", "PROFIL=release"])
                 environment = kwargs["env"]
-                self.assertEqual(environment["TAURI_SIGNING_PRIVATE_KEY"], "fixture-updater-key")
+                # The updater key never reaches the build's dependencies.
+                self.assertNotIn("TAURI_SIGNING_PRIVATE_KEY", environment)
+                self.assertNotIn("TAURI_SIGNING_PRIVATE_KEY_PASSWORD", environment)
                 self.assertNotIn("APPLE_API_PRIVATE_KEY", environment)
                 self.assertNotIn("APPLE_ID", environment)
                 self.assertNotIn("APPLE_PASSWORD", environment)
@@ -141,13 +183,21 @@ class AppleRelease(unittest.TestCase):
                 self.assertEqual(key.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(key.read_text(), "fixture-not-a-credential")
                 return subprocess.CompletedProcess([], status)
-            environment = self.environment | {"RUNNER_TEMP": self.directory.name, "APPLE_ID": "inherited", "APPLE_PASSWORD": "inherited", "TAURI_SIGNING_PRIVATE_KEY": "fixture-updater-key"}
-            with self.subTest(status=status), patch.object(APPLE.subprocess, "run", side_effect=invoke):
+            environment = self.environment | {
+                "RUNNER_TEMP": self.directory.name,
+                "APPLE_ID": "inherited",
+                "APPLE_PASSWORD": "inherited",
+                "TAURI_SIGNING_PRIVATE_KEY": "fixture-updater-key",
+                "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "fixture-updater-password",
+            }
+            with self.subTest(status=status), patch.object(APPLE.subprocess, "run", side_effect=invoke), patch.object(APPLE, "archive") as archive:
                 if status:
                     with self.assertRaises(APPLE.Refusal):
                         APPLE.build(environment)
+                    archive.assert_not_called()
                 else:
                     APPLE.build(environment)
+                    archive.assert_called_once_with(APPLE.ROOT / "target/release/bundle")
             self.assertEqual(len(paths), 1)
             self.assertFalse(paths[0].exists())
 
