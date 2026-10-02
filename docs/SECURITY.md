@@ -44,11 +44,19 @@ file looked like mere configuration.
 
 The minisign private key that signs updates is a secret of the **release**,
 not of a user: it lives only in the `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` Actions secrets, scoped to the steps that
-build, and in two offline backups. It is never in the repository, a log, a
-chat or the clipboard; scripts name the variables, never their values. Only
-its public half is committed, in `tauri.conf.json`. Procedure, rotation and
-loss: [RELEASE](RELEASE.md#updater-signing-key).
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets of the `release` GitHub
+environment, which only `v*` tags may deploy to — a workflow pushed on a
+branch cannot read them —, and in two offline backups. Within a release run
+it reaches two steps: the check that it is present, and the signing step,
+which runs the pinned `tauri signer sign` alone. **The build never holds
+it**: `tauri build` runs every `build.rs`, proc-macro and Vite plugin of the
+dependency graph, and one compromised dependency version could read its
+environment. It is never in the repository, a log, a chat or the clipboard;
+scripts name the variables, never their values, and do not relay the signing
+CLI's output. Only its public half is committed, in `tauri.conf.json`; until
+it is, the placeholder there fails releases closed — the workflow refuses it
+before building and before writing a manifest. Procedure, rotation and loss:
+[RELEASE](RELEASE.md#updater-signing-key).
 
 **Concrete failure:** the key pasted into a chat to "set up the secret", and
 anyone who reads that log can sign an update every installed copy accepts.
@@ -296,22 +304,31 @@ What enters Oxyn and is untrusted, in order of underestimation:
    The endpoint is a constant compiled into `oxyn-desktop`
    (`updates/channel.rs`), fetched over HTTPS only — the plugin refuses
    anything else in a release build. That check covers the endpoint, not the
-   archive `url` the manifest names: Oxyn refuses an archive whose URL is not
-   `https://github.com/…` before asking for a byte
-   (`channel::is_release_asset`), and what makes the archive trustworthy is
-   still its signature, not its transport. The archive is installed only if its
+   archive `url` the manifest names: Oxyn refuses an archive that is not an
+   asset of the project's releases
+   (`https://github.com/so-keyldzn/oxyn/releases/download/…`) before asking
+   for a byte (`channel::is_release_asset`), follows redirects over HTTPS
+   only, and drops an archive over 256 MiB, announced or received, before the
+   plugin has buffered more — what makes the archive trustworthy is still its
+   signature, not its transport. The archive is installed only if its
    minisign signature matches the public key compiled in, and the version
    signed with it matches the version the manifest announces
    (`requireSignedVersion`); a version not strictly greater than the running
-   one is never offered. Release notes are capped at 4 KiB, cut on a
-   character boundary, and rendered as plain text. The webview never supplies
+   one is never offered. A build still carrying the placeholder public key
+   refuses every update as a signature failure. Release notes come from the
+   unsigned manifest — accepted: they are capped at 4 KiB, cut on a character
+   boundary, and rendered as plain text, never as HTML or links. The webview never supplies
    a URL, a path or a version: the updater plugin is driven from Rust only,
    `tauri-plugin-opener` is not even registered — Rust calls its free
    function `open_url` —, `capabilities/main.json` grants no `updater:` nor
    `opener:` permission and a test keeps it so, and the release page opened
    in the browser is a fixed prefix followed by a version Rust validated as
    semver. The manifest itself is not signed: whoever controls
-   the endpoint can withhold updates, not ship code.
+   the endpoint can withhold updates and choose the notes shown beside a
+   genuine archive, not ship code. `restart_to_update({confirmed: true})`
+   lets a script skip the "work would be stopped" dialog — at worst it
+   restarts into an update already verified, as `cancel_exit` and the
+   ordered exit already allow; open transactions still ask.
 
 ## `unsafe` policy
 

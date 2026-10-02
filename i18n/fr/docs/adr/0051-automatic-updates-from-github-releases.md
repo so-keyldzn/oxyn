@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="e75a9c3a7769" -->
+<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="c3f5df1a210c" -->
 
 > Traduction française de [docs/adr/0051-automatic-updates-from-github-releases.md](../../../../docs/adr/0051-automatic-updates-from-github-releases.md). **La version anglaise fait foi.**
 
@@ -113,23 +113,44 @@ permettra d'ajouter un canal bêta sans toucher au reste.
 
 `tauri.conf.json` porte la clé publique minisign et
 `requireSignedVersion: true`. La clé privée n'existe que dans les secrets de
-livraison et dans deux sauvegardes hors ligne
+l'environnement GitHub `release`, vers lequel seuls les tags `v*` peuvent
+déployer, et dans deux sauvegardes hors ligne
 ([RELEASE](../RELEASE.md#clé-de-signature-des-mises-à-jour),
-[I-03](../../CLAUDE.md#i-03)).
+[I-03](../../CLAUDE.md#i-03)). Tant que le mainteneur n'a pas collé la vraie
+clé publique, `tauri.conf.json` porte la valeur de substitution
+`REPLACE_WITH_UPDATER_PUBLIC_KEY` : le workflow de livraison la refuse avant
+de construire (`script/livraison cle`) et avant d'écrire un manifeste, et un
+build qui la porte refuse toute mise à jour comme un échec de signature.
 
-### 3. Le manifeste est écrit en dernier, par le workflow de livraison
+### 3. Les artefacts sont signés après le build, et vérifiés avant le manifeste
 
-Tauri signe les artefacts de mise à jour au build (`createUpdaterArtifacts`,
-activé seulement par `make desktop PROFIL=release MISE_A_JOUR=1`, pour qu'un
-build de release local n'ait pas besoin de la clé privée). L'archive macOS est
-construite par le bundler à partir du `.app` **après** sa signature, sa
-notarisation et son agrafage ; `script/apple-release verify` contrôle le
-`.app` qu'elle contient.
+**Aucun build ne signe.** `createUpdaterArtifacts` reste désactivé : avec
+lui, `tauri build` signe à la fin du bundling, et la clé doit être dans
+l'environnement de tout le build — chaque `build.rs` et chaque proc-macro de
+`Cargo.lock`, Vite et ses plugins, dont n'importe lequel pourrait devenir,
+par une version compromise d'une dépendance, un lecteur de cet
+environnement. Les jobs de paquets construisent sans la clé ; l'archive
+macOS est écrite par `script/apple-release build` à partir du `.app`
+**après** sa signature, sa notarisation et son agrafage, comme
+`tauri-bundler` 2.10.1 l'écrit (le `.app` à la racine d'un `.tar.gz`, liens
+conservés), et `script/apple-release verify` contrôle le `.app` qu'elle
+contient. L'AppImage est celle que le bundler a écrite : le type de bundle
+qu'il inscrit dans le binaire ne dépend pas de `createUpdaterArtifacts`. Une
+étape ultérieure, `script/livraison signer`, détient seule la clé : elle
+lance le `tauri signer sign --app-version <version>` épinglé, qui écrit le
+même commentaire de confiance qu'un `tauri build` qui signe.
 
-Un dernier job, `manifeste`, démarre une fois les deux jobs de paquets au
-vert, sans autre secret que `GH_TOKEN` : il lit les fichiers `.sig` du
-brouillon, exige exactement une archive macOS et une AppImage, écrit
-`latest.json` et le dépose. C'est le seul job qui dépose `latest.json`. Comme
+**Le manifeste est écrit en dernier.** Un dernier job, `manifeste`, démarre
+une fois les deux jobs de paquets au vert, sans autre secret que
+`GH_TOKEN` : il exige exactement une archive macOS et une AppImage dans le
+brouillon, les télécharge avec leur `.sig`, vérifie chaque paire avec
+`minisign -V` 0.12 (épinglé par empreinte) contre la clé publique de
+`tauri.conf.json`, puis contrôle la version signée, écrit `latest.json` et le
+dépose. La CLI ne fait qu'avertir quand la clé privée ne correspond pas à
+cette clé publique, et une relance peut apparier l'archive d'une exécution à
+la signature d'une autre : sans contrôle, l'un comme l'autre livrerait une
+release que toute copie installée refuse comme un échec de signature.
+`manifeste` est le seul job qui dépose `latest.json`. Comme
 `/releases/latest/download` ignore les brouillons, rien n'est proposé à
 personne avant que le mainteneur publie.
 
@@ -140,16 +161,24 @@ personne avant que le mainteneur publie.
   à l'horloge murale, relue toutes les heures — un sommeil de 24 h se
   figerait pendant la veille de la machine. Une vérification est bornée à
   **30 s** ; cette borne n'atteint pas le téléchargement, que le plugin lance
-  sans délai maximal (`Update.timeout` vaut `None`) : une liaison lente ne
-  doit pas le perdre. `cancel_update` interrompt la tâche, et la requête HTTP
-  avec elle.
+  sans délai maximal global (`Update.timeout` vaut `None`) : une liaison
+  lente ne doit pas le perdre. Chaque requête du client de mise à jour est en
+  HTTPS seulement, redirections comprises, et échoue après **60 s** sans
+  recevoir un octet — par lecture, si bien qu'un flux bloqué finit en
+  `error{offline, retryable: true}` au lieu de garder `downloading` pour la
+  session. `cancel_update` interrompt la tâche, et la requête HTTP avec elle.
 * **Télécharge** en arrière-plan quand les mises à jour automatiques sont
   actives. Les octets restent **en mémoire** ; la signature est vérifiée par
   le plugin avant que rien ne soit gardé. Après un plantage ou une fermeture
   sans installation, le téléchargement recommence simplement. Une archive dont
-  l'URL n'est pas `https://github.com/…` est refusée avant qu'un octet soit
-  demandé, en `error{server, retryable: false}` : le plugin n'impose HTTPS
-  qu'à l'endpoint.
+  l'URL n'est pas un asset des releases du projet
+  (`https://github.com/so-keyldzn/oxyn/releases/download/…`) est refusée avant
+  qu'un octet soit demandé, en `error{server, retryable: false}` : le plugin
+  n'impose HTTPS qu'à l'endpoint. Une archive de plus de **256 Mio**, annoncée
+  ou reçue, est abandonnée en `error{server, retryable: true}` : le plugin met
+  tout le corps en mémoire avant de vérifier sa signature, si bien qu'un asset
+  non vérifié ne doit pas choisir cette taille — la plus grosse publiée,
+  l'AppImage de v0.0.1, pèse 89 Mo.
 * **Installe à la fermeture**, jamais en forçant une relance. Une action
   « Restart now » est proposée ; elle lance l'arrêt ordonné, puis installe,
   puis appelle `request_restart()` — jamais `restart()`. La fermeture est
@@ -163,16 +192,26 @@ personne avant que le mainteneur publie.
   export : sa destination garde son contenu précédent, et un
   `.oxyn-export-*.part` égaré peut rester à côté.
 * **Le Quit du Dock et la fermeture de session** (`RunEvent::Exit`)
-  installent aussi, après le départ des fenêtres, sur un thread auxiliaire que
-  le thread principal attend au plus **10 s** — mesuré le 2026-10-02,
-  l'extraction de l'archive de 12 Mo d'un bundle de 25 Mo prend 0,6 s. Passé
-  ce délai, le processus se termine sans attendre davantage ; 10 s est une
-  borne pour un disque lent, pas une durée attendue.
+  installent aussi, sous macOS seulement, après le départ des fenêtres, sur un
+  thread auxiliaire que le thread principal attend au plus **10 s** — mesuré
+  le 2026-10-02, l'extraction de l'archive de 12 Mo d'un bundle de 25 Mo
+  prend 0,6 s. Passé ce délai, le processus se termine sans attendre
+  davantage ; 10 s est une borne pour un disque lent, pas une durée attendue.
+  Risque accepté : le plugin extrait toute l'archive avant de toucher au
+  `.app` installé, puis l'échange par deux renommages à quelques
+  microsecondes d'écart ; coupé entre les deux, `/Applications` n'a plus
+  Oxyn.app tant que la sauvegarde laissée dans `$TMPDIR` n'est pas remise en
+  place. Sous Linux, le plugin écrit la nouvelle AppImage en plusieurs
+  secondes, si bien que la couper laisserait une image tronquée : une telle
+  sortie n'installe rien, et le lancement suivant télécharge de nouveau la
+  mise à jour.
 * **Là où Oxyn ne peut pas écrire** (le `.app` dans un dossier qui
   n'appartient pas à l'utilisateur, sur une image montée sous `/Volumes`, ou
   déplacé par la translocation de Gatekeeper), rien n'est installé à la
   fermeture : l'invite administrateur n'apparaît qu'après un clic sur
-  « Restart now ».
+  « Restart now ». Le dossier est sondé sur le pool bloquant une fois un
+  téléchargement vérifié, jamais au lancement : le lancement ne lit que
+  `updates.json` et `update-notice.json`, chacun borné à 64 Kio.
 * **Une opération à la fois.** Une vérification pendant `checking`,
   `downloading` ou `ready` ne fait rien ; `ready` dure jusqu'à la relance.
 * **Échecs.** Un échec réseau ou serveur en arrière-plan est gardé en
@@ -191,6 +230,24 @@ sans Oxyn ([I-11](../../CLAUDE.md#i-11)). Un champ inconnu est ignoré ; un
 fichier corrompu vaut la valeur par défaut.
 `OXYN_UPDATES=off` dans l'environnement verrouille les mises à jour, pour un
 poste administré ou hors ligne.
+
+Ce que la sortie dit au lancement suivant traverse la relance dans un second
+fichier ouvert à côté, `app_config_dir()/update-notice.json`, sous l'une de
+deux formes :
+
+```json
+{"format":1,"type":"installed","from":"0.0.2","to":"0.0.3"}
+{"format":1,"type":"installFailed","version":"0.0.3","message":"…"}
+```
+
+`message` est la phrase montrée à l'utilisateur, suivie de l'erreur du
+plugin ; il ne porte aucun secret. Le fichier est écrit de façon atomique par
+l'installation, lu et **supprimé** au lancement suivant, avant que l'avis ne
+soit affiché — un avis se dit une fois. `installed` n'est affiché que si `to`
+est la version qui se lance (une copie plus ancienne démarrée d'ailleurs ne
+dit rien) ; un fichier qui ne se lit pas est ignoré. Les deux fichiers sont
+bornés à 64 Kio à la lecture. Un `format` futur est une nouvelle valeur de ce
+champ, jamais un changement silencieux des formes ci-dessus.
 
 ### 6. Où elle s'applique
 
@@ -218,9 +275,16 @@ poste administré ou hors ligne.
   authentiquement signée sous un numéro de version plus haut.
 * **−** **`latest.json` n'est pas signé.** Qui contrôle l'endpoint peut encore
   **retenir** les mises à jour — servir un vieux manifeste, ou aucun — et
-  laisser les utilisateurs sur une version vulnérable. Accepté : l'alternative
-  est une seconde chaîne de signature pour le manifeste, et l'utilisateur voit
-  la version qui tourne dans les Réglages.
+  laisser les utilisateurs sur une version vulnérable — et choisir les notes
+  de version que les Réglages affichent à côté d'une archive authentique.
+  Accepté : l'alternative est une seconde chaîne de signature pour le
+  manifeste, et l'utilisateur voit la version qui tourne dans les Réglages ;
+  les notes sont plafonnées à 4 Kio et rendues en texte brut, si bien qu'une
+  note forgée relève de l'ingénierie sociale, pas du code.
+* **−** **L'étape de signature fait encore confiance à la CLI Tauri.** La clé
+  atteint un seul processus, le binaire `@tauri-apps/cli` épinglé dans le
+  lockfile ; les centaines de crates et de paquets npm du build ne la voient
+  jamais.
 * **−** **La disponibilité de GitHub devient celle d'Oxyn.** Si GitHub est en
   panne, les vérifications échouent en silence jusqu'à son retour.
 * **−** **Les utilisateurs de v0.0.1 mettent à jour à la main une fois.** Elle

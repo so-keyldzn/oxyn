@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="cec0b6bf92ff" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="f323c411b494" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -82,7 +82,7 @@ crates/oxyn-desktop/              # l'hôte Tauri, binaire `oxyn-desktop`
 ├── src/menu.rs                   # barre native macOS, lue au manifeste du front ; aucune Command
 ├── src/updates.rs + updates/     # mise à jour depuis les GitHub Releases (ADR-0051) ; aucune Command
 │   ├── state.rs                  #   la machine d'états, pure, testée sans Tauri
-│   ├── channel.rs                #   le seul endpoint, la page de release, le contrôle d'archive github.com
+│   ├── channel.rs                #   le seul endpoint, la page de release, le contrôle d'asset de release
 │   ├── installation.rs           #   bundle macOS, AppImage, ou pourquoi pas (deb/rpm, dev, lecture seule)
 │   ├── preference.rs             #   updates.json et le verrou OXYN_UPDATES
 │   ├── schedule.rs               #   l'échéance de la prochaine vérification, à l'horloge murale
@@ -90,8 +90,7 @@ crates/oxyn-desktop/              # l'hôte Tauri, binaire `oxyn-desktop`
 │   ├── apply.rs                  #   l'installation à la sortie, et update-notice.json pour le lancement suivant
 │   └── tests.rs
 ├── capabilities/main.json        # permissions de la webview — aucune pour la mise à jour ni l'opener
-├── tauri.conf.json               # CSP de production, clé publique de mise à jour ; tauri.dev.json5 la relâche en dev
-└── tauri.updater.json5           # fusionné par les seuls builds de release : signe les artefacts de mise à jour
+└── tauri.conf.json               # CSP de production, clé publique de mise à jour ; tauri.dev.json5 la relâche en dev
 ```
 
 Chaque domaine — consoles, métadonnées, résultats, bibliothèque, reprise,
@@ -1063,9 +1062,9 @@ tant qu'une fenêtre existe**
 | Étape | Où |
 |---|---|
 | Planification — 60 s après le lancement, puis échéance toutes les 24 h | une tâche sur `tauri::async_runtime`, réveillée toutes les heures ou par une vérification manuelle (`Notify`) ; l'échéance se lit à l'horloge murale, si bien que la veille de la machine ne l'allonge pas |
-| Vérification et téléchargement | une tâche d'opération à la fois sur `tauri::async_runtime`, que `cancel_update` interrompt avec sa requête HTTP ; la vérification est bornée à 30 s, le téléchargement ne l'est pas ; l'archive reste en mémoire, sa signature vérifiée par le plugin avant d'être gardée ; progression limitée à quatre événements par seconde sur le `Channel` de `subscribe_updates` |
+| Vérification et téléchargement | une tâche d'opération à la fois sur `tauri::async_runtime`, que `cancel_update` interrompt avec sa requête HTTP ; la vérification est bornée à 30 s, le téléchargement seulement par 60 s sans un octet et par 256 Mio ; l'archive reste en mémoire, sa signature vérifiée par le plugin avant d'être gardée, puis le dossier de l'installation sondé en écriture sur le pool bloquant — le lancement ne lit que deux fichiers d'au plus 64 Kio ; progression limitée à quatre événements par seconde sur le `Channel` de `subscribe_updates` |
 | Installation, après ⌘Q, le Quit d'Oxyn ou « Restart now » | `begin_exit`, après `backend.shutdown()` : fenêtres masquées, `install` dans `spawn_blocking` sans délai maximal, un échec journalisé sans retenir la sortie, le journal vidé, puis `request_restart()` ou `exit(0)` |
-| Installation, après le Quit du Dock ou la fermeture de session | `RunEvent::Exit` : un thread auxiliaire, `oxyn-update-install`, que le thread principal attend au plus 10 s — les fenêtres sont déjà parties, l'attente ne fige donc rien ([I-05](../CLAUDE.md#i-05)) ; 0,6 s mesurée le 2026-10-02 pour l'archive de 12 Mo d'un bundle de 25 Mo |
+| Installation, après le Quit du Dock ou la fermeture de session | macOS seulement — sous Linux, couper la réécriture de l'AppImage laisserait une image tronquée, si bien qu'une telle sortie n'installe rien. `RunEvent::Exit` : un thread auxiliaire, `oxyn-update-install`, que le thread principal attend au plus 10 s — les fenêtres sont déjà parties, l'attente ne fige donc rien ([I-05](../CLAUDE.md#i-05)) ; 0,6 s mesurée le 2026-10-02 pour l'archive de 12 Mo d'un bundle de 25 Mo |
 
 `request_restart()` passe par `RunEvent::ExitRequested` comme toute sortie ;
 le gestionnaire le laisse passer parce que l'arrêt ordonné est déjà terminé.

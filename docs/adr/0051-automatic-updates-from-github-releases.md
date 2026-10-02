@@ -104,23 +104,42 @@ supply one. Only the **stable** channel exists; the isolation is what lets a
 beta channel be added later without touching the rest.
 
 `tauri.conf.json` carries the minisign public key and
-`requireSignedVersion: true`. The private key exists only in the release
-secrets and in two offline backups ([RELEASE](../RELEASE.md#updater-signing-key),
-[I-03](../../CLAUDE.md#i-03)).
+`requireSignedVersion: true`. The private key exists only in the secrets of
+the `release` GitHub environment, which only `v*` tags may deploy to, and in
+two offline backups ([RELEASE](../RELEASE.md#updater-signing-key),
+[I-03](../../CLAUDE.md#i-03)). Until the maintainer pastes the real public
+key, `tauri.conf.json` holds the placeholder `REPLACE_WITH_UPDATER_PUBLIC_KEY`:
+the release workflow refuses it before building (`script/livraison cle`) and
+before writing a manifest, and a build carrying it refuses every update as a
+signature failure.
 
-### 3. The manifest is written last, by the release workflow
+### 3. The artifacts are signed after the build, and verified before the manifest
 
-Tauri signs the updater artifacts at build time (`createUpdaterArtifacts`,
-enabled only by `make desktop PROFIL=release MISE_A_JOUR=1` so that a local
-release build does not need the private key). The macOS archive is built by
-the bundler from the `.app` **after** it is signed, notarized and stapled;
-`script/apple-release verify` checks the `.app` inside it.
+**No build signs.** `createUpdaterArtifacts` stays off: with it, `tauri build`
+signs at the end of the bundling, and the key has to be in the environment of
+the whole build — every `build.rs` and proc-macro of `Cargo.lock`, Vite and
+its plugins, any of which a compromised dependency version could turn into a
+reader of that environment. The package jobs build without the key; the macOS
+archive is written by `script/apple-release build` from the `.app` **after**
+it is signed, notarized and stapled, the way `tauri-bundler` 2.10.1 writes it
+(the `.app` at the root of a `.tar.gz`, links kept), and
+`script/apple-release verify` checks the `.app` inside it. The AppImage is the
+one the bundler wrote: the bundle type it patches into the binary does not
+depend on `createUpdaterArtifacts`. A later step, `script/livraison signer`,
+alone holds the key: it runs the pinned `tauri signer sign --app-version
+<version>`, which writes the same trusted comment as a signing `tauri build`.
 
-A final job, `manifeste`, runs once both package jobs are green, with no
-secret but `GH_TOKEN`: it reads the `.sig` files of the draft, requires exactly
-one macOS archive and one AppImage, writes `latest.json` and uploads it. It is
-the only job that uploads `latest.json`. Since `/releases/latest/download`
-ignores drafts, nothing is offered to anyone before the maintainer publishes.
+**The manifest is written last.** A final job, `manifeste`, runs once both
+package jobs are green, with no secret but `GH_TOKEN`: it requires exactly one
+macOS archive and one AppImage in the draft, downloads them with their `.sig`,
+verifies each pair with `minisign -V` 0.12 (pinned by checksum) against the
+public key of `tauri.conf.json`, then checks the signed version, writes
+`latest.json` and uploads it. The CLI only warns when the private key does not
+match that public key, and a rerun can pair one run's archive with another's
+signature: unchecked, either would ship a release every installed copy
+refuses as a signature failure. `manifeste` is the only job that uploads
+`latest.json`. Since `/releases/latest/download` ignores drafts, nothing is
+offered to anyone before the maintainer publishes.
 
 ### 4. When it checks, downloads and installs
 
@@ -128,15 +147,23 @@ ignores drafts, nothing is offered to anyone before the maintainer publishes.
   ([I-05](../../CLAUDE.md#i-05)). The due date is computed against the wall
   clock, re-read every hour — a 24 h sleep would stall through the machine's
   sleep. A check is bounded by **30 s**; that bound does not reach the
-  download, which the plugin starts with no timeout (`Update.timeout` is
-  `None`): a slow link must not lose it. `cancel_update` aborts the task, and
-  the HTTP request with it.
+  download, which the plugin starts with no overall timeout (`Update.timeout`
+  is `None`): a slow link must not lose it. Every request of the updater's
+  client is HTTPS only, redirects included, and fails after **60 s** without
+  receiving a byte — per read, so a stalled stream ends as
+  `error{offline, retryable: true}` instead of holding `downloading` for the
+  session. `cancel_update` aborts the task, and the HTTP request with it.
 * **Downloads** in the background when automatic updates are on. The bytes
   stay **in memory**; the signature is verified by the plugin before anything
   is kept. After a crash or a quit without install, the download simply starts
-  again. An archive whose URL is not `https://github.com/…` is refused before
+  again. An archive whose URL is not an asset of the project's releases
+  (`https://github.com/so-keyldzn/oxyn/releases/download/…`) is refused before
   any byte is asked for, as `error{server, retryable: false}`: the plugin only
-  enforces HTTPS on the endpoint.
+  enforces HTTPS on the endpoint. An archive over **256 MiB**, announced or
+  received, is dropped as `error{server, retryable: true}`: the plugin buffers
+  the whole body before checking its signature, so an unverified asset must
+  not choose that size — the largest published, the v0.0.1 AppImage, weighs
+  89 MB.
 * **Installs on quit**, never by forcing a restart. A "Restart now" action is
   offered; it runs the ordered exit, then installs, then calls
   `request_restart()` — never `restart()`. The close is recorded before the
@@ -147,15 +174,23 @@ ignores drafts, nothing is offered to anyone before the maintainer publishes.
   written in any window; exports are counted by a guard around the export.
   Confirmed, the exit does not wait for an export: its destination keeps its
   previous content, and a stray `.oxyn-export-*.part` may remain beside it.
-* **The Dock's Quit and logout** (`RunEvent::Exit`) also install, after the
-  windows are gone, on a helper thread the main thread waits for at most
-  **10 s** — measured on 2026-10-02, extracting the 12 MB archive of a 25 MB
-  bundle takes 0.6 s. Past that bound the process ends without waiting
-  further; 10 s is a bound for a slow disk, not an expected duration.
+* **The Dock's Quit and logout** (`RunEvent::Exit`) also install, on macOS
+  only, after the windows are gone, on a helper thread the main thread waits
+  for at most **10 s** — measured on 2026-10-02, extracting the 12 MB archive
+  of a 25 MB bundle takes 0.6 s. Past that bound the process ends without
+  waiting further; 10 s is a bound for a slow disk, not an expected duration.
+  Accepted risk: the plugin extracts the whole archive before touching the
+  installed `.app`, then swaps it by two renames microseconds apart; cut
+  between them, `/Applications` lacks Oxyn.app until the backup left in
+  `$TMPDIR` is moved back. On Linux the plugin writes the new AppImage over
+  seconds, so cutting it would leave a truncated image: such an exit installs
+  nothing, and the next launch downloads the update again.
 * **Where Oxyn cannot write** (the `.app` in a folder the user does not own,
   on a mounted image under `/Volumes`, or translocated by Gatekeeper),
   nothing is installed on quit: the administrator prompt only ever appears
-  after a click on "Restart now".
+  after a click on "Restart now". The folder is probed on the blocking pool
+  once a download is verified, never at launch: the launch reads only
+  `updates.json` and `update-notice.json`, each bounded at 64 KiB.
 * **One operation at a time.** A check during `checking`, `downloading` or
   `ready` does nothing; `ready` lasts until the restart.
 * **Failures.** A network or server failure in the background is kept as
@@ -174,6 +209,22 @@ without Oxyn ([I-11](../../CLAUDE.md#i-11)). An unknown field is ignored; a
 corrupt file counts as the default.
 `OXYN_UPDATES=off` in the environment locks updates off, for an administered
 or offline machine.
+
+What the exit tells the next launch crosses the restart in a second open file
+beside it, `app_config_dir()/update-notice.json`, in one of two shapes:
+
+```json
+{"format":1,"type":"installed","from":"0.0.2","to":"0.0.3"}
+{"format":1,"type":"installFailed","version":"0.0.3","message":"…"}
+```
+
+`message` is the sentence shown to the user, followed by the plugin's error;
+it carries no secret. The file is written atomically by the install, read and **removed** at the next
+launch, before the notice is shown — a notice is said once. `installed` is
+shown only if `to` is the version that launches (an older copy started from
+elsewhere says nothing); a file that does not parse is ignored. Both files
+are bounded at 64 KiB when read. A future `format` is a new value of that
+field, never a silent change of the shapes above.
 
 ### 6. Where it applies
 
@@ -199,8 +250,14 @@ or offline machine.
   offer an old, genuinely signed archive under a higher version number.
 * **−** **`latest.json` is not signed.** Whoever controls the endpoint can
   still **withhold** updates — serve an old manifest, or none — and keep users
-  on a vulnerable version. Accepted: the alternative is a second signature
-  chain for the manifest, and the user sees the running version in Settings.
+  on a vulnerable version — and choose the release notes Settings shows
+  beside a genuine archive. Accepted: the alternative is a second signature
+  chain for the manifest, and the user sees the running version in Settings;
+  the notes are capped at 4 KiB and rendered as plain text, so a forged note
+  is social engineering, not code.
+* **−** **The signing step still trusts the Tauri CLI.** The key reaches one
+  process, the `@tauri-apps/cli` binary pinned in the lockfile; the build's
+  hundreds of crates and npm packages never see it.
 * **−** **GitHub availability is Oxyn's.** If GitHub is down, checks fail
   silently until it returns.
 * **−** **v0.0.1 users update by hand once.** It ships without the updater;

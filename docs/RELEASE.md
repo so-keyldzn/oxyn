@@ -13,10 +13,10 @@ the pinned `cargo-about` binary after verifying its checksum so that required
 third-party notices are included.
 
 The workflow also builds what installed copies update from
-([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)): the package
-jobs run `make desktop PROFIL=release MISE_A_JOUR=1`, which signs the updater
-artifacts — `Oxyn_<version>_aarch64.app.tar.gz` and the AppImage, each with
-its `.sig` — and a final `manifeste` job writes `latest.json` from them.
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)): after the
+build, a step of its own signs the updater artifacts —
+`Oxyn_<version>_aarch64.app.tar.gz` and the AppImage, each with its `.sig` —
+and a final `manifeste` job verifies them and writes `latest.json`.
 
 ## Apple setup
 
@@ -80,28 +80,81 @@ these jobs use disposable GitHub-hosted runners, never a persistent runner.
 team, the application's hardened runtime, stapled ticket and Gatekeeper
 assessment. A failed check prevents the macOS upload. The DMG itself is signed;
 the notarized, stapled object inside it is the `.app`. The updater archive is
-made by the bundler from that same `.app`, after stapling; `verify` extracts
-it and runs the same `codesign`, `stapler` and `spctl` checks on the `.app`
-it contains.
+made by `script/apple-release build` from that same `.app`, after stapling,
+the way the bundler would make it; `verify` extracts it and runs the same
+`codesign`, `stapler` and `spctl` checks on the `.app` it contains.
 
 ## Updater signing key
 
 Every installed Oxyn accepts an update only if its archive carries a minisign
 signature from the key whose public half is compiled in
 (`plugins.updater.pubkey` in `crates/oxyn-desktop/tauri.conf.json`). GitHub
-never holds the private key in clear: it lives in two Actions secrets and in
-two offline backups, nowhere else ([I-03](../CLAUDE.md#i-03)). Generating it,
-storing it and rotating it are the maintainer's alone; none of it is
-delegated to an agent.
+never holds the private key in clear: it lives in two secrets of the `release`
+environment and in two offline backups, nowhere else
+([I-03](../CLAUDE.md#i-03)). Generating it, storing it and rotating it are the
+maintainer's alone; none of it is delegated to an agent.
 
-| Secret | Value |
+| Secret of the `release` environment | Value |
 |---|---|
 | `TAURI_SIGNING_PRIVATE_KEY` | Contents of the private key file written by `tauri signer generate` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The password chosen at generation |
 
-The package jobs pass them only to the key check and the build steps.
-`script/livraison cle` refuses an empty secret or the placeholder public key
-before an hour of build, and names the variables, never their values.
+**Which steps hold the key.** Only two steps of the package jobs: the key
+check, `script/livraison cle`, which refuses an empty secret or the
+placeholder public key before an hour of build and names the variables,
+never their values; and the signing step, `script/livraison signer`, which
+runs the pinned `tauri signer sign --app-version <version>` on the built
+artifact and nothing else. The build itself — `tauri build`, every `build.rs`
+and proc-macro of `Cargo.lock`, Vite and its plugins — runs without it:
+any of them could read its environment, and one compromised dependency
+version would be enough to take the key. That is why no build produces
+signed updater artifacts (`createUpdaterArtifacts` stays off): the macOS
+archive is made by `script/apple-release build` from the stapled `.app`, and
+the AppImage is signed as the bundler wrote it.
+
+**The `release` environment.** Repository secrets are readable by any
+workflow run on any branch: a collaborator, or a token with the `workflow`
+scope, could push a workflow that prints them. Environment secrets reach only
+the jobs that name the environment, and the environment's deployment rule
+decides which refs may run them. Before the first release, the maintainer
+creates it in **Settings → Environments → New environment**:
+
+1. Name: `release`.
+2. **Deployment branches and tags → Selected branches and tags → Add rule →
+   Tag**, pattern `v*`. No branch rule: a run from `main` or any branch then
+   cannot reach the secrets, including a manual run.
+3. **Required reviewers**: the maintainer. Each release then waits for an
+   approval before the package jobs read the key — available because the
+   repository is public.
+4. Add the two secrets above to the environment (commands below), then
+   delete any repository secret of the same name.
+5. Protect the `v*` tags with a tag ruleset (**Settings → Rules → Rulesets →
+   New tag ruleset**, target `v*`, restrict creation, update and deletion to
+   the maintainer): otherwise whoever can push a tag can still start a run
+   the environment admits.
+
+The package job is the only one that names `release`; `brouillon` and
+`manifeste` hold no secret. GitHub creates an environment that a job names
+and that does not exist yet, **without any rule**: create it with its rules
+first. Moving the seven Apple secrets into the same environment is advised
+for the same reason; the workflow reads them identically.
+
+**Why the verification.** The Tauri CLI only *warns* when the private key
+does not match the committed public key, and a rerun can leave in the draft
+the archive of one run beside the signature of another. Either way every
+installed Oxyn would refuse the update as a signature failure — shown as
+such, every day, indistinguishable from an attack — until the next release.
+So the `manifeste` job downloads both archives from the draft and verifies
+each with `minisign -V` against the public key of `tauri.conf.json` before
+it reads the signed version or writes anything. The verifier is the
+reference implementation, minisign 0.12, installed from its GitHub release
+archive pinned by SHA-256
+([RESEARCH-NOTES](RESEARCH-NOTES.md#tauri-updater-contracts--checked-on-2026-10-02)),
+like `cargo-about`; it verifies the `.sig` Tauri writes once decoded from
+Base64. It runs in `manifeste` rather than in the package jobs because there
+it checks the bytes users will download, on one platform, with one pinned
+binary. Python's standard library has no Ed25519, and the repository has no
+precedent of a vendored implementation.
 
 **Generate**, once, outside the repository, with a password:
 
@@ -114,12 +167,12 @@ the public key next to it, with `.pub` appended. Then:
 
 1. Paste the **public** key (`oxyn-updater.key.pub`, one line of Base64) into
    `plugins.updater.pubkey` and commit it through a pull request.
-2. Send both secrets to GitHub from the file and from a prompt, never through
-   the clipboard, a chat or a command argument:
+2. Send both secrets to the `release` environment from the file and from a
+   prompt, never through the clipboard, a chat or a command argument:
 
    ```sh
-   gh secret set TAURI_SIGNING_PRIVATE_KEY --repo so-keyldzn/oxyn < /absolute/path/outside-the-repo/oxyn-updater.key
-   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo so-keyldzn/oxyn
+   gh secret set TAURI_SIGNING_PRIVATE_KEY --env release --repo so-keyldzn/oxyn < /absolute/path/outside-the-repo/oxyn-updater.key
+   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --env release --repo so-keyldzn/oxyn
    ```
 
 3. Copy the private key file to **two offline backups** on different media,
@@ -148,23 +201,29 @@ the secrets, and audit the published releases' `.sig` against the archives.
 2. Set the release version consistently in the workspace and Tauri config,
    commit the intended source, then push the matching version tag. A tag push
    triggers delivery automatically; ordinary branch pushes do not create releases.
-3. Alternatively, select **Actions → livraison → Run workflow** and enter
-   that existing version tag, or run:
+3. Alternatively, select **Actions → livraison → Run workflow**, choose the
+   version tag itself under **Use workflow from**, and enter that same tag,
+   or run:
 
    ```sh
-   gh workflow run livraison.yml --repo so-keyldzn/oxyn -f tag=v0.0.1
+   gh workflow run livraison.yml --repo so-keyldzn/oxyn --ref v0.0.1 -f tag=v0.0.1
    ```
 
-   The manual workflow must first exist on the default branch. The example
-   version must be replaced when the configured version changes.
+   The manual workflow must first exist on the default branch. Started from
+   a branch, the run is refused by the `release` environment's tag rule. The
+   example version must be replaced when the configured version changes.
 4. Wait for both package jobs, inspect their checks and download/install the
    packages from the draft.
 5. Wait for the `manifeste` job. It runs once both package jobs are green,
-   with no secret but `GH_TOKEN`: it downloads the draft's `.sig` files,
-   requires exactly one `*_aarch64.app.tar.gz` and one `*.AppImage`, each
-   with its signature, and uploads `latest.json` with the keys
-   `darwin-aarch64` and `linux-x86_64-appimage`. It is the only job that
-   uploads `latest.json`, and it refuses a draft that already holds one.
+   with no secret but `GH_TOKEN`: it requires exactly one
+   `*_aarch64.app.tar.gz` and one `*.AppImage` in the draft, each with its
+   signature, downloads them, verifies each archive against its signature
+   and the committed public key, checks the signed version, and uploads
+   `latest.json` with the keys `darwin-aarch64` and `linux-x86_64-appimage`.
+   It is the only job that uploads `latest.json`, and it refuses a draft that
+   already holds one. A signature that does not verify means a key pair that
+   does not match, or an archive and a signature from two runs: delete both
+   from the draft and rerun the package job of that platform.
 6. **Publish the draft only when both package jobs and `manifeste` are green
    and `latest.json` is attached.** Publishing is what offers the update:
    `https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json`
@@ -186,7 +245,10 @@ GitHub build, ticket verification and installation on a clean Mac are the
 end-to-end evidence. Sources and checked tool contracts are recorded in
 [RESEARCH-NOTES](RESEARCH-NOTES.md#apple-release-contracts--checked-on-2026-10-01).
 
-The same tests cover `manifeste` and `cle`; they do not prove that an
+The same tests cover `manifeste`, `cle` and `signer`, with a simulated
+minisign and Tauri CLI; the real pair — `tauri signer sign` 2.12.1, then
+`minisign -V` 0.12 accepting the result and refusing a modified archive or
+another key — was checked by hand on 2026-10-02. They do not prove that an
 installed Oxyn accepts the result. That takes two steps:
 
 1. **Local rehearsal**, with the `update-rehearsal` cargo feature, never
