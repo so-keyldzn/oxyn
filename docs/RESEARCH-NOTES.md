@@ -231,7 +231,8 @@ Source: [Apple API key help](https://developer.apple.com/help/app-store-connect/
 The workspace now requires Wasmtime **48.0.5**, with its matching Cranelift
 0.135.5 family in `Cargo.lock`. The crates.io sparse index lists 48.0.5 as
 not yanked, with Rust 1.95.0 still its minimum; 49.0.2 requires Rust 1.96.0,
-above the pinned toolchain.
+above the workspace's `rust-version` floor of 1.95 (the pinned 1.98.1
+toolchain would build it, but the declared minimum would become false).
 
 - 48.0.3 fixed the fuel accounting advisories RUSTSEC-2026-0315 and
   RUSTSEC-2026-0316 that blocked `make qualite` on 48.0.1.

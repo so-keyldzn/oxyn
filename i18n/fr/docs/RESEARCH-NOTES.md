@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="c5b8696bedb3" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="dda201522be8" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -235,7 +235,9 @@ Source : [aide Apple sur les clés API](https://developer.apple.com/help/app-sto
 Le workspace exige désormais Wasmtime **48.0.5**, avec la famille Cranelift
 0.135.5 correspondante dans `Cargo.lock`. L'index sparse de crates.io indique
 que 48.0.5 n'est pas retirée et conserve Rust 1.95.0 comme minimum ; 49.0.2
-exige Rust 1.96.0, au-dessus de la chaîne d'outils épinglée.
+exige Rust 1.96.0, au-dessus du plancher `rust-version` 1.95 du workspace (la
+chaîne d'outils épinglée 1.98.1 la compilerait, mais le minimum déclaré
+deviendrait faux).
 
 - 48.0.3 a résolu les avis de comptabilité du carburant RUSTSEC-2026-0315 et
   RUSTSEC-2026-0316 qui bloquaient `make qualite` sur 48.0.1.
