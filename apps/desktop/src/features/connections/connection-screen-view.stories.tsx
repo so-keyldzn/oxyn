@@ -478,7 +478,21 @@ export const ProductionApproval: Story = {
 export const SavedButNotOpened: Story = {
   args: {
     driver: postgresDriver,
-    savedAs: "billing",
+    saved: {
+      id: "018f0000-0000-7000-8000-0000000b1111",
+      name: "billing",
+      driver: "postgres",
+      environment: "production",
+      readOnly: false,
+      privacyTier: "metadata",
+      values: {
+        host: "db.internal",
+        port: "5432",
+        database: "billing",
+        user: "app",
+      },
+      hasStoredSecrets: true,
+    },
     formError: {
       message:
         'opening a session on "billing": TLS mode disable is accepted only on a connection marked Local',

@@ -34,7 +34,11 @@ import { actionSources } from "@/lib/actions/context"
 import type { ConnectionMenuActions } from "@/lib/actions/targets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
-import type { ConnectionChange, ConnectionSummary } from "@/lib/ipc/settings"
+import type {
+  ConnectionChange,
+  ConnectionDetails,
+  ConnectionSummary,
+} from "@/lib/ipc/settings"
 import type {
   ConnectResponse,
   ConnectionDraft,
@@ -160,7 +164,9 @@ export function ConnectionScreen() {
    * updates it — through the same edit, policy and secret handling as the
    * settings — then reopens it, rather than saving one more.
    */
-  const [formSaved, setFormSaved] = React.useState<SavedConnection | null>(null)
+  const [formSaved, setFormSaved] = React.useState<ConnectionDetails | null>(
+    null
+  )
   const [openFailure, setOpenFailure] = React.useState<BackendFailure | null>(
     null
   )
@@ -181,11 +187,26 @@ export function ConnectionScreen() {
     setOpenFailure(null)
   }
 
-  const adoptSaved = (response: ConnectResponse) => {
+  /**
+   * What the form compares its next attempt with: the parameters as stored,
+   * and whether secrets are. Unreadable, nothing counts as stored — every
+   * secret is then typed again, never sent on from the earlier attempt.
+   */
+  const savedDetails = async (
+    connection: SavedConnection
+  ): Promise<ConnectionDetails> => {
+    try {
+      return await settingsBackend.connectionDetails(connection.id)
+    } catch {
+      return { ...connection, values: {}, hasStoredSecrets: false }
+    }
+  }
+
+  const adoptSaved = async (response: ConnectResponse) => {
     if (response.type !== "saved") return
-    setFormSaved(response.connection)
     setOpenFailure({ message: response.message, retryable: response.retryable })
     void queryClient.invalidateQueries({ queryKey: ["connections"] })
+    setFormSaved(await savedDetails(response.connection))
   }
 
   /** Runs a cancellable opening; resolves to `null` when the user cancelled. */
@@ -234,8 +255,8 @@ export function ConnectionScreen() {
     change: ConnectionChange | null
   ): Promise<ConnectResponse | null> => {
     if (change?.type !== "saved") return null
-    setFormSaved(change.connection)
     void queryClient.invalidateQueries({ queryKey: ["connections"] })
+    setFormSaved(await savedDetails(change.connection))
     if (change.secretsError !== null)
       toast.add({
         title: "Secrets not saved",
@@ -294,7 +315,7 @@ export function ConnectionScreen() {
         return held.late
       })
       // Kept even when the opening was cancelled: the connection is saved.
-      if (held.late) adoptSaved(held.late)
+      if (held.late) await adoptSaved(held.late)
       if (response === null) discardLate(held.late)
       return response
     },
@@ -342,19 +363,18 @@ export function ConnectionScreen() {
     }: {
       review: PendingConnectionChange
       approved: boolean
-    }) =>
-      review.kind === "update"
-        ? reopenEdited(
-            await settingsBackend.decideConnectionChange(
-              review.command,
-              approved
-            )
-          )
-        : backend.decideConnection(review.command, approved),
+    }) => {
+      if (review.kind === "update")
+        return reopenEdited(
+          await settingsBackend.decideConnectionChange(review.command, approved)
+        )
+      const response = await backend.decideConnection(review.command, approved)
+      if (response) await adoptSaved(response)
+      return response
+    },
     onSuccess: (response) => {
       setApproval(null)
       if (response === null) return
-      adoptSaved(response)
       const open = asOpen(response)
       if (open) enter(open)
     },
@@ -498,7 +518,7 @@ export function ConnectionScreen() {
           ? { message: refusal, retryable: false }
           : (failureOf(connect.error ?? decide.error) ?? openFailure)
       }
-      savedAs={formSaved?.name ?? null}
+      saved={formSaved}
       onSubmit={(draft) => {
         if (connect.isPending || test.isPending) return
         if (refuseBeyondLimit()) return

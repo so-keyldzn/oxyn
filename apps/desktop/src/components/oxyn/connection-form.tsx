@@ -184,6 +184,11 @@ export function missingFields(
  * With `prefill`, it creates a copy: the parameters are there, the secrets
  * are typed, and nothing is saved until the user connects.
  *
+ * With `saved`, a new connection was saved and could not open: connecting
+ * again edits it, with `existing`'s secret semantics. The secrets typed for
+ * the first attempt are cleared from the form; left empty, the stored ones
+ * are kept — until a parameter changes, and they are asked again.
+ *
  * While `submitting`, the only live action is `onAbort` (Esc), which cancels
  * the opening on the server side (docs/UX-SPEC.md « Cancellation »). The submit
  * stays disabled while a required field is empty, and says which.
@@ -208,7 +213,7 @@ export function ConnectionForm({
   testing = false,
   aborting = false,
   error,
-  savedAs = null,
+  saved = null,
   onSubmit,
   onTest,
   onBrowse,
@@ -230,10 +235,10 @@ export function ConnectionForm({
   aborting?: boolean
   error?: BackendFailure | null
   /**
-   * A new connection already saved under this name, whose opening failed:
-   * `error` is then the opening's, and the save is not undone.
+   * A new connection already saved, whose opening failed: `error` is then
+   * the opening's, and the save is not undone. Ignored with `existing`.
    */
-  savedAs?: string | null
+  saved?: ConnectionDetails | null
   onSubmit: (draft: ConnectionDraft) => void
   onTest?: (draft: ConnectionDraft) => void
   onBrowse?: (field: FormField) => Promise<string | null>
@@ -249,6 +254,9 @@ export function ConnectionForm({
   dropped?: Readonly<Record<string, string>>
 }) {
   const editing = existing !== undefined
+  // What the secrets were stored for: a change of parameter forgets them.
+  const stored = existing ?? saved ?? undefined
+  const savedAs = editing ? null : (saved?.name ?? null)
   const busy = submitting || testing
   const form = useForm({
     defaultValues: initialValues(driver, existing, prefill, dropped),
@@ -262,8 +270,15 @@ export function ConnectionForm({
   React.useEffect(() => {
     onValuesChange?.(values)
   }, [values, onValuesChange])
-  const missing = missingFields(driver, values, existing)
-  const moved = settingsChanged(driver, values, existing)
+  // A secret typed before the save would otherwise be sent again with the
+  // next attempt, to whatever destination it then names (I-03).
+  React.useEffect(() => {
+    if (!saved) return
+    for (const field of driver.fields)
+      if (field.secret) form.setFieldValue(`values.${field.key}`, "")
+  }, [saved, driver, form])
+  const missing = missingFields(driver, values, stored)
+  const moved = settingsChanged(driver, values, stored)
   const malformed = driver.fields.some(
     (field) =>
       field.kind.type === "number" &&
@@ -362,18 +377,12 @@ export function ConnectionForm({
                     onChange={(next) => field.handleChange(next)}
                     onBlur={field.handleBlur}
                     storedSecret={
-                      editing &&
-                      spec.secret &&
-                      existing.hasStoredSecrets &&
-                      !moved
+                      spec.secret && stored?.hasStoredSecrets === true && !moved
                     }
                     forgottenSecret={
-                      editing &&
-                      spec.secret &&
-                      existing.hasStoredSecrets &&
-                      moved
+                      spec.secret && stored?.hasStoredSecrets === true && moved
                     }
-                    editing={editing}
+                    editing={stored !== undefined}
                     onBrowse={onBrowse}
                   />
                 )}

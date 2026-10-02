@@ -43,7 +43,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import type { ConnectionSummary } from "@/lib/ipc/settings"
+import type { ConnectionDetails, ConnectionSummary } from "@/lib/ipc/settings"
 import type {
   ConnectionDraft,
   ConnectionTest,
@@ -93,10 +93,10 @@ export interface ConnectionScreenViewProps {
   submitting: boolean
   formError?: BackendFailure | null
   /**
-   * The name the form's connection was saved under when its opening failed:
-   * connecting again updates that connection rather than saving another.
+   * The form's connection, saved when its opening failed: connecting again
+   * updates it rather than saving another, as an edit of it would.
    */
-  savedAs?: string | null
+  saved?: ConnectionDetails | null
   onSubmit: (draft: ConnectionDraft) => void
   onBrowse?: (field: FormField) => Promise<string | null>
   /**
@@ -119,7 +119,7 @@ export interface ConnectionScreenViewProps {
   cancelling: boolean
   onCancelOpening: () => void
 
-  /** A creation, or the update of the connection saved as `savedAs`. */
+  /** A creation, or the update of the connection `saved`. */
   approval: PendingConnectionChange | null
   deciding: boolean
   onDecide: (approved: boolean) => void
@@ -168,7 +168,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     connectionMenu,
     submitting,
     formError,
-    savedAs = null,
+    saved = null,
     onSubmit,
     onBrowse,
     prefill,
@@ -392,7 +392,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                     testing={testing}
                     aborting={cancelling}
                     error={formError}
-                    savedAs={savedAs}
+                    saved={saved}
                     onSubmit={onSubmit}
                     onTest={onTest}
                     onBrowse={onBrowse}
