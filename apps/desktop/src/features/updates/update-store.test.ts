@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { UpdateSnapshot } from "@/lib/ipc/updates"
 
@@ -28,7 +28,18 @@ async function freshStore() {
   return import("./update-store")
 }
 
+// The store's first import transforms its whole graph — the toast, the IPC
+// client, zod — and later imports only evaluate it again. Inside the first
+// test, that cold start took 5.6 s of its 5 s on a loaded CI runner (run
+// 37069643591) against 2 ms for the second test: paid here, it is part of no
+// test's budget, and the first test times only what it proves.
+const COLD_IMPORT_BUDGET_MS = 60_000
+
 describe("the first snapshot of a window (ADR-0051)", () => {
+  beforeAll(async () => {
+    await import("./update-store")
+  }, COLD_IMPORT_BUDGET_MS)
+
   beforeEach(() => {
     backend.push = null
     backend.answer = null
