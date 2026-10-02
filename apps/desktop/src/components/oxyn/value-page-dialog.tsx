@@ -1,6 +1,8 @@
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, Copy01Icon } from "@hugeicons/core-free-icons"
+import * as React from "react"
 
+import { NullTextContext } from "@/components/oxyn/cell-value"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -60,6 +62,7 @@ export function ValuePageDialog({
   onClose: () => void
 }) {
   const page = state.status === "page" ? state.page : null
+  const nullText = React.useContext(NullTextContext)
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
@@ -100,7 +103,7 @@ export function ValuePageDialog({
             </Alert>
           ) : page?.isNull ? (
             <p className="p-3 font-mono text-sm text-null italic" data-null>
-              ∅ NULL
+              {nullText}
             </p>
           ) : page?.totalBytes === 0 ? (
             <p className="p-3 text-sm text-muted-foreground">

@@ -14,7 +14,16 @@ vi.mock("@/lib/ipc/windows", () => ({
   windows: { openInNewWindow: vi.fn(), reportConsoles: vi.fn() },
 }))
 vi.mock("@/lib/ipc/consoles", () => ({
-  consoles: { close: () => Promise.resolve() },
+  consoles: {
+    open: () =>
+      Promise.resolve({
+        session: "console-2",
+        capabilities: [],
+        readOnly: false,
+        transactionState: "idle",
+      }),
+    close: () => Promise.resolve(),
+  },
 }))
 
 vi.mock("@/lib/ipc/client", () => ({
@@ -137,5 +146,42 @@ describe("closing a modified console", () => {
     expect(handle.close).not.toHaveBeenCalled()
     expect(hook.result.current.entries).toHaveLength(1)
     expect(hook.result.current.closing).toBe(request)
+  })
+})
+
+describe("closing every console of a closing window", () => {
+  it("cancels the console closing on Cancel and starts no other", async () => {
+    const { hook, key, handle } = await openConsoles()
+    await act(() => hook.result.current.openConsole())
+    expect(hook.result.current.entries).toHaveLength(2)
+    const second = hook.result.current.entries.find(
+      (entry) => entry.key !== key
+    )
+    const other = modifiedConsole()
+    hook.result.current.register(second?.key ?? "", other.handle)
+    let finish = (_closed: boolean) => {}
+    handle.close.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve
+        })
+    )
+
+    const request = new AbortController()
+    let pending = Promise.resolve()
+    act(() => {
+      pending = hook.result.current.closeAll(request.signal)
+    })
+    expect(handle.close).toHaveBeenCalledWith(true)
+    request.abort()
+    expect(handle.cancelWrite).toHaveBeenCalledOnce()
+    // The store answers that the cancellation came in time.
+    await act(async () => {
+      finish(false)
+      await pending
+    })
+
+    expect(other.handle.close).not.toHaveBeenCalled()
+    expect(hook.result.current.entries).toHaveLength(2)
   })
 })

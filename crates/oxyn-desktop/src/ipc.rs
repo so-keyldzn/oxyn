@@ -746,6 +746,7 @@ mod tests {
     }
 }
 
+pub mod about;
 pub mod ai;
 pub mod consoles;
 pub mod file_drops;

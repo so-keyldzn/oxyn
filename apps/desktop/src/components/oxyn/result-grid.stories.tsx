@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { invoiceColumns, syntheticPages } from "./fixtures"
+import { NullTextContext } from "./cell-value"
 import { centerOf, drag } from "./pointer-drag-fixtures"
 import { ResultGrid } from "./result-grid"
 import type { FetchPage } from "./result-grid"
@@ -362,6 +363,110 @@ export const NullIsNotTheWordNull: Story = {
     for (const element of literal) {
       await expect(element).not.toHaveAttribute("data-null")
     }
+  },
+}
+
+const missingColumns: Array<ResultColumn> = [
+  { name: "missing_value", dataType: "Null", nullable: true },
+  { name: "note", dataType: "Utf8", nullable: true },
+]
+
+/**
+ * The marker saved in Settings → Formats draws the absent values; a text equal
+ * to that marker stays text, without the absent-value token.
+ */
+export const SavedNullMarker: Story = {
+  decorators: [
+    (Story) => (
+      <NullTextContext value="<MISSING>">
+        <Story />
+      </NullTextContext>
+    ),
+  ],
+  args: {
+    resultKey: "story-null-marker",
+    columns: missingColumns,
+    rowCount: 1,
+    fetchPage: pagesOf(
+      1,
+      (_, column) => (column === 0 ? null : "<MISSING>"),
+      2
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    await waitFor(() =>
+      expect(canvasElement.querySelector("[data-null]")).not.toBeNull()
+    )
+    const absent = canvasElement.querySelectorAll("[data-null]")
+    await expect(absent).toHaveLength(1)
+    await expect(absent[0]).toHaveTextContent(/^<MISSING>$/)
+  },
+}
+
+const LONG_MARKER = "<value not provided by the server>"
+
+/**
+ * A NULL-only column under a short header is as wide as the saved marker, so
+ * the marker reads whole; were it clipped, it would carry its own tooltip.
+ */
+export const LongNullMarker: Story = {
+  decorators: [
+    (Story) => (
+      <NullTextContext value={LONG_MARKER}>
+        <Story />
+      </NullTextContext>
+    ),
+  ],
+  args: {
+    resultKey: "story-long-null-marker",
+    columns: [{ name: "x", dataType: "Null", nullable: true }],
+    rowCount: 3,
+    fetchPage: pagesOf(3, () => null, 1),
+  },
+  play: async ({ canvasElement }) => {
+    await waitFor(() =>
+      expect(canvasElement.querySelectorAll("[data-null]")).toHaveLength(3)
+    )
+    for (const element of canvasElement.querySelectorAll("[data-null]")) {
+      await expect(element).toHaveTextContent(LONG_MARKER)
+      // The estimate counts the font's nominal advance; the width it gives
+      // follows the marker, far past the default one and the « x » header.
+      const fontSize = Number.parseFloat(getComputedStyle(element).fontSize)
+      await expect(element.clientWidth).toBeGreaterThanOrEqual(
+        Math.floor(LONG_MARKER.length * 0.6 * fontSize)
+      )
+      // Wide enough at the nominal advance: no tooltip is owed.
+      await expect(element).not.toHaveAttribute("title")
+    }
+  },
+}
+
+const OVERSIZED_MARKER = "<missing> ".repeat(12).trim()
+
+/**
+ * A marker wider than any automatic width is clipped like a long text: an
+ * ellipsis, and the whole marker in its tooltip.
+ */
+export const OversizedNullMarker: Story = {
+  decorators: [
+    (Story) => (
+      <NullTextContext value={OVERSIZED_MARKER}>
+        <Story />
+      </NullTextContext>
+    ),
+  ],
+  args: {
+    resultKey: "story-oversized-null-marker",
+    columns: [{ name: "x", dataType: "Null", nullable: true }],
+    rowCount: 1,
+    fetchPage: pagesOf(1, () => null, 1),
+  },
+  play: async ({ canvasElement }) => {
+    await waitFor(() =>
+      expect(canvasElement.querySelector("[data-null]")).not.toBeNull()
+    )
+    const absent = canvasElement.querySelector("[data-null]")
+    await expect(absent).toHaveAttribute("title", OVERSIZED_MARKER)
   },
 }
 
