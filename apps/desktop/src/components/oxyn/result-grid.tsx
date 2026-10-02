@@ -4,7 +4,12 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, Clock01Icon } from "@hugeicons/core-free-icons"
 
-import { CellValue, cellText } from "@/components/oxyn/cell-value"
+import {
+  CellValue,
+  DEFAULT_NULL_TEXT,
+  NullTextContext,
+  cellText,
+} from "@/components/oxyn/cell-value"
 import {
   MAX_COPY_ROWS,
   copyText,
@@ -174,20 +179,22 @@ export function isNumericType(dataType: string) {
 export function estimateWidth(
   column: ResultColumn,
   sample: ReadonlyArray<Cell | undefined>,
-  charWidth = CHAR_WIDTH
+  charWidth = CHAR_WIDTH,
+  nullText = DEFAULT_NULL_TEXT
 ) {
   let chars = Math.max(column.name.length, column.dataType.length * 0.85)
   for (const cell of sample) {
     if (cell === undefined) continue
     const length =
       cell === null
-        ? 6
+        ? nullText.length
         : typeof cell === "object" && "text" in cell
           ? cell.text.length + 8
           : cellText(cell).length
     chars = Math.max(chars, Math.min(length, 80))
   }
-  return Math.round(
+  // Up, never down: a width rounded under the text clips its last pixel.
+  return Math.ceil(
     Math.max(
       MIN_COLUMN_WIDTH,
       Math.min(MAX_AUTO_WIDTH, chars * charWidth + CELL_PADDING)
@@ -367,6 +374,7 @@ export const ResultGrid = React.memo(function ResultGrid({
   const [resized, setResized] = React.useState<Record<number, number>>({})
   const [estimated, setEstimated] = React.useState<{
     charWidth: number
+    nullText: string
     widths: Array<number>
   } | null>(null)
   const [widthsFor, setWidthsFor] = React.useState(resultKey)
@@ -380,6 +388,7 @@ export const ResultGrid = React.memo(function ResultGrid({
     setMenuTarget(null)
   }
   const { rowHeight, charWidth } = useGridMetrics(scrollRef)
+  const nullText = React.useContext(NullTextContext)
   const autoWidth = (column: number) => {
     const estimate = estimated?.widths[column]
     if (estimate !== undefined) return estimate
@@ -453,22 +462,26 @@ export const ResultGrid = React.memo(function ResultGrid({
   }
 
   // The first page that arrives gives each column its width; it is measured
-  // again when the reading density changes the size the cells are drawn at.
+  // again when the reading density changes the size the cells are drawn at, or
+  // when Settings change the marker a NULL-only column is as wide as.
   const firstRows = asPage(pageQueries[0]?.data)?.rows
   React.useEffect(() => {
-    if (estimated?.charWidth === charWidth) return
+    if (estimated?.charWidth === charWidth && estimated.nullText === nullText)
+      return
     if (!firstRows || firstRows.length === 0) return
     setEstimated({
       charWidth,
+      nullText,
       widths: columns.map((column, index) =>
         estimateWidth(
           column,
           firstRows.slice(0, 50).map((row) => row[index]),
-          charWidth
+          charWidth,
+          nullText
         )
       ),
     })
-  }, [firstRows, estimated, columns, charWidth])
+  }, [firstRows, estimated, columns, charWidth, nullText])
 
   const activeCell = active ? rowAt(active.row)?.[active.column] : undefined
   React.useEffect(() => {
@@ -863,7 +876,13 @@ export const ResultGrid = React.memo(function ResultGrid({
                   const numeric = described
                     ? isNumericType(described.dataType)
                     : false
-                  const text = typeof cell === "string" ? cell : null
+                  // A clipped marker is disclosed like a clipped text.
+                  const text =
+                    typeof cell === "string"
+                      ? cell
+                      : row && (cell ?? null) === null
+                        ? nullText
+                        : null
                   return (
                     <div
                       key={virtual.key}
