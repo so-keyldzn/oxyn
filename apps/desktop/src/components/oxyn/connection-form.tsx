@@ -208,6 +208,7 @@ export function ConnectionForm({
   testing = false,
   aborting = false,
   error,
+  savedAs = null,
   onSubmit,
   onTest,
   onBrowse,
@@ -228,6 +229,11 @@ export function ConnectionForm({
   /** The cancellation was sent and the backend has not answered yet. */
   aborting?: boolean
   error?: BackendFailure | null
+  /**
+   * A new connection already saved under this name, whose opening failed:
+   * `error` is then the opening's, and the save is not undone.
+   */
+  savedAs?: string | null
   onSubmit: (draft: ConnectionDraft) => void
   onTest?: (draft: ConnectionDraft) => void
   onBrowse?: (field: FormField) => Promise<string | null>
@@ -412,7 +418,21 @@ export function ConnectionForm({
         {shownError ? (
           <div ref={errorRef}>
             <BackendErrorAlert
-              title={editing ? "Connection not saved" : "Connection failed"}
+              title={
+                editing
+                  ? "Connection not saved"
+                  : savedAs !== null
+                    ? "Saved, but not connected"
+                    : "Connection failed"
+              }
+              context={
+                savedAs !== null ? (
+                  <>
+                    <bdi>{savedAs}</bdi> is saved in this workspace. Connecting
+                    again updates it: no second connection is saved.
+                  </>
+                ) : undefined
+              }
               error={shownError}
               onRetry={() => void form.handleSubmit()}
               retryLabel={`${verb} again`}

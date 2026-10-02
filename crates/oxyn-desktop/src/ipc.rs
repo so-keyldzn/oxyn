@@ -275,6 +275,18 @@ pub enum ConnectResponse {
         reason: String,
         preview: Option<ApprovalPreview>,
     },
+    /// The connection was saved, its session did not open.
+    ///
+    /// An answer rather than an error: the form keeps `connection`, and
+    /// connecting again edits and reopens it instead of saving a second
+    /// connection. The message is the opening's, secret-free like every
+    /// `OxynError` (I-03).
+    #[serde(rename_all = "camelCase")]
+    Saved {
+        connection: SavedConnection,
+        message: String,
+        retryable: bool,
+    },
 }
 
 /// The answer to a connection test.

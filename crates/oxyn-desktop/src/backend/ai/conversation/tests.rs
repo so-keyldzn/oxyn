@@ -50,6 +50,7 @@ fn open(
             .expect("connects")
         {
             ConnectResponse::Open(open) => open,
+            ConnectResponse::Saved { message, .. } => panic!("not opened: {message}"),
             ConnectResponse::Approval { command, .. } => {
                 match backend
                     .decide_connection(command.parse().expect("minted id"), true)
