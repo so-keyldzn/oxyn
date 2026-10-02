@@ -17,9 +17,8 @@
 #
 # Both rules are applied and tested by `script/livraison`.
 #
-# The packages are NOT signed: on first launch macOS asks for a right click,
-# then "Open". Signing and notarization need an Apple Developer account and
-# repository secrets that do not exist yet.
+# macOS delivery requires Developer ID signing and Apple notarization; missing
+# credentials fail closed. Setup and manual launch: docs/RELEASE.md.
 #
 # Versions of the actions and tools: docs/RESEARCH-NOTES.md, § CI and GitHub
 # delivery.
@@ -28,11 +27,17 @@ name: livraison
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build (for example v0.0.1)
+        required: true
+        type: string
 
 # Two pushes of the same tag must not write to the same release at the same
 # time.
 concurrency:
-  group: livraison-${{ github.ref }}
+  group: livraison-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -41,6 +46,11 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   brouillon:
@@ -50,13 +60,14 @@ jobs:
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           # The job does not use git: `gh` gets its token through GH_TOKEN.
           persist-credentials: false
 
       - name: Check the tag and create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 script/livraison brouillon "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+        run: python3 script/livraison brouillon "$RELEASE_TAG" "$GITHUB_REPOSITORY"
 
   paquets:
     needs: brouillon
@@ -79,6 +90,21 @@ jobs:
       - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+
+      - name: Check Apple release credentials before installing dependencies
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 script/apple-release check
 
       - name: Install Tauri's system libraries
         if: runner.os == 'Linux'
@@ -108,9 +134,44 @@ jobs:
           cache: true
           cache_dependency_path: apps/desktop/pnpm-lock.yaml
 
-      - name: Build the application in release mode
+      - name: Install cargo-about for required third-party notices
+        # Same version/checksums as qualite.yml (RESEARCH-NOTES § Licenses).
+        run: |
+          case "$RUNNER_OS" in
+            macOS) target=aarch64-apple-darwin
+                   checksum=ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e ;;
+            Linux) target=x86_64-unknown-linux-musl
+                   checksum=9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af ;;
+          esac
+          archive="cargo-about-0.9.2-$target.tar.gz"
+          curl -LsSf -o "$RUNNER_TEMP/$archive" "https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/$archive"
+          echo "$checksum  $RUNNER_TEMP/$archive" | shasum -a 256 -c -
+          tar xzf "$RUNNER_TEMP/$archive" --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-about-0.9.2-$target/cargo-about"
+
+      - name: Build Linux packages in release mode
+        if: runner.os == 'Linux'
         # The same target as locally: `make desktop PROFIL=release`.
         run: make desktop PROFIL=release
+
+      - name: Build, sign and notarize macOS packages
+        if: runner.os == 'macOS'
+        # Tauri imports the certificate into its temporary keychain. Pass
+        # credentials through the environment, never interpolate them into shell.
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 script/apple-release build
+
+      - name: Verify macOS signatures and stapled notarization before upload
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 script/apple-release verify
 
       - name: Upload the packages to the draft
         env:
@@ -127,4 +188,4 @@ jobs:
             find . -path ./node_modules -prune -o -type d -name bundle -print
             exit 1
           fi
-          python3 script/livraison deposer "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "${fichiers[@]}"
+          python3 script/livraison deposer "$RELEASE_TAG" "$GITHUB_REPOSITORY" "${fichiers[@]}"

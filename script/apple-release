@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Fail closed before a signed macOS build and before its release upload.
+
+Tauri owns certificate import, signing and notarization. The API key exists
+only in a private temporary file during the build; diagnostics omit values.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+REQUIRED = (
+    "APPLE_CERTIFICATE",
+    "APPLE_CERTIFICATE_PASSWORD",
+    "APPLE_SIGNING_IDENTITY",
+    "APPLE_API_KEY",
+    "APPLE_API_ISSUER",
+    "APPLE_API_PRIVATE_KEY",
+    "APPLE_TEAM_ID",
+)
+
+
+class Refusal(Exception):
+    """A package must not reach a release."""
+
+
+def team_id(environment: dict[str, str]) -> str:
+    team = environment.get("APPLE_TEAM_ID", "")
+    if not re.fullmatch(r"[A-Z0-9]{10}", team):
+        raise Refusal("APPLE_TEAM_ID must contain the ten-character Apple team ID")
+    return team
+
+
+def check(environment: dict[str, str]) -> None:
+    missing = [name for name in REQUIRED if not environment.get(name, "").strip()]
+    if missing:
+        raise Refusal("missing GitHub Actions secrets: " + ", ".join(missing))
+    team = team_id(environment)
+    identity = environment["APPLE_SIGNING_IDENTITY"]
+    if not identity.startswith("Developer ID Application: ") or not identity.endswith(f" ({team})"):
+        raise Refusal("APPLE_SIGNING_IDENTITY must be a Developer ID Application identity for APPLE_TEAM_ID")
+
+
+def run(*command: str) -> str:
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode:
+        # Tool output is deliberately not relayed: credentials must never be
+        # included in a failure message, including a misconfigured identity.
+        raise Refusal(f"{command[0]} {command[1]} failed; no macOS package may be uploaded")
+    return result.stdout + result.stderr
+
+
+def build(environment: dict[str, str]) -> None:
+    check(environment)
+    with tempfile.TemporaryDirectory(prefix="oxyn-apple-", dir=environment.get("RUNNER_TEMP")) as directory:
+        key = Path(directory) / "notarization.p8"
+        with open(key, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
+            output.write(environment["APPLE_API_PRIVATE_KEY"])
+        child_environment = environment.copy()
+        child_environment.pop("APPLE_API_PRIVATE_KEY")
+        # An inherited Apple ID must not override the dedicated API identity.
+        child_environment.pop("APPLE_ID", None)
+        child_environment.pop("APPLE_PASSWORD", None)
+        child_environment["APPLE_API_KEY_PATH"] = str(key)
+        result = subprocess.run(
+            ["make", "desktop", "PROFIL=release"], cwd=ROOT, env=child_environment, check=False
+        )
+        if result.returncode:
+            raise Refusal("signed macOS build failed; no package may be uploaded")
+
+
+def verify(bundle: Path, team: str) -> None:
+    apps = sorted((bundle / "macos").glob("*.app"))
+    dmgs = sorted((bundle / "dmg").glob("*.dmg"))
+    if len(apps) != 1 or len(dmgs) != 1:
+        raise Refusal("expected exactly one .app and one .dmg in target/release/bundle")
+    for package in [*apps, *dmgs]:
+        run("codesign", "--verify", "--deep", "--strict", str(package))
+        details = run("codesign", "--display", "--verbose=4", str(package))
+        lines = details.splitlines()
+        if f"TeamIdentifier={team}" not in lines or not any(
+            line.startswith("Authority=Developer ID Application: ") for line in lines
+        ):
+            raise Refusal("package is not signed with Developer ID Application for the configured team")
+        if package.suffix == ".app":
+            if not any(line.startswith("CodeDirectory ") and "runtime" in line for line in lines):
+                raise Refusal("application signature does not enable the hardened runtime")
+            # Tauri notarizes/staples the app before putting it in the signed
+            # DMG. The DMG itself does not receive a separate notarization.
+            run("xcrun", "stapler", "validate", str(package))
+            run("spctl", "--assess", "--type", "execute", str(package))
+
+
+def main(args: list[str]) -> int:
+    try:
+        if args == ["check"]:
+            check(dict(os.environ))
+        elif args == ["build"]:
+            build(dict(os.environ))
+        elif args == ["verify"]:
+            verify(ROOT / "target/release/bundle", team_id(dict(os.environ)))
+        else:
+            print("usage: python3 script/apple-release check|build|verify", file=sys.stderr)
+            return 2
+    except (Refusal, OSError) as problem:
+        message = str(problem) if isinstance(problem, Refusal) else "required Apple verification tool unavailable"
+        print(f"apple-release: {message}", file=sys.stderr)
+        return 1
+    print("Apple release check passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

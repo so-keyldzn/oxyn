@@ -22,6 +22,7 @@ They are written in English, and each has a French mirror in
 | [MCP.md](MCP.md) | the declared MCP servers, and those that are ruled out |
 | [RESEARCH-NOTES.md](RESEARCH-NOTES.md) | every external version and value, with its source and its date |
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | the order of the phases and their exit gates — the only document of the remaining work |
+| [RELEASE.md](RELEASE.md) | GitHub package builds, Apple signing setup and draft publication |
 
 ## Architecture decisions (ADRs)
 

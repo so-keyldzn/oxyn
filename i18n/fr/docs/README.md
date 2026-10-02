@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="88d5e26c001b" -->
+<!-- oxyn-translation source="docs/README.md" sha256="e282ba6b7df9" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -26,6 +26,7 @@ Ils sont écrits en anglais, et chacun a son miroir français dans
 | [MCP.md](MCP.md) | les serveurs MCP déclarés, et ceux qui sont écartés |
 | [RESEARCH-NOTES.md](RESEARCH-NOTES.md) | toute version et valeur externe, avec sa source et sa date |
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | l'ordre des phases et leurs portes de sortie — le seul document du reste à faire |
+| [RELEASE.md](RELEASE.md) | builds des paquets GitHub, configuration de la signature Apple et publication des brouillons |
 
 ## Décisions d'architecture (ADR)
 

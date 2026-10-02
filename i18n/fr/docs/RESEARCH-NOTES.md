@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="18f061a5ecd7" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="5d2e95f3656b" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -186,6 +186,31 @@ pas le tag : un tag se déplace, un SHA non.
 | Sur l'événement `pull_request`, `actions/checkout` extrait par défaut le commit de fusion (`GITHUB_SHA`, `refs/pull/<n>/merge`), dont le premier parent est la pointe de la base : `git diff HEAD^1 HEAD` avec `fetch-depth: 2` donne les fichiers de la PR (`script/zones-ci`) | `https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows`, § `pull_request` : `GITHUB_SHA` « Last merge commit on the `GITHUB_REF` branch » ; aucun run si la PR est en conflit | 2026-09-25 |
 | `vitest run --changed [since]` (« Run tests that are affected by the changed files ») et `--passWithNoTests` existent dans vitest 4.1.11 ; `eslint --no-warn-ignored` dans eslint 9.39.5 ; `prettier --ignore-unknown` dans prettier 3.9.6 — options de `script/verif-rapide` | `--help` des binaires installés | 2026-09-25 |
 | Plus aucun job ne démarrait sur les PR #31, #32 et #33 : « The job was not started because recent account payments have failed or your spending limit needs to be increased » (0 étape, aucun runner). La matrice macOS + Linux sur chaque PR, avec 4 jobs macOS par PR, avait épuisé le quota. D'où Linux seul sur les PR (`qualite.yml`) | annotations des jobs du run `36046972599` | 2026-09-24 |
+
+## Contrats de livraison Apple — vérifiés le 2026-10-01
+
+| Fait | Conséquence | Source |
+|---|---|---|
+| Developer ID Application signe les apps distribuées hors du Mac App Store ; la notarisation accepte une clé API d’équipe, un identifiant d’émetteur et un chemin de clé privée | La livraison exige cette identité et les sept secrets documentés ; aucun repli non signé | [Signature macOS Tauri](https://v2.tauri.app/distribute/sign/macos/), [Developer ID Apple](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/) |
+| Le CLI épinglé `2.11.4` correspond au commit Tauri `8909f221d1515955fc843808032bdc5d62209c96` ; `APPLE_CERTIFICATE` et `APPLE_CERTIFICATE_PASSWORD` importent un trousseau temporaire ; le `Drop` normal le supprime ; l'app est notarisée/agrafée et le DMG signé | Utiliser la gestion des identifiants de Tauri sur des runners hébergés jetables ; vérifier le ticket de l'app et les deux signatures après empaquetage | [sign.rs](https://github.com/tauri-apps/tauri/blob/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-bundler/src/bundle/macos/sign.rs), [keychain.rs](https://github.com/tauri-apps/tauri/blob/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-macos-sign/src/keychain.rs), [dmg/mod.rs](https://github.com/tauri-apps/tauri/blob/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-bundler/src/bundle/macos/dmg/mod.rs) |
+| Un secret GitHub absent vaut une chaîne vide ; `gh secret set` accepte stdin ; le lancement manuel exige le workflow sur la branche par défaut | Vérifier explicitement les identifiants, documenter leur transfert direct et exiger un tag de version existant pour un build manuel | [Secrets GitHub](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets), [lancement manuel](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow) |
+| Les deux empreintes des archives `cargo-about` 0.9.2 correspondent toujours aux valeurs de la section Licences ci-dessous | Réutiliser la version et les empreintes vérifiées du workflow qualité dans la livraison ; sinon `--exiger` arrête le build | [release 0.9.2](https://github.com/EmbarkStudios/cargo-about/releases/tag/0.9.2), fichiers `.sha256` macOS ARM et Linux musl récupérés à cette date |
+
+La portée des clés API d’équipe a été revérifiée le 2026-10-02 : elles couvrent
+les apps du compte. La clé dédiée à la notarisation utilise le rôle Developer,
+comme indiqué par Tauri ; sa clé privée n’est téléchargeable qu’une fois.
+Source : [aide Apple sur les clés API](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/).
+
+## Correctif de sécurité Wasmtime — vérifié le 2026-10-02
+
+Le workspace exige désormais Wasmtime **48.0.3**, avec la famille Cranelift
+0.135.3 correspondante dans `Cargo.lock`. L'index sparse de crates.io indique
+que 48.0.3 n'est pas retirée et conserve Rust 1.95.0 comme minimum. Ce correctif
+résout les avis de comptabilité du carburant RUSTSEC-2026-0315 et
+RUSTSEC-2026-0316 qui bloquaient `make qualite` sur 48.0.1 ; aucun avis n'est
+ignoré pour permettre la livraison. Sources :
+[index du registre](https://index.crates.io/wa/sm/wasmtime),
+[notes de version 48.0.3](https://github.com/bytecodealliance/wasmtime/releases/tag/v48.0.3).
 
 ## GPUI
 
