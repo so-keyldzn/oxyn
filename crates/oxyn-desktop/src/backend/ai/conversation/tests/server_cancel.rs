@@ -106,16 +106,25 @@ fn bench() -> Option<Bench> {
     let tag = format!("oxyn_cancel_{}", uuid::Uuid::new_v4().simple());
 
     let parts = parsed.parts();
-    let mut values: BTreeMap<String, String> = [
-        ("host", parts.host.clone()),
-        ("port", parts.port.map(|port| port.to_string())),
-        ("user", parts.user.clone()),
-        ("database", parts.database().map(str::to_owned)),
-        ("application_name", Some(tag.clone())),
-    ]
-    .into_iter()
-    .filter_map(|(key, value)| Some((key.to_owned(), value?)))
-    .collect();
+    // The URL's own options first — `sslmode=require` included —, secrets
+    // already set apart by the parser; only `application_name` is ours.
+    let mut values: BTreeMap<String, String> = parts
+        .options
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    values.extend(
+        [
+            ("host", parts.host.clone()),
+            ("port", parts.port.map(|port| port.to_string())),
+            ("user", parts.user.clone()),
+            ("database", parts.database().map(str::to_owned)),
+            ("application_name", Some(tag.clone())),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| Some((key.to_owned(), value?))),
+    );
+    // Only when the URL names no mode: the Docker image serves no TLS.
     values
         .entry("sslmode".to_owned())
         .or_insert_with(|| "disable".to_owned());
