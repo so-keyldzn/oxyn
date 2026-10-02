@@ -18,10 +18,14 @@ pub enum UpdateState {
     Idle,
     Checking,
     #[serde(rename_all = "camelCase")]
-    UpToDate { checked_at: String },
+    UpToDate {
+        checked_at: String,
+    },
     /// Found, not downloaded: automatic updates are off, or the download was
     /// cancelled.
-    Available { version: String },
+    Available {
+        version: String,
+    },
     /// `total` is what the server announced, when it did.
     Downloading {
         version: String,
@@ -55,7 +59,9 @@ pub enum UpdateState {
         version: Option<String>,
     },
     /// No update can happen in this installation, or the user turned them off.
-    Disabled { reason: DisabledReason },
+    Disabled {
+        reason: DisabledReason,
+    },
 }
 
 /// The family of an update failure.

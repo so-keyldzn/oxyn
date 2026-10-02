@@ -134,6 +134,9 @@ pub async fn export_result(
     let destination = chosen
         .into_path()
         .map_err(|_| IpcError::invalid("The chosen destination is not a local file"))?;
+    // Counted for `Restart now`, which names what it would stop (ADR-0051).
+    let _exporting =
+        tauri::Manager::state::<crate::updates::Updates>(&webview).export_in_progress();
     run_owned(
         &backend,
         window,

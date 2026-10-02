@@ -282,4 +282,5 @@ pub mod recovery;
 pub mod results;
 pub mod settings;
 mod subscriptions;
+pub mod updates;
 pub mod windows;
