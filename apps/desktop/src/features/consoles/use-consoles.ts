@@ -378,11 +378,20 @@ export function useConsoles({
    * confirmed: the window's dialog was the decision, so none asks again.
    * Unsaved text is discarded; a running statement is cancelled as `⌘W`
    * would, and a write whose outcome turns unknown stays flagged, never
-   * replayed (I-13).
+   * replayed (I-13). The window's Cancel stops the series: the console
+   * closing is cancelled as its own dialog's Cancel would — a close the store
+   * already committed still goes — and the next ones are not started.
    */
-  const closeAll = async () => {
+  const closeAll = async (signal: AbortSignal) => {
     for (const entry of [...entriesRef.current]) {
-      await finishClose(entry.key, true).catch(() => false)
+      if (signal.aborted) return
+      const cancel = () => handles.current.get(entry.key)?.cancelWrite()
+      signal.addEventListener("abort", cancel)
+      try {
+        await finishClose(entry.key, true).catch(() => false)
+      } finally {
+        signal.removeEventListener("abort", cancel)
+      }
     }
   }
 
