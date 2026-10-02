@@ -79,8 +79,10 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// cancelled, then their tasks aborted right after, without waiting: the
 /// executor cancels on the database server once its `drain` returns, so an
 /// aborted call reaches the server only through the executor's abandon guard.
-// TODO(2026-09-30, unblocked by the executor's abandon guard, now in oxyn-exec):
-// prove end to end that a call aborted here cancels its query on the server.
+/// That it does, against a real PostgreSQL, is held by
+/// `oxyn-desktop`'s `conversation/tests/server_cancel.rs`, within one limit no
+/// grace can lift: a server that accepts no new connection never receives the
+/// cancellation.
 struct CloseOnDrop(ToolTurns);
 
 impl Drop for CloseOnDrop {

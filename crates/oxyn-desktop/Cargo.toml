@@ -61,3 +61,6 @@ rstest.workspace = true
 agent-client-protocol.workspace = true
 # A workspace on disk, to read the file a conversation is written to.
 tempfile.workspace = true
+# Post to the MCP endpoint as an external agent does, over the loopback: the
+# server-cancellation tests abandon that call and read the server's view.
+tokio = { workspace = true, features = ["net", "io-util"] }
