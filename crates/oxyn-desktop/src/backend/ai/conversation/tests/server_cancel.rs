@@ -160,6 +160,7 @@ fn bench() -> Option<Bench> {
                     _ => panic!("an approved connection opens"),
                 }
             }
+            ConnectResponse::Saved { message, .. } => panic!("not opened: {message}"),
         }
     });
 
