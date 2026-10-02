@@ -17,12 +17,14 @@ mod logging;
 mod menu;
 #[cfg(test)]
 mod sentinel_tests;
+mod updates;
 mod webview_guard;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use tauri::Manager as _;
 
 use crate::backend::{Backend, NativeDialog};
 use crate::logging::FileJournal;
@@ -67,6 +69,13 @@ fn main() -> Result<()> {
         }
     };
 
+    // Before the window too: the preference, the lock and the previous
+    // exit's notice are read once, off the event loop (ADR-0051).
+    let updates = updates::Updates::new(
+        &context.config().identifier,
+        context.package_info().version.to_string(),
+    );
+
     // The menu bar: native on macOS, built from the front's action manifest;
     // drawn by the front elsewhere (ADR-0041).
     let builder = tauri::Builder::default()
@@ -78,7 +87,11 @@ fn main() -> Result<()> {
     let builder = builder.menu(menu::application_menu);
     builder
         .plugin(tauri_plugin_dialog::init())
+        // Driven from Rust alone: `capabilities/main.json` grants the
+        // webview none of its commands (ADR-0051).
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(backend.clone())
+        .manage(updates)
         // One closure: a second `setup` replaces the first, it does not chain.
         .setup(move |app| {
             dialog.attach(app.handle().clone());
@@ -87,6 +100,7 @@ fn main() -> Result<()> {
             // (ADR-0043). On the main thread, where building a window does
             // not deadlock.
             commands::windows::build_launch_windows(app.handle(), &backend, temporary)?;
+            app.state::<updates::Updates>().start(app.handle());
             Ok(())
         })
         // Files dropped from the system: classified in Rust, `dragDropEnabled`
@@ -216,6 +230,16 @@ fn main() -> Result<()> {
             commands::ai::ai_forget,
             commands::ai::ai_list_mentionable,
             commands::ai::ai_propose_schema_change,
+            // Updates (ADR-0051): interface plumbing, no `Command`
+            commands::updates::get_update_state,
+            commands::updates::subscribe_updates,
+            commands::updates::check_for_updates,
+            commands::updates::cancel_update,
+            commands::updates::download_update,
+            commands::updates::set_automatic_updates,
+            commands::updates::restart_to_update,
+            commands::updates::open_release_page,
+            commands::updates::take_update_notice,
         ])
         .build(context)
         .context("building the Tauri application")?

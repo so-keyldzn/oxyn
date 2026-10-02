@@ -87,8 +87,9 @@ enum CursorEvent {
 enum Halt {
     /// The server has nothing more to send.
     Exhausted,
-    /// [`ExecLimits::max_rows`] is reached: a row beyond it was received and
-    /// dropped, or, for a mutating statement, none was asked for.
+    /// [`ExecLimits::max_rows`] is reached by a statement that does not
+    /// mutate: a row beyond it was received and dropped. A mutating statement
+    /// never stops here; it is drained to its end.
     RowLimit,
     /// The cancellation token fired.
     Cancelled,
@@ -270,13 +271,15 @@ pub(crate) struct StreamRequest {
     pub(crate) opens_transaction: bool,
     /// The execution's bounds.
     pub(crate) limits: ExecLimits,
-    /// May row N + 1 be read to tell exactly N rows from more than N?
+    /// Does the statement not mutate, so that it may stop at its bound?
     ///
-    /// Only for a statement that does not mutate, the rule the executor applies
-    /// to its own end probe. Reading that row adds no effect here — `Execute`
-    /// goes out without a row limit, and a `RETURNING` runs whole before its
-    /// first row — but a write is not proven whole by its driver either: it
-    /// stops at N, and its result stays truncated.
+    /// A read reads row N + 1 to tell exactly N rows from more than N, then
+    /// stops and cancels. A write is never cut there: `Execute` goes out
+    /// without a row limit, a `RETURNING` runs whole before its first row, and
+    /// an autocommit statement only commits at `Sync`, once its last row is
+    /// written. Cutting it would roll back a write whose rows the user is
+    /// shown. Its rows past the bound are drained instead, neither decoded nor
+    /// kept, under the same token and deadline, until `CommandComplete`.
     pub(crate) confirm_end: bool,
     /// The intent, which decides the class of transport errors.
     pub(crate) intent: StatementIntent,
@@ -415,6 +418,8 @@ async fn run(
     let mut assembler = BatchAssembler::new(schema, &decodings);
     let mut affected: u64 = 0;
     let mut produced: usize = 0;
+    // Did a write's drain pass rows the user will not see?
+    let mut rows_dropped = false;
     let deadline = limits
         .timeout
         .map(|duration| tokio::time::Instant::now() + duration);
@@ -496,13 +501,17 @@ async fn run(
                 let _ = sender.send(learnt);
             }
 
-            // One row beyond the bound: the result is really longer. It is
+            // A row beyond the bound: the result is really longer. It is
             // neither decoded nor kept; reading it, under the same token and
             // deadline as every other row, is what tells exactly N rows from
-            // more than N. Only a statement that may be read past its bound
-            // gets here: the others stopped at N, below.
+            // more than N. A read stops there; a write is drained on to its
+            // `CommandComplete` (see `StreamRequest::confirm_end`).
             if limits.max_rows.is_some_and(|max| produced >= max) {
-                break Halt::RowLimit;
+                if confirm_end {
+                    break Halt::RowLimit;
+                }
+                rows_dropped = true;
+                continue;
             }
 
             if let Err(error) = assembler.push(&row) {
@@ -515,8 +524,14 @@ async fn run(
             let limit_reached = limits.max_rows.is_some_and(|max| produced >= max);
             let batch_full =
                 assembler.bytes() >= BATCH_BYTE_BUDGET || assembler.rows() >= BATCH_ROW_CEILING;
+            // A write's batch that reaches the bound is held until the drain
+            // ends. A consumer that stops reading at N and drops the cursor
+            // cancels the token: emitted now, row N would let it cut the very
+            // drain that keeps the write from being rolled back. The executor
+            // reads a write to its end, but the cursor does not rely on it.
+            let held = limit_reached && !confirm_end;
 
-            if batch_full || limit_reached {
+            if (batch_full || limit_reached) && !held {
                 // The token is watched **also** during back-pressure: a grid
                 // that no longer reads would otherwise let `Session::cancel`
                 // wait forever, the query still running on the server.
@@ -532,11 +547,14 @@ async fn run(
                     Emission::Failed => break Halt::Failed,
                 }
             }
-            if limit_reached && !confirm_end {
-                break Halt::RowLimit;
-            }
         }
     };
+    // Was a write stopped once its rows had started to arrive? A `RETURNING`
+    // runs whole before its first row: only the commit, at `Sync`, is left,
+    // and the server may make it before the cancellation sent below lands —
+    // during the drain past the bound as well as before it. The deadline needs
+    // no such care: `Timeout` is already ambiguous.
+    let drain_cut = !confirm_end && (produced > 0 || rows_dropped);
 
     // The stop is decided: a token fired after this point changes nothing any
     // more. The task removes itself from the registry, and it — not
@@ -635,6 +653,18 @@ async fn run(
 
     match stop {
         Halt::Failed => {}
+        // Not `Cancelled`: that would read as "nothing happened" and invite
+        // running the write again (I-13).
+        Halt::Cancelled | Halt::Abandoned if drain_cut => {
+            let _ = events
+                .send(CursorEvent::Failed(Box::new(OxynError::OutcomeUnknown(
+                    "the write was interrupted while its returned rows were being read: the \
+                     server either committed it or rolled it back; check the data before \
+                     running it again"
+                        .to_owned(),
+                ))))
+                .await;
+        }
         Halt::Cancelled | Halt::Abandoned => {
             let _ = events
                 .send(CursorEvent::Failed(Box::new(OxynError::Cancelled)))
@@ -661,7 +691,7 @@ async fn run(
             let _ = events
                 .send(CursorEvent::Finished {
                     affected_rows: affected,
-                    truncated: stop == Halt::RowLimit,
+                    truncated: stop == Halt::RowLimit || rows_dropped,
                 })
                 .await;
         }

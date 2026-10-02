@@ -1,11 +1,11 @@
-<!-- oxyn-translation source="docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md" sha256="f23fd2bf4f79" -->
+<!-- oxyn-translation source="docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md" sha256="65ce22b0ccb2" -->
 
 > Traduction française de [docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md](../../../../docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md). **La version anglaise fait foi.**
 
 # ADR-0050 — Le driver MySQL repose sur `mysql_async`, prépare d'abord chaque instruction, et décode tout type que le serveur envoie
 
 **Statut :** accepté · **Date :** 2026-09-30 · **Amendé :** 2026-09-30 (point 7, avant
-l'acceptation)
+l'acceptation), 2026-10-02 (point 7, issue #139)
 
 ## Contexte
 
@@ -165,6 +165,15 @@ l'Arrow. Vérifié le 2026-09-30 ([RESEARCH-NOTES](../RESEARCH-NOTES.md)) :
    transaction ouverte de l'utilisateur chaque fois qu'un résultat de console
    était tronqué par la borne de lignes ou qu'un onglet était fermé — des
    écritures non validées perdues sans un mot.
+
+   *Amendé le 2026-10-02 (issue #139) :* la lecture d'avance et le kill à la
+   borne de lignes ne valent que pour une lecture. Une écriture qui renvoie
+   des lignes — le `RETURNING` de MariaDB — est vidée jusqu'au bout sous le
+   même jeton et la même échéance : le kill annulait une instruction en
+   autocommit dont les premières lignes étaient à l'écran, sans rien
+   signaler. Une écriture arrêtée par un kill auquel le serveur n'a pas
+   répondu sur cette instruction même se termine sur `OutcomeUnknown`, pas
+   `Cancelled` : elle a pu aller à son terme et valider.
 8. **L'état de transaction**
    ([ADR-0039](0039-etat-de-transaction-d-une-session.md)) est lu dans
    `SERVER_STATUS_IN_TRANS` après chaque instruction — le serveur le dit, le

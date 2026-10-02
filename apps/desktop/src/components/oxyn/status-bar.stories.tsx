@@ -3,6 +3,7 @@ import { expect, userEvent, waitFor, within } from "storybook/test"
 
 import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { StatusBar } from "./status-bar"
+import { UpdateIndicator } from "./update-indicator"
 
 const postgres = [
   "SERVER_SIDE_CANCEL",
@@ -179,5 +180,36 @@ export const SessionCapabilities: Story = {
         )
       ).toBeVisible()
     )
+  },
+}
+
+/**
+ * A downloaded update sits at the right end, before the session details
+ * (ADR-0051): passive, and named for assistive technology.
+ */
+export const UpdateReady: Story = {
+  args: {
+    update: (
+      <UpdateIndicator
+        pending={{
+          kind: "ready",
+          version: "1.4.0",
+          installOnQuit: true,
+          days: 0,
+        }}
+        onRestart={() => undefined}
+        onWhatsNew={() => undefined}
+        onOpenSettings={() => undefined}
+        onReleasePage={() => undefined}
+      />
+    ),
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByRole("button", { name: "Update ready: Oxyn 1.4.0" })
+    ).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: "Session capabilities" })
+    ).toBeVisible()
   },
 }

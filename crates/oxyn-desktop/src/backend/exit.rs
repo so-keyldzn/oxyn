@@ -376,11 +376,19 @@ impl Backend {
     /// `Idle` — lists again. A webview that does not acknowledge does not
     /// hold the exit: its transactions are rolled back by the close of the
     /// sessions, and the journal names them.
-    pub(crate) async fn exit_step(&self) -> ExitStep {
-        self.exit_step_within(ACKNOWLEDGE_GRACE).await
+    ///
+    /// `scope` is what the dialog says waits: the application's exit, or the
+    /// restart that installs an update (ADR-0051).
+    pub(crate) async fn exit_step(&self, scope: ExitScope) -> ExitStep {
+        self.exit_step_as(ACKNOWLEDGE_GRACE, scope).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn exit_step_within(&self, grace: Duration) -> ExitStep {
+        self.exit_step_as(grace, ExitScope::Application).await
+    }
+
+    async fn exit_step_as(&self, grace: Duration, scope: ExitScope) -> ExitStep {
         let hold = &self.inner.workbench.exit;
         {
             let mut state = hold.hold.lock();
@@ -406,7 +414,7 @@ impl Backend {
         for (window, transactions) in &open {
             let signal = ShutdownSignal::ResolveTransactions {
                 transactions: transactions.clone(),
-                scope: ExitScope::Application,
+                scope,
             };
             if windows.shutdown_signal(*window, signal) {
                 sent.push(*window);
@@ -446,14 +454,15 @@ impl Backend {
     /// close is abandoned; during an exit held by a transaction, the exit is
     /// abandoned for every window, before anything is flushed or recorded.
     /// Outside both, or once the ordered shutdown has begun, does nothing.
-    pub fn cancel_exit(&self, window: WindowKey) {
+    /// Returns whether the application's exit was the one abandoned.
+    pub fn cancel_exit(&self, window: WindowKey) -> bool {
         if self.cancel_window_close(window) {
-            return;
+            return false;
         }
         {
             let mut hold = self.inner.workbench.exit.hold.lock();
             if !matches!(*hold, Hold::Listing | Hold::Asking | Hold::Deciding) {
-                return;
+                return false;
             }
             *hold = Hold::Idle;
         }
@@ -465,6 +474,7 @@ impl Backend {
                 .windows
                 .shutdown_signal(window, ShutdownSignal::ExitCancelled);
         }
+        true
     }
 
     /// The console sessions whose transaction is open or not known, as the
