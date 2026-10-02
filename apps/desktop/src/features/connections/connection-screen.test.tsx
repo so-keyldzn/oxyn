@@ -6,7 +6,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
 
 import { postgresDriver } from "@/components/oxyn/fixtures"
 import type { ConnectionDetails, ConnectionEdit } from "@/lib/ipc/settings"
@@ -95,7 +103,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function failFirstOpening() {
+function renderScreen() {
   render(
     <QueryClientProvider
       client={
@@ -105,6 +113,34 @@ async function failFirstOpening() {
       <ConnectionScreen />
     </QueryClientProvider>
   )
+}
+
+// The screen's first render, the driver list's and the form's are cold: the
+// first test in this file waited for the driver button past Testing Library's
+// 1 s on a loaded CI runner, the screen still in its skeletons (run
+// 37065651839), while the second test found it in time. Paid here, once, that
+// cold start is part of no test, and every wait below keeps the default bound.
+const COLD_START_BUDGET_MS = 60_000
+
+beforeAll(async () => {
+  renderScreen()
+  fireEvent.click(
+    await screen.findByRole(
+      "button",
+      { name: /PostgreSQL/ },
+      { timeout: COLD_START_BUDGET_MS }
+    )
+  )
+  await screen.findByLabelText(
+    /^Password/,
+    {},
+    { timeout: COLD_START_BUDGET_MS }
+  )
+  cleanup()
+}, COLD_START_BUDGET_MS * 2)
+
+async function failFirstOpening() {
+  renderScreen()
   fireEvent.click(await screen.findByRole("button", { name: /PostgreSQL/ }))
   type(screen.getByLabelText(/^Name/), "billing")
   type(screen.getByLabelText(/^Database/), "billing")
