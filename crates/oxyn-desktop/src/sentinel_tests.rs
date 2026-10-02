@@ -255,6 +255,7 @@ async fn open_connection(backend: &Backend, draft: ConnectionDraft) -> OpenConne
         .expect("connects")
     {
         ConnectResponse::Open(open) => open,
+        ConnectResponse::Saved { message, .. } => panic!("not opened: {message}"),
         ConnectResponse::Approval { command, .. } => {
             let command = command.parse().expect("an id the backend minted");
             match backend
@@ -272,8 +273,8 @@ async fn open_connection(backend: &Backend, draft: ConnectionDraft) -> OpenConne
 /// Everything the scenario below produced, for the sweep in the test proper.
 struct Scenario {
     /// (i) A `postgres` connection to a refused port, secrets carrying the
-    /// sentinel: must fail.
-    connect_refused: IpcError,
+    /// sentinel: saved, and its opening must fail.
+    connect_refused: ConnectResponse,
     /// (ii) A provider declaration whose base URL carries the sentinel as
     /// credentials: refused by `validate_base_url` before any network call.
     credentials_in_url: IpcError,
@@ -323,7 +324,11 @@ async fn run_scenario(backend: &Backend) -> Scenario {
             },
         )
         .await
-        .expect_err("nothing answers on a released port");
+        .expect("a saved connection that does not open is an answer");
+    assert!(
+        matches!(connect_refused, ConnectResponse::Saved { .. }),
+        "nothing answers on a released port: {connect_refused:?}"
+    );
 
     // (ii) A provider whose base URL carries the sentinel as a password —
     // refused before the keyring or the network are touched.
