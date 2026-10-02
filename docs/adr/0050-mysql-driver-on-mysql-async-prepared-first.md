@@ -1,7 +1,7 @@
 # ADR-0050 — The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends
 
 **Status:** accepted · **Date:** 2026-09-30 · **Amended:** 2026-09-30 (point 7, before
-acceptance)
+acceptance), 2026-10-02 (point 7, issue #139)
 
 ## Context
 
@@ -146,6 +146,14 @@ wire, and how values become Arrow. Checked on 2026-09-30
    every kill. With one connection per session (point 1), that rolled back the
    user's open transaction each time a console result was truncated by the row
    bound or a tab was closed — uncommitted writes discarded without a word.
+
+   *Amended on 2026-10-02 (issue #139):* the read-ahead and the kill at the
+   row bound apply to a read only. A write returning rows — MariaDB's
+   `RETURNING` — is drained to its end under the same token and deadline: the
+   kill rolled back an autocommit statement whose first rows were on screen,
+   and reported nothing. A write stopped by a kill the server did not answer on
+   that very statement ends on `OutcomeUnknown`, not `Cancelled`: it may have
+   run to its end and committed.
 8. **Transaction state** ([ADR-0039](0039-etat-de-transaction-d-une-session.md))
    is read from `SERVER_STATUS_IN_TRANS` after each statement — the server says
    it, the driver does not infer it from the text.

@@ -28,10 +28,12 @@
 //! # What it does not do
 //!
 //! It does not retry, and it does not report a write as cleanly failed: an
-//! abandoned write may have been applied ([I-13](../../../CLAUDE.md#i-13)). The
-//! end is announced as [`Event::Cancelled`], the same as an interrupted write
-//! on the normal path, and the query history keeps the entry `Running`, which
-//! it already treats as needing reconciliation before any replay.
+//! abandoned write may have been applied ([I-13](../../../CLAUDE.md#i-13)). A
+//! read's end is announced as [`Event::Cancelled`]; a write's as a failure
+//! with an unknown outcome, never retryable — the normal path no longer
+//! announces a stopped write before its driver's verdict, and an abandonment
+//! has none. The query history keeps the entry `Running`, which it already
+//! treats as needing reconciliation before any replay.
 //!
 //! # The audit outcome, written later
 //!
@@ -56,7 +58,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use oxyn_core::{
-    CancelToken, CommandId, ConnectionId, ErrorClass, Event, ExecStats, StatementHandle,
+    CancelToken, CommandId, ConnectionId, ErrorClass, Event, ExecStats, OxynError, StatementHandle,
 };
 use oxyn_data::ResultBuffer;
 use oxyn_store::JournalRecord;
@@ -77,17 +79,19 @@ pub(crate) struct AbandonGuard<'a> {
     connection: ConnectionId,
     /// This execution's own token — a child, so cancelling it spares the tab.
     token: CancelToken,
+    /// Is the statement a write, whose abandonment leaves its effect unknown?
+    mutating: bool,
     drained: Option<(StatementHandle, Arc<ResultBuffer>)>,
     settled: bool,
 }
 
 impl<'a> AbandonGuard<'a> {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         running: &'a CancelRegistry,
         events: &'a EventBus,
         command: CommandId,
         connection: ConnectionId,
-        token: CancelToken,
+        (token, mutating): (CancelToken, bool),
     ) -> Self {
         Self {
             running,
@@ -95,6 +99,7 @@ impl<'a> AbandonGuard<'a> {
             command,
             connection,
             token,
+            mutating,
             drained: None,
             settled: false,
         }
@@ -137,8 +142,17 @@ impl Drop for AbandonGuard<'_> {
             self.running.finish(statement);
         }
         tracing::debug!(command = %self.command, "execution abandoned by its caller");
+        let end = if self.mutating {
+            Event::failed(&OxynError::OutcomeUnknown(
+                "the write was abandoned before its driver said whether the server applied \
+                 it; check the data before running it again"
+                    .to_owned(),
+            ))
+        } else {
+            Event::Cancelled
+        };
         self.events
-            .publish(self.command, Some(self.connection), Event::Cancelled);
+            .publish(self.command, Some(self.connection), end);
     }
 }
 

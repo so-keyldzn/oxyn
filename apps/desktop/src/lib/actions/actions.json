@@ -63,6 +63,15 @@
   ],
   "actions": [
     {
+      "id": "app.checkForUpdates",
+      "label": "Check for updates…",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "app", "group": 0, "order": 1 },
+        "other": { "menu": "help", "group": 1, "order": 0, "mnemonic": "u" }
+      }
+    },
+    {
       "id": "app.settings",
       "label": "Settings…",
       "zone": "global",

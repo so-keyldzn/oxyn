@@ -61,6 +61,11 @@ desktop-dev: $(TAURI)
 # A published binary always ships its third-party notices, regenerated: without
 # them, it would violate the licenses of what it redistributes. `--exiger` makes
 # publishing fail if `cargo-about` is missing.
+#
+# No build signs the updater artifacts (ADR-0051): `tauri build` runs every
+# build.rs and Vite plugin, which must never see the updater private key. The
+# release workflow signs them afterwards, in a step of its own
+# (`script/livraison signer`).
 desktop: $(TAURI)
 ifeq ($(PROFIL),release)
 	@python3 script/licences-tierces generer --exiger $(MENTIONS)

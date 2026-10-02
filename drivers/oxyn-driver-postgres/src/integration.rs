@@ -806,12 +806,25 @@ async fn the_row_bound_reads_one_row_ahead_before_saying_truncated() {
     session.close().await.expect("close");
 }
 
-/// A write is not read past its bound, the rule the executor applies to its own
-/// end probe. Exactly N rows therefore stay truncated, where a read of N rows
-/// is proven whole.
+/// A write bounded at `max_rows`, returning rows.
+fn bounded_write(sql: &str, max_rows: usize) -> ExecRequest {
+    ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), sql)
+        .with_intent(StatementIntent::Write)
+        .with_limits(
+            ExecLimits::default()
+                .writable()
+                .with_max_rows(Some(max_rows)),
+        )
+}
+
+/// Issue #139: a write is drained past its bound, never cut there. Its rows
+/// are far beyond the socket buffers: cut at N, the autocommit statement —
+/// which commits only once its last row is sent — was rolled back while the
+/// user was shown N rows and no error.
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
-async fn a_write_at_the_row_bound_is_not_read_past_it() {
+async fn a_write_past_the_row_bound_is_drained_and_committed() {
+    const WRITTEN: usize = 50_000;
     let Some(session) = session().await else {
         return;
     };
@@ -826,23 +839,149 @@ async fn a_write_at_the_row_bound_is_not_read_past_it() {
     )
     .await;
 
-    let exec_request = ExecRequest::new(
-        QueryLanguage::Sql(SqlDialect::Postgres),
-        "INSERT INTO oxyn_row_bound_write SELECT i FROM generate_series(1, 1000) AS s(i) \
-         RETURNING i",
-    )
-    .with_intent(StatementIntent::Write)
-    .with_limits(ExecLimits::default().writable().with_max_rows(Some(1_000)));
     let mut cursor = session
-        .execute(exec_request, &CancelToken::new())
+        .execute(
+            bounded_write(
+                &format!(
+                    "INSERT INTO oxyn_row_bound_write \
+                     SELECT i FROM generate_series(1, {WRITTEN}) AS s(i) \
+                     RETURNING i, repeat('x', 1000)"
+                ),
+                10,
+            ),
+            &CancelToken::new(),
+        )
         .await
         .expect("execution");
     let (rows, _) = drain(&mut cursor).await;
+    assert_eq!(rows, 10, "only the bound is shown");
+    assert!(cursor.stats().truncated, "rows were left out");
+    drop(cursor);
 
+    // Read from another session, hence another pool: the write is committed,
+    // not merely visible to the connection that made it.
+    let Some(witness) = self::session().await else {
+        return;
+    };
+    let count = first_text(
+        witness.as_ref(),
+        "SELECT count(*)::text FROM oxyn_row_bound_write",
+    )
+    .await;
+    assert_eq!(count, WRITTEN.to_string(), "every row is committed");
+    witness.close().await.expect("close");
+
+    // Exactly N rows: the drain read the end, so the result is whole.
+    let mut cursor = session
+        .execute(
+            bounded_write(
+                "INSERT INTO oxyn_row_bound_write \
+                 SELECT i FROM generate_series(1, 1000) AS s(i) RETURNING i",
+                1_000,
+            ),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("execution");
+    let (rows, _) = drain(&mut cursor).await;
     assert_eq!(rows, 1_000);
-    assert!(cursor.stats().truncated, "nothing proved the result whole");
+    assert!(!cursor.stats().truncated, "the drain proved the end");
+    drop(cursor);
 
     apply(session.as_ref(), "DROP TABLE oxyn_row_bound_write").await;
+    session.close().await.expect("close");
+}
+
+/// Issue #139: a drain cut by the token leaves the write's fate to the server —
+/// committed if its last row had gone out, rolled back otherwise. It is
+/// reported as ambiguous, never as a cancellation nor as a finished result.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn a_write_cut_during_its_drain_is_ambiguous() {
+    const WRITTEN: usize = 1_000;
+    let Some(session) = session().await else {
+        return;
+    };
+    apply(session.as_ref(), "DROP TABLE IF EXISTS oxyn_row_bound_cut").await;
+    apply(
+        session.as_ref(),
+        "CREATE TABLE oxyn_row_bound_cut (i integer)",
+    )
+    .await;
+    // The window that makes the cut ambiguous, held open: every row is sent,
+    // the commit is not made yet. A deferred trigger runs at the commit, after
+    // the last row. Waiting on the rows themselves raced the driver, which
+    // drains a write without back-pressure.
+    apply(
+        session.as_ref(),
+        "CREATE OR REPLACE FUNCTION oxyn_row_bound_linger() RETURNS trigger \
+         LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(30); RETURN NULL; END $$",
+    )
+    .await;
+    apply(
+        session.as_ref(),
+        "CREATE CONSTRAINT TRIGGER oxyn_row_bound_linger AFTER INSERT ON oxyn_row_bound_cut \
+         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.i = 1) \
+         EXECUTE FUNCTION oxyn_row_bound_linger()",
+    )
+    .await;
+    let Some(witness) = self::session().await else {
+        return;
+    };
+
+    let token = CancelToken::new();
+    let mut cursor = session
+        .execute(
+            bounded_write(
+                &format!(
+                    "INSERT INTO oxyn_row_bound_cut \
+                     SELECT i FROM generate_series(1, {WRITTEN}) AS s(i) \
+                     RETURNING i"
+                ),
+                10,
+            ),
+            &token,
+        )
+        .await
+        .expect("execution");
+
+    let mut lingering = false;
+    for _ in 0..1_000 {
+        let waiting = first_text(
+            witness.as_ref(),
+            "SELECT count(*)::text FROM pg_stat_activity \
+             WHERE wait_event = 'PgSleep' AND query LIKE 'INSERT INTO oxyn_row_bound_cut%'",
+        )
+        .await;
+        if waiting != "0" {
+            lingering = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(lingering, "the write never reached its commit");
+    token.cancel();
+
+    let error = refusal(cursor.next_batch().await, "a cut drain must not finish");
+    assert!(!error.is_cancelled(), "{error:?}");
+    assert_eq!(error.class(), oxyn_core::ErrorClass::Ambiguous, "{error:?}");
+    drop(cursor);
+
+    // Whatever the server decided, it decided it whole.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let count = first_text(
+        witness.as_ref(),
+        "SELECT count(*)::text FROM oxyn_row_bound_cut",
+    )
+    .await;
+    assert!(
+        count == "0" || count == WRITTEN.to_string(),
+        "a write is atomic: {count} rows"
+    );
+    witness.close().await.expect("close");
+
+    apply(session.as_ref(), "DROP TABLE oxyn_row_bound_cut").await;
+    apply(session.as_ref(), "DROP FUNCTION oxyn_row_bound_linger()").await;
     session.close().await.expect("close");
 }
 

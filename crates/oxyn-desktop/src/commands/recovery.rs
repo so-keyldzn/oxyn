@@ -11,9 +11,10 @@ use crate::commands::windows::{
     bring_to_front, caller, close_requested, forget_window, place_all, window_moved,
 };
 use crate::ipc::IpcError;
-use crate::ipc::recovery::{RecoveryStatus, ShutdownSignal};
+use crate::ipc::recovery::{ExitScope, RecoveryStatus, ShutdownSignal};
 use crate::logging::FileJournal;
 use crate::menu::{self, MenuBar};
+use crate::updates::{FORCED_EXIT_INSTALL_GRACE, Updates};
 
 /// The journal the exit flushes last, for the exits the front asks for.
 pub struct ExitJournal(pub Option<FileJournal>);
@@ -79,10 +80,25 @@ pub fn shutdown_acknowledged(
 /// Takes nothing. Outside such an exit or close, does nothing; at worst, a
 /// script cancels an exit the user asked for. Synchronous: in-memory state
 /// and channel messages.
+///
+/// A cancelled exit forgets `Restart now`: otherwise the next ⌘Q would
+/// restart Oxyn (ADR-0051).
 #[tauri::command]
-pub fn cancel_exit(webview: Webview, backend: State<'_, Backend>) -> Result<(), IpcError> {
-    backend.cancel_exit(caller(&backend, &webview)?);
+pub fn cancel_exit(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    updates: State<'_, Updates>,
+) -> Result<(), IpcError> {
+    cancel_exit_of(&backend, &updates, caller(&backend, &webview)?);
     Ok(())
+}
+
+/// The exit or close cancelled in `window`'s dialog — and, when it was the
+/// application's exit, the restart it carried.
+pub(crate) fn cancel_exit_of(backend: &Backend, updates: &Updates, window: WindowKey) {
+    if backend.cancel_exit(window) {
+        updates.clear_restart_intent();
+    }
 }
 
 /// `File ▸ Exit` of Windows and Linux, and the palette's Quit: the ordered
@@ -137,6 +153,15 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJour
                 tracing::warn!(
                     "exiting without the ordered shutdown; the close is not recorded yet"
                 );
+            }
+            // An update ready to install on quit is installed here too, on a
+            // thread of its own and within a grace: the ordered exit took it
+            // already when it ran, so this is the Dock's Quit or a logout.
+            if let Some(install) = app
+                .try_state::<Updates>()
+                .and_then(|updates| updates.take_install(false))
+            {
+                install.run_within(FORCED_EXIT_INSTALL_GRACE);
             }
             if let Some(journal) = journal {
                 journal.flush(JOURNAL_GRACE);
@@ -196,6 +221,9 @@ fn on_window_event(
 /// Lists the open transactions, then begins the ordered shutdown once and
 /// exits — unless a transaction holds the exit for the user to resolve
 /// (ADR-0043). Asked again while the dialog is open, it lists again.
+///
+/// After the shutdown, the update ready to install is installed, and Oxyn
+/// starts again if `Restart now` asked for this exit (ADR-0051).
 pub(crate) fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
     let backend = app.state::<Backend>().inner().clone();
     let app = app.clone();
@@ -203,7 +231,10 @@ pub(crate) fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
     // Off the main thread: the listing waits for the executor's events and
     // the webview's acknowledgement (I-05).
     tauri::async_runtime::spawn(async move {
-        match backend.exit_step().await {
+        let scope = app
+            .try_state::<Updates>()
+            .map_or(ExitScope::Application, |updates| updates.exit_scope());
+        match backend.exit_step(scope).await {
             ExitStep::Proceed => {}
             ExitStep::Held => return,
             ExitStep::Asked(windows) => {
@@ -224,9 +255,40 @@ pub(crate) fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
         place_all(&app, &backend);
         backend.save_layouts().await;
         backend.shutdown().await;
+        let restart = install_update(&app).await;
         if let Some(journal) = journal {
             let _ = tokio::task::spawn_blocking(move || journal.flush(JOURNAL_GRACE)).await;
         }
-        app.exit(0);
+        // Never `restart()`: it blocks its thread until the event loop ends.
+        if restart {
+            app.request_restart();
+        } else {
+            app.exit(0);
+        }
     });
+}
+
+/// Installs the update this exit carries, once the session is closed: the
+/// one `Restart now` asked for, or the one quitting installs. The windows go
+/// first — the swap takes a moment, and a window frozen meanwhile looks like
+/// a crash. Without a time limit: interrupted, the swap could leave no
+/// application. A failure is journaled and recorded for the next launch; the
+/// exit goes on. Returns whether Oxyn starts again.
+async fn install_update(app: &AppHandle) -> bool {
+    let Some(updates) = app.try_state::<Updates>() else {
+        return false;
+    };
+    let restart = updates.restart_intended();
+    if let Some(install) = updates.take_install(restart) {
+        for window in app.webview_windows().into_values() {
+            let _ = window.hide();
+        }
+        if tokio::task::spawn_blocking(move || install.run())
+            .await
+            .is_err()
+        {
+            tracing::error!("the update installation stopped before its end");
+        }
+    }
+    restart
 }

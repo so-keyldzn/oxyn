@@ -5,6 +5,7 @@ import { consoles } from "@/lib/ipc/consoles"
 import { recovery } from "@/lib/ipc/recovery"
 import type { ExitScope, ExitTransaction } from "@/lib/ipc/recovery"
 import { results } from "@/lib/ipc/results"
+import { updates } from "@/lib/ipc/updates"
 import type { TransactionState } from "@/lib/ipc/types"
 import { windows } from "@/lib/ipc/windows"
 
@@ -151,11 +152,25 @@ export async function resolveExit(
   update({ busy: null })
   // Cancelled meanwhile: the exit is no longer asked for.
   if (exitHold.state === null) return
-  const again =
-    exitHold.state.scope === "window" ? windows.close() : recovery.requestExit()
-  await again.catch((error: unknown) => {
+  await askAgain(exitHold.state.scope).catch((error: unknown) => {
     update({ error: message(error) })
   })
+}
+
+/**
+ * Asks again for what the transactions held. A restart is asked confirmed:
+ * the user already chose to stop running work, and the transactions were the
+ * last thing in the way (ADR-0051).
+ */
+async function askAgain(scope: ExitScope): Promise<void> {
+  switch (scope) {
+    case "window":
+      return windows.close()
+    case "application":
+      return recovery.requestExit()
+    case "restart":
+      await updates.restartToUpdate({ confirmed: true })
+  }
 }
 
 /** The failure to show, or `null` when the statement ran. */

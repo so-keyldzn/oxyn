@@ -66,9 +66,11 @@ Versions are written **exact** in `apps/desktop/package.json` and the root
 
 | Crate | Version | `rust-version` | Checked on |
 |---|---|---|---|
-| `tauri` | `2.11.5` | `1.77.2` | 2026-09-15 |
-| `tauri-build` | `2.6.3` | `1.77.2` | 2026-09-15 |
+| `tauri` | `2.12.1` | `1.90` | 2026-10-02 |
+| `tauri-build` | `2.7.1` | `1.90` | 2026-10-02 |
 | `tauri-plugin-dialog` | `2.7.3` | `1.77.2` | 2026-09-15 |
+| `tauri-plugin-updater` | `2.13.1` | `1.90` | 2026-10-02 |
+| `tauri-plugin-opener` | `2.7.0` | `1.90` | 2026-10-02 |
 | `rfd` | `0.16.0` | — (not declared) | 2026-09-24 |
 
 `rfd` shows the startup failure dialog, before the Tauri application
@@ -77,6 +79,33 @@ exists. The version is the one `tauri-plugin-dialog@2.7.3` already resolves
 (crates.io, 2026-09-24), but taking it would put two `rfd` in the graph.
 Declared without default features: the plugin's (`gtk3`,
 `common-controls-v6`) unify on the same crate.
+
+`tauri-plugin-updater` and `tauri-plugin-opener` serve the automatic updates
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)); both
+published on 2026-09-29, both require `tauri` 2.12, which moved `tauri` from
+2.11.5 to 2.12.1 and `tauri-build` from 2.6.3 to 2.7.1 (both published on
+2026-09-30), and with them `tao` 0.35.3 → 0.37.1, `wry` 0.55.1 → 0.57.0,
+`muda` 0.19.3 → 0.20.0 in `Cargo.lock`. A 3.0.0 alpha line exists for `tauri`
+and both plugins: not taken. The updater is declared with
+`default-features = false` and no TLS feature, hence without `rustls-tls`,
+`system-proxy` and `zip`: its `rustls-tls` enables `reqwest/rustls-no-provider`
+plus its own `rustls` dependency, which would pull `ring` and install it as
+the process's default `CryptoProvider`. It reuses the `reqwest` 0.13.4 that
+`oxyn-llm` builds on `rustls` with `aws-lc-rs`; on 2026-10-02,
+`cargo tree -p oxyn-desktop -i ring` prints nothing, and the graph keeps one
+`reqwest` and one `rustls` (0.23.45). The opener plugin is not registered:
+Rust calls its free function `open_url`, which needs no `AppHandle`. Its npm
+package `@tauri-apps/plugin-updater` (2.13.1) and the `tauri-plugin-process`
+crate (2.4.0) are **deliberately not taken**: the webview never drives the
+update, and Rust restarts through `AppHandle::request_restart`. Sources:
+crates.io API `/api/v1/crates/<crate>/<version>`, npm registry, read on
+2026-10-02.
+
+Re-read after that bump, on 2026-10-02, the two facts below marked "to
+re-check at every bump of `tauri`" still hold: `tauri` 2.12.1
+`src/path/desktop.rs` computes `app_log_dir` as before, and `tao` 0.37.1
+still registers `applicationWillTerminate:` only, and stops through
+`[NSApp stop:]` (`src/platform_impl/macos/app_delegate.rs`, `app_state.rs`).
 
 Behaviors of the message dialog that
 [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) relies
@@ -100,7 +129,7 @@ plugin or of `rfd`**:
 | Package | Chosen version | Latest published | Why the gap |
 |---|---|---|---|
 | `pnpm` (`packageManager`) | `11.1.2` | `12.4.2` | version installed on the dev machine; bumping is a deliberate commit |
-| `@tauri-apps/cli` · `@tauri-apps/api` | `2.11.4` · `2.11.1` | same | — |
+| `@tauri-apps/cli` · `@tauri-apps/api` | `2.12.1` · `2.12.1` | same | read on 2026-10-02. The CLI moved from 2.11.4 for the updater: from 2.12.0 it signs the version into the updater signature, which `requireSignedVersion` checks ([updater contracts](#tauri-updater-contracts--checked-on-2026-10-02)). `@tauri-apps/api` moved from 2.11.1 with the `tauri` crate: `tauri build` refuses a different major or minor |
 | `@tanstack/react-start` · `react-router` · `router-plugin` | `1.168.54` · `1.170.36` · `1.168.38` | same | — |
 | `@tanstack/react-query` · `react-virtual` · `react-form` | `5.102.8` · `3.14.13` · `1.33.5` | same | — |
 | `@tanstack/react-store` · `react-pacer` | `0.11.1` · `0.23.0` | same | `react-hotkeys` (`0.10.0`, which declared itself **alpha** in its README) was removed on 2026-09-25: the dispatcher of the action registry replaces it ([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md), point 3) |
@@ -218,6 +247,39 @@ Sources: [registry index](https://index.crates.io/wa/sm/wasmtime),
 [RUSTSEC-2026-0327](https://rustsec.org/advisories/RUSTSEC-2026-0327),
 [GHSA-32h6-97mm-8q3c](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-32h6-97mm-8q3c),
 [48.0.5 release notes](https://github.com/bytecodealliance/wasmtime/releases/tag/v48.0.5).
+
+## Tauri updater contracts — checked on 2026-10-02
+
+Read in the published crates — `tauri-plugin-updater` 2.13.1 and
+`tauri-plugin-opener` 2.7.0 (plugins-workspace commit `e5112843`), `tauri`
+2.12.1, `tauri-cli` 2.12.1 and `tauri-bundler` 2.10.1 (tauri commit
+`30da1fd6`) —, for [ADR-0051](adr/0051-automatic-updates-from-github-releases.md).
+**To re-read at every bump of the updater plugin or of the CLI.**
+
+| Fact | Consequence | Source |
+|---|---|---|
+| Static manifest: `version` (a leading `v` is trimmed), `notes`, `pub_date`, and `platforms` mapping a key to `url` and `signature`. Without a target set by the application, the key looked up is `{os}-{arch}-{installer}` then `{os}-{arch}`; `os` is `darwin` on macOS, `installer` is `app` for a `.app` or DMG, `appimage`, `deb`, `rpm` | `latest.json` carries `darwin-aarch64` and `linux-x86_64-appimage`; a bare `linux-x86_64` would also match a deb or rpm install | [updater.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/updater/src/updater.rs), `RemoteRelease`, `get_urls`, `Installer::name`, `updater_os` |
+| An endpoint whose scheme is not `https` is refused with `InsecureTransportProtocol` in a release build (a warning in debug), unless `dangerousInsecureTransportProtocol`. The check covers the endpoints only, not the `url` inside the manifest | The endpoint is HTTPS by construction; Oxyn refuses itself an archive URL that is not `https://github.com/…`; the archive's integrity rests on its signature | [config.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/updater/src/config.rs), `validate_endpoints` |
+| `UpdaterBuilder::timeout` applies to the check's request; the `Update` that `check` returns carries `timeout: None`, so `download` runs with no timeout unless `Update::timeout` is set | Oxyn's 30 s bound covers the check only; the download is ended by `cancel_update`, which aborts its task, or by the 60 s read timeout and HTTPS-only redirects set on the client through `UpdaterBuilder::configure_client` | updater.rs, `Updater::check` (the `Update { … timeout: None … }` literal), `Update::download` |
+| `download` reads the whole archive into a `Vec<u8>`, then verifies the minisign signature against `pubkey` before returning it. The signature covers the archive's bytes and its trusted comment; the manifest is not signed | The bytes are kept in memory, already verified; whoever serves the manifest chooses which signed archive is offered | updater.rs, `Update::download`, `verify_signature` |
+| `requireSignedVersion` (default `false`): after the signature check, the `version:` field of the trusted comment must equal the announced version, compared as semver; absent, the archive is refused (`MissingSignedVersion`), different, `SignedVersionMismatch` | Set to `true`: a forged manifest cannot pair a higher version with an older signed archive | config.rs, `require_signed_version`; updater.rs, `verify_signed_version` |
+| The Tauri CLI writes `timestamp:…\tfile:…` in the trusted comment, and from 2.12.0 appends `\tversion:<app version>` when bundling (`sign_file(…, Some(settings.version_string()))`); 2.11.4 writes no version | The CLI is pinned to 2.12.1; an archive signed by an older CLI would be refused | [updater_signature.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-cli/src/helpers/updater_signature.rs), `sign_file`; `crates/tauri-cli/src/bundle.rs` line 312 |
+| `tauri signer generate -w <path>` prompts for a password when none is given, writes the private key there and the public key at `<path>.pub` | The runbook in [RELEASE](RELEASE.md#updater-signing-key) | `crates/tauri-cli/src/signer/generate.rs`, `helpers/updater_signature.rs`, `save_keypair` |
+| `tauri signer sign` reads the key from `TAURI_SIGNING_PRIVATE_KEY` and its password from `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, writes `<file>.sig`, and with `--app-version <v>` calls the same `sign_file(…, Some(v))` as the bundler, hence the same `version:` field | Signing is a step of its own, after a build that never holds the key (`script/livraison signer`) | `crates/tauri-cli/src/signer/sign.rs`, `app_version` |
+| The bundler signs updater artifacts only when `createUpdaterArtifacts` is on, at the end of `tauri build`/`tauri bundle`, with the key read from the environment of that process; a private key that does not match `plugins.updater.pubkey` only logs a **warning** | `createUpdaterArtifacts` stays off; the `manifeste` job verifies every pair against the committed public key | `crates/tauri-cli/src/bundle.rs`, `sign_updaters` (`signature.keynum() != public_key.keynum()` → `log::warn!`) |
+| `patch_binary`, which writes the bundle type the plugin reads (`appimage`, `deb`…), runs for every package type unless `--no-binary-patching`, whether or not updater artifacts are created | The AppImage of a build without `createUpdaterArtifacts` is the one a signing build would produce | `crates/tauri-bundler/src/bundle.rs`, `bundle_project` |
+| minisign **0.12** (GitHub release of 2025-01-15, the latest on 2026-10-02): `minisign-0.12-linux.tar.gz`, SHA-256 `9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73`, holds a static x86-64 binary at `minisign-linux/x86_64/minisign`; the archive verifies with its `.minisig` and the author's key `RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3`, as printed in the project's README | The `manifeste` job installs it pinned by that checksum, like `cargo-about` | [release 0.12](https://github.com/jedisct1/minisign/releases/tag/0.12), [README](https://github.com/jedisct1/minisign/blob/master/README.md); checksum computed on download, signature checked with the macOS binary of the same release |
+| `minisign -V -q -p <public key file> -m <file> -x <signature file>` accepts a `.sig` written by `tauri signer sign` 2.12.1 once decoded from Base64 (prehashed `ED` signatures) and prints its trusted comment; it exits non-zero for a modified file and for another key ("Signature key id … but the key id in the public key is …") | `script/livraison manifeste` verifies each archive this way before reading the signed version | run by hand on 2026-10-02, throwaway keys from `tauri signer generate` |
+| A job's environment secrets reach only jobs that reference the environment; "Selected branches and tags" matches `GITHUB_REF` and is available for all public repositories, as are required reviewers; a workflow referencing an environment that does not exist creates it **without protection rules**; `gh secret set --env <name>` sets an environment secret | The signing secrets live in the `release` environment, `v*` tags only, created with its rules before the first release | [deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments), [manage environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments), [use secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets) |
+| The repository is public; `GET /repos/so-keyldzn/oxyn/rulesets` now answers `[]` (it answered 403 while private, CI and GitHub delivery above) and it has no environment yet | A `v*` tag ruleset and the `release` environment can be created | GitHub API |
+| The default comparison offers an update only if `release.version > current_version`; `allowDowngrades` (config only since 2.12.0, previously also settable by the webview's `check`) relaxes it to "different", and a custom comparator overrides both | Downgrades are refused by default; Oxyn sets neither | updater.rs, `check`; config.rs, `allow_downgrades`; plugin `CHANGELOG.md`, 2.12.0 |
+| macOS install: the archive is unpacked into a temporary directory, the running `.app` renamed to a backup, the new one renamed into place. If the first rename fails with `PermissionDenied`, an AppleScript `do shell script … with administrator privileges` runs on the main thread and the install waits for it | No install on quit where the `.app`'s folder is not writable: the password prompt only follows a click | updater.rs, macOS `install_inner` |
+| Linux install: an AppImage is replaced in place (a backup renamed beside it on the same device, restored on failure); a deb or rpm is installed with `dpkg -i` or `rpm -U` through `pkexec`, then a `zenity` or `kdialog` password prompt, then `sudo` | Oxyn disables updates for deb and rpm instead of running a package manager with elevation | updater.rs, `install_appimage`, `install_deb`, `install_rpm`, `try_tmp_locations` |
+| The macOS updater archive is the `.app` produced by `bundle_project` — signed, notarized and stapled there — put in a `.tar.gz` by `bundle_update_macos`: `tar::Builder` with `follow_symlinks(false)`, `append_dir_all("<App>.app", …)`, gzip. The AppImage, deb and rpm are signed as they are. The plugin's macOS install drops the first component of every entry (`skip(1)`) | `script/apple-release build` writes the same archive with Python's `tarfile` (links kept, the `.app` at the root), so that no build needs the key; `script/apple-release verify` checks the `.app` inside it | [macos/app.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-bundler/src/bundle/macos/app.rs), [bundle.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-bundler/src/bundle.rs), [updater_bundle.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-bundler/src/bundle/updater_bundle.rs) |
+| `AppHandle::restart()` never returns: on the main thread it relaunches at once, skipping the exit events; elsewhere it requests the exit and sleeps forever. `request_restart()` sets the restart flag and requests an exit with `RESTART_EXIT_CODE`, which goes through `ExitRequested` and `Exit`, then relaunches | "Restart now" calls `request_restart()` after the ordered shutdown | [app.rs](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri/src/app.rs), `restart`, `request_restart` |
+| `tauri build` stops when the `tauri` crate and `@tauri-apps/api` differ in major or minor version, unless `--ignore-version-mismatches` | The two move together | `crates/tauri-cli/src/build.rs`, `info/plugins.rs`, `check_mismatched_packages` |
+| `open_url` calls the `open` crate's `that_detached`; `open` 5.4.4 tries, on Linux, `xdg-open`, `gio open`, `gnome-open`, `kde-open` (and WSL first under WSL), prefixes an argument starting with `-` with `./`, and spawns detached | The release page is opened by the free function `open_url`, from Rust, without registering the plugin | [open.rs](https://github.com/tauri-apps/plugins-workspace/blob/e51128438011755f9e7277bad29b8c0978cf281c/plugins/opener/src/open.rs); `open` 5.4.4 `src/unix.rs` |
+| "Get the latest release": "the most recent non-prerelease, non-draft release, sorted by the `created_at` attribute"; `/releases/latest/download/<asset>` links to an asset of the latest release | A draft is never offered; publishing is what offers the update | [REST releases](https://docs.github.com/en/rest/releases/releases#get-the-latest-release), [linking to releases](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases) |
 
 ## GPUI
 

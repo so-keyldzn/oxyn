@@ -34,7 +34,7 @@ pub const QUIT: &str = "app.quit";
 /// ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)): they have no
 /// target, so any window may run them, and they stay enabled when no window
 /// has the focus. Quit is Rust's own.
-const APPLICATION_ENTRIES: &[&str] = &["window.new", "app.settings"];
+const APPLICATION_ENTRIES: &[&str] = &["window.new", "app.settings", "app.checkForUpdates"];
 
 /// Coupled by path to the front, on purpose: moving the file breaks this
 /// build, not the menu of a released version (ADR-0041, « Consequences »).
@@ -1123,6 +1123,14 @@ mod tests {
             .collect();
         let mut enabled = enabled;
         enabled.sort();
-        assert_eq!(enabled, ["app.quit", "app.settings", "window.new"]);
+        assert_eq!(
+            enabled,
+            [
+                "app.checkForUpdates",
+                "app.quit",
+                "app.settings",
+                "window.new"
+            ]
+        );
     }
 }
