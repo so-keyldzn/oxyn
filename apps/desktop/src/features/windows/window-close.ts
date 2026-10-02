@@ -17,7 +17,8 @@ export interface WorkspaceConsoles {
   /** The connection's name, as the workspace shows it. */
   connection: string
   costs: () => Array<WindowCloseCost>
-  closeAll: () => Promise<void>
+  /** Stops before the next console, and cancels the one closing, on abort. */
+  closeAll: (signal: AbortSignal) => Promise<void>
 }
 
 const workspaces = new Map<string, WorkspaceConsoles>()
@@ -47,6 +48,11 @@ export interface WindowClose {
 
 /** `null` while no close of this window is being decided. */
 export const windowClose = createStore<WindowClose | null>(null)
+
+// The close under way, aborted by Cancel: its continuation, resumed after an
+// await, must not close a console the user chose to keep — nor one of a
+// newer close, which holds a request of its own.
+let request: AbortController | null = null
 
 /** What closing the window now would cost, across its workspaces. */
 export function windowCloseRows(
@@ -86,6 +92,8 @@ export function onCloseRequested() {
 
 /** The dialog's `Cancel`: the window stays, with every console as it was. */
 export function cancelWindowClose() {
+  request?.abort()
+  request = null
   windowClose.setState(() => null)
   void recovery.cancelExit().catch(() => undefined)
 }
@@ -98,10 +106,14 @@ export function cancelWindowClose() {
 export async function closeWindow() {
   const current = windowClose.state
   if (!current) return
+  request?.abort()
+  const { signal } = (request = new AbortController())
   windowClose.setState(() => ({ ...current, busy: true }))
   await flushAllDrafts().catch(() => false)
   for (const consoles of [...workspaces.values()]) {
-    await consoles.closeAll().catch(() => undefined)
+    if (signal.aborted) return
+    await consoles.closeAll(signal).catch(() => undefined)
   }
+  if (signal.aborted) return
   await windows.confirmClose().catch(() => undefined)
 }
