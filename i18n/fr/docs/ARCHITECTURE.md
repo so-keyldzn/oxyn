@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="6e180841302c" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="a12bd5a80f50" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -241,6 +241,10 @@ Le paquet d'application est produit par `make desktop PROFIL=release`
 (`tauri build`), selon la section `bundle` de `crates/oxyn-desktop/tauri.conf.json` :
 icônes de `crates/oxyn-desktop/icons/`, macOS 13.0 au minimum. Sans
 `PROFIL=release`, `make desktop` construit le binaire sans paquet.
+La livraison GitHub construit les tags de version dans une release brouillon.
+La livraison macOS exige une signature Developer ID et une notarisation,
+vérifiées avant l'envoi ; configuration et publication sont décrites dans
+[RELEASE](RELEASE.md).
 
 Les préférences de lecture vivent dans `workspace_preferences`, ajoutée par
 la migration SQLite 4. Le payload est un JSON versionné de `WorkspacePreferences`

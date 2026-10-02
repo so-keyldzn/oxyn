@@ -5,7 +5,7 @@ members = ["crates/*", "drivers/*"]
 [workspace.package]
 version       = "0.0.1"
 edition       = "2024"
-# 1.95 and not 1.94: `sqlx 0.9.0` requires 1.94.0, but `wasmtime 48.0.1`
+# 1.95 and not 1.94: `sqlx 0.9.0` requires 1.94.0, but `wasmtime 48.0.3`
 # requires 1.95.0. wasmtime is behind oxyn-plugin's `wasm-host` feature, off by
 # default — cargo therefore does not check its rust-version in an ordinary
 # build, and the real floor would stay invisible until the day someone enables
@@ -129,7 +129,7 @@ schemars      = "1.2.2"
 agent-client-protocol = "2.1.0"
 
 # --- plugins (optional, `wasm-host` feature) ---------------------------------
-wasmtime      = "48.0.1"
+wasmtime      = "48.0.3"
 toml          = "0.9.8"
 
 # --- UI ----------------------------------------------------------------------

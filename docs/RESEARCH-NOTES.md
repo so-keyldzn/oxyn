@@ -183,6 +183,30 @@ tag: a tag moves, a SHA does not.
 | `vitest run --changed [since]` ("Run tests that are affected by the changed files") and `--passWithNoTests` exist in vitest 4.1.11; `eslint --no-warn-ignored` in eslint 9.39.5; `prettier --ignore-unknown` in prettier 3.9.6 — options of `script/verif-rapide` | `--help` of the installed binaries | 2026-09-25 |
 | No job started any more on PRs #31, #32 and #33: "The job was not started because recent account payments have failed or your spending limit needs to be increased" (0 step, no runner). The macOS + Linux matrix on every PR, with 4 macOS jobs per PR, had exhausted the quota. Hence Linux only on PRs (`qualite.yml`) | annotations of the jobs of run `36046972599` | 2026-09-24 |
 
+## Apple release contracts — checked on 2026-10-01
+
+| Fact | Consequence | Source |
+|---|---|---|
+| Developer ID Application signs apps distributed outside the Mac App Store; notarization accepts a team API key, issuer ID and private-key path | Delivery requires this identity and all seven documented secrets; no unsigned fallback | [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/), [Apple Developer ID](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/) |
+| The pinned CLI `2.11.4` resolves to Tauri commit `8909f221d1515955fc843808032bdc5d62209c96`; `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` import a temporary keychain; normal `Drop` deletes it; the app is notarized/stapled and the DMG signed | Use Tauri's credential handling on disposable hosted runners; verify the app's ticket and both signatures after bundling | [sign.rs](https://github.com/tauri-apps/tauri/blob/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-bundler/src/bundle/macos/sign.rs), [keychain.rs](https://github.com/tauri-apps/tauri/blob/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-macos-sign/src/keychain.rs), [dmg/mod.rs](https://github.com/tauri-apps/tauri/blob/8909f221d1515955fc843808032bdc5d62209c96/crates/tauri-bundler/src/bundle/macos/dmg/mod.rs) |
+| An unset GitHub secret evaluates to an empty string; `gh secret set` accepts stdin; manual dispatch requires the workflow on the default branch | Check credentials explicitly, document direct secret transfer and require an existing version tag for manual builds | [GitHub secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets), [manual dispatch](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow) |
+| `cargo-about` 0.9.2's two archive checksums still match the values in the Licenses section below | Reuse the quality workflow's version and verified checksums in delivery; `--exiger` otherwise stops the release build | [release 0.9.2](https://github.com/EmbarkStudios/cargo-about/releases/tag/0.9.2), macOS ARM and Linux musl `.sha256` assets fetched on this date |
+
+Team API key scope was rechecked on 2026-10-02: keys apply across the account’s
+apps. The dedicated notarization key uses Developer access, as documented by
+Tauri; its private key is downloadable once.
+Source: [Apple API key help](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/).
+
+## Wasmtime security patch — checked on 2026-10-02
+
+The workspace now requires Wasmtime **48.0.3**, with its matching Cranelift
+0.135.3 family in `Cargo.lock`. The crates.io sparse index lists 48.0.3 as
+not yanked, with Rust 1.95.0 still its minimum. This patch fixes the fuel
+accounting advisories RUSTSEC-2026-0315 and RUSTSEC-2026-0316 that blocked
+`make qualite` on 48.0.1; no advisory is ignored to permit delivery.
+Sources: [registry index](https://index.crates.io/wa/sm/wasmtime),
+[48.0.3 release notes](https://github.com/bytecodealliance/wasmtime/releases/tag/v48.0.3).
+
 ## GPUI
 
 | Fact | Value | Source | Checked on |

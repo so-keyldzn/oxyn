@@ -236,6 +236,9 @@ The application package is produced by `make desktop PROFIL=release`
 (`tauri build`), according to the `bundle` section of `crates/oxyn-desktop/tauri.conf.json`:
 icons from `crates/oxyn-desktop/icons/`, macOS 13.0 minimum. Without
 `PROFIL=release`, `make desktop` builds the binary without a package.
+GitHub delivery builds version tags into a draft release. macOS delivery
+requires Developer ID signing and notarization, verified before upload;
+the setup and publication contract are in [RELEASE](RELEASE.md).
 
 Reading preferences live in `workspace_preferences`, added by
 SQLite migration 4. The payload is a versioned JSON of `WorkspacePreferences`
