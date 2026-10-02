@@ -32,6 +32,7 @@ fn open(runtime: &tokio::runtime::Runtime, backend: &Backend) -> OpenConnection 
         .expect("connects")
     {
         ConnectResponse::Open(open) => open,
+        ConnectResponse::Saved { message, .. } => panic!("not opened: {message}"),
         ConnectResponse::Approval { .. } => panic!("a local connection needs no approval"),
     }
 }

@@ -127,6 +127,7 @@ fn bench_on(environment: Environment, left_answers: bool, right_answers: bool) -
         .expect("connects")
     {
         ConnectResponse::Open(open) => open,
+        ConnectResponse::Saved { message, .. } => panic!("not opened: {message}"),
         // Production: the host of these tests confirms at once.
         ConnectResponse::Approval { command, .. } => {
             match runtime
