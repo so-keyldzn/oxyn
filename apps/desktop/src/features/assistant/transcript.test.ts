@@ -409,6 +409,7 @@ describe("what an answer touched", () => {
         complete: true,
         cancelled,
         truncated: false,
+        rowLimitUnverified: false,
       })
     expect(touched(executed(false))).toMatchObject([
       { mutating: true, rows: 3 },

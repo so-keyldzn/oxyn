@@ -320,6 +320,9 @@ impl Session for PostgresSession {
             return Err(OxynError::Cancelled);
         }
 
+        // Taken before the request is taken apart: `is_mutating` also counts
+        // the reported risk, which the cursor does not receive.
+        let confirm_end = !request.is_mutating();
         let ExecRequest {
             text,
             params,
@@ -467,6 +470,7 @@ impl Session for PostgresSession {
                 schema,
                 decodings,
                 limits,
+                confirm_end,
                 intent,
                 backend_pid: pid,
                 canceller: Arc::clone(&self.canceller),

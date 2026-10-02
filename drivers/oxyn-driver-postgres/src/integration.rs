@@ -806,6 +806,46 @@ async fn the_row_bound_reads_one_row_ahead_before_saying_truncated() {
     session.close().await.expect("close");
 }
 
+/// A write is not read past its bound, the rule the executor applies to its own
+/// end probe. Exactly N rows therefore stay truncated, where a read of N rows
+/// is proven whole.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn a_write_at_the_row_bound_is_not_read_past_it() {
+    let Some(session) = session().await else {
+        return;
+    };
+    apply(
+        session.as_ref(),
+        "DROP TABLE IF EXISTS oxyn_row_bound_write",
+    )
+    .await;
+    apply(
+        session.as_ref(),
+        "CREATE TABLE oxyn_row_bound_write (i integer)",
+    )
+    .await;
+
+    let exec_request = ExecRequest::new(
+        QueryLanguage::Sql(SqlDialect::Postgres),
+        "INSERT INTO oxyn_row_bound_write SELECT i FROM generate_series(1, 1000) AS s(i) \
+         RETURNING i",
+    )
+    .with_intent(StatementIntent::Write)
+    .with_limits(ExecLimits::default().writable().with_max_rows(Some(1_000)));
+    let mut cursor = session
+        .execute(exec_request, &CancelToken::new())
+        .await
+        .expect("execution");
+    let (rows, _) = drain(&mut cursor).await;
+
+    assert_eq!(rows, 1_000);
+    assert!(cursor.stats().truncated, "nothing proved the result whole");
+
+    apply(session.as_ref(), "DROP TABLE oxyn_row_bound_write").await;
+    session.close().await.expect("close");
+}
+
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn read_only_is_enforced_by_the_server() {

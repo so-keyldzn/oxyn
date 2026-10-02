@@ -13,6 +13,7 @@ describe("stateFromOutcome", () => {
       complete: false,
       cancelled: false,
       truncated: true,
+      rowLimitUnverified: false,
     })
     expect(state).toMatchObject({
       status: "populated",

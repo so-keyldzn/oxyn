@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   Cell,
+  CommandOutcome,
   ConnectionDraft,
   ConnectionTest,
   ExecutionEvent,
@@ -126,6 +127,26 @@ describe("optional fields", () => {
 
     const { comment: _absent, ...missing } = detail
     expect(RelationDetail.safeParse(missing).success).toBe(false)
+  })
+
+  it("requires the flag of an unverified row limit, which Rust always writes", () => {
+    // A missing key would fall back to the ordinary truncated message: the
+    // footer would claim missing rows nobody looked for.
+    const executed = {
+      type: "executed",
+      result: "r",
+      columns: [],
+      rows: 10_000,
+      elapsedMs: 40,
+      complete: false,
+      cancelled: false,
+      truncated: true,
+      rowLimitUnverified: true,
+    }
+    expect(CommandOutcome.safeParse(executed).success).toBe(true)
+
+    const { rowLimitUnverified: _absent, ...missing } = executed
+    expect(CommandOutcome.safeParse(missing).success).toBe(false)
   })
 })
 

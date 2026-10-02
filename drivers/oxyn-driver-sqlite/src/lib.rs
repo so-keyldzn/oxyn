@@ -653,6 +653,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_write_at_the_row_bound_is_not_stepped_past_it() {
+        // Exactly N rows: a read steps once more and proves the result whole;
+        // a write does not, like the executor's own end probe, and its result
+        // stays truncated.
+        let session = workshop().await;
+        run_to_end(session.as_ref(), "CREATE TABLE t(n INTEGER)").await;
+        run_to_end(session.as_ref(), "CREATE TABLE u(n INTEGER)").await;
+        run_to_end(session.as_ref(), "INSERT INTO t(n) VALUES (1), (2)").await;
+
+        for (request, truncated) in [
+            (
+                read_request("SELECT n FROM t").with_limits(ExecLimits::default().with_max_rows(2)),
+                false,
+            ),
+            (
+                write_request("INSERT INTO u(n) SELECT n FROM t RETURNING n")
+                    .with_limits(ExecLimits::default().writable().with_max_rows(2)),
+                true,
+            ),
+        ] {
+            let mut batch_cursor = session
+                .execute(request, &CancelToken::new())
+                .await
+                .expect("execution");
+            let all_batches = drain_all(&mut batch_cursor).await;
+            let row_count: usize = all_batches.iter().map(RecordBatch::num_rows).sum();
+            assert_eq!(row_count, 2);
+            assert_eq!(batch_cursor.stats().truncated, truncated);
+        }
+    }
+
+    #[tokio::test]
     async fn cancellation_cuts_the_read_between_two_batches() {
         let session = session(BatchLimits::new().with_max_rows(10)).await;
         run_to_end(session.as_ref(), "CREATE TABLE big(n INTEGER)").await;

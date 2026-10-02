@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="9260fa609e90" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="1827fb64fe14" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -241,7 +241,12 @@ instruction mutante n'est pas lue au-delà de sa
 limite, car demander un lot de plus au serveur prolongerait ses effets de bord :
 l'arrêt est `SinkOutcome::RowLimitUnverified`, affiché `Row limit reached ·
 completeness not verified` plutôt que comme des lignes manquantes, et reste non
-exportable comme tout résultat dont l'intégralité n'est pas prouvée.
+exportable comme tout résultat dont l'intégralité n'est pas prouvée. Les pilotes
+PostgreSQL et SQLite appliquent la même règle à leur propre borne et arrêtent
+une instruction mutante à N sans lire la ligne N + 1. Le pilote MySQL continue
+de lire au-delà de la borne : son protocole ne laisse aucune instruction en
+pause avec des lignes non lues, et l'alternative à la lecture du jeu de
+résultats est de tuer l'écriture en cours.
 
 La préparation PostgreSQL examine les types des colonnes, y compris les bases
 de domaines et les éléments de tableaux. Les types sans sortie binaire, les
