@@ -403,6 +403,67 @@ export const SavedNullMarker: Story = {
   },
 }
 
+const LONG_MARKER = "<value not provided by the server>"
+
+/**
+ * A NULL-only column under a short header is as wide as the saved marker, so
+ * the marker reads whole; were it clipped, it would carry its own tooltip.
+ */
+export const LongNullMarker: Story = {
+  decorators: [
+    (Story) => (
+      <NullTextContext value={LONG_MARKER}>
+        <Story />
+      </NullTextContext>
+    ),
+  ],
+  args: {
+    resultKey: "story-long-null-marker",
+    columns: [{ name: "x", dataType: "Null", nullable: true }],
+    rowCount: 3,
+    fetchPage: pagesOf(3, () => null, 1),
+  },
+  play: async ({ canvasElement }) => {
+    await waitFor(() =>
+      expect(canvasElement.querySelectorAll("[data-null]")).toHaveLength(3)
+    )
+    for (const element of canvasElement.querySelectorAll("[data-null]")) {
+      await expect(element).toHaveTextContent(LONG_MARKER)
+      await expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth)
+      await expect(element).not.toHaveAttribute("title")
+    }
+  },
+}
+
+const OVERSIZED_MARKER = "<missing> ".repeat(12).trim()
+
+/**
+ * A marker wider than any automatic width is clipped like a long text: an
+ * ellipsis, and the whole marker in its tooltip.
+ */
+export const OversizedNullMarker: Story = {
+  decorators: [
+    (Story) => (
+      <NullTextContext value={OVERSIZED_MARKER}>
+        <Story />
+      </NullTextContext>
+    ),
+  ],
+  args: {
+    resultKey: "story-oversized-null-marker",
+    columns: [{ name: "x", dataType: "Null", nullable: true }],
+    rowCount: 1,
+    fetchPage: pagesOf(1, () => null, 1),
+  },
+  play: async ({ canvasElement }) => {
+    await waitFor(() =>
+      expect(canvasElement.querySelector("[data-null]")).not.toBeNull()
+    )
+    const absent = canvasElement.querySelector("[data-null]")
+    await expect(absent).toHaveAttribute("title", OVERSIZED_MARKER)
+  },
+}
+
 /** Screen readers follow the active cell through aria-activedescendant. */
 export const KeyboardOnly: Story = {
   args: {

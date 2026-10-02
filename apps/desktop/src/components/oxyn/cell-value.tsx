@@ -22,7 +22,8 @@ export function formatBytes(bytes: number) {
  * until they say otherwise. Carried apart from the cell: a NULL crosses the IPC
  * as NULL and only its drawing takes the marker.
  */
-export const NullTextContext = React.createContext("∅ NULL")
+export const DEFAULT_NULL_TEXT = "∅ NULL"
+export const NullTextContext = React.createContext(DEFAULT_NULL_TEXT)
 
 /**
  * One formatted cell. Rendered as text only — never as HTML — whatever the
@@ -47,7 +48,8 @@ export function CellValue({
   if (cell === null) {
     return (
       <span
-        className={cn("shrink-0 text-null select-none", className)}
+        className={cn("min-w-0 truncate text-null select-none", className)}
+        title={title}
         data-null
       >
         {nullText}
