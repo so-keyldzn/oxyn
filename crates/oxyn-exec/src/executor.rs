@@ -69,7 +69,7 @@ use oxyn_core::{
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
-    ResultBuffer, SinkOutcome, export_to_path,
+    Pressure, ResultBuffer, SinkOutcome, export_to_path,
 };
 use oxyn_driver::{Cursor, DriverRegistry};
 use oxyn_store::history::Reconciliation;
@@ -1701,6 +1701,9 @@ impl Executor {
     ) -> Result<Drained> {
         let connection = slot.connection();
         let limits = request.limits.clone();
+        // Probing for the end at the row limit makes the server produce one
+        // more batch: harmless for a read, an extra side effect otherwise.
+        let confirm_end = preview_limit.is_some() || !request.is_mutating();
         // Armed before the driver is called: `execute` waits for the session,
         // prepares, and — SQLite — computes the whole first batch, an entire
         // aggregate. A clock started at the drain would let that run unbounded.
@@ -1748,13 +1751,15 @@ impl Executor {
                 cursor,
                 ct,
                 deadline,
-                preview_limit.is_some(),
+                confirm_end,
             )
             .await;
 
         // An abandonment — timeout or cancellation — must reach the server.
+        // A confirming drain only ends unverified when its probe timed out.
         let interrupted = matches!(outcome, Ok(SinkOutcome::Cancelled))
-            || matches!(outcome, Err(OxynError::Timeout { .. }));
+            || matches!(outcome, Err(OxynError::Timeout { .. }))
+            || (confirm_end && matches!(outcome, Ok(SinkOutcome::RowLimitUnverified)));
         if interrupted {
             self.running.cancel(&self.sessions, statement).await;
         }
@@ -1886,10 +1891,10 @@ impl Executor {
         cursor: Box<dyn Cursor>,
         ct: &CancelToken,
         deadline: Option<Deadline>,
-        confirm_preview_end: bool,
+        confirm_end: bool,
     ) -> Result<SinkOutcome> {
         let sink = BatchSink::new(Arc::clone(buffer));
-        let sink = if confirm_preview_end {
+        let sink = if confirm_end {
             sink.with_end_confirmation()
         } else {
             sink
@@ -1918,12 +1923,20 @@ impl Executor {
         {
             Ok(outcome) => outcome,
             Err(_) => {
+                // Read before closing: a buffer already at its row limit was
+                // only waiting for the end-of-stream probe.
+                let at_limit = buffer.pressure() == Pressure::RowLimit;
                 // The draining future was just abandoned, perhaps after
                 // consuming bytes from the stream: the cursor is burnt. The
                 // buffer is closed so that the interface stops waiting — what
                 // was already received stays readable, and marked truncated.
                 buffer.mark_truncated();
                 buffer.mark_complete(BatchSource::stats(&source));
+                if at_limit {
+                    // Every row the limit allows arrived in time: the read
+                    // succeeded, only its completeness is unknown.
+                    return Ok(SinkOutcome::RowLimitUnverified);
+                }
                 Err(OxynError::Timeout {
                     after: deadline.after,
                 })
@@ -3543,6 +3556,10 @@ mod connection_tests;
 #[cfg(test)]
 #[path = "export_tests.rs"]
 mod export_tests;
+
+#[cfg(test)]
+#[path = "row_limit_tests.rs"]
+mod row_limit_tests;
 
 #[cfg(test)]
 #[path = "production_read_tests.rs"]

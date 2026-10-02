@@ -423,7 +423,7 @@ fn probe(
 
     loop {
         if *remaining == Some(0) {
-            truncated = step(rows, effect, bound)?.is_some();
+            truncated = past_the_bound(rows, effect, bound)?;
             finished = true;
             break;
         }
@@ -481,7 +481,7 @@ fn fill(
 
     loop {
         if *remaining == Some(0) {
-            truncated = step(rows, effect, bound)?.is_some();
+            truncated = past_the_bound(rows, effect, bound)?;
             finished = true;
             break;
         }
@@ -520,6 +520,20 @@ fn step<'a, 'stmt>(
 ) -> Result<Option<&'a Row<'stmt>>> {
     rows.next()
         .map_err(|err| error::engine_bound(err, effect, bound))
+}
+
+/// Is there a row beyond the `ExecLimits::max_rows` bound?
+///
+/// One more step tells exactly N rows from more than N, and only a statement
+/// the engine knows to be read-only takes it, the rule the executor applies to
+/// its own end probe. A `RETURNING` makes all its changes at the first step, so
+/// the rule costs a write nothing but exactness: stopped at its bound, it stays
+/// truncated.
+fn past_the_bound(rows: &mut Rows<'_>, effect: Effect, bound: Bound) -> Result<bool> {
+    match effect {
+        Effect::ReadOnly => Ok(step(rows, effect, bound)?.is_some()),
+        Effect::Mutating => Ok(true),
+    }
 }
 
 /// Counts a row against the `ExecLimits::max_rows` bound, when there is one.

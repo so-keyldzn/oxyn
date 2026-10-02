@@ -26,6 +26,7 @@ export function stateFromOutcome(outcome: CommandOutcome): {
           complete: outcome.complete,
           truncated: outcome.truncated,
           cancelled: outcome.cancelled,
+          rowLimitUnverified: outcome.rowLimitUnverified,
           elapsedMs: outcome.elapsedMs,
         },
         approval: null,

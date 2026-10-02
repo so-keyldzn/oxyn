@@ -69,6 +69,7 @@ use oxyn_core::{
     Actor, AgentId, AgentSessionId, CancelToken, Command, CommandId, ErrorClass, ExecStats,
     OxynError, ResultId,
 };
+use oxyn_data::SinkOutcome;
 
 use crate::executor::{Executor, Outcome};
 
@@ -207,7 +208,11 @@ impl DispatchReport {
             } => {
                 let (result, stats) = (*result, *stats);
                 let mut summary = format!("{} rows, {} batches", stats.rows, stats.batches);
-                if stats.truncated || sink.is_truncated() {
+                if *sink == SinkOutcome::RowLimitUnverified {
+                    // Not proven whole, not proven cut either: claiming
+                    // missing rows would be as wrong as claiming none.
+                    summary.push_str(" (row limit reached; completeness not verified)");
+                } else if stats.truncated || sink.is_truncated() {
                     // Tells the model explicitly that this is not everything: a
                     // truncated result that looks complete leads to wrong
                     // conclusions about real data.

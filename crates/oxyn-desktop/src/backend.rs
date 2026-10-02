@@ -940,6 +940,7 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
             complete: matches!(sink, SinkOutcome::Exhausted),
             cancelled: matches!(sink, SinkOutcome::Cancelled),
             truncated: stats.truncated,
+            row_limit_unverified: matches!(sink, SinkOutcome::RowLimitUnverified),
         },
         Outcome::NeedsApproval {
             command,

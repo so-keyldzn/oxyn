@@ -71,6 +71,7 @@ const executed = (result: string): CommandOutcome => ({
   complete: true,
   cancelled: false,
   truncated: false,
+  rowLimitUnverified: false,
 })
 
 let connections = 0
