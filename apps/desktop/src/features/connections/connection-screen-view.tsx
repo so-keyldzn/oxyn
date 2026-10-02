@@ -9,10 +9,10 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import markUrl from "@/assets/oxyn-mark.png"
-import { ApprovalDialog } from "@/components/oxyn/approval-dialog"
-import type { PendingApproval } from "@/components/oxyn/approval-dialog"
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import { ConnectionChangeReview } from "@/components/oxyn/connection-change-review"
+import type { PendingConnectionChange } from "@/components/oxyn/connection-change-review"
 import { ConnectionForm } from "@/components/oxyn/connection-form"
 import type {
   ConnectionPrefill,
@@ -43,22 +43,16 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import type { ConnectionSummary } from "@/lib/ipc/settings"
+import type { ConnectionDetails, ConnectionSummary } from "@/lib/ipc/settings"
 import type {
   ConnectionDraft,
   ConnectionTest,
   DriverChoice,
-  Environment,
   FormField,
 } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 import { useActionSource } from "@/lib/actions/context"
 import type { ConnectionMenuActions } from "@/lib/actions/targets"
-
-export type PendingConnectionApproval = PendingApproval & {
-  name: string
-  environment: Environment
-}
 
 export interface ConnectionScreenViewProps {
   connections: Array<ConnectionSummary> | undefined
@@ -98,6 +92,11 @@ export interface ConnectionScreenViewProps {
   /** A new connection being created and opened. */
   submitting: boolean
   formError?: BackendFailure | null
+  /**
+   * The form's connection, saved when its opening failed: connecting again
+   * updates it rather than saving another, as an edit of it would.
+   */
+  saved?: ConnectionDetails | null
   onSubmit: (draft: ConnectionDraft) => void
   onBrowse?: (field: FormField) => Promise<string | null>
   /**
@@ -120,7 +119,8 @@ export interface ConnectionScreenViewProps {
   cancelling: boolean
   onCancelOpening: () => void
 
-  approval: PendingConnectionApproval | null
+  /** A creation, or the update of the connection `saved`. */
+  approval: PendingConnectionChange | null
   deciding: boolean
   onDecide: (approved: boolean) => void
 
@@ -168,6 +168,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     connectionMenu,
     submitting,
     formError,
+    saved = null,
     onSubmit,
     onBrowse,
     prefill,
@@ -391,6 +392,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                     testing={testing}
                     aborting={cancelling}
                     error={formError}
+                    saved={saved}
                     onSubmit={onSubmit}
                     onTest={onTest}
                     onBrowse={onBrowse}
@@ -504,10 +506,8 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
         onDiscard={leaveDriver}
       />
 
-      <ApprovalDialog
-        approval={approval}
-        connectionName={approval?.name ?? ""}
-        environment={approval?.environment ?? "production"}
+      <ConnectionChangeReview
+        change={approval}
         deciding={deciding}
         onDecide={onDecide}
       />

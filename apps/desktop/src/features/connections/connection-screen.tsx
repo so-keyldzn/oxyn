@@ -7,7 +7,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { toast } from "@/components/ui/toast"
 import { ConnectionScreenView } from "@/features/connections/connection-screen-view"
-import type { PendingConnectionApproval } from "@/features/connections/connection-screen-view"
+import type { PendingConnectionChange } from "@/components/oxyn/connection-change-review"
 import type { ConnectionPrefill } from "@/components/oxyn/connection-form"
 import { copyConnection } from "@/features/connections/copy-connection"
 import { duplicatePrefill } from "@/features/connections/duplicate-connection"
@@ -34,12 +34,17 @@ import { actionSources } from "@/lib/actions/context"
 import type { ConnectionMenuActions } from "@/lib/actions/targets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
-import type { ConnectionSummary } from "@/lib/ipc/settings"
+import type {
+  ConnectionChange,
+  ConnectionDetails,
+  ConnectionSummary,
+} from "@/lib/ipc/settings"
 import type {
   ConnectResponse,
   ConnectionDraft,
   DriverChoice,
   OpenConnection,
+  SavedConnection,
 } from "@/lib/ipc/types"
 
 function asOpen(response: ConnectResponse): OpenConnection | null {
@@ -146,20 +151,62 @@ export function ConnectionScreen() {
     // Rust offers only a registered driver; a list read before a change of
     // build would still not have it, and then nothing is offered.
     if (!choice) return
+    setFormSaved(null)
+    setOpenFailure(null)
     setDuplicate(null)
     setPrefill({ key: offer.id, values: { [offer.field]: offer.path } })
     setDriver(choice)
   }, [offer, drivers.data])
   const [approval, setApproval] =
-    React.useState<PendingConnectionApproval | null>(null)
+    React.useState<PendingConnectionChange | null>(null)
+  /**
+   * The connection this form saved and could not open. Connecting again
+   * updates it — through the same edit, policy and secret handling as the
+   * settings — then reopens it, rather than saving one more.
+   */
+  const [formSaved, setFormSaved] = React.useState<ConnectionDetails | null>(
+    null
+  )
+  const [openFailure, setOpenFailure] = React.useState<BackendFailure | null>(
+    null
+  )
   const [cancelling, setCancelling] = React.useState(false)
   const inFlight = React.useRef<string | null>(null)
   const cancelled = React.useRef(new Set<string>())
 
   const enter = (open: OpenConnection) => {
+    setFormSaved(null)
     openConnection(open)
     void queryClient.invalidateQueries({ queryKey: ["connections"] })
     void navigate({ to: "/workspace" })
+  }
+
+  /** A new form, or another one: what an earlier one saved is not its own. */
+  const forgetSaved = () => {
+    setFormSaved(null)
+    setOpenFailure(null)
+  }
+
+  /**
+   * What the form compares its next attempt with: the parameters as stored,
+   * and whether secrets are. Unreadable, nothing counts as stored — every
+   * secret is then typed again, never sent on from the earlier attempt.
+   */
+  const savedDetails = async (
+    connection: SavedConnection
+  ): Promise<ConnectionDetails> => {
+    try {
+      return await settingsBackend.connectionDetails(connection.id)
+    } catch {
+      return { ...connection, values: {}, hasStoredSecrets: false }
+    }
+  }
+
+  const adoptSaved = async (response: ConnectResponse) => {
+    if (response.type !== "saved") return
+    setOpenFailure({ message: response.message, retryable: response.retryable })
+    void queryClient.invalidateQueries({ queryKey: ["connections"] })
+    setFormSaved(await savedDetails(response.connection))
   }
 
   /** Runs a cancellable opening; resolves to `null` when the user cancelled. */
@@ -192,16 +239,83 @@ export function ConnectionScreen() {
       void backend.disconnect(open.connection).catch(() => undefined)
   }
 
+  /** Opens a saved connection; `null` when the user cancelled. */
+  const reopen = async (connection: string) => {
+    const held: { late: OpenConnection | null } = { late: null }
+    const open = await cancellable(async (commandId) => {
+      held.late = await backend.reconnect(commandId, connection)
+      return held.late
+    })
+    if (open === null) discardLate(held.late)
+    return open
+  }
+
+  /** The form's saved connection, edited: reopened under its own id. */
+  const reopenEdited = async (
+    change: ConnectionChange | null
+  ): Promise<ConnectResponse | null> => {
+    if (change?.type !== "saved") return null
+    void queryClient.invalidateQueries({ queryKey: ["connections"] })
+    setFormSaved(await savedDetails(change.connection))
+    if (change.secretsError !== null)
+      toast.add({
+        title: "Secrets not saved",
+        description: change.secretsError,
+        type: "error",
+      })
+    const open = await reopen(change.connection.id)
+    return open ? { type: "open", ...open } : null
+  }
+
+  /**
+   * Connecting again after a save whose opening failed. The saved connection
+   * is edited as the settings edit it — the host's dialog for a new marking,
+   * the policy's review on production, the secrets kept, replaced or
+   * forgotten — and only then reopened.
+   */
+  const retrySaved = async (
+    target: SavedConnection,
+    draft: WithoutSecrets<ConnectionDraft>,
+    secrets: Record<string, string>
+  ): Promise<ConnectResponse | null> => {
+    const change = await settingsBackend.updateConnection(
+      newCommandId(),
+      target.id,
+      {
+        name: draft.name,
+        environment: draft.environment,
+        privacyTier: draft.privacyTier,
+        readOnly: draft.readOnly,
+        values: draft.values,
+        secrets,
+      }
+    )
+    if (change?.type === "approval") {
+      setApproval({
+        command: change.command,
+        kind: "update",
+        reason: change.reason,
+        connectionName: change.preview?.connection ?? target.name,
+        environment: draft.environment,
+      })
+      return null
+    }
+    // `null`: refused in the host's dialog, nothing changed.
+    return reopenEdited(change)
+  }
+
   const connect = useMutation({
     mutationFn: async (draft: WithoutSecrets<ConnectionDraft>) => {
+      const secrets = typedSecrets.take(draft)
+      setOpenFailure(null)
+      if (formSaved) return retrySaved(formSaved, draft, secrets)
       const held: { late: ConnectResponse | null } = { late: null }
       const response = await cancellable(async (commandId) => {
-        held.late = await backend.connect(commandId, {
-          ...draft,
-          secrets: typedSecrets.take(draft),
-        })
+        held.late = await backend.connect(commandId, { ...draft, secrets })
         return held.late
       })
+      // Kept even when the opening was cancelled: the connection is saved.
+      if (held.late) await adoptSaved(held.late)
       if (response === null) discardLate(held.late)
       return response
     },
@@ -210,9 +324,9 @@ export function ConnectionScreen() {
       if (response.type === "approval") {
         setApproval({
           command: response.command,
+          kind: "create",
           reason: response.reason,
-          preview: response.preview,
-          name: draft.name,
+          connectionName: response.preview?.connection ?? draft.name,
           environment: draft.environment,
         })
         return
@@ -236,31 +350,32 @@ export function ConnectionScreen() {
   })
 
   const reconnect = useMutation({
-    mutationFn: async (connection: ConnectionSummary) => {
-      const held: { late: OpenConnection | null } = { late: null }
-      const open = await cancellable(async (commandId) => {
-        held.late = await backend.reconnect(commandId, connection.id)
-        return held.late
-      })
-      if (open === null) discardLate(held.late)
-      return open
-    },
+    mutationFn: (connection: ConnectionSummary) => reopen(connection.id),
     onSuccess: (open) => {
       if (open) enter(open)
     },
   })
 
   const decide = useMutation({
-    mutationFn: ({
-      command,
+    mutationFn: async ({
+      review,
       approved,
     }: {
-      command: string
+      review: PendingConnectionChange
       approved: boolean
-    }) => backend.decideConnection(command, approved),
+    }) => {
+      if (review.kind === "update")
+        return reopenEdited(
+          await settingsBackend.decideConnectionChange(review.command, approved)
+        )
+      const response = await backend.decideConnection(review.command, approved)
+      if (response) await adoptSaved(response)
+      return response
+    },
     onSuccess: (response) => {
       setApproval(null)
-      const open = response ? asOpen(response) : null
+      if (response === null) return
+      const open = asOpen(response)
       if (open) enter(open)
     },
     onError: () => setApproval(null),
@@ -338,6 +453,7 @@ export function ConnectionScreen() {
       const source = await settingsBackend.connectionDetails(connection.id)
       connect.reset()
       test.reset()
+      forgetSaved()
       setPrefill(null)
       setDuplicate({
         of: connection.name,
@@ -372,6 +488,7 @@ export function ConnectionScreen() {
         setRefusal(null)
         connect.reset()
         test.reset()
+        forgetSaved()
         setDuplicate(null)
         setPrefill(null)
         setDriver(choice)
@@ -380,6 +497,7 @@ export function ConnectionScreen() {
         setRefusal(null)
         connect.reset()
         test.reset()
+        forgetSaved()
         setDuplicate(null)
         setPrefill(null)
         setDriver(null)
@@ -398,8 +516,9 @@ export function ConnectionScreen() {
       formError={
         refusal !== null
           ? { message: refusal, retryable: false }
-          : failureOf(connect.error ?? decide.error)
+          : (failureOf(connect.error ?? decide.error) ?? openFailure)
       }
+      saved={formSaved}
       onSubmit={(draft) => {
         if (connect.isPending || test.isPending) return
         if (refuseBeyondLimit()) return
@@ -422,7 +541,7 @@ export function ConnectionScreen() {
       approval={approval}
       deciding={decide.isPending}
       onDecide={(approved) => {
-        if (approval) decide.mutate({ command: approval.command, approved })
+        if (approval) decide.mutate({ review: approval, approved })
       }}
       onReturnToWorkspace={
         leftOpen ? () => void navigate({ to: "/workspace" }) : undefined

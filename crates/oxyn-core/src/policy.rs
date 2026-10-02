@@ -290,8 +290,21 @@ impl DefaultPolicy {
 
     /// Showable name of a connection, or a neutral mention if it is unknown.
     /// **Never** returns the identifier (I-03).
-    fn display_name(facts: Option<&ConnectionFacts>) -> String {
-        facts.map_or_else(|| "unknown connection".to_owned(), |f| f.name.clone())
+    ///
+    /// A connection being created is not registered yet, but its command
+    /// carries the name the user typed: the review names what it saves, not
+    /// an « unknown connection ».
+    fn display_name(cmd: &Command, facts: Option<&ConnectionFacts>) -> String {
+        match (facts, cmd) {
+            (Some(facts), _) => facts.name.clone(),
+            (
+                None,
+                Command::CreateConnection { config }
+                | Command::UpdateConnection { config }
+                | Command::TestConnection { config },
+            ) => config.name.clone(),
+            (None, _) => "unknown connection".to_owned(),
+        }
     }
 
     /// Builds the preview of a command.
@@ -299,7 +312,7 @@ impl DefaultPolicy {
         let statement = cmd
             .statement_text()
             .map_or_else(|| cmd.name().to_owned(), |text| text.to_owned());
-        Some(Preview::new(statement, Self::display_name(facts)))
+        Some(Preview::new(statement, Self::display_name(cmd, facts)))
     }
 }
 
@@ -416,7 +429,7 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent() && mutating && env.is_production() {
             return Decision::deny(format!(
                 "an agent is strictly read-only on \"{}\" (production)",
-                Self::display_name(facts.as_ref())
+                Self::display_name(cmd, facts.as_ref())
             ));
         }
 
@@ -432,7 +445,7 @@ impl PolicyGate for DefaultPolicy {
             return Decision::approval(
                 format!(
                     "an agent is requesting a {intent} operation on \"{}\"",
-                    Self::display_name(facts.as_ref())
+                    Self::display_name(cmd, facts.as_ref())
                 ),
                 Self::preview(cmd, facts.as_ref()),
             );
@@ -444,7 +457,7 @@ impl PolicyGate for DefaultPolicy {
             return Decision::approval(
                 format!(
                     "{intent} operation on \"{}\", marked production",
-                    Self::display_name(facts.as_ref())
+                    Self::display_name(cmd, facts.as_ref())
                 ),
                 Self::preview(cmd, facts.as_ref()),
             );
@@ -916,6 +929,26 @@ mod tests {
             policy
                 .authorize(&human(), &cmd, Environment::Local)
                 .is_allowed()
+        );
+    }
+
+    #[test]
+    fn a_production_creation_is_reviewed_under_the_name_it_saves() {
+        let policy = DefaultPolicy::new();
+        let cmd = Command::CreateConnection {
+            config: Box::new(ConnectionConfig::new("billing", DriverId::postgres())),
+        };
+
+        let Decision::RequireApproval { reason, preview } =
+            policy.authorize(&human(), &cmd, Environment::Production)
+        else {
+            panic!("a production connection is saved only on a decision");
+        };
+        assert!(reason.contains("\"billing\""), "{reason}");
+        assert!(!reason.contains("unknown connection"), "{reason}");
+        assert_eq!(
+            preview.map(|preview| preview.connection),
+            Some("billing".to_owned())
         );
     }
 
