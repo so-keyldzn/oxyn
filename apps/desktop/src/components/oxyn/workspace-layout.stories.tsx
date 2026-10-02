@@ -475,6 +475,22 @@ export const ResizeAcrossCompactWithSidePanelOpen: Story = {
   },
 }
 
+/**
+ * The column's width is a pixel preference: a narrower window, or the sidebar
+ * still sliding open after a return to wide mode, takes room from the work
+ * area, not from the column.
+ */
+export const SidePanelKeepsItsWidthWhenTheWorkspaceNarrows: Story = {
+  args: WithSidePanel.args,
+  render: ResizingWorkspace,
+  play: async ({ canvas }) => {
+    const panel = asidePanelOf(canvas)
+    await expectAsideWidth(panel, 280)
+    canvas.getByTestId("resizing-frame").style.width = "1210px"
+    await expectAsideWidth(panel, 280)
+  },
+}
+
 export const ResizeAcrossCompactWithSidePanelClosed: Story = {
   args: { ...WithSidePanel.args, asideOpen: false },
   render: ResizingWorkspace,

@@ -54,4 +54,13 @@ describe("surfaces", () => {
     expect(isReadOnlySession(["READ_ONLY_SESSION"])).toBe(true)
     expect(isReadOnlySession(postgres)).toBe(false)
   })
+
+  it("does not read the ability to enforce read-only as the state", () => {
+    // What a writable PostgreSQL or MySQL session really declares.
+    expect(
+      isReadOnlySession([...postgres, "DML", "DDL", "READ_ONLY_SESSION"])
+    ).toBe(false)
+    // SQLite opened read-only keeps the flag and drops both writes.
+    expect(isReadOnlySession([...sqlite, "READ_ONLY_SESSION"])).toBe(true)
+  })
 })
