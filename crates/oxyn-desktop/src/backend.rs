@@ -1215,6 +1215,67 @@ mod tests {
         }
     }
 
+    struct RefusingKeychain;
+
+    impl std::fmt::Debug for RefusingKeychain {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RefusingKeychain")
+        }
+    }
+
+    impl SecretStore for RefusingKeychain {
+        fn put(
+            &self,
+            _reference: &oxyn_secrets::SecretRef,
+            _secret: oxyn_secrets::SecretString,
+        ) -> oxyn_secrets::Result<()> {
+            Err(oxyn_secrets::SecretError::AccessDenied {
+                detail: "test keychain refuses writes".into(),
+            })
+        }
+
+        fn get(
+            &self,
+            _reference: &oxyn_secrets::SecretRef,
+        ) -> oxyn_secrets::Result<Option<oxyn_secrets::SecretString>> {
+            Ok(None)
+        }
+
+        fn delete(&self, _reference: &oxyn_secrets::SecretRef) -> oxyn_secrets::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_keychain_write_reports_saved_but_never_claims_stored_secrets() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("temporary store"));
+        let backend =
+            Backend::assemble(store.clone(), Arc::new(RefusingKeychain)).expect("backend");
+        let ConnectResponse::Saved { connection, .. } = runtime
+            .block_on(backend.connect(CommandId::new(), draft_with_password(Environment::Local)))
+            .expect("the declaration is saved")
+        else {
+            panic!("a failed keychain write does not open a session");
+        };
+        let id = connection.id.parse().expect("connection id");
+        assert!(
+            !backend
+                .connection_details(id)
+                .expect("details")
+                .has_stored_secrets
+        );
+        let reopened =
+            Backend::assemble(store, Arc::new(RefusingKeychain)).expect("reopened backend");
+        assert!(
+            !reopened
+                .connection_details(id)
+                .expect("reopened details")
+                .has_stored_secrets
+        );
+    }
+
     #[test]
     fn approving_a_new_connection_writes_its_secret_and_opens_it() {
         let runtime = runtime();
@@ -1247,6 +1308,12 @@ mod tests {
             .get_bundle(&reference)
             .expect("keychain read")
             .expect("saved secrets");
+        assert!(
+            backend
+                .connection_details(config.id)
+                .expect("details")
+                .has_stored_secrets
+        );
         assert_eq!(bundle.password(), Some("not-a-real-password"));
         assert_eq!(secrets.len(), 1, "the saved connection has one entry");
     }

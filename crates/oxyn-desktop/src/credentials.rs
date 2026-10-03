@@ -84,6 +84,26 @@ impl KeyringCredentials {
         Ok(reference)
     }
 
+    /// Whether the referenced entry actually holds credentials. A reference
+    /// alone is insufficient after a failed keychain write or an external deletion.
+    ///
+    /// # Blocking
+    /// Reaches the platform keyring: call it from the blocking pool.
+    ///
+    /// # Errors
+    /// [`OxynError::Config`] if the reference or the stored bundle is invalid,
+    /// or if the keyring refuses the read.
+    pub fn has_secrets(&self, config: &ConnectionConfig) -> Result<bool, OxynError> {
+        if config.secret_ref.is_none() {
+            return Ok(false);
+        }
+        let reference = reference_of(config)?;
+        self.store
+            .get_bundle(&reference)
+            .map(|bundle| bundle.is_some_and(|bundle| !bundle.is_empty()))
+            .map_err(|err| OxynError::Config(format!("reading the connection secrets: {err}")))
+    }
+
     /// Replaces some of a connection's secrets and keeps the others.
     ///
     /// Editing a connection sends only the secrets the user retyped: a password
