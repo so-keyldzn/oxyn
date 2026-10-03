@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="f16cc2539b8a" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="2a9f02621a42" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -1898,8 +1898,9 @@ lecture qui échoue **conserve la liste** au lieu de la vider, pour la raison qu
 vaut déjà pour les fournisseurs — une panne locale ne doit pas se lire comme une
 absence de déclaration.
 
-`remove_external_agent` est plus court que son jumeau, et c'est le sujet : **il
-n'y a pas de clé à oublier**, le geste s'arrête au bus.
+Depuis l'amendement du 2026-10-03 à ADR-0026, `remove_external_agent` supprime la
+déclaration par le bus, puis oublie ses secrets d'environnement du trousseau du
+système sur le pool bloquant. Un échec de suppression préserve les anciennes entrées.
 
 **Ce qui restait au 2026-09-14 :** le champ d'environnement dans le formulaire de
 déclaration, et le choix explicite d'un second agent plutôt que du premier

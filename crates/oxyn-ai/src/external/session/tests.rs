@@ -822,7 +822,7 @@ fn a_request_to_act_on_the_machine_is_refused_and_shown() {
 fn a_local_only_connection_launches_nothing() {
     let agent =
         ExternalAgentConfig::new(oxyn_core::ProviderId::for_new_agent(), "Claude Code", "npx");
-    let refused = ExternalSession::launch(&agent, PrivacyTier::Local).map(|_| ());
+    let refused = block_on(ExternalSession::launch(&agent, PrivacyTier::Local, None)).map(|_| ());
     assert_eq!(refused, Err(ExternalError::RefusedByTier));
 }
 
@@ -1928,4 +1928,53 @@ mod confined {
             seen.lines()
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_one_shot_launch_resolves_secrets_after_the_tier_check() {
+    struct Secrets(Arc<AtomicUsize>);
+    impl super::super::spawn::EnvironmentSecrets for Secrets {
+        fn resolve(&self, _: &str) -> Result<String, ExternalError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok("synthetic-one-shot-token".into())
+        }
+    }
+    let reads = Arc::new(AtomicUsize::new(0));
+    let secrets: Arc<dyn super::super::spawn::EnvironmentSecrets> =
+        Arc::new(Secrets(reads.clone()));
+    let mut agent =
+        ExternalAgentConfig::new(oxyn_core::ProviderId::for_new_agent(), "Test", "/bin/sh")
+            .with_args([
+                "-c",
+                "test \"$ANTHROPIC_API_KEY\" = synthetic-one-shot-token",
+            ]);
+    agent.env_secret_refs.push((
+        "ANTHROPIC_API_KEY".into(),
+        "oxyn:agent-env:00000000000000000000000000000001".into(),
+    ));
+    assert!(matches!(
+        block_on(ExternalSession::launch(
+            &agent,
+            PrivacyTier::Local,
+            Some(secrets.clone())
+        )),
+        Err(ExternalError::RefusedByTier)
+    ));
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let (session, driver) =
+            ExternalSession::launch(&agent, PrivacyTier::Metadata, Some(secrets))
+                .await
+                .expect("launch with keychain");
+        tokio::time::timeout(std::time::Duration::from_secs(5), driver)
+            .await
+            .expect("child finishes");
+        assert_eq!(session.exit_report().expect("exit report").code, Some(0));
+    });
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
 }

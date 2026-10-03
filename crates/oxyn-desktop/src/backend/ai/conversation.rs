@@ -2333,6 +2333,12 @@ impl Run<'_> {
 /// Checks the agent's program exists before launching it, so a missing one
 /// reads as such rather than as a protocol failure.
 async fn locate(agent: &ExternalAgentConfig) -> Result<(), Failure> {
+    // A protected PATH is resolved only at spawn. Let that launch perform the
+    // lookup with the child's actual environment, rather than falsely reject
+    // a program absent from the host PATH (or disclose a secret search path).
+    if agent.env_secret_refs.iter().any(|(name, _)| name == "PATH") {
+        return Ok(());
+    }
     let command = agent.command.clone();
     let path = agent
         .env

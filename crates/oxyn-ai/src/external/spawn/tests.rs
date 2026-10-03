@@ -422,3 +422,36 @@ fn explicitly_secret_short_values_are_redacted_too() {
         .expect("resolved");
     assert_eq!(redact("PIN=1234", &environment), "PIN=<PIN redacted>");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_program_on_a_protected_path_can_be_spawned() {
+    struct Secrets(String);
+    impl EnvironmentSecrets for Secrets {
+        fn resolve(&self, _: &str) -> Result<String, ExternalError> {
+            Ok(self.0.clone())
+        }
+    }
+    let directory = private_directory().expect("temporary search path");
+    std::os::unix::fs::symlink(SHELL, directory.join("oxyn-test-program"))
+        .expect("fixture program");
+    let mut agent = oxyn_core::ExternalAgentConfig::new(
+        oxyn_core::ProviderId::for_new_agent(),
+        "Test",
+        "oxyn-test-program",
+    );
+    agent.env_secret_refs.push((
+        "PATH".into(),
+        "oxyn:agent-env:00000000000000000000000000000001".into(),
+    ));
+    let environment = Environment::empty()
+        .with_secrets(
+            &agent,
+            Some(&Secrets(directory.to_string_lossy().into_owned())),
+        )
+        .expect("resolved path");
+    let spawned = spawn(&agent.command, &script("exit 0"), &environment)
+        .expect("the child's PATH finds its program");
+    assert_eq!(block_on(spawned.watch).code, Some(0));
+    std::fs::remove_dir_all(directory).expect("fixture cleanup");
+}

@@ -1893,8 +1893,9 @@ read that fails **keeps the list** instead of emptying it, for the reason that
 already holds for providers — a local failure must not read as an
 absence of declaration.
 
-`remove_external_agent` is shorter than its twin, and that is the point: **there
-is no key to forget**, the gesture stops at the bus.
+Since the 2026-10-03 amendment to ADR-0026, `remove_external_agent` removes the
+declaration through the bus, then forgets its environment secrets from the OS
+keychain on the blocking pool. A failed removal preserves the old entries.
 
 **What remained as of 2026-09-14:** the environment field in the declaration
 form, and the explicit choice of a second agent rather than the first

@@ -361,6 +361,30 @@ fn refuse_before_launch(
     check_launchable(agent).map_err(|error| ExternalError::Invalid(error.to_string()))
 }
 
+/// Both launch modes use one environment for confinement and the child.
+async fn prepare_launch(
+    agent: &ExternalAgentConfig,
+    tool_url: Option<String>,
+    secrets: Option<Arc<dyn super::spawn::EnvironmentSecrets>>,
+) -> Result<(Option<super::confine::Confinement>, Environment), ExternalError> {
+    let agent = agent.clone();
+    tokio::task::spawn_blocking(move || {
+        let environment = Environment::empty()
+            .with_essentials(|name| std::env::var(name).ok())
+            .with_declared(agent.env.iter().cloned())
+            .with_secrets(&agent, secrets.as_deref())?;
+        let launch = environment.for_confinement(&agent);
+        let confinement = super::confine::confinement_for(&launch, tool_url.as_deref(), || {
+            super::confine::codex_config_layers(&launch)
+        })?;
+        Ok((confinement, environment))
+    })
+    .await
+    .map_err(|_| {
+        ExternalError::Invalid("preparing the agent environment and confinement failed".into())
+    })?
+}
+
 /// What an agent needs to reach Oxyn's tools: the service, and who acts.
 ///
 /// The sink, the panel and the stop are **not** here: they belong to a
@@ -390,20 +414,15 @@ impl ExternalSession {
     /// process exists, since launching one may already reach its service;
     /// [`ExternalError::Invalid`] if the declaration does not validate.
     ///
-    /// Blocks on the file system for Codex, whose configuration it reads: not
-    /// for an async worker — [`Self::launch_with_tools`] reads it off one.
-    pub fn launch(
+    /// Reads configuration and keychain entries on the blocking pool; secrets
+    /// are resolved only after the privacy check permits this launch.
+    pub async fn launch(
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
+        secrets: Option<Arc<dyn super::spawn::EnvironmentSecrets>>,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         refuse_before_launch(agent, tier)?;
-        let confinement = super::confine::confinement_for(agent, None, || {
-            super::confine::codex_config_layers(agent)
-        })?;
-        let environment = Environment::empty()
-            .with_essentials(|name| std::env::var(name).ok())
-            .with_declared(agent.env.iter().cloned())
-            .with_secrets(agent, None)?;
+        let (confinement, environment) = prepare_launch(agent, None, secrets).await?;
         Self::start_process(agent, tier, None, confinement, environment)
     }
 
@@ -433,28 +452,8 @@ impl ExternalSession {
             .map_err(|error| {
                 ExternalError::Invalid(format!("opening the tool endpoint: {error}"))
             })?;
-        // On the blocking pool, not this worker: Codex's configuration may
-        // sit on a network share that stops answering, and the caller holds
-        // the lock every other agent launch waits on (I-05).
-        let (confinement, environment) = {
-            let agent = agent.clone();
-            let url = endpoint.url().to_owned();
-            tokio::task::spawn_blocking(move || {
-                let environment = Environment::empty()
-                    .with_essentials(|name| std::env::var(name).ok())
-                    .with_declared(agent.env.iter().cloned())
-                    .with_secrets(&agent, secrets.as_deref())?;
-                let launch = environment.for_confinement(&agent);
-                let confinement = super::confine::confinement_for(&launch, Some(&url), || {
-                    super::confine::codex_config_layers(&launch)
-                })?;
-                Ok::<_, ExternalError>((confinement, environment))
-            })
-            .await
-            .map_err(|error| {
-                ExternalError::Invalid(format!("reading the agent's configuration: {error}"))
-            })??
-        };
+        let (confinement, environment) =
+            prepare_launch(agent, Some(endpoint.url().to_owned()), secrets).await?;
         Self::start_process(
             agent,
             tier,
