@@ -2129,9 +2129,18 @@ Checked on 2026-10-03 for [ADR-0053](adr/0053-redact-sql-passwords-before-persis
   [String literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)
   describes double quotes, character-set introducers, adjacent strings and
   `NO_BACKSLASH_ESCAPES`.
+- MariaDB [CREATE USER](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/create-user)
+  also permits `OR REPLACE` and `IDENTIFIED VIA … USING PASSWORD(…)`;
+  [GRANT](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/grant)
+  can carry an authentication clause. These use the same MySQL driver/dialect.
+- MySQL [comments](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
+  distinguishes executable `/*! … */` content from ordinary comments; a password
+  clause there is still SQL and must be scanned before persistence.
 
 The redactor reuses the workspace scanner and combines lexical interpretations
 where SQL mode or dialect is unavailable. This is a persistence/context copy;
 no redacted text is submitted to a database. Grammar and executor-boundary tests
 use synthetic credentials and a recording session; they do not certify a live
 server execution.
+
+MariaDB also documents its `/*M! … */` form in [Comment Syntax](https://mariadb.com/docs/server/reference/sql-statements/comment-syntax), checked on the same date; both executable comment forms are scanned.

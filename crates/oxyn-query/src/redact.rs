@@ -1,6 +1,6 @@
 //! Redaction of credential literals before a statement leaves process memory.
 
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use oxyn_core::{QueryLanguage, SqlDialect};
 
@@ -31,7 +31,8 @@ enum SecretClause {
 /// Replaces password string literals in SQL while preserving every other byte.
 ///
 /// PostgreSQL `CREATE`/`ALTER ROLE` and `USER`, MySQL `CREATE`/`ALTER USER`,
-/// `IDENTIFIED WITH … BY`, and `SET PASSWORD` are recognized. Text in comments,
+/// `IDENTIFIED WITH … BY`, and `SET PASSWORD` are recognized, along with MariaDB
+/// user modifiers and `GRANT` authentication. Text in ordinary comments,
 /// quoted identifiers, and unrelated string literals is left unchanged. An
 /// unterminated password literal is redacted through the end of the text.
 /// ANSI (an unspecified dialect) conservatively combines PostgreSQL and MySQL
@@ -103,8 +104,13 @@ fn collect_with_profile(
     let mut kind = StatementKind::Other;
     let mut clause = SecretClause::None;
     let mut password_clause = false;
+    let visible = if dialect == SqlDialect::MySql {
+        executable_sql(statement, profile)
+    } else {
+        Cow::Borrowed(statement)
+    };
 
-    scan(statement, profile, &mut |token, span| match token {
+    scan(&visible, profile, &mut |token, span| match token {
         Tok::Semicolon => {
             kind = StatementKind::Other;
             clause = SecretClause::None;
@@ -118,11 +124,15 @@ fn collect_with_profile(
             kind = if word.eq_ignore_ascii_case("CREATE") || word.eq_ignore_ascii_case("ALTER") {
                 StatementKind::CreateOrAlter
             } else if matches!(kind, StatementKind::CreateOrAlter) {
-                if word.eq_ignore_ascii_case("ROLE") || word.eq_ignore_ascii_case("USER") {
+                if word.eq_ignore_ascii_case("OR") || word.eq_ignore_ascii_case("REPLACE") {
+                    StatementKind::CreateOrAlter
+                } else if word.eq_ignore_ascii_case("ROLE") || word.eq_ignore_ascii_case("USER") {
                     StatementKind::RoleOrUser
                 } else {
                     StatementKind::Other
                 }
+            } else if word.eq_ignore_ascii_case("GRANT") {
+                StatementKind::RoleOrUser
             } else if word.eq_ignore_ascii_case("SET") && matches!(kind, StatementKind::Other) {
                 StatementKind::Set
             } else {
@@ -133,11 +143,15 @@ fn collect_with_profile(
                 SecretClause::Identified if word.eq_ignore_ascii_case("BY") => {
                     SecretClause::AwaitingLiteral
                 }
-                SecretClause::Identified if word.eq_ignore_ascii_case("WITH") => {
+                SecretClause::Identified
+                    if word.eq_ignore_ascii_case("WITH") || word.eq_ignore_ascii_case("VIA") =>
+                {
                     SecretClause::IdentifiedWith
                 }
                 SecretClause::IdentifiedWith
-                    if word.eq_ignore_ascii_case("BY") || word.eq_ignore_ascii_case("AS") =>
+                    if word.eq_ignore_ascii_case("BY")
+                        || word.eq_ignore_ascii_case("AS")
+                        || word.eq_ignore_ascii_case("USING") =>
                 {
                     SecretClause::AwaitingLiteral
                 }
@@ -160,7 +174,11 @@ fn collect_with_profile(
                     password_clause = true;
                     SecretClause::AwaitingSetLiteral
                 }
-                _ if password_clause && word.eq_ignore_ascii_case("REPLACE") => {
+                _ if password_clause
+                    && ["REPLACE", "USING", "AS"]
+                        .iter()
+                        .any(|keyword| word.eq_ignore_ascii_case(keyword)) =>
+                {
                     SecretClause::AwaitingLiteral
                 }
                 SecretClause::AwaitingLiteral
@@ -204,6 +222,40 @@ fn collect_with_profile(
     });
 }
 
+/// Keep original byte offsets while exposing executable comment bodies to the
+/// shared lexer. Changing only ASCII delimiters preserves valid UTF-8.
+fn executable_sql(statement: &str, profile: SplitProfile) -> Cow<'_, str> {
+    let mut unmasked: Option<Vec<u8>> = None;
+    scan(statement, profile, &mut |token, span| {
+        let Some(comment) = statement.get(span.clone()) else {
+            return;
+        };
+        if token != Tok::Comment {
+            return;
+        }
+        let prefix_len = if comment.starts_with("/*!") {
+            3
+        } else if comment.starts_with("/*M!") {
+            4
+        } else {
+            return;
+        };
+        let bytes = unmasked.get_or_insert_with(|| statement.as_bytes().to_vec());
+        if let Some(prefix) = bytes.get_mut(span.start..span.start + prefix_len) {
+            prefix.fill(b' ');
+        }
+        if comment.ends_with("*/")
+            && let Some(suffix) = bytes.get_mut(span.end.saturating_sub(2)..span.end)
+        {
+            suffix.fill(b' ');
+        }
+    });
+    match unmasked {
+        Some(bytes) => Cow::Owned(String::from_utf8_lossy(&bytes).into_owned()),
+        None => Cow::Borrowed(statement),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use oxyn_core::{QueryLanguage, SqlDialect};
@@ -221,6 +273,34 @@ mod tests {
     )]
     #[case(SqlDialect::MySql, "SET PASSWORD FOR u = 'witness-secret'")]
     #[case(SqlDialect::MySql, "SET PASSWORD = PASSWORD('witness-secret')")]
+    #[case(
+        SqlDialect::MySql,
+        "/*M! CREATE USER u IDENTIFIED BY 'witness-secret' */"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "CREATE OR REPLACE USER u IDENTIFIED BY 'witness-secret'"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "GRANT SELECT ON db.* TO u IDENTIFIED BY 'witness-secret'"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "ALTER USER u IDENTIFIED VIA ed25519 USING PASSWORD('witness-secret')"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "CREATE USER u IDENTIFIED WITH plugin AS 'witness-secret'"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "/*! CREATE USER u IDENTIFIED BY 'witness-secret' */"
+    )]
+    #[case(
+        SqlDialect::MySql,
+        "CREATE USER u /*! IDENTIFIED BY 'witness-secret' */"
+    )]
     #[case(
         SqlDialect::MySql,
         "SET PASSWORD FOR 'u'@'localhost' = 'witness-secret'"

@@ -3435,8 +3435,11 @@ mod tests {
                 connection: connection.id,
                 session: session.id(),
                 request: Box::new(
-                    ExecRequest::new(QueryLanguage::Sql(dialect), sql)
-                        .with_limits(ExecLimits::default().with_timeout(None::<Duration>)),
+                    ExecRequest::new(QueryLanguage::Sql(dialect), sql).with_limits(
+                        ExecLimits::default()
+                            .writable()
+                            .with_timeout(None::<Duration>),
+                    ),
                 ),
             };
 

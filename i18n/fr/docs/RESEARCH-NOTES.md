@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0d54dbf814e1" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="9998162ad4ab" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2143,6 +2143,14 @@ Vérifié le 2026-10-03 pour [ADR-0053](adr/0053-redact-sql-passwords-before-per
   [String literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)
   décrit les guillemets doubles, les préfixes de jeu de caractères, les chaînes
   adjacentes et `NO_BACKSLASH_ESCAPES`.
+- MariaDB [CREATE USER](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/create-user)
+  permet aussi `OR REPLACE` et `IDENTIFIED VIA … USING PASSWORD(…)` ;
+  [GRANT](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/grant)
+  peut porter une clause d'authentification. Ces formes utilisent le même pilote
+  et le même dialecte MySQL.
+- Les [commentaires MySQL](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
+  distinguent le contenu exécutable `/*! … */` des commentaires ordinaires ; une
+  clause de mot de passe qui s'y trouve reste du SQL à scanner avant persistance.
 
 Le caviardage réutilise le scanner du workspace et combine les interprétations
 lexicales lorsque le mode SQL ou le dialecte est indisponible. Il produit une
@@ -2150,3 +2158,5 @@ copie pour la persistance ou le contexte ; aucun texte caviardé n'est soumis à
 une base. Les tests de grammaire et de frontière de l'exécuteur utilisent des
 secrets synthétiques et une session d'enregistrement ; ils ne certifient pas une
 exécution sur un serveur réel.
+
+MariaDB documente aussi sa forme `/*M! … */` dans [Comment Syntax](https://mariadb.com/docs/server/reference/sql-statements/comment-syntax), vérifiée à la même date ; les deux formes de commentaire exécutable sont scannées.

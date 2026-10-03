@@ -23,6 +23,10 @@ scanner to replace the string literal in `PASSWORD`, `IDENTIFIED BY`, and
 `IDENTIFIED WITH … BY` clauses with `'<redacted>'`. It preserves all other
 bytes, including formatting and comments.
 
+The MySQL dialect also covers MariaDB user modifiers, authentication in `GRANT`,
+and plugin authentication strings. MySQL executable comments are scanned as SQL;
+ordinary comments remain unchanged.
+
 The grammar references were checked on 2026-10-03 and are recorded in
 [RESEARCH-NOTES](../RESEARCH-NOTES.md#sql-password-literals-before-persistence).
 Quoted account names in `SET PASSWORD FOR` are preserved; the literal after

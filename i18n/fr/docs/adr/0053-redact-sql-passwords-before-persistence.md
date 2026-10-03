@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0053-redact-sql-passwords-before-persistence.md" sha256="f4b754f3ae44" -->
+<!-- oxyn-translation source="docs/adr/0053-redact-sql-passwords-before-persistence.md" sha256="3e487fd71024" -->
 
 # ADR-0053 — Caviarder les littéraux de mot de passe SQL avant la persistance
 
@@ -26,6 +26,11 @@ journal et détruirait après coup les octets historiques exacts.
 sensible au dialecte pour remplacer par `'<redacted>'` le littéral chaîne des
 clauses `PASSWORD`, `IDENTIFIED BY` et `IDENTIFIED WITH … BY`. Tous les autres
 octets sont préservés, y compris la mise en forme et les commentaires.
+
+Le dialecte MySQL couvre aussi les modificateurs d'utilisateur MariaDB,
+l'authentification dans `GRANT` et les chaînes d'authentification par plugin.
+Les commentaires exécutables MySQL sont scannés comme du SQL ; les commentaires
+ordinaires restent inchangés.
 
 Les références grammaticales ont été vérifiées le 2026-10-03 et sont consignées
 dans [RESEARCH-NOTES](../RESEARCH-NOTES.md#sql-password-literals-before-persistence).
