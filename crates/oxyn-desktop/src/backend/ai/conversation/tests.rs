@@ -2958,7 +2958,8 @@ fn a_protected_path_is_searched_only_at_spawn() {
         "PATH".into(),
         "oxyn:agent-env:00000000000000000000000000000001".into(),
     ));
-    runtime()
-        .block_on(locate(&declared))
-        .expect("defer to the child's resolved PATH");
+    assert!(
+        runtime().block_on(locate(&declared)).is_ok(),
+        "defer to the child's resolved PATH"
+    );
 }

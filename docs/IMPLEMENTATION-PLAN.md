@@ -1848,7 +1848,7 @@ interface is missing.**
 
 | Layer | State | What holds it |
 |---|---|---|
-| Declaration | done | `oxyn_core::ExternalAgentConfig` — **no secret field**, manual `Debug` that only renders the number of environment variables |
+| Declaration | done | `oxyn_core::ExternalAgentConfig` — **keychain references for secrets**, manual `Debug` that only renders the number of environment variables |
 | Persistence | done | migration 9, table `external_agents`. `the_table_has_no_secret_column` reads the **schema**, not the documentation |
 | Bus | done | three commands, **refused to an `Actor::Agent`** — `an_agent_does_not_declare_an_external_agent` |
 | Privacy | done | `Local` closed, and refused **before launch** — `the_local_tier_refuses_before_even_launching_the_process` |
@@ -1875,7 +1875,7 @@ Two nuances of vocabulary are held by tests, because they decide
 what the user believes:
 
 * an agent does **not** display "key missing" — that would read as a setting
-  that is missing, whereas there is no key to configure;
+  that is missing, whereas environment credentials are optional;
 * its destination is announced as **unknowable**, not "unknown":
   the warning is permanent, since no measurement will come to lift it. The
   test refuses that the mention contains "measured".
