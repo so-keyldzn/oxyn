@@ -32,7 +32,7 @@ enum SecretClause {
 ///
 /// PostgreSQL `CREATE`/`ALTER ROLE` and `USER`, MySQL `CREATE`/`ALTER USER`,
 /// `IDENTIFIED WITH … BY`, and `SET PASSWORD` are recognized. Text in comments,
-/// quoted identifiers, and unrelated string literals is left unchanged. A
+/// quoted identifiers, and unrelated string literals is left unchanged. An
 /// unterminated password literal is redacted through the end of the text.
 /// ANSI (an unspecified dialect) conservatively combines PostgreSQL and MySQL
 /// lexical interpretations. This is not a general secret detector: credentials
@@ -154,7 +154,8 @@ fn collect_with_profile(
                     SecretClause::Identified
                 }
                 _ if matches!(kind, StatementKind::Set)
-                    && word.eq_ignore_ascii_case("PASSWORD") =>
+                    && word.eq_ignore_ascii_case("PASSWORD")
+                    && !matches!(clause, SecretClause::AwaitingLiteral) =>
                 {
                     password_clause = true;
                     SecretClause::AwaitingSetLiteral
@@ -219,6 +220,7 @@ mod tests {
         "ALTER USER u IDENTIFIED WITH caching_sha2_password BY 'witness-secret'"
     )]
     #[case(SqlDialect::MySql, "SET PASSWORD FOR u = 'witness-secret'")]
+    #[case(SqlDialect::MySql, "SET PASSWORD = PASSWORD('witness-secret')")]
     #[case(
         SqlDialect::MySql,
         "SET PASSWORD FOR 'u'@'localhost' = 'witness-secret'"

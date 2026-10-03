@@ -1390,8 +1390,13 @@ fn tool_call_password_literals_are_redacted_before_serialization() {
     let sql = "ALTER ROLE app PASSWORD 'witness-secret'";
     let turn = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "Done.")
         .with_tool_calls(vec![
-            ToolCallRecord::new("call_1", "execute", sql, ToolCallStatus::Completed)
-                .with_statement(sql),
+            ToolCallRecord::new(
+                "call_1",
+                "execute",
+                format!("Executed: \"{sql}\""),
+                ToolCallStatus::Completed,
+            )
+            .with_statement(sql),
         ]);
 
     store.conversations().append(id, &turn).expect("turn");
@@ -1419,7 +1424,7 @@ fn direct_tool_call_fields_cannot_bypass_password_redaction() {
         let mut call = ToolCallRecord::new(
             "call",
             "execute",
-            format!("Executed: {sql}"),
+            format!("Executed: \"{sql}\""),
             ToolCallStatus::Completed,
         );
         call.statement = Some(sql.into());

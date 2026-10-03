@@ -421,10 +421,12 @@ impl ToolCallRecord {
     /// Adds the statement the command carried.
     #[must_use]
     pub fn with_statement(mut self, statement: impl Into<String>) -> Self {
-        self.statement = Some(oxyn_query::redact_password_literals(
-            &statement.into(),
-            QueryLanguage::SQL,
-        ));
+        let original = statement.into();
+        let redacted = oxyn_query::redact_password_literals(&original, QueryLanguage::SQL);
+        if original != redacted {
+            self.summary = self.summary.replace(&original, &redacted);
+        }
+        self.statement = Some(redacted);
         self
     }
 
@@ -1092,15 +1094,26 @@ fn encode_tool_calls(calls: &[ToolCallRecord]) -> Result<Option<String>> {
     }
     let payload: Vec<ToolCallPayload> = calls
         .iter()
-        .map(|call| ToolCallPayload {
-            call_id: call.call_id.clone(),
-            tool: call.tool.clone(),
-            summary: oxyn_query::redact_password_literals(&call.summary, QueryLanguage::SQL),
-            statement: call.statement.as_deref().map(|statement| {
+        .map(|call| {
+            let statement = call.statement.as_deref().map(|statement| {
                 oxyn_query::redact_password_literals(statement, QueryLanguage::SQL)
-            }),
-            status: call.status.as_str().to_owned(),
-            error_class: call.error_class.map(|class| class.as_str().to_owned()),
+            });
+            // A rendering can wrap the SQL in quotes, hiding its tokens from
+            // the scanner. Replace the known statement before scanning prose.
+            let summary = match (call.statement.as_deref(), statement.as_deref()) {
+                (Some(original), Some(redacted)) if original != redacted => {
+                    call.summary.replace(original, redacted)
+                }
+                _ => call.summary.clone(),
+            };
+            ToolCallPayload {
+                call_id: call.call_id.clone(),
+                tool: call.tool.clone(),
+                summary: oxyn_query::redact_password_literals(&summary, QueryLanguage::SQL),
+                statement,
+                status: call.status.as_str().to_owned(),
+                error_class: call.error_class.map(|class| class.as_str().to_owned()),
+            }
         })
         .collect();
     let encoded = serde_json::to_string(&payload)?;
