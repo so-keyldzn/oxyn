@@ -52,6 +52,8 @@ MySQL-only decision is preserved rather than rewritten.
 * **−** Local test URLs that relied on the old default must name their TLS
   mode. A Local environment alone does not disable verification.
 * **−** Neither driver currently exposes a per-connection private CA field.
+  Both use the bundled roots selected by their current TLS features, rather
+  than the system trust store (checked in [RESEARCH-NOTES](../RESEARCH-NOTES.md#postgresql-tls-modes--checked-on-2026-10-03)).
   PostgreSQL's `sslrootcert` parameter is forwarded as a server session option,
   not applied as a TLS trust root: adding it to a saved configuration or DSN
   is not a supported migration path. A private-CA server whose root is not

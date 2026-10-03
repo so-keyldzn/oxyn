@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="782f880bc2da" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="62c3e2359b7e" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2133,3 +2133,12 @@ sections sur la vérification du certificat et la protection par mode :
 vérifie la chaîne seule. `prefer` ne protège pas contre un intermédiaire actif.
 La politique Oxyn applique ces distinctions à l'environnement de connexion ;
 aucune version de dépendance ne change.
+
+Les sources épinglées du registre et les fonctionnalités du workspace confirment
+aussi le magasin de confiance : `_tls-rustls-aws-lc-rs` de `sqlx-core` active
+`webpki-roots`, et `src/net/tls/tls_rustls.rs::import_root_certs` importe cet
+ensemble embarqué ; `src/io/tls/rustls_io.rs` de `mysql_async` importe aussi
+`webpki_roots::TLS_SERVER_ROOTS`. Aucun driver livré ne sélectionne de
+fonctionnalité de racines système ni ne propose de champ d'autorité par
+connexion. La clé de configuration PostgreSQL `sslrootcert` entre actuellement
+dans les options serveur de `ConnectSpec`.
