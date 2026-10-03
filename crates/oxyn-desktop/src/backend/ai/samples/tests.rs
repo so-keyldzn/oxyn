@@ -270,7 +270,9 @@ fn asks() -> std::sync::Arc<SampleAsks> {
 fn an_agents_request_is_answered_once_with_the_ticked_columns() {
     let asks = asks();
     let connection = ConnectionId::new();
-    let mut open = asks.open(connection, offered()).expect("opened");
+    let mut open = asks
+        .open(connection, offered(), description())
+        .expect("opened");
     let ticked = ["plan".to_owned(), "id".to_owned()];
     assert_eq!(asks.answer(connection, &open.id, Some(&ticked)), Ok(()));
     assert_eq!(
@@ -293,7 +295,9 @@ fn a_declined_or_malformed_answer_declines_the_request() {
     let asks = asks();
     let connection = ConnectionId::new();
 
-    let mut declined = asks.open(connection, offered()).expect("opened");
+    let mut declined = asks
+        .open(connection, offered(), description())
+        .expect("opened");
     assert_eq!(asks.answer(connection, &declined.id, None), Ok(()));
     assert!(
         declined.answer.try_recv().is_err(),
@@ -301,7 +305,9 @@ fn a_declined_or_malformed_answer_declines_the_request() {
     );
 
     for ticked in [vec!["secret".to_owned()], Vec::new()] {
-        let mut open = asks.open(connection, offered()).expect("opened");
+        let mut open = asks
+            .open(connection, offered(), description())
+            .expect("opened");
         assert!(asks.answer(connection, &open.id, Some(&ticked)).is_err());
         assert!(open.answer.try_recv().is_err(), "{ticked:?}");
         assert_eq!(
@@ -318,7 +324,9 @@ fn a_declined_or_malformed_answer_declines_the_request() {
 fn an_agents_request_is_bound_to_its_connection_and_to_its_call() {
     let asks = asks();
     let connection = ConnectionId::new();
-    let open = asks.open(connection, offered()).expect("opened");
+    let open = asks
+        .open(connection, offered(), description())
+        .expect("opened");
     let id = open.id.clone();
     assert_eq!(
         asks.answer(ConnectionId::new(), &id, Some(&["id".to_owned()])),
@@ -332,13 +340,19 @@ fn an_agents_request_is_bound_to_its_connection_and_to_its_call() {
     );
 
     let kept: Vec<_> = (0..MAX_ASKS_PER_CONNECTION)
-        .map(|_| asks.open(connection, offered()).expect("under the bound"))
+        .map(|_| {
+            asks.open(connection, offered(), description())
+                .expect("under the bound")
+        })
         .collect();
     assert!(matches!(
-        asks.open(connection, offered()),
+        asks.open(connection, offered(), description()),
         Err(SampleRefused::TooManyAsks)
     ));
-    assert!(asks.open(ConnectionId::new(), offered()).is_ok());
+    assert!(
+        asks.open(ConnectionId::new(), offered(), description())
+            .is_ok()
+    );
     asks.forget_connection(connection);
     for mut open in kept {
         assert!(
@@ -515,4 +529,20 @@ fn a_sample_read_projects_the_ticked_columns_only() {
 
     let namespace = CatalogPath::for_namespace(None, "public").expect("a namespace path");
     assert!(sample_read((connection, session), &namespace, &ticked, 5).is_none());
+}
+
+fn description() -> crate::backend::confirm::text::SampleDescription {
+    use crate::backend::confirm::text::{SampleDescription, SampleDestination};
+    SampleDescription {
+        source: path("customers"),
+        destination: SampleDestination::Provider(oxyn_core::AiProviderConfig::new(
+            "local-model".parse().expect("a provider id"),
+            oxyn_core::AiProviderKind::OpenAiCompatible,
+            "Local",
+            "http://127.0.0.1:11434",
+            "model",
+        )),
+        reach: Reach::Local,
+        rows: MAX_SAMPLE_ROWS,
+    }
 }

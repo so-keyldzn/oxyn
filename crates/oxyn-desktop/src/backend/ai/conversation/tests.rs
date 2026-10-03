@@ -1274,6 +1274,7 @@ fn the_effort_asked_for_travels_with_the_provider_it_was_asked_for() {
 }
 
 mod approved_samples {
+    mod native_confirmation;
     use super::*;
     use std::collections::VecDeque;
 

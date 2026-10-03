@@ -2134,18 +2134,17 @@ decision, taken for all previews and not for the sample alone.
 **Deadline**: before the exit gate of this phase, and at the latest on
 2026-10-31.
 
-**Still to do, noted on 2026-09-25 — sending rows to an agent is still
-confirmed in the webview.** [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
-decides that a write on `production`, sending rows to an agent and
-a change of marking are confirmed in a native dialog. The
-`HostConfirm` port exists (`crates/oxyn-desktop/src/backend/confirm.rs`), and
-`decide`, `decide_connection`, `decide_connection_change` and
-`update_connection` go through it. What remains is family 2 — `ai_answer_sample`
-and the `sample` field of `ai_ask` still grant on a simple call — and
-`ai_save_external_agent`, which still opens its dialog without going through the
-port. **What unblocks it**: the end of the work in progress on the assistant
-(`commands/ai.rs`, `backend/ai`), then one commit per path, with the tests of
-§ 4 of the ADR. **Deadline**: at the latest on 2026-10-31.
+**Done on 2026-10-03 — row samples require native confirmation (family 2).**
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) is enforced
+for both `ai_answer_sample` and a pinned sample in `ai_ask`: `HostConfirm` names
+the recorded recipient, connection, relation, selected columns and row cap
+before any row is read. Refusal consumes the request, sends no rows and records
+no `ai_egress`; a pinned question is not sent. Scripted-host regression tests
+cover both paths, including a misleading webview label.
+
+**Still to do, noted on 2026-09-25 — external agent declarations use the native
+dialog directly.** `ai_save_external_agent` must join the `HostConfirm` port,
+with the tests of ADR-0037 § 4; tracked by #150. **Deadline**: 2026-10-31.
 
 ## Phase 3 bis — Beyond the relational
 
