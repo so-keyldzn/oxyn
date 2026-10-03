@@ -93,7 +93,7 @@ export const EnvironmentSentOnceThenForgotten: Story = {
     ).toBeChecked()
     await expect(
       canvas.getByRole("switch", { name: "Secret: GEMINI_API_KEY" })
-    ).toBeDisabled()
+    ).toHaveAttribute("aria-disabled", "true")
     await userEvent.click(
       canvas.getByRole("switch", { name: "Secret: CUSTOM" })
     )

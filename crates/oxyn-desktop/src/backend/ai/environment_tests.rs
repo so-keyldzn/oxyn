@@ -54,6 +54,23 @@ fn a_token_is_keychained_even_when_the_draft_says_it_is_public() {
         assert!(raw.contains("secret_refs"));
         assert!(raw.contains("west"));
         assert!(!serde_json::to_string(&view).expect("IPC").contains(VALUE));
+        let environment = oxyn_ai::external::spawn::Environment::empty()
+            .with_secrets(agent, Some(backend.inner.credentials.as_ref()))
+            .expect("spawn environment");
+        let child = oxyn_ai::external::spawn::spawn(
+            "/bin/sh",
+            &[
+                "-c".into(),
+                "test \"$ANTHROPIC_API_KEY\" = synthetic-agent-token-154".into(),
+            ],
+            &environment,
+        )
+        .expect("spawn declared environment");
+        assert_eq!(
+            child.watch.await.code,
+            Some(0),
+            "the child receives the keychain value"
+        );
         let first_refs = agent.env_secret_refs.clone();
         let mut replacement = draft(true);
         replacement.id = Some(view.id.clone());
@@ -145,4 +162,36 @@ fn a_failed_replacement_keeps_the_previous_secret_live() {
         assert_eq!(after.env_secret_refs, first.env_secret_refs);
         assert_eq!(backend.inner.credentials.resolve(&after.env_secret_refs[0].1).expect("old key"), VALUE);
     });
+}
+
+#[test]
+fn an_unavailable_keychain_never_falls_back_to_plaintext() {
+    #[derive(Debug)]
+    struct Unavailable;
+    impl SecretStore for Unavailable {
+        fn put(&self, _: &SecretRef, _: oxyn_secrets::SecretString) -> oxyn_secrets::Result<()> {
+            Err(oxyn_secrets::SecretError::Backend {
+                detail: VALUE.into(),
+            })
+        }
+        fn get(&self, _: &SecretRef) -> oxyn_secrets::Result<Option<oxyn_secrets::SecretString>> {
+            Err(oxyn_secrets::SecretError::Backend {
+                detail: VALUE.into(),
+            })
+        }
+        fn delete(&self, _: &SecretRef) -> oxyn_secrets::Result<()> {
+            Ok(())
+        }
+    }
+    let store = Arc::new(oxyn_store::Store::open_in_memory().expect("store"));
+    let backend = Backend::assemble(store.clone(), Arc::new(Unavailable)).expect("backend");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let error = runtime
+        .block_on(backend.save_external_agent(draft(false)))
+        .expect_err("refused");
+    assert!(!error.message.contains(VALUE));
+    assert!(store.external_agents().list().expect("list").is_empty());
 }

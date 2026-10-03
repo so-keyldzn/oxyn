@@ -172,6 +172,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig
         tracing::warn!("external agent row skipped: unreadable identifier");
         return Ok(Ok(None));
     };
+    let legacy_environment = env.trim_start().starts_with('[');
     let (Ok(args), Ok(env)) = (
         serde_json::from_str::<Vec<String>>(&args),
         read_environment(&env),
@@ -196,7 +197,12 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig
     // A row that would no longer pass the domain's validation — written by a
     // version whose bounds differed — is skipped rather than returned:
     // offering it would make its launch fail later, far from here.
-    if let Err(error) = agent.validate() {
+    let validation = if legacy_environment {
+        agent.validate()
+    } else {
+        agent.validate_stored_environment()
+    };
+    if let Err(error) = validation {
         tracing::warn!(
             agent = %agent.id.as_str(),
             reason = %error,

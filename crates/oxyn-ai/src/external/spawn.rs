@@ -173,7 +173,7 @@ impl Environment {
         Ok(self)
     }
 
-    /// Uses the same HOME/CODEX_HOME for confinement as the child will see.
+    /// Uses the same `HOME`/`CODEX_HOME` for confinement as the child will see.
     /// This temporary configuration never leaves the launch path.
     pub(super) fn for_confinement(
         &self,

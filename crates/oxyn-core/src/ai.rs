@@ -712,6 +712,11 @@ impl ExternalAgentConfig {
     /// Rejects clear token-like variables, duplicate names and invalid/bounded
     /// environment names or references. No error repeats a value.
     pub fn validate_stored_environment(&self) -> Result<()> {
+        if self.env.len().saturating_add(self.env_secret_refs.len()) > MAX_AGENT_ENV {
+            return Err(OxynError::Config(
+                "agent has too many environment variables".into(),
+            ));
+        }
         if self.env.iter().any(|(name, _)| agent_env_is_secret(name)) {
             return Err(OxynError::Config(
                 "agent tokens must use the system keychain".into(),
