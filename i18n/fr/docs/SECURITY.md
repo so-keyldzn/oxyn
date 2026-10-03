@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="f31a5bd86623" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="358f13b5bf6f" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -376,15 +376,17 @@ ce qui le maintiendra valide.
 - toute nouvelle dépendance directe est justifiée en revue : ce qu'elle apporte,
   et le coût de s'en passer ;
 - `cargo deny` sur les licences et les avis de sécurité fait partie de la porte
-  de qualité, par la cible `make deny` que `make qualite` appelle. Elle **avertit
-  sans bloquer** quand `cargo-deny` n'est pas installé : une porte qui échoue sur
-  un outil absent finit par être contournée, et c'est alors tout le contrôle qui
-  disparaît. La configuration vit dans `deny.toml`. Toute licence qu'elle
-  accepte est compatible avec la GPLv3, la licence de l'application
+  de qualité, par la cible `make deny` que `make qualite` appelle. Une exécution
+  locale **avertit sans bloquer** quand `cargo-deny` n'est pas installé ; en CI,
+  l'outil absent fait échouer la porte, et le workflow installe un binaire
+  versionné dont l'empreinte SHA-256 est épinglée. La configuration vit dans
+  `deny.toml`. Toute licence qu'elle accepte est compatible avec la GPLv3, la licence de l'application
   ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md)) ;
 - les dépendances npm de production d'`apps/desktop` passent le même contrôle,
   par `make licences-npm`, que `make front-controles` appelle. La liste est
-  celle de `deny.toml`, complétée pour npm par `apps/desktop/licences-npm.toml` ;
+  celle de `deny.toml`, complétée pour npm par `apps/desktop/licences-npm.toml`.
+  `make audit-npm`, également atteinte par `make front-controles`, exécute
+  `pnpm audit --prod` et échoue sur un avis publié dans ce graphe livré ;
 - une dépendance qui n'est utilisée qu'à un seul endroit pour une seule fonction
   est un candidat à la réécriture, pas une évidence ;
 - une crate non maintenue sur une frontière externe est un risque à documenter,

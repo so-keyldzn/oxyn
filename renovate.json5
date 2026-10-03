@@ -69,6 +69,27 @@
     },
   ],
 
+  // Prebuilt Rust tools are shell variables rather than package manifests.
+  // Renovate raises version bumps; the required per-platform checksums stay a
+  // deliberate review step and make the workflow fail until they are updated.
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github\\/workflows\\/qualite\\.yml$/"],
+      matchStrings: ["# renovate: cargo-deny\\n\\s*version=(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      depNameTemplate: "EmbarkStudios/cargo-deny",
+      datasourceTemplate: "github-releases",
+    },
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github\\/workflows\\/qualite\\.yml$/"],
+      matchStrings: ["# renovate: cargo-nextest\\n\\s*version=(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      depNameTemplate: "nextest-rs/nextest",
+      datasourceTemplate: "github-releases",
+      extractVersionTemplate: "^cargo-nextest-(?<version>.*)$",
+    },
+  ],
+
   // Worth noting, and intended: Renovate has no manager for
   // `rust-toolchain.toml`. The toolchain therefore stays out of its scope,
   // which matches ADR-0008 — a toolchain bump is a deliberate commit that

@@ -363,15 +363,17 @@ what will keep it valid.
 - every new direct dependency is justified in review: what it brings,
   and the cost of doing without it;
 - `cargo deny` on licenses and security advisories is part of the quality
-  gate, through the `make deny` target that `make qualite` calls. It **warns
-  without blocking** when `cargo-deny` is not installed: a gate that fails on
-  a missing tool ends up being bypassed, and then the whole check
-  disappears. The configuration lives in `deny.toml`. Every license it
-  accepts is compatible with GPLv3, the application's license
+  gate, through the `make deny` target that `make qualite` calls. A local run
+  **warns without blocking** when `cargo-deny` is not installed; under CI, a
+  missing tool fails the gate, and the workflow installs a versioned binary
+  whose SHA-256 checksum is pinned. The configuration lives in `deny.toml`.
+  Every license it accepts is compatible with GPLv3, the application's license
   ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md));
 - the production npm dependencies of `apps/desktop` go through the same check,
   through `make licences-npm`, which `make front-controles` calls. The list is
-  the one in `deny.toml`, completed for npm by `apps/desktop/licences-npm.toml`;
+  the one in `deny.toml`, completed for npm by `apps/desktop/licences-npm.toml`.
+  `make audit-npm`, also reached by `make front-controles`, runs `pnpm audit
+  --prod` and fails on a published advisory in that shipped graph;
 - a dependency used in a single place for a single function
   is a candidate for rewriting, not a given;
 - an unmaintained crate on an external boundary is a risk to document,

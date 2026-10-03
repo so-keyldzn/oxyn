@@ -15,7 +15,7 @@
 #
 # See .claude/rules/manifestes.md and .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite verif-rapide format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm
+.PHONY: qualite verif-rapide format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm audit-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -104,12 +104,15 @@ verif-rapide:
 # makes it a promise; it is kept here, and its configuration lives in
 # `deny.toml`.
 #
-# The missing tool **warns without blocking**, and that is deliberate: a gate
-# that fails for lack of an optional binary ends up bypassed — and then the
-# whole check disappears, not just this one. The message says what did not run,
-# because silence reads as success.
+# A local clone without the optional tool gets an explicit warning. CI has no
+# such escape hatch: the workflow installs the pinned binary, and a missing
+# installation must fail rather than turn the dependency check into a no-op.
 deny:
 ifeq ($(shell command -v cargo-deny 2>/dev/null),)
+ifneq ($(origin CI),undefined)
+	@echo "cargo-deny is required in CI; dependency checks did NOT run."
+	@exit 1
+endif
 	@echo "cargo-deny missing: licenses and RUSTSEC advisories were NOT checked."
 	@echo "  To install it: cargo install --locked cargo-deny"
 else
@@ -142,7 +145,7 @@ doc:
 # therefore runs `front-build` before it.
 front: front-controles front-tests front-build
 
-front-controles: $(TAURI) licences-npm
+front-controles: $(TAURI) licences-npm audit-npm
 	@python3 script/verifier-stories
 	cd $(FRONT) && pnpm exec prettier --check .
 	cd $(FRONT) && pnpm exec eslint .
@@ -157,7 +160,7 @@ front-tests: $(TAURI)
 front-build: $(TAURI) $(MENTIONS)
 	cd $(FRONT) && pnpm build
 
-# Without `cargo-about`, warns without writing anything, like `make deny`: the
+# Without `cargo-about`, warns without writing anything: the
 # build goes through, and the About section says the notices are missing from
 # this build.
 $(MENTIONS): Cargo.lock $(FRONT)/pnpm-lock.yaml deny.toml $(FRONT)/licences-npm.toml script/licences-tierces
@@ -168,6 +171,11 @@ $(MENTIONS): Cargo.lock $(FRONT)/pnpm-lock.yaml deny.toml $(FRONT)/licences-npm.
 # apps/desktop/licences-npm.toml) fails the gate.
 licences-npm: $(TAURI)
 	@python3 script/licences-tierces verifier-npm
+
+# Published advisories for the npm graph shipped to users. Development-only
+# tooling is excluded because it is not part of the desktop application.
+audit-npm: $(TAURI)
+	cd $(FRONT) && pnpm audit --prod
 
 todo:
 	@python3 script/verifier-todo
