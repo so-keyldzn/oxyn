@@ -83,6 +83,15 @@ data leaves the machine, or not.
 > The error asks to point the base URL at the final address, without copying
 > the destination.
 
+
+Oxyn's HTTP clients ignore environment and system proxies. The reach measured
+for a send is passed to the transport as well as the privacy gate and
+`ai_egress`: for `Local`, every new DNS answer must be nonempty and entirely
+loopback before any address is tried. A changed or mixed answer is refused;
+literal non-loopback addresses are refused as well. DNS runs off the UI and
+async worker threads. A service intentionally listening on loopback can still
+forward traffic elsewhere; this guarantee concerns Oxyn's TCP peer.
+
 ## An external agent: the reach is not unknown, it is **unknowable**
 
 Since [ADR-0026](adr/0026-agents-externes-acp.md), a destination can also

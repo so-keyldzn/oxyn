@@ -264,12 +264,16 @@ fn open_body(status: u16, length: Option<usize>, body: &[u8]) -> Vec<u8> {
 
 /// The headers are received: it is the reading of the body that is tested.
 async fn headers_of(server: &Server) -> reqwest::Response {
-    super::client(&ProviderId::openai())
-        .expect("client")
-        .get(&server.origin)
-        .send()
-        .await
-        .expect("headers arrive")
+    super::client(
+        &ProviderId::openai(),
+        &reqwest::Url::parse(&server.origin).expect("test URL"),
+        crate::Reach::Local,
+    )
+    .expect("client")
+    .get(&server.origin)
+    .send()
+    .await
+    .expect("headers arrive")
 }
 
 #[tokio::test]

@@ -209,7 +209,8 @@ impl Backend {
         let credentials = Arc::clone(&self.inner.credentials);
         let provider = tokio::task::spawn_blocking(move || {
             let key = credentials.provider_key(&config)?;
-            oxyn_llm::build_provider(config.kind, &config.base_url, key)
+            let reach = oxyn_llm::endpoint_reach(&config.base_url);
+            oxyn_llm::build_provider(config.kind, &config.base_url, key, reach)
         })
         .await
         .map_err(|error| IpcError::invalid(format!("preparing the provider: {error}")))??;

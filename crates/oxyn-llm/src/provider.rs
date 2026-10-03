@@ -261,6 +261,10 @@ impl ProviderRegistry {
 /// the loopback as well as a gateway in the cloud; the factory cannot tell
 /// them apart and does not try.
 ///
+/// `reach` must be the measurement used by the privacy gate and egress audit.
+/// A local measurement confines every subsequent connection to loopback;
+/// changing DNS answers fail closed. This constructor performs no DNS I/O.
+///
 /// # Identity of the built provider
 ///
 /// [`LlmProvider::id`] returns the identifier **of the family**, not that of
@@ -279,35 +283,39 @@ pub fn build_provider(
     kind: AiProviderKind,
     base_url: &str,
     key: Option<ApiKey>,
+    reach: crate::Reach,
 ) -> Result<Arc<dyn LlmProvider>> {
     match kind {
         AiProviderKind::Anthropic => {
             let key = require_key(&ProviderId::anthropic(), key)?;
             Ok(Arc::new(
-                crate::anthropic::AnthropicProvider::with_base_url(key, base_url)?,
+                crate::anthropic::AnthropicProvider::with_base_url_and_reach(key, base_url, reach)?,
             ))
         }
         AiProviderKind::Gemini => {
             let key = require_key(&ProviderId::gemini(), key)?;
-            Ok(Arc::new(crate::gemini::GeminiProvider::with_base_url(
-                key, base_url,
-            )?))
+            Ok(Arc::new(
+                crate::gemini::GeminiProvider::with_base_url_and_reach(key, base_url, reach)?,
+            ))
         }
         AiProviderKind::OpenAi => {
             let id = ProviderId::openai();
             let key = require_key(&id, key)?;
             Ok(Arc::new(
-                crate::openai_compatible::OpenAiCompatibleProvider::new(id, base_url)?
-                    .with_api_key(key)
-                    .requiring_api_key()
-                    .with_usage_reporting(true)
-                    .supporting_reasoning_effort(),
+                crate::openai_compatible::OpenAiCompatibleProvider::new_with_reach(
+                    id, base_url, reach,
+                )?
+                .with_api_key(key)
+                .requiring_api_key()
+                .with_usage_reporting(true)
+                .supporting_reasoning_effort(),
             ))
         }
         AiProviderKind::OpenAiCompatible => {
-            let provider = crate::openai_compatible::OpenAiCompatibleProvider::new(
+            let provider = crate::openai_compatible::OpenAiCompatibleProvider::new_with_reach(
                 ProviderId::openai_compatible(),
                 base_url,
+                reach,
             )?;
             // A given key is presented; its absence cannot be required — that
             // is the case of a local model.
@@ -427,6 +435,7 @@ mod tests {
             AiProviderKind::OpenAiCompatible,
             "http://localhost:11434/v1",
             None,
+            crate::Reach::Local,
         )
         .expect("a local endpoint builds without a key");
         assert_eq!(provider.id(), ProviderId::openai_compatible());
@@ -449,8 +458,8 @@ mod tests {
                 "https://generativelanguage.googleapis.com",
             ),
         ] {
-            let error =
-                build_provider(kind, base_url, None).expect_err("a remote family requires a key");
+            let error = build_provider(kind, base_url, None, crate::Reach::Remote)
+                .expect_err("a remote family requires a key");
             assert!(
                 matches!(error, oxyn_core::OxynError::Authentication(_)),
                 "{kind} : {error:?}"
@@ -459,8 +468,13 @@ mod tests {
             assert!(message.contains("API key"), "{message}");
 
             // With a key, the same declaration builds.
-            let provider = build_provider(kind, base_url, Some(ApiKey::new("sk-test")))
-                .expect("a remote family builds with its key");
+            let provider = build_provider(
+                kind,
+                base_url,
+                Some(ApiKey::new("sk-test")),
+                crate::Reach::Remote,
+            )
+            .expect("a remote family builds with its key");
             let rendered = format!("{provider:?}");
             assert!(!rendered.contains("sk-test"), "leaked key: {rendered}");
         }
@@ -476,7 +490,13 @@ mod tests {
             "https://localhost.mon-nuage.example/v1",
         ] {
             assert!(
-                build_provider(AiProviderKind::OpenAiCompatible, base_url, None).is_ok(),
+                build_provider(
+                    AiProviderKind::OpenAiCompatible,
+                    base_url,
+                    None,
+                    crate::Reach::Unresolved
+                )
+                .is_ok(),
                 "{base_url}"
             );
         }
@@ -484,8 +504,13 @@ mod tests {
 
     #[test]
     fn an_unreadable_url_is_refused_by_the_factory() {
-        let error = build_provider(AiProviderKind::OpenAiCompatible, "not a url", None)
-            .expect_err("unreadable URL");
+        let error = build_provider(
+            AiProviderKind::OpenAiCompatible,
+            "not a url",
+            None,
+            crate::Reach::Unresolved,
+        )
+        .expect_err("unreadable URL");
         assert!(matches!(error, oxyn_core::OxynError::Config(_)), "{error}");
     }
 
