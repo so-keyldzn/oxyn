@@ -1192,6 +1192,7 @@ fn a_refused_tier_opens_no_port() {
         &agent,
         PrivacyTier::Local,
         bridge,
+        None,
     ))
     .map(|_| ());
     assert_eq!(refused, Err(ExternalError::RefusedByTier));

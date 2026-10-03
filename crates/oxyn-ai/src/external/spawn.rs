@@ -36,7 +36,7 @@
 //! added only when a measurement demands it — never « just in case », which
 //! would hand the environment back one variable at a time.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
@@ -46,6 +46,16 @@ use futures::AsyncReadExt;
 use futures::future::BoxFuture;
 
 use super::session::ExternalError;
+
+/// The host keychain boundary. Resolution can block and must run on the
+/// blocking pool; errors must never contain the value or backend diagnostics.
+pub trait EnvironmentSecrets: Send + Sync {
+    /// Reads one explicitly declared agent secret, never a connection secret.
+    ///
+    /// # Errors
+    /// Missing or inaccessible entries abort launch; no empty fallback.
+    fn resolve(&self, reference: &str) -> Result<String, ExternalError>;
+}
 
 /// How much of the child's `stderr` is kept for a failure report.
 ///
@@ -90,6 +100,7 @@ pub struct Environment {
     /// endpoint's token, handed over the protocol — and must be removed from
     /// its report all the same. Keyed by the label its marker shows.
     withheld: BTreeMap<String, String>,
+    secret_names: BTreeSet<String>,
 }
 
 /// Written by hand, names only. The values are what the user declared for the
@@ -141,6 +152,42 @@ impl Environment {
         self
     }
 
+    /// Resolves explicitly declared references at launch, on the blocking pool.
+    /// Values remain in this redacted, non-serializable spawn environment.
+    ///
+    /// # Errors
+    /// Missing resolver, missing value or keychain failure aborts the launch.
+    pub fn with_secrets(
+        mut self,
+        agent: &oxyn_core::ExternalAgentConfig,
+        resolver: Option<&dyn EnvironmentSecrets>,
+    ) -> Result<Self, ExternalError> {
+        for (name, reference) in &agent.env_secret_refs {
+            let resolver = resolver.ok_or_else(|| {
+                ExternalError::Invalid("agent environment needs the system keychain".into())
+            })?;
+            let value = resolver.resolve(reference)?;
+            self.secret_names.insert(name.clone());
+            self.passed.insert(name.clone(), value);
+        }
+        Ok(self)
+    }
+
+    /// Uses the same HOME/CODEX_HOME for confinement as the child will see.
+    /// This temporary configuration never leaves the launch path.
+    pub(super) fn for_confinement(
+        &self,
+        agent: &oxyn_core::ExternalAgentConfig,
+    ) -> oxyn_core::ExternalAgentConfig {
+        let mut launch = agent.clone();
+        launch.env = self
+            .passed
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        launch
+    }
+
     /// Adds a secret the child is not given but may repeat, to redact from
     /// what it reports. `label` names it in the marker that replaces it.
     #[must_use]
@@ -178,9 +225,18 @@ impl Environment {
 /// what disappear.
 fn redact(text: &str, environment: &Environment) -> String {
     let mut clean = text.to_owned();
-    for (name, value) in environment.pairs().chain(environment.withheld.iter()) {
-        // A one-character value would turn the whole report into markers.
-        if value.chars().count() >= MIN_REDACTED_CHARS {
+    let mut values: Vec<_> = environment
+        .pairs()
+        .chain(environment.withheld.iter())
+        .collect();
+    // A shorter value must not cut a longer secret before it can be removed.
+    values.sort_by_key(|(_, value)| std::cmp::Reverse(value.len()));
+    for (name, value) in values {
+        // Short ordinary values are noise; explicitly marked secrets are not.
+        if !value.is_empty()
+            && (environment.secret_names.contains(name)
+                || value.chars().count() >= MIN_REDACTED_CHARS)
+        {
             clean = clean.replace(value.as_str(), &format!("<{name} redacted>"));
         }
     }

@@ -86,14 +86,33 @@ export const EnvironmentSentOnceThenForgotten: Story = {
     await userEvent.clear(canvas.getByLabelText("Environment"))
     await userEvent.type(
       canvas.getByLabelText("Environment"),
-      "GEMINI_API_KEY=not-a-real-key"
+      "GEMINI_API_KEY=not-a-real-key\nCUSTOM=synthetic-custom\nREGION=west"
     )
+    await expect(
+      canvas.getByRole("switch", { name: "Secret: GEMINI_API_KEY" })
+    ).toBeChecked()
+    await expect(
+      canvas.getByRole("switch", { name: "Secret: GEMINI_API_KEY" })
+    ).toBeDisabled()
+    await userEvent.click(
+      canvas.getByRole("switch", { name: "Secret: CUSTOM" })
+    )
+    await expect(
+      canvas.getByRole("switch", { name: "Secret: REGION" })
+    ).not.toBeChecked()
+    await expect(
+      canvas.getByText(/Other values are stored in clear/)
+    ).toBeVisible()
     await userEvent.click(canvas.getByRole("button", { name: "Declare" }))
     await waitFor(() =>
       expect(args.onSaveAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           args: ["--experimental-acp"],
-          env: [{ name: "GEMINI_API_KEY", value: "not-a-real-key" }],
+          env: [
+            { name: "GEMINI_API_KEY", value: "not-a-real-key", secret: true },
+            { name: "CUSTOM", value: "synthetic-custom", secret: true },
+            { name: "REGION", value: "west", secret: false },
+          ],
         })
       )
     )

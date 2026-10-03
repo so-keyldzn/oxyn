@@ -532,7 +532,7 @@ pub const MAX_AGENT_ENV: usize = 32;
 ///
 /// A product choice, not an external limit: what justifies this bound is that
 /// an environment value declared by hand has no reason to be long, and that
-/// this field is persisted in clear in the local state. Without a bound, it
+/// non-secret values are persisted in the local state. Without a bound, it
 /// becomes a convenient place to store anything.
 pub const MAX_AGENT_ENV_VALUE_BYTES: usize = 4096;
 
@@ -540,9 +540,8 @@ pub const MAX_AGENT_ENV_VALUE_BYTES: usize = 4096;
 ///
 /// # Why this type is not an [`AiProviderConfig`]
 ///
-/// An external agent has no endpoint, no model, and — above all — no **secret
-/// reference**: it carries its own authentication, and that is the whole point
-/// of the mode ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
+/// An external agent has no endpoint or model. It can carry its own
+/// authentication or receive explicitly declared secrets at launch.
 /// Fitting it into `AiProviderConfig` would produce a structure half of whose
 /// fields mean nothing depending on the variant, and the question "does this
 /// field count here?" would come up again at every read.
@@ -573,14 +572,14 @@ pub struct ExternalAgentConfig {
     /// Its arguments, in order.
     #[serde(default)]
     pub args: Vec<String>,
-    /// The environment variables to give it.
-    ///
-    /// **Must not carry a secret**: what the user puts there goes into a
-    /// process's environment, visible from the process table on some systems.
-    /// An agent that needs a token reads it itself, where it stored it
-    /// ([I-03](../../../CLAUDE.md#i-03)).
+    /// Non-secret environment values. Token-like names must be moved to
+    /// `env_secret_refs` by the host before persistence.
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    /// Environment names and OS keychain references, never secret values.
+    /// Resolved only when preparing the child process, never for the webview.
+    #[serde(default)]
+    pub env_secret_refs: Vec<(String, String)>,
     /// Date of the declaration.
     pub created_at: DateTime<Utc>,
     /// Date of the last modification.
@@ -598,6 +597,7 @@ impl ExternalAgentConfig {
             command: command.into(),
             args: Vec::new(),
             env: Vec::new(),
+            env_secret_refs: Vec::new(),
             created_at: now,
             updated_at: now,
         }
@@ -694,13 +694,54 @@ impl ExternalAgentConfig {
     }
 }
 
-/// **Manual** rendering: environment values are not logged.
-///
-/// The checkable corollary of [I-03](../../../CLAUDE.md#i-03) forbids a derived
-/// `Debug` on a type carrying a secret. `env` *must* not carry one — the
-/// field's documentation says so —, but that is an instruction to the user,
-/// not a guarantee: a `tracing::debug!("{config:?}")` added six months later
-/// must not put it to the test.
+/// Token-like names are secret even when an IPC caller marks them otherwise.
+#[must_use]
+pub fn agent_env_is_secret(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    name.ends_with("_API_KEY")
+        || name.ends_with("_TOKEN")
+        || name.ends_with("_SECRET")
+        || name.contains("PASSWORD")
+        || matches!(name.as_str(), "API_KEY" | "TOKEN" | "SECRET")
+}
+
+impl ExternalAgentConfig {
+    /// Validates the complete persisted environment without resolving secrets.
+    ///
+    /// # Errors
+    /// Rejects clear token-like variables, duplicate names and invalid/bounded
+    /// environment names or references. No error repeats a value.
+    pub fn validate_stored_environment(&self) -> Result<()> {
+        if self.env.iter().any(|(name, _)| agent_env_is_secret(name)) {
+            return Err(OxynError::Config(
+                "agent tokens must use the system keychain".into(),
+            ));
+        }
+        let mut combined = self.clone();
+        combined.env.extend(self.env_secret_refs.iter().cloned());
+        combined.validate()?;
+        let mut names = std::collections::BTreeSet::new();
+        if combined
+            .env
+            .iter()
+            .any(|(name, _)| !names.insert(name.to_ascii_uppercase()))
+        {
+            return Err(OxynError::Config(
+                "agent environment names must be unique".into(),
+            ));
+        }
+        if self.env_secret_refs.iter().any(|(_, reference)| {
+            !reference
+                .strip_prefix("oxyn:agent-env:")
+                .is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        }) {
+            return Err(OxynError::Config("invalid agent secret reference".into()));
+        }
+        Ok(())
+    }
+}
+
+/// Manual rendering keeps transient draft values out of logs.
 impl fmt::Debug for ExternalAgentConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExternalAgentConfig")

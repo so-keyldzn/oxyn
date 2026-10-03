@@ -147,7 +147,12 @@ impl ExternalAgent {
             label: config.label.clone(),
             command: config.command.clone(),
             arg_count: config.args.len(),
-            env_names: config.env.iter().map(|(name, _)| name.clone()).collect(),
+            env_names: config
+                .env
+                .iter()
+                .chain(&config.env_secret_refs)
+                .map(|(name, _)| name.clone())
+                .collect(),
             preset: preset_of(config).map(|preset| preset.id),
             confined: oxyn_ai::external::presets::pinned_preset_of(config).is_some(),
         }
@@ -156,12 +161,23 @@ impl ExternalAgent {
 
 pub use oxyn_ai::external::presets::preset_of;
 
-/// One environment variable of a draft.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One environment variable of a draft; values never appear in Debug.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvVar {
     pub name: String,
     pub value: String,
+    #[serde(default)]
+    pub secret: bool,
+}
+
+impl fmt::Debug for EnvVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EnvVar")
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 /// A ready-made declaration to review, filled from what « Detect » found.
@@ -207,7 +223,11 @@ impl AgentPresetDraft {
             env: draft
                 .env
                 .into_iter()
-                .map(|(name, value)| EnvVar { name, value })
+                .map(|(name, value)| EnvVar {
+                    name,
+                    value,
+                    secret: false,
+                })
                 .collect(),
             detected,
             launcher: draft.launcher,
@@ -278,8 +298,7 @@ impl fmt::Debug for ProviderDraft {
 
 /// What the user filled in to declare an external agent.
 ///
-/// No secret belongs here — the agent carries its own authentication — but the
-/// arguments may still hold one someone pasted, so `Debug` counts them.
+/// Secret values are write-only and go to the keychain before persistence.
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDraft {

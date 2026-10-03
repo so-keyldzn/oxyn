@@ -2569,7 +2569,12 @@ async fn launch_agent(
     // file system that stops answering must not hold it for good.
     let (session, driver) = tokio::time::timeout(
         AGENT_LAUNCH_TIMEOUT,
-        ExternalSession::launch_with_tools(agent, tier, bridge),
+        ExternalSession::launch_with_tools(
+            agent,
+            tier,
+            bridge,
+            Some(Arc::clone(&inner.credentials) as Arc<_>),
+        ),
     )
     .await
     .map_err(|_| {

@@ -40,6 +40,33 @@ workspace is a **reference** to the secret, never the secret.
 committed by the user to their team's repository, because the
 file looked like mere configuration.
 
+### External-agent environment
+
+Secret environment values go to the OS keychain, under a fresh
+`oxyn:agent-env:<random identifier>` reference for each value and each save.
+Rust forces `*_API_KEY`, `*_TOKEN`, `*_SECRET`, names containing `PASSWORD`,
+and the bare names `API_KEY`, `TOKEN`, `SECRET` into the keychain, ignoring
+case. The user can mark any other variable secret. Other values stay in clear.
+`external_agents.env` is readable JSON: `plain` holds name/value pairs and
+`secret_refs` holds name/reference pairs. References never return to the webview.
+
+Values are resolved on the blocking pool only while preparing a launch, after
+the privacy check, and injected into the child's cleared environment. Missing
+entries or keychain errors abort launch; no plaintext fallback exists. The
+agent receives these credentials and may use them to authenticate; they never
+join an AI prompt. Debug and child error reports redact them, including short
+explicitly secret values.
+
+Replacing a declaration writes fresh entries before saving through the bus;
+only a successful save or deletion permits forgetting the old entries. A
+failure can leave unreachable keychain entries, never overwrite an old value.
+Legacy JSON arrays remain readable: the first list moves token-like names to the
+keychain on the blocking pool before offering any agent. A failure aborts listing. This
+upgrade changes live rows; historical SQLite pages, WAL files, backups and
+copies from older releases may still contain the old value. Rotate previously
+stored tokens to invalidate those copies. Unknown sensitive names in legacy
+rows must be marked secret by replacing their declaration.
+
 ### The updater signing key
 
 The minisign private key that signs updates is a secret of the **release**,

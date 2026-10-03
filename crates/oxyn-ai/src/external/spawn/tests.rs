@@ -377,3 +377,48 @@ fn a_withheld_secret_is_redacted_but_never_passed() {
     );
     assert!(!format!("{environment:?}").contains("oxyn-token"));
 }
+
+#[test]
+fn a_keychain_secret_reaches_only_the_spawn_environment() {
+    struct Secrets;
+    impl EnvironmentSecrets for Secrets {
+        fn resolve(&self, reference: &str) -> Result<String, ExternalError> {
+            assert_eq!(reference, "oxyn:agent-env:00000000000000000000000000000001");
+            Ok("synthetic-agent-token".into())
+        }
+    }
+    let mut agent =
+        oxyn_core::ExternalAgentConfig::new(oxyn_core::ProviderId::for_new_agent(), "Test", SHELL);
+    agent.env_secret_refs.push((
+        "ANTHROPIC_API_KEY".into(),
+        "oxyn:agent-env:00000000000000000000000000000001".into(),
+    ));
+    assert!(Environment::empty().with_secrets(&agent, None).is_err());
+    let environment = Environment::empty()
+        .with_secrets(&agent, Some(&Secrets))
+        .expect("resolved");
+    assert!(!format!("{environment:?}").contains("synthetic-agent-token"));
+    let spawned = spawn(SHELL, &script("test \"$ANTHROPIC_API_KEY\" = synthetic-agent-token && printf '%s' \"$ANTHROPIC_API_KEY\" >&2"), &environment).expect("spawn");
+    let exit = block_on(spawned.watch);
+    assert_eq!(exit.code, Some(0), "the child received the exact value");
+    assert_eq!(exit.stderr, "<ANTHROPIC_API_KEY redacted>");
+}
+
+#[test]
+fn explicitly_secret_short_values_are_redacted_too() {
+    struct Secrets;
+    impl EnvironmentSecrets for Secrets {
+        fn resolve(&self, _: &str) -> Result<String, ExternalError> {
+            Ok("1234".into())
+        }
+    }
+    let mut agent =
+        oxyn_core::ExternalAgentConfig::new(oxyn_core::ProviderId::for_new_agent(), "Test", SHELL);
+    agent
+        .env_secret_refs
+        .push(("PIN".into(), "reference".into()));
+    let environment = Environment::empty()
+        .with_secrets(&agent, Some(&Secrets))
+        .expect("resolved");
+    assert_eq!(redact("PIN=1234", &environment), "PIN=<PIN redacted>");
+}

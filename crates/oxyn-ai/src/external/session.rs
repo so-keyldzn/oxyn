@@ -400,7 +400,11 @@ impl ExternalSession {
         let confinement = super::confine::confinement_for(agent, None, || {
             super::confine::codex_config_layers(agent)
         })?;
-        Self::start_process(agent, tier, None, confinement)
+        let environment = Environment::empty()
+            .with_essentials(|name| std::env::var(name).ok())
+            .with_declared(agent.env.iter().cloned())
+            .with_secrets(agent, None)?;
+        Self::start_process(agent, tier, None, confinement, environment)
     }
 
     /// The same, plus Oxyn's tools served to the agent on the loopback.
@@ -418,6 +422,7 @@ impl ExternalSession {
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
         tools: ToolBridge,
+        secrets: Option<Arc<dyn super::spawn::EnvironmentSecrets>>,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         // Refused before the port opens, not after: the refusal falls before
         // anything is started (ADR-0026), and a listening socket is something
@@ -431,20 +436,32 @@ impl ExternalSession {
         // On the blocking pool, not this worker: Codex's configuration may
         // sit on a network share that stops answering, and the caller holds
         // the lock every other agent launch waits on (I-05).
-        let confinement = {
+        let (confinement, environment) = {
             let agent = agent.clone();
             let url = endpoint.url().to_owned();
             tokio::task::spawn_blocking(move || {
-                super::confine::confinement_for(&agent, Some(&url), || {
-                    super::confine::codex_config_layers(&agent)
-                })
+                let environment = Environment::empty()
+                    .with_essentials(|name| std::env::var(name).ok())
+                    .with_declared(agent.env.iter().cloned())
+                    .with_secrets(&agent, secrets.as_deref())?;
+                let launch = environment.for_confinement(&agent);
+                let confinement = super::confine::confinement_for(&launch, Some(&url), || {
+                    super::confine::codex_config_layers(&launch)
+                })?;
+                Ok::<_, ExternalError>((confinement, environment))
             })
             .await
             .map_err(|error| {
                 ExternalError::Invalid(format!("reading the agent's configuration: {error}"))
             })??
         };
-        Self::start_process(agent, tier, Some((endpoint, serving)), confinement)
+        Self::start_process(
+            agent,
+            tier,
+            Some((endpoint, serving)),
+            confinement,
+            environment,
+        )
     }
 
     /// Reads nothing: the confinement is computed by the caller, off any
@@ -457,24 +474,19 @@ impl ExternalSession {
             futures::future::BoxFuture<'static, ()>,
         )>,
         confinement: Option<super::confine::Confinement>,
+        environment: Environment,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         refuse_before_launch(agent, tier)?;
         let tools_in_env = confinement
             .as_ref()
             .is_some_and(|confinement| confinement.tools_in_env);
-        // Only what is named reaches the child. Reading the host here is not a
-        // leak: `with_essentials` looks up the names of `ALWAYS_PASSED` and
-        // ignores the rest.
         // The confinement comes last: a declared variable cannot undo it.
-        let mut environment = Environment::empty()
-            .with_essentials(|name| std::env::var(name).ok())
-            .with_declared(agent.env.iter().cloned())
-            .with_declared(
-                confinement
-                    .iter()
-                    .flat_map(|confinement| confinement.env.iter())
-                    .map(|(name, value)| (*name, value.clone())),
-            );
+        let mut environment = environment.with_declared(
+            confinement
+                .iter()
+                .flat_map(|confinement| confinement.env.iter())
+                .map(|(name, value)| (*name, value.clone())),
+        );
         if let Some((endpoint, _)) = &tools {
             environment = if tools_in_env {
                 // Given to the child, for the configuration that names it:
