@@ -1053,7 +1053,7 @@ pub(crate) mod config_reads {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::{Arc, Barrier};
+    use std::sync::Arc;
 
     use oxyn_core::{Decision, Environment, ResultId};
     use oxyn_secrets::MemorySecretStore;
@@ -1111,21 +1111,6 @@ mod tests {
             } else {
                 DefaultPolicy::new().authorize(actor, command, env)
             }
-        }
-    }
-
-    struct BlockingCreate {
-        entered: Arc<Barrier>,
-        release: Arc<Barrier>,
-    }
-
-    impl PolicyGate for BlockingCreate {
-        fn authorize(&self, _actor: &Actor, command: &Command, _env: Environment) -> Decision {
-            if matches!(command, Command::CreateConnection { .. }) {
-                self.entered.wait();
-                self.release.wait();
-            }
-            Decision::Allow
         }
     }
 
@@ -1201,42 +1186,33 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_connection_dispatch_leaves_no_secret_entry() {
+    fn a_failed_connection_dispatch_leaves_no_secret_entry() {
         let runtime = runtime();
         let _guard = runtime.enter();
-        let secrets = Arc::new(MemorySecretStore::new());
-        let entered = Arc::new(Barrier::new(2));
-        let release = Arc::new(Barrier::new(2));
-        let backend = Backend::assemble_with_test_gate(
-            Arc::new(Store::open_in_memory().expect("temporary store")),
-            Arc::clone(&secrets) as Arc<dyn SecretStore>,
-            Arc::new(BlockingCreate {
-                entered: Arc::clone(&entered),
-                release: Arc::clone(&release),
-            }),
-        )
-        .expect("temporary backend");
-        let command = CommandId::new();
-        let connecting = runtime.spawn({
-            let backend = backend.clone();
-            async move {
-                backend
-                    .connect(command, draft_with_password(Environment::Local))
-                    .await
+        for environment in [Environment::Local, Environment::Production] {
+            let (backend, secrets) = backend_with_secrets();
+            let mut draft = draft_with_password(environment);
+            // The actual store refuses a secret field in persisted parameters.
+            draft
+                .values
+                .insert("password".to_owned(), "invalid-test-parameter".to_owned());
+            let created = runtime.block_on(backend.connect(CommandId::new(), draft));
+            if environment == Environment::Production {
+                let ConnectResponse::Approval { command, .. } = created.expect("held") else {
+                    panic!("production creation waits for approval");
+                };
+                runtime
+                    .block_on(backend.decide_connection(command.parse().expect("command id"), true))
+                    .expect_err("the approved save fails");
+            } else {
+                created.expect_err("the immediate save fails");
             }
-        });
-
-        entered.wait();
-        assert!(backend.cancel(command), "the dispatch is tracked");
-        release.wait();
-        runtime
-            .block_on(connecting)
-            .expect("connection task joins")
-            .expect_err("the dispatch was cancelled");
-        assert!(
-            secrets.is_empty(),
-            "a dispatch error leaves no secret entry"
-        );
+            assert!(
+                secrets.is_empty(),
+                "a dispatch error leaves no secret entry"
+            );
+            assert!(backend.saved_connections().expect("connections").is_empty());
+        }
     }
 
     #[test]

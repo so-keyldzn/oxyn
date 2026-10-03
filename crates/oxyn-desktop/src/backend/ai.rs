@@ -107,6 +107,7 @@ impl Backend {
         &self,
         draft: ProviderDraft,
     ) -> Result<DeclaredProvider, IpcError> {
+        let _ordered = self.inner.ai.provider_declarations.lock().await;
         let existing = match &draft.id {
             Some(id) => {
                 let id = parse_provider_id(id)?;
@@ -186,6 +187,7 @@ impl Backend {
     /// In that order: a key forgotten first, followed by a failed removal,
     /// would leave a declaration that fails for no visible reason.
     pub async fn remove_ai_provider(&self, id: &str) -> Result<(), IpcError> {
+        let _ordered = self.inner.ai.provider_declarations.lock().await;
         let id = parse_provider_id(id)?;
         let secret_ref = self
             .declared_providers()
@@ -752,6 +754,67 @@ mod tests {
             assert_eq!(secrets.len(), 1);
             before = after;
         }
+    }
+
+    #[test]
+    fn overlapping_provider_key_edits_leave_only_the_saved_entry() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let (backend, secrets) =
+            backend_with_provider_store(&directory.path().join("providers.sqlite3"));
+        runtime.block_on(async {
+            let declared = backend
+                .save_ai_provider(provider_draft(
+                    None,
+                    AiProviderKind::Anthropic,
+                    "https://198.51.100.1/v1",
+                    Some("initial-test-key"),
+                ))
+                .await
+                .expect("declared");
+            let before = backend
+                .declared_providers()
+                .await
+                .expect("listed")
+                .remove(0);
+            let (left, right) = tokio::join!(
+                backend.save_ai_provider(provider_draft(
+                    Some(declared.id.clone()),
+                    AiProviderKind::Anthropic,
+                    "https://203.0.113.7/v1",
+                    Some("left-test-key")
+                )),
+                backend.save_ai_provider(provider_draft(
+                    Some(declared.id.clone()),
+                    AiProviderKind::Anthropic,
+                    "https://198.51.100.2/v1",
+                    Some("right-test-key")
+                )),
+            );
+            left.expect("left saved");
+            right.expect("right saved");
+            let saved = backend
+                .declared_providers()
+                .await
+                .expect("listed")
+                .remove(0);
+            assert_ne!(saved.secret_ref, before.secret_ref);
+            assert_eq!(
+                secrets.len(),
+                1,
+                "each successful save retires its actual predecessor"
+            );
+            let key = stored_key(&secrets, &saved).expect("saved key");
+            let expected = if saved.base_url == "https://203.0.113.7/v1" {
+                "left-test-key"
+            } else {
+                "right-test-key"
+            };
+            assert_eq!(key, expected);
+        });
     }
 
     #[test]
