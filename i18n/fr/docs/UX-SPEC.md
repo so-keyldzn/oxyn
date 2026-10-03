@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="8406412691aa" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="39d696494550" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1600,8 +1600,8 @@ marque, et c'est une limite assumée d'ADR-0023, pas un défaut à contourner.
 ### Configuration des fournisseurs et des agents
 
 L'écran IA des réglages déclare deux sortes de destinations et les montre dans
-**une** liste : les fournisseurs, avec leur clé, et les agents externes, sans
-clé.
+**une** liste : les fournisseurs, avec leur clé, et les agents externes, avec
+des secrets d'environnement facultatifs.
 
 Un fournisseur se déclare par sa famille, son point d'accès, son modèle et, si
 le point d'accès l'exige, une clé. La clé va au trousseau du système ; elle
@@ -1641,7 +1641,10 @@ l'utilisateur l'ait voulu :
   ligne `NOM=valeur` par variable ; une ligne sans nom valide refuse
   l'enregistrement plutôt que d'être ignorée. Les valeurs, qui sont souvent des
   jetons, partent une fois et quittent l'écran aussitôt, que l'enregistrement
-  réussisse ou non ; la liste n'en montre que les noms.
+  réussisse ou non ; la liste n'en montre que les noms. Chaque variable a un
+  interrupteur secret ; les noms de jetons sont toujours secrets. L'aide indique
+  que les secrets vont au trousseau du système et que les autres valeurs sont
+  stockées en clair dans l'état SQLite local.
 
 Dans les deux cas, déclarer demande **deux confirmations** : le bouton de
 l'écran, puis une boîte de dialogue **native** qui recopie la commande exacte,

@@ -88,7 +88,8 @@ data leaves the machine, or not.
 Since [ADR-0026](adr/0026-agents-externes-acp.md), a destination can also
 be an **external agent** — a program already installed and authenticated on the
 user's machine, launched as a subprocess and speaking the Agent Client Protocol. Oxyn
-then holds **no key**: the agent carries its own authentication.
+can use the agent's own authentication or inject explicitly declared environment
+secrets from the OS keychain at launch ([SECURITY](SECURITY.md#external-agent-environment)).
 
 Oxyn has a **preset** for two agents, Claude Code and Codex: an ACP
 adapter at a pinned version, whose confinement settings have been measured

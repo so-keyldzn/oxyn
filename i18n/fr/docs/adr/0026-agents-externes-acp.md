@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0026-agents-externes-acp.md" sha256="307136135b09" -->
+<!-- oxyn-translation source="docs/adr/0026-agents-externes-acp.md" sha256="73591a08bb9b" -->
 
 > Traduction française de [docs/adr/0026-agents-externes-acp.md](../../../../docs/adr/0026-agents-externes-acp.md). **La version anglaise fait foi.**
 
@@ -8,6 +8,31 @@
 
 **Précise :** [ADR-0023](0023-fournisseurs-declares-et-provenance.md), qui ne
 connaissait qu'un seul mode — un fournisseur d'API déclaré avec sa clé.
+
+## Amendement — 2026-10-03 : secrets d'environnement facultatifs
+
+La décision du mainteneur pour l'issue #154 remplace l'hypothèse initiale
+« aucune clé / aucune référence secrète » de cet ADR. L'agent peut toujours
+utiliser sa propre connexion, mais les identifiants déclarés explicitement dans
+son environnement sont désormais pris en charge. Les valeurs secrètes vont au
+trousseau du système, chacune sous une référence neuve ; la déclaration SQLite
+ne conserve que la référence. Rust impose les noms de jetons comme secrets,
+quel que soit le choix du formulaire. Les valeurs ordinaires restent en clair.
+Le contrat de stockage, migration et gestion des échecs est dans
+[SECURITY](../SECURITY.md#environnement-des-agents-externes).
+
+La résolution se fait sur le pool bloquant pendant la préparation du lancement,
+après le refus de confidentialité et avant l'injection dans l'environnement vidé.
+Le remplacement ou la suppression n'oublie les anciennes entrées qu'après un
+enregistrement réussi. Le formulaire indique les deux lieux de stockage et
+propose un interrupteur secret par variable. La décision originale ci-dessous
+reste historique pour l'authentification et le stockage ; les décisions ACP,
+autorisations et niveaux de confidentialité restent inchangées.
+
+**Coût de sortie :** convertir les références exige le trousseau de l'hôte ;
+les valeurs ordinaires et références restent du JSON lisible sans Oxyn (I-11).
+**Reconsidérer si :** les agents proposent un transport d'identifiants évitant
+l'exposition par l'environnement tout en préservant compatibilité et choix explicite.
 
 ## Contexte
 

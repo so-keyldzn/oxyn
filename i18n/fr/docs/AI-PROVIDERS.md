@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="1a91630ab8ed" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="dacd420fdd13" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -92,7 +92,9 @@ données quittent la machine, ou non.
 Depuis [ADR-0026](adr/0026-agents-externes-acp.md), une destination peut aussi
 être un **agent externe** — un programme déjà installé et authentifié chez
 l'utilisateur, lancé en sous-processus et parlant l'Agent Client Protocol. Oxyn
-ne détient alors **aucune clé** : l'agent porte sa propre authentification.
+peut utiliser l'authentification propre de l'agent ou injecter au lancement les
+secrets déclarés dans le trousseau du système
+([SECURITY](SECURITY.md#environnement-des-agents-externes)).
 
 Oxyn a un **préréglage** pour deux agents, Claude Code et Codex : un adaptateur
 ACP à version épinglée, dont les réglages de confinement ont été mesurés

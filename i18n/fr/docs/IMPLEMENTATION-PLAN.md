@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="f16cc2539b8a" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="054dc58a1835" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -1853,7 +1853,7 @@ l'interface.**
 
 | Couche | État | Ce qui la tient |
 |---|---|---|
-| Déclaration | fait | `oxyn_core::ExternalAgentConfig` — **aucun champ de secret**, `Debug` manuel qui ne rend que le nombre de variables d'environnement |
+| Déclaration | fait | `oxyn_core::ExternalAgentConfig` — **références au trousseau pour les secrets**, `Debug` manuel qui ne rend que le nombre de variables d'environnement |
 | Persistance | fait | migration 9, table `external_agents`. `the_table_has_no_secret_column` lit le **schéma**, pas la documentation |
 | Bus | fait | trois commandes, **refusées à un `Actor::Agent`** — `an_agent_does_not_declare_an_external_agent` |
 | Confidentialité | fait | `Local` fermé, et refusé **avant le lancement** — `the_local_tier_refuses_before_even_launching_the_process` |
@@ -1880,7 +1880,7 @@ Deux nuances de vocabulaire sont tenues par des tests, parce qu'elles décident 
 ce que l'utilisateur croit :
 
 * un agent n'affiche **pas** « clé absente » — cela se lirait comme un réglage
-  qui manque, alors qu'il n'y a pas de clé à configurer ;
+  qui manque, alors que les identifiants d'environnement sont facultatifs ;
 * sa destination est annoncée **inconnaissable**, pas « inconnue » :
   l'avertissement est permanent, puisque aucune mesure ne viendra le lever. Le
   test refuse que la mention contienne « measured ».
@@ -1898,8 +1898,9 @@ lecture qui échoue **conserve la liste** au lieu de la vider, pour la raison qu
 vaut déjà pour les fournisseurs — une panne locale ne doit pas se lire comme une
 absence de déclaration.
 
-`remove_external_agent` est plus court que son jumeau, et c'est le sujet : **il
-n'y a pas de clé à oublier**, le geste s'arrête au bus.
+Depuis l'amendement du 2026-10-03 à ADR-0026, `remove_external_agent` supprime la
+déclaration par le bus, puis oublie ses secrets d'environnement du trousseau du
+système sur le pool bloquant. Un échec de suppression préserve les anciennes entrées.
 
 **Ce qui restait au 2026-09-14 :** le champ d'environnement dans le formulaire de
 déclaration, et le choix explicite d'un second agent plutôt que du premier

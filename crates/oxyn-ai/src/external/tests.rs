@@ -254,6 +254,7 @@ fn the_local_tier_refuses_before_even_launching_the_process() {
         &launch_request,
         &oxyn_core::CancelToken::new(),
         std::sync::Arc::new(()),
+        None,
     ))
     .expect_err("a local connection cannot talk to an external agent");
 
@@ -297,6 +298,7 @@ fn an_already_cancelled_turn_launches_nothing() {
         &launch_request,
         &token,
         std::sync::Arc::new(()),
+        None,
     ))
     .expect("a cancellation is an end of turn, not an error");
 
@@ -320,6 +322,7 @@ fn an_invalid_declaration_is_refused_before_the_launch() {
         &launch_request,
         &oxyn_core::CancelToken::new(),
         std::sync::Arc::new(()),
+        None,
     ))
     .expect_err("an empty command does not launch");
     assert!(error.to_string().contains("command"), "{error}");

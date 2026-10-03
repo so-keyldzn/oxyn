@@ -56,6 +56,8 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Inspect the stored environment without going through Oxyn's deserializer.
+rusqlite.workspace = true
 # Ages a session's heartbeat, to test recovery without waiting two minutes.
 oxyn-store = { workspace = true, features = ["test-support"] }
 # Scripts a model's stream, to run the tool loop against a real database.
