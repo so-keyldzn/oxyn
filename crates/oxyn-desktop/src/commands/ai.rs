@@ -24,8 +24,7 @@
 
 use oxyn_core::ConnectionId;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager as _, Runtime, State, Webview};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri::{Manager as _, State, Webview};
 
 use crate::backend::Backend;
 use crate::commands::windows::{bring_to_front, caller};
@@ -33,7 +32,7 @@ use crate::ipc::ai::{
     AgentDraft, AgentPresetDraft, AgentSettingAnswer, AgentSettingChange, AgentStart,
     AgentStartRequest, AiUpdate, AskRequest, AskStarted, DeclaredProvider, DestinationChoice,
     ExternalAgent, ModelChoice, OrphanThreadSummary, ProposalTarget, ProviderDraft, PrunedHistory,
-    SampleRequest, SchemaProposal, ThreadSummary, ThreadView, shell_quote,
+    SampleRequest, SchemaProposal, ThreadSummary, ThreadView,
 };
 use crate::ipc::{CatalogAddress, IpcError};
 
@@ -121,58 +120,13 @@ pub async fn ai_provider_models(
 /// can call this command, it cannot click a window it does not draw. Without
 /// it, declaring an agent then asking a question would run any program on the
 /// machine ([ADR-0026](../../../../docs/adr/0026-agents-externes-acp.md)).
-/// Arguments are shown in full here and nowhere else: this is the moment they
-/// must be read.
+/// The backend composes the dialog and applies the shared timing safeguards.
 #[tauri::command]
-pub async fn ai_save_external_agent<R: Runtime>(
-    app: AppHandle<R>,
+pub async fn ai_save_external_agent(
     backend: State<'_, Backend>,
     draft: AgentDraft,
 ) -> Result<Option<ExternalAgent>, IpcError> {
-    // Validated before the dialog, and shown as it will be saved: the user
-    // confirms the declaration itself, not a draft that may still be refused.
-    let agent = backend.review_external_agent(&draft).await?;
-    let (title, confirm) = if draft.id.is_some() {
-        ("Replace this external agent?", "Replace agent")
-    } else {
-        ("Declare an external agent?", "Declare agent")
-    };
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .message(format!(
-            "“{}” will run this program on your machine each time you ask it a question:\n\n{}\n\n\
-             Oxyn cannot see where it sends your prompts, so it never serves a local-only \
-             connection.",
-            agent.label,
-            command_line(&agent)
-        ))
-        .title(title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            confirm.to_owned(),
-            "Cancel".to_owned(),
-        ))
-        .show(move |confirmed| {
-            let _ = sender.send(confirmed);
-        });
-    if !receiver.await.unwrap_or(false) {
-        return Ok(None);
-    }
-    backend.save_external_agent(draft).await.map(Some)
-}
-
-/// The declaration as one shell line, each word quoted as a shell reads it
-/// back: joined by spaces, `["-y foo"]` and `["-y", "foo"]` would read the same
-/// in the dialog and run differently.
-fn command_line(agent: &oxyn_core::ExternalAgentConfig) -> String {
-    let env = agent
-        .env
-        .iter()
-        .map(|(name, value)| format!("{}={}", shell_quote(name), shell_quote(value)));
-    let words = std::iter::once(&agent.command)
-        .chain(&agent.args)
-        .map(|word| shell_quote(word));
-    env.chain(words).collect::<Vec<_>>().join(" ")
+    backend.save_external_agent(draft).await
 }
 
 #[tauri::command]
@@ -489,39 +443,4 @@ pub async fn ai_propose_schema_change(
     })
     .await
     .map_err(|_| IpcError::invalid("The proposal stopped before it finished"))?
-}
-
-#[cfg(test)]
-mod tests {
-    use oxyn_core::{ExternalAgentConfig, ProviderId};
-
-    use super::command_line;
-
-    #[test]
-    fn the_dialog_tells_one_argument_from_two() {
-        let agent = |args: &[&str]| {
-            ExternalAgentConfig::new(ProviderId::for_new_agent(), "Agent", "npx")
-                .with_args(args.iter().copied())
-        };
-        let one = command_line(&agent(&["-y foo"]));
-        let two = command_line(&agent(&["-y", "foo"]));
-        assert_eq!(one, "npx '-y foo'");
-        assert_eq!(two, "npx -y foo");
-    }
-
-    #[test]
-    fn the_environment_is_quoted_before_the_command() {
-        let mut agent = ExternalAgentConfig::new(
-            ProviderId::for_new_agent(),
-            "Agent",
-            "/Users/me/.nvm/versions/node/v22.23.2/bin/npx",
-        )
-        .with_args(["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]);
-        agent.env = vec![("PATH".to_owned(), "/opt/my bin:/usr/bin".to_owned())];
-        assert_eq!(
-            command_line(&agent),
-            "PATH='/opt/my bin:/usr/bin' /Users/me/.nvm/versions/node/v22.23.2/bin/npx -y \
-             @agentclientprotocol/claude-agent-acp@0.78.0"
-        );
-    }
 }

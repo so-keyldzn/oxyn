@@ -609,3 +609,137 @@ fn a_production_connection_refused_in_the_dialog_is_not_saved() {
     assert!(backend.saved_connections().expect("list").is_empty());
     assert!(backend.inner.executor.approvals().is_empty());
 }
+
+#[test]
+fn an_external_agent_confirmed_under_one_second_is_not_declared() {
+    let runtime = runtime();
+    let host = ScriptedConfirm::new(Answer::ConfirmAfter(Duration::from_millis(10)));
+    let backend = {
+        let _guard = runtime.enter();
+        Backend::open_scripted(Arc::clone(&host), Timing::HOST).expect("temporary backend")
+    };
+    runtime.block_on(async {
+        let draft = serde_json::from_value(serde_json::json!({
+            "label": "Agent", "command": "agent"
+        }))
+        .expect("agent draft");
+        let _ = backend
+            .save_external_agent(draft)
+            .await
+            .expect("decision answered");
+        assert!(backend.declared_agents().await.expect("listed").is_empty());
+        assert_eq!(host.shown().len(), 1);
+    });
+}
+
+fn external_agent_draft(id: Option<String>) -> crate::ipc::ai::AgentDraft {
+    serde_json::from_value(serde_json::json!({
+        "id": id, "label": "Agent", "command": "agent"
+    }))
+    .expect("agent draft")
+}
+
+#[test]
+fn refusing_or_expiring_an_external_agent_leaves_no_declaration() {
+    for answer in [Answer::Refuse, Answer::Never] {
+        let runtime = runtime();
+        let host = ScriptedConfirm::new(answer);
+        let backend = {
+            let _guard = runtime.enter();
+            Backend::open_scripted(
+                Arc::clone(&host),
+                Timing {
+                    deadline: Duration::from_millis(20),
+                    ..Timing::HOST
+                },
+            )
+            .expect("temporary backend")
+        };
+        runtime.block_on(async {
+            assert!(
+                backend
+                    .save_external_agent(external_agent_draft(None))
+                    .await
+                    .expect("answered")
+                    .is_none()
+            );
+            assert!(backend.declared_agents().await.expect("listed").is_empty());
+            assert_eq!(host.shown().len(), 1);
+        });
+    }
+}
+
+#[test]
+fn an_external_agent_is_saved_only_after_reading_and_replacement_refusal_keeps_it() {
+    let runtime = runtime();
+    let host = ScriptedConfirm::new(Answer::ConfirmAfter(Duration::from_secs(1)));
+    let backend = {
+        let _guard = runtime.enter();
+        Backend::open_scripted(Arc::clone(&host), Timing::HOST).expect("temporary backend")
+    };
+    runtime.block_on(async {
+        let declared = backend
+            .save_external_agent(external_agent_draft(None))
+            .await
+            .expect("answered")
+            .expect("confirmed");
+        assert_eq!(host.shown().len(), 1);
+        let before = backend.declared_agents().await.expect("listed");
+        assert_eq!(before.len(), 1);
+        host.answer(Answer::Refuse);
+        let mut replacement = external_agent_draft(Some(declared.id));
+        replacement.command = "replacement".to_owned();
+        assert!(
+            backend
+                .save_external_agent(replacement)
+                .await
+                .expect("answered")
+                .is_none()
+        );
+        assert_eq!(backend.declared_agents().await.expect("listed"), before);
+        assert_eq!(host.shown().len(), 2);
+    });
+}
+
+#[test]
+fn an_external_agent_uses_the_same_dialog_slot_as_other_critical_decisions() {
+    let fixture = Fixture::new(Environment::Production, PROMPT);
+    let command = fixture.held("DELETE FROM t");
+    fixture.host.answer(Answer::Never);
+    fixture.runtime.block_on(async {
+        let declaration = fixture
+            .backend
+            .save_external_agent(external_agent_draft(None));
+        tokio::pin!(declaration);
+        tokio::select! {
+            result = &mut declaration => panic!("the host must still be waiting: {result:?}"),
+            () = fixture.host.wait_shown(1) => {}
+        }
+        assert!(fixture.backend.decide(command, true).await.is_err());
+        assert!(
+            fixture
+                .backend
+                .inner
+                .executor
+                .approvals()
+                .peek(command)
+                .is_some()
+        );
+        assert!(
+            fixture
+                .backend
+                .save_external_agent(external_agent_draft(None))
+                .await
+                .is_err()
+        );
+        assert_eq!(fixture.host.shown().len(), 1);
+        assert!(
+            fixture
+                .backend
+                .declared_agents()
+                .await
+                .expect("listed")
+                .is_empty()
+        );
+    });
+}

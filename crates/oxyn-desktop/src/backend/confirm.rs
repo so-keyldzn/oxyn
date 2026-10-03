@@ -200,6 +200,16 @@ pub(crate) enum HostAnswer {
 }
 
 impl Backend {
+    /// Declaring an external program shares the host's timing and dialog slot.
+    pub(crate) async fn confirm_external_agent(
+        &self,
+        agent: &oxyn_core::ExternalAgentConfig,
+        replacing: bool,
+    ) -> Result<bool, IpcError> {
+        let slot = self.inner.confirmations.reserve()?;
+        Ok(slot.ask(text::external_agent(agent, replacing)).await)
+    }
+
     /// Asks the host before a held command is approved, when the approval is
     /// critical: a mutating command whose connection the gate retains as
     /// production **now**, whatever the reason it was held for.

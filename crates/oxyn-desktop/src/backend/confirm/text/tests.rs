@@ -282,3 +282,83 @@ fn no_confirming_label_is_cancel() {
     assert_ne!(WRITE_TO_PRODUCTION, CANCEL);
     assert_ne!(CHANGE_MARKING, CANCEL);
 }
+
+#[test]
+fn the_dialog_tells_one_argument_from_two() {
+    let agent = |args: &[&str]| {
+        oxyn_core::ExternalAgentConfig::new(oxyn_core::ProviderId::for_new_agent(), "Agent", "npx")
+            .with_args(args.iter().copied())
+    };
+    let one = command_line(&agent(&["-y foo"]));
+    let two = command_line(&agent(&["-y", "foo"]));
+    assert_eq!(one, "npx '-y foo'");
+    assert_eq!(two, "npx -y foo");
+}
+
+#[test]
+fn the_environment_is_quoted_before_the_command() {
+    let mut agent = oxyn_core::ExternalAgentConfig::new(
+        oxyn_core::ProviderId::for_new_agent(),
+        "Agent",
+        "/Users/me/.nvm/versions/node/v22.23.2/bin/npx",
+    )
+    .with_args(["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]);
+    agent.env = vec![("PATH".to_owned(), "/opt/my bin:/usr/bin".to_owned())];
+    assert_eq!(
+        command_line(&agent),
+        "PATH='/opt/my bin:/usr/bin' /Users/me/.nvm/versions/node/v22.23.2/bin/npx -y \
+             @agentclientprotocol/claude-agent-acp@0.78.0"
+    );
+}
+
+#[test]
+fn an_external_agent_dialog_escapes_every_untrusted_field_and_uses_constant_labels() {
+    let mut agent = oxyn_core::ExternalAgentConfig::new(
+        oxyn_core::ProviderId::for_new_agent(),
+        "Label\u{2028}",
+        "command\u{202E}",
+    )
+    .with_args(["argument\u{2066}"]);
+    agent.env = vec![("NAME\u{200B}".to_owned(), "value\u{0600}".to_owned())];
+    for replacing in [false, true] {
+        let confirmation = external_agent(&agent, replacing);
+        for escaped in [
+            "Label\\u{2028}",
+            "command\\u{202E}",
+            "argument\\u{2066}",
+            "NAME\\u{200B}",
+            "value\\u{0600}",
+        ] {
+            assert!(confirmation.body.contains(escaped), "missing {escaped}");
+        }
+        assert!(!confirmation.body.chars().any(is_invisible));
+        assert_ne!(confirmation.confirm, CANCEL);
+        assert_eq!(
+            confirmation.confirm,
+            if replacing {
+                REPLACE_AGENT
+            } else {
+                DECLARE_AGENT
+            }
+        );
+    }
+    agent.label = "Cancel".to_owned();
+    assert_eq!(external_agent(&agent, false).confirm, DECLARE_AGENT);
+}
+
+#[test]
+fn an_external_agent_dialog_bounds_fields_and_shows_command_and_argument_tails() {
+    let long = format!("{}END", "x".repeat(2000));
+    let mut agent = oxyn_core::ExternalAgentConfig::new(
+        oxyn_core::ProviderId::for_new_agent(),
+        long.clone(),
+        long.clone(),
+    )
+    .with_args([long.clone()]);
+    agent.env = vec![(long.clone(), long.clone())];
+    let body = external_agent(&agent, false).body;
+    assert_eq!(body.matches("more characters").count(), 5);
+    assert_eq!(body.matches("END").count(), 3);
+    assert!(!body.contains(&long));
+    assert!(body.len() < 4000);
+}

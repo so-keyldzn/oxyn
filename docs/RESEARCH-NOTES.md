@@ -2110,3 +2110,13 @@ prepare leave `SERVER_STATUS_IN_TRANS` set in the next `COM_PING` OK packet,
 and the row inserted before them is there after `COMMIT`, on all three
 servers. `mysql_async` forgets the last OK packet on an error packet
 (`handle_err`, `src/conn/mod.rs:313`): the driver asks again with `COM_PING`.
+
+## External-agent declaration characters — checked 2026-10-03
+
+The Unicode Character Database's [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+was checked for general categories `Cf`, `Zl` and `Zp`. They include U+2028,
+U+2029, bidi controls and zero-width format characters that `char::is_control`
+does not reject. `ExternalAgentConfig::validate` rejects these ranges in every
+text field, alongside the existing invisible-character ranges used by native
+confirmations. The 4,096-byte command/argument bounds are Oxyn product limits,
+not operating-system limits; no dependency was added.

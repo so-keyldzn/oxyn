@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="f16cc2539b8a" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="fbebbbbe64b5" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2146,11 +2146,20 @@ un changement de marquage se confirment dans un dialogue natif. Le port
 `HostConfirm` existe (`crates/oxyn-desktop/src/backend/confirm.rs`), et
 `decide`, `decide_connection`, `decide_connection_change` et
 `update_connection` le traversent. Restent la famille 2 — `ai_answer_sample`
-et le champ `sample` d'`ai_ask` accordent toujours sur un simple appel — et
-`ai_save_external_agent`, qui ouvre encore son dialogue sans passer par le
-port. **Ce qui le débloque** : la fin des travaux en cours sur l'assistant
+et le champ `sample` d'`ai_ask` accordent toujours sur un simple appel. **Ce qui le débloque** : la fin des travaux en cours sur l'assistant
 (`commands/ai.rs`, `backend/ai`), puis un commit par chemin, avec les tests du
 § 4 de l'ADR. **Échéance** : au plus tard le 2026-10-31.
+
+**Fait le 2026-10-03 — les déclarations d'agents externes passent par `HostConfirm` (#150).**
+`save_external_agent` valide la déclaration, interroge l'hôte par le port partagé,
+puis envoie `SaveExternalAgent` par le bus. Le délai minimal d'une seconde,
+l'échéance de cinq minutes et l'exclusion des dialogues simultanés s'appliquent
+aux déclarations et remplacements. Le dialogue utilise des valeurs échappées et
+bornées ainsi que des libellés de boutons constants ; la validation refuse les
+caractères de contrôle, de format et les séparateurs de ligne/paragraphe dans
+chaque champ et borne la commande et chaque argument à 4 096 octets UTF-8.
+Les tests d'hôte scripté couvrent l'accord prématuré, le refus, l'expiration et
+la concurrence.
 
 ## Phase 3 bis — Au-delà du relationnel
 
