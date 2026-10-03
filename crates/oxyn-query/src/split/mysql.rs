@@ -59,7 +59,7 @@ pub(super) fn split(sql: &str) -> Vec<Fragment<'_>> {
                     pending.body.word(span, &mut scanner);
                 }
             }
-            Tok::Quoted | Tok::Symbol => {
+            Tok::Quoted | Tok::SingleQuoted | Tok::Symbol => {
                 pending.has_code = true;
                 pending.body.other(is_colon(sql, token, &span));
             }
@@ -82,7 +82,9 @@ pub(super) fn program_is_complete(text: &str) -> Option<bool> {
             Tok::Semicolon if body.is_open() => body.separator(),
             Tok::Semicolon => single = false,
             Tok::Word => body.word(span, &mut scanner),
-            Tok::Quoted | Tok::Symbol => body.other(is_colon(text, token, &span)),
+            Tok::Quoted | Tok::SingleQuoted | Tok::Symbol => {
+                body.other(is_colon(text, token, &span));
+            }
             Tok::Comment | Tok::UnreadableComment => {}
         }
     }

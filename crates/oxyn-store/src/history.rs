@@ -30,6 +30,7 @@ use chrono::{DateTime, Utc};
 use oxyn_core::{
     Actor, AgentId, Command, ConnectionId, ErrorClass, OxynError, QueryLanguage, StatementIntent,
 };
+use oxyn_query::redact_password_literals;
 use rusqlite::{OptionalExtension, Row, params};
 use std::time::Duration;
 
@@ -203,7 +204,11 @@ impl HistoryRecord {
                 request,
                 ..
             } => {
-                let mut record = Self::new(actor, request.language, request.text.clone());
+                let mut record = Self::new(
+                    actor,
+                    request.language,
+                    redact_password_literals(&request.text, request.language),
+                );
                 record.connection = Some(*connection);
                 record.intent = request.intent;
                 Some(record)
@@ -339,6 +344,7 @@ impl<'a> History<'a> {
     /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Json`].
     pub fn record(&self, record: &HistoryRecord) -> Result<i64> {
         let language = tag_to_json(&record.language)?;
+        let statement = redact_password_literals(&record.statement, record.language);
 
         self.store.with_connection(|conn| {
             conn.execute(
@@ -354,7 +360,7 @@ impl<'a> History<'a> {
                     record.actor_kind.as_str(),
                     record.actor_id.map(|id| id.to_string()),
                     language,
-                    record.statement,
+                    statement,
                     record.intent.as_str(),
                     record.duration.map(duration_to_ms),
                     record.rows.map(count_to_i64),
@@ -624,6 +630,38 @@ mod tests {
         AgentSessionId, ErrorClass, ExecRequest, ScalarValue, SessionId, SqlDialect,
         StatementHandle,
     };
+
+    #[test]
+    fn direct_records_cannot_persist_password_literals() {
+        let store = Store::open_in_memory().expect("in-memory store");
+        let sql = "ALTER ROLE app PASSWORD 'witness-secret'";
+        let command = Command::Execute {
+            connection: ConnectionId::new(),
+            session: SessionId::new(),
+            request: Box::new(ExecRequest::new(QueryLanguage::SQL, sql)),
+        };
+        let history = HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, sql);
+        let mut journal =
+            crate::JournalRecord::new(&Actor::Human, &command, &oxyn_core::Decision::Allow);
+        journal.statement = Some(sql.into());
+        store.history().record(&history).expect("history insert");
+        store.journal().append(&journal).expect("journal append");
+        store
+            .with_connection(|conn| {
+                for table in ["query_history", "audit_journal"] {
+                    let statement: String =
+                        conn.query_row(&format!("SELECT statement FROM {table}"), [], |row| {
+                            row.get(0)
+                        })?;
+                    assert!(!statement.contains("witness-secret"));
+                    assert!(statement.contains("<redacted>"));
+                }
+                Ok(())
+            })
+            .expect("raw SQL reads");
+        assert_eq!(history.statement, sql);
+        assert_eq!(journal.statement.as_deref(), Some(sql));
+    }
 
     fn read_record(text: &str) -> HistoryRecord {
         HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, text)

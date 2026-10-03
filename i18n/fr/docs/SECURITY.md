@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="f31a5bd86623" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="e67a6ac84117" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -39,6 +39,22 @@ clés privées SSH de tunnel, certificats clients.
 
 Le stockage passe par le trousseau du système. Ce qui est persisté dans le
 workspace, c'est une **référence** au secret, jamais le secret.
+
+Les instructions d'administration SQL sont la surface d'entrée exceptionnelle
+où un mot de passe fait partie du texte de l'instruction lui-même. Avant qu'une
+nouvelle instruction n'atteigne l'historique des requêtes, le journal d'audit
+en ajout seul ou un enregistrement d'appel d'outil de conversation, Oxyn
+remplace lexicalement les littéraux de mot de passe reconnus par
+`'<redacted>'` ; les requêtes enregistrées incluses dans le contexte IA reçoivent
+le même caviardage avant leur troncature ou leur rendu. Le driver reçoit toujours
+le texte d'origine. Cela couvre les clauses explicites de mot de passe, pas les
+secrets arbitraires dans les commentaires, le SQL dynamique, les brouillons de
+l'éditeur ou le texte libre des conversations. Les lignes déjà présentes dans
+`audit_journal` ne sont pas réécrites, car le journal reste strictement en ajout
+seul. Un utilisateur ayant exécuté un tel SQL avant cette protection doit
+renouveler le mot de passe et protéger ou remplacer les fichiers de workspace
+concernés
+([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
 
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le

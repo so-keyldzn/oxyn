@@ -3285,6 +3285,37 @@ mod tests {
         }
     }
 
+    struct RecordingSession {
+        executed: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl oxyn_driver::Session for RecordingSession {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::SQL | Capabilities::TABLES
+        }
+        async fn execute(&self, request: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
+            self.executed.lock().push(request.text);
+            Ok(Box::new(FakeCursor {
+                handle: StatementHandle::new(),
+                rendered: false,
+                stats: ExecStats::default(),
+            }))
+        }
+        async fn cancel(&self, _: StatementHandle) -> Result<()> {
+            Ok(())
+        }
+        fn catalog(&self) -> &dyn oxyn_catalog::CatalogProvider {
+            unreachable!("password-redaction tests introspect nothing")
+        }
+        async fn ping(&self) -> Result<Duration> {
+            Ok(Duration::ZERO)
+        }
+        async fn close(self: Box<Self>) -> Result<()> {
+            Ok(())
+        }
+    }
+
     struct FakeCursor {
         handle: StatementHandle,
         rendered: bool,
@@ -3372,6 +3403,75 @@ mod tests {
         // The name is copied to survive the connection's deletion.
         assert_eq!(entry.record.connection_name.as_deref(), Some("atelier"));
         assert!(entry.record.error.is_none());
+    }
+
+    #[test]
+    fn password_literals_execute_verbatim_but_are_redacted_from_disk() {
+        let cases = [
+            (
+                DriverId::postgres(),
+                SqlDialect::Postgres,
+                "ALTER ROLE app PASSWORD 'witness-secret'",
+            ),
+            (
+                DriverId::mysql(),
+                SqlDialect::MySql,
+                "CREATE USER u IDENTIFIED BY 'witness-secret'",
+            ),
+        ];
+
+        for (driver, dialect, sql) in cases {
+            let connection = ConnectionConfig::new("credential test", driver)
+                .with_environment(Environment::Local);
+            let bench = Harness::new(&connection);
+            let executed = Arc::new(Mutex::new(Vec::new()));
+            let session = bench.executor.sessions.insert(SessionSlot::new(
+                connection.id,
+                Box::new(RecordingSession {
+                    executed: Arc::clone(&executed),
+                }),
+            ));
+            let command = Command::Execute {
+                connection: connection.id,
+                session: session.id(),
+                request: Box::new(
+                    ExecRequest::new(QueryLanguage::Sql(dialect), sql).with_limits(
+                        ExecLimits::default()
+                            .writable()
+                            .with_timeout(None::<Duration>),
+                    ),
+                ),
+            };
+
+            block_on(
+                bench
+                    .executor
+                    .dispatch(Actor::Human, command, &CancelToken::new()),
+            )
+            .expect("the server accepts the statement");
+
+            assert_eq!(executed.lock().as_slice(), [sql]);
+            let history = bench.store.history().recent(1).expect("history");
+            let journal = bench.store.journal().recent(2).expect("journal");
+            assert_eq!(history.len(), 1);
+            assert_eq!(
+                journal.len(),
+                2,
+                "the decision and outcome are both retained"
+            );
+            assert_eq!(history[0].record.status, HistoryStatus::Succeeded);
+            assert!(!history[0].record.statement.contains("witness-secret"));
+            assert!(
+                journal.iter().all(|entry| {
+                    entry
+                        .record
+                        .statement
+                        .as_deref()
+                        .is_none_or(|statement| !statement.contains("witness-secret"))
+                }),
+                "the audit journal must not retain the password literal"
+            );
+        }
     }
 
     /// The `HistoryRecorded` received so far, without waiting.

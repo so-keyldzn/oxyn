@@ -499,7 +499,7 @@ fn sqlite_statements(sql: &str, cursor: usize) -> Result<Vec<Fragment<'_>>, Quer
                 body_statement_start = false;
                 ended = false;
             }
-            Tok::Quoted | Tok::Symbol => {
+            Tok::Quoted | Tok::SingleQuoted | Tok::Symbol => {
                 has_code = true;
                 if body && !ended {
                     body_statement_start = false;
@@ -572,7 +572,7 @@ pub fn split_with(sql: &str, profile: SplitProfile) -> Vec<Fragment<'_>> {
             has_code = false;
             unreadable = false;
         }
-        Tok::Word | Tok::Quoted | Tok::Symbol => has_code = true,
+        Tok::Word | Tok::Quoted | Tok::SingleQuoted | Tok::Symbol => has_code = true,
     });
 
     if has_code {
@@ -651,11 +651,13 @@ pub fn words_with(sql: &str, profile: SplitProfile) -> Vec<Word<'_>> {
 /// What the scanner can tell apart. It does not understand SQL: it only knows
 /// where it is allowed to look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tok {
+pub(crate) enum Tok {
     /// A bare word (keyword, unquoted identifier).
     Word,
     /// A string, a quoted identifier, a `$$ … $$` body.
     Quoted,
+    /// A single-quoted string literal.
+    SingleQuoted,
     /// A comment, whatever its form.
     Comment,
     /// A line comment whose end depends on a lexer nobody checked
@@ -673,7 +675,7 @@ enum Tok {
 /// A single scanner serves splitting, comment detection and word reading:
 /// three copies of this loop would end up diverging, and it would be the one
 /// holding the safety net that diverged.
-fn scan(sql: &str, profile: SplitProfile, on: &mut dyn FnMut(Tok, Range<usize>)) {
+pub(crate) fn scan(sql: &str, profile: SplitProfile, on: &mut dyn FnMut(Tok, Range<usize>)) {
     for (token, span) in Scanner::new(sql, profile) {
         on(token, span);
     }
@@ -759,7 +761,7 @@ fn lex(b: &[u8], i: usize, c: u8, profile: SplitProfile) -> (Tok, usize) {
         b'\'' => {
             let escapes = profile.backslash_escapes
                 || (profile.escape_string_prefix && has_escape_prefix(b, i));
-            (Tok::Quoted, skip_quoted(b, i, b'\'', escapes))
+            (Tok::SingleQuoted, skip_quoted(b, i, b'\'', escapes))
         }
         b'"' => (
             Tok::Quoted,
