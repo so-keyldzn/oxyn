@@ -1930,11 +1930,13 @@ mod approved_samples {
             },
             "which plans?",
         ));
-        started
-            .map_err(|error| error.message)
-            .expect("the question starts");
-        let events = ending(&fixture, &received);
-        assert!(events.contains("another provider"), "{events}");
+        let refused = started.expect_err("an invalid sample is refused before the native dialog");
+        assert!(
+            refused.message.contains("another provider"),
+            "{}",
+            refused.message
+        );
+        assert!(received.lock().is_empty(), "the question never started");
         assert_eq!(fixture.reads(), 0, "refused before any read");
         assert!(fixture.egress().is_empty(), "a refusal records no send");
     }
