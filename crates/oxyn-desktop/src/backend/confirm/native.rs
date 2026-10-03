@@ -24,9 +24,6 @@ pub(crate) struct NativeDialog {
     /// plugin cannot close a dialog, so one left past its deadline stays on
     /// screen: the next waits for it here, and its minimum delay starts when
     /// it is drawn, not when it was asked.
-    ///
-    /// Only this port's dialogs take it: the external agent's declaration
-    /// (`commands/ai.rs`) still draws its own, outside the queue.
     screen: Arc<tokio::sync::Mutex<()>>,
 }
 

@@ -2141,11 +2141,19 @@ a change of marking are confirmed in a native dialog. The
 `HostConfirm` port exists (`crates/oxyn-desktop/src/backend/confirm.rs`), and
 `decide`, `decide_connection`, `decide_connection_change` and
 `update_connection` go through it. What remains is family 2 — `ai_answer_sample`
-and the `sample` field of `ai_ask` still grant on a simple call — and
-`ai_save_external_agent`, which still opens its dialog without going through the
-port. **What unblocks it**: the end of the work in progress on the assistant
+and the `sample` field of `ai_ask` still grant on a simple call. **What unblocks it**: the end of the work in progress on the assistant
 (`commands/ai.rs`, `backend/ai`), then one commit per path, with the tests of
 § 4 of the ADR. **Deadline**: at the latest on 2026-10-31.
+
+**Done on 2026-10-03 — external-agent declarations use `HostConfirm` (#150).**
+`save_external_agent` validates the declaration, asks the host through the shared
+port, and only then sends `SaveExternalAgent` through the bus. The one-second
+guard, five-minute deadline and single-dialog exclusion apply to declarations
+and replacements. The dialog uses escaped, bounded values and constant button
+labels. A declaration whose full escaped dialog exceeds 4,096 bytes is refused,
+never abbreviated. Validation refuses control, format and line/paragraph separator characters
+in every field and bounds the command and each argument to 4,096 UTF-8 bytes.
+Scripted host tests cover premature approval, refusal, expiry and contention.
 
 ## Phase 3 bis — Beyond the relational
 

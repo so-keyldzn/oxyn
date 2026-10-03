@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="dda201522be8" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0fdd4aebce92" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2123,3 +2123,15 @@ du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
 sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
 paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
 par `COM_PING`.
+
+## Caractères de déclaration d'agent externe — vérifiés le 2026-10-03
+
+Le fichier [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+de la base Unicode a été vérifié pour les catégories générales `Cf`, `Zl` et
+`Zp`. Elles comprennent U+2028, U+2029, les contrôles bidirectionnels et les
+caractères de format de largeur nulle que `char::is_control` ne refuse pas.
+`ExternalAgentConfig::validate` refuse ces plages dans chaque champ textuel,
+ainsi que les plages de caractères invisibles déjà utilisées par les
+confirmations natives. Les bornes de 4 096 octets pour la commande et les
+arguments sont des limites produit Oxyn, pas celles du système d'exploitation ;
+aucune dépendance n'a été ajoutée.
