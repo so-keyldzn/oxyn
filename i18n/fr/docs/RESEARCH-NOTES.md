@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="dda201522be8" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="62c3e2359b7e" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2123,3 +2123,22 @@ du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
 sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
 paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
 par `COM_PING`.
+
+## Modes TLS PostgreSQL — vérifiés le 2026-10-03
+
+Pour [ADR-0052](adr/0052-verified-tls-outside-local.md), consultation de la
+[documentation SSL officielle](https://www.postgresql.org/docs/18/libpq-ssl.html),
+sections sur la vérification du certificat et la protection par mode :
+`verify-full` vérifie la chaîne de certificats et le nom d'hôte ; `verify-ca`
+vérifie la chaîne seule. `prefer` ne protège pas contre un intermédiaire actif.
+La politique Oxyn applique ces distinctions à l'environnement de connexion ;
+aucune version de dépendance ne change.
+
+Les sources épinglées du registre et les fonctionnalités du workspace confirment
+aussi le magasin de confiance : `_tls-rustls-aws-lc-rs` de `sqlx-core` active
+`webpki-roots`, et `src/net/tls/tls_rustls.rs::import_root_certs` importe cet
+ensemble embarqué ; `src/io/tls/rustls_io.rs` de `mysql_async` importe aussi
+`webpki_roots::TLS_SERVER_ROOTS`. Aucun driver livré ne sélectionne de
+fonctionnalité de racines système ni ne propose de champ d'autorité par
+connexion. La clé de configuration PostgreSQL `sslrootcert` entre actuellement
+dans les options serveur de `ConnectSpec`.
