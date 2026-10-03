@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0052-verified-tls-outside-local.md" sha256="3e3d3a4ca4df" -->
+<!-- oxyn-translation source="docs/adr/0052-verified-tls-outside-local.md" sha256="ea533dee100d" -->
 
 > Traduction française de [docs/adr/0052-verified-tls-outside-local.md](../../../../docs/adr/0052-verified-tls-outside-local.md). **La version anglaise fait foi.**
 
@@ -59,6 +59,15 @@ décision historique propre à MySQL est conservée, sans être réécrite.
 * **−** Les URL de test locales qui dépendaient de l'ancien défaut doivent
   nommer leur mode TLS. Le seul environnement Local ne désactive pas la
   vérification.
+* **−** Aucun des deux drivers ne propose actuellement de champ d'autorité
+  privée par connexion. Le paramètre PostgreSQL `sslrootcert` est transmis
+  comme option de session au serveur, sans être appliqué comme racine de
+  confiance TLS : l'ajouter à une configuration enregistrée ou à un DSN n'est
+  pas une migration prise en charge. Un serveur signé par une autorité privée
+  dont la racine n'est pas accessible au vérificateur TLS reste donc
+  inaccessible avec cette règle. Cette décision n'introduit aucun nouveau
+  champ de configuration d'autorité ou de certificat client ; il ne faut pas
+  marquer la connexion comme Local dans le seul but de contourner la vérification.
 
 **Coût de sortie :** faible dans le code (deux constructeurs d'options et les
 défauts de leurs formulaires), mais important dans le contrat de sécurité :

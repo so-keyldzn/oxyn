@@ -51,6 +51,14 @@ MySQL-only decision is preserved rather than rewritten.
   marked Local to retain a weaker mode.
 * **−** Local test URLs that relied on the old default must name their TLS
   mode. A Local environment alone does not disable verification.
+* **−** Neither driver currently exposes a per-connection private CA field.
+  PostgreSQL's `sslrootcert` parameter is forwarded as a server session option,
+  not applied as a TLS trust root: adding it to a saved configuration or DSN
+  is not a supported migration path. A private-CA server whose root is not
+  available to the TLS verifier therefore remains unavailable under this
+  rule. This decision introduces no new CA or client-certificate configuration
+  surface, and the connection must not be relabeled Local merely to bypass
+  verification.
 
 **Exit cost:** small in code (two option builders and their form defaults),
 but substantial in the security contract: relaxing the rule would change the
