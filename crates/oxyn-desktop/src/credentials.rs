@@ -159,7 +159,7 @@ impl KeyringCredentials {
             .map_err(|err| OxynError::Config(format!("forgetting the connection secrets: {err}")))
     }
 
-    /// Writes a model provider's API key, replacing whatever was there.
+    /// Writes a model provider's API key under a reference no declaration has used.
     ///
     /// Returns the reference to persist with the declaration, which never
     /// carries the key itself
@@ -176,8 +176,9 @@ impl KeyringCredentials {
         provider: &ProviderId,
         key: &str,
     ) -> Result<SecretRef, OxynError> {
-        let reference = SecretRef::for_provider(provider.as_str())
-            .map_err(|err| OxynError::Config(format!("provider secret reference: {err}")))?;
+        let reference =
+            SecretRef::for_provider(format!("{provider}.{}", uuid::Uuid::new_v4().simple()))
+                .map_err(|err| OxynError::Config(format!("provider secret reference: {err}")))?;
         self.store
             .put(&reference, SecretString::from(key.to_owned()))
             .map_err(|err| OxynError::Config(format!("writing the provider key: {err}")))?;

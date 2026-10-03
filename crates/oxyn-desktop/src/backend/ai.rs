@@ -98,11 +98,10 @@ impl Backend {
     /// declaration through the bus.
     ///
     /// The declaration is validated **before** the key is written, so a
-    /// refused endpoint leaves no orphan entry. After that the order is the
-    /// connection's: a failure past the keyring write leaves an unreachable
-    /// entry, while the reverse would leave a declaration whose key does not
-    /// exist. An edit that moves to another endpoint or kind forgets the old
-    /// key exactly as clearing it explicitly would
+    /// refused endpoint leaves no orphan entry. A typed key gets a fresh entry:
+    /// a failed save forgets it without changing the previous declaration's
+    /// key. A successful save forgets the old entry only once the declaration
+    /// no longer references it
     /// ([I-03](../../../../CLAUDE.md#i-03)).
     pub async fn save_ai_provider(
         &self,
@@ -150,20 +149,28 @@ impl Backend {
             None => {}
         }
 
-        self.dispatch_ai(Command::SaveAiProvider {
-            config: Box::new(config.clone()),
-        })
-        .await?;
+        let saved = self
+            .dispatch_ai(Command::SaveAiProvider {
+                config: Box::new(config.clone()),
+            })
+            .await;
+        if !matches!(saved, Ok(Outcome::AiProviderSaved { .. })) {
+            if key.is_some()
+                && let Some(reference) = config.secret_ref
+            {
+                self.forget_provider_key(reference).await;
+            }
+            return Err(saved
+                .err()
+                .unwrap_or_else(|| IpcError::invalid("The provider was not saved")));
+        }
 
-        // The old key goes only once the declaration no longer references
-        // it — whether the user asked to clear it, or the edit moved to
-        // another endpoint or kind and `compose_provider` already dropped
-        // `config.secret_ref` for that reason.
-        if key.is_none()
-            && config.secret_ref.is_none()
-            && let Some(reference) = existing.and_then(|previous| previous.secret_ref)
+        // A fresh key must never overwrite the one the saved endpoint still
+        // uses; only a successful save makes that previous entry unreachable.
+        if let Some(reference) = existing.and_then(|previous| previous.secret_ref)
+            && config.secret_ref.as_ref() != Some(&reference)
         {
-            self.forget_provider_key(reference);
+            self.forget_provider_key(reference).await;
         }
 
         tokio::task::spawn_blocking(move || {
@@ -188,7 +195,7 @@ impl Backend {
             .and_then(|config| config.secret_ref);
         self.dispatch_ai(Command::RemoveAiProvider { id }).await?;
         if let Some(reference) = secret_ref {
-            self.forget_provider_key(reference);
+            self.forget_provider_key(reference).await;
         }
         Ok(())
     }
@@ -374,19 +381,16 @@ impl Backend {
         }
     }
 
-    fn forget_provider_key(&self, reference: String) {
+    async fn forget_provider_key(&self, reference: String) {
         let credentials = Arc::clone(&self.inner.credentials);
-        tauri::async_runtime::spawn(async move {
-            match tokio::task::spawn_blocking(move || credentials.forget_provider_key(&reference))
-                .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    tracing::warn!(error = %error, "orphan provider key left in the keyring");
-                }
-                Err(error) => tracing::warn!(error = %error, "the keyring task did not finish"),
+        match tokio::task::spawn_blocking(move || credentials.forget_provider_key(&reference)).await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "orphan provider key left in the keyring");
             }
-        });
+            Err(error) => tracing::warn!(error = %error, "the keyring task did not finish"),
+        }
     }
 }
 
@@ -498,7 +502,11 @@ fn model_choice(model: oxyn_llm::ModelInfo) -> ModelChoice {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use oxyn_core::{AiProviderKind, PrivacyTier};
+    use oxyn_secrets::{ExposeSecret as _, MemorySecretStore, SecretRef, SecretStore};
+    use oxyn_store::Store;
 
     use super::*;
 
@@ -592,6 +600,158 @@ mod tests {
             "key": key,
         }))
         .expect("valid draft")
+    }
+
+    fn backend_with_provider_store(path: &std::path::Path) -> (Backend, Arc<MemorySecretStore>) {
+        let secrets = Arc::new(MemorySecretStore::new());
+        let backend = Backend::assemble(
+            Arc::new(Store::open_at(path).expect("temporary store")),
+            Arc::clone(&secrets) as Arc<dyn SecretStore>,
+        )
+        .expect("temporary backend");
+        (backend, secrets)
+    }
+
+    fn stored_provider(backend: &Backend, runtime: &tokio::runtime::Runtime) -> AiProviderConfig {
+        runtime
+            .block_on(backend.declared_providers())
+            .expect("listed")
+            .into_iter()
+            .next()
+            .expect("one declaration")
+    }
+
+    fn stored_key(store: &MemorySecretStore, config: &AiProviderConfig) -> Option<String> {
+        let reference = SecretRef::parse(config.secret_ref.as_deref().expect("a reference"))
+            .expect("valid reference");
+        store
+            .get(&reference)
+            .expect("keychain read")
+            .map(|secret| secret.expose_secret().to_owned())
+    }
+
+    #[test]
+    fn a_failed_provider_edit_keeps_the_old_declaration_and_key() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the executor");
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("providers.sqlite3");
+        let (backend, secrets) = backend_with_provider_store(&path);
+        // An existing installation may still name the deterministic entry.
+        let id = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
+        let reference = SecretRef::for_provider(id.as_str()).expect("legacy reference");
+        secrets
+            .put(
+                &reference,
+                oxyn_secrets::SecretString::from("old-test-key".to_owned()),
+            )
+            .expect("legacy key");
+        let before = AiProviderConfig::new(
+            id,
+            AiProviderKind::Anthropic,
+            "Provider",
+            "https://198.51.100.1/v1",
+            "model",
+        )
+        .with_secret_ref(reference.as_str());
+        backend
+            .inner
+            .executor
+            .store()
+            .providers()
+            .save(&before)
+            .expect("legacy declaration");
+        assert_eq!(
+            backend
+                .inner
+                .credentials
+                .provider_key(&before)
+                .expect("legacy lookup")
+                .expect("legacy key")
+                .expose(),
+            "old-test-key"
+        );
+        assert_eq!(
+            stored_key(&secrets, &before).as_deref(),
+            Some("old-test-key")
+        );
+        let connection = rusqlite::Connection::open(&path).expect("test connection");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_provider_update
+                 BEFORE UPDATE ON ai_providers
+                 BEGIN
+                     SELECT RAISE(FAIL, 'injected provider save failure');
+                 END;",
+            )
+            .expect("failing trigger");
+
+        runtime
+            .block_on(backend.save_ai_provider(provider_draft(
+                Some(before.id.to_string()),
+                AiProviderKind::Anthropic,
+                "https://203.0.113.7/v1",
+                Some("new-test-key"),
+            )))
+            .expect_err("the declaration save fails");
+
+        let after = stored_provider(&backend, &runtime);
+        assert_eq!(after.base_url, before.base_url);
+        assert_eq!(after.secret_ref, before.secret_ref);
+        assert_eq!(
+            stored_key(&secrets, &after).as_deref(),
+            Some("old-test-key")
+        );
+        assert_eq!(secrets.len(), 1, "the failed edit leaves no fresh orphan");
+    }
+
+    #[test]
+    fn a_successful_provider_key_edit_replaces_the_reference_and_forgets_the_old_entry() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the executor");
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("providers.sqlite3");
+        let (backend, secrets) = backend_with_provider_store(&path);
+        let declared = runtime
+            .block_on(backend.save_ai_provider(provider_draft(
+                None,
+                AiProviderKind::Anthropic,
+                "https://198.51.100.1/v1",
+                Some("old-test-key"),
+            )))
+            .expect("declared");
+        let mut before = stored_provider(&backend, &runtime);
+        // Replacing on the same endpoint must isolate its key just like a move.
+        for endpoint in ["https://203.0.113.7/v1", "https://203.0.113.7/v1"] {
+            runtime
+                .block_on(backend.save_ai_provider(provider_draft(
+                    Some(declared.id.clone()),
+                    AiProviderKind::Anthropic,
+                    endpoint,
+                    Some("new-test-key"),
+                )))
+                .expect("edited");
+
+            let after = stored_provider(&backend, &runtime);
+            assert_ne!(after.secret_ref, before.secret_ref);
+            assert_eq!(
+                stored_key(&secrets, &after).as_deref(),
+                Some("new-test-key")
+            );
+            let old_reference =
+                SecretRef::parse(before.secret_ref.as_deref().expect("old reference"))
+                    .expect("valid old reference");
+            assert!(
+                !secrets.contains(&old_reference),
+                "the old key is forgotten"
+            );
+            assert_eq!(secrets.len(), 1);
+            before = after;
+        }
     }
 
     #[test]
