@@ -38,6 +38,9 @@ const STATEMENT_WHOLE: usize = 1_000;
 const STATEMENT_EDGE: usize = 500;
 /// Any other untrusted string — a name, a value, a reason.
 const FIELD_MAX: usize = 200;
+/// A program cannot be approved from an abbreviated declaration: refuse what
+/// exceeds this product budget instead of hiding executable content.
+const DECLARATION_MAX_BYTES: usize = 4_096;
 
 /// How the dialog looks. The host maps it to its own icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,24 +73,39 @@ pub(crate) struct SecretsShown {
 
 /// A validated declaration, including the exact argument boundaries. The host
 /// asks about the backend's configuration, not text supplied by the webview.
-pub(crate) fn external_agent(agent: &ExternalAgentConfig, replacing: bool) -> Confirmation {
+/// Returns `None` if the full escaped declaration exceeds the dialog budget.
+pub(crate) fn external_agent(agent: &ExternalAgentConfig, replacing: bool) -> Option<Confirmation> {
+    // Environment names are not bounded by validate. Check every input before
+    // rendering so an oversized name cannot cause a second unbounded allocation.
+    if std::iter::once(&agent.label)
+        .chain(std::iter::once(&agent.command))
+        .chain(&agent.args)
+        .chain(agent.env.iter().flat_map(|(name, value)| [name, value]))
+        .any(|value| value.len() > DECLARATION_MAX_BYTES)
+    {
+        return None;
+    }
     let (title, confirm) = if replacing {
         ("Replace this external agent?", REPLACE_AGENT)
     } else {
         ("Declare an external agent?", DECLARE_AGENT)
     };
-    Confirmation {
+    let body = format!(
+        "“{}” will run this program on your machine each time you ask it a question:\n\n{}\n\n\
+         Oxyn cannot see where it sends your prompts, so it never serves a local-only \
+         connection.",
+        visible(&agent.label),
+        command_line(agent)
+    );
+    if body.len() > DECLARATION_MAX_BYTES {
+        return None;
+    }
+    Some(Confirmation {
         title: title.to_owned(),
-        body: format!(
-            "“{}” will run this program on your machine each time you ask it a question:\n\n{}\n\n\
-             Oxyn cannot see where it sends your prompts, so it never serves a local-only \
-             connection.",
-            bounded(&agent.label),
-            command_line(agent)
-        ),
+        body,
         confirm,
         severity: Severity::Warning,
-    }
+    })
 }
 
 /// The declaration as one shell line, each word quoted as a shell reads it
@@ -99,13 +117,13 @@ fn command_line(agent: &oxyn_core::ExternalAgentConfig) -> String {
     let env = agent.env.iter().map(|(name, value)| {
         format!(
             "{}={}",
-            shell_quote(&bounded(name)),
-            shell_quote(&cut_statement(value))
+            shell_quote(&visible(name)),
+            shell_quote(&visible(value))
         )
     });
     let words = std::iter::once(&agent.command)
         .chain(&agent.args)
-        .map(|word| shell_quote(&cut_statement(word)));
+        .map(|word| shell_quote(&visible(word)));
     env.chain(words).collect::<Vec<_>>().join(" ")
 }
 

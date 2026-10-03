@@ -207,7 +207,10 @@ impl Backend {
         replacing: bool,
     ) -> Result<bool, IpcError> {
         let slot = self.inner.confirmations.reserve()?;
-        Ok(slot.ask(text::external_agent(agent, replacing)).await)
+        let confirmation = text::external_agent(agent, replacing).ok_or_else(|| {
+            IpcError::invalid("The agent declaration is too long to display in full; shorten its command, arguments or environment")
+        })?;
+        Ok(slot.ask(confirmation).await)
     }
 
     /// Asks the host before a held command is approved, when the approval is

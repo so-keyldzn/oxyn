@@ -321,7 +321,7 @@ fn an_external_agent_dialog_escapes_every_untrusted_field_and_uses_constant_labe
     .with_args(["argument\u{2066}"]);
     agent.env = vec![("NAME\u{200B}".to_owned(), "value\u{0600}".to_owned())];
     for replacing in [false, true] {
-        let confirmation = external_agent(&agent, replacing);
+        let confirmation = external_agent(&agent, replacing).expect("short declaration");
         for escaped in [
             "Label\\u{2028}",
             "command\\u{202E}",
@@ -343,22 +343,32 @@ fn an_external_agent_dialog_escapes_every_untrusted_field_and_uses_constant_labe
         );
     }
     agent.label = "Cancel".to_owned();
-    assert_eq!(external_agent(&agent, false).confirm, DECLARE_AGENT);
+    assert_eq!(
+        external_agent(&agent, false)
+            .expect("short declaration")
+            .confirm,
+        DECLARE_AGENT
+    );
 }
 
 #[test]
-fn an_external_agent_dialog_bounds_fields_and_shows_command_and_argument_tails() {
-    let long = format!("{}END", "x".repeat(2000));
-    let mut agent = oxyn_core::ExternalAgentConfig::new(
+fn an_external_agent_dialog_never_abbreviates_executable_content() {
+    let long = format!("{}MIDDLE{}END", "x".repeat(600), "y".repeat(600));
+    let agent = oxyn_core::ExternalAgentConfig::new(
         oxyn_core::ProviderId::for_new_agent(),
-        long.clone(),
-        long.clone(),
+        "Agent",
+        "agent",
     )
     .with_args([long.clone()]);
-    agent.env = vec![(long.clone(), long.clone())];
-    let body = external_agent(&agent, false).body;
-    assert_eq!(body.matches("more characters").count(), 5);
-    assert_eq!(body.matches("END").count(), 3);
-    assert!(!body.contains(&long));
-    assert!(body.len() < 4000);
+    let body = external_agent(&agent, false)
+        .expect("declaration fits")
+        .body;
+    assert!(body.contains(&long));
+    assert!(!body.contains("more characters"));
+    let mut oversized = agent;
+    oversized.args = vec!["x".repeat(4096)];
+    assert!(external_agent(&oversized, false).is_none());
+    oversized.args.clear();
+    oversized.env = vec![("x".repeat(4097), "value".to_owned())];
+    assert!(external_agent(&oversized, false).is_none());
 }

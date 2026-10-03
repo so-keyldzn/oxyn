@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="fbebbbbe64b5" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="6842349ad1c0" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2155,7 +2155,9 @@ et le champ `sample` d'`ai_ask` accordent toujours sur un simple appel. **Ce qui
 puis envoie `SaveExternalAgent` par le bus. Le délai minimal d'une seconde,
 l'échéance de cinq minutes et l'exclusion des dialogues simultanés s'appliquent
 aux déclarations et remplacements. Le dialogue utilise des valeurs échappées et
-bornées ainsi que des libellés de boutons constants ; la validation refuse les
+bornées ainsi que des libellés de boutons constants. Une déclaration dont le
+dialogue échappé complet dépasse 4 096 octets est refusée, jamais abrégée.
+La validation refuse les
 caractères de contrôle, de format et les séparateurs de ligne/paragraphe dans
 chaque champ et borne la commande et chaque argument à 4 096 octets UTF-8.
 Les tests d'hôte scripté couvrent l'accord prématuré, le refus, l'expiration et

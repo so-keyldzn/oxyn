@@ -2150,7 +2150,8 @@ and the `sample` field of `ai_ask` still grant on a simple call. **What unblocks
 port, and only then sends `SaveExternalAgent` through the bus. The one-second
 guard, five-minute deadline and single-dialog exclusion apply to declarations
 and replacements. The dialog uses escaped, bounded values and constant button
-labels; validation refuses control, format and line/paragraph separator characters
+labels. A declaration whose full escaped dialog exceeds 4,096 bytes is refused,
+never abbreviated. Validation refuses control, format and line/paragraph separator characters
 in every field and bounds the command and each argument to 4,096 UTF-8 bytes.
 Scripted host tests cover premature approval, refusal, expiry and contention.
 

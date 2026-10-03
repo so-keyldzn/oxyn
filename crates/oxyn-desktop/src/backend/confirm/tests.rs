@@ -743,3 +743,20 @@ fn an_external_agent_uses_the_same_dialog_slot_as_other_critical_decisions() {
         );
     });
 }
+
+#[test]
+fn an_oversized_external_agent_is_neither_shown_nor_saved() {
+    let runtime = runtime();
+    let host = ScriptedConfirm::new(Answer::Confirm);
+    let backend = {
+        let _guard = runtime.enter();
+        Backend::open_scripted(Arc::clone(&host), PROMPT).expect("temporary backend")
+    };
+    runtime.block_on(async {
+        let mut draft = external_agent_draft(None);
+        draft.args = vec!["x".repeat(4096)];
+        assert!(backend.save_external_agent(draft).await.is_err());
+        assert!(backend.declared_agents().await.expect("listed").is_empty());
+        assert!(host.shown().is_empty());
+    });
+}
