@@ -2110,3 +2110,28 @@ prepare leave `SERVER_STATUS_IN_TRANS` set in the next `COM_PING` OK packet,
 and the row inserted before them is there after `COMMIT`, on all three
 servers. `mysql_async` forgets the last OK packet on an error packet
 (`handle_err`, `src/conn/mod.rs:313`): the driver asks again with `COM_PING`.
+
+
+## SQL password literals before persistence
+
+Checked on 2026-10-03 for [ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md).
+
+- PostgreSQL [ALTER ROLE](https://www.postgresql.org/docs/current/sql-alterrole.html)
+  admits password string literals and `PASSWORD NULL`; its
+  [lexical rules](https://www.postgresql.org/docs/current/sql-syntax-lexical.html)
+  describe escape, Unicode and dollar-quoted strings, adjacent string fragments,
+  and the effect of `standard_conforming_strings`.
+- MySQL [CREATE USER](https://dev.mysql.com/doc/refman/8.4/en/create-user.html),
+  [ALTER USER](https://dev.mysql.com/doc/refman/8.4/en/alter-user.html), and
+  [SET PASSWORD](https://dev.mysql.com/doc/refman/8.4/en/set-password.html)
+  describe `IDENTIFIED BY`, plugin authentication clauses, quoted accounts,
+  password assignments and the old password supplied by `REPLACE`.
+  [String literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)
+  describes double quotes, character-set introducers, adjacent strings and
+  `NO_BACKSLASH_ESCAPES`.
+
+The redactor reuses the workspace scanner and combines lexical interpretations
+where SQL mode or dialect is unavailable. This is a persistence/context copy;
+no redacted text is submitted to a database. Grammar and executor-boundary tests
+use synthetic credentials and a recording session; they do not certify a live
+server execution.

@@ -1380,6 +1380,61 @@ fn debug_does_not_render_the_user_text() {
     assert!(rendered.contains("title_bytes"), "{rendered}");
 }
 
+#[test]
+fn tool_call_password_literals_are_redacted_before_serialization() {
+    let (store, workspace, connection) = fixture();
+    let conversation = Conversation::new(workspace, provider(), "password rotation")
+        .on_connection(connection, "customer db");
+    let id = conversation.id;
+    store.conversations().save(&conversation).expect("thread");
+    let sql = "ALTER ROLE app PASSWORD 'witness-secret'";
+    let turn = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "Done.")
+        .with_tool_calls(vec![
+            ToolCallRecord::new("call_1", "execute", sql, ToolCallStatus::Completed)
+                .with_statement(sql),
+        ]);
+
+    store.conversations().append(id, &turn).expect("turn");
+
+    let persisted = whole_thread(&store, id);
+    let call = &persisted[0].record.tool_calls[0];
+    assert!(!call.summary.contains("witness-secret"));
+    assert!(
+        call.statement
+            .as_deref()
+            .is_some_and(|statement| !statement.contains("witness-secret"))
+    );
+    assert!(sweep_conversations(&store, "witness-secret").is_empty());
+}
+
+#[test]
+fn direct_tool_call_fields_cannot_bypass_password_redaction() {
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    for sql in [
+        "ALTER ROLE app PASSWORD $pw$witness-secret$pw$",
+        "CREATE USER u IDENTIFIED BY \"witness-secret\"",
+        "SET PASSWORD FOR 'u'@'localhost' = 'witness-secret'",
+    ] {
+        let mut call = ToolCallRecord::new(
+            "call",
+            "execute",
+            format!("Executed: {sql}"),
+            ToolCallStatus::Completed,
+        );
+        call.statement = Some(sql.into());
+        store
+            .conversations()
+            .append(
+                id,
+                &TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "Done.")
+                    .with_tool_calls(vec![call]),
+            )
+            .expect("persist the call");
+    }
+    assert!(sweep_conversations(&store, "witness-secret").is_empty());
+}
+
 /// A thread role coming from `oxyn-llm` converts without loss.
 #[test]
 fn thread_roles_cover_the_protocol_roles() {

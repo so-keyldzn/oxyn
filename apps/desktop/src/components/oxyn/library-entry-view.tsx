@@ -113,7 +113,8 @@ export function LibraryEntryView({
                 <bdi>
                   {state.entry.connectionName ?? "Connection unavailable"}
                 </bdi>{" "}
-                · {state.entry.status}
+                · {state.entry.status} · New history entries redact password
+                literals. Re-enter them before running a copy.
               </>
             ) : state.status === "saved" ? (
               <bdi>{state.entry.connectionName ?? "No connection"}</bdi>

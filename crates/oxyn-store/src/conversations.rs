@@ -60,7 +60,8 @@ pub use tree::{
 use chrono::{DateTime, Utc};
 use oxyn_core::ai::{ReasoningBlock, Role, StopReason};
 use oxyn_core::{
-    AgentSessionId, ConnectionId, ConversationId, ErrorClass, PrivacyTier, ProviderId, WorkspaceId,
+    AgentSessionId, ConnectionId, ConversationId, ErrorClass, PrivacyTier, ProviderId,
+    QueryLanguage, WorkspaceId,
 };
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -420,7 +421,10 @@ impl ToolCallRecord {
     /// Adds the statement the command carried.
     #[must_use]
     pub fn with_statement(mut self, statement: impl Into<String>) -> Self {
-        self.statement = Some(statement.into());
+        self.statement = Some(oxyn_query::redact_password_literals(
+            &statement.into(),
+            QueryLanguage::SQL,
+        ));
         self
     }
 
@@ -1091,8 +1095,10 @@ fn encode_tool_calls(calls: &[ToolCallRecord]) -> Result<Option<String>> {
         .map(|call| ToolCallPayload {
             call_id: call.call_id.clone(),
             tool: call.tool.clone(),
-            summary: call.summary.clone(),
-            statement: call.statement.clone(),
+            summary: oxyn_query::redact_password_literals(&call.summary, QueryLanguage::SQL),
+            statement: call.statement.as_deref().map(|statement| {
+                oxyn_query::redact_password_literals(statement, QueryLanguage::SQL)
+            }),
             status: call.status.as_str().to_owned(),
             error_class: call.error_class.map(|class| class.as_str().to_owned()),
         })

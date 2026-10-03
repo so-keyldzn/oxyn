@@ -44,8 +44,9 @@
 use chrono::{DateTime, Utc};
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, Command, CommandId, ConnectionId, Decision, ErrorClass,
-    MutationRisk, OxynError, StatementIntent,
+    MutationRisk, OxynError, QueryLanguage, StatementIntent,
 };
+use oxyn_query::redact_password_literals;
 use rusqlite::{Row, params};
 use std::time::Duration;
 
@@ -279,7 +280,13 @@ impl JournalRecord {
             agent_session,
             connection: command.target_connection(),
             command_kind: command.name().to_owned(),
-            statement: command.statement_text().map(str::to_owned),
+            statement: command.statement_text().map(|statement| {
+                let language = match command {
+                    Command::Execute { request, .. } => request.language,
+                    _ => QueryLanguage::SQL,
+                };
+                redact_password_literals(statement, language)
+            }),
             intent: command.intent(),
             risk: command.mutation_risk(),
             decision: PolicyOutcome::from(decision),
@@ -368,6 +375,10 @@ impl<'a> Journal<'a> {
     /// [`crate::StoreError::Json`] if the risk is not serializable.
     pub fn append(&self, record: &JournalRecord) -> Result<i64> {
         let risk = tag_to_json(&record.risk)?;
+        let statement = record
+            .statement
+            .as_deref()
+            .map(|sql| redact_password_literals(sql, QueryLanguage::SQL));
 
         self.store.with_connection(|conn| {
             conn.execute(
@@ -385,7 +396,7 @@ impl<'a> Journal<'a> {
                     record.agent_session.map(|id| id.to_string()),
                     record.connection.map(|id| id.to_string()),
                     record.command_kind,
-                    record.statement,
+                    statement,
                     record.intent.as_str(),
                     risk,
                     record.decision.as_str(),

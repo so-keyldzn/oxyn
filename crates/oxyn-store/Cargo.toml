@@ -25,6 +25,7 @@ test-support = []
 # silently lose a block added later. Declaring them in `oxyn-core` avoids both,
 # without bringing an HTTP client into `oxyn-store` or `oxyn-exec`.
 oxyn-core.workspace = true
+oxyn-query.workspace = true
 chrono.workspace = true
 directories.workspace = true
 parking_lot.workspace = true

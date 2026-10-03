@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="dda201522be8" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0d54dbf814e1" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2123,3 +2123,30 @@ du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
 sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
 paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
 par `COM_PING`.
+
+
+<a id="sql-password-literals-before-persistence"></a>
+## Littéraux de mot de passe SQL avant persistance
+
+Vérifié le 2026-10-03 pour [ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md).
+
+- PostgreSQL [ALTER ROLE](https://www.postgresql.org/docs/current/sql-alterrole.html)
+  admet des littéraux de mot de passe et `PASSWORD NULL` ; ses
+  [règles lexicales](https://www.postgresql.org/docs/current/sql-syntax-lexical.html)
+  décrivent les chaînes échappées, Unicode et délimitées par des dollars, les
+  fragments de chaîne adjacents et l'effet de `standard_conforming_strings`.
+- MySQL [CREATE USER](https://dev.mysql.com/doc/refman/8.4/en/create-user.html),
+  [ALTER USER](https://dev.mysql.com/doc/refman/8.4/en/alter-user.html) et
+  [SET PASSWORD](https://dev.mysql.com/doc/refman/8.4/en/set-password.html)
+  décrivent `IDENTIFIED BY`, les clauses d'authentification par plugin, les comptes
+  entre guillemets, les affectations et l'ancien mot de passe fourni par `REPLACE`.
+  [String literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)
+  décrit les guillemets doubles, les préfixes de jeu de caractères, les chaînes
+  adjacentes et `NO_BACKSLASH_ESCAPES`.
+
+Le caviardage réutilise le scanner du workspace et combine les interprétations
+lexicales lorsque le mode SQL ou le dialecte est indisponible. Il produit une
+copie pour la persistance ou le contexte ; aucun texte caviardé n'est soumis à
+une base. Les tests de grammaire et de frontière de l'exécuteur utilisent des
+secrets synthétiques et une session d'enregistrement ; ils ne certifient pas une
+exécution sur un serveur réel.

@@ -4556,6 +4556,7 @@ dependencies = [
  "chrono",
  "directories",
  "oxyn-core",
+ "oxyn-query",
  "parking_lot",
  "rusqlite",
  "serde",
