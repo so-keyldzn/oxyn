@@ -110,7 +110,7 @@ fn question(fixture: &Fixture, offer: &SampleRequest) -> AskRequest {
             model: None,
             effort: None,
         },
-        sample: Some(approval(&offer, &["email"])),
+        sample: Some(approval(offer, &["email"])),
         mentions: vec![],
     }
 }

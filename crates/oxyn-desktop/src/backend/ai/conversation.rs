@@ -914,7 +914,9 @@ impl Backend {
                 return Err(refused);
             }
         };
-        if let (Some(approval), Some(grant), Some(slot)) = (&request.sample, &grant, sample_slot) {
+        let confirmed_recipient = if let (Some(approval), Some(grant), Some(slot)) =
+            (&request.sample, &grant, sample_slot)
+        {
             let (recipient, destination) = match &resolved {
                 Resolved::Provider {
                     config: provider,
@@ -962,7 +964,10 @@ impl Backend {
                     "Sharing this sample was declined in the native dialog; the question was not sent",
                 ));
             }
-        }
+            Some(recipient)
+        } else {
+            None
+        };
         let thread = self
             .inner
             .ai
@@ -1024,18 +1029,11 @@ impl Backend {
             let result = async {
                 // Checked before anything else, whatever the destination: a
                 // refusal reads nothing.
-                let sample = match (&approval, grant) {
-                    (Some(approval), Some(grant)) => {
-                        let recipient = match &resolved {
-                            Resolved::Provider { config, model, .. } => Recipient::provider(
-                                config.id.clone(),
-                                model.clone(),
-                                // Classified again: an address edited since the
-                                // offer must not inherit its approval.
-                                classify(&config.base_url).await?,
-                            ),
-                            Resolved::Agent(agent) => Recipient::agent(agent),
-                        };
+                let sample = match (&approval, grant, confirmed_recipient) {
+                    (Some(approval), Some(grant), Some(recipient)) => {
+                        // Retain the reach the native dialog named. `converse`
+                        // classifies again before sending and refuses a wider
+                        // reach, even when the original offer was remote.
                         let tiers = StoredTier {
                             executor: Arc::clone(&inner.executor),
                             connection,
