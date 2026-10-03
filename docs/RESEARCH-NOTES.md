@@ -2110,3 +2110,12 @@ prepare leave `SERVER_STATUS_IN_TRANS` set in the next `COM_PING` OK packet,
 and the row inserted before them is there after `COMMIT`, on all three
 servers. `mysql_async` forgets the last OK packet on an error packet
 (`handle_err`, `src/conn/mod.rs:313`): the driver asks again with `COM_PING`.
+
+## PostgreSQL TLS modes — checked on 2026-10-03
+
+For [ADR-0052](adr/0052-verified-tls-outside-local.md), checked the official
+[SSL support documentation](https://www.postgresql.org/docs/18/libpq-ssl.html),
+sections on certificate verification and protection by mode: `verify-full`
+checks the certificate chain and hostname; `verify-ca` checks the chain alone.
+`prefer` does not protect against an active intermediary. Oxyn's policy applies
+these distinctions to the connection environment; no dependency version changes.

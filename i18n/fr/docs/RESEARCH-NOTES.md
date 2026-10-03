@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="dda201522be8" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="782f880bc2da" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2123,3 +2123,13 @@ du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
 sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
 paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
 par `COM_PING`.
+
+## Modes TLS PostgreSQL — vérifiés le 2026-10-03
+
+Pour [ADR-0052](adr/0052-verified-tls-outside-local.md), consultation de la
+[documentation SSL officielle](https://www.postgresql.org/docs/18/libpq-ssl.html),
+sections sur la vérification du certificat et la protection par mode :
+`verify-full` vérifie la chaîne de certificats et le nom d'hôte ; `verify-ca`
+vérifie la chaîne seule. `prefer` ne protège pas contre un intermédiaire actif.
+La politique Oxyn applique ces distinctions à l'environnement de connexion ;
+aucune version de dépendance ne change.

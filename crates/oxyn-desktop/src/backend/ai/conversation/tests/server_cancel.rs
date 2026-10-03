@@ -41,7 +41,7 @@
 //! ```sh
 //! docker run --rm -d -p 127.0.0.1::5432 \
 //!   -e POSTGRES_PASSWORD=oxyn --name oxyn-pg postgres:17
-//! OXYN_PG_TEST_URL="postgres://postgres:oxyn@$(docker port oxyn-pg 5432)/postgres" \
+//! OXYN_PG_TEST_URL="postgres://postgres:oxyn@$(docker port oxyn-pg 5432)/postgres?sslmode=disable" \
 //!   cargo test -p oxyn-desktop server_cancel -- --ignored --test-threads=1
 //! docker rm -f oxyn-pg
 //! ```
