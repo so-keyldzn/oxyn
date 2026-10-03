@@ -18,6 +18,19 @@ the values of this file and reports the gaps. It changes nothing: deciding on
 a version bump is a human's call. The `/versions` command does the same while
 explaining the gaps.
 
+
+## AI transport confinement — 2026-10-03
+
+The pinned reqwest **0.13.4** and its checksum were verified against the
+[crates.io sparse registry](https://index.crates.io/re/qw/reqwest) and `Cargo.lock`.
+Its [ClientBuilder API](https://docs.rs/reqwest/0.13.4/reqwest/struct.ClientBuilder.html)
+provides `no_proxy` (including automatic system proxies), `dns_resolver`, and
+`resolve_to_addrs`. The [Resolve contract](https://docs.rs/reqwest/0.13.4/reqwest/dns/trait.Resolve.html)
+returns a future of socket addresses; an explicit URL port overrides their
+ports. Oxyn uses a resolver that rejects a non-loopback answer for a measured
+`Local` destination, and disables proxies for every provider family. Literal
+IPs bypass DNS and are checked before building a local client.
+
 ## Rust toolchain
 
 | Fact | Value | Source | Checked on |

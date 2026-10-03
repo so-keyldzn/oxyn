@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="dda201522be8" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="6ebcd7e7425e" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -21,6 +21,20 @@ Le script interroge crates.io et le canal stable de Rust, compare avec les
 valeurs de ce fichier et signale les écarts. Il ne modifie rien : c'est à un
 humain de décider d'une montée de version. La commande `/versions` fait la
 même chose en expliquant les écarts.
+
+
+## Confinement du transport IA — 2026-10-03
+
+La version verrouillée de reqwest, **0.13.4**, et sa somme de contrôle ont été
+vérifiées dans le [registre sparse crates.io](https://index.crates.io/re/qw/reqwest)
+et `Cargo.lock`. Son [API ClientBuilder](https://docs.rs/reqwest/0.13.4/reqwest/struct.ClientBuilder.html)
+fournit `no_proxy` (proxys système automatiques inclus), `dns_resolver` et
+`resolve_to_addrs`. Le [contrat Resolve](https://docs.rs/reqwest/0.13.4/reqwest/dns/trait.Resolve.html)
+renvoie une future d'adresses socket ; un port explicite dans l'URL remplace
+leurs ports. Oxyn utilise un résolveur qui refuse toute réponse non loopback
+pour une destination mesurée `Local` et désactive les proxys pour toutes les
+familles. Les IP littérales contournent le DNS et sont vérifiées avant de
+construire un client local.
 
 ## Chaîne d'outils Rust
 
