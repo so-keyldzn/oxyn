@@ -15,8 +15,9 @@
 # On a pull request, the `zones` job says which areas the PR touches, and the
 # jobs of untouched areas are skipped. On `main` and on demand, everything
 # runs: that is the safety net (ADR-0045). The `qualite` job aggregates the
-# others, and it is the only status check branch protection requires — a
-# required check on a skipped job would wait forever.
+# others; ruleset 24429281 requires this check and a PR for `main`, with
+# administrator bypass limited to PR merges. Direct pushes are refused.
+# Requiring a skipped job instead would leave its check pending forever.
 #
 # Versions of the actions and tools: docs/RESEARCH-NOTES.md, § CI and GitHub
 # delivery.

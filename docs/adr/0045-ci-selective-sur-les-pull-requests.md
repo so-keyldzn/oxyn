@@ -66,6 +66,14 @@ refused to this private repository
 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#ci-and-github-delivery)): until then,
 `qualite` is the only check to read before merging.
 
+**Amendment (2026-10-03).** The repository is now public. GitHub ruleset
+[`24429281`](https://github.com/so-keyldzn/oxyn/rules/24429281) requires a
+pull request (with zero required approvals) and the aggregate `qualite` status
+check from GitHub Actions app `15368` on `main`; it also forbids deletion and
+non-fast-forward updates. Repository administrators may bypass these rules
+only when merging a pull request (`bypass_mode: pull_request`); direct pushes
+to `main` are refused for everyone, including administrators.
+
 **On `push` to `main` and on `workflow_dispatch`, everything always runs.**
 `script/zones-ci` returns all areas outside the `pull_request` event, and the
 macOS matrix is added as before. It is the safety net: what a PR wrongly
