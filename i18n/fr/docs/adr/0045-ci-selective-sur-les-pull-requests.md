@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="f098c1d0d6cf" -->
+<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="eef9e409a777" -->
 
 > Traduction française de [docs/adr/0045-ci-selective-sur-les-pull-requests.md](../../../../docs/adr/0045-ci-selective-sur-les-pull-requests.md). **La version anglaise fait foi.**
 
@@ -69,6 +69,15 @@ resterait en attente pour toujours. Le 2026-09-25, la protection de branche est
 encore refusée à ce dépôt privé
 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#ci-et-livraison-github)) : d'ici là,
 `qualite` est le seul check à lire avant de fusionner.
+
+**Amendement (2026-10-03).** Le dépôt est désormais public. Le ruleset GitHub
+[`24429281`](https://github.com/so-keyldzn/oxyn/rules/24429281) exige une pull
+request (zéro approbation obligatoire) et le status check agrégé `qualite` de
+l’application GitHub Actions `15368` sur `main` ; il interdit aussi la suppression
+et les mises à jour non-fast-forward. Les administrateurs du dépôt peuvent
+contourner ces règles uniquement lors de la fusion d’une pull request
+(`bypass_mode: pull_request`) ; les push directs vers `main` sont refusés à tout
+le monde, y compris aux administrateurs.
 
 **Sur `push` vers `main` et sur `workflow_dispatch`, tout tourne toujours.**
 `script/zones-ci` renvoie toutes les zones hors de l'événement `pull_request`,
