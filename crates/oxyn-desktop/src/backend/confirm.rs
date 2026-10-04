@@ -3,7 +3,7 @@
 //! A confirmation drawn in the webview stops a slip, not a script: whatever the
 //! webview can click, a script running in it can call. The decisions of
 //! [ADR-0037](../../../../docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
-//! — a write on production, a change of marking — are therefore granted only
+//! — a write on production, row egress, a change of marking — are granted only
 //! once a dialog the **host** draws, and the backend words, was confirmed.
 //!
 //! The rules live here, next to the configuration they read, and not in the
@@ -122,7 +122,7 @@ impl Confirmations {
 
     /// Takes the one dialog slot, or says a dialog is already open. Nothing is
     /// consumed by that refusal: the caller has not touched its decision yet.
-    fn reserve(&self) -> Result<Slot<'_>, IpcError> {
+    pub(crate) fn reserve(&self) -> Result<Slot<'_>, IpcError> {
         if self
             .open
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -138,7 +138,7 @@ impl Confirmations {
 
 /// The dialog slot, released when dropped — answered, refused, or past its
 /// deadline with the dialog still on screen.
-struct Slot<'a> {
+pub(crate) struct Slot<'a> {
     owner: &'a Confirmations,
 }
 
@@ -148,7 +148,7 @@ impl Slot<'_> {
     ///
     /// The deadline counts from the request: it bounds the decision, which
     /// must not be granted hours later by a dialog that waited its turn.
-    async fn ask(self, confirmation: Confirmation) -> bool {
+    pub(crate) async fn ask(self, confirmation: Confirmation) -> bool {
         let Timing {
             min_delay,
             deadline,

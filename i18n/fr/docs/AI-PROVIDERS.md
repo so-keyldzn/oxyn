@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="1a91630ab8ed" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="f8a9b551b9ce" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -355,11 +355,14 @@ comme pour un agent externe.
      Tauri `ai_answer_sample` ; l'identifiant de la demande ne part jamais vers
      le modèle.
 
-   Dans l'écran, rien n'est coché par défaut, rien ne coche tout, et Annuler a
-   le focus. Cette garantie vaut contre le **modèle**, pas contre un script de
-   la webview : un tel script peut demander une offre et la présenter sans
-   montrer l'écran, mais il peut déjà lire des pages de résultat et coller leurs
-   valeurs dans la question.
+   Dans l'écran, rien n'est coché par défaut, aucune action ne coche tout, et
+   Annuler a le focus. Le choix des colonnes demande une confirmation native
+   avant toute lecture ([ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)).
+   Le destinataire vient de la déclaration enregistrée qui sert l'échange,
+   jamais du libellé de l'écran : hôte de l'endpoint pour un fournisseur,
+   commande pour un agent. Un refus consomme la demande sans enregistrer de
+   sortie ; une question épinglée n'est pas envoyée. Un autre dialogue natif
+   ouvert laisse la décision disponible.
 2. **Un jeton du backend, à usage unique.** L'offre émet un jeton aléatoire, lié
    à la connexion, à la conversation, à l'échange qu'il suit, à la source, aux
    colonnes proposées et au destinataire que l'écran nomme : fournisseur,
@@ -368,8 +371,10 @@ comme pour un agent externe.
    la connexion oubliée. Une connexion garde au plus quatre jetons en attente :
    au-delà, le plus ancien est oublié. Le front le reçoit sans l'afficher et le
    renvoie. À la question, le backend vérifie, dans cet ordre :
-   - le jeton, retiré dès l'arrivée de la question, **même en cas de refus**,
-     y compris quand la question est refusée avant de démarrer ;
+   - la place du dialogue natif, réservée sans consommer le jeton si une autre
+     confirmation critique est ouverte ;
+   - le jeton, retiré dès que la question peut réserver cette place, **même en
+     cas de refus**, y compris avant le démarrage de la question ;
    - le niveau, **relu depuis le store** et toujours `Sampled` ;
    - la source identique ;
    - les colonnes cochées incluses dans les colonnes proposées ;

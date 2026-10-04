@@ -138,12 +138,12 @@ fn an_agent_request_reads_the_columns_the_cache_does_not_hold() {
     assert_eq!(fixture.reads(), 0, "nothing is read before the answer");
 
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             None,
-        )
+        ))
         .map_err(|error| error.message)
         .expect("declined");
     let said = text_of(&fixture, pending);
