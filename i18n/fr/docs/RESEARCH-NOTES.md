@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="17f53f3ad48f" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="1b99c7c9ebcd" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2156,6 +2156,42 @@ Sources : le source installé du registre crates.io et
 consultés le 2026-10-03. PostgreSQL exécute `PROGRAM` sur le serveur de base de
 données et y résout les chemins de fichiers ; `STDOUT` transmet les données par
 la connexion cliente. Aucune base réelle n'a été utilisée pour cette vérification.
+
+<a id="sql-password-literals-before-persistence"></a>
+## Littéraux de mot de passe SQL avant persistance
+
+Vérifié le 2026-10-03 pour [ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md).
+
+- PostgreSQL [ALTER ROLE](https://www.postgresql.org/docs/current/sql-alterrole.html)
+  admet des littéraux de mot de passe et `PASSWORD NULL` ; ses
+  [règles lexicales](https://www.postgresql.org/docs/current/sql-syntax-lexical.html)
+  décrivent les chaînes échappées, Unicode et délimitées par des dollars, les
+  fragments de chaîne adjacents et l'effet de `standard_conforming_strings`.
+- MySQL [CREATE USER](https://dev.mysql.com/doc/refman/8.4/en/create-user.html),
+  [ALTER USER](https://dev.mysql.com/doc/refman/8.4/en/alter-user.html) et
+  [SET PASSWORD](https://dev.mysql.com/doc/refman/8.4/en/set-password.html)
+  décrivent `IDENTIFIED BY`, les clauses d'authentification par plugin, les comptes
+  entre guillemets, les affectations et l'ancien mot de passe fourni par `REPLACE`.
+  [String literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)
+  décrit les guillemets doubles, les préfixes de jeu de caractères, les chaînes
+  adjacentes et `NO_BACKSLASH_ESCAPES`.
+- MariaDB [CREATE USER](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/create-user)
+  permet aussi `OR REPLACE` et `IDENTIFIED VIA … USING PASSWORD(…)` ;
+  [GRANT](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/grant)
+  peut porter une clause d'authentification. Ces formes utilisent le même pilote
+  et le même dialecte MySQL.
+- Les [commentaires MySQL](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
+  distinguent le contenu exécutable `/*! … */` des commentaires ordinaires ; une
+  clause de mot de passe qui s'y trouve reste du SQL à scanner avant persistance.
+
+Le caviardage réutilise le scanner du workspace et combine les interprétations
+lexicales lorsque le mode SQL ou le dialecte est indisponible. Il produit une
+copie pour la persistance ou le contexte ; aucun texte caviardé n'est soumis à
+une base. Les tests de grammaire et de frontière de l'exécuteur utilisent des
+secrets synthétiques et une session d'enregistrement ; ils ne certifient pas une
+exécution sur un serveur réel.
+
+MariaDB documente aussi sa forme `/*M! … */` dans [Comment Syntax](https://mariadb.com/docs/server/reference/sql-statements/comment-syntax), vérifiée à la même date ; les deux formes de commentaire exécutable sont scannées.
 
 ## Modes TLS PostgreSQL — vérifiés le 2026-10-03
 

@@ -66,6 +66,9 @@ export const History: Story = {
     await userEvent.keyboard(mod("{Enter}"))
     await expect(editor).toHaveTextContent("ORDER BY total DESC;")
     await expect(editor).not.toHaveTextContent("DROP TABLE audit")
+    await expect(
+      screen.getByText(/New history entries redact password literals/)
+    ).toBeVisible()
     await expect(args.onOpenCopy).not.toHaveBeenCalled()
     await userEvent.click(
       screen.getByRole("button", { name: "Open copy in billing staging" })

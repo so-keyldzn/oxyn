@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="625f83fcd2f5" -->
+<!-- oxyn-translation source="docs/README.md" sha256="cfc5962f5c67" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -87,6 +87,8 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0049](adr/0049-agents-declared-as-markdown-files.md) | Un agent est un fichier Markdown à en-tête YAML, ciblé par dialecte, rempli seulement par une liste fermée de variables | proposé |
 | [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | Le driver MySQL repose sur `mysql_async`, prépare d'abord chaque instruction, et décode tout type que le serveur envoie | accepté |
 | [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn se met à jour depuis les GitHub Releases, en Rust seulement, et installe à la fermeture | proposé |
+| [0053](adr/0053-redact-sql-passwords-before-persistence.md) | Les littéraux de mot de passe SQL sont caviardés avant persistance ; les lignes d'audit existantes restent en ajout seul | accepté |
+
 | [0052](adr/0052-verified-tls-outside-local.md) | PostgreSQL et MySQL exigent TLS vérifié hors de Local | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.

@@ -234,7 +234,10 @@ pub(super) fn render_saved_query(title: &str, text: &str) -> String {
         "saved query {} (written in the user's workspace, not read from the database):\n",
         json_title(title)
     );
-    let clipped = untrusted::sanitize_clamped(text, MAX_SAVED_QUERY_CHARS);
+    // Redact before clipping: truncation can remove the quote that tells the
+    // lexer where a credential ends. Saved-query mentions carry no dialect.
+    let redacted = oxyn_query::redact_password_literals(text, oxyn_core::QueryLanguage::SQL);
+    let clipped = untrusted::sanitize_clamped(&redacted, MAX_SAVED_QUERY_CHARS);
     for line in clipped.lines() {
         out.push_str("    ");
         out.push_str(line);
