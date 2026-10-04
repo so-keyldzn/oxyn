@@ -251,9 +251,12 @@ async fn an_approved_read_on_production_is_bounded_too() {
 
 // ── Against a real server ───────────────────────────────────────────────────
 //
-// `#[ignore]`, like the driver's own server tests, and started the same way:
-// see `drivers/oxyn-driver-postgres/src/integration.rs`. Without
-// `OXYN_PG_TEST_URL`, each test stops without failing and says so.
+// `#[ignore]`, like the driver's own server tests. Unlike their Local fixture,
+// these tests exercise production connections: `OXYN_PG_TEST_URL` must name a
+// TLS-enabled disposable server with a trusted certificate and matching host,
+// using `sslmode=verify-full` (also the default). A weaker mode is refused
+// before these tests reach their read-only assertions (ADR-0052).
+// Without `OXYN_PG_TEST_URL`, each test stops without failing and says so.
 
 mod server {
     use super::*;

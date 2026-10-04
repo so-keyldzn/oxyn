@@ -281,7 +281,8 @@ fn a_pinned_agent_sample_names_the_stored_command_and_unresolved_reach() {
                 .expect("an agent draft"),
             ),
         )
-        .expect("stored agent");
+        .expect("stored agent")
+        .expect("the scripted host confirms the declaration");
     let destination = DestinationChoice::Agent { id: declared.id };
     let offer = fixture
         .runtime

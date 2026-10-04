@@ -34,19 +34,23 @@
 //! that never ends therefore holds neither memory nor the "Cancel" button.
 
 use std::pin::pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures::future::{Either, select};
 use oxyn_core::CancelToken;
-use reqwest::{Client, Response, redirect};
+use reqwest::{Client, ClientBuilder, Response, Url, redirect};
 use serde::Deserializer;
 use serde::de::{DeserializeOwned, SeqAccess, Visitor};
 use serde_json::Value;
 
 use crate::error::{LlmError, classify_json_error};
 use crate::provider::ProviderId;
+use crate::reach::{Reach, literal_reach};
 use crate::secret::ApiKey;
+
+mod dns;
 
 /// Timeout for establishing the TCP and TLS connection.
 ///
@@ -63,17 +67,32 @@ const USER_AGENT: &str = concat!("oxyn/", env!("CARGO_PKG_VERSION"));
 /// another one would get back the default redirection policy.
 ///
 /// # Errors
-/// [`LlmError::Config`] if the TLS stack does not initialize.
-pub(crate) fn client(id: &ProviderId) -> Result<Client, LlmError> {
-    Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .user_agent(USER_AGENT)
-        .redirect(redirect::Policy::none())
+/// [`LlmError::Config`] if the TLS stack does not initialize or a local
+/// measurement is paired with a literal non-loopback address.
+pub(crate) fn client(id: &ProviderId, url: &Url, reach: Reach) -> Result<Client, LlmError> {
+    // Literal addresses bypass reqwest's resolver entirely.
+    if reach == Reach::Local && literal_reach(url) == Some(Reach::Remote) {
+        return Err(LlmError::Config {
+            provider: id.clone(),
+            detail: "a local provider cannot connect to a non-loopback address".to_owned(),
+        });
+    }
+    builder(reach, Arc::new(dns::SystemResolver))
         .build()
         .map_err(|err| LlmError::Config {
             provider: id.clone(),
             detail: format!("cannot build the HTTP client: {err}"),
         })
+}
+
+fn builder(reach: Reach, resolver: Arc<dyn reqwest::dns::Resolve>) -> ClientBuilder {
+    Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .user_agent(USER_AGENT)
+        .redirect(redirect::Policy::none())
+        // A proxy would change the recipient without changing the recorded reach.
+        .no_proxy()
+        .dns_resolver(Arc::new(dns::ReachResolver { reach, resolver }))
 }
 
 /// Turns a failure response into an error, body scrubbed.
@@ -353,3 +372,6 @@ pub(crate) mod loopback;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod reach_tests;

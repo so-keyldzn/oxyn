@@ -58,7 +58,9 @@ uuid.workspace = true
 [dev-dependencies]
 # Ages a session's heartbeat, to test recovery without waiting two minutes.
 oxyn-store = { workspace = true, features = ["test-support"] }
-# Installs a failing SQLite trigger to exercise provider-save rollback.
+# Inspects the stored agent environment without going through Oxyn's
+# deserializer, and installs a failing SQLite trigger to exercise
+# provider-save rollback.
 rusqlite.workspace = true
 # Scripts a model's stream, to run the tool loop against a real database.
 futures.workspace = true

@@ -36,9 +36,49 @@ SSH tunnel private keys, client certificates.
 Storage goes through the system keychain. What is persisted in the
 workspace is a **reference** to the secret, never the secret.
 
+SQL administration statements are the exceptional input surface where a
+password is part of the statement text itself. Before a new statement reaches
+query history, the append-only audit journal, or a conversation tool-call
+record, Oxyn lexically replaces recognized password literals with
+`'<redacted>'`; saved queries included in AI context receive the same redaction
+before clipping or rendering. The driver still receives the original text.
+This covers explicit password clauses, not arbitrary secrets in comments,
+dynamic SQL, editor drafts, or free-form conversation text. Rows already present in
+`audit_journal` are not rewritten because the journal remains strictly
+append-only. A user who ran such SQL before this protection must rotate the
+credential and protect or replace affected workspace files
+([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
+
 **Concrete failure:** a workspace file containing a production password,
 committed by the user to their team's repository, because the
 file looked like mere configuration.
+
+### External-agent environment
+
+Secret environment values go to the OS keychain, under a fresh
+`oxyn:agent-env:<random identifier>` reference for each value and each save.
+Rust forces `*_API_KEY`, `*_TOKEN`, `*_SECRET`, names containing `PASSWORD`,
+and the bare names `API_KEY`, `TOKEN`, `SECRET` into the keychain, ignoring
+case. The user can mark any other variable secret. Other values stay in clear.
+`external_agents.env` is readable JSON: `plain` holds name/value pairs and
+`secret_refs` holds name/reference pairs. References never return to the webview.
+
+Values are resolved on the blocking pool only while preparing a launch, after
+the privacy check, and injected into the child's cleared environment. Missing
+entries or keychain errors abort launch; no plaintext fallback exists. The
+agent receives these credentials and may use them to authenticate; they never
+join an AI prompt. Debug and child error reports redact them, including short
+explicitly secret values.
+
+Replacing a declaration writes fresh entries before saving through the bus;
+only a successful save or deletion permits forgetting the old entries. A
+failure can leave unreachable keychain entries, never overwrite an old value.
+Legacy JSON arrays remain readable: the first list moves token-like names to the
+keychain on the blocking pool before offering any agent. A failure aborts listing. This
+upgrade changes live rows; historical SQLite pages, WAL files, backups and
+copies from older releases may still contain the old value. Rotate previously
+stored tokens to invalidate those copies. Unknown sensitive names in legacy
+rows must be marked secret by replacing their declaration.
 
 ### The updater signing key
 
@@ -128,6 +168,12 @@ conversation. **Never a value nor a token**: there is no column to
 store them, and the file refuses a column list that would contain anything
 other than names. The entry is written **before** the send; if it fails, nothing
 goes out.
+
+## Connection transport
+
+The shared PostgreSQL and MySQL TLS policy is defined in
+[ADR-0052](adr/0052-verified-tls-outside-local.md). It governs driver configuration,
+connection-form defaults and the explicit Local exception.
 
 ## Connection marking
 
@@ -363,15 +409,17 @@ what will keep it valid.
 - every new direct dependency is justified in review: what it brings,
   and the cost of doing without it;
 - `cargo deny` on licenses and security advisories is part of the quality
-  gate, through the `make deny` target that `make qualite` calls. It **warns
-  without blocking** when `cargo-deny` is not installed: a gate that fails on
-  a missing tool ends up being bypassed, and then the whole check
-  disappears. The configuration lives in `deny.toml`. Every license it
-  accepts is compatible with GPLv3, the application's license
+  gate, through the `make deny` target that `make qualite` calls. A local run
+  **warns without blocking** when `cargo-deny` is not installed; under CI, a
+  missing tool fails the gate, and the workflow installs a versioned binary
+  whose SHA-256 checksum is pinned. The configuration lives in `deny.toml`.
+  Every license it accepts is compatible with GPLv3, the application's license
   ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md));
 - the production npm dependencies of `apps/desktop` go through the same check,
   through `make licences-npm`, which `make front-controles` calls. The list is
-  the one in `deny.toml`, completed for npm by `apps/desktop/licences-npm.toml`;
+  the one in `deny.toml`, completed for npm by `apps/desktop/licences-npm.toml`.
+  `make audit-npm`, also reached by `make front-controles`, runs `pnpm audit
+  --prod` and fails on a published advisory in that shipped graph;
 - a dependency used in a single place for a single function
   is a candidate for rewriting, not a given;
 - an unmaintained crate on an external boundary is a risk to document,

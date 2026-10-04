@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="f31a5bd86623" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="17b7c33eea30" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -40,9 +40,53 @@ clés privées SSH de tunnel, certificats clients.
 Le stockage passe par le trousseau du système. Ce qui est persisté dans le
 workspace, c'est une **référence** au secret, jamais le secret.
 
+Les instructions d'administration SQL sont la surface d'entrée exceptionnelle
+où un mot de passe fait partie du texte de l'instruction lui-même. Avant qu'une
+nouvelle instruction n'atteigne l'historique des requêtes, le journal d'audit
+en ajout seul ou un enregistrement d'appel d'outil de conversation, Oxyn
+remplace lexicalement les littéraux de mot de passe reconnus par
+`'<redacted>'` ; les requêtes enregistrées incluses dans le contexte IA reçoivent
+le même caviardage avant leur troncature ou leur rendu. Le driver reçoit toujours
+le texte d'origine. Cela couvre les clauses explicites de mot de passe, pas les
+secrets arbitraires dans les commentaires, le SQL dynamique, les brouillons de
+l'éditeur ou le texte libre des conversations. Les lignes déjà présentes dans
+`audit_journal` ne sont pas réécrites, car le journal reste strictement en ajout
+seul. Un utilisateur ayant exécuté un tel SQL avant cette protection doit
+renouveler le mot de passe et protéger ou remplacer les fichiers de workspace
+concernés
+([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
+
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le
 fichier avait l'air d'être une simple configuration.
+
+### Environnement des agents externes
+
+Les valeurs secrètes vont dans le trousseau du système, sous une nouvelle
+référence `oxyn:agent-env:<identifiant aléatoire>` par valeur et enregistrement.
+Rust impose le trousseau pour `*_API_KEY`, `*_TOKEN`, `*_SECRET`, les noms
+contenant `PASSWORD` et les noms seuls `API_KEY`, `TOKEN`, `SECRET`, sans tenir
+compte de la casse. L'utilisateur peut marquer toute autre variable secrète.
+Les autres valeurs restent en clair. `external_agents.env` est du JSON lisible :
+`plain` contient les paires nom/valeur et `secret_refs` les paires nom/référence.
+Les références ne retournent jamais à la webview.
+
+Les valeurs sont résolues sur le pool bloquant uniquement lors de la préparation
+du lancement, après le contrôle de confidentialité, puis injectées dans
+l'environnement vidé du processus enfant. Une entrée absente ou une erreur du
+trousseau refuse le lancement, sans repli en clair. L'agent reçoit ces identifiants
+pour s'authentifier ; ils ne rejoignent jamais un prompt IA. Debug et les rapports
+d'erreur du processus les masquent, même les valeurs courtes explicitement secrètes.
+
+Le remplacement écrit de nouvelles entrées avant l'enregistrement par le bus ;
+seul un enregistrement ou une suppression réussi permet d'oublier les anciennes.
+Un échec peut laisser des entrées inaccessibles dans le trousseau, jamais écraser
+une ancienne valeur. Les anciens tableaux JSON restent lisibles : la première
+liste transfère les noms de jetons au trousseau, sur le pool bloquant, avant de
+proposer un agent. Un échec refuse la liste. Cette mise à niveau change les lignes actives ; les
+anciennes pages SQLite, fichiers WAL, sauvegardes et copies peuvent encore contenir
+la valeur. Renouveler les jetons précédemment stockés invalide ces copies. Les
+noms sensibles non reconnus doivent être marqués secrets en remplaçant la déclaration.
 
 ### La clé de signature des mises à jour
 
@@ -137,6 +181,12 @@ conversation. **Jamais une valeur ni un jeton** : il n'y a pas de colonne pour
 les ranger, et le fichier refuse une liste de colonnes qui contiendrait autre
 chose que des noms. L'entrée s'écrit **avant** l'envoi ; si elle échoue, rien
 ne part.
+
+## Transport des connexions
+
+La politique TLS commune à PostgreSQL et MySQL est définie dans
+[ADR-0052](adr/0052-verified-tls-outside-local.md). Elle régit la configuration des drivers,
+les défauts des formulaires de connexion et l’exception Local explicite.
 
 ## Marquage des connexions
 
@@ -376,15 +426,17 @@ ce qui le maintiendra valide.
 - toute nouvelle dépendance directe est justifiée en revue : ce qu'elle apporte,
   et le coût de s'en passer ;
 - `cargo deny` sur les licences et les avis de sécurité fait partie de la porte
-  de qualité, par la cible `make deny` que `make qualite` appelle. Elle **avertit
-  sans bloquer** quand `cargo-deny` n'est pas installé : une porte qui échoue sur
-  un outil absent finit par être contournée, et c'est alors tout le contrôle qui
-  disparaît. La configuration vit dans `deny.toml`. Toute licence qu'elle
-  accepte est compatible avec la GPLv3, la licence de l'application
+  de qualité, par la cible `make deny` que `make qualite` appelle. Une exécution
+  locale **avertit sans bloquer** quand `cargo-deny` n'est pas installé ; en CI,
+  l'outil absent fait échouer la porte, et le workflow installe un binaire
+  versionné dont l'empreinte SHA-256 est épinglée. La configuration vit dans
+  `deny.toml`. Toute licence qu'elle accepte est compatible avec la GPLv3, la licence de l'application
   ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md)) ;
 - les dépendances npm de production d'`apps/desktop` passent le même contrôle,
   par `make licences-npm`, que `make front-controles` appelle. La liste est
-  celle de `deny.toml`, complétée pour npm par `apps/desktop/licences-npm.toml` ;
+  celle de `deny.toml`, complétée pour npm par `apps/desktop/licences-npm.toml`.
+  `make audit-npm`, également atteinte par `make front-controles`, exécute
+  `pnpm audit --prod` et échoue sur un avis publié dans ce graphe livré ;
 - une dépendance qui n'est utilisée qu'à un seul endroit pour une seule fonction
   est un candidat à la réécriture, pas une évidence ;
 - une crate non maintenue sur une frontière externe est un risque à documenter,

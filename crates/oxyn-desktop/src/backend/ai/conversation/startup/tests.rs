@@ -590,8 +590,9 @@ fn an_agent_that_dies_says_why_and_nothing_it_was_handed() {
             "echo \"cannot start: key $OXYN_TEST_KEY refused\" >&2; exit 3",
         ]);
     agent.env = vec![("OXYN_TEST_KEY".to_owned(), secret.to_owned())];
-    let (session, driver) =
-        ExternalSession::launch(&agent, PrivacyTier::Metadata).expect("launched");
+    let (session, driver) = runtime
+        .block_on(ExternalSession::launch(&agent, PrivacyTier::Metadata, None))
+        .expect("launched");
     runtime.spawn(driver);
 
     let failure = runtime.block_on(async {

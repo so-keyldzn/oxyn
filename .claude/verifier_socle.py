@@ -479,6 +479,53 @@ def check_ci_aggregate() -> list[str]:
     return aggregate_errors(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
 
 
+def dependency_tool_errors(body: str) -> list[str]:
+    """Keep cargo-deny installed on every runner that executes make rust.
+
+    Deliberately checks the workflow's restricted shape, like the coverage
+    check above; changing that shape requires updating this guard too.
+    """
+    rust = re.search(r"^  rust:\n(.*?)(?=^  [\w-]+:|\Z)", body, re.M | re.S)
+    if rust is None:
+        return ["qualite.yml: missing rust job and its cargo-deny installation"]
+    steps = re.split(r"^      - name: ", rust.group(1), flags=re.M)[1:]
+    install = next((i for i, step in enumerate(steps) if step.startswith("Install cargo-deny\n")), None)
+    run = next((i for i, step in enumerate(steps) if re.search(r"^        run: make rust$", step, re.M)), None)
+    if install is None or run is None or install >= run:
+        return ["qualite.yml: install cargo-deny before make rust"]
+    step = steps[install]
+    conditions = re.findall(r"^        if: (.+)$", step, re.M)
+    run_conditions = re.findall(r"^        if: (.+)$", steps[run], re.M)
+    if conditions and conditions != run_conditions:
+        return ["qualite.yml: cargo-deny installation must cover every make rust runner"]
+    if "continue-on-error:" in step:
+        return ["qualite.yml: cargo-deny installation must fail closed"]
+    commands = [line.strip() for line in step.splitlines() if line.startswith("          ") and not line.lstrip().startswith("#")]
+    script = "\n".join(commands)
+    if not re.search(r"^version=\d+\.\d+\.\d+$", script, re.M):
+        return ["qualite.yml: pin an explicit cargo-deny release"]
+    for runner in ("macOS", "Linux"):
+        if not re.search(rf"{runner}\) target=[\w-]+\n\s*checksum=[a-f0-9]{{64}} ;;", script):
+            return [f"qualite.yml: pin the cargo-deny archive and checksum for {runner}"]
+    if 'curl -LsSfO "https://github.com/EmbarkStudios/cargo-deny/releases/download/$version/$archive"' not in commands:
+        return ["qualite.yml: download cargo-deny from its official versioned release"]
+    verify = 'echo "$checksum  $archive" | shasum -a 256 -c -'
+    extraction = next((i for i, line in enumerate(commands) if line.startswith('tar xzf "$archive"')), None)
+    if verify not in commands or extraction is None or commands.index(verify) >= extraction:
+        return ["qualite.yml: verify cargo-deny archive before extraction"]
+    if not any('"${CARGO_HOME:-$HOME/.cargo}/bin"' in line and 'cargo-deny"' in line for line in commands):
+        return ["qualite.yml: install cargo-deny in Cargo's bin directory"]
+    if "cargo deny --version" not in commands:
+        return ["qualite.yml: verify cargo-deny is executable before make rust"]
+    return []
+
+
+def check_ci_dependency_tools() -> list[str]:
+    if not QUALITY_WORKFLOW.is_file():
+        return []
+    return dependency_tool_errors(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
+
+
 def main() -> int:
     problems = (
         check_links()
@@ -488,6 +535,7 @@ def main() -> int:
         + check_dependency_graph()
         + check_ci_coverage()
         + check_ci_aggregate()
+        + check_ci_dependency_tools()
         + check_translations()
     )
     warnings = check_inert_paths()

@@ -43,6 +43,59 @@ impl KeyringCredentials {
         Self { store }
     }
 
+    /// Moves declared secrets into fresh keychain entries before the store write.
+    /// Token-like names cannot be opted out by a caller. Blocks on the keychain.
+    ///
+    /// # Errors
+    /// A keychain failure aborts the declaration; there is no plaintext fallback.
+    pub fn protect_agent_environment(
+        &self,
+        agent: &mut oxyn_core::ExternalAgentConfig,
+        secret_names: &std::collections::BTreeSet<String>,
+    ) -> Result<(), OxynError> {
+        agent.validate()?;
+        let mut plain = Vec::new();
+        let mut references: Vec<(String, String)> = Vec::new();
+        for (name, value) in &agent.env {
+            if oxyn_core::agent_env_is_secret(name) || secret_names.contains(name) {
+                // A replacement must never overwrite an entry still referenced
+                // by the previous declaration if its subsequent save fails.
+                let reference =
+                    SecretRef::parse(&format!("oxyn:agent-env:{}", uuid::Uuid::new_v4().simple()))
+                        .map_err(|_| OxynError::Config("invalid agent secret reference".into()))?;
+                if self
+                    .store
+                    .put(&reference, SecretString::from(value.clone()))
+                    .is_err()
+                {
+                    for (_, reference) in &references {
+                        let _ignored = self.forget_agent_secret(reference);
+                    }
+                    return Err(OxynError::Config(
+                        "writing the agent environment to the system keychain failed".into(),
+                    ));
+                }
+                references.push((name.clone(), reference.as_str().to_owned()));
+            } else {
+                plain.push((name.clone(), value.clone()));
+            }
+        }
+        agent.env = plain;
+        agent.env_secret_refs.extend(references);
+        Ok(())
+    }
+
+    /// Forgets an unreferenced agent value. Call only on the blocking pool.
+    ///
+    /// # Errors
+    /// Refuses another secret namespace or a failed keychain deletion.
+    pub fn forget_agent_secret(&self, reference: &str) -> Result<(), OxynError> {
+        let reference = agent_reference(reference)?;
+        self.store
+            .delete(&reference)
+            .map_err(|_| OxynError::Config("forgetting an agent secret failed".into()))
+    }
+
     /// Writes a connection's secrets, replacing whatever was there.
     ///
     /// Under the reference `config` carries, or the one derived from its id
@@ -250,6 +303,28 @@ impl KeyringCredentials {
     }
 }
 
+fn agent_reference(raw: &str) -> Result<SecretRef, OxynError> {
+    if !raw.starts_with("oxyn:agent-env:") {
+        return Err(OxynError::Config("invalid agent secret reference".into()));
+    }
+    SecretRef::parse(raw).map_err(|_| OxynError::Config("invalid agent secret reference".into()))
+}
+
+impl oxyn_ai::external::spawn::EnvironmentSecrets for KeyringCredentials {
+    fn resolve(
+        &self,
+        reference: &str,
+    ) -> Result<String, oxyn_ai::external::session::ExternalError> {
+        use oxyn_ai::external::session::ExternalError;
+        let reference = agent_reference(reference)
+            .map_err(|_| ExternalError::Invalid("invalid agent secret reference".into()))?;
+        let value = self.store.get(&reference)
+            .map_err(|_| ExternalError::Invalid("reading the agent environment from the system keychain failed".into()))?
+            .ok_or_else(|| ExternalError::Invalid("an agent environment secret is missing; replace the declaration to enter it again".into()))?;
+        Ok(value.expose_secret().to_owned())
+    }
+}
+
 /// The entry a connection's secrets are written to: the one it references,
 /// never a derived one in its place — writing beside the entry the resolver
 /// reads would leave the old secrets in use.
@@ -399,5 +474,56 @@ mod tests {
             Err(OxynError::Config(_)) => {}
             other => panic!("expected a config error, got {:?}", other.err()),
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_environment_tests {
+    use super::*;
+    use oxyn_ai::external::spawn::EnvironmentSecrets;
+
+    #[test]
+    fn token_name_patterns_cannot_be_downgraded_to_plaintext() {
+        let store = Arc::new(oxyn_secrets::MemorySecretStore::new());
+        let credentials = KeyringCredentials::new(store.clone());
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "access_TOKEN",
+            "APP_SECRET",
+            "MY_PASSWORD_FILE",
+            "PASSWORD",
+            "TOKEN",
+            "SECRET",
+        ] {
+            let mut agent =
+                oxyn_core::ExternalAgentConfig::new(ProviderId::for_new_agent(), "Test", "program");
+            agent.env.push((name.into(), "synthetic-secret".into()));
+            credentials
+                .protect_agent_environment(&mut agent, &Default::default())
+                .expect("keychain");
+            assert!(agent.env.is_empty());
+            let (_, reference) = &agent.env_secret_refs[0];
+            assert_eq!(
+                EnvironmentSecrets::resolve(&credentials, reference).expect("resolved"),
+                "synthetic-secret"
+            );
+        }
+        assert_eq!(store.len(), 7);
+    }
+
+    #[test]
+    fn an_agent_reference_never_reads_or_deletes_a_connection_secret() {
+        let store = Arc::new(oxyn_secrets::MemorySecretStore::new());
+        let credentials = KeyringCredentials::new(store.clone());
+        let reference = SecretRef::for_connection(ConnectionId::new());
+        store
+            .put(
+                &reference,
+                SecretString::from("synthetic-connection-secret".to_owned()),
+            )
+            .expect("put");
+        assert!(EnvironmentSecrets::resolve(&credentials, reference.as_str()).is_err());
+        assert!(credentials.forget_agent_secret(reference.as_str()).is_err());
+        assert!(store.contains(&reference));
     }
 }

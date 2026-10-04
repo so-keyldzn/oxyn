@@ -2041,7 +2041,7 @@ impl Run<'_> {
         let declaration = provider.clone();
         let transport = tokio::task::spawn_blocking(move || {
             let key = credentials.provider_key(&declaration)?;
-            oxyn_llm::build_provider(declaration.kind, &declaration.base_url, key)
+            oxyn_llm::build_provider(declaration.kind, &declaration.base_url, key, reach)
         })
         .await
         .map_err(|error| setup(format!("preparing the provider: {error}")))?
@@ -2418,6 +2418,12 @@ impl Run<'_> {
 /// Checks the agent's program exists before launching it, so a missing one
 /// reads as such rather than as a protocol failure.
 async fn locate(agent: &ExternalAgentConfig) -> Result<(), Failure> {
+    // A protected PATH is resolved only at spawn. Let that launch perform the
+    // lookup with the child's actual environment, rather than falsely reject
+    // a program absent from the host PATH (or disclose a secret search path).
+    if agent.env_secret_refs.iter().any(|(name, _)| name == "PATH") {
+        return Ok(());
+    }
     let command = agent.command.clone();
     let path = agent
         .env
@@ -2654,7 +2660,12 @@ async fn launch_agent(
     // file system that stops answering must not hold it for good.
     let (session, driver) = tokio::time::timeout(
         AGENT_LAUNCH_TIMEOUT,
-        ExternalSession::launch_with_tools(agent, tier, bridge),
+        ExternalSession::launch_with_tools(
+            agent,
+            tier,
+            bridge,
+            Some(Arc::clone(&inner.credentials) as Arc<_>),
+        ),
     )
     .await
     .map_err(|_| {

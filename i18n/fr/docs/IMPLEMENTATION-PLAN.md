@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="d3f79df9c643" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="e98493539cef" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -1853,7 +1853,7 @@ l'interface.**
 
 | Couche | État | Ce qui la tient |
 |---|---|---|
-| Déclaration | fait | `oxyn_core::ExternalAgentConfig` — **aucun champ de secret**, `Debug` manuel qui ne rend que le nombre de variables d'environnement |
+| Déclaration | fait | `oxyn_core::ExternalAgentConfig` — **références au trousseau pour les secrets**, `Debug` manuel qui ne rend que le nombre de variables d'environnement |
 | Persistance | fait | migration 9, table `external_agents`. `the_table_has_no_secret_column` lit le **schéma**, pas la documentation |
 | Bus | fait | trois commandes, **refusées à un `Actor::Agent`** — `an_agent_does_not_declare_an_external_agent` |
 | Confidentialité | fait | `Local` fermé, et refusé **avant le lancement** — `the_local_tier_refuses_before_even_launching_the_process` |
@@ -1880,7 +1880,7 @@ Deux nuances de vocabulaire sont tenues par des tests, parce qu'elles décident 
 ce que l'utilisateur croit :
 
 * un agent n'affiche **pas** « clé absente » — cela se lirait comme un réglage
-  qui manque, alors qu'il n'y a pas de clé à configurer ;
+  qui manque, alors que les identifiants d'environnement sont facultatifs ;
 * sa destination est annoncée **inconnaissable**, pas « inconnue » :
   l'avertissement est permanent, puisque aucune mesure ne viendra le lever. Le
   test refuse que la mention contienne « measured ».
@@ -1898,8 +1898,9 @@ lecture qui échoue **conserve la liste** au lieu de la vider, pour la raison qu
 vaut déjà pour les fournisseurs — une panne locale ne doit pas se lire comme une
 absence de déclaration.
 
-`remove_external_agent` est plus court que son jumeau, et c'est le sujet : **il
-n'y a pas de clé à oublier**, le geste s'arrête au bus.
+Depuis l'amendement du 2026-10-03 à ADR-0026, `remove_external_agent` supprime la
+déclaration par le bus, puis oublie ses secrets d'environnement du trousseau du
+système sur le pool bloquant. Un échec de suppression préserve les anciennes entrées.
 
 **Ce qui restait au 2026-09-14 :** le champ d'environnement dans le formulaire de
 déclaration, et le choix explicite d'un second agent plutôt que du premier
@@ -2148,10 +2149,18 @@ demande, n'envoie aucune ligne et n'enregistre aucun `ai_egress` ; la question
 épinglée n'est pas envoyée. Les tests de régression avec un hôte scripté
 couvrent les deux chemins, y compris un libellé trompeur dans la webview.
 
-**Reste à faire, noté le 2026-09-25 — les déclarations d'agents externes utilisent
-le dialogue natif directement.** `ai_save_external_agent` doit rejoindre le
-port `HostConfirm`, avec les tests du § 4 d'ADR-0037 ; suivi par #150.
-**Échéance** : 2026-10-31.
+**Fait le 2026-10-03 — les déclarations d'agents externes passent par `HostConfirm` (#150).**
+`save_external_agent` valide la déclaration, interroge l'hôte par le port partagé,
+puis envoie `SaveExternalAgent` par le bus. Le délai minimal d'une seconde,
+l'échéance de cinq minutes et l'exclusion des dialogues simultanés s'appliquent
+aux déclarations et remplacements. Le dialogue utilise des valeurs échappées et
+bornées ainsi que des libellés de boutons constants. Une déclaration dont le
+dialogue échappé complet dépasse 4 096 octets est refusée, jamais abrégée.
+La validation refuse les
+caractères de contrôle, de format et les séparateurs de ligne/paragraphe dans
+chaque champ et borne la commande et chaque argument à 4 096 octets UTF-8.
+Les tests d'hôte scripté couvrent l'accord prématuré, le refus, l'expiration et
+la concurrence.
 
 ## Phase 3 bis — Au-delà du relationnel
 

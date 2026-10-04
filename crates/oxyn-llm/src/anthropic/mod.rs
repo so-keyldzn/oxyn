@@ -116,6 +116,9 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     /// Builds the provider on the public endpoint.
     ///
+    /// This unclassified transport performs no DNS measurement. For a
+    /// privacy-gated request, use [`crate::build_provider`] with its measured reach.
+    ///
     /// # Errors
     /// Unreadable base URL, or HTTP client impossible to build.
     pub fn new(api_key: impl Into<ApiKey>) -> Result<Self> {
@@ -127,12 +130,20 @@ impl AnthropicProvider {
     /// # Errors
     /// Unreadable base URL, or HTTP client impossible to build.
     pub fn with_base_url(api_key: impl Into<ApiKey>, base_url: &str) -> Result<Self> {
+        Self::with_base_url_and_reach(api_key, base_url, crate::Reach::Unresolved)
+    }
+
+    pub(crate) fn with_base_url_and_reach(
+        api_key: impl Into<ApiKey>,
+        base_url: &str,
+        reach: crate::Reach,
+    ) -> Result<Self> {
         let id = ProviderId::anthropic();
         let parsed = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
         })?;
-        let client = http::client(&id)?;
+        let client = http::client(&id, &parsed, reach)?;
         Ok(Self {
             base_url: provider::normalize_base_url(parsed),
             api_key: api_key.into(),

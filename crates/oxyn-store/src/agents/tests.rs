@@ -29,12 +29,7 @@ fn a_declaration_reads_back_identically() {
     );
 }
 
-/// The table has **no** column where a secret could be stored.
-///
-/// This is the guarantee this mode rests on: an agent carries its own
-/// authentication. The test reads the schema rather than the documentation,
-/// because a column added later "just for a token" would turn no other test
-/// red.
+/// Secrets belong in the keychain; the table stores environment references.
 #[test]
 fn the_table_has_no_secret_column() {
     let store = Store::open_in_memory().expect("open");
@@ -50,7 +45,7 @@ fn the_table_has_no_secret_column() {
     for forbidden in ["secret_ref", "secret", "api_key", "token", "password"] {
         assert!(
             !columns.iter().any(|name| name == forbidden),
-            "`{forbidden}` has no business here: an external agent entrusts no key"
+            "`{forbidden}` has no business here: the table stores references only"
         );
     }
 }
@@ -121,4 +116,18 @@ fn removing_a_declaration_leaves_the_others_alone() {
     let remaining = store.external_agents().list().expect("read");
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].label, "Two");
+}
+
+#[test]
+fn token_like_environment_cannot_be_persisted_in_clear() {
+    let store = Store::open_in_memory().expect("open");
+    let mut config = agent("token-agent", "Token agent");
+    config.env = vec![("ANTHROPIC_API_KEY".into(), "synthetic-agent-secret".into())];
+    assert!(store.external_agents().save(&config).is_err());
+    let count: i64 = store
+        .with_connection(|conn| {
+            Ok(conn.query_row("SELECT count(*) FROM external_agents", [], |row| row.get(0))?)
+        })
+        .expect("read table");
+    assert_eq!(count, 0);
 }

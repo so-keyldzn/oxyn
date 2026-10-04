@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="f5ced11304e7" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="1b99c7c9ebcd" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -21,6 +21,20 @@ Le script interroge crates.io et le canal stable de Rust, compare avec les
 valeurs de ce fichier et signale les écarts. Il ne modifie rien : c'est à un
 humain de décider d'une montée de version. La commande `/versions` fait la
 même chose en expliquant les écarts.
+
+
+## Confinement du transport IA — 2026-10-03
+
+La version verrouillée de reqwest, **0.13.4**, et sa somme de contrôle ont été
+vérifiées dans le [registre sparse crates.io](https://index.crates.io/re/qw/reqwest)
+et `Cargo.lock`. Son [API ClientBuilder](https://docs.rs/reqwest/0.13.4/reqwest/struct.ClientBuilder.html)
+fournit `no_proxy` (proxys système automatiques inclus), `dns_resolver` et
+`resolve_to_addrs`. Le [contrat Resolve](https://docs.rs/reqwest/0.13.4/reqwest/dns/trait.Resolve.html)
+renvoie une future d'adresses socket ; un port explicite dans l'URL remplace
+leurs ports. Oxyn utilise un résolveur qui refuse toute réponse non loopback
+pour une destination mesurée `Local` et désactive les proxys pour toutes les
+familles. Les IP littérales contournent le DNS et sont vérifiées avant de
+construire un client local.
 
 ## Chaîne d'outils Rust
 
@@ -207,7 +221,8 @@ pas le tag : un tag se déplace, un SHA non.
 | Node exigé par le front | vite 8.3.0 : `^20.19.0 \|\| >=22.12.0` ; vitest 4.1.11 : `^20.0.0 \|\| ^22.0.0 \|\| >=24.0.0` ; la CI prend la ligne 22, celle de la machine de dev (22.23.2) | champ `engines` des paquets installés | 2026-09-24 |
 | Bibliothèques système de Tauri sous Debian/Ubuntu | `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` | `tauri-apps/tauri-docs`, branche `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` du 2026-08-20 | 2026-09-24 |
 | `keyring` 4.2.0 sous Linux passe par `zbus-secret-service-keyring-store` et `secret-service` 5.2.0 : du Rust pur, sans `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
-| `https://get.nexte.st/latest/linux` redirige vers `cargo-nextest-0.9.146-x86_64-unknown-linux-gnu.tar.gz` | en-tête `location` de la réponse | 2026-09-24 |
+| Binaire CI `cargo-nextest` | `0.9.146` ; SHA-256 `universal-apple-darwin` `39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8` ; SHA-256 `x86_64-unknown-linux-gnu` `682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428` | release GitHub `cargo-nextest-0.9.146` de `nextest-rs/nextest` et ses ressources `.sha256` | 2026-10-03 |
+| Binaire CI `cargo-deny` | `0.20.2` ; SHA-256 `aarch64-apple-darwin` `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3` ; SHA-256 `x86_64-unknown-linux-musl` `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` | release GitHub `0.20.2` d'`EmbarkStudios/cargo-deny` et ses ressources `.sha256` | 2026-10-03 |
 | La CI échouait à chaque poussée depuis au moins le 2026-09-21, en une vingtaine de secondes : pnpm absent du runner, `make qualite` s'arrêtait avant le front | journal du run `36034960589` | 2026-09-24 |
 | Aucune des exécutions de la porte n'avait enregistré de cache Cargo : toutes échouaient, et l'étape « Post Restaurer le cache Cargo » était `skipped`. Seuls les caches pnpm existaient. Sous Linux, les stories prenaient 275 s (1045 tests) avant l'échec | runs `36037137682` et `36036585873`, `GET /actions/caches` | 2026-09-24 |
 | La protection de branche est refusée sur ce dépôt : « Upgrade to GitHub Pro or make this repository public » (403). Rien n'empêche donc de fusionner une PR dont la CI échoue | `GET /repos/so-keyldzn/oxyn/branches/main/protection` | 2026-09-24 |
@@ -2141,3 +2156,70 @@ Sources : le source installé du registre crates.io et
 consultés le 2026-10-03. PostgreSQL exécute `PROGRAM` sur le serveur de base de
 données et y résout les chemins de fichiers ; `STDOUT` transmet les données par
 la connexion cliente. Aucune base réelle n'a été utilisée pour cette vérification.
+
+<a id="sql-password-literals-before-persistence"></a>
+## Littéraux de mot de passe SQL avant persistance
+
+Vérifié le 2026-10-03 pour [ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md).
+
+- PostgreSQL [ALTER ROLE](https://www.postgresql.org/docs/current/sql-alterrole.html)
+  admet des littéraux de mot de passe et `PASSWORD NULL` ; ses
+  [règles lexicales](https://www.postgresql.org/docs/current/sql-syntax-lexical.html)
+  décrivent les chaînes échappées, Unicode et délimitées par des dollars, les
+  fragments de chaîne adjacents et l'effet de `standard_conforming_strings`.
+- MySQL [CREATE USER](https://dev.mysql.com/doc/refman/8.4/en/create-user.html),
+  [ALTER USER](https://dev.mysql.com/doc/refman/8.4/en/alter-user.html) et
+  [SET PASSWORD](https://dev.mysql.com/doc/refman/8.4/en/set-password.html)
+  décrivent `IDENTIFIED BY`, les clauses d'authentification par plugin, les comptes
+  entre guillemets, les affectations et l'ancien mot de passe fourni par `REPLACE`.
+  [String literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)
+  décrit les guillemets doubles, les préfixes de jeu de caractères, les chaînes
+  adjacentes et `NO_BACKSLASH_ESCAPES`.
+- MariaDB [CREATE USER](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/create-user)
+  permet aussi `OR REPLACE` et `IDENTIFIED VIA … USING PASSWORD(…)` ;
+  [GRANT](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/grant)
+  peut porter une clause d'authentification. Ces formes utilisent le même pilote
+  et le même dialecte MySQL.
+- Les [commentaires MySQL](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
+  distinguent le contenu exécutable `/*! … */` des commentaires ordinaires ; une
+  clause de mot de passe qui s'y trouve reste du SQL à scanner avant persistance.
+
+Le caviardage réutilise le scanner du workspace et combine les interprétations
+lexicales lorsque le mode SQL ou le dialecte est indisponible. Il produit une
+copie pour la persistance ou le contexte ; aucun texte caviardé n'est soumis à
+une base. Les tests de grammaire et de frontière de l'exécuteur utilisent des
+secrets synthétiques et une session d'enregistrement ; ils ne certifient pas une
+exécution sur un serveur réel.
+
+MariaDB documente aussi sa forme `/*M! … */` dans [Comment Syntax](https://mariadb.com/docs/server/reference/sql-statements/comment-syntax), vérifiée à la même date ; les deux formes de commentaire exécutable sont scannées.
+
+## Modes TLS PostgreSQL — vérifiés le 2026-10-03
+
+Pour [ADR-0052](adr/0052-verified-tls-outside-local.md), consultation de la
+[documentation SSL officielle](https://www.postgresql.org/docs/18/libpq-ssl.html),
+sections sur la vérification du certificat et la protection par mode :
+`verify-full` vérifie la chaîne de certificats et le nom d'hôte ; `verify-ca`
+vérifie la chaîne seule. `prefer` ne protège pas contre un intermédiaire actif.
+La politique Oxyn applique ces distinctions à l'environnement de connexion ;
+aucune version de dépendance ne change.
+
+Les sources épinglées du registre et les fonctionnalités du workspace confirment
+aussi le magasin de confiance : `_tls-rustls-aws-lc-rs` de `sqlx-core` active
+`webpki-roots`, et `src/net/tls/tls_rustls.rs::import_root_certs` importe cet
+ensemble embarqué ; `src/io/tls/rustls_io.rs` de `mysql_async` importe aussi
+`webpki_roots::TLS_SERVER_ROOTS`. Aucun driver livré ne sélectionne de
+fonctionnalité de racines système ni ne propose de champ d'autorité par
+connexion. La clé de configuration PostgreSQL `sslrootcert` entre actuellement
+dans les options serveur de `ConnectSpec`.
+
+## Caractères de déclaration d'agent externe — vérifiés le 2026-10-03
+
+Le fichier [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+de la base Unicode a été vérifié pour les catégories générales `Cf`, `Zl` et
+`Zp`. Elles comprennent U+2028, U+2029, les contrôles bidirectionnels et les
+caractères de format de largeur nulle que `char::is_control` ne refuse pas.
+`ExternalAgentConfig::validate` refuse ces plages dans chaque champ textuel,
+ainsi que les plages de caractères invisibles déjà utilisées par les
+confirmations natives. Les bornes de 4 096 octets pour la commande et les
+arguments sont des limites produit Oxyn, pas celles du système d'exploitation ;
+aucune dépendance n'a été ajoutée.

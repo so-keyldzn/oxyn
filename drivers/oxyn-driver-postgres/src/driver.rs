@@ -112,8 +112,8 @@ pub fn postgres_metadata() -> DriverMetadata {
                     "verify-full".to_owned(),
                 ]),
             )
-            .with_default("prefer")
-            .with_help("`verify-full` is the only mode that authenticates the server."),
+            .with_default("verify-full")
+            .with_help("`verify-full` authenticates the server; other modes require a Local connection."),
             ConnectionField::new("application_name", "Application name", FieldKind::Text)
                 .with_default(DEFAULT_APPLICATION_NAME)
                 .with_help("Shown in `pg_stat_activity` on the server."),
@@ -346,6 +346,7 @@ mod tests {
     fn the_tls_mode_offers_the_six_libpq_values() {
         let metadata = postgres_metadata();
         let field = metadata.field("sslmode").expect("the TLS field exists");
+        assert_eq!(field.default.as_deref(), Some("verify-full"));
         let FieldKind::Choice(values) = &field.kind else {
             panic!("`sslmode` must be a closed choice: {:?}", field.kind);
         };

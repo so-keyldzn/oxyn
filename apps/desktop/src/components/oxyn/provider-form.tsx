@@ -111,6 +111,12 @@ function title(target: FormTarget) {
   return "Declare a provider"
 }
 
+function secretByName(name: string) {
+  return /(?:_API_KEY|_TOKEN|_SECRET)$|PASSWORD|^(?:API_KEY|TOKEN|SECRET)$/i.test(
+    name
+  )
+}
+
 function required(label: string) {
   return ({ value }: { value: string }) =>
     value.trim() === "" ? { message: `${label} is required.` } : undefined
@@ -151,6 +157,9 @@ export function ProviderForm({
   onSaveAgent,
   onDone,
 }: ProviderFormProps) {
+  const [secretNames, setSecretNames] = React.useState<Record<string, boolean>>(
+    {}
+  )
   const formRef = React.useRef<HTMLFormElement>(null)
   const nameRef = React.useRef<HTMLInputElement>(null)
   const replacing = target?.kind === "agent" ? target.agent : null
@@ -175,7 +184,14 @@ export function ProviderForm({
               // Validated on submit: a line without a name never gets here.
               env: (() => {
                 const parsed = parseEnvironment(value.env)
-                return parsed.ok ? parsed.env : []
+                return parsed.ok
+                  ? parsed.env.map((variable) => ({
+                      ...variable,
+                      secret:
+                        secretByName(variable.name) ||
+                        secretNames[variable.name] === true,
+                    }))
+                  : []
               })(),
             })
           : onSaveProvider({
@@ -191,6 +207,7 @@ export function ProviderForm({
       // at once, whatever the outcome: a value there is as often a token (I-03).
       formApi.setFieldValue("key", "")
       formApi.setFieldValue("env", "")
+      setSecretNames({})
       if (!(await saving)) return
       if (target) onDone()
       else formApi.reset()
@@ -232,7 +249,7 @@ export function ProviderForm({
                 ))}
                 {editing ? null : (
                   <NativeSelectOption value="agent">
-                    External agent (no key)
+                    External agent
                   </NativeSelectOption>
                 )}
               </NativeSelect>
@@ -336,11 +353,42 @@ export function ProviderForm({
                         }
                       />
                       <FieldError errors={field.state.meta.errors} />
+                      {(() => {
+                        const parsed = parseEnvironment(field.state.value)
+                        if (!parsed.ok) return null
+                        return [
+                          ...new Set(
+                            parsed.env.map((variable) => variable.name)
+                          ),
+                        ].map((name, index) => (
+                          <Field key={name} orientation="horizontal">
+                            <Switch
+                              id={`agent-env-secret-${index}`}
+                              checked={
+                                secretByName(name) || secretNames[name] === true
+                              }
+                              disabled={secretByName(name)}
+                              onCheckedChange={(checked: boolean) =>
+                                setSecretNames((previous) => ({
+                                  ...previous,
+                                  [name]: checked,
+                                }))
+                              }
+                            />
+                            <FieldLabel htmlFor={`agent-env-secret-${index}`}>
+                              Secret: {name}
+                            </FieldLabel>
+                          </Field>
+                        ))
+                      })()}
                       <FieldDescription>
                         One NAME=value per line. The agent gets these and a few
                         essentials such as PATH and HOME, nothing else of
-                        Oxyn&apos;s environment. Values are sent once and never
-                        shown again.
+                        Oxyn&apos;s environment. Secret values are stored in the
+                        system keychain and injected only at launch. Other
+                        values are stored in clear in Oxyn&apos;s local SQLite
+                        state. Token-like names always use the keychain. Mark
+                        any other sensitive variable as secret before saving.
                       </FieldDescription>
                     </Field>
                   )}

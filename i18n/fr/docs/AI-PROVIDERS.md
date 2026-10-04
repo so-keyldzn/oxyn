@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="f8a9b551b9ce" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="95fd73e0043c" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -87,12 +87,24 @@ données quittent la machine, ou non.
 > L'erreur demande de pointer l'URL de base sur l'adresse finale, sans recopier
 > la destination.
 
+
+Les clients HTTP d'Oxyn ignorent les proxys d'environnement et du système. La
+portée mesurée pour un envoi est transmise au transport, au contrôle de
+confidentialité et à `ai_egress` : pour `Local`, chaque nouvelle réponse DNS doit
+être non vide et entièrement loopback avant toute tentative de connexion. Une
+réponse modifiée ou mixte est refusée, de même qu'une adresse littérale non
+loopback. Le DNS s'exécute hors des threads UI et des workers asynchrones. Un
+service volontairement à l'écoute sur loopback peut toujours relayer le trafic
+ailleurs ; cette garantie concerne le pair TCP d'Oxyn.
+
 ## Un agent externe : la portée n'est pas inconnue, elle est **inconnaissable**
 
 Depuis [ADR-0026](adr/0026-agents-externes-acp.md), une destination peut aussi
 être un **agent externe** — un programme déjà installé et authentifié chez
 l'utilisateur, lancé en sous-processus et parlant l'Agent Client Protocol. Oxyn
-ne détient alors **aucune clé** : l'agent porte sa propre authentification.
+peut utiliser l'authentification propre de l'agent ou injecter au lancement les
+secrets déclarés dans le trousseau du système
+([SECURITY](SECURITY.md#environnement-des-agents-externes)).
 
 Oxyn a un **préréglage** pour deux agents, Claude Code et Codex : un adaptateur
 ACP à version épinglée, dont les réglages de confinement ont été mesurés

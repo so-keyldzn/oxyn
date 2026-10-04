@@ -1,8 +1,8 @@
 //! What a native confirmation says, composed from what the backend holds.
 //!
 //! Pure functions: no store, no dialog. Everything in a [`Confirmation`] comes
-//! from the saved configuration or the command the executor holds, never from
-//! an argument the webview sent — a script may choose what to have approved,
+//! from the saved configuration, a validated declaration or the command the
+//! executor holds, never from a dialog body the webview sent — a script may choose what to have approved,
 //! not what the dialog says about it ([ADR-0037 § 2](../../../../../docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)).
 //!
 //! Every string that is not one of this module's own literals goes through
@@ -13,7 +13,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use oxyn_core::{Command, ConnectionConfig, Environment};
+use oxyn_core::{Command, ConnectionConfig, Environment, ExternalAgentConfig};
 use oxyn_driver::DriverMetadata;
 use oxyn_exec::PendingCommand;
 
@@ -27,6 +27,10 @@ pub(crate) use sample::{SampleDescription, SampleDestination, sample};
 pub(crate) const CANCEL: &str = "Cancel";
 /// Confirms a write, a DDL or a connection change on production.
 pub(crate) const WRITE_TO_PRODUCTION: &str = "Write to production";
+/// Confirms a new external program declaration.
+pub(crate) const DECLARE_AGENT: &str = "Declare agent";
+/// Confirms replacing an external program declaration.
+pub(crate) const REPLACE_AGENT: &str = "Replace agent";
 /// Confirms a change of environment or privacy tier.
 pub(crate) const CHANGE_MARKING: &str = "Change marking";
 
@@ -37,6 +41,9 @@ const STATEMENT_WHOLE: usize = 1_000;
 const STATEMENT_EDGE: usize = 500;
 /// Any other untrusted string — a name, a value, a reason.
 const FIELD_MAX: usize = 200;
+/// A program cannot be approved from an abbreviated declaration: refuse what
+/// exceeds this product budget instead of hiding executable content.
+const DECLARATION_MAX_BYTES: usize = 4_096;
 
 /// How the dialog looks. The host maps it to its own icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +72,62 @@ pub(crate) struct SecretsShown {
     /// The others are forgotten rather than kept: the edit moves the
     /// connection, and a secret does not follow it elsewhere.
     pub(crate) others_forgotten: bool,
+}
+
+/// A validated declaration, including the exact argument boundaries. The host
+/// asks about the backend's configuration, not text supplied by the webview.
+/// Returns `None` if the full escaped declaration exceeds the dialog budget.
+pub(crate) fn external_agent(agent: &ExternalAgentConfig, replacing: bool) -> Option<Confirmation> {
+    // Environment names are not bounded by validate. Check every input before
+    // rendering so an oversized name cannot cause a second unbounded allocation.
+    if std::iter::once(&agent.label)
+        .chain(std::iter::once(&agent.command))
+        .chain(&agent.args)
+        .chain(agent.env.iter().flat_map(|(name, value)| [name, value]))
+        .any(|value| value.len() > DECLARATION_MAX_BYTES)
+    {
+        return None;
+    }
+    let (title, confirm) = if replacing {
+        ("Replace this external agent?", REPLACE_AGENT)
+    } else {
+        ("Declare an external agent?", DECLARE_AGENT)
+    };
+    let body = format!(
+        "“{}” will run this program on your machine each time you ask it a question:\n\n{}\n\n\
+         Oxyn cannot see where it sends your prompts, so it never serves a local-only \
+         connection.",
+        visible(&agent.label),
+        command_line(agent)
+    );
+    if body.len() > DECLARATION_MAX_BYTES {
+        return None;
+    }
+    Some(Confirmation {
+        title: title.to_owned(),
+        body,
+        confirm,
+        severity: Severity::Warning,
+    })
+}
+
+/// The declaration as one shell line, each word quoted as a shell reads it
+/// back: joined by spaces, `["-y foo"]` and `["-y", "foo"]` would read the same
+/// in the dialog and run differently.
+fn command_line(agent: &oxyn_core::ExternalAgentConfig) -> String {
+    use crate::ipc::ai::shell_quote;
+
+    let env = agent.env.iter().map(|(name, value)| {
+        format!(
+            "{}={}",
+            shell_quote(&visible(name)),
+            shell_quote(&visible(value))
+        )
+    });
+    let words = std::iter::once(&agent.command)
+        .chain(&agent.args)
+        .map(|word| shell_quote(&visible(word)));
+    env.chain(words).collect::<Vec<_>>().join(" ")
 }
 
 /// The approval of a held command, on a connection retained as production.
@@ -339,7 +402,12 @@ fn is_invisible(character: char) -> bool {
         character,
         '\u{00AD}'
             | '\u{034F}'
+            | '\u{0600}'..='\u{0605}'
             | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
             | '\u{115F}'..='\u{1160}'
             | '\u{17B4}'..='\u{17B5}'
             | '\u{180B}'..='\u{180F}'
@@ -351,6 +419,9 @@ fn is_invisible(character: char) -> bool {
             | '\u{FEFF}'
             | '\u{FFA0}'
             | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
             | '\u{1BCA0}'..='\u{1BCA3}'
             | '\u{1D173}'..='\u{1D17A}'
             | '\u{E0000}'..='\u{E0FFF}'

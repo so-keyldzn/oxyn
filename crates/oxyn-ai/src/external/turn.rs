@@ -88,13 +88,14 @@ pub async fn run_turn(
     prompt: &AgentPrompt,
     cancel: &CancelToken,
     observer: Arc<dyn AgentObserver>,
+    secrets: Option<Arc<dyn super::spawn::EnvironmentSecrets>>,
 ) -> Result<TurnEnd> {
     // Before the tier: an already cancelled turn does not launch a process only
     // to find out afterwards that it had to stop it.
     if cancel.is_cancelled() {
         return Ok(TurnEnd::Cancelled);
     }
-    let (session, driver) = ExternalSession::launch(agent, tier)?;
+    let (session, driver) = ExternalSession::launch(agent, tier, secrets).await?;
     let driver = pin!(driver);
     let turn = pin!(session.prompt(prompt, observer, cancel));
     // The turn and the transport move forward together; the session dropped on

@@ -18,6 +18,19 @@ the values of this file and reports the gaps. It changes nothing: deciding on
 a version bump is a human's call. The `/versions` command does the same while
 explaining the gaps.
 
+
+## AI transport confinement — 2026-10-03
+
+The pinned reqwest **0.13.4** and its checksum were verified against the
+[crates.io sparse registry](https://index.crates.io/re/qw/reqwest) and `Cargo.lock`.
+Its [ClientBuilder API](https://docs.rs/reqwest/0.13.4/reqwest/struct.ClientBuilder.html)
+provides `no_proxy` (including automatic system proxies), `dns_resolver`, and
+`resolve_to_addrs`. The [Resolve contract](https://docs.rs/reqwest/0.13.4/reqwest/dns/trait.Resolve.html)
+returns a future of socket addresses; an explicit URL port overrides their
+ports. Oxyn uses a resolver that rejects a non-loopback answer for a measured
+`Local` destination, and disables proxies for every provider family. Literal
+IPs bypass DNS and are checked before building a local client.
+
 ## Rust toolchain
 
 | Fact | Value | Source | Checked on |
@@ -203,7 +216,8 @@ tag: a tag moves, a SHA does not.
 | Node required by the front end | vite 8.3.0: `^20.19.0 \|\| >=22.12.0`; vitest 4.1.11: `^20.0.0 \|\| ^22.0.0 \|\| >=24.0.0`; CI takes the 22 line, the dev machine's (22.23.2) | `engines` field of the installed packages | 2026-09-24 |
 | Tauri system libraries on Debian/Ubuntu | `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` | `tauri-apps/tauri-docs`, branch `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` of 2026-08-20 | 2026-09-24 |
 | `keyring` 4.2.0 on Linux goes through `zbus-secret-service-keyring-store` and `secret-service` 5.2.0: pure Rust, without `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
-| `https://get.nexte.st/latest/linux` redirects to `cargo-nextest-0.9.146-x86_64-unknown-linux-gnu.tar.gz` | `location` header of the response | 2026-09-24 |
+| `cargo-nextest` CI binary | `0.9.146`; `universal-apple-darwin` SHA-256 `39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8`; `x86_64-unknown-linux-gnu` SHA-256 `682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428` | [nextest release cargo-nextest-0.9.146](https://github.com/nextest-rs/nextest/releases/tag/cargo-nextest-0.9.146) and its `.sha256` assets | 2026-10-03 |
+| `cargo-deny` CI binary | `0.20.2`; `aarch64-apple-darwin` SHA-256 `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3`; `x86_64-unknown-linux-musl` SHA-256 `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` | [cargo-deny release 0.20.2](https://github.com/EmbarkStudios/cargo-deny/releases/tag/0.20.2) and its `.sha256` assets | 2026-10-03 |
 | CI failed at every push since at least 2026-09-21, in about twenty seconds: pnpm missing from the runner, `make qualite` stopped before the front end | log of run `36034960589` | 2026-09-24 |
 | None of the runs of the gate had saved a Cargo cache: all of them failed, and the step "Post Restaurer le cache Cargo" was `skipped`. Only the pnpm caches existed. On Linux, the stories took 275 s (1045 tests) before the failure | runs `36037137682` and `36036585873`, `GET /actions/caches` | 2026-09-24 |
 | Branch protection is refused on this repository: "Upgrade to GitHub Pro or make this repository public" (403). Nothing therefore prevents merging a PR whose CI fails | `GET /repos/so-keyldzn/oxyn/branches/main/protection` | 2026-09-24 |
@@ -2128,3 +2142,63 @@ Sources: the installed crates.io registry source, and PostgreSQL **18**
 2026-10-03. PostgreSQL executes `PROGRAM` on the database server and resolves
 file paths there; `STDOUT` transfers data through the client connection.
 No live database was used for this verification.
+
+## SQL password literals before persistence
+
+Checked on 2026-10-03 for [ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md).
+
+- PostgreSQL [ALTER ROLE](https://www.postgresql.org/docs/current/sql-alterrole.html)
+  admits password string literals and `PASSWORD NULL`; its
+  [lexical rules](https://www.postgresql.org/docs/current/sql-syntax-lexical.html)
+  describe escape, Unicode and dollar-quoted strings, adjacent string fragments,
+  and the effect of `standard_conforming_strings`.
+- MySQL [CREATE USER](https://dev.mysql.com/doc/refman/8.4/en/create-user.html),
+  [ALTER USER](https://dev.mysql.com/doc/refman/8.4/en/alter-user.html), and
+  [SET PASSWORD](https://dev.mysql.com/doc/refman/8.4/en/set-password.html)
+  describe `IDENTIFIED BY`, plugin authentication clauses, quoted accounts,
+  password assignments and the old password supplied by `REPLACE`.
+  [String literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)
+  describes double quotes, character-set introducers, adjacent strings and
+  `NO_BACKSLASH_ESCAPES`.
+- MariaDB [CREATE USER](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/create-user)
+  also permits `OR REPLACE` and `IDENTIFIED VIA … USING PASSWORD(…)`;
+  [GRANT](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/grant)
+  can carry an authentication clause. These use the same MySQL driver/dialect.
+- MySQL [comments](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
+  distinguishes executable `/*! … */` content from ordinary comments; a password
+  clause there is still SQL and must be scanned before persistence.
+
+The redactor reuses the workspace scanner and combines lexical interpretations
+where SQL mode or dialect is unavailable. This is a persistence/context copy;
+no redacted text is submitted to a database. Grammar and executor-boundary tests
+use synthetic credentials and a recording session; they do not certify a live
+server execution.
+
+MariaDB also documents its `/*M! … */` form in [Comment Syntax](https://mariadb.com/docs/server/reference/sql-statements/comment-syntax), checked on the same date; both executable comment forms are scanned.
+
+## PostgreSQL TLS modes — checked on 2026-10-03
+
+For [ADR-0052](adr/0052-verified-tls-outside-local.md), checked the official
+[SSL support documentation](https://www.postgresql.org/docs/18/libpq-ssl.html),
+sections on certificate verification and protection by mode: `verify-full`
+checks the certificate chain and hostname; `verify-ca` checks the chain alone.
+`prefer` does not protect against an active intermediary. Oxyn's policy applies
+these distinctions to the connection environment; no dependency version changes.
+
+The pinned registry sources and workspace features also confirm the trust store:
+`sqlx-core`'s `_tls-rustls-aws-lc-rs` enables `webpki-roots`, and
+`src/net/tls/tls_rustls.rs::import_root_certs` imports that bundled set;
+`mysql_async`'s `src/io/tls/rustls_io.rs` likewise imports
+`webpki_roots::TLS_SERVER_ROOTS`. Neither shipped driver selects a system-root
+feature or exposes a per-connection CA field. PostgreSQL's `sslrootcert`
+configuration key currently falls into `ConnectSpec`'s server options.
+
+## External-agent declaration characters — checked 2026-10-03
+
+The Unicode Character Database's [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+was checked for general categories `Cf`, `Zl` and `Zp`. They include U+2028,
+U+2029, bidi controls and zero-width format characters that `char::is_control`
+does not reject. `ExternalAgentConfig::validate` rejects these ranges in every
+text field, alongside the existing invisible-character ranges used by native
+confirmations. The 4,096-byte command/argument bounds are Oxyn product limits,
+not operating-system limits; no dependency was added.

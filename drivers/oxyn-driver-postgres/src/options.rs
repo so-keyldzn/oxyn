@@ -41,7 +41,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use oxyn_core::{ConnectionConfig, OxynError, Result};
+use oxyn_core::{ConnectionConfig, Environment, OxynError, Result};
 use oxyn_driver::{Credentials, DriverMetadata};
 use secrecy::ExposeSecret as _;
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
@@ -98,7 +98,8 @@ impl ConnectSpec {
     /// # Errors
     /// [`OxynError::Config`] if the configuration does not designate this
     /// driver, if a required parameter is missing, if the port is not a 16-bit
-    /// integer, or if `sslmode` does not name a known mode.
+    /// integer, if `sslmode` does not name a known mode, or if a mode weaker
+    /// than `verify-full` is asked for outside [`Environment::Local`].
     pub fn from_config(
         metadata: &DriverMetadata,
         config: &ConnectionConfig,
@@ -110,8 +111,8 @@ impl ConnectSpec {
         let mut port = metadata.default_port.unwrap_or(DEFAULT_PORT);
         let mut database = String::new();
         let mut user = String::new();
-        let mut sslmode = PgSslMode::Prefer;
-        let mut sslmode_name = "prefer";
+        let mut sslmode = PgSslMode::VerifyFull;
+        let mut sslmode_name = "verify-full";
         let mut application_name = DEFAULT_APPLICATION_NAME.to_owned();
         let mut extras: Vec<(String, String)> = Vec::new();
 
@@ -152,6 +153,12 @@ impl ConnectSpec {
         }
         if user.is_empty() {
             return Err(OxynError::Config("parameter `user` is required".to_owned()));
+        }
+        if !matches!(sslmode, PgSslMode::VerifyFull) && config.environment != Environment::Local {
+            return Err(OxynError::Config(format!(
+                "`sslmode = {sslmode_name}` is only accepted on a connection marked Local: elsewhere the \
+                 server must be authenticated (`verify-full`)"
+            )));
         }
 
         // `new_without_pgpass` rather than `new`: the latter also reads the
@@ -270,10 +277,10 @@ fn parse_ssl_mode(value: &str) -> Result<(PgSslMode, &'static str)> {
     let pair = match value.to_ascii_lowercase().as_str() {
         "disable" => (PgSslMode::Disable, "disable"),
         "allow" => (PgSslMode::Allow, "allow"),
-        "prefer" | "" => (PgSslMode::Prefer, "prefer"),
+        "prefer" => (PgSslMode::Prefer, "prefer"),
         "require" => (PgSslMode::Require, "require"),
         "verify-ca" | "verify_ca" => (PgSslMode::VerifyCa, "verify-ca"),
-        "verify-full" | "verify_full" => (PgSslMode::VerifyFull, "verify-full"),
+        "verify-full" | "verify_full" | "" => (PgSslMode::VerifyFull, "verify-full"),
         _ => {
             return Err(OxynError::Config(
                 "parameter `sslmode` expects: disable, allow, prefer, require, \
@@ -343,7 +350,66 @@ mod tests {
         assert_eq!(spec.port(), 6543);
         assert_eq!(spec.database(), "shop");
         assert_eq!(spec.user(), "read_request");
-        assert_eq!(spec.ssl_mode(), "prefer");
+        assert_eq!(spec.ssl_mode(), "verify-full");
+    }
+
+    #[test]
+    fn omitted_or_empty_tls_mode_verifies_the_server_in_every_environment() {
+        for config in [
+            config(),
+            config().with_environment(Environment::Production),
+            config().with_environment(Environment::Staging),
+            config().with_environment(Environment::Development),
+            config().with_environment(Environment::Local),
+        ] {
+            for config in [
+                config.clone(),
+                config.clone().with_param("sslmode", ""),
+                config.with_param("ssl_mode", "  "),
+            ] {
+                let spec =
+                    ConnectSpec::from_config(&postgres_metadata(), &config, &Credentials::new())
+                        .expect("the default TLS mode must authenticate the server");
+                assert_eq!(spec.ssl_mode(), "verify-full");
+                assert!(matches!(
+                    spec.options().get_ssl_mode(),
+                    PgSslMode::VerifyFull
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn weaker_tls_modes_are_refused_outside_local() {
+        for config in [
+            config(),
+            config().with_environment(Environment::Production),
+            config().with_environment(Environment::Staging),
+            config().with_environment(Environment::Development),
+        ] {
+            for key in ["sslmode", "ssl_mode"] {
+                for mode in [
+                    "disable",
+                    "allow",
+                    "prefer",
+                    "require",
+                    "verify-ca",
+                    " VERIFY_CA ",
+                ] {
+                    let error = ConnectSpec::from_config(
+                        &postgres_metadata(),
+                        &config.clone().with_param(key, mode),
+                        &Credentials::new(),
+                    )
+                    .expect_err("only Local may weaken server authentication");
+                    let OxynError::Config(message) = error else {
+                        panic!("a weak TLS mode must be a configuration error");
+                    };
+                    assert!(message.contains("verify-full"), "{message}");
+                    assert!(message.contains("Local"), "{message}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -379,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn the_six_libpq_tls_modes_are_accepted() {
+    fn the_six_libpq_tls_modes_are_accepted_locally() {
         for name in [
             "disable",
             "allow",
@@ -388,7 +454,9 @@ mod tests {
             "verify-ca",
             "verify-full",
         ] {
-            let with_mode = config().with_param("sslmode", name);
+            let with_mode = config()
+                .with_environment(Environment::Local)
+                .with_param("sslmode", name);
             let spec =
                 ConnectSpec::from_config(&postgres_metadata(), &with_mode, &Credentials::new())
                     .expect("known mode");
