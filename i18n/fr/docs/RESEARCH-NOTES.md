@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b156429b62a9" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="17f53f3ad48f" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2156,6 +2156,25 @@ Sources : le source installé du registre crates.io et
 consultés le 2026-10-03. PostgreSQL exécute `PROGRAM` sur le serveur de base de
 données et y résout les chemins de fichiers ; `STDOUT` transmet les données par
 la connexion cliente. Aucune base réelle n'a été utilisée pour cette vérification.
+
+## Modes TLS PostgreSQL — vérifiés le 2026-10-03
+
+Pour [ADR-0052](adr/0052-verified-tls-outside-local.md), consultation de la
+[documentation SSL officielle](https://www.postgresql.org/docs/18/libpq-ssl.html),
+sections sur la vérification du certificat et la protection par mode :
+`verify-full` vérifie la chaîne de certificats et le nom d'hôte ; `verify-ca`
+vérifie la chaîne seule. `prefer` ne protège pas contre un intermédiaire actif.
+La politique Oxyn applique ces distinctions à l'environnement de connexion ;
+aucune version de dépendance ne change.
+
+Les sources épinglées du registre et les fonctionnalités du workspace confirment
+aussi le magasin de confiance : `_tls-rustls-aws-lc-rs` de `sqlx-core` active
+`webpki-roots`, et `src/net/tls/tls_rustls.rs::import_root_certs` importe cet
+ensemble embarqué ; `src/io/tls/rustls_io.rs` de `mysql_async` importe aussi
+`webpki_roots::TLS_SERVER_ROOTS`. Aucun driver livré ne sélectionne de
+fonctionnalité de racines système ni ne propose de champ d'autorité par
+connexion. La clé de configuration PostgreSQL `sslrootcert` entre actuellement
+dans les options serveur de `ConnectSpec`.
 
 ## Caractères de déclaration d'agent externe — vérifiés le 2026-10-03
 

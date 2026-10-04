@@ -72,7 +72,7 @@ export const postgresDriver: DriverChoice = {
       },
       required: false,
       secret: false,
-      default: "prefer",
+      default: "verify-full",
       help: null,
     },
   ],

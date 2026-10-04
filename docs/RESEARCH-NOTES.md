@@ -2143,6 +2143,23 @@ Sources: the installed crates.io registry source, and PostgreSQL **18**
 file paths there; `STDOUT` transfers data through the client connection.
 No live database was used for this verification.
 
+## PostgreSQL TLS modes — checked on 2026-10-03
+
+For [ADR-0052](adr/0052-verified-tls-outside-local.md), checked the official
+[SSL support documentation](https://www.postgresql.org/docs/18/libpq-ssl.html),
+sections on certificate verification and protection by mode: `verify-full`
+checks the certificate chain and hostname; `verify-ca` checks the chain alone.
+`prefer` does not protect against an active intermediary. Oxyn's policy applies
+these distinctions to the connection environment; no dependency version changes.
+
+The pinned registry sources and workspace features also confirm the trust store:
+`sqlx-core`'s `_tls-rustls-aws-lc-rs` enables `webpki-roots`, and
+`src/net/tls/tls_rustls.rs::import_root_certs` imports that bundled set;
+`mysql_async`'s `src/io/tls/rustls_io.rs` likewise imports
+`webpki_roots::TLS_SERVER_ROOTS`. Neither shipped driver selects a system-root
+feature or exposes a per-connection CA field. PostgreSQL's `sslrootcert`
+configuration key currently falls into `ConnectSpec`'s server options.
+
 ## External-agent declaration characters — checked 2026-10-03
 
 The Unicode Character Database's [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)

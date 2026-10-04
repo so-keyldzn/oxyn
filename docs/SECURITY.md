@@ -129,6 +129,12 @@ store them, and the file refuses a column list that would contain anything
 other than names. The entry is written **before** the send; if it fails, nothing
 goes out.
 
+## Connection transport
+
+The shared PostgreSQL and MySQL TLS policy is defined in
+[ADR-0052](adr/0052-verified-tls-outside-local.md). It governs driver configuration,
+connection-form defaults and the explicit Local exception.
+
 ## Connection marking
 
 Every connection carries an environment: `local`, `development`, `staging`,

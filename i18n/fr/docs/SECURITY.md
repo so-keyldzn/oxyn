@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="358f13b5bf6f" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="5cf54e4ca0c5" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -137,6 +137,12 @@ conversation. **Jamais une valeur ni un jeton** : il n'y a pas de colonne pour
 les ranger, et le fichier refuse une liste de colonnes qui contiendrait autre
 chose que des noms. L'entrée s'écrit **avant** l'envoi ; si elle échoue, rien
 ne part.
+
+## Transport des connexions
+
+La politique TLS commune à PostgreSQL et MySQL est définie dans
+[ADR-0052](adr/0052-verified-tls-outside-local.md). Elle régit la configuration des drivers,
+les défauts des formulaires de connexion et l’exception Local explicite.
 
 ## Marquage des connexions
 

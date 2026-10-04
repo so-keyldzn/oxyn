@@ -101,7 +101,7 @@
 //!
 //! ```sh
 //! docker run --rm -d -p 5433:5432 -e POSTGRES_PASSWORD=oxyn --name oxyn-pg postgres:17
-//! OXYN_PG_TEST_URL='postgres://postgres:oxyn@localhost:5433/postgres' \
+//! OXYN_PG_TEST_URL='postgres://postgres:oxyn@localhost:5433/postgres?sslmode=disable' \
 //!   cargo test -p oxyn-driver-postgres -- --ignored --test-threads=1
 //! ```
 //!
