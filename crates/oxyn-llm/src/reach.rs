@@ -116,6 +116,8 @@ pub fn literal_reach(url: &Url) -> Option<Reach> {
 /// never be called from the UI thread (I-05), nor from an async task without
 /// going through a blocking pool. It is meant to be called when a provider is
 /// registered and at each change of its configuration, not at each request.
+/// Pass this measurement to [`crate::build_provider`]: classification alone
+/// does not constrain a later DNS answer or the socket.
 #[must_use]
 pub fn resolve_reach(url: &Url) -> Reach {
     if let Some(immediate) = literal_reach(url) {
@@ -175,7 +177,8 @@ pub fn endpoint_reach(base_url: &str) -> Reach {
 ///
 /// A URL can carry a `user:password` pair in its authority part. Copying it
 /// into an error message or a `Debug` is a leak (I-03) — and that is exactly
-/// what the natural display of a [`Url`] does.
+/// what the natural display of a [`Url`] does. Query parameters and fragments
+/// can also carry tokens, so neither is ever shown.
 #[must_use]
 pub fn redacted(url: &Url) -> String {
     let mut clean = url.clone();
@@ -183,6 +186,8 @@ pub fn redacted(url: &Url) -> String {
     // (`data:`, `mailto:`): there is then no credential to remove.
     let _ = clean.set_username("");
     let _ = clean.set_password(None);
+    clean.set_query(None);
+    clean.set_fragment(None);
     clean.to_string()
 }
 

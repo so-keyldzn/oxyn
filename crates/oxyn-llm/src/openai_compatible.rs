@@ -129,14 +129,25 @@ impl OpenAiCompatibleProvider {
     /// replace the last segment and `…/v1` would become `…/chat/completions`
     /// instead of `…/v1/chat/completions`.
     ///
+    /// This unclassified transport performs no DNS measurement. For a
+    /// privacy-gated request, use [`crate::build_provider`] with its measured reach.
+    ///
     /// # Errors
     /// Unreadable URL, or HTTP client impossible to build.
     pub fn new(id: ProviderId, base_url: &str) -> Result<Self> {
+        Self::new_with_reach(id, base_url, crate::Reach::Unresolved)
+    }
+
+    pub(crate) fn new_with_reach(
+        id: ProviderId,
+        base_url: &str,
+        reach: crate::Reach,
+    ) -> Result<Self> {
         let parsed = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
         })?;
-        let client = http::client(&id)?;
+        let client = http::client(&id, &parsed, reach)?;
         Ok(Self {
             base_url: provider::normalize_base_url(parsed),
             api_key: None,

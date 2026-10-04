@@ -2041,7 +2041,7 @@ impl Run<'_> {
         let declaration = provider.clone();
         let transport = tokio::task::spawn_blocking(move || {
             let key = credentials.provider_key(&declaration)?;
-            oxyn_llm::build_provider(declaration.kind, &declaration.base_url, key)
+            oxyn_llm::build_provider(declaration.kind, &declaration.base_url, key, reach)
         })
         .await
         .map_err(|error| setup(format!("preparing the provider: {error}")))?
