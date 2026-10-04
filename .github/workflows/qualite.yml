@@ -247,14 +247,43 @@ jobs:
         if: needs.zones.outputs.rust == 'true'
         # The profile of `.config/nextest.toml` — serialized execution of the
         # driver tests, termination of a hanging test — only applies if nextest
-        # is present. Without this step, `make test` would silently fall back
-        # to `cargo test` and the profile would never be used.
+        # is present. Version and checksums were read from the GitHub release
+        # assets on 2026-10-03 (RESEARCH-NOTES, CI and GitHub delivery).
         run: |
+          # renovate: cargo-nextest
+          version=0.9.146
           case "$RUNNER_OS" in
-            macOS) platform=mac ;;
-            Linux) platform=linux ;;
+            macOS) target=universal-apple-darwin
+                   checksum=39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8 ;;
+            Linux) target=x86_64-unknown-linux-gnu
+                   checksum=682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428 ;;
+            *) echo "Unsupported runner: $RUNNER_OS"; exit 1 ;;
           esac
-          curl -LsSf "https://get.nexte.st/latest/$platform" | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+          archive="cargo-nextest-$version-$target.tar.gz"
+          curl -LsSfO "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/$archive"
+          echo "$checksum  $archive" | shasum -a 256 -c -
+          tar xzf "$archive" -C "${CARGO_HOME:-$HOME/.cargo}/bin" cargo-nextest
+
+      - name: Install cargo-deny
+        if: needs.zones.outputs.rust == 'true'
+        # `make deny` deliberately tolerates a missing local tool, but CI must
+        # exercise licenses and advisories. Version and checksums were read
+        # from the GitHub release assets on 2026-10-03 (RESEARCH-NOTES).
+        run: |
+          # renovate: cargo-deny
+          version=0.20.2
+          case "$RUNNER_OS" in
+            macOS) target=aarch64-apple-darwin
+                   checksum=fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3 ;;
+            Linux) target=x86_64-unknown-linux-musl
+                   checksum=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f ;;
+            *) echo "Unsupported runner: $RUNNER_OS"; exit 1 ;;
+          esac
+          archive="cargo-deny-$version-$target.tar.gz"
+          curl -LsSfO "https://github.com/EmbarkStudios/cargo-deny/releases/download/$version/$archive"
+          echo "$checksum  $archive" | shasum -a 256 -c -
+          tar xzf "$archive" --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-deny-$version-$target/cargo-deny"
+          cargo deny --version
 
       - name: Install cargo-about
         # `front-build` generates the third-party license notices with

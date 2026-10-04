@@ -19,6 +19,10 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import os
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -31,6 +35,7 @@ from verifier_socle import (  # noqa: E402
     _slug,
     fingerprint,
     aggregate_errors,
+    dependency_tool_errors,
     translation_errors,
 )
 
@@ -131,6 +136,55 @@ def ci_failures() -> list[str]:
     return failures
 
 
+def dependency_failures() -> list[str]:
+    """Missing tools must not turn a CI dependency check into a green warning."""
+    failures = []
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/qualite.yml").read_text()
+    if dependency_tool_errors(workflow):
+        failures.append(f"dependency tooling refused: {dependency_tool_errors(workflow)}")
+    start = workflow.index("      - name: Install cargo-deny")
+    end = workflow.index("      - name:", start + 1)
+    install = workflow[start:end]
+    mutations = {
+        "missing install": workflow[:start] + workflow[end:],
+        "unpinned release": workflow.replace(install, re.sub(r"version=\d+\.\d+\.\d+", "version=latest", install)),
+        "missing platform checksum": workflow.replace(install, re.sub(r"checksum=[a-f0-9]{64}", "checksum=invalid", install, count=1)),
+        "Linux-only install": workflow.replace(install, install.replace(
+            "if: needs.zones.outputs.rust == 'true'",
+            "if: runner.os == 'Linux'")),
+        "ignored install failure": workflow.replace(install, install.replace(
+            "        run: |", "        continue-on-error: true\n        run: |")),
+        "late install": workflow[:start] + workflow[end:] + install,
+        "unchecked archive": workflow.replace(install, install.replace(
+            '          echo "$checksum  $archive" | shasum -a 256 -c -\n', '')),
+    }
+    for name, mutated in mutations.items():
+        if not dependency_tool_errors(mutated):
+            failures.append(f"dependency check accepts {name}")
+    with tempfile.TemporaryDirectory() as folder:
+        env = dict(os.environ, PATH=folder)
+        env.pop("CI", None)
+        command = [shutil.which("make"), "--no-print-directory", "-f", str(root / "Makefile"), "deny"]
+        local = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True)
+        if local.returncode or "NOT checked" not in local.stdout:
+            failures.append("missing local cargo-deny no longer warns successfully")
+        for value in ("", "true", "false"):
+            ci = subprocess.run(command, cwd=root, env=dict(env, CI=value), capture_output=True, text=True)
+            if ci.returncode == 0:
+                failures.append(f"missing cargo-deny passes with CI={value!r}")
+        deny = Path(folder) / "cargo-deny"
+        deny.write_text("#!/bin/sh\nexit 0\n")
+        deny.chmod(0o755)
+        cargo = Path(folder) / "cargo"
+        cargo.write_text('#!/bin/sh\n[ "$*" = "deny --all-features check" ] || exit 99\nexit 42\n')
+        cargo.chmod(0o755)
+        rejected = subprocess.run(command, cwd=root, env=dict(env, CI="true"), capture_output=True, text=True)
+        if rejected.returncode == 0 or "Error 42" not in rejected.stderr:
+            failures.append("cargo-deny rejection does not fail make deny")
+    return failures
+
+
 def translation_failures() -> list[str]:
     """A fresh mirror passes; an edited source or a missing header fails."""
     failures = []
@@ -176,10 +230,11 @@ def main() -> int:
 
     failures += ci_failures()
     failures += translation_failures()
+    failures += dependency_failures()
 
     for failure in failures:
         print(f"FAIL  {failure}")
-    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3
+    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 13
     print(f"\n{total - len(failures)}/{total} cases pass")
     return 1 if failures else 0
 

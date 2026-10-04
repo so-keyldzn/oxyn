@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="f5ced11304e7" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b06281e58013" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -207,7 +207,8 @@ pas le tag : un tag se déplace, un SHA non.
 | Node exigé par le front | vite 8.3.0 : `^20.19.0 \|\| >=22.12.0` ; vitest 4.1.11 : `^20.0.0 \|\| ^22.0.0 \|\| >=24.0.0` ; la CI prend la ligne 22, celle de la machine de dev (22.23.2) | champ `engines` des paquets installés | 2026-09-24 |
 | Bibliothèques système de Tauri sous Debian/Ubuntu | `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` | `tauri-apps/tauri-docs`, branche `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` du 2026-08-20 | 2026-09-24 |
 | `keyring` 4.2.0 sous Linux passe par `zbus-secret-service-keyring-store` et `secret-service` 5.2.0 : du Rust pur, sans `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
-| `https://get.nexte.st/latest/linux` redirige vers `cargo-nextest-0.9.146-x86_64-unknown-linux-gnu.tar.gz` | en-tête `location` de la réponse | 2026-09-24 |
+| Binaire CI `cargo-nextest` | `0.9.146` ; SHA-256 `universal-apple-darwin` `39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8` ; SHA-256 `x86_64-unknown-linux-gnu` `682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428` | release GitHub `cargo-nextest-0.9.146` de `nextest-rs/nextest` et ses ressources `.sha256` | 2026-10-03 |
+| Binaire CI `cargo-deny` | `0.20.2` ; SHA-256 `aarch64-apple-darwin` `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3` ; SHA-256 `x86_64-unknown-linux-musl` `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` | release GitHub `0.20.2` d'`EmbarkStudios/cargo-deny` et ses ressources `.sha256` | 2026-10-03 |
 | La CI échouait à chaque poussée depuis au moins le 2026-09-21, en une vingtaine de secondes : pnpm absent du runner, `make qualite` s'arrêtait avant le front | journal du run `36034960589` | 2026-09-24 |
 | Aucune des exécutions de la porte n'avait enregistré de cache Cargo : toutes échouaient, et l'étape « Post Restaurer le cache Cargo » était `skipped`. Seuls les caches pnpm existaient. Sous Linux, les stories prenaient 275 s (1045 tests) avant l'échec | runs `36037137682` et `36036585873`, `GET /actions/caches` | 2026-09-24 |
 | La protection de branche est refusée sur ce dépôt : « Upgrade to GitHub Pro or make this repository public » (403). Rien n'empêche donc de fusionner une PR dont la CI échoue | `GET /repos/so-keyldzn/oxyn/branches/main/protection` | 2026-09-24 |
