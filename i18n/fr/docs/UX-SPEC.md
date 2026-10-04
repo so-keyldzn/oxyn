@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="39d696494550" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="eb2240a8e888" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1279,6 +1279,14 @@ Ce qui ne change pas selon le déclencheur, et que les stories tiennent :
 * **aucune valeur** n'apparaît dans l'écran : il approuve des colonnes, pas un
   aperçu ;
 * hors `Sampled`, l'écran ne montre que le refus, sans case ni bouton d'envoi.
+
+Le choix des colonnes demande au backend d'ouvrir la confirmation native
+d'[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md), qui
+nomme le destinataire enregistré et la lecture approuvée avant toute lecture
+de lignes. Refuser ce dialogue consomme la demande ; une question épinglée
+n'est pas envoyée. Si une autre confirmation native est déjà ouverte, la
+demande reste disponible et l'écran permet une nouvelle décision après
+avoir signalé l'erreur.
 
 **Une demande d'agent se ferme d'elle-même** quand elle est tranchée, expire
 (cinq minutes) ou que la question s'arrête : l'agent reçoit alors « the user

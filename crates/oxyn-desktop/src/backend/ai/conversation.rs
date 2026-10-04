@@ -45,6 +45,7 @@ use super::samples::{self, Grant, Offer, Presented, Recipient, RecipientKind, Sa
 use super::threads::{AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRelease};
 use super::{Backend, check_endpoint};
 use crate::backend::Inner;
+use crate::backend::confirm::text::{self as confirm_text, SampleDescription, SampleDestination};
 use crate::ipc::ai::{
     AgentExit, AgentSettingAnswer, AgentSettingChange, AgentSettingsView, AgentStart, AiEvent,
     AiUpdate, AskRequest, AskStarted, ContextSummary, Cut, Destination, DestinationChoice, Ending,
@@ -851,6 +852,13 @@ impl Backend {
         request: AskRequest,
         channel: Channel<AiUpdate>,
     ) -> Result<AskStarted, IpcError> {
+        // A competing critical dialog refuses without spending this offer.
+        // Reserve before taking it, and hold the slot through the decision.
+        let sample_slot = request
+            .sample
+            .as_ref()
+            .map(|_| self.inner.confirmations.reserve())
+            .transpose()?;
         // Taken out before anything can refuse the question: a grant presented
         // is spent, whether the question starts or not.
         let grant = request
@@ -905,6 +913,60 @@ impl Backend {
                 self.inner.ai.release_agents(connection);
                 return Err(refused);
             }
+        };
+        let confirmed_recipient = if let (Some(approval), Some(grant), Some(slot)) =
+            (&request.sample, &grant, sample_slot)
+        {
+            let (recipient, destination) = match &resolved {
+                Resolved::Provider {
+                    config: provider,
+                    model,
+                    ..
+                } => (
+                    Recipient::provider(
+                        provider.id.clone(),
+                        model.clone(),
+                        classify(&provider.base_url)
+                            .await
+                            .map_err(|failure| IpcError::invalid(failure.message))?,
+                    ),
+                    SampleDestination::Provider(provider.clone()),
+                ),
+                Resolved::Agent(agent) => (
+                    Recipient::agent(agent),
+                    SampleDestination::Agent(agent.clone()),
+                ),
+            };
+            let source = approval.source.to_path()?;
+            let presented = Presented {
+                connection,
+                thread: request.thread.as_deref(),
+                parent: request.parent,
+                source: &source,
+                ticked: &approval.columns,
+                recipient: &recipient,
+            };
+            let (source, columns) =
+                samples::consume(grant.clone(), &presented, Some(config.privacy_tier))
+                    .map_err(|refused| IpcError::invalid(refused.to_string()))?;
+            let description = SampleDescription {
+                source,
+                destination,
+                reach: recipient.reach,
+                rows: samples::MAX_SAMPLE_ROWS,
+            };
+            let confirmation =
+                confirm_text::sample(&config, &description, &columns).ok_or_else(|| {
+                    IpcError::invalid("The sample recipient cannot be confirmed; nothing was sent")
+                })?;
+            if !slot.ask(confirmation).await {
+                return Err(IpcError::invalid(
+                    "Sharing this sample was declined in the native dialog; the question was not sent",
+                ));
+            }
+            Some(recipient)
+        } else {
+            None
         };
         let thread = self
             .inner
@@ -967,18 +1029,11 @@ impl Backend {
             let result = async {
                 // Checked before anything else, whatever the destination: a
                 // refusal reads nothing.
-                let sample = match (&approval, grant) {
-                    (Some(approval), Some(grant)) => {
-                        let recipient = match &resolved {
-                            Resolved::Provider { config, model, .. } => Recipient::provider(
-                                config.id.clone(),
-                                model.clone(),
-                                // Classified again: an address edited since the
-                                // offer must not inherit its approval.
-                                classify(&config.base_url).await?,
-                            ),
-                            Resolved::Agent(agent) => Recipient::agent(agent),
-                        };
+                let sample = match (&approval, grant, confirmed_recipient) {
+                    (Some(approval), Some(grant), Some(recipient)) => {
+                        // Retain the reach the native dialog named. `converse`
+                        // classifies again before sending and refuses a wider
+                        // reach, even when the original offer was remote.
                         let tiers = StoredTier {
                             executor: Arc::clone(&inner.executor),
                             connection,
@@ -1438,18 +1493,46 @@ impl Backend {
     /// columns, or `None` to decline. The call waiting on it reads the rows —
     /// or says « declined » — itself.
     ///
-    /// The only way an agent's request is approved: this is a Tauri command,
-    /// the user's gesture, and nothing an agent sends reaches it.
+    /// The screen selects columns; only the host's native dialog grants the
+    /// read. Another open dialog leaves the request available, while a native
+    /// refusal consumes it. Expiry during the dialog cannot release rows.
     ///
     /// # Errors
     /// The request is unknown, answered, expired or of another connection;
     /// or the columns were not offered — which declines it.
-    pub fn ai_answer_sample(
+    pub async fn ai_answer_sample(
         &self,
         connection: ConnectionId,
         request: &str,
         columns: Option<&[String]>,
     ) -> Result<(), IpcError> {
+        if let Some(columns) = columns {
+            let slot = self.inner.confirmations.reserve()?;
+            let reviewed = self
+                .inner
+                .ai
+                .asks
+                .review(connection, request, columns)
+                .map_err(|refused| IpcError::invalid(refused.to_string()))?;
+            let config = self.read_config(connection).await?;
+            let confirmed =
+                match confirm_text::sample(&config, &reviewed.description, &reviewed.columns) {
+                    Some(confirmation) if config.privacy_tier == PrivacyTier::Sampled => {
+                        slot.ask(confirmation).await
+                    }
+                    _ => false,
+                };
+            return self
+                .inner
+                .ai
+                .asks
+                .answer(
+                    connection,
+                    request,
+                    confirmed.then_some(reviewed.columns.as_slice()),
+                )
+                .map_err(|refused| IpcError::invalid(refused.to_string()));
+        }
         self.inner
             .ai
             .asks
@@ -2011,6 +2094,7 @@ impl Run<'_> {
             Recipient::provider(provider.id.clone(), model.clone(), reach),
             provider.label.clone(),
             format!("{} · {model}", provider.label),
+            SampleDestination::Provider(provider.clone()),
         );
         self.emit(AiEvent::Started {
             destination: Destination {
@@ -2269,6 +2353,7 @@ impl Run<'_> {
                     Recipient::agent(agent),
                     agent.label.clone(),
                     agent.label.clone(),
+                    SampleDestination::Agent(agent.clone()),
                 )),
             }),
             Arc::clone(&observer),

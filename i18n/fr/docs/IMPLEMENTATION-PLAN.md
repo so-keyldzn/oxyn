@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="054dc58a1835" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="8623b8ea16ae" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2140,18 +2140,19 @@ décision, prise pour tous les aperçus et non pour le seul échantillon.
 **Échéance** : avant la porte de sortie de cette phase, et au plus tard le
 2026-10-31.
 
-**Reste à faire, noté le 2026-09-25 — la sortie de lignes vers un agent se
-confirme encore dans la webview.** [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
-décide qu'une écriture en `production`, une sortie de lignes vers un agent et
-un changement de marquage se confirment dans un dialogue natif. Le port
-`HostConfirm` existe (`crates/oxyn-desktop/src/backend/confirm.rs`), et
-`decide`, `decide_connection`, `decide_connection_change` et
-`update_connection` le traversent. Restent la famille 2 — `ai_answer_sample`
-et le champ `sample` d'`ai_ask` accordent toujours sur un simple appel — et
-`ai_save_external_agent`, qui ouvre encore son dialogue sans passer par le
-port. **Ce qui le débloque** : la fin des travaux en cours sur l'assistant
-(`commands/ai.rs`, `backend/ai`), puis un commit par chemin, avec les tests du
-§ 4 de l'ADR. **Échéance** : au plus tard le 2026-10-31.
+**Fait le 2026-10-03 — les échantillons exigent une confirmation native (famille 2).**
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) s'applique
+à `ai_answer_sample` et à un échantillon épinglé dans `ai_ask` : `HostConfirm`
+nomme le destinataire enregistré, la connexion, la relation, les colonnes
+choisies et la limite de lignes avant toute lecture. Un refus consomme la
+demande, n'envoie aucune ligne et n'enregistre aucun `ai_egress` ; la question
+épinglée n'est pas envoyée. Les tests de régression avec un hôte scripté
+couvrent les deux chemins, y compris un libellé trompeur dans la webview.
+
+**Reste à faire, noté le 2026-09-25 — les déclarations d'agents externes utilisent
+le dialogue natif directement.** `ai_save_external_agent` doit rejoindre le
+port `HostConfirm`, avec les tests du § 4 d'ADR-0037 ; suivi par #150.
+**Échéance** : 2026-10-31.
 
 ## Phase 3 bis — Au-delà du relationnel
 

@@ -352,11 +352,13 @@ as for an external agent.
      `ai_answer_sample`; the request identifier never goes to
      the model.
 
-   In the screen, nothing is checked by default, nothing checks everything, and Cancel has
-   the focus. This guarantee holds against the **model**, not against a webview
-   script: such a script can request an offer and present it without
-   showing the screen, but it can already read result pages and paste their
-   values into the question.
+   In the screen, nothing is checked by default, nothing checks everything, and
+   Cancel has the focus. Selecting columns requests a native host confirmation
+   before any row is read ([ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)).
+   Its recipient comes from the stored declaration serving the exchange, never
+   from the screen's label: endpoint host for a provider, command for an agent.
+   Refusal consumes the request and records no egress; a pinned question does
+   not go out. A competing native dialog leaves the decision unconsumed.
 2. **A backend token, single-use.** The offer issues a random token, bound
    to the connection, the conversation, the exchange it follows, the source, the
    proposed columns and the recipient the screen names: provider,
@@ -365,8 +367,10 @@ as for an external agent.
    the connection forgotten. A connection keeps at most four pending tokens:
    beyond that, the oldest is forgotten. The front end receives it without displaying it and
    sends it back. At the question, the backend checks, in this order:
-   - the token, removed as soon as the question arrives, **even on refusal**,
-     including when the question is refused before starting;
+   - the native dialog slot, reserved without consuming the token if another
+     critical confirmation is open;
+   - the token, removed as soon as the question can reserve that slot, **even
+     on refusal**, including when the question is refused before starting;
    - the tier, **re-read from the store** and still `Sampled`;
    - the identical source;
    - the checked columns included in the proposed columns;

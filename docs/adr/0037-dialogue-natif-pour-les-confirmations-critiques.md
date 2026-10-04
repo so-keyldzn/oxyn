@@ -218,9 +218,12 @@ critical and calls the port: the rule lives next to the configuration it reads.
 
 The port is only awaited from an asynchronous context: the plugin draws the
 dialog through `run_on_main_thread`, and a synchronous Tauri command runs on
-that thread ([I-05](../../CLAUDE.md#i-05)). `ai_answer_sample` stays
-synchronous — it hands the columns to the waiting agent call — and it is **that
-call**, on its task, that opens the dialog before reading.
+that thread ([I-05](../../CLAUDE.md#i-05)). `ai_answer_sample` is asynchronous: it
+reserves the host dialog before consuming the request, composes its body from
+the stored request and the declaration serving the exchange, and only hands
+the columns to the waiting agent call after native approval. That call still
+reads through the bus. Expiry or cancellation while the dialog is open leaves
+no answer capable of releasing rows.
 
 What is tested, without a window or `MockRuntime`:
 

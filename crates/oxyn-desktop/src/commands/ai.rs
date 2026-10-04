@@ -246,21 +246,23 @@ pub fn ai_withdraw_sample(
 /// ticked, or `null` to decline. The **only** way such a request is approved
 /// (ADR-0034): the agent's call waits on it, and does the read itself.
 ///
-/// In memory only, and synchronous for that: it hands the answer to the call
-/// waiting on it and returns — the read runs on that call's task.
+/// The native confirmation is awaited off the UI thread before the answer
+/// reaches the waiting call, which then performs the read through the bus.
 #[tauri::command]
-pub fn ai_answer_sample(
+pub async fn ai_answer_sample(
     webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     request: String,
     columns: Option<Vec<String>>,
 ) -> Result<(), IpcError> {
-    backend.ai_answer_sample(
-        assistant(&backend, &webview, &connection)?,
-        &request,
-        columns.as_deref(),
-    )
+    backend
+        .ai_answer_sample(
+            assistant(&backend, &webview, &connection)?,
+            &request,
+            columns.as_deref(),
+        )
+        .await
 }
 
 #[tauri::command]

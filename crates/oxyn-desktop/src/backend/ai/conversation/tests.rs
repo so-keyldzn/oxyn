@@ -1274,6 +1274,7 @@ fn the_effort_asked_for_travels_with_the_provider_it_was_asked_for() {
 }
 
 mod approved_samples {
+    mod native_confirmation;
     use super::*;
     use std::collections::VecDeque;
 
@@ -1929,11 +1930,13 @@ mod approved_samples {
             },
             "which plans?",
         ));
-        started
-            .map_err(|error| error.message)
-            .expect("the question starts");
-        let events = ending(&fixture, &received);
-        assert!(events.contains("another provider"), "{events}");
+        let refused = started.expect_err("an invalid sample is refused before the native dialog");
+        assert!(
+            refused.message.contains("another provider"),
+            "{}",
+            refused.message
+        );
+        assert!(received.lock().is_empty(), "the question never started");
         assert_eq!(fixture.reads(), 0, "refused before any read");
         assert!(fixture.egress().is_empty(), "a refusal records no send");
     }
