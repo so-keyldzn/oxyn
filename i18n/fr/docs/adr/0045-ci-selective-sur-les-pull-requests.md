@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="eef9e409a777" -->
+<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="e61246393d68" -->
 
 > Traduction française de [docs/adr/0045-ci-selective-sur-les-pull-requests.md](../../../../docs/adr/0045-ci-selective-sur-les-pull-requests.md). **La version anglaise fait foi.**
 
@@ -78,6 +78,12 @@ et les mises à jour non-fast-forward. Les administrateurs du dépôt peuvent
 contourner ces règles uniquement lors de la fusion d’une pull request
 (`bypass_mode: pull_request`) ; les push directs vers `main` sont refusés à tout
 le monde, y compris aux administrateurs.
+
+**Amendement (2026-10-04).** À la demande du mainteneur, le contournement
+administrateur passe à `bypass_mode: always` : un administrateur peut pousser
+directement sur `main`, si bien qu’un commit dont la CI est rouge peut y arriver
+par ce chemin. Tous les autres ont toujours besoin d’une pull request avec un
+`qualite` vert, et le run complet sur `main` reste le filet de sécurité.
 
 **Sur `push` vers `main` et sur `workflow_dispatch`, tout tourne toujours.**
 `script/zones-ci` renvoie toutes les zones hors de l'événement `pull_request`,

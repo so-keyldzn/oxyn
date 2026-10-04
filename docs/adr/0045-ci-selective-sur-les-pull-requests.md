@@ -74,6 +74,12 @@ non-fast-forward updates. Repository administrators may bypass these rules
 only when merging a pull request (`bypass_mode: pull_request`); direct pushes
 to `main` are refused for everyone, including administrators.
 
+**Amendment (2026-10-04).** At the maintainer's request, the administrator
+bypass is now `bypass_mode: always`: an administrator may push directly to
+`main`, so a commit whose CI is red can reach it that way. Everyone else still
+needs a pull request with a green `qualite`, and the full run on `main` stays
+the safety net.
+
 **On `push` to `main` and on `workflow_dispatch`, everything always runs.**
 `script/zones-ci` returns all areas outside the `pull_request` event, and the
 macOS matrix is added as before. It is the safety net: what a PR wrongly
