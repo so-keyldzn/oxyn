@@ -51,7 +51,7 @@ use oxyn_core::{ExternalAgentConfig, Result};
 /// out-of-bounds lists. Validating **here** rather than only at input time: a
 /// declaration can come from a state file written elsewhere.
 pub fn check_launchable(agent: &ExternalAgentConfig) -> Result<()> {
-    agent.validate()
+    agent.validate_stored_environment()
 }
 
 /// Is this log record one the host must drop, whatever level it was asked for?

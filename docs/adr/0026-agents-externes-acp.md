@@ -5,6 +5,29 @@
 **Clarifies:** [ADR-0023](0023-fournisseurs-declares-et-provenance.md), which
 knew only one mode — an API provider declared with its key.
 
+## Amendment — 2026-10-03: optional environment secrets
+
+The maintainer's decision for issue #154 replaces this ADR's original
+"no key / no secret reference" assumption. Agents may still use their own
+login, but explicitly declared environment credentials are now supported.
+Secret values live in the OS keychain, each under a fresh reference; the local
+SQLite declaration keeps only that reference. Rust enforces token-like names
+as secret regardless of the form's toggle. Non-secret values remain in clear.
+The full storage, migration and failure contract is in
+[SECURITY](../SECURITY.md#external-agent-environment).
+
+Resolution occurs on the blocking pool during spawn preparation, after the
+privacy refusal and before injection into the cleared child environment.
+Replacement/deletion forgets previous entries only after a successful save.
+The form states both storage locations and offers a secret toggle per variable.
+The original decision below remains historical for authentication/storage;
+its ACP, authorization and privacy-tier decisions remain unchanged.
+
+**Exit cost:** converting keychain references requires the host keychain;
+ordinary values and references remain readable JSON without Oxyn (I-11).
+**Reconsider if:** agents gain a credential transport that avoids process
+environment exposure while preserving compatibility and explicit user choice.
+
 ## Context
 
 [ADR-0023](0023-fournisseurs-declares-et-provenance.md) assumes a provider is

@@ -361,6 +361,30 @@ fn refuse_before_launch(
     check_launchable(agent).map_err(|error| ExternalError::Invalid(error.to_string()))
 }
 
+/// Both launch modes use one environment for confinement and the child.
+async fn prepare_launch(
+    agent: &ExternalAgentConfig,
+    tool_url: Option<String>,
+    secrets: Option<Arc<dyn super::spawn::EnvironmentSecrets>>,
+) -> Result<(Option<super::confine::Confinement>, Environment), ExternalError> {
+    let agent = agent.clone();
+    tokio::task::spawn_blocking(move || {
+        let environment = Environment::empty()
+            .with_essentials(|name| std::env::var(name).ok())
+            .with_declared(agent.env.iter().cloned())
+            .with_secrets(&agent, secrets.as_deref())?;
+        let launch = environment.for_confinement(&agent);
+        let confinement = super::confine::confinement_for(&launch, tool_url.as_deref(), || {
+            super::confine::codex_config_layers(&launch)
+        })?;
+        Ok((confinement, environment))
+    })
+    .await
+    .map_err(|_| {
+        ExternalError::Invalid("preparing the agent environment and confinement failed".into())
+    })?
+}
+
 /// What an agent needs to reach Oxyn's tools: the service, and who acts.
 ///
 /// The sink, the panel and the stop are **not** here: they belong to a
@@ -390,17 +414,16 @@ impl ExternalSession {
     /// process exists, since launching one may already reach its service;
     /// [`ExternalError::Invalid`] if the declaration does not validate.
     ///
-    /// Blocks on the file system for Codex, whose configuration it reads: not
-    /// for an async worker — [`Self::launch_with_tools`] reads it off one.
-    pub fn launch(
+    /// Reads configuration and keychain entries on the blocking pool; secrets
+    /// are resolved only after the privacy check permits this launch.
+    pub async fn launch(
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
+        secrets: Option<Arc<dyn super::spawn::EnvironmentSecrets>>,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         refuse_before_launch(agent, tier)?;
-        let confinement = super::confine::confinement_for(agent, None, || {
-            super::confine::codex_config_layers(agent)
-        })?;
-        Self::start_process(agent, tier, None, confinement)
+        let (confinement, environment) = prepare_launch(agent, None, secrets).await?;
+        Self::start_process(agent, tier, None, confinement, environment)
     }
 
     /// The same, plus Oxyn's tools served to the agent on the loopback.
@@ -418,6 +441,7 @@ impl ExternalSession {
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
         tools: ToolBridge,
+        secrets: Option<Arc<dyn super::spawn::EnvironmentSecrets>>,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         // Refused before the port opens, not after: the refusal falls before
         // anything is started (ADR-0026), and a listening socket is something
@@ -428,23 +452,15 @@ impl ExternalSession {
             .map_err(|error| {
                 ExternalError::Invalid(format!("opening the tool endpoint: {error}"))
             })?;
-        // On the blocking pool, not this worker: Codex's configuration may
-        // sit on a network share that stops answering, and the caller holds
-        // the lock every other agent launch waits on (I-05).
-        let confinement = {
-            let agent = agent.clone();
-            let url = endpoint.url().to_owned();
-            tokio::task::spawn_blocking(move || {
-                super::confine::confinement_for(&agent, Some(&url), || {
-                    super::confine::codex_config_layers(&agent)
-                })
-            })
-            .await
-            .map_err(|error| {
-                ExternalError::Invalid(format!("reading the agent's configuration: {error}"))
-            })??
-        };
-        Self::start_process(agent, tier, Some((endpoint, serving)), confinement)
+        let (confinement, environment) =
+            prepare_launch(agent, Some(endpoint.url().to_owned()), secrets).await?;
+        Self::start_process(
+            agent,
+            tier,
+            Some((endpoint, serving)),
+            confinement,
+            environment,
+        )
     }
 
     /// Reads nothing: the confinement is computed by the caller, off any
@@ -457,24 +473,19 @@ impl ExternalSession {
             futures::future::BoxFuture<'static, ()>,
         )>,
         confinement: Option<super::confine::Confinement>,
+        environment: Environment,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         refuse_before_launch(agent, tier)?;
         let tools_in_env = confinement
             .as_ref()
             .is_some_and(|confinement| confinement.tools_in_env);
-        // Only what is named reaches the child. Reading the host here is not a
-        // leak: `with_essentials` looks up the names of `ALWAYS_PASSED` and
-        // ignores the rest.
         // The confinement comes last: a declared variable cannot undo it.
-        let mut environment = Environment::empty()
-            .with_essentials(|name| std::env::var(name).ok())
-            .with_declared(agent.env.iter().cloned())
-            .with_declared(
-                confinement
-                    .iter()
-                    .flat_map(|confinement| confinement.env.iter())
-                    .map(|(name, value)| (*name, value.clone())),
-            );
+        let mut environment = environment.with_declared(
+            confinement
+                .iter()
+                .flat_map(|confinement| confinement.env.iter())
+                .map(|(name, value)| (*name, value.clone())),
+        );
         if let Some((endpoint, _)) = &tools {
             environment = if tools_in_env {
                 // Given to the child, for the configuration that names it:

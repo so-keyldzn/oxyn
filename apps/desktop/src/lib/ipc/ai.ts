@@ -98,6 +98,7 @@ export type ProviderDraft = z.infer<typeof ProviderDraft>
 export const EnvVar = z.object({
   name: z.string(),
   value: z.string(),
+  secret: z.boolean().optional(),
 })
 export type EnvVar = z.infer<typeof EnvVar>
 

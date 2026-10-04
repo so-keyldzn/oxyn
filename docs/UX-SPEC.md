@@ -1539,7 +1539,7 @@ and it is an accepted limit of ADR-0023, not a defect to work around.
 
 The AI screen of the settings declares two kinds of destinations and shows them
 in **one** list: the providers, with their key, and the external agents,
-without a key.
+with optional environment secrets.
 
 A provider is declared by its family, its endpoint, its model and, if the
 endpoint requires it, a key. The key goes to the system keyring; it is neither
@@ -1578,7 +1578,9 @@ the user wanting it:
   one `NAME=value` line per variable; a line without a valid name refuses the
   save rather than being ignored. The values, which are often tokens, go out
   once and leave the screen immediately, whether the save succeeds or not; the
-  list only shows their names.
+  list only shows their names. Each variable has a secret toggle; token-like
+  names are always secret. Help states that secrets go to the system keychain
+  and other values are stored in clear in the local SQLite state.
 
 In both cases, declaring requires **two confirmations**: the screen's button,
 then a **native** dialog box that copies the exact command, environment

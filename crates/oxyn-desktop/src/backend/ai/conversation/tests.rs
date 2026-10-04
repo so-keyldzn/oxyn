@@ -2953,3 +2953,16 @@ mod provider_errors;
 
 /// An external agent's abandoned query stops on a real PostgreSQL server.
 mod server_cancel;
+
+#[test]
+fn a_protected_path_is_searched_only_at_spawn() {
+    let mut declared = agent("oxyn-only-on-protected-path");
+    declared.env_secret_refs.push((
+        "PATH".into(),
+        "oxyn:agent-env:00000000000000000000000000000001".into(),
+    ));
+    assert!(
+        runtime().block_on(locate(&declared)).is_ok(),
+        "defer to the child's resolved PATH"
+    );
+}

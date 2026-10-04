@@ -4,15 +4,9 @@
 //! an agent installed on the machine serves every workspace
 //! ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
 //!
-//! **No secret is written here, and there is no column to write one.** An
-//! external agent carries its own authentication; Oxyn holds none. That is the
-//! difference this mode rests on: the only sure way not to leak a key is not
-//! to have it ([I-03](../../../CLAUDE.md#i-03)).
-//!
-//! `env` is not a place to store a token either — what is there goes into a
-//! process environment, visible in the process table on some systems. The
-//! domain says so in the field's documentation; this module has no way to
-//! check it, and does not invent one.
+//! `env` contains JSON with `plain` pairs and `secret_refs` pairs. Only the
+//! host can move secret values into the OS keychain; this boundary refuses a
+//! token-like name in `plain`. Legacy arrays remain readable for host migration.
 //!
 //! **No reach is persisted**, and this time not because it would be stale as
 //! for a provider: an external agent's reach is **unknowable**. There is
@@ -82,15 +76,21 @@ impl<'a> ExternalAgents<'a> {
     /// names the reason, never the value; [`StoreError::Sqlite`] if the write
     /// fails.
     pub fn save(&self, agent: &ExternalAgentConfig) -> Result<()> {
-        agent.validate().map_err(|error| StoreError::Corrupted {
-            field: "external_agents",
-            detail: error.to_string(),
-        })?;
+        agent
+            .validate_stored_environment()
+            .map_err(|error| StoreError::Corrupted {
+                field: "external_agents",
+                detail: error.to_string(),
+            })?;
         let args = serde_json::to_string(&agent.args).map_err(|error| StoreError::Corrupted {
             field: "external_agents.args",
             detail: error.to_string(),
         })?;
-        let env = serde_json::to_string(&agent.env).map_err(|error| StoreError::Corrupted {
+        let env = serde_json::to_string(&StoredEnvironment {
+            plain: agent.env.clone(),
+            secret_refs: agent.env_secret_refs.clone(),
+        })
+        .map_err(|error| StoreError::Corrupted {
             field: "external_agents.env",
             detail: error.to_string(),
         })?;
@@ -122,8 +122,7 @@ impl<'a> ExternalAgents<'a> {
 
     /// Removes a declaration. Returns `true` if a row disappeared.
     ///
-    /// Erases nothing else. There is no secret to revoke elsewhere: that is
-    /// the point of this mode.
+    /// The host forgets keychain entries only after this deletion succeeds.
     ///
     /// # Errors
     /// [`StoreError::Sqlite`] if the deletion fails.
@@ -135,6 +134,23 @@ impl<'a> ExternalAgents<'a> {
             )?;
             Ok(erased > 0)
         })
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredEnvironment {
+    plain: Vec<(String, String)>,
+    secret_refs: Vec<(String, String)>,
+}
+
+fn read_environment(raw: &str) -> serde_json::Result<StoredEnvironment> {
+    if raw.trim_start().starts_with('[') {
+        serde_json::from_str(raw).map(|plain| StoredEnvironment {
+            plain,
+            secret_refs: Vec::new(),
+        })
+    } else {
+        serde_json::from_str(raw)
     }
 }
 
@@ -156,9 +172,10 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig
         tracing::warn!("external agent row skipped: unreadable identifier");
         return Ok(Ok(None));
     };
+    let legacy_environment = env.trim_start().starts_with('[');
     let (Ok(args), Ok(env)) = (
         serde_json::from_str::<Vec<String>>(&args),
-        serde_json::from_str::<Vec<(String, String)>>(&env),
+        read_environment(&env),
     ) else {
         tracing::warn!(
             agent = %id.as_str(),
@@ -172,14 +189,20 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<Option<ExternalAgentConfig
         label,
         command,
         args,
-        env,
+        env: env.plain,
+        env_secret_refs: env.secret_refs,
         created_at,
         updated_at,
     };
     // A row that would no longer pass the domain's validation — written by a
     // version whose bounds differed — is skipped rather than returned:
     // offering it would make its launch fail later, far from here.
-    if let Err(error) = agent.validate() {
+    let validation = if legacy_environment {
+        agent.validate()
+    } else {
+        agent.validate_stored_environment()
+    };
+    if let Err(error) = validation {
         tracing::warn!(
             agent = %agent.id.as_str(),
             reason = %error,

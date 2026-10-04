@@ -98,7 +98,7 @@ pub mod window_layout;
 
 pub use ai::{
     AiProviderConfig, AiProviderKind, ExternalAgentConfig, MAX_PROVENANCE_BYTES, Provenance,
-    ProviderId, ReasoningBlock, Role, StopReason,
+    ProviderId, ReasoningBlock, Role, StopReason, agent_env_is_secret,
 };
 pub use cancel::CancelToken;
 pub use capabilities::Capabilities;

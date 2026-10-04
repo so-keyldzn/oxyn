@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="a102fa092ac6" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="17b7c33eea30" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -59,6 +59,34 @@ concernés
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le
 fichier avait l'air d'être une simple configuration.
+
+### Environnement des agents externes
+
+Les valeurs secrètes vont dans le trousseau du système, sous une nouvelle
+référence `oxyn:agent-env:<identifiant aléatoire>` par valeur et enregistrement.
+Rust impose le trousseau pour `*_API_KEY`, `*_TOKEN`, `*_SECRET`, les noms
+contenant `PASSWORD` et les noms seuls `API_KEY`, `TOKEN`, `SECRET`, sans tenir
+compte de la casse. L'utilisateur peut marquer toute autre variable secrète.
+Les autres valeurs restent en clair. `external_agents.env` est du JSON lisible :
+`plain` contient les paires nom/valeur et `secret_refs` les paires nom/référence.
+Les références ne retournent jamais à la webview.
+
+Les valeurs sont résolues sur le pool bloquant uniquement lors de la préparation
+du lancement, après le contrôle de confidentialité, puis injectées dans
+l'environnement vidé du processus enfant. Une entrée absente ou une erreur du
+trousseau refuse le lancement, sans repli en clair. L'agent reçoit ces identifiants
+pour s'authentifier ; ils ne rejoignent jamais un prompt IA. Debug et les rapports
+d'erreur du processus les masquent, même les valeurs courtes explicitement secrètes.
+
+Le remplacement écrit de nouvelles entrées avant l'enregistrement par le bus ;
+seul un enregistrement ou une suppression réussi permet d'oublier les anciennes.
+Un échec peut laisser des entrées inaccessibles dans le trousseau, jamais écraser
+une ancienne valeur. Les anciens tableaux JSON restent lisibles : la première
+liste transfère les noms de jetons au trousseau, sur le pool bloquant, avant de
+proposer un agent. Un échec refuse la liste. Cette mise à niveau change les lignes actives ; les
+anciennes pages SQLite, fichiers WAL, sauvegardes et copies peuvent encore contenir
+la valeur. Renouveler les jetons précédemment stockés invalide ces copies. Les
+noms sensibles non reconnus doivent être marqués secrets en remplaçant la déclaration.
 
 ### La clé de signature des mises à jour
 

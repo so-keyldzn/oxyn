@@ -25,6 +25,8 @@
 
 mod catalog_fill;
 mod conversation;
+#[cfg(test)]
+mod environment_tests;
 mod mentions;
 mod persistence;
 mod samples;
@@ -241,9 +243,17 @@ impl Backend {
         &self,
         draft: AgentDraft,
     ) -> Result<Option<ExternalAgent>, IpcError> {
-        let agent = self.review_external_agent(&draft).await?;
+        let mut agent = self.review_external_agent(&draft).await?;
+        let names: std::collections::BTreeSet<String> = draft
+            .env
+            .iter()
+            .filter(|var| var.secret)
+            .map(|var| var.name.trim().to_owned())
+            .collect();
+        // Confirmed before the keychain is touched, so a refusal leaves no
+        // entry behind; a secret value is named in the dialog, never shown.
         if !self
-            .confirm_external_agent(&agent, draft.id.is_some())
+            .confirm_external_agent(&masked_secrets(&agent, &names), draft.id.is_some())
             .await?
         {
             return Ok(None);
@@ -253,10 +263,26 @@ impl Backend {
         if draft.id.is_some() {
             self.review_external_agent(&draft).await?;
         }
+        let previous = self
+            .declared_agents()
+            .await?
+            .into_iter()
+            .find(|old| old.id == agent.id);
+        let credentials = Arc::clone(&self.inner.credentials);
+        agent = tokio::task::spawn_blocking(move || {
+            credentials.protect_agent_environment(&mut agent, &names)?;
+            agent.validate_stored_environment()?;
+            Ok::<_, oxyn_core::OxynError>(agent)
+        })
+        .await
+        .map_err(|_| IpcError::invalid("the agent keychain task failed"))??;
         self.dispatch_ai(Command::SaveExternalAgent {
             agent: Box::new(agent.clone()),
         })
         .await?;
+        if let Some(previous) = previous {
+            self.forget_agent_secrets(previous).await;
+        }
         tokio::task::spawn_blocking(move || agent_view(&agent))
             .await
             .map(Some)
@@ -328,11 +354,19 @@ impl Backend {
         .map_err(|error| IpcError::invalid(format!("looking for the agent: {error}")))
     }
 
-    /// Removes an external agent. There is no key to forget.
+    /// Removes an external agent, then forgets its environment secrets.
     pub async fn remove_external_agent(&self, id: &str) -> Result<(), IpcError> {
         let id = parse_provider_id(id)?;
+        let previous = self
+            .declared_agents()
+            .await?
+            .into_iter()
+            .find(|agent| agent.id == id);
         self.dispatch_ai(Command::RemoveExternalAgent { id })
             .await?;
+        if let Some(previous) = previous {
+            self.forget_agent_secrets(previous).await;
+        }
         Ok(())
     }
 
@@ -372,12 +406,36 @@ impl Backend {
     }
 
     pub(crate) async fn declared_agents(&self) -> Result<Vec<ExternalAgentConfig>, IpcError> {
-        match self.dispatch_ai(Command::ListExternalAgents).await? {
-            Outcome::ExternalAgentsListed { agents } => Ok(agents),
-            _ => Err(IpcError::invalid(
+        let _migration = self.inner.ai.environment_migration.lock().await;
+        let Outcome::ExternalAgentsListed { mut agents } =
+            self.dispatch_ai(Command::ListExternalAgents).await?
+        else {
+            return Err(IpcError::invalid(
                 "Listing the external agents gave an unexpected answer",
-            )),
+            ));
+        };
+        for agent in &mut agents {
+            if agent
+                .env
+                .iter()
+                .any(|(name, _)| oxyn_core::agent_env_is_secret(name))
+            {
+                let credentials = Arc::clone(&self.inner.credentials);
+                let mut upgraded = agent.clone();
+                upgraded = tokio::task::spawn_blocking(move || {
+                    credentials.protect_agent_environment(&mut upgraded, &Default::default())?;
+                    Ok::<_, oxyn_core::OxynError>(upgraded)
+                })
+                .await
+                .map_err(|_| IpcError::invalid("the agent keychain migration task failed"))??;
+                self.dispatch_ai(Command::SaveExternalAgent {
+                    agent: Box::new(upgraded.clone()),
+                })
+                .await?;
+                *agent = upgraded;
+            }
         }
+        Ok(agents)
     }
 
     /// A human dispatch whose outcome carries data the generic
@@ -394,6 +452,21 @@ impl Backend {
         }
     }
 
+    async fn forget_agent_secrets(&self, agent: ExternalAgentConfig) {
+        let credentials = Arc::clone(&self.inner.credentials);
+        let result = tokio::task::spawn_blocking(move || {
+            for (_, reference) in agent.env_secret_refs {
+                if credentials.forget_agent_secret(&reference).is_err() {
+                    tracing::warn!("orphan agent secret left in the keychain");
+                }
+            }
+        })
+        .await;
+        if result.is_err() {
+            tracing::warn!("agent keychain cleanup task failed");
+        }
+    }
+
     async fn forget_provider_key(&self, reference: String) {
         let credentials = Arc::clone(&self.inner.credentials);
         match tokio::task::spawn_blocking(move || credentials.forget_provider_key(&reference)).await
@@ -406,6 +479,32 @@ impl Backend {
         }
     }
 }
+
+/// The declaration as the confirmation dialog shows it: a value bound for the
+/// keychain appears as `<keychain>`, so a typed token is never drawn on screen
+/// ([I-03](../../../../CLAUDE.md#i-03)), while its name still tells the user
+/// what the program receives.
+fn masked_secrets(
+    agent: &ExternalAgentConfig,
+    secret_names: &std::collections::BTreeSet<String>,
+) -> ExternalAgentConfig {
+    let mut shown = agent.clone();
+    for (name, value) in &mut shown.env {
+        if oxyn_core::agent_env_is_secret(name) || secret_names.contains(name.as_str()) {
+            *value = KEYCHAIN_PLACEHOLDER.to_owned();
+        }
+    }
+    let stored = std::mem::take(&mut shown.env_secret_refs);
+    shown.env.extend(
+        stored
+            .into_iter()
+            .map(|(name, _)| (name, KEYCHAIN_PLACEHOLDER.to_owned())),
+    );
+    shown
+}
+
+/// What the dialog shows in place of a secret environment value.
+const KEYCHAIN_PLACEHOLDER: &str = "<keychain>";
 
 /// The declaration a draft describes.
 ///
