@@ -12,6 +12,20 @@ The real progress is in
 [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) — this README does
 not duplicate it, because a copy of the progress is stale the next day.
 
+## Interface and demos
+
+![Oxyn SQL workspace with revenue results from a synthetic SQLite database](assets/demo/screenshots/sql-workspace.jpg)
+
+Explore the [screenshot gallery and demo videos](assets/demo/README.md):
+
+- [Explore a database](assets/demo/videos/explore-database.mp4): browse rows,
+  inspect columns and read the table definition.
+- [Run a revenue query](assets/demo/videos/run-query.mp4): execute SQL and inspect
+  the results.
+
+Recorded in **Oxyn 0.0.3 for macOS** with a temporary workspace and
+[reproducible synthetic data](assets/demo/seed.sql).
+
 ## What the repository contains
 
 15 crates in a single Cargo workspace: `crates/` for the core, the interface and

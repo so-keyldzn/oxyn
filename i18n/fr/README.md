@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="README.md" sha256="70a632ad3c71" -->
+<!-- oxyn-translation source="README.md" sha256="627c6f188e28" -->
 
 > Traduction française de [README.md](../../README.md). **La version anglaise fait foi.**
 
@@ -16,6 +16,20 @@ Le périmètre et les principes font autorité dans [docs/VISION.md](docs/VISION
 L'état d'avancement réel est dans
 [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) — ce README ne le
 duplique pas, parce qu'une copie de l'avancement est périmée le lendemain.
+
+## Interface et démonstrations
+
+![Console SQL Oxyn et résultats de chiffre d’affaires issus d’une base SQLite fictive](../../assets/demo/screenshots/sql-workspace.jpg)
+
+Consultez la [galerie de captures et les vidéos de démonstration](assets/demo/README.md) :
+
+- [Explorer une base](../../assets/demo/videos/explore-database.mp4) : parcourir les
+  lignes, inspecter les colonnes et lire la définition de la table.
+- [Exécuter une requête de chiffre d’affaires](../../assets/demo/videos/run-query.mp4) :
+  exécuter du SQL et inspecter les résultats.
+
+Enregistrements réalisés dans **Oxyn 0.0.3 pour macOS**, avec un workspace
+temporaire et des [données fictives reproductibles](../../assets/demo/seed.sql).
 
 ## Ce que le dépôt contient
 
