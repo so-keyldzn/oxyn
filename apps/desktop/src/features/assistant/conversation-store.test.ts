@@ -7,7 +7,9 @@ import {
   getAssistant,
   newThread,
   openThread,
+  refreshHistory,
   resumeAssistant,
+  sendQueued,
   withdrawSample,
 } from "./conversation-store"
 import { activePath } from "./thread"
@@ -323,6 +325,203 @@ describe("the assistant store", () => {
     await closeConversation(id)
     expect(backend.forget).toHaveBeenCalledWith(id)
     expect(getAssistant(id).thread.nodes).toHaveLength(0)
+  })
+})
+
+/** A promise the test settles when it chooses to. */
+function deferred<T>() {
+  const gate: {
+    resolve: (value: T) => void
+    reject: (error: unknown) => void
+  } = { resolve: () => {}, reject: () => {} }
+  const promise = new Promise<T>((resolve, reject) => {
+    gate.resolve = resolve
+    gate.reject = reject
+  })
+  return { promise, ...gate }
+}
+
+function summary(id: string): ThreadSummary {
+  return {
+    id,
+    title: id,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    exchanges: 1,
+    running: false,
+  }
+}
+
+describe("leaving a conversation while a call is in flight", () => {
+  it("does not keep the next one sending, whichever way it is left", async () => {
+    const id = connection()
+    const asked = deferred<AskStarted>()
+    backend.ask.mockReturnValue(asked.promise)
+
+    const sending = askQuestion(id, target, "slow")
+    expect(getAssistant(id).sending).toBe(true)
+    newThread(id)
+    expect(getAssistant(id).sending).toBe(false)
+    asked.resolve({ thread: "7", node: 0 })
+    await sending
+    expect(getAssistant(id).sending).toBe(false)
+    expect(getAssistant(id).thread.nodes).toHaveLength(0)
+
+    const again = deferred<AskStarted>()
+    backend.ask.mockReturnValue(again.promise)
+    backend.openThread.mockResolvedValue({
+      id: "3",
+      title: "Other",
+      nodes: [],
+      selections: [],
+      running: null,
+    } satisfies ThreadView)
+    const second = askQuestion(id, target, "slow again")
+    await openThread(id, "3")
+    expect(getAssistant(id).sending).toBe(false)
+    again.resolve({ thread: "7", node: 0 })
+    await second
+    expect(getAssistant(id).thread.id).toBe("3")
+  })
+
+  it("does not show a refusal meant for the conversation left", async () => {
+    const id = connection()
+    const asked = deferred<AskStarted>()
+    backend.ask.mockReturnValue(asked.promise)
+
+    const sending = askQuestion(id, target, "slow")
+    newThread(id)
+    asked.reject(new Error("This session is no longer open"))
+    await expect(sending).rejects.toThrow("no longer open")
+    expect(getAssistant(id).askError).toBeNull()
+    expect(getAssistant(id).sending).toBe(false)
+  })
+})
+
+describe("opening a conversation", () => {
+  it("applies the events that beat its snapshot to it, not to the one shown", async () => {
+    const id = connection()
+    // The conversation shown has a node 0 too, already answered.
+    backend.ask.mockImplementation(
+      async (_request: unknown, onUpdate: (update: AiUpdate) => void) => {
+        onUpdate({ node: 0, event: { kind: "textDelta", text: "old" } })
+        onUpdate(answered)
+        return { thread: "7", node: 0 } satisfies AskStarted
+      }
+    )
+    await askQuestion(id, target, "shown one")
+    const shown = activePath(getAssistant(id).thread)[0]?.exchange
+
+    const opened = deferred<ThreadView>()
+    const captured: { stream?: (update: AiUpdate) => void } = {}
+    backend.openThread.mockImplementation(
+      (
+        _connection: string,
+        _id: string,
+        onUpdate: (update: AiUpdate) => void
+      ) => {
+        captured.stream = onUpdate
+        return opened.promise
+      }
+    )
+    const opening = openThread(id, "3")
+    // The backend attached the new channel with its snapshot, then streamed.
+    captured.stream?.({ node: 0, event: { kind: "textDelta", text: "live" } })
+    expect(activePath(getAssistant(id).thread)[0]?.exchange).toBe(shown)
+
+    opened.resolve({
+      id: "3",
+      title: "Running one",
+      nodes: [
+        {
+          id: 0,
+          parent: null,
+          question: "q",
+          mentions: [],
+          events: [{ kind: "textDelta", text: "snapshot " }],
+        },
+      ],
+      selections: [],
+      running: 0,
+    })
+    await opening
+    // Nothing lost, nothing twice: what came after the snapshot follows it.
+    expect(
+      activePath(getAssistant(id).thread)[0]?.exchange.entries
+    ).toMatchObject([{ kind: "answer", text: "snapshot live" }])
+  })
+})
+
+describe("the history", () => {
+  it("keeps the newest list when two requests cross", async () => {
+    const id = connection()
+    const older = deferred<Array<ThreadSummary>>()
+    const newer = deferred<Array<ThreadSummary>>()
+    backend.threads
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise)
+
+    const first = refreshHistory(id)
+    const second = refreshHistory(id)
+    newer.resolve([summary("new")])
+    await second
+    older.resolve([summary("old")])
+    await first
+    expect(getAssistant(id).history).toMatchObject({
+      status: "ready",
+      items: [{ id: "new" }],
+    })
+  })
+
+  it("writes nothing into a connection closed meanwhile", async () => {
+    const id = connection()
+    const listed = deferred<Array<ThreadSummary>>()
+    backend.threads.mockReturnValueOnce(listed.promise)
+
+    const pending = refreshHistory(id)
+    await closeConversation(id)
+    listed.resolve([summary("gone")])
+    expect(await pending).toBeNull()
+    expect(getAssistant(id).history).toStrictEqual({ status: "idle" })
+  })
+})
+
+describe("a queued message the backend refuses", () => {
+  it("goes back first in line, the refusal shown, and leaves when sent again", async () => {
+    const id = connection()
+    const captured: { stream?: (update: AiUpdate) => void } = {}
+    backend.ask.mockImplementationOnce(
+      async (_request: unknown, onUpdate: (update: AiUpdate) => void) => {
+        captured.stream = onUpdate
+        return { thread: "7", node: 0 } satisfies AskStarted
+      }
+    )
+    await askQuestion(id, target, "first")
+    await askQuestion(id, target, "then this one")
+
+    // The run said it finished before the backend took questions again.
+    backend.ask.mockRejectedValueOnce(
+      new Error("This conversation is still answering")
+    )
+    captured.stream?.(answered)
+    await vi.waitFor(() =>
+      expect(getAssistant(id).askError).toBe(
+        "This conversation is still answering"
+      )
+    )
+    expect(getAssistant(id).thread.queue).toMatchObject([
+      { text: "then this one" },
+    ])
+    expect(getAssistant(id).sending).toBe(false)
+
+    backend.ask.mockResolvedValueOnce({ thread: "7", node: 1 })
+    const key = getAssistant(id).thread.queue[0]?.key ?? ""
+    await sendQueued(id, key)
+    expect(getAssistant(id).thread.queue).toHaveLength(0)
+    expect(backend.ask.mock.calls.at(-1)?.[0]).toMatchObject({
+      question: "then this one",
+      parent: 0,
+    })
   })
 })
 

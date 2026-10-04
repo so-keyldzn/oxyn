@@ -9,7 +9,8 @@ import type { QueuedMessage } from "@/features/assistant/thread"
  *
  * They leave when the run ends — one at a time, as follow-ups. A queued
  * message never answers a pending approval: only the review does. After a
- * failure they wait for the user, who reads the failure first.
+ * failure they wait for the user, who reads the failure first; after a
+ * refusal of the next one too — nothing would send them on its own.
  */
 export function AssistantQueue({
   queue,
@@ -18,8 +19,11 @@ export function AssistantQueue({
   onRemove,
 }: {
   queue: ReadonlyArray<QueuedMessage>
-  /** The last run failed: nothing leaves on its own. */
-  held: boolean
+  /**
+   * Why nothing leaves on its own: the last run failed, or the backend
+   * refused the next message. `null` while they wait for the run to end.
+   */
+  held: "failed" | "refused" | null
   onSendNow: (key: string) => void
   onRemove: (key: string) => void
 }) {
@@ -37,9 +41,11 @@ export function AssistantQueue({
           className="size-3.5"
           aria-hidden
         />
-        {held
+        {held === "failed"
           ? "Queued · the last answer failed, so these wait for you."
-          : "Queued · sent when the current answer ends. They approve nothing."}
+          : held === "refused"
+            ? "Queued · the next one was not sent, so these wait for you."
+            : "Queued · sent when the current answer ends. They approve nothing."}
       </p>
       <ol className="flex flex-col gap-1">
         {queue.map((message, index) => (

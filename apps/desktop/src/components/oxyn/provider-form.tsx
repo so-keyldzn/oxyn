@@ -242,7 +242,9 @@ export function ProviderForm({
                   field.handleChange(event.target.value as Kind)
                 }
               >
-                {KINDS.map((entry) => (
+                {KINDS.filter(
+                  (entry) => entry.offered || entry.kind === field.state.value
+                ).map((entry) => (
                   <NativeSelectOption key={entry.kind} value={entry.kind}>
                     {entry.label}
                   </NativeSelectOption>
