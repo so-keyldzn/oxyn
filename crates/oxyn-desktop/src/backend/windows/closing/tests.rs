@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use oxyn_core::{CommandId, ConnectionId, Environment, SessionId};
+use oxyn_secrets::{MemorySecretStore, SecretStore};
+use oxyn_store::Store;
 use parking_lot::Mutex;
 use serde_json::Value;
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -470,6 +472,47 @@ fn an_approval_pending_in_a_closed_window_is_rejected() {
         },
     ));
     assert!(read.is_err(), "the rejected write did not run: {read:?}");
+}
+
+#[test]
+fn a_connection_pending_in_a_closed_window_leaves_no_secret_entry() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let secrets = Arc::new(MemorySecretStore::new());
+    let backend = Backend::assemble(
+        Arc::new(Store::open_in_memory().expect("temporary store")),
+        Arc::clone(&secrets) as Arc<dyn SecretStore>,
+    )
+    .expect("temporary backend");
+    let window = backend.reserve_window(false).expect("a window");
+    let draft = ConnectionDraft {
+        driver: "sqlite".into(),
+        name: "pending".into(),
+        environment: Environment::Production,
+        privacy_tier: oxyn_core::PrivacyTier::Metadata,
+        read_only: false,
+        values: [("path".to_owned(), ":memory:".to_owned())].into(),
+        secrets: [("password".to_owned(), "not-a-real-password".to_owned())].into(),
+    };
+    let ConnectResponse::Approval { command, .. } = runtime
+        .block_on(backend.connect(CommandId::new(), draft))
+        .expect("the policy holds creation")
+    else {
+        panic!("a production connection waits for approval");
+    };
+    let command = command.parse().expect("command id");
+    backend
+        .inner
+        .windows
+        .claim_command(window, command)
+        .expect("free");
+
+    runtime.block_on(backend.release_window(window));
+    assert!(
+        backend.inner.executor.approvals().peek(command).is_none(),
+        "rejected with its window"
+    );
+    assert!(secrets.is_empty(), "a window close writes no secret");
 }
 
 #[test]

@@ -234,6 +234,10 @@ pub enum MutationRisk {
     Truncate,
     /// `DROP` of an object: the structure goes with the data.
     DropObject,
+    /// `COPY TO` a file on the database server, outside transaction rollback.
+    CopyToServerFile,
+    /// `COPY FROM/TO PROGRAM`: shell execution on the database server.
+    CopyServerProgram,
 }
 
 impl MutationRisk {
@@ -252,6 +256,8 @@ impl MutationRisk {
             Self::UnboundedDelete => Some("DELETE without a WHERE clause: every row"),
             Self::Truncate => Some("TRUNCATE: the table is emptied"),
             Self::DropObject => Some("DROP: the object and its data are removed"),
+            Self::CopyToServerFile => Some("COPY: writes a file on the database server"),
+            Self::CopyServerProgram => Some("COPY: runs a program on the database server"),
         }
     }
 }
@@ -554,6 +560,8 @@ mod tests {
             MutationRisk::UnboundedDelete,
             MutationRisk::Truncate,
             MutationRisk::DropObject,
+            MutationRisk::CopyToServerFile,
+            MutationRisk::CopyServerProgram,
         ] {
             assert!(risque.is_some());
             assert!(risque.reason().is_some(), "{risque:?} without a reason");

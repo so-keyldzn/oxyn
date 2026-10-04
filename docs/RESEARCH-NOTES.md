@@ -2111,6 +2111,23 @@ and the row inserted before them is there after `COMMIT`, on all three
 servers. `mysql_async` forgets the last OK packet on an error packet
 (`handle_err`, `src/conn/mod.rs:313`): the driver asks again with `COM_PING`.
 
+
+## COPY destinations and classification — checked 2026-10-03
+
+The registry source of `sqlparser` **0.62.0**, pinned in `Cargo.lock`, defines
+`CopyTarget::{Stdin, Stdout, File { filename }, Program { command }}` in
+`src/ast/mod.rs`; `Statement::Copy` carries both `to` and `target`.
+Only a `TO STDOUT` destination exports to the client without a server-side
+file or program effect. The classification treats file exports and program
+execution as writes with dedicated approval reasons; rejected COPY syntax
+remains `Unknown`, hence mutating.
+
+Sources: the installed crates.io registry source, and PostgreSQL **18**
+[`COPY`](https://www.postgresql.org/docs/18/sql-copy.html), checked on
+2026-10-03. PostgreSQL executes `PROGRAM` on the database server and resolves
+file paths there; `STDOUT` transfers data through the client connection.
+No live database was used for this verification.
+
 ## External-agent declaration characters — checked 2026-10-03
 
 The Unicode Character Database's [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
