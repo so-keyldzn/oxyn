@@ -2142,3 +2142,13 @@ Sources: the installed crates.io registry source, and PostgreSQL **18**
 2026-10-03. PostgreSQL executes `PROGRAM` on the database server and resolves
 file paths there; `STDOUT` transfers data through the client connection.
 No live database was used for this verification.
+
+## External-agent declaration characters — checked 2026-10-03
+
+The Unicode Character Database's [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+was checked for general categories `Cf`, `Zl` and `Zp`. They include U+2028,
+U+2029, bidi controls and zero-width format characters that `char::is_control`
+does not reject. `ExternalAgentConfig::validate` rejects these ranges in every
+text field, alongside the existing invisible-character ranges used by native
+confirmations. The 4,096-byte command/argument bounds are Oxyn product limits,
+not operating-system limits; no dependency was added.

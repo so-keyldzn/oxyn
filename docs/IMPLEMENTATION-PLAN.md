@@ -2142,9 +2142,15 @@ before any row is read. Refusal consumes the request, sends no rows and records
 no `ai_egress`; a pinned question is not sent. Scripted-host regression tests
 cover both paths, including a misleading webview label.
 
-**Still to do, noted on 2026-09-25 — external agent declarations use the native
-dialog directly.** `ai_save_external_agent` must join the `HostConfirm` port,
-with the tests of ADR-0037 § 4; tracked by #150. **Deadline**: 2026-10-31.
+**Done on 2026-10-03 — external-agent declarations use `HostConfirm` (#150).**
+`save_external_agent` validates the declaration, asks the host through the shared
+port, and only then sends `SaveExternalAgent` through the bus. The one-second
+guard, five-minute deadline and single-dialog exclusion apply to declarations
+and replacements. The dialog uses escaped, bounded values and constant button
+labels. A declaration whose full escaped dialog exceeds 4,096 bytes is refused,
+never abbreviated. Validation refuses control, format and line/paragraph separator characters
+in every field and bounds the command and each argument to 4,096 UTF-8 bytes.
+Scripted host tests cover premature approval, refusal, expiry and contention.
 
 ## Phase 3 bis — Beyond the relational
 

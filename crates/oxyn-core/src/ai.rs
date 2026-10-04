@@ -525,6 +525,12 @@ fn validate_base_url(raw: &str) -> Result<()> {
 /// on opening.
 pub const MAX_AGENT_ARGS: usize = 32;
 
+/// Product bound on a command shown in a native declaration confirmation.
+pub const MAX_AGENT_COMMAND_BYTES: usize = 4096;
+
+/// Product bound on each argument, independently of the argument count.
+pub const MAX_AGENT_ARGUMENT_BYTES: usize = 4096;
+
 /// How many environment variables an agent declaration can carry.
 pub const MAX_AGENT_ENV: usize = 32;
 
@@ -587,6 +593,24 @@ pub struct ExternalAgentConfig {
     pub updated_at: DateTime<Utc>,
 }
 
+// A declaration must stay readable wherever it is shown, not just in the host
+// dialog. Cf/Zl/Zp ranges were checked against UnicodeData.txt on 2026-10-03
+// (RESEARCH-NOTES); also refuse the invisible fillers used by dialog escaping.
+fn obscures_agent_declaration(character: char) -> bool {
+    character.is_control()
+        || matches!(character,
+            '\u{00AD}' | '\u{034F}' | '\u{0600}'..='\u{0605}' | '\u{061C}'
+            | '\u{06DD}' | '\u{070F}' | '\u{0890}'..='\u{0891}' | '\u{08E2}'
+            | '\u{115F}'..='\u{1160}' | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}'
+            | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}'
+            | '\u{FFA0}' | '\u{FFF9}'..='\u{FFFB}' | '\u{110BD}' | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}' | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}' | '\u{E0000}'..='\u{E0FFF}'
+        )
+}
+
 impl ExternalAgentConfig {
     /// Declares an external agent, dated now.
     #[must_use]
@@ -613,8 +637,8 @@ impl ExternalAgentConfig {
     /// Checks what must be checked **before** the declaration reaches the disk.
     ///
     /// # Errors
-    /// [`OxynError::Config`]: empty name or command, control character in the
-    /// name, the command, an argument or an environment variable, lists out of
+    /// [`OxynError::Config`]: empty name or command, control or invisible character in the
+    /// name, the command, an argument or an environment variable, fields or lists out of
     /// bounds, environment variable without a name. No message copies the
     /// faulty value.
     pub fn validate(&self) -> Result<()> {
@@ -627,26 +651,37 @@ impl ExternalAgentConfig {
         // asks the user to read. A newline or two there pushes the real
         // command out of view — and the declaration can come from any script
         // running in the webview.
-        if self.label.chars().any(char::is_control) {
+        if self.label.chars().any(obscures_agent_declaration) {
             return Err(OxynError::Config(
-                "agent label must not contain control characters".into(),
+                "agent label must not contain control or invisible characters".into(),
             ));
         }
         if self.command.trim().is_empty() {
             return Err(OxynError::Config("agent command must be nonempty".into()));
         }
+        if self.command.len() > MAX_AGENT_COMMAND_BYTES
+            || self
+                .args
+                .iter()
+                .any(|arg| arg.len() > MAX_AGENT_ARGUMENT_BYTES)
+        {
+            return Err(OxynError::Config(
+                "agent command and each argument must fit 4096 UTF-8 bytes".into(),
+            ));
+        }
         // A control character in a command or an argument has no legitimate
         // use, and it makes everything that displays the declaration unreadable
         // — the same reason that makes us refuse a catalog level name carrying
         // a control character.
-        if self.command.chars().any(char::is_control)
+        if self.command.chars().any(obscures_agent_declaration)
             || self
                 .args
                 .iter()
-                .any(|arg| arg.chars().any(char::is_control))
+                .any(|arg| arg.chars().any(obscures_agent_declaration))
         {
             return Err(OxynError::Config(
-                "agent command and arguments must not contain control characters".into(),
+                "agent command and arguments must not contain control or invisible characters"
+                    .into(),
             ));
         }
         if self.args.len() > MAX_AGENT_ARGS {
@@ -658,10 +693,12 @@ impl ExternalAgentConfig {
             ));
         }
         if self.env.iter().any(|(name, _)| {
-            name.trim().is_empty() || name.contains('=') || name.chars().any(char::is_control)
+            name.trim().is_empty()
+                || name.contains('=')
+                || name.chars().any(obscures_agent_declaration)
         }) {
             return Err(OxynError::Config(
-                "agent environment variable names must be nonempty and free of '=' and control \
+                "agent environment variable names must be nonempty and free of '=' and control or invisible \
                  characters"
                     .into(),
             ));
@@ -684,10 +721,10 @@ impl ExternalAgentConfig {
         if self
             .env
             .iter()
-            .any(|(_, value)| value.chars().any(char::is_control))
+            .any(|(_, value)| value.chars().any(obscures_agent_declaration))
         {
             return Err(OxynError::Config(
-                "agent environment variable values must not contain control characters".into(),
+                "agent environment variable values must not contain control or invisible characters".into(),
             ));
         }
         Ok(())
@@ -789,6 +826,49 @@ mod tests {
         // pair, and the password field will follow.
         config.base_url = "https://alice@api.example.com/v1".to_owned();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invisible_characters_are_refused_in_every_agent_field() {
+        for character in [
+            '\u{2028}',
+            '\u{2029}',
+            '\u{202E}',
+            '\u{2066}',
+            '\u{200B}',
+            '\u{0600}',
+            '\u{13430}',
+        ] {
+            for field in 0..5 {
+                let mut agent =
+                    ExternalAgentConfig::new(ProviderId::for_new_agent(), "Agent", "agent");
+                let hostile = format!("before{character}after");
+                match field {
+                    0 => agent.label = hostile,
+                    1 => agent.command = hostile,
+                    2 => agent.args = vec![hostile],
+                    3 => agent.env = vec![(hostile, "value".to_owned())],
+                    _ => agent.env = vec![("MODE".to_owned(), hostile)],
+                }
+                assert!(
+                    agent.validate().is_err(),
+                    "{character:?} accepted in field {field}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn agent_command_and_each_argument_are_bounded_in_utf8_bytes() {
+        let mut agent =
+            ExternalAgentConfig::new(ProviderId::for_new_agent(), "Agent", "é".repeat(2048));
+        agent.args = vec!["é".repeat(2048)];
+        assert!(agent.validate().is_ok());
+        agent.command.push('x');
+        assert!(agent.validate().is_err(), "command above 4096 bytes");
+        agent.command = "agent".to_owned();
+        agent.args[0].push('x');
+        assert!(agent.validate().is_err(), "argument above 4096 bytes");
     }
 
     /// Environment **values** are checked, not only the names.

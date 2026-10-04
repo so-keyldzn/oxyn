@@ -235,21 +235,31 @@ impl Backend {
         Ok(models.into_iter().map(model_choice).collect())
     }
 
-    /// Declares an external agent.
-    ///
-    /// The caller has already had the user confirm the exact command in a
-    /// native dialog: declaring an agent is declaring a program Oxyn will run
-    /// ([`crate::commands::ai::ai_save_external_agent`]).
-    pub async fn save_external_agent(&self, draft: AgentDraft) -> Result<ExternalAgent, IpcError> {
-        // Reviewed again: the agent it replaces may have been removed while
-        // the dialog was open, and a replacement must not bring it back.
+    /// Declares an external program only after the host confirms it.
+    /// A refusal, premature approval or expiry leaves the declaration untouched.
+    pub async fn save_external_agent(
+        &self,
+        draft: AgentDraft,
+    ) -> Result<Option<ExternalAgent>, IpcError> {
         let agent = self.review_external_agent(&draft).await?;
+        if !self
+            .confirm_external_agent(&agent, draft.id.is_some())
+            .await?
+        {
+            return Ok(None);
+        }
+        // A replacement must not revive an agent removed while the dialog was
+        // open. Persist the reviewed configuration, not a new draft or id.
+        if draft.id.is_some() {
+            self.review_external_agent(&draft).await?;
+        }
         self.dispatch_ai(Command::SaveExternalAgent {
             agent: Box::new(agent.clone()),
         })
         .await?;
         tokio::task::spawn_blocking(move || agent_view(&agent))
             .await
+            .map(Some)
             .map_err(|error| IpcError::invalid(format!("reading the agent: {error}")))
     }
 
@@ -259,7 +269,7 @@ impl Backend {
     /// nothing, and a label full of newlines hides the command below it.
     ///
     /// A draft naming an agent replaces it, which must still be declared.
-    pub async fn review_external_agent(
+    async fn review_external_agent(
         &self,
         draft: &AgentDraft,
     ) -> Result<ExternalAgentConfig, IpcError> {
@@ -976,6 +986,7 @@ mod tests {
             let declared = backend
                 .save_external_agent(agent_draft(None, "/old/codex-acp"))
                 .await
+                .expect("decision answered")
                 .expect("declared");
 
             backend

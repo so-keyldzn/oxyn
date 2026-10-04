@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="1fdc5a8317d8" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b156429b62a9" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2156,3 +2156,15 @@ Sources : le source installé du registre crates.io et
 consultés le 2026-10-03. PostgreSQL exécute `PROGRAM` sur le serveur de base de
 données et y résout les chemins de fichiers ; `STDOUT` transmet les données par
 la connexion cliente. Aucune base réelle n'a été utilisée pour cette vérification.
+
+## Caractères de déclaration d'agent externe — vérifiés le 2026-10-03
+
+Le fichier [UnicodeData.txt](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+de la base Unicode a été vérifié pour les catégories générales `Cf`, `Zl` et
+`Zp`. Elles comprennent U+2028, U+2029, les contrôles bidirectionnels et les
+caractères de format de largeur nulle que `char::is_control` ne refuse pas.
+`ExternalAgentConfig::validate` refuse ces plages dans chaque champ textuel,
+ainsi que les plages de caractères invisibles déjà utilisées par les
+confirmations natives. Les bornes de 4 096 octets pour la commande et les
+arguments sont des limites produit Oxyn, pas celles du système d'exploitation ;
+aucune dépendance n'a été ajoutée.

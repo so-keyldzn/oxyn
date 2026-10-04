@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="d3f79df9c643" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="a759cd930297" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2148,10 +2148,18 @@ demande, n'envoie aucune ligne et n'enregistre aucun `ai_egress` ; la question
 épinglée n'est pas envoyée. Les tests de régression avec un hôte scripté
 couvrent les deux chemins, y compris un libellé trompeur dans la webview.
 
-**Reste à faire, noté le 2026-09-25 — les déclarations d'agents externes utilisent
-le dialogue natif directement.** `ai_save_external_agent` doit rejoindre le
-port `HostConfirm`, avec les tests du § 4 d'ADR-0037 ; suivi par #150.
-**Échéance** : 2026-10-31.
+**Fait le 2026-10-03 — les déclarations d'agents externes passent par `HostConfirm` (#150).**
+`save_external_agent` valide la déclaration, interroge l'hôte par le port partagé,
+puis envoie `SaveExternalAgent` par le bus. Le délai minimal d'une seconde,
+l'échéance de cinq minutes et l'exclusion des dialogues simultanés s'appliquent
+aux déclarations et remplacements. Le dialogue utilise des valeurs échappées et
+bornées ainsi que des libellés de boutons constants. Une déclaration dont le
+dialogue échappé complet dépasse 4 096 octets est refusée, jamais abrégée.
+La validation refuse les
+caractères de contrôle, de format et les séparateurs de ligne/paragraphe dans
+chaque champ et borne la commande et chaque argument à 4 096 octets UTF-8.
+Les tests d'hôte scripté couvrent l'accord prématuré, le refus, l'expiration et
+la concurrence.
 
 ## Phase 3 bis — Au-delà du relationnel
 
