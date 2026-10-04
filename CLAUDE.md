@@ -196,7 +196,7 @@ included, goes through `make qualite` — called by CI
 ([.github/workflows/qualite.yml](.github/workflows/qualite.yml)) in parallel
 jobs, which adds no check of its own and which `make socle` verifies misses
 none. On a pull request, it skips the jobs whose area — Rust, front end — is not
-touched, and the aggregate `qualite` job is the only check to read; on `main`,
+touched, and the aggregate `qualite` job is the required check; on `main`,
 everything always runs
 ([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md)):
 
