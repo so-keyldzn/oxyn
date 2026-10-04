@@ -8,9 +8,23 @@
 //!
 //! A tool call does not arrive in one block: the name comes in one frame, the
 //! arguments in a dozen fragments, and the fragments of several calls are
-//! **interleaved**. The only thing that links them is the `index` field. A
-//! decoder that concatenated in order of arrival would produce a JSON mixing
-//! two calls — and the model would have asked for two distinct actions.
+//! **interleaved**. What links them is the `index` field and, on the first
+//! fragment, the `id`. A decoder that concatenated in order of arrival would
+//! produce a JSON mixing two calls — and the model would have asked for two
+//! distinct actions.
+//!
+//! Neither key is enough alone. Some gateways omit `index`, others give every
+//! call the same one; only the first fragment carries the `id`. So a fragment
+//! continues the call of the same `id` if there is one; otherwise the last
+//! call of the same `index` — or the last call at all when there is no
+//! `index` —, **unless** that call already has another `id`: a new `id` is a
+//! new call, whatever the `index` says. Merging them produced one call with
+//! the two names glued together and the arguments `{…}{…}`, which parses as
+//! nothing.
+//!
+//! The index the events carry is the call's position in the turn, never the
+//! server's `index`: two calls that share a server `index` must not share a
+//! card.
 //!
 //! # When `Done` is emitted
 //!
@@ -46,8 +60,6 @@
 //! without anything being emitted. At the first overrun, the generation stops:
 //! see [`crate::budget`].
 
-use std::collections::BTreeMap;
-
 use super::wire::{self, ChatChunk, DeltaToolCall};
 use crate::budget::{BudgetExceeded, GenerationBudget};
 use crate::sse::SseFrame;
@@ -67,16 +79,23 @@ pub(crate) const MAX_DECODE_ERRORS: usize = 8;
 /// A tool call being reassembled.
 #[derive(Debug, Default)]
 struct PartialCall {
+    /// The server's `index`, when it gives one: a lookup key, not an
+    /// identity.
+    wire_index: Option<u32>,
+    /// The server's `id`, when it gave one.
     id: Option<String>,
     name: String,
     arguments: String,
-    started: bool,
+    /// The identifier announced by `ToolCallStarted`, once it is.
+    started: Option<String>,
 }
 
 /// State of an OpenAI-compatible completion stream.
 #[derive(Debug, Default)]
 pub(crate) struct ChunkDecoder {
-    calls: BTreeMap<u32, PartialCall>,
+    /// In order of first appearance: the position is the call's index in the
+    /// events.
+    calls: Vec<PartialCall>,
     budget: GenerationBudget,
     stop: Option<StopReason>,
     done: bool,
@@ -273,15 +292,27 @@ impl ChunkDecoder {
         raw: DeltaToolCall,
         out: &mut Vec<ChatEvent>,
     ) -> Result<(), BudgetExceeded> {
-        let index = raw.index;
-        if !self.calls.contains_key(&index) {
-            // A new index is a new call: it is the one the ceiling on the
-            // number of calls counts, before the state exists.
-            self.budget.open_tool_call()?;
-        }
-        let entry = self.calls.entry(index).or_default();
+        let id = raw.id.filter(|value| !value.is_empty());
+        let position = match self.continued(raw.index, id.as_deref()) {
+            Some(position) => position,
+            None => {
+                // A new call: it is the one the ceiling on the number of
+                // calls counts, before the state exists.
+                self.budget.open_tool_call()?;
+                self.calls.push(PartialCall {
+                    wire_index: raw.index,
+                    ..PartialCall::default()
+                });
+                self.calls.len().saturating_sub(1)
+            }
+        };
+        // The ceiling on the number of calls keeps the position far below.
+        let index = u32::try_from(position).unwrap_or(u32::MAX);
+        let Some(entry) = self.calls.get_mut(position) else {
+            return Ok(());
+        };
 
-        if let Some(id) = raw.id.filter(|value| !value.is_empty())
+        if let Some(id) = id
             && entry.id.is_none()
         {
             self.budget.charge(id.len())?;
@@ -305,10 +336,9 @@ impl ChunkDecoder {
             }
         }
 
-        if !entry.started && !entry.name.is_empty() {
+        if entry.started.is_none() && !entry.name.is_empty() {
             let id = entry.id.clone().unwrap_or_else(|| synthetic_id(index));
-            entry.id = Some(id.clone());
-            entry.started = true;
+            entry.started = Some(id.clone());
             let name = entry.name.clone();
             out.push(ChatEvent::ToolCallStarted { index, id, name });
         }
@@ -319,12 +349,36 @@ impl ChunkDecoder {
         Ok(())
     }
 
+    /// The position of the call a fragment continues, or `None` when it opens
+    /// a new one. See the module note for the rule.
+    fn continued(&self, index: Option<u32>, id: Option<&str>) -> Option<usize> {
+        if let Some(id) = id
+            && let Some(same) = self
+                .calls
+                .iter()
+                .rposition(|call| call.id.as_deref() == Some(id))
+        {
+            return Some(same);
+        }
+        let candidate = match index {
+            Some(index) => self
+                .calls
+                .iter()
+                .rposition(|call| call.wire_index == Some(index))?,
+            None => self.calls.len().checked_sub(1)?,
+        };
+        match (id, self.calls.get(candidate)?.id.as_deref()) {
+            (Some(new), Some(known)) if new != known => None,
+            _ => Some(candidate),
+        }
+    }
+
     /// Throws away the tool calls without an end announcement, reporting it.
     ///
     /// A call that disappears silently would let the user believe the model
     /// asked for nothing.
     fn discard_calls(&mut self, out: &mut Vec<ChatEvent>) {
-        for (index, partial) in std::mem::take(&mut self.calls) {
+        for (index, partial) in std::mem::take(&mut self.calls).into_iter().enumerate() {
             if !partial.name.is_empty() || !partial.arguments.is_empty() {
                 out.push(ChatEvent::Error(format!(
                     "tool call #{index} was not finished by the provider and was dropped"
@@ -335,25 +389,29 @@ impl ChunkDecoder {
 
     /// Closes all gathered tool calls, on an end announcement.
     fn flush_calls(&mut self, out: &mut Vec<ChatEvent>) {
-        for (index, partial) in std::mem::take(&mut self.calls) {
+        for (position, partial) in std::mem::take(&mut self.calls).into_iter().enumerate() {
+            let index = u32::try_from(position).unwrap_or(u32::MAX);
             if partial.name.is_empty() {
                 out.push(ChatEvent::Error(format!(
                     "tool call #{index} has no name and was dropped"
                 )));
                 continue;
             }
-            let id = partial.id.unwrap_or_else(|| synthetic_id(index));
-            if !partial.started {
-                out.push(ChatEvent::ToolCallStarted {
-                    index,
-                    id: id.clone(),
-                    name: partial.name.clone(),
-                });
-            }
-            match wire::build_tool_call(id, partial.name, &partial.arguments) {
-                Ok(call) => out.push(ChatEvent::ToolCallComplete(call)),
-                Err(message) => out.push(ChatEvent::Error(message)),
-            }
+            // The identifier already announced wins: the card and the result
+            // must name the same call.
+            let id = match partial.started {
+                Some(announced) => announced,
+                None => {
+                    let id = partial.id.unwrap_or_else(|| synthetic_id(index));
+                    out.push(ChatEvent::ToolCallStarted {
+                        index,
+                        id: id.clone(),
+                        name: partial.name.clone(),
+                    });
+                    id
+                }
+            };
+            out.push(wire::tool_call_event(id, partial.name, &partial.arguments));
         }
     }
 }
@@ -568,6 +626,72 @@ mod tests {
     }
 
     #[test]
+    fn calls_without_index_are_told_apart_by_their_identifier() {
+        // A gateway that omits `index`: defaulting it to 0 glued the names
+        // into `lireecrire` and the arguments into `{"t":1}{"u":2}`.
+        let events = play(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"id":"a","function":{"name":"lire","arguments":"{\"t\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"1}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"ecrire","arguments":"{\"u\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"2}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]);
+
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 2, "{events:?}");
+        assert_eq!(
+            (complete[0].id.as_str(), complete[0].name.as_str()),
+            ("a", "lire")
+        );
+        assert_eq!(complete[0].arguments, serde_json::json!({"t": 1}));
+        assert_eq!(
+            (complete[1].id.as_str(), complete[1].name.as_str()),
+            ("b", "ecrire")
+        );
+        assert_eq!(complete[1].arguments, serde_json::json!({"u": 2}));
+        assert!(events.contains(&ChatEvent::ToolCallStarted {
+            index: 1,
+            id: "b".to_owned(),
+            name: "ecrire".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn a_reused_index_with_another_identifier_is_another_call() {
+        // A gateway that numbers every call 0: the second `id` used to be
+        // ignored, and its call merged into the first.
+        let events = play(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"lire","arguments":"{}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b","function":{"name":"ecrire","arguments":"{\"u\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"2}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            DONE_SENTINEL,
+        ]);
+
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 2, "{events:?}");
+        assert_eq!(complete[0].id, "a");
+        assert_eq!(complete[0].name, "lire");
+        assert_eq!(complete[0].arguments, serde_json::json!({}));
+        assert_eq!(complete[1].id, "b");
+        assert_eq!(complete[1].name, "ecrire");
+        assert_eq!(complete[1].arguments, serde_json::json!({"u": 2}));
+    }
+
+    #[test]
+    fn an_identifier_repeated_on_every_fragment_stays_one_call() {
+        // Some servers repeat the `id` on each fragment: it is the same call.
+        let events = play(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"lire","arguments":"{\"t\":"}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"arguments":"1}"}}]}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ]);
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 1, "{events:?}");
+        assert_eq!(complete[0].arguments, serde_json::json!({"t": 1}));
+    }
+
+    #[test]
     fn a_call_without_identifier_receives_one() {
         // Ollama and llama.cpp omit `id`.
         let events = play(&[
@@ -592,19 +716,36 @@ mod tests {
     }
 
     #[test]
-    fn invalid_arguments_produce_an_error_and_not_a_call() {
+    fn invalid_arguments_are_an_invalid_call_and_the_sibling_stands() {
         // A model sometimes produces broken JSON. Emitting a call with null
-        // arguments would be a silent lie.
+        // arguments would be a silent lie; failing the turn would throw away
+        // the valid call next to it.
         let events = play(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"execute","arguments":"{\"sql\": "}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"d","function":{"name":"lister","arguments":"{}"}}]}}]}"#,
             r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+            DONE_SENTINEL,
         ]);
-        assert!(calls(&events).is_empty(), "{events:?}");
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 1, "{events:?}");
+        assert_eq!(complete[0].id, "d");
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, ChatEvent::Error(m) if m.contains("execute"))),
+            events.iter().any(|e| matches!(
+                e,
+                ChatEvent::ToolCallInvalid { id, name, detail }
+                    if id == "c" && name == "execute" && detail.contains("truncated JSON")
+            )),
             "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "not a stream error: {events:?}"
+        );
+        assert_eq!(
+            events.last(),
+            Some(&ChatEvent::Done {
+                stop_reason: StopReason::ToolCalls
+            })
         );
     }
 

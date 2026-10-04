@@ -14,7 +14,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ChatRequest, Cost, ModelInfo, Support, ToolCall};
+use crate::types::{ChatEvent, ChatRequest, Cost, ModelInfo, Support, ToolCall};
 
 /// Currency in which OpenRouter publishes its prices.
 ///
@@ -229,10 +229,12 @@ pub(crate) struct Delta {
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct DeltaToolCall {
-    /// Order number of the call in the turn. It is **the** reassembly key: the
-    /// fragments of one call arrive interleaved with those of the others.
+    /// Order number of the call in the turn: the fragments of one call arrive
+    /// interleaved with those of the others. Optional, and not defaulted to
+    /// `0`: a gateway that omits it would see all its calls merged into the
+    /// first. The decoder pairs it with `id` (see its module note).
     #[serde(default)]
-    pub(crate) index: u32,
+    pub(crate) index: Option<u32>,
     #[serde(default)]
     pub(crate) id: Option<String>,
     #[serde(default)]
@@ -490,27 +492,29 @@ pub(crate) fn parse_models(response: ModelsResponse) -> Vec<ModelInfo> {
 
 /// Rebuilds a complete tool call from its fragments.
 ///
-/// # Errors
-/// Returns the parse error message — **without** the arguments string, which
-/// is a model output and can copy what it was given.
-pub(crate) fn build_tool_call(
-    id: String,
-    name: String,
-    arguments: &str,
-) -> Result<ToolCall, String> {
+/// Unreadable arguments do not lose the call: it becomes
+/// [`ChatEvent::ToolCallInvalid`](crate::types::ChatEvent::ToolCallInvalid),
+/// which the caller answers with a rejection, and the turn's other calls stand.
+pub(crate) fn tool_call_event(id: String, name: String, arguments: &str) -> ChatEvent {
     let raw = arguments.trim();
     if raw.is_empty() {
         // A tool without parameters: the model sometimes sends nothing at all.
-        return Ok(ToolCall::new(id, name, serde_json::json!({})));
+        return ChatEvent::ToolCallComplete(ToolCall::new(id, name, serde_json::json!({})));
     }
     match serde_json::from_str::<serde_json::Value>(raw) {
-        Ok(value) => Ok(ToolCall::new(id, name, value)),
-        Err(err) => Err(format!(
-            "cannot read the arguments of tool `{name}`: {} (line {}, column {})",
-            classify_label(&err),
-            err.line(),
-            err.column()
-        )),
+        Ok(value) => ChatEvent::ToolCallComplete(ToolCall::new(id, name, value)),
+        // The arguments string is not copied: it is a model output, and can
+        // copy what the model was given.
+        Err(err) => ChatEvent::ToolCallInvalid {
+            id,
+            name,
+            detail: format!(
+                "the arguments are not valid JSON: {} (line {}, column {})",
+                classify_label(&err),
+                err.line(),
+                err.column()
+            ),
+        },
     }
 }
 
@@ -711,23 +715,29 @@ mod tests {
 
     #[test]
     fn missing_arguments_count_as_an_empty_object() {
-        let call = build_tool_call("c1".to_owned(), "ping".to_owned(), "  ")
-            .expect("a tool without parameters is legitimate");
+        let ChatEvent::ToolCallComplete(call) =
+            tool_call_event("c1".to_owned(), "ping".to_owned(), "  ")
+        else {
+            panic!("a tool without parameters is legitimate");
+        };
         assert_eq!(call.arguments, serde_json::json!({}));
     }
 
     #[test]
-    fn truncated_arguments_produce_an_error_without_copying_them() {
-        let error = build_tool_call(
+    fn truncated_arguments_keep_the_call_without_copying_them() {
+        let event = tool_call_event(
             "c1".to_owned(),
             "execute".to_owned(),
             r#"{"sql": "SELECT secret FROM"#,
-        )
-        .expect_err("truncated JSON");
-        assert!(error.contains("execute"), "{error}");
+        );
+        let ChatEvent::ToolCallInvalid { id, name, detail } = &event else {
+            panic!("truncated JSON is an invalid call: {event:?}");
+        };
+        assert_eq!((id.as_str(), name.as_str()), ("c1", "execute"));
+        assert!(detail.contains("truncated JSON"), "{detail}");
         assert!(
-            !error.contains("secret"),
-            "the model output must not be copied: {error}"
+            !format!("{event:?}").contains("secret"),
+            "the model output must not be copied: {event:?}"
         );
     }
 
