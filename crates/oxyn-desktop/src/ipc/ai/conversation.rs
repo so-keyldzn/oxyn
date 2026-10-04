@@ -43,7 +43,8 @@ pub struct AskRequest {
     pub parent: Option<u32>,
     pub question: String,
     pub destination: DestinationChoice,
-    /// A row sample the user approved for **this** question, if any.
+    /// Columns selected for **this** question, if any. This IPC field grants
+    /// nothing: the backend requires native confirmation before reading rows.
     #[serde(default)]
     pub sample: Option<SampleApproval>,
     /// The objects the user named with `@`, in the order they were typed.

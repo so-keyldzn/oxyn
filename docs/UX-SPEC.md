@@ -1222,6 +1222,13 @@ What does not change depending on the trigger, and what the stories hold:
 * outside `Sampled`, the screen only shows the refusal, without a checkbox or a
   send button.
 
+Selecting columns asks the backend to open the native confirmation of
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md), naming
+the recorded recipient and the approved read before any row is read. Refusing
+that dialog consumes the request; a pinned question is not sent. If another
+native confirmation is already open, the request remains available and the
+selection screen allows another decision after reporting the error.
+
 **An agent's request closes by itself** when it is decided, expires (five
 minutes) or the question stops: the agent then receives "the user declined". A
 user's pin goes first: the agent's request waits behind it. The tool call reads

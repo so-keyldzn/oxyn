@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="aed2577e6989" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="6222113653e1" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -817,9 +817,14 @@ Quatre règles gouvernent cette table, et leur **ordre** compte :
    pouvoir dégrader la protection. Une connexion sans environnement renseigné vaut
    `production` ([I-02](../CLAUDE.md#i-02)).
 4. **Le risque prime sur l'acteur dans le choix du motif.** Un `MutationRisk` non nul
-   — `UnboundedUpdate`, `UnboundedDelete`, `Truncate`, `DropObject` — déclenche
-   l'approbation avec **son** motif, parce que « `DELETE` sans `WHERE` » se lit mieux
-   que « écriture par un agent ».
+   — `UnboundedUpdate`, `UnboundedDelete`, `Truncate`, `DropObject`,
+   `CopyToServerFile`, `CopyServerProgram` — déclenche l'approbation avec **son**
+   motif dans tous les environnements, y compris pour un humain hors production,
+   sauf si les règles précédentes refusent déjà la commande. `COPY TO` vers un
+   fichier serveur et `COPY FROM/TO PROGRAM` demandent donc confirmation même en
+   local : ils écrivent un fichier ou exécutent un programme sur le serveur de
+   base de données. `COPY TO STDOUT` reste une lecture. Le motif dédié explique
+   mieux l'effet que « écriture par un agent ».
 
 Deux compléments, hors de la table :
 

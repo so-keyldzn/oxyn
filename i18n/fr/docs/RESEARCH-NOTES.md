@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="5916fc332fe1" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="193befae4a28" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2124,3 +2124,20 @@ du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
 sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
 paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
 par `COM_PING`.
+
+
+## Destinations de COPY et classification — vérifié le 2026-10-03
+
+Le source du registre de `sqlparser` **0.62.0**, verrouillé dans `Cargo.lock`,
+définit `CopyTarget::{Stdin, Stdout, File { filename }, Program { command }}`
+dans `src/ast/mod.rs` ; `Statement::Copy` porte `to` et `target`.
+Seule une destination `TO STDOUT` exporte vers le client sans effet sur un
+fichier ou un programme du serveur. La classification traite les exports vers
+un fichier et l'exécution d'un programme comme des écritures avec des motifs
+d'approbation dédiés ; une syntaxe COPY refusée reste `Unknown`, donc mutante.
+
+Sources : le source installé du registre crates.io et
+[`COPY`](https://www.postgresql.org/docs/18/sql-copy.html) de PostgreSQL **18**,
+consultés le 2026-10-03. PostgreSQL exécute `PROGRAM` sur le serveur de base de
+données et y résout les chemins de fichiers ; `STDOUT` transmet les données par
+la connexion cliente. Aucune base réelle n'a été utilisée pour cette vérification.
