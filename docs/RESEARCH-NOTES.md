@@ -2202,3 +2202,24 @@ does not reject. `ExternalAgentConfig::validate` rejects these ranges in every
 text field, alongside the existing invisible-character ranges used by native
 confirmations. The 4,096-byte command/argument bounds are Oxyn product limits,
 not operating-system limits; no dependency was added.
+
+## Idle streams — checked on 2026-10-04
+
+Question: does a provider promise to send something at a known interval while
+the model thinks silently, so that a bound on silence could follow it? The
+answer sets the idle bounds of
+[AI-PROVIDERS](AI-PROVIDERS.md#a-silent-provider).
+
+| Fact | Source | Checked on |
+|---|---|---|
+| Anthropic sends `ping` events "in any number"; no interval is given | [Streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), recorded above in "SSE stream" | 2026-09-16 |
+| Anthropic: "Some networks may drop idle connections after a variable period of time"; streaming or batches are advised for long requests, "especially those over 10 minutes", and a TCP keep-alive for direct integrations. No interval for `ping` there either | [Claude API errors § Long requests](https://platform.claude.com/docs/en/api/errors#long-requests) | 2026-10-04 |
+| llama.cpp sends `:` SSE keep-alive comments; no interval was recorded | recorded above in "End of stream on local OpenAI-compatible servers" | 2026-09-16 |
+| OpenAI: nothing about keep-alives is recorded in this file, and it was not re-checked | — | — |
+| reqwest **0.13.4** `ClientBuilder::read_timeout`: "applies to each read operation, and resets after a successful read". The same timer also bounds the wait for the response headers (`Pending::poll`); past it, a body read fails with `is_timeout()` | installed sources, `src/async_impl/client.rs`; behavior checked by `crates/oxyn-llm/src/http/idle_tests.rs` | 2026-10-04 |
+
+Consequence retained: there is no published interval to follow. The 300 s
+bound is Oxyn's, long enough for a model that thinks for minutes, and it is
+reset by any byte — a `ping` or a `:` comment counts. The same holds for
+external agents: nothing in this file records how often an adapter reports
+progress, and their bound is a product choice too.
