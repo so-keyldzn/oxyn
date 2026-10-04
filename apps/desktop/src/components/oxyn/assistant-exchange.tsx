@@ -1,3 +1,5 @@
+import * as React from "react"
+
 import {
   AssistantAgentTool,
   AssistantCatalogRead,
@@ -25,8 +27,7 @@ import { AssistantUsage } from "@/components/oxyn/assistant-usage"
 import type { AssistantViewProps } from "@/components/oxyn/assistant-view"
 import { Marker, MarkerContent } from "@/components/ui/marker"
 import { Message, MessageContent } from "@/components/ui/message"
-import { versionsOf } from "@/features/assistant/thread"
-import type { ExchangeNode } from "@/features/assistant/thread"
+import type { ExchangeNode, Versions } from "@/features/assistant/thread"
 import {
   answerText,
   canContinue,
@@ -80,7 +81,24 @@ export function exchangeCost(
   )
 }
 
-function EntryView({
+/**
+ * What an exchange can ask of the panel. The view hands the same object to
+ * every exchange for as long as it is mounted, so an exchange whose node did
+ * not change is not drawn again while another one streams.
+ */
+export interface ExchangeActions {
+  onOpenObject?: AssistantViewProps["onOpenObject"]
+  onEdit: AssistantViewProps["onEdit"]
+  onSelectVersion: AssistantViewProps["onSelectVersion"]
+  onCopy: AssistantViewProps["onCopy"]
+  onOpenInConsole: AssistantViewProps["onOpenInConsole"]
+  onRegenerate: AssistantViewProps["onRegenerate"]
+  onContinue: AssistantViewProps["onContinue"]
+  onSignIn: AssistantViewProps["onSignIn"]
+  onReview: (node: number, entry: ToolCallEntry) => void
+}
+
+const EntryView = React.memo(function EntryView({
   entry,
   openSql,
   openSqlDisabledReason,
@@ -206,28 +224,67 @@ function EntryView({
     case "failed":
       return null
   }
-}
+})
 
-/** One exchange of the shown path: the question, the run, what it offers. */
-export function ExchangeView({
-  node,
-  view,
-  busy,
-  last,
-  cost,
-  onReview,
-}: {
+interface ExchangeViewProps {
   node: ExchangeNode
-  view: AssistantViewProps
+  versions: Versions
   busy: boolean
   last: boolean
   /** The price of **this** exchange's model; `null` shows no cost. */
   cost: ModelCost | null
-  onReview: (node: number, entry: ToolCallEntry) => void
-}) {
+  tier: AssistantViewProps["tier"]
+  signInStates: AssistantViewProps["state"]["signIn"]
+  identifierQuote?: AssistantViewProps["identifierQuote"]
+  renderToolRows?: AssistantViewProps["renderToolRows"]
+  renderErd?: AssistantViewProps["renderErd"]
+  actions: ExchangeActions
+}
+
+// `versions` is computed afresh by each render of the view: equal is enough.
+function sameExchangeProps(
+  before: ExchangeViewProps,
+  after: ExchangeViewProps
+) {
+  const keys = Object.keys({ ...before, ...after }) as Array<
+    keyof ExchangeViewProps
+  >
+  return keys.every((key) =>
+    key === "versions"
+      ? before.versions.position === after.versions.position &&
+        before.versions.count === after.versions.count &&
+        before.versions.previous === after.versions.previous &&
+        before.versions.next === after.versions.next
+      : Object.is(before[key], after[key])
+  )
+}
+
+/** One exchange of the shown path: the question, the run, what it offers. */
+export const ExchangeView = React.memo(function ExchangeView({
+  node,
+  versions,
+  busy,
+  last,
+  cost,
+  tier,
+  signInStates,
+  identifierQuote,
+  renderToolRows,
+  renderErd,
+  actions,
+}: ExchangeViewProps) {
   const exchange: Exchange = node.exchange
   const provenance = exchange.started?.provenance ?? null
   const openSqlDisabledReason = provenance === null ? NO_PROVENANCE : null
+  // Stable while the exchange streams, so the entries already drawn are not.
+  const openSql = React.useCallback(
+    (sql: string) => actions.onOpenInConsole(sql, provenance),
+    [actions, provenance]
+  )
+  const review = React.useCallback(
+    (tool: ToolCallEntry) => actions.onReview(node.id, tool),
+    [actions, node.id]
+  )
   const outcome = outcomeOf(exchange)
   const answer = answerText(exchange)
   const waiting =
@@ -241,12 +298,12 @@ export function ExchangeView({
       <AssistantQuestion
         text={exchange.question}
         mentions={exchange.mentions}
-        onOpenObject={view.onOpenObject}
-        versions={versionsOf(view.state.thread, node)}
+        onOpenObject={actions.onOpenObject}
+        versions={versions}
         busy={busy}
-        onEdit={(text) => view.onEdit(node, text)}
-        onSelectVersion={view.onSelectVersion}
-        onCopy={view.onCopy}
+        onEdit={(text) => actions.onEdit(node, text)}
+        onSelectVersion={actions.onSelectVersion}
+        onCopy={actions.onCopy}
       />
       {/* Before the run: what the agent says it will do. It describes intent,
           not authority — what actually went through the bus is drawn by the
@@ -257,13 +314,13 @@ export function ExchangeView({
           <EntryView
             key={item.key}
             entry={item}
-            openSql={(sql) => view.onOpenInConsole(sql, provenance)}
+            openSql={openSql}
             openSqlDisabledReason={openSqlDisabledReason}
-            onReview={(tool) => onReview(node.id, tool)}
-            onCopy={view.onCopy}
-            renderToolRows={view.renderToolRows}
-            renderErd={view.renderErd}
-            identifierQuote={view.identifierQuote}
+            onReview={review}
+            onCopy={actions.onCopy}
+            renderToolRows={renderToolRows}
+            renderErd={renderErd}
+            identifierQuote={identifierQuote}
           />
         )
         // A right click on any part of the answer acts on the whole answer,
@@ -273,8 +330,8 @@ export function ExchangeView({
             key={item.key}
             text={answer}
             answering={busy}
-            onCopy={view.onCopy}
-            onRegenerate={() => view.onRegenerate(node)}
+            onCopy={actions.onCopy}
+            onRegenerate={() => actions.onRegenerate(node)}
           >
             {entry}
           </AssistantAnswerMenu>
@@ -309,18 +366,18 @@ export function ExchangeView({
           checked against the database rather than believed. */}
       <AssistantSources
         sources={exchange.sources ?? []}
-        tier={view.tier}
-        onOpenObject={view.onOpenObject}
+        tier={tier}
+        onOpenObject={actions.onOpenObject}
       />
 
       {outcome?.kind === "failed" ? (
         <AssistantFailure
           entry={outcome}
           canRetry={!busy}
-          signInStates={view.state.signIn}
-          onRetry={() => view.onRegenerate(node)}
-          onSignIn={view.onSignIn}
-          onCopy={view.onCopy}
+          signInStates={signInStates}
+          onRetry={() => actions.onRegenerate(node)}
+          onSignIn={actions.onSignIn}
+          onCopy={actions.onCopy}
         />
       ) : null}
 
@@ -331,7 +388,7 @@ export function ExchangeView({
             awaitingReview={awaitsReview(exchange)}
             onContinue={
               last && canContinue(exchange)
-                ? () => view.onContinue(node)
+                ? () => actions.onContinue(node)
                 : undefined
             }
             continueDisabled={busy}
@@ -340,12 +397,12 @@ export function ExchangeView({
             <AssistantAnswerActions
               text={answer}
               canRegenerate={!busy}
-              onRegenerate={() => view.onRegenerate(node)}
-              onCopy={view.onCopy}
+              onRegenerate={() => actions.onRegenerate(node)}
+              onCopy={actions.onCopy}
             />
           ) : null}
         </div>
       ) : null}
     </div>
   )
-}
+}, sameExchangeProps)

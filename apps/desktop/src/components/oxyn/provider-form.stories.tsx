@@ -2,7 +2,11 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { ProviderForm } from "./provider-form"
-import { externalAgent, remoteProvider } from "./assistant-fixtures"
+import {
+  externalAgent,
+  remoteProvider,
+  unresolvedProvider,
+} from "./assistant-fixtures"
 
 const meta = {
   title: "Oxyn/Settings/ProviderForm",
@@ -27,7 +31,14 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const NewDeclaration: Story = {}
+export const NewDeclaration: Story = {
+  play: async ({ canvasElement }) => {
+    // Its provider cannot stream yet: declaring it would only fail later.
+    await expect(
+      within(canvasElement).queryByRole("option", { name: "Gemini" })
+    ).toBeNull()
+  },
+}
 
 export const Saving: Story = {
   args: { working: true },
@@ -135,6 +146,15 @@ export const EditingAProvider: Story = {
       canvas.getByRole("switch", { name: "Remove the stored key" })
     ).toBeInTheDocument()
     await expect(canvas.getByText(/change the endpoint/i)).toBeInTheDocument()
+  },
+}
+
+/** A kind no longer offered still names a provider declared with it. */
+export const EditingAGeminiProvider: Story = {
+  args: { target: { kind: "provider", provider: unresolvedProvider } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByLabelText("Kind")).toHaveDisplayValue("Gemini")
   },
 }
 
