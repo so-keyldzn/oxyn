@@ -32,10 +32,13 @@
 //!    timeout actually configured; [`LlmError::ConnectionLost`] becomes
 //!    [`OxynError::OutcomeUnknown`].
 //!
-//!    Today only a **connection** timeout is configured. A timeout expired
-//!    after sending with no known response timeout therefore cannot say how
-//!    long it waited: it becomes `ConnectionLost`, ambiguous as well, rather
-//!    than a `ResponseTimeout` with an invented duration.
+//!    The response timeout is the idle bound of the HTTP client
+//!    (`http::IDLE_TIMEOUT`): it bounds the wait for the headers, then each
+//!    silence between two chunks, never the whole generation. A caller that
+//!    passes no timeout gets `ConnectionLost`, ambiguous as well, rather than
+//!    a `ResponseTimeout` with an invented duration. A silence **during** the
+//!    stream is not an error of this type: like any cut, it ends the stream
+//!    with `StopReason::Interrupted`.
 //! 3. **No message from the network stack enters a transport error.**
 //!    reqwest's message repeats the URL, which can carry an internal host or a
 //!    sensitive parameter (I-03). The text describes the fact.

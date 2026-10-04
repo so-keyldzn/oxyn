@@ -431,8 +431,8 @@ impl OpenAiCompatibleProvider {
 
     /// Classifies a transport error, without ever copying the key.
     fn transport(&self, err: &reqwest::Error) -> LlmError {
-        // No response timeout is configured (see `CONNECT_TIMEOUT`).
-        LlmError::from_transport(self.id.clone(), err, None)
+        // The idle bound also covers the wait for the headers.
+        LlmError::from_transport(self.id.clone(), err, Some(crate::http::IDLE_TIMEOUT))
     }
 
     /// Turns a failure response into an error, body scrubbed and read under a

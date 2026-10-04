@@ -445,6 +445,21 @@ pub enum ChatEvent {
     },
     /// A tool call is complete and its arguments are parsed.
     ToolCallComplete(ToolCall),
+    /// A tool call is complete, and its arguments are not readable JSON.
+    ///
+    /// Not an [`Error`](Self::Error): the stream is sound, only this call is
+    /// not. The other calls of the turn stand, and the caller answers this one
+    /// with a rejection the model can correct on its next turn — the same
+    /// answer as for arguments that parse but do not fit the tool.
+    ToolCallInvalid {
+        /// Identifier to copy into [`ChatMessage::tool_result`].
+        id: String,
+        /// Name of the requested tool.
+        name: String,
+        /// What is wrong, **without** the arguments: they are a model output,
+        /// and can copy what the model was given.
+        detail: String,
+    },
     /// Fragment of **written-out** reasoning, to concatenate.
     ///
     /// Only arrives if the provider agrees to show the reasoning. An encrypted

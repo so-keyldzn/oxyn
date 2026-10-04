@@ -24,8 +24,13 @@
 //! Cancelling sends `session/cancel` and returns **immediately**: the stop
 //! button cannot wait for the agent's goodwill. The session stays open, and the
 //! agent's `cancelled` answer is awaited before the next question — two prompts
-//! mixed in the same session would read as one. An agent that never answers is
-//! terminated by dropping the session.
+//! mixed in the same session would read as one. That wait is bounded
+//! (`idle::CANCEL_GRACE`): an agent that does not confirm in time is stopped,
+//! process group included, and the next question starts a fresh one.
+//!
+//! An agent that goes silent while answering is stopped the same way, after
+//! `idle::AGENT_IDLE_LIMIT` without any update — a tool call in flight
+//! excepted, see the `idle` module.
 
 use std::pin::pin;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -48,6 +53,7 @@ use futures::future::{BoxFuture, Either, select};
 use futures::stream::StreamExt;
 use oxyn_core::{CancelToken, ExternalAgentConfig};
 
+use idle::{Limits, Liveness};
 use oxyn_calls::OxynCalls;
 
 use super::confine::{Confinement, ModeWatch};
@@ -177,6 +183,18 @@ pub enum ExternalError {
     /// The agent process is gone.
     #[error("the agent process stopped; asking again starts it again")]
     Exited,
+    /// The agent sent nothing for too long while answering, outside a tool
+    /// call. The question ends; it is not asked again on its own, since what
+    /// the agent did meanwhile is unknown.
+    #[error(
+        "the agent sent nothing for {} seconds, so Oxyn stopped waiting for its answer; \
+         ask again to continue",
+        .after.as_secs()
+    )]
+    Silent {
+        /// The silence accepted, as configured.
+        after: std::time::Duration,
+    },
     /// The agent answered with an error.
     #[error("the agent reported an error: {0}")]
     Protocol(String),
@@ -514,7 +532,13 @@ impl ExternalSession {
         // The session's working directory is the process's own: announcing
         // another would point the agent at a directory it was not given.
         let directory = guard.directory().to_path_buf();
-        let (session, protocol) = Self::over_with(transport, directory, declaration, confinement);
+        let (session, protocol) = Self::over_with(
+            transport,
+            directory,
+            declaration,
+            confinement,
+            Limits::default(),
+        );
         let exit = Arc::clone(&session.exit);
         let driver = async move {
             // The guard lives exactly as long as the driver: dropping the
@@ -548,7 +572,7 @@ impl ExternalSession {
         transport: impl ConnectTo<Client> + 'static,
         directory: std::path::PathBuf,
     ) -> (Self, SessionDriver) {
-        Self::over_with(transport, directory, None, None)
+        Self::over_with(transport, directory, None, None, Limits::default())
     }
 
     /// A session that also hands the agent Oxyn's tools.
@@ -557,6 +581,7 @@ impl ExternalSession {
         directory: std::path::PathBuf,
         tools: Option<ToolEndpoint>,
         confinement: Option<super::confine::Confinement>,
+        limits: Limits,
     ) -> (Self, SessionDriver) {
         let (requests, inbox) = mpsc::unbounded();
         let (declared, settings) = tokio::sync::watch::channel(AgentSettings::default());
@@ -567,6 +592,7 @@ impl ExternalSession {
             tools,
             confinement,
             Arc::new(declared),
+            limits,
         )
         .boxed();
         (
@@ -712,6 +738,10 @@ struct State {
     confinement: Option<Confinement>,
     /// Whether it left the mode it was put in.
     watch: Arc<ModeWatch>,
+    /// What the agent did lately, fed by the protocol callbacks.
+    liveness: Arc<Liveness>,
+    /// How long a silence, and a stop, are waited for.
+    limits: Limits,
 }
 
 impl State {
@@ -743,9 +773,11 @@ async fn drive(
     tools: Option<ToolEndpoint>,
     confinement: Option<Confinement>,
     settings: Settings,
+    limits: Limits,
 ) {
     let watcher: Watcher = Arc::new(Mutex::new(None));
     let watch = Arc::new(ModeWatch::default());
+    let liveness = Arc::new(Liveness::default());
     let hidden = Arc::new(Mutex::new(OxynCalls::new(
         tools
             .as_ref()
@@ -761,7 +793,10 @@ async fn drive(
                 let settings = Arc::clone(&settings);
                 let watch = Arc::clone(&watch);
                 let hidden = Arc::clone(&hidden);
+                let liveness = Arc::clone(&liveness);
                 async move |notification: SessionNotification, cx| {
+                    // Any update proves the agent alive, shown or not.
+                    liveness.saw(&notification.update);
                     // Stopped at once, not at the next question: the turn in
                     // progress would otherwise go on in the wider mode.
                     if let Some(mode) = locked_mode
@@ -792,7 +827,9 @@ async fn drive(
         .on_receive_request(
             {
                 let watcher = Arc::clone(&watcher);
+                let liveness = Arc::clone(&liveness);
                 async move |request: RequestPermissionRequest, responder, _connection| {
+                    liveness.poke();
                     // No question watching — none in progress, or the one in
                     // progress was stopped (the watcher is cleared before
                     // `session/cancel` leaves): the protocol requires
@@ -850,6 +887,8 @@ async fn drive(
                     tools,
                     confinement,
                     watch,
+                    liveness,
+                    limits,
                     ..State::default()
                 };
                 serve(&connection, inbox, &watcher, &settings, state).await;
@@ -923,6 +962,7 @@ async fn serve(
                     observer.observe(AgentEvent::AgentSettings(&declared));
                 }
                 set_watcher(watcher, Some(observer));
+                state.liveness.begin();
                 let sent = connection
                     .send_request(PromptRequest::new(
                         session.clone(),
@@ -930,8 +970,8 @@ async fn serve(
                     ))
                     .block_task();
                 let sent = pin!(sent);
-                let cancelled = pin!(cancel.cancelled());
-                match select(sent, cancelled).await {
+                let halted = pin!(halted(&cancel, &state.liveness, state.limits.idle));
+                match select(sent, halted).await {
                     Either::Left((answer, _)) => {
                         set_watcher(watcher, None);
                         // Cut short because it left its mode: said as such,
@@ -954,17 +994,52 @@ async fn serve(
                                 }),
                         );
                     }
-                    Either::Right(((), sent)) => {
+                    Either::Right((halt, sent)) => {
                         set_watcher(watcher, None);
                         let _ = connection.send_notification(CancelNotification::new(session));
-                        let _ = reply.send(Ok(TurnEnd::Cancelled));
+                        let _ = reply.send(match halt {
+                            Halt::Cancelled => Ok(TurnEnd::Cancelled),
+                            Halt::Silent => Err(ExternalError::Silent {
+                                after: state.limits.idle,
+                            }),
+                        });
                         // The agent's `cancelled` answer closes this prompt
-                        // before the next one starts.
-                        let _ = sent.await;
+                        // before the next one starts — within a bound: past
+                        // it, leaving ends the connection, and the driver
+                        // stops the process group. The session reads closed,
+                        // and the next question launches a fresh agent
+                        // instead of waiting behind this one forever.
+                        if tokio::time::timeout(state.limits.cancel_grace, sent)
+                            .await
+                            .is_err()
+                        {
+                            tracing::debug!(
+                                "external agent did not close a stopped prompt in time; stopping it"
+                            );
+                            return;
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/// Why a prompt ended before its answer.
+enum Halt {
+    /// The user stopped it.
+    Cancelled,
+    /// The agent said nothing for too long.
+    Silent,
+}
+
+/// Resolves when the user stops the prompt or the agent goes silent.
+async fn halted(cancel: &CancelToken, liveness: &Liveness, idle: std::time::Duration) -> Halt {
+    let cancelled = pin!(cancel.cancelled());
+    let silent = pin!(liveness.silent_for(idle));
+    match select(cancelled, silent).await {
+        Either::Left(((), _)) => Halt::Cancelled,
+        Either::Right(((), _)) => Halt::Silent,
     }
 }
 
@@ -1418,6 +1493,7 @@ pub(crate) const fn kind_label(kind: ToolKind) -> &'static str {
     }
 }
 
+mod idle;
 mod oxyn_calls;
 
 #[cfg(test)]

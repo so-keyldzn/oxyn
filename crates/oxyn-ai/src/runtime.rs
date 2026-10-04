@@ -781,11 +781,20 @@ impl AgentSession {
     }
 }
 
+/// A call the model proposed, as the turn received it.
+#[derive(Debug)]
+struct Proposed {
+    call: ToolCall,
+    /// Why its arguments could not be read, when they could not. Such a call
+    /// is answered with a rejection the model can correct, and never runs.
+    unreadable: Option<String>,
+}
+
 /// What a turn produced.
 #[derive(Debug)]
 struct Turn {
     text: String,
-    calls: Vec<ToolCall>,
+    calls: Vec<Proposed>,
     /// The turn's reasoning blocks, to put back in the assistant message: a
     /// provider that signs its blocks refuses the next turn if one is
     /// missing.
@@ -1024,16 +1033,27 @@ impl AgentRuntime {
             session.messages.push(
                 ChatMessage::assistant(turn.text)
                     .with_reasoning(turn.reasoning)
-                    .with_tool_calls(calls.clone()),
+                    .with_tool_calls(calls.iter().map(|proposed| proposed.call.clone()).collect()),
             );
 
-            for call in calls {
+            for Proposed { call, unreadable } in calls {
                 if cancel.is_cancelled() {
                     return Ok(AgentOutcome::Cancelled { turns });
                 }
-                let content = self
-                    .run_one_tool(&call, actor, session, sink, observer, cancel)
-                    .await?;
+                let content = match unreadable {
+                    Some(detail) => rejection(
+                        observer,
+                        &call.name,
+                        &AiError::InvalidArguments {
+                            name: call.name.clone(),
+                            detail,
+                        },
+                    ),
+                    None => {
+                        self.run_one_tool(&call, actor, session, sink, observer, cancel)
+                            .await?
+                    }
+                };
                 session
                     .messages
                     .push(ChatMessage::tool_result(call.id, content));
@@ -1096,12 +1116,7 @@ pub(crate) async fn run_tool_call(
             // An invented tool name or malformed arguments can be fixed on the
             // next turn: we tell the model rather than interrupt.
             Err(err) if err.is_recoverable_by_model() => {
-                tracing::debug!(tool = %call.name, "tool call refused at translation");
-                observer.observe(AgentEvent::CallRejected {
-                    tool: &call.name,
-                    error: &err,
-                });
-                return Ok(untrusted::fence(&format!("status: rejected\nerror: {err}")));
+                return Ok(rejection(observer, &call.name, &err));
             }
             Err(err) => return Err(err),
         };
@@ -1160,6 +1175,17 @@ pub(crate) async fn run_tool_call(
         });
         Ok(outcome.render())
     }
+}
+
+/// What the model reads when its call is refused before reaching the bus.
+///
+/// One wording for every such refusal — an unknown tool, arguments that do not
+/// fit, arguments that are not JSON at all —: the model corrects them the same
+/// way, on its next turn.
+fn rejection(observer: &dyn AgentObserver, tool: &str, err: &AiError) -> String {
+    tracing::debug!(tool = %tool, "tool call refused at translation");
+    observer.observe(AgentEvent::CallRejected { tool, error: err });
+    untrusted::fence(&format!("status: rejected\nerror: {err}"))
 }
 
 /// Releases a rendered sample, or says what actually happened.
@@ -1242,6 +1268,8 @@ fn charge(
             budget.check_tool_arguments(index, size)?;
             budget.open_tool_call()
         }
+        // Its arguments were counted as fragments; it still counts as a call.
+        ChatEvent::ToolCallInvalid { .. } => budget.open_tool_call(),
         ChatEvent::ReasoningComplete { block, .. } => {
             budget.open_block()?;
             match block {
@@ -1344,7 +1372,19 @@ impl AgentRuntime {
                     cache_write: cache_write_tokens,
                     reasoning: reasoning_tokens,
                 })),
-                ChatEvent::ToolCallComplete(call) => calls.push(call),
+                ChatEvent::ToolCallComplete(call) => calls.push(Proposed {
+                    call,
+                    unreadable: None,
+                }),
+                // Kept as a call, not as a failure of the turn: its siblings
+                // still run, and the model reads why this one did not. The
+                // history carries it with empty arguments — a protocol that
+                // wants an object there refuses anything else, and the
+                // rejection says what was wrong.
+                ChatEvent::ToolCallInvalid { id, name, detail } => calls.push(Proposed {
+                    call: ToolCall::new(id, name, serde_json::json!({})),
+                    unreadable: Some(detail),
+                }),
                 // Kept, and reading goes on: the `Done` that follows says
                 // whether the provider announced its failure or the stream was
                 // cut. Leaving here lost `Interrupted`, and a possibly billed
@@ -1989,6 +2029,69 @@ mod tests {
             .find(|m| m.role == oxyn_llm::Role::Tool)
             .expect("a tool result");
         assert!(result.content.contains("status: rejected"));
+    }
+
+    #[test]
+    fn unreadable_arguments_are_rejected_and_the_sibling_call_still_runs() {
+        // One broken call used to fail the whole question, valid call
+        // included. Now the model reads why it failed, and the other runs.
+        let provider = ScriptedProvider::new(vec![
+            vec![
+                ChatEvent::ToolCallInvalid {
+                    id: "broken".to_owned(),
+                    name: EXECUTE_QUERY.to_owned(),
+                    detail: "the arguments are not valid JSON: truncated JSON (line 1, column 9)"
+                        .to_owned(),
+                },
+                tool_call(),
+                end_of_tool_calls(),
+            ],
+            vec![
+                ChatEvent::TextDelta("done".to_owned()),
+                ChatEvent::Done {
+                    stop_reason: StopReason::EndTurn,
+                },
+            ],
+        ]);
+        let engine = runtime(Arc::clone(&provider), Reach::Local);
+        let bus = FakeBus::succeeding();
+        let mut session = session(PrivacyTier::Metadata);
+
+        let issue = block_on(engine.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect("a broken call does not fail the question");
+        assert!(matches!(issue, AgentOutcome::Answered { .. }), "{issue:?}");
+        assert_eq!(bus.commands().len(), 1, "only the readable call runs");
+        assert_eq!(provider.calls(), 2, "the model reads the results");
+
+        let messages = session.messages();
+        let proposed = messages
+            .iter()
+            .find(|m| !m.tool_calls.is_empty())
+            .expect("the assistant turn");
+        assert_eq!(
+            proposed
+                .tool_calls
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["broken", "call_1"],
+            "every proposed call is in the history, so that every result pairs"
+        );
+        let rejected = messages
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("broken"))
+            .expect("the broken call is answered");
+        assert!(
+            rejected.content.contains("status: rejected"),
+            "{rejected:?}"
+        );
+        assert!(rejected.content.contains("not valid JSON"));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("call_1")),
+            "the readable call is answered too"
+        );
     }
 
     #[test]

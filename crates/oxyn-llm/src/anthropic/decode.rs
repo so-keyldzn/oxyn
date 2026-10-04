@@ -358,10 +358,7 @@ impl MessageDecoder {
                     )));
                     return;
                 }
-                match build_tool_call(id, name, &arguments) {
-                    Ok(call) => out.push(ChatEvent::ToolCallComplete(call)),
-                    Err(message) => out.push(ChatEvent::Error(message)),
-                }
+                out.push(tool_call_event(id, name, &arguments));
             }
             PartialBlock::Thinking { text, signature } => {
                 out.push(ChatEvent::ReasoningComplete {
@@ -548,24 +545,30 @@ fn synthetic_id(index: u32) -> String {
 
 /// Rebuilds a complete tool call from its fragments.
 ///
-/// # Errors
-/// Returns the parse error message — **without** the arguments string, which
-/// is a model output and can copy what it was given.
-fn build_tool_call(id: String, name: String, arguments: &str) -> Result<ToolCall, String> {
+/// Unreadable arguments do not lose the call: it becomes
+/// [`ChatEvent::ToolCallInvalid`], which the caller answers with a rejection,
+/// and the turn's other calls stand.
+fn tool_call_event(id: String, name: String, arguments: &str) -> ChatEvent {
     let raw = arguments.trim();
     if raw.is_empty() {
         // A tool without parameters: the block opens with `input: {}` and no
         // delta follows.
-        return Ok(ToolCall::new(id, name, serde_json::json!({})));
+        return ChatEvent::ToolCallComplete(ToolCall::new(id, name, serde_json::json!({})));
     }
     match serde_json::from_str::<serde_json::Value>(raw) {
-        Ok(value) => Ok(ToolCall::new(id, name, value)),
-        Err(err) => Err(format!(
-            "cannot read the arguments of tool `{name}`: {} (line {}, column {})",
-            classify_json_error(&err),
-            err.line(),
-            err.column()
-        )),
+        Ok(value) => ChatEvent::ToolCallComplete(ToolCall::new(id, name, value)),
+        // The arguments string is not copied: it is a model output, and can
+        // copy what the model was given.
+        Err(err) => ChatEvent::ToolCallInvalid {
+            id,
+            name,
+            detail: format!(
+                "the arguments are not valid JSON: {} (line {}, column {})",
+                classify_json_error(&err),
+                err.line(),
+                err.column()
+            ),
+        },
     }
 }
 
@@ -794,27 +797,44 @@ mod tests {
     }
 
     #[test]
-    fn invalid_arguments_produce_an_error_and_not_a_call() {
+    fn invalid_arguments_are_an_invalid_call_and_the_sibling_stands() {
         // The fine-grained stream is not validated by the server: the
-        // accumulated string may not be JSON.
+        // accumulated string may not be JSON. It costs this call, not the
+        // turn: the valid call next to it is still proposed.
         let events = play(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"execute"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"sql\": \"SELECT secret"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"d","name":"lister","input":{}}}"#,
+            r#"{"type":"content_block_stop","index":1}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
             r#"{"type":"message_stop"}"#,
         ]);
-        assert!(calls(&events).is_empty(), "{events:?}");
-        let error = events
+        let complete = calls(&events);
+        assert_eq!(complete.len(), 1, "{events:?}");
+        assert_eq!(complete[0].id, "d");
+        let invalid = events
             .iter()
             .find_map(|e| match e {
-                ChatEvent::Error(m) => Some(m.as_str()),
+                ChatEvent::ToolCallInvalid { id, name, detail } => Some((id, name, detail)),
                 _ => None,
             })
-            .expect("an error must be reported");
-        assert!(error.contains("execute"), "{error}");
+            .expect("the invalid call is reported as such");
+        assert_eq!((invalid.0.as_str(), invalid.1.as_str()), ("c", "execute"));
         assert!(
-            !error.contains("secret"),
-            "the model output must not be copied: {error}"
+            !events.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "not a stream error: {events:?}"
+        );
+        assert!(
+            !invalid.2.contains("secret"),
+            "the model output must not be copied: {}",
+            invalid.2
+        );
+        assert_eq!(
+            events.last(),
+            Some(&ChatEvent::Done {
+                stop_reason: StopReason::ToolCalls
+            })
         );
     }
 
