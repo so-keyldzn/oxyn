@@ -127,12 +127,12 @@ fn after_a_refusal_the_assistant_cannot_ask_again_in_the_same_answer() {
     );
     let request = screen(&fixture, &received);
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             None,
-        )
+        ))
         .map_err(|error| error.message)
         .expect("declined");
     let told = settled(&fixture, running);
@@ -176,12 +176,12 @@ fn after_a_refusal_an_external_agent_cannot_ask_again_in_the_same_answer() {
     let pending = bridge.ask(&fixture, arguments.clone());
     let request = screen(&fixture, &received);
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             None,
-        )
+        ))
         .map_err(|error| error.message)
         .expect("declined");
     let first = text_of(&fixture, pending);
@@ -243,12 +243,12 @@ fn no_sample_screen_opens_while_a_write_of_the_assistant_waits() {
         .expect("rejected");
     let request = screen(&fixture, &received);
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             None,
-        )
+        ))
         .map_err(|error| error.message)
         .expect("declined");
     let told = settled(&fixture, running);
@@ -338,8 +338,12 @@ fn a_call_dropped_mid_wait_closes_its_screen() {
     );
     assert!(
         fixture
-            .backend
-            .ai_answer_sample(fixture.connection, &id, Some(&["email".to_owned()]))
+            .runtime
+            .block_on(fixture.backend.ai_answer_sample(
+                fixture.connection,
+                &id,
+                Some(&["email".to_owned()])
+            ))
             .is_err(),
         "an approval still reached a request nobody waits for"
     );
@@ -438,12 +442,12 @@ fn a_sample_dropped_for_the_budget_is_neither_recorded_nor_announced() {
         .collect();
     assert_eq!(every.len(), 30);
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             Some(&every),
-        )
+        ))
         .map_err(|error| error.message)
         .expect("approved");
     let told = settled(&fixture, running);

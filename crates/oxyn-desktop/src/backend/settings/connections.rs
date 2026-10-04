@@ -89,8 +89,11 @@ pub(crate) enum SecretsEdit {
 impl Backend {
     /// A saved connection with what its edit form may show.
     ///
+    /// # Blocking
+    /// Reads the keychain: the IPC caller uses the blocking pool (I-05).
+    ///
     /// # Errors
-    /// If the connection is no longer in the workspace.
+    /// If the connection is no longer in the workspace or its secrets cannot be read.
     pub fn connection_details(
         &self,
         connection: ConnectionId,
@@ -99,6 +102,7 @@ impl Backend {
         Ok(ConnectionDetails::of(
             &config,
             self.inner.drivers.metadata(&config.driver),
+            self.inner.credentials.has_secrets(&config)?,
         ))
     }
 
