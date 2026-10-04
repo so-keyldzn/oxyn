@@ -43,9 +43,9 @@
 //!   the asking — the internal loop has no per-call ceiling, and the bridge's
 //!   allows eight screens.
 //!
-//! The answer comes from `ai_answer_sample`, a Tauri command: the user's
-//! gesture. Nothing the agent sends names the request — its id travels to the
-//! webview only.
+//! The answer comes from `ai_answer_sample`, after native host confirmation.
+//! Nothing the agent sends names the request — its id travels to the webview
+//! only. While the host decides, expiry and cancellation still withdraw it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,6 +64,7 @@ use super::{AgentSink, ForgetResult, REQUEST_WITHDRAWN, StoredTier, announce_cal
 use crate::backend::ai::catalog_fill::CatalogFill;
 use crate::backend::ai::samples::{self, Recipient, RecipientKind, SampleAsks};
 use crate::backend::ai::threads::Thread;
+use crate::backend::confirm::text::{SampleDescription, SampleDestination};
 use crate::ipc::ai::{AiEvent, SampleRequest};
 use crate::ipc::{CatalogAddress, RelationField};
 use oxyn_exec::Executor;
@@ -77,6 +78,7 @@ pub(in crate::backend::ai) struct Sampling {
     pub(in crate::backend::ai) destination: String,
     /// Who asks, as the screen names it.
     pub(in crate::backend::ai) requested_by: String,
+    target: SampleDestination,
     /// Set when this exchange's screen opens, and never cleared: the sink
     /// lives for one exchange, so this is « the exchange had its screen ».
     spent: AtomicBool,
@@ -88,12 +90,14 @@ impl Sampling {
         recipient: Recipient,
         destination: String,
         requested_by: String,
+        target: SampleDestination,
     ) -> Self {
         Self {
             asks,
             recipient,
             destination,
             requested_by,
+            target,
             spent: AtomicBool::new(false),
         }
     }
@@ -273,7 +277,16 @@ impl AgentSink {
             }
         };
         let offered: Vec<String> = fields.iter().map(|field| field.name.clone()).collect();
-        let open = match sampling.asks.open(connection, offered) {
+        let open = match sampling.asks.open(
+            connection,
+            offered,
+            SampleDescription {
+                source: path.clone(),
+                destination: sampling.target.clone(),
+                reach: sampling.recipient.reach,
+                rows: rows_asked,
+            },
+        ) {
             Ok(open) => open,
             Err(refused) => return denied(refused.to_string()),
         };

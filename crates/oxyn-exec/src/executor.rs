@@ -3089,6 +3089,43 @@ mod tests {
         assert_eq!(trace.record.command_id, Some(command));
     }
 
+    #[rstest::rstest]
+    #[case::agent_production(true, Environment::Production)]
+    #[case::agent_development(true, Environment::Development)]
+    #[case::human_production(false, Environment::Production)]
+    fn copy_server_side_effects_reach_the_policy_as_writes(
+        #[case] is_agent: bool,
+        #[case] environment: Environment,
+    ) {
+        for sql in ["COPY t TO PROGRAM 'x'", "COPY t TO '/tmp/x.csv'"] {
+            let connection = ConnectionConfig::new("customer database", DriverId::postgres())
+                .with_environment(environment);
+            let bench = Harness::new(&connection);
+            let actor = if is_agent { agent() } else { Actor::Human };
+            let command = execution(connection.id, sql, StatementIntent::Read);
+            let outcome = block_on(bench.executor.dispatch(actor, command, &CancelToken::new()))
+                .expect("the gate decides before looking for a session");
+            if is_agent && environment.is_production() {
+                assert!(matches!(outcome, Outcome::Denied { .. }), "{outcome:?}");
+                assert!(bench.executor.approvals().is_empty());
+            } else {
+                let Outcome::NeedsApproval {
+                    preview, reason, ..
+                } = outcome
+                else {
+                    panic!("server-side COPY requires approval: {outcome:?}");
+                };
+                assert_eq!(
+                    preview.expect("a named connection preview").connection,
+                    connection.name
+                );
+                assert!(reason.contains("database server"), "{reason}");
+                assert_eq!(bench.executor.approvals().len(), 1);
+            }
+            assert!(bench.executor.running().is_empty());
+        }
+    }
+
     #[test]
     fn an_unknown_or_stale_approval_executes_nothing() {
         let connection = ConnectionConfig::new("atelier", DriverId::sqlite())

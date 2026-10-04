@@ -13,7 +13,7 @@
 //! Which database to open is the user's decision
 //! ([UX-SPEC](../../../docs/UX-SPEC.md)).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -49,6 +49,14 @@ pub struct Backend {
     pub(crate) inner: Arc<Inner>,
 }
 
+/// A creation held by policy. Secrets stay in memory until the declaration
+/// exists; rejecting or closing the owning window simply drops them (I-03).
+/// No `Debug`: this value owns the secrets typed in the form.
+pub(crate) struct PendingConnection {
+    config: ConnectionConfig,
+    secrets: BTreeMap<String, String>,
+}
+
 /// State shared by every feature module under `backend/`.
 ///
 /// A feature that needs state adds **one** field here, holding its own type
@@ -72,7 +80,7 @@ pub(crate) struct Inner {
     /// Connection configurations awaiting a decision. Kept here rather than
     /// sent to the front: a configuration carries parameters the webview has
     /// no reason to hold ([I-03](../../../CLAUDE.md#i-03)).
-    pub(crate) pending_connections: Mutex<HashMap<CommandId, ConnectionConfig>>,
+    pub(crate) pending_connections: Mutex<HashMap<CommandId, PendingConnection>>,
     /// Consoles and documents: document writers, the shutdown marker and the
     /// local writes it waits for.
     pub(crate) workbench: consoles::Workbench,
@@ -244,6 +252,35 @@ impl Backend {
         confirmations: confirm::Confirmations,
         memory_budget: usize,
     ) -> Result<Self> {
+        let policy = Arc::new(DefaultPolicy::new());
+        let gate: Arc<dyn PolicyGate> = policy.clone();
+        Self::assemble_parts(store, secrets, confirmations, memory_budget, policy, gate)
+    }
+
+    #[cfg(test)]
+    fn assemble_with_test_gate(
+        store: Arc<Store>,
+        secrets: Arc<dyn SecretStore>,
+        gate: Arc<dyn PolicyGate>,
+    ) -> Result<Self> {
+        Self::assemble_parts(
+            store,
+            secrets,
+            confirm::Confirmations::confirming(),
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
+            Arc::new(DefaultPolicy::new()),
+            gate,
+        )
+    }
+
+    fn assemble_parts(
+        store: Arc<Store>,
+        secrets: Arc<dyn SecretStore>,
+        confirmations: confirm::Confirmations,
+        memory_budget: usize,
+        policy: Arc<DefaultPolicy>,
+        gate: Arc<dyn PolicyGate>,
+    ) -> Result<Self> {
         let mut drivers = DriverRegistry::new();
         drivers
             .register(Arc::new(SqliteDriver::new()))
@@ -258,8 +295,6 @@ impl Backend {
         let drivers = Arc::new(drivers);
 
         let credentials = Arc::new(KeyringCredentials::new(secrets));
-        let policy = Arc::new(DefaultPolicy::new());
-        let gate: Arc<dyn PolicyGate> = policy.clone();
 
         // Chosen before the executor is built: left to its default, the
         // builder mints a workspace that exists nowhere on disk, and saved
@@ -437,12 +472,12 @@ impl Backend {
 
         let mut config = config_from(&draft)?;
         if !draft.secrets.is_empty() {
-            let reference = inner
-                .credentials
-                .store_secrets(&config, &draft.secrets)
-                .map_err(IpcError::from)?;
-            config = config.with_secret_ref(reference.as_str());
+            config.secret_ref = Some(KeyringCredentials::fresh_reference(config.id));
         }
+        let pending = PendingConnection {
+            config: config.clone(),
+            secrets: draft.secrets,
+        };
 
         // Through the command bus, like everything else. Writing to the store
         // directly is the second execution path I-01 forbids.
@@ -467,17 +502,14 @@ impl Backend {
                 if let Some(preview) = &mut preview {
                     preview.connection = config.name.clone();
                 }
-                inner.pending_connections.lock().insert(command, config);
+                inner.pending_connections.lock().insert(command, pending);
                 Ok(ConnectResponse::Approval {
                     command: command.to_string(),
                     reason,
                     preview: preview.map(Into::into),
                 })
             }
-            Outcome::ConnectionSaved { .. } => {
-                inner.policy.register(&config);
-                Ok(self.open_saved(config, &cancel).await)
-            }
+            Outcome::ConnectionSaved { .. } => Ok(self.finish_creation(pending, &cancel).await),
             Outcome::Denied { reason, .. } => Err(IpcError::invalid(reason)),
             _ => Err(IpcError::invalid("The connection was not saved")),
         }
@@ -488,8 +520,8 @@ impl Backend {
     /// The draft's secrets must reach the driver through the keyring, the one
     /// place the executor resolves them from: they are written under the
     /// draft's own fresh id, then forgotten whatever the test gave. A crash
-    /// in between leaves an unreferenced entry, harmless like the one
-    /// [`Self::connect`] may leave. Cancellable under `id`, like an opening.
+    /// in between leaves an unreferenced entry. Cancellable under `id`, like
+    /// an opening.
     pub async fn test_connection(
         &self,
         id: CommandId,
@@ -590,7 +622,7 @@ impl Backend {
         let cancel = self.track(command)?;
         // Before the configuration is taken: a busy dialog leaves it pending.
         let answer = self.confirm_held(command).await?;
-        let Some(config) = inner.pending_connections.lock().remove(&command) else {
+        let Some(pending) = inner.pending_connections.lock().remove(&command) else {
             return Err(IpcError::invalid("No connection is awaiting this decision"));
         };
         if answer == HostAnswer::Refused {
@@ -602,8 +634,40 @@ impl Backend {
             Outcome::Denied { reason, .. } => return Err(IpcError::invalid(reason)),
             _ => return Err(IpcError::invalid("The connection was not saved")),
         }
-        inner.policy.register(&config);
-        Ok(Some(self.open_saved(config, &cancel).await))
+        Ok(Some(self.finish_creation(pending, &cancel).await))
+    }
+
+    async fn finish_creation(
+        &self,
+        pending: PendingConnection,
+        cancel: &CancelToken,
+    ) -> ConnectResponse {
+        let PendingConnection { config, secrets } = pending;
+        self.inner.policy.register(&config);
+        if !secrets.is_empty() {
+            let target = config.clone();
+            if let Err(error) = self
+                .on_blocking_pool(move |backend| {
+                    backend
+                        .inner
+                        .credentials
+                        .store_secrets(&target, &secrets)
+                        .map(|_| ())
+                        .map_err(IpcError::from)
+                })
+                .await
+            {
+                return ConnectResponse::Saved {
+                    connection: ipc::SavedConnection::of(&config),
+                    message: format!(
+                        "The connection was saved without its secrets: type them again. {}",
+                        error.message
+                    ),
+                    retryable: error.retryable,
+                };
+            }
+        }
+        self.open_saved(config, cancel).await
     }
 
     /// Opens a connection just saved.
@@ -989,8 +1053,10 @@ pub(crate) mod config_reads {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
-    use oxyn_core::{Environment, ResultId};
+    use oxyn_core::{Decision, Environment, ResultId};
+    use oxyn_secrets::MemorySecretStore;
 
     use super::*;
     use crate::ipc::results::ResultWindow;
@@ -1014,6 +1080,242 @@ mod tests {
                 .collect(),
             secrets: BTreeMap::new(),
         }
+    }
+
+    fn draft_with_password(environment: Environment) -> ConnectionDraft {
+        let mut draft = draft(environment);
+        draft
+            .secrets
+            .insert("password".to_owned(), "not-a-real-password".to_owned());
+        draft
+    }
+
+    fn backend_with_secrets() -> (Backend, Arc<MemorySecretStore>) {
+        let secrets = Arc::new(MemorySecretStore::new());
+        let backend = Backend::assemble(
+            Arc::new(Store::open_in_memory().expect("temporary store")),
+            Arc::clone(&secrets) as Arc<dyn SecretStore>,
+        )
+        .expect("temporary backend");
+        (backend, secrets)
+    }
+
+    struct DenyingCreate(std::sync::atomic::AtomicBool);
+
+    impl PolicyGate for DenyingCreate {
+        fn authorize(&self, actor: &Actor, command: &Command, env: Environment) -> Decision {
+            if self.0.load(std::sync::atomic::Ordering::SeqCst)
+                && matches!(command, Command::CreateConnection { .. })
+            {
+                Decision::deny("connection creation refused by the test policy")
+            } else {
+                DefaultPolicy::new().authorize(actor, command, env)
+            }
+        }
+    }
+
+    #[test]
+    fn rejecting_a_new_connection_leaves_no_secret_entry() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let (backend, secrets) = backend_with_secrets();
+        let ConnectResponse::Approval { command, .. } = runtime
+            .block_on(backend.connect(
+                CommandId::new(),
+                draft_with_password(Environment::Production),
+            ))
+            .expect("the policy holds creation")
+        else {
+            panic!("a production connection waits for approval");
+        };
+
+        assert!(
+            runtime
+                .block_on(backend.decide_connection(command.parse().expect("command id"), false))
+                .expect("rejected")
+                .is_none()
+        );
+        assert!(secrets.is_empty(), "a rejected creation writes no secret");
+    }
+
+    #[test]
+    fn a_denied_new_connection_leaves_no_secret_entry() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let secrets = Arc::new(MemorySecretStore::new());
+        let backend = Backend::assemble_with_test_gate(
+            Arc::new(Store::open_in_memory().expect("temporary store")),
+            Arc::clone(&secrets) as Arc<dyn SecretStore>,
+            Arc::new(DenyingCreate(std::sync::atomic::AtomicBool::new(true))),
+        )
+        .expect("temporary backend");
+
+        runtime
+            .block_on(backend.connect(CommandId::new(), draft_with_password(Environment::Local)))
+            .expect_err("the test policy denies creation");
+        assert!(secrets.is_empty(), "a denied creation writes no secret");
+    }
+
+    #[test]
+    fn a_creation_denied_after_approval_leaves_no_secret_entry() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let secrets = Arc::new(MemorySecretStore::new());
+        let gate = Arc::new(DenyingCreate(std::sync::atomic::AtomicBool::new(false)));
+        let backend = Backend::assemble_with_test_gate(
+            Arc::new(Store::open_in_memory().expect("temporary store")),
+            secrets.clone(),
+            gate.clone(),
+        )
+        .expect("temporary backend");
+        let ConnectResponse::Approval { command, .. } = runtime
+            .block_on(backend.connect(
+                CommandId::new(),
+                draft_with_password(Environment::Production),
+            ))
+            .expect("the policy holds creation")
+        else {
+            panic!("a production connection waits for approval");
+        };
+        gate.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        runtime
+            .block_on(backend.decide_connection(command.parse().expect("command id"), true))
+            .expect_err("the policy now refuses creation");
+        assert!(secrets.is_empty(), "a denied approval writes no secret");
+        assert!(backend.inner.pending_connections.lock().is_empty());
+    }
+
+    #[test]
+    fn a_failed_connection_dispatch_leaves_no_secret_entry() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        for environment in [Environment::Local, Environment::Production] {
+            let (backend, secrets) = backend_with_secrets();
+            let mut draft = draft_with_password(environment);
+            // The actual store refuses a secret field in persisted parameters.
+            draft
+                .values
+                .insert("password".to_owned(), "invalid-test-parameter".to_owned());
+            let created = runtime.block_on(backend.connect(CommandId::new(), draft));
+            if environment == Environment::Production {
+                let ConnectResponse::Approval { command, .. } = created.expect("held") else {
+                    panic!("production creation waits for approval");
+                };
+                runtime
+                    .block_on(backend.decide_connection(command.parse().expect("command id"), true))
+                    .expect_err("the approved save fails");
+            } else {
+                created.expect_err("the immediate save fails");
+            }
+            assert!(
+                secrets.is_empty(),
+                "a dispatch error leaves no secret entry"
+            );
+            assert!(backend.saved_connections().expect("connections").is_empty());
+        }
+    }
+
+    struct RefusingKeychain;
+
+    impl std::fmt::Debug for RefusingKeychain {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("RefusingKeychain")
+        }
+    }
+
+    impl SecretStore for RefusingKeychain {
+        fn put(
+            &self,
+            _reference: &oxyn_secrets::SecretRef,
+            _secret: oxyn_secrets::SecretString,
+        ) -> oxyn_secrets::Result<()> {
+            Err(oxyn_secrets::SecretError::AccessDenied {
+                detail: "test keychain refuses writes".into(),
+            })
+        }
+
+        fn get(
+            &self,
+            _reference: &oxyn_secrets::SecretRef,
+        ) -> oxyn_secrets::Result<Option<oxyn_secrets::SecretString>> {
+            Ok(None)
+        }
+
+        fn delete(&self, _reference: &oxyn_secrets::SecretRef) -> oxyn_secrets::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failed_keychain_write_reports_saved_but_never_claims_stored_secrets() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("temporary store"));
+        let backend =
+            Backend::assemble(store.clone(), Arc::new(RefusingKeychain)).expect("backend");
+        let ConnectResponse::Saved { connection, .. } = runtime
+            .block_on(backend.connect(CommandId::new(), draft_with_password(Environment::Local)))
+            .expect("the declaration is saved")
+        else {
+            panic!("a failed keychain write does not open a session");
+        };
+        let id = connection.id.parse().expect("connection id");
+        assert!(
+            !backend
+                .connection_details(id)
+                .expect("details")
+                .has_stored_secrets
+        );
+        let reopened =
+            Backend::assemble(store, Arc::new(RefusingKeychain)).expect("reopened backend");
+        assert!(
+            !reopened
+                .connection_details(id)
+                .expect("reopened details")
+                .has_stored_secrets
+        );
+    }
+
+    #[test]
+    fn approving_a_new_connection_writes_its_secret_and_opens_it() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let (backend, secrets) = backend_with_secrets();
+        let ConnectResponse::Approval { command, .. } = runtime
+            .block_on(backend.connect(
+                CommandId::new(),
+                draft_with_password(Environment::Production),
+            ))
+            .expect("the policy holds creation")
+        else {
+            panic!("a production connection waits for approval");
+        };
+        assert!(secrets.is_empty(), "approval has not saved anything yet");
+
+        let decided = runtime
+            .block_on(backend.decide_connection(command.parse().expect("command id"), true))
+            .expect("approved");
+        let Some(ConnectResponse::Open(open)) = decided else {
+            panic!("the approved connection opens");
+        };
+        let config = backend
+            .config(open.connection.parse().expect("connection id"))
+            .expect("saved connection");
+        let reference =
+            oxyn_secrets::SecretRef::parse(config.secret_ref.as_deref().expect("saved reference"))
+                .expect("valid reference");
+        let bundle = secrets
+            .get_bundle(&reference)
+            .expect("keychain read")
+            .expect("saved secrets");
+        assert!(
+            backend
+                .connection_details(config.id)
+                .expect("details")
+                .has_stored_secrets
+        );
+        assert_eq!(bundle.password(), Some("not-a-real-password"));
+        assert_eq!(secrets.len(), 1, "the saved connection has one entry");
     }
 
     fn open(
