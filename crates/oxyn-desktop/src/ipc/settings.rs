@@ -206,7 +206,11 @@ pub struct ConnectionDetails {
 }
 
 impl ConnectionDetails {
-    pub fn of(config: &ConnectionConfig, metadata: Option<&DriverMetadata>) -> Self {
+    pub fn of(
+        config: &ConnectionConfig,
+        metadata: Option<&DriverMetadata>,
+        has_stored_secrets: bool,
+    ) -> Self {
         let values = metadata
             .map(|metadata| {
                 metadata
@@ -227,7 +231,7 @@ impl ConnectionDetails {
         Self {
             connection: SavedConnection::of(config),
             values,
-            has_stored_secrets: config.secret_ref.is_some(),
+            has_stored_secrets,
         }
     }
 }
@@ -387,7 +391,7 @@ mod tests {
             .params
             .insert("password".to_owned(), "hunter2".to_owned());
 
-        let json = serde_json::to_string(&ConnectionDetails::of(&config, Some(&metadata)))
+        let json = serde_json::to_string(&ConnectionDetails::of(&config, Some(&metadata), true))
             .expect("serializable");
         assert!(json.contains("db.internal"), "{json}");
         assert!(!json.contains("hunter2"), "secret sent: {json}");
@@ -395,8 +399,8 @@ mod tests {
         assert!(!json.contains("kept-out"), "undeclared value sent: {json}");
         assert!(json.contains(r#""hasStoredSecrets":true"#), "{json}");
 
-        let unknown =
-            serde_json::to_string(&ConnectionDetails::of(&config, None)).expect("serializable");
+        let unknown = serde_json::to_string(&ConnectionDetails::of(&config, None, true))
+            .expect("serializable");
         assert!(!unknown.contains("db.internal"), "{unknown}");
     }
 

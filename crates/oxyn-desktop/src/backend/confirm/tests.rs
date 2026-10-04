@@ -14,6 +14,8 @@ use oxyn_core::{
     PrivacyTier, SessionId,
 };
 use oxyn_exec::Outcome;
+use oxyn_secrets::{MemorySecretStore, SecretStore};
+use oxyn_store::Store;
 
 use super::text::{CHANGE_MARKING, WRITE_TO_PRODUCTION};
 use super::{Answer, ScriptedConfirm, Timing};
@@ -584,7 +586,14 @@ fn a_production_connection_refused_in_the_dialog_is_not_saved() {
     let runtime = runtime();
     let _guard = runtime.enter();
     let host = ScriptedConfirm::new(Answer::Refuse);
-    let backend = Backend::open_scripted(Arc::clone(&host), PROMPT).expect("temporary backend");
+    let secrets = Arc::new(MemorySecretStore::new());
+    let backend = Backend::assemble_with(
+        Arc::new(Store::open_in_memory().expect("temporary store")),
+        Arc::clone(&secrets) as Arc<dyn SecretStore>,
+        super::Confirmations::new(host.clone(), PROMPT),
+        oxyn_data::DEFAULT_MEMORY_BUDGET,
+    )
+    .expect("temporary backend");
     let draft = ConnectionDraft {
         driver: "sqlite".into(),
         name: NAME.into(),
@@ -592,7 +601,7 @@ fn a_production_connection_refused_in_the_dialog_is_not_saved() {
         privacy_tier: PrivacyTier::Metadata,
         read_only: false,
         values: [("path".to_owned(), ":memory:".to_owned())].into(),
-        secrets: BTreeMap::new(),
+        secrets: [("password".to_owned(), "not-a-real-password".to_owned())].into(),
     };
     let ConnectResponse::Approval { command, .. } = runtime
         .block_on(backend.connect(CommandId::new(), draft))
@@ -608,4 +617,5 @@ fn a_production_connection_refused_in_the_dialog_is_not_saved() {
     assert!(host.shown()[0].body.contains(NAME));
     assert!(backend.saved_connections().expect("list").is_empty());
     assert!(backend.inner.executor.approvals().is_empty());
+    assert!(secrets.is_empty(), "a native refusal writes no secret");
 }

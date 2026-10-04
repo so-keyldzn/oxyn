@@ -805,9 +805,13 @@ Four rules govern this table, and their **order** matters:
    be able to degrade the protection. A connection with no environment set counts as
    `production` ([I-02](../CLAUDE.md#i-02)).
 4. **Risk takes precedence over the actor in choosing the reason.** A non-null `MutationRisk`
-   — `UnboundedUpdate`, `UnboundedDelete`, `Truncate`, `DropObject` — triggers
-   the approval with **its** reason, because "`DELETE` without `WHERE`" reads better
-   than "write by an agent".
+   — `UnboundedUpdate`, `UnboundedDelete`, `Truncate`, `DropObject`,
+   `CopyToServerFile`, `CopyServerProgram` — triggers approval with **its** reason
+   in every environment, including for a human outside production, unless the
+   command is already refused by the rules above. `COPY TO` a server file and
+   `COPY FROM/TO PROGRAM` therefore require confirmation even locally: they write
+   a file or run a program on the database server. `COPY TO STDOUT` remains a read.
+   The dedicated reason explains the effect better than "write by an agent".
 
 Two additions, outside the table:
 

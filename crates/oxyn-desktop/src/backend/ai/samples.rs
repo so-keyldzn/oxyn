@@ -266,6 +266,8 @@ impl SampleGrants {
 /// An agent's request for a sample, waiting for the user.
 struct PendingAsk {
     connection: ConnectionId,
+    description: crate::backend::confirm::text::SampleDescription,
+    expires: Instant,
     /// The columns the screen offers, in catalog order. Names only.
     offered: Vec<String>,
     /// Where the approved columns go. Dropped unanswered: declined.
@@ -301,6 +303,22 @@ pub(crate) struct OpenAsk {
     asks: std::sync::Arc<SampleAsks>,
 }
 
+/// A native decision in progress. Dropping its future declines the request,
+/// just as abandoning the host's reply channel does (ADR-0037 section 3).
+pub(crate) struct ReviewedAsk<'a> {
+    asks: &'a SampleAsks,
+    connection: ConnectionId,
+    id: String,
+    pub(crate) description: crate::backend::confirm::text::SampleDescription,
+    pub(crate) columns: Vec<String>,
+}
+
+impl Drop for ReviewedAsk<'_> {
+    fn drop(&mut self) {
+        let _ = self.asks.answer(self.connection, &self.id, None);
+    }
+}
+
 impl OpenAsk {
     /// Withdraws the request now: nothing of it stays approvable. Idempotent,
     /// for a caller that must withdraw before it says the screen closed.
@@ -325,6 +343,7 @@ impl SampleAsks {
         self: &std::sync::Arc<Self>,
         connection: ConnectionId,
         offered: Vec<String>,
+        description: crate::backend::confirm::text::SampleDescription,
     ) -> Result<OpenAsk, SampleRefused> {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let (answer, receiver) = tokio::sync::oneshot::channel();
@@ -341,6 +360,8 @@ impl SampleAsks {
             id.clone(),
             PendingAsk {
                 connection,
+                description,
+                expires: Instant::now() + ASK_LIFETIME,
                 offered,
                 answer,
             },
@@ -349,6 +370,47 @@ impl SampleAsks {
             id,
             answer: receiver,
             asks: std::sync::Arc::clone(self),
+        })
+    }
+
+    /// Reviews the stored request without spending it while the host dialog
+    /// is open. Invalid columns still consume it, like a screen refusal.
+    pub(crate) fn review(
+        &self,
+        connection: ConnectionId,
+        id: &str,
+        ticked: &[String],
+    ) -> Result<ReviewedAsk<'_>, SampleRefused> {
+        let mut pending = self.pending.lock();
+        let ask = pending
+            .get(id)
+            .filter(|ask| ask.connection == connection)
+            .ok_or(SampleRefused::UnknownOrUsed)?;
+        let columns: Vec<_> = ask
+            .offered
+            .iter()
+            .filter(|column| ticked.contains(column))
+            .cloned()
+            .collect();
+        let refusal = if Instant::now() >= ask.expires {
+            Some(SampleRefused::Expired)
+        } else if ticked.iter().any(|column| !ask.offered.contains(column)) {
+            Some(SampleRefused::ColumnNotOffered)
+        } else if columns.is_empty() {
+            Some(SampleRefused::NoColumn)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            pending.remove(id);
+            return Err(refusal);
+        }
+        Ok(ReviewedAsk {
+            asks: self,
+            connection,
+            id: id.to_owned(),
+            description: ask.description.clone(),
+            columns,
         })
     }
 
@@ -376,6 +438,9 @@ impl SampleAsks {
             }
         }
         .ok_or(SampleRefused::UnknownOrUsed)?;
+        if Instant::now() >= ask.expires {
+            return Err(SampleRefused::Expired);
+        }
         let Some(ticked) = ticked else {
             // Declined: the sender drops, and the call reads « declined ».
             return Ok(());

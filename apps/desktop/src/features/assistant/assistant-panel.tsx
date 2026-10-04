@@ -432,8 +432,9 @@ function useAgentSampleAsk(connection: string, running: ExchangeNode | null) {
         request.id,
         columns === null || columns.length === 0 ? null : columns
       ).catch((error: unknown) => {
-        // Expired or withdrawn meanwhile: the backend already told the agent
-        // « declined », and the screen closes with the run.
+        // A busy native dialog leaves this request pending in the backend.
+        // Let the user decide again; expired requests close through events.
+        setAnswered((current) => (current === request.id ? null : current))
         toast.add({
           title: "Sample not sent",
           description: error instanceof Error ? error.message : String(error),

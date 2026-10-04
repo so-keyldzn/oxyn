@@ -37,10 +37,26 @@ pub(super) fn sink(
         question: QuestionOpen::new(),
         sampling: Some(Sampling::new(
             Arc::clone(&fixture.backend.inner.ai.asks),
-            recipient,
+            recipient.clone(),
             who.to_owned(),
             who.to_owned(),
+            target(fixture, &recipient),
         )),
+    }
+}
+
+fn target(fixture: &Fixture, recipient: &Recipient) -> SampleDestination {
+    match recipient.kind {
+        RecipientKind::Provider => SampleDestination::Provider(
+            fixture
+                .runtime
+                .block_on(fixture.backend.declared_providers())
+                .expect("providers")
+                .into_iter()
+                .find(|provider| provider.id == recipient.provider)
+                .expect("stored provider"),
+        ),
+        RecipientKind::Agent => SampleDestination::Agent(agent("unused")),
     }
 }
 
@@ -199,8 +215,12 @@ fn an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after() 
 
     let id = request["id"].as_str().expect("an id").to_owned();
     fixture
-        .backend
-        .ai_answer_sample(fixture.connection, &id, Some(&["email".to_owned()]))
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
+            fixture.connection,
+            &id,
+            Some(&["email".to_owned()]),
+        ))
         .map_err(|error| error.message)
         .expect("answered");
     let said = text_of(&fixture, pending);
@@ -243,8 +263,12 @@ fn an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after() 
     // Spent: a second answer approves nothing.
     assert!(
         fixture
-            .backend
-            .ai_answer_sample(fixture.connection, &id, Some(&["email".to_owned()]))
+            .runtime
+            .block_on(fixture.backend.ai_answer_sample(
+                fixture.connection,
+                &id,
+                Some(&["email".to_owned()])
+            ))
             .is_err()
     );
 }
@@ -274,12 +298,12 @@ fn a_declined_request_reads_nothing_and_says_so() {
     let pending = bridge.ask(&fixture, serde_json::json!({ "relation": "customers" }));
     let request = screen(&fixture, &received);
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             None,
-        )
+        ))
         .map_err(|error| error.message)
         .expect("declined");
     let said = text_of(&fixture, pending);
@@ -461,12 +485,12 @@ fn a_hostile_name_is_quoted_by_the_driver_never_concatenated() {
     );
     let request = screen(&fixture, &received);
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             Some(&[column.to_owned()]),
-        )
+        ))
         .map_err(|error| error.message)
         .expect("answered");
     let said = text_of(&fixture, pending);
@@ -566,12 +590,12 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
     });
     let request = screen(&fixture, &received);
     fixture
-        .backend
-        .ai_answer_sample(
+        .runtime
+        .block_on(fixture.backend.ai_answer_sample(
             fixture.connection,
             request["id"].as_str().expect("an id"),
             Some(&["email".to_owned()]),
-        )
+        ))
         .map_err(|error| error.message)
         .expect("answered");
     let session = fixture

@@ -78,6 +78,9 @@ const MAX_TITLE_CHARS: usize = 80;
 /// The conversations of this window, by connection.
 #[derive(Default)]
 pub(crate) struct AiState {
+    /// A replacement must read the reference that the preceding save actually
+    /// committed; overlapping saves would otherwise leave a fresh orphan.
+    pub(crate) provider_declarations: tokio::sync::Mutex<()>,
     threads: Mutex<HashMap<ConnectionId, Vec<Arc<Thread>>>>,
     /// Row samples offered and not yet presented.
     pub(crate) samples: super::samples::SampleGrants,

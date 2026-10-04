@@ -37,8 +37,8 @@ use std::ops::Range;
 use oxyn_core::{ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    BinaryOperator, CopyIntoSnowflakeKind, Expr, ObjectType, Query, Set, SetExpr, Statement,
-    UnaryOperator, UtilityOption, Value,
+    BinaryOperator, CopyIntoSnowflakeKind, CopyTarget, Expr, ObjectType, Query, Set, SetExpr,
+    Statement, UnaryOperator, UtilityOption, Value,
 };
 use sqlparser::dialect::Dialect;
 use sqlparser::parser::Parser;
@@ -375,6 +375,8 @@ const fn risk_rank(risk: MutationRisk) -> u8 {
         MutationRisk::UnboundedDelete => 2,
         MutationRisk::Truncate => 3,
         MutationRisk::DropObject => 4,
+        MutationRisk::CopyToServerFile => 5,
+        MutationRisk::CopyServerProgram => 6,
         _ => u8::MAX,
     }
 }
@@ -555,14 +557,18 @@ fn statement_facts(statement: &Statement) -> Facts {
         // `MERGE` is bounded by its `ON` condition: no scope risk.
         Statement::Merge(_) => Facts::WRITE,
 
-        // `COPY t FROM …` loads into the table; `COPY t TO …` exports.
-        Statement::Copy { to, .. } => {
-            if *to {
-                Facts::READ
-            } else {
-                Facts::WRITE
+        // Server-side files and programs escape PostgreSQL's READ ONLY
+        // transaction: only STDOUT exports through the client connection.
+        Statement::Copy { to, target, .. } => match (to, target) {
+            (true, CopyTarget::Stdout) => Facts::READ,
+            (true, CopyTarget::File { .. }) => {
+                Facts::new(StatementIntent::Write, MutationRisk::CopyToServerFile)
             }
-        }
+            (_, CopyTarget::Program { .. }) => {
+                Facts::new(StatementIntent::Write, MutationRisk::CopyServerProgram)
+            }
+            _ => Facts::WRITE,
+        },
         Statement::CopyIntoSnowflake { kind, .. } => match kind {
             CopyIntoSnowflakeKind::Table => Facts::WRITE,
             CopyIntoSnowflakeKind::Location => Facts::READ,
@@ -851,6 +857,19 @@ const MUTATING_WORDS: [&str; 8] = [
 /// is a confirmation, that of a false negative is a silent `DELETE`.
 fn hides_a_mutation(text: &str, dialect: SqlDialect) -> bool {
     let words = split::words(text, dialect);
+    // A COPY program target is a server-side effect even if a future AST
+    // form misses it. Bare identifiers named `program` are still reads.
+    if words
+        .iter()
+        .any(|word| word.text.eq_ignore_ascii_case("copy"))
+        && words.windows(2).any(|pair| {
+            matches!(pair, [to, program]
+                if to.text.eq_ignore_ascii_case("to")
+                    && program.text.eq_ignore_ascii_case("program"))
+        })
+    {
+        return true;
+    }
     for (index, word) in words.iter().enumerate() {
         // `TRUNCATE(x, 2)` and `INSERT('abc', 1, 1, 'z')` are functions.
         if word.call {
@@ -942,7 +961,7 @@ mod tests {
     #[case("SHOW TABLES", StatementIntent::Read)]
     #[case("EXPLAIN SELECT 1", StatementIntent::Read)]
     #[case("EXPLAIN ANALYZE SELECT 1", StatementIntent::Read)]
-    #[case("COPY clients TO '/tmp/x.csv'", StatementIntent::Read)]
+    #[case("COPY clients TO '/tmp/x.csv'", StatementIntent::Write)]
     #[case("INSERT INTO t (a) VALUES (1)", StatementIntent::Write)]
     #[case("UPDATE t SET a = 1 WHERE id = 2", StatementIntent::Write)]
     #[case("DELETE FROM t WHERE id = 2", StatementIntent::Write)]
@@ -973,6 +992,56 @@ mod tests {
     fn the_rule_table(#[case] sql: &str, #[case] expected: StatementIntent) {
         let outcome = pg(sql);
         assert_eq!(outcome.intent, expected, "{sql} → {outcome:?}");
+    }
+
+    #[test]
+    fn copy_server_side_effects_are_mutating_and_stdout_stays_read() {
+        for (sql, reason) in [
+            (
+                "COPY (SELECT 1) TO PROGRAM 'x'",
+                "runs a program on the database server",
+            ),
+            (
+                "COPY t TO PROGRAM 'x' WITH (FORMAT csv)",
+                "runs a program on the database server",
+            ),
+            (
+                "COPY clients TO '/tmp/x.csv'",
+                "writes a file on the database server",
+            ),
+            (
+                "COPY (SELECT 1) TO '/tmp/x.csv' WITH (FORMAT csv)",
+                "writes a file on the database server",
+            ),
+        ] {
+            let outcome = pg(sql);
+            assert!(outcome.is_mutating(), "{sql}: {outcome:?}");
+            assert_eq!(outcome.intent, StatementIntent::Write, "{sql}");
+            assert!(
+                outcome
+                    .risk
+                    .reason()
+                    .is_some_and(|risk| risk.contains(reason)),
+                "{sql}: {outcome:?}"
+            );
+        }
+        for sql in [
+            "COPY t TO STDOUT",
+            "COPY (SELECT 1) TO STDOUT WITH (FORMAT csv)",
+        ] {
+            assert_eq!(pg(sql).intent, StatementIntent::Read, "{sql}");
+        }
+        for sql in [
+            "COPY t TO PROGRAM $$x$$",
+            "COPY t TO $$file$$",
+            "COPY t TO PROGRAM",
+            "COPY t TO '/tmp/x.csv' WITH (unsupported_option true)",
+        ] {
+            let outcome = pg(sql);
+            assert!(outcome.is_mutating(), "{sql}: {outcome:?}");
+            assert_eq!(outcome.intent, StatementIntent::Unknown, "{sql}");
+            assert_eq!(outcome.statements[0].basis, Basis::Unparsed, "{sql}");
+        }
     }
 
     #[test]
@@ -1386,6 +1455,10 @@ mod tests {
             SqlDialect::Postgres
         ));
         assert!(hides_a_mutation("SELECT 1; GRANT", SqlDialect::Postgres));
+        assert!(hides_a_mutation(
+            "COPY t TO PROGRAM 'x'",
+            SqlDialect::Postgres
+        ));
     }
 
     #[test]
