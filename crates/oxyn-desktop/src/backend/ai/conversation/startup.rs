@@ -103,7 +103,8 @@ impl Backend {
         }
 
         let (started, stop) = {
-            let _launching = self.inner.ai.launching.lock().await;
+            let launching = self.inner.ai.launch_lock(connection);
+            let _launching = launching.lock().await;
             match self
                 .inner
                 .ai
