@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md" sha256="8454226455e2" -->
+<!-- oxyn-translation source="docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md" sha256="6a4b2188804a" -->
 
 > Traduction française de [docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md](../../../../docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md). **La version anglaise fait foi.**
 
@@ -228,9 +228,12 @@ côté de la configuration qu'elle lit.
 
 Le port ne s'attend que depuis un contexte asynchrone : le plugin dessine le
 dialogue par `run_on_main_thread`, et une commande Tauri synchrone tourne sur
-ce thread ([I-05](../../CLAUDE.md#i-05)). `ai_answer_sample` reste synchrone —
-elle remet les colonnes à l'appel d'agent qui attend — et c'est **cet appel**,
-sur sa tâche, qui ouvre le dialogue avant de lire.
+ce thread ([I-05](../../CLAUDE.md#i-05)). `ai_answer_sample` est asynchrone :
+elle réserve le dialogue avant de consommer la demande, compose son texte à
+partir de la demande enregistrée et de la déclaration qui sert l'échange,
+puis ne remet les colonnes à l'appel d'agent qu'après confirmation native.
+Cet appel lit toujours par le bus. Une expiration ou une annulation pendant
+le dialogue ne laisse aucune réponse capable de libérer des lignes.
 
 Ce qui se teste, sans fenêtre ni `MockRuntime` :
 
