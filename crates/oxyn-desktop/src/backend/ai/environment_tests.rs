@@ -201,6 +201,61 @@ fn an_unavailable_keychain_never_falls_back_to_plaintext() {
     assert!(store.external_agents().list().expect("list").is_empty());
 }
 
+/// #177: a running agent holds the keychain values resolved at its spawn, so
+/// a declaration whose secrets changed must not reuse it — on the waiting and
+/// the conversation paths alike, which share this predicate.
+#[test]
+fn a_replaced_or_removed_secret_is_not_served_by_the_old_process() {
+    let store = Arc::new(oxyn_store::Store::open_in_memory().expect("store"));
+    let backend = Backend::assemble(store, Arc::new(MemorySecretStore::new())).expect("backend");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let view = backend
+            .save_external_agent(draft(false))
+            .await
+            .expect("save")
+            .expect("the test host confirms the declaration");
+        let first = backend.declared_agents().await.expect("list").remove(0);
+        assert!(
+            threads::launches_as(&first, &first),
+            "an unchanged declaration keeps its process"
+        );
+
+        let mut rotated = draft(false);
+        rotated.id = Some(view.id.clone());
+        rotated.env[0].value = "synthetic-rotated-token-177".into();
+        backend
+            .save_external_agent(rotated)
+            .await
+            .expect("replace")
+            .expect("confirmed");
+        let second = backend.declared_agents().await.expect("list").remove(0);
+        assert_eq!((&first.env, &first.args), (&second.env, &second.args));
+        assert!(
+            !threads::launches_as(&first, &second),
+            "a rotated key needs a new process"
+        );
+
+        let mut removed = draft(false);
+        removed.id = Some(view.id);
+        removed.env.remove(0);
+        backend
+            .save_external_agent(removed)
+            .await
+            .expect("replace")
+            .expect("confirmed");
+        let third = backend.declared_agents().await.expect("list").remove(0);
+        assert_eq!(second.env, third.env);
+        assert!(
+            !threads::launches_as(&second, &third),
+            "a removed key needs a new process"
+        );
+    });
+}
+
 #[test]
 fn the_declaration_dialog_names_a_secret_without_showing_it() {
     let mut agent = ExternalAgentConfig::new(ProviderId::for_new_agent(), "Test", "/bin/sh");
