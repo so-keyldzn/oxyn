@@ -147,11 +147,17 @@ impl Waiting {
 /// Whether a process launched from `launched` is the one `declared` would
 /// start. Not the label, nor the dates: the store rewrites `updated_at` on
 /// every save, and a renamed agent is the same program.
-fn launches_as(launched: &ExternalAgentConfig, declared: &ExternalAgentConfig) -> bool {
+///
+/// The keychain half of the environment counts as much as `env`: a replaced
+/// secret gets a fresh reference and the old entry is forgotten, so a child
+/// spawned from the old references still runs under the rotated key. The
+/// references are compared, never the values they resolve to.
+pub(super) fn launches_as(launched: &ExternalAgentConfig, declared: &ExternalAgentConfig) -> bool {
     launched.id == declared.id
         && launched.command == declared.command
         && launched.args == declared.args
         && launched.env == declared.env
+        && launched.env_secret_refs == declared.env_secret_refs
 }
 
 impl fmt::Debug for AiState {
