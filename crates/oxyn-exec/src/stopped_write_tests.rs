@@ -346,3 +346,123 @@ async fn a_stopped_read_is_cancelled_at_once() {
         "{events:?}"
     );
 }
+
+#[tokio::test]
+async fn a_sqlite_returning_write_stopped_mid_stream_is_not_announced_cancelled() {
+    // The real driver, not a script (issue #181): a `RETURNING` made all its
+    // changes at its first step, so a Stop while its rows stream proves no
+    // rollback. Terminal event and history must both stay ambiguous.
+    use oxyn_driver_sqlite::{BatchLimits, SqliteDriver};
+
+    let store = Arc::new(Store::open_in_memory().expect("store"));
+    let workspace = store
+        .workspaces()
+        .create("sqlite-stop")
+        .expect("workspace")
+        .id;
+    let config = ConnectionConfig::new("sqlite-stop", DriverId::sqlite())
+        .with_environment(Environment::Local)
+        .with_param(SqliteDriver::PATH, SqliteDriver::MEMORY);
+    store
+        .connections()
+        .save(workspace, &config)
+        .expect("connection");
+    let policy = Arc::new(DefaultPolicy::new());
+    policy.register(&config);
+    let mut drivers = oxyn_driver::DriverRegistry::new();
+    drivers
+        .register(Arc::new(
+            // One row per batch: the stream outlasts the Stop.
+            SqliteDriver::new().with_batch_limits(BatchLimits::new().with_max_rows(1)),
+        ))
+        .expect("SQLite registration");
+    let executor = Executor::builder(Arc::clone(&store), policy)
+        .with_drivers(Arc::new(drivers))
+        .with_workspace(workspace)
+        .build();
+    executor.register_connection(&config);
+    let Ok(Outcome::Connected { session, .. }) = executor
+        .dispatch(
+            Actor::Human,
+            Command::Connect {
+                connection: config.id,
+            },
+            &CancelToken::new(),
+        )
+        .await
+    else {
+        panic!("an in-memory database always opens");
+    };
+    let writable = ExecLimits::default().writable().with_timeout(None);
+    let execute = |text: &str| Command::Execute {
+        connection: config.id,
+        session,
+        request: Box::new(ExecRequest::new(QueryLanguage::SQL, text).with_limits(writable.clone())),
+    };
+    executor
+        .dispatch(
+            Actor::Human,
+            execute("CREATE TABLE t(id INTEGER)"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("fixture SQL");
+
+    let statement = "WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s \
+                     WHERE n < 100000) INSERT INTO t SELECT n FROM s RETURNING id";
+    let mut events = executor.subscribe();
+    let stop = CancelToken::new();
+    let run = executor.dispatch(Actor::Human, execute(statement), &stop);
+    let outcome = tokio::time::timeout(GIVE_UP_AFTER, async {
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                outcome = &mut run => break outcome,
+                event = events.recv() => {
+                    if matches!(event.map(|seen| seen.event), Ok(Event::BatchReady { .. })) {
+                        stop.cancel();
+                        break run.await;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("a stopped execution must end");
+
+    let Err(error) = outcome else {
+        panic!("expected an ambiguous failure, got {outcome:?}");
+    };
+    assert!(!error.is_cancelled(), "{error:?}");
+    assert_eq!(error.class(), oxyn_core::ErrorClass::Ambiguous, "{error:?}");
+    let mut terminal = None;
+    while let Ok(event) = events.try_recv() {
+        if event.event.is_terminal() {
+            terminal = Some(event.event);
+        }
+    }
+    assert!(
+        matches!(
+            terminal,
+            Some(Event::Failed {
+                retryable: false,
+                ..
+            })
+        ),
+        "{terminal:?}"
+    );
+
+    let recorded = store
+        .history()
+        .recent(10)
+        .expect("history")
+        .into_iter()
+        .find(|entry| entry.record.statement == statement)
+        .expect("the stopped write is in the history");
+    assert_ne!(recorded.record.status, oxyn_store::HistoryStatus::Cancelled);
+    assert_eq!(
+        recorded.record.error_class,
+        Some(oxyn_core::ErrorClass::Ambiguous)
+    );
+    assert!(recorded.record.requires_reconciliation());
+}

@@ -278,9 +278,10 @@ The verdict is only as sound as the driver's: MySQL answers `Cancelled` for a
 write only once the server reported the kill on that very statement, but
 PostgreSQL still answers it for a write stopped before any of its rows arrived
 — any write without `RETURNING` — without reading the server's answer to its
-cancel request, and SQLite answers it as soon as its token fires, even after a
-`RETURNING` that already made all its changes at its first step. Both are
-known gaps, not guarantees.
+cancel request, a known gap, not a guarantee. SQLite answers `Cancelled` only
+for a write that never started; a write it interrupts is ambiguous, one whose
+last row was read is `Completed`, and a `RETURNING` stopped between two batches
+— its changes already made at its first step — is `OutcomeUnknown`.
 
 PostgreSQL preparation examines the column types, including domain
 bases and array elements. Types without binary output, internal
