@@ -84,10 +84,18 @@ export function useDraftModels(
     }
   )
 
+  // Keyed on the fields, not on `auto`: a remote endpoint without a key keeps
+  // `auto` at `null` while a click lists it anyway, and that answer must not
+  // survive the next endpoint.
   React.useEffect(() => {
     // Whatever was in flight answers a question nobody asks any more.
-    const turn = ++latest.current
+    latest.current += 1
+    setModels({ status: "idle" })
     setTest({ status: "idle" })
+  }, [kind, endpoint, key])
+
+  React.useEffect(() => {
+    const turn = ++latest.current
     if (auto === null || list === undefined) {
       setModels({ status: "idle" })
       return

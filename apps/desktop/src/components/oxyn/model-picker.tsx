@@ -154,13 +154,30 @@ export function ModelPicker({
   onRefresh,
 }: ModelPickerProps) {
   const listed = models.status === "ok" ? models.models : null
+  // What the user is typing; `null` shows the selection's label.
   const [input, setInput] = React.useState<string | null>(null)
   // The text of the selection is not a search: opening shows every model.
-  const all = modelEntries(listed, value, "", providerLabel)
-  const selected = all.find((entry) => entry.id === value) ?? null
+  const all = React.useMemo(
+    () => modelEntries(listed, value, "", providerLabel),
+    [listed, value, providerLabel]
+  )
+  // Kept by identity: a new object each render reads to the combobox as a new
+  // selection, and it puts its label back over what is being typed.
+  const selected = React.useMemo(
+    () => all.find((entry) => entry.id === value) ?? null,
+    [all, value]
+  )
   const query = input === null || input === selected?.label ? "" : input
   const entries =
     query === "" ? all : modelEntries(listed, value, query, providerLabel)
+
+  // Leaving the field with an id typed but not chosen keeps that id: saving
+  // the previous model instead would go against what the user just wrote. An
+  // emptied field keeps the value — clearing it is never silent.
+  const commitTyped = () => {
+    const typed = query.trim()
+    if (typed !== "" && typed !== value) onChange(typed)
+  }
 
   return (
     <div className="flex flex-col gap-2">
@@ -173,9 +190,12 @@ export function ModelPicker({
         itemToStringLabel={(entry) => entry.label}
         itemToStringValue={(entry) => entry.id}
         isItemEqualToValue={(item, chosen) => item.id === chosen.id}
+        inputValue={input ?? selected?.label ?? ""}
         onInputValueChange={setInput}
         onValueChange={(entry) => {
-          if (entry !== null) onChange(entry.id)
+          if (entry === null) return
+          setInput(null)
+          onChange(entry.id)
         }}
       >
         <ComboboxInput
@@ -187,7 +207,11 @@ export function ModelPicker({
           showTrigger={false}
           placeholder="Search or type a model id"
           aria-invalid={invalid}
-          onBlur={onBlur}
+          onBlur={() => {
+            commitTyped()
+            setInput(null)
+            onBlur?.()
+          }}
           {...TEXT_FIELD_ATTRIBUTES}
         />
         <ComboboxContent>

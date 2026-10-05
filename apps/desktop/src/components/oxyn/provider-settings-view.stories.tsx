@@ -182,10 +182,9 @@ export const NothingIsClearedBeforeTheSaveSucceeds: Story = {
       canvas.getByLabelText("Endpoint"),
       "https://api.anthropic.com"
     )
-    // Typed, then kept as the id with Enter.
     await userEvent.type(
       canvas.getByLabelText("Default model"),
-      "claude-sonnet-5{Enter}"
+      "claude-sonnet-5"
     )
     await userEvent.type(canvas.getByLabelText("API key"), "sk-ant-refused")
     await userEvent.click(canvas.getByRole("button", { name: "Declare" }))
@@ -259,8 +258,10 @@ export const CredentialsInEndpointAreRefusedWhileTyping: Story = {
     // At once, not when the form is complete.
     await expect(await canvas.findByText(CREDENTIALS_IN_ENDPOINT)).toBeVisible()
     await userEvent.type(canvas.getByLabelText("Name"), "Work")
-    await userEvent.type(canvas.getByLabelText("Default model"), "gpt{Enter}")
-    await userEvent.click(canvas.getByRole("button", { name: "Declare" }))
+    // Found first: the open list hides the rest of the form from roles.
+    const declare = canvas.getByRole("button", { name: "Declare" })
+    await userEvent.type(canvas.getByLabelText("Default model"), "gpt")
+    await userEvent.click(declare)
     await expect(args.onSaveProvider).not.toHaveBeenCalled()
   },
 }
@@ -276,7 +277,7 @@ export const TheKeyIsSentOnceAndForgotten: Story = {
     )
     await userEvent.type(
       canvas.getByLabelText("Default model"),
-      "claude-sonnet-5{Enter}"
+      "claude-sonnet-5"
     )
     await userEvent.type(
       canvas.getByLabelText("API key"),
@@ -414,5 +415,68 @@ export const PickedModelSurvivesTheEdit: Story = {
       await page.findByRole("option", { name: /^Vega mini/ })
     ).toHaveAttribute("aria-selected", "true")
     await userEvent.keyboard("{Escape}")
+  },
+}
+
+/** An id typed and never picked is the one saved, not the one it replaces. */
+export const TypedModelIsSaved: Story = {
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Edit Work account" })
+    )
+    const model = canvas.getByLabelText("Default model")
+    await expect(model).toHaveValue("claude-sonnet-5")
+    // Found first: the open list hides the rest of the form from roles.
+    const save = canvas.getByRole("button", { name: "Save changes" })
+    await userEvent.clear(model)
+    await userEvent.type(model, "my-deployment")
+    // Straight to the button, the list still open: nothing was picked.
+    await userEvent.click(save)
+    await waitFor(() =>
+      expect(args.onSaveProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "my-deployment" })
+      )
+    )
+  },
+}
+
+let answerFirstEndpoint = () => {}
+
+/**
+ * Refresh on a remote endpoint without a key, then edit the endpoint before
+ * the answer: that answer is the first endpoint's list, never the second's.
+ */
+export const AnswerForThePreviousEndpointIsDropped: Story = {
+  args: {
+    providers: [],
+    agents: [],
+    onListDraftModels: fn(
+      () =>
+        new Promise((resolve) => {
+          answerFirstEndpoint = () => resolve(listed(draftModels))
+        })
+    ),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const endpoint = canvas.getByLabelText("Endpoint")
+    await userEvent.type(endpoint, "https://a.example.test/v1")
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Refresh models" })
+    )
+    await expect(await canvas.findByText("Listing models…")).toBeVisible()
+    await expect(args.onListDraftModels).toHaveBeenCalledOnce()
+    await userEvent.clear(endpoint)
+    await userEvent.type(endpoint, "https://b.example.test/v1")
+    answerFirstEndpoint()
+    await expect(
+      await canvas.findByText(/Fill in the endpoint and the API key/)
+    ).toBeVisible()
+    // Long enough for the dropped answer to have landed, had it been kept.
+    await new Promise((resolve) => window.setTimeout(resolve, 50))
+    await expect(
+      canvas.queryByText("3 models available.")
+    ).not.toBeInTheDocument()
   },
 }

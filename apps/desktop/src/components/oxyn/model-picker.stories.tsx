@@ -100,16 +100,16 @@ export const OpenAndSearch: Story = {
     await userEvent.type(input(), "lyra-1")
     await waitFor(async () =>
       expect(await optionNames()).toEqual([
-        "Lyramodel-lyra-1",
         "Use “lyra-1” as model id",
+        "Lyramodel-lyra-1",
       ])
     )
     await userEvent.clear(input())
     await userEvent.type(input(), "vega")
     await waitFor(async () =>
       expect(await optionNames()).toEqual([
-        "Vega minimodel-vega-mini",
         "Use “vega” as model id",
+        "Vega minimodel-vega-mini",
       ])
     )
     await userEvent.keyboard("{Escape}")
@@ -130,6 +130,54 @@ export const KeyboardSelect: Story = {
     )
     // The name is shown; the id is what the form stores.
     await waitFor(() => expect(input()).toHaveValue("Lyra"))
+  },
+}
+
+/** Enter keeps what was typed, not the listed model it happens to match. */
+export const EnterKeepsTheTypedId: Story = {
+  play: async ({ args }) => {
+    await userEvent.type(input(), "vega")
+    await waitFor(async () =>
+      expect(await optionNames()).toContain("Use “vega” as model id")
+    )
+    await userEvent.keyboard("{Enter}")
+    await waitFor(() => expect(args.onChange).toHaveBeenCalledWith("vega"))
+    await expect(args.onChange).not.toHaveBeenCalledWith("model-vega-mini")
+  },
+}
+
+/** An exact id is still the one Enter picks. */
+export const EnterPicksTheExactId: Story = {
+  play: async ({ args }) => {
+    await userEvent.type(input(), "model-lyra-1")
+    await waitFor(async () =>
+      expect(await optionNames()).toEqual(["Lyramodel-lyra-1"])
+    )
+    await userEvent.keyboard("{Enter}")
+    await waitFor(() =>
+      expect(args.onChange).toHaveBeenCalledWith("model-lyra-1")
+    )
+    await waitFor(() => expect(input()).toHaveValue("Lyra"))
+  },
+}
+
+/** Leaving the field keeps the typed id; leaving it emptied clears nothing. */
+export const LeavingKeepsTheTypedId: Story = {
+  args: { value: "model-orion-2" },
+  play: async ({ args }) => {
+    await expect(input()).toHaveValue("Orion 2")
+    await userEvent.clear(input())
+    await userEvent.tab()
+    await expect(args.onChange).not.toHaveBeenCalled()
+    await waitFor(() => expect(input()).toHaveValue("Orion 2"))
+    await userEvent.clear(input())
+    await userEvent.type(input(), "my-deployment")
+    await userEvent.tab()
+    await waitFor(() =>
+      expect(args.onChange).toHaveBeenCalledWith("my-deployment")
+    )
+    await expect(args.onChange).toHaveBeenCalledOnce()
+    await waitFor(() => expect(input()).toHaveValue("my-deployment"))
   },
 }
 

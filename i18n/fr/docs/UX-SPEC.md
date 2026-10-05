@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="fdd528ba2684" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="ab5401226179" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1638,7 +1638,11 @@ ils diffèrent. Ce qui est enregistré, c'est l'identifiant.
 * **La saisie n'est jamais bloquée** : quoi que dise la liste, « Use "…" as
   model id » garde ce qui a été tapé — une passerelle maison, un modèle privé,
   un déploiement Azure se déclarent avec l'identifiant que l'utilisateur
-  connaît.
+  connaît. Elle vient en tête, si bien qu'Entrée garde « vega » plutôt que le
+  modèle listé qui lui correspond par hasard ; seul un identifiant listé tapé
+  exactement passe en tête à sa place. Quitter le champ — pour enregistrer,
+  par exemple — garde un identifiant tapé jamais choisi ; le quitter vidé garde
+  le modèle courant.
 * **Le modèle courant n'est jamais remplacé en silence** : un modèle que le
   fournisseur ne liste plus reste sélectionné, en tête de liste, marqué
   « Current model — unavailable from provider ».

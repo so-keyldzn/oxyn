@@ -72,6 +72,31 @@ describe("modelEntries", () => {
       )
     ).toBe(false)
   })
+
+  // The first entry is the one Enter picks.
+  it("puts the typed id first when no listed id is exactly it", () => {
+    expect(
+      modelEntries(listed, "gpt-alpha", "gpt", "OpenAI").map(
+        (entry) => entry.id
+      )
+    ).toEqual(["gpt", "gpt-alpha", "gpt-beta", "gpt-gamma"])
+  })
+
+  it("puts the exact id first, and offers no typed id beside it", () => {
+    expect(
+      modelEntries(listed, "gpt-alpha", "gpt-gamma", "OpenAI").map(
+        (entry) => entry.id
+      )
+    ).toEqual(["gpt-gamma"])
+    expect(
+      modelEntries(
+        [model("gpt-beta-long"), model("gpt-beta")],
+        "",
+        "gpt-beta",
+        "OpenAI"
+      ).map((entry) => entry.id)
+    ).toEqual(["gpt-beta", "gpt-beta-long"])
+  })
 })
 
 describe("probeOf", () => {

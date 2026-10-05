@@ -42,8 +42,11 @@ function matches(model: ModelChoice, query: string, providerLabel: string) {
 
 /**
  * The entries offered for `query`: the current value first, then the
- * provider's models in the provider's order, then the typed id when nothing
- * listed carries it exactly.
+ * provider's models in the provider's order.
+ *
+ * What was typed leads, since the first entry is the one Enter picks: the
+ * entry carrying it exactly, or else the typed id itself — « vega » then Enter
+ * keeps « vega », never the « model-vega-mini » it happens to match.
  *
  * The current value is never dropped: a model the provider no longer lists is
  * shown, flagged, and stays selected until the user picks another.
@@ -91,18 +94,13 @@ export function modelEntries(
     })
   }
   const typed = query.trim()
-  if (
-    typed !== "" &&
-    typed !== current &&
-    !listed.some((model) => model.id === typed)
-  )
-    entries.push({
-      id: typed,
-      label: typed,
-      origin: "manual",
-      unavailable: false,
-    })
-  return entries
+  if (typed === "") return entries
+  const exact = entries.find((entry) => entry.id === typed)
+  if (exact) return [exact, ...entries.filter((entry) => entry !== exact)]
+  return [
+    { id: typed, label: typed, origin: "manual", unavailable: false },
+    ...entries,
+  ]
 }
 
 /** The values of the form a list depends on. */

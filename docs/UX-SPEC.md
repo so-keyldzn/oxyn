@@ -1567,7 +1567,11 @@ id.
 
 * **Typing is never blocked**: whatever the list says, "Use "…" as model id"
   keeps what was typed — a custom gateway, a private model, an Azure
-  deployment are declared with the id the user knows.
+  deployment are declared with the id the user knows. It comes first, so
+  Enter keeps "vega" rather than the listed model it happens to match; only a
+  listed id typed exactly comes first instead. Leaving the field — to save,
+  for instance — keeps a typed id that was never picked; leaving it emptied
+  keeps the current model.
 * **The current model is never replaced in silence**: a model the provider no
   longer lists stays selected, first in the list, marked "Current model —
   unavailable from provider".
