@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="0f83e97e3073" -->
+<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="8d3649369455" -->
 
 > Traduction française de [docs/adr/0051-automatic-updates-from-github-releases.md](../../../../docs/adr/0051-automatic-updates-from-github-releases.md). **La version anglaise fait foi.**
 
@@ -223,13 +223,21 @@ personne avant que le mainteneur publie.
   téléchargement vérifié, jamais au lancement : le lancement ne lit que
   `updates.json` et `update-notice.json`, chacun borné à 64 Kio.
 * **Une opération à la fois.** Une vérification pendant `checking`,
-  `downloading` ou `ready` ne fait rien ; `ready` dure jusqu'à la relance.
+  `downloading` ou `ready` ne fait rien ; `ready` dure jusqu'à la relance, ou
+  jusqu'à ce que les mises à jour automatiques soient coupées.
 * **Échecs.** Un échec réseau ou serveur en arrière-plan est gardé en
   `error{offline|server, retryable: true}`, affiché dans les Réglages et nulle
   part ailleurs, et retenté à l'échéance suivante ; un échec de signature ou
   d'installation est toujours affiché.
 * **Le mode automatique coupé** repose dans `disabled{user}` ; une
-  vérification manuelle part encore de là.
+  vérification manuelle part encore de là. Le couper, comme l'annonce
+  l'interrupteur (UX-SPEC), interrompt un téléchargement en cours et
+  abandonne une mise à jour `ready` avec ses octets, sous un nouveau ticket
+  pour que l'achèvement tardif soit refusé : quitter n'installe alors rien. Un
+  téléchargement lancé à la main alors qu'il était déjà coupé reste celui de
+  l'utilisateur. Les enregistrements concurrents de la préférence sont
+  sérialisés de l'écriture à la publication, chacun par un fichier temporaire
+  qui lui est propre.
 * **Les notes de version** sont plafonnées à 4 Kio, coupées sur une frontière
   de caractère ([I-09](../../CLAUDE.md#i-09)), et rendues en texte brut.
 
