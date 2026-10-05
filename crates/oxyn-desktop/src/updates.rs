@@ -93,6 +93,9 @@ struct Shared {
     /// drops the HTTP request with it. Locked before `machine`.
     operation: Mutex<Option<JoinHandle<()>>>,
     scheduler: Mutex<Option<JoinHandle<()>>>,
+    /// Held by a preference save from its write to its publication. Locked
+    /// before `operation`.
+    saving: Mutex<()>,
     /// Wakes the scheduler before its hour: automatic updates turned on.
     wake: Notify,
     last_success: Mutex<Option<DateTime<Utc>>>,
@@ -173,6 +176,7 @@ impl Updates {
                 pending: Mutex::new(None),
                 operation: Mutex::new(None),
                 scheduler: Mutex::new(None),
+                saving: Mutex::new(()),
                 wake: Notify::new(),
                 last_success: Mutex::new(None),
                 restart: AtomicBool::new(false),
@@ -239,6 +243,8 @@ impl Updates {
     }
 
     /// Records the preference, then applies it. Blocking: the blocking pool.
+    /// Turning it off stops the download under way and drops the bytes of
+    /// an update not installed yet.
     ///
     /// # Errors
     /// The preference could not be written; nothing changed.
@@ -248,13 +254,24 @@ impl Updates {
                 "This system gives Oxyn no configuration folder to keep the preference in.",
             ));
         };
+        // One save at a time, from the write to the publication: two windows
+        // saving opposite values would otherwise leave the file saying one
+        // and the windows the other.
+        let _saving = self.shared.saving.lock();
         preference::write(folder, automatic).map_err(|error| IpcError {
             message: format!("The preference could not be saved: {error}"),
             retryable: true,
         })?;
         {
+            let mut operation = self.shared.operation.lock();
             let mut machine = self.shared.machine.lock();
-            machine.set_automatic(automatic);
+            if machine.set_automatic(automatic) {
+                if let Some(task) = operation.take() {
+                    task.abort();
+                }
+                *self.shared.pending.lock() = None;
+                tracing::info!("automatic updates turned off; pending update discarded");
+            }
             self.shared.publish(&machine);
         }
         if automatic {
