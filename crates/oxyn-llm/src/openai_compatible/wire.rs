@@ -361,23 +361,89 @@ impl WireError {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Corps de `GET /models`.
-#[derive(Debug, Default, Deserialize)]
+///
+/// Two shapes are read: OpenAI's `{"data": [...]}`, and the bare array
+/// Together AI returns (RESEARCH-NOTES, "Model listing", 2026-10-04). An object
+/// without `data` is refused, not read as an empty list: a native endpoint
+/// (`/api/tags`, `/api/v1/models`) answering at this address would otherwise
+/// show « no model » where the truth is « wrong address ».
+#[derive(Debug, Default)]
 pub(crate) struct ModelsResponse {
     /// Deliberately untyped: a malformed entry must not make the whole list
     /// fail. Each element is parsed separately by [`parse_models`].
-    #[serde(default, deserialize_with = "crate::http::bounded_entries")]
     pub(crate) data: Vec<serde_json::Value>,
 }
 
+/// The `data` member, bounded like a bare array.
+#[derive(Deserialize)]
+struct Entries(#[serde(deserialize_with = "crate::http::bounded_entries")] Vec<serde_json::Value>);
+
+impl<'de> Deserialize<'de> for ModelsResponse {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Body;
+        impl<'de> serde::de::Visitor<'de> for Body {
+            type Value = ModelsResponse;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a model list: an object with `data`, or an array")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                Ok(ModelsResponse {
+                    data: crate::http::bounded_seq(seq)?,
+                })
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut data = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "data" && data.is_none() {
+                        data = Some(map.next_value::<Entries>()?.0);
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                data.map(|data| ModelsResponse { data })
+                    .ok_or_else(|| serde::de::Error::missing_field("data"))
+            }
+        }
+        deserializer.deserialize_any(Body)
+    }
+}
+
 /// An entry of the model list.
+///
+/// Every field but `id` is optional and read leniently: each provider of this
+/// family names its metadata differently (RESEARCH-NOTES, "Model listing",
+/// 2026-10-04), and a value out of range loses the field, never the model.
 #[derive(Debug, Deserialize)]
 pub(crate) struct WireModel {
     id: String,
-    #[serde(default)]
+    /// OpenRouter, DeepSeek.
+    #[serde(default, deserialize_with = "lenient_string")]
     name: Option<String>,
-    /// Declared by OpenRouter; absent at OpenAI, Ollama and LM Studio.
-    #[serde(default)]
+    /// Together AI.
+    #[serde(default, deserialize_with = "lenient_string")]
+    display_name: Option<String>,
+    /// OpenRouter, Together AI, xAI.
+    #[serde(default, deserialize_with = "lenient_u32")]
     context_length: Option<u32>,
+    /// Groq, DeepSeek.
+    #[serde(default, deserialize_with = "lenient_u32")]
+    context_window: Option<u32>,
+    /// Mistral.
+    #[serde(default, deserialize_with = "lenient_u32")]
+    max_context_length: Option<u32>,
+    /// Together AI's kind of model: `chat`, `language`, `code`, `image`,
+    /// `embedding`, `moderation`, `rerank`.
+    #[serde(default, rename = "type", deserialize_with = "lenient_string")]
+    kind: Option<String>,
     #[serde(default)]
     top_provider: Option<TopProvider>,
     #[serde(default)]
@@ -389,8 +455,36 @@ pub(crate) struct WireModel {
 
 #[derive(Debug, Deserialize)]
 struct TopProvider {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u32")]
     context_length: Option<u32>,
+}
+
+/// A count that does not fit, or is not a count, is not declared.
+fn lenient_u32<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u32>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_u64().and_then(|n| u32::try_from(n).ok()))
+}
+
+/// A label that is not a string is not declared.
+fn lenient_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::String(text) => Ok(Some(text)),
+        _ => Ok(None),
+    }
+}
+
+/// Kinds Together AI documents that no chat request can use.
+const NOT_CHAT_KINDS: [&str; 4] = ["image", "embedding", "moderation", "rerank"];
+
+impl WireModel {
+    /// Can a chat request use this model, as far as the provider says?
+    fn serves_chat(&self) -> bool {
+        self.kind
+            .as_deref()
+            .is_none_or(|kind| !NOT_CHAT_KINDS.contains(&kind))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,6 +500,8 @@ impl From<WireModel> for ModelInfo {
     fn from(raw: WireModel) -> Self {
         let context = raw
             .context_length
+            .or(raw.context_window)
+            .or(raw.max_context_length)
             .or_else(|| raw.top_provider.as_ref().and_then(|t| t.context_length));
 
         // The provider says nothing about tools in most cases: `Unknown` is
@@ -427,7 +523,7 @@ impl From<WireModel> for ModelInfo {
         };
 
         let mut info = Self::new(raw.id);
-        if let Some(display_name) = raw.name {
+        if let Some(display_name) = raw.name.or(raw.display_name) {
             info = info.with_display_name(display_name);
         }
         if let Some(window) = context {
@@ -478,7 +574,8 @@ pub(crate) fn parse_models(response: ModelsResponse) -> Vec<ModelInfo> {
     let mut ignored = 0_usize;
     for entry in response.data {
         match serde_json::from_value::<WireModel>(entry) {
-            Ok(raw) => infos.push(ModelInfo::from(raw)),
+            Ok(raw) if raw.serves_chat() => infos.push(ModelInfo::from(raw)),
+            Ok(_) => {}
             Err(_) => ignored += 1,
         }
     }
@@ -711,6 +808,89 @@ mod tests {
             serde_json::from_str(r#"{"data":[{"id":"a","top_provider":{"context_length":8192}}]}"#)
                 .expect("list tolerated");
         assert_eq!(parse_models(response)[0].context_window, Some(8192));
+    }
+
+    #[test]
+    fn a_bare_array_is_a_model_list() {
+        // Together AI's shape.
+        let response: ModelsResponse = serde_json::from_str(
+            r#"[{"id":"meta/llama","display_name":"Llama","context_length":131072,"type":"chat"}]"#,
+        )
+        .expect("bare array read");
+        let infos = parse_models(response);
+        assert_eq!(infos[0].id, "meta/llama");
+        assert_eq!(infos[0].display_name, "Llama");
+        assert_eq!(infos[0].context_window, Some(131_072));
+    }
+
+    #[test]
+    fn an_object_without_data_is_not_an_empty_list() {
+        // A native endpoint answering at this address: wrong address, not « no
+        // model ».
+        for body in [
+            r#"{"models":[{"name":"llama3"}]}"#,
+            "{}",
+            r#"{"data":3}"#,
+            "3",
+        ] {
+            assert!(
+                serde_json::from_str::<ModelsResponse>(body).is_err(),
+                "`{body}` must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_array_is_bounded_like_a_wrapped_one() {
+        let entries = vec![serde_json::json!({"id": "m"}); crate::http::MAX_MODELS + 1];
+        let body = serde_json::to_string(&entries).expect("serialized");
+        let err = serde_json::from_str::<ModelsResponse>(&body).expect_err("too many entries");
+        assert!(err.to_string().contains("too many entries"), "{err}");
+    }
+
+    #[test]
+    fn every_name_of_the_context_window_is_read() {
+        let response: ModelsResponse = serde_json::from_str(
+            r#"{"data":[
+                {"id":"groq","context_window":131072},
+                {"id":"mistral","max_context_length":32768},
+                {"id":"deepseek","name":"DeepSeek","context_window":65536}
+            ]}"#,
+        )
+        .expect("list tolerated");
+        let infos = parse_models(response);
+        assert_eq!(infos[0].context_window, Some(131_072));
+        assert_eq!(infos[1].context_window, Some(32_768));
+        assert_eq!(infos[2].context_window, Some(65_536));
+        assert_eq!(infos[2].display_name, "DeepSeek");
+    }
+
+    #[test]
+    fn an_out_of_range_field_loses_the_field_not_the_model() {
+        let response: ModelsResponse = serde_json::from_str(
+            r#"{"data":[
+                {"id":"a","context_length":-1,"name":42},
+                {"id":"b","context_window":99999999999},
+                {"id":"c","context_length":1.5,"display_name":null}
+            ]}"#,
+        )
+        .expect("list tolerated");
+        let infos = parse_models(response);
+        let ids: Vec<&str> = infos.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+        assert!(infos.iter().all(|info| info.context_window.is_none()));
+        assert_eq!(infos[0].display_name, "a");
+    }
+
+    #[test]
+    fn kinds_no_conversation_can_use_are_left_out() {
+        let response: ModelsResponse = serde_json::from_str(
+            r#"[{"id":"chat","type":"chat"},{"id":"embed","type":"embedding"},
+                {"id":"img","type":"image"},{"id":"code","type":"code"},{"id":"plain"}]"#,
+        )
+        .expect("list tolerated");
+        let ids: Vec<String> = parse_models(response).into_iter().map(|f| f.id).collect();
+        assert_eq!(ids, ["chat", "code", "plain"]);
     }
 
     #[test]

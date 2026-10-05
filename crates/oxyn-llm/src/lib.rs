@@ -131,7 +131,7 @@ pub use budget::{BudgetExceeded, GenerationBudget};
 pub use error::LlmError;
 pub use gemini::GeminiProvider;
 pub use openai_compatible::{AuthStyle, OpenAiCompatibleProvider};
-pub use provider::{LlmProvider, ProviderId, ProviderRegistry, build_provider};
+pub use provider::{LlmProvider, ProviderId, ProviderRegistry, build_provider, list_models};
 pub use reach::{Reach, endpoint_reach};
 pub use reasoning::{ReasoningBlock, ReasoningEffort};
 pub use secret::ApiKey;

@@ -18,6 +18,9 @@
 //!   ([I-03](../../../../CLAUDE.md#i-03));
 //! * call [`ai_provider_models`] — sends no base content of its own, and a
 //!   conversation's context only leaves on a question typed in the panel;
+//! * call [`ai_list_draft_models`] with an address and a key of its choosing —
+//!   the key goes to that address and nowhere else, which is what typing it in
+//!   the form already allows; a stored key only follows its own endpoint;
 //! * declare an **external agent**, which is a program Oxyn will run — held
 //!   behind a native confirmation that names the exact command, drawn by the
 //!   host and not by the webview ([`ai_save_external_agent`]).
@@ -31,8 +34,8 @@ use crate::commands::windows::{bring_to_front, caller};
 use crate::ipc::ai::{
     AgentDraft, AgentPresetDraft, AgentSettingAnswer, AgentSettingChange, AgentStart,
     AgentStartRequest, AiUpdate, AskRequest, AskStarted, DeclaredProvider, DestinationChoice,
-    ExternalAgent, ModelChoice, OrphanThreadSummary, ProposalTarget, ProviderDraft, PrunedHistory,
-    SampleRequest, SchemaProposal, ThreadSummary, ThreadView,
+    ExternalAgent, ModelChoice, ModelListing, ModelProbe, OrphanThreadSummary, ProposalTarget,
+    ProviderDraft, PrunedHistory, SampleRequest, SchemaProposal, ThreadSummary, ThreadView,
 };
 use crate::ipc::{CatalogAddress, IpcError};
 
@@ -112,6 +115,22 @@ pub async fn ai_provider_models(
     id: String,
 ) -> Result<Vec<ModelChoice>, IpcError> {
     backend.provider_models(&id).await
+}
+
+/// Lists the models of the endpoint a provider form describes, before it is
+/// saved.
+///
+/// Sends the typed key — or, on an unchanged endpoint, the stored one — to
+/// that endpoint only; persists nothing, writes nothing to the keychain. A
+/// provider's refusal comes back as a `failed` listing; an `Err` means the
+/// request itself was malformed.
+#[tauri::command]
+pub async fn ai_list_draft_models(
+    backend: State<'_, Backend>,
+    probe: ModelProbe,
+    refresh: bool,
+) -> Result<ModelListing, IpcError> {
+    backend.list_draft_models(probe, refresh).await
 }
 
 /// Declares an external agent, once the user confirmed the exact command.

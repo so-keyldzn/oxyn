@@ -106,6 +106,8 @@ pub(crate) struct AiState {
     launching: Mutex<HashMap<ConnectionId, Arc<tokio::sync::Mutex<()>>>>,
     /// Model transports kept between questions.
     pub(crate) transports: super::transports::Transports,
+    /// Model lists endpoints gave, keyed by endpoint and never by key.
+    pub(crate) model_lists: super::ModelLists,
     /// Serializes legacy environment upgrades so two lists never mint competing references.
     pub(crate) environment_migration: tokio::sync::Mutex<()>,
     /// What this launch's prune removed, for the history panel to say.
