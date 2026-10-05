@@ -130,14 +130,18 @@ impl AnthropicProvider {
     /// # Errors
     /// Unreadable base URL, or HTTP client impossible to build.
     pub fn with_base_url(api_key: impl Into<ApiKey>, base_url: &str) -> Result<Self> {
-        Self::with_base_url_and_reach(api_key, base_url, crate::Reach::Unresolved)
+        Ok(Self::with_base_url_and_reach(
+            api_key,
+            base_url,
+            crate::Reach::Unresolved,
+        )?)
     }
 
     pub(crate) fn with_base_url_and_reach(
         api_key: impl Into<ApiKey>,
         base_url: &str,
         reach: crate::Reach,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, LlmError> {
         let id = ProviderId::anthropic();
         let parsed = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
@@ -330,6 +334,52 @@ impl AnthropicProvider {
     ) -> Result<T> {
         Ok(http::read_json(&ProviderId::anthropic(), response, subject, None).await?)
     }
+
+    /// The model list, every page walked under a bound, failures typed.
+    ///
+    /// Typed rather than projected onto [`oxyn_core::OxynError`]: listing models
+    /// tells a refused key (`401`) from a key without the right (`403`), which
+    /// the projection merges.
+    pub(crate) async fn fetch_models(&self) -> std::result::Result<Vec<ModelInfo>, LlmError> {
+        let mut infos = Vec::new();
+        let mut after: Option<String> = None;
+
+        for _ in 0..MAX_MODEL_PAGES {
+            let mut url = self.join(MODELS_PATH)?;
+            url.query_pairs_mut()
+                .append_pair("limit", &MODELS_PAGE_SIZE.to_string());
+            if let Some(cursor) = &after {
+                url.query_pairs_mut().append_pair("after_id", cursor);
+            }
+
+            let request = self.authorize(self.client.get(url))?;
+            // No cancellation here: listing models is a short request, and the
+            // trait passes no token.
+            let response = request.send().await.map_err(|err| self.transport(&err))?;
+            if !response.status().is_success() {
+                return Err(self.failure(response, None).await);
+            }
+
+            let raw: wire::ModelsResponse =
+                http::read_json(&ProviderId::anthropic(), response, "model list", None).await?;
+            let more = raw.has_more;
+            let last = raw.last_id.clone();
+            infos.extend(wire::parse_models(raw));
+            // Cumulative bound: each page is bounded, not their sum.
+            if infos.len() > http::MAX_MODELS {
+                return Err(http::too_many_models(&ProviderId::anthropic()));
+            }
+
+            // `last_id` missing while there would be more: stop rather than ask
+            // for the same page again forever.
+            match (more, last) {
+                (true, Some(cursor)) => after = Some(cursor),
+                _ => break,
+            }
+        }
+
+        Ok(infos)
+    }
 }
 
 impl fmt::Debug for AnthropicProvider {
@@ -354,43 +404,7 @@ impl LlmProvider for AnthropicProvider {
     }
 
     async fn models(&self) -> Result<Vec<ModelInfo>> {
-        let mut infos = Vec::new();
-        let mut after: Option<String> = None;
-
-        for _ in 0..MAX_MODEL_PAGES {
-            let mut url = self.join(MODELS_PATH)?;
-            url.query_pairs_mut()
-                .append_pair("limit", &MODELS_PAGE_SIZE.to_string());
-            if let Some(cursor) = &after {
-                url.query_pairs_mut().append_pair("after_id", cursor);
-            }
-
-            let request = self.authorize(self.client.get(url))?;
-            // No cancellation here: listing models is a short request, and the
-            // trait passes no token.
-            let response = request.send().await.map_err(|err| self.transport(&err))?;
-            if !response.status().is_success() {
-                return Err(self.failure(response, None).await.into());
-            }
-
-            let raw: wire::ModelsResponse = self.read_json(response, "model list").await?;
-            let more = raw.has_more;
-            let last = raw.last_id.clone();
-            infos.extend(wire::parse_models(raw));
-            // Cumulative bound: each page is bounded, not their sum.
-            if infos.len() > http::MAX_MODELS {
-                return Err(http::too_many_models(&ProviderId::anthropic()).into());
-            }
-
-            // `last_id` missing while there would be more: stop rather than ask
-            // for the same page again forever.
-            match (more, last) {
-                (true, Some(cursor)) => after = Some(cursor),
-                _ => break,
-            }
-        }
-
-        Ok(infos)
+        Ok(self.fetch_models().await?)
     }
 
     async fn count_tokens(&self, request: &ChatRequest) -> Result<Option<u32>> {

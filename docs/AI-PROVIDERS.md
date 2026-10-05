@@ -310,6 +310,36 @@ has changed and the socket is half-open — no reset ever arrives. Without these
 bounds, the question stayed "thinking" forever; with an external agent, a stop
 the agent never confirmed also held every later question behind it.
 
+## Listing a provider's models
+
+The provider form offers the models an endpoint serves, before anything is
+saved (`ai_list_draft_models`), and a declared provider lists its own
+(`ai_provider_models`). Both take one path, `oxyn_llm::list_models`.
+
+**What goes out:** one `GET` of the provider's own list endpoint
+([RESEARCH-NOTES](RESEARCH-NOTES.md#model-listing--checked-on-2026-10-04)),
+carrying the key — and nothing else. No prompt, no schema, no database content,
+no tier applies because there is nothing to filter. No third-party model
+registry is asked: the list is the provider's word, and its metadata
+(display name, context window, price) is what the provider published.
+
+| Rule | Why |
+|---|---|
+| The listing is built by the transport a conversation would use: same base URL resolution, same refusal of redirects, same confinement of a loopback endpoint | a list that works on an address the conversation would not use would validate a broken configuration |
+| A typed key goes only to the address typed beside it, and is never written to the keychain by a listing | typing a key in the form is the user's consent for that endpoint, not for another |
+| A stored key is used only while the kind and the endpoint are those it was saved for (`AiProviderConfig::same_endpoint_as`) | the same rule as a save: an edited address must not receive the old key ([I-03](../CLAUDE.md#i-03)) |
+| An endpoint is never rewritten: a missing or repeated `/v1` is said in the message, not fixed | a silent rewrite would make the listed address differ from the stored one |
+| Successes are kept in memory **10 minutes**, keyed by kind and endpoint — never by key, never with the URL's credentials or query; at most 32 endpoints. "Refresh models" and "Test connection" bypass it | a form reopened within minutes need not ask again; a failure is never kept, so a fixed key is tried at once |
+| Bounds: **5 s** for a loopback endpoint, **20 s** otherwise; pages and entries bounded (`MAX_MODELS`, ten pages at most) | a local server that does not answer within seconds is not running; a paginating server cannot hold the call forever ([I-06](../CLAUDE.md#i-06)) |
+
+A failure is data the form shows, with a reason it can act on: `unauthorized`
+(`401` with a key), `missingKey` (no key, or a `401` without one),
+`forbidden` (`403`), `unsupported` (`404`, `405`, another refusal),
+`rateLimited` (`429`), `timeout`, `unreachable` (nothing answered, or a `5xx`),
+`malformed` (an answer that is not a model list), `invalidEndpoint` (an address
+that cannot be one, or a redirect). The message is a short English sentence;
+it never quotes the key, nor the address, which may carry a password.
+
 ## Database content is not an instruction
 
 A table name, a column comment, a row value can contain

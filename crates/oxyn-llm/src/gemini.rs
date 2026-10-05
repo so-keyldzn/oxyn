@@ -18,11 +18,13 @@
 //!
 //! # What this module already does
 //!
-//! Building the request is written and tested. Sending and decoding the stream
-//! explicitly **refuse** ([`LlmError::NotImplemented`]): an unfinished path
+//! Listing the models is sent ([`models`]). Building the request is written
+//! and tested. Sending and decoding the stream explicitly **refuse** ([`LlmError::NotImplemented`]): an unfinished path
 //! that panics kills the application the day someone configures this provider
 //! ([I-09](../../../CLAUDE.md#i-09)), whereas a refusal is read, displayed and
 //! worked around by switching provider.
+
+mod models;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -85,14 +87,18 @@ impl GeminiProvider {
     /// # Errors
     /// Unreadable base URL, or HTTP client impossible to build.
     pub fn with_base_url(api_key: impl Into<ApiKey>, base_url: &str) -> Result<Self> {
-        Self::with_base_url_and_reach(api_key, base_url, crate::Reach::Unresolved)
+        Ok(Self::with_base_url_and_reach(
+            api_key,
+            base_url,
+            crate::Reach::Unresolved,
+        )?)
     }
 
     pub(crate) fn with_base_url_and_reach(
         api_key: impl Into<ApiKey>,
         base_url: &str,
         reach: crate::Reach,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, LlmError> {
         let id = ProviderId::gemini();
         let parsed = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
@@ -340,14 +346,7 @@ impl LlmProvider for GeminiProvider {
     }
 
     async fn models(&self) -> Result<Vec<ModelInfo>> {
-        // Neither the path nor the schema of the list is checked against the
-        // registry (I-12): a list written from memory would be plausible and wrong.
-        Err(LlmError::NotImplemented {
-            provider: ProviderId::gemini(),
-            operation: "listing models (endpoint path and response shape still unverified)"
-                .to_owned(),
-        }
-        .into())
+        Ok(self.fetch_models().await?)
     }
 
     async fn stream(
@@ -387,10 +386,6 @@ mod tests {
         // I-09: a panic kills the application. A provider that is configured
         // but whose protocol is not written must give a message.
         let f = provider();
-        let list = futures::executor::block_on(f.models()).expect_err("not implemented yet");
-        assert!(matches!(&list, OxynError::NotSupported { .. }), "{list}");
-        assert!(!list.is_retryable(), "retrying will not write the code");
-
         let request = ChatRequest::new("gemini-2.0-flash", vec![ChatMessage::user("hello")]);
         let flux = futures::executor::block_on(f.stream(request, &CancelToken::new()))
             .err()

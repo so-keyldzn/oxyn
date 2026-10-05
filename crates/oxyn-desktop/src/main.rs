@@ -207,6 +207,7 @@ fn main() -> Result<()> {
             commands::ai::ai_save_provider,
             commands::ai::ai_remove_provider,
             commands::ai::ai_provider_models,
+            commands::ai::ai_list_draft_models,
             commands::ai::ai_save_external_agent,
             commands::ai::ai_remove_external_agent,
             commands::ai::ai_agent_presets,
