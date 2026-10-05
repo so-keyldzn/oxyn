@@ -4263,7 +4263,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-ai"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -4291,7 +4291,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-catalog"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4309,7 +4309,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "bitflags 2.13.1",
  "chrono",
@@ -4329,7 +4329,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-data"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "arrow",
  "criterion",
@@ -4347,7 +4347,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-desktop"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -4391,7 +4391,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver-mysql"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4432,7 +4432,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver-postgres"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4452,7 +4452,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver-sqlite"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4472,7 +4472,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-exec"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "arrow",
  "async-trait",
@@ -4497,7 +4497,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-llm"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4513,7 +4513,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-plugin"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "oxyn-core",
  "oxyn-driver",
@@ -4526,7 +4526,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-query"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "criterion",
  "oxyn-core",
@@ -4539,7 +4539,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-secrets"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "keyring",
  "oxyn-core",
@@ -4553,7 +4553,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-store"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "chrono",
  "directories",
