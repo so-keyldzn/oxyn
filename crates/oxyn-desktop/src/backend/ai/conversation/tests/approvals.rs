@@ -58,6 +58,20 @@ fn write(open: &OpenConnection, sql: &str) -> Command {
     }
 }
 
+/// Opens the row of a write call on `thread`, as the runtime's announcement
+/// does, and answers the identity its dispatch carries.
+fn write_call(thread: &Thread, open: &OpenConnection) -> CallId {
+    let key = CallId::fresh();
+    thread.open_call(
+        key,
+        "execute_query",
+        "Execute",
+        open.connection.parse().ok(),
+        true,
+    );
+    key
+}
+
 fn reported(received: &Mutex<Vec<String>>) -> Vec<serde_json::Value> {
     received
         .lock()
@@ -77,17 +91,15 @@ fn an_agent_write_waits_for_the_users_decision_and_the_model_learns_its_outcome(
     let backend = Backend::open_temporary().expect("temporary backend");
     let staging = open(&runtime, &backend, Environment::Staging);
     let (sink, thread, actor, _received) = sink_on(&backend, &staging);
-    thread.open_call(
-        "execute_query",
-        "Execute",
-        staging.connection.parse().ok(),
-        true,
-    );
+    let key = write_call(&thread, &staging);
     let sink = Arc::new(sink);
     let call = runtime.spawn({
         let sink = Arc::clone(&sink);
         let command = write(&staging, "CREATE TABLE t (a INTEGER)");
-        async move { sink.dispatch(actor, command, &CancelToken::new()).await }
+        async move {
+            sink.dispatch(&CallHandle::new(key), actor, command, &CancelToken::new())
+                .await
+        }
     });
 
     let request = pending_of(&runtime, &backend, actor);
@@ -117,17 +129,15 @@ fn a_rejected_write_tells_the_model_nothing_ran() {
     let backend = Backend::open_temporary().expect("temporary backend");
     let staging = open(&runtime, &backend, Environment::Staging);
     let (sink, thread, actor, _received) = sink_on(&backend, &staging);
-    thread.open_call(
-        "execute_query",
-        "Execute",
-        staging.connection.parse().ok(),
-        true,
-    );
+    let key = write_call(&thread, &staging);
     let sink = Arc::new(sink);
     let call = runtime.spawn({
         let sink = Arc::clone(&sink);
         let command = write(&staging, "CREATE TABLE t (a INTEGER)");
-        async move { sink.dispatch(actor, command, &CancelToken::new()).await }
+        async move {
+            sink.dispatch(&CallHandle::new(key), actor, command, &CancelToken::new())
+                .await
+        }
     });
 
     let request = pending_of(&runtime, &backend, actor);
@@ -253,6 +263,95 @@ fn a_decision_cut_off_is_ambiguous_never_nothing_ran() {
     );
 }
 
+#[test]
+fn a_request_purged_before_the_wait_expires_it_ends_as_expired() {
+    // The next submission purges a stale request a hair before this wait's
+    // own timer: the wait found it gone, took it for approved, and waited for
+    // an outcome nobody owed — for ever.
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let staging = open(&runtime, &backend, Environment::Staging);
+    let request = held(&runtime, &backend, &staging);
+
+    let awaited = backend.inner.ai.decisions.expect(request);
+    // As the purge does: removed, and remembered as stale.
+    assert!(backend.inner.executor.approvals().expire(request).is_some());
+    let ending = runtime
+        .block_on(tokio::time::timeout(
+            Duration::from_secs(5),
+            decisions::wait(
+                &backend.inner.executor,
+                awaited,
+                tokio::time::Instant::now() + Duration::from_millis(50),
+                &CancelToken::new(),
+            ),
+        ))
+        .expect("the wait ends");
+    let RequestEnd::Withdrawn(withdrawn) = ending else {
+        panic!("a purged request ends withdrawn, as expired");
+    };
+    assert!(
+        withdrawn.detail.starts_with("Expired"),
+        "{}",
+        withdrawn.detail
+    );
+}
+
+#[test]
+fn a_stop_ends_the_wait_for_an_approved_command_and_says_it_may_have_run() {
+    // Taken by an approval that never reports: the wait used to have neither
+    // a deadline nor a stop past this point.
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let staging = open(&runtime, &backend, Environment::Staging);
+    let request = held(&runtime, &backend, &staging);
+
+    let awaited = backend.inner.ai.decisions.expect(request);
+    let stop = CancelToken::new();
+    let waiting = runtime.spawn({
+        let executor = Arc::clone(&backend.inner.executor);
+        let stop = stop.clone();
+        async move {
+            decisions::wait(
+                &executor,
+                awaited,
+                tokio::time::Instant::now() + Duration::from_millis(50),
+                &stop,
+            )
+            .await
+        }
+    });
+    // Taken as `decide` takes it, and never settled.
+    let _taken = backend
+        .inner
+        .executor
+        .approvals()
+        .take(request)
+        .expect("still pending");
+    runtime.block_on(tokio::time::sleep(Duration::from_millis(200)));
+    assert!(
+        !waiting.is_finished(),
+        "an approved command's outcome is awaited"
+    );
+    stop.cancel();
+    let ending = runtime
+        .block_on(tokio::time::timeout(Duration::from_secs(5), waiting))
+        .expect("the stop ends the wait")
+        .expect("the wait did not panic");
+    assert!(
+        matches!(
+            ending,
+            RequestEnd::Answered(DispatchReport::Failed {
+                class: ErrorClass::Ambiguous,
+                ..
+            })
+        ),
+        "an approved command may have run (I-13)"
+    );
+}
+
 /// The capture's scenario: the agent released while its request waited.
 #[test]
 fn releasing_an_agent_withdraws_its_waiting_request_and_says_so_on_its_card() {
@@ -261,34 +360,32 @@ fn releasing_an_agent_withdraws_its_waiting_request_and_says_so_on_its_card() {
     let backend = Backend::open_temporary().expect("temporary backend");
     let staging = open(&runtime, &backend, Environment::Staging);
     let (sink, thread, actor, received) = sink_on(&backend, &staging);
-    thread.open_call(
-        "execute_query",
-        "Execute",
-        staging.connection.parse().ok(),
-        true,
-    );
+    let key = write_call(&thread, &staging);
     let sink = Arc::new(sink);
     let call = runtime.spawn({
         let sink = Arc::clone(&sink);
         let command = write(&staging, "CREATE TABLE t (a INTEGER)");
-        async move { sink.dispatch(actor, command, &CancelToken::new()).await }
+        async move {
+            sink.dispatch(&CallHandle::new(key), actor, command, &CancelToken::new())
+                .await
+        }
     });
     let request = pending_of(&runtime, &backend, actor);
 
     // An unrelated agent's request is left alone.
     let (other_sink, other_thread, other_actor, _other) = sink_on(&backend, &staging);
-    other_thread.open_call(
-        "execute_query",
-        "Execute",
-        staging.connection.parse().ok(),
-        true,
-    );
+    let other_key = write_call(&other_thread, &staging);
     let other_sink = Arc::new(other_sink);
     let _other_call = runtime.spawn({
         let command = write(&staging, "CREATE TABLE u (a INTEGER)");
         async move {
             other_sink
-                .dispatch(other_actor, command, &CancelToken::new())
+                .dispatch(
+                    &CallHandle::new(other_key),
+                    other_actor,
+                    command,
+                    &CancelToken::new(),
+                )
                 .await
         }
     });

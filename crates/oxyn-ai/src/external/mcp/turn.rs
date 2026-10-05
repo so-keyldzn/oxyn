@@ -22,7 +22,11 @@
 //!   a request left undecided by the previous question;
 //! * **one call at a time.** Each HTTP connection has its own task, and the
 //!   check above is only true if no other call slips between it and the
-//!   executor's answer: two writes sent together both passed it once;
+//!   executor's answer: two writes sent together both passed it once. The
+//!   order ends at the executor's answer, not at the user's: once a request
+//!   waits, the check refuses the next call by itself, and holding the order
+//!   through the decision only queued the agent's other calls until they timed
+//!   out on its side;
 //! * **closing a question cancels its calls**, and a result that lands after
 //!   the question closed is discarded rather than shown to nobody.
 
@@ -32,6 +36,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use oxyn_core::{Actor, CancelToken, Command};
 
+use crate::call::CallHandle;
 use crate::observer::AgentObserver;
 use crate::runtime::{CommandSink, DispatchOutcome};
 use crate::tools::SampleAsk;
@@ -98,7 +103,9 @@ impl ToolTurns {
     /// the call observe it, is what reaches the server.
     pub(crate) async fn close(&self, grace: Duration) {
         self.close_now();
-        // The order lock is free exactly when no call is at the executor.
+        // The order lock is free exactly when no call is at the executor —
+        // a call waiting on the user gave it back, and the cancellation above
+        // withdraws its request.
         let _settled = tokio::time::timeout(grace, self.order.lock()).await;
     }
 
@@ -247,14 +254,22 @@ pub(crate) const QUESTION_CLOSED: &str = "the question this call answered has en
 
 #[async_trait]
 impl CommandSink for WriteGate {
+    /// The order is held from the check to the executor's answer — not to the
+    /// user's: the inner sink gives it back through
+    /// [`CallHandle::awaiting_user`] once the executor holds the request, and
+    /// from then on that pending request refuses the agent's next calls by
+    /// itself. Held through the decision, it queued the agent's other calls
+    /// for up to the request's lifetime, until they timed out on its side.
     async fn dispatch(
         &self,
+        call: &CallHandle,
         actor: Actor,
         command: Command,
         cancel: &CancelToken,
     ) -> DispatchOutcome {
-        let _in_order = self.turns.order.lock().await;
+        call.hold(Arc::clone(&self.turns.order).lock_owned().await);
         if !self.still_open() {
+            call.release_order();
             return DispatchOutcome::Denied {
                 reason: QUESTION_CLOSED.to_owned(),
             };
@@ -262,11 +277,15 @@ impl CommandSink for WriteGate {
         // Every command, not only those this side calls mutating: the
         // executor may reclassify a « read » into a request for approval.
         if (self.turns.waiting)() {
+            call.release_order();
             return DispatchOutcome::Denied {
                 reason: ONE_REQUEST_AWAITING.to_owned(),
             };
         }
-        let outcome = self.inner.dispatch(actor, command, cancel).await;
+        let outcome = self.inner.dispatch(call, actor, command, cancel).await;
+        // Given back already if the call waited on the user; given back now
+        // otherwise.
+        call.release_order();
         if self.still_open() {
             outcome
         } else {
@@ -285,10 +304,13 @@ impl CommandSink for WriteGate {
     /// a second call slipped in meanwhile would be a second screen.
     async fn request_sample(
         &self,
+        call: &CallHandle,
         actor: Actor,
         ask: SampleAsk,
         cancel: &CancelToken,
     ) -> DispatchOutcome {
+        // Not handed to `call`: the sample's screen is not a request the
+        // executor holds, so nothing else would refuse the next call.
         let _in_order = self.turns.order.lock().await;
         if !self.still_open() {
             return DispatchOutcome::Denied {
@@ -300,7 +322,7 @@ impl CommandSink for WriteGate {
                 reason: ONE_REQUEST_AWAITING.to_owned(),
             };
         }
-        let outcome = self.inner.request_sample(actor, ask, cancel).await;
+        let outcome = self.inner.request_sample(call, actor, ask, cancel).await;
         if self.still_open() {
             outcome
         } else {
