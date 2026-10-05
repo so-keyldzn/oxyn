@@ -1,3 +1,4 @@
+import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
@@ -8,6 +9,7 @@ import {
   remoteProvider,
   unresolvedProvider,
 } from "./assistant-fixtures"
+import { draftModels, listed } from "./model-picker-fixtures"
 import { CREDENTIALS_IN_ENDPOINT } from "./provider-settings-model"
 import type { AgentPresetDraft } from "@/lib/ipc/ai"
 
@@ -45,6 +47,7 @@ const meta = {
     onRemoveProvider: fn(),
     onRemoveAgent: fn(),
     onListModels: fn(),
+    onListDraftModels: fn(() => Promise.resolve(listed(draftModels))),
     onDismissFailure: fn(),
   },
   decorators: [
@@ -179,9 +182,10 @@ export const NothingIsClearedBeforeTheSaveSucceeds: Story = {
       canvas.getByLabelText("Endpoint"),
       "https://api.anthropic.com"
     )
+    // Typed, then kept as the id with Enter.
     await userEvent.type(
       canvas.getByLabelText("Default model"),
-      "claude-sonnet-5"
+      "claude-sonnet-5{Enter}"
     )
     await userEvent.type(canvas.getByLabelText("API key"), "sk-ant-refused")
     await userEvent.click(canvas.getByRole("button", { name: "Declare" }))
@@ -255,7 +259,7 @@ export const CredentialsInEndpointAreRefusedWhileTyping: Story = {
     // At once, not when the form is complete.
     await expect(await canvas.findByText(CREDENTIALS_IN_ENDPOINT)).toBeVisible()
     await userEvent.type(canvas.getByLabelText("Name"), "Work")
-    await userEvent.type(canvas.getByLabelText("Default model"), "gpt")
+    await userEvent.type(canvas.getByLabelText("Default model"), "gpt{Enter}")
     await userEvent.click(canvas.getByRole("button", { name: "Declare" }))
     await expect(args.onSaveProvider).not.toHaveBeenCalled()
   },
@@ -272,7 +276,7 @@ export const TheKeyIsSentOnceAndForgotten: Story = {
     )
     await userEvent.type(
       canvas.getByLabelText("Default model"),
-      "claude-sonnet-5"
+      "claude-sonnet-5{Enter}"
     )
     await userEvent.type(
       canvas.getByLabelText("API key"),
@@ -336,5 +340,79 @@ export const AnAgentAlreadyInstalledIsProposed: Story = {
     await expect(args.onDeclarePreset).toHaveBeenCalledWith(
       expect.objectContaining({ id: "claude-code" })
     )
+  },
+}
+
+/** The screen with its declarations held in memory, as the backend would. */
+function SavingScreen(
+  props: React.ComponentProps<typeof ProviderSettingsView>
+) {
+  const [providers, setProviders] = React.useState(props.providers)
+  return (
+    <ProviderSettingsView
+      {...props}
+      providers={providers}
+      onSaveProvider={async (draft) => {
+        await props.onSaveProvider(draft)
+        setProviders((all) => [
+          ...all,
+          {
+            id: "openai-5e1ec7ed",
+            label: draft.label,
+            kind: draft.kind,
+            endpoint: draft.baseUrl,
+            endpointRedacted: false,
+            model: draft.model,
+            keyConfigured: draft.key !== null,
+            reach: "remote",
+            measuredAtMs: Date.UTC(2026, 9, 4, 9, 30),
+          },
+        ])
+        return true
+      }}
+    />
+  )
+}
+
+/** Pick a listed model, declare, edit again: the picked model is still the one. */
+export const PickedModelSurvivesTheEdit: Story = {
+  args: { providers: [], agents: [] },
+  render: (args) => <SavingScreen {...args} />,
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const page = within(document.body)
+    const model = () => page.getByRole("combobox", { name: "Default model" })
+    await userEvent.selectOptions(canvas.getByLabelText("Kind"), "openai")
+    await userEvent.type(canvas.getByLabelText("Name"), "Gateway")
+    await userEvent.type(
+      canvas.getByLabelText("Endpoint"),
+      "https://llm.example.test/v1"
+    )
+    await userEvent.type(canvas.getByLabelText("API key"), "sk-synthetic")
+    await expect(await canvas.findByText("3 models available.")).toBeVisible()
+    await userEvent.click(model())
+    await userEvent.click(
+      await page.findByRole("option", { name: /^Vega mini/ })
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Declare" }))
+    await waitFor(() =>
+      expect(args.onSaveProvider).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "model-vega-mini" })
+      )
+    )
+
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Edit Gateway" })
+    )
+    await expect(
+      await canvas.findByRole("heading", { name: "Edit “Gateway”" })
+    ).toBeVisible()
+    // Listed again with the stored key, and shown by its name.
+    await waitFor(() => expect(model()).toHaveValue("Vega mini"))
+    await userEvent.click(model())
+    await expect(
+      await page.findByRole("option", { name: /^Vega mini/ })
+    ).toHaveAttribute("aria-selected", "true")
+    await userEvent.keyboard("{Escape}")
   },
 }

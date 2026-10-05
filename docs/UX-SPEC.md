@@ -1555,6 +1555,38 @@ shown again, nor copied into an error message, nor exported with the workspace
 (I-03). What the screen shows after saving is "configured" or "missing", never
 the value.
 
+**The default model is chosen in the provider's own list, or typed.** As soon
+as the form knows the family, the endpoint and — unless the endpoint is local
+or the declaration being edited keeps its stored key — a key, it asks the
+provider for its models, after a pause in typing. The list is the provider's
+and in the provider's order: Oxyn carries no list of models and invents no
+"recommended" one. The field is a searchable combobox — on the model's name,
+its id and the provider's name; arrows, Enter to choose, Escape to close — that
+shows the name, and the id beneath it when they differ. What is saved is the
+id.
+
+* **Typing is never blocked**: whatever the list says, "Use "…" as model id"
+  keeps what was typed — a custom gateway, a private model, an Azure
+  deployment are declared with the id the user knows.
+* **The current model is never replaced in silence**: a model the provider no
+  longer lists stays selected, first in the list, marked "Current model —
+  unavailable from provider".
+* The field has its states: waiting for the endpoint and key, listing, empty
+  list, failure. A failure says why in one sentence — key refused, endpoint
+  unreachable, endpoint that does not list its models — then the provider's
+  short message, never the key nor the URL's credentials. "Refresh models"
+  asks again past the backend's cache.
+* Changing the family, the endpoint or the key drops the list shown; an answer
+  that arrives for an endpoint typed before is ignored, never shown for the
+  one typed after.
+* "Test connection" lists the models afresh and says "Connected — N models
+  available" or "Connection failed — …" next to it, announced politely. It
+  saves nothing.
+
+The key typed in the form travels inside the listing request and nowhere else:
+not in a log, not in a cache key — the backend caches a list by family and
+endpoint only.
+
 The screen shows the local/remote classification **with the time of its
 measurement**, because it is recomputed and never persisted: an endpoint
 classified local yesterday may resolve elsewhere today. A URL carrying

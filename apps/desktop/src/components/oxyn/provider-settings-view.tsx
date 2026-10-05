@@ -20,6 +20,7 @@ import type {
   ModelsState,
   ProviderSettingsFailure,
 } from "@/components/oxyn/provider-settings-model"
+import type { ListDraftModels } from "@/components/oxyn/use-draft-models"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
@@ -59,6 +60,8 @@ export interface ProviderSettingsViewProps {
   onRemoveProvider: (provider: DeclaredProvider) => void
   onRemoveAgent: (agent: ExternalAgent) => void
   onListModels: (provider: DeclaredProvider) => void
+  /** The models of the provider being typed in the form; saves nothing. */
+  onListDraftModels: ListDraftModels
   /** The failure shown no longer concerns what is on screen. */
   onDismissFailure: () => void
 }
@@ -94,6 +97,7 @@ export function ProviderSettingsView({
   onRemoveProvider,
   onRemoveAgent,
   onListModels,
+  onListDraftModels,
   onDismissFailure,
 }: ProviderSettingsViewProps) {
   const [target, setTarget] = React.useState<FormTarget>(null)
@@ -211,6 +215,7 @@ export function ProviderSettingsView({
         onSaveProvider={onSaveProvider}
         onSaveAgent={onSaveAgent}
         onDone={() => retarget(null)}
+        onListModels={onListDraftModels}
       />
 
       <DeclarationRemovalDialog

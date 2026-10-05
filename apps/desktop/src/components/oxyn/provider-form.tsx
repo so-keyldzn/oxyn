@@ -1,17 +1,24 @@
 import * as React from "react"
-import { useForm } from "@tanstack/react-form"
+import { useForm, useStore } from "@tanstack/react-form"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Alert02Icon } from "@hugeicons/core-free-icons"
+import { Alert02Icon, CheckmarkCircle02Icon } from "@hugeicons/core-free-icons"
 
+import { ModelPicker } from "@/components/oxyn/model-picker"
 import {
   CREDENTIALS_IN_ENDPOINT,
   FAILURE_TITLES,
   KINDS,
   counted,
   endpointCarriesCredentials,
+  kindLabel,
   parseArguments,
   parseEnvironment,
 } from "@/components/oxyn/provider-settings-model"
+import { useDraftModels } from "@/components/oxyn/use-draft-models"
+import type {
+  ConnectionTest,
+  ListDraftModels,
+} from "@/components/oxyn/use-draft-models"
 import type { ProviderSettingsFailure } from "@/components/oxyn/provider-settings-model"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -51,6 +58,8 @@ export interface ProviderFormProps {
   onSaveAgent: (draft: AgentDraft) => Promise<boolean>
   /** Leaves an edit, saved or cancelled. */
   onDone: () => void
+  /** Lists the models of the provider being typed; saves nothing. */
+  onListModels: ListDraftModels
 }
 
 type Kind = ProviderKind | "agent"
@@ -142,6 +151,55 @@ function ReplacementNote({ agent }: { agent: ExternalAgent }) {
   )
 }
 
+/** « Test connection »: lists the models afresh, and says what came back. */
+function ConnectionTestRow({
+  test,
+  disabled,
+  onTest,
+}: {
+  test: ConnectionTest
+  disabled: boolean
+  onTest: () => void
+}) {
+  return (
+    <Field orientation="horizontal" className="items-center">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="shrink-0"
+        disabled={disabled || test.status === "testing"}
+        onClick={onTest}
+      >
+        {test.status === "testing" ? (
+          <Spinner data-icon="inline-start" />
+        ) : null}
+        Test connection
+      </Button>
+      <p role="status" aria-live="polite" className="text-sm">
+        {test.status === "ok" ? (
+          <span className="inline-flex items-center gap-1.5">
+            <HugeiconsIcon
+              icon={CheckmarkCircle02Icon}
+              strokeWidth={2}
+              className="size-4 shrink-0"
+            />
+            Connected — {counted(test.count, "model", "models")} available
+          </span>
+        ) : test.status === "failed" ? (
+          <span data-selectable className="text-destructive">
+            Connection failed — {test.message}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">
+            Lists the models with these settings. Saves nothing.
+          </span>
+        )}
+      </p>
+    </Field>
+  )
+}
+
 /**
  * Declares a provider or an external agent, or edits one already saved.
  *
@@ -156,6 +214,7 @@ export function ProviderForm({
   onSaveProvider,
   onSaveAgent,
   onDone,
+  onListModels,
 }: ProviderFormProps) {
   const [secretNames, setSecretNames] = React.useState<Record<string, boolean>>(
     {}
@@ -215,6 +274,28 @@ export function ProviderForm({
   })
 
   const editing = target?.kind === "provider" ? target.provider : null
+  // What the model list depends on, read above the fields: a hook cannot run
+  // inside a field's render.
+  const listedKind = useStore(form.store, (state) => state.values.kind)
+  const endpoint = useStore(form.store, (state) => state.values.endpoint)
+  const key = useStore(form.store, (state) => state.values.key)
+  const stored = React.useMemo(
+    () =>
+      editing
+        ? {
+            id: editing.id,
+            endpoint: editing.endpoint,
+            keyConfigured: editing.keyConfigured,
+          }
+        : null,
+    [editing]
+  )
+  const draftModels = useDraftModels(
+    listedKind === "agent" || endpointCarriesCredentials(endpoint)
+      ? null
+      : { kind: listedKind, endpoint, key, editing: stored },
+    onListModels
+  )
 
   return (
     <form
@@ -454,18 +535,23 @@ export function ProviderForm({
                 >
                   {(field) => (
                     <Field data-invalid={invalid(field.state.meta.errors)}>
-                      <FieldLabel htmlFor="provider-model">
+                      <FieldLabel
+                        id="provider-model-label"
+                        htmlFor="provider-model"
+                      >
                         Default model
                       </FieldLabel>
-                      <TextInput
+                      <ModelPicker
                         id="provider-model"
-                        className="font-mono"
-                        maxLength={128}
+                        labelId="provider-model-label"
                         value={field.state.value}
-                        aria-invalid={invalid(field.state.meta.errors)}
-                        onChange={(event) =>
-                          field.handleChange(event.target.value)
-                        }
+                        onChange={(model) => field.handleChange(model)}
+                        onBlur={field.handleBlur}
+                        models={draftModels.models}
+                        providerLabel={kindLabel(kind)}
+                        invalid={invalid(field.state.meta.errors)}
+                        canRefresh={draftModels.canAsk}
+                        onRefresh={draftModels.refresh}
                       />
                       <FieldError errors={field.state.meta.errors} />
                     </Field>
@@ -510,6 +596,11 @@ export function ProviderForm({
                     )}
                   </form.Field>
                 ) : null}
+                <ConnectionTestRow
+                  test={draftModels.test}
+                  disabled={!draftModels.canAsk}
+                  onTest={draftModels.testConnection}
+                />
               </>
             )
           }

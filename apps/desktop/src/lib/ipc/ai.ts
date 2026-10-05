@@ -164,6 +164,52 @@ export const ModelChoice = z.object({
 })
 export type ModelChoice = z.infer<typeof ModelChoice>
 
+/**
+ * What the form knows of a provider not saved yet, to list its models.
+ *
+ * `key` is the one typed in the form, if any. `null` with an `id` and the
+ * stored endpoint lets the backend read that declaration's key from the
+ * keychain; a changed endpoint never reuses it. Sent once, never kept (I-03).
+ */
+export const ModelProbe = z.object({
+  id: z.string().nullable(),
+  kind: ProviderKind,
+  /** As typed; `""` with an `id` is the stored endpoint. */
+  baseUrl: z.string(),
+  key: z.string().nullable(),
+})
+export type ModelProbe = z.infer<typeof ModelProbe>
+
+/** Why a provider could not list its models; a new reason is not a failure. */
+export const ModelListingReason = freeWord<ModelListingReason>()
+export type ModelListingReason =
+  | "unauthorized"
+  | "forbidden"
+  | "unsupported"
+  | "rateLimited"
+  | "timeout"
+  | "unreachable"
+  | "malformed"
+  | "invalidEndpoint"
+  | "missingKey"
+
+/** A provider failure is an answer, not an `Err`: the form shows it inline. */
+export const ModelListing = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ok"),
+    models: z.array(ModelChoice),
+    cached: z.boolean(),
+    fetchedAtMs: z.number().nonnegative(),
+  }),
+  z.object({
+    status: z.literal("failed"),
+    reason: ModelListingReason,
+    /** Short and English; never the key, the URL's user information nor its query. */
+    message: z.string(),
+  }),
+])
+export type ModelListing = z.infer<typeof ModelListing>
+
 export const DestinationChoice = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("provider"),
@@ -834,6 +880,10 @@ export const ai = {
 
   providerModels: (id: string) =>
     call("ai_provider_models", z.array(ModelChoice), { id }),
+
+  /** The models of a provider being typed; `refresh` bypasses the cache. */
+  listDraftModels: (probe: ModelProbe, refresh: boolean) =>
+    call("ai_list_draft_models", ModelListing, { probe, refresh }),
 
   /** `null` when the user declined the native confirmation. */
   saveExternalAgent: (draft: AgentDraft) =>

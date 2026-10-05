@@ -238,6 +238,7 @@ export function ProviderSettings() {
       onRemoveProvider={(provider) => removeProvider.mutate(provider)}
       onRemoveAgent={(agent) => removeAgent.mutate(agent.id)}
       onListModels={listModels}
+      onListDraftModels={ai.listDraftModels}
       onDismissFailure={() => setFailure(null)}
     />
   )
