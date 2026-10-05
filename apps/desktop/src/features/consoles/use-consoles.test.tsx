@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
+import { flushAllDrafts, registerDraftFlush } from "./draft-registry"
 import { useConsoles } from "./use-consoles"
 import type { ConsoleHandle } from "./console-panel"
 import type { OpenConnection } from "@/lib/ipc/types"
@@ -183,5 +184,51 @@ describe("closing every console of a closing window", () => {
 
     expect(other.handle.close).not.toHaveBeenCalled()
     expect(hook.result.current.entries).toHaveLength(2)
+  })
+})
+
+describe("two retained workspaces in one window", () => {
+  // Each keeps its consoles mounted (ADR-0046); the shutdown flush and the
+  // inspectors address them in one window-wide namespace.
+  async function twoWorkspaces() {
+    const a = renderHook(() =>
+      useConsoles({ open: { ...open, connection: "A" }, onActivate: () => {} })
+    )
+    const b = renderHook(() =>
+      useConsoles({ open: { ...open, connection: "B" }, onActivate: () => {} })
+    )
+    await waitFor(() => {
+      expect(a.result.current.entries).toHaveLength(1)
+      expect(b.result.current.entries).toHaveLength(1)
+    })
+    return {
+      a,
+      b,
+      aKey: a.result.current.entries[0]?.key ?? "",
+      bKey: b.result.current.entries[0]?.key ?? "",
+    }
+  }
+
+  it("flushes the first console of each workspace", async () => {
+    const { a, b, aKey, bKey } = await twoWorkspaces()
+    expect(aKey).not.toBe(bKey)
+    const flushA = vi.fn(() => Promise.resolve(false))
+    const flushB = vi.fn(() => Promise.resolve(true))
+    const unregisterA = registerDraftFlush(aKey, flushA)
+    const unregisterB = registerDraftFlush(bKey, flushB)
+
+    // A's failure is not hidden by B's success.
+    await expect(flushAllDrafts()).resolves.toBe(false)
+    expect(flushA).toHaveBeenCalledOnce()
+    expect(flushB).toHaveBeenCalledOnce()
+
+    // B leaving does not take A's registration with it.
+    unregisterB()
+    b.unmount()
+    await expect(flushAllDrafts()).resolves.toBe(false)
+    expect(flushA).toHaveBeenCalledTimes(2)
+
+    unregisterA()
+    a.unmount()
   })
 })
