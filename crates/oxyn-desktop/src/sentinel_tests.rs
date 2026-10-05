@@ -279,7 +279,7 @@ struct Scenario {
     /// credentials: refused by `validate_base_url` before any network call.
     credentials_in_url: IpcError,
     /// (iv) Listing a declared provider's models against the hostile fake
-    /// provider: must fail, with the fake provider's body recopied through.
+    /// provider: must fail, with a fixed sentence chosen from the status.
     provider_models_failed: IpcError,
     /// (v) Where the question landed.
     ask_started: AskStarted,
@@ -461,17 +461,13 @@ fn no_sentinel_reaches_an_error_shown_to_the_front() {
         scenario.fake_requests
     );
 
-    // (iv) is the channel through which the fake provider's body — carrying
-    // the mention that proves oxyn-llm's redaction ran — reaches an
-    // `IpcError`. Asserted on that one path, not guessed on every path
-    // (front.md).
-    assert!(
-        scenario
-            .provider_models_failed
-            .message
-            .contains("<redacted API key>"),
-        "the redaction mark never reached the front: {}",
-        scenario.provider_models_failed.message
+    // (iv) no longer recopies the fake provider's body: a model listing's
+    // failure reaches the front as a fixed sentence chosen from the status
+    // (`backend/ai/draft_models.rs`). Asserting that sentence proves the
+    // `401` was read and classified, not refused earlier by something else.
+    assert_eq!(
+        scenario.provider_models_failed.message, "Invalid API key.",
+        "the provider's refusal never reached the front"
     );
 
     let mut shown = vec![

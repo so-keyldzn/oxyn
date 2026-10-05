@@ -25,6 +25,7 @@
 
 mod catalog_fill;
 mod conversation;
+mod draft_models;
 #[cfg(test)]
 mod environment_tests;
 mod mentions;
@@ -45,12 +46,13 @@ use oxyn_exec::{ExecutorSink, Outcome};
 use oxyn_llm::Reach;
 
 use self::catalog_fill::{CatalogFill, Want};
+pub(crate) use self::draft_models::ModelLists;
 pub(crate) use self::threads::AiState;
 use super::Backend;
 use crate::ipc::IpcError;
 use crate::ipc::ai::{
-    AgentDraft, AgentPresetDraft, DeclaredProvider, ExternalAgent, ModelChoice, ModelCost,
-    ProviderDraft,
+    AgentDraft, AgentPresetDraft, DeclaredProvider, ExternalAgent, ListingFailure, ModelChoice,
+    ModelCost, ModelListing, ModelProbe, ProviderDraft,
 };
 
 /// How long listing a provider's models may take before the screen says so.
@@ -217,33 +219,36 @@ impl Backend {
     ///
     /// One request to the endpoint, with the stored key: it doubles as the
     /// check that the endpoint answers. Nothing from a database goes with it,
-    /// so no tier applies.
+    /// so no tier applies. The same path and cache as a form's listing
+    /// ([`list_draft_models`](Self::list_draft_models)), on the stored
+    /// endpoint and key.
     pub async fn provider_models(&self, id: &str) -> Result<Vec<ModelChoice>, IpcError> {
-        let id = parse_provider_id(id)?;
+        let parsed = parse_provider_id(id)?;
         let config = self
             .declared_providers()
             .await?
             .into_iter()
-            .find(|config| config.id == id)
+            .find(|config| config.id == parsed)
             .ok_or_else(|| IpcError::invalid("This provider is no longer declared"))?;
-        let credentials = Arc::clone(&self.inner.credentials);
-        let provider = tokio::task::spawn_blocking(move || {
-            let key = credentials.provider_key(&config)?;
-            let reach = oxyn_llm::endpoint_reach(&config.base_url);
-            oxyn_llm::build_provider(config.kind, &config.base_url, key, reach)
-        })
-        .await
-        .map_err(|error| IpcError::invalid(format!("preparing the provider: {error}")))??;
-        let models = tokio::time::timeout(MODELS_TIMEOUT, provider.models())
-            .await
-            .map_err(|_| IpcError {
-                message: format!(
-                    "The endpoint did not answer within {} seconds",
-                    MODELS_TIMEOUT.as_secs()
+        let probe = ModelProbe {
+            id: Some(id.to_owned()),
+            kind: config.kind,
+            base_url: String::new(),
+            key: None,
+        };
+        match self.list_draft_models(probe, false).await? {
+            ModelListing::Ok { models, .. } => Ok(models),
+            // Listing is a read: asking again cannot apply anything twice.
+            ModelListing::Failed { reason, message } => Err(IpcError {
+                message,
+                retryable: matches!(
+                    reason,
+                    ListingFailure::RateLimited
+                        | ListingFailure::Timeout
+                        | ListingFailure::Unreachable
                 ),
-                retryable: true,
-            })??;
-        Ok(models.into_iter().map(model_choice).collect())
+            }),
+        }
     }
 
     /// Declares an external program only after the host confirms it.
@@ -1050,7 +1055,7 @@ mod tests {
                 .await
                 .expect_err("no key follows a changed host");
             assert!(
-                error.message.contains("no API key configured"),
+                error.message.contains("An API key is needed"),
                 "unexpected message: {}",
                 error.message
             );

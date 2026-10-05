@@ -285,18 +285,27 @@ pub(crate) fn bounded_entries<'de, D: Deserializer<'de>>(
             write!(f, "a list of at most {MAX_MODELS} entries")
         }
 
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut entries = Vec::new();
-            while let Some(entry) = seq.next_element::<Value>()? {
-                if entries.len() >= MAX_MODELS {
-                    return Err(serde::de::Error::custom(TOO_MANY_ENTRIES));
-                }
-                entries.push(entry);
-            }
-            Ok(entries)
+        fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
+            bounded_seq(seq)
         }
     }
     deserializer.deserialize_seq(Bounded)
+}
+
+/// The body of [`bounded_entries`], for a visitor that already holds the
+/// sequence — a list that may arrive bare or wrapped.
+///
+/// # Errors
+/// A deserialization error beyond [`MAX_MODELS`] entries.
+pub(crate) fn bounded_seq<'de, A: SeqAccess<'de>>(mut seq: A) -> Result<Vec<Value>, A::Error> {
+    let mut entries = Vec::new();
+    while let Some(entry) = seq.next_element::<Value>()? {
+        if entries.len() >= MAX_MODELS {
+            return Err(serde::de::Error::custom(TOO_MANY_ENTRIES));
+        }
+        entries.push(entry);
+    }
+    Ok(entries)
 }
 
 /// The explicit refusal of a model list that is too long.
@@ -400,3 +409,6 @@ mod reach_tests;
 
 #[cfg(test)]
 mod idle_tests;
+
+#[cfg(test)]
+mod models_tests;

@@ -15,9 +15,11 @@ use oxyn_llm::Reach;
 use serde::{Deserialize, Serialize};
 
 mod conversation;
+mod models;
 mod startup;
 
 pub use self::conversation::*;
+pub use self::models::*;
 pub use self::startup::*;
 
 /// Where an endpoint resolved, as the screen says it.

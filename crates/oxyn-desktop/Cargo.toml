@@ -52,6 +52,8 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# A model-listing probe's endpoint, checked and keyed for the cache.
+url.workspace = true
 # An approved sample's token: random, never derived from what it grants.
 uuid.workspace = true
 

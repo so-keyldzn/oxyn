@@ -135,14 +135,18 @@ impl OpenAiCompatibleProvider {
     /// # Errors
     /// Unreadable URL, or HTTP client impossible to build.
     pub fn new(id: ProviderId, base_url: &str) -> Result<Self> {
-        Self::new_with_reach(id, base_url, crate::Reach::Unresolved)
+        Ok(Self::new_with_reach(
+            id,
+            base_url,
+            crate::Reach::Unresolved,
+        )?)
     }
 
     pub(crate) fn new_with_reach(
         id: ProviderId,
         base_url: &str,
         reach: crate::Reach,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, LlmError> {
         let parsed = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
@@ -429,6 +433,27 @@ impl OpenAiCompatibleProvider {
         Ok(())
     }
 
+    /// The model list, failures typed — see
+    /// [`AnthropicProvider::fetch_models`](crate::anthropic::AnthropicProvider).
+    ///
+    /// One request: no endpoint of this family documents pagination of
+    /// `GET /models` (RESEARCH-NOTES, "Model listing", 2026-10-04). OpenRouter
+    /// paginates only when `offset` or `limit` is sent, and returns the whole
+    /// list without them.
+    pub(crate) async fn fetch_models(&self) -> std::result::Result<Vec<ModelInfo>, LlmError> {
+        let url = self.models_url()?;
+        let request = self.apply_auth(self.client.get(url))?;
+        let response = request.send().await.map_err(|err| self.transport(&err))?;
+        if !response.status().is_success() {
+            return Err(self.failure(response, None).await);
+        }
+        // No token here: the trait does not pass one. The reading stays bounded
+        // in size and in time.
+        let raw: wire::ModelsResponse =
+            http::read_json(&self.id, response, "model list", None).await?;
+        Ok(wire::parse_models(raw))
+    }
+
     /// Classifies a transport error, without ever copying the key.
     fn transport(&self, err: &reqwest::Error) -> LlmError {
         // The idle bound also covers the wait for the headers.
@@ -510,17 +535,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 
     async fn models(&self) -> Result<Vec<ModelInfo>> {
-        let url = self.models_url()?;
-        let request = self.apply_auth(self.client.get(url))?;
-        let response = request.send().await.map_err(|err| self.transport(&err))?;
-        if !response.status().is_success() {
-            return Err(self.failure(response, None).await.into());
-        }
-        // No token here: the trait does not pass one. The reading stays bounded
-        // in size and in time.
-        let raw: wire::ModelsResponse =
-            http::read_json(&self.id, response, "model list", None).await?;
-        Ok(wire::parse_models(raw))
+        Ok(self.fetch_models().await?)
     }
 
     async fn stream(
@@ -641,6 +656,59 @@ mod tests {
             f.chat_url().expect("URL").as_str(),
             "http://localhost:11434/v1/chat/completions"
         );
+    }
+
+    /// Listing and chatting resolve the base URL the same way: a list that
+    /// works on an address the conversation would not use is a lie.
+    #[test]
+    fn the_model_list_and_the_conversation_share_their_prefix() {
+        for (base, models) in [
+            (
+                "http://localhost:11434/v1",
+                "http://localhost:11434/v1/models",
+            ),
+            (
+                "http://localhost:11434/v1/",
+                "http://localhost:11434/v1/models",
+            ),
+            (
+                "http://127.0.0.1:1234/v1",
+                "http://127.0.0.1:1234/v1/models",
+            ),
+            ("http://[::1]:8080/v1", "http://[::1]:8080/v1/models"),
+            (
+                "https://api.deepseek.com",
+                "https://api.deepseek.com/models",
+            ),
+            (
+                "https://api.deepseek.com/",
+                "https://api.deepseek.com/models",
+            ),
+            (
+                "https://api.groq.com/openai/v1",
+                "https://api.groq.com/openai/v1/models",
+            ),
+            (
+                "https://gateway.example/team/llm/v1",
+                "https://gateway.example/team/llm/v1/models",
+            ),
+            (
+                "https://gateway.example/v1?tenant=a",
+                "https://gateway.example/v1/models",
+            ),
+        ] {
+            let f = OpenAiCompatibleProvider::new(ProviderId::openai_compatible(), base)
+                .expect("construction");
+            let listed = f.models_url().expect("URL");
+            assert_eq!(listed.as_str(), models, "listing from `{base}`");
+            let chat = f.chat_url().expect("URL");
+            assert_eq!(
+                chat.as_str().strip_suffix("chat/completions"),
+                listed.as_str().strip_suffix("models"),
+                "chat and listing diverge from `{base}`"
+            );
+            assert!(!listed.path().contains("/v1/v1"), "{listed}");
+        }
     }
 
     #[test]

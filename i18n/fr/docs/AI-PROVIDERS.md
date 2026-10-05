@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="98e6bbc61382" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="6ed65e778c48" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -319,6 +319,39 @@ réponse ; au réveil, le Wi-Fi a changé et la socket est à moitié ouverte �
 aucune réinitialisation n'arrive jamais. Sans ces bornes, la question restait
 « en réflexion » pour toujours ; avec un agent externe, un arrêt que l'agent ne
 confirmait jamais bloquait en plus toutes les questions suivantes derrière lui.
+
+## Lister les modèles d'un fournisseur
+
+Le formulaire d'un fournisseur propose les modèles qu'un point d'accès sert,
+avant tout enregistrement (`ai_list_draft_models`), et un fournisseur déclaré
+liste les siens (`ai_provider_models`). Les deux passent par un seul chemin,
+`oxyn_llm::list_models`.
+
+**Ce qui sort :** un `GET` du point d'accès de liste du fournisseur lui-même
+([RESEARCH-NOTES](RESEARCH-NOTES.md#liste-des-modèles--vérifié-le-2026-10-04)),
+portant la clé — et rien d'autre. Aucune invite, aucun schéma, aucun contenu de
+base ; aucun niveau ne s'applique puisqu'il n'y a rien à filtrer. Aucun
+registre de modèles tiers n'est interrogé : la liste est la parole du
+fournisseur, et ses métadonnées (nom affiché, fenêtre de contexte, prix) sont
+ce que le fournisseur a publié.
+
+| Règle | Pourquoi |
+|---|---|
+| La liste est construite par le transport qu'utiliserait une conversation : même résolution de l'URL de base, même refus des redirections, même confinement d'un point d'accès en boucle locale | une liste qui fonctionne sur une adresse que la conversation n'utiliserait pas validerait une configuration cassée |
+| Une clé saisie ne va qu'à l'adresse saisie à côté d'elle, et une liste ne l'écrit jamais dans le trousseau | saisir une clé dans le formulaire est le consentement de l'utilisateur pour ce point d'accès, pas pour un autre |
+| Une clé enregistrée n'est utilisée que tant que le type et le point d'accès sont ceux pour lesquels elle a été enregistrée (`AiProviderConfig::same_endpoint_as`) | la même règle qu'un enregistrement : une adresse modifiée ne doit pas recevoir l'ancienne clé ([I-03](../CLAUDE.md#i-03)) |
+| Un point d'accès n'est jamais réécrit : un `/v1` manquant ou répété est dit dans le message, pas corrigé | une réécriture silencieuse ferait différer l'adresse listée de l'adresse enregistrée |
+| Les succès sont gardés en mémoire **10 minutes**, indexés par type et point d'accès — jamais par clé, jamais avec les identifiants ni la requête de l'URL ; 32 points d'accès au plus. « Rafraîchir les modèles » et « Tester la connexion » le contournent | un formulaire rouvert dans les minutes qui suivent n'a pas à redemander ; un échec n'est jamais gardé, pour qu'une clé corrigée soit essayée aussitôt |
+| Bornes : **5 s** pour un point d'accès en boucle locale, **20 s** sinon ; pages et entrées bornées (`MAX_MODELS`, dix pages au plus) | un serveur local qui ne répond pas en quelques secondes ne tourne pas ; un serveur qui pagine ne peut pas retenir l'appel indéfiniment ([I-06](../CLAUDE.md#i-06)) |
+
+Un échec est une donnée que le formulaire affiche, avec une raison sur laquelle
+il peut agir : `unauthorized` (`401` avec une clé), `missingKey` (pas de clé, ou
+un `401` sans clé), `forbidden` (`403`), `unsupported` (`404`, `405`, un autre
+refus), `rateLimited` (`429`), `timeout`, `unreachable` (rien n'a répondu, ou un
+`5xx`), `malformed` (une réponse qui n'est pas une liste de modèles),
+`invalidEndpoint` (une adresse qui ne peut pas en être une, ou une
+redirection). Le message est une courte phrase en anglais ; il ne cite jamais
+la clé, ni l'adresse, qui peut porter un mot de passe.
 
 ## Le contenu de la base n'est pas une consigne
 

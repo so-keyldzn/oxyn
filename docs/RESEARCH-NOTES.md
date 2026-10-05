@@ -1646,8 +1646,9 @@ never ends up in a logged URL, a query parameter does
 [ARCHITECTURE §7.5](ARCHITECTURE.md#75-provider-abstraction)
 establishes the real state of the provider: `GeminiProvider` builds this
 request then refuses the call (`LlmError::NotImplemented`) before any
-`.send()`. The exact schema of the response stream and the list of available
-models remain unverified; no value is written for them here.
+`.send()`. The exact schema of the response stream remains unverified; no value
+is written for it here. The model list was checked on 2026-10-04: see
+[Model listing](#model-listing--checked-on-2026-10-04).
 
 ## OpenRouter provider — check of 2026-09-24
 
@@ -1665,6 +1666,75 @@ source. The page consulted says nothing about a `-1` value: the reading of
 `parse_price` (`crates/oxyn-llm/src/openai_compatible/wire.rs`) — which
 rejects any negative price, `-1` included — therefore remains, on this precise
 point, unconfirmed by the provider's documentation.
+
+## Model listing — checked on 2026-10-04
+
+Read in each provider's official API reference on 2026-10-04, for
+`oxyn_llm::list_models` and the provider form
+([AI-PROVIDERS](AI-PROVIDERS.md#listing-a-providers-models)). Every provider
+below lists its models; none documents listing without a key, except local
+servers, which need none by default.
+
+| Provider | Endpoint | Key | Shape | Pagination (documented maximum) | Context window | Display name |
+|---|---|---|---|---|---|---|
+| OpenAI | `GET https://api.openai.com/v1/models` | `Authorization: Bearer` | `{object:"list", data:[{id, created, owned_by}]}` | none | — | — |
+| Anthropic | `GET https://api.anthropic.com/v1/models` | `x-api-key` + `anthropic-version` | `{data, first_id, last_id, has_more}` | `limit` (default 20, max **1000**), `after_id`, `before_id` | `max_input_tokens` | `display_name` |
+| Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models` | `x-goog-api-key` (or `?key=`, which Oxyn never uses) | `{models, nextPageToken}`; `name` is `models/<id>` | `pageSize` (default 50, max **1000**), `pageToken` | `inputTokenLimit` | `displayName` |
+| Mistral | `GET https://api.mistral.ai/v1/models` | Bearer | `{object:"list", data}` | none | `max_context_length` | — |
+| Groq | `GET https://api.groq.com/openai/v1/models` | Bearer | `{object:"list", data}` | none | `context_window` | — |
+| OpenRouter | `GET https://openrouter.ai/api/v1/models` | Bearer, documented as required | `{data, total_count, links}` | `offset`, `limit` (default 500, max **1000**); the whole list when both are omitted | `context_length`, `top_provider.context_length` | `name` |
+| Ollama | `GET http://localhost:11434/v1/models`; native `GET /api/tags` → `{models:[{name, model, details}]}` | none locally | OpenAI list | none | not returned by either | — |
+| LM Studio | `GET http://localhost:1234/v1/models`; native `GET /api/v1/models` → `{models}` (v0 `/api/v0/models` superseded) | none unless the server's token setting is on | "OpenAI-compatible", not further documented | none | native only: `max_context_length` | native only: `display_name` |
+| xAI | `GET https://api.x.ai/v1/models` (also `/v1/language-models` → `{models}`) | Bearer | `{object:"list", data}` | none | `context_length` (in the example only) | — |
+| Together AI | `GET https://api.together.ai/v1/models` | Bearer | **bare array** | none | `context_length` | `display_name`; `type` among `chat`, `language`, `code`, `image`, `embedding`, `moderation`, `rerank` |
+| Fireworks AI | `GET https://api.fireworks.ai/v1/accounts/{account_id}/models` — **not** under the OpenAI-compatible base `…/inference/v1` | Bearer | `{models, nextPageToken, totalSize}` | `pageSize` (default 50, max **200**), `pageToken` | `contextLength` | `displayName` |
+| Cerebras | `GET https://api.cerebras.ai/v1/models` | Bearer | `{object:"list", data:[{id, created, owned_by}]}` | none | — | — |
+| DeepSeek | `GET https://api.deepseek.com/models` (no `/v1`) | Bearer | `{object:"list", data}` | none | `context_window` | `name` |
+
+Sources:
+[OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list),
+[Anthropic](https://platform.claude.com/docs/en/api/models-list),
+[Gemini](https://ai.google.dev/api/models),
+[Mistral](https://docs.mistral.ai/api/endpoint/models),
+[Groq](https://console.groq.com/docs/api-reference),
+[OpenRouter](https://openrouter.ai/docs/api-reference/models/get-models),
+[Ollama `/api/tags`](https://docs.ollama.com/api/tags) and
+[OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility),
+[LM Studio REST](https://lmstudio.ai/docs/developer/rest/list),
+[LM Studio OpenAI compatibility](https://lmstudio.ai/docs/developer/openai-compat/models),
+[LM Studio authentication](https://lmstudio.ai/docs/developer/core/authentication),
+[xAI](https://docs.x.ai/developers/rest-api-reference/inference/models),
+[Together AI](https://docs.together.ai/reference/models-1),
+[Fireworks](https://docs.fireworks.ai/api-reference/list-models) and
+[its OpenAI compatibility](https://docs.fireworks.ai/tools-sdks/openai-compatibility),
+[Cerebras](https://inference-docs.cerebras.ai/api-reference/models),
+[DeepSeek list](https://api-docs.deepseek.com/api/list-models) and
+[base URL](https://api-docs.deepseek.com/). All read on 2026-10-04.
+
+What the code takes from it:
+
+* **OpenAI-compatible family** — one request, no pagination: none of these
+  providers documents one, and OpenRouter returns its whole list without
+  `offset`/`limit`. The body is `{data:[…]}` or Together's bare array; the
+  context window is read from `context_length`, `context_window` or
+  `max_context_length`, the display name from `name` or `display_name`;
+  Together's `image`, `embedding`, `moderation` and `rerank` entries are left
+  out. Ollama and LM Studio are listed through `/v1/models`, the path their chat
+  uses — never through their native endpoints, which a conversation does not
+  use.
+* **Anthropic** — `limit=1000`, cursor `after_id`, at most ten pages.
+* **Gemini** — `pageSize=1000`, cursor `pageToken`, at most ten pages; the
+  `models/` prefix is stripped, models without `generateContent` (embeddings)
+  are left out. The key goes in `x-goog-api-key`.
+* **Fireworks** cannot be listed through an OpenAI-compatible declaration: its
+  list is per account, outside the chat base. The form reports `unsupported`.
+
+Could not be verified: no maximum response size for the unpaginated
+providers; the shape of LM Studio's `/v1/models` beyond "OpenAI-compatible";
+the fields of Ollama's `/v1/models` beyond `created` and `owned_by`; xAI's host
+and Bearer header are not written on its reference page; whether OpenRouter
+actually answers without a key; whether Fireworks serves
+`GET /inference/v1/models`.
 
 ## Benchmarks — check of 2026-09-10
 

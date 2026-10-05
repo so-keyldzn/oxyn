@@ -285,23 +285,70 @@ pub fn build_provider(
     key: Option<ApiKey>,
     reach: crate::Reach,
 ) -> Result<Arc<dyn LlmProvider>> {
+    Ok(match build(kind, base_url, key, reach)? {
+        Built::Anthropic(provider) => Arc::new(provider),
+        Built::Gemini(provider) => Arc::new(provider),
+        Built::OpenAiCompatible(provider) => Arc::new(provider),
+    })
+}
+
+/// Lists the models an endpoint serves, through the transport
+/// [`build_provider`] would build for it — same base URL resolution, same
+/// redirect refusal, same reach confinement. Listing never succeeds on an
+/// address a conversation would not use.
+///
+/// Sends the key, if any, to that endpoint and nothing else: no prompt, no
+/// database content, no third-party registry.
+///
+/// # Errors
+/// The [`LlmError`] as such, not projected onto the domain: listing models
+/// must tell a refused key (`401`) from a key without the right (`403`), which
+/// the projection merges. Same construction errors as [`build_provider`].
+pub async fn list_models(
+    kind: AiProviderKind,
+    base_url: &str,
+    key: Option<ApiKey>,
+    reach: crate::Reach,
+) -> std::result::Result<Vec<ModelInfo>, LlmError> {
+    match build(kind, base_url, key, reach)? {
+        Built::Anthropic(provider) => provider.fetch_models().await,
+        Built::Gemini(provider) => provider.fetch_models().await,
+        Built::OpenAiCompatible(provider) => provider.fetch_models().await,
+    }
+}
+
+/// A transport of a known family, before it is erased behind the trait.
+enum Built {
+    Anthropic(crate::anthropic::AnthropicProvider),
+    Gemini(crate::gemini::GeminiProvider),
+    OpenAiCompatible(crate::openai_compatible::OpenAiCompatibleProvider),
+}
+
+/// What [`build_provider`] and [`list_models`] share: one construction per
+/// family, so the two can never resolve an endpoint differently.
+fn build(
+    kind: AiProviderKind,
+    base_url: &str,
+    key: Option<ApiKey>,
+    reach: crate::Reach,
+) -> std::result::Result<Built, LlmError> {
     match kind {
         AiProviderKind::Anthropic => {
             let key = require_key(&ProviderId::anthropic(), key)?;
-            Ok(Arc::new(
+            Ok(Built::Anthropic(
                 crate::anthropic::AnthropicProvider::with_base_url_and_reach(key, base_url, reach)?,
             ))
         }
         AiProviderKind::Gemini => {
             let key = require_key(&ProviderId::gemini(), key)?;
-            Ok(Arc::new(
+            Ok(Built::Gemini(
                 crate::gemini::GeminiProvider::with_base_url_and_reach(key, base_url, reach)?,
             ))
         }
         AiProviderKind::OpenAi => {
             let id = ProviderId::openai();
             let key = require_key(&id, key)?;
-            Ok(Arc::new(
+            Ok(Built::OpenAiCompatible(
                 crate::openai_compatible::OpenAiCompatibleProvider::new_with_reach(
                     id, base_url, reach,
                 )?
@@ -319,7 +366,7 @@ pub fn build_provider(
             )?;
             // A given key is presented; its absence cannot be required — that
             // is the case of a local model.
-            Ok(Arc::new(match key {
+            Ok(Built::OpenAiCompatible(match key {
                 Some(key) => provider.with_api_key(key),
                 None => provider,
             }))
@@ -327,18 +374,14 @@ pub fn build_provider(
         other => Err(LlmError::Unsupported {
             provider: ProviderId::openai_compatible(),
             capability: format!("provider family `{other}`"),
-        }
-        .into()),
+        }),
     }
 }
 
 /// Requires the key of a family that does not work without one.
-fn require_key(id: &ProviderId, key: Option<ApiKey>) -> Result<ApiKey> {
-    key.ok_or_else(|| {
-        LlmError::MissingApiKey {
-            provider: id.clone(),
-        }
-        .into()
+fn require_key(id: &ProviderId, key: Option<ApiKey>) -> std::result::Result<ApiKey, LlmError> {
+    key.ok_or_else(|| LlmError::MissingApiKey {
+        provider: id.clone(),
     })
 }
 
