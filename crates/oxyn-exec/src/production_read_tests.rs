@@ -11,7 +11,8 @@ use super::*;
 use async_trait::async_trait;
 use oxyn_catalog::CatalogProvider;
 use oxyn_core::{
-    Capabilities, DefaultPolicy, DriverId, ExecLimits, QueryLanguage, SqlDialect, StatementHandle,
+    AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ExecLimits, QueryLanguage,
+    SqlDialect, StatementHandle,
 };
 use oxyn_driver::Session;
 
@@ -212,6 +213,81 @@ async fn a_confirmed_production_write_keeps_its_lifted_bound() {
         .await;
 
     assert_eq!(reached(&bench), [false]);
+}
+
+/// What a MySQL console sends: the bound lifted, as `writable`.
+fn mysql(bench: &Bench, text: &str) -> Command {
+    Command::Execute {
+        connection: bench.connection,
+        session: bench.session,
+        request: Box::new(
+            ExecRequest::new(QueryLanguage::Sql(SqlDialect::MySql), text)
+                .with_limits(ExecLimits::default().writable()),
+        ),
+    }
+}
+
+/// MySQL cannot bound a statement to read-only inside an open transaction,
+/// and refused the `COMMIT` or `ROLLBACK` that would have ended it: a
+/// production transaction could never be settled, exit dialog included
+/// (issue #182). A bare transaction verb reaches the driver unbounded.
+#[tokio::test]
+async fn a_production_transaction_verb_reaches_the_driver_unbounded() {
+    let connection = ConnectionConfig::new("customers", DriverId::mysql())
+        .with_environment(Environment::Production);
+    let bench = bench(&connection, default_policy(&connection));
+
+    for text in ["START TRANSACTION", "COMMIT", "BEGIN", "ROLLBACK"] {
+        let _ = bench
+            .executor
+            .dispatch(Actor::Human, mysql(&bench, text), &CancelToken::new())
+            .await;
+    }
+
+    assert_eq!(reached(&bench), [false, false, false, false]);
+}
+
+#[tokio::test]
+async fn a_read_behind_a_transaction_verb_stays_bounded() {
+    let connection = ConnectionConfig::new("customers", DriverId::mysql())
+        .with_environment(Environment::Production);
+    let bench = bench(&connection, default_policy(&connection));
+
+    let _ = bench
+        .executor
+        .dispatch(
+            Actor::Human,
+            mysql(&bench, "COMMIT; SELECT audit_touch()"),
+            &CancelToken::new(),
+        )
+        .await;
+
+    assert_eq!(reached(&bench), [true]);
+}
+
+#[tokio::test]
+async fn an_agent_still_may_not_settle_a_production_transaction() {
+    let connection = ConnectionConfig::new("customers", DriverId::mysql())
+        .with_environment(Environment::Production);
+    let bench = bench(&connection, default_policy(&connection));
+
+    for text in ["COMMIT", "ROLLBACK"] {
+        let outcome = bench
+            .executor
+            .dispatch(
+                Actor::agent(AgentId::new(), AgentSessionId::new()),
+                mysql(&bench, text),
+                &CancelToken::new(),
+            )
+            .await
+            .expect("a decision");
+        assert!(
+            matches!(outcome, Outcome::Denied { .. }),
+            "`{text}` must be refused to an agent"
+        );
+    }
+
+    assert!(reached(&bench).is_empty(), "nothing reached the driver");
 }
 
 /// A policy that asks about everything, to reach `approve` with a read.
