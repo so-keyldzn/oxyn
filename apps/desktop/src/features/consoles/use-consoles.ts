@@ -99,6 +99,13 @@ interface ClosedConsole {
 /** Closed consoles kept for ⌘⇧T, the oldest forgotten first. */
 const MAX_REOPENABLE = 20
 
+// Keys are window-wide, not per workspace: retained workspaces stay mounted
+// (ADR-0046), and the shutdown draft flush and the inspectors address every
+// console of the window in one namespace. A per-workspace ordinal would give
+// two workspaces the same `console:1`, and the later one would silently
+// replace the earlier one there.
+let lastKey = 0
+
 function failure(error: unknown) {
   return error instanceof BackendError ? error.message : String(error)
 }
@@ -172,7 +179,8 @@ export function useConsoles({
     initialResult: ResultState | null = null
   ) => {
     counter.current += 1
-    const key = `console:${counter.current}`
+    lastKey += 1
+    const key = `console:${lastKey}`
     // What the session reported at opening; events carry it on (ADR-0039).
     if (session)
       recordTransactionState(session.session, session.transactionState)
