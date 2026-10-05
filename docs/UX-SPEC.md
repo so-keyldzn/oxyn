@@ -102,6 +102,14 @@ from a complete result.
 buffer stops at two million, the user exports, and leaves with a CSV they
 believe is the table. Nothing in the file says forty-eight million are missing.
 
+A result whose columns share a name — `SELECT 1 AS id, 2 AS id`, or
+`SELECT *` over a join — is **refused in JSON and JSON Lines**, before the
+destination is touched. A JSON object identifies its fields by name, so one of
+the two values would be lost to any ordinary reader. The refusal names the
+shared columns and asks for distinct aliases. CSV, TSV and Arrow IPC keep every
+column by position and stay available. Names are compared exactly: `id` and
+`ID` are two keys.
+
 A format the product cannot write yet is shown as **unavailable**, not absent:
 offering it would make the write fail after the file is chosen, leaving an empty
 file on disk; hiding it would suggest the product will never have it.

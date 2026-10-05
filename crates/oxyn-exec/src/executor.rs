@@ -1013,9 +1013,10 @@ impl Executor {
                         capability: format!("export:{}", format.extension()),
                     });
                 }
-                // A truncated buffer is refused here for the same reason: before
-                // the destination is touched, and for every actor.
-                oxyn_data::ensure_exportable(&buffer, &ExportOptions::default())?;
+                // A truncated buffer, or duplicate names a JSON object would
+                // collapse, are refused here for the same reason: before the
+                // destination is touched, and for every actor.
+                oxyn_data::ensure_exportable(&buffer, *format, &ExportOptions::default())?;
                 let format = *format;
                 let destination = destination.clone();
                 let cancel_owned = cancel.clone();

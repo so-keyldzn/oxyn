@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="eb2240a8e888" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="3621546027e9" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -106,6 +106,14 @@ distingue d'un résultat complet.
 le tampon s'arrête à deux millions, l'utilisateur exporte, et repart avec un CSV
 qu'il croit être la table. Rien dans le fichier ne dit qu'il en manque
 quarante-huit millions.
+
+Un résultat dont des colonnes partagent un nom — `SELECT 1 AS id, 2 AS id`, ou
+`SELECT *` sur une jointure — est **refusé en JSON et en JSON Lines**, avant que
+la destination ne soit touchée. Un objet JSON identifie ses champs par leur nom :
+l'une des deux valeurs serait perdue pour tout lecteur ordinaire. Le refus
+nomme les colonnes concernées et demande des alias distincts. CSV, TSV et
+Arrow IPC gardent chaque colonne par sa position et restent disponibles. Les
+noms se comparent à l'identique : `id` et `ID` sont deux clés.
 
 Un format que le produit ne sait pas encore écrire s'affiche **indisponible**,
 pas absent : le proposer ferait échouer l'écriture après le choix du fichier, en
