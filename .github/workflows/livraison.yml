@@ -20,7 +20,8 @@
 # macOS delivery requires Developer ID signing and Apple notarization; missing
 # credentials fail closed. Setup and manual launch: docs/RELEASE.md.
 #
-# Automatic updates (ADR-0051): the macOS archive and the AppImage are signed
+# Automatic updates (ADR-0051): the macOS archive and the two AppImages
+# (x86_64 and aarch64) are signed
 # with the updater key, in a step of their own after the build — the key never
 # reaches `tauri build`, its build scripts or its npm code. The last job,
 # `manifeste`, verifies each archive of the draft against its signature and the
@@ -100,14 +101,26 @@ jobs:
             # literal, and `signer` refuses a file that does not exist.
             a_signer: target/release/bundle/updater/*_aarch64.app.tar.gz
           - os: ubuntu-24.04
+            # Checked by `livraison architecture` before signing and upload.
+            architecture: x86_64
             # deb and rpm are not signed for the updater: those installs are
             # updated by their package manager.
             paquets: |
               target/release/bundle/deb/*.deb
               target/release/bundle/rpm/*.rpm
-              target/release/bundle/appimage/*.AppImage
-              target/release/bundle/appimage/*.AppImage.sig
-            a_signer: target/release/bundle/appimage/*.AppImage
+              target/release/bundle/appimage/*_amd64.AppImage
+              target/release/bundle/appimage/*_amd64.AppImage.sig
+            a_signer: target/release/bundle/appimage/*_amd64.AppImage
+          - os: ubuntu-24.04-arm
+            # Built natively on GitHub's ARM64 runner: no cross toolchain, and
+            # the bundler's AppImage tooling runs as on x86_64.
+            architecture: aarch64
+            paquets: |
+              target/release/bundle/deb/*.deb
+              target/release/bundle/rpm/*.rpm
+              target/release/bundle/appimage/*_aarch64.AppImage
+              target/release/bundle/appimage/*_aarch64.AppImage.sig
+            a_signer: target/release/bundle/appimage/*_aarch64.AppImage
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
 
@@ -143,6 +156,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          # `rpm` reads the built package's architecture; the bundler does not need it.
+          sudo apt-get install -y rpm
 
       - name: Install the pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
@@ -166,13 +181,17 @@ jobs:
           cache_dependency_path: apps/desktop/pnpm-lock.yaml
 
       - name: Install cargo-about for required third-party notices
-        # Same version/checksums as qualite.yml (RESEARCH-NOTES § Licenses).
+        # Same version as qualite.yml; checksums in RESEARCH-NOTES
+        # (§ Third-party notices).
         run: |
-          case "$RUNNER_OS" in
-            macOS) target=aarch64-apple-darwin
-                   checksum=ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e ;;
-            Linux) target=x86_64-unknown-linux-musl
-                   checksum=9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af ;;
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            macOS-ARM64) target=aarch64-apple-darwin
+                         checksum=ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e ;;
+            Linux-X64)   target=x86_64-unknown-linux-musl
+                         checksum=9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af ;;
+            Linux-ARM64) target=aarch64-unknown-linux-musl
+                         checksum=af5169282fb6f84e13471493f405437e43ac517744c9ae12fbe2cdf0a6f0e5a8 ;;
+            *) echo "No cargo-about binary pinned for $RUNNER_OS-$RUNNER_ARCH."; exit 1 ;;
           esac
           archive="cargo-about-0.9.2-$target.tar.gz"
           curl -LsSf -o "$RUNNER_TEMP/$archive" "https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/$archive"
@@ -184,6 +203,12 @@ jobs:
         # The same target as locally: `make desktop PROFIL=release`. No
         # secret: the AppImage is signed for the updater in a later step.
         run: make desktop PROFIL=release
+
+      - name: Check the architecture of the Linux packages
+        if: runner.os == 'Linux'
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: python3 script/livraison architecture "$ARCHITECTURE" target/release/bundle target/release/oxyn-desktop
 
       - name: Build, sign and notarize macOS packages
         if: runner.os == 'macOS'
