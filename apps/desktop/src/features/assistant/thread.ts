@@ -181,6 +181,14 @@ export function dequeue(thread: Thread, key: string): Thread {
   }
 }
 
+/** Puts a message back first in line: it was next, and nothing left. */
+export function requeue(thread: Thread, message: QueuedMessage): Thread {
+  return {
+    ...thread,
+    queue: [message, ...thread.queue.filter((m) => m.key !== message.key)],
+  }
+}
+
 /** The exchange shown last, if any. */
 export function lastExchange(thread: Thread) {
   return activePath(thread).at(-1) ?? null

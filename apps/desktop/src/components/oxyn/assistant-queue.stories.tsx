@@ -11,7 +11,7 @@ const meta = {
       { key: "queued-1", text: "And the same for last month?" },
       { key: "queued-2", text: "Then group it by status." },
     ],
-    held: false,
+    held: null,
     onSendNow: fn(),
     onRemove: fn(),
   },
@@ -43,7 +43,7 @@ export const WaitingForTheTurnToEnd: Story = {
 }
 
 export const HeldAfterAFailure: Story = {
-  args: { held: true },
+  args: { held: "failed" },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
     await expect(canvas.getByText(/the last answer failed/)).toBeVisible()
@@ -51,6 +51,19 @@ export const HeldAfterAFailure: Story = {
       canvas.getByRole("button", { name: "Send queued message 2 now" })
     )
     await expect(args.onSendNow).toHaveBeenCalledWith("queued-2")
+  },
+}
+
+/** The backend refused the next message: it is back first, sent by hand. */
+export const HeldAfterARefusal: Story = {
+  args: { held: "refused" },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText(/the next one was not sent/)).toBeVisible()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Send queued message 1 now" })
+    )
+    await expect(args.onSendNow).toHaveBeenCalledWith("queued-1")
   },
 }
 

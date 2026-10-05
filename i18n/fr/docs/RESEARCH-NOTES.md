@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="a4493f0d6bf7" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="2f5d308d0008" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2225,3 +2225,25 @@ ainsi que les plages de caractères invisibles déjà utilisées par les
 confirmations natives. Les bornes de 4 096 octets pour la commande et les
 arguments sont des limites produit Oxyn, pas celles du système d'exploitation ;
 aucune dépendance n'a été ajoutée.
+
+## Flux silencieux — vérifié le 2026-10-04
+
+Question : un fournisseur promet-il d'envoyer quelque chose à intervalle connu
+pendant que le modèle réfléchit en silence, pour qu'une borne sur le silence
+puisse s'y caler ? La réponse fixe les bornes d'inactivité de
+[AI-PROVIDERS](AI-PROVIDERS.md#un-fournisseur-silencieux).
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Anthropic envoie des événements `ping` « en nombre quelconque » ; aucun intervalle n'est donné | [Streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), consigné plus haut dans « Flux SSE » | 2026-09-16 |
+| Anthropic : « Some networks may drop idle connections after a variable period of time » ; le streaming ou les lots sont conseillés pour les longues requêtes, « especially those over 10 minutes », et un keep-alive TCP pour les intégrations directes. Là non plus, aucun intervalle pour `ping` | [Claude API errors § Long requests](https://platform.claude.com/docs/en/api/errors#long-requests) | 2026-10-04 |
+| llama.cpp envoie des commentaires SSE `:` de maintien ; aucun intervalle n'a été consigné | consigné plus haut dans « Fin de flux chez les serveurs locaux compatibles OpenAI » | 2026-09-16 |
+| OpenAI : rien sur les keep-alive n'est consigné dans ce fichier, et ce n'a pas été revérifié | — | — |
+| reqwest **0.13.4** `ClientBuilder::read_timeout` : « applies to each read operation, and resets after a successful read ». Le même minuteur borne aussi l'attente des en-têtes de réponse (`Pending::poll`) ; au-delà, une lecture du corps échoue avec `is_timeout()` | sources installées, `src/async_impl/client.rs` ; comportement vérifié par `crates/oxyn-llm/src/http/idle_tests.rs` | 2026-10-04 |
+
+Conséquence retenue : il n'y a pas d'intervalle publié à suivre. La borne de
+300 s est celle d'Oxyn, assez longue pour un modèle qui réfléchit plusieurs
+minutes, et elle est remise à zéro par tout octet — un `ping` ou un commentaire
+`:` compte. Il en va de même pour les agents externes : rien dans ce fichier ne
+consigne à quelle fréquence un adaptateur signale sa progression, et leur borne
+est aussi un choix produit.

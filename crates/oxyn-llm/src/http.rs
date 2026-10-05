@@ -58,6 +58,25 @@ mod dns;
 /// bounding it globally would cut long responses.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Longest silence accepted from a provider once the request went out: until
+/// the response headers, then between two body chunks.
+///
+/// There is still no total bound — a long answer that keeps arriving is never
+/// cut. This one ends what never arrives: a half-open connection after the
+/// laptop slept or the Wi-Fi changed, where no reset ever comes, and the
+/// question would otherwise wait forever.
+///
+/// No provider documents how often it sends something while the model thinks
+/// silently: Anthropic's `ping` comes "in any number", llama.cpp sends `:`
+/// comments, OpenAI documents nothing
+/// ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md#idle-streams--checked-on-2026-10-04)).
+/// The value is therefore Oxyn's, chosen long — a reasoning model thinking
+/// for minutes must not be cut —, since "Stop" stays the fast way out
+/// ([AI-PROVIDERS](../../../docs/AI-PROVIDERS.md#a-silent-provider)). Its
+/// expiry is an ambiguous failure: the request went out and may have been
+/// billed, it is never replayed (I-13).
+pub(crate) const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// `User-Agent` header sent to every provider.
 const USER_AGENT: &str = concat!("oxyn/", env!("CARGO_PKG_VERSION"));
 
@@ -88,6 +107,9 @@ pub(crate) fn client(id: &ProviderId, url: &Url, reach: Reach) -> Result<Client,
 fn builder(reach: Reach, resolver: Arc<dyn reqwest::dns::Resolve>) -> ClientBuilder {
     Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
+        // Reset by every chunk received, `ping` frames included: it bounds a
+        // silence, never a generation.
+        .read_timeout(IDLE_TIMEOUT)
         .user_agent(USER_AGENT)
         .redirect(redirect::Policy::none())
         // A proxy would change the recipient without changing the recorded reach.
@@ -375,3 +397,6 @@ mod tests;
 
 #[cfg(test)]
 mod reach_tests;
+
+#[cfg(test)]
+mod idle_tests;

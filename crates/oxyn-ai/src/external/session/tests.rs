@@ -11,7 +11,6 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Agent, Channel, Error};
 use futures::FutureExt;
-use futures::executor::block_on;
 use futures::future::{join, select};
 
 use super::*;
@@ -69,6 +68,18 @@ impl Seen {
     }
 }
 
+/// Runs a future to completion on a fresh tokio runtime.
+///
+/// Not `futures::executor::block_on`: a question's bounds are tokio timers, and
+/// they need the runtime's clock.
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(future)
+}
+
 fn prompt(text: &str) -> AgentPrompt {
     AgentPrompt::from_user(PrivacyTier::Metadata, text).expect("a question under metadata")
 }
@@ -89,7 +100,8 @@ fn run_with<T>(
     scenario: impl AsyncFnOnce(ExternalSession) -> T,
 ) -> T {
     let (ours, theirs) = Channel::duplex();
-    let (session, driver) = ExternalSession::over_with(ours, private(), tools, None);
+    let (session, driver) =
+        ExternalSession::over_with(ours, private(), tools, None, Limits::default());
     let background = join(driver, agent(theirs));
     block_on(async move {
         let scenario = pin!(scenario(session));
@@ -1886,7 +1898,7 @@ mod confined {
 
         let (ours, theirs) = Channel::duplex();
         let (session, driver) =
-            ExternalSession::over_with(ours, private(), None, Some(confinement));
+            ExternalSession::over_with(ours, private(), None, Some(confinement), Limits::default());
         let background = join(driver, wandering(Arc::clone(&said))(theirs));
         let ends = block_on(async move {
             let scenario = pin!(async {
@@ -1978,3 +1990,5 @@ fn a_one_shot_launch_resolves_secrets_after_the_tier_check() {
     });
     assert_eq!(reads.load(Ordering::SeqCst), 1);
 }
+
+mod idle;

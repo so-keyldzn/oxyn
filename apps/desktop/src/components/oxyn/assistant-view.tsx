@@ -19,6 +19,7 @@ import {
   awaitsReview,
   exchangeCost,
 } from "@/components/oxyn/assistant-exchange"
+import type { ExchangeActions } from "@/components/oxyn/assistant-exchange"
 import { AssistantHeader } from "@/components/oxyn/assistant-header"
 import type { ModelListState } from "@/components/oxyn/assistant-header"
 import { AssistantHistory } from "@/components/oxyn/assistant-history"
@@ -51,7 +52,7 @@ import type {
   DestinationOption,
 } from "@/features/assistant/availability"
 import type { AssistantState } from "@/features/assistant/conversation-store"
-import { activePath } from "@/features/assistant/thread"
+import { activePath, versionsOf } from "@/features/assistant/thread"
 import type { ExchangeNode } from "@/features/assistant/thread"
 import { outcomeOf } from "@/features/assistant/transcript"
 import type { ToolCallEntry } from "@/features/assistant/transcript"
@@ -248,6 +249,36 @@ export function AssistantView(props: AssistantViewProps) {
   } | null>(null)
   const [historyOpen, setHistoryOpen] = React.useState(false)
   const composer = React.useRef<AssistantComposerHandle>(null)
+  // The callers pass fresh callbacks at every render, and the panel renders
+  // at every frame of a streamed answer. The exchanges get one object for the
+  // life of the view, which reads the latest callbacks when they act: an
+  // exchange already answered is not drawn again for each streamed word.
+  const latest = React.useRef(props)
+  React.useLayoutEffect(() => {
+    latest.current = props
+  })
+  // Absent is not a no-op: the sources then offer no `Open` at all.
+  const opensObjects = props.onOpenObject !== undefined
+  const actions = React.useMemo<ExchangeActions>(
+    () => ({
+      onOpenObject: opensObjects
+        ? (address) => latest.current.onOpenObject?.(address)
+        : undefined,
+      onEdit: (node, text) => latest.current.onEdit(node, text),
+      onSelectVersion: (node) => latest.current.onSelectVersion(node),
+      onCopy: (text) => latest.current.onCopy(text),
+      onOpenInConsole: (sql, provenance) =>
+        latest.current.onOpenInConsole(sql, provenance),
+      onRegenerate: (node) => latest.current.onRegenerate(node),
+      onContinue: (node) => latest.current.onContinue(node),
+      onSignIn: (method) => latest.current.onSignIn(method),
+      onReview: (node, tool) =>
+        setReviewing(
+          tool.approval ? { node, approval: tool.approval.id } : null
+        ),
+    }),
+    [opensObjects]
+  )
   // The agent started when the panel opened, before any question: what it
   // declared then is what the selector offers until an answer reports more.
   const startedSettings =
@@ -277,7 +308,14 @@ export function AssistantView(props: AssistantViewProps) {
         ? (selected?.reason ?? "Choose who answers.")
         : null
   const lastExchange = path.at(-1)?.exchange ?? null
-  const held = lastExchange ? outcomeOf(lastExchange)?.kind === "failed" : false
+  // Idle with messages still queued: the backend refused the next one, and
+  // nothing would send them now that no run is left to end.
+  const held =
+    lastExchange && outcomeOf(lastExchange)?.kind === "failed"
+      ? "failed"
+      : !busy && state.thread.queue.length > 0
+        ? "refused"
+        : null
   const remedy = unavailable ? (REMEDIES[entry.reason] ?? null) : null
 
   return (
@@ -399,17 +437,16 @@ export function AssistantView(props: AssistantViewProps) {
                   >
                     <ExchangeView
                       node={node}
-                      view={props}
+                      versions={versionsOf(state.thread, node)}
                       busy={busy}
                       last={index === path.length - 1}
                       cost={exchangeCost(node.exchange, props)}
-                      onReview={(id, tool) =>
-                        setReviewing(
-                          tool.approval
-                            ? { node: id, approval: tool.approval.id }
-                            : null
-                        )
-                      }
+                      tier={tier}
+                      signInStates={state.signIn}
+                      identifierQuote={props.identifierQuote}
+                      renderToolRows={props.renderToolRows}
+                      renderErd={props.renderErd}
+                      actions={actions}
                     />
                   </MessageScrollerItem>
                 ))}

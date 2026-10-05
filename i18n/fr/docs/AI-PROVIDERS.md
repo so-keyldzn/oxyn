@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="95fd73e0043c" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="98e6bbc61382" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -280,6 +280,45 @@ distingue un `UPDATE` d'une ligne d'un `UPDATE` sans `WHERE` : le promettre sans
 le fournir laisse croire à une protection qui n'existe pas, au moment précis où
 [I-02](../CLAUDE.md#i-02) compte. Le code, lui, était honnête — il dit
 « inconnu ».
+
+Un appel d'outil dont les arguments ne sont pas du JSON lisible **n'est pas
+exécuté, et ne fait pas échouer le tour** : le fournisseur le signale comme tel
+(`ChatEvent::ToolCallInvalid`), le modèle reçoit un refus comme résultat de cet
+appel — le même que pour des arguments qui ne conviennent pas à l'outil —, et
+les autres appels du tour s'exécutent. Le refus nomme l'erreur d'analyse,
+jamais les arguments : ils sont une sortie de modèle, et peuvent recopier ce
+qu'on lui a donné.
+
+## Un fournisseur silencieux
+
+Une question attend deux choses qui peuvent se taire sans échouer : le flux
+d'un fournisseur, et la réponse d'un agent externe. Aucune n'a de borne totale
+— une longue réponse qui continue d'arriver n'est jamais coupée — ; toutes
+deux ont une borne sur le **silence**.
+
+| Quoi | Silence accepté | Remis à zéro par | À l'expiration |
+|---|---|---|---|
+| Requête et flux d'un fournisseur (`oxyn-llm`, `IDLE_TIMEOUT`) | **300 s**, jusqu'aux en-têtes de réponse, puis entre deux morceaux | tout octet reçu, trames `ping` et commentaires `:` compris | avant les en-têtes, `LlmError::ResponseTimeout` ; pendant le flux, la fin est `StopReason::Interrupted`. Les deux sont ambigus et jamais rejoués ([I-13](../CLAUDE.md#i-13)) |
+| Réponse d'un agent externe (`external::session`, `AGENT_IDLE_LIMIT`) | **300 s**, hors appel d'outil | toute mise à jour de session, toute demande de permission | `session/cancel` est envoyé, et la question se termine par « l'agent n'a rien envoyé pendant 300 secondes » |
+| Confirmation d'un arrêt par l'agent externe (`CANCEL_GRACE`) | **10 s** | — | le groupe de processus de l'agent est arrêté ; la question suivante lance un agent neuf |
+
+Aucun fournisseur ne documente à quelle fréquence il parle pendant que le
+modèle réfléchit
+([RESEARCH-NOTES](RESEARCH-NOTES.md#flux-silencieux--vérifié-le-2026-10-04)) :
+les valeurs sont celles d'Oxyn, choisies longues pour qu'un modèle de
+raisonnement qui réfléchit plusieurs minutes ne soit pas coupé. « Arrêter »
+reste la sortie rapide, et elle libère la session quoi que fasse l'agent.
+
+Un appel d'outil en cours suspend le décompte de l'agent externe : un appel aux
+outils d'Oxyn peut attendre une approbation que l'utilisateur est en train de
+lire, ou une longue requête, et l'agent ne dit rien pendant ce temps. Couper là
+couperait une approbation au milieu de sa lecture.
+
+**Panne concrète :** l'ordinateur portable se met en veille pendant une
+réponse ; au réveil, le Wi-Fi a changé et la socket est à moitié ouverte —
+aucune réinitialisation n'arrive jamais. Sans ces bornes, la question restait
+« en réflexion » pour toujours ; avec un agent externe, un arrêt que l'agent ne
+confirmait jamais bloquait en plus toutes les questions suivantes derrière lui.
 
 ## Le contenu de la base n'est pas une consigne
 

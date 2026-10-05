@@ -41,6 +41,7 @@ import type { ObjectPin } from "./object-pin"
 import { useProviderModels } from "./use-provider-models"
 import { declaredEfforts, effortToSend } from "./reasoning-effort"
 import type { ExchangeNode } from "./thread"
+import type { ToolCallEntry } from "./transcript"
 import { useAssistantAvailable } from "./use-assistant-available"
 import { useMentionSearch } from "./mention-search"
 import { orphanThreadsQuery, prunedHistoryQuery } from "./queries"
@@ -49,6 +50,7 @@ import { ErdBlock } from "./erd-block"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
 import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
 import type { ModelListState } from "@/components/oxyn/assistant-header"
+import type { ErdRequest } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantSampleApproval } from "@/components/oxyn/assistant-sample-approval"
 import { AssistantView } from "@/components/oxyn/assistant-view"
 import { toast } from "@/components/ui/toast"
@@ -215,6 +217,31 @@ export function AssistantPanel({
       }
     : null
 
+  // Drawn while an exchange draws: kept the same across renders, so an
+  // exchange already answered is not drawn again while another streams.
+  // The rows are read from this connection's executor, for the user.
+  const renderToolRows = React.useCallback(
+    (call: ToolCallEntry) =>
+      call.result === null ? null : (
+        <ToolRows
+          connection={open.connection}
+          entry={{ ...call, result: call.result }}
+        />
+      ),
+    [open.connection]
+  )
+  // Names resolved against this connection's catalog, never believed.
+  const renderErd = React.useCallback(
+    (request: ErdRequest) => (
+      <ErdBlock
+        open={open}
+        request={request}
+        onOpenObject={(address) => openObject(open.connection, address)}
+      />
+    ),
+    [open]
+  )
+
   /** Every send goes through here: without a destination, nothing leaves. */
   const withTarget = async (
     run: (target: AskTarget) => Promise<unknown>
@@ -326,23 +353,8 @@ export function AssistantPanel({
         onOpenInConsole={onOpenInConsole}
         // In this connection's workspace, as a click in its catalog would.
         onOpenObject={(address) => openObject(open.connection, address)}
-        // The rows are read from this connection's executor, for the user.
-        renderToolRows={(call) =>
-          call.result === null ? null : (
-            <ToolRows
-              connection={open.connection}
-              entry={{ ...call, result: call.result }}
-            />
-          )
-        }
-        // Names resolved against this connection's catalog, never believed.
-        renderErd={(request) => (
-          <ErdBlock
-            open={open}
-            request={request}
-            onOpenObject={(address) => openObject(open.connection, address)}
-          />
-        )}
+        renderToolRows={renderToolRows}
+        renderErd={renderErd}
         onChangeAgentSetting={(intent) =>
           changeAgentSetting(open.connection, intent)
         }
@@ -383,7 +395,10 @@ export function AssistantPanel({
               ? { status: "ready", items: orphanThreads.data }
               : undefined
         }
-        onSendQueued={(key) => void sendQueued(open.connection, key)}
+        // A refusal is published by the store, and the message stays queued.
+        onSendQueued={(key) =>
+          void sendQueued(open.connection, key).catch(() => undefined)
+        }
         onRemoveQueued={(key) => removeQueued(open.connection, key)}
       />
       {/* The user's own pin first: it is what they are doing now. An agent's

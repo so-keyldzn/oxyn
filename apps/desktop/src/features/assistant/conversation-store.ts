@@ -6,11 +6,19 @@
 // `resumeAssistant` takes back what the backend kept — a read: nothing is
 // asked again.
 //
-// Two races are closed here, not in the views:
+// Three races are closed here, not in the views:
 // * an event can reach the channel before the `ask` that caused it resolves;
 //   it waits in `buffered` until its node exists;
+// * an event can reach the channel of a conversation being opened before its
+//   snapshot does; it waits in `buffered` too. The backend attaches the new
+//   channel under the lock that takes the snapshot, so whatever arrives on it
+//   is not in the snapshot: applied on top, never twice;
 // * an event of a conversation the panel has since left belongs to an older
-//   generation, and is dropped.
+//   generation, and is dropped — as is any reply to a call made for it.
+//
+// A streamed answer can bring hundreds of events a second. They change the
+// state at once, so the code here always reads the latest; the panel is told
+// once per animation frame (`shown`), not once per event.
 
 import * as React from "react"
 
@@ -23,6 +31,7 @@ import {
   enqueue,
   select,
   threadOf,
+  requeue,
   updateExchange,
 } from "./thread"
 import type { ExchangeNode, Thread } from "./thread"
@@ -90,8 +99,17 @@ export interface AskTarget {
 export const CONTINUE_TEXT = "Continue."
 
 interface Slot {
+  /** The latest state: what the code of this module reads. */
   state: AssistantState
+  /** What the panel was last told; behind `state` for at most a frame. */
+  shown: AssistantState
+  /** A frame is due to tell the panel. */
+  scheduled: boolean
   generation: number
+  /** Bumped by every history request: only the latest one writes the list. */
+  historyTicket: number
+  /** Bumped when the connection closes: no reply made before writes after. */
+  closings: number
   buffered: Array<AiUpdate>
   /**
    * Where each queued message was meant to go, and what it named with `@`:
@@ -110,7 +128,11 @@ function slot(connection: string): Slot {
   if (!found) {
     found = {
       state: INITIAL_ASSISTANT,
+      shown: INITIAL_ASSISTANT,
+      scheduled: false,
       generation: 0,
+      historyTicket: 0,
+      closings: 0,
       buffered: [],
       queued: new Map(),
       listeners: new Set(),
@@ -120,13 +142,41 @@ function slot(connection: string): Slot {
   return found
 }
 
+function tell(found: Slot) {
+  found.scheduled = false
+  found.shown = found.state
+  found.listeners.forEach((notify) => notify())
+}
+
+/** Changes the state and tells the panel now — and whatever waited for a frame. */
 function publish(
   connection: string,
   change: (state: AssistantState) => AssistantState
 ) {
   const found = slot(connection)
   found.state = change(found.state)
-  found.listeners.forEach((notify) => notify())
+  tell(found)
+}
+
+// Without a frame to wait for — a test under jsdom has none — a timer stands in.
+const nextFrame: (run: () => void) => unknown =
+  typeof requestAnimationFrame === "function"
+    ? (run) => requestAnimationFrame(run)
+    : (run) => setTimeout(run, 16)
+
+/** Changes the state now, and tells the panel at the next frame. */
+function publishSoon(
+  connection: string,
+  change: (state: AssistantState) => AssistantState
+) {
+  const found = slot(connection)
+  found.state = change(found.state)
+  if (found.scheduled) return
+  found.scheduled = true
+  nextFrame(() => {
+    // A `publish` since has told the panel already.
+    if (found.scheduled) tell(found)
+  })
 }
 
 function setThread(connection: string, change: (thread: Thread) => Thread) {
@@ -161,16 +211,24 @@ function listener(connection: string, generation: number) {
   return (update: AiUpdate) => {
     const found = slot(connection)
     if (found.generation !== generation) return
-    if (!found.state.thread.nodes.some((node) => node.id === update.node)) {
+    // While a conversation opens, the thread shown is still the one left: a
+    // node of the same number there is not this event's node.
+    if (
+      found.state.opening ||
+      !found.state.thread.nodes.some((node) => node.id === update.node)
+    ) {
       found.buffered.push(update)
       return
     }
     const running = found.state.thread.running
-    setThread(connection, (thread) => applyUpdate(thread, update))
-    if (
-      running === update.node &&
-      (update.event.kind === "finished" || update.event.kind === "failed")
-    ) {
+    const ended =
+      update.event.kind === "finished" || update.event.kind === "failed"
+    const apply = ended ? publish : publishSoon
+    apply(connection, (state) => ({
+      ...state,
+      thread: applyUpdate(state.thread, update),
+    }))
+    if (running === update.node && ended) {
       void refreshHistory(connection)
       // A queued message leaves after an answer — never after a failure,
       // which the user should read first — and never approves anything.
@@ -194,18 +252,24 @@ export function subscribeAssistant(connection: string, notify: () => void) {
   }
 }
 
+/** The latest state, streamed events included — for code, not for rendering. */
 export function getAssistant(connection: string): AssistantState {
   return slot(connection).state
 }
 
+function shownAssistant(connection: string): AssistantState {
+  return slot(connection).shown
+}
+
+/** The state as the panel was last told: it changes once per frame at most. */
 export function useAssistant(connection: string): AssistantState {
   return React.useSyncExternalStore(
     React.useCallback(
       (notify: () => void) => subscribeAssistant(connection, notify),
       [connection]
     ),
-    () => getAssistant(connection),
-    () => getAssistant(connection)
+    () => shownAssistant(connection),
+    () => shownAssistant(connection)
   )
 }
 
@@ -235,6 +299,8 @@ async function send(
       },
       listener(connection, generation)
     )
+    // The conversation was left meanwhile, and leaving it cleared `sending`:
+    // a question sent since in the new one may own the flag now.
     if (slot(connection).generation !== generation) return
     setThread(connection, (current) =>
       addNode({ ...current, id: started.thread }, started.node, parent, text)
@@ -244,11 +310,14 @@ async function send(
     publish(connection, (state) => ({ ...state, sending: false }))
     void refreshHistory(connection)
   } catch (error) {
-    publish(connection, (state) => ({
-      ...state,
-      sending: false,
-      askError: message(error),
-    }))
+    // A refusal for a conversation left meanwhile is not this one's error.
+    if (slot(connection).generation === generation) {
+      publish(connection, (state) => ({
+        ...state,
+        sending: false,
+        askError: message(error),
+      }))
+    }
     throw error
   }
 }
@@ -361,38 +430,45 @@ export function selectVersion(connection: string, node: number) {
   if (id !== null) void ai.selectVersion(connection, id, node).catch(() => {})
 }
 
+/**
+ * Sends a queued message; if the backend refuses it, the message goes back
+ * first in line, the refusal shown, and waits for the user.
+ *
+ * Not retried on its own: the refusal says nothing started, but only the
+ * backend could say when asking again would be accepted (I-13).
+ */
+async function sendFromQueue(connection: string, key: string, text: string) {
+  const found = slot(connection)
+  const meant = found.queued.get(key)
+  found.queued.delete(key)
+  setThread(connection, (thread) => dequeue(thread, key))
+  if (!meant) return
+  const generation = found.generation
+  try {
+    await askQuestion(connection, meant.target, text, null, meant.mentions)
+  } catch (error) {
+    // Left meanwhile: the queue belonged to that conversation.
+    if (slot(connection).generation !== generation) return
+    found.queued.set(key, meant)
+    setThread(connection, (thread) => requeue(thread, { key, text }))
+    throw error
+  }
+}
+
 async function drainQueue(connection: string) {
-  const { state, queued } = slot(connection)
+  const { state } = slot(connection)
   const next = state.thread.queue[0]
   if (!next || state.thread.running !== null) return
-  const waiting = queued.get(next.key)
-  queued.delete(next.key)
-  setThread(connection, (thread) => dequeue(thread, next.key))
-  if (!waiting) return
-  await askQuestion(
-    connection,
-    waiting.target,
-    next.text,
-    null,
-    waiting.mentions
-  ).catch(() => undefined)
+  // The refusal is already published as `askError`, and the message is back.
+  await sendFromQueue(connection, next.key, next.text).catch(() => undefined)
 }
 
 /** Sends a queued message now — after a failure, when the user chooses to. */
 export async function sendQueued(connection: string, key: string) {
   const { state, queued } = slot(connection)
   const waiting = state.thread.queue.find((entry) => entry.key === key)
-  const meant = queued.get(key)
-  if (!waiting || !meant || state.thread.running !== null) return
-  queued.delete(key)
-  setThread(connection, (thread) => dequeue(thread, key))
-  await askQuestion(
-    connection,
-    meant.target,
-    waiting.text,
-    null,
-    meant.mentions
-  )
+  if (!waiting || !queued.has(key) || state.thread.running !== null) return
+  await sendFromQueue(connection, key, waiting.text)
 }
 
 export function removeQueued(connection: string, key: string) {
@@ -416,9 +492,13 @@ export async function openThread(connection: string, id: string) {
   const generation = (found.generation += 1)
   found.buffered = []
   found.queued.clear()
+  // `opening` holds this conversation's events in `buffered` until its
+  // snapshot replaces the thread left; a question in flight there no longer
+  // keeps this one `sending`.
   publish(connection, (state) => ({
     ...state,
     opening: true,
+    sending: false,
     askError: null,
     signIn: {},
   }))
@@ -438,6 +518,7 @@ export async function openThread(connection: string, id: string) {
     flushBuffered(connection)
   } catch (error) {
     if (slot(connection).generation !== generation) return
+    found.buffered = []
     rememberThread(connection, null)
     publish(connection, (state) => ({
       ...state,
@@ -455,9 +536,13 @@ export function newThread(connection: string) {
   found.buffered = []
   found.queued.clear()
   rememberThread(connection, null)
+  // A conversation still opening, or a question still in flight, belonged to
+  // the generation just left: neither may hold this one.
   publish(connection, (state) => ({
     ...state,
     thread: NEW_THREAD,
+    sending: false,
+    opening: false,
     askError: null,
     signIn: {},
   }))
@@ -482,24 +567,35 @@ export async function resumeAssistant(connection: string) {
 export async function refreshHistory(
   connection: string
 ): Promise<Array<ThreadSummary> | null> {
-  const previous = slot(connection).state.history
+  const found = slot(connection)
+  const ticket = (found.historyTicket += 1)
+  const closings = found.closings
+  const previous = found.state.history
   const items = "items" in previous ? previous.items : []
   publish(connection, (state) => ({
     ...state,
     history: { status: "loading", items },
   }))
+  // Two requests may cross: only the latest writes, so an older list never
+  // replaces a newer one. A closed connection's list is written by none.
+  const latest = () => found.historyTicket === ticket
   try {
     const listed = await ai.threads(connection)
-    publish(connection, (state) => ({
-      ...state,
-      history: { status: "ready", items: listed },
-    }))
+    if (found.closings !== closings) return null
+    if (latest()) {
+      publish(connection, (state) => ({
+        ...state,
+        history: { status: "ready", items: listed },
+      }))
+    }
     return listed
   } catch (error) {
-    publish(connection, (state) => ({
-      ...state,
-      history: { status: "error", items, message: message(error) },
-    }))
+    if (latest() && found.closings === closings) {
+      publish(connection, (state) => ({
+        ...state,
+        history: { status: "error", items, message: message(error) },
+      }))
+    }
     return null
   }
 }
@@ -610,6 +706,7 @@ export async function changeAgentSetting(
 export async function closeConversation(connection: string) {
   const found = slot(connection)
   found.generation += 1
+  found.closings += 1
   found.buffered = []
   found.queued.clear()
   resumed.delete(connection)

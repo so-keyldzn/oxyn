@@ -59,23 +59,39 @@ export const KINDS: ReadonlyArray<{
   label: string
   /** An example, never a value: the field starts empty. */
   placeholder: string
+  /**
+   * Offered for a new declaration. A kind not offered is still named, and
+   * still shown for a provider declared with it before.
+   */
+  offered: boolean
 }> = [
   // The first three are the endpoints `oxyn-llm` itself defaults to.
   {
     kind: "anthropic",
     label: "Anthropic",
     placeholder: "https://api.anthropic.com",
+    offered: true,
   },
-  { kind: "openai", label: "OpenAI", placeholder: "https://api.openai.com/v1" },
+  {
+    kind: "openai",
+    label: "OpenAI",
+    placeholder: "https://api.openai.com/v1",
+    offered: true,
+  },
+  // TODO(2026-12-31, unblocked by `oxyn-llm`'s Gemini provider streaming a
+  // generation): offer it again. It refuses with `NotImplemented` today, so a
+  // declaration would only ever fail on its first question.
   {
     kind: "gemini",
     label: "Gemini",
     placeholder: "https://generativelanguage.googleapis.com",
+    offered: false,
   },
   {
     kind: "openai_compatible",
     label: "OpenAI-compatible (Ollama, LM Studio, Azure…)",
     placeholder: "http://localhost:11434/v1",
+    offered: true,
   },
 ]
 

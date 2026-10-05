@@ -275,6 +275,41 @@ providing it suggests a protection that does not exist, at the precise moment wh
 [I-02](../CLAUDE.md#i-02) matters. The code, for its part, was honest — it says
 "unknown".
 
+A tool call whose arguments are not readable JSON is **not executed, and does
+not fail the turn**: the provider reports it as such
+(`ChatEvent::ToolCallInvalid`), the model receives a rejection as that call's
+result — the same as for arguments that do not fit the tool —, and the other
+calls of the turn run. The rejection names the parse error, never the
+arguments: they are a model output, and can copy what the model was given.
+
+## A silent provider
+
+A question waits on two things that can go quiet without failing: a provider's
+stream, and an external agent's answer. Neither has a total bound — a long
+answer that keeps arriving is never cut —; both have a bound on **silence**.
+
+| What | Silence accepted | Reset by | On expiry |
+|---|---|---|---|
+| Provider request and stream (`oxyn-llm`, `IDLE_TIMEOUT`) | **300 s**, until the response headers, then between two chunks | any byte received, `ping` frames and `:` comments included | before the headers, `LlmError::ResponseTimeout`; during the stream, the end is `StopReason::Interrupted`. Both are ambiguous and never replayed ([I-13](../CLAUDE.md#i-13)) |
+| External agent's answer (`external::session`, `AGENT_IDLE_LIMIT`) | **300 s**, outside a tool call | any session update, any permission request | `session/cancel` is sent, and the question ends with "the agent sent nothing for 300 seconds" |
+| External agent's confirmation of a stop (`CANCEL_GRACE`) | **10 s** | — | the agent's process group is stopped; the next question starts a fresh agent |
+
+No provider documents how often it speaks while the model thinks
+([RESEARCH-NOTES](RESEARCH-NOTES.md#idle-streams--checked-on-2026-10-04)): the
+values are Oxyn's, chosen long so that a reasoning model thinking for minutes
+is not cut. "Stop" remains the fast way out, and it frees the session whatever
+the agent does.
+
+A tool call in flight suspends the external agent's count: a call to Oxyn's
+tools can wait on an approval the user is reading, or on a long query, and the
+agent says nothing meanwhile. Cutting there would cut an approval in the
+middle of its reading.
+
+**Concrete failure:** the laptop sleeps during an answer; on waking, the Wi-Fi
+has changed and the socket is half-open — no reset ever arrives. Without these
+bounds, the question stayed "thinking" forever; with an external agent, a stop
+the agent never confirmed also held every later question behind it.
+
 ## Database content is not an instruction
 
 A table name, a column comment, a row value can contain
