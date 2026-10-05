@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RELEASE.md" sha256="56d94fb112ef" -->
+<!-- oxyn-translation source="docs/RELEASE.md" sha256="42d5b7900910" -->
 # Livraisons GitHub
 
 GitHub Actions construit les paquets ; le mainteneur publie le brouillon
@@ -7,8 +7,13 @@ tag `v*`, ou manuellement avec un tag existant. Le tag doit être exactement
 `v` suivi de la version de `crates/oxyn-desktop/tauri.conf.json`. Les deux jobs
 extraient ce tag précis, même si le lancement manuel sélectionne une autre branche.
 
-`macos-latest` produit un DMG Apple Silicon ; `ubuntu-24.04` produit les paquets
-DEB, RPM et AppImage. macOS Intel et Windows ne font pas partie de cette matrice.
+`macos-latest` produit un DMG Apple Silicon ; `ubuntu-24.04` (x86_64) et
+`ubuntu-24.04-arm` (ARM64) produisent chacun les paquets DEB, RPM et AppImage,
+construits nativement sur leur runner. macOS Intel et Windows ne font pas
+partie de cette matrice. Avant de signer ou de déposer quoi que ce soit, chaque
+job Linux lance `script/livraison architecture`, qui refuse un binaire, un deb,
+un rpm, un runtime d'AppImage ou un contenu d'AppImage construit pour une autre
+architecture que celle du job.
 `make desktop PROFIL=release` est le point d'entrée du build. Le workflow
 installe le binaire épinglé de `cargo-about` après vérification de son empreinte,
 pour inclure les mentions obligatoires des licences tierces.
@@ -16,7 +21,8 @@ pour inclure les mentions obligatoires des licences tierces.
 Le workflow construit aussi ce dont les copies installées se mettent à jour
 ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) : après le
 build, une étape à part signe les artefacts de mise à jour —
-`Oxyn_<version>_aarch64.app.tar.gz` et l'AppImage, chacun avec son `.sig` —
+`Oxyn_<version>_aarch64.app.tar.gz`, `Oxyn_<version>_amd64.AppImage` et
+`Oxyn_<version>_aarch64.AppImage`, chacun avec son `.sig` —
 et un dernier job, `manifeste`, les vérifie et écrit `latest.json`.
 
 ## Configuration Apple
@@ -116,8 +122,8 @@ d'entre eux pourrait lire son environnement, et une seule version compromise
 d'une dépendance suffirait à prendre la clé. C'est pourquoi aucun build ne
 produit d'artefacts de mise à jour signés (`createUpdaterArtifacts` reste
 désactivé) : l'archive macOS est faite par `script/apple-release build` à
-partir du `.app` agrafé, et l'AppImage est signée telle que le bundler l'a
-écrite.
+partir du `.app` agrafé, et chaque AppImage est signée telle que le bundler
+l'a écrite.
 
 **L'environnement `release`.** Les secrets du dépôt sont lisibles par
 n'importe quelle exécution de workflow, sur n'importe quelle branche : un
@@ -156,7 +162,7 @@ laisser dans le brouillon l'archive d'une exécution à côté de la signature
 d'une autre. Dans les deux cas, chaque Oxyn installé refuserait la mise à
 jour comme un échec de signature — affiché comme tel, chaque jour,
 indiscernable d'une attaque — jusqu'à la release suivante. Le job
-`manifeste` télécharge donc les deux archives du brouillon et vérifie
+`manifeste` télécharge donc les trois archives du brouillon et vérifie
 chacune avec `minisign -V` contre la clé publique de `tauri.conf.json` avant
 de lire la version signée ou d'écrire quoi que ce soit. Le vérificateur est
 l'implémentation de référence, minisign 0.12, installée depuis l'archive de
@@ -230,20 +236,22 @@ releases publiées à leurs archives.
    depuis une branche, l'exécution est refusée par la règle de tag de
    l'environnement `release`. Remplacer la version de l'exemple lorsque la
    version configurée change.
-4. Attendre les deux jobs de paquets, examiner les contrôles puis télécharger
+4. Attendre les trois jobs de paquets, examiner les contrôles puis télécharger
    et installer les paquets du brouillon.
-5. Attendre le job `manifeste`. Il démarre une fois les deux jobs de paquets
+5. Attendre le job `manifeste`. Il démarre une fois les trois jobs de paquets
    au vert, sans autre secret que `GH_TOKEN` : il exige exactement un
-   `*_aarch64.app.tar.gz` et une `*.AppImage` dans le brouillon, chacun avec
-   sa signature, les télécharge, vérifie chaque archive contre sa signature
-   et la clé publique committée, contrôle la version signée, et dépose
-   `latest.json` avec les clés `darwin-aarch64` et `linux-x86_64-appimage`.
+   `*_aarch64.app.tar.gz`, une `*_amd64.AppImage` et une `*_aarch64.AppImage`
+   dans le brouillon, chacun avec sa signature, et aucun autre `.app.tar.gz`
+   ni `.AppImage` ; les télécharge, vérifie chaque archive contre sa
+   signature et la clé publique committée, contrôle la version signée, et
+   dépose `latest.json` avec les clés `darwin-aarch64`,
+   `linux-x86_64-appimage` et `linux-aarch64-appimage`.
    C'est le seul job qui dépose `latest.json`, et il refuse un brouillon qui
    en contient déjà un. Une signature qui ne se vérifie pas signifie une
    paire de clés qui ne correspond pas, ou une archive et une signature
    issues de deux exécutions : supprimer les deux du brouillon et relancer le
    job de paquets de cette plateforme.
-6. **Ne publier le brouillon que lorsque les deux jobs de paquets et
+6. **Ne publier le brouillon que lorsque les jobs de paquets et
    `manifeste` sont au vert et que `latest.json` est joint.** C'est la
    publication qui propose la mise à jour :
    `https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json`
@@ -281,7 +289,9 @@ qu'un Oxyn installé accepte le résultat. Il y faut deux étapes :
 2. **Releases réelles.** Publier v0.0.2, installée à la main (v0.0.1 n'a pas
    de mise à jour automatique), puis v0.0.3. Vérifier que v0.0.2 se met à jour
    seule sur un Mac vierge et en AppImage, et qu'une installation `.deb`
-   affiche « Updates are managed by your package manager ».
+   affiche « Updates are managed by your package manager ». L'AppImage ARM64
+   reçoit la même vérification avec la première release qui la livre et la
+   suivante.
 
 Contrats de mise à jour :
 [RESEARCH-NOTES](RESEARCH-NOTES.md#contrats-de-mise-à-jour-tauri--vérifiés-le-2026-10-02).

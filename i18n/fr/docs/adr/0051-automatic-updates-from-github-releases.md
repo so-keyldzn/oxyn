@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="fff6968fb442" -->
+<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="0f83e97e3073" -->
 
 > Traduction française de [docs/adr/0051-automatic-updates-from-github-releases.md](../../../../docs/adr/0051-automatic-updates-from-github-releases.md). **La version anglaise fait foi.**
 
@@ -105,6 +105,14 @@ https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json
 `signature`. Ses clés sont `darwin-aarch64` et `linux-x86_64-appimage` —
 jamais un `linux-x86_64` seul, que le plugin proposerait aussi à une
 installation deb ou rpm.
+
+**Amendement (2026-10-04).** Les paquets Linux sont aussi construits pour
+ARM64, nativement sur le runner `ubuntu-24.04-arm`. Le manifeste gagne la clé
+`linux-aarch64-appimage` — jamais un `linux-aarch64` seul, pour la même
+raison — et `manifeste` exige exactement une `*_amd64.AppImage` et une
+`*_aarch64.AppImage`, chacune avec son `.sig`, et aucune autre AppImage, là où
+cet ADR dit « une AppImage ». Rien d'autre ne change dans la décision
+([RELEASE](../RELEASE.md)).
 
 L'endpoint est une constante d'un seul module (`updates/channel.rs`) ; il
 n'est ni dans `tauri.conf.json` ni dans une préférence, et la webview ne peut
