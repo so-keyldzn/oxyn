@@ -1,0 +1,111 @@
+# TEMPORARY — proof that the Linux package job of livraison.yml builds natively
+# on ubuntu-24.04-arm. Removed before the pull request is marked ready. No
+# secret, no signing, no release: the `release` environment admits `v*` tags
+# only, so livraison.yml itself cannot run from a branch.
+name: essai-linux-arm64
+
+on:
+  push:
+    branches: [linux-arm64-release]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  paquets:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            architecture: x86_64
+          - os: ubuntu-24.04-arm
+            architecture: aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    steps:
+      - name: Check out the repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install Tauri's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y rpm
+
+      - name: Install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Restore the Cargo cache
+        # Swatinem/rust-cache v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - name: Install Node
+        # actions/setup-node v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22"
+
+      - name: Install pnpm
+        # pnpm/action-setup v6.1.0
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with:
+          package_json_file: apps/desktop/package.json
+          cache: true
+          cache_dependency_path: apps/desktop/pnpm-lock.yaml
+
+      - name: Install cargo-about for required third-party notices
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64)   target=x86_64-unknown-linux-musl
+                         checksum=9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af ;;
+            Linux-ARM64) target=aarch64-unknown-linux-musl
+                         checksum=af5169282fb6f84e13471493f405437e43ac517744c9ae12fbe2cdf0a6f0e5a8 ;;
+            *) echo "No cargo-about binary pinned for $RUNNER_OS-$RUNNER_ARCH."; exit 1 ;;
+          esac
+          archive="cargo-about-0.9.2-$target.tar.gz"
+          curl -LsSf -o "$RUNNER_TEMP/$archive" "https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/$archive"
+          echo "$checksum  $RUNNER_TEMP/$archive" | shasum -a 256 -c -
+          tar xzf "$RUNNER_TEMP/$archive" --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-about-0.9.2-$target/cargo-about"
+
+      - name: Build Linux packages in release mode
+        run: make desktop PROFIL=release
+
+      - name: Check the architecture of the Linux packages
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: python3 script/livraison architecture "$ARCHITECTURE" target/release/bundle target/release/oxyn-desktop
+
+      - name: Show the evidence
+        if: always()
+        run: |
+          uname -m
+          ldd --version | head -1
+          find target/release/bundle -maxdepth 2 -type f -printf '%s\t%p\n' | sort -k2
+          file target/release/oxyn-desktop
+          for deb in target/release/bundle/deb/*.deb; do dpkg-deb -f "$deb" Package Version Architecture Depends; done
+          for rpm in target/release/bundle/rpm/*.rpm; do rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' "$rpm"; done
+          file target/release/bundle/appimage/*.AppImage
+
+      - name: Upload the packages
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: paquets-linux-${{ matrix.architecture }}
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+            target/release/bundle/appimage/*.AppImage
+          retention-days: 7
