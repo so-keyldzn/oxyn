@@ -276,6 +276,99 @@ fn each_refusal_reaches_the_form_as_its_reason_and_is_not_cached() {
     });
 }
 
+/// The front shows `message` verbatim, in copyable text: only Oxyn's own
+/// sentences may reach it — never the provider's body, the address's query or
+/// credentials, nor a parser's or the HTTP stack's wording.
+#[test]
+fn a_failure_message_is_only_ever_oxyns_own_sentence() {
+    const PLANTED: &str = "planted-7f3a";
+    let runtime = runtime();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let foreign = [
+        PLANTED,
+        "serde",
+        "reqwest",
+        "hyper",
+        "error decoding",
+        "expected",
+        "invalid type",
+        "line 1",
+        "column",
+        "HTTP/1.1",
+        "127.0.0.1",
+        "models.example",
+    ];
+    let assert_own = |message: &str, case: &str| {
+        for word in foreign {
+            assert!(!message.contains(word), "{case}: `{word}` in {message:?}");
+        }
+    };
+    runtime.block_on(async {
+        let body = format!(r#"{{"error":{{"message":"{PLANTED} {TYPED_KEY}"}}}}"#);
+        let mut replies: Vec<(String, Option<Vec<u8>>)> = [400_u16, 401, 403, 404, 405, 418, 429, 500, 503, 504]
+            .into_iter()
+            .map(|status| (format!("HTTP {status}"), json(status, &body)))
+            .collect();
+        for garbage in [
+            format!("<html>{PLANTED}</html>"),
+            format!(r#"{{"data":"{PLANTED}"}}"#),
+            format!(r#"{{"models":["{PLANTED}"]}}"#),
+            format!(r#"{{"data":[{PLANTED}"#),
+        ] {
+            replies.push((format!("200 {garbage}"), json(200, &garbage)));
+        }
+        replies.push((
+            "redirect".to_owned(),
+            Some(
+                format!(
+                    "HTTP/1.1 308 Moved\r\nlocation: http://{PLANTED}.example/\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                )
+                .into_bytes(),
+            ),
+        ));
+        for (case, reply) in replies {
+            let server = Mock::start(reply).await;
+            // A Gemini-style key in the query, which the request never sends
+            // and the message never quotes.
+            let base = format!("{}/v1?key={PLANTED}", server.origin);
+            for key in [Some(TYPED_KEY), None] {
+                let listing = backend
+                    .list_draft_models(
+                        probe(None, AiProviderKind::OpenAiCompatible, &base, key),
+                        true,
+                    )
+                    .await
+                    .expect("well-formed probe");
+                let (_, message) = failure(&listing);
+                assert_own(&message, &case);
+                assert!(!message.contains(TYPED_KEY), "{case}: {message}");
+            }
+            assert!(!server.seen().contains(PLANTED), "{case}: the query went out");
+        }
+
+        // Nothing answering, and addresses refused before any request.
+        let free = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("a free port");
+        for base in [
+            format!("http://{free}/v1?key={PLANTED}"),
+            format!("https://user:{PLANTED}@models.example/v1"),
+            format!("{PLANTED}://models.example/v1"),
+            format!("not a url {PLANTED}"),
+        ] {
+            let listing = backend
+                .list_draft_models(
+                    probe(None, AiProviderKind::OpenAiCompatible, &base, Some(TYPED_KEY)),
+                    true,
+                )
+                .await
+                .expect("well-formed probe");
+            let (_, message) = failure(&listing);
+            assert_own(&message, &base);
+        }
+    });
+}
+
 #[test]
 fn a_silent_server_is_a_timeout() {
     let runtime = runtime();

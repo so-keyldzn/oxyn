@@ -18,7 +18,7 @@
 //!
 //! # What this module already does
 //!
-//! Listing the models is sent ([`models`]). Building the request is written
+//! Listing the models is sent (`gemini/models.rs`). Building the request is written
 //! and tested. Sending and decoding the stream explicitly **refuse** ([`LlmError::NotImplemented`]): an unfinished path
 //! that panics kills the application the day someone configures this provider
 //! ([I-09](../../../CLAUDE.md#i-09)), whereas a refusal is read, displayed and

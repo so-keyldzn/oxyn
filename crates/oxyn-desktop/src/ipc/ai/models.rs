@@ -24,12 +24,34 @@ pub struct ModelProbe {
     pub id: Option<String>,
     pub kind: AiProviderKind,
     /// As typed. Empty with an `id` means the stored endpoint.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "opaque_url")]
     pub base_url: String,
     /// The key typed in the form. Absent on an edit, and the endpoint
     /// unchanged, the stored key is used — never across a changed endpoint.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "opaque_key")]
     pub key: Option<String>,
+}
+
+/// Reads the key without ever quoting it: serde's own type error copies a
+/// scalar it rejects (`invalid type: integer `…``), and Tauri hands that
+/// text back to the webview ([I-03](../../../../../CLAUDE.md#i-03)).
+fn opaque_key<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(key)) => Ok(Some(key)),
+        Some(_) => Err(serde::de::Error::custom("`key` must be a string or null")),
+    }
+}
+
+/// Same for the address, which may carry a password before it is checked.
+fn opaque_url<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    match Option::<serde_json::Value>::deserialize(deserializer)? {
+        None | Some(serde_json::Value::Null) => Ok(String::new()),
+        Some(serde_json::Value::String(url)) => Ok(url),
+        Some(_) => Err(serde::de::Error::custom("`baseUrl` must be a string")),
+    }
 }
 
 /// What listing the models gave.
@@ -112,6 +134,36 @@ mod tests {
                 serde_json::to_value(reason).expect("serialized"),
                 serde_json::json!(name)
             );
+        }
+    }
+
+    #[test]
+    fn a_malformed_probe_never_quotes_its_key_or_address() {
+        // What Tauri returns to the webview for unreadable arguments is this
+        // error's text.
+        for value in [
+            serde_json::json!(4_242_424_242_u64),
+            serde_json::json!(-4_242_424_242_i64),
+            serde_json::json!(4242.4242),
+            serde_json::json!(true),
+            serde_json::json!(["4242424242"]),
+            serde_json::json!({"secret": "4242424242"}),
+        ] {
+            for field in ["key", "baseUrl"] {
+                let mut input = serde_json::json!({
+                    "id": null,
+                    "kind": "openai",
+                    "baseUrl": "https://api.example/v1",
+                    "key": null,
+                });
+                input[field] = value.clone();
+                let error = match serde_json::from_value::<ModelProbe>(input) {
+                    Ok(_) => panic!("`{field}` = {value} must be refused"),
+                    Err(error) => error.to_string(),
+                };
+                assert!(!error.contains("4242"), "{field}: {error}");
+                assert!(!error.contains("true"), "{field}: {error}");
+            }
         }
     }
 
