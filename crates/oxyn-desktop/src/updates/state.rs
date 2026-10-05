@@ -250,12 +250,30 @@ impl Machine {
         true
     }
 
-    /// The preference changed. Only the resting state follows it: an
-    /// operation under way, a result shown, an update ready stay.
-    pub(crate) fn set_automatic(&mut self, automatic: bool) {
+    /// The preference changed. Turning it off discards a download under way
+    /// or an update ready — the switch promises it (UX-SPEC) — under a new
+    /// ticket, so the late completion of the dropped download is refused.
+    /// Otherwise only the resting state follows: a check under way, a result
+    /// shown stay. `true` when an update was discarded: its task and bytes
+    /// are the caller's to release.
+    ///
+    /// Only the switch moving from on to off discards: a download the user
+    /// started by hand while automatic updates were already off is theirs.
+    pub(crate) fn set_automatic(&mut self, automatic: bool) -> bool {
+        let turned_off = self.automatic && !automatic;
         self.automatic = automatic;
         if self.blocked.is_some() {
-            return;
+            return false;
+        }
+        if turned_off
+            && matches!(
+                self.state,
+                UpdateState::Downloading { .. } | UpdateState::Ready { .. }
+            )
+        {
+            self.state = self.resting();
+            self.next_ticket();
+            return true;
         }
         if matches!(
             self.state,
@@ -266,6 +284,7 @@ impl Machine {
         ) {
             self.state = self.resting();
         }
+        false
     }
 
     /// The version waiting for the restart, if one is.
