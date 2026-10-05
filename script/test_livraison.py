@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,7 @@ PUBKEY = base64.b64encode(
 ).decode()
 MAC_ARCHIVE = "Oxyn_0.0.1_aarch64.app.tar.gz"
 APPIMAGE = "Oxyn_0.0.1_amd64.AppImage"
+APPIMAGE_ARM = "Oxyn_0.0.1_aarch64.AppImage"
 
 
 def signature(file: str, trusted: str = "\tversion:0.0.1") -> str:
@@ -46,15 +48,21 @@ def signature(file: str, trusted: str = "\tversion:0.0.1") -> str:
 SIGNATURES = {
     f"{MAC_ARCHIVE}.sig": signature("Oxyn.app.tar.gz") + "\n",
     f"{APPIMAGE}.sig": signature(APPIMAGE),
+    f"{APPIMAGE_ARM}.sig": signature(APPIMAGE_ARM),
 }
-ARCHIVES = {MAC_ARCHIVE: "macOS archive", APPIMAGE: "AppImage"}
+ARCHIVES = {MAC_ARCHIVE: "macOS archive", APPIMAGE: "AppImage", APPIMAGE_ARM: "ARM64 AppImage"}
 UPDATER_ASSETS = [
     {"name": "Oxyn_0.0.1_aarch64.dmg"},
     {"name": MAC_ARCHIVE},
     {"name": f"{MAC_ARCHIVE}.sig"},
-    {"name": "oxyn_0.0.1_amd64.deb"},
+    {"name": "Oxyn_0.0.1_amd64.deb"},
+    {"name": "Oxyn-0.0.1-1.x86_64.rpm"},
     {"name": APPIMAGE},
     {"name": f"{APPIMAGE}.sig"},
+    {"name": "Oxyn_0.0.1_arm64.deb"},
+    {"name": "Oxyn-0.0.1-1.aarch64.rpm"},
+    {"name": APPIMAGE_ARM},
+    {"name": f"{APPIMAGE_ARM}.sig"},
 ]
 
 FAKE_GH = textwrap.dedent(
@@ -426,7 +434,7 @@ class Delivery(unittest.TestCase):
     def manifest(self) -> dict:
         return self.state()["manifeste"]
 
-    def test_manifest_lists_both_platforms_with_their_signatures(self) -> None:
+    def test_manifest_lists_the_three_platforms_with_their_signatures(self) -> None:
         self.write_state(release={"isDraft": True, "assets": list(UPDATER_ASSETS)})
         output = self.launch("manifeste", "v0.0.1", REPO_DIR)
         self.assertEqual(output.returncode, 0, output.stderr)
@@ -447,10 +455,16 @@ class Delivery(unittest.TestCase):
                         "url": f"{base}/{APPIMAGE}",
                         "signature": signature(APPIMAGE),
                     },
+                    "linux-aarch64-appimage": {
+                        "url": f"{base}/{APPIMAGE_ARM}",
+                        "signature": signature(APPIMAGE_ARM),
+                    },
                 },
             },
         )
+        # A bare key would be offered to the deb and rpm installs too.
         self.assertNotIn("linux-x86_64", manifest["platforms"])
+        self.assertNotIn("linux-aarch64", manifest["platforms"])
         upload_calls = [a for a in self.state()["appels"] if a[1] == "upload"]
         self.assertEqual(len(upload_calls), 1)
         self.assertNotIn("--clobber", upload_calls[0])
@@ -459,23 +473,27 @@ class Delivery(unittest.TestCase):
         # Each archive is downloaded and verified with the committed key.
         self.assertIn(MAC_ARCHIVE, download)
         self.assertIn(APPIMAGE, download)
+        self.assertIn(APPIMAGE_ARM, download)
         verified = [json.loads(line) for line in self.minisign_log.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(
-            sorted(Path(args[args.index("-m") + 1]).name for args in verified), sorted([MAC_ARCHIVE, APPIMAGE])
+            sorted(Path(args[args.index("-m") + 1]).name for args in verified),
+            sorted([MAC_ARCHIVE, APPIMAGE, APPIMAGE_ARM]),
         )
 
     def test_manifest_urls_are_quoted(self) -> None:
         self.version("1.0.0+build-1")
         appimage = "Oxyn 1.0.0+build-1_amd64.AppImage"
-        assets = [{"name": MAC_ARCHIVE}, {"name": f"{MAC_ARCHIVE}.sig"}, {"name": appimage}, {"name": f"{appimage}.sig"}]
+        arm = "Oxyn 1.0.0+build-1_aarch64.AppImage"
+        assets = [{"name": n} for a in (MAC_ARCHIVE, appimage, arm) for n in (a, f"{a}.sig")]
         self.write_state(release={"isDraft": True, "assets": assets})
         state = self.state()
         signed = "\tversion:1.0.0+build-1"
         state["signatures"] = {
             f"{MAC_ARCHIVE}.sig": signature("Oxyn.app.tar.gz", signed),
             f"{appimage}.sig": signature(appimage, signed),
+            f"{arm}.sig": signature(arm, signed),
         }
-        state["archives"] = {MAC_ARCHIVE: "macOS archive", appimage: "AppImage"}
+        state["archives"] = {MAC_ARCHIVE: "macOS archive", appimage: "AppImage", arm: "ARM64 AppImage"}
         self.path_state.write_text(json.dumps(state), encoding="utf-8")
         output = self.launch("manifeste", "v1.0.0+build-1", REPO_DIR)
         self.assertEqual(output.returncode, 0, output.stderr)
@@ -493,14 +511,17 @@ class Delivery(unittest.TestCase):
         self.assertNotIn("manifeste", self.state())
 
     def test_missing_archive_or_signature_writes_no_manifest(self) -> None:
-        for missing in (MAC_ARCHIVE, f"{MAC_ARCHIVE}.sig", APPIMAGE, f"{APPIMAGE}.sig"):
+        for missing in (MAC_ARCHIVE, APPIMAGE, APPIMAGE_ARM, *(f"{a}.sig" for a in ARCHIVES)):
             with self.subTest(missing=missing):
                 assets = [a for a in UPDATER_ASSETS if a["name"] != missing]
                 self.write_state(release={"isDraft": True, "assets": assets})
                 self.assert_no_manifest(self.launch("manifeste", "v0.0.1", REPO_DIR), "no manifest is written")
 
     def test_ambiguous_or_foreign_archives_write_no_manifest(self) -> None:
-        for extra in ("Oxyn_0.0.1_x64.app.tar.gz", "Oxyn_0.0.1_aarch64.AppImage"):
+        # A macOS archive for another architecture, a third AppImage, and a
+        # second one for an architecture already present (another version).
+        extras = ("Oxyn_0.0.1_x64.app.tar.gz", "Oxyn_0.0.1_x86_64.AppImage", "Oxyn_0.0.2_aarch64.AppImage")
+        for extra in extras:
             with self.subTest(extra=extra):
                 assets = [*UPDATER_ASSETS, {"name": extra}, {"name": f"{extra}.sig"}]
                 self.write_state(release={"isDraft": True, "assets": assets})
@@ -566,7 +587,7 @@ class Delivery(unittest.TestCase):
 
     def test_archive_its_signature_does_not_verify_writes_no_manifest(self) -> None:
         # A rerun pairing one run's archive with another run's signature.
-        for asset in (MAC_ARCHIVE, APPIMAGE):
+        for asset in ARCHIVES:
             with self.subTest(asset=asset):
                 self.with_archives(**{asset: "tampered bytes"})
                 self.assert_no_manifest(self.launch("manifeste", "v0.0.1", REPO_DIR), "does not verify")
@@ -654,6 +675,122 @@ class Delivery(unittest.TestCase):
         output = self.launch("signer", "v0.0.1", file, FAUX_TAURI_MODE="autre_version", **self.secrets())
         self.assertEqual(output.returncode, 1)
         self.assertIn("signed for version 0.0.0", output.stderr)
+
+
+# `file -b`, `dpkg-deb -f <deb> Architecture` and `rpm -qp --queryformat
+# %{ARCH}`, reading what the fixture wrote: an executable carries a
+# `#ELF <machine>` line, a package the architecture it declares.
+FAKE_FILE = textwrap.dedent(
+    """\
+    import sys
+    with open(sys.argv[-1], encoding="utf-8") as f:
+        machines = [l[5:].strip() for l in f if l.startswith("#ELF ")]
+    print(f"ELF 64-bit LSB pie executable, {machines[0]}, version 1 (SYSV)" if machines else "data")
+    """
+)
+FAKE_PACKAGE_TOOL = textwrap.dedent(
+    """\
+    import sys
+    paquet = sys.argv[2] if sys.argv[1] == "-f" else sys.argv[-1]
+    with open(paquet, encoding="utf-8") as f:
+        print(f.read().strip())
+    """
+)
+# An AppImage whose runtime is a script: `--appimage-extract` writes the
+# application binary into `squashfs-root`, as the AppImage runtime does.
+FAKE_APPIMAGE = textwrap.dedent(
+    """\
+    #ELF {runtime}
+    import os, sys
+    assert sys.argv[1:] == ["--appimage-extract"], sys.argv
+    os.makedirs("squashfs-root/usr/bin")
+    with open("squashfs-root/usr/bin/{binary}", "w", encoding="utf-8") as f:
+        f.write("#ELF {inside}\\n")
+    """
+)
+
+
+class Architecture(unittest.TestCase):
+    """`livraison architecture`, before the Linux packages are signed or uploaded."""
+
+    def setUp(self) -> None:
+        self._folder = tempfile.TemporaryDirectory()
+        self.folder = Path(self._folder.name)
+        self.tools = {}
+        for variable, source in (("FILE", FAKE_FILE), ("DPKG_DEB", FAKE_PACKAGE_TOOL), ("RPM", FAKE_PACKAGE_TOOL)):
+            tool = self.folder / variable.lower()
+            tool.write_text(f"#!{sys.executable}\n{source}", encoding="utf-8")
+            tool.chmod(0o755)
+            self.tools[variable] = str(tool)
+        self.bundle = self.folder / "bundle"
+        self.binary = self.folder / "oxyn-desktop"
+
+    def tearDown(self) -> None:
+        self._folder.cleanup()
+
+    def build(self, machine: str, deb: str, rpm: str, appimage: str, runtime: str | None = None,
+              inside: str | None = None) -> None:
+        """Writes what the bundler would have produced on one runner."""
+        self.binary.write_text(f"#ELF {machine}\n", encoding="utf-8")
+        for kind, name, content in (("deb", f"Oxyn_0.0.1_{deb}.deb", deb), ("rpm", f"Oxyn-0.0.1-1.{rpm}.rpm", rpm)):
+            (self.bundle / kind).mkdir(parents=True, exist_ok=True)
+            (self.bundle / kind / name).write_text(f"{content}\n", encoding="utf-8")
+        (self.bundle / "appimage").mkdir(parents=True, exist_ok=True)
+        image = self.bundle / "appimage" / f"Oxyn_0.0.1_{appimage}.AppImage"
+        script = FAKE_APPIMAGE.format(runtime=runtime or machine, inside=inside or machine, binary=self.binary.name)
+        image.write_text(f"#!{sys.executable}\n{script}", encoding="utf-8")
+        image.chmod(0o755)
+
+    def check(self, arch: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "architecture", arch, str(self.bundle), str(self.binary)],
+            capture_output=True, text=True, env={**os.environ, **self.tools}, check=False,
+        )
+
+    def test_packages_of_each_runner_pass(self) -> None:
+        for arch, machine, deb, rpm, appimage in (
+            ("x86_64", "x86-64", "amd64", "x86_64", "amd64"),
+            ("aarch64", "ARM aarch64", "arm64", "aarch64", "aarch64"),
+        ):
+            with self.subTest(arch=arch):
+                shutil.rmtree(self.bundle, ignore_errors=True)
+                self.build(machine, deb, rpm, appimage)
+                output = self.check(arch)
+                self.assertEqual(output.returncode, 0, output.stderr)
+                self.assertIn(f"Architecture {deb}", output.stdout)
+                self.assertIn(f"ARCH {rpm}", output.stdout)
+                self.assertEqual(output.stdout.count(f", {machine},"), 3)
+
+    def test_a_package_of_another_architecture_is_refused(self) -> None:
+        arm = ("ARM aarch64", "arm64", "aarch64", "aarch64")
+        cases = (
+            ({"machine": "x86-64"}, "oxyn-desktop is not an ELF executable for ARM aarch64"),
+            ({"deb": "amd64"}, "declares amd64 architecture, not arm64"),
+            ({"rpm": "x86_64"}, "declares x86_64 architecture, not aarch64"),
+            ({"appimage": "amd64"}, "is not named *_aarch64.AppImage"),
+            ({"runtime": "x86-64"}, "Oxyn_0.0.1_aarch64.AppImage is not an ELF executable for ARM aarch64"),
+            ({"inside": "x86-64"}, "oxyn-desktop is not an ELF executable for ARM aarch64"),
+        )
+        for change, reason in cases:
+            with self.subTest(change=change):
+                shutil.rmtree(self.bundle, ignore_errors=True)
+                self.build(**{**dict(zip(("machine", "deb", "rpm", "appimage"), arm)), **change})
+                output = self.check("aarch64")
+                self.assertEqual(output.returncode, 1, output.stdout)
+                self.assertIn(reason, output.stderr)
+
+    def test_missing_extra_or_non_executable_packages_are_refused(self) -> None:
+        self.build("ARM aarch64", "arm64", "aarch64", "aarch64")
+        (self.bundle / "rpm" / "Oxyn-0.0.1-1.aarch64.rpm").unlink()
+        self.assertIn("exactly one *.rpm, found none", self.check("aarch64").stderr)
+        self.build("ARM aarch64", "arm64", "aarch64", "aarch64")
+        (self.bundle / "deb" / "Oxyn_0.0.0_arm64.deb").write_text("arm64\n", encoding="utf-8")
+        self.assertIn("exactly one *.deb", self.check("aarch64").stderr)
+        shutil.rmtree(self.bundle)
+        self.build("ARM aarch64", "arm64", "aarch64", "aarch64")
+        (self.bundle / "appimage" / "Oxyn_0.0.1_aarch64.AppImage").chmod(0o644)
+        self.assertIn("is not executable", self.check("aarch64").stderr)
+        self.assertIn("unknown architecture armv7", self.check("armv7").stderr)
 
 
 if __name__ == "__main__":

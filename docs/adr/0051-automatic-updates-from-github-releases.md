@@ -98,6 +98,14 @@ https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json
 keys are `darwin-aarch64` and `linux-x86_64-appimage` — never a bare
 `linux-x86_64`, which the plugin would also offer to a deb or rpm install.
 
+**Amendment (2026-10-04).** Linux packages are also built for ARM64, natively
+on the `ubuntu-24.04-arm` runner. The manifest gains the key
+`linux-aarch64-appimage` — never a bare `linux-aarch64`, for the same reason —
+and `manifeste` requires exactly one `*_amd64.AppImage` and one
+`*_aarch64.AppImage`, each with its `.sig`, and no other AppImage, where this
+ADR says "one AppImage". Nothing else in the decision changes
+([RELEASE](../RELEASE.md)).
+
 The endpoint is a constant in a single module (`updates/channel.rs`); it is
 neither in `tauri.conf.json` nor in a preference, and the webview cannot
 supply one. Only the **stable** channel exists; the isolation is what lets a

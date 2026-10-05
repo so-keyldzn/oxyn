@@ -17,6 +17,8 @@ therefore live here, tested by `script/test_livraison.py`.
                                                  after the build
     livraison manifeste <tag> <repo>             verifies the draft's archives,
                                                  writes latest.json, uploads it
+    livraison architecture <arch> <bundle> <bin> checks that the Linux packages
+                                                 are built for x86_64 or aarch64
 
 **The tag.** It is exactly `v` followed by the configured version, prerelease
 suffix included: `0.1.0-rc.1` ⇔ `v0.1.0-rc.1`. Nothing is silently corrected —
@@ -53,8 +55,10 @@ The CLI's output is not relayed: it is the one process that holds the key.
 
 **The manifest.** `latest.json` is what every installed Oxyn reads. It is
 written last, from the signatures actually uploaded to the draft, and only if
-the draft holds exactly one macOS archive and one AppImage, each with its
-signature: a manifest pointing to a missing file would make every update fail.
+the draft holds exactly one archive per platform — the macOS archive, the
+x86_64 AppImage and the aarch64 AppImage — each with its signature, and no
+other archive of those kinds: a manifest pointing to a missing file would make
+every update fail, and a stray archive means a run nobody accounted for.
 Each signature must verify its archive, as downloaded from the draft, with
 the public key of `tauri.conf.json` — checked by a pinned `minisign -V`
 (`$MINISIGN`): the CLI only warns when the private key does not match that
@@ -64,12 +68,20 @@ signature failure, indistinguishable from an attack. Only then is the
 signature's version read: it must be the released version, which
 `tauri-cli` ≥ 2.12.0 writes into the trusted comment.
 Its platform keys are the ones `tauri-plugin-updater` 2.13.1 looks up,
-`{os}-{arch}-{installer}` then `{os}-{arch}`: `darwin-aarch64` and
-`linux-x86_64-appimage`. A bare `linux-x86_64` would also be offered to the
-deb and rpm installs, which have no archive to apply it to.
+`{os}-{arch}-{installer}` then `{os}-{arch}`: `darwin-aarch64`,
+`linux-x86_64-appimage` and `linux-aarch64-appimage`. A bare `linux-x86_64`
+would also be offered to the deb and rpm installs, which have no archive to
+apply it to.
 
-`gh`, the Tauri CLI and `minisign` are read from `$GH`, `$TAURI` and
-`$MINISIGN` if set — that is what lets the tests simulate them.
+**The architecture** of the Linux packages is checked before they are signed
+or uploaded: the binary, the deb's and the rpm's declared architecture, the
+AppImage's runtime and the binary it carries. Each package job builds
+natively, so a wrong one means the runner or the bundler did not do what the
+matrix says.
+
+`gh`, the Tauri CLI, `minisign`, `file`, `dpkg-deb` and `rpm` are read from
+`$GH`, `$TAURI`, `$MINISIGN`, `$FILE`, `$DPKG_DEB` and `$RPM` if set — that is
+what lets the tests simulate them.
 """
 
 from __future__ import annotations
@@ -98,7 +110,15 @@ REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # archive that would have been named for another architecture.
 PLATFORMS = {
     "darwin-aarch64": (".app.tar.gz", "_aarch64.app.tar.gz"),
-    "linux-x86_64-appimage": (".AppImage", ".AppImage"),
+    "linux-x86_64-appimage": (".AppImage", "_amd64.AppImage"),
+    "linux-aarch64-appimage": (".AppImage", "_aarch64.AppImage"),
+}
+# Architecture of a Linux package job → what each of its packages must declare:
+# the ELF machine as `file` prints it, the deb and rpm architectures, and the
+# suffix the Tauri bundler gives the AppImage.
+ARCHITECTURES = {
+    "x86_64": {"elf": "x86-64", "deb": "amd64", "rpm": "x86_64", "appimage": "_amd64.AppImage"},
+    "aarch64": {"elf": "ARM aarch64", "deb": "arm64", "rpm": "aarch64", "appimage": "_aarch64.AppImage"},
 }
 
 
@@ -346,8 +366,8 @@ def write_manifest(tag: str, repo: str, config: Path, now: datetime) -> dict:
         raise Refusal(f"{MANIFEST} is already in draft {tag}: it is not replaced.")
     archives = {}
     for platform, (kind, suffix) in PLATFORMS.items():
-        found = sorted(n for n in names if n.endswith(kind))
-        if len(found) != 1 or not found[0].endswith(suffix):
+        found = sorted(n for n in names if n.endswith(suffix))
+        if len(found) != 1:
             raise Refusal(
                 f"draft {tag} must hold exactly one *{suffix} for {platform}, "
                 f"found {found or 'none'}; no manifest is written."
@@ -355,6 +375,13 @@ def write_manifest(tag: str, repo: str, config: Path, now: datetime) -> dict:
         if f"{found[0]}.sig" not in names:
             raise Refusal(f"{found[0]}.sig is missing from draft {tag}; no manifest is written.")
         archives[platform] = found[0]
+    kinds = {kind for kind, _ in PLATFORMS.values()}
+    unexpected = sorted(n for n in names if n.endswith(tuple(kinds)) and n not in archives.values())
+    if unexpected:
+        raise Refusal(
+            f"draft {tag} must hold exactly one archive per platform, "
+            f"found {unexpected} besides {sorted(archives.values())}; no manifest is written."
+        )
     # The archives too: what is verified is the bytes every installed Oxyn
     # will download, not the files a package job had on its disk.
     patterns = [option for asset in archives.values() for option in ("--pattern", asset)]
@@ -380,6 +407,73 @@ def write_manifest(tag: str, repo: str, config: Path, now: datetime) -> dict:
     }
 
 
+def tool_output(command: list[str], cwd: Path | None = None) -> str:
+    try:
+        run = subprocess.run(command, capture_output=True, text=True, cwd=cwd, check=False)
+    except OSError as problem:
+        raise Refusal(f"cannot run {command[0]}: {problem.strerror}") from problem
+    if run.returncode != 0:
+        raise Refusal(f"{' '.join(command)} failed: {run.stderr.strip() or run.returncode}")
+    return run.stdout.strip()
+
+
+def require_elf(path: Path, machine: str, environment: dict[str, str]) -> None:
+    """Refuses a file that is not an ELF executable for `machine`, as `file` names it."""
+    description = tool_output([environment.get("FILE", "file"), "-b", str(path)])
+    print(f"{path.name}: {description}")
+    if not description.startswith("ELF ") or f", {machine}," not in description:
+        raise Refusal(f"{path} is not an ELF executable for {machine}: {description}")
+
+
+def only_package(directory: Path, suffix: str) -> Path:
+    """The single `*suffix` of a bundle directory: a second one would be uploaded too."""
+    found = sorted(directory.glob(f"*{suffix}"))
+    if len(found) != 1:
+        raise Refusal(f"{directory} must hold exactly one *{suffix}, found {[p.name for p in found] or 'none'}")
+    return found[0]
+
+
+def check_architecture(arch: str, bundle: Path, binary: Path, environment: dict[str, str]) -> None:
+    """Refuses Linux packages built for another architecture than the job's.
+
+    A runner label that silently changes, or a bundler that picks up a
+    leftover binary, would upload packages that install and then fail on the
+    user's machine: nothing else in the release reads their architecture.
+    """
+    expected = ARCHITECTURES.get(arch)
+    if expected is None:
+        raise Refusal(f"unknown architecture {arch}: expected one of {', '.join(ARCHITECTURES)}")
+    require_elf(binary, expected["elf"], environment)
+
+    deb = only_package(bundle / "deb", ".deb")
+    declared = tool_output([environment.get("DPKG_DEB", "dpkg-deb"), "-f", str(deb), "Architecture"])
+    print(f"{deb.name}: Architecture {declared}")
+    if declared != expected["deb"]:
+        raise Refusal(f"{deb.name} declares {declared or 'no'} architecture, not {expected['deb']}")
+
+    rpm = only_package(bundle / "rpm", ".rpm")
+    declared = tool_output([environment.get("RPM", "rpm"), "-qp", "--queryformat", "%{ARCH}", str(rpm)])
+    print(f"{rpm.name}: ARCH {declared}")
+    if declared != expected["rpm"]:
+        raise Refusal(f"{rpm.name} declares {declared or 'no'} architecture, not {expected['rpm']}")
+
+    appimage = only_package(bundle / "appimage", ".AppImage")
+    if not appimage.name.endswith(expected["appimage"]):
+        raise Refusal(f"{appimage.name} is not named *{expected['appimage']}: the manifest would not find it")
+    if not os.access(appimage, os.X_OK):
+        raise Refusal(f"{appimage.name} is not executable")
+    # Its runtime, then the application it carries: the two are assembled
+    # from different downloads by the bundler.
+    require_elf(appimage, expected["elf"], environment)
+    with tempfile.TemporaryDirectory(prefix="oxyn-appimage-") as folder:
+        tool_output([str(appimage.resolve()), "--appimage-extract"], cwd=Path(folder))
+        inside = Path(folder) / "squashfs-root" / "usr" / "bin" / binary.name
+        if not inside.is_file():
+            raise Refusal(f"{appimage.name} does not carry usr/bin/{binary.name}")
+        require_elf(inside, expected["elf"], environment)
+    print(f"Linux packages built for {arch}.")
+
+
 def publish_manifest(tag: str, repo: str, config: Path) -> None:
     manifest = write_manifest(tag, repo, config, datetime.now(timezone.utc))
     with tempfile.TemporaryDirectory(prefix="oxyn-manifeste-") as folder:
@@ -402,6 +496,8 @@ def main(args: list[str]) -> int:
                 sign(tag, [Path(f) for f in file_list], dict(os.environ), config)
             case ["manifeste", tag, repo]:
                 publish_manifest(tag, repo, config)
+            case ["architecture", arch, bundle, binary]:
+                check_architecture(arch, Path(bundle), Path(binary), dict(os.environ))
             case _:
                 print(__doc__, file=sys.stderr)
                 return 2

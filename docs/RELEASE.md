@@ -6,8 +6,12 @@ tag, or manually with an existing tag. The tag must equal `v` followed by
 `crates/oxyn-desktop/tauri.conf.json`'s version. Both jobs check out that exact
 tag, including for a manual run selected from another branch.
 
-`macos-latest` produces an Apple Silicon DMG; `ubuntu-24.04` produces DEB,
-RPM and AppImage packages. Intel macOS and Windows are not in this matrix.
+`macos-latest` produces an Apple Silicon DMG; `ubuntu-24.04` (x86_64) and
+`ubuntu-24.04-arm` (ARM64) each produce DEB, RPM and AppImage packages, built
+natively on their runner. Intel macOS and Windows are not in this matrix.
+Before signing or uploading anything, each Linux job runs
+`script/livraison architecture`, which refuses a binary, deb, rpm, AppImage
+runtime or AppImage content built for another architecture than the job's.
 `make desktop PROFIL=release` is the build entry point. The workflow installs
 the pinned `cargo-about` binary after verifying its checksum so that required
 third-party notices are included.
@@ -15,7 +19,8 @@ third-party notices are included.
 The workflow also builds what installed copies update from
 ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)): after the
 build, a step of its own signs the updater artifacts —
-`Oxyn_<version>_aarch64.app.tar.gz` and the AppImage, each with its `.sig` —
+`Oxyn_<version>_aarch64.app.tar.gz`, `Oxyn_<version>_amd64.AppImage` and
+`Oxyn_<version>_aarch64.AppImage`, each with its `.sig` —
 and a final `manifeste` job verifies them and writes `latest.json`.
 
 ## Apple setup
@@ -110,7 +115,7 @@ any of them could read its environment, and one compromised dependency
 version would be enough to take the key. That is why no build produces
 signed updater artifacts (`createUpdaterArtifacts` stays off): the macOS
 archive is made by `script/apple-release build` from the stapled `.app`, and
-the AppImage is signed as the bundler wrote it.
+each AppImage is signed as the bundler wrote it.
 
 **The `release` environment.** Repository secrets are readable by any
 workflow run on any branch: a collaborator, or a token with the `workflow`
@@ -144,7 +149,7 @@ does not match the committed public key, and a rerun can leave in the draft
 the archive of one run beside the signature of another. Either way every
 installed Oxyn would refuse the update as a signature failure — shown as
 such, every day, indistinguishable from an attack — until the next release.
-So the `manifeste` job downloads both archives from the draft and verifies
+So the `manifeste` job downloads the three archives from the draft and verifies
 each with `minisign -V` against the public key of `tauri.conf.json` before
 it reads the signed version or writes anything. The verifier is the
 reference implementation, minisign 0.12, installed from its GitHub release
@@ -212,19 +217,21 @@ the secrets, and audit the published releases' `.sig` against the archives.
    The manual workflow must first exist on the default branch. Started from
    a branch, the run is refused by the `release` environment's tag rule. The
    example version must be replaced when the configured version changes.
-4. Wait for both package jobs, inspect their checks and download/install the
-   packages from the draft.
-5. Wait for the `manifeste` job. It runs once both package jobs are green,
-   with no secret but `GH_TOKEN`: it requires exactly one
-   `*_aarch64.app.tar.gz` and one `*.AppImage` in the draft, each with its
-   signature, downloads them, verifies each archive against its signature
-   and the committed public key, checks the signed version, and uploads
-   `latest.json` with the keys `darwin-aarch64` and `linux-x86_64-appimage`.
+4. Wait for the three package jobs, inspect their checks and download/install
+   the packages from the draft.
+5. Wait for the `manifeste` job. It runs once the three package jobs are
+   green, with no secret but `GH_TOKEN`: it requires exactly one
+   `*_aarch64.app.tar.gz`, one `*_amd64.AppImage` and one
+   `*_aarch64.AppImage` in the draft, each with its signature, and no other
+   `.app.tar.gz` or `.AppImage`; downloads them, verifies each archive
+   against its signature and the committed public key, checks the signed
+   version, and uploads `latest.json` with the keys `darwin-aarch64`,
+   `linux-x86_64-appimage` and `linux-aarch64-appimage`.
    It is the only job that uploads `latest.json`, and it refuses a draft that
    already holds one. A signature that does not verify means a key pair that
    does not match, or an archive and a signature from two runs: delete both
    from the draft and rerun the package job of that platform.
-6. **Publish the draft only when both package jobs and `manifeste` are green
+6. **Publish the draft only when the package jobs and `manifeste` are green
    and `latest.json` is attached.** Publishing is what offers the update:
    `https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json`
    serves the latest published, non-prerelease release only. A release
@@ -260,7 +267,8 @@ installed Oxyn accepts the result. That takes two steps:
 2. **Real releases.** Publish v0.0.2, installed by hand (v0.0.1 has no
    updater), then v0.0.3. Check that v0.0.2 updates itself on a clean Mac and
    as an AppImage, and that a `.deb` install says "Updates are managed by your
-   package manager".
+   package manager". The ARM64 AppImage gets the same check with the first
+   release that ships it and the one after.
 
 Updater contracts are recorded in
 [RESEARCH-NOTES](RESEARCH-NOTES.md#tauri-updater-contracts--checked-on-2026-10-02).
