@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="3621546027e9" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="ab5401226179" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1624,6 +1624,43 @@ le point d'accès l'exige, une clé. La clé va au trousseau du système ; elle
 n'est ni réaffichée, ni recopiée dans un message d'erreur, ni exportée avec le
 workspace (I-03). Ce que l'écran remontre après enregistrement, c'est
 « configurée » ou « absente », jamais la valeur.
+
+**Le modèle par défaut se choisit dans la liste du fournisseur, ou se tape.**
+Dès que le formulaire connaît la famille, le point d'accès et — sauf point
+d'accès local ou déclaration éditée qui garde sa clé enregistrée — une clé, il
+demande ses modèles au fournisseur, après une pause dans la frappe. La liste est
+celle du fournisseur, dans son ordre : Oxyn ne porte aucune liste de modèles et
+n'en invente aucun « recommandé ». Le champ est une combobox filtrable — sur le
+nom du modèle, son identifiant et le nom du fournisseur ; flèches, Entrée pour
+choisir, Échap pour fermer — qui montre le nom, et l'identifiant dessous quand
+ils diffèrent. Ce qui est enregistré, c'est l'identifiant.
+
+* **La saisie n'est jamais bloquée** : quoi que dise la liste, « Use "…" as
+  model id » garde ce qui a été tapé — une passerelle maison, un modèle privé,
+  un déploiement Azure se déclarent avec l'identifiant que l'utilisateur
+  connaît. Elle vient en tête, si bien qu'Entrée garde « vega » plutôt que le
+  modèle listé qui lui correspond par hasard ; seul un identifiant listé tapé
+  exactement passe en tête à sa place. Quitter le champ — pour enregistrer,
+  par exemple — garde un identifiant tapé jamais choisi ; le quitter vidé garde
+  le modèle courant.
+* **Le modèle courant n'est jamais remplacé en silence** : un modèle que le
+  fournisseur ne liste plus reste sélectionné, en tête de liste, marqué
+  « Current model — unavailable from provider ».
+* Le champ a ses états : en attente du point d'accès et de la clé, listage,
+  liste vide, échec. Un échec dit pourquoi en une phrase — clé refusée, point
+  d'accès injoignable, point d'accès qui ne liste pas ses modèles — puis le
+  message court du fournisseur, jamais la clé ni les identifiants de l'URL.
+  « Refresh models » redemande en passant outre le cache du backend.
+* Changer la famille, le point d'accès ou la clé retire la liste affichée ; une
+  réponse qui arrive pour un point d'accès tapé avant est ignorée, jamais
+  montrée pour celui tapé après.
+* « Test connection » liste les modèles à neuf et dit « Connected — N models
+  available » ou « Connection failed — … » à côté, annoncé poliment. Il
+  n'enregistre rien.
+
+La clé tapée dans le formulaire voyage dans la requête de listage et nulle part
+ailleurs : ni dans un journal, ni dans une clé de cache — le backend met une
+liste en cache par famille et point d'accès seulement.
 
 L'écran affiche le classement local/distant **avec l'instant de sa mesure**,
 parce qu'il est recalculé et jamais persisté : un point d'accès classé local
