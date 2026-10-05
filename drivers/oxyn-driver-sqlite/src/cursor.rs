@@ -28,7 +28,7 @@
 //! `RETURNING` makes all its changes at its first step, before its rows are
 //! read. A read stopped is cancelled; a write is reported as the engine ends
 //! it. Its last batch carries the end of the statement
-//! ([`Pulled::Last`]), so a Stop arriving after it finds the cursor finished;
+//! (`Pulled::Last`), so a Stop arriving after it finds the cursor finished;
 //! a Stop arriving before, while a batch is requested, waits for the worker
 //! thread's verdict; and a Stop at rest, with the statement still open, is an
 //! [`OxynError::OutcomeUnknown`] — never a cancellation the engine did not
