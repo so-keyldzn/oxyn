@@ -121,13 +121,16 @@ fn an_agent_write_on_production_is_refused_and_shown_with_its_statement() {
     let open = open(&runtime, &backend, Environment::Production);
     let (sink, thread, actor, received) = sink_on(&backend, &open);
 
+    let call = CallHandle::new(CallId::fresh());
     thread.open_call(
+        call.id(),
         "execute_query",
         "Execute",
         open.connection.parse().ok(),
         true,
     );
     let outcome = runtime.block_on(sink.dispatch(
+        &call,
         actor,
         execute(&open, "CREATE TABLE audit_copy (id INTEGER)"),
         &CancelToken::new(),
@@ -156,6 +159,7 @@ fn an_agent_cannot_present_itself_as_the_user() {
     let open = open(&runtime, &backend, Environment::Local);
     let (sink, _thread, _actor, _) = sink_on(&backend, &open);
     let outcome = runtime.block_on(sink.dispatch(
+        &CallHandle::new(CallId::fresh()),
         Actor::Human,
         execute(&open, "SELECT 1"),
         &CancelToken::new(),
@@ -170,12 +174,14 @@ fn a_tool_call_cancelled_with_its_conversation_is_not_a_failure() {
     let backend = Backend::open_temporary().expect("temporary backend");
     let open = open(&runtime, &backend, Environment::Local);
     let (_sink, thread, _actor, received) = sink_on(&backend, &open);
-    thread.open_call("execute_query", "Execute", None, false);
-    let (call, _, _) = announce_call(&thread, 0, Some("SELECT pg_sleep(60)".into()));
-    thread.mark_cancelled(call);
+    let key = CallId::fresh();
+    thread.open_call(key, "execute_query", "Execute", None, false);
+    announce_call(&thread, 0, key, Some("SELECT pg_sleep(60)".into()));
+    thread.mark_cancelled(key);
     report_call(
         &thread,
         0,
+        key,
         &DispatchOutcome::Failed {
             class: oxyn_core::ErrorClass::Ambiguous,
             message: "cancelled".into(),
@@ -184,6 +190,37 @@ fn a_tool_call_cancelled_with_its_conversation_is_not_a_failure() {
     );
     let sent = received.lock().join("\n");
     assert!(sent.contains(r#""status":"cancelled""#), "{sent}");
+}
+
+#[test]
+fn a_run_that_panics_still_ends_and_says_it_failed() {
+    // The regression: a panic in the run skipped both `failed` and the end,
+    // and the conversation said « still answering » until a restart.
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let open = open(&runtime, &backend, Environment::Local);
+    let (sink, thread, _actor, received) = sink_on(&backend, &open);
+    let ended = EndRun {
+        thread: Arc::clone(&thread),
+        node: sink.node,
+        armed: true,
+    };
+    let run = runtime.spawn(async move {
+        let _ended = ended;
+        tokio::task::yield_now().await;
+        panic!("a defect in the run");
+    });
+    assert!(runtime.block_on(run).is_err(), "the task panicked");
+
+    assert!(
+        !thread.is_running(),
+        "the conversation takes questions again"
+    );
+    let sent = received.lock().join("\n");
+    assert!(sent.contains(r#""kind":"failed""#), "{sent}");
+    assert!(sent.contains(r#""retryable":false"#), "{sent}");
+    assert!(!sent.contains("a defect in the run"), "{sent}");
 }
 
 fn agent(command: &str) -> ExternalAgentConfig {
@@ -662,18 +699,21 @@ fn deleting_a_conversation_releases_the_rows_its_calls_left() {
     let open = open(&runtime, &backend, Environment::Local);
     let (sink, thread, actor, received) = sink_on(&backend, &open);
 
+    let call = CallHandle::new(CallId::fresh());
     thread.open_call(
+        call.id(),
         "execute_query",
         "Execute",
         open.connection.parse().ok(),
         false,
     );
     let outcome = runtime.block_on(sink.dispatch(
+        &call,
         actor,
         execute(&open, "SELECT 1 AS one"),
         &CancelToken::new(),
     ));
-    report_call(&thread, sink.node, &outcome, false);
+    report_call(&thread, sink.node, call.id(), &outcome, false);
     let report = received
         .lock()
         .iter()
@@ -897,13 +937,16 @@ fn a_write_that_reached_the_executor_marks_the_run_and_a_refused_one_does_not() 
     // Refused on production: nothing ran, nothing to fear from asking again.
     let production = open(&runtime, &backend, Environment::Production);
     let (sink, thread, actor, _received) = sink_on(&backend, &production);
+    let refused = CallHandle::new(CallId::fresh());
     thread.open_call(
+        refused.id(),
         "execute_query",
         "Execute",
         production.connection.parse().ok(),
         true,
     );
     runtime.block_on(sink.dispatch(
+        &refused,
         actor,
         execute(&production, "DELETE FROM t"),
         &CancelToken::new(),
@@ -914,15 +957,19 @@ fn a_write_that_reached_the_executor_marks_the_run_and_a_refused_one_does_not() 
     // from the moment it waits, before any decision.
     let staging = open(&runtime, &backend, Environment::Staging);
     let (sink, thread, actor, _received) = sink_on(&backend, &staging);
+    let key = CallId::fresh();
     thread.open_call(
+        key,
         "execute_query",
         "Execute",
         staging.connection.parse().ok(),
         true,
     );
     let command = execute(&staging, "CREATE TABLE t (a INTEGER)");
-    let call =
-        runtime.spawn(async move { sink.dispatch(actor, command, &CancelToken::new()).await });
+    let call = runtime.spawn(async move {
+        sink.dispatch(&CallHandle::new(key), actor, command, &CancelToken::new())
+            .await
+    });
     let mut waiting = None;
     for _ in 0..500 {
         waiting = backend
@@ -984,13 +1031,16 @@ fn a_request_born_after_its_question_closed_is_withdrawn_not_shown() {
     sink.question = question.clone();
     question.close();
 
+    let call = CallHandle::new(CallId::fresh());
     thread.open_call(
+        call.id(),
         "execute_query",
         "Execute",
         staging.connection.parse().ok(),
         true,
     );
     let outcome = runtime.block_on(sink.dispatch(
+        &call,
         actor,
         execute(&staging, "CREATE TABLE t (a INTEGER)"),
         &CancelToken::new(),
@@ -2344,6 +2394,9 @@ mod approved_samples {
                 },
             },
         );
+        // As the run does: ended first, then written.
+        let agent = thread.agent_session();
+        thread.finish(node);
         fixture
             .runtime
             .block_on(super::super::persistence::save_answer(
@@ -2352,6 +2405,7 @@ mod approved_samples {
                 node,
                 PrivacyTier::Sampled,
                 None,
+                agent,
             ));
 
         let bytes = disk.bytes();
@@ -2437,6 +2491,9 @@ mod approved_samples {
                 },
             },
         );
+        // As the run does: ended first, then written.
+        let agent = thread.agent_session();
+        thread.finish(first);
         fixture
             .runtime
             .block_on(super::super::persistence::save_answer(
@@ -2445,8 +2502,8 @@ mod approved_samples {
                 first,
                 PrivacyTier::Sampled,
                 None,
+                agent,
             ));
-        thread.finish(first);
 
         // As after a restart: this window knows nothing of it any more.
         fixture.backend.inner.ai.forget(fixture.connection);

@@ -257,12 +257,16 @@ fn class_of(word: &str) -> Option<oxyn_core::ErrorClass> {
 ///
 /// Silent on failure: the question has been answered, and the panel already
 /// said once that this thread is not being kept.
+///
+/// `agent` is the agent session that answered, read before the run ended:
+/// the thread may already serve the next question, with another agent.
 pub(crate) async fn save_answer(
     executor: &Arc<Executor>,
     thread: &Arc<super::threads::Thread>,
     node: u32,
     tier: PrivacyTier,
     failed: Option<(FailureCategory, bool)>,
+    agent: Option<AgentSessionId>,
 ) {
     let (Some(id), Some(stored)) = (thread.conversation(), thread.stored_node(node)) else {
         return;
@@ -271,7 +275,7 @@ pub(crate) async fn save_answer(
         &thread.log_of(node),
         tier,
         thread.is_withheld(node),
-        thread.agent_session(),
+        agent,
         failed,
     );
     let executor = Arc::clone(executor);

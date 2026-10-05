@@ -25,8 +25,8 @@ use oxyn_ai::external::session::{AgentReady, ExternalError, ExternalSession, Too
 use oxyn_ai::external::turn::TurnEnd;
 use oxyn_ai::tools::SampleAsk;
 use oxyn_ai::{
-    AgentEvent, AgentObserver, AgentOutcome, AgentRuntime, AgentSession, AiError, CommandSink,
-    ContextBuilder, DispatchOutcome, ToolRegistry, ToolScope, sql_agent,
+    AgentEvent, AgentObserver, AgentOutcome, AgentRuntime, AgentSession, AiError, CallHandle,
+    CallId, CommandSink, ContextBuilder, DispatchOutcome, ToolRegistry, ToolScope, sql_agent,
 };
 use oxyn_core::ai::MAX_PROVIDER_MODEL_BYTES;
 use oxyn_core::{
@@ -114,14 +114,20 @@ impl AgentObserver for Observer {
             }),
             // Announced by the sink, which holds the statement.
             AgentEvent::CommandSubmitted {
+                call,
                 tool,
                 command,
                 connection,
                 mutating,
-            } => self.thread.open_call(tool, command, connection, mutating),
+            } => self
+                .thread
+                .open_call(call, tool, command, connection, mutating),
             AgentEvent::CommandReported {
-                outcome, withheld, ..
-            } => report_call(&self.thread, self.node, outcome, withheld),
+                call,
+                outcome,
+                withheld,
+                ..
+            } => report_call(&self.thread, self.node, call, outcome, withheld),
             AgentEvent::CallRejected { tool, error } => emit(AiEvent::CallRejected {
                 tool: tool.to_owned(),
                 error: error.to_string(),
@@ -197,13 +203,14 @@ fn counted(count: usize, noun: &str) -> String {
     }
 }
 
-/// Announces the open call with its statement. Returns its id and target.
+/// Announces call `key` with its statement. Returns its id and target.
 fn announce_call(
     thread: &Thread,
     node: u32,
+    key: CallId,
     statement: Option<String>,
 ) -> (u32, String, Option<Environment>) {
-    let call = thread.announce();
+    let call = thread.announce(key);
     let (target, environment) = name_target(call.connection, thread.scope().as_ref());
     thread.emit(
         node,
@@ -220,8 +227,8 @@ fn announce_call(
     (call.id, target, environment)
 }
 
-fn report_call(thread: &Thread, node: u32, outcome: &DispatchOutcome, withheld: bool) {
-    let Some(current) = thread.take_call() else {
+fn report_call(thread: &Thread, node: u32, key: CallId, outcome: &DispatchOutcome, withheld: bool) {
+    let Some(current) = thread.take_call(key) else {
         return;
     };
     if !current.announced {
@@ -564,16 +571,18 @@ impl fmt::Debug for AgentSink {
 impl CommandSink for AgentSink {
     async fn dispatch(
         &self,
+        handle: &CallHandle,
         actor: Actor,
         command: Command,
         cancel: &CancelToken,
     ) -> DispatchOutcome {
+        let key = handle.id();
         let statement = match &command {
             Command::Execute { request, .. } => Some(request.text.clone()),
             _ => None,
         };
         let (call, connection, environment) =
-            announce_call(&self.thread, self.node, statement.clone());
+            announce_call(&self.thread, self.node, key, statement.clone());
         let mutating = command.is_mutating();
         // `describe_schema` reads the cache as it stands: what it would
         // describe and the cache does not hold is read first, as the agent's
@@ -619,6 +628,10 @@ impl CommandSink for AgentSink {
         // the model write on and the answer end over a pending request.
         let report = match report {
             DispatchReport::AwaitingApproval { command, reason } => {
+                // The executor holds the request now, and refuses this
+                // agent's next call by itself: the agent's order of calls is
+                // not held through the user's decision.
+                handle.awaiting_user();
                 let request = Request {
                     call,
                     mutating,
@@ -651,9 +664,9 @@ impl CommandSink for AgentSink {
                 stats: Some(stats),
                 result,
                 ..
-            } => self.thread.record_rows(call, stats.rows, *result),
+            } => self.thread.record_rows(key, stats.rows, *result),
             DispatchReport::Failed { .. } if cancel.is_cancelled() => {
-                self.thread.mark_cancelled(call);
+                self.thread.mark_cancelled(key);
             }
             _ => {}
         }
@@ -664,11 +677,12 @@ impl CommandSink for AgentSink {
     /// [`CommandSink::dispatch`]'s own sink. See [`sampling`].
     async fn request_sample(
         &self,
+        handle: &CallHandle,
         actor: Actor,
         ask: SampleAsk,
         cancel: &CancelToken,
     ) -> DispatchOutcome {
-        self.sample(actor, ask, cancel).await
+        self.sample(handle.id(), actor, ask, cancel).await
     }
 }
 
@@ -772,6 +786,51 @@ pub(super) struct Failure {
     /// start, or out of its confinement. The conversation lets it go, so
     /// asking again starts a new one, as the failure says.
     ends_agent: bool,
+}
+
+/// Ends a run however its task ends — a panic included.
+///
+/// A panic in the run used to skip both its `failed` and its end: the
+/// conversation said « still answering » until the application restarted,
+/// and refused every question. Dropped armed, this says the run failed and
+/// ends it; the exchange's outcome is then not written — a `Drop` cannot wait
+/// for the store —, and a reopened conversation shows it unsettled.
+struct EndRun {
+    thread: Arc<Thread>,
+    node: u32,
+    armed: bool,
+}
+
+/// Said when a run ended without settling. Not retryable: what it did before
+/// is unknown (I-13).
+const RUN_BROKE_OFF: &str = "Oxyn stopped this answer on an internal error.";
+
+impl EndRun {
+    /// The ordinary end: see [`Thread::finish`].
+    fn finish(mut self) -> Option<Ending> {
+        self.armed = false;
+        self.thread.finish(self.node)
+    }
+}
+
+impl Drop for EndRun {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        tracing::error!(
+            conversation = %self.thread.id,
+            node = self.node,
+            "an assistant turn broke off without ending; it is shown as failed"
+        );
+        let failure = Failure {
+            class: Some(ErrorClass::Ambiguous),
+            ..Failure::new(RUN_BROKE_OFF, FailureCategory::Setup)
+        };
+        self.thread
+            .emit(self.node, failure.into_event(self.thread.wrote()));
+        let _ending = self.thread.finish(self.node);
+    }
 }
 
 /// Said after a failure that followed a write, so nobody reads the failure as
@@ -1016,7 +1075,27 @@ impl Backend {
         }
 
         let inner = Arc::clone(&self.inner);
+        let destination = match &resolved {
+            Resolved::Provider { config, .. } => format!("provider {:?}", config.kind),
+            Resolved::Agent(_) => "external agent".to_owned(),
+        };
         tauri::async_runtime::spawn(async move {
+            // Armed before anything can fail: a panic below drops it, and the
+            // run still ends — said `failed`, the conversation free again.
+            let ended = EndRun {
+                thread: Arc::clone(&thread),
+                node,
+                armed: true,
+            };
+            let began = std::time::Instant::now();
+            // Never the question nor the answer: they may quote the database
+            // (I-03). Where it went, how it ended, how long it took.
+            tracing::info!(
+                conversation = %thread.id,
+                node,
+                destination,
+                "assistant turn started"
+            );
             let run = Run {
                 inner: &inner,
                 thread: &thread,
@@ -1076,11 +1155,34 @@ impl Backend {
             if let Err(failure) = result {
                 thread.emit(node, failure.into_event(wrote));
             }
-            // After the last event of the run: what is written is what the
-            // panel showed.
-            persistence::save_answer(&inner.executor, &thread, node, config.privacy_tier, failed)
-                .await;
-            thread.finish(node);
+            // Read before the run ends: a question asked the instant it ends
+            // may link another agent to this conversation.
+            let agent = thread.agent_session();
+            // Ended before the answer is written, not after: the panel reads
+            // `finished` the moment it is sent, and a follow-up sent then must
+            // find the conversation free. What is written is still what the
+            // panel showed — the ending is in the node's log by now.
+            let ending = ended.finish();
+            tracing::info!(
+                conversation = %thread.id,
+                node,
+                destination,
+                outcome = ?ending,
+                category = ?failed.map(|(category, _)| category),
+                retryable = failed.is_some_and(|(_, retryable)| retryable),
+                wrote,
+                duration_ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX),
+                "assistant turn ended"
+            );
+            persistence::save_answer(
+                &inner.executor,
+                &thread,
+                node,
+                config.privacy_tier,
+                failed,
+                agent,
+            )
+            .await;
         });
         Ok(started)
     }
@@ -2022,9 +2124,10 @@ impl Run<'_> {
             .await?;
 
         // Classified first, and refused before the keyring is read or a
-        // transport exists (ADR-0023). Neither the reach nor the key is cached:
-        // a key revoked must stop working, a name that resolved locally
-        // yesterday may not today.
+        // transport exists (ADR-0023). The reach is never cached: a name that
+        // resolved locally yesterday may not today. The transport is, for as
+        // long as the declaration, its key reference and this reach hold —
+        // see `transports`: a key replaced or cleared stops working at once.
         let reach = classify(&provider.base_url).await?;
         check_endpoint(tier, reach)
             .map_err(|message| Failure::new(message, FailureCategory::Refused))?;
@@ -2037,15 +2140,25 @@ impl Run<'_> {
             ));
         }
 
-        let credentials = Arc::clone(&self.inner.credentials);
-        let declaration = provider.clone();
-        let transport = tokio::task::spawn_blocking(move || {
-            let key = credentials.provider_key(&declaration)?;
-            oxyn_llm::build_provider(declaration.kind, &declaration.base_url, key, reach)
-        })
-        .await
-        .map_err(|error| setup(format!("preparing the provider: {error}")))?
-        .map_err(|error| setup(error.to_string()))?;
+        let transport = match self.inner.ai.transports.get(&provider, reach) {
+            Some(kept) => kept,
+            None => {
+                let credentials = Arc::clone(&self.inner.credentials);
+                let declaration = provider.clone();
+                let built = tokio::task::spawn_blocking(move || {
+                    let key = credentials.provider_key(&declaration)?;
+                    oxyn_llm::build_provider(declaration.kind, &declaration.base_url, key, reach)
+                })
+                .await
+                .map_err(|error| setup(format!("preparing the provider: {error}")))?
+                .map_err(|error| setup(error.to_string()))?;
+                self.inner
+                    .ai
+                    .transports
+                    .keep(&provider, reach, Arc::clone(&built));
+                built
+            }
+        };
 
         // Read before the runtime takes the transport: the model's declared
         // efforts, asked only when an effort was chosen — a question without
@@ -2275,7 +2388,8 @@ impl Run<'_> {
                 // this one — else a launch of its own. Under the launch lock,
                 // so a start still launching is waited for rather than doubled.
                 let link = {
-                    let _launching = self.inner.ai.launching.lock().await;
+                    let launching = self.inner.ai.launch_lock(self.connection.id);
+                    let _launching = launching.lock().await;
                     match self
                         .inner
                         .ai

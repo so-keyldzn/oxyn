@@ -31,6 +31,7 @@ mod mentions;
 mod persistence;
 mod samples;
 mod threads;
+mod transports;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -157,6 +158,9 @@ impl Backend {
                 config: Box::new(config.clone()),
             })
             .await;
+        // Whatever the save did: a transport built from the previous
+        // declaration must not answer for this one.
+        self.inner.ai.transports.forget(&config.id);
         if !matches!(saved, Ok(Outcome::AiProviderSaved { .. })) {
             if key.is_some()
                 && let Some(reference) = config.secret_ref
@@ -197,7 +201,12 @@ impl Backend {
             .into_iter()
             .find(|config| config.id == id)
             .and_then(|config| config.secret_ref);
-        self.dispatch_ai(Command::RemoveAiProvider { id }).await?;
+        let removed = self
+            .dispatch_ai(Command::RemoveAiProvider { id: id.clone() })
+            .await;
+        // The transport holds the key: it goes with the declaration.
+        self.inner.ai.transports.forget(&id);
+        removed?;
         if let Some(reference) = secret_ref {
             self.forget_provider_key(reference).await;
         }
