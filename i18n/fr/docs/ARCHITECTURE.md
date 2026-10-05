@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="6222113653e1" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="8fd0b68e16e5" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -289,9 +289,11 @@ verdict ne vaut que ce que vaut celui du pilote : MySQL ne répond `Cancelled`
 pour une écriture qu'une fois le kill signalé par le serveur sur cette
 instruction même, mais PostgreSQL le répond encore pour une écriture arrêtée
 avant qu'aucune de ses lignes n'arrive — toute écriture sans `RETURNING` — sans
-lire la réponse du serveur à sa demande d'annulation, et SQLite le répond dès
-que son jeton se déclenche, même après un `RETURNING` qui a déjà fait tous ses
-changements à son premier pas. Ce sont deux lacunes connues, pas des garanties.
+lire la réponse du serveur à sa demande d'annulation, une lacune connue, pas une
+garantie. SQLite ne répond `Cancelled` que pour une écriture qui n'a jamais
+commencé ; une écriture qu'il interrompt est ambiguë, celle dont la dernière
+ligne a été lue est `Completed`, et un `RETURNING` arrêté entre deux lots — ses
+changements déjà faits à son premier pas — est `OutcomeUnknown`.
 
 La préparation PostgreSQL examine les types des colonnes, y compris les bases
 de domaines et les éléments de tableaux. Les types sans sortie binaire, les

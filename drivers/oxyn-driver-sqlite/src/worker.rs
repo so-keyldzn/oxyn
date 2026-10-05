@@ -211,6 +211,47 @@ impl WorkerHandle {
         }
     }
 
+    /// Waits for the reply of task `id`; when the token fires, interrupts the
+    /// task and **keeps waiting for its reply**.
+    ///
+    /// For a task that may write. The token firing proves nothing about the
+    /// write: the statement may have ended before the interruption reached it,
+    /// or the engine may report it stopped. Only the worker thread knows, and
+    /// its reply carries the classification of an interrupted statement (see
+    /// [`error::engine_bound`]). A task still queued is the exception: it will
+    /// never run, so [`OxynError::Cancelled`] is the truth and is returned at
+    /// once (I-13).
+    ///
+    /// The wait after the interruption is bounded by the engine, which checks
+    /// its interruption flag as it steps; a caller that abandons it still
+    /// interrupts, like [`await_reply`](Self::await_reply).
+    ///
+    /// # Errors
+    /// The task's, [`OxynError::Cancelled`] for a task that never started, or
+    /// a driver error if the thread disappeared before replying.
+    pub(crate) async fn await_verdict<T>(
+        &self,
+        answer: oneshot::Receiver<Result<T>>,
+        cancel: &CancelToken,
+        id: WorkId,
+    ) -> Result<T> {
+        let mut abandon = AbandonGuard::new(&self.interrupter, id);
+        let answer = match select(answer, pin!(cancel.cancelled())).await {
+            Either::Left((replied, _)) => {
+                abandon.disarm();
+                return replied.unwrap_or_else(|_| Err(error::closed()));
+            }
+            Either::Right(((), answer)) => answer,
+        };
+        if self.interrupter.interrupt(id) {
+            abandon.disarm();
+            return Err(OxynError::Cancelled);
+        }
+        let replied = answer.await;
+        abandon.disarm();
+        replied.unwrap_or_else(|_| Err(error::closed()))
+    }
+
     /// The task the worker thread is executing, for tests.
     #[cfg(test)]
     pub(crate) fn running(&self) -> Option<WorkId> {

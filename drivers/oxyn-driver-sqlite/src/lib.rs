@@ -85,6 +85,8 @@ pub mod params;
 mod preview;
 mod schema_sql;
 pub mod session;
+#[cfg(test)]
+mod stopped_write_tests;
 pub mod stream;
 pub mod worker;
 

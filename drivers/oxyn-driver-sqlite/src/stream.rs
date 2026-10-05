@@ -56,6 +56,21 @@ pub(crate) type Pull = oneshot::Sender<Result<Pulled>>;
 pub(crate) enum Pulled {
     /// A batch of rows.
     Batch(RecordBatch),
+    /// The last batch of rows: nothing more will be read from the statement —
+    /// it ran to its end, or `ExecLimits::max_rows` cut it — and the worker
+    /// thread has already let go of it.
+    ///
+    /// Distinct from [`Batch`](Self::Batch) followed by [`Done`](Self::Done)
+    /// because a write is over when its last row is read, not when the cursor
+    /// asks once more: a Stop landing between the two must find the cursor
+    /// already finished, not report a cancellation of what was applied
+    /// (issue #181, I-13).
+    Last {
+        /// The rows.
+        batch: RecordBatch,
+        /// Rows are missing, because `ExecLimits::max_rows` cut.
+        truncated: bool,
+    },
     /// The stream is finished.
     Done {
         /// Rows are missing, because `ExecLimits::max_rows` cut.
@@ -74,6 +89,9 @@ pub(crate) struct StreamStart {
     pub first: Pulled,
     /// Rows affected by the statements that produced no columns.
     pub affected: u64,
+    /// What the streamed statement could do: a Stop ends a read as a
+    /// cancellation, a write only on what the engine reports.
+    pub effect: Effect,
 }
 
 /// An execution handed to the worker thread.
@@ -162,6 +180,8 @@ fn nothing(affected: u64) -> StreamStart {
         schema: Arc::new(Schema::empty()),
         first: Pulled::Done { truncated: false },
         affected,
+        // Every statement has already run: there is no stream left to stop.
+        effect: Effect::ReadOnly,
     }
 }
 
@@ -313,13 +333,14 @@ fn stream_rows(
         .map(|(index, plan)| ColumnBuilder::new(plan.kind, index, capacity))
         .collect();
 
-    let mut finished = probed.finished;
+    let finished = probed.finished;
     let mut truncated = probed.truncated;
 
     let first = if probed.rows == 0 {
         Pulled::Done { truncated }
     } else {
         match assemble(&mut builders, &probed.values, &schema) {
+            Ok(batch) if finished => Pulled::Last { batch, truncated },
             Ok(batch) => Pulled::Batch(batch),
             Err(err) => {
                 let _ = start.send(Err(err));
@@ -333,25 +354,21 @@ fn stream_rows(
             schema: Arc::clone(&schema),
             first,
             affected: 0,
+            effect,
         }))
         .is_err()
+        || finished
     {
-        // The caller gave up before even reading the first batch.
+        // Either the caller gave up before even reading the first batch, or
+        // the source is exhausted. In the second case, staying in the loop
+        // would **hold the worker thread** until the cursor is dropped: a
+        // cursor left in a scope after being drained then blocked every
+        // following execution on the same session — the driver has a single
+        // thread. The cursor knows it is finished and will not pull anymore.
         return;
     }
 
     while let Some(reply) = pulls.blocking_recv() {
-        if finished {
-            let _ = reply.send(Ok(Pulled::Done { truncated }));
-            // `return` and not `continue`: the source is exhausted, there is
-            // nothing left to produce, and staying in the loop **holds the worker
-            // thread** until the cursor is dropped. A cursor left in a scope after
-            // being drained then blocked every following execution on the same
-            // session — the driver has a single thread. `Cursor::next_batch`
-            // short-circuits on its own `finished`: it will not pull anymore, and
-            // the channel closing cannot be reported to it as an error.
-            return;
-        }
         let filled = match fill(
             &mut rows,
             &mut builders,
@@ -366,20 +383,20 @@ fn stream_rows(
                 return;
             }
         };
-        finished = filled.finished;
         truncated |= filled.truncated;
 
-        let nothing_left = filled.rows == 0;
-        let answer = if nothing_left {
+        let answer = if filled.rows == 0 {
             Ok(Pulled::Done { truncated })
+        } else if filled.finished {
+            finish_batch(&mut builders, &schema).map(|batch| Pulled::Last { batch, truncated })
         } else {
             finish_batch(&mut builders, &schema).map(Pulled::Batch)
         };
         let failed = answer.is_err();
-        // `nothing_left` joins the two other stop causes for the same reason as
-        // above: once `Done` is announced, keeping the thread only serves to
-        // block the next query.
-        if reply.send(answer).is_err() || failed || nothing_left {
+        // A finished source joins the two other stop causes for the same reason
+        // as above: once the end is announced, keeping the thread only serves
+        // to block the next query.
+        if reply.send(answer).is_err() || failed || filled.finished {
             return;
         }
     }

@@ -312,6 +312,78 @@ async fn a_preview_whose_limited_sql_ended_normally_still_exports() {
     );
 }
 
+/// The audit's scenario for issue #183: two columns named `id`, from an alias
+/// and from a join. JSON and JSON Lines are refused before the destination is
+/// touched; CSV keeps both columns by position.
+#[tokio::test]
+async fn duplicate_column_names_refuse_json_and_keep_the_file() {
+    let (executor, connection) = sqlite_executor();
+    let session = connect(&executor, &connection).await;
+    for fixture in [
+        "CREATE TABLE a (id INTEGER)",
+        "CREATE TABLE b (id INTEGER)",
+        "INSERT INTO a VALUES (1)",
+        "INSERT INTO b VALUES (2)",
+    ] {
+        execute(
+            &executor,
+            connection.id,
+            session,
+            fixture,
+            ExecLimits::default().writable(),
+        )
+        .await;
+    }
+
+    for text in ["SELECT 1 AS id, 2 AS id", "SELECT * FROM a, b"] {
+        let (result, _) = execute(
+            &executor,
+            connection.id,
+            session,
+            text,
+            ExecLimits::default(),
+        )
+        .await;
+        for format in [ExportFormat::Json, ExportFormat::JsonLines] {
+            let (folder, destination) = existing_document();
+            let refused = executor
+                .dispatch(
+                    Actor::Human,
+                    Command::Export {
+                        connection: connection.id,
+                        result,
+                        format,
+                        destination: destination.clone(),
+                    },
+                    &CancelToken::new(),
+                )
+                .await;
+
+            let Err(OxynError::Config(message)) = &refused else {
+                panic!("{text} as {format}: expected a refusal, got {refused:?}");
+            };
+            assert!(message.contains("\"id\""), "{message}");
+            assert!(message.contains("aliases"), "{message}");
+            assert_untouched(&folder, &destination);
+        }
+
+        let (_folder, destination) = existing_document();
+        let exported = executor
+            .dispatch(
+                Actor::Human,
+                export(connection.id, result, &destination),
+                &CancelToken::new(),
+            )
+            .await
+            .expect("CSV keeps columns by position");
+        assert!(matches!(exported, Outcome::Exported { rows: 1, .. }));
+        assert_eq!(
+            std::fs::read_to_string(&destination).expect("export reread"),
+            "id,id\n1,2\n"
+        );
+    }
+}
+
 /// Reproduces the audit's scenario: an export whose token is already
 /// cancelled must not empty the document the user pointed it at.
 #[tokio::test]
