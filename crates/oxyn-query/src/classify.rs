@@ -494,9 +494,10 @@ fn classify_fragment(
             Some("no statement was read".to_owned()),
         ),
         Err(err) => {
+            // Not the parser's message: it quotes the token it stopped at,
+            // which can be a password literal (I-03). The span locates it.
             tracing::debug!(
                 span = ?fragment.span,
-                error = %err,
                 "statement could not be parsed: classified as Unknown"
             );
             (Facts::UNKNOWN, Basis::Unparsed, Some(err.to_string()))

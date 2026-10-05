@@ -14,7 +14,8 @@
 //! `sqlx` is capped the same way, whatever its level: its `sqlx::query` events
 //! carry the statement's whole text — at `warn` for any statement slower than a
 //! second —, and a statement holds what the user typed, `ALTER ROLE … PASSWORD`
-//! included.
+//! included. So is `sqlparser`, which logs the statement it is given and the
+//! tokens it reads at `debug`.
 //!
 //! Both outputs go through [`layer`], so the file holds no more than stderr.
 
@@ -96,7 +97,18 @@ where
         .with_filter(filter_fn(|meta| {
             !oxyn_ai::external::is_protocol_chatter(meta.target(), meta.level())
                 && meta.target() != STATEMENT_TEXT
+                && !is_parser_chatter(meta.target())
         }))
+}
+
+/// `sqlparser` logs, through the `log` facade bridged into `tracing`, the
+/// whole statement before parsing it and every token it looks at, string
+/// literals included.
+fn is_parser_chatter(target: &str) -> bool {
+    target == PARSER
+        || target
+            .strip_prefix(PARSER)
+            .is_some_and(|rest| rest.starts_with("::"))
 }
 
 /// The file's layer, as [`start`] installs it: the tests read what it wrote.
@@ -109,6 +121,9 @@ where
 
 /// The target `sqlx` logs statements under, text included.
 const STATEMENT_TEXT: &str = "sqlx::query";
+
+/// The SQL parser's crate, every module of which may quote the statement.
+const PARSER: &str = "sqlparser";
 
 #[cfg(test)]
 mod tests;
