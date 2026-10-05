@@ -205,6 +205,15 @@ still writes to a temporary table, and holds back nothing that
 leaves the transaction — `dblink_exec` to another connection,
 `pg_terminate_backend`, `set_config`, advisory locks.
 
+A request made **only** of bare transaction verbs — `START TRANSACTION`,
+`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`, each parsed as such,
+never a `BEGIN … END` block — is not a read, and is not bounded: it calls no
+function, and MySQL cannot apply the bound inside an open transaction, so a
+bounded `COMMIT` or `ROLLBACK` was refused and the transaction could never be
+settled. Settling a transaction the user opened is not a new write: the writes
+it holds were each confirmed under the connection's name. A verb followed or
+preceded by any other statement keeps the bound.
+
 **Concrete failure:** `SELECT public.audit_touch()` in a production
 console, where the function inserts a row: the write went out without
 confirmation, classified as a read.

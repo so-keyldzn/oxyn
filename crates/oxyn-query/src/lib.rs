@@ -67,7 +67,8 @@ pub mod redact;
 pub mod split;
 
 pub use classify::{
-    Basis, Classification, StatementInfo, classify, classify_language, reclassify, validate,
+    Basis, Classification, StatementInfo, classify, classify_language, only_controls_transactions,
+    reclassify, validate,
 };
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;

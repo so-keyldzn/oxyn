@@ -302,6 +302,48 @@ pub fn reclassify(request: &ExecRequest) -> Classification {
     classify_language(request.language, &request.text)
 }
 
+/// Does the request do nothing but begin, end or mark a transaction?
+///
+/// `oxyn-exec` leaves such a request out of the read-only bound of a
+/// production read: a `COMMIT` that calls no function has nothing for the
+/// bound to refuse, and a driver that cannot apply the bound inside an open
+/// transaction — MySQL — would otherwise refuse the very statement that
+/// settles it (issue #182). Stricter than
+/// [`ExecRequest::transaction_control`], which over-reads on purpose: every
+/// statement must parse to a bare transaction verb, and a `BEGIN … END` block,
+/// which can hold anything, never does.
+#[must_use]
+pub fn only_controls_transactions(request: &ExecRequest) -> bool {
+    let Some(dialect) = request.language.sql_dialect() else {
+        return false;
+    };
+    let grammar = parser_dialect(dialect);
+    let fragments = split::split(&request.text, dialect);
+    !fragments.is_empty()
+        && fragments.iter().all(|fragment| {
+            !fragment.unreadable_comment
+                && Parser::parse_sql(grammar, fragment.text).is_ok_and(|parsed| {
+                    !parsed.is_empty() && parsed.iter().all(is_bare_transaction_verb)
+                })
+        })
+}
+
+fn is_bare_transaction_verb(statement: &Statement) -> bool {
+    match statement {
+        Statement::StartTransaction {
+            statements,
+            exception,
+            has_end_keyword,
+            ..
+        } => statements.is_empty() && exception.is_none() && !has_end_keyword,
+        Statement::Commit { .. }
+        | Statement::Rollback { .. }
+        | Statement::Savepoint { .. }
+        | Statement::ReleaseSavepoint { .. } => true,
+        _ => false,
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Facts of a statement
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1379,6 +1421,52 @@ mod tests {
     #[case::string("SELECT 'COMMIT'")]
     fn the_rest_is_not(#[case] sql: &str) {
         assert!(!pg(sql).transaction_control, "{sql}");
+    }
+
+    fn mysql_request(sql: &str) -> ExecRequest {
+        ExecRequest::new(QueryLanguage::Sql(SqlDialect::MySql), sql)
+    }
+
+    /// What settles or opens a transaction, and nothing else: left out of
+    /// the read-only bound of a production read (issue #182).
+    #[rstest]
+    #[case::start("START TRANSACTION")]
+    #[case::begin("BEGIN")]
+    #[case::commit("COMMIT")]
+    #[case::commit_and_chain("COMMIT AND CHAIN")]
+    #[case::rollback("ROLLBACK")]
+    #[case::rollback_to("ROLLBACK TO SAVEPOINT s1")]
+    #[case::savepoint("SAVEPOINT s1")]
+    #[case::release("RELEASE SAVEPOINT s1")]
+    #[case::commented("/* settle */ commit;")]
+    #[case::two_verbs("COMMIT; START TRANSACTION")]
+    fn a_bare_transaction_verb_only_controls_a_transaction(#[case] sql: &str) {
+        assert!(only_controls_transactions(&mysql_request(sql)), "{sql}");
+    }
+
+    /// Anything else keeps the bound: a read that may call a writing
+    /// function, a verb hiding a statement after it, a `BEGIN … END` block, a
+    /// text that does not parse or is not SQL.
+    #[rstest]
+    #[case::read("SELECT audit_touch()")]
+    #[case::then_a_read("COMMIT; SELECT audit_touch()")]
+    #[case::before_a_read("SELECT audit_touch(); ROLLBACK")]
+    #[case::empty("")]
+    #[case::comment_only("-- COMMIT")]
+    #[case::unparsed("ROLLBACK WHATEVER")]
+    fn the_rest_does_not(#[case] sql: &str) {
+        assert!(!only_controls_transactions(&mysql_request(sql)), "{sql}");
+    }
+
+    #[test]
+    fn a_begin_block_does_not_only_control_a_transaction() {
+        let request = ExecRequest::new(
+            QueryLanguage::Sql(SqlDialect::BigQuery),
+            "BEGIN SELECT audit_touch(); END",
+        );
+        assert!(!only_controls_transactions(&request));
+        let opaque = ExecRequest::new(QueryLanguage::RedisCommand, "MULTI");
+        assert!(!only_controls_transactions(&opaque));
     }
 
     #[test]
