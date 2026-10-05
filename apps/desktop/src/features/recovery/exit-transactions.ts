@@ -41,6 +41,11 @@ export interface ExitHold {
 /** `null` while no exit is held. */
 export const exitHold = createStore<ExitHold | null>(null)
 
+// Bumped by every listing and every cancellation: a `resolveExit` still
+// awaiting a statement then sends nothing more, and never touches the hold
+// or asks for the scope of a decision that is no longer its own.
+let generation = 0
+
 /** A listed transaction, with the state to show and the console's name. */
 export interface ShownTransaction extends ExitTransaction {
   console: string
@@ -84,6 +89,7 @@ export function holdExit(
   transactions: Array<ExitTransaction>,
   scope: ExitScope = "application"
 ) {
+  generation += 1
   exitHold.setState((current) => ({
     transactions,
     scope,
@@ -96,6 +102,7 @@ export function holdExit(
 
 /** `exitCancelled`, or this dialog's own Cancel. */
 export function releaseExit() {
+  generation += 1
   exitHold.setState(() => null)
 }
 
@@ -117,6 +124,11 @@ const STATEMENT: Record<ExitDecision, string> = {
  *
  * `pending` is what the dialog still shows open or unknown. A `COMMIT` is not
  * sent to a session whose `COMMIT` already failed here.
+ *
+ * Cancelled meanwhile — here, from another window, or replaced by a new
+ * listing —, it sends nothing more: the statement already sent keeps its
+ * outcome, which its session reports, and the sessions not reached yet keep
+ * their transaction, as the dialog promises.
  */
 export async function resolveExit(
   decision: ExitDecision,
@@ -124,6 +136,8 @@ export async function resolveExit(
 ) {
   const hold = exitHold.state
   if (!hold || hold.busy) return
+  const own = generation
+  const stillOwn = () => own === generation
   const targets = pending.filter(
     (transaction) =>
       decision === "rollback" ||
@@ -133,12 +147,15 @@ export async function resolveExit(
   for (const transaction of targets) {
     const failure = await send(decision, transaction)
     if (failure !== null) {
+      // A failed `COMMIT` is remembered by whichever decision is held now,
+      // so that none sends it again (I-13); the message is this one's only.
+      const shown = stillOwn()
       exitHold.setState((current) =>
         current
           ? {
               ...current,
-              busy: null,
-              error: failure,
+              busy: shown ? null : current.busy,
+              error: shown ? failure : current.error,
               commitFailed:
                 decision === "commit"
                   ? [...current.commitFailed, transaction.session]
@@ -148,12 +165,11 @@ export async function resolveExit(
       )
       return
     }
+    if (!stillOwn()) return
   }
   update({ busy: null })
-  // Cancelled meanwhile: the exit is no longer asked for.
-  if (exitHold.state === null) return
-  await askAgain(exitHold.state.scope).catch((error: unknown) => {
-    update({ error: message(error) })
+  await askAgain(hold.scope).catch((error: unknown) => {
+    if (stillOwn()) update({ error: message(error) })
   })
 }
 

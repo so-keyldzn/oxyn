@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  cancelExit,
   commitBlocked,
   exitHold,
   holdExit,
@@ -14,6 +15,8 @@ const backend = vi.hoisted(() => ({
   sent: [] as Array<{ session: string; sql: string }>,
   /** Sessions whose statement fails, with the server's message. */
   failing: new Map<string, string>(),
+  /** Sessions whose answer waits until the promise settles. */
+  held: new Map<string, Promise<void>>(),
   exits: 0,
   cancels: 0,
   closes: 0,
@@ -23,19 +26,18 @@ vi.mock("@/lib/ipc/consoles", async () => {
   const { BackendError } = await import("@/lib/ipc/client")
   return {
     consoles: {
-      run: (
+      run: async (
         _command: string,
         _connection: string,
         session: string,
         run: { sql: string }
       ) => {
         backend.sent.push({ session, sql: run.sql })
+        await backend.held.get(session)
         const failure = backend.failing.get(session)
         if (failure)
-          return Promise.reject(
-            new BackendError({ message: failure, retryable: false })
-          )
-        return Promise.resolve({
+          throw new BackendError({ message: failure, retryable: false })
+        return {
           type: "executed",
           result: "r",
           columns: [],
@@ -45,7 +47,7 @@ vi.mock("@/lib/ipc/consoles", async () => {
           cancelled: false,
           truncated: false,
           rowLimitUnverified: false,
-        })
+        }
       },
     },
   }
@@ -92,6 +94,7 @@ describe("resolving an exit held by transactions", () => {
     releaseExit()
     backend.sent = []
     backend.failing.clear()
+    backend.held.clear()
     backend.exits = 0
     backend.cancels = 0
     backend.closes = 0
@@ -156,6 +159,89 @@ describe("resolving an exit held by transactions", () => {
     await resolving
     expect(backend.exits).toBe(0)
   })
+
+  /** Holds the first session's answer until the returned function is called. */
+  function holdFirstAnswer() {
+    let answer = () => {}
+    backend.held.set(
+      "s1",
+      new Promise<void>((resolve) => {
+        answer = resolve
+      })
+    )
+    return () => answer()
+  }
+
+  describe.each(["commit", "rollback"] as const)(
+    "cancelled while the first %s waits for its answer",
+    (decision) => {
+      const sql = decision === "commit" ? "COMMIT" : "ROLLBACK"
+
+      it("sends nothing to the sessions not reached yet", async () => {
+        const listed = [transaction("s1"), transaction("s2")]
+        holdExit(listed)
+        const answer = holdFirstAnswer()
+        const resolving = resolveExit(decision, listed)
+        cancelExit()
+        answer()
+        await resolving
+        expect(backend.sent).toEqual([{ session: "s1", sql }])
+        expect(backend.cancels).toBe(1)
+        expect(backend.exits).toBe(0)
+        expect(exitHold.state).toBeNull()
+      })
+
+      it("stops the same way when another window cancelled the exit", async () => {
+        const listed = [transaction("s1"), transaction("s2")]
+        holdExit(listed)
+        const answer = holdFirstAnswer()
+        const resolving = resolveExit(decision, listed)
+        releaseExit()
+        answer()
+        await resolving
+        expect(backend.sent).toEqual([{ session: "s1", sql }])
+        expect(backend.exits).toBe(0)
+      })
+
+      it("leaves a new decision untouched by the old one's answer", async () => {
+        const listed = [transaction("s1"), transaction("s2")]
+        holdExit(listed)
+        const answer = holdFirstAnswer()
+        const resolving = resolveExit(decision, listed)
+        cancelExit()
+        holdExit(listed, "window")
+        answer()
+        await resolving
+        expect(backend.sent).toEqual([{ session: "s1", sql }])
+        expect(backend.exits).toBe(0)
+        expect(backend.closes).toBe(0)
+        expect(exitHold.state).toMatchObject({
+          scope: "window",
+          busy: null,
+          error: null,
+        })
+      })
+
+      it("keeps quiet about a failure that answers after the cancellation", async () => {
+        const listed = [transaction("s1"), transaction("s2")]
+        holdExit(listed)
+        backend.failing.set("s1", "the connection was lost")
+        const answer = holdFirstAnswer()
+        const resolving = resolveExit(decision, listed)
+        cancelExit()
+        holdExit(listed)
+        answer()
+        await resolving
+        expect(backend.sent).toEqual([{ session: "s1", sql }])
+        expect(exitHold.state?.error).toBeNull()
+        // A failed COMMIT is never sent again from here, whichever decision
+        // learns of it (I-13).
+        expect(exitHold.state?.commitFailed).toEqual(
+          decision === "commit" ? ["s1"] : []
+        )
+      })
+    }
+  )
 
   it("shows the listing's states until a statement runs, then the sessions' own", () => {
     holdExit([transaction("s1"), transaction("s2")])
