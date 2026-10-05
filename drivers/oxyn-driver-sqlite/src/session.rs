@@ -144,6 +144,7 @@ impl Session for SqliteSession {
         let started = Instant::now();
         let (pulls, orders) = mpsc::unbounded_channel();
         let (start, opened) = oneshot::channel();
+        let read_only = request.limits.read_only;
 
         let work = self.worker.start_stream(Box::new(StreamJob {
             request,
@@ -153,9 +154,15 @@ impl Session for SqliteSession {
         }))?;
 
         // It is during this wait that SQLite computes the first batch — a whole
-        // `count(*)`, for instance. Abandoning this future interrupts the task:
-        // see `WorkerHandle::await_reply`.
-        let begun = self.worker.await_reply(opened, cancel, work).await?;
+        // `count(*)`, or every change of a `RETURNING`. Abandoning this future
+        // interrupts the task: see `WorkerHandle::await_reply`. A request that
+        // may write waits, past a Stop, for the engine to say how it ended: the
+        // token firing proves nothing about it (I-13).
+        let begun = if read_only {
+            self.worker.await_reply(opened, cancel, work).await?
+        } else {
+            self.worker.await_verdict(opened, cancel, work).await?
+        };
         Ok(Box::new(SqliteCursor::new(
             handle,
             begun,
@@ -435,10 +442,10 @@ mod tests {
     #[tokio::test]
     async fn the_automatic_rollback_after_a_stop_is_observed() {
         // The scenario: `BEGIN`, a write, then Stop on an endless `INSERT`.
-        // SQLite rolls the whole transaction back on `SQLITE_INTERRUPT`, while
-        // `execute` returns `Cancelled` as soon as the token fires — before
-        // the carrier thread is even out of `sqlite3_step`. A state read then
-        // must come after that step, not before.
+        // SQLite rolls the whole transaction back on `SQLITE_INTERRUPT`, the
+        // earlier write included: `execute` reports the engine's interruption,
+        // ambiguous for a write, not a cancellation (issue #181). A state read
+        // then must come after that step, not before.
         let dir = tempfile::tempdir().expect("temporary directory");
         let db_path = dir.path().join("transactions.sqlite");
         let journal = dir.path().join("transactions.sqlite-journal");
@@ -474,7 +481,7 @@ mod tests {
         cancel_token.cancel();
         match endless_write.await {
             Ok(_) => panic!("an endless INSERT only ends interrupted"),
-            Err(err) => assert!(err.is_cancelled(), "{err:?}"),
+            Err(err) => assert_eq!(err.class(), oxyn_core::ErrorClass::Ambiguous, "{err:?}"),
         }
 
         assert_eq!(

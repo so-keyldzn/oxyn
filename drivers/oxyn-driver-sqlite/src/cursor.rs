@@ -22,6 +22,18 @@
 //! and [`SqliteSession::cancel`](crate::SqliteSession) refuses. The cancellation
 //! path is the [`CancelToken`], and it is the only one.
 //!
+//! # A Stop does not decide how a write ended
+//!
+//! The token firing proves nothing about a statement that may write: a
+//! `RETURNING` makes all its changes at its first step, before its rows are
+//! read. A read stopped is cancelled; a write is reported as the engine ends
+//! it. Its last batch carries the end of the statement
+//! ([`Pulled::Last`]), so a Stop arriving after it finds the cursor finished;
+//! a Stop arriving before, while a batch is requested, waits for the worker
+//! thread's verdict; and a Stop at rest, with the statement still open, is an
+//! [`OxynError::OutcomeUnknown`] — never a cancellation the engine did not
+//! report ([I-13](../../../CLAUDE.md#i-13)).
+//!
 //! # After a cancellation, the cursor does not resume
 //!
 //! An interrupted statement leaves the engine at a point nothing allows resuming
@@ -37,7 +49,7 @@ use oxyn_core::{CancelToken, ExecStats, OxynError, Result, StatementHandle};
 use oxyn_driver::Cursor;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::error;
+use crate::error::{self, Effect};
 use crate::interrupt::WorkId;
 use crate::stream::{Pull, Pulled, StreamStart};
 use crate::worker::WorkerHandle;
@@ -54,6 +66,8 @@ pub struct SqliteCursor {
     /// The worker thread task that streams this flow: an interruption targets
     /// only it.
     work: WorkId,
+    /// What the statement could do: decides what a Stop may claim.
+    effect: Effect,
     cancel: CancelToken,
     stats: ExecStats,
     started: Instant,
@@ -99,6 +113,7 @@ impl SqliteCursor {
             pulls,
             worker,
             work,
+            effect: start.effect,
             cancel,
             stats,
             started,
@@ -110,6 +125,11 @@ impl SqliteCursor {
             Pulled::Batch(batch) => {
                 cursor.record(&batch);
                 cursor.pending = Some(batch);
+            }
+            Pulled::Last { batch, truncated } => {
+                cursor.record(&batch);
+                cursor.pending = Some(batch);
+                cursor.close(truncated);
             }
             Pulled::Done { truncated } => cursor.close(truncated),
         }
@@ -137,15 +157,31 @@ impl SqliteCursor {
         }
     }
 
-    /// Returns the cancellation requested before any batch was claimed.
+    /// Returns the stop requested before any batch was claimed.
     ///
     /// **Without interrupting**: no request is in flight, so the worker thread is
     /// not in `sqlite3_step`. Setting the interruption flag on an engine at rest
     /// would cancel nothing and could land on the next statement.
+    ///
+    /// A read is cancelled. A write is not known to be: its statement is still
+    /// open, after a first step that may already have applied it, and what
+    /// releasing it keeps is not established here.
     fn abort(&mut self) -> OxynError {
         self.close(true);
-        OxynError::Cancelled
+        match self.effect {
+            Effect::ReadOnly => OxynError::Cancelled,
+            Effect::Mutating => stopped_write(),
+        }
     }
+}
+
+/// The error of a write stopped while its statement was still open.
+fn stopped_write() -> OxynError {
+    OxynError::OutcomeUnknown(
+        "the write was stopped after it started, and SQLite may already have applied it; \
+         check the data before running it again"
+            .to_owned(),
+    )
 }
 
 #[async_trait]
@@ -175,16 +211,25 @@ impl Cursor for SqliteCursor {
             return Err(error::closed());
         }
 
-        // The token is cloned: `await_reply` borrows it, and `self` is already
+        // The token is cloned: the wait borrows it, and `self` is already
         // mutably borrowed. From here on, the worker thread may be in
-        // `sqlite3_step`: if this future is abandoned, `await_reply` interrupts
-        // the stream's task.
+        // `sqlite3_step`: if this future is abandoned, the wait interrupts the
+        // stream's task. A read lets go at the Stop; a write waits for what the
+        // engine says of it.
         let cancel = self.cancel.clone();
-        let pulled = self.worker.await_reply(answer, &cancel, self.work).await;
+        let pulled = match self.effect {
+            Effect::ReadOnly => self.worker.await_reply(answer, &cancel, self.work).await,
+            Effect::Mutating => self.worker.await_verdict(answer, &cancel, self.work).await,
+        };
 
         match pulled {
             Ok(Pulled::Batch(batch)) => {
                 self.record(&batch);
+                Ok(Some(batch))
+            }
+            Ok(Pulled::Last { batch, truncated }) => {
+                self.record(&batch);
+                self.close(truncated);
                 Ok(Some(batch))
             }
             Ok(Pulled::Done { truncated }) => {
