@@ -25,12 +25,12 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
-use oxyn_ai::AgentSession;
 use oxyn_ai::external::mcp::ToolTurns;
 use oxyn_ai::external::session::ExternalSession;
+use oxyn_ai::{AgentSession, CallId};
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, CancelToken, ConnectionId, ConversationId, Environment,
     ExternalAgentConfig, PrivacyTier, ResultId, SessionId,
@@ -42,8 +42,9 @@ use tauri::ipc::Channel;
 use super::conversation::decisions::Decisions;
 use crate::ipc::IpcError;
 use crate::ipc::ai::{
-    AiEvent, AiUpdate, MentionView, NodeView, Selection, ThreadSummary, ThreadView,
+    AiEvent, AiUpdate, Ending, MentionView, NodeView, Selection, ThreadSummary, ThreadView,
 };
+use outbox::{FLUSH_EVERY, Outbox, is_fragment};
 
 /// Conversations kept per connection. Past it, the oldest idle one goes.
 const MAX_THREADS: usize = 64;
@@ -98,7 +99,13 @@ pub(crate) struct AiState {
     /// Held across « is one already there? » and « launch one »: without it,
     /// the panel's start and a question asked at the same moment would each
     /// see none, and launch two agents where the user asked for one.
-    pub(crate) launching: tokio::sync::Mutex<()>,
+    ///
+    /// One per connection, as the waiting agent is: a single lock for the
+    /// window made a slow agent start on one connection hold every other
+    /// connection's questions. See [`AiState::launch_lock`].
+    launching: Mutex<HashMap<ConnectionId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Model transports kept between questions.
+    pub(crate) transports: super::transports::Transports,
     /// Serializes legacy environment upgrades so two lists never mint competing references.
     pub(crate) environment_migration: tokio::sync::Mutex<()>,
     /// What this launch's prune removed, for the history panel to say.
@@ -162,6 +169,14 @@ impl fmt::Debug for AiState {
 }
 
 impl AiState {
+    /// The lock held while an agent for `connection` is looked for and
+    /// launched. Never removed — a lock replaced while held would let two
+    /// launches run under two locks —, and it costs one entry per connection
+    /// asked in during this session.
+    pub(crate) fn launch_lock(&self, connection: ConnectionId) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(self.launching.lock().entry(connection).or_default())
+    }
+
     /// The conversation to ask in: `id`'s, or a new one.
     pub(crate) fn thread_for(
         &self,
@@ -171,12 +186,13 @@ impl AiState {
         if let Some(id) = id {
             return self.find(connection, id);
         }
-        let thread = Arc::new(Thread {
+        let thread = Arc::new_cyclic(|me| Thread {
             // The store's identity from the start, whether or not a row is
             // ever written for it: the panel keeps this id across a restart.
             id: ConversationId::new(),
             created_at_ms: now_ms(),
             state: Mutex::new(ThreadState::default()),
+            me: me.clone(),
         });
         let mut threads = self.threads.lock();
         let list = threads.entry(connection).or_default();
@@ -249,10 +265,11 @@ impl AiState {
                 withheld: node.withheld,
             });
         }
-        let thread = Arc::new(Thread {
+        let thread = Arc::new_cyclic(|me| Thread {
             id: restored.id,
             created_at_ms: restored.created_at_ms,
             state: Mutex::new(state),
+            me: me.clone(),
         });
         self.threads
             .lock()
@@ -427,6 +444,9 @@ pub(crate) struct Thread {
     pub(crate) id: ConversationId,
     created_at_ms: u64,
     state: Mutex<ThreadState>,
+    /// Itself, weakly: what the timer that sends held fragments reaches it
+    /// through, without keeping a deleted conversation alive.
+    me: Weak<Thread>,
 }
 
 // A conversation quotes answers, statements and server messages: counted,
@@ -457,9 +477,44 @@ struct ThreadState {
     nodes: Vec<Node>,
     selections: HashMap<Option<u32>, u32>,
     channel: Option<Channel<AiUpdate>>,
+    /// Fragments kept in the log already, not yet sent — see [`outbox`].
+    outbox: Outbox,
     running: Option<Running>,
     run: RunState,
     agent: Option<AgentLink>,
+}
+
+impl ThreadState {
+    /// Sends an event to whoever listens.
+    ///
+    /// A failed send drops nothing: the panel may be reloading, and the next
+    /// event — the run's end above all — must still be tried. Dropping the
+    /// channel on the first failure lost `finished`, and the panel waited for
+    /// it for ever. A view replaces the channel.
+    fn send(&self, node: u32, event: AiEvent) {
+        if let Some(channel) = &self.channel
+            && channel.send(AiUpdate { node, event }).is_err()
+        {
+            tracing::debug!(node, "an assistant event did not reach the panel");
+        }
+    }
+
+    /// Sends what the outbox holds.
+    fn flush(&mut self) {
+        if let Some((node, event)) = self.outbox.take() {
+            self.send(node, event);
+        }
+    }
+
+    /// Holds a fragment, sending first the block it does not continue.
+    /// Answers whether the outbox is due.
+    fn hold(&mut self, node: u32, event: AiEvent) -> bool {
+        let (displaced, due) = self.outbox.hold(node, event);
+        if let Some((node, event)) = displaced {
+            self.send(node, event);
+        }
+        due
+    }
 }
 
 struct Running {
@@ -555,7 +610,15 @@ pub(crate) struct LinkedAgent {
 struct RunState {
     scope: Option<Scope>,
     next_call: u32,
-    current: Option<CurrentCall>,
+    /// The calls between their announcement and their report, by the identity
+    /// the runtime gave each. An external agent's calls overlap: a single slot
+    /// let the second overwrite the first, and their reports, rows and
+    /// approval cards landed on each other's.
+    calls: HashMap<CallId, CurrentCall>,
+    /// `finished` or `failed`, held until [`Thread::finish`] sends it with
+    /// the run marked ended — under one lock, so a follow-up sent on
+    /// `finished` never finds the conversation « still answering ».
+    ending: Vec<AiEvent>,
     thinking_since: Option<Instant>,
     /// A command that may change data reached the executor during this run
     /// and was not refused. After it, a failure is never « ask again »: the
@@ -728,6 +791,8 @@ impl Thread {
             node,
             token: token.clone(),
         });
+        // Whatever is still held belongs to the panel listening until now.
+        state.flush();
         state.channel = Some(channel);
         state.run = RunState {
             scope: Some(scope),
@@ -756,18 +821,36 @@ impl Thread {
     }
 
     /// Ends the run: whatever happened, the conversation takes questions again.
-    pub(crate) fn finish(&self, node: u32) {
+    ///
+    /// Sends what is held — fragments, then the run's `finished` or `failed` —
+    /// and marks the run ended under the same lock: whoever reads the ending
+    /// can ask again at once. Answers the ending the run reached, when it
+    /// reached one.
+    pub(crate) fn finish(&self, node: u32) -> Option<Ending> {
         self.close_thinking(node);
         let mut state = self.state.lock();
-        if state
+        state.flush();
+        state.updated_at_ms = now_ms();
+        if !state
             .running
             .as_ref()
             .is_some_and(|running| running.node == node)
         {
-            state.running = None;
+            return None;
         }
-        state.run.current = None;
-        state.updated_at_ms = now_ms();
+        let mut reached = None;
+        for event in std::mem::take(&mut state.run.ending) {
+            if let AiEvent::Finished { ending } = &event {
+                reached.get_or_insert(*ending);
+            }
+            if let Some(target) = state.nodes.get_mut(node as usize) {
+                keep(&mut target.log, event.clone());
+            }
+            state.send(node, event);
+        }
+        state.running = None;
+        state.run.calls.clear();
+        reached
     }
 
     /// Asks the running node to stop. Returns whether one was running.
@@ -795,6 +878,9 @@ impl Thread {
     pub(crate) fn view(&self, channel: Option<Channel<AiUpdate>>) -> ThreadView {
         let mut state = self.state.lock();
         if channel.is_some() {
+            // Already in the log this view returns: sent on the new channel
+            // too, they would show twice.
+            state.outbox = Outbox::default();
             state.channel = channel;
         }
         ThreadView {
@@ -1003,6 +1089,10 @@ impl Thread {
     /// Under one lock, so a reload never interleaves with a live event. A
     /// closed channel is not an incident: the panel reloaded or closed, the
     /// conversation continues, and opening it again attaches a new channel.
+    ///
+    /// Streamed fragments are held and merged before they are sent — see
+    /// [`Outbox`]. The running node's `finished` or `failed` is held until
+    /// [`Thread::finish`].
     pub(crate) fn emit(&self, node: u32, event: AiEvent) {
         let thinking = matches!(
             event,
@@ -1011,24 +1101,57 @@ impl Thread {
         if !thinking {
             self.close_thinking(node);
         }
-        let mut state = self.state.lock();
-        if thinking && state.run.thinking_since.is_none() {
-            state.run.thinking_since = Some(Instant::now());
-        }
-        if let Some(channel) = &state.channel
-            && channel
-                .send(AiUpdate {
-                    node,
-                    event: event.clone(),
-                })
-                .is_err()
-        {
-            state.channel = None;
-        }
-        let Some(target) = state.nodes.get_mut(node as usize) else {
-            return;
+        let schedule = {
+            let mut state = self.state.lock();
+            if thinking && state.run.thinking_since.is_none() {
+                state.run.thinking_since = Some(Instant::now());
+            }
+            let ending = matches!(event, AiEvent::Finished { .. } | AiEvent::Failed { .. });
+            if ending
+                && state
+                    .running
+                    .as_ref()
+                    .is_some_and(|running| running.node == node)
+            {
+                state.run.ending.push(event);
+                return;
+            }
+            if let Some(target) = state.nodes.get_mut(node as usize) {
+                keep(&mut target.log, event.clone());
+            }
+            if is_fragment(&event) {
+                if state.hold(node, event) {
+                    state.flush();
+                    false
+                } else {
+                    !std::mem::replace(&mut state.outbox.scheduled, true)
+                }
+            } else {
+                state.flush();
+                state.send(node, event);
+                false
+            }
         };
-        keep(&mut target.log, event);
+        if schedule {
+            self.flush_later();
+        }
+    }
+
+    /// Sends the held fragments once [`FLUSH_EVERY`] has passed, if nothing
+    /// sent them before.
+    ///
+    /// Detached, and deliberately: it lives [`FLUSH_EVERY`] at most and holds
+    /// the conversation weakly, so it outlives neither.
+    fn flush_later(&self) {
+        let thread = self.me.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(FLUSH_EVERY).await;
+            if let Some(thread) = thread.upgrade() {
+                let mut state = thread.state.lock();
+                state.outbox.scheduled = false;
+                state.flush();
+            }
+        });
     }
 
     fn close_thinking(&self, node: u32) {
@@ -1051,8 +1174,10 @@ impl Thread {
         self.state.lock().run.wrote
     }
 
+    /// Opens the row of call `key`, numbered in the order calls arrive.
     pub(crate) fn open_call(
         &self,
+        key: CallId,
         tool: &str,
         command: &'static str,
         connection: Option<ConnectionId>,
@@ -1061,34 +1186,43 @@ impl Thread {
         let mut state = self.state.lock();
         let id = state.run.next_call;
         state.run.next_call = id.saturating_add(1);
-        state.run.current = Some(CurrentCall {
-            id,
-            tool: tool.to_owned(),
-            command,
-            connection,
-            mutating,
-            announced: false,
-            cancelled: false,
-            rows: None,
-            result: None,
-        });
+        state.run.calls.insert(
+            key,
+            CurrentCall {
+                id,
+                tool: tool.to_owned(),
+                command,
+                connection,
+                mutating,
+                announced: false,
+                cancelled: false,
+                rows: None,
+                result: None,
+            },
+        );
     }
 
-    /// The open call, marked announced — or a placeholder that says nothing
-    /// about it but that it may change data.
-    pub(crate) fn announce(&self) -> CurrentCallView {
+    /// Call `key`, marked announced — or, never opened, a placeholder that
+    /// says nothing about it but that it may change data.
+    pub(crate) fn announce(&self, key: CallId) -> CurrentCallView {
         let mut state = self.state.lock();
-        let next = state.run.next_call;
-        let current = state.run.current.get_or_insert_with(|| CurrentCall {
-            id: next,
-            tool: "unknown".to_owned(),
-            command: "unknown",
-            connection: None,
-            mutating: true,
-            announced: false,
-            cancelled: false,
-            rows: None,
-            result: None,
+        let RunState {
+            calls, next_call, ..
+        } = &mut state.run;
+        let current = calls.entry(key).or_insert_with(|| {
+            let id = *next_call;
+            *next_call = id.saturating_add(1);
+            CurrentCall {
+                id,
+                tool: "unknown".to_owned(),
+                command: "unknown",
+                connection: None,
+                mutating: true,
+                announced: false,
+                cancelled: false,
+                rows: None,
+                result: None,
+            }
         });
         current.announced = true;
         CurrentCallView {
@@ -1100,26 +1234,23 @@ impl Thread {
         }
     }
 
-    pub(crate) fn mark_cancelled(&self, call: u32) {
-        if let Some(current) = self.state.lock().run.current.as_mut()
-            && current.id == call
-        {
+    pub(crate) fn mark_cancelled(&self, key: CallId) {
+        if let Some(current) = self.state.lock().run.calls.get_mut(&key) {
             current.cancelled = true;
         }
     }
 
     /// What a completed call measured, and the result it left for the user.
-    pub(crate) fn record_rows(&self, call: u32, rows: u64, result: Option<ResultId>) {
-        if let Some(current) = self.state.lock().run.current.as_mut()
-            && current.id == call
-        {
+    pub(crate) fn record_rows(&self, key: CallId, rows: u64, result: Option<ResultId>) {
+        if let Some(current) = self.state.lock().run.calls.get_mut(&key) {
             current.rows = Some(rows);
             current.result = result;
         }
     }
 
-    pub(crate) fn take_call(&self) -> Option<CurrentCall> {
-        self.state.lock().run.current.take()
+    /// Closes the row of call `key`, for its report.
+    pub(crate) fn take_call(&self, key: CallId) -> Option<CurrentCall> {
+        self.state.lock().run.calls.remove(&key)
     }
 
     /// The results this conversation's calls left in the executor, to release
@@ -1142,7 +1273,7 @@ impl Thread {
     }
 }
 
-/// A copy of the open call's facts, taken under the lock.
+/// A copy of a call's facts, taken under the lock.
 pub(crate) struct CurrentCallView {
     pub(crate) id: u32,
     pub(crate) tool: String,
@@ -1246,6 +1377,8 @@ fn now_ms() -> u64 {
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
 }
+
+mod outbox;
 
 #[cfg(test)]
 mod tests;

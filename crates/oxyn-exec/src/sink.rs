@@ -21,8 +21,13 @@
 //! ```ignore
 //! #[async_trait]
 //! impl CommandSink for MySink {
-//!     async fn dispatch(&self, actor: Actor, command: Command, cancel: &CancelToken)
-//!         -> DispatchOutcome
+//!     async fn dispatch(
+//!         &self,
+//!         _call: &CallHandle,
+//!         actor: Actor,
+//!         command: Command,
+//!         cancel: &CancelToken,
+//!     ) -> DispatchOutcome
 //!     {
 //!         match self.0.dispatch(actor, command, cancel).await {
 //!             DispatchReport::Completed { stats: Some(stats), .. } => {

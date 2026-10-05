@@ -52,6 +52,7 @@
 
 use oxyn_core::ConnectionId;
 
+use crate::call::CallId;
 use crate::error::AiError;
 use crate::runtime::{AgentOutcome, DispatchOutcome};
 
@@ -211,6 +212,9 @@ pub enum AgentEvent<'a> {
     /// [`CommandReported`](Self::CommandReported): UX-SPEC requires every
     /// command requested by the agent to be shown before its result.
     CommandSubmitted {
+        /// Which call this is: the same identity the sink receives, and the
+        /// report carries. Calls may overlap; this is what keeps them apart.
+        call: CallId,
         /// The tool's name, as the model requested it.
         tool: &'a str,
         /// The command's stable name, that of the audit log. The same string
@@ -228,6 +232,8 @@ pub enum AgentEvent<'a> {
 
     /// A command's execution report came back.
     CommandReported {
+        /// The call reported, as [`Self::CommandSubmitted`] announced it.
+        call: CallId,
         /// The tool's name, as the model requested it.
         tool: &'a str,
         /// What happened, **whole**: it is what the user has the right to
