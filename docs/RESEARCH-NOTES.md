@@ -842,11 +842,11 @@ Codex's 300 s and the request's five minutes coincide: either deadline wins
 within a few milliseconds. In both cases nothing runs, and the card says so —
 "Expired", or "Withdrawn: the agent stopped waiting" when Codex hangs up first.
 An approval given in the same millisecond runs; Codex has already told its
-model that the call expired, and a new attempt on its part waits for the first
-to be settled — an agent's calls go one by one
-(`crates/oxyn-ai/src/external/mcp/turn.rs`, "one call at a time") — then asks
-for approval again, on screen: never a silent replay
-([I-13](../CLAUDE.md#i-13)).
+model that the call expired, and a new attempt on its part is refused while
+the request still waits — no call of an agent runs while one of its requests is
+before the user (`crates/oxyn-ai/src/external/mcp/turn.rs`) — or, once the
+approval has taken it, asks for approval again, on screen: never a silent
+replay ([I-13](../CLAUDE.md#i-13)).
 
 **To redo** at every version bump of either adapter or of `@openai/codex`: a
 default timeout shorter than five minutes would make the call be given up

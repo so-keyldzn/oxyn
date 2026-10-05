@@ -218,13 +218,16 @@ fn describe_schema_on_an_empty_cache_reads_as_the_agent_then_describes() {
     let fixture = unexpanded(PrivacyTier::Metadata);
     let _guard = fixture.runtime.enter();
     let (sink, thread, actor, received) = sink_on(&fixture.backend, &fixture.open);
+    let call = CallHandle::new(CallId::fresh());
     thread.open_call(
+        call.id(),
         "describe_schema",
         "DescribeCatalog",
         Some(fixture.connection),
         false,
     );
     let outcome = fixture.runtime.block_on(sink.dispatch(
+        &call,
         actor,
         Command::DescribeCatalog {
             connection: fixture.connection,
@@ -281,13 +284,16 @@ fn refresh_catalog_lists_the_relations_of_each_schema() {
     let fixture = unexpanded(PrivacyTier::Metadata);
     let _guard = fixture.runtime.enter();
     let (sink, thread, actor, _) = sink_on(&fixture.backend, &fixture.open);
+    let call = CallHandle::new(CallId::fresh());
     thread.open_call(
+        call.id(),
         "refresh_catalog",
         "RefreshCatalog",
         Some(fixture.connection),
         false,
     );
     let outcome = fixture.runtime.block_on(sink.dispatch(
+        &call,
         actor,
         Command::RefreshCatalog {
             connection: fixture.connection,

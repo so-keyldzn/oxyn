@@ -53,7 +53,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use oxyn_ai::tools::SampleAsk;
 use oxyn_ai::{
-    DispatchOutcome, SampleReceipt, SampleRelease, context::RowSample, external::mcp::TierSource,
+    CallId, DispatchOutcome, SampleReceipt, SampleRelease, context::RowSample,
+    external::mcp::TierSource,
 };
 use oxyn_catalog::{CatalogCache, CatalogHandle, CatalogPath};
 use oxyn_core::{Actor, CancelToken, Command, PrivacyTier};
@@ -195,11 +196,12 @@ impl AgentSink {
     /// module: every refusal comes before anything is read.
     pub(super) async fn sample(
         &self,
+        key: CallId,
         actor: Actor,
         ask: SampleAsk,
         cancel: &CancelToken,
     ) -> DispatchOutcome {
-        let (call, _, _) = announce_call(&self.thread, self.node, None);
+        let (call, _, _) = announce_call(&self.thread, self.node, key, None);
         let Some(sampling) = &self.sampling else {
             return denied(
                 "this conversation cannot show the user an approval screen; nothing was read",
