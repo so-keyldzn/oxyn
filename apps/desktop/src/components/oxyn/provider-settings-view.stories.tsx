@@ -480,3 +480,30 @@ export const AnswerForThePreviousEndpointIsDropped: Story = {
     ).not.toBeInTheDocument()
   },
 }
+
+/**
+ * The backend caches a list by endpoint, not by key: a new key lists afresh,
+ * or it would be shown what the previous key was allowed to see.
+ */
+export const NewKeyListsAfresh: Story = {
+  args: { providers: [], agents: [] },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.type(
+      canvas.getByLabelText("Endpoint"),
+      "https://llm.example.test/v1"
+    )
+    await userEvent.type(canvas.getByLabelText("API key"), "sk-first")
+    await expect(await canvas.findByText("3 models available.")).toBeVisible()
+    await expect(args.onListDraftModels).toHaveBeenLastCalledWith(
+      expect.objectContaining({ baseUrl: "https://llm.example.test/v1" }),
+      false
+    )
+    await userEvent.type(canvas.getByLabelText("API key"), "-second")
+    await waitFor(() => expect(args.onListDraftModels).toHaveBeenCalledTimes(2))
+    await expect(args.onListDraftModels).toHaveBeenLastCalledWith(
+      expect.objectContaining({ baseUrl: "https://llm.example.test/v1" }),
+      true
+    )
+  },
+}

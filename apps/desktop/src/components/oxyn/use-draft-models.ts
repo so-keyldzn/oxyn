@@ -36,7 +36,8 @@ function messageOf(error: unknown) {
  * endpoint or the key drops the list shown.
  *
  * The key only travels inside the probe: it is never logged nor rendered, and
- * no cache of the screen is keyed on it (I-03).
+ * no cache of the screen is keyed on it (I-03). The last probe listed is kept,
+ * by reference, only to tell a new key from the same one.
  */
 export function useDraftModels(
   inputs: ProbeInputs | null,
@@ -94,6 +95,10 @@ export function useDraftModels(
     setTest({ status: "idle" })
   }, [kind, endpoint, key])
 
+  // The backend caches a list by kind and endpoint, never by key: after a new
+  // key, the cached list is the one the previous key was allowed to see.
+  const listedWith = React.useRef<ModelProbe | null>(null)
+
   React.useEffect(() => {
     const turn = ++latest.current
     if (auto === null || list === undefined) {
@@ -102,7 +107,11 @@ export function useDraftModels(
     }
     setModels({ status: "loading" })
     const timer = window.setTimeout(() => {
-      if (turn === latest.current) void request(auto, false)
+      if (turn !== latest.current) return
+      const newKey =
+        listedWith.current !== null && listedWith.current.key !== auto.key
+      listedWith.current = auto
+      void request(auto, newKey)
     }, LIST_DEBOUNCE_MS)
     return () => window.clearTimeout(timer)
   }, [auto, list])
