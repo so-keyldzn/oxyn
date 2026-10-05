@@ -63,6 +63,7 @@ use oxyn_core::{
 use oxyn_llm::reasoning::ReasoningBlock;
 use oxyn_llm::{ChatEvent, ChatMessage, ChatRequest, LlmProvider, Reach, StopReason, ToolCall};
 
+use crate::call::{CallHandle, CallId};
 use crate::context::{AgentContext, ContextBuilder, ContextPolicy, RowSample};
 use crate::error::AiError;
 use crate::failure::FailureReport;
@@ -576,11 +577,18 @@ impl fmt::Debug for ToolOutcome {
 /// tier applies **afterwards**, in the loop, at the only place where it is
 /// known. An implementation therefore cannot bring a server message into a
 /// prompt, even by trying.
+///
+/// `call` is the tool call the command answers: its [`CallId`] is the one the
+/// observer received in [`AgentEvent::CommandSubmitted`] and will receive in
+/// [`AgentEvent::CommandReported`] — what lets a host keep each call's steps
+/// on that call's row when calls overlap. A sink that leaves a request with
+/// the user calls [`CallHandle::awaiting_user`] once the executor holds it.
 #[async_trait]
 pub trait CommandSink: Send + Sync {
     /// Submits a command and returns what happened.
     async fn dispatch(
         &self,
+        call: &CallHandle,
         actor: Actor,
         command: Command,
         cancel: &CancelToken,
@@ -607,11 +615,12 @@ pub trait CommandSink: Send + Sync {
     /// the approval screen has no path to a value. Nothing is read.
     async fn request_sample(
         &self,
+        call: &CallHandle,
         actor: Actor,
         ask: SampleAsk,
         cancel: &CancelToken,
     ) -> DispatchOutcome {
-        let _ = (actor, ask, cancel);
+        let _ = (call, actor, ask, cancel);
         DispatchOutcome::Denied {
             reason: "this destination cannot ask the user to approve a row sample; \
                      nothing was read"
@@ -1128,10 +1137,14 @@ pub(crate) async fn run_tool_call(
             mutating = command.is_mutating(),
             "command submitted to the bus by an agent"
         );
+        // Minted here, the one place every call passes: the observer and the
+        // sink receive the same identity, whoever made the call.
+        let handle = CallHandle::new(CallId::fresh());
         // Announced **before** execution: UX-SPEC asks that every command show
         // before its result, and a command announced after the fact says
         // nothing about the wait that just went by.
         observer.observe(AgentEvent::CommandSubmitted {
+            call: handle.id(),
             tool: &call.name,
             command: command.name(),
             connection: command.target_connection(),
@@ -1156,8 +1169,8 @@ pub(crate) async fn run_tool_call(
                      the structure, and do not ask again"
                 ),
             },
-            ToolRequest::Sample(ask) => sink.request_sample(actor, ask, cancel).await,
-            ToolRequest::Dispatch(command) => sink.dispatch(actor, command, cancel).await,
+            ToolRequest::Sample(ask) => sink.request_sample(&handle, actor, ask, cancel).await,
+            ToolRequest::Dispatch(command) => sink.dispatch(&handle, actor, command, cancel).await,
         };
         // The session's tier is the connection's. It is the only place on the
         // error path where it is known, hence the only place where it can
@@ -1169,6 +1182,7 @@ pub(crate) async fn run_tool_call(
         // carried by the event, observed on the two values held here — the
         // only place where they coexist.
         observer.observe(AgentEvent::CommandReported {
+            call: handle.id(),
             tool: &call.name,
             outcome: &dispatched,
             withheld: outcome.withholds_from(&dispatched),
@@ -1643,6 +1657,7 @@ mod tests {
     impl CommandSink for FakeBus {
         async fn dispatch(
             &self,
+            _call: &CallHandle,
             actor: Actor,
             command: Command,
             _cancel: &CancelToken,
@@ -1722,6 +1737,7 @@ mod tests {
                 AgentEvent::TurnStarted { turn, max_turns } => Seen::Turn { turn, max_turns },
                 AgentEvent::TextDelta { text } => Seen::Text(text.to_owned()),
                 AgentEvent::CommandSubmitted {
+                    call: _,
                     tool,
                     command,
                     connection,
@@ -1733,6 +1749,7 @@ mod tests {
                     mutating,
                 },
                 AgentEvent::CommandReported {
+                    call: _,
                     tool,
                     outcome,
                     withheld,

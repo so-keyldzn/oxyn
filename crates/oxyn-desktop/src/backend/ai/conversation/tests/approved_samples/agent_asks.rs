@@ -382,7 +382,12 @@ fn under_metadata_no_screen_opens_and_nothing_is_read() {
             Recipient::agent(&declared),
             "Codex",
         )
-        .request_sample(Actor::agent(actor.0, actor.1), ask, &CancelToken::new()),
+        .request_sample(
+            &CallHandle::new(CallId::fresh()),
+            Actor::agent(actor.0, actor.1),
+            ask,
+            &CancelToken::new(),
+        ),
     );
     assert!(
         matches!(&outcome, DispatchOutcome::Denied { reason } if reason.contains("`sampled`")),

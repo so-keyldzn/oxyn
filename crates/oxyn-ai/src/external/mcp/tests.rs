@@ -39,6 +39,7 @@ impl Bus {
 impl CommandSink for Bus {
     async fn dispatch(
         &self,
+        _call: &crate::CallHandle,
         actor: Actor,
         command: Command,
         _cancel: &CancelToken,
@@ -463,7 +464,13 @@ mod request_sample {
 
     #[async_trait]
     impl CommandSink for Desk {
-        async fn dispatch(&self, _: Actor, _: Command, _: &CancelToken) -> DispatchOutcome {
+        async fn dispatch(
+            &self,
+            _: &crate::CallHandle,
+            _: Actor,
+            _: Command,
+            _: &CancelToken,
+        ) -> DispatchOutcome {
             *self.dispatched.lock().expect("no panic held the lock") += 1;
             DispatchOutcome::Completed {
                 summary: "1 rows, 1 batches".to_owned(),
@@ -472,6 +479,7 @@ mod request_sample {
 
         async fn request_sample(
             &self,
+            _: &crate::CallHandle,
             actor: Actor,
             ask: SampleAsk,
             _: &CancelToken,

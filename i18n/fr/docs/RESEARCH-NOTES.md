@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="9002e28a7e35" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="907aeb3bd104" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -853,11 +853,11 @@ l'étiquette correspondante — jamais de mémoire :
 s'exécute, et la carte le dit — « Expired », ou « Withdrawn: the agent stopped
 waiting » quand Codex raccroche le premier. Un accord donné dans la même
 milliseconde s'exécute ; Codex a déjà dit à son modèle que l'appel avait
-expiré, et une nouvelle tentative de sa part attend que la première soit
-tranchée — les appels d'un agent passent un par un
-(`crates/oxyn-ai/src/external/mcp/turn.rs`, « one call at a time ») —
-puis redemande l'accord, à l'écran : jamais un rejeu silencieux
-([I-13](../CLAUDE.md#i-13)).
+expiré, et une nouvelle tentative de sa part est refusée tant que la demande
+attend — aucun appel d'un agent ne s'exécute pendant qu'une de ses demandes
+est devant l'utilisateur (`crates/oxyn-ai/src/external/mcp/turn.rs`) — ou,
+une fois la demande prise par l'accord, redemande l'accord, à l'écran : jamais
+un rejeu silencieux ([I-13](../CLAUDE.md#i-13)).
 
 **À refaire** à chaque montée de version de l'un des deux adaptateurs ou de
 `@openai/codex` : un délai par défaut plus court que cinq minutes ferait
