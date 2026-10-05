@@ -100,6 +100,27 @@ pub enum DataError {
     )]
     TruncatedResult,
 
+    /// A JSON or JSON Lines export was asked of a result in which several
+    /// columns share a name.
+    ///
+    /// The result tells its columns apart by position; a JSON object, by name.
+    /// The file would carry duplicate keys, and an ordinary JSON reader keeps
+    /// only one of the values. CSV, TSV and Arrow IPC keep every column by
+    /// position and stay available.
+    #[error(
+        "several columns are named {}: a {format} export would write duplicate keys, \
+         and JSON readers keep only one of their values; give these columns distinct \
+         aliases (`AS ...`), or export as CSV, TSV or Arrow IPC",
+        quoted(.names)
+    )]
+    DuplicateColumnNames {
+        /// Name of the format, as it appears in
+        /// [`ExportFormat`](oxyn_core::ExportFormat).
+        format: &'static str,
+        /// Each shared name, once, in the order of its first column.
+        names: Vec<String>,
+    },
+
     /// The operation was interrupted by a
     /// [`CancelToken`](oxyn_core::CancelToken).
     #[error("cancelled")]
@@ -142,10 +163,22 @@ impl From<DataError> for OxynError {
             }
             // A refusal of use, not a bug: `Internal` would present it as a
             // defect of Oxyn.
-            other @ DataError::TruncatedResult => Self::Config(other.to_string()),
+            other @ (DataError::TruncatedResult | DataError::DuplicateColumnNames { .. }) => {
+                Self::Config(other.to_string())
+            }
             other => Self::Internal(other.to_string()),
         }
     }
+}
+
+/// Column names as the message shows them: quoted and escaped, since a name
+/// comes from the server and may hold a quote, a comma or a line break.
+fn quoted(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("{name:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

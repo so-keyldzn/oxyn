@@ -158,7 +158,7 @@ pub fn export<W: Write>(
     opts: &ExportOptions,
     ct: &CancelToken,
 ) -> Result<ExportSummary> {
-    ensure_exportable(buffer, opts)?;
+    ensure_exportable(buffer, format, opts)?;
 
     // Snapshot: the number of batches is read only once, so that the export
     // of a result still in progress has a defined end.
@@ -236,8 +236,13 @@ pub fn export<W: Write>(
 ///
 /// # Errors
 ///
-/// [`DataError::TruncatedResult`] or [`DataError::IncompleteResult`].
-pub fn ensure_exportable(buffer: &ResultBuffer, opts: &ExportOptions) -> Result<()> {
+/// [`DataError::TruncatedResult`], [`DataError::IncompleteResult`], or
+/// [`DataError::DuplicateColumnNames`] for JSON and JSON Lines.
+pub fn ensure_exportable(
+    buffer: &ResultBuffer,
+    format: ExportFormat,
+    opts: &ExportOptions,
+) -> Result<()> {
     // `truncated` first: it is never cleared, and a truncated buffer still
     // open will not become whole by waiting.
     if buffer.stats().truncated {
@@ -246,7 +251,36 @@ pub fn ensure_exportable(buffer: &ResultBuffer, opts: &ExportOptions) -> Result<
     if !buffer.is_complete() && !opts.allow_incomplete {
         return Err(DataError::IncompleteResult);
     }
+    if matches!(format, ExportFormat::Json | ExportFormat::JsonLines) {
+        let names = shared_names(buffer.schema());
+        if !names.is_empty() {
+            return Err(DataError::DuplicateColumnNames {
+                format: format.extension(),
+                names,
+            });
+        }
+    }
     Ok(())
+}
+
+/// The names carried by more than one column, once each, in the order of
+/// their first column.
+///
+/// Compared exactly: JSON keys are case-sensitive, so `id` and `ID` are two
+/// keys and lose nothing. A result tells its columns apart by position —
+/// `SELECT *` over a join routinely repeats `id` — and a JSON object by name:
+/// writing both would leave the reader one value of the two
+/// ([UX-SPEC](../../../docs/UX-SPEC.md#what-is-exported-is-what-is-displayed)).
+fn shared_names(schema: &Schema) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut shared: Vec<String> = Vec::new();
+    for field in schema.fields() {
+        let name = field.name();
+        if !seen.insert(name.as_str()) && !shared.iter().any(|known| known == name) {
+            shared.push(name.clone());
+        }
+    }
+    shared
 }
 
 /// The snapshot of the batches to write.
@@ -892,6 +926,85 @@ mod tests {
                 "{format}: {text}"
             );
         }
+    }
+
+    /// A complete buffer of one row over `names`, column `i` holding `i`.
+    fn one_row_named(names: &[&str]) -> ResultBuffer {
+        let schema = Arc::new(Schema::new(
+            names
+                .iter()
+                .map(|name| Field::new(*name, DataType::Int32, false))
+                .collect::<Vec<_>>(),
+        ));
+        let columns = (0..names.len())
+            .map(|i| {
+                let value = i32::try_from(i).expect("a few test columns");
+                Arc::new(Int32Array::from(vec![value])) as ArrayRef
+            })
+            .collect();
+        let buffer = ResultBuffer::new(Arc::clone(&schema), 1 << 20);
+        buffer
+            .push(RecordBatch::try_new(schema, columns).expect("the columns match the schema"))
+            .expect("batch accepted");
+        buffer.mark_complete(ExecStats::default());
+        buffer
+    }
+
+    /// Duplicate names — an alias repeated, or `SELECT *` over a join — are
+    /// refused in JSON and JSON Lines, named once each, and the message asks
+    /// for aliases (issue #183).
+    #[test]
+    fn json_refuses_duplicate_column_names_and_names_them() {
+        let buffer = one_row_named(&["id", "name", "id", "name", "id", "total"]);
+        for format in [ExportFormat::Json, ExportFormat::JsonLines] {
+            let mut output: Vec<u8> = Vec::new();
+            let outcome = export(
+                &buffer,
+                format,
+                &mut output,
+                &ExportOptions::default(),
+                &CancelToken::new(),
+            );
+            let Err(DataError::DuplicateColumnNames { names, .. }) = &outcome else {
+                panic!("{format}: expected a refusal, got {outcome:?}");
+            };
+            assert_eq!(names, &["id", "name"], "{format}");
+            let message = outcome.expect_err("refused").to_string();
+            assert!(message.contains("\"id\", \"name\""), "{message}");
+            assert!(message.contains("aliases"), "{message}");
+            assert!(output.is_empty(), "{format}: nothing is written");
+        }
+    }
+
+    /// The formats that keep columns by position still export them all.
+    #[test]
+    fn positional_formats_keep_duplicate_column_names() {
+        let buffer = one_row_named(&["id", "id"]);
+        assert_eq!(export_text(&buffer, ExportFormat::Csv), "id,id\n0,1\n");
+        assert_eq!(export_text(&buffer, ExportFormat::Tsv), "id\tid\n0\t1\n");
+        let mut output: Vec<u8> = Vec::new();
+        export(
+            &buffer,
+            ExportFormat::ArrowIpc,
+            &mut output,
+            &ExportOptions::default(),
+            &CancelToken::new(),
+        )
+        .expect("Arrow IPC keeps duplicate names");
+    }
+
+    /// Distinct names stay distinct: case counts, and a name that merely looks
+    /// like a suffixed copy is its own key.
+    #[test]
+    fn json_accepts_names_that_differ_only_by_case_or_suffix() {
+        let buffer = one_row_named(&["id", "ID", "id_2"]);
+        let text = export_text(&buffer, ExportFormat::Json);
+        let records: Vec<serde_json::Value> = serde_json::from_str(&text).expect("a JSON array");
+        assert_eq!(
+            records,
+            [serde_json::json!({"id": 0, "ID": 1, "id_2": 2})],
+            "{text}"
+        );
     }
 
     #[test]

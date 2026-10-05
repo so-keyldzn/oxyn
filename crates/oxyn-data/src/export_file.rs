@@ -49,7 +49,7 @@ pub fn export_to_path(
     opts: &ExportOptions,
     ct: &CancelToken,
 ) -> Result<ExportSummary> {
-    ensure_exportable(buffer, opts)?;
+    ensure_exportable(buffer, format, opts)?;
     replace_atomically(destination, ct, |file| {
         export(buffer, format, BufWriter::new(file), opts, ct)
     })
@@ -293,6 +293,47 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&destination).expect("reread"), EXISTING);
         assert_eq!(entries(&folder), ["export.csv"]);
+    }
+
+    #[test]
+    fn duplicate_column_names_refuse_json_before_any_file_is_created() {
+        // `SELECT 1 AS id, 2 AS id`: a JSON object would keep one of the two
+        // (issue #183). The refusal comes before the destination is touched.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let rows = ResultBuffer::new(Arc::clone(&schema), 1 << 20);
+        rows.push(
+            RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(Int32Array::from(vec![2])),
+                ],
+            )
+            .expect("the columns match the schema"),
+        )
+        .expect("batch accepted");
+        rows.mark_complete(ExecStats::default());
+
+        for format in [ExportFormat::Json, ExportFormat::JsonLines] {
+            let (folder, destination) = folder_with_document();
+            let outcome = export_to_path(
+                &rows,
+                format,
+                &destination,
+                &ExportOptions::default(),
+                &CancelToken::new(),
+            );
+
+            assert!(
+                matches!(&outcome, Err(DataError::DuplicateColumnNames { names, .. }) if names == &["id"]),
+                "{format}: {outcome:?}"
+            );
+            assert_eq!(fs::read_to_string(&destination).expect("reread"), EXISTING);
+            assert_eq!(entries(&folder), ["export.csv"]);
+        }
     }
 
     #[test]
