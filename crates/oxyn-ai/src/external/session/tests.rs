@@ -1363,6 +1363,7 @@ struct Patient(std::sync::atomic::AtomicBool);
 impl crate::runtime::CommandSink for Patient {
     async fn dispatch(
         &self,
+        _call: &crate::CallHandle,
         _actor: oxyn_core::Actor,
         _command: oxyn_core::Command,
         cancel: &CancelToken,

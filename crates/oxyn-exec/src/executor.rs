@@ -2696,6 +2696,11 @@ fn reclassified(command: Command) -> Command {
 /// leaves bounded to read-only, and the driver opens a read-only transaction
 /// for it (I-02). A write keeps the bounds its caller lifted: it was confirmed
 /// under the connection's name before reaching here.
+///
+/// A request made only of transaction verbs is not a read and stays unbounded:
+/// it calls no function, and a bound the driver cannot honor inside an open
+/// transaction would refuse the `COMMIT` or `ROLLBACK` that ends it (issue
+/// #182). Who may send one is the gate's question, and an agent may not.
 fn bounded_to(command: Command, env: Environment) -> Command {
     match command {
         Command::Execute {
@@ -2703,7 +2708,11 @@ fn bounded_to(command: Command, env: Environment) -> Command {
             session,
             mut request,
         } => {
-            if env.is_production() && !request.is_mutating() {
+            if env.is_production()
+                && !request.is_mutating()
+                && !(request.transaction_control
+                    && oxyn_query::only_controls_transactions(&request))
+            {
                 request.limits.read_only = true;
             }
             Command::Execute {

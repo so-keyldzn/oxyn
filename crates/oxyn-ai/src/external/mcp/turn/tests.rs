@@ -34,6 +34,9 @@ struct Bus {
     delay: Duration,
     /// Waits for the call's cancellation instead of answering at once.
     until_cancelled: bool,
+    /// Like the desktop's sink: once the request is filed, the call waits for
+    /// the user's decision — this notification — having given its order back.
+    user: Option<Arc<tokio::sync::Notify>>,
     seen: Mutex<Vec<(String, bool)>>,
 }
 
@@ -44,6 +47,7 @@ impl Bus {
             requests: Arc::clone(requests),
             delay: Duration::ZERO,
             until_cancelled: false,
+            user: None,
             seen: Mutex::new(Vec::new()),
         })
     }
@@ -78,6 +82,7 @@ impl Bus {
 impl CommandSink for Bus {
     async fn dispatch(
         &self,
+        call: &CallHandle,
         _actor: Actor,
         command: Command,
         cancel: &CancelToken,
@@ -93,6 +98,10 @@ impl CommandSink for Bus {
             .push((command.name().to_owned(), cancel.is_cancelled()));
         if matches!(self.answer, DispatchOutcome::AwaitingApproval { .. }) {
             self.requests.0.store(true, Ordering::SeqCst);
+            if let Some(user) = &self.user {
+                call.awaiting_user();
+                let _ = tokio::time::timeout(Duration::from_secs(3), user.notified()).await;
+            }
         }
         self.answer.clone()
     }
@@ -361,6 +370,52 @@ async fn two_writes_sent_together_make_one_request() {
         1,
         "{replies:?}"
     );
+}
+
+#[tokio::test]
+async fn a_call_waiting_on_the_user_does_not_hold_the_agents_next_calls() {
+    // The regression: the order was held while the user decided — up to the
+    // request's lifetime —, so the agent's next call queued behind it and
+    // timed out on its side instead of being told a request waits.
+    let requests = Arc::new(Requests::default());
+    let user = Arc::new(tokio::sync::Notify::new());
+    let bus = Arc::new(Bus {
+        user: Some(Arc::clone(&user)),
+        ..Arc::into_inner(Bus::awaiting(&requests)).expect("sole owner")
+    });
+    let turns = turns_over(&requests, 8);
+    let _question = open_on(&turns, &bus, CancelToken::new());
+    let service = Arc::new(service());
+
+    let waiting = {
+        let (service, turns) = (Arc::clone(&service), turns.clone());
+        tokio::spawn(async move {
+            service
+                .respond(&message("UPDATE invoices SET paid = true"), &turns)
+                .await
+        })
+    };
+    // Until the first call's request is filed.
+    for _ in 0..100 {
+        if requests.0.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let next = tokio::time::timeout(
+        Duration::from_secs(1),
+        service.respond(&message("SELECT 1"), &turns),
+    )
+    .await
+    .expect("answered while the user still decides")
+    .expect("a request is answered");
+    let (text, _) = read(&next);
+    assert!(text.contains("already waiting"), "{text}");
+    assert_eq!(bus.seen().len(), 1, "the second call never reached the bus");
+
+    user.notify_one();
+    let _ = tokio::time::timeout(Duration::from_secs(3), waiting).await;
 }
 
 #[tokio::test]

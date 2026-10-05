@@ -276,10 +276,119 @@ fn the_preference_moves_only_the_resting_state() {
         matches!(machine.state(), UpdateState::UpToDate { .. }),
         "a result shown stays"
     );
+}
 
-    let mut ready = ready_machine();
-    ready.set_automatic(false);
-    assert!(matches!(ready.state(), UpdateState::Ready { .. }));
+#[test]
+fn turning_automatic_updates_off_discards_a_download_and_a_ready_update() {
+    let mut waiting = ready_machine();
+    assert!(waiting.set_automatic(false), "an update ready is discarded");
+    assert_eq!(
+        *waiting.state(),
+        UpdateState::Disabled {
+            reason: DisabledReason::User
+        }
+    );
+    assert!(waiting.ready_version().is_none());
+    assert!(!waiting.installs_on_quit(), "quitting installs nothing");
+
+    let mut downloading = machine(true);
+    let ticket = downloading.begin_check().expect("idle checks");
+    let found = Found::Newer {
+        version: "0.0.3".into(),
+    };
+    assert_eq!(downloading.checked(ticket, found, NOW), Next::Download);
+    assert!(downloading.set_automatic(false), "a download is stopped");
+    assert!(
+        !downloading.progress(ticket, 10, Some(100)),
+        "the dropped download's progress is refused"
+    );
+    assert!(
+        !downloading.downloaded(ticket, ready()),
+        "its late completion is refused"
+    );
+    assert!(!downloading.installs_on_quit());
+    assert!(downloading.ready_version().is_none());
+}
+
+#[test]
+fn a_download_started_by_hand_with_automatic_updates_off_is_kept() {
+    let mut machine = machine(false);
+    let ticket = machine.begin_check().expect("a manual check runs");
+    let found = Found::Newer {
+        version: "0.0.3".into(),
+    };
+    assert_eq!(machine.checked(ticket, found, NOW), Next::Stop);
+    let ticket = machine.begin_download().expect("available downloads");
+    assert!(
+        !machine.set_automatic(false),
+        "the switch did not move: nothing is discarded"
+    );
+    assert!(machine.downloaded(ticket, ready()));
+    assert!(machine.installs_on_quit());
+}
+
+#[test]
+fn turning_automatic_updates_off_stops_the_download_task_for_every_window() {
+    struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let folder = tempfile::tempdir().expect("temporary directory");
+    let updates = Updates::assemble(
+        "0.0.2".into(),
+        true,
+        false,
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
+        Some(folder.path().to_path_buf()),
+        None,
+    );
+    let ticket = {
+        let mut machine = updates.shared.machine.lock();
+        let ticket = machine.begin_check().expect("idle checks");
+        let found = Found::Newer {
+            version: "0.0.3".into(),
+        };
+        assert_eq!(machine.checked(ticket, found, NOW), Next::Download);
+        ticket
+    };
+    // A download that never ends on its own: only an abort drops it.
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let guard = Dropped(Arc::clone(&dropped));
+    *updates.shared.operation.lock() = Some(tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        std::future::pending::<()>().await;
+    }));
+    let mut first = updates.subscribe();
+    let mut second = updates.subscribe();
+
+    updates.set_automatic(false).expect("saved");
+
+    let stopped = std::time::Instant::now();
+    while !dropped.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            stopped.elapsed() < std::time::Duration::from_secs(5),
+            "the download task is aborted"
+        );
+        std::thread::yield_now();
+    }
+    assert!(updates.shared.operation.lock().is_none());
+    let disabled = UpdateState::Disabled {
+        reason: DisabledReason::User,
+    };
+    for window in [&mut first, &mut second] {
+        assert!(window.has_changed().expect("open"));
+        assert_eq!(window.borrow_and_update().state, disabled);
+    }
+    assert!(
+        !updates.shared.machine.lock().downloaded(ticket, ready()),
+        "the late completion cannot make it ready again"
+    );
+    assert!(updates.take_install(false).is_none());
+    assert!(updates.take_install(true).is_none());
 }
 
 #[test]
@@ -552,6 +661,106 @@ fn turning_automatic_updates_off_is_saved_then_published() {
     );
     assert!(nowhere.set_automatic(false).is_err());
     assert!(nowhere.snapshot().automatic, "nothing changed");
+}
+
+#[test]
+fn a_write_never_touches_another_writes_temporary_file() {
+    let folder = tempfile::tempdir().expect("temporary directory");
+    // What another write of this process holds at that instant, under the
+    // name the process alone used to choose.
+    let other = folder
+        .path()
+        .join(format!(".{}.{}.part", preference::FILE, std::process::id()));
+    std::fs::write(&other, b"another write").expect("written");
+    preference::write(folder.path(), false).expect("saved");
+    assert_eq!(
+        std::fs::read(&other).expect("still there"),
+        b"another write",
+        "neither truncated nor renamed"
+    );
+    assert!(!preference::read(folder.path()));
+    std::fs::remove_file(&other).expect("removed");
+    assert_eq!(
+        std::fs::read_dir(folder.path()).expect("listed").count(),
+        1,
+        "a write leaves only the preference behind"
+    );
+}
+
+#[test]
+fn concurrent_saves_leave_disk_and_windows_agreeing() {
+    let folder = tempfile::tempdir().expect("temporary directory");
+    let updates = Arc::new(Updates::assemble(
+        "0.0.2".into(),
+        true,
+        false,
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
+        Some(folder.path().to_path_buf()),
+        None,
+    ));
+    let snapshots = updates.subscribe();
+    let file = folder.path().join(preference::FILE);
+    for _ in 0..200 {
+        let start = Arc::new(std::sync::Barrier::new(2));
+        let savers: Vec<_> = [true, false]
+            .into_iter()
+            .map(|automatic| {
+                let updates = Arc::clone(&updates);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    updates.set_automatic(automatic)
+                })
+            })
+            .collect();
+        for saver in savers {
+            saver.join().expect("no panic").expect("saved");
+        }
+        let bytes = std::fs::read(&file).expect("published");
+        let stored: Value = serde_json::from_slice(&bytes).expect("complete JSON");
+        let on_disk = stored["automatic"].as_bool().expect("a boolean");
+        assert_eq!(updates.snapshot().automatic, on_disk, "memory follows disk");
+        assert_eq!(snapshots.borrow().automatic, on_disk, "windows follow disk");
+    }
+    assert_eq!(
+        std::fs::read_dir(folder.path()).expect("listed").count(),
+        1,
+        "no temporary file left behind"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_save_keeps_the_last_value_and_cleans_only_its_own_file() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let folder = tempfile::tempdir().expect("temporary directory");
+    let updates = Updates::assemble(
+        "0.0.2".into(),
+        true,
+        false,
+        &Installation::MacBundle {
+            quit_folder: Some("/Applications".into()),
+        },
+        Some(folder.path().to_path_buf()),
+        None,
+    );
+    updates.set_automatic(false).expect("saved");
+    let other = folder.path().join(".updates.json.other.part");
+    std::fs::write(&other, b"another write").expect("written");
+    let read_only = std::fs::Permissions::from_mode(0o555);
+    std::fs::set_permissions(folder.path(), read_only).expect("read-only");
+    if folder_is_writable(folder.path()) {
+        // Run as root: permissions bind nothing, the failure cannot be made.
+        return;
+    }
+    assert!(updates.set_automatic(true).is_err());
+    std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o755))
+        .expect("writable again");
+    assert!(!updates.snapshot().automatic, "nothing changed");
+    assert!(!preference::read(folder.path()), "the last value kept");
+    assert_eq!(std::fs::read(&other).expect("kept"), b"another write");
 }
 
 // ---- Endpoint and release page -------------------------------------------------------

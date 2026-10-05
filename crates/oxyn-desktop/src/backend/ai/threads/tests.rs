@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tauri::ipc::InvokeResponseBody;
 
 use super::*;
@@ -14,6 +16,64 @@ fn recording() -> (Channel<AiUpdate>, Arc<Mutex<Vec<String>>>) {
         Ok(())
     });
     (channel, received)
+}
+
+/// A channel whose first `failures` sends fail, as a reloading webview's do.
+fn flaky(failures: usize) -> (Channel<AiUpdate>, Arc<Mutex<Vec<String>>>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&received);
+    let left = AtomicUsize::new(failures);
+    let channel = Channel::new(move |body: InvokeResponseBody| {
+        if left
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(tauri::Error::WebviewNotFound);
+        }
+        if let InvokeResponseBody::Json(json) = body {
+            sink.lock().push(json);
+        }
+        Ok(())
+    });
+    (channel, received)
+}
+
+/// The kinds of the events received, in order.
+fn kinds(received: &Mutex<Vec<String>>) -> Vec<String> {
+    received
+        .lock()
+        .iter()
+        .map(|json| {
+            let update: serde_json::Value = serde_json::from_str(json).expect("json");
+            update["event"]["kind"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
+fn answered() -> AiEvent {
+    AiEvent::Finished {
+        ending: Ending::Answered {
+            turns: 1,
+            truncated: false,
+            cut: None,
+        },
+    }
+}
+
+/// Waits on a runtime, the only sleep the lints allow in a test.
+fn wait(duration: Duration) {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("a test runtime starts")
+        // Built inside: a timer needs the runtime that drives it.
+        .block_on(async { tokio::time::sleep(duration).await });
 }
 
 fn scope(connection: ConnectionId) -> Scope {
@@ -272,4 +332,187 @@ fn a_merged_block_stops_growing_and_says_where_it_was_cut() {
         panic!("arguments");
     };
     assert!(fragment.len() <= MAX_MERGED_BYTES + MERGED_CUT.len());
+}
+
+#[test]
+fn a_failed_send_does_not_lose_the_end_of_the_run() {
+    // The regression: the first failed send dropped the channel, so the run's
+    // `finished` went nowhere and the panel spun for ever.
+    let state = AiState::default();
+    let connection = ConnectionId::new();
+    let thread = state.thread_for(connection, None).expect("new");
+    let (channel, received) = flaky(1);
+    let (node, _) = thread
+        .begin(None, "count", channel, scope(connection))
+        .expect("begins");
+    thread.emit(node, AiEvent::NotSaved);
+    thread.emit(node, answered());
+    thread.finish(node);
+    assert_eq!(kinds(&received), ["finished"]);
+}
+
+#[test]
+fn a_follow_up_sent_on_finished_is_accepted() {
+    // The panel sends the next question the moment it reads `finished`; the
+    // run used to end only after the answer was written, and the question was
+    // refused « still answering ».
+    let state = AiState::default();
+    let connection = ConnectionId::new();
+    let thread = state.thread_for(connection, None).expect("new");
+    let (seen, read) = std::sync::mpsc::channel::<String>();
+    let channel = Channel::new(move |body: InvokeResponseBody| {
+        if let InvokeResponseBody::Json(json) = body {
+            let _gone = seen.send(json);
+        }
+        Ok(())
+    });
+    let (node, _) = thread
+        .begin(None, "first", channel, scope(connection))
+        .expect("begins");
+    let follower = {
+        let thread = Arc::clone(&thread);
+        std::thread::spawn(move || {
+            while let Ok(json) = read.recv_timeout(Duration::from_secs(5)) {
+                if json.contains(r#""kind":"finished""#) {
+                    let (again, _) = recording();
+                    return thread
+                        .begin(Some(0), "and then?", again, scope(connection))
+                        .map(|_| ())
+                        .map_err(|error| error.message);
+                }
+            }
+            Err("`finished` never arrived".to_owned())
+        })
+    };
+    thread.emit(node, answered());
+    assert!(
+        thread.is_running(),
+        "the ending waits for the run to end before it is sent"
+    );
+    thread.finish(node);
+    assert_eq!(follower.join().expect("the follower ran"), Ok(()));
+    let view = thread.view(None);
+    assert!(
+        view.nodes[0]
+            .events
+            .iter()
+            .any(|event| matches!(event, AiEvent::Finished { .. })),
+        "the ending is kept for a replay"
+    );
+}
+
+#[test]
+fn streamed_fragments_reach_the_panel_merged_and_before_what_follows() {
+    let state = AiState::default();
+    let connection = ConnectionId::new();
+    let thread = state.thread_for(connection, None).expect("new");
+    let (channel, received) = recording();
+    let (node, _) = thread
+        .begin(None, "why", channel, scope(connection))
+        .expect("begins");
+    for _ in 0..200 {
+        thread.emit(node, AiEvent::TextDelta { text: "a".into() });
+    }
+    for (index, fragment) in [(0, "{\"st"), (0, "atement\"}"), (1, "{}")] {
+        thread.emit(
+            node,
+            AiEvent::ToolArguments {
+                index,
+                fragment: fragment.into(),
+            },
+        );
+    }
+    thread.emit(node, AiEvent::NotSaved);
+
+    let kinds = kinds(&received);
+    let texts = kinds.iter().filter(|kind| *kind == "textDelta").count();
+    assert!(
+        (1..200).contains(&texts),
+        "{texts} messages for 200 fragments"
+    );
+    assert_eq!(
+        kinds.iter().skip(texts).cloned().collect::<Vec<_>>(),
+        ["toolArguments", "toolArguments", "notSaved"],
+        "arguments of two calls are not merged, and nothing overtakes them"
+    );
+    let text: String = received
+        .lock()
+        .iter()
+        .filter_map(|json| {
+            let update: serde_json::Value = serde_json::from_str(json).ok()?;
+            update["event"]["text"].as_str().map(str::to_owned)
+        })
+        .collect();
+    assert_eq!(text, "a".repeat(200), "every fragment, once, in order");
+    assert!(
+        received.lock()[texts].contains(r#""fragment":"{\"statement\"}""#),
+        "{:?}",
+        received.lock()
+    );
+}
+
+#[test]
+fn held_fragments_go_out_on_their_own_and_once() {
+    let state = AiState::default();
+    let connection = ConnectionId::new();
+    let thread = state.thread_for(connection, None).expect("new");
+    let (channel, received) = recording();
+    let (node, _) = thread
+        .begin(None, "why", channel, scope(connection))
+        .expect("begins");
+    thread.emit(
+        node,
+        AiEvent::TextDelta {
+            text: "Because".into(),
+        },
+    );
+    assert!(received.lock().is_empty(), "held for a moment");
+    wait(FLUSH_EVERY * 5);
+    assert_eq!(kinds(&received), ["textDelta"], "sent without a next event");
+
+    // A view taken while fragments are held returns them: they must not
+    // also arrive on its channel.
+    thread.emit(node, AiEvent::TextDelta { text: ".".into() });
+    let (reopened, live) = recording();
+    let view = thread.view(Some(reopened));
+    assert!(matches!(
+        view.nodes[0].events.last(),
+        Some(AiEvent::TextDelta { text }) if text == "Because."
+    ));
+    wait(FLUSH_EVERY * 5);
+    assert!(live.lock().is_empty(), "{:?}", live.lock());
+}
+
+#[test]
+fn overlapping_calls_keep_their_own_rows() {
+    // An external agent's calls overlap. With one slot, the second's
+    // announcement overwrote the first: reports, counts and approval cards
+    // landed on each other's rows.
+    let state = AiState::default();
+    let connection = ConnectionId::new();
+    let thread = state.thread_for(connection, None).expect("new");
+    let (channel, _) = recording();
+    thread
+        .begin(None, "two at once", channel, scope(connection))
+        .expect("begins");
+    let (read, write) = (CallId::fresh(), CallId::fresh());
+    thread.open_call(read, "execute_query", "Execute", Some(connection), false);
+    thread.open_call(write, "execute_query", "Execute", Some(connection), true);
+
+    let shown_write = thread.announce(write);
+    let shown_read = thread.announce(read);
+    assert_ne!(shown_read.id, shown_write.id);
+    assert!(!shown_read.mutating);
+    assert!(shown_write.mutating);
+
+    thread.record_rows(read, 3, None);
+    thread.mark_cancelled(write);
+    let write_row = thread.take_call(write).expect("the write's row");
+    assert_eq!(write_row.id, shown_write.id);
+    assert!(write_row.cancelled && write_row.rows.is_none());
+    let read_row = thread.take_call(read).expect("the read's row");
+    assert_eq!(read_row.id, shown_read.id);
+    assert_eq!(read_row.rows, Some(3));
+    assert!(!read_row.cancelled);
+    assert!(thread.take_call(read).is_none(), "reported once");
 }

@@ -84,6 +84,7 @@
 //! ```
 
 pub mod builtin;
+pub mod call;
 pub mod context;
 pub mod error;
 pub mod external;
@@ -101,6 +102,7 @@ pub mod untrusted;
 pub use oxyn_core::CancelToken;
 
 pub use builtin::{REMAINING_AGENTS, builtin_agents, schema_agent, sql_agent};
+pub use call::{CallHandle, CallId};
 pub use context::{
     AgentContext, ContextBuilder, ContextPolicy, MAX_MENTIONS, Mention, RowSample, estimate_tokens,
 };
@@ -126,6 +128,7 @@ pub mod prelude {
     pub use oxyn_core::CancelToken;
 
     pub use crate::builtin::{builtin_agents, schema_agent, sql_agent};
+    pub use crate::call::{CallHandle, CallId};
     pub use crate::context::{AgentContext, ContextBuilder, ContextPolicy, RowSample};
     pub use crate::error::AiError;
     pub use crate::failure::FailureReport;

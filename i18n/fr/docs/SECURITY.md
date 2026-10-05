@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="17b7c33eea30" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="c2deb6ebe1fd" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -217,6 +217,17 @@ connexion. La borne ne confine pas tout : une transaction `READ ONLY` de
 PostgreSQL écrit encore dans une table temporaire, et ne retient rien de ce qui
 sort de la transaction — `dblink_exec` vers une autre connexion,
 `pg_terminate_backend`, `set_config`, les verrous consultatifs.
+
+Une requête faite **uniquement** de verbes de transaction nus —
+`START TRANSACTION`, `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`,
+chacun analysé comme tel, jamais un bloc `BEGIN … END` — n'est pas une lecture,
+et n'est pas bornée : elle n'appelle aucune fonction, et MySQL ne sait pas
+appliquer la borne dans une transaction ouverte, si bien qu'un `COMMIT` ou un
+`ROLLBACK` borné était refusé et que la transaction ne pouvait jamais être
+soldée. Solder une transaction que l'utilisateur a ouverte n'est pas une
+nouvelle écriture : les écritures qu'elle contient ont chacune été confirmées
+sous le nom de la connexion. Un verbe suivi ou précédé de toute autre
+instruction garde la borne.
 
 **Panne concrète :** `SELECT public.audit_touch()` dans une console de
 production, où la fonction insère une ligne : l'écriture partait sans

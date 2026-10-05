@@ -201,13 +201,19 @@ offered to anyone before the maintainer publishes.
   once a download is verified, never at launch: the launch reads only
   `updates.json` and `update-notice.json`, each bounded at 64 KiB.
 * **One operation at a time.** A check during `checking`, `downloading` or
-  `ready` does nothing; `ready` lasts until the restart.
+  `ready` does nothing; `ready` lasts until the restart, or until automatic
+  updates are turned off.
 * **Failures.** A network or server failure in the background is kept as
   `error{offline|server, retryable: true}`, shown in Settings and nowhere
   else, and retried at the next due date; a signature or install failure is
   always shown.
 * **Automatic off** rests in `disabled{user}`; a manual check still runs
-  from there.
+  from there. Turning it off, as the switch says (UX-SPEC), aborts a
+  download under way and drops a `ready` update with its bytes, under a new
+  ticket so a late completion is refused: quitting then installs nothing. A
+  download started by hand while it was already off stays the user's.
+  Concurrent saves of the preference are serialized from the write to the
+  publication, each through a temporary file of its own.
 * **Release notes** are capped at 4 KiB, cut on a character boundary
   ([I-09](../../CLAUDE.md#i-09)), and rendered as plain text.
 

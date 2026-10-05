@@ -11,6 +11,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -103,11 +104,26 @@ pub(crate) fn read_bounded(path: &Path) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+/// Writes `bytes` to `folder/name` through a temporary file of this write's
+/// own: named after the process and a counter, and created exclusively, so a
+/// concurrent write neither truncates, renames nor removes it. A failure
+/// removes only that file and leaves `name` as it was.
 pub(crate) fn write_atomically(folder: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     std::fs::create_dir_all(folder)?;
-    let temporary = folder.join(format!(".{name}.{}.part", std::process::id()));
-    std::fs::write(&temporary, bytes)?;
-    std::fs::rename(&temporary, folder.join(name)).inspect_err(|_| {
-        let _ = std::fs::remove_file(&temporary);
-    })
+    let write = WRITES.fetch_add(1, Ordering::Relaxed);
+    let temporary = folder.join(format!(".{name}.{}.{write}.part", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(bytes)
+        .and_then(|()| {
+            drop(file);
+            std::fs::rename(&temporary, folder.join(name))
+        })
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&temporary);
+        })
 }

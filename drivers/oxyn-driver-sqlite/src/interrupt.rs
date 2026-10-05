@@ -117,7 +117,10 @@ impl Interrupter {
     ///
     /// Running: the engine is interrupted. Queued: it will not be executed.
     /// Finished: nothing.
-    pub(crate) fn interrupt(&self, id: WorkId) {
+    ///
+    /// Returns `true` when the task was still queued: it is then proven never
+    /// to run, which is the only stop of a write whose outcome needs no reply.
+    pub(crate) fn interrupt(&self, id: WorkId) -> bool {
         let mut turn = self.turn.lock();
         if turn.running == Some(id) {
             self.tripped.store(true, Ordering::SeqCst);
@@ -128,7 +131,9 @@ impl Interrupter {
             self.engine.interrupt();
         } else if let Some(abandoned) = turn.queued.get_mut(&id) {
             *abandoned = true;
+            return true;
         }
+        false
     }
 
     /// Refuses to launch a statement if the current task was interrupted.
@@ -188,7 +193,7 @@ impl<'a> AbandonGuard<'a> {
 impl Drop for AbandonGuard<'_> {
     fn drop(&mut self) {
         if self.armed {
-            self.interrupter.interrupt(self.id);
+            let _ = self.interrupter.interrupt(self.id);
         }
     }
 }

@@ -329,6 +329,19 @@ impl ApprovalRegistry {
         Some(entry)
     }
 
+    /// Was `id` removed as stale — by its own expiry or by the purge another
+    /// request's submission makes — and not reported since?
+    ///
+    /// Reads without forgetting: [`take`](Self::take) still says "expired"
+    /// afterwards. For whoever waits on a request and finds it gone: it was
+    /// either taken by an approval, and its outcome will come, or purged as
+    /// stale, and nothing will — a wait that cannot tell the two apart waits
+    /// for ever on the second.
+    #[must_use]
+    pub fn was_expired(&self, id: CommandId) -> bool {
+        self.queue.lock().expired.contains(&id)
+    }
+
     /// What is waiting for an answer, without removing anything.
     ///
     /// The order is not guaranteed: it is up to the interface to sort what it
@@ -590,6 +603,33 @@ mod tests {
             matches!(outcome, Err(ApprovalError::Expired { .. })),
             "{outcome:?}"
         );
+    }
+
+    #[test]
+    fn a_request_purged_as_stale_can_be_told_from_one_taken() {
+        // A call waiting on a request purged by the next submission found it
+        // gone, took it for approved, and waited for an outcome nobody owed.
+        let registry = ApprovalRegistry::with_ttl(Duration::ZERO);
+        let purged = CommandId::new();
+        registry
+            .submit(purged, agent(), sample_command(), "motif", None)
+            .expect("queue not empty");
+        registry
+            .submit(CommandId::new(), agent(), sample_command(), "motif", None)
+            .expect("the stale one made room");
+        assert!(registry.was_expired(purged));
+        assert!(registry.was_expired(purged), "read without forgetting");
+        assert!(matches!(
+            registry.take(purged),
+            Err(ApprovalError::Expired { .. })
+        ));
+
+        let live = ApprovalRegistry::new();
+        let taken = CommandId::new();
+        live.submit(taken, agent(), sample_command(), "motif", None)
+            .expect("queue not empty");
+        assert!(live.take(taken).is_ok());
+        assert!(!live.was_expired(taken));
     }
 
     #[test]

@@ -24,15 +24,20 @@
 //! ([`oxyn_exec::ApprovalRegistry::ttl`]), sent with the request
 //! (`expiresAtMs`). Past it, the call withdraws the request **as expired** — a
 //! late approval says « expired » — the card says « Expired », and nothing
-//! runs. There is no other clock here: an external agent's own bound on the
+//! runs. The only other clock here bounds the wait for an approved command's
+//! outcome, by the same lifetime (below): an external agent's own bound on the
 //! call is its adapter's, recorded in RESEARCH-NOTES.
 //!
 //! # Never a silent loss (I-13)
 //!
 //! Once `decide` took the request, the command may run: the call then waits for
-//! its outcome, whatever else happens — a stop, the expiry. And if `decide`
-//! ends without saying how it went, the call says « it may have been applied »,
-//! never « nothing ran ».
+//! its outcome — the expiry passed meanwhile does not end it. The wait is
+//! still bounded, by the registry's lifetime again, and a stop ends it: in
+//! both cases, as when `decide` ends without saying how it went, the call says
+//! « it may have been applied », never « nothing ran ». A request purged as
+//! stale by another's submission, just before this wait's own timer, is told
+//! apart from one taken ([`oxyn_exec::ApprovalRegistry::was_expired`]): it
+//! ended as expired, and nothing will settle it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -248,9 +253,31 @@ pub(crate) async fn wait(
             }
         }
     }
-    // Taken by `decide` at the same moment: it runs, and says how it went.
-    let settled = (&mut awaited.receiver).await.ok();
-    ending(executor, command, settled)
+    // Gone from the executor. Purged as stale by another request's
+    // submission, a hair before this wait's own timer: nobody will settle it,
+    // and waiting on the receiver hung the call for ever.
+    if executor.approvals().was_expired(command) {
+        return RequestEnd::Withdrawn(Withdrawn::expired(executor.approvals().ttl()));
+    }
+    // Taken by `decide` at the same moment: it runs, and says how it went —
+    // within a bound, and while the question is not stopped. Past either,
+    // the command may have run: said so, never « nothing ran » (I-13).
+    let outcome = tokio::time::sleep(executor.approvals().ttl());
+    tokio::pin!(outcome);
+    tokio::select! {
+        settled = &mut awaited.receiver => ending(executor, command, settled.ok()),
+        () = cancel.cancelled() => RequestEnd::Answered(lost_track(command)),
+        () = &mut outcome => RequestEnd::Answered(lost_track(command)),
+    }
+}
+
+/// What the call answers when an approved command's outcome never came back.
+fn lost_track(command: CommandId) -> DispatchReport {
+    DispatchReport::Failed {
+        command,
+        class: ErrorClass::Ambiguous,
+        error: INTERRUPTED.to_owned(),
+    }
 }
 
 fn ending(executor: &Executor, command: CommandId, settled: Option<Settled>) -> RequestEnd {
@@ -260,11 +287,7 @@ fn ending(executor: &Executor, command: CommandId, settled: Option<Settled>) -> 
         // Nobody left to say: the backend is going away. Withdrawn if it still
         // waits; otherwise it was taken, and may have run.
         None if executor.reject(command).is_some() => RequestEnd::Withdrawn(Withdrawn::released()),
-        None => RequestEnd::Answered(DispatchReport::Failed {
-            command,
-            class: ErrorClass::Ambiguous,
-            error: INTERRUPTED.to_owned(),
-        }),
+        None => RequestEnd::Answered(lost_track(command)),
     }
 }
 

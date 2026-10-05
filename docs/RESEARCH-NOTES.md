@@ -186,6 +186,7 @@ plugin or of `rfd`**:
 | SQLite automatically rolls back the open transaction of a connection being closed; after some errors (including `SQLITE_BUSY` and `SQLITE_INTERRUPT`), a transaction may be rolled back automatically, and only `sqlite3_get_autocommit` reveals it ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)) | `https://www.sqlite.org/c3ref/close.html`, `https://www.sqlite.org/c3ref/get_autocommit.html` | 2026-09-25 |
 | `rusqlite@0.37.0` exposes `Connection::is_autocommit`; `sqlx-postgres@0.9.0` keeps the `ReadyForQuery` state (`Idle`, `Transaction`, `Error`) private — `PgConnection::in_transaction` is `pub(crate)` and confuses `Error` with `Idle`; `sqlx-core@0.9.0` `Connection::is_in_transaction` only counts transactions opened by sqlx (`transaction_depth`), not a typed `BEGIN` ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)) | installed sources: `rusqlite-0.37.0/src/lib.rs`, `sqlx-postgres-0.9.0/src/connection/mod.rs` and `src/message/ready_for_query.rs`, `sqlx-core-0.9.0/src/connection.rs` | 2026-09-25 |
 | `sqlx` logs the whole text of a query on the `sqlx::query` target: at `debug` by default, at `warn` beyond one second | sources of `sqlx-core@0.9.0`, `src/connection.rs` and `src/logger.rs` | 2026-09-24 |
+| `sqlparser` logs through the `log` facade at `debug`: the whole statement on `sqlparser::parser` (`Parser::try_with_sql`) and the tokens it reads, string literals included, on `sqlparser::parser` and `sqlparser::dialect::*`; its `ParserError` quotes the token it stopped at | sources of `sqlparser@0.62.0`, `src/parser/mod.rs`, `src/dialect/postgresql.rs`, and observed, `logging::tests` | 2026-10-04 |
 | Vitest's browser server starts from port 63315 and inherits the `server` of the Vite configuration: with `server.strictPort: true`, two worktrees running the stories at the same time fail on "Port 63315 is already in use". `browser.api: { strictPort: false }` restores Vite's fallback to the next port; `port: 0` is useless, Vitest replaces a zero port with 63315 | sources of `@vitest/browser@4.1.11` (`dist/index.js`, plugin `vitest:browser:config`) and of `vitest@4.1.11` (`resolveApiServerConfig`), and observed, two simultaneous `make front-tests` | 2026-09-24 |
 | `esbuild` and `unrs-resolver` ship their binary as an optional dependency: their install scripts are refused (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
 | `LexicalTypeaheadMenuPlugin` sets `role="listbox"` and `aria-label="Typeahead menu"` on its anchor **at every attachment** — the anchor is removed then put back at every keystroke —, and leaves `aria-activedescendant` on `typeahead-item-0` when the list empties: axe fails with `aria-valid-attr-value` and, on a list with no option, with `aria-required-children` | sources of `@lexical/react@0.51.0` (`shared/LexicalMenu.tsx`) and observed, `vitest --project storybook` | 2026-09-24 |
@@ -842,11 +843,11 @@ Codex's 300 s and the request's five minutes coincide: either deadline wins
 within a few milliseconds. In both cases nothing runs, and the card says so —
 "Expired", or "Withdrawn: the agent stopped waiting" when Codex hangs up first.
 An approval given in the same millisecond runs; Codex has already told its
-model that the call expired, and a new attempt on its part waits for the first
-to be settled — an agent's calls go one by one
-(`crates/oxyn-ai/src/external/mcp/turn.rs`, "one call at a time") — then asks
-for approval again, on screen: never a silent replay
-([I-13](../CLAUDE.md#i-13)).
+model that the call expired, and a new attempt on its part is refused while
+the request still waits — no call of an agent runs while one of its requests is
+before the user (`crates/oxyn-ai/src/external/mcp/turn.rs`) — or, once the
+approval has taken it, asks for approval again, on screen: never a silent
+replay ([I-13](../CLAUDE.md#i-13)).
 
 **To redo** at every version bump of either adapter or of `@openai/codex`: a
 default timeout shorter than five minutes would make the call be given up

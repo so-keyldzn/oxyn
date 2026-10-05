@@ -239,8 +239,8 @@ async fn a_stop_during_a_read_reads_the_state_with_its_own_token() {
 #[tokio::test]
 async fn a_stop_during_a_write_publishes_the_rollback_sqlite_did() {
     // Stop lands in `slot.execute`, since a write runs whole there: an early
-    // failure, `Cancelled`, returned while the engine is still unwinding the
-    // transaction. The state read after it sees the rollback.
+    // failure, the engine's interruption — ambiguous for a write, not a
+    // cancellation (issue #181). The state read after it sees the rollback.
     let folder = tempfile::tempdir().expect("temporary folder");
     let base = folder.path().join("transactions.sqlite");
     let journal = folder.path().join("transactions.sqlite-journal");
@@ -278,7 +278,9 @@ async fn a_stop_during_a_write_publishes_the_rollback_sqlite_did() {
 
     let outcome = task.await.expect("the task ends");
     assert!(
-        outcome.as_ref().is_err_and(OxynError::is_cancelled),
+        outcome
+            .as_ref()
+            .is_err_and(|error| error.class() == oxyn_core::ErrorClass::Ambiguous),
         "{outcome:?}"
     );
     let events = announced(&mut events, id);

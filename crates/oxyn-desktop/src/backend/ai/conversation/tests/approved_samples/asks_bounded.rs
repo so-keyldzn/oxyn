@@ -311,8 +311,13 @@ fn a_call_dropped_mid_wait_closes_its_screen() {
         panic!("a sample request");
     };
     let call = fixture.runtime.spawn(async move {
-        sink.request_sample(Actor::agent(actor.0, actor.1), ask, &CancelToken::new())
-            .await
+        sink.request_sample(
+            &CallHandle::new(CallId::fresh()),
+            Actor::agent(actor.0, actor.1),
+            ask,
+            &CancelToken::new(),
+        )
+        .await
     });
     let shown = screen(&fixture, &received);
     let id = shown["id"].as_str().expect("an id").to_owned();
