@@ -26,6 +26,7 @@ impl Bus {
 impl CommandSink for Bus {
     async fn dispatch(
         &self,
+        _call: &crate::CallHandle,
         _actor: oxyn_core::Actor,
         _command: Command,
         _cancel: &CancelToken,
@@ -478,6 +479,7 @@ struct Patient {
 impl CommandSink for Patient {
     async fn dispatch(
         &self,
+        _call: &crate::CallHandle,
         _actor: oxyn_core::Actor,
         _command: Command,
         cancel: &CancelToken,
