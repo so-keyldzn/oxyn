@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "drivers/*"]
 
 [workspace.package]
-version       = "0.0.5"
+version       = "0.0.6"
 edition       = "2024"
 # 1.95 and not 1.94: `sqlx 0.9.0` requires 1.94.0, but `wasmtime 48.0.5`
 # requires 1.95.0. wasmtime is behind oxyn-plugin's `wasm-host` feature, off by
