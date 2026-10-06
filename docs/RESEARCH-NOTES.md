@@ -819,7 +819,7 @@ again without the measurement.
 | `hyper-util` | **0.1.20** | MIT | the service and accepting connections |
 | `http-body-util` | **0.1.5** | MIT | reading and writing a full body |
 | `async-process` | **2.5.0** | Apache-2.0 OR MIT | launching the agent with an allow-listed environment; its streams are already `futures::io`, so no executor bridge |
-| `rustix` | **0.38.44** | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | killing the process **group**. The latest version is `1.1.4`; we align on `0.38.44`, the one `agent-client-protocol` already pulls, so as not to compile two copies of a system-call crate |
+| `rustix` | **0.38.44** | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | killing the process **group** (feature `process`), and opening a user's agent file with `O_NOFOLLOW \| O_NONBLOCK` (feature `fs`, ADR-0049). The latest version is `1.1.4`; we align on `0.38.44`, the one `agent-client-protocol` already pulls, so as not to compile two copies of a system-call crate |
 
 **The MCP revisions the bridge announces**, read on **2026-09-16** in the
 package installed by the Claude adapter, and not from memory. The server

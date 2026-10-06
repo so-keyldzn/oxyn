@@ -42,8 +42,11 @@ uuid.workspace = true
 [dev-dependencies]
 # Raise a log to `debug` and check what does not appear in it (I-03).
 tracing-subscriber.workspace = true
+# A user's `agents/` directory, with its links and its oversized files.
+tempfile.workspace = true
 
 # Kill the process **group** of an agent launched behind `npx`: otherwise the
 # real agent reattaches to pid 1 and outlives the end of the conversation.
+# Open a user's agent file without following a link (ADR-0049 § 4).
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

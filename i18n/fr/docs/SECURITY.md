@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="ae7034a7ce3b" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="bbae8492b0d0" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -282,7 +282,13 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    fermées ; son `id` ne peut pas prendre l'identité d'audit d'un agent livré ;
    il ne fournit qu'un **rôle** et ne remplace jamais les fragments de
    dialecte ou de destinataire livrés par Oxyn ; une erreur nomme le fichier
-   et la ligne, jamais son contenu ([I-03](../CLAUDE.md#i-03)). Ce qu'il ne
+   et la ligne, jamais son contenu ([I-03](../CLAUDE.md#i-03)). La lecture du
+   répertoire est bornée elle aussi : seuls les fichiers `*.md` directement
+   dedans, 64 au plus dans l'ordre des noms (le reste listé comme une seule
+   erreur), fichiers ordinaires seulement — un lien symbolique est refusé, pas
+   suivi, et l'ouverture elle-même refuse un lien ou une FIFO mis à sa place —,
+   et le plafond de 64 Kio est vérifié sur la taille puis de nouveau pendant
+   la lecture. Ce qu'il ne
    peut jamais obtenir : un outil, un niveau, une connexion, une adresse, une
    clé ou une écriture que le `PolicyGate` refuserait — le ciblage restreint,
    il n'accorde rien. Le panneau le signale comme agent utilisateur, et
