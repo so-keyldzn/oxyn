@@ -30,6 +30,9 @@
 //! repeats nothing the file says: the agent picker shows it, and a log may
 //! record it.
 
+mod catalog;
+#[cfg(test)]
+mod catalog_tests;
 mod files;
 mod parse;
 mod render;
@@ -39,6 +42,7 @@ mod tests;
 
 use std::fmt;
 
+pub use catalog::{AgentCatalog, AgentOrigin, CatalogEntry, CatalogError, UserAgentFile};
 pub use files::shipped_agents;
 pub(crate) use files::{SCHEMA_AGENT, SQL_AGENT, shipped_agent};
 pub use parse::parse_agent_file;
