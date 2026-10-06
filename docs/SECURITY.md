@@ -254,6 +254,23 @@ What enters Oxyn and is untrusted, in order of underestimation:
    as an instruction** when it is attached to an AI prompt.
 3. **Workspace files.** They may have been written by a third party, or
    by a future version of the program.
+
+   **User agent files** belong here
+   ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposed):
+   `<name>.md` in `agents/` of the data directory, read at launch and on
+   reload. A file someone else wrote can carry a role prompt that tells the
+   model to insist, to hide what it does or to ignore the user. What bounds
+   it: the file is refused above 64 KiB, outside UTF-8, with a YAML that uses
+   anchors, aliases, merge keys, duplicate keys, unsupported tags or an
+   unknown field, with a tool the registry does not have, or with a
+   placeholder outside the four closed variables; its `id` cannot take a
+   shipped agent's audit identity; it supplies a **role** only and never
+   replaces the dialect or recipient fragments Oxyn ships; an error names the
+   file and the line, never its content ([I-03](../CLAUDE.md#i-03)). What it
+   can never obtain: a tool, a tier, a connection, an endpoint, a key or a
+   write the `PolicyGate` would refuse — targeting narrows, it grants
+   nothing. The panel marks it as a user agent, and the step that reads
+   these files is reviewed for security before it merges.
 4. **Plugins.** Third-party code, run in a WASM sandbox
    ([ADR-0005](adr/0005-wasm-plugins.md)). The sandbox bounds the damage; it
    does not exempt from entrusting it with nothing. See

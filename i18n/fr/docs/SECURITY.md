@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="c2deb6ebe1fd" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="ae7034a7ce3b" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -269,6 +269,24 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    comme une instruction** lorsqu'il est joint à une invite IA.
 3. **Les fichiers de workspace.** Ils peuvent avoir été écrits par un tiers, ou
    par une version future du programme.
+
+   **Les fichiers d'agents utilisateur** en font partie
+   ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée) :
+   `<nom>.md` dans `agents/` du répertoire de données, lus au lancement et au
+   rechargement. Un fichier écrit par quelqu'un d'autre peut porter un prompt
+   de rôle qui dit au modèle d'insister, de cacher ce qu'il fait ou d'ignorer
+   l'utilisateur. Ce qui le borne : le fichier est refusé au-delà de 64 Kio,
+   hors UTF-8, avec un YAML qui utilise ancres, alias, clés de fusion, clés en
+   double, étiquettes non prises en charge ou un champ inconnu, avec un outil
+   que le registre n'a pas, ou avec un marqueur hors des quatre variables
+   fermées ; son `id` ne peut pas prendre l'identité d'audit d'un agent livré ;
+   il ne fournit qu'un **rôle** et ne remplace jamais les fragments de
+   dialecte ou de destinataire livrés par Oxyn ; une erreur nomme le fichier
+   et la ligne, jamais son contenu ([I-03](../CLAUDE.md#i-03)). Ce qu'il ne
+   peut jamais obtenir : un outil, un niveau, une connexion, une adresse, une
+   clé ou une écriture que le `PolicyGate` refuserait — le ciblage restreint,
+   il n'accorde rien. Le panneau le signale comme agent utilisateur, et
+   l'étape qui lit ces fichiers passe une relecture sécurité avant sa fusion.
 4. **Les plugins.** Du code tiers, exécuté dans un bac à sable WASM
    ([ADR-0005](adr/0005-wasm-plugins.md)). Le bac à sable borne les dégâts ; il
    ne dispense pas de ne rien lui confier. Voir

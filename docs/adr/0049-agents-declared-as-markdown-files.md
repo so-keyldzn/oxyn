@@ -1,10 +1,24 @@
-# ADR-0049 — An agent is a Markdown file with a YAML front matter, targeted by dialect, filled only from a closed list of variables
+# ADR-0049 — An agent is a Markdown file with a YAML front matter, composed with a dialect and a recipient fragment, filled only from a closed list of variables
 
-**Status:** proposed · **Date:** 2026-09-29 · **Deciders:** Nicolas Boromée
+**Status:** proposed · **Date:** 2026-09-29 · **Amended on:** 2026-10-06 ·
+**Deciders:** Nicolas Boromée
 
 **Refines:** [ARCHITECTURE §7.3](../ARCHITECTURE.md#73-agent-runtime), on one
 point: the form an `AgentSpec` takes on disk. That agents are configurations,
 not implementations, stays as it is.
+
+> **Amended on 2026-10-06, before acceptance.** The first version had one
+> axis: an agent, targeted by dialect, whose whole prompt was its file. A
+> system prompt now depends on **three** axes — the agent's **role**, the
+> connection's **dialect**, and the **recipient** that reads it (a provider
+> protocol or an external agent). The amendment adds the `recipients`
+> field (§ 2), the `{{recipient}}` variable (§ 3), the dialect and recipient
+> fragment files (§ 8), the fixed composition order (§ 9), the Rust and IPC
+> surface every implementation follows (§ 10), and the matching consequences
+> and rejected alternatives. Since the ADR was still `proposed`, it is
+> amended in place; nothing of the first version is withdrawn except the
+> sentence "the body is the system prompt, as is", now "the body is the
+> **role** part of the system prompt".
 
 ## Context
 
@@ -32,6 +46,17 @@ untrusted input (`AgentSpec::validate`: unknown tool refused, turns capped
 at `MAX_TURNS_CEILING` = 64). What is missing is a file format, a targeting
 field, and a place to read files from.
 
+**Added on 2026-10-06.** One prompt per agent is still one prompt for
+every reader. The same text goes to Anthropic's API, to a 7-billion-parameter
+model behind Ollama (`openai_compatible`), and to Claude Code or Codex
+through ACP, which see Oxyn's tools under their own MCP prefix and have no
+shell of their own once confined
+([ADR-0032](0032-agent-externe-confine-au-lancement.md)). What a model must
+know about the dialect — identifier quoting, `LIMIT` against `TOP` or
+`FETCH`, that `EXPLAIN ANALYZE` runs the statement, whether DDL is
+transactional — is the same for the SQL agent and the Schema agent, and
+would otherwise be copied into each role file, per dialect.
+
 ## Decision
 
 ### 1. The format: Markdown with a YAML front matter
@@ -44,6 +69,7 @@ id: 0199a3c0-0000-7000-8000-000000000001
 name: SQL
 description: Writes, fixes and explains queries on the open connection.
 applies_to: []
+recipients: []
 tools: [execute_query, describe_schema, request_sample]
 max_turns: 8
 context:
@@ -59,9 +85,11 @@ You help a data professional write and fix queries against the
   2026-09-29 — [RESEARCH-NOTES](../RESEARCH-NOTES.md#yaml-parsing-for-agent-files--checked-on-2026-09-29)),
   with `deny_unknown_fields` on the front-matter struct: a misspelled key is
   an error, not a silently ignored setting.
-* The **body**, after the closing `---`, is the system prompt, as is. Oxyn
-  never renders it as HTML; Markdown is only the author's convenience and
-  the model's.
+* The **body**, after the closing `---`, is the **role** part of the system
+  prompt: what the agent is for, whatever the database and whoever reads
+  it. The rest of the prompt comes from the fragments of § 8, in the order
+  of § 9. Oxyn never renders it as HTML; Markdown is only the author's
+  convenience and the model's.
 * The parser is configured strict, and the configuration is part of the
   decision: `Budget { max_anchors: 0, max_aliases: 0, .. }`,
   `merge_keys: MergeKeyPolicy::Error`,
@@ -70,39 +98,53 @@ You help a data professional write and fix queries against the
   An agent file has no use for references between nodes, and each of these
   is either a resource-exhaustion lever or a way for a key to mean
   something other than what it reads.
-* A file is refused, with the file name and the line in the message, when:
-  it is over **64 KiB** (checked before parsing: `serde-saphyr`'s own size
-  cap applies to readers, not to strings); the front matter is missing or is
-  not the first thing in the file; the YAML breaks one of the settings
-  above; `validate()` fails; the prompt names an unknown variable (§ 3);
-  `applies_to` names an unknown dialect (§ 2).
+* A file is refused, with the file name and the line in the message —
+  never its content beyond that —, when: it is over **64 KiB** (checked
+  before parsing: `serde-saphyr`'s own size cap applies to readers, not to
+  strings); it is not valid UTF-8; the front matter is missing or is not the
+  first thing in the file; the YAML breaks one of the settings above;
+  `validate()` fails; the prompt names an unknown variable (§ 3);
+  `applies_to` names an unknown dialect, or `recipients` an unknown
+  recipient (§ 2).
 
-### 2. Targeting: `applies_to`
+### 2. Targeting: `applies_to` and `recipients`
 
 `applies_to` is a list of `SqlDialect` names as `SqlDialect::as_str` writes
-them (`postgres`, `sqlite`, `mysql`, `duckdb`…). An empty list means every
-connection. An agent is **offered** for a connection only if the list is
-empty or contains the connection's dialect. The agent picker shows the
-offered agents; the default is the first offered one, in the order of § 4.
+them: `ansi`, `postgres`, `mysql`, `sqlite`, `sqlserver`, `oracle`,
+`clickhouse`, `duckdb`, `snowflake`, `bigquery`, `redshift`.
+
+`recipients` is a list of recipient keys, as `Recipient::as_str` writes
+them (§ 8): `anthropic`, `openai`, `gemini`, `openai_compatible`,
+`claude-code`, `codex`, `external`.
+
+For both, an empty list means "all". An agent is **offered** for a target
+only if both lists are empty or contain the target's dialect and recipient
+(`AgentSpec::offered_for`). The agent picker shows the offered agents; the
+default is the SQL agent when it is offered, otherwise the first offered
+one in the order of § 4.
 
 Targeting narrows what is offered. It grants nothing: the tools, the
 `PolicyGate` and the connection's tier are the same whichever agent runs.
 
 ### 3. The closed list of variables
 
-The prompt may contain `{{name}}` placeholders, and only these:
+The prompt — role body and fragments alike — may contain `{{name}}`
+placeholders, and only these:
 
 | Variable | Value | Source |
 |---|---|---|
 | `{{dialect}}` | `SqlDialect::as_str` of the connection | the connection's driver |
 | `{{driver}}` | the driver's name | the driver |
 | `{{environment}}` | `local`, `development`, `staging` or `production` | the connection's marking |
+| `{{recipient}}` | `Recipient::as_str` of the destination (§ 8) | the destination chosen in the panel |
 
-All three are values Oxyn holds, from a closed set; none is written by the
-server or the database. A placeholder outside this list makes the file
-**invalid**; it is never replaced by an empty string. The list is extended
-only by a new ADR, and only with a value that is neither database content,
-nor a server response, nor a secret.
+All four are values Oxyn holds, from a closed set; none is written by the
+server, the database or the model. A placeholder outside this list makes
+the file **invalid**; it is never replaced by an empty string. The list is
+extended only by a new ADR, and only with a value that is neither database
+content, nor a server response, nor a secret. `{{recipient}}` was added by
+the 2026-10-06 amendment under that rule: it names a protocol or a preset,
+never an endpoint, a model or a key.
 
 **Database content is never a variable**: no `{{tables}}`, `{{schema}}`,
 `{{comments}}`, `{{sample}}`. The structure and the samples reach the model
@@ -121,14 +163,17 @@ a variable either, for the same reason: they are a server response, and
    with `include_str!`. They are parsed and validated by a test at build
    time (`shipped_agents_are_valid`, which already exists), so a broken
    shipped file never reaches a user. `sql_agent()` and `schema_agent()`
-   become thin readers of their file; their `id` stays the same, since the
-   audit log records it.
+   become thin readers of their file; their `id` stays the same
+   (`0199a3c0-0000-7000-8000-000000000001` and `…0002`), since the audit
+   log records it.
 2. **User agents** — second step, same format — live in `agents/` of the
    data directory (`ProjectDirs::data_dir()`, next to the local store). They
    are read at launch and when the user reloads them; an invalid file is
    listed with its error and not offered, it never blocks the others. Their
    `id` must not collide with a shipped one: a collision is refused, so a
-   file cannot take the audit identity of a shipped agent.
+   file cannot take the audit identity of a shipped agent. A user file
+   supplies a **role**; it never replaces a dialect or recipient fragment
+   (§ 8).
 3. **Plugin agents** (phase 4, [PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md))
    use the same format and the same validation; the manifest carries the
    file.
@@ -139,23 +184,34 @@ Order in the picker: shipped, then user, then plugin, each by `name`.
 
 Unchanged from `spec.rs`, and now enforced by `deny_unknown_fields`: no
 connection or session, no privacy tier, no endpoint, no key, no model
-choice. `tools` restricts the registry; it never adds to it.
+choice. `tools` restricts the registry; it never adds to it. `recipients`
+restricts where an agent is offered; it never chooses the destination.
 
 ### 6. One conversation, one agent
 
 * The picker sits in the header of the assistant panel. The agent is chosen
   **per conversation**: choosing another agent opens a **new conversation**;
-  the current one stays in the history, unchanged. A conversation's system
-  prompt therefore never changes under it.
+  the current one stays in the history, unchanged. A conversation's **role**
+  therefore never changes under it.
 * The conversation remembers its agent: `ai_conversations` gains a nullable
-  `agent_id` column (one `ALTER TABLE … ADD COLUMN` migration of
-  `oxyn-store`). A conversation written before it reads as the SQL agent,
+  `agent_id TEXT` column (one additive `ALTER TABLE … ADD COLUMN` migration
+  of `oxyn-store`). A conversation written before it reads as the SQL agent,
   which is what it ran with.
-* Resumed, a conversation runs with its recorded agent, rendered again from
-  the file with the connection's current variables. If that agent no longer
-  exists — a user file deleted or now invalid —, the conversation reopens
-  with the SQL agent, and the panel **says so**, naming the missing agent.
-  It never silently runs under another prompt than the one it shows.
+* Resumed, a conversation runs with its recorded agent, rendered again with
+  the connection's current target. If that agent no longer exists — a user
+  file deleted or now invalid —, the conversation reopens with the SQL
+  agent, and the panel **says so**, naming the missing agent. It never
+  silently runs under another prompt than the one it shows.
+* Changing **destination** between two questions keeps the conversation and
+  its agent, and changes the recipient fragment (§ 9). It does not put a
+  history under a prompt it was not written with: a change of destination
+  already sends no previous exchange to the new recipient
+  ([UX-SPEC](../UX-SPEC.md#who-answers-is-chosen-in-the-panel)), so the new
+  recipient starts from a fresh context with its own rendered prompt. Each
+  exchange records its destination, hence the prompt that produced it can
+  be named: agent × dialect × recipient. A destination the conversation's
+  agent is not offered for is shown disabled, with its reason; it does not
+  switch the agent.
 
 ### 7. External agents receive the agent's prompt too
 
@@ -181,12 +237,129 @@ The chosen agent applies to both destinations, provider and external agent
   confinement ([ADR-0032](0032-agent-externe-confine-au-lancement.md)) and
   the `PolicyGate` stay the guarantees, not the prompt.
 
+### 8. Three axes, three kinds of file
+
+Every file below is UTF-8, capped at **64 KiB**, embedded with
+`include_str!`, and checked by a build-time test: size, encoding, and that
+every placeholder belongs to § 3.
+
+| Axis | File | Front matter | Carries |
+|---|---|---|---|
+| Role | `crates/oxyn-ai/agents/<role>.md` | yes (§ 1) | what the agent is for; `applies_to`, `recipients`, tools, context, turns |
+| Dialect | `crates/oxyn-ai/prompts/dialects/<dialect>.md` | **none** | what a model must know to write correct SQL for that dialect |
+| Recipient | `crates/oxyn-ai/prompts/recipients/<recipient>.md` | **none** | how this recipient behaves inside Oxyn |
+
+**Dialect fragments.** One file per `SqlDialect::as_str` key. It says:
+how identifiers are quoted; how a result is bounded (`LIMIT`, `TOP`,
+`FETCH FIRST`); the `EXPLAIN` form, and that the analyzing form
+(`EXPLAIN ANALYZE` and its equivalents) **executes** the statement
+([I-07](../../CLAUDE.md#i-07)); whether DDL is transactional; the catalog
+views; the common traps. Real fragments are written at least for `ansi`,
+`postgres`, `redshift`, `mysql`, `sqlite` and `duckdb` — the dialects Oxyn
+has or plans drivers for. **A dialect without its file uses `ansi.md`**:
+the common denominator is a conservative default, an absent fragment would
+leave the model guessing.
+
+**Recipient fragments.** One file per recipient, and every recipient has
+its file — a missing one fails the build-time test, there is no fallback.
+It says how the tools look **as this recipient sees them**, the output
+format (fenced `sql` blocks, the `erd` block of
+[UX-SPEC](../UX-SPEC.md#an-erd-block-is-drawn-from-the-catalog-not-from-the-answer)),
+and what the recipient must not attempt:
+
+| Key | Recipient | What its fragment is for |
+|---|---|---|
+| `anthropic` | `AiProviderKind::Anthropic` | Oxyn's tools as native tool calls |
+| `openai` | `AiProviderKind::OpenAi` | same, for OpenAI's function calling |
+| `gemini` | `AiProviderKind::Gemini` | same, for Gemini's function declarations |
+| `openai_compatible` | `AiProviderKind::OpenAiCompatible` | a **shorter, more explicit** style: Ollama, LM Studio, llama.cpp often serve small local models |
+| `claude-code` | the `claude-code` preset | Oxyn's tools (`describe_schema`, `execute_query`, `request_sample`) under its own MCP prefix; **no shell or file tool of its own**, confined ([ADR-0032](0032-agent-externe-confine-au-lancement.md)) |
+| `codex` | the `codex` preset | same, for Codex |
+| `external` | an external agent declared by hand | only Oxyn's MCP tools are meant to be used; it may have shell or file tools Oxyn cannot see, and must not use them |
+
+The `external` fragment is a request, not a fence: a hand-declared agent is
+**not confined**, and Oxyn cannot enforce what the fragment asks
+(Consequences).
+
+Fragments are **shipped only**. A user or plugin agent supplies a role; it
+does not add, replace or remove a dialect or recipient fragment. What Oxyn
+tells every model about `EXPLAIN ANALYZE` or about its own tools is Oxyn's
+text, reviewed in the repository.
+
+### 9. The composition order is fixed
+
+```text
+rendered = role body + "\n\n" + dialect fragment + "\n\n" + recipient fragment
+```
+
+then the § 3 substitution, applied once to the whole text. The order is
+fixed and nothing else is concatenated in: no catalog, no sample, no server
+banner, no conversation state. Database content reaches the model only
+through `ContextBuilder` ([I-04](../../CLAUDE.md#i-04)), in a message of its
+own, never in the rendered prompt. Since the substitution only knows four
+values Oxyn holds, a value cannot introduce a placeholder of its own.
+
+`render_system_prompt` is the **only** way a system prompt is produced. A
+`format!` that builds one elsewhere is a defect, as a second gateway would
+be.
+
+### 10. The surface every implementation follows
+
+In `oxyn-ai`:
+
+```rust
+pub enum Recipient { Provider(AiProviderKind), External(ExternalAgentKind) }
+pub enum ExternalAgentKind { ClaudeCode, Codex, Other }
+
+pub struct PromptTarget {
+    pub dialect: SqlDialect,
+    pub driver: DriverId,
+    pub environment: Environment,
+    pub recipient: Recipient,
+}
+
+impl AgentSpec {
+    pub fn offered_for(&self, target: &PromptTarget) -> bool;
+}
+
+pub fn parse_agent_file(name: &str, text: &str) -> Result<AgentSpec, AgentFileError>;
+pub fn render_system_prompt(spec: &AgentSpec, target: &PromptTarget) -> Result<String, AgentFileError>;
+pub fn shipped_agents() -> Vec<AgentSpec>;
+```
+
+* `Recipient::as_str` gives the file keys of § 8. `ExternalAgentKind` is
+  parsed from the preset id (`claude-code`, `codex`); an external agent
+  without a preset is `Other`, key `external`.
+* `AgentSpec` gains `applies_to: Vec<SqlDialect>` and
+  `recipients: Vec<Recipient>`, both `#[serde(default)]`, empty meaning
+  "all".
+* `AgentFileError` carries the file name and the line, never the file's
+  content beyond that.
+
+Between `oxyn-desktop` and `apps/desktop`:
+
+* `ai_list_agents { connectionId } -> AgentOption[]`, with
+  `AgentOption = { id, name, description, origin: "shipped" | "user", error: string | null }`.
+  Only the agents offered for that connection come back; an invalid user
+  file comes back with `error` set, and is not selectable.
+* Starting a conversation takes an optional `agentId`; absent means the
+  SQL agent.
+* A conversation summary and a transcript carry `agentId: string | null`
+  and `missingAgent: { name: string } | null` — set when the recorded agent
+  no longer exists and the SQL agent replaced it (§ 6).
+
 ## Consequences
 
 * **+** Writing or tuning an agent is editing text: no Rust, no recompile
   for user agents, a one-file diff for shipped ones.
 * **+** One agent per database becomes one file per database, offered only
   where it applies.
+* **+** What every model must know about a dialect is written once, in one
+  fragment, and every role benefits from it. What a recipient must know
+  about Oxyn's tools is written once per recipient.
+* **+** A small local model behind `openai_compatible` gets a prompt
+  written for it, and a confined external agent is told what it has and
+  has not, instead of looking for a shell it no longer has.
 * **+** A user agent is readable and portable without Oxyn
   ([I-11](../../CLAUDE.md#i-11)).
 * **+** The seven remaining agents and plugin agents land in the format
@@ -197,7 +370,7 @@ The chosen agent applies to both destinations, provider and external agent
   `deny_unknown_fields` and typed fields catch most of it; the rest shows as
   a validation error.
 * **−** User agents are a **new input surface**
-  ([SECURITY](../SECURITY.md), "Workspace files"): a file written by someone
+  ([SECURITY](../SECURITY.md#input-surface), "Workspace files"): a file written by someone
   else can carry a prompt that asks the model to misbehave. It cannot
   obtain a tool, a tier or a write the `PolicyGate` would refuse, but it can
   make the model insistent. The picker therefore marks user agents as such,
@@ -210,21 +383,35 @@ The chosen agent applies to both destinations, provider and external agent
 * **−** On an external agent, the agent's prompt is advice the external
   agent may weigh against its own system prompt. The same `.md` can behave
   more loosely there than on a provider.
-* **−** Three variables will feel short. Every request for a fourth one has
+* **−** The `external` fragment asks a hand-declared agent not to use its
+  own shell or file tools; Oxyn **cannot enforce it**, since such an agent
+  is not confined ([ADR-0032](0032-agent-externe-confine-au-lancement.md)).
+  The panel's permanent mention for a non-confined agent stays the truth,
+  not the fragment.
+* **−** The prompt a model read is no longer one file: it is three, and an
+  exchange is explained by naming the agent, the dialect and the recipient.
+  A reviewer of a prompt change reads the composition, not one file.
+* **−** The `ansi` fallback is right for no dialect in particular: until a
+  dialect has its own fragment, its models get the common denominator.
+* **−** Four variables will feel short. Every request for a fifth one has
   to go through an ADR, on purpose.
 
 **Exit cost:** low for shipped agents — about a day to put the prompts back
-into Rust literals; the `AgentSpec` type does not change. Higher once user
-agents exist: their files are the user's, and dropping the format would
-need a converter; the `agent_id` column stays, readable, whatever the
-format. What bounds it: the front matter is `AgentSpec`'s own
-serde form, so any other serde format (TOML, JSON) reads the same data.
+into Rust literals; the `AgentSpec` type does not change. The fragments
+add a day: their text goes back into the role literals, one copy per
+role. Higher once user agents exist: their files are the user's, and
+dropping the format would need a converter; the `agent_id` column stays,
+readable, whatever the format. What bounds it: the front matter is
+`AgentSpec`'s own serde form, so any other serde format (TOML, JSON) reads
+the same data.
 
 **Reconsider if** a provider needs per-agent settings that do not fit a
 flat front matter (structured outputs, tool schemas written by the agent
-author), or if user agents turn out to be used mostly to work around the
+author), if user agents turn out to be used mostly to work around the
 `PolicyGate`'s refusals — which would argue for signing them instead of
-reading them freely.
+reading them freely —, or if a recipient fragment turns out to need
+different text for two models of the same protocol, which would argue for
+a model-family axis rather than a longer fragment.
 
 ## Rejected alternatives
 
@@ -240,3 +427,10 @@ reading them freely.
 | Do not persist the agent of a conversation | A resumed conversation would silently run under whatever agent is selected, with a history written under another prompt. |
 | Agents for providers only | Leaves the external-agent path without the per-database knowledge the feature is for; the opening text already carries Oxyn-written instructions, so the prompt has a place there. |
 | `applies_to` on driver name instead of dialect | Redshift speaks the PostgreSQL dialect through the PostgreSQL driver ([ADR-0003](0003-driver-capabilities.md)); the dialect is what the prompt is written for. `{{driver}}` stays available to the text. |
+| One complete file per role × dialect × recipient | Combinatorial: 2 shipped roles × 11 dialects × 7 recipients is 154 files, nearly all copies of each other; a correction to the `EXPLAIN ANALYZE` warning would be made in dozens of places, and missed in one. |
+| Recipient-specific or dialect-specific text inside the role file, behind conditionals | Needs conditionals in the prompt, that is the template engine rejected above; and every role would carry its own copy of the dialect and recipient knowledge. |
+| Recipient guidance written in Rust, in each provider adapter of `oxyn-llm` | Back to prompt text in string literals, outside the review of prompts, and absent from the external-agent path, which has no adapter. |
+| Recipient keyed by model name rather than by protocol or preset | The model list is open and changes every month; a closed key is what the § 3 rule allows. `openai_compatible` approximates "often a small local model", and the reconsideration clause covers the day it is not enough. |
+| No dialect fragment when a dialect has no file | The model would get no SQL guidance at all; `ansi` is conservative and always present. |
+| User or plugin files that override a fragment | A user file could remove the warning that `EXPLAIN ANALYZE` executes, or tell an external agent it has a shell. Fragments are Oxyn's own text; a role body can still add guidance of its own. |
+| Concatenate the rendered prompt with the schema context | Puts database content into the system prompt, outside `ContextBuilder`'s fencing (I-04); the context stays a message of its own. |

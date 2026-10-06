@@ -2153,6 +2153,46 @@ never abbreviated. Validation refuses control, format and line/paragraph separat
 in every field and bounds the command and each argument to 4,096 UTF-8 bytes.
 Scripted host tests cover premature approval, refusal, expiry and contention.
 
+**Planned on 2026-10-06 — prompts composed per role × dialect × recipient.**
+[ADR-0049](adr/0049-agents-declared-as-markdown-files.md), amended on
+2026-10-06, stays `proposed` until the user accepts it; its first code
+commit is step 1. Three steps, each its own pull request, in this order:
+
+1. **Composition, in `oxyn-ai`.** The role files `agents/sql.md` and
+   `agents/schema.md`, the dialect fragments (real text for `ansi`,
+   `postgres`, `redshift`, `mysql`, `sqlite`, `duckdb`; the others fall
+   back to `ansi`), one recipient fragment per recipient (`anthropic`,
+   `openai`, `gemini`, `openai_compatible`, `claude-code`, `codex`,
+   `external`); `Recipient`, `PromptTarget`, `AgentSpec::offered_for`,
+   `parse_agent_file`, `render_system_prompt`, `shipped_agents`; the
+   provider and external-agent paths call `render_system_prompt` and
+   nothing else. **Exit gate**: a build-time test parses every shipped
+   file, checks the 64 KiB cap, UTF-8 and the closed variables, and renders
+   every role × dialect × recipient without error; `sql_agent()` and
+   `schema_agent()` keep their ids; a test refuses an unknown placeholder,
+   an unknown dialect and an unknown recipient with the file name and line;
+   no `format!` builds a system prompt outside `render_system_prompt`.
+2. **One conversation, one agent: store, IPC, panel.** The additive
+   migration adding `ai_conversations.agent_id TEXT` (NULL reads as the SQL
+   agent); `ai_list_agents { connectionId }` returning `AgentOption[]`; an
+   optional `agentId` when a conversation starts; `agentId` and
+   `missingAgent` on summaries and transcripts; the agent selector in the
+   panel header ([UX-SPEC](UX-SPEC.md#the-agent-is-chosen-per-conversation)).
+   **Exit gate**: choosing the Schema agent opens a new conversation and
+   leaves the previous one unchanged; a conversation written before the
+   migration reopens as the SQL agent; a conversation whose agent is gone
+   reopens with the SQL agent and the panel names the missing agent —
+   each proven by a test, the panel by a story.
+3. **User agents.** Reading `agents/` of the data directory at launch and on
+   reload, the id-collision refusal, invalid files listed with their error
+   and not selectable, user agents marked in the selector
+   ([SECURITY](SECURITY.md#input-surface), "Workspace files").
+   **Exit gate**: a security review (`/securite`) of the reading step
+   before it merges; tests for an oversized file, a non-UTF-8 file, an
+   anchor or alias, a duplicate key, an unknown field, an unknown
+   placeholder and an id collision, none of which blocks the valid files
+   next to it.
+
 ## Phase 3 bis — Beyond the relational
 
 Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbered

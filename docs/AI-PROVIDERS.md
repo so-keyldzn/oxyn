@@ -190,6 +190,45 @@ kind and state of its steps, plan — and what it never shows of it is described
 in [UX-SPEC](UX-SPEC.md#what-the-panel-shows-of-an-external-agent); the
 rule refines ADR-0026, which only reported the text.
 
+## The system prompt depends on the recipient
+
+What Oxyn writes to a model besides the context — the system prompt for a
+provider, the Oxyn-written block of the opening text for an external
+agent — is **composed**, not stored whole
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposed,
+amended on 2026-10-06): the agent's role, then the fragment of the
+connection's dialect (`ansi` when the dialect has none), then the fragment
+of the **recipient**, in that fixed order, filled with four closed
+variables — `{{dialect}}`, `{{driver}}`, `{{environment}}`,
+`{{recipient}}`. The same question, on the same connection, therefore goes
+out with a different system prompt to Anthropic's API, to a small model
+behind `openai_compatible`, and to Claude Code.
+
+What this changes at the boundary, and what it does not:
+
+* **The recipient key is the only new value that goes out**, and it names a
+  protocol or a preset — `anthropic`, `openai`, `gemini`,
+  `openai_compatible`, `claude-code`, `codex`, `external` —, never an
+  endpoint, a model, a host or a key ([I-03](../CLAUDE.md#i-03)).
+* **No database content enters the composition.** The fragments are text
+  shipped with Oxyn; the variables are values Oxyn holds. The schema, the
+  samples and the server's identity still reach the model only through
+  `ContextBuilder`, under the connection's tier, in a message of their own
+  ([I-04](../CLAUDE.md#i-04)). The tier table of
+  [ADR-0006](adr/0006-ai-privacy-tiers.md) is unchanged: a rendered prompt
+  carries nothing a `Local` connection would have to hold back.
+* **A recipient fragment describes; it does not grant.** The `claude-code`
+  and `codex` fragments tell a confined agent that it has Oxyn's MCP tools
+  and no shell; the `external` fragment asks a hand-declared agent not to
+  use the shell or file tools Oxyn cannot see. Neither is a guarantee: the
+  confinement of [ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)
+  and the `PolicyGate` are, and a hand-declared agent stays **not
+  confined** whatever its fragment says.
+* **A user agent file only supplies a role.** It cannot replace a dialect
+  or recipient fragment, so what Oxyn tells every model about its tools and
+  about `EXPLAIN ANALYZE` executing the statement
+  ([I-07](../CLAUDE.md#i-07)) stays Oxyn's text.
+
 ## What the AI sees of the schema, and when it is read
 
 The context is rendered from the catalog **cache**, never from a server
