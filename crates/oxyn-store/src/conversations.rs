@@ -39,6 +39,8 @@
 //! Every method here can block and takes the store lock: never call them from
 //! the interface thread ([I-05](../../../CLAUDE.md#i-05)).
 
+#[cfg(test)]
+mod agent_tests;
 mod mentions;
 mod orphans;
 mod retention;
@@ -60,7 +62,7 @@ pub use tree::{
 use chrono::{DateTime, Utc};
 use oxyn_core::ai::{ReasoningBlock, Role, StopReason};
 use oxyn_core::{
-    AgentSessionId, ConnectionId, ConversationId, ErrorClass, PrivacyTier, ProviderId,
+    AgentId, AgentSessionId, ConnectionId, ConversationId, ErrorClass, PrivacyTier, ProviderId,
     QueryLanguage, WorkspaceId,
 };
 use rusqlite::{OptionalExtension, Row, params};
@@ -629,6 +631,9 @@ pub struct TurnPage {
 pub struct Conversation {
     /// Identity, stable across restarts.
     pub id: ConversationId,
+    /// The agent role that opened the thread. `None` leaves the legacy SQL
+    /// agent fallback to the caller; the store never resolves agent files.
+    pub agent_id: Option<AgentId>,
     /// The owning workspace. Deleting it deletes the thread.
     pub workspace: WorkspaceId,
     /// The connection the thread is about. No foreign key: deleting a
@@ -655,10 +660,16 @@ pub struct Conversation {
 impl Conversation {
     /// Opens a thread, not yet persisted.
     #[must_use]
-    pub fn new(workspace: WorkspaceId, destination: Destination, title: impl Into<String>) -> Self {
+    pub fn new(
+        workspace: WorkspaceId,
+        destination: Destination,
+        title: impl Into<String>,
+        agent_id: Option<AgentId>,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id: ConversationId::new(),
+            agent_id,
             workspace,
             connection: None,
             connection_name: None,
@@ -702,6 +713,8 @@ impl std::fmt::Debug for Conversation {
 pub struct ConversationSummary {
     /// Identity, to open it.
     pub id: ConversationId,
+    /// The recorded agent role, with the same legacy semantics as [`Conversation::agent_id`].
+    pub agent_id: Option<AgentId>,
     /// The title shown.
     pub title: String,
     /// Who answered.
@@ -757,8 +770,9 @@ impl<'a> Conversations<'a> {
             connection.execute(
                 "INSERT INTO ai_conversations
                      (id, workspace_id, connection_id, connection_name, destination_kind,
-                      destination_id, destination_label, model, title, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                      destination_id, destination_label, model, title, created_at, updated_at,
+                      agent_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(id) DO UPDATE SET
                      connection_id     = excluded.connection_id,
                      connection_name   = excluded.connection_name,
@@ -767,7 +781,8 @@ impl<'a> Conversations<'a> {
                      destination_label = excluded.destination_label,
                      model             = excluded.model,
                      title             = excluded.title,
-                     updated_at        = excluded.updated_at",
+                     updated_at        = excluded.updated_at,
+                     agent_id          = excluded.agent_id",
                 params![
                     conversation.id.to_string(),
                     conversation.workspace.to_string(),
@@ -780,6 +795,7 @@ impl<'a> Conversations<'a> {
                     conversation.title,
                     conversation.created_at,
                     conversation.updated_at,
+                    conversation.agent_id.map(|id| id.to_string()),
                 ],
             )?;
             Ok(())
@@ -997,7 +1013,7 @@ impl<'a> Conversations<'a> {
         self.store.with_connection(|handle| {
             let mut query = handle.prepare(
                 "SELECT c.id, c.destination_kind, c.destination_id, c.destination_label, c.model,
-                        c.title, c.created_at, c.updated_at,
+                        c.title, c.created_at, c.updated_at, c.agent_id,
                         (SELECT COUNT(*) FROM ai_conversation_turns t
                           WHERE t.conversation_id = c.id) AS turns
                    FROM ai_conversations c
@@ -1040,7 +1056,7 @@ impl<'a> Conversations<'a> {
 /// The header columns, shared by every header read.
 const HEADER_COLUMNS: &str = "SELECT id, workspace_id, connection_id, connection_name, \
      destination_kind, destination_id, destination_label, model, title, created_at, updated_at, \
-     selected_node FROM ai_conversations";
+     selected_node, agent_id FROM ai_conversations";
 
 /// The turn columns, shared by every transcript read.
 ///
@@ -1316,6 +1332,7 @@ fn conversation_from_row(row: &Row<'_>) -> Result<Conversation> {
     let workspace: String = row.get("workspace_id")?;
     Ok(Conversation {
         id: parse_id(&id, "ai_conversations.id")?,
+        agent_id: parse_id_opt(row.get("agent_id")?, "ai_conversations.agent_id")?,
         workspace: parse_id(&workspace, "ai_conversations.workspace_id")?,
         connection: parse_id_opt(row.get("connection_id")?, "ai_conversations.connection_id")?,
         connection_name: row.get("connection_name")?,
@@ -1360,6 +1377,7 @@ fn summary_from_row(row: &Row<'_>) -> Result<ConversationSummary> {
     let turns: i64 = row.get("turns")?;
     Ok(ConversationSummary {
         id: parse_id(&id, "ai_conversations.id")?,
+        agent_id: parse_id_opt(row.get("agent_id")?, "ai_conversations.agent_id")?,
         title: row.get("title")?,
         destination: destination_from_row(row)?,
         created_at: row.get("created_at")?,

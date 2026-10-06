@@ -1224,6 +1224,7 @@ impl Backend {
                 executor.workspace(),
                 destination,
                 thread.title(),
+                None,
             )
             .on_connection(config.id, config.name.clone());
             // The window's thread and the store's row are one conversation.

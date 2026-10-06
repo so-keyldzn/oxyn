@@ -747,6 +747,10 @@ CREATE TABLE workspace_window_consoles (
 CREATE INDEX workspace_windows_order ON workspace_windows(workspace_id, ordinal);
 ";
 
+/// Migration 19 — the role that opened a conversation. Older rows keep NULL:
+/// resolving that legacy value to the SQL agent belongs to the caller.
+const M0019_CONVERSATION_AGENT: &str = "ALTER TABLE ai_conversations ADD COLUMN agent_id TEXT;";
+
 /// Every migration, in application order.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -838,6 +842,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 18,
         name: "workspace_windows",
         sql: M0018_WORKSPACE_WINDOWS,
+    },
+    Migration {
+        version: 19,
+        name: "conversation_agent",
+        sql: M0019_CONVERSATION_AGENT,
     },
 ];
 
