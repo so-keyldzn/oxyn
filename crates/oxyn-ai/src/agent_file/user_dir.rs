@@ -13,7 +13,7 @@ use std::io::{self, Read};
 use std::path::Path;
 
 use super::catalog::UserAgentFile;
-use super::parse::parse_agent_file;
+use super::parse::{is_misleading_char, parse_agent_file};
 use super::{AgentFileError, MAX_FILE_BYTES};
 
 /// Most agent files read from the directory.
@@ -412,21 +412,13 @@ fn display_name(name: &OsStr) -> String {
     name.to_string_lossy()
         .chars()
         .map(|c| {
-            if c.is_control() || is_bidi_control(c) {
+            if is_misleading_char(c) {
                 char::REPLACEMENT_CHARACTER
             } else {
                 c
             }
         })
         .collect()
-}
-
-/// The characters that reorder text around them (Unicode's `Bidi_Control`).
-const fn is_bidi_control(c: char) -> bool {
-    matches!(
-        c,
-        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-    )
 }
 
 /// What an error about the directory itself names: its last component,

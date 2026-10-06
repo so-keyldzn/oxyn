@@ -154,6 +154,33 @@ pub enum AgentFileError {
         reason: String,
     },
 
+    /// `name` or `description` holds a control or bidirectional character.
+    #[error(
+        "{file}, line {line}: `{field}` holds a control or bidirectional character; \
+         write it as plain text"
+    )]
+    MisleadingCharacter {
+        /// The file.
+        file: String,
+        /// The line of the field.
+        line: u64,
+        /// `name` or `description`.
+        field: &'static str,
+    },
+
+    /// `name` or `description` is longer than the picker shows.
+    #[error("{file}, line {line}: `{field}` is longer than {max} characters")]
+    TextTooLong {
+        /// The file.
+        file: String,
+        /// The line of the field.
+        line: u64,
+        /// `name` or `description`.
+        field: &'static str,
+        /// The longest accepted.
+        max: usize,
+    },
+
     /// The file's bytes are not UTF-8.
     #[error("{file}: not valid UTF-8; an agent file is UTF-8 text")]
     NotUtf8 {

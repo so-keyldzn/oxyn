@@ -189,3 +189,36 @@ fn get_ignores_unknown_ids() {
     assert!(catalog.get(&oxyn_core::AgentId::new()).is_none());
     assert_eq!(catalog.get(&schema_agent().id), Some(&schema_agent()));
 }
+
+/// What a `{:?}` added to a log one day would print: names, ids and counts,
+/// never what a user's file says.
+#[test]
+fn debug_never_prints_a_prompt_or_a_description() {
+    let text = "---\nid: 0199a3c0-0000-7000-8000-0000000000a9\nname: Tuner\n\
+                description: DESCRIPTION-MARKER\n---\nPROMPT-MARKER\n";
+    let file = UserAgentFile {
+        file_name: "tuner.md".to_owned(),
+        result: parse_agent_file("tuner.md", text),
+    };
+    let catalog = AgentCatalog::new(shipped_agents(), vec![file.clone()]);
+    let offered = catalog.offered(&anthropic_on(SqlDialect::Postgres));
+    let spec = catalog
+        .get(
+            &"0199a3c0-0000-7000-8000-0000000000a9"
+                .parse()
+                .expect("an id"),
+        )
+        .expect("the agent is valid");
+
+    for printed in [
+        format!("{file:?}"),
+        format!("{catalog:?}"),
+        format!("{offered:?}"),
+        format!("{spec:?}"),
+        format!("{:?}", sql_agent()),
+    ] {
+        assert!(!printed.contains("MARKER"), "{printed}");
+        assert!(!printed.contains("You help"), "{printed}");
+    }
+    assert!(format!("{file:?}").contains("tuner.md"));
+}
