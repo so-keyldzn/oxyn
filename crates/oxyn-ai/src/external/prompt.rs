@@ -227,7 +227,9 @@ impl AgentPrompt {
         let asked = Self::from_user(tier, question)?;
         let instructions = render_system_prompt(agent.spec, agent.target)
             .map_err(|error| OxynError::Config(error.to_string()))?;
+        // The agent's own budget for the opening schema (ADR-0049 § 7).
         let context = ContextBuilder::new(cache, tier)
+            .with_policy(agent.spec.context.clone())
             .with_language(language)
             .focused_on(asked.text.clone())
             .with_mentions(mentions)

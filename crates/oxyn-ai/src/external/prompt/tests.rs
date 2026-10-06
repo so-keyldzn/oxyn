@@ -412,6 +412,29 @@ mod schema {
         assert!(!follow_up.as_str().contains(rendered.as_str()));
     }
 
+    /// The opening schema is bounded by the agent's own `context`, not by the
+    /// default policy (ADR-0049 § 7).
+    #[test]
+    fn the_opening_schema_follows_the_agents_context_policy() {
+        let mut narrow = crate::builtin::sql_agent();
+        narrow.context.max_relations = 1;
+        let opening = AgentPrompt::with_schema(
+            PrivacyTier::Metadata,
+            "orders and customers",
+            &nbc(),
+            SQLITE,
+            Vec::new(),
+            Vec::new(),
+            AgentInstructions {
+                spec: &narrow,
+                target: sql_instructions().target,
+            },
+        )
+        .expect("valid prompt");
+        let context = opening.context().expect("a schema is attached");
+        assert_eq!(context.relations().len(), 1);
+    }
+
     /// Under `Local`, nothing is composed — the agent block no more than the
     /// schema —, even for an agent whose prompt would not render.
     #[test]

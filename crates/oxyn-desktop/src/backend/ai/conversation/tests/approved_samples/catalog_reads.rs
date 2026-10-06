@@ -132,6 +132,7 @@ fn a_provider_question_on_a_never_expanded_connection_is_told_the_tables_and_the
         .block_on(
             run(&fixture, &thread, node, None, &config, &cancel, nothing).prepare(
                 &sql_agent(),
+                LOCAL,
                 fixture.session,
                 "total of the orders per customer",
                 None,
@@ -344,6 +345,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
         .block_on(
             run(&fixture, &thread, first, None, &config, &cancel, nothing).prepare(
                 &agent,
+                LOCAL,
                 fixture.session,
                 "customers",
                 None,
@@ -363,7 +365,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
         Memory {
             session: opened,
             tier: PrivacyTier::Metadata,
-            prompt: agent.system_prompt.clone(),
+            recipient: LOCAL,
         },
     );
     thread.finish(first);
@@ -389,6 +391,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
             )
             .prepare(
                 &agent,
+                LOCAL,
                 fixture.session,
                 "and this one?",
                 None,
