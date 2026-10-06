@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CLAUDE.md" sha256="58c144bf6a97" -->
+<!-- oxyn-translation source="CLAUDE.md" sha256="1bb4c149c302" -->
 
 > Traduction française de [CLAUDE.md](../../CLAUDE.md). **La version anglaise fait foi.**
 
@@ -77,6 +77,14 @@ et de toute réponse qui doit faire foi : `semantiq_find_refs` s'arrête à sa
 `limit` et compte un `use` comme une définition, et `semantiq_deps` ne suit pas
 les réexports `pub use`, si bien que son « Imported by » manque la plupart des
 appelants. **« Rien d'autre n'utilise X » se vérifie au grep.**
+
+Le même index répond depuis le shell : `semantiq calls`, `hierarchy`, `impact`
+et `dead-code` n'ont pas d'équivalent au grep. On passe `--no-refresh` tant que
+le serveur MCP d'une session tourne : sinon chaque commande commence par
+réindexer les fichiers modifiés, et ce rafraîchissement a déjà été vu bloqué
+pendant que le serveur tenait la base. La commande `semantiq init` n'est pas
+pour ce dépôt : elle réécrit `CLAUDE.md`, dont la traduction française se
+retrouve alors périmée ; `semantiq init --global` n'installe que le skill.
 
 ## Invariants
 
