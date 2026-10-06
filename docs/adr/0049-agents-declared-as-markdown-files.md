@@ -1,6 +1,6 @@
 # ADR-0049 — An agent is a Markdown file with a YAML front matter, composed with a dialect and a recipient fragment, filled only from a closed list of variables
 
-**Status:** proposed · **Date:** 2026-09-29 · **Amended on:** 2026-10-06 ·
+**Status:** accepted (2026-10-06) · **Date:** 2026-09-29 · **Amended on:** 2026-10-06 ·
 **Deciders:** Nicolas Boromée
 
 **Refines:** [ARCHITECTURE §7.3](../ARCHITECTURE.md#73-agent-runtime), on one

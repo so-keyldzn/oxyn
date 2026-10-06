@@ -1,10 +1,10 @@
-<!-- oxyn-translation source="docs/adr/0049-agents-declared-as-markdown-files.md" sha256="4b483fbb3972" -->
+<!-- oxyn-translation source="docs/adr/0049-agents-declared-as-markdown-files.md" sha256="ce8ad667d974" -->
 
 > Traduction française de [docs/adr/0049-agents-declared-as-markdown-files.md](../../../../docs/adr/0049-agents-declared-as-markdown-files.md). **La version anglaise fait foi.**
 
 # ADR-0049 — Un agent est un fichier Markdown à en-tête YAML, composé avec un fragment de dialecte et un fragment de destinataire, rempli seulement par une liste fermée de variables
 
-**Statut :** proposé · **Date :** 2026-09-29 · **Amendée le :** 2026-10-06 ·
+**Statut :** accepté (2026-10-06) · **Date :** 2026-09-29 · **Amendée le :** 2026-10-06 ·
 **Décideurs :** Nicolas Boromée
 
 **Précise :** [ARCHITECTURE §7.3](../ARCHITECTURE.md#73-runtime-dagents), sur un

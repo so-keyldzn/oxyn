@@ -195,7 +195,7 @@ rule refines ADR-0026, which only reported the text.
 What Oxyn writes to a model besides the context — the system prompt for a
 provider, the Oxyn-written block of the opening text for an external
 agent — is **composed**, not stored whole
-([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposed,
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), accepted,
 amended on 2026-10-06): the agent's role, then the fragment of the
 connection's dialect (`ansi` when the dialect has none), then the fragment
 of the **recipient**, in that fixed order, filled with four closed

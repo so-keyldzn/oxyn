@@ -256,7 +256,7 @@ What enters Oxyn and is untrusted, in order of underestimation:
    by a future version of the program.
 
    **User agent files** belong here
-   ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposed):
+   ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), accepted):
    `<name>.md` in `agents/` of the data directory, read at launch and on
    reload. A file someone else wrote can carry a role prompt that tells the
    model to insist, to hide what it does or to ignore the user. What bounds

@@ -80,7 +80,7 @@ To locate the boards and their states before implementation, see
 | [0046](adr/0046-workspaces-retenus-restent-connectes.md) | A retained connection workspace keeps its sessions open, up to eight per window | accepted |
 | [0047](adr/0047-english-as-the-repository-language.md) | English is the repository language; French lives in authoritative-English mirrors | accepted |
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | A statement sqlx cannot prepare, or whose result has no binary form, runs in the simple protocol, as text | accepted |
-| [0049](adr/0049-agents-declared-as-markdown-files.md) | An agent is a Markdown file with a YAML front matter, composed with a dialect and a recipient fragment, filled only from a closed list of variables (amended on 2026-10-06) | proposed |
+| [0049](adr/0049-agents-declared-as-markdown-files.md) | An agent is a Markdown file with a YAML front matter, composed with a dialect and a recipient fragment, filled only from a closed list of variables (amended on 2026-10-06) | accepted |
 | [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends | accepted |
 | [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn updates itself from the GitHub Releases, in Rust only, and installs on quit | proposed |
 | [0052](adr/0052-verified-tls-outside-local.md) | PostgreSQL and MySQL require verified TLS outside Local | accepted |
