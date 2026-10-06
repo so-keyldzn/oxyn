@@ -849,6 +849,23 @@ makes the list sustainable and opens the door to plugin-provided agents, which
 Two specs exist today, in `oxyn-ai::builtin`: `sql_agent` and
 `schema_agent`. The seven others are files to write, not code.
 
+**A system prompt is composed on three axes**
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposed,
+amended on 2026-10-06): the agent's **role**
+(`crates/oxyn-ai/agents/<role>.md`, front matter plus body), the
+connection's **dialect** (`crates/oxyn-ai/prompts/dialects/<dialect>.md`,
+`ansi.md` when a dialect has none) and the **recipient** that reads it
+(`crates/oxyn-ai/prompts/recipients/<recipient>.md`: one per
+`AiProviderKind`, one per external-agent preset, and `external` for an
+agent declared by hand). `render_system_prompt(spec, target)` concatenates
+them in that fixed order and fills the closed variables `{{dialect}}`,
+`{{driver}}`, `{{environment}}`, `{{recipient}}`; it is the only producer of
+a system prompt. Nothing from the database is concatenated in: the schema
+and the samples go through `ContextBuilder` (§ 7.4,
+[I-04](../CLAUDE.md#i-04)). `AgentSpec::offered_for` decides, from
+`applies_to` and `recipients`, which agents the panel offers for a
+connection and a destination.
+
 Collaboration between agents goes through an orchestrator that delegates via the same Command
 bus. No direct lateral communication: every exchange stays logged.
 

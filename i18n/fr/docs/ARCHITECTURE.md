@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="8fd0b68e16e5" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="85e3fb050ac6" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -862,6 +862,23 @@ rend la liste tenable et ouvre la porte aux agents fournis par plugin, que
 
 Deux specs existent aujourd'hui, dans `oxyn-ai::builtin` : `sql_agent` et
 `schema_agent`. Les sept autres sont des fichiers à écrire, pas du code.
+
+**Un prompt système se compose sur trois axes**
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée,
+amendée le 2026-10-06) : le **rôle** de l'agent
+(`crates/oxyn-ai/agents/<role>.md`, en-tête plus corps), le **dialecte** de
+la connexion (`crates/oxyn-ai/prompts/dialects/<dialect>.md`, `ansi.md`
+quand un dialecte n'en a pas) et le **destinataire** qui le lit
+(`crates/oxyn-ai/prompts/recipients/<recipient>.md` : un par
+`AiProviderKind`, un par preset d'agent externe, et `external` pour un agent
+déclaré à la main). `render_system_prompt(spec, target)` les concatène dans
+cet ordre fixe et remplit les variables fermées `{{dialect}}`, `{{driver}}`,
+`{{environment}}`, `{{recipient}}` ; c'est le seul producteur d'un prompt
+système. Rien de la base n'y est concaténé : le schéma et les échantillons
+passent par `ContextBuilder` (§ 7.4, [I-04](../CLAUDE.md#i-04)).
+`AgentSpec::offered_for` décide, à partir d'`applies_to` et de
+`recipients`, quels agents le panneau propose pour une connexion et une
+destination.
 
 La collaboration inter-agents passe par un orchestrateur qui délègue via le même Command
 bus. Pas de communication latérale directe : chaque échange reste journalisé.

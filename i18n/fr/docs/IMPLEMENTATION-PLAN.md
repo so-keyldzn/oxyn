@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="e98493539cef" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="fe02a2e22ee3" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2161,6 +2161,50 @@ caractères de contrôle, de format et les séparateurs de ligne/paragraphe dans
 chaque champ et borne la commande et chaque argument à 4 096 octets UTF-8.
 Les tests d'hôte scripté couvrent l'accord prématuré, le refus, l'expiration et
 la concurrence.
+
+**Prévu le 2026-10-06 — des prompts composés par rôle × dialecte ×
+destinataire.** L'[ADR-0049](adr/0049-agents-declared-as-markdown-files.md),
+amendée le 2026-10-06, reste `proposed` jusqu'à ce que l'utilisateur
+l'accepte ; son premier commit de code est l'étape 1. Trois étapes, chacune
+sa pull request, dans cet ordre :
+
+1. **La composition, dans `oxyn-ai`.** Les fichiers de rôle
+   `agents/sql.md` et `agents/schema.md`, les fragments de dialecte (un vrai
+   texte pour `ansi`, `postgres`, `redshift`, `mysql`, `sqlite`, `duckdb` ;
+   les autres se replient sur `ansi`), un fragment par destinataire
+   (`anthropic`, `openai`, `gemini`, `openai_compatible`, `claude-code`,
+   `codex`, `external`) ; `Recipient`, `PromptTarget`,
+   `AgentSpec::offered_for`, `parse_agent_file`, `render_system_prompt`,
+   `shipped_agents` ; les chemins provider et agent externe appellent
+   `render_system_prompt` et rien d'autre. **Porte de sortie** : un test à
+   la compilation lit chaque fichier livré, vérifie le plafond de 64 Kio,
+   l'UTF-8 et les variables fermées, et rend chaque rôle × dialecte ×
+   destinataire sans erreur ; `sql_agent()` et `schema_agent()` gardent leurs
+   id ; un test refuse un marqueur inconnu, un dialecte inconnu et un
+   destinataire inconnu avec le nom du fichier et la ligne ; aucun `format!`
+   ne construit un prompt système hors de `render_system_prompt`.
+2. **Une conversation, un agent : store, IPC, panneau.** La migration
+   additive qui ajoute `ai_conversations.agent_id TEXT` (NULL se lit comme
+   l'agent SQL) ; `ai_list_agents { connectionId }` qui renvoie
+   `AgentOption[]` ; un `agentId` optionnel au démarrage d'une conversation ;
+   `agentId` et `missingAgent` sur les résumés et les transcriptions ; le
+   sélecteur d'agent dans l'en-tête du panneau
+   ([UX-SPEC](UX-SPEC.md#lagent-se-choisit-par-conversation)).
+   **Porte de sortie** : choisir l'agent Schema ouvre une nouvelle
+   conversation et laisse la précédente inchangée ; une conversation écrite
+   avant la migration se rouvre en agent SQL ; une conversation dont l'agent
+   a disparu se rouvre avec l'agent SQL et le panneau nomme l'agent
+   manquant — chaque point prouvé par un test, le panneau par une story.
+3. **Les agents utilisateur.** La lecture d'`agents/` du répertoire de
+   données au lancement et au rechargement, le refus des collisions d'id,
+   les fichiers invalides listés avec leur erreur et non sélectionnables, les
+   agents utilisateur signalés dans le sélecteur
+   ([SECURITY](SECURITY.md#surface-dentrée), « Les fichiers de workspace »).
+   **Porte de sortie** : une relecture sécurité (`/securite`) de l'étape de
+   lecture avant sa fusion ; des tests pour un fichier trop gros, un fichier
+   hors UTF-8, une ancre ou un alias, une clé en double, un champ inconnu, un
+   marqueur inconnu et une collision d'id, dont aucun ne bloque les fichiers
+   valides à côté.
 
 ## Phase 3 bis — Au-delà du relationnel
 

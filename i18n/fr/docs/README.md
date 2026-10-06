@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="e9f75f4f4aea" -->
+<!-- oxyn-translation source="docs/README.md" sha256="e63174828d80" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -84,7 +84,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0046](adr/0046-workspaces-retenus-restent-connectes.md) | Un workspace de connexion retenu garde ses sessions ouvertes, dans la limite de huit par fenêtre | accepté |
 | [0047](adr/0047-english-as-the-repository-language.md) | L'anglais est la langue du dépôt ; le français vit dans des miroirs dont l'anglais fait foi | accepté |
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | Une instruction que sqlx ne sait pas préparer, ou dont le résultat n'a pas de forme binaire, passe par le protocole simple, en texte | accepté |
-| [0049](adr/0049-agents-declared-as-markdown-files.md) | Un agent est un fichier Markdown à en-tête YAML, ciblé par dialecte, rempli seulement par une liste fermée de variables | proposé |
+| [0049](adr/0049-agents-declared-as-markdown-files.md) | Un agent est un fichier Markdown à en-tête YAML, composé avec un fragment de dialecte et un fragment de destinataire, rempli seulement par une liste fermée de variables (amendée le 2026-10-06) | proposé |
 | [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | Le driver MySQL repose sur `mysql_async`, prépare d'abord chaque instruction, et décode tout type que le serveur envoie | accepté |
 | [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn se met à jour depuis les GitHub Releases, en Rust seulement, et installe à la fermeture | proposé |
 | [0052](adr/0052-verified-tls-outside-local.md) | PostgreSQL et MySQL exigent TLS vérifié hors de Local | accepté |

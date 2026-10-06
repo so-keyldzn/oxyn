@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="6ed65e778c48" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="b48fc4e7848b" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -195,6 +195,46 @@ Ce que le panneau montre en retour du travail de l'agent — texte, raisonnement
 sorte et état de ses étapes, plan — et ce qu'il n'en montre jamais est décrit
 dans [UX-SPEC](UX-SPEC.md#ce-que-le-panneau-montre-dun-agent-externe) ; la
 règle précise l'ADR-0026, qui ne remontait que le texte.
+
+## Le prompt système dépend du destinataire
+
+Ce qu'Oxyn écrit à un modèle en plus du contexte — le prompt système pour un
+provider, le bloc écrit par Oxyn dans le texte d'ouverture pour un agent
+externe — est **composé**, pas stocké d'un bloc
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée,
+amendée le 2026-10-06) : le rôle de l'agent, puis le fragment du dialecte de
+la connexion (`ansi` quand le dialecte n'en a pas), puis le fragment du
+**destinataire**, dans cet ordre fixe, rempli par quatre variables fermées —
+`{{dialect}}`, `{{driver}}`, `{{environment}}`, `{{recipient}}`. La même
+question, sur la même connexion, part donc avec un prompt système différent
+vers l'API d'Anthropic, vers un petit modèle derrière `openai_compatible`,
+et vers Claude Code.
+
+Ce que cela change à la frontière, et ce que cela ne change pas :
+
+* **La clé de destinataire est la seule valeur nouvelle qui sort**, et elle
+  nomme un protocole ou un preset — `anthropic`, `openai`, `gemini`,
+  `openai_compatible`, `claude-code`, `codex`, `external` —, jamais une
+  adresse, un modèle, un hôte ou une clé ([I-03](../CLAUDE.md#i-03)).
+* **Aucun contenu de la base n'entre dans la composition.** Les fragments
+  sont du texte livré avec Oxyn ; les variables sont des valeurs qu'Oxyn
+  tient. Le schéma, les échantillons et l'identité du serveur n'atteignent
+  toujours le modèle que par `ContextBuilder`, sous le niveau de la
+  connexion, dans un message à part ([I-04](../CLAUDE.md#i-04)). La table
+  des niveaux de l'[ADR-0006](adr/0006-ai-privacy-tiers.md) ne change pas :
+  un prompt rendu ne porte rien qu'une connexion `Local` aurait à retenir.
+* **Un fragment de destinataire décrit ; il n'accorde rien.** Les fragments
+  `claude-code` et `codex` disent à un agent confiné qu'il a les outils MCP
+  d'Oxyn et aucun shell ; le fragment `external` demande à un agent déclaré
+  à la main de ne pas se servir des outils shell ou fichier qu'Oxyn ne voit
+  pas. Aucun n'est une garantie : le confinement de
+  l'[ADR-0032](adr/0032-agent-externe-confine-au-lancement.md) et le
+  `PolicyGate` le sont, et un agent déclaré à la main reste **non confiné**
+  quoi que dise son fragment.
+* **Un fichier d'agent utilisateur ne fournit qu'un rôle.** Il ne peut
+  remplacer aucun fragment de dialecte ou de destinataire, si bien que ce
+  qu'Oxyn dit à tout modèle de ses outils et du fait qu'`EXPLAIN ANALYZE`
+  exécute l'instruction ([I-07](../CLAUDE.md#i-07)) reste le texte d'Oxyn.
 
 ## Ce que l'IA voit du schéma, et quand c'est lu
 

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="ab5401226179" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="12808a3300c9" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1119,6 +1119,41 @@ l'écran. Un agent non confiné garde les modes et options qu'il déclare.
 Un point d'accès qu'Oxyn n'a pas su résoudre compte comme distant. La
 configuration l'affiche comme « non résolu », pas comme « local » : le doute ne
 profite pas à l'envoi.
+
+### L'agent se choisit par conversation
+
+L'en-tête du panneau porte un second sélecteur, l'**agent** — SQL, Schema,
+et les agents que l'utilisateur a ajoutés
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée). Il ne
+liste que les agents proposés pour le dialecte de la connexion et la
+destination choisie (`ai_list_agents`) ; une nouvelle conversation commence
+avec l'agent SQL.
+
+* **Choisir un autre agent ouvre une nouvelle conversation.** La
+  conversation en cours reste dans la liste « Conversations », inchangée,
+  avec son agent : le prompt d'un agent ne change jamais sous un historique
+  écrit. Le sélecteur est inerte pendant qu'une réponse s'écrit.
+* **Un agent utilisateur est signalé comme tel** dans le sélecteur, à côté
+  de son nom (« agent utilisateur »), et sa description dit qu'il vient du
+  dossier `agents/` de l'utilisateur. Un agent livré ne porte aucune marque.
+* **Un agent utilisateur invalide est listé, pas caché** : grisé, non
+  sélectionnable, avec l'erreur que renvoie le backend — nom du fichier et
+  ligne, jamais le contenu du fichier. Un fichier invalide ne retire pas les
+  autres de la liste.
+* **Une conversation reprise tourne avec son agent enregistré.** Quand cet
+  agent n'existe plus — son fichier supprimé ou devenu invalide —, la
+  conversation se rouvre avec l'agent SQL, et une ligne au-dessus de la
+  prochaine question le dit, en nommant l'agent manquant (« L'agent « Nom »
+  n'existe plus ; cette conversation continue avec l'agent SQL. »). Le
+  panneau ne laisse jamais une conversation tourner sous un autre prompt sans
+  le dire.
+* Changer de **destination** dans « Qui répond » garde la conversation et
+  son agent ; ce qui change, c'est la partie du prompt écrite pour le
+  destinataire, et la ligne `destinationChanged` dit déjà que le nouveau
+  destinataire part sans les échanges précédents. Une destination pour
+  laquelle l'agent de la conversation n'est pas proposé (son `recipients`
+  l'exclut) reste dans « Qui répond », désactivée, avec sa raison, comme une
+  destination que le niveau refuse.
 
 ### Le panneau montre ce qui se passe, y compris quand rien n'arrive
 
