@@ -150,4 +150,69 @@ export const RecordedAgentDuringListFailure: Story = {
     await closePopup()
   },
 }
+export const ReloadAgents: Story = {
+  args: { onReload: fn() },
+  play: async ({ args }) => {
+    const reload = body().getByRole("button", { name: "Reload agents" })
+    await expect(reload).toBeEnabled()
+    await userEvent.click(reload)
+    await expect(args.onReload).toHaveBeenCalledTimes(1)
+    await expect(args.onSelect).not.toHaveBeenCalled()
+  },
+}
+
+export const Reloading: Story = {
+  args: { onReload: fn(), reloading: true },
+  play: async ({ args }) => {
+    const reload = body().getByRole("button", { name: "Reload agents" })
+    await expect(reload).toBeDisabled()
+    await expect(body().getByText("Reloading agents…")).toBeVisible()
+    await expect(args.onReload).not.toHaveBeenCalled()
+  },
+}
+
+/** A reload that found a broken file: listed, marked, and not selectable. */
+export const ReloadedWithInvalidUserAgent: Story = {
+  args: {
+    onReload: fn(),
+    agents: [
+      ...shipped,
+      user,
+      {
+        id: "broken.md",
+        name: "broken.md",
+        description: "",
+        origin: "user",
+        error: "broken.md: not valid UTF-8; an agent file is UTF-8 text",
+      },
+    ],
+  },
+  play: async ({ args }) => {
+    const list = await openPopup()
+    const broken = list.getByRole("option", { name: /^broken\.md/ })
+    await expect(broken).toHaveAttribute("aria-disabled", "true")
+    await expect(broken).toHaveTextContent("User")
+    await expect(broken).toHaveTextContent("not valid UTF-8")
+    await expect(args.onSelect).not.toHaveBeenCalled()
+    await closePopup()
+  },
+}
+
+export const ReloadFailed: Story = {
+  args: {
+    onReload: fn(),
+    reloadError: "the data directory is unavailable",
+  },
+  play: async () => {
+    await expect(
+      body().getByText(
+        "Agents could not be reloaded: the data directory is unavailable"
+      )
+    ).toBeVisible()
+    await expect(
+      body().getByRole("button", { name: "Reload agents" })
+    ).toBeEnabled()
+  },
+}
+
 export const Light: Story = { globals: { theme: "light" } }

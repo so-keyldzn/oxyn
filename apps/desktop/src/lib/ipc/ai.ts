@@ -935,6 +935,14 @@ export const ai = {
   listAgents: (connectionId: string) =>
     call("ai_list_agents", z.array(AgentOption), { connectionId }),
 
+  /**
+   * Reads the user's `agents/` directory again and answers what
+   * `listAgents` would for this connection. Running conversations keep the
+   * prompt they started with.
+   */
+  reloadAgents: (connectionId: string) =>
+    call("ai_reload_agents", z.array(AgentOption), { connectionId }),
+
   /** What this launch's prune removed; `null` when nothing went. */
   prunedHistory: () => call("ai_pruned_history", PrunedHistory.nullable()),
 

@@ -50,6 +50,7 @@ import {
   prunedHistoryQuery,
 } from "./queries"
 import { SQL_ONLY } from "./agent-options"
+import { useReloadAgents } from "./reload-agents"
 import { ToolRows } from "./tool-rows"
 import { ErdBlock } from "./erd-block"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
@@ -104,6 +105,7 @@ export function AssistantPanel({
   const orphanThreads = useQuery(orphanThreadsQuery)
   const prunedHistory = useQuery(prunedHistoryQuery)
   const agentOptions = useQuery(agentOptionsQuery(open.connection))
+  const reloadAgents = useReloadAgents(open.connection)
   // From the local catalog and library: no model completes a name.
   const mentionSource = useMentionSearch(open.connection)
   const { chosenKey, pin: pinned } = usePinState(open.connection)
@@ -326,6 +328,9 @@ export function AssistantPanel({
           unavailable: agentOptions.isError,
           disabled: state.opening || state.sending,
           onSelect: (id) => newThread(open.connection, id),
+          onReload: reloadAgents.reload,
+          reloading: reloadAgents.reloading,
+          reloadError: reloadAgents.error,
         }}
         connectionName={open.name}
         identifierQuote={identifierQuoteForDriver(open.driver)}
