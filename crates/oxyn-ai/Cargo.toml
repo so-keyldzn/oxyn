@@ -26,6 +26,8 @@ hyper-util.workspace = true
 indexmap.workspace = true
 schemars.workspace = true
 serde.workspace = true
+# Agent files' front matter, parsed strict (ADR-0049 § 1).
+serde-saphyr.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # Read the **names** of the MCP servers and plugins in `~/.codex/config.toml`

@@ -78,10 +78,10 @@ pub const DESCRIBE_SCHEMA: &str = "describe_schema";
 /// entity-relationship diagram.
 ///
 /// A macro and not a constant: `concat!` only takes literals, and tool
-/// descriptions as well as built-in agent prompts are literals. It is what
-/// keeps **one** sentence for the system prompts, the description of
-/// [`DESCRIBE_SCHEMA`] and an external agent's prompt; two copies would end up
-/// stating two formats, and the panel only draws one.
+/// descriptions are literals. It keeps **one** sentence for the description
+/// of [`DESCRIBE_SCHEMA`] and an external agent's prompt; the shipped agent
+/// files repeat it word for word, which a test checks — two wordings would
+/// end up stating two formats, and the panel only draws one.
 macro_rules! erd_hint {
     () => {
         "To show an entity-relationship diagram, write a fenced code block whose language \
@@ -89,7 +89,6 @@ macro_rules! erd_hint {
          diagram from its catalog. Do not draw one in ASCII or in another diagram language."
     };
 }
-pub(crate) use erd_hint;
 
 /// The instruction of `erd_hint!`, for whoever composes a prompt at runtime:
 /// the same sentence as that of the system prompts and of [`DESCRIBE_SCHEMA`].
