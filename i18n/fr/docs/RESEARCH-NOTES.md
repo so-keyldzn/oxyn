@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="800eefc5d6fb" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="6519f743f32e" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -180,6 +180,7 @@ versions --json` ; les plages de dépendances et les licences avec
 |---|---|---|
 | `source-map-js` | `1.2.2` | Première version corrigée pour [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) ; BSD-3-Clause. Les [notes de version](https://github.com/7rulnik/source-map-js/releases/tag/v1.2.2) confirment la correction du déni de service lié aux source maps indexées. Même Vite `8.3.3` autorise PostCSS `8.5.28`, dont la plage `source-map-js` est `^1.2.1` ; une montée de Vite seule n'impose pas la correction. |
 | `katex` | `0.18.2` | Première version corrigée pour [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7) ; MIT. Les [notes de version](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.2) confirment la correction de la pollution du prototype des paramètres. Mermaid `11.17.2` reste la dernière 11.x ; même `12.1.0` exige encore `katex ^0.16.47`, qui exclut la correction. Garder la cible navigateur existante de Mermaid et imposer KaTeX par override. |
+| `seroval`, `seroval-plugins` | `1.6.8` | Développement seulement (`@tanstack/react-devtools` > `@tanstack/devtools` > `solid-js`). Couvre [GHSA-p6vx-979v-rg4c](https://github.com/advisories/GHSA-p6vx-979v-rg4c) (corrigé en `1.6.2`), [GHSA-jp82-f5mq-hwhp](https://github.com/advisories/GHSA-jp82-f5mq-hwhp) et [GHSA-mv8w-475r-vwqw](https://github.com/advisories/GHSA-mv8w-475r-vwqw) ; MIT ; `1.6.8` publiée le 2026-09-29. Ajouté le 2026-10-06 : `solid-js 1.9.15` fige `seroval ~1.5.4`, et le `solid-js 1.9.16` qui exige `~1.6.8` a été publié ce jour-là à 19:11 UTC, ce que le délai minimal de publication de pnpm 11 refuse encore — l'override évite de contourner ce garde-fou. `seroval-plugins 1.6.8` a pour pair `seroval ^1.0`. À retirer dès que le lockfile résout `solid-js >= 1.9.16`. |
 
 pnpm `11.1.2` ignore `package.json#pnpm` : les overrides vont dans
 `apps/desktop/pnpm-workspace.yaml`, comme l'indique le
