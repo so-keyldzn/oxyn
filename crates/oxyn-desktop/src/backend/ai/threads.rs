@@ -575,10 +575,10 @@ struct Node {
 pub(crate) struct Memory {
     pub(crate) session: AgentSession,
     pub(crate) tier: PrivacyTier,
-    /// The rendered system prompt the session was opened with: a question
-    /// whose prompt differs — another protocol, another marking — starts
-    /// from a fresh context.
-    pub(crate) prompt: String,
+    /// Who the session's prompt was rendered for: a question to another
+    /// protocol starts from a fresh context, under its own recipient
+    /// fragment (ADR-0049 § 6).
+    pub(crate) recipient: oxyn_ai::Recipient,
 }
 
 /// A live external agent session, and the node it last answered.

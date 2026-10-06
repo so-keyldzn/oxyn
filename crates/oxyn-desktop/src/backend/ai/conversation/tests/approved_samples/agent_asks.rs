@@ -642,6 +642,7 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
     let (dialogue, _) = run
         .prepare_dialogue(
             &spec,
+            LOCAL,
             fixture.session,
             "and the domains?",
             None,

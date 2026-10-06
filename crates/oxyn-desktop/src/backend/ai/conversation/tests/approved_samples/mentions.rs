@@ -67,6 +67,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
     let (fresh, context) = run(&fixture, &thread, first, None, &config, &cancel, &named)
         .prepare_dialogue(
             &agent,
+            LOCAL,
             fixture.session,
             "customers emails",
             None,
@@ -85,6 +86,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
     let (remembered, _) = run(&fixture, &thread, first, None, &config, &cancel, nothing)
         .prepare_dialogue(
             &agent,
+            LOCAL,
             fixture.session,
             "customers",
             None,
@@ -97,7 +99,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
         Memory {
             session: remembered,
             tier: PrivacyTier::Sampled,
-            prompt: agent.system_prompt.clone(),
+            recipient: LOCAL,
         },
     );
     thread.finish(first);
@@ -114,6 +116,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
     )
     .prepare_dialogue(
         &agent,
+        LOCAL,
         fixture.session,
         "how many are there?",
         None,

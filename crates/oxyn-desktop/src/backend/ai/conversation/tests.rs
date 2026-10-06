@@ -8,6 +8,10 @@ use super::*;
 use crate::ipc::{ConnectResponse, ConnectionDraft, OpenConnection};
 use oxyn_ai::sql_agent;
 
+/// Who reads the prompt in a test that does not choose: a local model.
+pub(super) const LOCAL: oxyn_ai::Recipient =
+    oxyn_ai::Recipient::Provider(oxyn_core::AiProviderKind::OpenAiCompatible);
+
 /// The SQL agent, as the conversation of every test that does not choose one runs it.
 pub(super) fn sql_role() -> &'static oxyn_ai::AgentSpec {
     static SQL: std::sync::LazyLock<oxyn_ai::AgentSpec> =
@@ -1834,7 +1838,14 @@ mod approved_samples {
         // An earlier exchange, remembered as a provider conversation.
         let first = fixture.begin(&thread, None, channel.clone());
         let (mut remembered, _) = run_at(first, None)
-            .prepare_dialogue(&agent, fixture.session, "first", None, PrivacyTier::Sampled)
+            .prepare_dialogue(
+                &agent,
+                LOCAL,
+                fixture.session,
+                "first",
+                None,
+                PrivacyTier::Sampled,
+            )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         remembered.ask("EARLIER-EXCHANGE-MARK");
         thread.remember(
@@ -1842,7 +1853,7 @@ mod approved_samples {
             Memory {
                 session: remembered,
                 tier: PrivacyTier::Sampled,
-                prompt: agent.system_prompt.clone(),
+                recipient: LOCAL,
             },
         );
         thread.finish(first);
@@ -1868,6 +1879,7 @@ mod approved_samples {
         let (with_sample, _) = run
             .prepare_dialogue(
                 &agent,
+                LOCAL,
                 fixture.session,
                 "which plans?",
                 Some(sample.rows),
@@ -1895,6 +1907,7 @@ mod approved_samples {
         let (after, _) = run_at(next, Some(sampled))
             .prepare_dialogue(
                 &agent,
+                LOCAL,
                 fixture.session,
                 "and then?",
                 None,
@@ -2105,6 +2118,7 @@ mod approved_samples {
         let (dialogue, _) = run
             .prepare_dialogue(
                 &sql_agent(),
+                LOCAL,
                 fixture.session,
                 "which plans?",
                 Some(sample),
@@ -2559,6 +2573,7 @@ mod approved_samples {
         let (dialogue, _) = run
             .prepare_dialogue(
                 &sql_agent(),
+                LOCAL,
                 fixture.session,
                 "and now?",
                 None,

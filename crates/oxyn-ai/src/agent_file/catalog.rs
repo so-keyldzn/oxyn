@@ -131,8 +131,9 @@ impl AgentCatalog {
     }
 
     /// The picker's lines for `target`: the shipped agents offered for it,
-    /// then the user agents offered for it, each group by name; then, among
-    /// the user files, the ones that cannot be picked, with their error.
+    /// then the user files — the agents offered for it and the files that
+    /// cannot be picked, with their error —, each group by name in byte
+    /// order.
     ///
     /// An entry in error is listed whatever the target: its targeting may be
     /// unreadable, and hiding a broken file would leave the user wondering
@@ -189,9 +190,10 @@ fn entry(spec: &AgentSpec, origin: AgentOrigin, file_name: Option<String>) -> Ca
     }
 }
 
-/// The line of a user file that cannot be picked. A collision keeps the
-/// agent's name, which the user wrote and will look for; an unreadable file
-/// has only its file name.
+/// The line of a user file that cannot be picked, under its file name: an
+/// unreadable file has no other, and a file that collides with a shipped
+/// agent may well carry that agent's name — shown, it would put a second
+/// « SQL » in the picker.
 fn refused(file: &UserEntry, err: &CatalogError) -> CatalogEntry {
     CatalogEntry {
         id: None,

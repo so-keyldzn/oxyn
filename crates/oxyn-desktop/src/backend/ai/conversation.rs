@@ -1831,6 +1831,7 @@ impl Run<'_> {
     async fn prepare(
         &self,
         agent: &oxyn_ai::AgentSpec,
+        recipient: oxyn_ai::Recipient,
         session: SessionId,
         question: &str,
         sample: Option<oxyn_ai::context::RowSample>,
@@ -1840,9 +1841,9 @@ impl Run<'_> {
             && self
                 .thread
                 .memory_from(self.parent)
-                .is_some_and(|memory| memory.tier == tier);
+                .is_some_and(|memory| memory.tier == tier && memory.recipient == recipient);
         self.complete_catalog(self.want(question, follows)).await;
-        self.prepare_dialogue(agent, session, question, sample, tier)
+        self.prepare_dialogue(agent, recipient, session, question, sample, tier)
     }
 
     fn observer(&self) -> Observer {
@@ -2021,6 +2022,7 @@ impl Run<'_> {
     fn prepare_dialogue(
         &self,
         agent: &oxyn_ai::AgentSpec,
+        recipient: oxyn_ai::Recipient,
         session: SessionId,
         question: &str,
         sample: Option<oxyn_ai::context::RowSample>,
@@ -2041,10 +2043,10 @@ impl Run<'_> {
         };
         let mentions = &self.mentions.mentions;
         Ok(match remembered {
-            // The same prompt too: another protocol reads another recipient
-            // fragment, and a history is not put under a prompt it was not
-            // written with (ADR-0049 § 6).
-            Some(memory) if memory.tier == tier && memory.prompt == agent.system_prompt => {
+            // The same recipient too: another protocol reads another
+            // recipient fragment, and a history is not put under a prompt it
+            // was not written with (ADR-0049 § 6).
+            Some(memory) if memory.tier == tier && memory.recipient == recipient => {
                 let mut dialogue = memory.session;
                 if mentions.is_empty() {
                     dialogue.ask(question);
@@ -2058,6 +2060,7 @@ impl Run<'_> {
                     let context = {
                         let cache = catalog.read();
                         ContextBuilder::new(&cache, tier)
+                            .with_policy(agent.context.clone())
                             .with_language(QueryLanguage::Sql(dialect))
                             .with_mentions(mentions.clone())
                             .mentioned_only()
@@ -2112,7 +2115,10 @@ impl Run<'_> {
                 }
                 let context = {
                     let cache = catalog.read();
+                    // The agent's own budget: the Schema agent reads more of
+                    // the structure than the SQL agent (ADR-0049 § 7).
                     ContextBuilder::new(&cache, tier)
+                        .with_policy(agent.context.clone())
                         .with_language(QueryLanguage::Sql(dialect))
                         .focused_on(question.to_owned())
                         .with_mentions(mentions.clone())
@@ -2160,6 +2166,7 @@ impl Run<'_> {
         let (mut dialogue, context) = self
             .prepare(
                 &agent,
+                recipient,
                 session,
                 &question,
                 sample.map(|sample| sample.rows),
@@ -2311,7 +2318,7 @@ impl Run<'_> {
                 Memory {
                     session: dialogue,
                     tier,
-                    prompt: agent.system_prompt,
+                    recipient,
                 },
             );
         }
