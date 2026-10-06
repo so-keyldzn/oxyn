@@ -11,6 +11,7 @@ const schema: AgentOption = {
   description: "Explains the schema and proposes changes.",
   origin: "shipped",
   error: null,
+  disabledDestinations: [],
 }
 const user: AgentOption = {
   id: "user-analytics",
@@ -18,6 +19,7 @@ const user: AgentOption = {
   description: "Helps explore reporting queries.",
   origin: "user",
   error: null,
+  disabledDestinations: [],
 }
 const shipped = [...SQL_ONLY, schema]
 const body = () => within(document.body)
@@ -99,12 +101,19 @@ export const WithInvalidUserAgent: Story = {
 }
 
 export const MissingAgentNotice: Story = {
-  args: { value: user.id, missingAgent: { name: "Analytics" } },
+  // What the backend sends: the recorded id, the name being gone with its
+  // file. The notice never shows it as a name.
+  args: {
+    value: "0199a3c0-0000-7000-8000-0000000000a7",
+    missingAgent: { name: "0199a3c0-0000-7000-8000-0000000000a7" },
+  },
   play: async () => {
     await expect(body().getByRole("combobox")).toHaveTextContent("SQL")
-    await expect(body().getByRole("status")).toHaveTextContent(
-      "Analytics is no longer available. This conversation continues with the SQL agent."
+    const notice = body().getByRole("status")
+    await expect(notice).toHaveTextContent(
+      "The agent this conversation used is no longer available — it continues with the SQL agent."
     )
+    await expect(notice).not.toHaveTextContent("0199a3c0")
   },
 }
 
@@ -150,4 +159,70 @@ export const RecordedAgentDuringListFailure: Story = {
     await closePopup()
   },
 }
+export const ReloadAgents: Story = {
+  args: { onReload: fn() },
+  play: async ({ args }) => {
+    const reload = body().getByRole("button", { name: "Reload agents" })
+    await expect(reload).toBeEnabled()
+    await userEvent.click(reload)
+    await expect(args.onReload).toHaveBeenCalledTimes(1)
+    await expect(args.onSelect).not.toHaveBeenCalled()
+  },
+}
+
+export const Reloading: Story = {
+  args: { onReload: fn(), reloading: true },
+  play: async ({ args }) => {
+    const reload = body().getByRole("button", { name: "Reload agents" })
+    await expect(reload).toBeDisabled()
+    await expect(body().getByText("Reloading agents…")).toBeVisible()
+    await expect(args.onReload).not.toHaveBeenCalled()
+  },
+}
+
+/** A reload that found a broken file: listed, marked, and not selectable. */
+export const ReloadedWithInvalidUserAgent: Story = {
+  args: {
+    onReload: fn(),
+    agents: [
+      ...shipped,
+      user,
+      {
+        id: "broken.md",
+        name: "broken.md",
+        description: "",
+        origin: "user",
+        error: "broken.md: not valid UTF-8; an agent file is UTF-8 text",
+        disabledDestinations: [],
+      },
+    ],
+  },
+  play: async ({ args }) => {
+    const list = await openPopup()
+    const broken = list.getByRole("option", { name: /^broken\.md/ })
+    await expect(broken).toHaveAttribute("aria-disabled", "true")
+    await expect(broken).toHaveTextContent("User")
+    await expect(broken).toHaveTextContent("not valid UTF-8")
+    await expect(args.onSelect).not.toHaveBeenCalled()
+    await closePopup()
+  },
+}
+
+export const ReloadFailed: Story = {
+  args: {
+    onReload: fn(),
+    reloadError: "the data directory is unavailable",
+  },
+  play: async () => {
+    await expect(
+      body().getByText(
+        "Agents could not be reloaded: the data directory is unavailable"
+      )
+    ).toBeVisible()
+    await expect(
+      body().getByRole("button", { name: "Reload agents" })
+    ).toBeEnabled()
+  },
+}
+
 export const Light: Story = { globals: { theme: "light" } }

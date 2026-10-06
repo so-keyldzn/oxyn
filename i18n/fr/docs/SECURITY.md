@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="ae7034a7ce3b" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="a4921ddb4ba6" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -282,7 +282,19 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    fermées ; son `id` ne peut pas prendre l'identité d'audit d'un agent livré ;
    il ne fournit qu'un **rôle** et ne remplace jamais les fragments de
    dialecte ou de destinataire livrés par Oxyn ; une erreur nomme le fichier
-   et la ligne, jamais son contenu ([I-03](../CLAUDE.md#i-03)). Ce qu'il ne
+   et la ligne, jamais son contenu ([I-03](../CLAUDE.md#i-03)). La lecture du
+   répertoire est bornée elle aussi : seuls les fichiers `*.md` directement
+   dedans, 64 au plus dans l'ordre des noms (le reste listé comme une seule
+   erreur), fichiers ordinaires seulement — un lien symbolique est refusé, pas
+   suivi —, et le plafond de 64 Kio est vérifié sur la taille puis de nouveau
+   pendant la lecture. `agents/` lui-même doit être un répertoire, pas un lien
+   vers un répertoire. Sur macOS et Linux, il est ouvert une fois sans suivre
+   de lien et chaque fichier est ouvert relativement à lui, sans suivre de
+   lien ni attendre sur une FIFO, si bien qu'une entrée échangée après le
+   listage ne gagne rien ; aucune version Windows n'est livrée, et un portage
+   devra garder cette propriété. La webview nomme une connexion quand elle
+   demande un rechargement, jamais un chemin. Un nom de fichier est affiché
+   avec ses caractères de contrôle et bidirectionnels remplacés. Ce qu'il ne
    peut jamais obtenir : un outil, un niveau, une connexion, une adresse, une
    clé ou une écriture que le `PolicyGate` refuserait — le ciblage restreint,
    il n'accorde rien. Le panneau le signale comme agent utilisateur, et

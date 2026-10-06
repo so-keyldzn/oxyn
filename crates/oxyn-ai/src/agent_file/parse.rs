@@ -26,9 +26,9 @@ const FENCE: &str = "---";
 #[serde(deny_unknown_fields)]
 struct FrontMatter {
     id: AgentId,
-    name: String,
+    name: Spanned<String>,
     #[serde(default)]
-    description: String,
+    description: Option<Spanned<String>>,
     #[serde(default)]
     applies_to: Vec<Spanned<String>>,
     #[serde(default)]
@@ -105,8 +105,16 @@ pub fn parse_agent_file(name: &str, text: &str) -> Result<AgentSpec, AgentFileEr
 
     check_variables(name, body, body_line)?;
 
-    let mut spec = AgentSpec::new(front.id, front.name, body.trim())
-        .with_description(front.description)
+    let display = |field: &'static str, text: &Spanned<String>, max: usize| {
+        check_display_text(name, field, text, max)
+    };
+    display("name", &front.name, MAX_NAME_CHARS)?;
+    if let Some(description) = &front.description {
+        display("description", description, MAX_DESCRIPTION_CHARS)?;
+    }
+
+    let mut spec = AgentSpec::new(front.id, front.name.value, body.trim())
+        .with_description(front.description.map(|text| text.value).unwrap_or_default())
         .with_tools(front.tools)
         .with_context(front.context)
         .with_max_turns(front.max_turns);
@@ -123,6 +131,55 @@ pub fn parse_agent_file(name: &str, text: &str) -> Result<AgentSpec, AgentFileEr
             },
         })?;
     Ok(spec)
+}
+
+/// Longest `name`, in characters: a picker line, next to a "User" badge, in a
+/// panel a few hundred pixels wide. The shipped names are a word.
+pub(super) const MAX_NAME_CHARS: usize = 64;
+
+/// Longest `description`, in characters: the line under the name in the
+/// picker, two or three lines at most. The shipped ones are under 80.
+pub(super) const MAX_DESCRIPTION_CHARS: usize = 280;
+
+/// Refuses a `name` or `description` that would mislead where it is shown.
+///
+/// A control character can break a line of the picker or of a log; a
+/// bidirectional control can make a user agent's name read as a shipped
+/// one's. Neither has a use in a name, so the file is refused rather than
+/// the character silently dropped.
+fn check_display_text(
+    file: &str,
+    field: &'static str,
+    text: &Spanned<String>,
+    max: usize,
+) -> Result<(), AgentFileError> {
+    let line = text.referenced.line().saturating_add(1);
+    if text.value.chars().any(is_misleading_char) {
+        return Err(AgentFileError::MisleadingCharacter {
+            file: file.to_owned(),
+            line,
+            field,
+        });
+    }
+    if text.value.chars().count() > max {
+        return Err(AgentFileError::TextTooLong {
+            file: file.to_owned(),
+            line,
+            field,
+            max,
+        });
+    }
+    Ok(())
+}
+
+/// A Unicode `Cc` control character, or a character that reorders the text
+/// around it (Unicode's `Bidi_Control`).
+pub(super) fn is_misleading_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// Splits the file into its YAML, its body, and the line the body starts on.

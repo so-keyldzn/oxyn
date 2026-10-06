@@ -1063,6 +1063,12 @@ the application quits — rather than a window opened on a broken backend. The
 dialog, and not only standard error: launched from the Finder, nobody
 reads it. The chain carries no secret ([I-03](../CLAUDE.md#i-03)): opening the
 backend reads no credential data, the keychain is only probed there.
+It also reads the user's agent files (`agents/` next to the store,
+[ADR-0049](adr/0049-agents-declared-as-markdown-files.md)): at most
+64 files of 64 KiB, and a failure there costs those agents, never the
+launch. A slow file system there — a network home, a file the cloud evicted —
+delays the first window with nothing shown; the reload the picker offers
+later runs on the blocking pool.
 
 **The log goes to standard error and to a file**, `oxyn.log`, in the
 application's log directory — that of Tauri's `app_log_dir`,

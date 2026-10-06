@@ -285,12 +285,25 @@ export type MentionView = z.infer<typeof MentionView>
 /** The backend's cap on the objects one question names. */
 export const MAX_MENTIONS = 16
 
+/** A declared destination, as `DestinationChoice` names it. */
+export const DestinationRef = z.object({
+  kind: z.enum(["provider", "agent"]),
+  id: z.string(),
+})
+export type DestinationRef = z.infer<typeof DestinationRef>
+
 export const AgentOption = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string(),
   origin: z.enum(["shipped", "user"]),
   error: z.string().nullable(),
+  /**
+   * The declared destinations this agent is not written for: shown disabled
+   * while a conversation runs it (ADR-0049 § 6). The backend refuses them
+   * whatever the panel shows.
+   */
+  disabledDestinations: z.array(DestinationRef),
 })
 export type AgentOption = z.infer<typeof AgentOption>
 
@@ -934,6 +947,14 @@ export const ai = {
 
   listAgents: (connectionId: string) =>
     call("ai_list_agents", z.array(AgentOption), { connectionId }),
+
+  /**
+   * Reads the user's `agents/` directory again and answers what
+   * `listAgents` would for this connection. The webview names a connection,
+   * never a path.
+   */
+  reloadAgents: (connectionId: string) =>
+    call("ai_reload_agents", z.array(AgentOption), { connectionId }),
 
   /** What this launch's prune removed; `null` when nothing went. */
   prunedHistory: () => call("ai_pruned_history", PrunedHistory.nullable()),

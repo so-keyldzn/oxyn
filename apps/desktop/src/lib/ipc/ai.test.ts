@@ -42,11 +42,30 @@ describe("agent picker IPC contract", () => {
       description: "",
       origin: "user",
       error: "analytics.md:2: invalid id",
+      disabledDestinations: [],
     }
     expect(AgentOption.parse(agent)).toEqual(agent)
     expect(AgentOption.safeParse({ ...agent, origin: "trusted" }).success).toBe(
       false
     )
+  })
+
+  it("reads the destinations an agent is not written for", () => {
+    const agent = {
+      id: "0199a3c0-0000-7000-8000-0000000000a1",
+      name: "Local",
+      description: "",
+      origin: "user",
+      error: null,
+      disabledDestinations: [{ kind: "provider", id: "p1" }],
+    }
+    expect(AgentOption.parse(agent)).toEqual(agent)
+    expect(
+      AgentOption.safeParse({
+        ...agent,
+        disabledDestinations: [{ kind: "server", id: "p1" }],
+      }).success
+    ).toBe(false)
   })
 })
 

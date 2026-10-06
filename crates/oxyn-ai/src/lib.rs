@@ -105,7 +105,8 @@ pub use oxyn_core::CancelToken;
 
 pub use agent_file::{
     AgentCatalog, AgentFileError, AgentOrigin, CatalogEntry, CatalogError, ExternalAgentKind,
-    PromptTarget, Recipient, UserAgentFile, parse_agent_file, render_system_prompt, shipped_agents,
+    PromptTarget, Recipient, UserAgentFile, parse_agent_file, read_user_agents,
+    render_system_prompt, shipped_agents,
 };
 pub use builtin::{REMAINING_AGENTS, schema_agent, sql_agent};
 pub use call::{CallHandle, CallId};

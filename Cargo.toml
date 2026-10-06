@@ -56,8 +56,9 @@ hyper         = { version = "1.11.1", features = ["server", "http1"] }
 hyper-util    = { version = "0.1.20", features = ["tokio"] }
 http-body-util = "0.1.5"
 # Aligned on the version `agent-client-protocol` already pulls: a second copy
-# of a system-call crate in the tree would bring nothing.
-rustix        = { version = "0.38.44", features = ["process"] }
+# of a system-call crate in the tree would bring nothing. `fs` opens a user's
+# agent file without following a link nor waiting on a FIFO (ADR-0049 § 4).
+rustix        = { version = "0.38.44", features = ["process", "fs"] }
 futures       = "0.3.34"
 indexmap      = { version = "2.14.2", features = ["serde"] }
 parking_lot   = "0.12.5"

@@ -951,8 +951,9 @@ export const MissingRoleInPanelHeader: Story = {
   args: {
     agentPicker: {
       agents: SQL_ONLY,
-      value: "deleted-role",
-      missingAgent: { name: "Analytics" },
+      value: "0199a3c0-0000-7000-8000-0000000000a7",
+      // The recorded id, as the backend sends it: never shown as a name.
+      missingAgent: { name: "0199a3c0-0000-7000-8000-0000000000a7" },
       onSelect: fn(),
     },
   },
@@ -962,8 +963,11 @@ export const MissingRoleInPanelHeader: Story = {
       canvas.getByRole("combobox", { name: "Agent role" })
     ).toHaveTextContent("SQL")
     await expect(
-      canvas.getByText(/Analytics is no longer available/)
+      canvas.getByText(
+        /The agent this conversation used is no longer available/
+      )
     ).toBeVisible()
+    await expect(canvas.queryByText(/0199a3c0/)).toBeNull()
   },
 }
 

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="3f0c0468be20" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="800eefc5d6fb" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -829,7 +829,7 @@ l'arbre.
 | `hyper-util` | **0.1.20** | MIT | le service et l'acceptation des connexions |
 | `http-body-util` | **0.1.5** | MIT | lire et écrire un corps complet |
 | `async-process` | **2.5.0** | Apache-2.0 OR MIT | lancer l'agent avec un environnement en liste blanche ; ses flux sont déjà des `futures::io`, donc aucun pont d'exécuteur |
-| `rustix` | **0.38.44** | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | tuer le **groupe** de processus. La version maximale est `1.1.4` ; nous alignons sur `0.38.44`, celle qu'`agent-client-protocol` tire déjà, pour ne pas compiler deux copies d'une crate d'appels système |
+| `rustix` | **0.38.44** | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | tuer le **groupe** de processus (feature `process`), et ouvrir le fichier d'agent d'un utilisateur avec `O_NOFOLLOW \| O_NONBLOCK` (feature `fs`, ADR-0049). La version maximale est `1.1.4` ; nous alignons sur `0.38.44`, celle qu'`agent-client-protocol` tire déjà, pour ne pas compiler deux copies d'une crate d'appels système |
 
 **Les révisions MCP que le pont annonce**, relevées le **2026-09-16** dans le
 paquet installé par l'adaptateur Claude, et non de mémoire. Le serveur les

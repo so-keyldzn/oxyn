@@ -39,6 +39,9 @@ mod render;
 mod target;
 #[cfg(test)]
 mod tests;
+mod user_dir;
+#[cfg(test)]
+mod user_dir_tests;
 
 use std::fmt;
 
@@ -49,6 +52,7 @@ pub use parse::parse_agent_file;
 pub use render::render_system_prompt;
 pub(crate) use target::dialect_names;
 pub use target::{DIALECTS, ExternalAgentKind, PromptTarget, Recipient};
+pub use user_dir::{MAX_DIRECTORY_ENTRIES, MAX_USER_AGENT_FILES, read_user_agents};
 
 #[cfg(doc)]
 use crate::spec::AgentSpec;
@@ -148,6 +152,91 @@ pub enum AgentFileError {
         /// `validate`'s sentence. It may quote a tool name the file lists,
         /// and nothing else of it.
         reason: String,
+    },
+
+    /// `name` or `description` holds a control or bidirectional character.
+    #[error(
+        "{file}, line {line}: `{field}` holds a control or bidirectional character; \
+         write it as plain text"
+    )]
+    MisleadingCharacter {
+        /// The file.
+        file: String,
+        /// The line of the field.
+        line: u64,
+        /// `name` or `description`.
+        field: &'static str,
+    },
+
+    /// `name` or `description` is longer than the picker shows.
+    #[error("{file}, line {line}: `{field}` is longer than {max} characters")]
+    TextTooLong {
+        /// The file.
+        file: String,
+        /// The line of the field.
+        line: u64,
+        /// `name` or `description`.
+        field: &'static str,
+        /// The longest accepted.
+        max: usize,
+    },
+
+    /// The file's bytes are not UTF-8.
+    #[error("{file}: not valid UTF-8; an agent file is UTF-8 text")]
+    NotUtf8 {
+        /// The file.
+        file: String,
+    },
+
+    /// The file's name is not UTF-8; `file` is its lossy rendering.
+    #[error("{file}: the file name is not valid UTF-8; rename the file")]
+    FileNameNotUtf8 {
+        /// The file, its invalid bytes replaced.
+        file: String,
+    },
+
+    /// A symbolic link, a directory, a FIFO or a device named `*.md`.
+    #[error("{file}: not a regular file; Oxyn does not follow links in its agents directory")]
+    NotARegularFile {
+        /// The file.
+        file: String,
+    },
+
+    /// The agents directory is a symbolic link, or not a directory.
+    #[error("{file}: not a directory; Oxyn reads agents from a real directory, not through a link")]
+    NotADirectory {
+        /// The directory's last component.
+        file: String,
+    },
+
+    /// The system refused to open or read the file.
+    #[error("{file}: could not be read")]
+    Unreadable {
+        /// The file, or the directory when the directory itself is unreadable.
+        file: String,
+    },
+
+    /// The directory holds more agent files than Oxyn reads.
+    #[error(
+        "{file}: Oxyn reads at most {} agent files; this one and the {skipped} after it, \
+         in name order, were not read",
+        user_dir::MAX_USER_AGENT_FILES
+    )]
+    TooManyFiles {
+        /// The first file left unread.
+        file: String,
+        /// How many more were left unread after it.
+        skipped: usize,
+    },
+
+    /// The directory holds more entries than Oxyn looks through.
+    #[error(
+        "{file}: more than {} entries; Oxyn stopped looking for agent files in it",
+        user_dir::MAX_DIRECTORY_ENTRIES
+    )]
+    TooManyEntries {
+        /// The directory.
+        file: String,
     },
 
     /// No fragment is written for this recipient.

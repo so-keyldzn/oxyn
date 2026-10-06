@@ -461,3 +461,98 @@ fn dialects_are_read_by_the_names_oxyn_shows() {
     let back: AgentSpec = serde_json::from_value(json).expect("reads back");
     assert_eq!(back, spec);
 }
+
+/// A file whose name names nothing in particular, with `front` as its whole
+/// front matter.
+fn front_only(front: &str) -> String {
+    format!("---\nid: 0199a3c0-0000-7000-8000-0000000000fe\n{front}---\nYou help.\n")
+}
+
+#[test]
+fn a_name_or_description_with_a_control_or_bidi_character_is_refused() {
+    for (front, field, line) in [
+        ("name: \"SQL\\u202E\"\n", "name", 3),
+        ("name: \"S\\u0007QL\"\n", "name", 3),
+        (
+            "name: Fine\ndescription: \"looks \\u2066shipped\"\n",
+            "description",
+            4,
+        ),
+        (
+            "name: Fine\ndescription: \"two\\nlines\"\n",
+            "description",
+            4,
+        ),
+    ] {
+        let err = parse_agent_file("user.md", &front_only(front)).expect_err(front);
+        assert_eq!(
+            err,
+            AgentFileError::MisleadingCharacter {
+                file: "user.md".to_owned(),
+                line,
+                field,
+            },
+            "{front}"
+        );
+        let message = err.to_string();
+        assert!(
+            !message
+                .chars()
+                .any(|c| c.is_control() || c == '\u{202E}' || c == '\u{2066}'),
+            "{message:?}"
+        );
+    }
+}
+
+#[test]
+fn a_name_or_description_over_its_cap_is_refused() {
+    let long_name = format!("name: {}\n", "n".repeat(parse::MAX_NAME_CHARS + 1));
+    assert!(matches!(
+        parse_agent_file("user.md", &front_only(&long_name)),
+        Err(AgentFileError::TextTooLong {
+            field: "name",
+            line: 3,
+            ..
+        })
+    ));
+    let at_cap = format!("name: {}\n", "n".repeat(parse::MAX_NAME_CHARS));
+    parse_agent_file("user.md", &front_only(&at_cap)).expect("a name at the cap");
+
+    let long_description = format!(
+        "name: Fine\ndescription: {}\n",
+        "d".repeat(parse::MAX_DESCRIPTION_CHARS + 1)
+    );
+    assert!(matches!(
+        parse_agent_file("user.md", &front_only(&long_description)),
+        Err(AgentFileError::TextTooLong {
+            field: "description",
+            line: 4,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_duplicated_tool_is_reported_without_its_name() {
+    for tools in [
+        "tools: [execute_query, execute_query]\n",
+        "tools: [\"x\\u202Ey\", \"x\\u202Ey\"]\n",
+    ] {
+        let err = parse_agent_file("user.md", &front_only(&format!("name: Fine\n{tools}")))
+            .expect_err(tools);
+        let message = err.to_string();
+        assert!(matches!(err, AgentFileError::Declaration { .. }), "{err:?}");
+        assert!(!message.contains("execute_query"), "{message}");
+        assert!(!message.contains('\u{202E}'), "{message:?}");
+    }
+}
+
+#[test]
+fn a_context_over_its_ceiling_is_refused_in_a_file() {
+    let err = parse_agent_file(
+        "user.md",
+        &front_only("name: Fine\ncontext:\n  max_sample_rows: 100000\n"),
+    )
+    .expect_err("over the ceiling");
+    assert!(err.to_string().contains("max_sample_rows"), "{err}");
+}

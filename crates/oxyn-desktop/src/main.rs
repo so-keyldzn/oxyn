@@ -216,6 +216,7 @@ fn main() -> Result<()> {
             commands::ai::ai_cancel,
             commands::ai::ai_threads,
             commands::ai::ai_list_agents,
+            commands::ai::ai_reload_agents,
             commands::ai::ai_orphan_threads,
             commands::ai::ai_pruned_history,
             commands::ai::ai_open_thread,

@@ -261,6 +261,20 @@ pub async fn ai_list_agents(
         .await
 }
 
+/// Reads the user's agents directory again, then answers as
+/// [`ai_list_agents`] does without a destination. The webview names a
+/// connection, never a path: the directory is the backend's. Async: the read
+/// runs on the blocking pool.
+#[tauri::command]
+pub async fn ai_reload_agents(
+    backend: State<'_, Backend>,
+    connection_id: String,
+) -> Result<Vec<AgentRoleOption>, IpcError> {
+    backend
+        .ai_reload_agents(self::connection(&connection_id)?)
+        .await
+}
+
 /// In memory only, and synchronous for that: what the launch's prune removed.
 #[tauri::command]
 pub fn ai_pruned_history(backend: State<'_, Backend>) -> Option<PrunedHistory> {

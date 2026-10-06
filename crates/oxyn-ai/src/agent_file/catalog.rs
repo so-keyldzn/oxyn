@@ -39,7 +39,11 @@ impl AgentOrigin {
 ///
 /// Whoever reads the directory builds it; the catalog only decides what is
 /// offered. `result` is [`parse_agent_file`](super::parse_agent_file)'s.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is written by hand, here and on every type below that holds a
+/// declaration: a user's file is third-party text, and a `{catalog:?}`
+/// added to a log one day must not copy prompts into it (I-03).
+#[derive(Clone)]
 pub struct UserAgentFile {
     /// The file's name, without its directory: what an error shows.
     pub file_name: String,
@@ -64,7 +68,7 @@ pub enum CatalogError {
 }
 
 /// One line of the agent picker.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CatalogEntry {
     /// The agent to start a conversation with; `None` when it cannot be
     /// picked, and then [`error`](Self::error) says why.
@@ -82,17 +86,56 @@ pub struct CatalogEntry {
 }
 
 /// A user agent, valid or not, in the order it was given.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct UserEntry {
     file_name: String,
     result: Result<AgentSpec, CatalogError>,
 }
 
 /// Every agent Oxyn knows, shipped and user, with collisions already refused.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentCatalog {
     shipped: Vec<AgentSpec>,
     user: Vec<UserEntry>,
+}
+
+impl fmt::Debug for UserAgentFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut out = f.debug_struct("UserAgentFile");
+        out.field("file_name", &self.file_name);
+        match &self.result {
+            Ok(spec) => out.field("id", &spec.id),
+            // The error holds a file name and a line, never the text.
+            Err(err) => out.field("error", err),
+        };
+        out.finish()
+    }
+}
+
+impl fmt::Debug for CatalogEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CatalogEntry")
+            .field("id", &self.id)
+            .field("origin", &self.origin)
+            .field("file_name", &self.file_name)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for AgentCatalog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let refused = self
+            .user
+            .iter()
+            .filter(|entry| entry.result.is_err())
+            .count();
+        f.debug_struct("AgentCatalog")
+            .field("shipped", &self.shipped.len())
+            .field("user", &self.user.len())
+            .field("refused", &refused)
+            .finish()
+    }
 }
 
 impl AgentCatalog {
