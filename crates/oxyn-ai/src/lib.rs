@@ -18,6 +18,7 @@
 //! | [`spec`] | an agent's declaration, serializable | ARCHITECTURE §7.3 |
 //! | [`runtime`] | the loop, and the caller's [`CommandSink`] | ADR-0004 |
 //! | [`observer`] | what a conversation shows as it unfolds | UX-SPEC |
+//! | [`agent_file`] | agents as files, and the one way a system prompt is made | ADR-0049, I-04 |
 //! | [`builtin`] | the SQL and Schema agents | IMPLEMENTATION-PLAN, phase 2 |
 //! | [`error`] | what the model → bus boundary can refuse | — |
 //!
@@ -83,6 +84,7 @@
 //! # }
 //! ```
 
+pub mod agent_file;
 pub mod builtin;
 pub mod call;
 pub mod context;
@@ -101,7 +103,11 @@ pub mod untrusted;
 /// to build one.
 pub use oxyn_core::CancelToken;
 
-pub use builtin::{REMAINING_AGENTS, builtin_agents, schema_agent, sql_agent};
+pub use agent_file::{
+    AgentFileError, ExternalAgentKind, PromptTarget, Recipient, parse_agent_file,
+    render_system_prompt, shipped_agents,
+};
+pub use builtin::{REMAINING_AGENTS, schema_agent, sql_agent};
 pub use call::{CallHandle, CallId};
 pub use context::{
     AgentContext, ContextBuilder, ContextPolicy, MAX_MENTIONS, Mention, RowSample, estimate_tokens,
@@ -127,7 +133,8 @@ pub use tools::{ToolDefinition, ToolRegistry, ToolScope};
 pub mod prelude {
     pub use oxyn_core::CancelToken;
 
-    pub use crate::builtin::{builtin_agents, schema_agent, sql_agent};
+    pub use crate::agent_file::{PromptTarget, Recipient, render_system_prompt, shipped_agents};
+    pub use crate::builtin::{schema_agent, sql_agent};
     pub use crate::call::{CallHandle, CallId};
     pub use crate::context::{AgentContext, ContextBuilder, ContextPolicy, RowSample};
     pub use crate::error::AiError;

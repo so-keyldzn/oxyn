@@ -110,7 +110,9 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// [`PrivacyTier`], and nothing else (I-04). An agent declaration coming from a
 /// plugin therefore cannot widen the leak.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+// `deny_unknown_fields`: an agent file's `context:` block is read into this
+// type, and a misspelled key must be refused, not ignored (ADR-0049 § 1).
+#[serde(default, deny_unknown_fields)]
 pub struct ContextPolicy {
     /// Ceiling of the assembled context, in estimated tokens.
     pub max_context_tokens: usize,

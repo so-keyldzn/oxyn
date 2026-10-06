@@ -28,8 +28,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use oxyn_core::AgentId;
+use oxyn_core::{AgentId, SqlDialect};
 
+use crate::agent_file::{PromptTarget, Recipient};
 use crate::context::ContextPolicy;
 use crate::error::AiError;
 use crate::tools::ToolRegistry;
@@ -96,6 +97,18 @@ pub struct AgentSpec {
     /// Maximum number of model → tools → model round trips.
     #[serde(default = "default_max_turns")]
     pub max_turns: usize,
+
+    /// The dialects this agent is written for; empty means every one.
+    ///
+    /// Narrows where the agent is **offered** ([`offered_for`](Self::offered_for));
+    /// it grants nothing (ADR-0049 § 2). Written as [`SqlDialect::as_str`]
+    /// names, as in a file.
+    #[serde(default, with = "crate::agent_file::dialect_names")]
+    pub applies_to: Vec<SqlDialect>,
+
+    /// The recipients this agent is written for; empty means every one.
+    #[serde(default)]
+    pub recipients: Vec<Recipient>,
 }
 
 /// Default value of [`AgentSpec::max_turns`] on deserialization.
@@ -118,7 +131,18 @@ impl AgentSpec {
             context: ContextPolicy::default(),
             output_schema: None,
             max_turns: DEFAULT_MAX_TURNS,
+            applies_to: Vec::new(),
+            recipients: Vec::new(),
         }
+    }
+
+    /// Is this agent offered for `target`? Only if each of
+    /// [`applies_to`](Self::applies_to) and [`recipients`](Self::recipients)
+    /// is empty or names the target's value.
+    #[must_use]
+    pub fn offered_for(&self, target: &PromptTarget) -> bool {
+        (self.applies_to.is_empty() || self.applies_to.contains(&target.dialect))
+            && (self.recipients.is_empty() || self.recipients.contains(&target.recipient))
     }
 
     /// Sets the description shown to the user.
