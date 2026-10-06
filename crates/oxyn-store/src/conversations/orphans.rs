@@ -36,7 +36,7 @@ impl Conversations<'_> {
         self.store.with_connection(|handle| {
             let mut query = handle.prepare(
                 "SELECT c.id, c.destination_kind, c.destination_id, c.destination_label, c.model,
-                        c.title, c.created_at, c.updated_at, c.connection_name,
+                        c.title, c.created_at, c.updated_at, c.connection_name, c.agent_id,
                         (SELECT COUNT(*) FROM ai_conversation_turns t
                           WHERE t.conversation_id = c.id) AS turns
                    FROM ai_conversations c

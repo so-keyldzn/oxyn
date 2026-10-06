@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CLAUDE.md" sha256="13b0c9e740c3" -->
+<!-- oxyn-translation source="CLAUDE.md" sha256="58c144bf6a97" -->
 
 > Traduction française de [CLAUDE.md](../../CLAUDE.md). **La version anglaise fait foi.**
 
@@ -66,6 +66,17 @@ Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
 | [`/adr`](claude/commands/adr.md) [`/versions`](claude/commands/versions.md) [`/benchmark`](claude/commands/benchmark.md) [`/securite`](claude/commands/securite.md) | les gestes rares et faciles à rater |
 
 Liste complète : [.claude/README.md](claude/README.md).
+
+## Chercher dans le code
+
+Le serveur MCP `semantiq` ([.mcp.json](../../.mcp.json)) indexe le dépôt. On
+commence par lui pour trouver ce qui se décrit en mots : `semantiq_search` pour
+un comportement ou une intention, `semantiq_explain` pour la définition, la
+documentation et les usages d'un symbole. Grep reste l'outil d'une chaîne exacte
+et de toute réponse qui doit faire foi : `semantiq_find_refs` s'arrête à sa
+`limit` et compte un `use` comme une définition, et `semantiq_deps` ne suit pas
+les réexports `pub use`, si bien que son « Imported by » manque la plupart des
+appelants. **« Rien d'autre n'utilise X » se vérifie au grep.**
 
 ## Invariants
 

@@ -23,6 +23,9 @@ __pycache__/
 # Sauvegardes locales — git garde l'historique, un .bak ne sert que localement
 *.bak
 
+# Local index of the semantiq MCP server, rebuilt on demand
+.semantiq.db*
+
 # macOS
 .DS_Store
 
