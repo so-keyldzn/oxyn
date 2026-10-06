@@ -34,6 +34,7 @@ mod persistence;
 mod samples;
 mod threads;
 mod transports;
+mod user_agents;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

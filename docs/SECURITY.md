@@ -269,9 +269,15 @@ What enters Oxyn and is untrusted, in order of underestimation:
    file and the line, never its content ([I-03](../CLAUDE.md#i-03)). Reading
    the directory is bounded too: only the `*.md` files directly in it, at
    most 64 of them in name order (the rest listed as one error), regular
-   files only — a symbolic link is refused, not followed, and the open itself
-   refuses a link or a FIFO put in its place —, and the 64 KiB cap is checked
-   on the size and again while reading. What it
+   files only — a symbolic link is refused, not followed —, and the 64 KiB
+   cap is checked on the size and again while reading. `agents/` itself must
+   be a directory, not a link to one. On macOS and Linux it is opened once
+   without following a link and every file is opened relative to it, without
+   following a link nor waiting on a FIFO, so an entry swapped after the
+   listing gains nothing; no Windows build ships, and a port has to keep
+   that property. The webview names a connection when it asks for a reload,
+   never a path. A file name is shown with its control and bidirectional
+   characters replaced. What it
    can never obtain: a tool, a tier, a connection, an endpoint, a key or a
    write the `PolicyGate` would refuse — targeting narrows, it grants
    nothing. The panel marks it as a user agent, and the step that reads

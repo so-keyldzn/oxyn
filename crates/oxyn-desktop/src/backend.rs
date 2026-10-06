@@ -351,6 +351,7 @@ impl Backend {
         };
         backend.start_heartbeat();
         backend.prune_conversations();
+        backend.load_user_agents();
         // Results nobody reads any more are released on a timer, off the IPC
         // threads (ADR-0017). A weak handle: the task ends with the backend.
         let weak = Arc::downgrade(&backend.inner);

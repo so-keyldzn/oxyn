@@ -23,7 +23,7 @@ use crate::ipc::ai::{AgentRoleOption, DestinationChoice, DestinationRef, Missing
 
 /// The agents this window offers.
 ///
-/// Behind a lock so that reading the user's directory, a later step, can put
+/// Behind a lock so that reading the user's directory (`user_agents`) can put
 /// a new catalog in place; a conversation reads it when a question starts,
 /// and keeps the spec it read until the question ends.
 pub(crate) struct Agents(RwLock<Arc<AgentCatalog>>);
@@ -40,8 +40,7 @@ impl Agents {
         Arc::clone(&self.0.read())
     }
 
-    /// Puts `catalog` in place, as reading the user's directory will.
-    #[cfg(test)]
+    /// Puts `catalog` in place: the user's directory was read again.
     pub(crate) fn set(&self, catalog: AgentCatalog) {
         *self.0.write() = Arc::new(catalog);
     }

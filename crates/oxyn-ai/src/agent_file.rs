@@ -175,6 +175,13 @@ pub enum AgentFileError {
         file: String,
     },
 
+    /// The agents directory is a symbolic link, or not a directory.
+    #[error("{file}: not a directory; Oxyn reads agents from a real directory, not through a link")]
+    NotADirectory {
+        /// The directory's last component.
+        file: String,
+    },
+
     /// The system refused to open or read the file.
     #[error("{file}: could not be read")]
     Unreadable {

@@ -31,8 +31,9 @@ export interface AssistantAgentPickerProps {
   /** Creates a new conversation; never changes the current one's role. */
   onSelect: (id: string) => void
   /**
-   * Reads the user's agent files again. A running conversation keeps the
-   * prompt it started with (ADR-0049 § 6); only the list changes.
+   * Reads the user's agent files again. A question already running keeps
+   * the agent it started with; a conversation's next question reads the new
+   * files, and one whose file is gone says so (ADR-0049 § 6).
    */
   onReload?: () => void
   reloading?: boolean

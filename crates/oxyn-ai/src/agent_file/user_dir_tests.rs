@@ -7,7 +7,7 @@ use std::path::Path;
 
 use oxyn_core::{AiProviderKind, DriverId, Environment, SqlDialect};
 
-use super::user_dir::read_bounded;
+use super::user_dir::{Directory, read_bounded};
 use super::*;
 
 const VALID_FRONT: &str = "id: 0199a3c0-0000-7000-8000-0000000000b1\nname: Tuner\n";
@@ -194,6 +194,85 @@ fn a_fifo_is_refused_without_waiting_for_a_writer() {
         error_of(&files, "pipe.md"),
         AgentFileError::NotARegularFile { .. }
     ));
+
+    // The FIFO swapped in after the listing: the open itself neither waits
+    // for a writer nor accepts it.
+    let directory = Directory::open_for_test(dir.path()).expect("the directory opens");
+    let opened = directory.open_regular(std::ffi::OsStr::new("pipe.md"), "pipe.md");
+    assert!(matches!(
+        opened,
+        Err(AgentFileError::NotARegularFile { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_swapped_in_after_the_listing_is_not_followed() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let elsewhere = tempfile::tempdir().expect("a temporary directory");
+    write(elsewhere.path(), "target.md", agent_text(VALID_FRONT));
+    std::os::unix::fs::symlink(
+        elsewhere.path().join("target.md"),
+        dir.path().join("link.md"),
+    )
+    .expect("a symbolic link");
+
+    let directory = Directory::open_for_test(dir.path()).expect("the directory opens");
+    let opened = directory.open_regular(std::ffi::OsStr::new("link.md"), "link.md");
+
+    assert!(matches!(
+        opened,
+        Err(AgentFileError::NotARegularFile { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_agents_directory_that_is_a_link_is_refused() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    let elsewhere = tempfile::tempdir().expect("a temporary directory");
+    write(elsewhere.path(), "tuner.md", agent_text(VALID_FRONT));
+    let agents = home.path().join("agents");
+    std::os::unix::fs::symlink(elsewhere.path(), &agents).expect("a symbolic link");
+
+    let files = read_user_agents(&agents);
+
+    assert_eq!(file_names(&files), ["agents"]);
+    assert_eq!(
+        error_of(&files, "agents"),
+        AgentFileError::NotADirectory {
+            file: "agents".to_owned()
+        }
+    );
+}
+
+#[test]
+fn an_agents_path_that_is_a_file_is_refused() {
+    let home = tempfile::tempdir().expect("a temporary directory");
+    write(home.path(), "agents", "not a directory");
+
+    let files = read_user_agents(&home.path().join("agents"));
+
+    assert!(matches!(
+        error_of(&files, "agents"),
+        AgentFileError::NotADirectory { .. }
+    ));
+}
+
+#[test]
+fn control_and_bidi_characters_in_a_name_are_replaced() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    write(dir.path(), "evil\u{202E}dm.txt\u{7}.md", "unparsed");
+
+    let files = read_user_agents(dir.path());
+
+    assert_eq!(file_names(&files), ["evil\u{FFFD}dm.txt\u{FFFD}.md"]);
+    let message = files
+        .first()
+        .and_then(|file| file.result.as_ref().err())
+        .map(ToString::to_string)
+        .expect("an error");
+    assert!(!message.contains('\u{202E}') && !message.contains('\u{7}'));
 }
 
 #[test]

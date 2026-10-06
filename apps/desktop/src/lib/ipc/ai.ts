@@ -937,8 +937,8 @@ export const ai = {
 
   /**
    * Reads the user's `agents/` directory again and answers what
-   * `listAgents` would for this connection. Running conversations keep the
-   * prompt they started with.
+   * `listAgents` would for this connection. The webview names a connection,
+   * never a path.
    */
   reloadAgents: (connectionId: string) =>
     call("ai_reload_agents", z.array(AgentOption), { connectionId }),

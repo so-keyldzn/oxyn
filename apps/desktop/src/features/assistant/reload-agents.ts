@@ -8,8 +8,8 @@ import { ai } from "@/lib/ipc/ai"
  *
  * The answer replaces this connection's list at once; the lists of the other
  * connections are only marked stale, since the catalog they come from is the
- * same and was just rebuilt. A running conversation is not touched: its
- * prompt was rendered when it started (ADR-0049 § 6).
+ * same and was just rebuilt. A question already running keeps its agent;
+ * the next one reads the new files (ADR-0049 § 6).
  */
 export function useReloadAgents(connection: string) {
   const queryClient = useQueryClient()

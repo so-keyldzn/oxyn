@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="85e3fb050ac6" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="cb8ad46c4ee2" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -1077,6 +1077,13 @@ l'application quitte — plutôt qu'une fenêtre ouverte sur un backend cassé. 
 dialogue, et non la seule sortie d'erreur : lancé depuis le Finder, personne ne
 la lit. La chaîne ne porte aucun secret ([I-03](../CLAUDE.md#i-03)) : ouvrir le
 backend ne lit aucune donnée d'identification, le trousseau n'y est que sondé.
+Il lit aussi les fichiers d'agents de l'utilisateur (`agents/` à côté du
+stockage, [ADR-0049](adr/0049-agents-declared-as-markdown-files.md)) : 64
+fichiers de 64 Kio au plus, et un échec n'y coûte que ces agents, jamais le
+lancement. Un système de fichiers lent à cet endroit — un dossier personnel
+sur le réseau, un fichier que le cloud a évincé — retarde la première fenêtre
+sans rien montrer ; le rechargement que propose le sélecteur tourne ensuite
+sur le pool bloquant.
 
 **Le journal va sur la sortie d'erreur et dans un fichier**, `oxyn.log`, dans le
 répertoire de logs de l'application — celui de `app_log_dir` de Tauri,

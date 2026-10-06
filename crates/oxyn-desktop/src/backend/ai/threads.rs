@@ -115,6 +115,9 @@ pub(crate) struct AiState {
     pub(crate) pruned: Mutex<Option<crate::ipc::ai::PrunedHistory>>,
     /// The agents a conversation can run.
     pub(crate) agents: super::agents::Agents,
+    /// One reload of the user's agents at a time: a script in the webview can
+    /// call it in a loop, and an older read must not replace a newer one.
+    pub(crate) agents_reload: tokio::sync::Mutex<()>,
 }
 
 /// An external agent launched ahead of its first question.
