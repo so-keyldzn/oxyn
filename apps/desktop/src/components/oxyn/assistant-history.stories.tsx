@@ -9,6 +9,8 @@ const items: Array<ThreadSummary> = [
   {
     id: "3",
     title: "Slowest queries of the week",
+    agentId: null,
+    missingAgent: null,
     createdAtMs: Date.UTC(2026, 8, 15, 9, 0),
     updatedAtMs: Date.UTC(2026, 8, 15, 12, 40),
     exchanges: 6,
@@ -17,6 +19,8 @@ const items: Array<ThreadSummary> = [
   {
     id: "2",
     title: "How many active clients?",
+    agentId: null,
+    missingAgent: null,
     createdAtMs: Date.UTC(2026, 8, 14, 16, 0),
     updatedAtMs: Date.UTC(2026, 8, 14, 16, 20),
     exchanges: 2,
@@ -25,6 +29,8 @@ const items: Array<ThreadSummary> = [
   {
     id: "1",
     title: "",
+    agentId: null,
+    missingAgent: null,
     createdAtMs: Date.UTC(2026, 8, 13, 8, 0),
     updatedAtMs: Date.UTC(2026, 8, 13, 8, 5),
     exchanges: 1,

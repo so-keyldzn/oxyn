@@ -9,6 +9,8 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { AssistantAgentStartup } from "@/components/oxyn/assistant-agent-startup"
+import { AssistantAgentPicker } from "@/components/oxyn/assistant-agent-picker"
+import type { AssistantAgentPickerProps } from "@/components/oxyn/assistant-agent-picker"
 import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
 import { AssistantReasoningEffort } from "@/components/oxyn/assistant-reasoning-effort"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
@@ -141,6 +143,7 @@ export function AssistantHeader({
   onNewConversation,
   agentStartup: agentStartupProp = null,
   modelList: modelListProp = null,
+  agentPicker,
 }: {
   connectionName: string
   environment: Environment
@@ -173,6 +176,7 @@ export function AssistantHeader({
   agentStartup?: AgentStartupControls | null
   /** The selected provider's model list, while it is loading or failed. */
   modelList?: ModelListState | null
+  agentPicker?: AssistantAgentPickerProps
 }) {
   const agentStartup = selected?.kind === "agent" ? agentStartupProp : null
   const modelList = selected?.kind === "provider" ? modelListProp : null
@@ -243,6 +247,8 @@ export function AssistantHeader({
       <p className="text-xs text-muted-foreground">
         {PRIVACY_TIERS[tier].summary}
       </p>
+
+      {agentPicker ? <AssistantAgentPicker {...agentPicker} /> : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <Select

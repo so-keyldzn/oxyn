@@ -21,6 +21,7 @@ import {
 } from "@/components/oxyn/assistant-exchange"
 import type { ExchangeActions } from "@/components/oxyn/assistant-exchange"
 import { AssistantHeader } from "@/components/oxyn/assistant-header"
+import type { AssistantAgentPickerProps } from "@/components/oxyn/assistant-agent-picker"
 import type { ModelListState } from "@/components/oxyn/assistant-header"
 import { AssistantHistory } from "@/components/oxyn/assistant-history"
 import type { OrphanThreadsState } from "@/components/oxyn/assistant-orphans"
@@ -91,6 +92,7 @@ const EXAMPLES = [
 ]
 
 export interface AssistantViewProps {
+  agentPicker?: AssistantAgentPickerProps
   connectionName: string
   identifierQuote?: IdentifierQuote
   environment: Environment
@@ -327,6 +329,17 @@ export function AssistantView(props: AssistantViewProps) {
         {panelStatus(path)}
       </p>
       <AssistantHeader
+        agentPicker={
+          props.agentPicker
+            ? {
+                ...props.agentPicker,
+                onSelect: (id) => {
+                  setHistoryOpen(false)
+                  props.agentPicker?.onSelect(id)
+                },
+              }
+            : undefined
+        }
         connectionName={connectionName}
         environment={environment}
         tier={tier}

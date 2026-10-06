@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  AgentOption,
+  ThreadSummary,
+  ThreadView,
   AgentOptionCategory,
   AgentSettingAnswer,
   AiUpdate,
@@ -8,6 +11,44 @@ import {
   FailureCategory,
   SampleRequest,
 } from "./ai"
+
+describe("agent picker IPC contract", () => {
+  it("keeps older SQL-only transcripts and summaries readable", () => {
+    expect(
+      ThreadView.parse({
+        id: "old",
+        title: "Old",
+        nodes: [],
+        selections: [],
+        running: null,
+      })
+    ).toMatchObject({ agentId: null, missingAgent: null })
+    expect(
+      ThreadSummary.parse({
+        id: "old",
+        title: "Old",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        exchanges: 0,
+        running: false,
+      })
+    ).toMatchObject({ agentId: null, missingAgent: null })
+  })
+
+  it("preserves invalid user agents and rejects an invented origin", () => {
+    const agent = {
+      id: "user",
+      name: "Analytics",
+      description: "",
+      origin: "user",
+      error: "analytics.md:2: invalid id",
+    }
+    expect(AgentOption.parse(agent)).toEqual(agent)
+    expect(AgentOption.safeParse({ ...agent, origin: "trusted" }).success).toBe(
+      false
+    )
+  })
+})
 
 // `finished` and `failed` are the only way a turn leaves its running state, and
 // nothing awaits them: `guarded` drops what it cannot read. Refusing one would
