@@ -97,6 +97,7 @@ fn run<'a>(
     mentions: &'a Named,
 ) -> Run<'a> {
     Run {
+        role: sql_role(),
         inner: &fixture.backend.inner,
         thread,
         node,
@@ -120,7 +121,7 @@ fn a_provider_question_on_a_never_expanded_connection_is_told_the_tables_and_the
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let (channel, received) = recording();
     let node = fixture.begin(&thread, None, channel);
@@ -173,7 +174,7 @@ fn an_external_agent_is_told_the_tables_at_its_first_question() {
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let cancel = CancelToken::new();
     let nothing = &crate::backend::ai::mentions::NO_MENTIONS;
@@ -329,7 +330,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let (channel, _) = recording();
     let cancel = CancelToken::new();
@@ -362,6 +363,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
         Memory {
             session: opened,
             tier: PrivacyTier::Metadata,
+            prompt: agent.system_prompt.clone(),
         },
     );
     thread.finish(first);

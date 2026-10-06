@@ -65,9 +65,32 @@ use std::fmt;
 use oxyn_catalog::CatalogCache;
 use oxyn_core::{OxynError, QueryLanguage};
 
+use crate::agent_file::{PromptTarget, render_system_prompt};
 use crate::context::{AgentContext, ContextBuilder, Mention, QUESTION_HEADER, RowSample};
 use crate::privacy::PrivacyTier;
+use crate::spec::AgentSpec;
 use crate::untrusted;
+
+/// What opens the conversation's agent block, so that the external agent reads
+/// it as Oxyn's and not as the user's question.
+///
+/// In English, because it goes to a model. It does not claim more than it is:
+/// ACP has no system message, and these instructions arrive below the external
+/// agent's own (ADR-0049 § 7).
+pub const AGENT_HEADER: &str =
+    "Oxyn's instructions for this conversation, written by Oxyn and not by the user:";
+
+/// The agent an opening prompt carries, and the target it is rendered for.
+///
+/// One argument rather than two: the pair is what
+/// [`render_system_prompt`] reads, and nothing else of the conversation.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentInstructions<'a> {
+    /// The conversation's agent.
+    pub spec: &'a AgentSpec,
+    /// The connection's dialect, driver and marking, and this recipient.
+    pub target: &'a PromptTarget,
+}
 
 /// What precedes the schema: where it comes from, and what can be expected of
 /// it.
@@ -160,8 +183,14 @@ impl AgentPrompt {
         })
     }
 
-    /// Composes the prompt that opens an agent session: the structure of the
-    /// database, then the question.
+    /// Composes the prompt that opens an agent session: the conversation's
+    /// agent, the structure of the database, then the question.
+    ///
+    /// The agent's block is [`render_system_prompt`]'s, rendered here after
+    /// the tier check and placed **before** the schema, under
+    /// [`AGENT_HEADER`]: Oxyn's text, never mixed with what the database
+    /// wrote. Only the opening carries it — [`following`](Self::following)
+    /// does not repeat it, the process remembers (ADR-0049 § 7).
     ///
     /// The schema is rendered by [`ContextBuilder::build`] under `tier` — the
     /// gateway of [I-04](../../../../CLAUDE.md#i-04), with its budget, its
@@ -182,8 +211,10 @@ impl AgentPrompt {
     ///
     /// # Errors
     ///
-    /// Those of [`AgentPrompt::from_user`], checked **before** any schema is
-    /// rendered.
+    /// Those of [`AgentPrompt::from_user`], checked **before** anything is
+    /// rendered; then [`OxynError::Config`] when the agent's prompt does not
+    /// render — a variable outside the closed list, a recipient without a
+    /// fragment.
     pub fn with_schema(
         tier: PrivacyTier,
         question: &str,
@@ -191,8 +222,11 @@ impl AgentPrompt {
         language: QueryLanguage,
         samples: Vec<RowSample>,
         mentions: Vec<Mention>,
+        agent: AgentInstructions<'_>,
     ) -> Result<Self, OxynError> {
         let asked = Self::from_user(tier, question)?;
+        let instructions = render_system_prompt(agent.spec, agent.target)
+            .map_err(|error| OxynError::Config(error.to_string()))?;
         let context = ContextBuilder::new(cache, tier)
             .with_language(language)
             .focused_on(asked.text.clone())
@@ -200,7 +234,7 @@ impl AgentPrompt {
             .with_samples(samples)
             .build();
         let text = format!(
-            "{}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{}",
+            "{AGENT_HEADER}\n\n{instructions}\n\n{}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{}",
             schema_intro(),
             untrusted::PREAMBLE,
             context.prompt_block(),
@@ -262,6 +296,29 @@ impl AgentPrompt {
     #[must_use]
     pub const fn context(&self) -> Option<&AgentContext> {
         self.context.as_ref()
+    }
+}
+
+/// The SQL agent rendered for Claude Code on a SQLite production connection:
+/// the opening every test that is not about the agent block passes.
+#[cfg(test)]
+pub(crate) fn sql_instructions() -> AgentInstructions<'static> {
+    use std::sync::LazyLock;
+
+    use oxyn_core::{DriverId, Environment, SqlDialect};
+
+    use crate::agent_file::{ExternalAgentKind, Recipient};
+
+    static SPEC: LazyLock<AgentSpec> = LazyLock::new(crate::builtin::sql_agent);
+    static TARGET: LazyLock<PromptTarget> = LazyLock::new(|| PromptTarget {
+        dialect: SqlDialect::Sqlite,
+        driver: DriverId::new(DriverId::SQLITE).expect("a valid driver name"),
+        environment: Environment::Production,
+        recipient: Recipient::External(ExternalAgentKind::ClaudeCode),
+    });
+    AgentInstructions {
+        spec: &SPEC,
+        target: &TARGET,
     }
 }
 

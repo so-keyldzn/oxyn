@@ -32,10 +32,11 @@ use tauri::{Manager as _, State, Webview};
 use crate::backend::Backend;
 use crate::commands::windows::{bring_to_front, caller};
 use crate::ipc::ai::{
-    AgentDraft, AgentPresetDraft, AgentSettingAnswer, AgentSettingChange, AgentStart,
-    AgentStartRequest, AiUpdate, AskRequest, AskStarted, DeclaredProvider, DestinationChoice,
-    ExternalAgent, ModelChoice, ModelListing, ModelProbe, OrphanThreadSummary, ProposalTarget,
-    ProviderDraft, PrunedHistory, SampleRequest, SchemaProposal, ThreadSummary, ThreadView,
+    AgentDraft, AgentPresetDraft, AgentRoleOption, AgentSettingAnswer, AgentSettingChange,
+    AgentStart, AgentStartRequest, AiUpdate, AskRequest, AskStarted, DeclaredProvider,
+    DestinationChoice, ExternalAgent, ModelChoice, ModelListing, ModelProbe, OrphanThreadSummary,
+    ProposalTarget, ProviderDraft, PrunedHistory, SampleRequest, SchemaProposal, ThreadSummary,
+    ThreadView,
 };
 use crate::ipc::{CatalogAddress, IpcError};
 
@@ -244,6 +245,20 @@ pub async fn ai_threads(
     connection: String,
 ) -> Result<Vec<ThreadSummary>, IpcError> {
     Ok(backend.ai_threads(self::connection(&connection)?).await)
+}
+
+/// The agents the picker offers on a connection; with `destination`, for that
+/// destination only. Async: it reads the connection's file and the declared
+/// destinations.
+#[tauri::command]
+pub async fn ai_list_agents(
+    backend: State<'_, Backend>,
+    connection_id: String,
+    destination: Option<DestinationChoice>,
+) -> Result<Vec<AgentRoleOption>, IpcError> {
+    backend
+        .ai_list_agents(self::connection(&connection_id)?, destination.as_ref())
+        .await
 }
 
 /// In memory only, and synchronous for that: what the launch's prune removed.

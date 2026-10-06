@@ -32,6 +32,7 @@ fn run<'a>(
     mentions: &'a Named,
 ) -> Run<'a> {
     Run {
+        role: sql_role(),
         inner: &fixture.backend.inner,
         thread,
         node,
@@ -51,7 +52,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let (channel, _) = recording();
     let agent = sql_agent();
@@ -96,6 +97,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
         Memory {
             session: remembered,
             tier: PrivacyTier::Sampled,
+            prompt: agent.system_prompt.clone(),
         },
     );
     thread.finish(first);
@@ -153,7 +155,7 @@ fn a_mention_reaches_an_external_agent_already_running() {
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let cancel = CancelToken::new();
     let nothing = &crate::backend::ai::mentions::NO_MENTIONS;
@@ -244,7 +246,7 @@ fn a_reopened_question_shows_its_chips_and_the_missing_ones() {
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let (channel, _) = recording();
     let first = fixture.begin(&thread, None, channel);

@@ -95,6 +95,7 @@ fn asked(kind: &str, path: &str, reply: String) -> String {
                 session: open.session.clone(),
                 thread: None,
                 parent: None,
+                agent_id: None,
                 question: "how many clients?".to_owned(),
                 destination: DestinationChoice::Provider {
                     id: provider,

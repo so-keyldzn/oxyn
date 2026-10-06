@@ -394,6 +394,7 @@ fn releasing_an_agent_withdraws_its_waiting_request_and_says_so_on_its_card() {
     let (ours, _theirs) = agent_client_protocol::Channel::duplex();
     let (session, _driver) = ExternalSession::over(ours, std::env::temp_dir().join("unused"));
     thread.link_agent(Some(AgentLink {
+        role: oxyn_ai::sql_agent().id,
         agent: agent("unused"),
         tier: PrivacyTier::Metadata,
         leaf: None,

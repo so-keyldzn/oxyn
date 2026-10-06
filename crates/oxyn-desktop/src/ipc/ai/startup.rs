@@ -24,6 +24,10 @@ pub struct AgentStartRequest {
     pub parent: Option<u32>,
     /// The declared agent's identifier.
     pub agent: String,
+    /// The role of a **new** conversation (ADR-0049); absent, the SQL agent.
+    /// The external agent is launched with this role's tools.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 /// How a start ended.

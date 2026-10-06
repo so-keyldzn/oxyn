@@ -29,6 +29,7 @@
 
 use std::sync::Arc;
 
+use oxyn_ai::AgentCatalog;
 use oxyn_core::ai::ReasoningBlock;
 use oxyn_core::{AgentSessionId, ConnectionId, ConversationId, PrivacyTier};
 use oxyn_exec::Executor;
@@ -450,22 +451,31 @@ fn shown_category(kind: FailureKind) -> FailureCategory {
 /// The conversations of a connection, as the history panel lists them.
 ///
 /// Blocks: the store is SQLite.
-pub(crate) fn history(executor: &Arc<Executor>, connection: ConnectionId) -> Vec<ThreadSummary> {
+pub(crate) fn history(
+    executor: &Arc<Executor>,
+    connection: ConnectionId,
+    agents: &AgentCatalog,
+) -> Vec<ThreadSummary> {
     executor
         .store()
         .conversations()
         .list(connection, MAX_HISTORY)
         .unwrap_or_default()
         .into_iter()
-        .map(|summary| ThreadSummary {
-            id: summary.id.to_string(),
-            title: summary.title,
-            created_at_ms: milliseconds(summary.created_at.timestamp_millis()),
-            updated_at_ms: milliseconds(summary.updated_at.timestamp_millis()),
-            exchanges: usize::try_from(summary.turns).unwrap_or(usize::MAX),
-            // A thread of the workspace that is not open here runs nothing:
-            // a run lives in the window that started it.
-            running: false,
+        .map(|summary| {
+            let (agent, missing_agent) = super::agents::recorded(agents, summary.agent_id);
+            ThreadSummary {
+                id: summary.id.to_string(),
+                title: summary.title,
+                agent_id: Some(agent.to_string()),
+                missing_agent,
+                created_at_ms: milliseconds(summary.created_at.timestamp_millis()),
+                updated_at_ms: milliseconds(summary.updated_at.timestamp_millis()),
+                exchanges: usize::try_from(summary.turns).unwrap_or(usize::MAX),
+                // A thread of the workspace that is not open here runs
+                // nothing: a run lives in the window that started it.
+                running: false,
+            }
         })
         .collect()
 }
@@ -502,6 +512,7 @@ pub(crate) fn load(
     executor: &Arc<Executor>,
     connection: ConnectionId,
     id: ConversationId,
+    agents: &AgentCatalog,
 ) -> Result<Restored, IpcError> {
     let conversations = executor.store().conversations();
     let gone = || IpcError::invalid("This conversation no longer exists");
@@ -585,8 +596,13 @@ pub(crate) fn load(
             }
         })
         .collect();
+    // Run again with its recorded agent, or with the SQL agent in place of
+    // one that no longer exists — and then said (ADR-0049 § 6).
+    let (agent, missing_agent) = super::agents::recorded(agents, header.agent_id);
     Ok(Restored {
         id,
+        agent,
+        missing_agent,
         title: header.title,
         created_at_ms: milliseconds(header.created_at.timestamp_millis()),
         updated_at_ms: milliseconds(header.updated_at.timestamp_millis()),

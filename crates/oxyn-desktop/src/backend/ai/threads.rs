@@ -42,7 +42,8 @@ use tauri::ipc::Channel;
 use super::conversation::decisions::Decisions;
 use crate::ipc::IpcError;
 use crate::ipc::ai::{
-    AiEvent, AiUpdate, Ending, MentionView, NodeView, Selection, ThreadSummary, ThreadView,
+    AiEvent, AiUpdate, Ending, MentionView, MissingAgent, NodeView, Selection, ThreadSummary,
+    ThreadView,
 };
 use outbox::{FLUSH_EVERY, Outbox, is_fragment};
 
@@ -112,6 +113,8 @@ pub(crate) struct AiState {
     pub(crate) environment_migration: tokio::sync::Mutex<()>,
     /// What this launch's prune removed, for the history panel to say.
     pub(crate) pruned: Mutex<Option<crate::ipc::ai::PrunedHistory>>,
+    /// The agents a conversation can run.
+    pub(crate) agents: super::agents::Agents,
 }
 
 /// An external agent launched ahead of its first question.
@@ -132,8 +135,15 @@ pub(crate) struct Waiting {
 }
 
 impl Waiting {
-    fn serves(&self, agent: &ExternalAgentConfig, tier: PrivacyTier, session: SessionId) -> bool {
+    fn serves(
+        &self,
+        agent: &ExternalAgentConfig,
+        tier: PrivacyTier,
+        session: SessionId,
+        role: AgentId,
+    ) -> bool {
         launches_as(&self.link.agent, agent)
+            && self.link.role == role
             && self.link.tier == tier
             && self.session == session
             && self.link.session.is_open()
@@ -179,11 +189,14 @@ impl AiState {
         Arc::clone(self.launching.lock().entry(connection).or_default())
     }
 
-    /// The conversation to ask in: `id`'s, or a new one.
+    /// The conversation to ask in: `id`'s, or a new one running `agent` —
+    /// the SQL agent when `None`. An existing conversation keeps its own
+    /// agent: `agent` only chooses a new one's (ADR-0049 § 6).
     pub(crate) fn thread_for(
         &self,
         connection: ConnectionId,
         id: Option<&str>,
+        agent: Option<AgentId>,
     ) -> Result<Arc<Thread>, IpcError> {
         if let Some(id) = id {
             return self.find(connection, id);
@@ -192,6 +205,8 @@ impl AiState {
             // The store's identity from the start, whether or not a row is
             // ever written for it: the panel keeps this id across a restart.
             id: ConversationId::new(),
+            agent: agent.unwrap_or_else(super::agents::sql_agent_id),
+            missing_agent: None,
             created_at_ms: now_ms(),
             state: Mutex::new(ThreadState::default()),
             me: me.clone(),
@@ -269,6 +284,8 @@ impl AiState {
         }
         let thread = Arc::new_cyclic(|me| Thread {
             id: restored.id,
+            agent: restored.agent,
+            missing_agent: restored.missing_agent,
             created_at_ms: restored.created_at_ms,
             state: Mutex::new(state),
             me: me.clone(),
@@ -325,19 +342,20 @@ impl AiState {
     }
 
     /// The agent waiting on this connection, if it is `agent`'s, launched
-    /// under `tier` for `session`, and still running — with the token that
-    /// ends the wait for its start.
+    /// under `tier` for `session` and the conversation agent `role`, and still
+    /// running — with the token that ends the wait for its start.
     pub(crate) fn waiting_agent(
         &self,
         connection: ConnectionId,
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
         session: SessionId,
+        role: AgentId,
     ) -> Option<(Arc<ExternalSession>, CancelToken)> {
         self.waiting
             .lock()
             .get(&connection)
-            .filter(|waiting| waiting.serves(agent, tier, session))
+            .filter(|waiting| waiting.serves(agent, tier, session, role))
             .map(|waiting| (Arc::clone(&waiting.link.session), waiting.stop.clone()))
     }
 
@@ -371,9 +389,10 @@ impl AiState {
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
         session: SessionId,
+        role: AgentId,
     ) -> Option<AgentLink> {
         let found = self.waiting.lock().remove(&connection)?;
-        if found.serves(agent, tier, session) {
+        if found.serves(agent, tier, session, role) {
             return Some(found.link);
         }
         found.release();
@@ -437,6 +456,10 @@ pub(crate) struct Restored {
     pub(crate) title: String,
     pub(crate) created_at_ms: u64,
     pub(crate) updated_at_ms: u64,
+    /// The agent it runs now: the recorded one, or the SQL agent in place of
+    /// one that no longer exists, named by `missing_agent`.
+    pub(crate) agent: AgentId,
+    pub(crate) missing_agent: Option<MissingAgent>,
     /// The branch shown, root first.
     pub(crate) nodes: Vec<RestoredNode>,
 }
@@ -444,6 +467,11 @@ pub(crate) struct Restored {
 /// One conversation.
 pub(crate) struct Thread {
     pub(crate) id: ConversationId,
+    /// Its agent, for its whole life: another agent is another conversation
+    /// (ADR-0049 § 6).
+    pub(crate) agent: AgentId,
+    /// The recorded agent the SQL agent replaced, when it no longer exists.
+    missing_agent: Option<MissingAgent>,
     created_at_ms: u64,
     state: Mutex<ThreadState>,
     /// Itself, weakly: what the timer that sends held fragments reaches it
@@ -544,6 +572,10 @@ struct Node {
 pub(crate) struct Memory {
     pub(crate) session: AgentSession,
     pub(crate) tier: PrivacyTier,
+    /// The rendered system prompt the session was opened with: a question
+    /// whose prompt differs — another protocol, another marking — starts
+    /// from a fresh context.
+    pub(crate) prompt: String,
 }
 
 /// A live external agent session, and the node it last answered.
@@ -552,6 +584,9 @@ pub(crate) struct AgentLink {
     /// and a link matched on the id alone would answer the next question with
     /// the process of the command the user just replaced.
     pub(crate) agent: ExternalAgentConfig,
+    /// The conversation's agent it was launched for: its tools are the ones
+    /// served, so a launch for another agent cannot answer for this one.
+    pub(crate) role: AgentId,
     pub(crate) tier: PrivacyTier,
     pub(crate) leaf: Option<u32>,
     pub(crate) session: Arc<ExternalSession>,
@@ -737,6 +772,8 @@ impl Thread {
         ThreadSummary {
             id: self.id(),
             title: state.title.clone(),
+            agent_id: Some(self.agent.to_string()),
+            missing_agent: self.missing_agent.clone(),
             created_at_ms: self.created_at_ms,
             updated_at_ms: state.updated_at_ms,
             exchanges: state.nodes.len(),
@@ -888,6 +925,8 @@ impl Thread {
         ThreadView {
             id: self.id(),
             title: state.title.clone(),
+            agent_id: Some(self.agent.to_string()),
+            missing_agent: self.missing_agent.clone(),
             nodes: state
                 .nodes
                 .iter()
@@ -1004,6 +1043,7 @@ impl Thread {
             .as_ref()
             .filter(|link| {
                 launches_as(&link.agent, agent)
+                    && link.role == self.agent
                     && link.tier == tier
                     && link.leaf == parent
                     && link.session.is_open()
