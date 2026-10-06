@@ -338,8 +338,8 @@ pub fn shipped_agents() -> Vec<AgentSpec>;
 
 Between `oxyn-desktop` and `apps/desktop`:
 
-* `ai_list_agents { connectionId } -> AgentOption[]`, with
-  `AgentOption = { id, name, description, origin: "shipped" | "user", error: string | null }`.
+* `ai_list_agents { connectionId, destination? } -> AgentOption[]`, with
+  `AgentOption = { id, name, description, origin: "shipped" | "user", error: string | null, disabledDestinations }`.
   Only the agents offered for that connection come back; an invalid user
   file comes back with `error` set, and is not selectable.
 * Starting a conversation takes an optional `agentId`; absent means the
@@ -347,6 +347,24 @@ Between `oxyn-desktop` and `apps/desktop`:
 * A conversation summary and a transcript carry `agentId: string | null`
   and `missingAgent: { name: string } | null` — set when the recorded agent
   no longer exists and the SQL agent replaced it (§ 6).
+
+> **Amended on 2026-10-06, by the implementation of this section.** Three
+> details the first wording left open:
+>
+> * `destination` is optional, a `DestinationChoice` as a question takes
+>   it. Given, the list is the agents offered for that destination. Absent
+>   — the panel asks before a destination is chosen —, it is the agents
+>   offered for at least one declared destination.
+> * `disabledDestinations: { kind: "provider" | "agent", id: string }[]`
+>   names the declared destinations an agent is not offered for: the panel
+>   shows them disabled while a conversation runs that agent (§ 6). It is
+>   empty for an entry in error. A question or an external agent start
+>   toward such a destination is refused by the backend before anything
+>   starts, whatever the panel shows.
+> * `missingAgent.name` carries the recorded agent's **id**: the store
+>   keeps the id and not the name, and a file that is gone can no longer
+>   say what it was called. `agentId` is the agent the conversation runs
+>   now — the SQL agent's id after that fallback.
 
 ## Consequences
 

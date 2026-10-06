@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0049-agents-declared-as-markdown-files.md" sha256="6a7903367cfd" -->
+<!-- oxyn-translation source="docs/adr/0049-agents-declared-as-markdown-files.md" sha256="4b483fbb3972" -->
 
 > Traduction française de [docs/adr/0049-agents-declared-as-markdown-files.md](../../../../docs/adr/0049-agents-declared-as-markdown-files.md). **La version anglaise fait foi.**
 
@@ -361,8 +361,8 @@ pub fn shipped_agents() -> Vec<AgentSpec>;
 
 Entre `oxyn-desktop` et `apps/desktop` :
 
-* `ai_list_agents { connectionId } -> AgentOption[]`, avec
-  `AgentOption = { id, name, description, origin: "shipped" | "user", error: string | null }`.
+* `ai_list_agents { connectionId, destination? } -> AgentOption[]`, avec
+  `AgentOption = { id, name, description, origin: "shipped" | "user", error: string | null, disabledDestinations }`.
   Seuls les agents proposés pour cette connexion reviennent ; un fichier
   utilisateur invalide revient avec `error` renseigné, et n'est pas
   sélectionnable.
@@ -372,6 +372,26 @@ Entre `oxyn-desktop` et `apps/desktop` :
   `agentId: string | null` et `missingAgent: { name: string } | null` —
   renseigné quand l'agent enregistré n'existe plus et que l'agent SQL l'a
   remplacé (§ 6).
+
+> **Amendé le 2026-10-06, par l'implémentation de cette section.** Trois
+> détails que la première rédaction laissait ouverts :
+>
+> * `destination` est optionnel, un `DestinationChoice` tel qu'une question
+>   le prend. Fourni, la liste est celle des agents proposés pour cette
+>   destination. Absent — le panneau demande avant qu'une destination soit
+>   choisie —, ce sont les agents proposés pour au moins une destination
+>   déclarée.
+> * `disabledDestinations: { kind: "provider" | "agent", id: string }[]`
+>   nomme les destinations déclarées pour lesquelles un agent n'est pas
+>   proposé : le panneau les montre désactivées tant qu'une conversation
+>   exécute cet agent (§ 6). Elle est vide pour une entrée en erreur. Une
+>   question ou un démarrage d'agent externe vers une telle destination est
+>   refusé par le backend avant que rien ne démarre, quoi que montre le
+>   panneau.
+> * `missingAgent.name` porte l'**id** de l'agent enregistré : le store
+>   garde l'id et non le nom, et un fichier disparu ne peut plus dire comment
+>   il s'appelait. `agentId` est l'agent que la conversation exécute
+>   maintenant — l'id de l'agent SQL après ce repli.
 
 ## Conséquences
 
