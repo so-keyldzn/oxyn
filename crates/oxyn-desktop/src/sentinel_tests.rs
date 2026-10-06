@@ -392,6 +392,7 @@ async fn run_scenario(backend: &Backend) -> Scenario {
                 session: open.session.clone(),
                 thread: None,
                 parent: None,
+                agent_id: None,
                 question: "which tables?".to_owned(),
                 destination: DestinationChoice::Provider {
                     id: edited.id.clone(),

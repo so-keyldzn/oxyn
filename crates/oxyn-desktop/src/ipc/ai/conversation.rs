@@ -42,6 +42,10 @@ pub struct AskRequest {
     #[serde(default)]
     pub parent: Option<u32>,
     pub question: String,
+    /// The agent of a **new** conversation; absent, the SQL agent. Ignored
+    /// for an existing one, whose agent never changes (ADR-0049 § 6).
+    #[serde(default)]
+    pub agent_id: Option<String>,
     pub destination: DestinationChoice,
     /// Columns selected for **this** question, if any. This IPC field grants
     /// nothing: the backend requires native confirmation before reading rows.
@@ -195,6 +199,13 @@ pub struct AskStarted {
 pub struct ThreadSummary {
     pub id: String,
     pub title: String,
+    /// The agent it runs. `Option` for the webview's contract; this backend
+    /// always names one, the SQL agent for a conversation recorded before
+    /// agents were.
+    pub agent_id: Option<String>,
+    /// Set when the recorded agent no longer exists and the SQL agent runs in
+    /// its place.
+    pub missing_agent: Option<super::MissingAgent>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     /// Exchanges, all versions counted.
@@ -271,6 +282,9 @@ pub struct NodeView {
 pub struct ThreadView {
     pub id: String,
     pub title: String,
+    /// As in [`ThreadSummary`].
+    pub agent_id: Option<String>,
+    pub missing_agent: Option<super::MissingAgent>,
     pub nodes: Vec<NodeView>,
     pub selections: Vec<Selection>,
     /// The node being answered, if any.

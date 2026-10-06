@@ -6,6 +6,14 @@ use tauri::ipc::InvokeResponseBody;
 
 use super::*;
 use crate::ipc::{ConnectResponse, ConnectionDraft, OpenConnection};
+use oxyn_ai::sql_agent;
+
+/// The SQL agent, as the conversation of every test that does not choose one runs it.
+pub(super) fn sql_role() -> &'static oxyn_ai::AgentSpec {
+    static SQL: std::sync::LazyLock<oxyn_ai::AgentSpec> =
+        std::sync::LazyLock::new(oxyn_ai::sql_agent);
+    &SQL
+}
 
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -74,7 +82,7 @@ fn sink_on(
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
     let (channel, received) = recording();
     let (node, _) = thread
@@ -383,7 +391,7 @@ fn a_tool_call_really_runs_the_query_on_the_database() {
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
     let (channel, received) = recording();
     let (node, _) = thread
@@ -506,7 +514,7 @@ fn the_rows_of_a_tool_call_reach_the_panel_and_never_the_model() {
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
     let (channel, received) = recording();
     let (node, _) = thread
@@ -590,7 +598,7 @@ fn an_external_agents_query_shows_its_rows_to_the_user_and_never_to_the_agent() 
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
     let (channel, received) = recording();
     let (node, _) = thread
@@ -745,11 +753,12 @@ fn linked(
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
     let (ours, _theirs) = agent_client_protocol::Channel::duplex();
     let (session, driver) = ExternalSession::over(ours, std::env::temp_dir().join("unused"));
     thread.link_agent(Some(AgentLink {
+        role: oxyn_ai::sql_agent().id,
         agent: agent("unused"),
         tier: PrivacyTier::Sampled,
         leaf: None,
@@ -879,6 +888,7 @@ fn a_refused_question_releases_the_agents_kept_for_the_connection() {
             session: open.session.clone(),
             thread: None,
             parent: None,
+            agent_id: None,
             question: "how many clients?".to_owned(),
             destination: crate::ipc::ai::DestinationChoice::Agent {
                 id: ProviderId::for_new_agent().to_string(),
@@ -1076,7 +1086,7 @@ fn an_agents_settings_reach_the_panel() {
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
     let (channel, received) = recording();
     let (node, _) = thread
@@ -1132,7 +1142,7 @@ fn an_agents_settings_reach_the_panel_between_two_questions() {
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
 
     // A question already answered: nothing is running when the agent speaks.
@@ -1177,6 +1187,7 @@ fn an_agents_settings_reach_the_panel_between_two_questions() {
     let session = Arc::new(session);
     thread.follow_agent_settings(&session);
     thread.link_agent(Some(AgentLink {
+        role: oxyn_ai::sql_agent().id,
         agent: agent("unused"),
         tier: PrivacyTier::Sampled,
         leaf: Some(node),
@@ -1718,13 +1729,14 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let (channel, _received) = recording();
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
             mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+            role: sql_role(),
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -1759,13 +1771,14 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let (channel, _received) = recording();
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
             mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+            role: sql_role(),
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -1802,13 +1815,14 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let (channel, received) = recording();
         let agent = sql_agent();
         let cancel = CancelToken::new();
         let run_at = |node, parent| Run {
             mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+            role: sql_role(),
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -1828,6 +1842,7 @@ mod approved_samples {
             Memory {
                 session: remembered,
                 tier: PrivacyTier::Sampled,
+                prompt: agent.system_prompt.clone(),
             },
         );
         thread.finish(first);
@@ -1927,6 +1942,7 @@ mod approved_samples {
             session: fixture.open.session.clone(),
             thread: None,
             parent: None,
+            agent_id: None,
             question: question.to_owned(),
             destination,
             sample: Some(approval(request, &["email"])),
@@ -2044,13 +2060,14 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let (channel, _received) = recording();
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
             mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+            role: sql_role(),
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -2122,6 +2139,7 @@ mod approved_samples {
             session: fixture.open.session.clone(),
             thread: None,
             parent: None,
+            agent_id: None,
             question: "which plans?".to_owned(),
             destination: DestinationChoice::Provider {
                 id: provider.to_owned(),
@@ -2249,13 +2267,14 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let (channel, _received) = recording();
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
             mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+            role: sql_role(),
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -2327,7 +2346,7 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let (channel, _received) = recording();
         let node = fixture.begin(&thread, None, channel);
@@ -2452,7 +2471,7 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let (channel, _received) = recording();
         let first = fixture.begin(&thread, None, channel);
@@ -2529,6 +2548,7 @@ mod approved_samples {
         let next = fixture.begin(&reopened, Some(0), channel);
         let run = Run {
             mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+            role: sql_role(),
             inner: &fixture.backend.inner,
             thread: &reopened,
             node: next,
@@ -2661,6 +2681,7 @@ mod approved_samples {
             fixture.connection,
             Waiting {
                 link: AgentLink {
+                    role: oxyn_ai::sql_agent().id,
                     agent: declared.clone(),
                     tier: PrivacyTier::Sampled,
                     leaf: None,
@@ -2682,7 +2703,7 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let scope = || Scope {
             connection: fixture.connection,
@@ -2696,6 +2717,7 @@ mod approved_samples {
                 .expect("begins");
             let run = Run {
                 mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+                role: sql_role(),
                 inner: &fixture.backend.inner,
                 thread: &thread,
                 node,
@@ -2778,7 +2800,7 @@ mod approved_samples {
             .backend
             .inner
             .ai
-            .thread_for(fixture.connection, None)
+            .thread_for(fixture.connection, None, None)
             .expect("a conversation");
         let begin = |question: &str| {
             let (channel, _) = recording();
@@ -2998,6 +3020,9 @@ mod approved_samples {
     /// them, for the user's offer and for an agent's request alike.
     mod columns_on_demand;
 }
+
+/// The conversation's agent, rendered for whoever answers (ADR-0049).
+mod agent_roles;
 
 /// A write an agent proposes waits, inside its call, for the user's decision.
 mod approvals;

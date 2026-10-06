@@ -20,13 +20,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use oxyn_ai::external::locate::SearchPath;
 use oxyn_ai::external::mcp::{TierSource, ToolService, ToolTurns};
-use oxyn_ai::external::prompt::AgentPrompt;
+use oxyn_ai::external::prompt::{AgentInstructions, AgentPrompt};
 use oxyn_ai::external::session::{AgentReady, ExternalError, ExternalSession, ToolBridge};
 use oxyn_ai::external::turn::TurnEnd;
 use oxyn_ai::tools::SampleAsk;
 use oxyn_ai::{
     AgentEvent, AgentObserver, AgentOutcome, AgentRuntime, AgentSession, AiError, CallHandle,
-    CallId, CommandSink, ContextBuilder, DispatchOutcome, ToolRegistry, ToolScope, sql_agent,
+    CallId, CommandSink, ContextBuilder, DispatchOutcome, ToolRegistry, ToolScope,
 };
 use oxyn_core::ai::MAX_PROVIDER_MODEL_BYTES;
 use oxyn_core::{
@@ -39,6 +39,7 @@ use oxyn_llm::Reach;
 use oxyn_store::{EgressReach, EgressRecord};
 use tauri::ipc::Channel;
 
+use super::agents;
 use super::catalog_fill::{CatalogFill, Filled, Want};
 use super::persistence;
 use super::samples::{self, Grant, Offer, Presented, Recipient, RecipientKind, SampleRefused};
@@ -973,6 +974,23 @@ impl Backend {
                 return Err(refused);
             }
         };
+        // Before any dialog: a destination the conversation's agent is not
+        // written for refuses the question, and does not switch the agent
+        // (ADR-0049 § 6).
+        let (new_agent, role) = self.conversation_agent(
+            connection,
+            request.thread.as_deref(),
+            request.agent_id.as_deref(),
+        )?;
+        let reader = match &resolved {
+            Resolved::Provider {
+                config: provider, ..
+            } => agents::provider_recipient(provider),
+            Resolved::Agent(declared) => agents::agent_recipient(declared),
+        };
+        if !role.offered_for(&agents::target_of(&config, reader)) {
+            return Err(agents::not_offered(&role, reader));
+        }
         let confirmed_recipient = if let (Some(approval), Some(grant), Some(slot)) =
             (&request.sample, &grant, sample_slot)
         {
@@ -1030,7 +1048,7 @@ impl Backend {
         let thread = self
             .inner
             .ai
-            .thread_for(connection, request.thread.as_deref())?;
+            .thread_for(connection, request.thread.as_deref(), new_agent)?;
         // The question as it was asked: a grant for a new conversation names
         // none, whatever id the conversation gets now.
         let asked_in = request.thread.clone();
@@ -1104,6 +1122,7 @@ impl Backend {
                 connection: &config,
                 cancel: &cancel,
                 mentions: &named,
+                role: &role,
             };
             let result = async {
                 // Checked before anything else, whatever the destination: a
@@ -1224,7 +1243,9 @@ impl Backend {
                 executor.workspace(),
                 destination,
                 thread.title(),
-                None,
+                // Recorded so a reopened conversation runs the same agent,
+                // or says it is gone (ADR-0049 § 6).
+                Some(thread.agent),
             )
             .on_connection(config.id, config.name.clone());
             // The window's thread and the store's row are one conversation.
@@ -1267,10 +1288,12 @@ impl Backend {
     pub async fn ai_threads(&self, connection: ConnectionId) -> Vec<ThreadSummary> {
         let live = self.inner.ai.list(connection);
         let executor = Arc::clone(&self.inner.executor);
-        let saved =
-            tokio::task::spawn_blocking(move || persistence::history(&executor, connection))
-                .await
-                .unwrap_or_default();
+        let agents = self.inner.ai.agents.catalog();
+        let saved = tokio::task::spawn_blocking(move || {
+            persistence::history(&executor, connection, &agents)
+        })
+        .await
+        .unwrap_or_default();
         // The window's own threads win: they know what is running, and a
         // thread open here is the same conversation as its row.
         let mut all = live;
@@ -1337,7 +1360,8 @@ impl Backend {
             .parse()
             .map_err(|_| IpcError::invalid("This conversation does not exist"))?;
         let executor = Arc::clone(&self.inner.executor);
-        tokio::task::spawn_blocking(move || persistence::load(&executor, connection, id))
+        let agents = self.inner.ai.agents.catalog();
+        tokio::task::spawn_blocking(move || persistence::load(&executor, connection, id, &agents))
             .await
             .map_err(|_| IpcError::invalid("Reading this conversation failed"))?
     }
@@ -1748,9 +1772,17 @@ struct Run<'a> {
     cancel: &'a CancelToken,
     /// What the user named with `@`, for whichever destination answers.
     mentions: &'a super::mentions::Named,
+    /// The conversation's agent, as declared: rendered for the destination
+    /// that answers, never sent as is.
+    role: &'a oxyn_ai::AgentSpec,
 }
 
 impl Run<'_> {
+    /// The target of this question's prompt, for `recipient`.
+    fn target(&self, recipient: oxyn_ai::Recipient) -> oxyn_ai::PromptTarget {
+        agents::target_of(self.connection, recipient)
+    }
+
     fn emit(&self, event: AiEvent) {
         self.thread.emit(self.node, event);
     }
@@ -2009,7 +2041,10 @@ impl Run<'_> {
         };
         let mentions = &self.mentions.mentions;
         Ok(match remembered {
-            Some(memory) if memory.tier == tier => {
+            // The same prompt too: another protocol reads another recipient
+            // fragment, and a history is not put under a prompt it was not
+            // written with (ADR-0049 § 6).
+            Some(memory) if memory.tier == tier && memory.prompt == agent.system_prompt => {
                 let mut dialogue = memory.session;
                 if mentions.is_empty() {
                     dialogue.ask(question);
@@ -2035,9 +2070,13 @@ impl Run<'_> {
                 }
             }
             other => {
-                if other.is_some() {
+                if let Some(memory) = other {
                     self.emit(AiEvent::MemoryReset {
-                        reason: MemoryReset::TierChanged,
+                        reason: if memory.tier == tier {
+                            MemoryReset::DestinationChanged
+                        } else {
+                            MemoryReset::TierChanged
+                        },
                     });
                 } else if self.parent.is_some()
                     && (sampled || self.thread.memory_withheld(self.parent))
@@ -2111,7 +2150,11 @@ impl Run<'_> {
             .map_or(self.connection.privacy_tier, |sample| sample.tier);
         let approved_reach = sample.as_ref().map(|sample| sample.reach);
         let egress = sample.as_ref().map(|sample| sample.egress.clone());
-        let agent = sql_agent();
+        // The only prompt a provider reads: the conversation's agent rendered
+        // for this connection and this provider's protocol.
+        let recipient = agents::provider_recipient(&provider);
+        let agent = agents::rendered(self.role, &self.target(recipient))
+            .map_err(|message| Failure::new(message, FailureCategory::Setup))?;
         // First, before anything can fail: a sampled exchange must be marked
         // as leaving no memory whatever happens next.
         let (mut dialogue, context) = self
@@ -2268,6 +2311,7 @@ impl Run<'_> {
                 Memory {
                     session: dialogue,
                     tier,
+                    prompt: agent.system_prompt,
                 },
             );
         }
@@ -2352,6 +2396,9 @@ impl Run<'_> {
         // agent as « 0 of 0 known relations », and ignores every mention.
         let catalog = self.inner.executor.catalog(self.connection.id);
         let empty = oxyn_catalog::CatalogCache::new();
+        // Only an opening carries the agent's prompt, rendered for this
+        // agent's preset: the process remembers it (ADR-0049 § 7).
+        let target = self.target(agents::agent_recipient(agent));
         // The read lock is released before anything awaits.
         let prompt = {
             let guard = catalog.as_ref().map(|catalog| catalog.read());
@@ -2360,7 +2407,18 @@ impl Run<'_> {
                 Some(_) => AgentPrompt::following(tier, question, cache, language, mentions),
                 None => {
                     let samples: Vec<_> = sample.map(|sample| sample.rows).into_iter().collect();
-                    AgentPrompt::with_schema(tier, question, cache, language, samples, mentions)
+                    AgentPrompt::with_schema(
+                        tier,
+                        question,
+                        cache,
+                        language,
+                        samples,
+                        mentions,
+                        AgentInstructions {
+                            spec: self.role,
+                            target: &target,
+                        },
+                    )
                 }
             }
         }
@@ -2391,14 +2449,24 @@ impl Run<'_> {
                 let link = {
                     let launching = self.inner.ai.launch_lock(self.connection.id);
                     let _launching = launching.lock().await;
-                    match self
-                        .inner
-                        .ai
-                        .take_waiting(self.connection.id, agent, tier, session)
-                    {
+                    match self.inner.ai.take_waiting(
+                        self.connection.id,
+                        agent,
+                        tier,
+                        session,
+                        self.role.id,
+                    ) {
                         Some(link) => link,
                         None => {
-                            launch_agent(self.inner, self.connection, session, agent, tier).await?
+                            launch_agent(
+                                self.inner,
+                                self.connection,
+                                session,
+                                agent,
+                                tier,
+                                self.role,
+                            )
+                            .await?
                         }
                     }
                 };
@@ -2719,12 +2787,16 @@ fn version_of(ready: AgentReady) -> Option<String> {
 /// panel starts it ahead of one: the tier is refused before anything exists
 /// (`launch_with_tools`), and the tools, the actor and the confinement are
 /// the same either way.
+///
+/// `role` is the conversation's agent: its `tools` are the MCP tools this
+/// session is served, as they are a provider's (ADR-0049 § 7, ADR-0030).
 async fn launch_agent(
     inner: &Inner,
     connection: &ConnectionConfig,
     session: SessionId,
     agent: &ExternalAgentConfig,
     tier: PrivacyTier,
+    role: &oxyn_ai::AgentSpec,
 ) -> Result<AgentLink, Failure> {
     tokio::time::timeout(AGENT_LAUNCH_TIMEOUT, locate(agent))
         .await
@@ -2739,8 +2811,6 @@ async fn launch_agent(
     // question's sink and the service: the executor refuses a command whose
     // actor is not the one bound to the conversation.
     let (identity, conversation) = (AgentId::new(), AgentSessionId::new());
-    let spec = sql_agent();
-    // The ceiling the internal assistant has, per question.
     let executor = Arc::clone(&inner.executor);
     let actor = Actor::agent(identity, conversation);
     // Asked of the executor, which holds the requests: a request this agent
@@ -2753,20 +2823,16 @@ async fn launch_agent(
             .iter()
             .any(|request| request.actor == actor && !request.is_expired())
     };
-    let tools = ToolTurns::new(spec.max_turns, Arc::new(waiting));
+    // Oxyn's own budget per question, not the role's `max_turns`: an external
+    // agent runs its own loop, and a file does not widen what Oxyn bounds it
+    // by (ADR-0049 § 7).
+    let tools = ToolTurns::new(oxyn_ai::spec::DEFAULT_MAX_TURNS, Arc::new(waiting));
     let bridge = ToolBridge {
-        service: Arc::new(ToolService::new(
-            ToolRegistry::builtin(),
-            spec.allowed_tools,
-            ToolScope::new(
-                connection.id,
-                session,
-                QueryLanguage::Sql(oxyn_query::dialect_for(&connection.driver)),
-            ),
-            Arc::new(StoredTier {
-                executor: Arc::clone(&inner.executor),
-                connection: connection.id,
-            }),
+        service: Arc::new(tool_service(
+            inner,
+            connection,
+            session,
+            role,
             Actor::agent(identity, conversation),
         )),
         turns: tools.clone(),
@@ -2795,6 +2861,7 @@ async fn launch_agent(
     tauri::async_runtime::spawn(driver);
     Ok(AgentLink {
         agent: agent.clone(),
+        role: role.id,
         tier,
         leaf: None,
         session: Arc::new(session),
@@ -2806,6 +2873,32 @@ async fn launch_agent(
             Actor::agent(identity, conversation),
         ),
     })
+}
+
+/// Oxyn's tools as an external agent of `role` reaches them: the role's
+/// `tools` and no other, scoped to `session`, under the tier read at each
+/// call, acting as `actor`.
+fn tool_service(
+    inner: &Inner,
+    connection: &ConnectionConfig,
+    session: SessionId,
+    role: &oxyn_ai::AgentSpec,
+    actor: Actor,
+) -> ToolService {
+    ToolService::new(
+        ToolRegistry::builtin(),
+        role.allowed_tools.clone(),
+        ToolScope::new(
+            connection.id,
+            session,
+            QueryLanguage::Sql(oxyn_query::dialect_for(&connection.driver)),
+        ),
+        Arc::new(StoredTier {
+            executor: Arc::clone(&inner.executor),
+            connection: connection.id,
+        }),
+        actor,
+    )
 }
 
 fn setup(message: impl Into<String>) -> Failure {

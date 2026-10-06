@@ -14,10 +14,12 @@ use oxyn_core::{AiProviderConfig, AiProviderKind, ExternalAgentConfig};
 use oxyn_llm::Reach;
 use serde::{Deserialize, Serialize};
 
+mod agents;
 mod conversation;
 mod models;
 mod startup;
 
+pub use self::agents::*;
 pub use self::conversation::*;
 pub use self::models::*;
 pub use self::startup::*;

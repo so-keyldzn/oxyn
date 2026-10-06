@@ -523,6 +523,7 @@ fn the_agent_receives_the_structure_of_the_database_and_no_value() {
         oxyn_core::QueryLanguage::Sql(oxyn_core::SqlDialect::Sqlite),
         Vec::new(),
         Vec::new(),
+        crate::external::prompt::sql_instructions(),
     )
     .expect("an external agent is allowed under sampled");
 

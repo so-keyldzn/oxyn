@@ -88,7 +88,7 @@ fn scope(connection: ConnectionId) -> Scope {
 fn a_reopened_conversation_replays_each_exchange_once_with_fragments_merged() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (first, _) = recording();
     let (node, _) = thread
         .begin(None, "How many clients?", first, scope(connection))
@@ -140,7 +140,7 @@ fn a_reopened_conversation_replays_each_exchange_once_with_fragments_merged() {
 fn one_run_at_a_time_per_conversation_and_stop_reaches_it() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (first, _) = recording();
     let (_, token) = thread
         .begin(None, "one", first, scope(connection))
@@ -159,7 +159,7 @@ fn one_run_at_a_time_per_conversation_and_stop_reaches_it() {
 fn a_regeneration_is_a_sibling_and_becomes_the_version_shown() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     for question in ["first", "first again"] {
         let (channel, _) = recording();
         let (node, _) = thread
@@ -192,7 +192,7 @@ fn a_regeneration_is_a_sibling_and_becomes_the_version_shown() {
 fn a_follow_up_to_an_unknown_exchange_is_refused() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (channel, _) = recording();
     assert!(
         thread
@@ -205,7 +205,7 @@ fn a_follow_up_to_an_unknown_exchange_is_refused() {
 fn reasoning_is_timed_once_it_gives_way_to_the_answer() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (channel, _) = recording();
     let (node, _) = thread
         .begin(None, "why", channel, scope(connection))
@@ -279,7 +279,7 @@ fn a_title_is_one_line_cut_on_a_character() {
 fn deleting_a_conversation_stops_it() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (channel, _) = recording();
     let (_, token) = thread
         .begin(None, "long", channel, scope(connection))
@@ -340,7 +340,7 @@ fn a_failed_send_does_not_lose_the_end_of_the_run() {
     // `finished` went nowhere and the panel spun for ever.
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (channel, received) = flaky(1);
     let (node, _) = thread
         .begin(None, "count", channel, scope(connection))
@@ -358,7 +358,7 @@ fn a_follow_up_sent_on_finished_is_accepted() {
     // refused « still answering ».
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (seen, read) = std::sync::mpsc::channel::<String>();
     let channel = Channel::new(move |body: InvokeResponseBody| {
         if let InvokeResponseBody::Json(json) = body {
@@ -405,7 +405,7 @@ fn a_follow_up_sent_on_finished_is_accepted() {
 fn streamed_fragments_reach_the_panel_merged_and_before_what_follows() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (channel, received) = recording();
     let (node, _) = thread
         .begin(None, "why", channel, scope(connection))
@@ -455,7 +455,7 @@ fn streamed_fragments_reach_the_panel_merged_and_before_what_follows() {
 fn held_fragments_go_out_on_their_own_and_once() {
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (channel, received) = recording();
     let (node, _) = thread
         .begin(None, "why", channel, scope(connection))
@@ -490,7 +490,7 @@ fn overlapping_calls_keep_their_own_rows() {
     // landed on each other's rows.
     let state = AiState::default();
     let connection = ConnectionId::new();
-    let thread = state.thread_for(connection, None).expect("new");
+    let thread = state.thread_for(connection, None, None).expect("new");
     let (channel, _) = recording();
     thread
         .begin(None, "two at once", channel, scope(connection))

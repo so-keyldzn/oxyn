@@ -182,7 +182,7 @@ fn bench() -> Option<Bench> {
     let thread = backend
         .inner
         .ai
-        .thread_for(connection, None)
+        .thread_for(connection, None, None)
         .expect("a conversation");
     let (channel, _received) = recording();
     let (node, _) = thread

@@ -104,6 +104,7 @@ fn question(fixture: &Fixture, offer: &SampleRequest) -> AskRequest {
         session: fixture.session.to_string(),
         thread: None,
         parent: None,
+        agent_id: None,
         question: "inspect these rows".into(),
         destination: DestinationChoice::Provider {
             id: fixture.provider.clone(),
