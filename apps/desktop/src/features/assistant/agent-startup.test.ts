@@ -64,6 +64,23 @@ beforeEach(() => {
 })
 
 describe("starting an agent before its first question", () => {
+  it("starts a fresh ACP session when a blank conversation changes role", async () => {
+    const initial = startAgent("role-switch", request("role-switch"), "Codex")
+    answer({ state: "ready", version: null, settings })
+    await initial
+    const changed = startAgent(
+      "role-switch",
+      {
+        ...request("role-switch"),
+        agentId: "schema-role",
+      },
+      "Codex"
+    )
+    expect(backend.starts).toHaveLength(2)
+    expect(backend.starts[1]?.agentId).toBe("schema-role")
+    answer({ state: "ready", version: null, settings })
+    await changed
+  })
   it("offers what the agent declared, and starts one agent per question", async () => {
     const done = startAgent("c-1", request("c-1"), "Claude Code")
     // A second render asks for the same start: nothing more is launched.

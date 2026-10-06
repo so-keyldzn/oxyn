@@ -58,6 +58,8 @@ describe("a conversation tree", () => {
     const thread = threadOf({
       id: "7",
       title: "Clients",
+      agentId: null,
+      missingAgent: null,
       nodes: [
         {
           id: 0,

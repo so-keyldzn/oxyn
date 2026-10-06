@@ -72,6 +72,60 @@ beforeEach(() => {
   backend.threads.mockResolvedValue([])
 })
 
+describe("one agent per conversation", () => {
+  it("starts a new thread for another role without cancelling or changing the old one", async () => {
+    const id = connection()
+    backend.ask.mockResolvedValueOnce({ thread: "sql-thread", node: 0 })
+    await askQuestion(id, target, "SQL question")
+    const previous = getAssistant(id).thread
+    newThread(id, "schema-role")
+    expect(getAssistant(id).thread).toMatchObject({
+      id: null,
+      agentId: "schema-role",
+      nodes: [],
+      missingAgent: null,
+    })
+    expect(previous).toMatchObject({
+      id: "sql-thread",
+      agentId: null,
+      running: 0,
+    })
+    expect(backend.cancel).not.toHaveBeenCalled()
+    backend.ask.mockResolvedValueOnce({ thread: "schema-thread", node: 0 })
+    await askQuestion(id, target, "Schema question")
+    expect(backend.ask.mock.calls[1]?.[0]).toMatchObject({
+      thread: null,
+      agentId: "schema-role",
+      question: "Schema question",
+    })
+  })
+
+  it("restores the recorded role and missing notice, leaving follow-ups to that thread", async () => {
+    const id = connection()
+    backend.openThread.mockResolvedValue({
+      id: "recorded",
+      title: "Saved question",
+      agentId: "deleted-role",
+      missingAgent: { name: "Analytics" },
+      nodes: [],
+      selections: [],
+      running: null,
+    } satisfies ThreadView)
+    newThread(id, "schema-role")
+    await openThread(id, "recorded")
+    expect(getAssistant(id).thread).toMatchObject({
+      agentId: "deleted-role",
+      missingAgent: { name: "Analytics" },
+    })
+    backend.ask.mockResolvedValue({ thread: "recorded", node: 0 })
+    await askQuestion(id, target, "Follow-up")
+    expect(backend.ask.mock.calls[0]?.[0]).toMatchObject({ thread: "recorded" })
+    expect(backend.ask.mock.calls[0]?.[0]).not.toHaveProperty("agentId")
+    newThread(id)
+    expect(getAssistant(id).thread.missingAgent).toBeNull()
+  })
+})
+
 describe("an approved sample", () => {
   const approval = {
     request: "grant",
@@ -261,6 +315,8 @@ describe("the assistant store", () => {
     const view: ThreadView = {
       id: "3",
       title: "Old one",
+      agentId: null,
+      missingAgent: null,
       nodes: [{ id: 0, parent: null, question: "q", mentions: [], events: [] }],
       selections: [],
       running: null,
@@ -288,6 +344,8 @@ describe("the assistant store", () => {
       {
         id: "1",
         title: "Old",
+        agentId: null,
+        missingAgent: null,
         createdAtMs: 1,
         updatedAtMs: 2,
         exchanges: 1,
@@ -296,6 +354,8 @@ describe("the assistant store", () => {
       {
         id: "2",
         title: "Live",
+        agentId: null,
+        missingAgent: null,
         createdAtMs: 3,
         updatedAtMs: 4,
         exchanges: 1,
@@ -305,6 +365,8 @@ describe("the assistant store", () => {
     backend.openThread.mockResolvedValue({
       id: "2",
       title: "Live",
+      agentId: null,
+      missingAgent: null,
       nodes: [{ id: 0, parent: null, question: "q", mentions: [], events: [] }],
       selections: [],
       running: 0,
@@ -345,6 +407,8 @@ function summary(id: string): ThreadSummary {
   return {
     id,
     title: id,
+    agentId: null,
+    missingAgent: null,
     createdAtMs: 1,
     updatedAtMs: 1,
     exchanges: 1,
@@ -372,6 +436,8 @@ describe("leaving a conversation while a call is in flight", () => {
     backend.openThread.mockResolvedValue({
       id: "3",
       title: "Other",
+      agentId: null,
+      missingAgent: null,
       nodes: [],
       selections: [],
       running: null,
@@ -432,6 +498,8 @@ describe("opening a conversation", () => {
     opened.resolve({
       id: "3",
       title: "Running one",
+      agentId: null,
+      missingAgent: null,
       nodes: [
         {
           id: 0,

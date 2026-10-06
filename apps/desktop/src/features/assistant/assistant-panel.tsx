@@ -44,7 +44,12 @@ import type { ExchangeNode } from "./thread"
 import type { ToolCallEntry } from "./transcript"
 import { useAssistantAvailable } from "./use-assistant-available"
 import { useMentionSearch } from "./mention-search"
-import { orphanThreadsQuery, prunedHistoryQuery } from "./queries"
+import {
+  agentOptionsQuery,
+  orphanThreadsQuery,
+  prunedHistoryQuery,
+} from "./queries"
+import { SQL_ONLY } from "./agent-options"
 import { ToolRows } from "./tool-rows"
 import { ErdBlock } from "./erd-block"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
@@ -98,6 +103,7 @@ export function AssistantPanel({
   const state = useAssistant(open.connection)
   const orphanThreads = useQuery(orphanThreadsQuery)
   const prunedHistory = useQuery(prunedHistoryQuery)
+  const agentOptions = useQuery(agentOptionsQuery(open.connection))
   // From the local catalog and library: no model completes a name.
   const mentionSource = useMentionSearch(open.connection)
   const { chosenKey, pin: pinned } = usePinState(open.connection)
@@ -174,6 +180,9 @@ export function AssistantPanel({
         thread: state.thread.id,
         parent,
         agent: agentId,
+        ...(state.thread.agentId !== null && state.thread.id === null
+          ? { agentId: state.thread.agentId }
+          : {}),
       },
       agentLabel
     )
@@ -183,6 +192,7 @@ export function AssistantPanel({
     agentId,
     agentLabel,
     state.thread.id,
+    state.thread.agentId,
     parent,
     running,
     state.opening,
@@ -306,6 +316,17 @@ export function AssistantPanel({
   return (
     <>
       <AssistantView
+        agentPicker={{
+          agents: agentOptions.isError
+            ? SQL_ONLY
+            : (agentOptions.data ?? SQL_ONLY),
+          value: state.thread.agentId,
+          missingAgent: state.thread.missingAgent,
+          loading: agentOptions.isPending,
+          unavailable: agentOptions.isError,
+          disabled: state.opening || state.sending,
+          onSelect: (id) => newThread(open.connection, id),
+        }}
         connectionName={open.name}
         identifierQuote={identifierQuoteForDriver(open.driver)}
         environment={open.environment}

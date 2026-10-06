@@ -31,7 +31,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { AgentSettings } from "@/features/assistant/transcript"
-import type { AgentChoice, AgentOption } from "@/lib/ipc/ai"
+import type {
+  AgentChoice,
+  AgentSettingOption as AgentOption,
+} from "@/lib/ipc/ai"
 
 /**
  * What the user asked to change, in the agent's own ids.

@@ -96,6 +96,7 @@ function message(error: unknown) {
 export function startKey(request: AgentStartRequest) {
   return [
     request.agent,
+    request.agentId ?? "",
     request.session,
     request.thread ?? "",
     request.parent ?? "",

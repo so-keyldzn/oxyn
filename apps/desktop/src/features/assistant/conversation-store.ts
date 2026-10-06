@@ -291,6 +291,9 @@ async function send(
         connection,
         session: target.session,
         thread: thread.id,
+        ...(thread.id === null && thread.agentId !== null
+          ? { agentId: thread.agentId }
+          : {}),
         parent,
         question: text,
         destination: target.destination,
@@ -530,7 +533,7 @@ export async function openThread(connection: string, id: string) {
 }
 
 /** A blank conversation. The one left keeps running and stays in the history. */
-export function newThread(connection: string) {
+export function newThread(connection: string, agentId: string | null = null) {
   const found = slot(connection)
   found.generation += 1
   found.buffered = []
@@ -540,7 +543,7 @@ export function newThread(connection: string) {
   // the generation just left: neither may hold this one.
   publish(connection, (state) => ({
     ...state,
-    thread: NEW_THREAD,
+    thread: { ...NEW_THREAD, agentId },
     sending: false,
     opening: false,
     askError: null,

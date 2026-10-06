@@ -285,11 +285,25 @@ export type MentionView = z.infer<typeof MentionView>
 /** The backend's cap on the objects one question names. */
 export const MAX_MENTIONS = 16
 
+export const AgentOption = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  origin: z.enum(["shipped", "user"]),
+  error: z.string().nullable(),
+})
+export type AgentOption = z.infer<typeof AgentOption>
+
+export const MissingAgent = z.object({ name: z.string() })
+export type MissingAgent = z.infer<typeof MissingAgent>
+
 export const AskRequest = z.object({
   connection: z.string(),
   session: z.string(),
   /** `null` starts a new conversation. */
   thread: z.string().nullable(),
+  /** Only for a new conversation; absent uses the SQL agent. */
+  agentId: z.string().optional(),
   /** The exchange this follows; an edit or a regeneration passes its parent. */
   parent: z.number().int().nonnegative().nullable(),
   question: z.string(),
@@ -310,6 +324,9 @@ export type AskStarted = z.infer<typeof AskStarted>
 export const ThreadSummary = z.object({
   id: z.string(),
   title: z.string(),
+  // Older backends predate the picker and only ran the SQL agent.
+  agentId: z.string().nullable().default(null),
+  missingAgent: MissingAgent.nullable().default(null),
   createdAtMs: z.number().nonnegative(),
   updatedAtMs: z.number().nonnegative(),
   exchanges: z.number().int().nonnegative(),
@@ -564,14 +581,14 @@ export const AgentOptionValue = z.discriminatedUnion("type", [
 ])
 export type AgentOptionValue = z.infer<typeof AgentOptionValue>
 
-export const AgentOption = z.object({
+export const AgentSettingOption = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().nullable(),
   category: AgentOptionCategory,
   value: AgentOptionValue,
 })
-export type AgentOption = z.infer<typeof AgentOption>
+export type AgentSettingOption = z.infer<typeof AgentSettingOption>
 
 /** A change asked of the conversation's agent. Identifiers are the agent's; the backend checks them against what it last declared. */
 export type AgentSettingChange =
@@ -585,7 +602,7 @@ export type AgentSettingChange =
 export const AgentSettingsState = z.object({
   modes: z.array(AgentChoice),
   currentMode: z.string().nullable(),
-  options: z.array(AgentOption),
+  options: z.array(AgentSettingOption),
 })
 export type AgentSettingsState = z.infer<typeof AgentSettingsState>
 
@@ -792,6 +809,8 @@ export type AiEvent = z.infer<typeof AiEvent>
 export interface AgentStartRequest {
   connection: string
   session: string
+  /** The role of a new conversation; absent uses the SQL agent. */
+  agentId?: string
   /** The conversation shown: its own agent answers when it would answer next. */
   thread: string | null
   parent: number | null
@@ -830,6 +849,8 @@ export type NodeView = z.infer<typeof NodeView>
 export const ThreadView = z.object({
   id: z.string(),
   title: z.string(),
+  agentId: z.string().nullable().default(null),
+  missingAgent: MissingAgent.nullable().default(null),
   nodes: z.array(NodeView),
   selections: z.array(Selection),
   running: z.number().int().nonnegative().nullable(),
@@ -910,6 +931,9 @@ export const ai = {
 
   threads: (connection: string) =>
     call("ai_threads", z.array(ThreadSummary), { connection }),
+
+  listAgents: (connectionId: string) =>
+    call("ai_list_agents", z.array(AgentOption), { connectionId }),
 
   /** What this launch's prune removed; `null` when nothing went. */
   prunedHistory: () => call("ai_pruned_history", PrunedHistory.nullable()),
