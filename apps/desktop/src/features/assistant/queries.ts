@@ -7,6 +7,7 @@ export const aiKeys = {
   all: ["ai"] as const,
   providers: ["ai", "providers"] as const,
   agents: ["ai", "agents"] as const,
+  roles: (connection: string) => ["ai", "roles", connection] as const,
   models: (provider: string) => ["ai", "models", provider] as const,
   presets: ["ai", "presets"] as const,
   detected: (preset: string) => ["ai", "detected", preset] as const,
@@ -54,6 +55,16 @@ export const agentsQuery = queryOptions({
   queryFn: () => ai.externalAgents(),
   staleTime: 30_000,
 })
+
+/** Role files offered for this connection; failures leave the SQL fallback. */
+export function agentOptionsQuery(connection: string) {
+  return queryOptions({
+    queryKey: aiKeys.roles(connection),
+    queryFn: () => ai.listAgents(connection),
+    staleTime: 0,
+    retry: false,
+  })
+}
 
 /**
  * The ready-made agent declarations. Static values from the backend, which is

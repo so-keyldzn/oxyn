@@ -10,7 +10,10 @@ import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { NEW_THREAD } from "@/features/assistant/thread"
 import { Button } from "@/components/ui/button"
 import type { AgentSettings } from "@/features/assistant/transcript"
-import type { AgentChoice, AgentOption } from "@/lib/ipc/ai"
+import type {
+  AgentChoice,
+  AgentSettingOption as AgentOption,
+} from "@/lib/ipc/ai"
 
 // Ids are shaped so no name could ever contain one: an assertion that no id is
 // visible then means something, instead of passing on a coincidence.

@@ -23,6 +23,7 @@ import {
 } from "./assistant-fixtures"
 import { NO_USABLE_DESTINATION } from "@/features/assistant/availability"
 import { NEW_THREAD } from "@/features/assistant/thread"
+import { SQL_ONLY } from "@/features/assistant/agent-options"
 import type { AiEvent } from "@/lib/ipc/ai"
 
 const question = "How many active clients?"
@@ -946,6 +947,26 @@ export const QueuedWhileAnswering: Story = {
   },
 }
 
+export const MissingRoleInPanelHeader: Story = {
+  args: {
+    agentPicker: {
+      agents: SQL_ONLY,
+      value: "deleted-role",
+      missingAgent: { name: "Analytics" },
+      onSelect: fn(),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByRole("combobox", { name: "Agent role" })
+    ).toHaveTextContent("SQL")
+    await expect(
+      canvas.getByText(/Analytics is no longer available/)
+    ).toBeVisible()
+  },
+}
+
 export const TheHistoryOpens: Story = {
   args: {
     state: assistantState(answeredThread, {
@@ -955,6 +976,8 @@ export const TheHistoryOpens: Story = {
           {
             id: "42",
             title: question,
+            agentId: null,
+            missingAgent: null,
             createdAtMs: Date.UTC(2026, 8, 15, 12, 0),
             updatedAtMs: Date.UTC(2026, 8, 15, 12, 30),
             exchanges: 1,

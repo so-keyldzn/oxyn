@@ -7,7 +7,7 @@
 
 import { emptyExchange, exchangeOf, reduce } from "./transcript"
 import type { Exchange } from "./transcript"
-import type { AiUpdate, ThreadView } from "@/lib/ipc/ai"
+import type { AiUpdate, MissingAgent, ThreadView } from "@/lib/ipc/ai"
 
 export interface ExchangeNode {
   id: number
@@ -25,6 +25,8 @@ export interface Thread {
   /** `null` until the backend created it, on the first question. */
   id: string | null
   title: string
+  agentId: string | null
+  missingAgent: MissingAgent | null
   nodes: Array<ExchangeNode>
   /** The version shown under each parent; `root` for the first exchange. */
   selections: Record<string, number>
@@ -35,6 +37,8 @@ export interface Thread {
 export const NEW_THREAD: Thread = {
   id: null,
   title: "",
+  agentId: null,
+  missingAgent: null,
   nodes: [],
   selections: {},
   running: null,
@@ -49,6 +53,8 @@ export function threadOf(view: ThreadView): Thread {
   return {
     id: view.id,
     title: view.title,
+    agentId: view.agentId,
+    missingAgent: view.missingAgent,
     nodes: view.nodes.map((node) => ({
       id: node.id,
       parent: node.parent,

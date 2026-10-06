@@ -11,7 +11,7 @@ import type { AssistantSource } from "@/components/oxyn/assistant-sources"
 import type {
   AgentChoice,
   AgentExit,
-  AgentOption,
+  AgentSettingOption,
   AgentProvenance,
   AgentToolStatus,
   AiEvent,
@@ -257,7 +257,7 @@ export interface Usage {
 export interface AgentSettings {
   modes: ReadonlyArray<AgentChoice>
   currentMode: string | null
-  options: ReadonlyArray<AgentOption>
+  options: ReadonlyArray<AgentSettingOption>
 }
 
 export interface ContextWindow {
