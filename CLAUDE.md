@@ -63,6 +63,16 @@ No version is written from memory: see [I-12](#i-12).
 
 Full list: [.claude/README.md](.claude/README.md).
 
+## Searching the code
+
+The `semantiq` MCP server ([.mcp.json](.mcp.json)) indexes the repository. Start
+there to locate something described in words: `semantiq_search` for a behavior
+or an intent, `semantiq_explain` for a symbol's definition, documentation and
+usages. Grep stays the tool for an exact string and for any conclusive answer:
+`semantiq_find_refs` stops at its `limit` and counts a `use` as a definition,
+and `semantiq_deps` does not follow `pub use` re-exports, so its "Imported by"
+misses most callers. **"Nothing else uses X" is checked with grep.**
+
 ## Invariants
 
 Thirteen prohibitions. Violating them is **silent**: nothing fails at the moment

@@ -6,3 +6,9 @@
 allowBuilds:
   esbuild: false
   unrs-resolver: false
+
+# Patched transitive dependencies; rationale and removal conditions are dated
+# in docs/RESEARCH-NOTES.md (npm security overrides).
+overrides:
+  katex: 0.18.2
+  source-map-js: 1.2.2

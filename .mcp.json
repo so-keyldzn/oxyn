@@ -12,6 +12,11 @@
     "figma-desktop": {
       "type": "http",
       "url": "http://127.0.0.1:3845/mcp"
+    },
+    "semantiq": {
+      "type": "stdio",
+      "command": "semantiq",
+      "args": ["serve", "--project", "."]
     }
   }
 }
