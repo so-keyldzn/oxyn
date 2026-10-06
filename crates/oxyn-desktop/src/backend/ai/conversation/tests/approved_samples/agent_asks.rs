@@ -157,7 +157,7 @@ pub(super) fn open_question(
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let (channel, received) = recording();
     let node = fixture.begin(&thread, parent, channel);
@@ -631,6 +631,7 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
     let cancel = CancelToken::new();
     let run = Run {
         mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+        role: sql_role(),
         inner: &fixture.backend.inner,
         thread: &thread,
         node: next,
@@ -641,6 +642,7 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
     let (dialogue, _) = run
         .prepare_dialogue(
             &spec,
+            LOCAL,
             fixture.session,
             "and the domains?",
             None,
@@ -715,6 +717,7 @@ pub(super) fn waiting(fixture: &Fixture, declared: &ExternalAgentConfig, session
         fixture.connection,
         Waiting {
             link: AgentLink {
+                role: oxyn_ai::sql_agent().id,
                 agent: declared.clone(),
                 tier: PrivacyTier::Sampled,
                 leaf: None,
@@ -750,7 +753,7 @@ fn an_approved_sample_reaches_an_external_agent_once_then_the_agent_starts_over(
         .backend
         .inner
         .ai
-        .thread_for(fixture.connection, None)
+        .thread_for(fixture.connection, None, None)
         .expect("a conversation");
     let source = fixture.customers.to_path().expect("a relation path");
     let token = fixture.backend.inner.ai.samples.issue(Offer {
@@ -777,6 +780,7 @@ fn an_approved_sample_reaches_an_external_agent_once_then_the_agent_starts_over(
     let cancel = CancelToken::new();
     let run = Run {
         mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+        role: sql_role(),
         inner: &fixture.backend.inner,
         thread: &thread,
         node: first,
@@ -842,6 +846,7 @@ fn an_approved_sample_reaches_an_external_agent_once_then_the_agent_starts_over(
     let second = fixture.begin(&thread, Some(first), channel);
     let run = Run {
         mentions: &crate::backend::ai::mentions::NO_MENTIONS,
+        role: sql_role(),
         inner: &fixture.backend.inner,
         thread: &thread,
         node: second,

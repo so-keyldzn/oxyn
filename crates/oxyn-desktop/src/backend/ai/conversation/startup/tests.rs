@@ -153,6 +153,7 @@ fn waiting(
 ) -> Waiting {
     Waiting {
         link: AgentLink {
+            role: oxyn_ai::sql_agent().id,
             agent: agent.clone(),
             tier: PrivacyTier::Metadata,
             leaf: None,
@@ -176,6 +177,7 @@ fn start_request(open: &OpenConnection, agent: &ExternalAgentConfig) -> AgentSta
         session: open.session.clone(),
         thread: None,
         parent: None,
+        agent_id: None,
         agent: agent.id.to_string(),
     }
 }
@@ -386,6 +388,7 @@ fn the_first_question_takes_the_started_agent_rather_than_launching_one() {
                 session: open.session.clone(),
                 thread: None,
                 parent: None,
+                agent_id: None,
                 question: "which tables?".to_owned(),
                 destination: DestinationChoice::Agent {
                     id: agent.id.to_string(),

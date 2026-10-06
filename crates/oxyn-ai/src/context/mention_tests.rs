@@ -351,6 +351,7 @@ fn an_external_agent_receives_the_mentions_open_or_not() {
         PG,
         Vec::new(),
         vec![Mention::relation(path("prices"))],
+        crate::external::prompt::sql_instructions(),
     )
     .expect("this tier admits an agent");
     assert!(
@@ -405,6 +406,7 @@ fn the_erd_instruction_is_the_same_for_both_destinations() {
         PG,
         Vec::new(),
         Vec::new(),
+        crate::external::prompt::sql_instructions(),
     )
     .expect("this tier admits an agent");
     assert!(agent.as_str().contains(crate::tools::ERD_HINT));

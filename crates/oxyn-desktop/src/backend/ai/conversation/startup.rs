@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use oxyn_core::{CancelToken, Capabilities, ConnectionId, SessionId};
 
+use super::super::agents;
 use super::super::threads::Waiting;
 use super::{Failure, NO_SQL, Resolved, launch_agent, start_bounded, version_of};
 use crate::backend::Backend;
@@ -89,10 +90,26 @@ impl Backend {
             }
         };
 
+        // The role the next question will run: the shown conversation's, or
+        // the one a new conversation asks for. Its tools are the ones the
+        // launch serves, and a destination it is not written for is refused
+        // here as the question would be (ADR-0049 § 6, § 7).
+        let shown = request
+            .thread
+            .as_deref()
+            .and_then(|thread| self.inner.ai.find(connection, thread).ok());
+        let role = match &shown {
+            Some(thread) => self.thread_agent(thread)?,
+            None => self.requested_agent(request.agent_id.as_deref())?,
+        };
+        let reader = agents::agent_recipient(&agent);
+        if !role.offered_for(&agents::target_of(&config, reader)) {
+            return Err(agents::not_offered(&role, reader));
+        }
+
         // The conversation shown keeps its own agent for the question after
         // `parent`: that one answers, and nothing else is started.
-        if let Some(thread) = request.thread.as_deref()
-            && let Ok(found) = self.inner.ai.find(connection, thread)
+        if let Some(found) = &shown
             && let Some(linked) = found.agent_for(&agent, tier, request.parent)
         {
             self.inner.ai.release_waiting(connection, None);
@@ -102,35 +119,38 @@ impl Backend {
             });
         }
 
-        let (started, stop) = {
-            let launching = self.inner.ai.launch_lock(connection);
-            let _launching = launching.lock().await;
-            match self
-                .inner
-                .ai
-                .waiting_agent(connection, &agent, tier, session)
+        let (started, stop) =
             {
-                Some(found) => found,
-                None => {
-                    let link = match launch_agent(&self.inner, &config, session, &agent, tier).await
-                    {
-                        Ok(link) => link,
-                        Err(failure) => return Ok(failure.into_start()),
-                    };
-                    let started = Arc::clone(&link.session);
-                    let stop = CancelToken::new();
-                    self.inner.ai.wait(
-                        connection,
-                        Waiting {
-                            link,
-                            session,
-                            stop: stop.clone(),
-                        },
-                    );
-                    (started, stop)
+                let launching = self.inner.ai.launch_lock(connection);
+                let _launching = launching.lock().await;
+                match self
+                    .inner
+                    .ai
+                    .waiting_agent(connection, &agent, tier, session, role.id)
+                {
+                    Some(found) => found,
+                    None => {
+                        let link =
+                            match launch_agent(&self.inner, &config, session, &agent, tier, &role)
+                                .await
+                            {
+                                Ok(link) => link,
+                                Err(failure) => return Ok(failure.into_start()),
+                            };
+                        let started = Arc::clone(&link.session);
+                        let stop = CancelToken::new();
+                        self.inner.ai.wait(
+                            connection,
+                            Waiting {
+                                link,
+                                session,
+                                stop: stop.clone(),
+                            },
+                        );
+                        (started, stop)
+                    }
                 }
-            }
-        };
+            };
 
         let outcome = tokio::select! {
             outcome = start_bounded(&agent, &started) => outcome,

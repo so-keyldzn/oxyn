@@ -128,6 +128,7 @@ mod schema {
                 SQLITE,
                 Vec::new(),
                 Vec::new(),
+                sql_instructions(),
             )
             .expect("this tier admits an external agent");
             let text = launch_request.as_str();
@@ -166,6 +167,7 @@ mod schema {
             SQLITE,
             Vec::new(),
             Vec::new(),
+            sql_instructions(),
         )
         .expect("valid prompt");
         let text = launch_request.as_str();
@@ -205,6 +207,7 @@ mod schema {
             SQLITE,
             Vec::new(),
             Vec::new(),
+            sql_instructions(),
         )
         .expect("valid prompt");
         let context = launch_request.context().expect("a schema is attached");
@@ -252,6 +255,7 @@ mod schema {
             SQLITE,
             vec![sample()],
             Vec::new(),
+            sql_instructions(),
         )
         .expect("valid prompt");
         let text = launch_request.as_str();
@@ -289,6 +293,7 @@ mod schema {
             SQLITE,
             vec![sample()],
             Vec::new(),
+            sql_instructions(),
         )
         .expect("valid prompt");
         assert!(!launch_request.as_str().contains("dupont@example.com"));
@@ -336,6 +341,7 @@ mod schema {
             SQLITE,
             Vec::new(),
             Vec::new(),
+            sql_instructions(),
         )
         .expect("valid prompt");
         let context = launch_request.context().expect("a schema is attached");
@@ -359,6 +365,110 @@ mod schema {
         );
     }
 
+    /// The opening carries the conversation's agent once, as Oxyn's block,
+    /// before the schema; a follow-up does not repeat it (ADR-0049 § 7).
+    #[test]
+    fn the_agent_block_opens_the_session_before_the_schema_and_only_once() {
+        let agent = sql_instructions();
+        let rendered =
+            crate::agent_file::render_system_prompt(agent.spec, agent.target).expect("renders");
+        let opening = AgentPrompt::with_schema(
+            PrivacyTier::Metadata,
+            "how many customers?",
+            &nbc(),
+            SQLITE,
+            Vec::new(),
+            Vec::new(),
+            agent,
+        )
+        .expect("valid prompt");
+        let text = opening.as_str();
+
+        assert!(text.starts_with(AGENT_HEADER), "{text}");
+        assert_eq!(text.matches(AGENT_HEADER).count(), 1);
+        assert_eq!(text.matches(rendered.as_str()).count(), 1);
+        let block = text.find(rendered.as_str()).expect("the block is there");
+        let schema = text
+            .find("You are working inside Oxyn")
+            .expect("the schema intro is there");
+        let fence = text
+            .find(untrusted::PREAMBLE)
+            .expect("the preamble is there");
+        assert!(block < schema && schema < fence, "{text}");
+        // What the recipient fragment and the dialect fragment add are there:
+        // the agent is rendered for this target, not as a bare role.
+        assert!(text.contains("claude-code") || text.contains("Claude Code"));
+        assert!(text.contains("SQLite"), "{text}");
+
+        let follow_up = AgentPrompt::following(
+            PrivacyTier::Metadata,
+            "and the orders?",
+            &nbc(),
+            SQLITE,
+            Vec::new(),
+        )
+        .expect("valid prompt");
+        assert!(!follow_up.as_str().contains(AGENT_HEADER));
+        assert!(!follow_up.as_str().contains(rendered.as_str()));
+    }
+
+    /// The opening schema is bounded by the agent's own `context`, not by the
+    /// default policy (ADR-0049 § 7).
+    #[test]
+    fn the_opening_schema_follows_the_agents_context_policy() {
+        let mut narrow = crate::builtin::sql_agent();
+        narrow.context.max_relations = 1;
+        let opening = AgentPrompt::with_schema(
+            PrivacyTier::Metadata,
+            "orders and customers",
+            &nbc(),
+            SQLITE,
+            Vec::new(),
+            Vec::new(),
+            AgentInstructions {
+                spec: &narrow,
+                target: sql_instructions().target,
+            },
+        )
+        .expect("valid prompt");
+        let context = opening.context().expect("a schema is attached");
+        assert_eq!(context.relations().len(), 1);
+    }
+
+    /// Under `Local`, nothing is composed — the agent block no more than the
+    /// schema —, even for an agent whose prompt would not render.
+    #[test]
+    fn under_local_not_even_the_agent_block_is_composed() {
+        let mut broken = crate::builtin::sql_agent();
+        broken.system_prompt = "Use {{tables}}.".to_owned();
+        let target = sql_instructions().target;
+        let refused = |tier| {
+            AgentPrompt::with_schema(
+                tier,
+                "tables?",
+                &nbc(),
+                SQLITE,
+                Vec::new(),
+                Vec::new(),
+                AgentInstructions {
+                    spec: &broken,
+                    target,
+                },
+            )
+            .expect_err("refused")
+            .to_string()
+        };
+
+        let local = refused(PrivacyTier::Local);
+        assert!(
+            local.contains("local-only"),
+            "the tier is checked first: {local}"
+        );
+        let metadata = refused(PrivacyTier::Metadata);
+        assert!(metadata.contains("unknown variable"), "{metadata}");
+        assert!(!metadata.contains("tables?"), "{metadata}");
+    }
+
     /// Under `Local`, the refusal falls before any schema is rendered.
     #[test]
     fn under_local_no_schema_is_rendered() {
@@ -369,6 +479,7 @@ mod schema {
             SQLITE,
             Vec::new(),
             Vec::new(),
+            sql_instructions(),
         )
         .expect_err("a local connection does not talk to an external agent");
         let message = error.to_string();
@@ -387,6 +498,7 @@ mod schema {
             SQLITE,
             Vec::new(),
             Vec::new(),
+            sql_instructions(),
         )
         .expect("valid prompt");
         let rendered = format!("{launch_request:?}");
