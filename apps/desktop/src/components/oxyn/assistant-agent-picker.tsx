@@ -154,8 +154,11 @@ export function AssistantAgentPicker({
       </p>
       {missingAgent ? (
         <Alert role="status">
+          {/* Not `missingAgent.name`: it carries the recorded agent's id,
+              since a file that is gone can no longer say its name
+              (ADR-0049 § 10). A UUID is not a name to show. */}
           <AlertDescription>
-            {missingAgent.name} is no longer available. This conversation
+            The agent this conversation used is no longer available — it
             continues with the SQL agent.
           </AlertDescription>
         </Alert>

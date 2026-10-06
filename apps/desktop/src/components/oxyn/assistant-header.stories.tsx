@@ -9,6 +9,7 @@ import {
   unresolvedProvider,
 } from "./assistant-fixtures"
 import { expectContainedInFrame, openFrame } from "./frame-overflow"
+import { restrictedToAgent } from "@/features/assistant/agent-options"
 import type { DestinationOption } from "@/features/assistant/availability"
 
 const meta = {
@@ -305,6 +306,54 @@ export const AgentClosedOnALocalConnection: Story = {
     await expect(agent).toHaveTextContent(
       /cannot see where an external agent sends data/
     )
+    await closeList()
+  },
+}
+
+/**
+ * The conversation runs an agent written for local models only: the hosted
+ * provider stays listed, disabled, and says why and what to do instead
+ * (ADR-0049 § 6). Choosing another destination never switches the agent.
+ */
+export const DestinationTheAgentIsNotWrittenFor: Story = {
+  args: (() => {
+    const local: DestinationOption = {
+      key: `provider:${localProvider.id}`,
+      kind: "provider",
+      id: localProvider.id,
+      label: localProvider.label,
+      model: localProvider.model,
+      reach: "local",
+      usable: true,
+      reason: null,
+    }
+    const restricted = restrictedToAgent([local, destinations[0]!], {
+      id: "0199a3c0-0000-7000-8000-0000000000a2",
+      name: "Small model",
+      description: "",
+      origin: "user",
+      error: null,
+      disabledDestinations: [{ kind: "provider", id: remoteProvider.id }],
+    })
+    return {
+      tier: "metadata" as const,
+      destinations: restricted,
+      selected: restricted[0] ?? null,
+      model: localProvider.model,
+    }
+  })(),
+  play: async ({ canvasElement, args }) => {
+    await userEvent.click(
+      within(canvasElement).getByRole("combobox", { name: "Who answers" })
+    )
+    const hosted = await within(document.body).findByRole("option", {
+      name: new RegExp(remoteProvider.label),
+    })
+    await expect(hosted).toHaveAttribute("aria-disabled", "true")
+    await expect(hosted).toHaveTextContent(
+      "The Small model agent is not written for it."
+    )
+    await expect(args.onSelectDestination).not.toHaveBeenCalled()
     await closeList()
   },
 }

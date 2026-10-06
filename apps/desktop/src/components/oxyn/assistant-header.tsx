@@ -279,10 +279,26 @@ export function AssistantHeader({
                     value={option.key}
                     disabled={!option.usable}
                   >
-                    {option.label}
-                    <span className="text-xs text-muted-foreground">
-                      {REACH[option.reach].label}
-                    </span>
+                    {option.usable || !option.reason ? (
+                      <>
+                        {option.label}
+                        <span className="text-xs text-muted-foreground">
+                          {REACH[option.reach].label}
+                        </span>
+                      </>
+                    ) : (
+                      // The same as an agent below: a greyed name alone
+                      // reads as a bug.
+                      <span className="flex max-w-72 flex-col gap-0.5">
+                        <span>{option.label}</span>
+                        <span
+                          data-slot="destination-refused"
+                          className="text-xs whitespace-normal text-muted-foreground"
+                        >
+                          {option.reason}
+                        </span>
+                      </span>
+                    )}
                   </SelectItem>
                 ))}
               </SelectGroup>

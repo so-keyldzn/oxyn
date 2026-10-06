@@ -11,6 +11,7 @@ const schema: AgentOption = {
   description: "Explains the schema and proposes changes.",
   origin: "shipped",
   error: null,
+  disabledDestinations: [],
 }
 const user: AgentOption = {
   id: "user-analytics",
@@ -18,6 +19,7 @@ const user: AgentOption = {
   description: "Helps explore reporting queries.",
   origin: "user",
   error: null,
+  disabledDestinations: [],
 }
 const shipped = [...SQL_ONLY, schema]
 const body = () => within(document.body)
@@ -99,12 +101,19 @@ export const WithInvalidUserAgent: Story = {
 }
 
 export const MissingAgentNotice: Story = {
-  args: { value: user.id, missingAgent: { name: "Analytics" } },
+  // What the backend sends: the recorded id, the name being gone with its
+  // file. The notice never shows it as a name.
+  args: {
+    value: "0199a3c0-0000-7000-8000-0000000000a7",
+    missingAgent: { name: "0199a3c0-0000-7000-8000-0000000000a7" },
+  },
   play: async () => {
     await expect(body().getByRole("combobox")).toHaveTextContent("SQL")
-    await expect(body().getByRole("status")).toHaveTextContent(
-      "Analytics is no longer available. This conversation continues with the SQL agent."
+    const notice = body().getByRole("status")
+    await expect(notice).toHaveTextContent(
+      "The agent this conversation used is no longer available — it continues with the SQL agent."
     )
+    await expect(notice).not.toHaveTextContent("0199a3c0")
   },
 }
 
@@ -184,6 +193,7 @@ export const ReloadedWithInvalidUserAgent: Story = {
         description: "",
         origin: "user",
         error: "broken.md: not valid UTF-8; an agent file is UTF-8 text",
+        disabledDestinations: [],
       },
     ],
   },
