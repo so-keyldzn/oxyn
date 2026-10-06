@@ -34,7 +34,7 @@ fn provider() -> Destination {
 
 /// A saved thread.
 fn thread(store: &Store, workspace: WorkspaceId, connection: ConnectionId) -> ConversationId {
-    let conversation = Conversation::new(workspace, provider(), "Doublons")
+    let conversation = Conversation::new(workspace, provider(), "Doublons", None)
         .on_connection(connection, "customer db");
     let id = conversation.id;
     store.conversations().save(&conversation).expect("thread");

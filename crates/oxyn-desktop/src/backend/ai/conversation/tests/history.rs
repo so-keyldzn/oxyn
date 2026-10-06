@@ -13,7 +13,7 @@ fn thread_on(store: &Store, workspace: WorkspaceId, connection: ConnectionId, na
         "Anthropic",
         "a-model",
     );
-    let conversation = Conversation::new(workspace, destination, format!("About {name}"))
+    let conversation = Conversation::new(workspace, destination, format!("About {name}"), None)
         .on_connection(connection, name);
     store
         .conversations()
@@ -41,6 +41,7 @@ fn the_launch_prune_is_transmitted_with_its_rule() {
                     "a-model",
                 ),
                 format!("Idle {index}"),
+                None,
             )
             .on_connection(ConnectionId::new(), "billing");
             store

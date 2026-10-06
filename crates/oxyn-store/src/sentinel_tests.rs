@@ -125,6 +125,7 @@ fn no_sentinel_reaches_the_workspace_file() {
             "a-model",
         ),
         "Canary thread",
+        None,
     )
     .on_connection(connection.id, "Canary db");
     let thread_id = thread.id;
