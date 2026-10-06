@@ -165,6 +165,22 @@ plugin or of `rfd`**:
 | `shiki` | `4.4.3` | same | read on 2026-09-24 (published on 2026-08-10); highlighting of code in responses, with the **JavaScript engine** (`shiki/engine/javascript`) and tokens, never `codeToHtml` |
 | `mermaid` | `11.17.2` | `12.0.0` | read on 2026-09-24 (11.17.2 published on 2026-08-25, 12.0.0 on 2026-09-10). **12 targets Safari 17.4+ and ES2024**, whereas the target is macOS 13.0 (`minimumSystemVersion`), shipped with Safari 16: we stay on the latest 11.x. To reopen when the minimum target guarantees a WebKit 17.4 |
 
+### npm security overrides — checked on 2026-10-06
+
+Versions were read from the npm registry with `pnpm view <package> versions
+--json`; dependency ranges and licenses with `pnpm view <package>@<version>`.
+
+| Package | Pinned version | Reason and source |
+|---|---|---|
+| `source-map-js` | `1.2.2` | First patched version for [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q); BSD-3-Clause. [Release notes](https://github.com/7rulnik/source-map-js/releases/tag/v1.2.2) confirm the indexed source-map denial-of-service fix. Even Vite `8.3.3` permits PostCSS `8.5.28`, whose `source-map-js` range is `^1.2.1`; a Vite bump alone does not require the fix. |
+| `katex` | `0.18.2` | First patched version for [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7); MIT. [Release notes](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.2) confirm the settings prototype-pollution fix. Mermaid `11.17.2` remains the latest 11.x; even `12.1.0` still requires `katex ^0.16.47`, excluding the fix. Keep Mermaid's existing browser target and override KaTeX. |
+
+pnpm `11.1.2` ignores `package.json#pnpm`: overrides belong in
+`apps/desktop/pnpm-workspace.yaml`, as documented in the
+[pnpm migration guide](https://github.com/pnpm/pnpm.io/blob/main/docs/migration.md)
+and confirmed by a lockfile-only install. Remove each override when the parent
+dependency requires a patched version. No other dependency is upgraded.
+
 ### Facts that decided the code
 
 | Fact | Source | Checked on |

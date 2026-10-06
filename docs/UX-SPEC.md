@@ -1070,6 +1070,39 @@ non-confined agent keeps the modes and options it declares.
 An endpoint that Oxyn could not resolve counts as remote. The configuration
 shows it as "unresolved", not as "local": doubt does not benefit sending.
 
+### The agent is chosen per conversation
+
+The panel header carries a second selector, the **agent** — SQL, Schema,
+and the agents the user added
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposed). It
+lists only the agents offered for the connection's dialect and the chosen
+destination (`ai_list_agents`); a new conversation starts with the SQL
+agent.
+
+* **Choosing another agent opens a new conversation.** The current one
+  stays in the "Conversations" list, unchanged, with its agent: an agent's
+  prompt never changes under a written history. The selector is inert while
+  an answer is being written.
+* **A user agent is marked as such** in the selector, next to its name
+  ("user agent"), and its description says it comes from the user's
+  `agents/` folder. A shipped agent carries no mark.
+* **An invalid user agent is listed, not hidden**: greyed out, not
+  selectable, with the error the backend returns — file name and line,
+  never the file's content. One invalid file does not remove the others
+  from the list.
+* **A resumed conversation runs with its recorded agent.** When that agent
+  no longer exists — its file deleted or now invalid —, the conversation
+  reopens with the SQL agent, and a line above the next question says so,
+  naming the missing agent ("The agent “Name” no longer exists; this
+  conversation continues with the SQL agent."). The panel never lets a
+  conversation run under another prompt without saying it.
+* Changing **destination** in "Who answers" keeps the conversation and its
+  agent; what changes is the part of the prompt written for the recipient,
+  and the `destinationChanged` line already says the new recipient starts
+  without the previous exchanges. A destination the conversation's agent is
+  not offered for (its `recipients` excludes it) stays in "Who answers",
+  disabled, with its reason, like a destination the tier refuses.
+
 ### The panel shows what is happening, including when nothing arrives
 
 The panel follows the five states of a view. What distinguishes them here:

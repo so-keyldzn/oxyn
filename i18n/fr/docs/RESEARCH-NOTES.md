@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="2490e010294e" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="3f0c0468be20" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -169,6 +169,24 @@ ou de `rfd`** :
 | `@dagrejs/dagre` | `3.1.1` | idem | relevé le 2026-09-24 (publiée le 2026-08-08) ; disposition du diagramme. **Pas** `dagre` 0.8, abandonné, ni `elkjs` |
 | `shiki` | `4.4.3` | idem | relevé le 2026-09-24 (publiée le 2026-08-10) ; coloration du code des réponses, en **moteur JavaScript** (`shiki/engine/javascript`) et jetons, jamais `codeToHtml` |
 | `mermaid` | `11.17.2` | `12.0.0` | relevé le 2026-09-24 (11.17.2 publiée le 2026-08-25, 12.0.0 le 2026-09-10). **La 12 vise Safari 17.4+ et ES2024**, alors que la cible est macOS 13.0 (`minimumSystemVersion`), livré avec Safari 16 : on reste sur la dernière 11.x. À rouvrir quand la cible minimale garantit un WebKit 17.4 |
+
+### Overrides de sécurité npm — vérifiés le 2026-10-06
+
+Les versions ont été lues dans le registre npm avec `pnpm view <package>
+versions --json` ; les plages de dépendances et les licences avec
+`pnpm view <package>@<version>`.
+
+| Paquet | Version épinglée | Motif et source |
+|---|---|---|
+| `source-map-js` | `1.2.2` | Première version corrigée pour [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) ; BSD-3-Clause. Les [notes de version](https://github.com/7rulnik/source-map-js/releases/tag/v1.2.2) confirment la correction du déni de service lié aux source maps indexées. Même Vite `8.3.3` autorise PostCSS `8.5.28`, dont la plage `source-map-js` est `^1.2.1` ; une montée de Vite seule n'impose pas la correction. |
+| `katex` | `0.18.2` | Première version corrigée pour [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7) ; MIT. Les [notes de version](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.2) confirment la correction de la pollution du prototype des paramètres. Mermaid `11.17.2` reste la dernière 11.x ; même `12.1.0` exige encore `katex ^0.16.47`, qui exclut la correction. Garder la cible navigateur existante de Mermaid et imposer KaTeX par override. |
+
+pnpm `11.1.2` ignore `package.json#pnpm` : les overrides vont dans
+`apps/desktop/pnpm-workspace.yaml`, comme l'indique le
+[guide de migration pnpm](https://github.com/pnpm/pnpm.io/blob/main/docs/migration.md)
+et comme le confirme une installation limitée au lockfile. Retirer chaque
+override lorsque la dépendance parente exige une version corrigée. Aucune autre
+dépendance n'est mise à niveau.
 
 ### Faits qui ont décidé du code
 

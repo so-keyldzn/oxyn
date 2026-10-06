@@ -58,7 +58,7 @@ fn provider() -> Destination {
 
 /// An open and saved thread.
 fn thread(store: &Store, workspace: WorkspaceId, connection: ConnectionId) -> ConversationId {
-    let conversation = Conversation::new(workspace, provider(), "Duplicate orders")
+    let conversation = Conversation::new(workspace, provider(), "Duplicate orders", None)
         .on_connection(connection, "customer db");
     let id = conversation.id;
     store
@@ -397,7 +397,7 @@ fn threads_of_a_deleted_connection_are_listed_under_its_name() {
         .save(workspace, &alive_one)
         .expect("connection");
     thread(&store, workspace, alive_one.id);
-    let without_connection = Conversation::new(workspace, provider(), "Sans connexion");
+    let without_connection = Conversation::new(workspace, provider(), "Sans connexion", None);
     store
         .conversations()
         .save(&without_connection)
@@ -945,7 +945,7 @@ fn dated_threads(
         .map(|index| {
             let when = base + TimeDelta::days(i64::from(index));
             let mut conversation =
-                Conversation::new(workspace, provider(), format!("thread {index}"))
+                Conversation::new(workspace, provider(), format!("thread {index}"), None)
                     .on_connection(connection, "customer db");
             conversation.created_at = when;
             conversation.updated_at = when;
@@ -1367,7 +1367,7 @@ fn debug_does_not_render_the_user_text() {
     assert!(rendered.contains("text_bytes"), "{rendered}");
 
     let (store, workspace, connection) = fixture();
-    let conversation = Conversation::new(workspace, provider(), "question-collee-par-erreur")
+    let conversation = Conversation::new(workspace, provider(), "question-collee-par-erreur", None)
         .on_connection(connection, "customer db");
     store.conversations().save(&conversation).expect("thread");
     let rendered = format!("{conversation:?}");
@@ -1383,7 +1383,7 @@ fn debug_does_not_render_the_user_text() {
 #[test]
 fn tool_call_password_literals_are_redacted_before_serialization() {
     let (store, workspace, connection) = fixture();
-    let conversation = Conversation::new(workspace, provider(), "password rotation")
+    let conversation = Conversation::new(workspace, provider(), "password rotation", None)
         .on_connection(connection, "customer db");
     let id = conversation.id;
     store.conversations().save(&conversation).expect("thread");
