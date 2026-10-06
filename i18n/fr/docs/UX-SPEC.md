@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="12808a3300c9" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a4945ad2e4c4" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1124,7 +1124,7 @@ profite pas à l'envoi.
 
 L'en-tête du panneau porte un second sélecteur, l'**agent** — SQL, Schema,
 et les agents que l'utilisateur a ajoutés
-([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée). Il ne
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée). Il ne
 liste que les agents proposés pour le dialecte de la connexion et la
 destination choisie (`ai_list_agents`) ; une nouvelle conversation commence
 avec l'agent SQL.

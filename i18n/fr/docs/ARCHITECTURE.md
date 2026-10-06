@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="cb8ad46c4ee2" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="c42a92e6c552" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -864,7 +864,7 @@ Deux specs existent aujourd'hui, dans `oxyn-ai::builtin` : `sql_agent` et
 `schema_agent`. Les sept autres sont des fichiers à écrire, pas du code.
 
 **Un prompt système se compose sur trois axes**
-([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée,
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée,
 amendée le 2026-10-06) : le **rôle** de l'agent
 (`crates/oxyn-ai/agents/<role>.md`, en-tête plus corps), le **dialecte** de
 la connexion (`crates/oxyn-ai/prompts/dialects/<dialect>.md`, `ansi.md`

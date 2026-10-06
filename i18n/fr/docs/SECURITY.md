@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="a4921ddb4ba6" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="06a9d0b08f51" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -271,7 +271,7 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    par une version future du programme.
 
    **Les fichiers d'agents utilisateur** en font partie
-   ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée) :
+   ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée) :
    `<nom>.md` dans `agents/` du répertoire de données, lus au lancement et au
    rechargement. Un fichier écrit par quelqu'un d'autre peut porter un prompt
    de rôle qui dit au modèle d'insister, de cacher ce qu'il fait ou d'ignorer

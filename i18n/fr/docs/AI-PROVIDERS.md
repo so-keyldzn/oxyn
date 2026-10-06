@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="b48fc4e7848b" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="070e665ea08c" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -201,7 +201,7 @@ règle précise l'ADR-0026, qui ne remontait que le texte.
 Ce qu'Oxyn écrit à un modèle en plus du contexte — le prompt système pour un
 provider, le bloc écrit par Oxyn dans le texte d'ouverture pour un agent
 externe — est **composé**, pas stocké d'un bloc
-([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposée,
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée,
 amendée le 2026-10-06) : le rôle de l'agent, puis le fragment du dialecte de
 la connexion (`ansi` quand le dialecte n'en a pas), puis le fragment du
 **destinataire**, dans cet ordre fixe, rempli par quatre variables fermées —

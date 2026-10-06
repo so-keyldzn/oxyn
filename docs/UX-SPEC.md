@@ -1074,7 +1074,7 @@ shows it as "unresolved", not as "local": doubt does not benefit sending.
 
 The panel header carries a second selector, the **agent** — SQL, Schema,
 and the agents the user added
-([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), proposed). It
+([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), accepted). It
 lists only the agents offered for the connection's dialect and the chosen
 destination (`ai_list_agents`); a new conversation starts with the SQL
 agent.
