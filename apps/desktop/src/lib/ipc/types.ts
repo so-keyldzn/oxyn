@@ -285,7 +285,21 @@ export interface CatalogNode {
   /** Read, then invalidated by a DDL sent from Oxyn (ADR-0022). */
   stale: boolean
   children: Array<CatalogNode>
+  /** The module behind a virtual table; `null` for anything else. */
+  virtualTable: VirtualTableMark | null
+  /** The virtual table a shadow table stores the data of. */
+  shadowOf: string | null
 }
+
+export const VirtualTableMark = z.object({
+  /** Database content: shown, never run. */
+  module: z.string(),
+  /** `null` when the engine could not say. */
+  available: z.boolean().nullable(),
+  /** Its shadow tables, where its data is stored. */
+  shadows: z.array(z.string()),
+})
+export type VirtualTableMark = z.infer<typeof VirtualTableMark>
 
 // The tree is recursive, so the schema refers to itself: `z.infer` cannot
 // unfold that on its own, and the interface above is the one it is checked
@@ -301,6 +315,8 @@ export const CatalogNode: z.ZodType<CatalogNode> = z.lazy(() =>
     loaded: z.boolean(),
     stale: z.boolean(),
     children: z.array(CatalogNode),
+    virtualTable: VirtualTableMark.nullable(),
+    shadowOf: z.string().nullable(),
   })
 )
 

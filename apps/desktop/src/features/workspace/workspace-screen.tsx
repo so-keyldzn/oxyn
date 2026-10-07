@@ -130,6 +130,8 @@ function relatedNode(address: CatalogAddress): CatalogNode {
     loaded: false,
     stale: false,
     children: [],
+    virtualTable: null,
+    shadowOf: null,
   }
 }
 

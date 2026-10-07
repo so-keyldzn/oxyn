@@ -332,6 +332,31 @@ pub struct RelationRef {
     /// instructions" is data, never an instruction (ARCHITECTURE §8): it is up
     /// to the single gateway of `oxyn-ai` to frame it before it joins a prompt.
     pub comment: Option<String>,
+    /// The module behind it, when the relation is a virtual table (SQLite
+    /// `CREATE VIRTUAL TABLE … USING <module>`).
+    #[serde(default)]
+    pub virtual_table: Option<VirtualTable>,
+    /// The virtual table this relation stores the data of, when it is one of
+    /// its shadow tables. Reading the virtual table may fail while its shadow
+    /// tables stay readable: they are where its data actually is.
+    #[serde(default)]
+    pub shadow_of: Option<String>,
+}
+
+/// What backs a virtual table.
+///
+/// A virtual table holds no rows of its own: a module of the engine computes
+/// them, and a module the connection does not load makes every read fail
+/// while the catalog still lists the table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VirtualTable {
+    /// The module's name, as the schema declares it. **Database content**: an
+    /// identifier written by whoever created the table, framed like a comment
+    /// before it joins a prompt.
+    pub module: String,
+    /// Whether this connection provides the module. `None` when the engine
+    /// could not say: unknown, never presumed either way.
+    pub available: Option<bool>,
 }
 
 impl RelationRef {
@@ -357,6 +382,8 @@ impl RelationRef {
             name,
             kind,
             comment: None,
+            virtual_table: None,
+            shadow_of: None,
         })
     }
 
@@ -369,6 +396,8 @@ impl RelationRef {
             name,
             kind,
             comment: None,
+            virtual_table: None,
+            shadow_of: None,
         }
     }
 
@@ -394,6 +423,27 @@ impl RelationRef {
     #[must_use]
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
+        self
+    }
+
+    /// Marks the relation as a virtual table backed by `module`.
+    #[must_use]
+    pub fn with_virtual_table(
+        mut self,
+        module: impl Into<String>,
+        available: Option<bool>,
+    ) -> Self {
+        self.virtual_table = Some(VirtualTable {
+            module: module.into(),
+            available,
+        });
+        self
+    }
+
+    /// Marks the relation as a shadow table of the virtual table `owner`.
+    #[must_use]
+    pub fn with_shadow_of(mut self, owner: impl Into<String>) -> Self {
+        self.shadow_of = Some(owner.into());
         self
     }
 

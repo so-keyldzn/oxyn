@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useStore } from "@tanstack/react-store"
 
 import { addressKey } from "@/components/oxyn/catalog-tree"
+import { sameShape } from "@/components/oxyn/preview-controls"
 import type { PreviewStatus } from "@/components/oxyn/preview-controls"
 import type { ResultState } from "@/components/oxyn/result-panel"
 import {
@@ -157,6 +158,7 @@ export function usePreview({
     state: live,
     status,
     applied,
+    reshaped: entry ? !sameShape(entry.requested, entry.applied) : false,
     running: Boolean(entry?.running),
     cancelling: entry?.cancelling ?? false,
     startedAt: entry?.startedAt ?? null,

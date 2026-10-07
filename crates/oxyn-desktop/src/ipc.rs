@@ -458,6 +458,22 @@ pub struct CatalogNode {
     /// and read again when it is on screen (ADR-0022).
     pub stale: bool,
     pub children: Vec<CatalogNode>,
+    /// The module behind a virtual table; `None` for anything else.
+    pub virtual_table: Option<VirtualTableMark>,
+    /// The virtual table a shadow table stores the data of.
+    pub shadow_of: Option<String>,
+}
+
+/// What the tree and the Data tab say about a virtual table.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualTableMark {
+    /// The module's name. Database content: shown, never run.
+    pub module: String,
+    /// `None` when the engine could not say.
+    pub available: Option<bool>,
+    /// Its shadow tables listed beside it, where its data is stored.
+    pub shadows: Vec<String>,
 }
 
 impl CatalogNode {
@@ -477,6 +493,8 @@ impl CatalogNode {
             loaded: true,
             stale: false,
             children: Vec::new(),
+            virtual_table: None,
+            shadow_of: None,
         }
     }
 }

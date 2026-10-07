@@ -653,6 +653,21 @@ requests the corresponding tier through the command bus; no demo table replaces
 a missing response. The search covers the objects already loaded and announces
 this scope. Unavailable features do not trigger a simulated query.
 
+A **virtual table** (SQLite `CREATE VIRTUAL TABLE … USING <module>`) is not
+listed as an ordinary table: its row carries `virtual · <module>`, the module's
+name as the schema declares it. When the connection does not provide that
+module, the mark becomes `<module> not loaded`, in the warning color, and its
+hint says the rows cannot be read here. Availability is asked of the engine
+(`pragma_module_list`), for every module alike: `fts5`, built in, shows as
+virtual; a module an extension adds shows as loaded the day Oxyn loads it, with
+no case written for it. When the engine cannot say, the mark stays
+`virtual · <module>` and the hint says availability is unknown. The tables a
+virtual table stores its data in — its **shadow tables** — carry `shadow`, and
+their hint names the virtual table they belong to: SQLite's own word when the
+module is loaded, the `<virtual table>_` naming convention only when it is not.
+The module name comes from the database: it is shown as text and never joins a
+query Oxyn composes.
+
 The form only offers the registered drivers. Every new connection starts in
 `production` until explicitly changed. During a connection change, the old
 workspace stays accessible; a **new** connection copies the SQL text of the
@@ -715,6 +730,15 @@ the rows; no automatic refresh follows an error. Loading, empty result, failure
 and cancellation are distinct. Without a requested sort, the order of the rows
 is not guaranteed, and the preview never counts the whole table.
 
+A failed read of a virtual table whose module the connection does not load is
+**explained**, not shown raw: "This table is provided by the SQLite extension
+`<module>`, which Oxyn does not load. Its data is stored in …", followed by its
+shadow tables as links that select them. The driver's message stays one click
+away, under `Driver message`, word for word. The failure is permanent
+([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)):
+nothing offers to run it again, and nothing retries it. Any other failure of the
+same table is shown as it came.
+
 ### Filter, sort, page through
 
 The bar below the data actions carries a field preceded by `WHERE` and an
@@ -737,6 +761,12 @@ the server and comes back with **its** message, code included.
 The preview can therefore now fail for a syntax reason, which was not the case
 before. It can however write nothing: the final text is reclassified, the
 session is held read-only by the server, and the row bound applies.
+
+When a read that **changed** the filter, the sort or the page is refused, the
+line under the bar says, in the warning color, that the rows of the previous
+shape were not kept and that the text stays where it can be fixed. A first read,
+or a refresh of the shape in force, that fails had no previous shape: that line
+is not shown, and the failure below says all there is.
 
 `Sort` chooses columns, not an expression: Oxyn composes this part of the
 query, so it answers for it. A column unknown to the relation is refused before

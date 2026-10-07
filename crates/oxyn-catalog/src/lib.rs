@@ -80,7 +80,7 @@ pub use literal::{LiteralError, check_identifier, push_string_literal};
 pub use model::{
     CatalogRef, Constraint, ConstraintKind, Field, ForeignKey, ForeignKeyTarget,
     IncomingForeignKey, Index, LogicalType, NamespaceRef, ReferentialAction, Relation,
-    RelationKind, RelationRef, ServerInfo,
+    RelationKind, RelationRef, ServerInfo, VirtualTable,
 };
 pub use path::{CatalogLevel, CatalogPath, CatalogPathError, QuoteStyle, quote_identifier};
 pub use provider::CatalogProvider;

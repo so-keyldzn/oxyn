@@ -11,14 +11,24 @@ import type { CatalogNode, OpenConnection } from "@/lib/ipc/types"
 // last step before the backend.
 const previewVisible = vi.hoisted(() => vi.fn())
 const ensure = vi.hoisted(() => vi.fn())
+type MockedPreviewState =
+  | { status: "initial" }
+  | { status: "error"; message: string; retryable: boolean }
+const previewState = vi.hoisted(() => {
+  const holder: { current: MockedPreviewState } = {
+    current: { status: "initial" },
+  }
+  return holder
+})
 
 vi.mock("@/features/metadata/use-preview", () => ({
   usePreview: (options: { visible: boolean }) => {
     previewVisible(options.visible)
     return {
-      state: { status: "initial" },
-      status: "idle",
+      state: previewState.current,
+      status: previewState.current.status === "error" ? "failed" : "initial",
       applied: PLAIN_SHAPE,
+      reshaped: false,
       running: false,
       cancelling: false,
       startedAt: null,
@@ -91,6 +101,8 @@ const node: CatalogNode = {
   loaded: false,
   stale: false,
   children: [],
+  virtualTable: null,
+  shadowOf: null,
 }
 
 function renderView(props: Partial<React.ComponentProps<typeof ObjectView>>) {
@@ -114,6 +126,57 @@ function renderView(props: Partial<React.ComponentProps<typeof ObjectView>>) {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  previewState.current = { status: "initial" }
+})
+
+describe("a virtual table whose module is not loaded", () => {
+  const vec: CatalogNode = {
+    ...node,
+    address: { catalog: null, namespace: "main", relation: "chunks_vec" },
+    name: "chunks_vec",
+    virtualTable: {
+      module: "vec0",
+      available: false,
+      shadows: ["chunks_vec_info", "chunks_vec_rowids"],
+    },
+  }
+  const message = "driver `sqlite` (permanent error): no such module: vec0"
+
+  it("explains the failed read and links to where its data is", () => {
+    previewState.current = { status: "error", message, retryable: false }
+    const onOpenRelated = vi.fn()
+    renderView({ node: vec, onOpenRelated })
+
+    expect(
+      screen.getByText(/provided by the SQLite extension/).textContent
+    ).toContain("vec0, which Oxyn does not load")
+    expect(screen.queryByText("The statement failed")).toBeNull()
+    // No claim of a previous shape: this was the first read.
+    expect(screen.queryByText(/previous shape/)).toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "chunks_vec_rowids" }))
+    expect(onOpenRelated).toHaveBeenCalledWith({
+      catalog: null,
+      namespace: "main",
+      relation: "chunks_vec_rowids",
+    })
+  })
+
+  it("shows any other failure as it came", () => {
+    previewState.current = {
+      status: "error",
+      message: "database is locked",
+      retryable: true,
+    }
+    renderView({
+      node: {
+        ...vec,
+        virtualTable: { module: "fts5", available: true, shadows: [] },
+      },
+    })
+    expect(screen.getByText("The statement failed")).toBeTruthy()
+    expect(screen.queryByText(/provided by the SQLite extension/)).toBeNull()
+  })
 })
 
 describe("a restored object tab", () => {

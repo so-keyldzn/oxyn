@@ -183,6 +183,8 @@ const catalogRelation = (
   loaded: true,
   stale: false,
   children: [],
+  virtualTable: null,
+  shadowOf: null,
 })
 
 const catalogNamespace = (
@@ -199,6 +201,8 @@ const catalogNamespace = (
   loaded: true,
   stale: false,
   children,
+  virtualTable: null,
+  shadowOf: null,
   ...overrides,
 })
 

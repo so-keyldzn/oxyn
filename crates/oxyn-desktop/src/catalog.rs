@@ -9,7 +9,7 @@
 use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope};
 use oxyn_core::{Capabilities, CatalogRefreshScope, Command, ConnectionId};
 
-use crate::ipc::{CatalogAddress, CatalogNode, RelationDetail, RelationField};
+use crate::ipc::{CatalogAddress, CatalogNode, RelationDetail, RelationField, VirtualTableMark};
 
 /// The command that loads one level of the tree.
 ///
@@ -82,6 +82,8 @@ pub fn tree(cache: &CatalogCache) -> Vec<CatalogNode> {
                 system: false,
                 comment: catalog.comment.clone(),
                 children,
+                virtual_table: None,
+                shadow_of: None,
             }
         })
         .collect()
@@ -117,21 +119,40 @@ fn namespaces(cache: &CatalogCache, catalog: Option<&str>) -> Vec<CatalogNode> {
                 system: space.is_system,
                 comment: space.comment.clone(),
                 children,
+                virtual_table: None,
+                shadow_of: None,
             }
         })
         .collect()
 }
 
 fn relations(cache: &CatalogCache, parent: &CatalogPath) -> Vec<CatalogNode> {
-    cache
-        .relations(parent)
+    let listed: Vec<_> = cache.relations(parent).collect();
+    listed
+        .iter()
         .map(|relation| {
-            CatalogNode::relation(
+            let mut node = CatalogNode::relation(
                 relation.path(),
                 relation.name(),
                 relation.kind,
                 relation.comment.clone(),
-            )
+            );
+            node.shadow_of.clone_from(&relation.shadow_of);
+            node.virtual_table = relation.virtual_table.as_ref().map(|table| {
+                // Its shadow tables are siblings: the Data tab links to them
+                // when the module is missing and they are all that is readable.
+                let shadows = listed
+                    .iter()
+                    .filter(|other| other.shadow_of.as_deref() == Some(relation.name()))
+                    .map(|other| other.name().to_owned())
+                    .collect();
+                VirtualTableMark {
+                    module: table.module.clone(),
+                    available: table.available,
+                    shadows,
+                }
+            });
+            node
         })
         .collect()
 }
@@ -227,6 +248,54 @@ mod tests {
         let node = listed.first().expect("kept after invalidation");
         assert!(node.stale, "an invalidated level is not presented as fresh");
         assert_eq!(node.children.len(), 1, "its data stays until read again");
+    }
+
+    #[test]
+    fn a_virtual_table_crosses_with_its_module_and_its_shadow_tables() {
+        use oxyn_catalog::{RelationKind, RelationRef};
+
+        let mut cache = CatalogCache::new();
+        let main = CatalogPath::for_namespace(None, "main").expect("legal name");
+        cache.set_namespaces(
+            None,
+            vec![oxyn_catalog::NamespaceRef::new(CatalogPath::empty(), "main").expect("legal")],
+        );
+        let table = |name: &str| RelationRef::new(main.clone(), name, RelationKind::Table);
+        cache
+            .set_relations(
+                &main,
+                vec![
+                    table("chunks_vec")
+                        .expect("legal")
+                        .with_virtual_table("vec0", Some(false)),
+                    table("chunks_vec_info")
+                        .expect("legal")
+                        .with_shadow_of("chunks_vec"),
+                    table("chunks_vec_rowids")
+                        .expect("legal")
+                        .with_shadow_of("chunks_vec"),
+                    table("chunks").expect("legal"),
+                ],
+            )
+            .expect("a namespace");
+
+        let listed = tree(&cache);
+        let relations = &listed.first().expect("main").children;
+        let node = |name: &str| {
+            relations
+                .iter()
+                .find(|node| node.name == name)
+                .expect("listed")
+        };
+        let mark = node("chunks_vec").virtual_table.as_ref().expect("virtual");
+        assert_eq!(mark.module, "vec0");
+        assert_eq!(mark.available, Some(false));
+        assert_eq!(mark.shadows, ["chunks_vec_info", "chunks_vec_rowids"]);
+        assert_eq!(
+            node("chunks_vec_info").shadow_of.as_deref(),
+            Some("chunks_vec")
+        );
+        assert!(node("chunks").virtual_table.is_none() && node("chunks").shadow_of.is_none());
     }
 
     #[test]

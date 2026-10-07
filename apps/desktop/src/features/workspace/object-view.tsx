@@ -22,6 +22,7 @@ import {
 } from "@/components/oxyn/relation-definition"
 import { RelationIndexes } from "@/components/oxyn/relation-indexes"
 import { IncomingKeys, OutgoingKeys } from "@/components/oxyn/relation-keys"
+import { MissingModuleNotice } from "@/components/oxyn/missing-module-notice"
 import { operationOffer } from "@/components/oxyn/object-operations"
 import { RelationStructure } from "@/components/oxyn/relation-structure"
 import { RestoredObjectNotice } from "@/components/oxyn/restored-object-notice"
@@ -233,6 +234,10 @@ export function ObjectView({
 
   const data = facets.facets
   const state = preview.state
+  // A virtual table whose module this connection lacks: any read of it fails,
+  // and the failure is explained rather than shown raw (docs/UX-SPEC.md).
+  const missingModule =
+    node.virtualTable?.available === false ? node.virtualTable : null
   const result = state.status === "populated" ? state.result : null
   const shownResult =
     state.status === "populated"
@@ -395,6 +400,7 @@ export function ObjectView({
                 data?.detail.value?.fields.map((field) => field.name) ?? null
               }
               applied={preview.applied}
+              reshaped={preview.reshaped}
               status={preview.status}
               pagination={preview.pagination}
               loadingColumns={detailLoad.status === "loading"}
@@ -415,48 +421,62 @@ export function ObjectView({
               </Alert>
             ) : null}
             <div className="min-h-0 flex-1">
-              <ResultPanel
-                state={state}
-                initialHint="Refresh data reads the first rows of this object."
-                fetchPage={fetchPage}
-                onCancel={preview.cancel}
-                onRetry={preview.refresh}
-                context={{ connectionName: open.name, statement: null }}
-                footerNote="Preview · total row count not requested"
-                density={density}
-                gridMenu={gridMenu}
-                // Compact: the export sits in `Actions`, and the footer shows
-                // only a running export's progress and its Cancel.
-                footerActions={
-                  !compact || exporter.state.status === "exporting"
-                    ? exportMenu
-                    : null
-                }
-                compactActions={
-                  compact ? (
-                    <>
-                      <ExportSubmenu
-                        {...exportChoice}
-                        exporting={exporter.state.status === "exporting"}
-                        onExport={exporter.run}
-                      />
-                      <DropdownMenuItem
-                        disabled={!selected || !onInspectRow}
-                        onClick={onInspectRow}
-                      >
-                        <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
-                        Inspect row
-                      </DropdownMenuItem>
-                    </>
-                  ) : undefined
-                }
-                {...gridInspection({
-                  source,
-                  open,
-                  result,
-                  columns: state.status === "populated" ? state.columns : [],
-                })}
-              />
+              {missingModule && state.status === "error" ? (
+                <MissingModuleNotice
+                  module={missingModule.module}
+                  shadows={missingModule.shadows}
+                  message={state.message}
+                  onOpenShadow={
+                    onOpenRelated
+                      ? (name) =>
+                          onOpenRelated({ ...node.address, relation: name })
+                      : undefined
+                  }
+                />
+              ) : (
+                <ResultPanel
+                  state={state}
+                  initialHint="Refresh data reads the first rows of this object."
+                  fetchPage={fetchPage}
+                  onCancel={preview.cancel}
+                  onRetry={preview.refresh}
+                  context={{ connectionName: open.name, statement: null }}
+                  footerNote="Preview · total row count not requested"
+                  density={density}
+                  gridMenu={gridMenu}
+                  // Compact: the export sits in `Actions`, and the footer shows
+                  // only a running export's progress and its Cancel.
+                  footerActions={
+                    !compact || exporter.state.status === "exporting"
+                      ? exportMenu
+                      : null
+                  }
+                  compactActions={
+                    compact ? (
+                      <>
+                        <ExportSubmenu
+                          {...exportChoice}
+                          exporting={exporter.state.status === "exporting"}
+                          onExport={exporter.run}
+                        />
+                        <DropdownMenuItem
+                          disabled={!selected || !onInspectRow}
+                          onClick={onInspectRow}
+                        >
+                          <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+                          Inspect row
+                        </DropdownMenuItem>
+                      </>
+                    ) : undefined
+                  }
+                  {...gridInspection({
+                    source,
+                    open,
+                    result,
+                    columns: state.status === "populated" ? state.columns : [],
+                  })}
+                />
+              )}
             </div>
             <ValueInspectionDialog source={source} />
           </>

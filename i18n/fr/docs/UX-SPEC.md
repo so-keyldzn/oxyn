@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a4945ad2e4c4" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="7e28fd678b3a" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -692,6 +692,23 @@ démonstration ne remplace une réponse manquante. La recherche porte sur les
 objets déjà chargés et annonce cette portée. Les fonctionnalités non disponibles
 ne déclenchent pas de requête simulée.
 
+Une **table virtuelle** (SQLite `CREATE VIRTUAL TABLE … USING <module>`) n'est
+pas listée comme une table ordinaire : sa ligne porte `virtual · <module>`, le
+nom du module tel que le schéma le déclare. Quand la connexion ne fournit pas ce
+module, la marque devient `<module> not loaded`, dans la couleur d'avertissement,
+et son infobulle dit que ses lignes ne peuvent pas être lues ici. La
+disponibilité est demandée au moteur (`pragma_module_list`), pour tout module à
+l'identique : `fts5`, intégré, apparaît virtuel ; un module qu'ajoute une
+extension apparaît chargé le jour où Oxyn la charge, sans cas écrit pour lui.
+Quand le moteur ne peut pas le dire, la marque reste `virtual · <module>` et
+l'infobulle dit que la disponibilité est inconnue. Les tables où une table
+virtuelle range ses données — ses **tables fantômes** — portent `shadow`, et
+leur infobulle nomme la table virtuelle à laquelle elles appartiennent : le mot
+de SQLite quand le module est chargé, la convention de nommage
+`<table virtuelle>_` seulement quand il ne l'est pas. Le nom du module vient de
+la base : il s'affiche comme du texte et ne rejoint jamais une requête qu'Oxyn
+compose.
+
 Le formulaire propose uniquement les drivers enregistrés. Toute nouvelle
 connexion commence en `production` jusqu'à changement explicite. Pendant un
 changement de connexion, l'ancien workspace reste accessible ; une **nouvelle**
@@ -756,6 +773,16 @@ erreur. Le chargement, le résultat vide, l'échec et l'annulation sont distinct
 Sans tri demandé, l'ordre des lignes n'est pas garanti, et l'aperçu ne compte
 jamais la table entière.
 
+L'échec de lecture d'une table virtuelle dont la connexion ne charge pas le
+module est **expliqué**, pas montré brut : « This table is provided by the
+SQLite extension `<module>`, which Oxyn does not load. Its data is stored in … »,
+suivi de ses tables fantômes en liens qui les sélectionnent. Le message du
+driver reste à un clic, sous `Driver message`, mot pour mot. L'échec est
+permanent
+([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)) :
+rien ne propose de le relancer, et rien ne le retente. Tout autre échec de la
+même table s'affiche tel qu'il est venu.
+
 ### Filtrer, trier, parcourir
 
 La barre sous les actions de données porte un champ précédé de `WHERE` et un
@@ -779,6 +806,13 @@ L'aperçu peut donc désormais échouer pour une raison de syntaxe, ce qui n'ét
 pas le cas avant. Il ne peut en revanche rien écrire : le texte final est
 reclassifié, la session est tenue en lecture seule par le serveur, et la borne
 de lignes s'applique.
+
+Quand une lecture qui **changeait** le filtre, le tri ou la page est refusée, la
+ligne sous la barre dit, dans la couleur d'avertissement, que les lignes de la
+forme précédente n'ont pas été gardées et que le texte reste là où on peut le
+corriger. Une première lecture, ou le rafraîchissement de la forme en vigueur,
+qui échoue n'avait pas de forme précédente : cette ligne n'apparaît pas, et
+l'échec dessous dit tout ce qu'il y a à dire.
 
 `Sort` choisit des colonnes, pas une expression : c'est Oxyn qui compose cette
 partie de la requête, donc il en répond. Une colonne inconnue de la relation est
