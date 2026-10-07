@@ -123,7 +123,7 @@ export function AssistantPanel({
   }, [open.connection])
 
   // The conversation's agent decides which destinations stay usable; the
-  // SQL agent when it names none, as the backend reads it.
+  // SQL agent when it names none, as the backend reads it (ADR-0055).
   const runningAgent = agentOptions.data?.find(
     (agent) => agent.id === (state.thread.agentId ?? SQL_AGENT_ID)
   )

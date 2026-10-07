@@ -8,9 +8,6 @@ import {
   createRootRouteWithContext,
 } from "@tanstack/react-router"
 import { useStore } from "@tanstack/react-store"
-import { TanStackDevtools } from "@tanstack/react-devtools"
-import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools"
-import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 
 import { Toaster } from "@/components/ui/toast"
 import { ActionOverlays } from "@/features/actions/action-overlays"
@@ -64,6 +61,13 @@ const AI_SECTIONS = [
 ]
 
 const noSubscription = () => () => undefined
+
+// `import.meta.env.DEV` is a constant at build time: in a production build the
+// dynamic import is dead code, and the devtools — router state, query cache —
+// never reach the shipped bundle.
+const Devtools = import.meta.env.DEV
+  ? React.lazy(() => import("@/features/devtools/tanstack-devtools"))
+  : null
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext()
@@ -137,13 +141,11 @@ function RootComponent() {
           </Toaster>
         </PreferredNullText>
       </TooltipProvider>
-      <TanStackDevtools
-        config={{ position: "bottom-left", hideUntilHover: true }}
-        plugins={[
-          { name: "TanStack Router", render: <TanStackRouterDevtoolsPanel /> },
-          { name: "TanStack Query", render: <ReactQueryDevtoolsPanel /> },
-        ]}
-      />
+      {Devtools && (
+        <React.Suspense fallback={null}>
+          <Devtools />
+        </React.Suspense>
+      )}
     </QueryClientProvider>
   )
 }
