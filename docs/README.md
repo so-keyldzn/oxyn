@@ -85,6 +85,7 @@ To locate the boards and their states before implementation, see
 | [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn updates itself from the GitHub Releases, in Rust only, and installs on quit | proposed |
 | [0052](adr/0052-verified-tls-outside-local.md) | PostgreSQL and MySQL require verified TLS outside Local | accepted |
 | [0053](adr/0053-redact-sql-passwords-before-persistence.md) | SQL password literals are redacted before persistence; existing audit rows remain append-only | accepted |
+| [0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md) | The SQLite driver bundles sqlite-vec, registered only on connections where the user turned it on (off by default); no extension is loaded from a file | accepted |
 | [0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md) | The SQL agent is the default of a new conversation, whatever the display order | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.

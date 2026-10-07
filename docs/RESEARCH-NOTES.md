@@ -2329,3 +2329,27 @@ bound is Oxyn's, long enough for a model that thinks for minutes, and it is
 reset by any byte — a `ping` or a `:` comment counts. The same holds for
 external agents: nothing in this file records how often an adapter reports
 progress, and their bound is a product choice too.
+
+## sqlite-vec — checked on 2026-10-06
+
+Question: can the SQLite driver read a `CREATE VIRTUAL TABLE … USING vec0(…)`
+table without loading a native file at runtime? The answer grounds
+[ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md).
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `sqlite-vec` crate: latest stable **0.1.9**, published 2026-03-31; the 0.1.10 line is pre-release only (`0.1.10-alpha.4`, 2026-05-18) | [crates.io API](https://crates.io/api/v1/crates/sqlite-vec), [GitHub releases](https://github.com/asg017/sqlite-vec/releases) | 2026-10-06 |
+| License declared `MIT/Apache-2.0`; the repository ships `LICENSE-MIT` and `LICENSE-APACHE`. `cargo deny check licenses bans` passes with it | crate manifest; [repository](https://github.com/asg017/sqlite-vec); local run | 2026-10-06 |
+| Maintenance: not archived, last push 2026-05-18, 211 open issues, no published security advisory, no RustSec entry | [GitHub API](https://api.github.com/repos/asg017/sqlite-vec), [rustsec.org](https://rustsec.org/) | 2026-10-06 |
+| The crate has no dependency; its `build.rs` compiles `sqlite-vec.c` (320 026 bytes) with `cc` and the only define `SQLITE_CORE` — no SIMD flag, so the scalar code paths. `cc` 1.4.5 is already in `Cargo.lock` | crate source `build.rs` | 2026-10-06 |
+| With `SQLITE_CORE`, the extension calls `sqlite3_*` directly: they resolve, at link time, to the SQLite 3.50.2 that `libsqlite3-sys` 0.35.0 `bundled` compiles. The crate compiles against its own `sqlite3.h` 3.45.3, an older header: SQLite keeps its C interface backward compatible | crate source `sqlite-vec.c`, `sqlite3.h`; `libsqlite3-sys-0.35.0/sqlite3/sqlite3.h`; [SQLite compatibility](https://www.sqlite.org/capi3ref.html) | 2026-10-06 |
+| `src/lib.rs` declares `pub fn sqlite3_vec_init();` with no argument; the C definition is `int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi)`, and on failure it writes `*pzErrMsg` without checking for null | crate source `src/lib.rs`, `sqlite-vec.c` l. 10064–10145 | 2026-10-06 |
+| `sqlite3_vec_init` registers functions (`vec_f32`, `vec_distance_*`, `vec_to_json`…) and the modules `vec0` and `vec_each`. `vec_npy_file`, which opens a file by path, belongs to `sqlite3_vec_numpy_init`, a separate entry point | crate source `sqlite-vec.c` l. 10064–10165 | 2026-10-06 |
+| `rusqlite` 0.37.0 offers no safe registration of a statically linked extension: `Connection::handle` and `auto_extension::register_auto_extension` are `unsafe`; `load_extension` loads a file | installed source `rusqlite-0.37.0/src/lib.rs`, `src/auto_extension.rs` | 2026-10-06 |
+| A `float[N]` vector is stored and returned as a BLOB of N little-endian `f32` | observed by `drivers/oxyn-driver-sqlite/src/vector_tests.rs` | 2026-10-06 |
+| The release CI builds macOS on `macos-latest` (arm64) and Linux on `ubuntu-24.04` and `ubuntu-24.04-arm`; pull requests build Linux x86_64 only. The crate was built and tested locally on macOS arm64 | `.github/workflows/livraison.yml`, `qualite.yml`; local run | 2026-10-06 |
+| Release build of the crate alone: 8.2 s wall time on an Apple arm64 laptop; the static archive holds 96 246 bytes of `__TEXT` and 1 152 of `__DATA` | `cargo build -p sqlite-vec --release`, `size` on `libsqlite_vec0.a` | 2026-10-06 |
+| Stripped release `oxyn-desktop` (macOS arm64, `lto = "thin"`): 26 535 280 bytes with the extension, 26 450 800 without, i.e. +84 480 bytes; the relink after removing it took 3 min 30 s | two `cargo build --release -p oxyn-desktop` of the same tree | 2026-10-06 |
+| `assert()` stays live: `build.rs` does not define `NDEBUG`, the release archive imports `___assert_rtn`; `sqlite-vec.c` holds 42 `assert(` calls, some on sizes read from shadow tables (`vec0_metadata_filter_text`, l. 6155–6156) | `nm -u` on `libsqlite_vec0.a`; crate source | 2026-10-06 |
+| An interrupted `INSERT` into `vec0` can fail with `SQLITE_ERROR`, "Internal sqlite-vec error: Could not find latest chunk", instead of `SQLITE_INTERRUPT` | observed by `a_stopped_write_into_vec0_is_ambiguous` before the fix (one run in three) | 2026-10-06 |
+| sqlite-vec never calls `sqlite3_vtab_config`: `vec0` is marked neither `SQLITE_VTAB_INNOCUOUS` nor `SQLITE_VTAB_DIRECTONLY`. `libsqlite3-sys` 0.35.0's `build.rs` does not set `SQLITE_TRUSTED_SCHEMA`, so the engine default (on) applies | crate source; `libsqlite3-sys-0.35.0/build.rs` | 2026-10-06 |
