@@ -11,24 +11,38 @@ true positives with it.
 
 from __future__ import annotations
 
+import atexit
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
 REPO_ROOT = HOOKS.parents[1]
 
+# A temporary directory holding a symlink to the checkout: a redirection
+# through it looks temporary and writes into the repository.
+_LINK_DIR = Path(tempfile.mkdtemp(prefix="oxyn-hooks-"))
+atexit.register(shutil.rmtree, _LINK_DIR, ignore_errors=True)
+(_LINK_DIR / "checkout").symlink_to(REPO_ROOT, target_is_directory=True)
+
 
 def execute(script: str, event: dict) -> tuple[str | None, str]:
-    """Run a hook and return (decision, reason). `None` = let through."""
+    """Run a hook and return (decision, reason). `None` = let through.
+
+    `_project_dir` in the event, when present, replaces the project root the
+    hook sees: some cases need a checkout that lives somewhere else."""
+    event = dict(event)
+    project = event.pop("_project_dir", str(REPO_ROOT))
     r = subprocess.run(
         [sys.executable, str(HOOKS / script)],
         input=json.dumps(event),
         capture_output=True,
         text=True,
         timeout=30,
-        env={"CLAUDE_PROJECT_DIR": str(REPO_ROOT), "PATH": "/usr/bin:/bin:/usr/local/bin"},
+        env={"CLAUDE_PROJECT_DIR": project, "PATH": "/usr/bin:/bin:/usr/local/bin"},
     )
     if r.returncode != 0:
         return ("ERROR", r.stderr.strip()[:300])
@@ -177,6 +191,74 @@ CASES: list[tuple[str, str, dict, str | None]] = [
      bash("cargo test 2>/dev/null"), None),
     ("false positive: sed without -i", "bash_interdit.py", bash("sed 's/a/b/' src/lib.rs"), None),
     ("false positive: plain read", "bash_interdit.py", bash("cargo clippy --all-targets"), None),
+    ("redirection without a space", "bash_interdit.py", bash("echo x >src/lib.rs"), "ask"),
+    ("appending redirection", "bash_interdit.py", bash("echo x >> docs/VISION.md"), "ask"),
+    ("redirection after a subshell", "bash_interdit.py", bash("(echo a; echo b)>src/lib.rs"), "ask"),
+    ("redirection of both streams", "bash_interdit.py", bash("cargo test &> notes.log"), "ask"),
+    ("redirection to a variable path", "bash_interdit.py", bash('cargo test > "$OUT"'), "ask"),
+    ("redirection escaping the temporary root", "bash_interdit.py",
+     bash("echo x > /tmp/../Users/me/repo/src/lib.rs"), "ask"),
+    ("descriptor duplication into a file", "bash_interdit.py", bash("make >& build.log"), "ask"),
+    ("unreadable line with a redirection", "bash_interdit.py", bash("echo 'open > src/lib.rs"), "ask"),
+    ("temporary path through a symlink into the checkout", "bash_interdit.py",
+     bash(f"echo x > {_LINK_DIR}/checkout/src/lib.rs"), "ask"),
+    ("checkout itself under a temporary root", "bash_interdit.py",
+     {**bash("echo x > /tmp/oxyn-checkout/src/lib.rs"), "_project_dir": "/tmp/oxyn-checkout"}, "ask"),
+    ("redirection inside bash -c", "bash_interdit.py",
+     bash("bash -c 'echo x > crates/oxyn-core/src/lib.rs'"), "ask"),
+    ("redirection inside sh -lc behind env", "bash_interdit.py",
+     bash("env FOO=1 sh -lc \"echo x >> docs/VISION.md\""), "ask"),
+    ("redirection inside eval", "bash_interdit.py", bash("eval 'echo x > src/lib.rs'"), "ask"),
+    ("redirection behind a shell option with an argument", "bash_interdit.py",
+     bash("bash -O extglob -c 'echo x > src/lib.rs'"), "ask"),
+    ("redirection in a quoted command substitution", "bash_interdit.py",
+     bash('echo "$(printf x > src/lib.rs)"'), "ask"),
+    ("redirection in backticks", "bash_interdit.py", bash("echo `printf x > src/lib.rs`"), "ask"),
+    ("false positive: substitution text in single quotes", "bash_interdit.py",
+     bash("grep -n '$(cat > x)' docs/VISION.md"), None),
+    ("false positive: substitution writing to a scratchpad", "bash_interdit.py",
+     bash('echo "$(make 2>&1 > /tmp/s/make.log)"'), None),
+    ("redirection behind an expanded shell name", "bash_interdit.py",
+     bash("\"$SHELL\" -c 'echo x > src/lib.rs'"), "ask"),
+    ("redirection behind an unknown program's -c", "bash_interdit.py",
+     bash("/opt/homebrew/bin/fish -c 'echo x > src/lib.rs'"), "ask"),
+    ("accepted cost: quoted redirection text after any -c", "bash_interdit.py",
+     bash("grep -c 'a > b' docs/VISION.md"), "ask"),
+    ("redirection split across eval arguments", "bash_interdit.py",
+     bash("eval 'printf x >' 'src/lib.rs'"), "ask"),
+    ("false positive: rm as a redirection target", "bash_interdit.py", bash("printf x > /tmp/rm"), None),
+    ("false positive: rm as an argument", "bash_interdit.py", bash("echo rm > /tmp/s/log"), None),
+    ("redirection in a here-string fed to a shell", "bash_interdit.py",
+     bash("bash <<< 'echo x > src/lib.rs'"), "ask"),
+    ("symlink created inside a compound command", "bash_interdit.py",
+     bash("if true; then ln -s \"$PWD\" /tmp/oxyn-link-z; fi; echo x > /tmp/oxyn-link-z/file"), "ask"),
+    ("false positive: here-string fed to grep", "bash_interdit.py",
+     bash("grep -c x <<< 'a > b'"), None),
+    ("extended-glob temporary target", "bash_interdit.py",
+     bash("bash -O extglob -c 'echo x > /tmp/@(checkout)/src/lib.rs'"), "ask"),
+    ("symlink created earlier on the line", "bash_interdit.py",
+     bash(f"ln -s {REPO_ROOT} /tmp/oxyn-link-x; echo x > /tmp/oxyn-link-x/src/lib.rs"), "ask"),
+    ("symlink created before a nested shell", "bash_interdit.py",
+     bash(f"ln -s {REPO_ROOT} /tmp/oxyn-link-y && bash -c 'echo x > /tmp/oxyn-link-y/f'"), "ask"),
+    ("false positive: device file next to a path change", "bash_interdit.py",
+     bash("mkdir -p /tmp/s && cargo test 2>/dev/null"), None),
+    ("globbed temporary target", "bash_interdit.py", bash("echo x > /tmp/*/src/lib.rs"), "ask"),
+    ("quoted temporary target with a variable", "bash_interdit.py", bash('echo x > "/tmp/$D/x"'), "ask"),
+    ("false positive: quoted > alone", "bash_interdit.py", bash("grep '>' docs/VISION.md"), None),
+    ("false positive: double-quoted > alone", "bash_interdit.py", bash('grep -c ">" docs/VISION.md'), None),
+    ("false positive: bash -c into a scratchpad", "bash_interdit.py",
+     bash("bash -c 'cargo test > /tmp/s/test.log 2>&1'"), None),
+    ("false positive: quoted temporary target", "bash_interdit.py", bash('make > "/tmp/s/make.log"'), None),
+    ("false positive: 2>&1", "bash_interdit.py", bash("cargo test 2>&1 | tail -5"), None),
+    ("false positive: >&2", "bash_interdit.py", bash("echo failed >&2"), None),
+    ("false positive: > inside quotes", "bash_interdit.py",
+     bash("awk 'NR>=325 && NR<=350' a.rs; grep -E \"^error|-->\" b.log"), None),
+    ("false positive: log in a scratchpad", "bash_interdit.py",
+     bash("make rust > /private/tmp/claude-502/s/scratchpad/rust.log 2>&1; tail -4 /private/tmp/claude-502/s/scratchpad/rust.log"), None),
+    ("false positive: background test into /tmp", "bash_interdit.py",
+     bash("(cargo test -p oxyn-store > /tmp/store.log 2>&1; echo rc=$? >> /tmp/store.log) &"), None),
+    ("false positive: TMPDIR on macOS", "bash_interdit.py",
+     bash("pnpm audit > /var/folders/j2/x/T/audit.txt"), None),
 
     # ---- message_commit -----------------------------------------------------
     ("compliant commit", "message_commit.py", bash('git commit -m "feat(driver-postgres): add cancellation"'), None),

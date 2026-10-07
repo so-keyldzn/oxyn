@@ -55,6 +55,32 @@ For the same reason the hook **unfolds launchers** (`uv run`, `npx`, `xargs`,
 `timeout`…): without it, `timeout 30 git push --force` gets through. This exact
 case is a defect found by the tests, not in review — hence the next rule.
 
+Redirections are read on the shell's **operators**, not on the raw line: a `>`
+inside quotes (`awk 'NR>=3'`) is text, `2>&1` and `>&2` duplicate a
+descriptor, and a target under `/dev/null` or a temporary root (`/tmp/`,
+`/var/folders/`, where a session's scratchpad lives) is no repository file —
+none of them asks. Quotes are kept while reading, so `grep '>' file` is text
+too. The target is judged once resolved: a symlink under `/tmp/` that leads
+into the checkout, or a checkout that itself lives under a temporary root,
+still asks, and so does a target the shell expands afterwards (`*`, `?`, `[`,
+`{`, `~`, `$`). Text the shell runs again — the arguments of `bash`, `sh` or
+`eval` or of a command whose name the shell expands (`"$SHELL"`), the string
+after any `-c`-style option, a `$(…)` or backticks outside single quotes — is
+read the same way,
+deliberately wider than strictly needed: one string read too many costs a
+question, never a write let through. Extended globs (`@(…)`, `+(…)`, `!(…)`)
+count as later expansion, and a line that also runs `ln`, `mv`, `cp`, `mkdir`,
+`rm`… exempts nothing but the device files, since it can reshape a path before
+its redirection runs. A relative path, a variable or a path that `..` takes
+out of those roots still asks. The raw-line test it replaced asked on every
+test command that kept a log, so approvals became a reflex — the opposite of a
+safeguard.
+
+What this check is, and is not: a guard against the **accidental** shell write
+that skips Write and Edit. It is not a sandbox against a session set on getting
+around it — the shell is too rich for a parser to close every path; the
+invariants that must hold against that live in the code and in `make qualite`.
+
 ## Adding a pattern
 
 A pattern added without its false positive in `test_hooks.py` will be refused in

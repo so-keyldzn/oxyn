@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/hooks/README.md" sha256="157aca26a088" -->
+<!-- oxyn-translation source=".claude/hooks/README.md" sha256="4e5d43988565" -->
 
 > Traduction française de [.claude/hooks/README.md](../../../../.claude/hooks/README.md). **La version anglaise fait foi.**
 
@@ -60,6 +60,36 @@ C'est pour la même raison que le hook **déplie les lanceurs** (`uv run`, `npx`
 `xargs`, `timeout`…) : sans cela, `timeout 30 git push --force` passe. Ce cas
 précis est un défaut qui a été trouvé par les tests, pas à la relecture — d'où
 la règle suivante.
+
+Les redirections sont lues sur les **opérateurs** du shell, pas sur la ligne
+brute : un `>` entre guillemets (`awk 'NR>=3'`) est du texte, `2>&1` et `>&2`
+dupliquent un descripteur, et une cible sous `/dev/null` ou sous une racine
+temporaire (`/tmp/`, `/var/folders/`, où se trouve le scratchpad d'une
+session) n'est pas un fichier du dépôt — aucune ne demande de confirmation. Les
+guillemets sont conservés à la lecture : `grep '>' fichier` est donc lui aussi
+du texte. La cible est jugée une fois résolue : un lien symbolique sous `/tmp/`
+qui mène dans le dépôt, ou un dépôt qui se trouve lui-même sous une racine
+temporaire, demande toujours, de même qu'une cible que le shell développe
+ensuite (`*`, `?`, `[`, `{`, `~`, `$`). Le texte que le shell exécute à
+nouveau — les arguments de `bash`, `sh`, `eval` ou d'une commande dont le
+shell développe le nom (`"$SHELL"`), la chaîne qui suit toute option de type
+`-c`, un `$(…)` ou des apostrophes inverses hors guillemets simples — est lu de
+la même façon,
+volontairement plus largement que le strict nécessaire : une chaîne lue en trop
+coûte une question, jamais une écriture laissée passer. Les globs étendus
+(`@(…)`, `+(…)`, `!(…)`) comptent comme un développement ultérieur, et une ligne
+qui lance aussi `ln`, `mv`, `cp`, `mkdir`, `rm`… n'exempte plus que les fichiers
+de périphérique, puisqu'elle peut remodeler un chemin avant que sa redirection
+s'exécute. Un chemin relatif, une variable ou un chemin que `..` fait sortir
+de ces racines demande toujours. Le test sur la ligne brute qu'il remplace
+demandait à chaque commande de test qui gardait un journal : approuver devenait
+un réflexe, l'inverse d'un garde-fou.
+
+Ce que cette vérification est, et n'est pas : un garde-fou contre l'écriture
+**accidentelle** par le shell qui contourne Write et Edit. Ce n'est pas un bac à
+sable contre une session décidée à la contourner — le shell est trop riche pour
+qu'un analyseur ferme tous les chemins ; les invariants qui doivent tenir
+contre cela vivent dans le code et dans `make qualite`.
 
 ## Ajouter un motif
 
