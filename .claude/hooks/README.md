@@ -59,7 +59,9 @@ Redirections are read on the shell's **operators**, not on the raw line: a `>`
 inside quotes (`awk 'NR>=3'`) is text, `2>&1` and `>&2` duplicate a
 descriptor, and a target under `/dev/null` or a temporary root (`/tmp/`,
 `/var/folders/`, where a session's scratchpad lives) is no repository file —
-none of them asks. A relative path, a variable or a path that `..` takes out of
+none of them asks. The target is judged once resolved: a symlink under `/tmp/`
+that leads into the checkout, or a checkout that itself lives under a temporary
+root, still asks. A relative path, a variable or a path that `..` takes out of
 those roots still asks. The raw-line test it replaced asked on every test
 command that kept a log, so approvals became a reflex — the opposite of a
 safeguard.

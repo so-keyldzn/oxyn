@@ -76,15 +76,28 @@ def _split(command: str) -> list[list[str]]:
     return sub_commands
 
 
+def _inside(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
 def _harmless_target(target: str) -> bool:
     """A redirection target that cannot be a repository file. A variable or a
-    relative path could be one: it is not harmless."""
+    relative path could be one: it is not harmless.
+
+    Judged on the resolved path, not the written one: a symlink under `/tmp/`
+    can lead into the checkout, and a checkout can itself live under a
+    temporary root — a file of it is never harmless."""
     if target in OUTSIDE_REPOSITORY:
         return True
     if not target.startswith("/") or "$" in target or "`" in target:
         return False
-    normalized = os.path.normpath(target)
-    return any(normalized.startswith(root) for root in TEMPORARY_ROOTS)
+    resolved = os.path.realpath(target)
+    if _inside(resolved, os.path.realpath(p.project_root())):
+        return False
+    return any(
+        _inside(resolved, root) or _inside(resolved, os.path.realpath(root))
+        for root in TEMPORARY_ROOTS
+    )
 
 
 def _writing_redirection(command: str) -> bool:

@@ -11,24 +11,38 @@ true positives with it.
 
 from __future__ import annotations
 
+import atexit
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
 REPO_ROOT = HOOKS.parents[1]
 
+# A temporary directory holding a symlink to the checkout: a redirection
+# through it looks temporary and writes into the repository.
+_LINK_DIR = Path(tempfile.mkdtemp(prefix="oxyn-hooks-"))
+atexit.register(shutil.rmtree, _LINK_DIR, ignore_errors=True)
+(_LINK_DIR / "checkout").symlink_to(REPO_ROOT, target_is_directory=True)
+
 
 def execute(script: str, event: dict) -> tuple[str | None, str]:
-    """Run a hook and return (decision, reason). `None` = let through."""
+    """Run a hook and return (decision, reason). `None` = let through.
+
+    `_project_dir` in the event, when present, replaces the project root the
+    hook sees: some cases need a checkout that lives somewhere else."""
+    event = dict(event)
+    project = event.pop("_project_dir", str(REPO_ROOT))
     r = subprocess.run(
         [sys.executable, str(HOOKS / script)],
         input=json.dumps(event),
         capture_output=True,
         text=True,
         timeout=30,
-        env={"CLAUDE_PROJECT_DIR": str(REPO_ROOT), "PATH": "/usr/bin:/bin:/usr/local/bin"},
+        env={"CLAUDE_PROJECT_DIR": project, "PATH": "/usr/bin:/bin:/usr/local/bin"},
     )
     if r.returncode != 0:
         return ("ERROR", r.stderr.strip()[:300])
@@ -186,6 +200,10 @@ CASES: list[tuple[str, str, dict, str | None]] = [
      bash("echo x > /tmp/../Users/me/repo/src/lib.rs"), "ask"),
     ("descriptor duplication into a file", "bash_interdit.py", bash("make >& build.log"), "ask"),
     ("unreadable line with a redirection", "bash_interdit.py", bash("echo 'open > src/lib.rs"), "ask"),
+    ("temporary path through a symlink into the checkout", "bash_interdit.py",
+     bash(f"echo x > {_LINK_DIR}/checkout/src/lib.rs"), "ask"),
+    ("checkout itself under a temporary root", "bash_interdit.py",
+     {**bash("echo x > /tmp/oxyn-checkout/src/lib.rs"), "_project_dir": "/tmp/oxyn-checkout"}, "ask"),
     ("false positive: 2>&1", "bash_interdit.py", bash("cargo test 2>&1 | tail -5"), None),
     ("false positive: >&2", "bash_interdit.py", bash("echo failed >&2"), None),
     ("false positive: > inside quotes", "bash_interdit.py",
