@@ -15,6 +15,17 @@ import type { CatalogNode } from "@/lib/ipc/types"
 const SQLITE_VEC_MODULE = "vec0"
 
 /**
+ * Whether two module names are the same module. SQLite folds ASCII case only
+ * (`USING VEC0` is `vec0`); a Unicode fold would match names the engine keeps
+ * apart. Pure, so it is tested without a DOM.
+ */
+export function sameModule(a: string, b: string) {
+  const fold = (name: string) =>
+    name.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+  return fold(a) === fold(b)
+}
+
+/**
  * What the failed read was about, as the notice must say it.
  *
  * `virtualTable`: the selected object **is** the virtual table backed by the
@@ -35,7 +46,7 @@ export function missingModuleSubject(
   module: string
 ): MissingModuleSubject {
   const table = node.virtualTable
-  if (table && table.module.toLowerCase() === module.toLowerCase())
+  if (table && sameModule(table.module, module))
     return { type: "virtualTable", shadows: table.shadows }
   return { type: "dependent", noun: node.kind === "view" ? "view" : "object" }
 }
@@ -91,7 +102,7 @@ export function MissingModuleNotice({
               fails.
             </p>
           )}
-          {module === SQLITE_VEC_MODULE ? (
+          {sameModule(module, SQLITE_VEC_MODULE) ? (
             // The one extension Oxyn ships, off unless the connection opts in:
             // loading code a database file asks for is a trust decision.
             <p>

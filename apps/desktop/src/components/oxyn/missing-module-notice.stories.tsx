@@ -79,6 +79,17 @@ export const WithoutShadowTables: Story = {
 }
 
 /**
+ * `CREATE VIRTUAL TABLE … USING VEC0(…)`: SQLite folds ASCII case, so this is
+ * vec0, and the way to sqlite-vec is said all the same.
+ */
+export const UpperCaseVec0: Story = {
+  args: { module: "VEC0", message: "no such module: VEC0" },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText(/enable sqlite-vec/)).toBeVisible()
+  },
+}
+
+/**
  * A plain view whose definition reads `chunks_vec`: SQLite answers the same
  * `no such module`, but the view is not the virtual table — neither provided
  * by the extension nor stored in its shadow tables.

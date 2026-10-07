@@ -6,6 +6,8 @@
 //! expansion — so a database with fifty thousand relations does not ship them
 //! all to the webview on connect.
 
+use std::collections::HashMap;
+
 use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope};
 use oxyn_core::{Capabilities, CatalogRefreshScope, Command, ConnectionId};
 
@@ -128,6 +130,18 @@ fn namespaces(cache: &CatalogCache, catalog: Option<&str>) -> Vec<CatalogNode> {
 
 fn relations(cache: &CatalogCache, parent: &CatalogPath) -> Vec<CatalogNode> {
     let listed: Vec<_> = cache.relations(parent).collect();
+    // Shadow tables grouped by owner in one pass: looking them up per virtual
+    // table would scan every sibling each time, and a level holds up to
+    // 50,000 objects under the 50 ms expansion budget (PERFORMANCE.md).
+    let mut shadows_of: HashMap<&str, Vec<String>> = HashMap::new();
+    for relation in &listed {
+        if let Some(owner) = relation.shadow_of.as_deref() {
+            shadows_of
+                .entry(owner)
+                .or_default()
+                .push(relation.name().to_owned());
+        }
+    }
     listed
         .iter()
         .map(|relation| {
@@ -141,15 +155,10 @@ fn relations(cache: &CatalogCache, parent: &CatalogPath) -> Vec<CatalogNode> {
             node.virtual_table = relation.virtual_table.as_ref().map(|table| {
                 // Its shadow tables are siblings: the Data tab links to them
                 // when the module is missing and they are all that is readable.
-                let shadows = listed
-                    .iter()
-                    .filter(|other| other.shadow_of.as_deref() == Some(relation.name()))
-                    .map(|other| other.name().to_owned())
-                    .collect();
                 VirtualTableMark {
                     module: table.module.clone(),
                     available: table.available,
-                    shadows,
+                    shadows: shadows_of.get(relation.name()).cloned().unwrap_or_default(),
                 }
             });
             node
@@ -296,6 +305,55 @@ mod tests {
             Some("chunks_vec")
         );
         assert!(node("chunks").virtual_table.is_none() && node("chunks").shadow_of.is_none());
+    }
+
+    #[test]
+    fn shadow_tables_are_grouped_in_one_pass_at_the_object_bound() {
+        use oxyn_catalog::{RelationKind, RelationRef};
+
+        // 25,000 virtual tables and their 25,000 shadow tables: the 50,000
+        // objects a level may hold. One scan of the siblings per virtual
+        // table is 1.25 billion comparisons, seconds; grouped once, a blink.
+        const PAIRS: usize = 25_000;
+        let mut cache = CatalogCache::new();
+        let main = CatalogPath::for_namespace(None, "main").expect("legal name");
+        cache.set_namespaces(
+            None,
+            vec![oxyn_catalog::NamespaceRef::new(CatalogPath::empty(), "main").expect("legal")],
+        );
+        let mut listed = Vec::with_capacity(PAIRS * 2);
+        for index in 0..PAIRS {
+            let owner = format!("v{index:05}");
+            listed.push(
+                RelationRef::new(main.clone(), owner.as_str(), RelationKind::Table)
+                    .expect("legal")
+                    .with_virtual_table("fts5", Some(true)),
+            );
+            listed.push(
+                RelationRef::new(main.clone(), format!("{owner}_data"), RelationKind::Table)
+                    .expect("legal")
+                    .with_shadow_of(owner),
+            );
+        }
+        cache.set_relations(&main, listed).expect("a namespace");
+
+        let started = std::time::Instant::now();
+        let built = tree(&cache);
+        let elapsed = started.elapsed();
+
+        let relations = &built.first().expect("main").children;
+        assert_eq!(relations.len(), PAIRS * 2);
+        for node in relations {
+            if let Some(mark) = &node.virtual_table {
+                assert_eq!(mark.shadows, [format!("{}_data", node.name)]);
+            }
+        }
+        // Generous on purpose — a debug build on a loaded CI runner — yet far
+        // under what the quadratic scan takes at this size.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "building the level took {elapsed:?}"
+        );
     }
 
     #[test]
