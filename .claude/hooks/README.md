@@ -64,7 +64,9 @@ too. The target is judged once resolved: a symlink under `/tmp/` that leads
 into the checkout, or a checkout that itself lives under a temporary root,
 still asks, and so does a target the shell expands afterwards (`*`, `?`, `[`,
 `{`, `~`, `$`). Text the shell runs again — the arguments of `bash`, `sh` or
-`eval`, a `$(…)` or backticks outside single quotes — is read the same way,
+`eval` or of a command whose name the shell expands (`"$SHELL"`), the string
+after any `-c`-style option, a `$(…)` or backticks outside single quotes — is
+read the same way,
 deliberately wider than strictly needed: one string read too many costs a
 question, never a write let through. Extended globs (`@(…)`, `+(…)`, `!(…)`)
 count as later expansion, and a line that also runs `ln`, `mv`, `cp`, `mkdir`,

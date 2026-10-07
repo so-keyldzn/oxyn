@@ -127,21 +127,33 @@ def _nested_programs(tokens: list[str]) -> list[str]:
 
     Deliberately wider than where `-c` sits: shell options can take arguments
     (`bash -O extglob -c '…'`), and reading one string too many costs at most
-    a question, never a write let through."""
+    a question, never a write let through. A command whose name the shell
+    expands (`"$SHELL" -c '…'`) may be a shell, so it counts as one, and the
+    string after any `-c`-style option is read whatever the program."""
     programs = []
     runner = False
+    command_position = True
+    after_c = False
     for token in tokens:
         if set(token) <= PUNCTUATION:
             runner = False
+            command_position = True
+            after_c = False
             continue
         unquoted = _unquote(token)
-        if Path(unquoted).name in SHELLS | {"eval"}:
-            runner = True
+        if command_position and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", unquoted):
             continue
-        if runner and not token.startswith("-"):
+        dynamic_name = command_position and ("$" in token or "`" in token)
+        if command_position:
+            command_position = False
+            if Path(unquoted).name in SHELLS | {"eval"} or dynamic_name:
+                runner = True
+                continue
+        if (runner or after_c) and not token.startswith("-"):
             programs.append(unquoted)
         elif not token.startswith("'") and ("$(" in token or "`" in token):
             programs.append(unquoted)
+        after_c = bool(re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", token))
     return programs
 
 
@@ -187,6 +199,10 @@ def _writing_redirection(command: str, depth: int = 0, reshaped: bool = False) -
         if not token or not set(token) <= PUNCTUATION or ">" not in token:
             continue
         target = tokens[i + 1] if i + 1 < len(tokens) else ""
+        if not target:
+            # A `>` with nothing after it is a shell syntax error, not a
+            # write: the text `">"` read again as a program ends here.
+            continue
         if token.endswith(">&"):
             # `>&2`, `2>&1`: a descriptor, not a file. `>& file` is a file.
             if not target.isdigit() and target != "-" and not harmless(target):

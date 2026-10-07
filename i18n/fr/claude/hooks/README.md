@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/hooks/README.md" sha256="198f3583cea1" -->
+<!-- oxyn-translation source=".claude/hooks/README.md" sha256="4e5d43988565" -->
 
 > Traduction française de [.claude/hooks/README.md](../../../../.claude/hooks/README.md). **La version anglaise fait foi.**
 
@@ -71,8 +71,10 @@ du texte. La cible est jugée une fois résolue : un lien symbolique sous `/tmp/
 qui mène dans le dépôt, ou un dépôt qui se trouve lui-même sous une racine
 temporaire, demande toujours, de même qu'une cible que le shell développe
 ensuite (`*`, `?`, `[`, `{`, `~`, `$`). Le texte que le shell exécute à
-nouveau — les arguments de `bash`, `sh` ou `eval`, un `$(…)` ou des
-apostrophes inverses hors guillemets simples — est lu de la même façon,
+nouveau — les arguments de `bash`, `sh`, `eval` ou d'une commande dont le
+shell développe le nom (`"$SHELL"`), la chaîne qui suit toute option de type
+`-c`, un `$(…)` ou des apostrophes inverses hors guillemets simples — est lu de
+la même façon,
 volontairement plus largement que le strict nécessaire : une chaîne lue en trop
 coûte une question, jamais une écriture laissée passer. Les globs étendus
 (`@(…)`, `+(…)`, `!(…)`) comptent comme un développement ultérieur, et une ligne
