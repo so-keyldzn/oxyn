@@ -10,6 +10,9 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 
+/** The module sqlite-vec registers, which a connection can opt into. */
+const SQLITE_VEC_MODULE = "vec0"
+
 /**
  * Why a virtual table's rows cannot be read: the extension providing it is not
  * loaded. Shown in place of the raw failure, which stays one click away — the
@@ -74,6 +77,14 @@ export function MissingModuleNotice({
               "No table storing its data is listed beside it."
             )}
           </p>
+          {module === SQLITE_VEC_MODULE ? (
+            // The one extension Oxyn ships, off unless the connection opts in:
+            // loading code a database file asks for is a trust decision.
+            <p>
+              You can enable sqlite-vec for this connection in its settings, if
+              you trust this file.
+            </p>
+          ) : null}
           <p className="text-xs">
             Running it again as is will fail the same way.
           </p>

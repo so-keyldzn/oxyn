@@ -28,12 +28,16 @@ use serde::{Deserialize, Serialize};
 pub struct IpcError {
     pub message: String,
     pub retryable: bool,
+    /// The engine module the failed statement needed, when that is why it
+    /// failed: the front explains it rather than reading the message.
+    pub missing_module: Option<String>,
 }
 
 impl From<OxynError> for IpcError {
     fn from(error: OxynError) -> Self {
         Self {
             retryable: error.is_retryable(),
+            missing_module: error.missing_module().map(str::to_owned),
             message: error.to_string(),
         }
     }
@@ -47,6 +51,7 @@ impl From<anyhow::Error> for IpcError {
         Self {
             message: format!("{error:#}"),
             retryable: false,
+            missing_module: None,
         }
     }
 }
@@ -57,6 +62,7 @@ impl IpcError {
         Self {
             message: message.into(),
             retryable: false,
+            missing_module: None,
         }
     }
 }

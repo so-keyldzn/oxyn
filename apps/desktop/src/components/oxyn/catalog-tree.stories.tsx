@@ -6,7 +6,7 @@ import { CatalogTree, addressKey } from "./catalog-tree"
 import { Button } from "@/components/ui/button"
 import { catalog } from "./fixtures"
 import { centerOf, pressAndMove, release } from "./pointer-drag-fixtures"
-import { virtualCatalog } from "./virtual-table-fixtures"
+import { missingModuleTable, virtualCatalog } from "./virtual-table-fixtures"
 import {
   HOSTILE,
   hostileAddress,
@@ -259,6 +259,38 @@ export const SearchHits: Story = {
     await userEvent.click(within(hits).getByText(HOSTILE))
     await expect(args.onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ address: hostileAddress })
+    )
+  },
+}
+
+/** A hit opens the loaded node: a virtual table keeps its module. */
+export const SearchHitOfAVirtualTable: Story = {
+  args: {
+    nodes: virtualCatalog,
+    search: {
+      hits: [
+        {
+          address: missingModuleTable.address,
+          name: missingModuleTable.name,
+          kind: "table",
+          holdsRecords: true,
+          matched: "relationName",
+          matchedFields: [],
+        },
+      ],
+      searching: false,
+      onQuery: fn(),
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await userEvent.type(canvas.getByLabelText("Filter loaded objects"), "vec")
+    const hits = await canvas.findByRole("list", { name: "Matching objects" })
+    await userEvent.click(within(hits).getByText("chunks_vec"))
+    await expect(args.onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: missingModuleTable.address,
+        virtualTable: missingModuleTable.virtualTable,
+      })
     )
   },
 }

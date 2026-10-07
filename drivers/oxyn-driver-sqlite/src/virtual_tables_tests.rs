@@ -191,5 +191,26 @@ async fn a_missing_module_is_reported_unavailable_and_its_tables_attributed() {
         failure.to_string().contains("no such module: vec0"),
         "the engine's words are kept: {failure}"
     );
+    assert_eq!(
+        failure.missing_module(),
+        Some("vec0"),
+        "the module travels as data, not as text to parse"
+    );
+
+    // The structure read fails the same way, with the same data.
+    let structure = session
+        .catalog()
+        .describe_relation(&relation, &CancelToken::new())
+        .await;
+    let Err(structure) = structure else {
+        panic!("describing without the module fails");
+    };
+    assert_eq!(structure.missing_module(), Some("vec0"));
+
+    // Any other failure on the same connection carries no module.
+    let other = run(&*session, "SELECT * FROM no_such_table")
+        .await
+        .expect_err("a missing table fails");
+    assert_eq!(other.missing_module(), None);
     session.close().await.expect("close");
 }

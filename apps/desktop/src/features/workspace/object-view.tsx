@@ -234,10 +234,21 @@ export function ObjectView({
 
   const data = facets.facets
   const state = preview.state
-  // A virtual table whose module this connection lacks: any read of it fails,
-  // and the failure is explained rather than shown raw (docs/UX-SPEC.md).
-  const missingModule =
-    node.virtualTable?.available === false ? node.virtualTable : null
+  // A read that failed because the connection lacks the engine module the
+  // table needs: explained rather than shown raw (docs/UX-SPEC.md). Only that
+  // failure, as the backend names it — any other is shown as it came.
+  const explainMissing = (module: string, message: string) => (
+    <MissingModuleNotice
+      module={module}
+      shadows={node.virtualTable?.shadows ?? []}
+      message={message}
+      onOpenShadow={
+        onOpenRelated
+          ? (name) => onOpenRelated({ ...node.address, relation: name })
+          : undefined
+      }
+    />
+  )
   const result = state.status === "populated" ? state.result : null
   const shownResult =
     state.status === "populated"
@@ -421,18 +432,8 @@ export function ObjectView({
               </Alert>
             ) : null}
             <div className="min-h-0 flex-1">
-              {missingModule && state.status === "error" ? (
-                <MissingModuleNotice
-                  module={missingModule.module}
-                  shadows={missingModule.shadows}
-                  message={state.message}
-                  onOpenShadow={
-                    onOpenRelated
-                      ? (name) =>
-                          onOpenRelated({ ...node.address, relation: name })
-                      : undefined
-                  }
-                />
+              {state.status === "error" && state.missingModule ? (
+                explainMissing(state.missingModule, state.message)
               ) : (
                 <ResultPanel
                   state={state}
@@ -482,39 +483,44 @@ export function ObjectView({
           </>
         ) : null,
 
-        structure: data ? (
-          <FacetFrame
-            label="columns"
-            freshness={data.detail.freshness}
-            load={detailLoad}
-            unsupported={null}
-            hasValue={data.detail.value !== null}
-            empty={data.detail.value?.fields.length === 0}
-            emptyText="No columns reported for this object."
-            onRefresh={() => void facets.refresh("detail")}
-            onCancel={() => facets.cancel("detail")}
-          >
+        structure:
+          detailLoad.status === "error" && detailLoad.missingModule ? (
+            explainMissing(detailLoad.missingModule, detailLoad.message)
+          ) : data ? (
+            <FacetFrame
+              label="columns"
+              freshness={data.detail.freshness}
+              load={detailLoad}
+              unsupported={null}
+              hasValue={data.detail.value !== null}
+              empty={data.detail.value?.fields.length === 0}
+              emptyText="No columns reported for this object."
+              onRefresh={() => void facets.refresh("detail")}
+              onCancel={() => facets.cancel("detail")}
+            >
+              <RelationStructure
+                detail={data.detail.value}
+                renameColumn={{
+                  offer: operationOffer("rename", node, open.capabilities),
+                  onRename: (column) =>
+                    columnOperation.start(node, "rename", column),
+                }}
+              />
+              {/* Modal while open: no tab change can unmount it mid-review. */}
+              {columnOperation.element}
+            </FacetFrame>
+          ) : (
             <RelationStructure
-              detail={data.detail.value}
-              renameColumn={{
-                offer: operationOffer("rename", node, open.capabilities),
-                onRename: (column) =>
-                  columnOperation.start(node, "rename", column),
-              }}
+              detail={undefined}
+              error={
+                facets.error
+                  ? { message: facets.error, retryable: false }
+                  : null
+              }
+              onRefresh={() => void facets.refresh("detail")}
+              refreshing={detailLoad.status === "loading"}
             />
-            {/* Modal while open: no tab change can unmount it mid-review. */}
-            {columnOperation.element}
-          </FacetFrame>
-        ) : (
-          <RelationStructure
-            detail={undefined}
-            error={
-              facets.error ? { message: facets.error, retryable: false } : null
-            }
-            onRefresh={() => void facets.refresh("detail")}
-            refreshing={detailLoad.status === "loading"}
-          />
-        ),
+          ),
 
         indexes: data ? (
           <FacetFrame

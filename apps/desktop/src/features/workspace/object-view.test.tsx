@@ -13,10 +13,24 @@ const previewVisible = vi.hoisted(() => vi.fn())
 const ensure = vi.hoisted(() => vi.fn())
 type MockedPreviewState =
   | { status: "initial" }
-  | { status: "error"; message: string; retryable: boolean }
+  | {
+      status: "error"
+      message: string
+      retryable: boolean
+      missingModule?: string | null
+    }
 const previewState = vi.hoisted(() => {
   const holder: { current: MockedPreviewState } = {
     current: { status: "initial" },
+  }
+  return holder
+})
+type MockedDetailLoad =
+  | { status: "idle" }
+  | { status: "error"; message: string; missingModule?: string | null }
+const detailLoad = vi.hoisted(() => {
+  const holder: { current: MockedDetailLoad } = {
+    current: { status: "idle" },
   }
   return holder
 })
@@ -63,7 +77,7 @@ vi.mock("@/features/metadata/use-relation-facets", () => ({
     facets: null,
     error: null,
     loads: {
-      detail: { status: "idle" },
+      detail: detailLoad.current,
       constraints: { status: "idle" },
       incomingKeys: { status: "idle" },
       definition: { status: "idle" },
@@ -127,6 +141,7 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
   previewState.current = { status: "initial" }
+  detailLoad.current = { status: "idle" }
 })
 
 describe("a virtual table whose module is not loaded", () => {
@@ -143,13 +158,22 @@ describe("a virtual table whose module is not loaded", () => {
   const message = "driver `sqlite` (permanent error): no such module: vec0"
 
   it("explains the failed read and links to where its data is", () => {
-    previewState.current = { status: "error", message, retryable: false }
+    previewState.current = {
+      status: "error",
+      message,
+      retryable: false,
+      missingModule: "vec0",
+    }
     const onOpenRelated = vi.fn()
     renderView({ node: vec, onOpenRelated })
 
     expect(
       screen.getByText(/provided by the SQLite extension/).textContent
     ).toContain("vec0, which Oxyn does not load")
+    // sqlite-vec is opt-in per connection: the way to it is said.
+    expect(
+      screen.getByText(/enable sqlite-vec for this connection/)
+    ).toBeTruthy()
     expect(screen.queryByText("The statement failed")).toBeNull()
     // No claim of a previous shape: this was the first read.
     expect(screen.queryByText(/previous shape/)).toBeNull()
@@ -176,6 +200,47 @@ describe("a virtual table whose module is not loaded", () => {
     })
     expect(screen.getByText("The statement failed")).toBeTruthy()
     expect(screen.queryByText(/provided by the SQLite extension/)).toBeNull()
+  })
+
+  it("shows an invalid predicate's own error, even on a table marked unavailable", () => {
+    // The predicate was refused before sending: nothing names a module, and
+    // the explanation would hide the typo to fix.
+    previewState.current = {
+      status: "error",
+      message:
+        "query rejected: the preview predicate is not a condition Oxyn can read",
+      retryable: false,
+      missingModule: null,
+    }
+    renderView({ node: vec })
+    expect(screen.getByText("The statement failed")).toBeTruthy()
+    expect(screen.getByText(/not a condition Oxyn can read/)).toBeTruthy()
+    expect(screen.queryByText(/provided by the SQLite extension/)).toBeNull()
+  })
+
+  it("explains the Structure tab the same way", () => {
+    detailLoad.current = {
+      status: "error",
+      message,
+      missingModule: "vec0",
+    }
+    renderView({ node: vec, initialTab: "structure" })
+    expect(screen.getByText(/provided by the SQLite extension/)).toBeTruthy()
+    expect(screen.queryByText(message)).toBeNull()
+  })
+
+  it("keeps the generic wording for another module", () => {
+    previewState.current = {
+      status: "error",
+      message: "no such module: spellfix1",
+      retryable: false,
+      missingModule: "spellfix1",
+    }
+    renderView({ node: vec })
+    expect(
+      screen.getByText(/provided by the SQLite extension/).textContent
+    ).toContain("spellfix1")
+    expect(screen.queryByText(/enable sqlite-vec/)).toBeNull()
   })
 })
 

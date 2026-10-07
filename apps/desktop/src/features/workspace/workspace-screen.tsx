@@ -1,9 +1,14 @@
 import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useStore } from "@tanstack/react-store"
 
 import { visibleAssistantField } from "@/components/oxyn/assistant-composer"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
 import { addressKey } from "@/components/oxyn/catalog-tree"
+import {
+  tabsWithLoadedFacts,
+  withLoadedFacts,
+} from "@/components/oxyn/loaded-node"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
 import { CloseConsoleDialog } from "@/components/oxyn/close-console-dialog"
 import { DEFINITION_WIDTH } from "@/components/oxyn/definition-beside"
@@ -78,6 +83,7 @@ import { useActionSource } from "@/lib/actions/context"
 import { actionKeys } from "@/lib/actions/manifest"
 import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
+import { metadata } from "@/lib/ipc/metadata"
 import { windows } from "@/lib/ipc/windows"
 import type { HistoryRow } from "@/lib/ipc/library"
 import type { SectionChoice } from "@/lib/ipc/location"
@@ -207,6 +213,24 @@ export function WorkspaceScreen({
   const lastConsole = React.useRef<string | null>(null)
   const objectsRef = React.useRef(objects)
   objectsRef.current = objects
+
+  // The tree the explorer has loaded, shared with it by query key: an object
+  // opened by address alone — restored, Quick Open, a link — takes its
+  // catalog facts from there, a virtual table's module first among them.
+  const loadedTree = useQuery({
+    queryKey: ["catalog", open.connection],
+    queryFn: () => metadata.catalogTree(open.connection),
+    enabled: hasCatalog(open),
+    placeholderData: (previous) => previous,
+  }).data
+  const loadedTreeRef = React.useRef(loadedTree)
+  loadedTreeRef.current = loadedTree
+  // A tab opened before its level was read is completed once it is: its view
+  // learns, for instance, that the table's module is not loaded.
+  React.useEffect(() => {
+    if (!loadedTree) return
+    setObjects((tabs) => tabsWithLoadedFacts(tabs, loadedTree))
+  }, [loadedTree])
   const objectHandles = React.useRef(new Map<string, ObjectViewHandle>())
   // One width for every object's definition, for as long as this workspace
   // is open; not yet kept across launches (ADR-0018).
@@ -277,9 +301,26 @@ export function WorkspaceScreen({
 
   const asideItem = aside.find((item) => item.id === asideActive) ?? aside[0]
 
-  const openObject = (node: CatalogNode, target?: OpenTarget) => {
+  const openObject = (opened: CatalogNode, target?: OpenTarget) => {
+    const node = withLoadedFacts(opened, loadedTreeRef.current)
     const key = objectKey(node.address)
-    if (objectsRef.current.some((tab) => tab.key === key)) {
+    const existing = objectsRef.current.find((tab) => tab.key === key)
+    if (existing) {
+      // Opened again with more facts than the tab holds — a click on the
+      // loaded node after an address-only opening: the tab takes them.
+      // Only facts that came from the catalog: an address-only opening must
+      // not erase what the tab already learned.
+      const fromCatalog =
+        node !== opened || node.virtualTable !== null || node.shadowOf !== null
+      const richer = fromCatalog
+        ? withLoadedFacts(existing.node, [node])
+        : existing.node
+      if (richer !== existing.node)
+        setObjects((current) =>
+          current.map((tab) =>
+            tab.key === key ? { ...tab, node: richer } : tab
+          )
+        )
       activate(key)
       return
     }

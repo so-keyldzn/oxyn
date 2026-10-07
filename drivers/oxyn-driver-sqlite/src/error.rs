@@ -260,8 +260,36 @@ pub(crate) fn engine_bound(error: rusqlite::Error, effect: Effect, bound: Bound)
         // The `Display` of this variant contains the path (I-03).
         return driver(SqliteError::Path, ErrorClass::Permanent);
     }
+    if let Some(module) = missing_module(&error) {
+        // Named as data for the interface, which explains this failure rather
+        // than parsing a message. Kept even when the message is otherwise
+        // withheld: the engine composes it from the schema's module name,
+        // never from a bound value (I-03). Permanent: reading again changes
+        // nothing until the module is loaded (I-13).
+        return OxynError::driver(
+            DriverId::sqlite(),
+            ErrorClass::Permanent,
+            oxyn_core::MissingModule { module },
+        );
+    }
     let class = classify(&error);
     driver(hide(error, code, bound), class)
+}
+
+/// The module of an engine `no such module: <name>` failure.
+///
+/// The driver is the one place that may read its engine's words: the
+/// `SQLITE_ERROR` code alone does not say which failure it is, and the caller
+/// then reads the module as data, never the text.
+fn missing_module(error: &rusqlite::Error) -> Option<String> {
+    let rusqlite::Error::SqliteFailure(failure, Some(message)) = error else {
+        return None;
+    };
+    if failure.code != ErrorCode::Unknown {
+        return None;
+    }
+    let module = message.strip_prefix("no such module: ")?.trim();
+    (!module.is_empty()).then(|| module.to_owned())
 }
 
 /// The error the driver returns: the engine's, or its code alone when the

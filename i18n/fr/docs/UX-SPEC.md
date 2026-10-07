@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="7e28fd678b3a" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="28d0b4df0451" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -773,15 +773,27 @@ erreur. Le chargement, le résultat vide, l'échec et l'annulation sont distinct
 Sans tri demandé, l'ordre des lignes n'est pas garanti, et l'aperçu ne compte
 jamais la table entière.
 
-L'échec de lecture d'une table virtuelle dont la connexion ne charge pas le
-module est **expliqué**, pas montré brut : « This table is provided by the
-SQLite extension `<module>`, which Oxyn does not load. Its data is stored in … »,
-suivi de ses tables fantômes en liens qui les sélectionnent. Le message du
-driver reste à un clic, sous `Driver message`, mot pour mot. L'échec est
-permanent
+Une lecture qui échoue **parce que** la connexion ne charge pas le module dont
+une table a besoin — le `no such module: <module>` du moteur, que le driver
+nomme comme une donnée plutôt que de laisser le front lire le message — est
+**expliquée**, pas montrée brute : « This table is provided by the SQLite
+extension `<module>`, which Oxyn does not load. Its data is stored in … », suivi
+de ses tables fantômes en liens qui les sélectionnent. Pour `vec0`, que
+sqlite-vec enregistre et qu'une connexion active dans ses réglages (désactivé
+par défaut), une phrase suit : « You can enable sqlite-vec for this connection
+in its settings, if you trust this file. » Le message du driver reste à un
+clic, sous `Driver message`, mot pour mot. Les onglets Data et Structure
+l'expliquent de la même façon. L'échec est permanent
 ([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)) :
 rien ne propose de le relancer, et rien ne le retente. Tout autre échec de la
-même table s'affiche tel qu'il est venu.
+même table — un prédicat refusé avant envoi, un fichier verrouillé — s'affiche
+tel qu'il est venu, même sur une table marquée `not loaded`.
+
+Un objet ouvert par sa seule adresse — un onglet restauré de la dernière
+session, Quick Open, un lien de l'assistant ou d'une relation — prend les faits
+que l'explorateur a chargés pour cette adresse : sa nature, son module, la table
+virtuelle dont il range les données. Un onglet ouvert avant que son niveau soit
+lu les reçoit dès qu'il l'est.
 
 ### Filtrer, trier, parcourir
 

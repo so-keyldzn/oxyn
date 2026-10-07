@@ -743,6 +743,7 @@ impl Backend {
             // to fix. The class is kept: `anyhow` would flatten `retryable`.
             .map_err(|error| IpcError {
                 retryable: error.is_retryable(),
+                missing_module: error.missing_module().map(str::to_owned),
                 message: format!("opening a session on \"{}\": {error}", config.name),
             })?;
 

@@ -730,14 +730,26 @@ the rows; no automatic refresh follows an error. Loading, empty result, failure
 and cancellation are distinct. Without a requested sort, the order of the rows
 is not guaranteed, and the preview never counts the whole table.
 
-A failed read of a virtual table whose module the connection does not load is
-**explained**, not shown raw: "This table is provided by the SQLite extension
-`<module>`, which Oxyn does not load. Its data is stored in …", followed by its
-shadow tables as links that select them. The driver's message stays one click
-away, under `Driver message`, word for word. The failure is permanent
+A read that fails **because** the connection does not load the module a table
+needs — the engine's `no such module: <module>`, which the driver names as data
+rather than leaving the front to read the message — is **explained**, not shown
+raw: "This table is provided by the SQLite extension `<module>`, which Oxyn does
+not load. Its data is stored in …", followed by its shadow tables as links that
+select them. For `vec0`, which sqlite-vec registers and a connection enables in
+its settings (off by default), one sentence follows: "You can enable sqlite-vec
+for this connection in its settings, if you trust this file." The driver's
+message stays one click away, under `Driver message`, word for word. The Data
+and Structure tabs explain it the same way. The failure is permanent
 ([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)):
 nothing offers to run it again, and nothing retries it. Any other failure of the
-same table is shown as it came.
+same table — a predicate refused before sending, a locked file — is shown as it
+came, even on a table marked `not loaded`.
+
+An object opened by its address alone — a tab restored from the last session,
+Quick Open, a link from the assistant or from a relationship — takes the facts
+the explorer has loaded for that address: its kind, its module, the virtual
+table it stores data for. A tab opened before its level was read gets them once
+it is.
 
 ### Filter, sort, page through
 

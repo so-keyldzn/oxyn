@@ -30,6 +30,8 @@ export type PrivacyTier = z.infer<typeof PrivacyTier>
 export const IpcError = z.object({
   message: z.string(),
   retryable: z.boolean(),
+  /** The engine module the failed statement needed; data, never parsed. */
+  missingModule: z.string().nullable(),
 })
 export type IpcError = z.infer<typeof IpcError>
 

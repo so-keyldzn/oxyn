@@ -104,7 +104,7 @@ pub use cancel::CancelToken;
 pub use capabilities::Capabilities;
 pub use command::{Actor, CatalogRefreshScope, Command, ExportFormat, MAX_CATALOG_FOCUS_BYTES};
 pub use connection::{ConnectionConfig, Environment, PrivacyTier};
-pub use error::{ErrorClass, OxynError, Result};
+pub use error::{ErrorClass, MissingModule, OxynError, Result};
 pub use event::Event;
 pub use ids::{
     AgentId, AgentSessionId, AppSessionId, CommandId, ConnectionId, ConversationId, DocumentId,

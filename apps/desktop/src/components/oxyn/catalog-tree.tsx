@@ -44,6 +44,7 @@ import { hasInsertableName, useNameDrag } from "./catalog-name-drag"
 import type { NameTransfer } from "./catalog-name-drag"
 import { operationOffer } from "./object-operations"
 import { PRIVACY_TIERS } from "./privacy-tier"
+import { findLoadedNode } from "./loaded-node"
 import { relationMark } from "./relation-mark"
 import { InputGroupTextInput } from "./text-field"
 
@@ -708,19 +709,23 @@ export function CatalogTree({
           searching={search.searching}
           selected={selected}
           onSelect={(hit) =>
-            onSelect({
-              address: hit.address,
-              name: hit.name,
-              kind: hit.kind,
-              holdsRecords: hit.holdsRecords,
-              system: false,
-              comment: null,
-              loaded: true,
-              stale: false,
-              children: [],
-              virtualTable: null,
-              shadowOf: null,
-            })
+            // The loaded node when the tree holds it: a hit carries no
+            // virtual-table facts, and its view needs them.
+            onSelect(
+              findLoadedNode(nodes, hit.address) ?? {
+                address: hit.address,
+                name: hit.name,
+                kind: hit.kind,
+                holdsRecords: hit.holdsRecords,
+                system: false,
+                comment: null,
+                loaded: true,
+                stale: false,
+                children: [],
+                virtualTable: null,
+                shadowOf: null,
+              }
+            )
           }
         />
       ) : rows.length === 0 ? (

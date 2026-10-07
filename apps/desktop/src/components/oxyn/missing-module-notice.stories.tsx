@@ -36,6 +36,12 @@ export const WithShadowTables: Story = {
     ).toHaveTextContent(
       "This table is provided by the SQLite extension vec0, which Oxyn does not load."
     )
+    // sqlite-vec is opt-in per connection, off by default: the way is said.
+    await expect(
+      canvas.getByText(
+        "You can enable sqlite-vec for this connection in its settings, if you trust this file."
+      )
+    ).toBeVisible()
     // The shadow tables are where the data is readable: one click away.
     await userEvent.click(
       canvas.getByRole("button", { name: "chunks_vec_info" })
@@ -64,5 +70,7 @@ export const WithoutShadowTables: Story = {
       canvas.getByText(/No table storing its data is listed/)
     ).toBeVisible()
     await expect(canvas.queryByRole("button", { name: /_/ })).toBeNull()
+    // The sqlite-vec sentence belongs to vec0 alone.
+    await expect(canvas.queryByText(/enable sqlite-vec/)).toBeNull()
   },
 }

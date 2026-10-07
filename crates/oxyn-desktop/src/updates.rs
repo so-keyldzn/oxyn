@@ -261,6 +261,7 @@ impl Updates {
         preference::write(folder, automatic).map_err(|error| IpcError {
             message: format!("The preference could not be saved: {error}"),
             retryable: true,
+            missing_module: None,
         })?;
         {
             let mut operation = self.shared.operation.lock();
