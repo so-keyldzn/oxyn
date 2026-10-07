@@ -133,6 +133,64 @@ fn an_agent_round_trips_as_plain_uuid_text_in_headers_and_both_histories() {
 }
 
 #[test]
+fn saving_again_with_another_agent_keeps_the_agent_that_opened_the_thread() {
+    let store = Store::open_in_memory().expect("store");
+    let workspace = store.workspaces().create("workshop").expect("workspace").id;
+    let first = AgentId::new();
+    let mut header = Conversation::new(
+        workspace,
+        Destination::provider(
+            ProviderId::new("provider").expect("id"),
+            "Provider",
+            "model",
+        ),
+        "Question",
+        Some(first),
+    );
+    store.conversations().save(&header).expect("save");
+
+    header.agent_id = Some(AgentId::new());
+    header.title = "Renamed question".into();
+    store.conversations().save(&header).expect("save again");
+
+    let stored = store
+        .conversations()
+        .get(header.id)
+        .expect("read")
+        .expect("kept");
+    assert_eq!(stored.agent_id, Some(first));
+    assert_eq!(stored.title, "Renamed question");
+}
+
+#[test]
+fn a_legacy_thread_without_an_agent_takes_the_first_one_saved_with_it() {
+    let store = Store::open_in_memory().expect("store");
+    let workspace = store.workspaces().create("workshop").expect("workspace").id;
+    let mut header = Conversation::new(
+        workspace,
+        Destination::provider(
+            ProviderId::new("provider").expect("id"),
+            "Provider",
+            "model",
+        ),
+        "Question",
+        None,
+    );
+    store.conversations().save(&header).expect("save");
+
+    let agent = AgentId::new();
+    header.agent_id = Some(agent);
+    store.conversations().save(&header).expect("save again");
+
+    let stored = store
+        .conversations()
+        .get(header.id)
+        .expect("read")
+        .expect("kept");
+    assert_eq!(stored.agent_id, Some(agent));
+}
+
+#[test]
 fn an_invalid_stored_agent_is_a_redacted_error_on_every_header_read() {
     let store = Store::open_in_memory().expect("store");
     let workspace = store.workspaces().create("workshop").expect("workspace").id;
