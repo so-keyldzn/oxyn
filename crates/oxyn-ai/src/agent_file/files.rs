@@ -102,7 +102,10 @@ pub(super) const RECIPIENT_FRAGMENTS: [(&str, &str, &str); 7] = [
     ),
 ];
 
-/// The agents shipped with Oxyn, in the order the picker offers them.
+/// The agents shipped with Oxyn, the SQL agent first.
+///
+/// Not the picker's order: the catalog sorts by `name` (ADR-0049 § 4). The
+/// SQL agent is what a conversation naming no agent runs, whatever that order.
 ///
 /// # Panics
 /// Never in a build whose tests pass: the files are constants of the binary,

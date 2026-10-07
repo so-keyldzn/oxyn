@@ -1,10 +1,10 @@
-<!-- oxyn-translation source="docs/adr/0049-agents-declared-as-markdown-files.md" sha256="ce8ad667d974" -->
+<!-- oxyn-translation source="docs/adr/0049-agents-declared-as-markdown-files.md" sha256="6fe0ce9fed8c" -->
 
 > Traduction française de [docs/adr/0049-agents-declared-as-markdown-files.md](../../../../docs/adr/0049-agents-declared-as-markdown-files.md). **La version anglaise fait foi.**
 
 # ADR-0049 — Un agent est un fichier Markdown à en-tête YAML, composé avec un fragment de dialecte et un fragment de destinataire, rempli seulement par une liste fermée de variables
 
-**Statut :** accepté (2026-10-06) · **Date :** 2026-09-29 · **Amendée le :** 2026-10-06 ·
+**Statut :** accepté (2026-10-06) · **Date :** 2026-09-29 · **Amendée le :** 2026-10-06, 2026-10-07 ·
 **Décideurs :** Nicolas Boromée
 
 **Précise :** [ARCHITECTURE §7.3](../ARCHITECTURE.md#73-runtime-dagents), sur un
@@ -24,6 +24,15 @@ configuration, et non une implémentation, reste inchangé.
 > première version n'est retiré, sauf la phrase « le corps est le prompt
 > système, tel quel », devenue « le corps est la partie **rôle** du prompt
 > système ».
+
+> **Amendée le 2026-10-07, après acceptation — l'agent par défaut.** Le
+> défaut d'une nouvelle conversation est l'**agent SQL, quel que soit
+> l'ordre d'affichage**. Le § 4 trie le sélecteur par `name`, si bien que
+> Schema est listé avant SQL ; SQL reste celui sélectionné dans un fil vide,
+> et une conversation qui ne nomme aucun agent l'exécute côté backend. La
+> clause du § 2 « sinon le premier proposé dans l'ordre du § 4 » est
+> retirée : le défaut ne suit jamais l'ordre d'affichage. Le reste des § 2
+> et § 4 tient tel qu'écrit.
 
 ## Contexte
 
