@@ -286,6 +286,29 @@ pub(crate) fn hide(
     }
 }
 
+/// The failure of a task interrupted while running, for a request not declared
+/// read-only (the ones [`WorkerHandle::await_verdict`] waits for).
+///
+/// [`WorkerHandle::await_verdict`]: crate::worker::WorkerHandle::await_verdict
+///
+/// Every driver error becomes [`ErrorClass::Ambiguous`], its message kept:
+/// what the task applied before failing is unknown, whatever the code says —
+/// the thread disappearing mid-write included. A task that had already failed
+/// when the interruption arrived is reclassified too: the caller cannot tell
+/// the two apart, and the ambiguous reading is the one never retried. Other
+/// variants (a policy refusal, a cancellation) are not engine verdicts and keep
+/// their meaning.
+pub(crate) fn interrupted_write(error: OxynError) -> OxynError {
+    match error {
+        OxynError::Driver { driver, source, .. } => OxynError::Driver {
+            driver,
+            class: ErrorClass::Ambiguous,
+            source,
+        },
+        other => other,
+    }
+}
+
 /// Wraps a driver error, naming its family.
 pub(crate) fn driver(error: SqliteError, class: ErrorClass) -> OxynError {
     OxynError::driver(DriverId::sqlite(), class, error)

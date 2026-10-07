@@ -88,6 +88,9 @@ pub mod session;
 #[cfg(test)]
 mod stopped_write_tests;
 pub mod stream;
+mod vector_extension;
+#[cfg(test)]
+mod vector_tests;
 pub mod worker;
 
 pub use catalog::{MAIN, SqliteCatalog, logical_type, partial_predicate};
