@@ -45,6 +45,14 @@
 //! assistant. This module renders nothing itself; it places an already rendered
 //! block.
 //!
+//! The selection is the internal assistant's too, semantic ranking included
+//! ([ADR-0056](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md)):
+//! [`AgentPrompt::with_schema_ranked`] hands the host's per-relation scores to
+//! [`ContextBuilder::with_semantic_scores`], and ranks nothing itself. Scores
+//! can widen the selection up to the agent's `max_relations`, under the same
+//! tier. [`AgentPrompt::following`] takes none: it only describes mentions,
+//! which no score reorders.
+//!
 //! # The approved sample, and through the same gate
 //!
 //! A sample the user approved column by column comes into the prompt through
@@ -66,7 +74,9 @@ use oxyn_catalog::CatalogCache;
 use oxyn_core::{OxynError, QueryLanguage};
 
 use crate::agent_file::{PromptTarget, render_system_prompt};
-use crate::context::{AgentContext, ContextBuilder, Mention, QUESTION_HEADER, RowSample};
+use crate::context::{
+    AgentContext, ContextBuilder, Mention, QUESTION_HEADER, RowSample, SemanticScores,
+};
 use crate::privacy::PrivacyTier;
 use crate::spec::AgentSpec;
 use crate::untrusted;
@@ -224,6 +234,44 @@ impl AgentPrompt {
         mentions: Vec<Mention>,
         agent: AgentInstructions<'_>,
     ) -> Result<Self, OxynError> {
+        Self::with_schema_ranked(
+            tier,
+            question,
+            cache,
+            language,
+            samples,
+            mentions,
+            agent,
+            SemanticScores::new(),
+        )
+    }
+
+    /// [`AgentPrompt::with_schema`], the selection ordered by `semantic` as
+    /// well ([ADR-0056](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md)).
+    ///
+    /// The scores go to [`ContextBuilder::with_semantic_scores`]: the same
+    /// ranking, the same tier and the same budget as the internal assistant,
+    /// and no text of their own. They can make more relations be described —
+    /// up to the agent's `max_relations` — and so more schema leave, always
+    /// under `tier`. Empty, the prompt is exactly `with_schema`'s.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`AgentPrompt::with_schema`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "with_schema's parts, plus the scores its catalog fill ranked with"
+    )]
+    pub fn with_schema_ranked(
+        tier: PrivacyTier,
+        question: &str,
+        cache: &CatalogCache,
+        language: QueryLanguage,
+        samples: Vec<RowSample>,
+        mentions: Vec<Mention>,
+        agent: AgentInstructions<'_>,
+        semantic: SemanticScores,
+    ) -> Result<Self, OxynError> {
         let asked = Self::from_user(tier, question)?;
         let instructions = render_system_prompt(agent.spec, agent.target)
             .map_err(|error| OxynError::Config(error.to_string()))?;
@@ -234,6 +282,7 @@ impl AgentPrompt {
             .focused_on(asked.text.clone())
             .with_mentions(mentions)
             .with_samples(samples)
+            .with_semantic_scores(semantic)
             .build();
         let text = format!(
             "{AGENT_HEADER}\n\n{instructions}\n\n{}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{}",
