@@ -13,6 +13,8 @@ const node = (name: string, kind = "table"): CatalogNode => ({
   loaded: true,
   stale: false,
   children: [],
+  virtualTable: null,
+  shadowOf: null,
 })
 
 const POSTGRES = ["SQL", "DDL", "TRUNCATE", "TRANSACTIONAL_DDL"]

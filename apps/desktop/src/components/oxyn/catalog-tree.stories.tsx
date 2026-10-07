@@ -6,6 +6,7 @@ import { CatalogTree, addressKey } from "./catalog-tree"
 import { Button } from "@/components/ui/button"
 import { catalog } from "./fixtures"
 import { centerOf, pressAndMove, release } from "./pointer-drag-fixtures"
+import { missingModuleTable, virtualCatalog } from "./virtual-table-fixtures"
 import {
   HOSTILE,
   hostileAddress,
@@ -66,6 +67,37 @@ export const Filtered: Story = {
     await userEvent.type(canvas.getByLabelText("Filter loaded objects"), "line")
     await waitFor(() => expect(canvas.getByText("invoice_lines")).toBeVisible())
     await expect(canvas.queryByText("customers")).toBeNull()
+  },
+}
+
+/**
+ * SQLite virtual tables: the module is named, a module this connection does not
+ * load is marked as such, and shadow tables say whose data they store.
+ */
+export const VirtualTables: Story = {
+  args: { nodes: virtualCatalog },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByText("main"))
+    const missing = await canvas.findByText("vec0 not loaded")
+    await expect(missing).toHaveAttribute("data-mark", "warning")
+    await expect(canvas.getByText("virtual · fts5")).toHaveAttribute(
+      "data-mark",
+      "info"
+    )
+    await expect(canvas.getAllByText("shadow")).toHaveLength(6)
+    // The hint says it to a screen reader, not only to the eye.
+    const row = canvas
+      .getByText("chunks_vec_info")
+      .closest<HTMLElement>("[role=treeitem]")
+    await expect(row).toHaveAccessibleDescription(
+      "Stores the data of the virtual table chunks_vec."
+    )
+    const vec = canvas
+      .getByText("chunks_vec")
+      .closest<HTMLElement>("[role=treeitem]")
+    await expect(vec).toHaveAccessibleDescription(
+      /SQLite module vec0, which this connection does not load/
+    )
   },
 }
 
@@ -227,6 +259,38 @@ export const SearchHits: Story = {
     await userEvent.click(within(hits).getByText(HOSTILE))
     await expect(args.onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ address: hostileAddress })
+    )
+  },
+}
+
+/** A hit opens the loaded node: a virtual table keeps its module. */
+export const SearchHitOfAVirtualTable: Story = {
+  args: {
+    nodes: virtualCatalog,
+    search: {
+      hits: [
+        {
+          address: missingModuleTable.address,
+          name: missingModuleTable.name,
+          kind: "table",
+          holdsRecords: true,
+          matched: "relationName",
+          matchedFields: [],
+        },
+      ],
+      searching: false,
+      onQuery: fn(),
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await userEvent.type(canvas.getByLabelText("Filter loaded objects"), "vec")
+    const hits = await canvas.findByRole("list", { name: "Matching objects" })
+    await userEvent.click(within(hits).getByText("chunks_vec"))
+    await expect(args.onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: missingModuleTable.address,
+        virtualTable: missingModuleTable.virtualTable,
+      })
     )
   },
 }

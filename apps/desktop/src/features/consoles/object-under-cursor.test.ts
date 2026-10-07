@@ -19,6 +19,8 @@ function node(
     loaded: true,
     stale: false,
     children,
+    virtualTable: null,
+    shadowOf: null,
   }
 }
 

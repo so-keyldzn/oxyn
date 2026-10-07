@@ -44,6 +44,8 @@ import { hasInsertableName, useNameDrag } from "./catalog-name-drag"
 import type { NameTransfer } from "./catalog-name-drag"
 import { operationOffer } from "./object-operations"
 import { PRIVACY_TIERS } from "./privacy-tier"
+import { findLoadedNode } from "./loaded-node"
+import { relationMark } from "./relation-mark"
 import { InputGroupTextInput } from "./text-field"
 
 /**
@@ -707,17 +709,23 @@ export function CatalogTree({
           searching={search.searching}
           selected={selected}
           onSelect={(hit) =>
-            onSelect({
-              address: hit.address,
-              name: hit.name,
-              kind: hit.kind,
-              holdsRecords: hit.holdsRecords,
-              system: false,
-              comment: null,
-              loaded: true,
-              stale: false,
-              children: [],
-            })
+            // The loaded node when the tree holds it: a hit carries no
+            // virtual-table facts, and its view needs them.
+            onSelect(
+              findLoadedNode(nodes, hit.address) ?? {
+                address: hit.address,
+                name: hit.name,
+                kind: hit.kind,
+                holdsRecords: hit.holdsRecords,
+                system: false,
+                comment: null,
+                loaded: true,
+                stale: false,
+                children: [],
+                virtualTable: null,
+                shadowOf: null,
+              }
+            )
           }
         />
       ) : rows.length === 0 ? (
@@ -783,15 +791,19 @@ export function CatalogTree({
                 )
                 const isFocused = item.index === focus
                 const isSelected = selected === row.key
+                const mark = row.placeholder ? null : relationMark(row.node)
+                const said = [mark?.description, row.node.comment]
+                  .filter(Boolean)
+                  .join(" ")
                 const hint = row.placeholder
                   ? PLACEHOLDER[row.placeholder].title
-                  : row.node.comment
-                    ? `${row.node.name} — ${row.node.comment}`
+                  : said
+                    ? `${row.node.name} — ${said}`
                     : row.node.name
                 // What the hint adds to the row's own text is its description.
                 const description = row.placeholder
                   ? PLACEHOLDER[row.placeholder].title
-                  : row.node.comment
+                  : said || null
                 const hintId = description
                   ? `${idFor(row.key)}-hint`
                   : undefined
@@ -884,6 +896,18 @@ export function CatalogTree({
                             >
                               stale
                             </Badge>
+                          ) : mark ? (
+                            <span
+                              data-mark={mark.warning ? "warning" : "info"}
+                              className={cn(
+                                "ms-auto max-w-[45%] shrink-0 truncate text-[length:var(--reading-caption)]",
+                                mark.warning
+                                  ? "text-warning"
+                                  : "text-muted-foreground"
+                              )}
+                            >
+                              {mark.label}
+                            </span>
                           ) : row.node.system ? (
                             <span className="ms-auto shrink-0 text-[length:var(--reading-caption)] text-muted-foreground">
                               system

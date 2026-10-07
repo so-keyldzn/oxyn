@@ -28,12 +28,16 @@ use serde::{Deserialize, Serialize};
 pub struct IpcError {
     pub message: String,
     pub retryable: bool,
+    /// The engine module the failed statement needed, when that is why it
+    /// failed: the front explains it rather than reading the message.
+    pub missing_module: Option<String>,
 }
 
 impl From<OxynError> for IpcError {
     fn from(error: OxynError) -> Self {
         Self {
             retryable: error.is_retryable(),
+            missing_module: error.missing_module().map(str::to_owned),
             message: error.to_string(),
         }
     }
@@ -47,6 +51,7 @@ impl From<anyhow::Error> for IpcError {
         Self {
             message: format!("{error:#}"),
             retryable: false,
+            missing_module: None,
         }
     }
 }
@@ -57,6 +62,7 @@ impl IpcError {
         Self {
             message: message.into(),
             retryable: false,
+            missing_module: None,
         }
     }
 }
@@ -458,6 +464,22 @@ pub struct CatalogNode {
     /// and read again when it is on screen (ADR-0022).
     pub stale: bool,
     pub children: Vec<CatalogNode>,
+    /// The module behind a virtual table; `None` for anything else.
+    pub virtual_table: Option<VirtualTableMark>,
+    /// The virtual table a shadow table stores the data of.
+    pub shadow_of: Option<String>,
+}
+
+/// What the tree and the Data tab say about a virtual table.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualTableMark {
+    /// The module's name. Database content: shown, never run.
+    pub module: String,
+    /// `None` when the engine could not say.
+    pub available: Option<bool>,
+    /// Its shadow tables listed beside it, where its data is stored.
+    pub shadows: Vec<String>,
 }
 
 impl CatalogNode {
@@ -477,6 +499,8 @@ impl CatalogNode {
             loaded: true,
             stale: false,
             children: Vec::new(),
+            virtual_table: None,
+            shadow_of: None,
         }
     }
 }

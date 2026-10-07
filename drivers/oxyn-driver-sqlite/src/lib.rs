@@ -91,6 +91,9 @@ pub mod stream;
 mod vector_extension;
 #[cfg(test)]
 mod vector_tests;
+mod virtual_tables;
+#[cfg(test)]
+mod virtual_tables_tests;
 pub mod worker;
 
 pub use catalog::{MAIN, SqliteCatalog, logical_type, partial_predicate};

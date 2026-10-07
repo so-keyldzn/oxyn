@@ -18,6 +18,8 @@ const relation = (name: string): CatalogNode => ({
   loaded: true,
   stale: false,
   children: [],
+  virtualTable: null,
+  shadowOf: null,
 })
 
 const schema: CatalogNode = {
@@ -30,6 +32,8 @@ const schema: CatalogNode = {
   loaded: true,
   stale: false,
   children: [relation("orders"), relation("users")],
+  virtualTable: null,
+  shadowOf: null,
 }
 
 describe("catalog tree", () => {

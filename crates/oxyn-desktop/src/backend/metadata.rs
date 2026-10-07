@@ -710,6 +710,10 @@ fn condition_for(array: &dyn arrow::array::Array, row: usize) -> Option<Conditio
 }
 
 #[cfg(test)]
+#[path = "missing_module_tests.rs"]
+mod missing_module_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

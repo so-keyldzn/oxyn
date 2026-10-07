@@ -223,6 +223,8 @@ const relation = (
   loaded: true,
   stale: false,
   children: [],
+  virtualTable: null,
+  shadowOf: null,
 })
 
 export const catalog: Array<CatalogNode> = [
@@ -242,6 +244,8 @@ export const catalog: Array<CatalogNode> = [
       relation("public", "active_customers", "view"),
       relation("public", 'users"; DROP TABLE audit; --'),
     ],
+    virtualTable: null,
+    shadowOf: null,
   },
   {
     address: { catalog: "billing", namespace: "reporting", relation: null },
@@ -253,6 +257,8 @@ export const catalog: Array<CatalogNode> = [
     loaded: false,
     stale: false,
     children: [],
+    virtualTable: null,
+    shadowOf: null,
   },
   {
     address: { catalog: "billing", namespace: "pg_catalog", relation: null },
@@ -264,6 +270,8 @@ export const catalog: Array<CatalogNode> = [
     loaded: false,
     stale: false,
     children: [],
+    virtualTable: null,
+    shadowOf: null,
   },
 ]
 
