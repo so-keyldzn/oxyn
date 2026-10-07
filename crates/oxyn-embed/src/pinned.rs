@@ -85,8 +85,9 @@ pub(crate) const CONVERTED: PinnedFile = PinnedFile {
 ///
 /// It is the fallback when Hugging Face is unreachable or answers something
 /// that fails verification: a mirror changes where the bytes come from, never
-/// what is accepted. The release does not exist yet (2026-10-07); until it
-/// does, this second source answers 404 and the download error says so.
+/// what is accepted. Published on 2026-10-07 as a **pre-release**, so that
+/// it never becomes the "latest" release the updater reads (ADR-0051); its
+/// two assets were checked that day to carry the pinned SHA-256 values.
 pub const FALLBACK_RELEASE: &str =
     "https://github.com/so-keyldzn/oxyn/releases/download/embedding-model-835ad140";
 

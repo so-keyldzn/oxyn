@@ -121,18 +121,40 @@ impl Embedder {
         if store.status()? == ModelStatus::Absent {
             return Err(EmbedError::NotDownloaded);
         }
-        let tokenizer_path = store.path(&TOKENIZER);
+        // Verified before any parser sees them: the tokenizer's JSON parser
+        // and burn-store's header reader trust what they read.
+        //
+        // The tokenizer is read once, and the bytes hashed are the bytes
+        // parsed: nothing can swap the file between the check and the use.
+        let tokenizer_bytes = match hash::read_verified(&store.path(&TOKENIZER), &TOKENIZER)? {
+            Verdict::Valid(bytes) => bytes,
+            Verdict::Missing => return Err(EmbedError::NotDownloaded),
+            Verdict::Invalid(detail) => {
+                return Err(EmbedError::Corrupt {
+                    file: TOKENIZER.name,
+                    detail,
+                });
+            }
+        };
+        // The model cannot be read the same way: it is memory-mapped, not
+        // copied — 390 MB more of resident memory otherwise. Its check and its
+        // mapping are two opens of the same path. The accepted risk: a process
+        // of the same user that replaces the file in between gets its content
+        // loaded unverified, and one that truncates it in place while it is
+        // mapped makes the next read of a missing page kill Oxyn with SIGBUS.
+        // Neither is reachable without write access to the data directory,
+        // which already owns everything Oxyn keeps; renaming over the file or
+        // deleting it, which is what Oxyn itself does, leaves the mapping
+        // intact.
         let model_path = store.path(&CONVERTED);
-        // Before any parser sees them: the tokenizer's JSON parser and
-        // burn-store's header reader trust what they read.
-        check(&tokenizer_path, &TOKENIZER)?;
         check(&model_path, &CONVERTED)?;
 
         let mut tokenizer =
-            Tokenizer::from_file(&tokenizer_path).map_err(|err| EmbedError::Corrupt {
+            Tokenizer::from_bytes(&tokenizer_bytes).map_err(|_| EmbedError::Corrupt {
                 file: TOKENIZER.name,
-                detail: err.to_string(),
+                detail: "not a tokenizer definition".to_owned(),
             })?;
+        drop(tokenizer_bytes);
         // Padding is done per batch here, not by the tokenizer: its own
         // setting pads a whole call to its longest text.
         tokenizer.with_padding(None);
@@ -141,7 +163,7 @@ impl Embedder {
                 max_length: MAX_TOKENS,
                 ..TruncationParams::default()
             }))
-            .map_err(|err| EmbedError::Tokenizer(err.to_string()))?;
+            .map_err(|_| EmbedError::Tokenizer("the truncation setting was refused".to_owned()))?;
 
         let device = Device::default();
         let model = load::converted(&model_path, &device)?;
@@ -176,7 +198,9 @@ impl Embedder {
         let encodings = self
             .tokenizer
             .encode_batch(texts.to_vec(), true)
-            .map_err(|err| EmbedError::Tokenizer(err.to_string()))?;
+            // Not the tokenizer's message: it can quote the text, and texts
+            // are catalog names and questions.
+            .map_err(|_| EmbedError::Tokenizer("a text could not be tokenized".to_owned()))?;
         if encodings.len() != texts.len() {
             return Err(EmbedError::Tokenizer(format!(
                 "{} encodings for {} texts",
@@ -309,7 +333,7 @@ fn next_batch(order: &[usize], start: usize, len: impl Fn(usize) -> usize) -> us
 
 fn check(path: &std::path::Path, file: &PinnedFile) -> Result<(), EmbedError> {
     match hash::verify(path, file)? {
-        Verdict::Valid => Ok(()),
+        Verdict::Valid(()) => Ok(()),
         Verdict::Missing => Err(EmbedError::NotDownloaded),
         Verdict::Invalid(detail) => Err(EmbedError::Corrupt {
             file: file.name,

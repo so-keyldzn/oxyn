@@ -13,11 +13,12 @@ use crate::pinned::PinnedFile;
 /// Read buffer: large enough that the hash, not the system calls, dominates.
 const CHUNK: usize = 1 << 20;
 
-/// What a file on disk turned out to be.
+/// What a file on disk turned out to be. `Valid` carries what the reader
+/// kept: nothing for [`verify`], the bytes for [`read_verified`].
 #[derive(Debug)]
-pub(crate) enum Verdict {
+pub(crate) enum Verdict<T = ()> {
     Missing,
-    Valid,
+    Valid(T),
     /// Present, but not the pinned file; the text says how.
     Invalid(String),
 }
@@ -49,6 +50,34 @@ pub(crate) fn size_matches(path: &Path, file: &PinnedFile) -> Result<Option<bool
 /// one byte, so a file that grew while being read is refused without being
 /// read to its end.
 pub(crate) fn verify(path: &Path, file: &PinnedFile) -> Result<Verdict, EmbedError> {
+    scan(path, file, |_| {})
+}
+
+/// [`verify`], keeping the bytes it hashed: what the caller parses next is
+/// exactly what was checked, even if the file is replaced in the meantime.
+///
+/// **Blocks**, and holds the whole file in memory: for the 25 MB tokenizer,
+/// not for the model.
+pub(crate) fn read_verified(
+    path: &Path,
+    file: &PinnedFile,
+) -> Result<Verdict<Vec<u8>>, EmbedError> {
+    let mut bytes = Vec::with_capacity(usize::try_from(file.size).unwrap_or(0));
+    Ok(
+        match scan(path, file, |chunk| bytes.extend_from_slice(chunk))? {
+            Verdict::Valid(()) => Verdict::Valid(bytes),
+            Verdict::Missing => Verdict::Missing,
+            Verdict::Invalid(detail) => Verdict::Invalid(detail),
+        },
+    )
+}
+
+/// Reads `path` once, handing every chunk to `keep` as it is hashed.
+fn scan(
+    path: &Path,
+    file: &PinnedFile,
+    mut keep: impl FnMut(&[u8]),
+) -> Result<Verdict, EmbedError> {
     match size_matches(path, file)? {
         None => return Ok(Verdict::Missing),
         Some(false) => {
@@ -73,6 +102,7 @@ pub(crate) fn verify(path: &Path, file: &PinnedFile) -> Result<Verdict, EmbedErr
         }
         let chunk = buffer.get(..read).unwrap_or(&[]);
         hasher.update(chunk);
+        keep(chunk);
         total = total.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
     }
     if total != file.size {
@@ -83,7 +113,7 @@ pub(crate) fn verify(path: &Path, file: &PinnedFile) -> Result<Verdict, EmbedErr
     }
     let actual = hex(&hasher.finalize());
     if actual == file.sha256 {
-        Ok(Verdict::Valid)
+        Ok(Verdict::Valid(()))
     } else {
         Ok(Verdict::Invalid(format!(
             "sha256 {actual}, expected {}",
@@ -119,7 +149,11 @@ mod tests {
         assert!(matches!(verify(&path, &file)?, Verdict::Missing));
 
         std::fs::write(&path, b"pinned content").map_err(|e| EmbedError::io("write", &path, e))?;
-        assert!(matches!(verify(&path, &file)?, Verdict::Valid));
+        assert!(matches!(verify(&path, &file)?, Verdict::Valid(())));
+        // The bytes kept are the bytes hashed.
+        assert!(
+            matches!(read_verified(&path, &file)?, Verdict::Valid(b) if b == b"pinned content")
+        );
 
         // Same size, one byte flipped: only the checksum can tell.
         std::fs::write(&path, b"pinned contenT").map_err(|e| EmbedError::io("write", &path, e))?;

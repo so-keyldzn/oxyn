@@ -49,6 +49,10 @@ const PROGRESS_STEP: u64 = 1 << 20;
 
 const USER_AGENT: &str = concat!("oxyn/", env!("CARGO_PKG_VERSION"));
 
+/// Locked for the whole download, so that a second process refuses rather
+/// than writing the same files.
+const LOCK_FILE: &str = ".lock";
+
 /// What [`ModelStore::download`] is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -116,10 +120,15 @@ impl ModelStore {
         mut progress: impl FnMut(DownloadProgress) + Send,
         cancel: &CancelToken,
     ) -> Result<(), EmbedError> {
+        // Two locks, for two scopes: the mutex makes this process's calls
+        // wait their turn; the file lock refuses a second process — two
+        // instances, or a `make desktop-dev` beside the installed Oxyn —
+        // which would otherwise write the same `.part` files at once.
         let _serialized = self.download_lock.lock().await;
         tokio::fs::create_dir_all(self.dir())
             .await
             .map_err(|err| EmbedError::io("create", self.dir(), err))?;
+        let _exclusive = self.lock_directory().await?;
 
         progress(DownloadProgress {
             phase: DownloadPhase::Verifying,
@@ -163,8 +172,32 @@ impl ModelStore {
         Ok(())
     }
 
-    /// Converts the verified safetensors into the final model file, checks
-    /// the result against its pinned checksum, then deletes the safetensors.
+    /// Takes the directory's lock file, exclusively and without waiting.
+    ///
+    /// The lock belongs to the open file, so it is released when the
+    /// returned handle drops — at the end of the download, on an error, on
+    /// cancellation, and by the system if the process dies. The `.lock` file
+    /// itself stays; it is empty and only ever locked.
+    async fn lock_directory(&self) -> Result<std::fs::File, EmbedError> {
+        let path = self.dir().join(LOCK_FILE);
+        let file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .await
+            .map_err(|err| EmbedError::io("open", &path, err))?
+            .into_std()
+            .await;
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => Err(EmbedError::DownloadInProgress),
+            Err(std::fs::TryLockError::Error(err)) => Err(EmbedError::io("lock", &path, err)),
+        }
+    }
+
+    /// Converts the safetensors into the final model file, checks the result
+    /// against its pinned checksum, then deletes the safetensors.
     async fn convert(&self) -> Result<(), EmbedError> {
         let source = self.safetensors_path();
         let part = self.part_path(&CONVERTED);
@@ -172,6 +205,19 @@ impl ModelStore {
         let outcome = tokio::task::spawn_blocking({
             let part = part.clone();
             move || {
+                // Verified again, right before the parse: the safetensors
+                // reader trusts its header's offsets, and the file may have
+                // sat on disk since an earlier, interrupted download.
+                match hash::verify(&source, &SAFETENSORS)? {
+                    Verdict::Valid(()) => {}
+                    Verdict::Missing | Verdict::Invalid(_) => {
+                        let _ignored = std::fs::remove_file(&source);
+                        return Err(EmbedError::Conversion(format!(
+                            "{} is not the pinned file; download the model again",
+                            SAFETENSORS.name
+                        )));
+                    }
+                }
                 load::convert(&source, &part)?;
                 hash::verify(&part, &CONVERTED)
             }
@@ -179,7 +225,7 @@ impl ModelStore {
         .await
         .map_err(|err| EmbedError::Conversion(format!("the conversion task stopped: {err}")))?;
         match outcome {
-            Ok(Verdict::Valid) => {}
+            Ok(Verdict::Valid(())) => {}
             Ok(Verdict::Missing) => {
                 return Err(EmbedError::Conversion(format!(
                     "{} was not written",
@@ -218,7 +264,7 @@ async fn is_valid(path: &Path, file: PinnedFile, cancel: &CancelToken) -> Result
     let verdict = tokio::task::spawn_blocking(move || hash::verify(&path, &file))
         .await
         .map_err(|err| EmbedError::Conversion(format!("the verification task stopped: {err}")))??;
-    Ok(matches!(verdict, Verdict::Valid))
+    Ok(matches!(verdict, Verdict::Valid(())))
 }
 
 async fn remove_quietly(path: &Path) {

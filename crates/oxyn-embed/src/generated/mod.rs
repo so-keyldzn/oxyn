@@ -22,16 +22,18 @@
 //! [`MAX_TOKENS`](crate::pinned::MAX_TOKENS), and the tests run it at both
 //! ends of that range.
 
+// Exactly the lints the generated graph trips, counted with clippy on
+// 2026-10-07 — 138 `unwrap_used`, 172 `unnecessary_cast`, 2
+// `too_many_arguments` —, and nothing broader: a group such as `clippy::all`
+// would also silence `disallowed_methods` and `disallowed_types`, the walls
+// the workspace denies on purpose. `weights_map.rs` trips none.
 #[allow(
-    clippy::all,
     clippy::unwrap_used,
-    unused,
-    missing_debug_implementations,
-    rust_2018_idioms
+    clippy::unnecessary_cast,
+    clippy::too_many_arguments
 )]
 pub(crate) mod model;
 
-#[allow(clippy::all)]
 pub(crate) mod weights_map;
 
 /// The residual parameters, as written by `codegen/regenerate.py`.

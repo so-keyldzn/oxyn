@@ -347,6 +347,66 @@ async fn plain_http_is_refused_by_the_real_client() -> Result<(), EmbedError> {
     Ok(())
 }
 
+/// A second process — modeled by a second open of the lock file, which
+/// `flock` treats the same way — makes a download refuse at once, before it
+/// touches anything; once released, the download goes ahead.
+#[tokio::test]
+async fn a_download_refuses_while_another_process_holds_the_directory() -> Result<(), EmbedError> {
+    let root = tempfile::tempdir().map_err(|e| EmbedError::io("create", "tmp", e))?;
+    let store = ModelStore::new(root.path());
+    std::fs::create_dir_all(store.dir()).map_err(|e| EmbedError::io("create", store.dir(), e))?;
+    let lock_path = store.dir().join(LOCK_FILE);
+    let other =
+        std::fs::File::create(&lock_path).map_err(|e| EmbedError::io("create", &lock_path, e))?;
+    other
+        .try_lock()
+        .map_err(|_| EmbedError::Inference("the test could not take the lock".to_owned()))?;
+
+    let nowhere = fetcher(Scheme::PlainAllowed, Vec::new())?;
+    let refused = store
+        .download_with(&nowhere, |_| {}, &CancelToken::new())
+        .await;
+    assert!(
+        matches!(refused, Err(EmbedError::DownloadInProgress)),
+        "{refused:?}"
+    );
+
+    drop(other);
+    let went_ahead = store
+        .download_with(&nowhere, |_| {}, &CancelToken::new())
+        .await;
+    // No source to fetch from: it fails further on, not on the lock.
+    assert!(
+        matches!(went_ahead, Err(EmbedError::Download { .. })),
+        "{went_ahead:?}"
+    );
+    Ok(())
+}
+
+/// A safetensors left by an interrupted download is checked again right
+/// before the conversion parses it; a damaged one is removed, not parsed.
+#[tokio::test]
+async fn a_damaged_safetensors_is_never_converted() -> Result<(), EmbedError> {
+    let root = tempfile::tempdir().map_err(|e| EmbedError::io("create", "tmp", e))?;
+    let store = ModelStore::new(root.path());
+    std::fs::create_dir_all(store.dir()).map_err(|e| EmbedError::io("create", store.dir(), e))?;
+    let path = store.safetensors_path();
+    let file = std::fs::File::create(&path).map_err(|e| EmbedError::io("create", &path, e))?;
+    // Sparse: the pinned size, all zeros.
+    file.set_len(SAFETENSORS.size)
+        .map_err(|e| EmbedError::io("extend", &path, e))?;
+
+    let converted = store.convert().await;
+    assert!(
+        matches!(converted, Err(EmbedError::Conversion(_))),
+        "{converted:?}"
+    );
+    assert!(!path.exists());
+    assert!(!store.part_path(&CONVERTED).exists());
+    assert!(!store.path(&CONVERTED).exists());
+    Ok(())
+}
+
 #[test]
 fn the_pinned_sources_are_hugging_face_then_the_release() {
     let [first, second] = pinned::sources(&TOKENIZER);

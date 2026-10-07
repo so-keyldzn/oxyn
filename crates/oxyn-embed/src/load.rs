@@ -71,7 +71,10 @@ pub(crate) fn convert(safetensors: &Path, out: &Path) -> Result<(), EmbedError> 
         .allow_partial(true);
     let result = model
         .load_from(&mut store)
-        .map_err(|err| EmbedError::Conversion(format!("upstream weights: {err}")))?;
+        // Fixed texts, here and below, rather than burn-store's message: it
+        // names the file's full path, home directory included, and an error
+        // ends up displayed and logged.
+        .map_err(|_| EmbedError::Conversion("the upstream weights cannot be read".to_owned()))?;
     // Exact counts both ways: a key renamed upstream would otherwise leave a
     // zero matrix in place and the model would still answer.
     if result.applied.len() != weights_map::HF_TO_BURN.len()
@@ -105,7 +108,7 @@ pub(crate) fn convert(safetensors: &Path, out: &Path) -> Result<(), EmbedError> 
         .auto_extension(false)
         .overwrite(true)
         .write_to_file(out)
-        .map_err(|err| EmbedError::Conversion(format!("writing {}: {err}", CONVERTED.name)))
+        .map_err(|_| EmbedError::Conversion(format!("{} cannot be written", CONVERTED.name)))
 }
 
 /// Loads the converted model. `path` must have been verified first.
@@ -117,9 +120,9 @@ pub(crate) fn converted(path: &Path, device: &Device) -> Result<Model, EmbedErro
     let mut store = BurnpackStore::from_file(path).auto_extension(false);
     model
         .load_from(&mut store)
-        .map_err(|err| EmbedError::Corrupt {
+        .map_err(|_| EmbedError::Corrupt {
             file: CONVERTED.name,
-            detail: err.to_string(),
+            detail: "the model loader refused its content".to_owned(),
         })?;
     Ok(model)
 }
@@ -164,5 +167,26 @@ mod tests {
         // Frequencies of a rotary embedding decrease geometrically.
         assert!(values.windows(2).all(|w| w[0] > w[1]), "{values:?}");
         Ok(())
+    }
+
+    /// burn-store's messages name the full path, home directory included:
+    /// none of it may reach an error's text, which is displayed and logged.
+    #[test]
+    fn errors_do_not_carry_the_local_path() {
+        let root = std::env::temp_dir().join("oxyn-embed-RECOGNIZABLE-user-dir");
+        let missing = root.join("model.safetensors");
+        let out = root.join("model.bpk.part");
+
+        let converting = convert(&missing, &out);
+        let loading = converted(&root.join("model.bpk"), &Device::default());
+        for shown in [
+            converting.err().map(|e| e.to_string()),
+            loading.err().map(|e| e.to_string()),
+        ] {
+            let Some(shown) = shown else {
+                panic!("a missing file must be an error");
+            };
+            assert!(!shown.contains("RECOGNIZABLE"), "{shown}");
+        }
     }
 }

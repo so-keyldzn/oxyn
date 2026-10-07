@@ -127,8 +127,19 @@ mysql_common  = { version = "=0.37.3", default-features = false }
 
 # --- AI ----------------------------------------------------------------------
 # reqwest 0.13 renamed the `rustls-tls` feature to `rustls`.
+#
+# `system-proxy`: without it, reqwest only reads the `HTTP(S)_PROXY`
+# variables, which an application started from the Finder does not inherit.
+# The model download of `oxyn-embed` follows the system's proxy, by the
+# user's decision (ADR-0056): its files are accepted on their SHA-256, never
+# on their route. The feature applies to every client of the graph, so the
+# clients that must not follow a proxy say so themselves: `oxyn-llm`'s only
+# client (`http.rs`) calls `no_proxy()`, since a proxy would change an AI
+# request's recipient without changing its recorded reach (I-04). The
+# updater (`tauri-plugin-updater`) follows it too; what it installs is
+# accepted on its minisign signature, not on its route (ADR-0051).
 reqwest       = { version = "0.13.4", default-features = false, features = [
-    "json", "stream", "rustls", "http2", "charset",
+    "json", "stream", "rustls", "http2", "charset", "system-proxy",
 ] }
 schemars      = "1.2.2"
 # The external agents protocol (ADR-0026). Apache-2.0, hence compatible with
