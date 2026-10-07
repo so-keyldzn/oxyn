@@ -23,10 +23,11 @@
 //! ends of that range.
 
 // Exactly the lints the generated graph trips, counted with clippy on
-// 2026-10-07 — 138 `unwrap_used`, 172 `unnecessary_cast`, 2
-// `too_many_arguments` —, and nothing broader: a group such as `clippy::all`
-// would also silence `disallowed_methods` and `disallowed_types`, the walls
-// the workspace denies on purpose. `weights_map.rs` trips none.
+// 2026-10-07 on the library target, one count per site — 69 `unwrap_used`,
+// 86 `unnecessary_cast`, 1 `too_many_arguments` —, and nothing broader: a
+// group such as `clippy::all` would also silence `disallowed_methods` and
+// `disallowed_types`, the walls the workspace denies on purpose.
+// `weights_map.rs` trips none.
 #[allow(
     clippy::unwrap_used,
     clippy::unnecessary_cast,
