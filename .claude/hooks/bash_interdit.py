@@ -64,6 +64,8 @@ RESHAPES_PATHS = {"ln", "mv", "cp", "rsync", "mkdir", "rm", "rmdir", "unlink", "
 # their redirections hide in one quoted token.
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 NESTING_LIMIT = 4
+# Words after which the shell still expects a command: `if true; then ln …`.
+RESERVED_WORDS = {"if", "then", "else", "elif", "while", "until", "do", "{", "!", "time"}
 
 
 def _split(command: str) -> list[list[str]]:
@@ -158,8 +160,13 @@ def _read_commands(tokens: list[str]) -> tuple[list[str], set[str]]:
         unquoted = _unquote(token)
         if after_target:
             after_target = False
+            # `bash <<< 'echo x > f'`: a here-string fed to a shell is its program.
+            if runner_words is not None:
+                programs.append(unquoted)
             continue
-        if command_position and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", unquoted):
+        if command_position and (
+            unquoted in RESERVED_WORDS or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", unquoted)
+        ):
             continue
         if command_position:
             command_position = False
