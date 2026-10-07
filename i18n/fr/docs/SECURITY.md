@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="d913863a98ad" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="1ccbc6bbd59c" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -434,8 +434,10 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    jour déjà vérifiée, comme `cancel_exit` et la sortie ordonnée le
    permettent déjà ; les transactions ouvertes demandent toujours.
 9. **Les fichiers du modèle d'embeddings local.** Seulement quand
-   l'utilisateur active le classement sémantique, une préférence du workspace
-   désactivée par défaut qu'aucun agent ne peut changer, Oxyn télécharge
+   l'utilisateur active le classement sémantique — la commande
+   `enable_semantic_ranking`, qui enregistre une préférence du workspace
+   désactivée par défaut qu'aucun agent ne peut changer ; un `true` lu sur
+   disque ne lance rien —, Oxyn télécharge
    `model.safetensors` et `tokenizer.json` (220 191 240 octets)
    ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Les
    sources sont des constantes de `oxyn_embed::pinned` : Hugging Face à un
@@ -455,15 +457,49 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    crue sur sa somme, pas sur son chemin. Un proxy peut retenir le modèle, ou
    voir qu'Oxyn le récupère ; il ne peut pas faire accepter d'autres octets à
    Oxyn. Refuser le proxy rendrait seulement l'option impossible à activer
-   derrière un réseau d'entreprise. La requête ne porte aucune
-   donnée de l'utilisateur — une URL fixe et l'agent utilisateur
-   `oxyn/<version>` —, et la webview ne fournit ni URL ni chemin. Les fichiers
-   sur disque restent des entrées : le tokenizer et le `model.bpk` converti
-   sont vérifiés contre leur taille et leur somme épinglées avant toute
-   analyse, si bien qu'un fichier tronqué par un disque plein ou remplacé par
-   un autre programme est refusé, jamais remis à un analyseur. Ce qui est
-   transformé en vecteur — la question, les noms et commentaires des
-   relations — ne quitte jamais le processus.
+   derrière un réseau d'entreprise. Il est lu par la feature `system-proxy`
+   de `reqwest` — sans elle, seules comptent les variables `HTTP(S)_PROXY`,
+   dont une application lancée depuis le Finder n'hérite pas. La feature
+   s'applique à tous les clients de l'unique `reqwest` du graphe : le seul
+   client d'`oxyn-llm` continue d'appeler `no_proxy()`, et **le système de
+   mise à jour de l'entrée 8 suit désormais lui aussi le proxy système**, ce
+   qui laisse son intégrité où elle était — sur la signature minisign, pas sur
+   le chemin. La requête ne porte aucune donnée de l'utilisateur — une URL
+   fixe et l'agent utilisateur `oxyn/<version>` —, et la webview ne fournit ni
+   URL ni chemin.
+
+   **Deux processus.** Un téléchargement tient un verrou exclusif sur le
+   fichier `.lock` du répertoire du modèle ; un second processus Oxyn est
+   refusé avec `EmbedError::DownloadInProgress` au lieu d'écrire le même
+   `.part`. L'espace de travail temporaire de `make desktop-dev` garde son
+   modèle dans `models-temporary-workspace/` du répertoire de données de
+   l'utilisateur, à l'écart du `models/` de l'Oxyn installé — pas dans le
+   répertoire temporaire du système, où d'autres comptes peuvent écrire sous
+   Linux.
+
+   **Les fichiers sur disque restent des entrées.** Aucun fichier n'est
+   analysé avant que sa taille et son SHA-256 correspondent aux valeurs
+   épinglées : le safetensors est haché de nouveau juste avant que la
+   conversion l'analyse, et supprimé s'il est endommagé ; `tokenizer.json` est
+   lu une fois, si bien que les octets hachés sont les octets analysés. Un
+   fichier tronqué par un disque plein est refusé, jamais remis à un
+   analyseur. **Un risque est accepté** : `model.bpk` est vérifié, puis mappé
+   en mémoire. Un processus du même utilisateur qui le remplace entre les deux
+   fait charger son contenu sans vérification, et un processus qui le tronque
+   sur place pendant qu'il est mappé tue Oxyn par `SIGBUS`. Les deux exigent
+   un accès en écriture au répertoire de données, qui contient déjà tout ce
+   qu'Oxyn garde ; les remplacements d'Oxyn lui-même — un renommage, une
+   suppression — laissent un mappage intact.
+
+   **Les erreurs portent des textes fixes.** Les messages de burn-store
+   nomment le chemin complet d'un fichier et une erreur du tokenizer peut
+   citer le texte : les erreurs d'`oxyn-embed` et le message qu'affichent les
+   réglages et qu'enregistre le journal sont des phrases fixes, complétées
+   seulement d'un nom de fichier épinglé, d'une action ou d'un type d'erreur
+   d'E/S ; des tests donnent à chaque variante un chemin et un marqueur et
+   vérifient qu'aucun des deux ne ressort. Ce qui est transformé en vecteur —
+   la question, les noms et commentaires des relations — ne quitte jamais le
+   processus, et le cache des vecteurs n'en garde que le SHA-256.
 
 ## Politique `unsafe`
 

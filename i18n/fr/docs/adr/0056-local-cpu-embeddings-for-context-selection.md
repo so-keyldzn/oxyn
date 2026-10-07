@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="56387698ff32" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="aea2d5858c35" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -81,8 +81,9 @@ surface publique : `ModelStore` (le répertoire du modèle : `status`,
 n'en dépend pas : `ContextBuilder` reçoit des scores par relation — une table
 de `CatalogPath` vers `f32`, sans aucun texte — calculés par `oxyn-desktop`.
 La passerelle d'[I-04](../../CLAUDE.md#i-04) reste le seul endroit qui
-rend un contexte ; un score peut réordonner des relations, il ne peut pas
-ajouter un mot à un prompt. `oxyn-ai`, ses tests et le chemin d'un agent
+rend un contexte, et un score n'apporte aucun mot à un prompt. Il décide en
+revanche **quelles** relations sont rendues, et peut en augmenter le nombre —
+voir les règles de classement plus bas. `oxyn-ai`, ses tests et le chemin d'un agent
 externe continuent de compiler sans Burn, et retirer l'étape sémantique ne
 touche les tests d'aucune des deux crates. La sélection que lit le complément
 du catalogue (`wanted_relations`) prend les mêmes scores, si bien que ce qui
@@ -141,10 +142,16 @@ chaque classement.
 dépendent des formes des tenseurs, jamais de valeurs venues d'un serveur ou
 d'un fichier : `Embedder::embed` ne fournit que des entrées rectangulaires
 `[batch, length]` avec `batch ≥ 1` et `2 ≤ length ≤ 512`, et les tests
-exécutent les deux bornes de cet intervalle. Les `#[allow]` sont posés sur
-`mod model;` et `mod weights_map;` dans `generated/mod.rs`, nulle part
-ailleurs ; le reste de la crate garde les lints du workspace,
-[I-09](../../CLAUDE.md#i-09) compris. Aucun `unsafe` n'est écrit : le
+exécutent les deux bornes de cet intervalle. Un seul `#[allow]` est posé sur
+`mod model;` dans `generated/mod.rs`, et il nomme exactement les trois lints
+que le graphe déclenche, comptés avec clippy le 2026-10-07 :
+`clippy::unwrap_used` (138 signalements, pour les 69 `.unwrap()` que contient
+le texte), `clippy::unnecessary_cast` (172) et `clippy::too_many_arguments`
+(2). Jamais un groupe comme `clippy::all`, qui ferait taire aussi
+`disallowed_methods` et `disallowed_types` — les murs que le workspace refuse
+exprès. `weights_map.rs` n'en déclenche aucun et n'a pas d'exemption ; le reste
+de la crate garde les lints du workspace, [I-09](../../CLAUDE.md#i-09)
+compris. Aucun `unsafe` n'est écrit : le
 mappage mémoire vit dans burn-store.
 
 ### Désactivée par défaut, activée par l'humain
@@ -160,9 +167,13 @@ donc aucun agent ne lance un téléchargement. Son écran est dans
 d'`oxyn-embed` ne touche au réseau, au disque ni à la mémoire, et la sélection
 est exactement celle d'aujourd'hui.
 
-L'activer lance `ModelStore::download` en arrière-plan, avec un suivi de
-progression et une annulation. La désactiver décharge le modèle et supprime
-son répertoire (`ModelStore::remove`).
+**Le téléchargement est lancé par une commande, pas par la préférence.** Les
+réglages envoient `enable_semantic_ranking`, qui enregistre la préférence et
+lance `ModelStore::download` en arrière-plan, avec un suivi de progression et
+une annulation. Un `true` lu sur disque au démarrage ne lance rien : il décide
+seulement si un modèle déjà présent est utilisé. `disable_semantic_ranking`
+l'enregistre à désactivée, annule un téléchargement, décharge le modèle et
+supprime son répertoire (`ModelStore::remove`).
 
 ### Le téléchargement : deux sources, un seul ensemble d'octets acceptés
 
@@ -186,7 +197,33 @@ ne porte aucune donnée de l'utilisateur : une URL fixe et l'agent utilisateur
 IA, qui le désactivent : ce qu'ils envoient, ce sont les données de
 l'utilisateur, alors que cette requête n'en envoie aucune, et les octets
 qu'elle reçoit sont acceptés sur leur somme seule — qui les relaie peut les
-retenir, pas les altérer.
+retenir, pas les altérer. Le `reqwest` du workspace active pour cela sa
+feature `system-proxy` : sans elle, reqwest ne lit que les variables
+`HTTP(S)_PROXY`, dont une application lancée depuis le Finder n'hérite pas. La
+feature s'applique à tous les clients du graphe, si bien qu'un client qui ne
+doit pas suivre de proxy le dit : le seul client d'`oxyn-llm` continue
+d'appeler `no_proxy()`. Le système de mise à jour (`tauri-plugin-updater`,
+même `reqwest`) suit désormais lui aussi le proxy système ; ce qu'il installe
+reste accepté sur sa signature minisign, pas sur son chemin
+([ADR-0051](0051-automatic-updates-from-github-releases.md)).
+
+**Un seul téléchargement à la fois, entre processus.** Le téléchargement tient
+un verrou exclusif sur le fichier `.lock` du répertoire du modèle
+(`File::try_lock`) ; un second processus Oxyn qui le demande est refusé avec
+`EmbedError::DownloadInProgress`, puisqu'attendre est la solution — les
+fichiers qu'il écrit sont les mêmes fichiers. Le safetensors est haché de
+nouveau juste avant que la conversion l'analyse, et supprimé s'il est
+endommagé. `tokenizer.json` est lu une fois : les octets hachés sont les
+octets analysés.
+
+**Les erreurs portent des textes fixes.** Les messages de burn-store nomment
+le chemin complet d'un fichier, et une erreur du tokenizer peut citer le
+texte : les erreurs de conversion, de chargement et du tokenizer
+d'`oxyn-embed` les remplacent par des phrases fixes, et le message
+qu'`oxyn-desktop` affiche dans les réglages et écrit au journal est une phrase
+fixe par variante d'`EmbedError`, complétée seulement d'un nom de fichier
+épinglé, d'une action ou d'un type d'erreur d'E/S. Des tests donnent à chaque
+variante un chemin et un marqueur et vérifient qu'aucun des deux ne ressort.
 
 La release `embedding-model-835ad140` est publiée comme **pré-version** : la
 « latest release » de GitHub est la plus récente qui n'est ni une pré-version
@@ -198,7 +235,14 @@ release ordinaire, elle deviendrait « latest » et arrêterait toutes les mises
 `LICENSE-Apache-2.0.txt` et `NOTICE.md` (l'attribution d'IBM, la révision et
 les sommes) ; « latest » est resté `v0.0.7`.
 
-Les fichiers vivent sous `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`.
+Les fichiers vivent sous `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`,
+`models/` se trouvant à côté du fichier du store local. L'espace de travail
+temporaire de `make desktop-dev` utilise à la place
+`models-temporary-workspace/` dans le même répertoire de données de
+l'utilisateur : partager `models/` permettait à une session de développement
+qui désactive l'option de supprimer le modèle de l'Oxyn installé. Ce n'est pas
+le répertoire temporaire du système, où d'autres comptes peuvent écrire sous
+Linux, et il persiste d'un lancement de développement à l'autre.
 Après le téléchargement, le safetensors en bf16 est élargi en f32 et écrit en
 `model.bpk` (389 816 832 octets), qui se charge par mappage mémoire ; le
 safetensors n'est supprimé qu'une fois le fichier converti vérifié. Ce qui
@@ -218,6 +262,17 @@ l'élargissement depuis le bf16 est exact, si bien que le fichier ne dépend que
 des poids. Aucun fichier n'est analysé avant que sa taille et sa somme aient
 été vérifiées.
 
+**Un risque accepté : `model.bpk` est vérifié, puis mappé.** Entre la
+vérification et le mappage mémoire, un processus du même utilisateur qui
+remplace le fichier fait charger son contenu sans vérification ; un processus
+qui le tronque sur place pendant qu'il est mappé fait tuer Oxyn par `SIGBUS` à
+la prochaine lecture d'une page manquante. Ni l'un ni l'autre n'est possible
+sans accès en écriture au répertoire de données, qui contient déjà tout ce
+qu'Oxyn garde. Renommer par-dessus le fichier ou le supprimer — ce que fait
+Oxyn lui-même — laisse le mappage intact. Lire les 390 Mo en mémoire fermerait
+la fenêtre au prix de l'avantage mémoire du mappage ; le risque est écrit à
+côté de la vérification, dans `embedder.rs`.
+
 ### Chargé à la demande, libéré après cinq minutes
 
 `OnDemandEmbedder` charge le modèle à la première demande et le libère **cinq
@@ -235,19 +290,33 @@ thread d'exécuteur async ([I-05](../../CLAUDE.md#i-05)). burn-flex et
   champ soit lu, si bien que le vecteur ne change pas quand les champs se
   chargent.
 
-Les vecteurs des relations sont gardés en mémoire seulement, dans
-`oxyn-desktop`, indexés par `MODEL_ID` et le texte transformé ; ils ne sont
-jamais écrits sur disque, jamais journalisés, jamais envoyés. 384 `f32` pèsent
-1 536 octets : au plafond de 50 000 objets du cache de catalogue, 77 Mo au
-plus.
+Un commentaire est coupé à 2 048 octets avant d'être transformé : le modèle
+lit 512 jetons au plus. Les vecteurs des relations sont gardés en mémoire
+seulement, dans `oxyn-desktop`, indexés par un **SHA-256 de `MODEL_ID` et du
+texte transformé** : le cache ne garde aucun nom de table ni commentaire, le
+texte ne vit que le temps d'une question, et la borne ne dépend pas de la
+longueur des commentaires. Ils ne sont jamais écrits sur disque, jamais
+journalisés, jamais envoyés. Au plus 50 000 vecteurs — le plafond du cache de
+catalogue — en deux générations : 50 000 × 1 536 octets plus 2 × 32 768
+compartiments de 41 octets, environ **79,5 Mo**.
 
-Le classement, dans `oxyn-ai`, garde les règles existantes et ajoute une clé :
+Le classement, dans `oxyn-ai` :
 
 1. les mentions `@` d'abord, comme aujourd'hui ;
 2. les relations qui ont un score lexical, selon ce score ; **les scores égaux
    selon le cosinus**, puis selon le chemin ;
 3. les relations sans score lexical, **selon le cosinus**, puis selon le
-   chemin — au lieu du chemin seul.
+   chemin, jusqu'à `ContextPolicy::max_relations`.
+
+**Les scores peuvent élargir la sélection, pas seulement la réordonner.** Sans
+scores, une question qui correspond à certains noms garde ces correspondances
+et rien d'autre (l'ordre des chemins ne décide que quand rien ne correspond).
+Avec des scores, la règle 3 complète les correspondances avec les relations
+que la recherche a manquées, jusqu'à `max_relations` — 24. Une plus grande
+part du schéma est alors décrite et envoyée, toujours sous le niveau de la
+connexion et dans le budget de jetons ; les réglages le disent
+([UX-SPEC](../UX-SPEC.md#classement-sémantique)). Un test d'`oxyn-ai` fixe les
+deux nombres et vérifie que le complément du catalogue veut la même sélection.
 
 Pas de seuil de cosinus : une faible correspondance lexicale passe toujours
 devant une forte correspondance sémantique. Avec un écart de 0,1 entre tables
@@ -274,9 +343,14 @@ indisponible et pourquoi.
 * **+** Rien ne quitte la machine pour le calculer : pas de fournisseur, pas
   de clé, pas d'installation. Le niveau de confidentialité est intact sous
   toutes ses valeurs.
-* **+** Les résultats lexicaux gardent leur ordre ; l'étape sémantique
-  n'ordonne que ce qui était déjà à égalité ou non classé. Un vecteur faux ne
-  peut rétrograder rien de ce qui correspondait par le nom.
+* **+** Les correspondances lexicales gardent leur ordre et leur place : un
+  vecteur faux ne peut rétrograder rien de ce qui correspondait par le nom.
+* **−** **Une plus grande part du schéma peut sortir.** Là où la sélection
+  lexicale ne gardait que ses correspondances, les relations trouvées par le
+  sens la complètent jusqu'à 24 : un fournisseur peut lire la description de
+  tables que la question n'a jamais nommées. Le niveau et le budget de jetons
+  bornent toujours ce qui sort ; c'est le nombre de relations décrites qui
+  augmente.
 * **+** `oxyn-ai` ne dépend pas de Burn : ses tests et le chemin des agents
   externes gardent leur temps de compilation, et la passerelle reste une seule
   fonction.

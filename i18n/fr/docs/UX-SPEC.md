@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="947c5d8bfaf0" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="2b8b98b89cb4" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1832,8 +1832,11 @@ ce qu'elle coûte et ce qu'elle ne fait pas : calculé sur cet ordinateur, aucun
 nom de table, commentaire ou question envoyé nulle part ; environ **220 Mo**
 téléchargés une fois, environ **415 Mo** gardés sur disque, environ **800 Mo**
 de mémoire pendant qu'on pose des questions, libérés **5 minutes** après la
-dernière. Tant que l'option est activée, une seconde ligne dit que la
-désactiver supprime le modèle de cet ordinateur.
+dernière. Une seconde ligne dit ce qui peut sortir de plus : des tables
+trouvées par le sens peuvent être ajoutées au contexte de l'assistant, dans la
+limite habituelle et sous le niveau de confidentialité de la connexion. Tant
+que l'option est activée, une troisième ligne dit que la désactiver supprime
+le modèle de cet ordinateur.
 
 **L'état du modèle, et ce que chacun permet.** Une ligne d'état nomme l'état ;
 les actions à côté sont les seules proposées.

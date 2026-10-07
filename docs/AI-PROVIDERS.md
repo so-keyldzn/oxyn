@@ -282,20 +282,28 @@ diagram read the same cache.
 
 "The search guided by the question" is lexical, and only lexical while
 semantic ranking is off — its default. Turned on by the human, it adds local
-CPU embeddings that order the relations the lexical score ties or misses
+CPU embeddings that order the relations the lexical score ties or misses, and
+complete the selection with them
 ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)):
 
-- **nothing crosses the boundary.** The question, and each relation's
+- **the embedding step sends nothing.** The question, and each relation's
   qualified name and comment, are embedded in Oxyn's process by
-  `oxyn-embed`; the vectors are kept in memory only, never logged, never
-  written, never sent. No `ai_egress` record exists for this step because
-  nothing goes out, under every tier — `Local` included;
-- **a score is not context.** `ContextBuilder` receives one number per
-  relation and uses it only to order; it renders the same descriptions, under
-  the same tier, as without it. The catalog fill reads the same scores through
-  `wanted_relations`, so what is described is still what is kept;
-- **it never decides alone.** A relation matched by name keeps its rank; the
-  semantic score breaks ties and orders what matched nothing, without a
+  `oxyn-embed`; the vectors are kept in memory only, keyed by a digest, never
+  logged, never written, never sent. The step itself has no `ai_egress`
+  record because it sends nothing, under every tier — `Local` included;
+- **a score is not context, but it changes the context.** `ContextBuilder`
+  receives one number per relation; a score carries no word into the prompt,
+  and each relation is rendered as without it, under the same tier. But the
+  scores decide **which** relations are described, and **can raise their
+  number**: where the lexical search keeps only its matches, the relations it
+  missed complete the selection by cosine, up to `max_relations` (24). More of
+  the schema then reaches the provider — always under the connection's tier,
+  within the token budget, and recorded in `ai_egress` like any context. The
+  settings say so before the option is turned on. The catalog fill reads the
+  same scores through `wanted_relations`, so what is described is still what
+  is kept;
+- **it never outranks a name.** A relation matched by name keeps its rank;
+  the semantic score breaks ties and orders what matched nothing, without a
   threshold. It is bounded at 2 seconds per question, and while the model is
   off, downloading or failing, selection is exactly the lexical one.
 
@@ -651,9 +659,9 @@ that calls a model to produce a result the user expects to be
 deterministic — a sort, formatting, a table name completion — is a
 design defect, not a feature. The local embeddings of
 [ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md) do not
-break this rule: they only order what the AI context keeps, a result no user
-sees as a list, and the catalog search, the tree and the `@` list stay
-lexical.
+break this rule: they only choose and order what the AI context keeps, a
+result no user sees as a list, and the catalog search, the tree and the `@`
+list stay lexical.
 
 ## What is not settled yet
 

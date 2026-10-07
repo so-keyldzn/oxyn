@@ -70,7 +70,9 @@ L2-normalized), `cosine`, and the `pinned` constants.
 does not: `ContextBuilder` receives per-relation scores — a map from
 `CatalogPath` to `f32`, carrying no text — computed by `oxyn-desktop`. The
 gateway of [I-04](../../CLAUDE.md#i-04) stays the only place that renders a
-context; a score can reorder relations, it cannot add a word to a prompt.
+context, and a score carries no word into a prompt. It does decide **which**
+relations are rendered, and can raise their number — see the ranking rules
+below.
 `oxyn-ai`, its tests and an external agent's path keep compiling without Burn,
 and removing the semantic step touches neither crate's tests. The selection
 the catalog fill reads (`wanted_relations`) takes the same scores, so what is
@@ -127,9 +129,15 @@ constant fails the build instead of degrading every ranking.
 tensor shapes, never on values coming from a server or a file:
 `Embedder::embed` only feeds rectangular `[batch, length]` inputs with
 `batch ≥ 1` and `2 ≤ length ≤ 512`, and the tests run both ends of that
-range. The `#[allow]`s sit on `mod model;` and `mod weights_map;` in
-`generated/mod.rs`, nowhere else; the rest of the crate keeps the workspace's
-lints, [I-09](../../CLAUDE.md#i-09) included. No `unsafe` is written:
+range. A single `#[allow]` sits on `mod model;` in `generated/mod.rs`, and it
+names exactly the three lints the graph trips, counted with clippy on
+2026-10-07: `clippy::unwrap_used` (138 reports, for the 69 `.unwrap()` the
+text holds), `clippy::unnecessary_cast` (172) and
+`clippy::too_many_arguments` (2). Never a group such as `clippy::all`, which
+would also silence `disallowed_methods` and `disallowed_types` — the walls
+the workspace denies on purpose. `weights_map.rs` trips none and has no
+exemption; the rest of the crate keeps the workspace's lints,
+[I-09](../../CLAUDE.md#i-09) included. No `unsafe` is written:
 memory mapping lives inside burn-store.
 
 ### Off by default, turned on by the human
@@ -143,9 +151,13 @@ turns it on, so no agent starts a download. Its screen is in
 [UX-SPEC](../UX-SPEC.md#semantic-ranking). While it is off, nothing of `oxyn-embed` touches the
 network, the disk or memory, and selection is exactly today's.
 
-Turning it on starts `ModelStore::download` in the background, with a
-progress report and cancellation. Turning it off unloads the model and
-deletes its directory (`ModelStore::remove`).
+**The download is started by a command, not by the preference.** The
+settings send `enable_semantic_ranking`, which saves the preference and starts
+`ModelStore::download` in the background, with a progress report and
+cancellation. A `true` read from disk at startup starts nothing: it only
+decides whether a model already present is used. `disable_semantic_ranking`
+saves it off, cancels a download, unloads the model and deletes its
+directory (`ModelStore::remove`).
 
 ### The download: two sources, one set of accepted bytes
 
@@ -167,7 +179,31 @@ outgoing request carries no user data: a fixed URL and the `oxyn/<version>`
 user agent. The system proxy is honoured, unlike the AI transports, which
 disable it: what they send is the user's data, whereas this request sends
 none, and the bytes it receives are accepted on their checksum alone —
-whoever relays them can withhold them, not alter them.
+whoever relays them can withhold them, not alter them. The workspace
+`reqwest` enables its `system-proxy` feature for that: without it, reqwest
+only reads the `HTTP(S)_PROXY` variables, which an application started from
+the Finder does not inherit. The feature applies to every client of the
+graph, so a client that must not follow a proxy says so: `oxyn-llm`'s only
+client keeps calling `no_proxy()`. The updater (`tauri-plugin-updater`, same
+`reqwest`) now follows the system proxy too; what it installs is still
+accepted on its minisign signature, not on its route
+([ADR-0051](0051-automatic-updates-from-github-releases.md)).
+
+**One download at a time, across processes.** The download holds an exclusive
+lock on the model directory's `.lock` file (`File::try_lock`); a second Oxyn
+process asking for it is refused with `EmbedError::DownloadInProgress`, since
+waiting is the fix — the files it writes are the same files. The
+safetensors is hashed again right before the conversion parses it, and
+removed when damaged. `tokenizer.json` is read once: the bytes hashed are the
+bytes parsed.
+
+**Errors carry fixed texts.** burn-store's messages name a file's full path,
+and a tokenizer error can quote the text: the conversion, loading and
+tokenizer errors of `oxyn-embed` replace them with fixed sentences, and the
+message `oxyn-desktop` shows in the settings and writes to the journal is a
+fixed sentence per `EmbedError` variant, filled only with a pinned file name,
+an action or an I/O error kind. Tests feed every variant a path and a marker
+and check that neither comes out.
 
 The release `embedding-model-835ad140` is published as a **pre-release**:
 GitHub's "latest release" is the most recent non-prerelease, non-draft one,
@@ -178,7 +214,13 @@ published on 2026-10-07 and carries, beside the two files,
 `LICENSE-Apache-2.0.txt` and `NOTICE.md` (IBM's attribution, the revision and
 the checksums); "latest" stayed `v0.0.7`.
 
-The files live under `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`.
+The files live under `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`,
+`models/` sitting next to the local store's file. The temporary workspace of
+`make desktop-dev` uses `models-temporary-workspace/` in the same user data
+directory instead: sharing `models/` let turning the option off in a
+development session delete the installed Oxyn's model. It is not the system
+temporary directory, which other accounts can write on Linux, and it
+persists across development launches.
 After the download, the bf16 safetensors is widened to f32 and written as
 `model.bpk` (389,816,832 bytes), which loads by memory mapping; the
 safetensors is deleted only once the converted file is verified. What stays on
@@ -195,6 +237,16 @@ every `param_id` set to `None`; the ids only serve to resume training, and the
 widening from bf16 is exact, so the file is a function of the weights alone.
 No file is parsed before its size and checksum are checked.
 
+**An accepted risk: `model.bpk` is checked, then mapped.** Between the
+verification and the memory mapping, a process of the same user that replaces
+the file gets its content loaded unverified; one that truncates it in place
+while it is mapped makes the next read of a missing page kill Oxyn with
+`SIGBUS`. Neither is reachable without write access to the data directory,
+which already holds everything Oxyn keeps. Renaming over the file or deleting
+it — what Oxyn itself does — leaves the mapping intact. Reading the 390 MB
+into memory instead would remove the window at the cost of the mapping's
+memory advantage; the risk is written next to the check in `embedder.rs`.
+
 ### Loaded on demand, dropped after five minutes
 
 `OnDemandEmbedder` loads the model at the first request and drops it **five
@@ -210,18 +262,31 @@ burn-flex and `tokenizers` use rayon's global pool.
   carries them — known as soon as a schema is listed, before any field is
   read, so the vector does not change when the fields load.
 
-Relation vectors are kept in memory only, in `oxyn-desktop`, keyed by
-`MODEL_ID` and the embedded text; they are never written to disk, never
-logged, never sent. 384 `f32` weigh 1,536 bytes: at the catalog cache's
-ceiling of 50,000 objects, at most 77 MB.
+A comment is cut at 2,048 bytes before it is embedded: the model reads 512
+tokens at most. Relation vectors are kept in memory only, in `oxyn-desktop`,
+keyed by a **SHA-256 of `MODEL_ID` and the embedded text**: the cache keeps no
+table name nor comment, the text lives for one question only, and the bound
+does not depend on the comments' length. They are never written to disk,
+never logged, never sent. At most 50,000 vectors — the catalog cache's
+ceiling — in two generations: 50,000 × 1,536 bytes plus 2 × 32,768 buckets of
+41 bytes, about **79.5 MB**.
 
-The ranking, in `oxyn-ai`, keeps the existing rules and adds one key:
+The ranking, in `oxyn-ai`:
 
 1. `@` mentions first, as today;
 2. relations with a lexical score, by that score; **equal scores by cosine**,
    then by path;
-3. relations without a lexical score, **by cosine**, then by path — instead of
-   by path alone.
+3. relations without a lexical score, **by cosine**, then by path, until
+   `ContextPolicy::max_relations`.
+
+**Scores can widen the selection, not only reorder it.** Without scores, a
+question that matches some names keeps those matches and nothing else (the
+order of the paths decides only when nothing matches). With scores, rule 3
+completes the matches with the relations the search missed, up to
+`max_relations` — 24. More of the schema is then described and sent, always
+under the connection's tier and within the token budget; the settings say so
+([UX-SPEC](../UX-SPEC.md#semantic-ranking)). A test of `oxyn-ai` fixes both
+counts and that the catalog fill wants the same selection.
 
 No cosine threshold: a weak lexical match still outranks a strong semantic
 one. With a gap of 0.1 between relevant and irrelevant tables, a threshold
@@ -243,9 +308,13 @@ semantic ranking is unavailable and why.
   alphabetically first: the 24 relations kept stop being arbitrary.
 * **+** Nothing leaves the machine to compute it: no provider, no key, no
   installation. The privacy tier is untouched under every value.
-* **+** Lexical results keep their order; the semantic step only orders what
-  was already tied or unranked. A wrong vector can demote nothing that
-  matched by name.
+* **+** Lexical matches keep their order and their place: a wrong vector can
+  demote nothing that matched by name.
+* **−** **More schema can leave.** Where the lexical selection kept only its
+  matches, relations found by meaning complete it up to 24: a provider can
+  read the description of tables the question never named. The tier and the
+  token budget still bound what leaves; the number of relations described is
+  what grows.
 * **+** `oxyn-ai` does not depend on Burn: its tests and the external-agent
   path keep their compile time, and the gateway stays one function.
 * **−** **795 MB of RAM while the model is loaded**, five minutes after

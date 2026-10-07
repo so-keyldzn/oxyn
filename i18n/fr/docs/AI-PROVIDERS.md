@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="1cf5011e9290" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="ff9dcf77164b" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -290,22 +290,29 @@ l'événement `CatalogUpdated`, et la liste des mentions `@` comme le diagramme
 « La recherche guidée par la question » est lexicale, et seulement lexicale
 tant que le classement sémantique est désactivé — son défaut. Activé par
 l'humain, il ajoute des embeddings locaux sur CPU qui ordonnent les relations
-que le score lexical laisse à égalité ou manque
-([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)) :
+que le score lexical laisse à égalité ou manque, et complètent la sélection
+avec elles ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)) :
 
-- **rien ne franchit la frontière.** La question, ainsi que le nom qualifié et
-  le commentaire de chaque relation, sont transformés en vecteurs dans le
-  processus d'Oxyn par `oxyn-embed` ; les vecteurs restent en mémoire
-  seulement, jamais journalisés, jamais écrits, jamais envoyés. Aucun
-  enregistrement `ai_egress` n'existe pour cette étape puisque rien ne sort,
-  sous tous les niveaux — `Local` compris ;
-- **un score n'est pas du contexte.** `ContextBuilder` reçoit un nombre par
-  relation et ne s'en sert que pour ordonner ; il rend les mêmes descriptions,
-  sous le même niveau, que sans lui. Le complément du catalogue lit les mêmes
-  scores par `wanted_relations`, si bien que ce qui est décrit reste ce qui est
-  gardé ;
-- **il ne décide jamais seul.** Une relation trouvée par son nom garde son
-  rang ; le score sémantique départage les égalités et ordonne ce qui n'a rien
+- **l'étape de transformation n'envoie rien.** La question, ainsi que le nom
+  qualifié et le commentaire de chaque relation, sont transformés en vecteurs
+  dans le processus d'Oxyn par `oxyn-embed` ; les vecteurs restent en mémoire
+  seulement, indexés par une empreinte, jamais journalisés, jamais écrits,
+  jamais envoyés. L'étape elle-même n'a pas d'enregistrement `ai_egress`
+  puisqu'elle n'envoie rien, sous tous les niveaux — `Local` compris ;
+- **un score n'est pas du contexte, mais il change le contexte.**
+  `ContextBuilder` reçoit un nombre par relation ; un score n'apporte aucun
+  mot au prompt, et chaque relation est rendue comme sans lui, sous le même
+  niveau. Mais les scores décident **quelles** relations sont décrites, et
+  **peuvent en augmenter le nombre** : là où la recherche lexicale ne garde
+  que ses correspondances, les relations qu'elle a manquées complètent la
+  sélection selon le cosinus, jusqu'à `max_relations` (24). Une plus grande
+  part du schéma atteint alors le fournisseur — toujours sous le niveau de la
+  connexion, dans le budget de jetons, et consignée dans `ai_egress` comme tout
+  contexte. Les réglages le disent avant que l'option soit activée. Le
+  complément du catalogue lit les mêmes scores par `wanted_relations`, si bien
+  que ce qui est décrit reste ce qui est gardé ;
+- **il ne passe jamais devant un nom.** Une relation trouvée par son nom garde
+  son rang ; le score sémantique départage les égalités et ordonne ce qui n'a rien
   trouvé, sans seuil. Il est borné à 2 secondes par question, et tant que le
   modèle est désactivé, en téléchargement ou en échec, la sélection est
   exactement la sélection lexicale.
@@ -672,8 +679,8 @@ qui appelle un modèle pour produire un résultat que l'utilisateur attend comme
 déterministe — un tri, un formatage, une complétion de nom de table — est un
 défaut de conception, pas une fonctionnalité. Les embeddings locaux de
 l'[ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)
-n'enfreignent pas cette règle : ils n'ordonnent que ce que garde le contexte
-IA, un résultat qu'aucun utilisateur ne voit comme une liste, et la recherche
+n'enfreignent pas cette règle : ils ne font que choisir et ordonner ce que
+garde le contexte IA, un résultat qu'aucun utilisateur ne voit comme une liste, et la recherche
 du catalogue, l'arbre et la liste `@` restent lexicaux.
 
 ## Ce qui n'est pas encore tranché

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="c0981dbb6840" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0228b027887e" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2442,6 +2442,9 @@ Même machine, build release sauf mention contraire, commit `a7233c3`.
 | `sha2` **0.11.0**, déjà dépendance du workspace ; `Cargo.lock` garde aussi la 0.10.9 pour d'autres crates | `Cargo.lock` à `a7233c3` | 2026-10-07 |
 | Les nouvelles exigences déplacent cinq entrées existantes de `Cargo.lock` dans leur plage semver : `uuid` 1.26.0 → 1.27.0, `cc` 1.4.5 → 1.6.0, `syn` 3.0.5 → 3.0.6, `rand` 0.10.2 → 0.10.3, `find-msvc-tools` 0.1.12 → 0.1.14 | `git diff` de `Cargo.lock`, `8ec843c..a7233c3` | 2026-10-07 |
 | Paquets Python épinglés par `codegen/reference.py` et `codegen/regenerate.py` (hors build, exécutés avec `uv`) : `onnxruntime` **1.30.0** (2026-09-10), `numpy` **2.5.3** (2026-09-06), `tokenizers` **0.23.2** (2026-09-03) | [API JSON de PyPI](https://pypi.org/pypi/onnxruntime/1.30.0/json) | 2026-10-07 |
+| `reqwest` 0.13.4 gagne la feature `system-proxy` (commit `83e8076`) ; par `hyper-util`, `Cargo.lock` gagne quatre entrées : `system-configuration` **0.7.0** (2025-12-02), `system-configuration-sys` **0.6.0** (2024-01-31), un second `core-foundation` **0.9.4** (2023-11-30) à côté du 0.10.0 existant, et `windows-registry` **0.6.1** (2025-10-06), toutes `MIT OR Apache-2.0`. Des versions plus récentes existent (`system-configuration` 0.8.0, `windows-registry` 0.100.0, `core-foundation` 0.10.1) : ce sont les versions que demande `hyper-util` | `Cargo.lock` à `83e8076` ; [API crates.io](https://crates.io/api/v1/crates/system-configuration) | 2026-10-07 |
+| `system-configuration-sys` 0.6.0 est une crate `-sys`, contrairement au graphe du spike : son `build.rs` lie seulement le framework système `SystemConfiguration` sur les cibles Apple, et ne compile aucun C | source de la crate, `build.rs` | 2026-10-07 |
+| `reqwest` n'a qu'une version dans le graphe (0.13.4), partagée par `oxyn-llm`, `oxyn-embed` et `tauri-plugin-updater` 2.13.1 : une feature activée pour l'un l'est pour tous ; le client d'`oxyn-llm` appelle `no_proxy()` (`crates/oxyn-llm/src/http.rs`) | `Cargo.lock` ; source | 2026-10-07 |
 
 ### Alternatives
 

@@ -2416,6 +2416,9 @@ Same machine, release build unless stated, commit `a7233c3`.
 | `sha2` **0.11.0**, already a workspace dependency; `Cargo.lock` also keeps 0.10.9 for other crates | `Cargo.lock` at `a7233c3` | 2026-10-07 |
 | The new requirements move five existing `Cargo.lock` entries within their semver range: `uuid` 1.26.0 → 1.27.0, `cc` 1.4.5 → 1.6.0, `syn` 3.0.5 → 3.0.6, `rand` 0.10.2 → 0.10.3, `find-msvc-tools` 0.1.12 → 0.1.14 | `git diff` of `Cargo.lock`, `8ec843c..a7233c3` | 2026-10-07 |
 | Python packages pinned by `codegen/reference.py` and `codegen/regenerate.py` (outside the build, run with `uv`): `onnxruntime` **1.30.0** (2026-09-10), `numpy` **2.5.3** (2026-09-06), `tokenizers` **0.23.2** (2026-09-03) | [PyPI JSON API](https://pypi.org/pypi/onnxruntime/1.30.0/json) | 2026-10-07 |
+| `reqwest` 0.13.4 gains the `system-proxy` feature (commit `83e8076`); through `hyper-util`, `Cargo.lock` gains four entries: `system-configuration` **0.7.0** (2025-12-02), `system-configuration-sys` **0.6.0** (2024-01-31), a second `core-foundation` **0.9.4** (2023-11-30) beside the existing 0.10.0, and `windows-registry` **0.6.1** (2025-10-06), all `MIT OR Apache-2.0`. Newer releases exist (`system-configuration` 0.8.0, `windows-registry` 0.100.0, `core-foundation` 0.10.1): these are the versions `hyper-util` asks for | `Cargo.lock` at `83e8076`; [crates.io API](https://crates.io/api/v1/crates/system-configuration) | 2026-10-07 |
+| `system-configuration-sys` 0.6.0 is a `-sys` crate, unlike the spike's graph: its `build.rs` only links the system `SystemConfiguration` framework on Apple targets, and compiles no C | crate source `build.rs` | 2026-10-07 |
+| `reqwest` is a single version in the graph (0.13.4), shared by `oxyn-llm`, `oxyn-embed` and `tauri-plugin-updater` 2.13.1: a feature enabled for one is enabled for all; `oxyn-llm`'s client calls `no_proxy()` (`crates/oxyn-llm/src/http.rs`) | `Cargo.lock`; source | 2026-10-07 |
 
 ### Alternatives
 

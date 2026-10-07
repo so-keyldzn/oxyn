@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="bedee95305d6" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="8ecca2db0541" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -110,8 +110,9 @@ auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)).
 à jour ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) et le
 téléchargement du modèle d'embeddings local
 ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)), lancé
-par une préférence que seul l'humain peut écrire. Aucun d'eux n'atteint un
-driver. La mise à jour est pilotée depuis Rust
+seulement par la commande `enable_semantic_ranking`, qui enregistre aussi la
+préférence en tant qu'humain — un `true` lu sur disque ne lance rien. Aucun
+d'eux n'atteint un driver. La mise à jour est pilotée depuis Rust
 seul : ses commandes (`commands/updates.rs`, `ipc/updates.rs`) ne prennent ni
 URL, ni chemin, ni version, et la webview ne détient aucune permission
 `updater:`. `tauri-plugin-opener` n'est pas enregistré du tout :
@@ -904,13 +905,16 @@ fenêtre de contexte — la sélection des tables pertinentes est un vrai compos
 
 La sélection est d'abord lexicale. Quand l'utilisateur a activé le classement
 sémantique — désactivé par défaut —, des embeddings locaux sur CPU ordonnent
-les relations que le score lexical laisse à égalité ou manque
+les relations que le score lexical laisse à égalité ou manque, et complètent
+la sélection avec elles jusqu'à `max_relations`, si bien que plus de relations
+peuvent être décrites que sans elles
 ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
 `oxyn-desktop` les calcule avec `oxyn-embed`, sur le pool bloquant, en
 2 secondes au plus par question, et remet à `ContextBuilder` un score par
 relation ; `oxyn-ai` ne dépend jamais d'`oxyn-embed`, et un score n'apporte
-aucun texte au prompt. Le modèle est local quel que soit le niveau : rien de
-cette étape ne quitte la machine.
+aucun texte au prompt. Le modèle est local quel que soit le niveau : l'étape
+de transformation n'envoie rien ; ce qui atteint un fournisseur est toujours
+rendu sous le niveau.
 
 ### 7.5 Abstraction des fournisseurs
 

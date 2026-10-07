@@ -1750,8 +1750,10 @@ tables by meaning with a local model`. Beneath it, always, what it costs and
 what it does not do: computed on this computer, no table name, comment or
 question sent anywhere; about **220 MB** downloaded once, about **415 MB** kept
 on disk, about **800 MB** of memory while questions are asked, released
-**5 minutes** after the last one. While the option is on, a second line says
-that turning it off deletes the model from this computer.
+**5 minutes** after the last one. A second line says what more can leave:
+tables found by meaning can be added to the assistant's context, within the
+usual limit and the connection's privacy tier. While the option is on, a
+third line says that turning it off deletes the model from this computer.
 
 **The model's state, and what each one allows.** A status line names the
 state; the actions beside it are the only ones offered.

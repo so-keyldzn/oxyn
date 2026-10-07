@@ -413,8 +413,9 @@ What enters Oxyn and is untrusted, in order of underestimation:
    restarts into an update already verified, as `cancel_exit` and the
    ordered exit already allow; open transactions still ask.
 9. **The local embedding model files.** Only when the user turns on semantic
-   ranking, a workspace preference off by default that no agent can change,
-   Oxyn downloads `model.safetensors` and `tokenizer.json` (220,191,240 bytes)
+   ranking — the `enable_semantic_ranking` command, which saves a workspace
+   preference off by default that no agent can change; a `true` read from
+   disk starts nothing —, Oxyn downloads `model.safetensors` and `tokenizer.json` (220,191,240 bytes)
    ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
    sources are constants of `oxyn_embed::pinned`: Hugging Face at a pinned
    commit, then the `embedding-model-835ad140` pre-release of this
@@ -431,14 +432,44 @@ What enters Oxyn and is untrusted, in order of underestimation:
    user data and its answer is trusted on its checksum, not on its path. A
    proxy can withhold the model, or see that Oxyn fetches it; it cannot make
    Oxyn accept other bytes. Refusing the proxy would only make the option
-   impossible to turn on behind a corporate network.
+   impossible to turn on behind a corporate network. It is read through
+   `reqwest`'s `system-proxy` feature — without it, only the `HTTP(S)_PROXY`
+   variables count, which an application started from the Finder does not
+   inherit. The feature applies to every client of the single `reqwest` of
+   the graph: `oxyn-llm`'s only client keeps calling `no_proxy()`, and **the
+   updater of item 8 now follows the system proxy too**, which leaves its
+   integrity where it was — on the minisign signature, not on the route.
    The request carries no user data — a fixed URL and the `oxyn/<version>`
-   user agent —, and the webview supplies neither a URL nor a path. The
-   files on disk stay inputs: the tokenizer and the converted `model.bpk`
-   are checked against their pinned size and checksum before any parsing,
-   so a file truncated by a full disk or replaced by another program is
-   refused, never handed to a parser. What is embedded — the question and
-   relation names and comments — never leaves the process.
+   user agent —, and the webview supplies neither a URL nor a path.
+
+   **Two processes.** A download holds an exclusive lock on the model
+   directory's `.lock` file; a second Oxyn process is refused with
+   `EmbedError::DownloadInProgress` instead of writing the same `.part`. The
+   temporary workspace of `make desktop-dev` keeps its model in
+   `models-temporary-workspace/` of the user data directory, apart from the
+   installed Oxyn's `models/` — not in the system temporary directory, which
+   other accounts can write on Linux.
+
+   **The files on disk stay inputs.** No file is parsed before its size and
+   SHA-256 match the pinned values: the safetensors is hashed again right
+   before the conversion parses it, and removed when damaged;
+   `tokenizer.json` is read once, so the bytes hashed are the bytes parsed.
+   A file truncated by a full disk is refused, never handed to a parser.
+   **One risk is accepted**: `model.bpk` is checked, then memory-mapped. A
+   process of the same user that replaces it between the two gets its
+   content loaded unverified, and one that truncates it in place while it is
+   mapped kills Oxyn with `SIGBUS`. Both need write access to the data
+   directory, which already holds everything Oxyn keeps; Oxyn's own
+   replacements — a rename, a deletion — leave a mapping intact.
+
+   **Errors carry fixed texts.** burn-store's messages name a file's full
+   path and a tokenizer error can quote the text: the errors of `oxyn-embed`
+   and the message the settings show and the journal records are fixed
+   sentences, filled only with a pinned file name, an action or an I/O error
+   kind; tests feed every variant a path and a marker and check that neither
+   comes out. What is embedded — the question and relation names
+   and comments — never leaves the process, and the vector cache keeps only
+   their SHA-256.
 
 ## `unsafe` policy
 

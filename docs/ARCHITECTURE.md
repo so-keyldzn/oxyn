@@ -105,7 +105,9 @@ audit instead of one ([I-03](../CLAUDE.md#i-03)).
 ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) and the
 download of the local embedding model
 ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)), started
-by a preference only the human can write. None of them reaches a driver. The updater is driven from Rust alone: its commands
+only by the `enable_semantic_ranking` command, which also saves the
+preference as the human — a `true` read from disk starts nothing. None of
+them reaches a driver. The updater is driven from Rust alone: its commands
 (`commands/updates.rs`, `ipc/updates.rs`) take no URL, path or version, and
 the webview holds no `updater:` permission. `tauri-plugin-opener` is not
 registered at all: `open_release_page` calls its free function `open_url`.
@@ -889,12 +891,14 @@ context window — selecting the relevant tables is a real component.
 
 Selection is lexical first. When the user turned semantic ranking on — off by
 default — local CPU embeddings order the relations the lexical score ties or
-misses ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+misses, and complete the selection with them up to `max_relations`, so more
+relations can be described than without them
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
 `oxyn-desktop` computes them with `oxyn-embed`, on the blocking pool, within
 2 seconds per question, and hands `ContextBuilder` a score per relation;
 `oxyn-ai` never depends on `oxyn-embed`, and a score carries no text into the
-prompt. The model is local whatever the tier: nothing of this step leaves the
-machine.
+prompt. The model is local whatever the tier: the embedding step sends
+nothing; what reaches a provider is still rendered under the tier.
 
 ### 7.5 Provider abstraction
 
