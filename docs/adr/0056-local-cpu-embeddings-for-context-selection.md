@@ -130,10 +130,13 @@ tensor shapes, never on values coming from a server or a file:
 `Embedder::embed` only feeds rectangular `[batch, length]` inputs with
 `batch ≥ 1` and `2 ≤ length ≤ 512`, and the tests run both ends of that
 range. A single `#[allow]` sits on `mod model;` in `generated/mod.rs`, and it
-names exactly the three lints the graph trips, counted with clippy on
-2026-10-07: `clippy::unwrap_used` (138 reports, for the 69 `.unwrap()` the
-text holds), `clippy::unnecessary_cast` (172) and
-`clippy::too_many_arguments` (2). Never a group such as `clippy::all`, which
+names exactly the three lints the graph trips: `clippy::unwrap_used`,
+`clippy::unnecessary_cast` and `clippy::too_many_arguments`. The graph holds
+**69** `.unwrap()` — `cargo clippy -p oxyn-embed --lib` reports 69 distinct
+sites with the exemption removed (2026-10-07). The 138 written in
+`generated/mod.rs` is the `--all-targets` count: `model.rs` is then compiled
+twice, as the library and as the library's test harness, and every site is
+reported once per build. Never a group such as `clippy::all`, which
 would also silence `disallowed_methods` and `disallowed_types` — the walls
 the workspace denies on purpose. `weights_map.rs` trips none and has no
 exemption; the rest of the crate keeps the workspace's lints,

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="8d3649369455" -->
+<!-- oxyn-translation source="docs/adr/0051-automatic-updates-from-github-releases.md" sha256="6e58f2314940" -->
 
 > Traduction française de [docs/adr/0051-automatic-updates-from-github-releases.md](../../../../docs/adr/0051-automatic-updates-from-github-releases.md). **La version anglaise fait foi.**
 
@@ -67,7 +67,13 @@ Vérifié le 2026-10-02 dans les sources des versions concernées
 fonctionnalité TLS : son `rustls-tls` tirerait `ring` et l'installerait comme
 `CryptoProvider` par défaut du processus, sous les drivers. Il réutilise le
 `reqwest` qu'`oxyn-llm` construit déjà sur `rustls` avec `aws-lc-rs` ;
-`cargo tree` ne montre ni `ring` ni nouveau doublon.
+`cargo tree` ne montre ni `ring` ni nouveau doublon. Depuis
+l'[ADR-0056](0056-local-cpu-embeddings-for-context-selection.md), ce `reqwest`
+unique active `system-proxy`, si bien que le système de mise à jour suit lui
+aussi le proxy du système — c'est le client d'`oxyn-llm` qui s'en retire, par
+`no_proxy()`. Ce qu'installe le système de mise à jour reste accepté sur sa
+signature minisign, pas sur son chemin : un proxy peut retenir une mise à
+jour, pas en substituer une.
 Son paquet JavaScript `@tauri-apps/plugin-updater` n'est pas installé, et
 `capabilities/main.json` n'accorde **aucune** permission `updater:*` — un test
 d'`oxyn-desktop` en refuse une. La webview n'atteint la mise à jour que par

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="aea2d5858c35" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="3484cd5b6214" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -144,10 +144,13 @@ d'un fichier : `Embedder::embed` ne fournit que des entrées rectangulaires
 `[batch, length]` avec `batch ≥ 1` et `2 ≤ length ≤ 512`, et les tests
 exécutent les deux bornes de cet intervalle. Un seul `#[allow]` est posé sur
 `mod model;` dans `generated/mod.rs`, et il nomme exactement les trois lints
-que le graphe déclenche, comptés avec clippy le 2026-10-07 :
-`clippy::unwrap_used` (138 signalements, pour les 69 `.unwrap()` que contient
-le texte), `clippy::unnecessary_cast` (172) et `clippy::too_many_arguments`
-(2). Jamais un groupe comme `clippy::all`, qui ferait taire aussi
+que le graphe déclenche : `clippy::unwrap_used`, `clippy::unnecessary_cast`
+et `clippy::too_many_arguments`. Le graphe contient **69** `.unwrap()` —
+`cargo clippy -p oxyn-embed --lib` signale 69 sites distincts une fois
+l'exemption retirée (2026-10-07). Le 138 écrit dans `generated/mod.rs` est le
+compte de `--all-targets` : `model.rs` est alors compilé deux fois, comme
+bibliothèque et comme harnais de test de la bibliothèque, et chaque site est
+signalé une fois par compilation. Jamais un groupe comme `clippy::all`, qui ferait taire aussi
 `disallowed_methods` et `disallowed_types` — les murs que le workspace refuse
 exprès. `weights_map.rs` n'en déclenche aucun et n'a pas d'exemption ; le reste
 de la crate garde les lints du workspace, [I-09](../../CLAUDE.md#i-09)
