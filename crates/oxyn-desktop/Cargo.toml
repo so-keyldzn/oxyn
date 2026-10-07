@@ -46,6 +46,8 @@ parking_lot.workspace = true
 rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The key of a relation vector: a digest, so the cache keeps no schema text.
+sha2.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true

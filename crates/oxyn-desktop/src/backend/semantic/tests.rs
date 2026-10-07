@@ -11,7 +11,7 @@ use oxyn_embed::pinned::DIMENSIONS;
 use oxyn_embed::{EmbedError, Embedding};
 use parking_lot::{Mutex, RwLock};
 
-use super::vectors::{BATCH, VectorCache, VectorKey, rank};
+use super::vectors::{BATCH, Embeddable, VectorCache, rank};
 use super::{Ranking, failed};
 use crate::backend::Backend;
 use crate::ipc::semantic::ModelState;
@@ -42,9 +42,9 @@ fn by_initial(texts: &[&str]) -> Result<Vec<Embedding>, EmbedError> {
         .collect())
 }
 
-fn relation(name: &str) -> (CatalogPath, VectorKey) {
+fn relation(name: &str) -> (CatalogPath, Embeddable) {
     let path = CatalogPath::for_relation(None, Some("public"), name).expect("a valid path");
-    (path, VectorKey::text(name))
+    (path, Embeddable::text(name))
 }
 
 fn far_future() -> Instant {
@@ -191,29 +191,74 @@ fn a_relation_is_embedded_by_its_qualified_name_and_comment() {
     let commented = RelationRef::new(schema, "orders", RelationKind::Table)
         .expect("valid")
         .with_comment("  Customer orders  ");
-    assert_ne!(VectorKey::of(&plain), VectorKey::of(&commented));
-    assert_eq!(VectorKey::of(&plain), VectorKey::text("public.orders"));
+    assert_eq!(Embeddable::of(&plain).embedded(), "public.orders");
     assert_eq!(
-        VectorKey::of(&commented),
-        VectorKey::text("public.orders\nCustomer orders")
+        Embeddable::of(&commented).embedded(),
+        "public.orders\nCustomer orders"
     );
-    // The key's `Debug` counts bytes; it never shows the schema.
-    assert!(!format!("{:?}", VectorKey::of(&commented)).contains("orders"));
+    // The `Debug` counts bytes; it never shows the schema.
+    assert!(!format!("{:?}", Embeddable::of(&commented)).contains("orders"));
 }
 
 #[test]
-fn an_error_shown_names_no_local_path() {
-    let error = EmbedError::Io {
-        action: "rename",
-        path: "/Users/someone/Library/Application Support/oxyn/models/x".into(),
-        source: std::io::Error::other("disk full"),
-    };
-    let ModelState::Failed { message, retryable } = failed(&error) else {
+fn the_cache_tells_texts_apart_by_their_digest() {
+    let vectors = Mutex::new(VectorCache::default());
+    // Same initial, so the same fake vector: only the key tells them apart.
+    let relations = vec![relation("orders"), relation("orders_archive")];
+    rank("q", relations, &vectors, by_initial, far_future()).expect("ranked");
+    assert_eq!(vectors.lock().len(), 2, "two texts, two keys");
+    rank(
+        "q",
+        vec![relation("orders")],
+        &vectors,
+        by_initial,
+        far_future(),
+    )
+    .expect("ranked");
+    assert_eq!(vectors.lock().len(), 2, "the same text finds its key again");
+}
+
+/// No error text reaches the settings or the journal: an I/O message holds
+/// a local path, a dependency's detail whatever it was given.
+#[test]
+fn an_error_shown_copies_no_error_text() {
+    const LEAK: &str = "/Users/someone/Library/SECRET-MARK";
+    let errors = [
+        EmbedError::Io {
+            action: "rename",
+            path: LEAK.into(),
+            source: std::io::Error::new(std::io::ErrorKind::StorageFull, LEAK),
+        },
+        EmbedError::Download {
+            file: "model.safetensors",
+            detail: format!("huggingface.co: {LEAK}"),
+        },
+        EmbedError::Corrupt {
+            file: "model.bpk",
+            detail: LEAK.to_owned(),
+        },
+        EmbedError::Conversion(LEAK.to_owned()),
+        EmbedError::Tokenizer(LEAK.to_owned()),
+        EmbedError::Inference(LEAK.to_owned()),
+        EmbedError::NotDownloaded,
+        EmbedError::Cancelled,
+    ];
+    for error in &errors {
+        let ModelState::Failed { message, .. } = failed(error) else {
+            panic!("a failure");
+        };
+        assert!(!message.contains("SECRET-MARK"), "{message}");
+        assert!(!message.is_empty());
+    }
+    let ModelState::Failed { message, retryable } = failed(&errors[0]) else {
         panic!("a failure");
     };
-    assert!(!message.contains("/Users/someone"), "{message}");
-    assert!(message.contains("disk full"));
+    assert_eq!(message, "Could not rename a model file: the disk is full.");
     assert!(!retryable);
+    let ModelState::Failed { retryable, .. } = failed(&errors[1]) else {
+        panic!("a failure");
+    };
+    assert!(retryable, "a pinned GET can be tried again");
 }
 
 /// A workspace whose model lives in a directory of its own.

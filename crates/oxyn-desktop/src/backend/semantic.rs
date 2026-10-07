@@ -46,7 +46,7 @@ use parking_lot::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tokio::sync::watch;
 
-use self::vectors::{VectorCache, VectorKey, rank};
+use self::vectors::{Embeddable, VectorCache, rank};
 use crate::backend::{Backend, Inner};
 use crate::ipc::IpcError;
 use crate::ipc::semantic::{ModelState, SemanticSnapshot};
@@ -60,6 +60,10 @@ pub(crate) const SEMANTIC_DEADLINE: Duration = Duration::from_secs(2);
 
 /// The directory, next to the local store's file, that holds the models.
 pub(crate) const MODELS_DIRECTORY: &str = "models";
+
+/// The temporary workspace's own models directory, beside
+/// [`MODELS_DIRECTORY`]: see [`Backend::place_models`].
+pub(crate) const TEMPORARY_MODELS_DIRECTORY: &str = "models-temporary-workspace";
 
 /// The model in memory, and the task that drops it once idle.
 struct Resident {
@@ -238,40 +242,83 @@ fn progress_state(progress: DownloadProgress) -> ModelState {
     }
 }
 
-/// An error in words the settings can show: what failed and why, never a
-/// local path — it holds the user's account name ([I-03](../../../../CLAUDE.md#i-03)).
+/// An error in words the settings and the journal can show.
+///
+/// Fixed sentences, one per variant, filled only with values Oxyn chose — a
+/// pinned file name, an action, an error kind. **No text of an error is
+/// copied**: an I/O message can carry a local path and the user's account
+/// name, a download or conversion detail whatever a dependency or a server
+/// put there ([I-03](../../../../CLAUDE.md#i-03)). This holds whatever
+/// `oxyn-embed` writes in its own messages.
 fn failed(error: &EmbedError) -> ModelState {
     let (message, retryable) = match error {
-        // One line per source: its public host and why it failed.
-        EmbedError::Download { file, detail } => {
-            (format!("Could not download {file}: {detail}"), true)
-        }
-        EmbedError::Io { action, source, .. } => {
-            (format!("Could not {action} a model file: {source}"), false)
-        }
-        other => (other.to_string(), false),
+        EmbedError::NotDownloaded => ("The model is not downloaded.".to_owned(), false),
+        EmbedError::Corrupt { file, .. } => (
+            format!("The model file {file} is not the expected one: download it again."),
+            false,
+        ),
+        EmbedError::Io { action, source, .. } => (
+            format!(
+                "Could not {action} a model file: {}.",
+                io_reason(source.kind())
+            ),
+            false,
+        ),
+        // A `GET` of a pinned file duplicates nothing: trying again is safe.
+        EmbedError::Download { file, .. } => (
+            format!(
+                "Could not download {file} from Hugging Face nor from the Oxyn release. Check the network connection, then download again."
+            ),
+            true,
+        ),
+        EmbedError::Cancelled => ("The download was cancelled.".to_owned(), false),
+        EmbedError::Conversion(_) => (
+            "The downloaded model could not be prepared for this computer.".to_owned(),
+            false,
+        ),
+        EmbedError::Tokenizer(_) => ("The model's tokenizer refused a text.".to_owned(), false),
+        EmbedError::Inference(_) => ("The model returned an unusable result.".to_owned(), false),
+        // `#[non_exhaustive]`: a failure a newer `oxyn-embed` adds.
+        _ => ("The local model failed.".to_owned(), false),
     };
     ModelState::Failed { message, retryable }
+}
+
+/// The reason of a local file failure, from its kind alone.
+fn io_reason(kind: std::io::ErrorKind) -> &'static str {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::NotFound => "a file or directory is missing",
+        ErrorKind::PermissionDenied => "permission denied",
+        ErrorKind::StorageFull => "the disk is full",
+        ErrorKind::ReadOnlyFilesystem => "the disk is read-only",
+        _ => "the system refused the operation",
+    }
 }
 
 impl Backend {
     /// Puts the model next to the local store's file, under
     /// [`MODELS_DIRECTORY`].
     ///
-    /// The temporary workspace has no file: it takes the directory the saved
-    /// workspace would use. The model is public bytes checked on their
-    /// checksum, not workspace state, and one copy per machine spares a
-    /// 220 MB download at every development launch.
+    /// The temporary workspace has no file: it gets a directory of its own,
+    /// [`TEMPORARY_MODELS_DIRECTORY`] in the same data directory. Separate,
+    /// because turning the option off deletes the model, and a development
+    /// session must not delete the installed Oxyn's. Persistent, so that
+    /// `make desktop-dev` does not download 220 MB at every launch. In the
+    /// user's own data directory rather than the system's temporary one,
+    /// which is shared between accounts on Linux: another user could plant
+    /// a link where the download writes.
     pub(crate) fn place_models(&self) {
         let store = self.inner.executor.store();
         let root = match store.path() {
-            Some(file) => file.parent().map(Path::to_path_buf),
-            None => oxyn_store::Store::default_path()
-                .ok()
-                .and_then(|file| file.parent().map(Path::to_path_buf)),
+            Some(file) => file.parent().map(|dir| dir.join(MODELS_DIRECTORY)),
+            None => oxyn_store::Store::default_path().ok().and_then(|file| {
+                file.parent()
+                    .map(|dir| dir.join(TEMPORARY_MODELS_DIRECTORY))
+            }),
         };
         if let Some(root) = root {
-            self.inner.semantic.place(&root.join(MODELS_DIRECTORY));
+            self.inner.semantic.place(&root);
         }
     }
 
@@ -505,7 +552,7 @@ impl<'a> Ranking<'a> {
             let cache = catalog.read();
             cache
                 .iter_relations()
-                .map(|(relation, _)| (relation.path(), VectorKey::of(relation)))
+                .map(|(relation, _)| (relation.path(), Embeddable::of(relation)))
                 .collect()
         };
         if relations.is_empty() {

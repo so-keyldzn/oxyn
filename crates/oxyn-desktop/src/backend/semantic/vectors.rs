@@ -11,11 +11,15 @@ use std::time::Instant;
 use oxyn_ai::SemanticScores;
 use oxyn_catalog::{CatalogPath, RelationRef};
 use oxyn_embed::{EmbedError, Embedding, cosine, pinned::MODEL_ID};
+use sha2::{Digest, Sha256};
 
 /// The most vectors kept, both generations together.
 ///
-/// The catalog cache's own ceiling of 50,000 objects (PERFORMANCE): at
-/// 1,536 bytes a vector, about 77 MB at most, never written anywhere.
+/// The catalog cache's own ceiling of 50,000 objects (PERFORMANCE). An entry
+/// weighs a 1,536-byte vector on the heap, plus a 32-byte key and an 8-byte
+/// pointer in its table's bucket; each generation's table holds at most
+/// 32,768 buckets. At most 50,000 × 1,536 + 2 × 32,768 × 41 bytes, about
+/// 79.5 MB — never written anywhere.
 pub(crate) const MAX_VECTORS: usize = 50_000;
 
 /// Texts embedded per call between two deadline checks.
@@ -28,35 +32,58 @@ pub(crate) const BATCH: usize = 64;
 /// A comment longer than this is cut before it is embedded.
 ///
 /// The model reads 512 tokens at most, a few thousand bytes; what lies
-/// beyond would be dropped by the tokenizer anyway, and would only weigh on
-/// the cache's keys.
+/// beyond would be dropped by the tokenizer anyway.
 const MAX_COMMENT_BYTES: usize = 2_048;
 
-/// What a vector was computed from: the model, and the embedded text.
+/// What a vector was computed from, as a SHA-256 of the model and the
+/// embedded text.
 ///
-/// The model is part of the key so that a vector of another model is never
-/// compared with this one's — two models' spaces are unrelated (ADR-0056).
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) struct VectorKey {
-    model: &'static str,
-    text: String,
-}
+/// A digest rather than the text: the cache keeps no table name nor comment
+/// of the schema, and its bound does not depend on the comments' length. The
+/// model is hashed in so that a vector of another model is never compared
+/// with this one's — two models' spaces are unrelated (ADR-0056).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct VectorKey([u8; 32]);
 
-// The text is a qualified table name and its comment: a customer's schema,
-// which has nothing to do in a log (I-03).
+// A digest of a customer's schema says nothing to a reader of a log.
 impl std::fmt::Debug for VectorKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VectorKey")
-            .field("model", &self.model)
-            .field("text_bytes", &self.text.len())
-            .finish()
+        f.write_str("VectorKey(..)")
     }
 }
 
 impl VectorKey {
-    /// The key of a relation: its qualified name, then its comment if it has
-    /// one — what the catalog's summary carries as soon as a schema is
-    /// listed, so the vector does not change when the fields load.
+    fn of(text: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(MODEL_ID.as_bytes());
+        // A separator no model id contains: « a » + « bc » never collides
+        // with « ab » + « c ».
+        hasher.update([0]);
+        hasher.update(text.as_bytes());
+        Self(hasher.finalize().into())
+    }
+}
+
+/// A relation's text to embed, and its key. Lives for one question only:
+/// the cache keeps the key.
+pub(crate) struct Embeddable {
+    text: String,
+    key: VectorKey,
+}
+
+// The text is a qualified table name and its comment (I-03).
+impl std::fmt::Debug for Embeddable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Embeddable")
+            .field("text_bytes", &self.text.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Embeddable {
+    /// A relation's qualified name, then its comment if it has one — what the
+    /// catalog's summary carries as soon as a schema is listed, so the vector
+    /// does not change when the fields load.
     pub(crate) fn of(relation: &RelationRef) -> Self {
         let path = relation.path();
         let text = match relation.comment.as_deref().map(str::trim) {
@@ -65,18 +92,20 @@ impl VectorKey {
             }
             _ => path.to_string(),
         };
+        Self::text(text)
+    }
+
+    pub(crate) fn text(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
-            model: MODEL_ID,
+            key: VectorKey::of(&text),
             text,
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn text(text: &str) -> Self {
-        Self {
-            model: MODEL_ID,
-            text: text.to_owned(),
-        }
+    pub(crate) fn embedded(&self) -> &str {
+        &self.text
     }
 }
 
@@ -99,10 +128,14 @@ fn truncated(text: &str, max: usize) -> &str {
 /// whole. A vector read from the previous generation moves back to the
 /// current one, so what the questions keep using survives. Simple, bounded,
 /// and no bookkeeping per read.
+///
+/// Vectors are boxed: a table reserves up to twice its entries in buckets,
+/// and a bucket holding the vector inline would make the bound depend on
+/// the table's capacity instead of its length.
 #[derive(Default)]
 pub(crate) struct VectorCache {
-    current: HashMap<VectorKey, Embedding>,
-    previous: HashMap<VectorKey, Embedding>,
+    current: HashMap<VectorKey, Box<Embedding>>,
+    previous: HashMap<VectorKey, Box<Embedding>>,
     /// Moves at every [`clear`](Self::clear): a question still embedding
     /// when the option is turned off must not fill the cache again.
     epoch: u64,
@@ -133,7 +166,7 @@ impl VectorCache {
         self.current.contains_key(key) || self.previous.contains_key(key)
     }
 
-    fn insert(&mut self, key: VectorKey, vector: Embedding) {
+    fn insert(&mut self, key: VectorKey, vector: Box<Embedding>) {
         if self.current.len() >= Self::GENERATION && !self.current.contains_key(&key) {
             self.previous = std::mem::take(&mut self.current);
         }
@@ -141,13 +174,13 @@ impl VectorCache {
     }
 
     /// The cosine of `question` with the vector of `key`, if one is kept.
-    fn score(&mut self, key: &VectorKey, question: &Embedding) -> Option<f32> {
-        if let Some(vector) = self.current.get(key) {
+    fn score(&mut self, key: VectorKey, question: &Embedding) -> Option<f32> {
+        if let Some(vector) = self.current.get(&key) {
             return Some(cosine(question, vector));
         }
-        let vector = self.previous.remove(key)?;
+        let vector = self.previous.remove(&key)?;
         let score = cosine(question, &vector);
-        self.insert(key.clone(), vector);
+        self.insert(key, vector);
         Some(score)
     }
 }
@@ -173,7 +206,7 @@ pub(crate) struct Ranked {
 /// The embedding failed — the model is missing, damaged, or refused a text.
 pub(crate) fn rank(
     question: &str,
-    relations: Vec<(CatalogPath, VectorKey)>,
+    relations: Vec<(CatalogPath, Embeddable)>,
     vectors: &parking_lot::Mutex<VectorCache>,
     embed: impl Fn(&[&str]) -> Result<Vec<Embedding>, EmbedError>,
     deadline: Instant,
@@ -192,10 +225,10 @@ pub(crate) fn rank(
     let (epoch, missing) = {
         let cache = vectors.lock();
         let mut seen = HashSet::new();
-        let missing: Vec<&VectorKey> = relations
+        let missing: Vec<&Embeddable> = relations
             .iter()
-            .map(|(_, key)| key)
-            .filter(|key| !cache.contains(key) && seen.insert(*key))
+            .map(|(_, relation)| relation)
+            .filter(|relation| !cache.contains(&relation.key) && seen.insert(relation.key))
             .collect();
         (cache.epoch, missing)
     };
@@ -203,15 +236,18 @@ pub(crate) fn rank(
         if Instant::now() >= deadline {
             break;
         }
-        let texts: Vec<&str> = batch.iter().map(|key| key.text.as_str()).collect();
+        let texts: Vec<&str> = batch
+            .iter()
+            .map(|relation| relation.text.as_str())
+            .collect();
         let embedded = embed(&texts)?;
         let mut cache = vectors.lock();
         if cache.epoch != epoch {
             // Turned off meanwhile: nothing is kept, nothing is scored.
             return Ok(Ranked::default());
         }
-        for (key, vector) in batch.iter().zip(embedded) {
-            cache.insert((*key).clone(), vector);
+        for (relation, vector) in batch.iter().zip(embedded) {
+            cache.insert(relation.key, Box::new(vector));
         }
     }
 
@@ -220,10 +256,10 @@ pub(crate) fn rank(
         return Ok(Ranked::default());
     }
     let mut ranked = Ranked::default();
-    for (path, key) in relations {
+    for (path, relation) in relations {
         // `SemanticScores::insert` drops a non-finite score, and `cosine` of
         // two unit vectors is finite: no NaN reaches the ordering.
-        match cache.score(&key, &question) {
+        match cache.score(relation.key, &question) {
             Some(score) => ranked.scores.insert(path, score),
             None => ranked.unscored += 1,
         }

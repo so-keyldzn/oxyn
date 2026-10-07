@@ -74,6 +74,15 @@ export function SemanticRankingSettings({
               disk, and uses about 800 MB of memory while you ask questions —
               released 5 minutes after the last one.
             </FieldDescription>
+            {/* What the security review found: a table matched by meaning
+                alone can fill a slot lexical ranking left empty, so the
+                provider may read more of the schema — never past the limit
+                nor the connection's tier (ADR-0056). */}
+            <FieldDescription>
+              Tables found by meaning can be added to the assistant&apos;s
+              context, within the usual limit and the connection&apos;s privacy
+              tier.
+            </FieldDescription>
             {enabled ? (
               <FieldDescription>
                 Turning this off deletes the model from this computer.

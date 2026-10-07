@@ -45,6 +45,13 @@ export const Off: Story = {
     await expect(canvas.getByText(/about 220 MB once/)).toBeVisible()
     await expect(canvas.getByText(/about 415 MB on/)).toBeVisible()
     await expect(canvas.getByText(/about 800 MB of memory/)).toBeVisible()
+    // The model reads nothing remote, but what it ranks in can be sent:
+    // said before the switch is touched.
+    await expect(
+      canvas.getByText(
+        "Tables found by meaning can be added to the assistant's context, within the usual limit and the connection's privacy tier."
+      )
+    ).toBeVisible()
     await expect(canvas.getByRole("status")).toHaveTextContent(
       "Off. Questions are ranked by name only."
     )
