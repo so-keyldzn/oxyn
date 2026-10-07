@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/hooks/README.md" sha256="75ea9ec8bbb9" -->
+<!-- oxyn-translation source=".claude/hooks/README.md" sha256="e677793fa4a0" -->
 
 > Traduction française de [.claude/hooks/README.md](../../../../.claude/hooks/README.md). **La version anglaise fait foi.**
 
@@ -65,10 +65,13 @@ Les redirections sont lues sur les **opérateurs** du shell, pas sur la ligne
 brute : un `>` entre guillemets (`awk 'NR>=3'`) est du texte, `2>&1` et `>&2`
 dupliquent un descripteur, et une cible sous `/dev/null` ou sous une racine
 temporaire (`/tmp/`, `/var/folders/`, où se trouve le scratchpad d'une
-session) n'est pas un fichier du dépôt — aucune ne demande de confirmation. La
-cible est jugée une fois résolue : un lien symbolique sous `/tmp/` qui mène
-dans le dépôt, ou un dépôt qui se trouve lui-même sous une racine temporaire,
-demande toujours. Un
+session) n'est pas un fichier du dépôt — aucune ne demande de confirmation. Les
+guillemets sont conservés à la lecture : `grep '>' fichier` est donc lui aussi
+du texte. La cible est jugée une fois résolue : un lien symbolique sous `/tmp/`
+qui mène dans le dépôt, ou un dépôt qui se trouve lui-même sous une racine
+temporaire, demande toujours, de même qu'une cible que le shell développe
+ensuite (`*`, `?`, `[`, `{`, `~`, `$`). Un programme lancé par `bash -c`,
+`sh -c` ou `eval` est lu de la même façon. Un
 chemin relatif, une variable ou un chemin que `..` fait sortir de ces racines
 demande toujours. Le test sur la ligne brute qu'il remplace demandait à chaque
 commande de test qui gardait un journal : approuver devenait un réflexe,

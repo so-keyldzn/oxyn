@@ -53,6 +53,13 @@ REDIRECTION_ENDINGS = (">", ">|")
 # nothing there is a repository file. A session's scratchpad lives under them.
 OUTSIDE_REPOSITORY = ("/dev/null", "/dev/stdout", "/dev/stderr")
 TEMPORARY_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
+# Characters the shell expands after this hook has run: a target holding one
+# cannot be resolved here, so it is never exempted.
+EXPANDED_LATER = set("$`*?[{~")
+# Programs that run a command string of their own (`bash -c '…'`, `eval …`):
+# their redirections hide in one quoted token.
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+NESTING_LIMIT = 4
 
 
 def _split(command: str) -> list[list[str]]:
@@ -87,9 +94,10 @@ def _harmless_target(target: str) -> bool:
     Judged on the resolved path, not the written one: a symlink under `/tmp/`
     can lead into the checkout, and a checkout can itself live under a
     temporary root — a file of it is never harmless."""
+    target = _unquote(target)
     if target in OUTSIDE_REPOSITORY:
         return True
-    if not target.startswith("/") or "$" in target or "`" in target:
+    if not target.startswith("/") or EXPANDED_LATER & set(target) or set("'\"\\") & set(target):
         return False
     resolved = os.path.realpath(target)
     if _inside(resolved, os.path.realpath(p.project_root())):
@@ -100,20 +108,57 @@ def _harmless_target(target: str) -> bool:
     )
 
 
-def _writing_redirection(command: str) -> bool:
+def _unquote(token: str) -> str:
+    """One layer of matching quotes removed; anything else left as written."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
+        return token[1:-1]
+    return token
+
+
+def _nested_programs(tokens: list[str]) -> list[str]:
+    """The command strings run by `sh -c`, `bash -lc`… and `eval`."""
+    programs = []
+    for i, token in enumerate(tokens):
+        name = Path(_unquote(token)).name
+        if name in SHELLS:
+            j = i + 1
+            while j < len(tokens) and tokens[j].startswith("-"):
+                if "c" in tokens[j][1:] and j + 1 < len(tokens):
+                    programs.append(_unquote(tokens[j + 1]))
+                    break
+                j += 1
+        elif name == "eval":
+            words = []
+            for word in tokens[i + 1:]:
+                if set(word) <= PUNCTUATION:
+                    break
+                words.append(_unquote(word))
+            programs.append(" ".join(words))
+    return programs
+
+
+def _writing_redirection(command: str, depth: int = 0) -> bool:
     """Whether the command redirects output into a file that may belong to the
     repository.
 
-    Read on the shell's operators, not on the raw line: a `>` inside quotes
-    (`awk 'NR>=3'`, `grep "-->"`) is text, and `2>&1` or `> /dev/null` write
-    no file. A line `shlex` cannot read is judged by its raw `>`: unsure, the
-    hook asks rather than lets a write through."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    Read on the shell's operators, not on the raw line, with quotes kept: a
+    `>` inside quotes (`awk 'NR>=3'`, `grep '>'`) is text, and `2>&1` or
+    `> /dev/null` write no file. A program run by `bash -c` or `eval` is read
+    the same way. A line `shlex` cannot read is judged by its raw `>`, and so
+    is nesting too deep to follow: unsure, the hook asks rather than lets a
+    write through."""
+    if depth > NESTING_LIMIT:
+        return ">" in command
+    # Non-POSIX mode keeps the quotes in the tokens: a quoted `>` then never
+    # looks like the operator.
+    lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
         tokens = list(lexer)
     except ValueError:
         return ">" in command
+    if any(_writing_redirection(program, depth + 1) for program in _nested_programs(tokens)):
+        return True
     for i, token in enumerate(tokens):
         # `shlex` groups adjacent operators: `(cmd)>file` yields `)>`. What
         # decides is how the run of punctuation ends; `>(` is a process
