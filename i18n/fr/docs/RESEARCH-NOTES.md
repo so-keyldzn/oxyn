@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="a2f0c910664a" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="c0981dbb6840" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2458,3 +2458,4 @@ Même machine, build release sauf mention contraire, commit `a7233c3`.
 | Fait | Source | Vérifié le |
 |---|---|---|
 | « The latest release is the most recent non-prerelease, non-draft release, sorted by the `created_at` attribute » ; un brouillon ou une pré-version ne peut pas être marqué latest | [API REST GitHub, releases](https://docs.github.com/en/rest/releases/releases#get-the-latest-release) | 2026-10-07 |
+| Le secours [`embedding-model-835ad140`](https://github.com/so-keyldzn/oxyn/releases/tag/embedding-model-835ad140) est publié (2026-10-07T16:45:34Z), `prerelease: true`, `draft: false`. Assets et leurs empreintes GitHub : `model.safetensors` 194 889 568 octets `sha256:f3ea88b2…903be`, `tokenizer.json` 25 301 672 octets `sha256:4f2842d5…1582f` — tous deux égaux aux valeurs épinglées —, `LICENSE-Apache-2.0.txt` 11 358 octets, `NOTICE.md` 891 octets. La dernière release est restée `v0.0.7`, et `releases/latest/download/latest.json` répond 200 | `gh api repos/so-keyldzn/oxyn/releases/tags/embedding-model-835ad140`, `…/releases/latest` ; `curl -L` | 2026-10-07 |

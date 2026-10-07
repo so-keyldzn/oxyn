@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="6dce82d7db5b" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="2e2c5821776e" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -178,7 +178,11 @@ seulement quand taille et somme correspondent ; tout échec supprime le
 ([ADR-0052](0052-verified-tls-outside-local.md)), 10 s pour établir la
 connexion et 60 s de silence au plus entre deux morceaux. La requête sortante
 ne porte aucune donnée de l'utilisateur : une URL fixe et l'agent utilisateur
-`oxyn/<version>`.
+`oxyn/<version>`. Le proxy système est respecté, contrairement aux transports
+IA, qui le désactivent : ce qu'ils envoient, ce sont les données de
+l'utilisateur, alors que cette requête n'en envoie aucune, et les octets
+qu'elle reçoit sont acceptés sur leur somme seule — qui les relaie peut les
+retenir, pas les altérer.
 
 La release `embedding-model-835ad140` est publiée comme **pré-version** : la
 « latest release » de GitHub est la plus récente qui n'est ni une pré-version
@@ -186,8 +190,9 @@ ni un brouillon, et le système de mise à jour lit
 `releases/latest/download/latest.json`
 ([ADR-0051](0051-automatic-updates-from-github-releases.md)). Publiée comme une
 release ordinaire, elle deviendrait « latest » et arrêterait toutes les mises
-à jour. Elle porte le texte de la licence Apache-2.0 et l'attribution du
-modèle à côté des deux fichiers.
+à jour. Elle a été publiée le 2026-10-07 et porte, à côté des deux fichiers,
+`LICENSE-Apache-2.0.txt` et `NOTICE.md` (l'attribution d'IBM, la révision et
+les sommes) ; « latest » est resté `v0.0.7`.
 
 Les fichiers vivent sous `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`.
 Après le téléchargement, le safetensors en bf16 est élargi en f32 et écrit en
@@ -292,7 +297,7 @@ indisponible et pourquoi.
 * **−** **La disponibilité de Hugging Face.** La release de secours couvre une
   panne ou un retrait en amont, pas un réseau qui bloque les deux hôtes :
   derrière un tel réseau, l'option ne peut pas être activée. Le secours est à
-  nous de publier et de garder, et son absence est un 404 que l'erreur de
+  nous de le garder : une release supprimée est un 404 que l'erreur de
   téléchargement nomme.
 * **−** **Sans ses features, burn-flex tourne sur un cœur, sans SIMD**,
   plusieurs fois plus lentement — et rien n'échoue. Seule la déclaration

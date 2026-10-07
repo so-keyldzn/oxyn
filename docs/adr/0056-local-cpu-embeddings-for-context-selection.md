@@ -161,14 +161,19 @@ match; any failure removes the `.part`. HTTPS only, redirections included (at
 most 5), TLS verified ([ADR-0052](0052-verified-tls-outside-local.md)), a
 10 s connection timeout and 60 s of silence at most between two chunks. The
 outgoing request carries no user data: a fixed URL and the `oxyn/<version>`
-user agent.
+user agent. The system proxy is honoured, unlike the AI transports, which
+disable it: what they send is the user's data, whereas this request sends
+none, and the bytes it receives are accepted on their checksum alone —
+whoever relays them can withhold them, not alter them.
 
 The release `embedding-model-835ad140` is published as a **pre-release**:
 GitHub's "latest release" is the most recent non-prerelease, non-draft one,
 and the updater reads `releases/latest/download/latest.json`
 ([ADR-0051](0051-automatic-updates-from-github-releases.md)). Published as an
-ordinary release, it would become "latest" and stop every update. It carries
-the Apache-2.0 license text and the model's attribution beside the two files.
+ordinary release, it would become "latest" and stop every update. It was
+published on 2026-10-07 and carries, beside the two files,
+`LICENSE-Apache-2.0.txt` and `NOTICE.md` (IBM's attribution, the revision and
+the checksums); "latest" stayed `v0.0.7`.
 
 The files live under `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`.
 After the download, the bf16 safetensors is widened to f32 and written as
@@ -259,8 +264,8 @@ semantic ranking is unavailable and why.
   process, and can make another task wait.
 * **−** **Hugging Face availability.** The fallback release covers an outage
   or a removal upstream, not a network that blocks both hosts: behind such a
-  network, the option cannot be turned on. The fallback is ours to publish
-  and keep, and its absence is a 404 that the download error names.
+  network, the option cannot be turned on. The fallback is ours to keep: a
+  deleted release is a 404 that the download error names.
 * **−** **Without its features, burn-flex runs on one core, without SIMD**,
   several times slower — and nothing fails. Only the direct declaration in the
   root `Cargo.toml`, commented, keeps them.

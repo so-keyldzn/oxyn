@@ -2205,7 +2205,8 @@ proposed).** In this order, each with its exit gate:
 1. **`oxyn-embed`.** The crate, its pinned files, download, conversion and
    `OnDemandEmbedder`; the reference-output test that fails when a residual
    constant is missing; the converted `model.bpk` size and checksum written
-   into `pinned::CONVERTED`. **Exit gate**: `make qualite` green, the
+   into `pinned::CONVERTED` — **done in `a7233c3`** (389,816,832 bytes,
+   `d5ac67b8…`). **Exit gate**: `make qualite` green, the
    reference test passing, a cold CI build of the crate measured and recorded
    in RESEARCH-NOTES.
 2. **The fallback release.** Publish `embedding-model-835ad140` as a
@@ -2213,7 +2214,9 @@ proposed).** In this order, each with its exit gate:
    `tokenizer.json`, the Apache-2.0 text and the model's attribution. **Exit
    gate**: both files downloaded from it match their pinned SHA-256, and
    `releases/latest/download/latest.json` still answers the last Oxyn
-   release.
+   release. **Done on 2026-10-07**: published as a pre-release with
+   `LICENSE-Apache-2.0.txt` and `NOTICE.md`; the asset digests equal the
+   pinned SHA-256, "latest" stayed `v0.0.7`, and `latest.json` answers 200.
 3. **Ranking in `oxyn-ai`.** Per-relation scores accepted by
    `ContextBuilder` and `wanted_relations`; the three ordering rules of the
    ADR. **Exit gate**: tests that a lexical match is never demoted by a

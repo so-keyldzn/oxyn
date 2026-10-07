@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="1b4e1de4ad98" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="d913863a98ad" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -440,12 +440,22 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Les
    sources sont des constantes de `oxyn_embed::pinned` : Hugging Face à un
    commit épinglé, puis la pré-version `embedding-model-835ad140` de ce
-   dépôt. Un fichier est accepté sur sa taille et son SHA-256 épinglés seuls,
-   quelle que soit la source qui l'a servi : écrit en flux dans un `.part`,
-   haché à mesure qu'il arrive, coupé au-delà de sa taille épinglée, renommé
-   en place seulement s'il correspond, supprimé à tout échec. HTTPS seulement,
-   redirections comprises (5 au plus), TLS vérifié, 10 s pour se connecter et
-   60 s de silence au plus entre deux morceaux. La requête ne porte aucune
+   dépôt, publiée le 2026-10-07 avec les deux mêmes fichiers, le texte de
+   l'Apache-2.0 et un `NOTICE.md`. Un fichier est accepté sur sa taille et son
+   SHA-256 épinglés seuls, quelle que soit la source qui l'a servi : écrit en
+   flux dans un `.part`, haché à mesure qu'il arrive, coupé au-delà de sa
+   taille épinglée, renommé en place seulement s'il correspond, supprimé à
+   tout échec. HTTPS seulement, redirections comprises (5 au plus), TLS
+   vérifié, 10 s pour se connecter et 60 s de silence au plus entre deux
+   morceaux. **Le proxy système est respecté**, un choix que l'utilisateur a
+   validé, alors que les transports IA d'`oxyn-llm` le désactivent
+   (`no_proxy`) : une requête IA porte le schéma et les questions de
+   l'utilisateur, et un proxy est un tiers de plus qui les lit, tandis que
+   cette requête ne porte aucune donnée de l'utilisateur et que sa réponse est
+   crue sur sa somme, pas sur son chemin. Un proxy peut retenir le modèle, ou
+   voir qu'Oxyn le récupère ; il ne peut pas faire accepter d'autres octets à
+   Oxyn. Refuser le proxy rendrait seulement l'option impossible à activer
+   derrière un réseau d'entreprise. La requête ne porte aucune
    donnée de l'utilisateur — une URL fixe et l'agent utilisateur
    `oxyn/<version>` —, et la webview ne fournit ni URL ni chemin. Les fichiers
    sur disque restent des entrées : le tokenizer et le `model.bpk` converti

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="d926c8c929dd" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="22bd51d7a7c9" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2218,7 +2218,8 @@ proposée).** Dans cet ordre, chacun avec sa porte de sortie :
 1. **`oxyn-embed`.** La crate, ses fichiers épinglés, le téléchargement, la
    conversion et `OnDemandEmbedder` ; le test de sortie de référence qui
    échoue quand une constante résiduelle manque ; la taille et la somme du
-   `model.bpk` converti écrites dans `pinned::CONVERTED`. **Porte de
+   `model.bpk` converti écrites dans `pinned::CONVERTED` — **fait dans
+   `a7233c3`** (389 816 832 octets, `d5ac67b8…`). **Porte de
    sortie** : `make qualite` au vert, le test de référence qui passe, une
    compilation à froid de la crate en CI mesurée et consignée dans
    RESEARCH-NOTES.
@@ -2228,7 +2229,10 @@ proposée).** Dans cet ordre, chacun avec sa porte de sortie :
    **Porte de sortie** : les deux fichiers téléchargés depuis elle
    correspondent à leur SHA-256 épinglé, et
    `releases/latest/download/latest.json` répond toujours la dernière release
-   d'Oxyn.
+   d'Oxyn. **Fait le 2026-10-07** : publiée comme pré-version avec
+   `LICENSE-Apache-2.0.txt` et `NOTICE.md` ; les empreintes des assets égalent
+   les SHA-256 épinglés, « latest » est resté `v0.0.7`, et `latest.json`
+   répond 200.
 3. **Le classement dans `oxyn-ai`.** Des scores par relation acceptés par
    `ContextBuilder` et `wanted_relations` ; les trois règles d'ordre de
    l'ADR. **Porte de sortie** : des tests qu'une correspondance lexicale n'est

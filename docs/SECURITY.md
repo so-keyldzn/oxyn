@@ -418,11 +418,20 @@ What enters Oxyn and is untrusted, in order of underestimation:
    ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
    sources are constants of `oxyn_embed::pinned`: Hugging Face at a pinned
    commit, then the `embedding-model-835ad140` pre-release of this
-   repository. A file is accepted on its pinned size and SHA-256 alone,
-   whichever source served it: streamed to a `.part`, hashed as it arrives,
-   cut off past its pinned size, renamed into place only on a match, removed
-   on any failure. HTTPS only, redirections included (at most 5), TLS
-   verified, 10 s to connect and 60 s of silence at most between two chunks.
+   repository, published on 2026-10-07 with the same two files, the
+   Apache-2.0 text and a `NOTICE.md`. A file is accepted on its pinned size
+   and SHA-256 alone, whichever source served it: streamed to a `.part`,
+   hashed as it arrives, cut off past its pinned size, renamed into place
+   only on a match, removed on any failure. HTTPS only, redirections included
+   (at most 5), TLS verified, 10 s to connect and 60 s of silence at most
+   between two chunks. **The system proxy is honoured**, a choice the user
+   validated, whereas the AI transports of `oxyn-llm` disable it
+   (`no_proxy`): an AI request carries the user's schema and questions, and a
+   proxy is one more party that reads them, while this request carries no
+   user data and its answer is trusted on its checksum, not on its path. A
+   proxy can withhold the model, or see that Oxyn fetches it; it cannot make
+   Oxyn accept other bytes. Refusing the proxy would only make the option
+   impossible to turn on behind a corporate network.
    The request carries no user data — a fixed URL and the `oxyn/<version>`
    user agent —, and the webview supplies neither a URL nor a path. The
    files on disk stay inputs: the tokenizer and the converted `model.bpk`
