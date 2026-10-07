@@ -132,13 +132,21 @@ fn truncated(text: &str, max: usize) -> &str {
 /// Vectors are boxed: a table reserves up to twice its entries in buckets,
 /// and a bucket holding the vector inline would make the bound depend on
 /// the table's capacity instead of its length.
-#[derive(Default)]
 pub(crate) struct VectorCache {
     current: HashMap<VectorKey, Box<Embedding>>,
     previous: HashMap<VectorKey, Box<Embedding>>,
+    /// Entries a generation holds before it rotates: half of
+    /// [`MAX_VECTORS`], smaller in the tests of the rotation.
+    generation: usize,
     /// Moves at every [`clear`](Self::clear): a question still embedding
     /// when the option is turned off must not fill the cache again.
     epoch: u64,
+}
+
+impl Default for VectorCache {
+    fn default() -> Self {
+        Self::with_generation(MAX_VECTORS / 2)
+    }
 }
 
 impl std::fmt::Debug for VectorCache {
@@ -150,7 +158,14 @@ impl std::fmt::Debug for VectorCache {
 }
 
 impl VectorCache {
-    const GENERATION: usize = MAX_VECTORS / 2;
+    pub(crate) fn with_generation(generation: usize) -> Self {
+        Self {
+            current: HashMap::new(),
+            previous: HashMap::new(),
+            generation,
+            epoch: 0,
+        }
+    }
 
     pub(crate) fn len(&self) -> usize {
         self.current.len() + self.previous.len()
@@ -167,21 +182,39 @@ impl VectorCache {
     }
 
     fn insert(&mut self, key: VectorKey, vector: Box<Embedding>) {
-        if self.current.len() >= Self::GENERATION && !self.current.contains_key(&key) {
+        if self.current.len() >= self.generation && !self.current.contains_key(&key) {
             self.previous = std::mem::take(&mut self.current);
         }
         self.current.insert(key, vector);
     }
 
-    /// The cosine of `question` with the vector of `key`, if one is kept.
-    fn score(&mut self, key: VectorKey, question: &Embedding) -> Option<f32> {
-        if let Some(vector) = self.current.get(&key) {
-            return Some(cosine(question, vector));
+    /// The cosine of `question` with the vector of `key`, if one is kept,
+    /// and whether it was read from the previous generation.
+    ///
+    /// Read only: a promotion here could rotate the generations and drop the
+    /// rest of the previous one before its keys are scored.
+    fn score(&self, key: &VectorKey, question: &Embedding) -> Option<(f32, bool)> {
+        if let Some(vector) = self.current.get(key) {
+            return Some((cosine(question, vector), false));
         }
-        let vector = self.previous.remove(&key)?;
-        let score = cosine(question, &vector);
-        self.insert(key, vector);
-        Some(score)
+        self.previous
+            .get(key)
+            .map(|vector| (cosine(question, vector), true))
+    }
+
+    /// Moves vectors read from the previous generation back to the current
+    /// one, once every relation of the question is scored.
+    ///
+    /// Every vector is taken out before any is inserted: an insertion may
+    /// rotate, and the previous generation it drops would hold the next ones.
+    fn promote(&mut self, keys: Vec<VectorKey>) {
+        let moved: Vec<_> = keys
+            .into_iter()
+            .filter_map(|key| self.previous.remove(&key).map(|vector| (key, vector)))
+            .collect();
+        for (key, vector) in moved {
+            self.insert(key, vector);
+        }
     }
 }
 
@@ -256,13 +289,21 @@ pub(crate) fn rank(
         return Ok(Ranked::default());
     }
     let mut ranked = Ranked::default();
+    let mut promoted = Vec::new();
     for (path, relation) in relations {
         // `SemanticScores::insert` drops a non-finite score, and `cosine` of
         // two unit vectors is finite: no NaN reaches the ordering.
-        match cache.score(relation.key, &question) {
-            Some(score) => ranked.scores.insert(path, score),
+        match cache.score(&relation.key, &question) {
+            Some((score, from_previous)) => {
+                ranked.scores.insert(path, score);
+                if from_previous {
+                    promoted.push(relation.key);
+                }
+            }
             None => ranked.unscored += 1,
         }
     }
+    // After every score is read: promoting may rotate the generations.
+    cache.promote(promoted);
     Ok(ranked)
 }

@@ -51,7 +51,7 @@ use oxyn_core::{Actor, CancelToken, Capabilities, Command, ConnectionId};
 use oxyn_exec::{DispatchReport, ExecutorSink};
 use tokio::time::Instant;
 
-use crate::backend::semantic::Ranking;
+use crate::backend::semantic::{Ranking, SEMANTIC_DEADLINE};
 use crate::ipc::ai::AiEvent;
 
 /// The longest a completion may take, reads included.
@@ -267,10 +267,14 @@ impl CatalogFill<'_> {
             };
             // Every listing read: the relations to describe are chosen from
             // here on, so this is where they are scored, once.
+            // Within what is left of the fill's own deadline: the question
+            // never waits past it for scores, and a fill out of time ranks
+            // lexically rather than not at all describing what it chose.
             if listing.is_none()
                 && let Some(ranking) = ranking.take()
+                && let Some(budget) = semantic_budget(deadline, Instant::now())
             {
-                scores = ranking.scores(&self.catalog).await;
+                scores = ranking.scores_within(&self.catalog, budget).await;
             }
             // The read lock is released before anything awaits. The command is
             // the tree's own for that level: same scope, same capabilities.
@@ -402,6 +406,16 @@ impl CatalogFill<'_> {
             Step::Stopped(Stop::Cancelled) => Err("the read was cancelled".to_owned()),
         }
     }
+}
+
+/// What the semantic step may take of a fill that must end at `deadline`:
+/// its own [`SEMANTIC_DEADLINE`], or what is left if less, or nothing when
+/// the fill is out of time — the fill's bound is the question's
+/// (AI-PROVIDERS), and scores computed past it would rank relations nobody
+/// can describe any more.
+fn semantic_budget(deadline: Instant, now: Instant) -> Option<Duration> {
+    let left = deadline.saturating_duration_since(now);
+    (!left.is_zero()).then(|| left.min(SEMANTIC_DEADLINE))
 }
 
 /// The next listing to read, or `None` when every listing is read — or none

@@ -513,16 +513,14 @@ impl<'a> Ranking<'a> {
         usable.then_some(Self { inner, question })
     }
 
-    /// One score per relation `catalog` lists, within [`SEMANTIC_DEADLINE`].
+    /// One score per relation `catalog` lists, within `budget`: at most
+    /// [`SEMANTIC_DEADLINE`], less when the catalog fill that asks has less
+    /// time left — the fill's bound is the question's.
     ///
     /// Never fails a question: a missing, damaged or failing model, or a
     /// deadline reached before the first vector, gives no score, and the
     /// selection is the lexical one. The traces count; they never name a
     /// relation.
-    pub(crate) async fn scores(&self, catalog: &SharedCatalog) -> SemanticScores {
-        self.scores_within(catalog, SEMANTIC_DEADLINE).await
-    }
-
     pub(crate) async fn scores_within(
         &self,
         catalog: &SharedCatalog,

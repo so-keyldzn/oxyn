@@ -328,7 +328,7 @@ fn on_without_a_model_ranks_lexically() {
         .expect("saved");
     let ranking = Ranking::new(&backend.inner, "which customers ordered?").expect("on");
     let catalog = catalog_of(&["customers", "orders"]);
-    let scores = runtime.block_on(ranking.scores(&catalog));
+    let scores = runtime.block_on(ranking.scores_within(&catalog, super::SEMANTIC_DEADLINE));
     assert!(scores.is_empty(), "no model: no score, and no error");
     assert!(
         !backend.inner.semantic.is_resident(),
@@ -370,6 +370,40 @@ fn turning_off_unloads_the_model_empties_the_vectors_and_deletes_the_files() {
     assert!(!store.dir().exists(), "the files are deleted");
     assert!(root.path().exists(), "only the model's own directory");
     assert!(!backend.inner.settings.preferences.semantic_ranking());
+}
+
+/// Both generations full, the question's vectors spread over them: every
+/// relation is scored, although promoting the previous generation's makes
+/// the current one rotate (Codex review of #215).
+#[test]
+fn a_full_cache_scores_every_relation_it_holds() {
+    let vectors = Mutex::new(VectorCache::with_generation(2));
+    // Four relations embedded in order: `a`, `b` go to the previous
+    // generation once `c`, `d` fill the current one.
+    let all = || {
+        vec![
+            relation("a_t"),
+            relation("b_t"),
+            relation("c_t"),
+            relation("d_t"),
+        ]
+    };
+    rank("q", all(), &vectors, by_initial, far_future()).expect("embedded");
+    assert_eq!(vectors.lock().len(), 4, "both generations full");
+
+    let calls = AtomicUsize::new(0);
+    let counting = |texts: &[&str]| {
+        calls.fetch_add(texts.len(), Ordering::SeqCst);
+        by_initial(texts)
+    };
+    let ranked = rank("q", all(), &vectors, counting, far_future()).expect("ranked");
+    assert_eq!(ranked.unscored, 0, "no relation lost its score");
+    assert_eq!(ranked.scores.len(), 4);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "only the question is embedded"
+    );
 }
 
 #[test]

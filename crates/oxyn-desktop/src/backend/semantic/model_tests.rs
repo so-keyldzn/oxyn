@@ -142,7 +142,7 @@ fn real_model_puts_billing_first_in_french_and_in_english_within_the_deadline() 
     ] {
         let ranking = Ranking::new(&backend.inner, question).expect("the option is on");
         let started = Instant::now();
-        let scores = runtime.block_on(ranking.scores(&catalog));
+        let scores = runtime.block_on(ranking.scores_within(&catalog, SEMANTIC_DEADLINE));
         let elapsed = started.elapsed();
         assert_eq!(scores.len(), total, "every relation scored in time");
 

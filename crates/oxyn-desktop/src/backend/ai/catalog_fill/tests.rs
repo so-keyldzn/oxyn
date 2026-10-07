@@ -632,3 +632,28 @@ fn a_relation_the_server_does_not_know_says_so() {
     assert!(refused.contains("does not exist"), "{refused}");
     assert!(shop.catalog().read().relation(&path).is_none());
 }
+
+/// The semantic step takes what is left of the fill's deadline, never a
+/// fresh two seconds: listings that end near the deadline leave it little,
+/// and none past it (Codex review of #215).
+#[test]
+fn ranking_never_extends_the_fill_past_its_deadline() {
+    let now = Instant::now();
+    assert_eq!(
+        semantic_budget(now + FILL_DEADLINE, now),
+        Some(SEMANTIC_DEADLINE),
+        "early in the fill, the step's own bound"
+    );
+    let near = Duration::from_millis(300);
+    assert_eq!(
+        semantic_budget(now + near, now),
+        Some(near),
+        "near the end, only what is left"
+    );
+    assert_eq!(semantic_budget(now, now), None, "at the deadline, nothing");
+    assert_eq!(
+        semantic_budget(now, now + Duration::from_millis(1)),
+        None,
+        "past it, nothing"
+    );
+}
