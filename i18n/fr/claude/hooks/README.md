@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/hooks/README.md" sha256="157aca26a088" -->
+<!-- oxyn-translation source=".claude/hooks/README.md" sha256="846133beaf7d" -->
 
 > Traduction française de [.claude/hooks/README.md](../../../../.claude/hooks/README.md). **La version anglaise fait foi.**
 
@@ -60,6 +60,16 @@ C'est pour la même raison que le hook **déplie les lanceurs** (`uv run`, `npx`
 `xargs`, `timeout`…) : sans cela, `timeout 30 git push --force` passe. Ce cas
 précis est un défaut qui a été trouvé par les tests, pas à la relecture — d'où
 la règle suivante.
+
+Les redirections sont lues sur les **opérateurs** du shell, pas sur la ligne
+brute : un `>` entre guillemets (`awk 'NR>=3'`) est du texte, `2>&1` et `>&2`
+dupliquent un descripteur, et une cible sous `/dev/null` ou sous une racine
+temporaire (`/tmp/`, `/var/folders/`, où se trouve le scratchpad d'une
+session) n'est pas un fichier du dépôt — aucune ne demande de confirmation. Un
+chemin relatif, une variable ou un chemin que `..` fait sortir de ces racines
+demande toujours. Le test sur la ligne brute qu'il remplace demandait à chaque
+commande de test qui gardait un journal : approuver devenait un réflexe,
+l'inverse d'un garde-fou.
 
 ## Ajouter un motif
 

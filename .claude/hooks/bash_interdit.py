@@ -16,6 +16,7 @@ Two quality requirements, without which this hook would be useless or harmful:
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import sys
@@ -43,6 +44,16 @@ POSITIONAL_DURATION = {"timeout", "nice", "watch"}
 WRITE_PATTERN = {"sed", "tee", "truncate", "install", "patch", "dd", "shred"}
 INTERPRETERS = {"python", "python3", "perl", "ruby", "node", "bun", "deno", "osascript"}
 
+# Shell operator characters, as `shlex` groups them with `punctuation_chars`,
+# and how a run of them ends when it opens a file for writing (`>`, `>>`,
+# `>|`, `&>`, `&>>`, `<>`).
+PUNCTUATION = set("();<>|&")
+REDIRECTION_ENDINGS = (">", ">|")
+# Where a redirection can write without going around the repository's checks:
+# nothing there is a repository file. A session's scratchpad lives under them.
+OUTSIDE_REPOSITORY = ("/dev/null", "/dev/stdout", "/dev/stderr")
+TEMPORARY_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
+
 
 def _split(command: str) -> list[list[str]]:
     """Split into subcommands and tokenize. An unreadable command produces no
@@ -63,6 +74,48 @@ def _split(command: str) -> list[list[str]]:
     if current:
         sub_commands.append(current)
     return sub_commands
+
+
+def _harmless_target(target: str) -> bool:
+    """A redirection target that cannot be a repository file. A variable or a
+    relative path could be one: it is not harmless."""
+    if target in OUTSIDE_REPOSITORY:
+        return True
+    if not target.startswith("/") or "$" in target or "`" in target:
+        return False
+    normalized = os.path.normpath(target)
+    return any(normalized.startswith(root) for root in TEMPORARY_ROOTS)
+
+
+def _writing_redirection(command: str) -> bool:
+    """Whether the command redirects output into a file that may belong to the
+    repository.
+
+    Read on the shell's operators, not on the raw line: a `>` inside quotes
+    (`awk 'NR>=3'`, `grep "-->"`) is text, and `2>&1` or `> /dev/null` write
+    no file. A line `shlex` cannot read is judged by its raw `>`: unsure, the
+    hook asks rather than lets a write through."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return ">" in command
+    for i, token in enumerate(tokens):
+        # `shlex` groups adjacent operators: `(cmd)>file` yields `)>`. What
+        # decides is how the run of punctuation ends; `>(` is a process
+        # substitution, not a file.
+        if not token or not set(token) <= PUNCTUATION or ">" not in token:
+            continue
+        target = tokens[i + 1] if i + 1 < len(tokens) else ""
+        if token.endswith(">&"):
+            # `>&2`, `2>&1`: a descriptor, not a file. `>& file` is a file.
+            if not target.isdigit() and target != "-" and not _harmless_target(target):
+                return True
+        elif token.endswith(REDIRECTION_ENDINGS):
+            if not _harmless_target(target):
+                return True
+    return False
 
 
 def _unfold(tokens: list[str]) -> list[str]:
@@ -93,7 +146,7 @@ def _unfold(tokens: list[str]) -> list[str]:
     return tokens[i:]
 
 
-def verify(tokens: list[str], raw_command: str) -> None:
+def verify(tokens: list[str]) -> None:
     if not tokens:
         return
     actual_items = _unfold(tokens)
@@ -151,17 +204,9 @@ def verify(tokens: list[str], raw_command: str) -> None:
             write_reason = f"`{program}` modifies a file in place"
     elif program in INTERPRETERS and any(a in ("-c", "-e") for a in args):
         write_reason = f"`{program} -c` can write any file"
-    elif re.search(r"(?<![0-9<>])>>?\s*(?!/dev/null)\S", raw_command):
-        write_reason = "a redirection writes to a file"
 
     if write_reason:
-        p.ask(
-            EVENT,
-            f"{write_reason}. Writes going through the shell escape the "
-            "invariant checks applied to Write and Edit: a `use tauri` in the "
-            "core or a hard-coded secret would pass unseen. Prefer Write or "
-            "Edit; if the shell is needed, approve this command.",
-        )
+        _ask_write(write_reason)
 
     # --- Arbitration: destruction --------------------------------------------
     if program == "rm" and any(re.match(r"^-[a-zA-Z]*[rf]", a) for a in args):
@@ -173,6 +218,16 @@ def verify(tokens: list[str], raw_command: str) -> None:
         )
 
 
+def _ask_write(reason: str) -> None:
+    p.ask(
+        EVENT,
+        f"{reason}. Writes going through the shell escape the "
+        "invariant checks applied to Write and Edit: a `use tauri` in the "
+        "core or a hard-coded secret would pass unseen. Prefer Write or "
+        "Edit; if the shell is needed, approve this command.",
+    )
+
+
 def main() -> None:
     event = p.read_event()
     if event.get("tool_name") != "Bash":
@@ -181,7 +236,11 @@ def main() -> None:
     if not command.strip():
         p.laisser_passer()
     for tokens in _split(command):
-        verify(tokens, command)
+        verify(tokens)
+    # On the whole line, after the refusals: a redirection belongs to no single
+    # subcommand, and a line `_split` cannot read must still be judged.
+    if _writing_redirection(command):
+        _ask_write("a redirection writes to a file")
     p.laisser_passer()
 
 
