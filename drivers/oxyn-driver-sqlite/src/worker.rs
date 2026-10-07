@@ -81,6 +81,9 @@ pub(crate) struct OpenSpec {
     pub target: OpenTarget,
     /// Open read-only, at the engine level.
     pub read_only: bool,
+    /// Register sqlite-vec: only when the user turned it on for the connection
+    /// (ADR-0054).
+    pub vector_extension: bool,
 }
 
 impl std::fmt::Debug for OpenSpec {
@@ -88,6 +91,7 @@ impl std::fmt::Debug for OpenSpec {
         f.debug_struct("OpenSpec")
             .field("target", &self.target)
             .field("read_only", &self.read_only)
+            .field("vector_extension", &self.vector_extension)
             .finish()
     }
 }
@@ -375,12 +379,15 @@ fn open(spec: &OpenSpec) -> Result<Connection> {
         OpenTarget::File(path) => Connection::open_with_flags(path, flags),
     };
     let connection = connection.map_err(error::open)?;
-    // Before the first statement, read-only sessions included: reading a `vec0`
-    // table needs its module as much as writing it does (ADR-0054). A refusal
-    // here is the same at every attempt: permanent, not the transient class of
-    // an unreachable file.
-    vector_extension::register(&connection)
-        .map_err(|err| error::driver(SqliteError::Engine(err), ErrorClass::Permanent))?;
+    // Only on a connection the user turned it on for: otherwise no statement on
+    // this file can reach sqlite-vec's C code (ADR-0054). When on, before the
+    // first statement, read-only sessions included: reading a `vec0` table needs
+    // its module as much as writing it does. A refusal here is the same at
+    // every attempt: permanent, not the transient class of an unreachable file.
+    if spec.vector_extension {
+        vector_extension::register(&connection)
+            .map_err(|err| error::driver(SqliteError::Engine(err), ErrorClass::Permanent))?;
+    }
     if spec.read_only {
         connection
             .pragma_update(None, "query_only", true)
@@ -449,6 +456,7 @@ mod tests {
         OpenSpec {
             target: OpenTarget::Memory(oxyn_core::ConnectionId::new()),
             read_only: false,
+            vector_extension: false,
         }
     }
 
@@ -733,6 +741,7 @@ mod tests {
                 "/oxyn-missing/database-that-does-not-exist.sqlite",
             )),
             read_only: true,
+            vector_extension: false,
         };
         let err = spawn(spec, &cancel_token).await.expect_err("opening fails");
         assert!(matches!(err, OxynError::Connection(_)), "{err:?}");

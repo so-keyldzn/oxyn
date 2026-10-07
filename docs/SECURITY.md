@@ -419,8 +419,9 @@ What enters Oxyn and is untrusted, in order of underestimation:
 `unsafe_code = "deny"`, and of the fifteen crates — twelve under `crates/`,
 three drivers under `drivers/` — a single function re-allows it:
 `register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
-registers the bundled sqlite-vec extension on a connection
-([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)). The manifest is authoritative here, because it is what is
+registers the bundled sqlite-vec extension on a connection — only one where the
+user turned the `sqlite_vec` switch on, off by default, and that no agent can
+change ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)). The manifest is authoritative here, because it is what is
 executed: this document previously described a policy of supervised use that
 compilation does not grant, and [ADR-0021](adr/0021-marqueur-d-arret.md) grounded
 an architecture decision — not checking a pid — on the refusal, not on the

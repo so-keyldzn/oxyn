@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="a2abc92e17b4" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="8effc4b833b9" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -440,7 +440,9 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
 `unsafe_code = "deny"`, et des quinze crates — douze sous `crates/`,
 trois drivers sous `drivers/` — une seule fonction le réautorise :
 `register` dans `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, qui
-enregistre l'extension sqlite-vec embarquée sur une connexion
+enregistre l'extension sqlite-vec embarquée sur une connexion — seulement une
+où l'utilisateur a activé l'interrupteur `sqlite_vec`, désactivé par défaut et
+qu'aucun agent ne peut changer
 ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)). C'est le manifeste qui fait foi ici, parce que c'est lui qui est
 exécuté : ce document décrivait auparavant une politique d'encadrement que la
 compilation n'accorde pas, et [ADR-0021](adr/0021-marqueur-d-arret.md) a fondé

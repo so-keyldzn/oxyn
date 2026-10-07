@@ -1,5 +1,7 @@
-//! The bundled sqlite-vec extension, registered on every connection the driver
-//! opens ([ADR-0054](../../../docs/adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)).
+//! The bundled sqlite-vec extension, registered only on a connection where the
+//! user turned the `sqlite_vec` switch on
+//! ([ADR-0054](../../../docs/adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)):
+//! its C code keeps live `assert()`s that a hostile file could reach.
 //!
 //! A database built by a vector tool holds `CREATE VIRTUAL TABLE … USING
 //! vec0(…)`: without the module, even reading it fails with `no such module:

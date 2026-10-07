@@ -1,8 +1,9 @@
 //! `vec0` tables through the driver's ordinary paths
 //! ([ADR-0054](../../../docs/adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)).
 //!
-//! What is proven: the module exists on every connection, read-only ones
-//! included; a vector comes out as the bytes SQLite stores, in a `Binary`
+//! What is proven: the module exists only on a connection where the user
+//! turned sqlite-vec on, and there on every session, read-only ones included;
+//! without the switch, a `vec0` table is `no such module: vec0`; a vector comes out as the bytes SQLite stores, in a `Binary`
 //! column; a KNN query is a read for the engine; and a malformed vector is an
 //! error, never a panic.
 
@@ -32,13 +33,40 @@ async fn connect(config: &ConnectionConfig) -> Box<dyn Session> {
         .expect("the database opens")
 }
 
+/// A connection to `path` with the sqlite-vec switch set to `switch`, or
+/// without the parameter at all — a workspace saved before it existed.
+fn config(path: &str, switch: Option<&str>) -> ConnectionConfig {
+    let config = ConnectionConfig::new("vectors", DriverId::sqlite())
+        .with_environment(Environment::Local)
+        .with_param(SqliteDriver::PATH, path);
+    match switch {
+        Some(value) => config.with_param(SqliteDriver::VECTOR_EXTENSION, value),
+        None => config,
+    }
+}
+
+/// An in-memory database with sqlite-vec turned on.
 async fn in_memory() -> Box<dyn Session> {
-    connect(
-        &ConnectionConfig::new("vectors", DriverId::sqlite())
-            .with_environment(Environment::Local)
-            .with_param(SqliteDriver::PATH, SqliteDriver::MEMORY),
+    connect(&config(SqliteDriver::MEMORY, Some("true"))).await
+}
+
+/// The modules among `vec0` and `vec_each` that the session sees.
+async fn vector_modules(session: &dyn Session) -> Vec<String> {
+    let batches = run(
+        session,
+        read(
+            "SELECT name FROM pragma_module_list WHERE name IN ('vec0', 'vec_each') ORDER BY name",
+        ),
     )
     .await
+    .expect("the module list is readable");
+    batches
+        .iter()
+        .flat_map(|batch| {
+            let names = column::<StringArray>(batch, 0);
+            (0..names.len()).map(|row| names.value(row).to_owned())
+        })
+        .collect()
 }
 
 /// Runs `request` to the end; `Err` with the driver's error when it refuses.
@@ -97,20 +125,61 @@ fn floats(bytes: &[u8]) -> Vec<f32> {
 }
 
 #[tokio::test]
-async fn the_module_list_names_vec0() {
+async fn the_module_list_names_vec0_when_turned_on() {
     let session = in_memory().await;
-    let batches = run(
-        session.as_ref(),
-        read(
-            "SELECT name FROM pragma_module_list WHERE name IN ('vec0', 'vec_each') ORDER BY name",
-        ),
-    )
-    .await
-    .expect("the module list is readable");
-    let names = column::<StringArray>(&batches[0], 0);
-    assert_eq!(names.len(), 2);
-    assert_eq!(names.value(0), "vec0");
-    assert_eq!(names.value(1), "vec_each");
+    assert_eq!(vector_modules(session.as_ref()).await, ["vec0", "vec_each"]);
+}
+
+#[tokio::test]
+async fn sqlite_vec_stays_off_unless_turned_on() {
+    // Absent — a workspace saved before the switch existed — or `false`.
+    for switch in [None, Some("false")] {
+        let session = connect(&config(SqliteDriver::MEMORY, switch)).await;
+        assert!(
+            vector_modules(session.as_ref()).await.is_empty(),
+            "{switch:?}: no sqlite-vec module without the user's choice"
+        );
+        let refused = refusal(session.as_ref(), read("SELECT vec_version()")).await;
+        assert_eq!(refused.class(), ErrorClass::Permanent, "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_vec0_table_on_a_connection_without_the_switch_says_no_such_module() {
+    // The file was written with sqlite-vec on, then opened by a connection
+    // that did not turn it on: the C code is never reached, and the engine
+    // names the missing module.
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("semantiq.sqlite");
+    let path = path.to_str().expect("UTF-8 path");
+    let writer = connect(&config(path, Some("true"))).await;
+    apply(writer.as_ref(), TABLE).await;
+    apply(writer.as_ref(), ROWS).await;
+    writer.close().await.expect("close the writer");
+
+    let reader = connect(&config(path, None)).await;
+    let refused = refusal(reader.as_ref(), read("SELECT rowid FROM chunks_vec")).await;
+    assert_eq!(refused.class(), ErrorClass::Permanent, "{refused}");
+    assert!(
+        refused.to_string().contains("no such module: vec0"),
+        "{refused}"
+    );
+    reader.close().await.expect("close the reader");
+}
+
+#[tokio::test]
+async fn a_switch_value_other_than_true_or_false_is_refused() {
+    let issue = SqliteDriver::new()
+        .connect(
+            &config(SqliteDriver::MEMORY, Some("yes")),
+            &Credentials::new(),
+            &CancelToken::new(),
+        )
+        .await;
+    match issue {
+        Ok(_) => panic!("`yes` is neither on nor off"),
+        Err(err) => assert!(matches!(err, OxynError::Config(_)), "{err}"),
+    }
 }
 
 #[tokio::test]
@@ -226,9 +295,7 @@ async fn a_corrupted_shadow_table_is_an_error_not_a_crash() {
 async fn a_read_only_session_previews_a_vec0_table() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let path = dir.path().join("semantiq.sqlite");
-    let mut config = ConnectionConfig::new("vectors on disk", DriverId::sqlite())
-        .with_environment(Environment::Local)
-        .with_param(SqliteDriver::PATH, path.to_str().expect("UTF-8 path"));
+    let mut config = config(path.to_str().expect("UTF-8 path"), Some("true"));
     let writer = connect(&config).await;
     apply(writer.as_ref(), TABLE).await;
     apply(writer.as_ref(), ROWS).await;
@@ -304,12 +371,7 @@ async fn a_stopped_write_into_vec0_is_ambiguous() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let path = dir.path().join("vectors.sqlite");
     let journal = dir.path().join("vectors.sqlite-journal");
-    let session = connect(
-        &ConnectionConfig::new("vectors on disk", DriverId::sqlite())
-            .with_environment(Environment::Local)
-            .with_param(SqliteDriver::PATH, path.to_str().expect("UTF-8 path")),
-    )
-    .await;
+    let session = connect(&config(path.to_str().expect("UTF-8 path"), Some("true"))).await;
     apply(session.as_ref(), TABLE).await;
 
     let cancel = CancelToken::new();
