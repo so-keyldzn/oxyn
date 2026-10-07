@@ -31,9 +31,13 @@
 //!    passes [`SemanticScores`] — one number per relation path, computed on
 //!    the machine, no text ([ADR-0056](../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md))
 //!    —, they break ties between equal lexical scores and order the relations
-//!    the search missed, after every lexical match and without a threshold. A
-//!    score reorders; it never adds a word to the prompt, and the tier applies
-//!    exactly as without it;
+//!    the search missed, after every lexical match and without a threshold.
+//!    **Scores can increase how many relations are described**, not only
+//!    their order: where the lexical search keeps only its matches, scored
+//!    relations it missed complete the selection up to
+//!    [`ContextPolicy::max_relations`] — more schema leaves, always under
+//!    the connection's tier and within the token budget. A score itself
+//!    carries no text into the prompt;
 //! 2. **normalization** — a description rebuilt from the catalog's common
 //!    model, the same for every database, without the server's writing
 //!    variations;

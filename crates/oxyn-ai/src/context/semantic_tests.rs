@@ -102,6 +102,45 @@ fn equal_lexical_scores_are_broken_by_meaning_and_no_threshold_admits_more() {
 }
 
 #[test]
+fn scores_complete_the_lexical_matches_up_to_the_relation_ceiling() {
+    // Accepted by the security review: scores can raise how many relations
+    // leave, not only reorder them — always under the tier and the budget.
+    let cache = listed(&["alpha", "beta", "gamma", "order_audit", "order_lines"]);
+    let policy = ContextPolicy {
+        max_relations: 4,
+        ..ContextPolicy::default()
+    };
+    let build = |semantic: SemanticScores| {
+        ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_policy(policy.clone())
+            .focused_on("order")
+            .with_semantic_scores(semantic)
+            .build()
+    };
+
+    let lexical = build(SemanticScores::new());
+    assert_eq!(
+        lexical.relations(),
+        paths(&["order_audit", "order_lines"]).as_slice(),
+        "without scores: the two lexical matches, and nothing else"
+    );
+
+    let semantic = scores(&[("alpha", 0.1), ("beta", 0.3), ("gamma", 0.2)]);
+    let ranked = build(semantic.clone());
+    assert_eq!(
+        ranked.relations(),
+        paths(&["order_audit", "order_lines", "beta", "gamma"]).as_slice(),
+        "with scores: completed by cosine up to `max_relations`"
+    );
+    assert_eq!(ranked.tier(), PrivacyTier::Metadata);
+    assert_eq!(
+        wanted_relations_ranked(&cache, &policy, "order", &[], true, &semantic),
+        ranked.relations(),
+        "the host loads the same, larger, selection"
+    );
+}
+
+#[test]
 fn a_tie_at_the_limit_is_won_on_meaning() {
     // The search runs without its limit: the relation that ties the last one
     // kept, and that a limited search would cut, can still win.

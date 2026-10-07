@@ -10,6 +10,13 @@
 //!
 //! Nothing here renders, and no tier is involved: a tier decides what of a
 //! relation leaves, never which relations are chosen.
+//!
+//! Semantic scores ([`SemanticScores`]) can **add** relations, not only
+//! reorder them: when the question matches some names, the lexical selection
+//! stops at those matches, while the scored selection completes them with
+//! the relations the search missed, up to
+//! [`ContextPolicy::max_relations`]. More schema is then described — under
+//! the same tier and the same token budget.
 
 use std::collections::HashSet;
 

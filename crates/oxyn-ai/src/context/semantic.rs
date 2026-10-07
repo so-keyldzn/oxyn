@@ -3,10 +3,12 @@
 //! [ADR-0056](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md):
 //! the host embeds the question and the relations on the machine, and hands
 //! this module **one number per relation path** — no text, no vector. `oxyn-ai`
-//! therefore never depends on the embedding engine, and a score can reorder
-//! relations without adding a word to a prompt: what is rendered of a relation,
-//! and under which tier, is decided in the gate exactly as before
-//! ([I-04](../../../../CLAUDE.md#i-04)).
+//! therefore never depends on the embedding engine, and a score itself carries
+//! no word into a prompt: what is rendered of a relation, and under which
+//! tier, is decided in the gate exactly as before
+//! ([I-04](../../../../CLAUDE.md#i-04)). Scores do change **which** relations
+//! are rendered, and can raise their number up to
+//! [`ContextPolicy::max_relations`](super::ContextPolicy::max_relations).
 //!
 //! The ranking itself lives in [`wanted`](super::wanted), once, for both the
 //! gate and the host that completes the catalog.
@@ -22,8 +24,9 @@ use super::ContextBuilder;
 /// A semantic score per relation, from the caller: typically the cosine
 /// between the question's embedding and the relation's.
 ///
-/// A score only orders: it breaks ties between equal lexical scores, and
-/// orders the relations the lexical search missed. There is no threshold —
+/// A score breaks ties between equal lexical scores, and orders the relations
+/// the lexical search missed — which then complete the selection, so more
+/// relations can be described than without scores. There is no threshold —
 /// a weak lexical match still outranks a strong semantic one (ADR-0056).
 ///
 /// A relation without a score ranks as it would without this type. A
@@ -110,7 +113,10 @@ impl ContextBuilder<'_> {
     ///
     /// Mentions stay first; then the relations the question matches by name,
     /// field or comment, equal lexical scores broken by `scores`; then the
-    /// relations it does not match, by `scores`. Nothing else changes: the
+    /// relations it does not match, by `scores` — up to
+    /// [`ContextPolicy::max_relations`](super::ContextPolicy::max_relations),
+    /// so the context can describe more relations than without them. Nothing
+    /// else changes: the
     /// tier, the budget and the rendering are the gate's, and a score carries
     /// no text into the prompt. The host passes the same scores to
     /// [`wanted_relations_ranked`](super::wanted_relations_ranked), so that it
