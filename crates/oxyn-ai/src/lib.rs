@@ -111,7 +111,8 @@ pub use agent_file::{
 pub use builtin::{REMAINING_AGENTS, schema_agent, sql_agent};
 pub use call::{CallHandle, CallId};
 pub use context::{
-    AgentContext, ContextBuilder, ContextPolicy, MAX_MENTIONS, Mention, RowSample, estimate_tokens,
+    AgentContext, ContextBuilder, ContextPolicy, MAX_MENTIONS, Mention, RowSample, SemanticScores,
+    estimate_tokens,
 };
 pub use error::AiError;
 pub use failure::FailureReport;

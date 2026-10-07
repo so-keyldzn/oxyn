@@ -11,9 +11,11 @@
 //! Nothing here renders, and no tier is involved: a tier decides what of a
 //! relation leaves, never which relations are chosen.
 
+use std::collections::HashSet;
+
 use oxyn_catalog::{CatalogCache, CatalogPath, RelationRef, SearchOptions, search};
 
-use super::{ContextPolicy, MAX_MENTIONS, Mention};
+use super::{ContextPolicy, MAX_MENTIONS, Mention, SemanticScores};
 
 /// The relations the gate would describe, in its order: the mentioned ones
 /// first, then what `focus` makes the search find, up to
@@ -26,6 +28,9 @@ use super::{ContextPolicy, MAX_MENTIONS, Mention};
 /// A mentioned relation counts as soon as the catalog lists it, whatever the
 /// field it names: the gate checks a field against the relation's
 /// description, which is precisely what a host loads from this list.
+///
+/// The selection of a build without semantic scores; with them, see
+/// [`wanted_relations_ranked`].
 #[must_use]
 pub fn wanted_relations(
     cache: &CatalogCache,
@@ -33,6 +38,21 @@ pub fn wanted_relations(
     focus: &str,
     mentions: &[Mention],
     fill: bool,
+) -> Vec<CatalogPath> {
+    wanted_relations_ranked(cache, policy, focus, mentions, fill, &SemanticScores::new())
+}
+
+/// [`wanted_relations`] for a build given `semantic`
+/// ([`ContextBuilder::with_semantic_scores`](super::ContextBuilder::with_semantic_scores)):
+/// the host passes the gate's scores, and loads what it will describe.
+#[must_use]
+pub fn wanted_relations_ranked(
+    cache: &CatalogCache,
+    policy: &ContextPolicy,
+    focus: &str,
+    mentions: &[Mention],
+    fill: bool,
+    semantic: &SemanticScores,
 ) -> Vec<CatalogPath> {
     let mut mentioned: Vec<CatalogPath> = Vec::new();
     for mention in mentions.iter().take(MAX_MENTIONS) {
@@ -43,7 +63,14 @@ pub fn wanted_relations(
             mentioned.push(path.clone());
         }
     }
-    select(cache, policy.max_relations, focus, &mentioned, fill)
+    select(
+        cache,
+        policy.max_relations,
+        focus,
+        &mentioned,
+        fill,
+        semantic,
+    )
 }
 
 /// Mentioned relations first, in the order they were typed, then what the
@@ -52,19 +79,25 @@ pub fn wanted_relations(
 /// With a question, [`oxyn_catalog::search()`] ranks by relevance. Without
 /// one — or without a hit —, the order of the paths decides: a context that
 /// changes from one build to the next makes the model's answers
-/// irreproducible, hence undebuggable.
+/// irreproducible, hence undebuggable. With semantic scores, see [`ranked`].
 pub(super) fn select(
     cache: &CatalogCache,
     limit: usize,
     focus: &str,
     mentioned: &[CatalogPath],
     fill: bool,
+    semantic: &SemanticScores,
 ) -> Vec<CatalogPath> {
     let mut chosen: Vec<CatalogPath> = mentioned.iter().take(limit).cloned().collect();
     if !fill || chosen.len() >= limit {
         return chosen;
     }
-    for path in found(cache, focus, limit) {
+    let candidates = if semantic.is_empty() {
+        found(cache, focus, limit)
+    } else {
+        ranked(cache, focus, limit, semantic)
+    };
+    for path in candidates {
         if chosen.len() >= limit {
             break;
         }
@@ -85,16 +118,93 @@ fn found(cache: &CatalogCache, focus: &str, limit: usize) -> Vec<CatalogPath> {
             return hits.into_iter().map(|hit| hit.path).collect();
         }
     }
+    listing_order(cache)
+        .into_iter()
+        .take(limit)
+        .map(RelationRef::path)
+        .collect()
+}
+
+/// [`found`], ordered by semantic scores as well (ADR-0056):
+///
+/// 1. the relations the search matches, by lexical score — equal scores by
+///    semantic score, then by path;
+/// 2. the relations it does not match and that carry a semantic score, by
+///    that score, then by path;
+/// 3. failing any lexical match, the rest in the order of the paths, as
+///    [`found`] does: an unscored relation ranks as it would without scores.
+///
+/// No threshold: a weak lexical match outranks a strong semantic one. The
+/// search runs without its limit, because a relation cut at the limit may
+/// tie the last one kept and win on its semantic score.
+fn ranked(
+    cache: &CatalogCache,
+    focus: &str,
+    limit: usize,
+    semantic: &SemanticScores,
+) -> Vec<CatalogPath> {
+    let focus = focus.trim();
+    let mut hits = if focus.is_empty() {
+        Vec::new()
+    } else {
+        search(
+            cache,
+            focus,
+            &SearchOptions::default().with_limit(usize::MAX),
+        )
+    };
+    hits.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| semantic.compare(&a.path, &b.path))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    let lexical = !hits.is_empty();
+    let mut chosen: Vec<CatalogPath> = hits.into_iter().map(|hit| hit.path).collect();
+    if chosen.len() >= limit {
+        chosen.truncate(limit);
+        return chosen;
+    }
+
+    let mut seen: HashSet<CatalogPath> = chosen.iter().cloned().collect();
+    let mut unmatched: Vec<CatalogPath> = cache
+        .iter_relations()
+        .map(|(summary, _)| summary.path())
+        .filter(|path| !seen.contains(path) && semantic.get(path).is_some())
+        .collect();
+    unmatched.sort_by(|a, b| semantic.compare(a, b).then_with(|| a.cmp(b)));
+    for path in unmatched {
+        if chosen.len() >= limit {
+            return chosen;
+        }
+        seen.insert(path.clone());
+        chosen.push(path);
+    }
+
+    if !lexical {
+        for summary in listing_order(cache) {
+            if chosen.len() >= limit {
+                break;
+            }
+            let path = summary.path();
+            if !seen.contains(&path) {
+                chosen.push(path);
+            }
+        }
+    }
+    chosen
+}
+
+/// Every listed relation, in the order of the paths: what decides when the
+/// question matches nothing.
+fn listing_order(cache: &CatalogCache) -> Vec<&RelationRef> {
     let mut refs: Vec<&RelationRef> = cache.iter_relations().map(|(r, _)| r).collect();
     refs.sort_by(|a, b| {
         a.parent()
             .cmp(b.parent())
             .then_with(|| a.name().cmp(b.name()))
     });
-    refs.into_iter()
-        .take(limit)
-        .map(RelationRef::path)
-        .collect()
+    refs
 }
 
 #[cfg(test)]
