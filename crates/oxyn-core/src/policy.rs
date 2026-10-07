@@ -354,6 +354,19 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent() && matches!(cmd, Command::TestConnection { .. }) {
             return Decision::deny("only the human may test a connection configuration");
         }
+        // A connection's configuration is the human's: the host a session
+        // opens on, its markings, and switches like sqlite-vec's, which decides
+        // whether bundled C code parses the file (ADR-0054). No tool produces
+        // these commands; the gate refuses them anyway, a refusal and not an
+        // approval — a confirmation ends up being clicked (I-02).
+        if actor.is_agent()
+            && matches!(
+                cmd,
+                Command::CreateConnection { .. } | Command::UpdateConnection { .. }
+            )
+        {
+            return Decision::deny("only the human may create or change a connection");
+        }
         // Reconciling means declaring one inspected the server. An agent
         // inspected nothing: accepting it would silence the warning of a write
         // with an unknown outcome that nobody looked at (I-13). A refusal, not
@@ -917,14 +930,41 @@ mod tests {
         };
 
         let decision = policy.authorize(&agent(), &cmd, Environment::Local);
-        assert!(
-            !decision.is_allowed(),
-            "an agent does not create a connection without agreement: {decision:?}"
+        assert_eq!(
+            Shape::of(&decision),
+            Shape::Deny,
+            "an agent does not create a connection, even with agreement: {decision:?}"
         );
 
         // A human, on the other hand, is not hindered: the connection is not
         // registered yet, and the "closed by default" rule only targets what
         // reaches a server.
+        assert!(
+            policy
+                .authorize(&human(), &cmd, Environment::Local)
+                .is_allowed()
+        );
+    }
+
+    #[test]
+    fn an_agent_cannot_change_a_connection_switch() {
+        // Turning sqlite-vec on is what lets bundled C code parse a file
+        // (ADR-0054): a connection edit, the human's alone.
+        let policy = DefaultPolicy::new();
+        let config = ConnectionConfig::new("vectors", DriverId::sqlite())
+            .with_environment(Environment::Local)
+            .with_param("path", "/data/semantiq.sqlite");
+        policy.register(&config);
+        let cmd = Command::UpdateConnection {
+            config: Box::new(config.with_param("sqlite_vec", "true")),
+        };
+        for env in ENVS {
+            assert_eq!(
+                Shape::of(&policy.authorize(&agent(), &cmd, env)),
+                Shape::Deny,
+                "{env}"
+            );
+        }
         assert!(
             policy
                 .authorize(&human(), &cmd, Environment::Local)

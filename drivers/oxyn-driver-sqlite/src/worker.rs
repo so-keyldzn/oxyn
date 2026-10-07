@@ -42,13 +42,14 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use futures::future::{Either, select};
-use oxyn_core::{CancelToken, OxynError, Result};
+use oxyn_core::{CancelToken, ErrorClass, OxynError, Result};
 use rusqlite::{Connection, OpenFlags};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::error;
+use crate::error::{self, SqliteError};
 use crate::interrupt::{AbandonGuard, Interrupter, WorkId};
 use crate::stream::{self, StreamJob};
+use crate::vector_extension;
 
 /// A short task to execute on the worker thread.
 ///
@@ -80,6 +81,9 @@ pub(crate) struct OpenSpec {
     pub target: OpenTarget,
     /// Open read-only, at the engine level.
     pub read_only: bool,
+    /// Register sqlite-vec: only when the user turned it on for the connection
+    /// (ADR-0054).
+    pub vector_extension: bool,
 }
 
 impl std::fmt::Debug for OpenSpec {
@@ -87,6 +91,7 @@ impl std::fmt::Debug for OpenSpec {
         f.debug_struct("OpenSpec")
             .field("target", &self.target)
             .field("read_only", &self.read_only)
+            .field("vector_extension", &self.vector_extension)
             .finish()
     }
 }
@@ -249,7 +254,15 @@ impl WorkerHandle {
         }
         let replied = answer.await;
         abandon.disarm();
-        replied.unwrap_or_else(|_| Err(error::closed()))
+        // The engine's code no longer tells "stopped" from "refused" here: an
+        // extension may report the interruption under a code of its own —
+        // sqlite-vec turns the `SQLITE_INTERRUPT` of its inner statements into
+        // `SQLITE_ERROR`. A failure of a request not declared read-only, once
+        // it was interrupted, is therefore ambiguous whatever its code (I-13) —
+        // a pure read among them included: imprecise, never retried.
+        replied
+            .unwrap_or_else(|_| Err(error::closed()))
+            .map_err(error::interrupted_write)
     }
 
     /// The task the worker thread is executing, for tests.
@@ -295,7 +308,8 @@ impl WorkerHandle {
 ///
 /// # Errors
 /// [`OxynError::Io`] if the thread cannot start, [`OxynError::Connection`] if
-/// the database does not open, [`OxynError::Cancelled`] if the token has
+/// the database does not open, a permanent [`OxynError::Driver`] if sqlite-vec
+/// cannot be registered on it, [`OxynError::Cancelled`] if the token has
 /// already fired.
 pub(crate) async fn spawn(
     spec: OpenSpec,
@@ -365,6 +379,15 @@ fn open(spec: &OpenSpec) -> Result<Connection> {
         OpenTarget::File(path) => Connection::open_with_flags(path, flags),
     };
     let connection = connection.map_err(error::open)?;
+    // Only on a connection the user turned it on for: otherwise no statement on
+    // this file can reach sqlite-vec's C code (ADR-0054). When on, before the
+    // first statement, read-only sessions included: reading a `vec0` table needs
+    // its module as much as writing it does. A refusal here is the same at
+    // every attempt: permanent, not the transient class of an unreachable file.
+    if spec.vector_extension {
+        vector_extension::register(&connection)
+            .map_err(|err| error::driver(SqliteError::Engine(err), ErrorClass::Permanent))?;
+    }
     if spec.read_only {
         connection
             .pragma_update(None, "query_only", true)
@@ -433,6 +456,7 @@ mod tests {
         OpenSpec {
             target: OpenTarget::Memory(oxyn_core::ConnectionId::new()),
             read_only: false,
+            vector_extension: false,
         }
     }
 
@@ -591,6 +615,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_interrupted_write_failing_under_another_code_is_ambiguous() {
+        // What sqlite-vec does: its inner statement sees the interruption and
+        // the task fails with `SQLITE_ERROR`, a code that reads as a refusal.
+        let cancel_token = CancelToken::new();
+        let (handle, thread) = spawn(in_memory(), &cancel_token).await.expect("open");
+
+        let (active, in_task) = oneshot::channel();
+        let (go_ahead, wait_rx) = std::sync::mpsc::channel::<()>();
+        let (reply, answer) = oneshot::channel::<Result<()>>();
+        let id = handle
+            .submit(|id| {
+                WorkerCommand::Job(
+                    id,
+                    Box::new(move |_: &Connection| {
+                        let _ = active.send(());
+                        let _ = wait_rx.recv();
+                        let refused = rusqlite::Error::SqliteFailure(
+                            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+                            None,
+                        );
+                        let _ = reply.send(Err(error::engine(refused, error::Effect::Mutating)));
+                    }),
+                )
+            })
+            .expect("submission");
+        in_task.await.expect("the task is running");
+
+        let stop = CancelToken::new();
+        let mut verdict = pin!(handle.await_verdict(answer, &stop, id));
+        assert!(futures::poll!(verdict.as_mut()).is_pending());
+        stop.cancel();
+        // The interruption reaches the running task; the wait goes on.
+        assert!(futures::poll!(verdict.as_mut()).is_pending());
+        go_ahead.send(()).expect("go-ahead");
+
+        match verdict.await {
+            Ok(()) => panic!("the task failed"),
+            Err(err) => assert_eq!(err.class(), oxyn_core::ErrorClass::Ambiguous, "{err}"),
+        }
+
+        handle.close().await.expect("close");
+        thread.join().expect("the thread ends");
+    }
+
+    #[tokio::test]
     async fn a_task_abandoned_in_the_queue_is_not_executed() {
         // A tab closed while its query waits its turn: executing it afterwards
         // would occupy the session for nobody.
@@ -672,6 +741,7 @@ mod tests {
                 "/oxyn-missing/database-that-does-not-exist.sqlite",
             )),
             read_only: true,
+            vector_extension: false,
         };
         let err = spawn(spec, &cancel_token).await.expect_err("opening fails");
         assert!(matches!(err, OxynError::Connection(_)), "{err:?}");

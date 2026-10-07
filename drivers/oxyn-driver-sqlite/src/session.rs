@@ -322,6 +322,7 @@ mod tests {
         let spec = OpenSpec {
             target: OpenTarget::Memory(ConnectionId::new()),
             read_only: false,
+            vector_extension: false,
         };
         let (handle, thread) = worker::spawn(spec, &cancel_token).await.expect("open");
         let session = SqliteSession::new(handle, thread, Capabilities::SQL, BatchLimits::new());

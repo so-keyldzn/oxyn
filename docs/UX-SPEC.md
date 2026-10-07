@@ -244,6 +244,19 @@ back to the saved value restores the stored state. The announcement happens
 before saving, not after: the user who fixes a typo in the host learns they
 lose the password at the moment they can still cancel.
 
+### The sqlite-vec switch
+
+A SQLite connection carries, under its file, a switch labelled
+"Enable sqlite-vec (vec0 vector tables)", **off** on every new connection and on
+every `Duplicate`. Its description says what it does and when: "Runs the
+bundled sqlite-vec C extension on this file. Enable it only for files you
+trust. A change applies to sessions opened afterwards: disconnect to apply it
+to open ones." Saving it closes no session; `Disconnect` then `Connect` applies
+it to all. Off, a `vec0` table stays unreadable (`no such module: vec0`); on,
+it reads like any table. Only the
+connection form changes it — no agent can
+([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)).
+
 ## Common workspace structure
 
 The structure chosen is the **dense workbench** of the Figma page

@@ -557,8 +557,10 @@ impl Command {
     /// * the connection management commands answer
     ///   [`Ddl`](StatementIntent::Ddl). It is not DDL in the SQL sense, but the
     ///   effect is of the same order: an agent that could create a connection
-    ///   to the host of its choice would have an exfiltration channel. They
-    ///   therefore go through an approval.
+    ///   to the host of its choice would have an exfiltration channel. The
+    ///   `PolicyGate` **refuses** `CreateConnection` and `UpdateConnection` to
+    ///   an agent outright — a connection's switches, like sqlite-vec's, are
+    ///   the human's (ADR-0054) — and judges `DeleteConnection` as DDL.
     /// * [`Cancel`](Self::Cancel) answers `Read`: cancelling modifies nothing,
     ///   and a cancellation that must be approved is not a cancellation.
     /// * [`ReconcileHistoryEntry`](Self::ReconcileHistoryEntry) answers `Read`

@@ -84,6 +84,42 @@ async fn a_built_in_module_is_reported_available_with_its_shadow_tables() {
 }
 
 #[tokio::test]
+async fn vec0_shows_available_on_a_connection_that_enables_sqlite_vec() {
+    // Nothing names vec0 in the listing: the module list answers, as for fts5.
+    let config = ConnectionConfig::new("vectors", DriverId::sqlite())
+        .with_environment(Environment::Local)
+        .with_param(SqliteDriver::PATH, SqliteDriver::MEMORY)
+        .with_param(SqliteDriver::VECTOR_EXTENSION, "true");
+    let session = SqliteDriver::new()
+        .connect(&config, &Credentials::new(), &CancelToken::new())
+        .await
+        .unwrap_or_else(|err| panic!("open: {err}"));
+    run(
+        &*session,
+        "CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[4])",
+    )
+    .await
+    .expect("vec0 is registered");
+
+    let listed = relations(&*session).await;
+    let module = named(&listed, "chunks_vec")
+        .virtual_table
+        .as_ref()
+        .expect("a virtual table");
+    assert_eq!(module.module, "vec0");
+    assert_eq!(module.available, Some(true));
+    assert!(
+        listed
+            .iter()
+            .filter(|relation| relation.shadow_of.as_deref() == Some("chunks_vec"))
+            .count()
+            > 0,
+        "sqlite-vec names its shadow tables to the engine"
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
 async fn a_hostile_virtual_table_name_stays_data() {
     // I-10: the name and its shadow tables are compared, never joined to SQL.
     let session = open(SqliteDriver::MEMORY).await;
