@@ -55,7 +55,11 @@ OUTSIDE_REPOSITORY = ("/dev/null", "/dev/stdout", "/dev/stderr")
 TEMPORARY_ROOTS = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
 # Characters the shell expands after this hook has run: a target holding one
 # cannot be resolved here, so it is never exempted.
-EXPANDED_LATER = set("$`*?[{~")
+EXPANDED_LATER = set("$`*?[{~@+!")
+# Commands that can change what a path resolves to before a later redirection
+# of the same line runs (`ln -s repo /tmp/x; echo > /tmp/x/f`): with one of
+# them on the line, no target is exempted.
+RESHAPES_PATHS = {"ln", "mv", "cp", "rsync", "mkdir", "rm", "rmdir", "unlink", "install", "mount"}
 # Programs that run a command string of their own (`bash -c '…'`, `eval …`):
 # their redirections hide in one quoted token.
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
@@ -141,7 +145,7 @@ def _nested_programs(tokens: list[str]) -> list[str]:
     return programs
 
 
-def _writing_redirection(command: str, depth: int = 0) -> bool:
+def _writing_redirection(command: str, depth: int = 0, reshaped: bool = False) -> bool:
     """Whether the command redirects output into a file that may belong to the
     repository.
 
@@ -161,8 +165,21 @@ def _writing_redirection(command: str, depth: int = 0) -> bool:
         tokens = list(lexer)
     except ValueError:
         return ">" in command
-    if any(_writing_redirection(program, depth + 1) for program in _nested_programs(tokens)):
+    # The target is resolved now; a command of the same line, nested programs
+    # included, can reshape the path before the redirection runs. Then only
+    # the device files stay exempted.
+    reshaped = reshaped or any(Path(_unquote(token)).name in RESHAPES_PATHS for token in tokens)
+    if any(
+        _writing_redirection(program, depth + 1, reshaped)
+        for program in _nested_programs(tokens)
+    ):
         return True
+
+    def harmless(target: str) -> bool:
+        if reshaped:
+            return _unquote(target) in OUTSIDE_REPOSITORY
+        return _harmless_target(target)
+
     for i, token in enumerate(tokens):
         # `shlex` groups adjacent operators: `(cmd)>file` yields `)>`. What
         # decides is how the run of punctuation ends; `>(` is a process
@@ -172,10 +189,10 @@ def _writing_redirection(command: str, depth: int = 0) -> bool:
         target = tokens[i + 1] if i + 1 < len(tokens) else ""
         if token.endswith(">&"):
             # `>&2`, `2>&1`: a descriptor, not a file. `>& file` is a file.
-            if not target.isdigit() and target != "-" and not _harmless_target(target):
+            if not target.isdigit() and target != "-" and not harmless(target):
                 return True
         elif token.endswith(REDIRECTION_ENDINGS):
-            if not _harmless_target(target):
+            if not harmless(target):
                 return True
     return False
 

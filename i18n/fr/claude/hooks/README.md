@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/hooks/README.md" sha256="3ae1154b280c" -->
+<!-- oxyn-translation source=".claude/hooks/README.md" sha256="198f3583cea1" -->
 
 > Traduction française de [.claude/hooks/README.md](../../../../.claude/hooks/README.md). **La version anglaise fait foi.**
 
@@ -74,11 +74,20 @@ ensuite (`*`, `?`, `[`, `{`, `~`, `$`). Le texte que le shell exécute à
 nouveau — les arguments de `bash`, `sh` ou `eval`, un `$(…)` ou des
 apostrophes inverses hors guillemets simples — est lu de la même façon,
 volontairement plus largement que le strict nécessaire : une chaîne lue en trop
-coûte une question, jamais une écriture laissée passer. Un
-chemin relatif, une variable ou un chemin que `..` fait sortir de ces racines
-demande toujours. Le test sur la ligne brute qu'il remplace demandait à chaque
-commande de test qui gardait un journal : approuver devenait un réflexe,
-l'inverse d'un garde-fou.
+coûte une question, jamais une écriture laissée passer. Les globs étendus
+(`@(…)`, `+(…)`, `!(…)`) comptent comme un développement ultérieur, et une ligne
+qui lance aussi `ln`, `mv`, `cp`, `mkdir`, `rm`… n'exempte plus que les fichiers
+de périphérique, puisqu'elle peut remodeler un chemin avant que sa redirection
+s'exécute. Un chemin relatif, une variable ou un chemin que `..` fait sortir
+de ces racines demande toujours. Le test sur la ligne brute qu'il remplace
+demandait à chaque commande de test qui gardait un journal : approuver devenait
+un réflexe, l'inverse d'un garde-fou.
+
+Ce que cette vérification est, et n'est pas : un garde-fou contre l'écriture
+**accidentelle** par le shell qui contourne Write et Edit. Ce n'est pas un bac à
+sable contre une session décidée à la contourner — le shell est trop riche pour
+qu'un analyseur ferme tous les chemins ; les invariants qui doivent tenir
+contre cela vivent dans le code et dans `make qualite`.
 
 ## Ajouter un motif
 
