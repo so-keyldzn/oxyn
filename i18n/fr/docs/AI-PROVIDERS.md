@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="ff9dcf77164b" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="a3d3faa9289a" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -317,11 +317,14 @@ avec elles ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)) 
   modèle est désactivé, en téléchargement ou en échec, la sélection est
   exactement la sélection lexicale.
 
-**Seul le chemin des fournisseurs est classé ainsi, pour l'instant.** Le
-contexte envoyé à un agent externe passe par `AgentPrompt`, qui ne prend pas de
-scores : sa sélection reste lexicale quoi que dise l'option. Le classer lui
-aussi est un travail prévu, hors du changement qui a introduit le classement
-sémantique.
+**Le schéma d'ouverture d'un agent externe est classé de la même façon.**
+`AgentPrompt::with_schema_ranked` reçoit les scores avec lesquels le complément
+du catalogue a classé — les mêmes, calculés une fois par question —, si bien que
+la structure annoncée à un agent externe à sa première question est choisie
+comme celle d'un fournisseur, sous le même niveau et dans les mêmes bornes. Une
+session qui suit ne rend que ses mentions et ne prend aucun score ; tant que
+l'option est désactivée, la sélection de l'agent est la sélection lexicale,
+comme avant.
 
 Le modèle d'embeddings n'est pas un fournisseur : il ne génère aucun texte, ne
 reçoit aucun prompt et n'a besoin d'aucune déclaration dans

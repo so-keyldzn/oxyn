@@ -307,10 +307,13 @@ complete the selection with them
   threshold. It is bounded at 2 seconds per question, and while the model is
   off, downloading or failing, selection is exactly the lexical one.
 
-**Only the provider path is ranked this way, for now.** The context sent to an
-external agent goes through `AgentPrompt`, which takes no scores: its
-selection stays lexical whatever the option says. Ranking it too is planned
-work, outside the change that introduced semantic ranking.
+**An external agent's opening schema is ranked the same way.**
+`AgentPrompt::with_schema_ranked` receives the scores the catalog fill ranked
+with — the same ones, computed once per question —, so the structure an
+external agent is told at its first question is selected as a provider's is,
+under the same tier and the same bounds. A session that follows renders its
+mentions only and takes no score; while the option is off, the agent's
+selection is the lexical one, as before.
 
 The embedding model is not a provider: it generates no text, receives no
 prompt, and needs no declaration in `ProviderRegistry`.

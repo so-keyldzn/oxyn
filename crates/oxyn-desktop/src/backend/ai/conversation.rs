@@ -2420,10 +2420,13 @@ impl Run<'_> {
         // Before the prompt is rendered, what it needs is read — by Oxyn,
         // through the bus: the whole selection for a session that starts, the
         // mentions alone for one that follows.
-        // Unranked: the external agent's prompt is rendered by
-        // `AgentPrompt`, which takes no semantic scores, and the fill must
-        // load what that rendering selects.
-        self.complete_catalog(self.want(question, linked.is_some()), None)
+        // Ranked as the internal assistant's: the opening schema is rendered
+        // with the scores the fill loaded with, so the agent is told what was
+        // described (ADR-0056). Empty for a session that follows — it
+        // renders mentions only — and while the option is off.
+        let ranking = Ranking::new(self.inner, question);
+        let scores = self
+            .complete_catalog(self.want(question, linked.is_some()), ranking.as_ref())
             .await;
         // From the local catalog only: an agent that fetched what it needs
         // would bypass both the gate and the bus. No catalog yet is said to the
@@ -2441,7 +2444,7 @@ impl Run<'_> {
                 Some(_) => AgentPrompt::following(tier, question, cache, language, mentions),
                 None => {
                     let samples: Vec<_> = sample.map(|sample| sample.rows).into_iter().collect();
-                    AgentPrompt::with_schema(
+                    AgentPrompt::with_schema_ranked(
                         tier,
                         question,
                         cache,
@@ -2452,6 +2455,7 @@ impl Run<'_> {
                             spec: self.role,
                             target: &target,
                         },
+                        scores,
                     )
                 }
             }
