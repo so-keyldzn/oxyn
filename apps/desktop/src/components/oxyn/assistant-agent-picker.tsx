@@ -54,6 +54,8 @@ export function AssistantAgentPicker({
   reloadError = null,
 }: AssistantAgentPickerProps) {
   const hintId = React.useId()
+  // SQL is selected in a blank thread, whatever `ordered` lists first
+  // (ADR-0055): the display order never decides the default.
   const selectedId = missingAgent ? SQL_AGENT_ID : (value ?? SQL_AGENT_ID)
   const selected = agents.find((agent) => agent.id === selectedId)
   const ordered = [...agents].sort(
