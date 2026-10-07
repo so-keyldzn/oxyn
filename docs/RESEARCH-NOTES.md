@@ -174,13 +174,29 @@ Versions were read from the npm registry with `pnpm view <package> versions
 |---|---|---|
 | `source-map-js` | `1.2.2` | First patched version for [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q); BSD-3-Clause. [Release notes](https://github.com/7rulnik/source-map-js/releases/tag/v1.2.2) confirm the indexed source-map denial-of-service fix. Even Vite `8.3.3` permits PostCSS `8.5.28`, whose `source-map-js` range is `^1.2.1`; a Vite bump alone does not require the fix. |
 | `katex` | `0.18.2` | First patched version for [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7); MIT. [Release notes](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.2) confirm the settings prototype-pollution fix. Mermaid `11.17.2` remains the latest 11.x; even `12.1.0` still requires `katex ^0.16.47`, excluding the fix. Keep Mermaid's existing browser target and override KaTeX. |
-| `seroval`, `seroval-plugins` | `1.6.8` | Development only (`@tanstack/react-devtools` > `@tanstack/devtools` > `solid-js`). Covers [GHSA-p6vx-979v-rg4c](https://github.com/advisories/GHSA-p6vx-979v-rg4c) (patched in `1.6.2`), [GHSA-jp82-f5mq-hwhp](https://github.com/advisories/GHSA-jp82-f5mq-hwhp) and [GHSA-mv8w-475r-vwqw](https://github.com/advisories/GHSA-mv8w-475r-vwqw); MIT; `1.6.8` published on 2026-09-29. Added on 2026-10-06: `solid-js 1.9.15` pins `seroval ~1.5.4`, and the `solid-js 1.9.16` that requires `~1.6.8` was published that day at 19:11 UTC, which pnpm 11's minimum release age still refuses — the override avoids bypassing that safeguard. `seroval-plugins 1.6.8` peers on `seroval ^1.0`. Remove it once the lockfile resolves `solid-js >= 1.9.16`. |
+| `seroval`, `seroval-plugins` | `1.6.8` | **Shipped in the production bundle**: `@tanstack/react-router` > `@tanstack/router-core` (`seroval ^1.6.2`, `seroval-plugins ^1.6.2`) serializes the router state, and its `seroval/plugins/web/ReadableStream` code is in `dist/client/assets/index-*.js` (checked on 2026-10-07 after `pnpm build`). The development path `@tanstack/react-devtools` > `@tanstack/devtools` > `solid-js` is the one that needs the override; the devtools themselves are absent from the production bundle since 2026-10-07 (loaded only under `import.meta.env.DEV`). Covers [GHSA-p6vx-979v-rg4c](https://github.com/advisories/GHSA-p6vx-979v-rg4c) (patched in `1.6.2`), [GHSA-jp82-f5mq-hwhp](https://github.com/advisories/GHSA-jp82-f5mq-hwhp) and [GHSA-mv8w-475r-vwqw](https://github.com/advisories/GHSA-mv8w-475r-vwqw); MIT; `1.6.8` published on 2026-09-29. Added on 2026-10-06: `solid-js 1.9.15` pins `seroval ~1.5.4`, and the `solid-js 1.9.16` that requires `~1.6.8` was published that day at 19:11 UTC, which pnpm 11's minimum release age still refuses — the override avoids bypassing that safeguard. `seroval-plugins 1.6.8` peers on `seroval ^1.0`. Remove it once the lockfile resolves `solid-js >= 1.9.16`. |
 
 pnpm `11.1.2` ignores `package.json#pnpm`: overrides belong in
 `apps/desktop/pnpm-workspace.yaml`, as documented in the
 [pnpm migration guide](https://github.com/pnpm/pnpm.io/blob/main/docs/migration.md)
 and confirmed by a lockfile-only install. Remove each override when the parent
 dependency requires a patched version. No other dependency is upgraded.
+
+### npm advisories fixed by a lockfile refresh — checked on 2026-10-07
+
+Refreshed by #207 on 2026-10-06; recorded on 2026-10-07. Advisories read from
+the GitHub Advisory Database (`gh api /advisories?ecosystem=npm&affects=<package>@<old version>`),
+versions and publication dates from the npm registry (`npm view <package> time`),
+ranges from the installed parents' `package.json`. Each parent's range already
+admits the patched version: **lockfile refresh, no override**, nothing to remove
+later. All four are development-only (shadcn CLI, TanStack devtools Vite plugin).
+
+| Package | Version | Advisory | First patched | Parent and the range that admits it | Source |
+|---|---|---|---|---|---|
+| `@modelcontextprotocol/sdk` | `1.30.0` → `1.32.1` | [GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h) (high, `>= 1.12.0, < 1.31.0`) | `1.31.0` | `shadcn 4.21.0`: `^1.26.0` | `1.32.1` published on 2026-10-05; MIT |
+| `proxy-addr` | `2.0.7` → `2.0.8` | [GHSA-jqcg-44mw-7w3h](https://github.com/advisories/GHSA-jqcg-44mw-7w3h) (critical, `>= 1.1.0, < 2.0.8`) | `2.0.8` | `express 5.2.1` (under `@modelcontextprotocol/sdk`): `^2.0.7` | `2.0.8` published on 2026-09-15; MIT |
+| `shell-quote` | `1.10.0` → `1.12.0` | [GHSA-pqg4-j6r4-53mv](https://github.com/advisories/GHSA-pqg4-j6r4-53mv) (critical, `>= 1.8.4, < 1.11.0`) | `1.11.0` | `launch-editor 2.14.1` (under `@tanstack/devtools-vite`): `^1.8.4` | `1.12.0` published on 2026-10-02; MIT |
+| `fast-uri` | `3.1.7` → `3.1.8` | [GHSA-hrr3-gc8f-f4qj](https://github.com/advisories/GHSA-hrr3-gc8f-f4qj) (medium, `>= 3.0.0, < 3.1.8`) | `3.1.8` | `ajv 8.20.0` (under `@modelcontextprotocol/sdk`, `conf`): `^3.0.1` | `3.1.8` published on 2026-09-15; BSD-3-Clause |
 
 ### Facts that decided the code
 

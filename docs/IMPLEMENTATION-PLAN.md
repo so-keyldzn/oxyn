@@ -2153,10 +2153,14 @@ never abbreviated. Validation refuses control, format and line/paragraph separat
 in every field and bounds the command and each argument to 4,096 UTF-8 bytes.
 Scripted host tests cover premature approval, refusal, expiry and contention.
 
-**Planned on 2026-10-06 — prompts composed per role × dialect × recipient.**
+**Done on 2026-10-06 — prompts composed per role × dialect × recipient.**
+Planned the same day; the three steps below are merged and released in
+0.0.6 (#205): step 1 in #202, step 2 in #198 (store), #200 (picker) and
+#203 (the conversation runs its agent), step 3 in #204.
 [ADR-0049](adr/0049-agents-declared-as-markdown-files.md), amended on
-2026-10-06, stays `proposed` until the user accepts it; its first code
-commit is step 1. Three steps, each its own pull request, in this order:
+2026-10-06 (#199), was accepted on 2026-10-06 (#206), and amended on
+2026-10-07 on the default agent (SQL, whatever the display order). The
+steps, as planned, each its own pull request, in this order:
 
 1. **Composition, in `oxyn-ai`.** The role files `agents/sql.md` and
    `agents/schema.md`, the dialect fragments (real text for `ansi`,
