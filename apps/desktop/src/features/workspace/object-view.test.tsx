@@ -236,11 +236,70 @@ describe("a virtual table whose module is not loaded", () => {
       retryable: false,
       missingModule: "spellfix1",
     }
-    renderView({ node: vec })
+    renderView({
+      node: {
+        ...vec,
+        virtualTable: { module: "spellfix1", available: false, shadows: [] },
+      },
+    })
     expect(
       screen.getByText(/provided by the SQLite extension/).textContent
     ).toContain("spellfix1")
     expect(screen.queryByText(/enable sqlite-vec/)).toBeNull()
+  })
+
+  it("offers no read that would fail the same way", () => {
+    // Refresh, Apply and Sort would each read again, and fail again until the
+    // connection is reopened with the module.
+    const reading = {
+      ...open,
+      capabilities: ["SQL", "PREVIEW_FILTER", "PREVIEW_SORT"],
+    }
+    previewState.current = {
+      status: "error",
+      message,
+      retryable: false,
+      missingModule: "vec0",
+    }
+    renderView({ open: reading, node: vec })
+    expect(screen.queryByRole("button", { name: /Refresh data/ })).toBeNull()
+    expect(screen.queryByLabelText("Preview filter predicate")).toBeNull()
+    expect(screen.queryByRole("button", { name: /Sort/ })).toBeNull()
+
+    // Any other failure keeps them: fixing the predicate is the way out.
+    cleanup()
+    previewState.current = {
+      status: "error",
+      message: "query rejected: not a condition",
+      retryable: false,
+      missingModule: null,
+    }
+    renderView({ open: reading, node: vec })
+    expect(screen.getByRole("button", { name: /Refresh data/ })).toBeTruthy()
+    expect(screen.getByLabelText("Preview filter predicate")).toBeTruthy()
+  })
+
+  it("says a view reads such a table, without calling it one", () => {
+    previewState.current = {
+      status: "error",
+      message,
+      retryable: false,
+      missingModule: "vec0",
+    }
+    renderView({
+      node: {
+        ...node,
+        address: { catalog: null, namespace: "main", relation: "recent" },
+        name: "recent",
+        kind: "view",
+      },
+    })
+    expect(
+      screen.getByText(/reads a virtual table whose module/).textContent
+    ).toContain("This view reads a virtual table whose module vec0")
+    expect(screen.queryByText(/provided by the SQLite extension/)).toBeNull()
+    expect(screen.queryByText(/stored in|No table storing/)).toBeNull()
+    expect(screen.getByText(/enable sqlite-vec/)).toBeTruthy()
   })
 })
 

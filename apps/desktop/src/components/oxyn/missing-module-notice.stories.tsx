@@ -19,7 +19,10 @@ const meta = {
   ],
   args: {
     module: "vec0",
-    shadows: missingModuleTable.virtualTable?.shadows ?? [],
+    subject: {
+      type: "virtualTable",
+      shadows: missingModuleTable.virtualTable?.shadows ?? [],
+    },
     message: missingModuleMessage,
     onOpenShadow: fn(),
   },
@@ -62,7 +65,7 @@ export const WithShadowTables: Story = {
 export const WithoutShadowTables: Story = {
   args: {
     module: "spellfix1",
-    shadows: [],
+    subject: { type: "virtualTable", shadows: [] },
     message: "no such module: spellfix1",
   },
   play: async ({ canvas }) => {
@@ -72,5 +75,30 @@ export const WithoutShadowTables: Story = {
     await expect(canvas.queryByRole("button", { name: /_/ })).toBeNull()
     // The sqlite-vec sentence belongs to vec0 alone.
     await expect(canvas.queryByText(/enable sqlite-vec/)).toBeNull()
+  },
+}
+
+/**
+ * A plain view whose definition reads `chunks_vec`: SQLite answers the same
+ * `no such module`, but the view is not the virtual table — neither provided
+ * by the extension nor stored in its shadow tables.
+ */
+export const ViewReadingAVirtualTable: Story = {
+  args: { subject: { type: "dependent", noun: "view" } },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByText("This view reads a table that needs an SQLite extension")
+    ).toBeVisible()
+    await expect(
+      canvas.getByText(/reads a virtual table whose module/)
+    ).toHaveTextContent(
+      "This view reads a virtual table whose module vec0 is not loaded: Oxyn does not load that SQLite extension, so the read fails."
+    )
+    await expect(
+      canvas.queryByText(/provided by the SQLite extension/)
+    ).toBeNull()
+    await expect(canvas.queryByText(/stored in|No table storing/)).toBeNull()
+    // The way to vec0 is the same, whatever reads it.
+    await expect(canvas.getByText(/enable sqlite-vec/)).toBeVisible()
   },
 }

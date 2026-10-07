@@ -9,31 +9,58 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import type { CatalogNode } from "@/lib/ipc/types"
 
 /** The module sqlite-vec registers, which a connection can opt into. */
 const SQLITE_VEC_MODULE = "vec0"
 
 /**
- * Why a virtual table's rows cannot be read: the extension providing it is not
- * loaded. Shown in place of the raw failure, which stays one click away — the
- * engine's own words are never replaced, only explained.
+ * What the failed read was about, as the notice must say it.
+ *
+ * `virtualTable`: the selected object **is** the virtual table backed by the
+ * missing module — its shadow tables are where its data is. `dependent`:
+ * anything else — a view whose definition reads such a table, say — which the
+ * extension does not provide, and whose storage the notice does not claim.
+ */
+export type MissingModuleSubject =
+  | { type: "virtualTable"; shadows: Array<string> }
+  | { type: "dependent"; noun: string }
+
+/**
+ * The subject for `node`: the virtual table only when the catalog says the
+ * node is one backed by `module`. Pure, so it is tested without a DOM.
+ */
+export function missingModuleSubject(
+  node: Pick<CatalogNode, "kind" | "virtualTable">,
+  module: string
+): MissingModuleSubject {
+  const table = node.virtualTable
+  if (table && table.module.toLowerCase() === module.toLowerCase())
+    return { type: "virtualTable", shadows: table.shadows }
+  return { type: "dependent", noun: node.kind === "view" ? "view" : "object" }
+}
+
+/**
+ * Why a read failed: the extension providing a module is not loaded. Shown in
+ * place of the raw failure, which stays one click away — the engine's own
+ * words are never replaced, only explained.
  *
  * The module and table names come from the database: rendered as text.
  */
 export function MissingModuleNotice({
   module,
-  shadows,
+  subject,
   message,
   onOpenShadow,
 }: {
   module: string
-  /** The tables storing its data, as the catalog lists them. */
-  shadows: Array<string>
+  subject: MissingModuleSubject
   /** The driver's message, as it came. */
   message: string
   /** Selects a shadow table, as a click in the explorer would. */
   onOpenShadow?: (name: string) => void
 }) {
+  const named = <code className="font-mono text-foreground">{module}</code>
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-4">
       <Alert className="gap-1.5 px-3 py-3">
@@ -42,41 +69,28 @@ export function MissingModuleNotice({
           strokeWidth={2}
           className="text-warning"
         />
-        <AlertTitle>This table needs an SQLite extension</AlertTitle>
+        <AlertTitle>
+          {subject.type === "virtualTable"
+            ? "This table needs an SQLite extension"
+            : `This ${subject.noun} reads a table that needs an SQLite extension`}
+        </AlertTitle>
         <AlertDescription className="flex min-w-0 flex-col gap-2">
-          <p>
-            This table is provided by the SQLite extension{" "}
-            <code className="font-mono text-foreground">{module}</code>, which
-            Oxyn does not load.{" "}
-            {shadows.length > 0 ? (
-              <>
-                Its data is stored in{" "}
-                {shadows.map((name, index) => (
-                  <React.Fragment key={name}>
-                    {index > 0
-                      ? index === shadows.length - 1
-                        ? " and "
-                        : ", "
-                      : null}
-                    {onOpenShadow ? (
-                      <Button
-                        variant="link"
-                        className="h-auto p-0 font-mono text-[length:inherit]"
-                        onClick={() => onOpenShadow(name)}
-                      >
-                        {name}
-                      </Button>
-                    ) : (
-                      <code className="font-mono text-foreground">{name}</code>
-                    )}
-                  </React.Fragment>
-                ))}
-                .
-              </>
-            ) : (
-              "No table storing its data is listed beside it."
-            )}
-          </p>
+          {subject.type === "virtualTable" ? (
+            <p>
+              This table is provided by the SQLite extension {named}, which Oxyn
+              does not load.{" "}
+              <ShadowTables
+                shadows={subject.shadows}
+                onOpenShadow={onOpenShadow}
+              />
+            </p>
+          ) : (
+            <p>
+              This {subject.noun} reads a virtual table whose module {named} is
+              not loaded: Oxyn does not load that SQLite extension, so the read
+              fails.
+            </p>
+          )}
           {module === SQLITE_VEC_MODULE ? (
             // The one extension Oxyn ships, off unless the connection opts in:
             // loading code a database file asks for is a trust decision.
@@ -113,5 +127,39 @@ export function MissingModuleNotice({
         </AlertDescription>
       </Alert>
     </div>
+  )
+}
+
+/** Where a virtual table's data is: its shadow tables, as links. */
+function ShadowTables({
+  shadows,
+  onOpenShadow,
+}: {
+  shadows: Array<string>
+  onOpenShadow?: (name: string) => void
+}) {
+  if (shadows.length === 0)
+    return <>No table storing its data is listed beside it.</>
+  return (
+    <>
+      Its data is stored in{" "}
+      {shadows.map((name, index) => (
+        <React.Fragment key={name}>
+          {index > 0 ? (index === shadows.length - 1 ? " and " : ", ") : null}
+          {onOpenShadow ? (
+            <Button
+              variant="link"
+              className="h-auto p-0 font-mono text-[length:inherit]"
+              onClick={() => onOpenShadow(name)}
+            >
+              {name}
+            </Button>
+          ) : (
+            <code className="font-mono text-foreground">{name}</code>
+          )}
+        </React.Fragment>
+      ))}
+      .
+    </>
   )
 }

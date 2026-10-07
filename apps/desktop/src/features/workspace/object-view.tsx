@@ -22,7 +22,10 @@ import {
 } from "@/components/oxyn/relation-definition"
 import { RelationIndexes } from "@/components/oxyn/relation-indexes"
 import { IncomingKeys, OutgoingKeys } from "@/components/oxyn/relation-keys"
-import { MissingModuleNotice } from "@/components/oxyn/missing-module-notice"
+import {
+  MissingModuleNotice,
+  missingModuleSubject,
+} from "@/components/oxyn/missing-module-notice"
 import { operationOffer } from "@/components/oxyn/object-operations"
 import { RelationStructure } from "@/components/oxyn/relation-structure"
 import { RestoredObjectNotice } from "@/components/oxyn/restored-object-notice"
@@ -234,13 +237,20 @@ export function ObjectView({
 
   const data = facets.facets
   const state = preview.state
+  // While the last read failed for a missing module, nothing offers another:
+  // Refresh, Apply, Sort and the pages would all fail the same way (UX-SPEC).
+  // A read on a new session — the connection reopened with the module
+  // enabled — replaces this state, and the controls come back with it.
+  const moduleMissing =
+    state.status === "error" && state.missingModule ? state.missingModule : null
   // A read that failed because the connection lacks the engine module the
   // table needs: explained rather than shown raw (docs/UX-SPEC.md). Only that
   // failure, as the backend names it — any other is shown as it came.
   const explainMissing = (module: string, message: string) => (
     <MissingModuleNotice
       module={module}
-      shadows={node.virtualTable?.shadows ?? []}
+      // A view reading such a table is not the table: no storage is claimed.
+      subject={missingModuleSubject(node, module)}
       message={message}
       onOpenShadow={
         onOpenRelated
@@ -365,7 +375,7 @@ export function ObjectView({
         onWidthChange: onDefinitionWidthChange,
       }}
       toolbar={
-        tab === "data" && previewable ? (
+        tab === "data" && previewable && !moduleMissing ? (
           <PreviewToolbar
             running={preview.running}
             cancelling={preview.cancelling}
@@ -404,24 +414,26 @@ export function ObjectView({
       panels={{
         data: previewable ? (
           <>
-            <PreviewControls
-              canFilter={open.capabilities.includes("PREVIEW_FILTER")}
-              canSort={open.capabilities.includes("PREVIEW_SORT")}
-              columns={
-                data?.detail.value?.fields.map((field) => field.name) ?? null
-              }
-              applied={preview.applied}
-              reshaped={preview.reshaped}
-              status={preview.status}
-              pagination={preview.pagination}
-              loadingColumns={detailLoad.status === "loading"}
-              onApplyPredicate={preview.applyPredicate}
-              onApplySort={preview.applySort}
-              onPage={preview.page}
-              onCancel={preview.cancel}
-              onLoadColumns={() => void facets.refresh("detail")}
-              filterRef={filterRef}
-            />
+            {moduleMissing ? null : (
+              <PreviewControls
+                canFilter={open.capabilities.includes("PREVIEW_FILTER")}
+                canSort={open.capabilities.includes("PREVIEW_SORT")}
+                columns={
+                  data?.detail.value?.fields.map((field) => field.name) ?? null
+                }
+                applied={preview.applied}
+                reshaped={preview.reshaped}
+                status={preview.status}
+                pagination={preview.pagination}
+                loadingColumns={detailLoad.status === "loading"}
+                onApplyPredicate={preview.applyPredicate}
+                onApplySort={preview.applySort}
+                onPage={preview.page}
+                onCancel={preview.cancel}
+                onLoadColumns={() => void facets.refresh("detail")}
+                filterRef={filterRef}
+              />
+            )}
             {preview.approvalRefused ? (
               <Alert className="rounded-none border-x-0 border-t-0 py-2">
                 <AlertTitle>Preview not read</AlertTitle>
@@ -432,8 +444,8 @@ export function ObjectView({
               </Alert>
             ) : null}
             <div className="min-h-0 flex-1">
-              {state.status === "error" && state.missingModule ? (
-                explainMissing(state.missingModule, state.message)
+              {moduleMissing && state.status === "error" ? (
+                explainMissing(moduleMissing, state.message)
               ) : (
                 <ResultPanel
                   state={state}

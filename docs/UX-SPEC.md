@@ -746,15 +746,23 @@ is not guaranteed, and the preview never counts the whole table.
 A read that fails **because** the connection does not load the module a table
 needs — the engine's `no such module: <module>`, which the driver names as data
 rather than leaving the front to read the message — is **explained**, not shown
-raw: "This table is provided by the SQLite extension `<module>`, which Oxyn does
-not load. Its data is stored in …", followed by its shadow tables as links that
-select them. For `vec0`, which sqlite-vec registers and a connection enables in
-its settings (off by default), one sentence follows: "You can enable sqlite-vec
-for this connection in its settings, if you trust this file." The driver's
-message stays one click away, under `Driver message`, word for word. The Data
-and Structure tabs explain it the same way. The failure is permanent
+raw. When the catalog says the selected object **is** the virtual table backed
+by that module: "This table is provided by the SQLite extension `<module>`,
+which Oxyn does not load. Its data is stored in …", followed by its shadow
+tables as links that select them. Otherwise — a plain view whose definition
+reads such a table fails with the same words — the view is not called a virtual
+table and no storage is claimed: "This view reads a virtual table whose module
+`<module>` is not loaded: Oxyn does not load that SQLite extension, so the read
+fails." For `vec0`, which sqlite-vec registers and a connection enables in its
+settings (off by default), one sentence follows either wording: "You can enable
+sqlite-vec for this connection in its settings, if you trust this file." The
+driver's message stays one click away, under `Driver message`, word for word.
+The Data and Structure tabs explain it the same way. The failure is permanent
 ([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)):
-nothing offers to run it again, and nothing retries it. Any other failure of the
+nothing offers to run it again, and nothing retries it — while it is shown, the
+Data tab drops `Refresh data`, the filter, the sort and the pages, every one of
+which would read again. They come back with the next read that succeeds, which
+reopening the connection with the module enabled brings. Any other failure of the
 same table — a predicate refused before sending, a locked file — is shown as it
 came, even on a table marked `not loaded`.
 

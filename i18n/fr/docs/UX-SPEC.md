@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="30a106d45023" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="be0665c1e5e8" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -789,16 +789,25 @@ jamais la table entière.
 Une lecture qui échoue **parce que** la connexion ne charge pas le module dont
 une table a besoin — le `no such module: <module>` du moteur, que le driver
 nomme comme une donnée plutôt que de laisser le front lire le message — est
-**expliquée**, pas montrée brute : « This table is provided by the SQLite
-extension `<module>`, which Oxyn does not load. Its data is stored in … », suivi
-de ses tables fantômes en liens qui les sélectionnent. Pour `vec0`, que
-sqlite-vec enregistre et qu'une connexion active dans ses réglages (désactivé
-par défaut), une phrase suit : « You can enable sqlite-vec for this connection
-in its settings, if you trust this file. » Le message du driver reste à un
-clic, sous `Driver message`, mot pour mot. Les onglets Data et Structure
-l'expliquent de la même façon. L'échec est permanent
+**expliquée**, pas montrée brute. Quand le catalogue dit que l'objet
+sélectionné **est** la table virtuelle portée par ce module : « This table is
+provided by the SQLite extension `<module>`, which Oxyn does not load. Its data
+is stored in … », suivi de ses tables fantômes en liens qui les sélectionnent.
+Sinon — une vue ordinaire dont la définition lit une telle table échoue avec les
+mêmes mots — la vue n'est pas appelée table virtuelle et aucun stockage n'est
+affirmé : « This view reads a virtual table whose module `<module>` is not
+loaded: Oxyn does not load that SQLite extension, so the read fails. » Pour
+`vec0`, que sqlite-vec enregistre et qu'une connexion active dans ses réglages
+(désactivé par défaut), une phrase suit l'une ou l'autre formulation : « You can
+enable sqlite-vec for this connection in its settings, if you trust this
+file. » Le message du driver reste à un clic, sous `Driver message`, mot pour
+mot. Les onglets Data et Structure l'expliquent de la même façon. L'échec est
+permanent
 ([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)) :
-rien ne propose de le relancer, et rien ne le retente. Tout autre échec de la
+rien ne propose de le relancer, et rien ne le retente — tant qu'il est affiché,
+l'onglet Data retire `Refresh data`, le filtre, le tri et les pages, qui tous
+reliraient. Ils reviennent avec la prochaine lecture qui réussit, ce qu'apporte
+la réouverture de la connexion avec le module activé. Tout autre échec de la
 même table — un prédicat refusé avant envoi, un fichier verrouillé — s'affiche
 tel qu'il est venu, même sur une table marquée `not loaded`.
 
