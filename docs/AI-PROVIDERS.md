@@ -278,6 +278,30 @@ The rest of the product benefits without more code: the tree updates through
 the `CatalogUpdated` event, and the list of `@` mentions as well as the `erd`
 diagram read the same cache.
 
+### Semantic ranking stays on the machine
+
+"The search guided by the question" is lexical, and only lexical while
+semantic ranking is off — its default. Turned on by the human, it adds local
+CPU embeddings that order the relations the lexical score ties or misses
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)):
+
+- **nothing crosses the boundary.** The question, and each relation's
+  qualified name and comment, are embedded in Oxyn's process by
+  `oxyn-embed`; the vectors are kept in memory only, never logged, never
+  written, never sent. No `ai_egress` record exists for this step because
+  nothing goes out, under every tier — `Local` included;
+- **a score is not context.** `ContextBuilder` receives one number per
+  relation and uses it only to order; it renders the same descriptions, under
+  the same tier, as without it. The catalog fill reads the same scores through
+  `wanted_relations`, so what is described is still what is kept;
+- **it never decides alone.** A relation matched by name keeps its rank; the
+  semantic score breaks ties and orders what matched nothing, without a
+  threshold. It is bounded at 2 seconds per question, and while the model is
+  off, downloading or failing, selection is exactly the lexical one.
+
+The embedding model is not a provider: it generates no text, receives no
+prompt, and needs no declaration in `ProviderRegistry`.
+
 ## What is done with the responses
 
 **No model output is executed directly** ([I-07](../CLAUDE.md#i-07)).
@@ -620,7 +644,11 @@ the interface** and Oxyn remains a complete client
 [UX-SPEC](UX-SPEC.md#the-ai-workspace-only-exists-if-it-has-been-configured)). A code path
 that calls a model to produce a result the user expects to be
 deterministic — a sort, formatting, a table name completion — is a
-design defect, not a feature.
+design defect, not a feature. The local embeddings of
+[ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md) do not
+break this rule: they only order what the AI context keeps, a result no user
+sees as a list, and the catalog search, the tree and the `@` list stay
+lexical.
 
 ## What is not settled yet
 

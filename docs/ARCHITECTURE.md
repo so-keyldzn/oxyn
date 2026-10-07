@@ -100,10 +100,12 @@ only write outside the bus — the secrets of a connection draft — goes throug
 `credentials.rs`: one keychain call per driver would be as many places to
 audit instead of one ([I-03](../CLAUDE.md#i-03)).
 
-**Two subjects are plumbing, not `Command`s**: the menu bar
-([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)) and updates
-([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). Neither
-reaches a driver. The updater is driven from Rust alone: its commands
+**Three subjects are plumbing, not `Command`s**: the menu bar
+([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)), updates
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) and the
+download of the local embedding model
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)), started
+by a preference only the human can write. None of them reaches a driver. The updater is driven from Rust alone: its commands
 (`commands/updates.rs`, `ipc/updates.rs`) take no URL, path or version, and
 the webview holds no `updater:` permission. `tauri-plugin-opener` is not
 registered at all: `open_release_page` calls its free function `open_url`.
@@ -144,7 +146,7 @@ to the webview ([I-03](../CLAUDE.md#i-03)); tests in `ipc.rs` check it.
 
 ## 3. The Cargo workspace
 
-15 crates, as they exist, plus the `apps/desktop` front end
+16 crates, as they exist, plus the `apps/desktop` front end
 ([§2 bis](#2-bis-the-tauri-interface)):
 
 ```
@@ -166,6 +168,8 @@ oxyn/
 │   ├── oxyn-llm/                 # model provider abstraction
 │   ├── oxyn-ai/                  # agent runtime, tools, context, privacy
 │   ├── oxyn-plugin/              # WASM host (wasmtime behind the `wasm-host` feature)
+│   ├── oxyn-embed/               # local text embeddings: pinned model, download, CPU
+│   │                             #   inference (Burn); only oxyn-desktop depends on it (ADR-0056)
 │   └── oxyn-desktop/             # `oxyn-desktop` binary: Tauri host and IPC bridge (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embedded
@@ -882,6 +886,15 @@ Three tiers, chosen **per connection**, never globally:
 The schema context is **compacted** before sending: normalized DDL, irrelevant tables
 pruned by searching the catalog. A 5,000-table database does not fit in a
 context window — selecting the relevant tables is a real component.
+
+Selection is lexical first. When the user turned semantic ranking on — off by
+default — local CPU embeddings order the relations the lexical score ties or
+misses ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+`oxyn-desktop` computes them with `oxyn-embed`, on the blocking pool, within
+2 seconds per question, and hands `ContextBuilder` a score per relation;
+`oxyn-ai` never depends on `oxyn-embed`, and a score carries no text into the
+prompt. The model is local whatever the tier: nothing of this step leaves the
+machine.
 
 ### 7.5 Provider abstraction
 

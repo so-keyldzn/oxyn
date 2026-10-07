@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="1cee80bfd4b2" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="d926c8c929dd" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2210,6 +2210,43 @@ Les étapes, telles que prévues, chacune sa pull request, dans cet ordre :
    hors UTF-8, une ancre ou un alias, une clé en double, un champ inconnu, un
    marqueur inconnu et une collision d'id, dont aucun ne bloque les fichiers
    valides à côté.
+
+**Planifié le 2026-10-07 — des embeddings locaux classent le contexte IA
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md),
+proposée).** Dans cet ordre, chacun avec sa porte de sortie :
+
+1. **`oxyn-embed`.** La crate, ses fichiers épinglés, le téléchargement, la
+   conversion et `OnDemandEmbedder` ; le test de sortie de référence qui
+   échoue quand une constante résiduelle manque ; la taille et la somme du
+   `model.bpk` converti écrites dans `pinned::CONVERTED`. **Porte de
+   sortie** : `make qualite` au vert, le test de référence qui passe, une
+   compilation à froid de la crate en CI mesurée et consignée dans
+   RESEARCH-NOTES.
+2. **La release de secours.** Publier `embedding-model-835ad140` comme
+   **pré-version** de `so-keyldzn/oxyn`, avec `model.safetensors`,
+   `tokenizer.json`, le texte de l'Apache-2.0 et l'attribution du modèle.
+   **Porte de sortie** : les deux fichiers téléchargés depuis elle
+   correspondent à leur SHA-256 épinglé, et
+   `releases/latest/download/latest.json` répond toujours la dernière release
+   d'Oxyn.
+3. **Le classement dans `oxyn-ai`.** Des scores par relation acceptés par
+   `ContextBuilder` et `wanted_relations` ; les trois règles d'ordre de
+   l'ADR. **Porte de sortie** : des tests qu'une correspondance lexicale n'est
+   jamais rétrogradée par un score, que les égalités et les relations sans
+   correspondance suivent le cosinus puis le chemin, et qu'aucun score donne
+   exactement la sélection d'aujourd'hui ; `oxyn-ai` ne dépend pas
+   d'`oxyn-embed`.
+4. **`oxyn-desktop` : préférence, téléchargement, cache, borne.** La
+   préférence, désactivée par défaut et refusée à `Actor::Agent` ; le
+   téléchargement avec progression et annulation ; le cache en mémoire des
+   vecteurs de relations indexé par `MODEL_ID` ; la borne de 2 secondes par
+   question ; l'état indisponible affiché dans le panneau, écrit d'abord dans
+   [UX-SPEC](UX-SPEC.md). **Porte de sortie** : la mémoire résidente
+   d'`oxyn-desktop` modèle chargé mesurée contre le budget de 1 Go de
+   [PERFORMANCE](PERFORMANCE.md#budgets-de-mémoire), le déchargement après
+   5 minutes observé, la taille du binaire dépouillé avant et après
+   consignée, et la latence mesurée sous Linux x86_64 et arm64 autant que
+   sous macOS.
 
 ## Phase 3 bis — Au-delà du relationnel
 

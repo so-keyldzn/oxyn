@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="fc8638ef3e81" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="39ccc455b866" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2379,3 +2379,63 @@ USING vec0(…)` sans charger de fichier natif à l'exécution ? La réponse fon
 | `assert()` reste actif : `build.rs` ne définit pas `NDEBUG`, l'archive release importe `___assert_rtn` ; `sqlite-vec.c` contient 42 appels `assert(`, certains sur des tailles lues dans les tables fantômes (`vec0_metadata_filter_text`, l. 6155–6156) | `nm -u` sur `libsqlite_vec0.a` ; source de la crate | 2026-10-06 |
 | Un `INSERT` interrompu dans `vec0` peut échouer avec `SQLITE_ERROR`, « Internal sqlite-vec error: Could not find latest chunk », au lieu de `SQLITE_INTERRUPT` | observé par `a_stopped_write_into_vec0_is_ambiguous` avant le correctif (une exécution sur trois) | 2026-10-06 |
 | sqlite-vec n'appelle jamais `sqlite3_vtab_config` : `vec0` n'est marqué ni `SQLITE_VTAB_INNOCUOUS` ni `SQLITE_VTAB_DIRECTONLY`. Le `build.rs` de `libsqlite3-sys` 0.35.0 ne fixe pas `SQLITE_TRUSTED_SCHEMA`, si bien que la valeur par défaut du moteur (activé) s'applique | source de la crate ; `libsqlite3-sys-0.35.0/build.rs` | 2026-10-06 |
+
+## Embeddings locaux — vérifié le 2026-10-07
+
+Question : Oxyn peut-il calculer des embeddings de texte dans son propre
+processus, sur le CPU, sans rien installer à côté, assez bien pour classer les
+relations du catalogue face à une question ? La réponse fonde
+l'[ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md). Les
+mesures viennent d'un spike mené le 2026-10-07 sur un portable Apple Silicon
+arm64 à 10 cœurs, en release ; elles n'ont pas été refaites sous Linux.
+
+### Crates
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| `burn`, `burn-flex`, `burn-store`, `burn-onnx` : dernière stable **0.22.0**, toutes quatre publiées le 2026-10-06, `MIT OR Apache-2.0` ; `burn` déclare `rust-version = "1.95"`, le plancher du workspace | [API crates.io](https://crates.io/api/v1/crates/burn) | 2026-10-07 |
+| `burn` avec `default-features = false` et `flex` active burn-flex avec `std` seulement ; `simd` et `rayon` exigent de déclarer burn-flex directement | spike `oxyn-embed` ; commentaire du `Cargo.toml` racine | 2026-10-07 |
+| `tokenizers` : dernière stable **0.23.2**, publiée le 2026-09-03, `Apache-2.0` ; une pré-version `1.0.0-rc.2` existe (2026-09-21) | [API crates.io](https://crates.io/api/v1/crates/tokenizers) | 2026-10-07 |
+| `tokenizers` avec `default-features = false` et `fancy-regex` donne les mêmes identifiants de jetons que la build Oniguruma par défaut sur 17 cas multilingues | spike | 2026-10-07 |
+| Graphe résolu de la crate d'inférence : 198 crates, aucune crate `-sys` ; la seule licence MPL-2.0, `colored`, est acceptée par `deny.toml` | `cargo tree`, `cargo deny check licenses` dans le spike | 2026-10-07 |
+| `ort` : pas de 2.0 stable, dernière **2.0.0-rc.13** (2026-07-28) ; dépend de `ort-sys =2.0.0-rc.13` ; les features par défaut incluent `download-binaries` (onnxruntime précompilé téléchargé à la compilation), `load-dynamic` étant l'alternative | [API crates.io](https://crates.io/api/v1/crates/ort/2.0.0-rc.13) | 2026-10-07 |
+| `candle-transformers` : dernière stable **0.11.0** (2026-06-26) ; `src/models/modernbert.rs` implémente ModernBERT avec `global_rope_theta`, `local_rope_theta` et la fenêtre d'attention locale tirés de la configuration. Non mesuré | source de la crate `candle-transformers-0.11.0` | 2026-10-07 |
+
+### Le modèle
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| `ibm-granite/granite-embedding-97m-multilingual-r2` : licence `apache-2.0`, pipeline `feature-extraction`, créé le 2026-04-20, modifié le 2026-05-18 ; révision épinglée `835ad14087e140460703cf0fae09f97d469d65c2` | [API Hugging Face](https://huggingface.co/api/models/ibm-granite/granite-embedding-97m-multilingual-r2/revision/835ad14087e140460703cf0fae09f97d469d65c2) | 2026-10-07 |
+| À cette révision : `model.safetensors` 194 889 568 octets, SHA-256 `f3ea88b230492811046145513710e76b4cc8c2ad49e8708da0e7247e548903be` ; `tokenizer.json` 25 301 672 octets, SHA-256 `4f2842d568e2724370aec203652a42ac783c7937f8347a1a2cc7506d71f1582f` ; `onnx/model.onnx` 390 004 608 octets, SHA-256 `68e592b160673d30250824c1116bc6ab33f70efb22b97c9e1d7ce1e69c1c9d70` | même API, `?blobs=true` (sommes LFS) | 2026-10-07 |
+| Le safetensors contient 74 tenseurs, tous `BF16`, 97 441 152 paramètres : 389 764 608 octets une fois élargis en f32 | en-tête de `model.safetensors`, lu par requête partielle | 2026-10-07 |
+| `config.json` : `ModernBertModel`, `hidden_size` 384, 12 couches, 12 têtes, `vocab_size` 180 000, `global_rope_theta` 150 000, `local_rope_theta` 160 000, `local_attention` 128, attention globale toutes les 3 couches ; `1_Pooling/config.json` : pooling CLS, 384 dimensions | fichiers à la révision épinglée | 2026-10-07 |
+| Le dépôt n'a pas de fichier `LICENSE` : la licence est déclarée dans les métadonnées de la fiche du modèle | liste des fichiers à la révision épinglée | 2026-10-07 |
+| `resolve/<revision>/model.safetensors` répond `302` vers `us.aws.cdn.hf.co`, avec `x-linked-size` et `x-linked-etag` égaux à la taille et au SHA-256 ci-dessus | `curl -I` | 2026-10-07 |
+
+### Mesuré par le spike
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| burn-onnx 0.22.0 convertit l'export ONNX sans opérateur manquant ; 43 paramètres sont des initialiseurs ONNX repliés en constantes, absents du safetensors (fréquences rotatives, biais de LayerNorm, scalaires) | spike | 2026-10-07 |
+| Sortie de Burn contre onnxruntime sur les mêmes entrées : écart absolu maximal 4,2e-7, cosinus 1,0 | spike | 2026-10-07 |
+| Latence : environ 14 ms pour une phrase, environ 440 ms pour 256 noms de tables | spike, release | 2026-10-07 |
+| RSS maximal : 1,15 Go en chargeant le safetensors ; environ 750 Mo en chargeant un `.bpk` en f32 ; le tokenizer chargé seul, 286 Mo | spike, release | 2026-10-07 |
+| Cosinus question ↔ table pertinente : 0,909 (anglais), 0,865 (français) ; tables non pertinentes au plus 0,773 | spike | 2026-10-07 |
+| Compilation à froid de la crate d'inférence : 80 s de temps réel, dont 45 s de burn-flex sur le chemin critique ; binaire de démonstration 11,7 Mo, 8,6 Mo dépouillé | spike, `cargo build --release` | 2026-10-07 |
+| Le `model.rs` généré contient 69 `.unwrap()`, aucun `expect` ni `panic!`, et quelque 250 conversions `as` | `grep` sur `crates/oxyn-embed/src/generated/model.rs` | 2026-10-07 |
+
+### Alternatives
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| `microsoft/harrier-oss-v1-270m` : MIT, 268 098 176 paramètres en BF16, aucun fichier `.onnx` dans le dépôt | [API Hugging Face](https://huggingface.co/api/models/microsoft/harrier-oss-v1-270m) | 2026-10-07 |
+| `voyageai/voyage-4-nano` : Apache-2.0, 346 451 968 paramètres en BF16 ; des exports ONNX n'existent que dans des dépôts tiers | [API Hugging Face](https://huggingface.co/api/models/voyageai/voyage-4-nano) | 2026-10-07 |
+| `jinaai/jina-embeddings-v5-text-*` : CC-BY-NC-4.0 | API Hugging Face | 2026-10-07 |
+| `google/embeddinggemma-300m` : licence Gemma, 302 863 104 paramètres | API Hugging Face | 2026-10-07 |
+| `MongoDB/mdbr-leaf-mt` : Apache-2.0, 22 565 376 paramètres en F32, ONNX publié, étiquette de langue `en` seulement | API Hugging Face | 2026-10-07 |
+
+### Releases GitHub
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| « The latest release is the most recent non-prerelease, non-draft release, sorted by the `created_at` attribute » ; un brouillon ou une pré-version ne peut pas être marqué latest | [API REST GitHub, releases](https://docs.github.com/en/rest/releases/releases#get-the-latest-release) | 2026-10-07 |

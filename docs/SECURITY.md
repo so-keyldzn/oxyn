@@ -412,11 +412,29 @@ What enters Oxyn and is untrusted, in order of underestimation:
    lets a script skip the "work would be stopped" dialog — at worst it
    restarts into an update already verified, as `cancel_exit` and the
    ordered exit already allow; open transactions still ask.
+9. **The local embedding model files.** Only when the user turns on semantic
+   ranking, a workspace preference off by default that no agent can change,
+   Oxyn downloads `model.safetensors` and `tokenizer.json` (220,191,240 bytes)
+   ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
+   sources are constants of `oxyn_embed::pinned`: Hugging Face at a pinned
+   commit, then the `embedding-model-835ad140` pre-release of this
+   repository. A file is accepted on its pinned size and SHA-256 alone,
+   whichever source served it: streamed to a `.part`, hashed as it arrives,
+   cut off past its pinned size, renamed into place only on a match, removed
+   on any failure. HTTPS only, redirections included (at most 5), TLS
+   verified, 10 s to connect and 60 s of silence at most between two chunks.
+   The request carries no user data — a fixed URL and the `oxyn/<version>`
+   user agent —, and the webview supplies neither a URL nor a path. The
+   files on disk stay inputs: the tokenizer and the converted `model.bpk`
+   are checked against their pinned size and checksum before any parsing,
+   so a file truncated by a full disk or replaced by another program is
+   refused, never handed to a parser. What is embedded — the question and
+   relation names and comments — never leaves the process.
 
 ## `unsafe` policy
 
 **`unsafe` is refused at compile time.** `[workspace.lints.rust]` carries
-`unsafe_code = "deny"`, and of the fifteen crates — twelve under `crates/`,
+`unsafe_code = "deny"`, and of the sixteen crates — thirteen under `crates/`,
 three drivers under `drivers/` — a single function re-allows it:
 `register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
 registers the bundled sqlite-vec extension on a connection — only one where the

@@ -2198,6 +2198,38 @@ steps, as planned, each its own pull request, in this order:
    placeholder and an id collision, none of which blocks the valid files
    next to it.
 
+**Planned on 2026-10-07 — local embeddings rank the AI context
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md),
+proposed).** In this order, each with its exit gate:
+
+1. **`oxyn-embed`.** The crate, its pinned files, download, conversion and
+   `OnDemandEmbedder`; the reference-output test that fails when a residual
+   constant is missing; the converted `model.bpk` size and checksum written
+   into `pinned::CONVERTED`. **Exit gate**: `make qualite` green, the
+   reference test passing, a cold CI build of the crate measured and recorded
+   in RESEARCH-NOTES.
+2. **The fallback release.** Publish `embedding-model-835ad140` as a
+   **pre-release** of `so-keyldzn/oxyn`, carrying `model.safetensors`,
+   `tokenizer.json`, the Apache-2.0 text and the model's attribution. **Exit
+   gate**: both files downloaded from it match their pinned SHA-256, and
+   `releases/latest/download/latest.json` still answers the last Oxyn
+   release.
+3. **Ranking in `oxyn-ai`.** Per-relation scores accepted by
+   `ContextBuilder` and `wanted_relations`; the three ordering rules of the
+   ADR. **Exit gate**: tests that a lexical match is never demoted by a
+   score, that ties and unmatched relations follow the cosine then the path,
+   and that no score yields exactly today's selection; `oxyn-ai` has no
+   dependency on `oxyn-embed`.
+4. **`oxyn-desktop`: preference, download, cache, bound.** The preference,
+   off by default and refused to `Actor::Agent`; the download with progress
+   and cancellation; the in-memory relation-vector cache keyed by `MODEL_ID`;
+   the 2-second bound per question; the unavailable state shown in the
+   panel, written into [UX-SPEC](UX-SPEC.md) first. **Exit gate**: the
+   resident memory of `oxyn-desktop` with the model loaded measured against
+   the 1 GB budget of [PERFORMANCE](PERFORMANCE.md#memory-budgets), the
+   unload after 5 minutes observed, the stripped binary size before and after
+   recorded, and latency measured on Linux x86_64 and arm64 as well as macOS.
+
 ## Phase 3 bis — Beyond the relational
 
 Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbered

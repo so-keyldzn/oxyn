@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="8effc4b833b9" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="1b4e1de4ad98" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -433,11 +433,32 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    dialogue « work would be stopped » — au pire, il relance vers une mise à
    jour déjà vérifiée, comme `cancel_exit` et la sortie ordonnée le
    permettent déjà ; les transactions ouvertes demandent toujours.
+9. **Les fichiers du modèle d'embeddings local.** Seulement quand
+   l'utilisateur active le classement sémantique, une préférence du workspace
+   désactivée par défaut qu'aucun agent ne peut changer, Oxyn télécharge
+   `model.safetensors` et `tokenizer.json` (220 191 240 octets)
+   ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Les
+   sources sont des constantes de `oxyn_embed::pinned` : Hugging Face à un
+   commit épinglé, puis la pré-version `embedding-model-835ad140` de ce
+   dépôt. Un fichier est accepté sur sa taille et son SHA-256 épinglés seuls,
+   quelle que soit la source qui l'a servi : écrit en flux dans un `.part`,
+   haché à mesure qu'il arrive, coupé au-delà de sa taille épinglée, renommé
+   en place seulement s'il correspond, supprimé à tout échec. HTTPS seulement,
+   redirections comprises (5 au plus), TLS vérifié, 10 s pour se connecter et
+   60 s de silence au plus entre deux morceaux. La requête ne porte aucune
+   donnée de l'utilisateur — une URL fixe et l'agent utilisateur
+   `oxyn/<version>` —, et la webview ne fournit ni URL ni chemin. Les fichiers
+   sur disque restent des entrées : le tokenizer et le `model.bpk` converti
+   sont vérifiés contre leur taille et leur somme épinglées avant toute
+   analyse, si bien qu'un fichier tronqué par un disque plein ou remplacé par
+   un autre programme est refusé, jamais remis à un analyseur. Ce qui est
+   transformé en vecteur — la question, les noms et commentaires des
+   relations — ne quitte jamais le processus.
 
 ## Politique `unsafe`
 
 **`unsafe` est refusé à la compilation.** `[workspace.lints.rust]` porte
-`unsafe_code = "deny"`, et des quinze crates — douze sous `crates/`,
+`unsafe_code = "deny"`, et des seize crates — treize sous `crates/`,
 trois drivers sous `drivers/` — une seule fonction le réautorise :
 `register` dans `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, qui
 enregistre l'extension sqlite-vec embarquée sur une connexion — seulement une

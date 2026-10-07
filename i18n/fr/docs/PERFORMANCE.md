@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="a93f9f7ec03c" -->
+<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="63dd7991acf8" -->
 
 > Traduction française de [docs/PERFORMANCE.md](../../../docs/PERFORMANCE.md). **La version anglaise fait foi.**
 
@@ -67,6 +67,7 @@ est acceptable ; une opération longue et figée ne l'est pas.**
 | Conversations de l'assistant, relecture d'une branche | **16 échanges par page** : au pire 16,0 Mio lus du disque et 16,0 Mio décodés par appel — la question borne le calcul à elle seule (1 Mio), le reste de l'échange tient en 410 octets lus et 546 décodés. Une branche compte au plus 256 échanges, et les versions d'un échange se listent sans question ni réponse. Détail du calcul sur `MAX_EXCHANGE_PAGE` (`oxyn-store`, 2026-09-18) | [I-06](../CLAUDE.md#i-06) : un fil arborescent relu d'un seul tenant croît avec le nombre de régénérations, que rien ne borne côté appelant |
 | Conversations de l'assistant, sur disque | 200 fils, 90 jours d'inactivité et 32 Mio de transcript par workspace, appliqués par `Conversations::prune` ; 512 tours par fil et `stop_reason` ≤ 256 octets tenus par le fichier. Mesure : un fil de 12 échanges pèse 64 Kio de transcript, 72 Kio de fichier (2026-09-16) | un historique d'assistant qui grossit sans fin sur une session de plusieurs mois |
 | Définitions DDL en cache par connexion | 16 définitions et 16 Mio de SQL + notes ; éviction des anciennes valeurs, y compris invalidées ([ADR-0018](adr/0018-apercu-ddl.md)) | accumulation de scripts volumineux lors de la navigation |
+| Modèle d'embeddings local ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)) | **rien** tant que le classement sémantique est désactivé (le défaut) ; une fois activé, chargé à la première question et libéré **5 minutes** après sa dernière utilisation ; **1 Go** résident au plus pendant qu'il est chargé — mesuré à environ 750 Mo par le spike du 2026-10-07, pas encore dans `oxyn-desktop`. Vecteurs des relations : 1 536 octets chacun, en mémoire seulement, 77 Mo au plus aux 50 000 objets du cache de catalogue. L'étape sémantique d'une question : **2 s** au plus, chargement compris | 750 Mo gardés toute la journée pour une question posée le matin ; au-delà de 1 Go, l'ADR est réexaminée |
 | Application au repos, une connexion ouverte, aucune requête | stable dans le temps | une croissance au repos est une fuite ; elle se voit sur une session de plusieurs heures, pas dans les tests |
 
 La rétention des lots initiaux et des pages décodées partage le budget du
