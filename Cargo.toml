@@ -39,6 +39,7 @@ oxyn-secrets  = { path = "crates/oxyn-secrets" }
 oxyn-llm      = { path = "crates/oxyn-llm" }
 oxyn-ai       = { path = "crates/oxyn-ai" }
 oxyn-plugin   = { path = "crates/oxyn-plugin" }
+oxyn-embed    = { path = "crates/oxyn-embed" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
@@ -139,6 +140,24 @@ agent-client-protocol = "2.1.0"
 # writes YAML, and `include` stays off — an agent file has no business reading
 # another file. Checked on 2026-09-29, see RESEARCH-NOTES.
 serde-saphyr  = { version = "1.3.0", default-features = false, features = ["deserialize"] }
+
+# --- local embeddings (oxyn-embed, ADR-0056) ---------------------------------
+# All four Burn crates are pinned EXACTLY, together: `oxyn-embed` commits code
+# that burn-onnx generated for this release, and the converted weight file's
+# checksum depends on burn-store's format. A bump regenerates both
+# (`crates/oxyn-embed/codegen/`) instead of arriving with `cargo update`.
+# `burn/flex` turns burn-flex on with `std` only — no rayon, no SIMD, a CPU
+# inference several times slower —, so burn-flex is declared directly and
+# feature unification adds them.
+burn          = { version = "=0.22.0", default-features = false, features = ["std", "flex"] }
+burn-flex     = { version = "=0.22.0", default-features = false, features = ["std", "simd", "rayon"] }
+# Without `pytorch` (zip, tar, lzma): the model only reads safetensors once, to
+# convert it, then burnpack.
+burn-store    = { version = "=0.22.0", default-features = false, features = ["std", "safetensors", "memmap"] }
+# `fancy-regex` instead of the default `onig`: no C library to build. Exact,
+# because a tokenizer change moves every vector and invalidates the caches.
+tokenizers    = { version = "=0.23.2", default-features = false, features = ["fancy-regex"] }
+sha2          = "0.11.0"
 
 # --- plugins (optional, `wasm-host` feature) ---------------------------------
 wasmtime      = "48.0.5"
