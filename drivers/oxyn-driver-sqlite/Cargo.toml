@@ -21,6 +21,7 @@ async-trait.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
 rusqlite.workspace = true
+sqlite-vec.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tracing.workspace = true

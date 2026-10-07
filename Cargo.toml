@@ -95,7 +95,14 @@ keyring       = "4.2.0"
 # missing feature.
 rusqlite      = { version = "0.37.0", features = [
     "bundled", "chrono", "serde_json", "column_decltype" ] }
-secrecy       = { version = "0.10.3", features = ["serde"] }
+# The sqlite-vec extension, compiled from its C amalgamation with `SQLITE_CORE`:
+# it calls the SQLite that `rusqlite`'s `bundled` links, there is no second
+# engine. The SQLite driver registers it on each connection it opens
+# (ADR-0054). Pinned EXACTLY: the driver's `unsafe` relies on the C signature
+# of `sqlite3_vec_init` and on `SQLITE_CORE` in its `build.rs`, so a bump
+# re-reads both (`vector_extension.rs`) instead of arriving with `cargo update`.
+sqlite-vec    = "=0.1.9"
+secrecy      = { version = "0.10.3", features = ["serde"] }
 zeroize       = "1.9.0"
 
 # --- drivers -----------------------------------------------------------------

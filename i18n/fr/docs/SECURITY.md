@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="06a9d0b08f51" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="a2abc92e17b4" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -437,8 +437,11 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
 ## Politique `unsafe`
 
 **`unsafe` est refusé à la compilation.** `[workspace.lints.rust]` porte
-`unsafe_code = "deny"`, et aucune des quatorze crates — douze sous `crates/`,
-deux drivers sous `drivers/` — n'en contient ni ne le réautorise. C'est le manifeste qui fait foi ici, parce que c'est lui qui est
+`unsafe_code = "deny"`, et des quinze crates — douze sous `crates/`,
+trois drivers sous `drivers/` — une seule fonction le réautorise :
+`register` dans `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, qui
+enregistre l'extension sqlite-vec embarquée sur une connexion
+([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)). C'est le manifeste qui fait foi ici, parce que c'est lui qui est
 exécuté : ce document décrivait auparavant une politique d'encadrement que la
 compilation n'accorde pas, et [ADR-0021](adr/0021-marqueur-d-arret.md) a fondé
 une décision d'architecture — ne pas vérifier un pid — sur le refus, pas sur
