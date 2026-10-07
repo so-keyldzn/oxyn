@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a4945ad2e4c4" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="082ae9e1703f" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -259,6 +259,19 @@ secret enregistré sera oublié à l'enregistrement
 la valeur enregistrée rétablit l'état stocké. L'annonce se fait avant
 l'enregistrement, pas après : l'utilisateur qui corrige une faute de frappe dans
 l'hôte apprend qu'il perd le mot de passe au moment où il peut encore annuler.
+
+### L'interrupteur sqlite-vec
+
+Une connexion SQLite porte, sous son fichier, un interrupteur libellé
+« Enable sqlite-vec (vec0 vector tables) », **désactivé** sur toute nouvelle
+connexion et sur tout `Duplicate`. Sa description dit ce qu'il fait et quand :
+« Runs the bundled sqlite-vec C extension on this file. Enable it only for files
+you trust. A change applies to sessions opened afterwards: disconnect to apply
+it to open ones. » L'enregistrer ne ferme aucune session ; `Disconnect` puis
+`Connect` l'applique partout. Désactivé, une table
+`vec0` reste illisible (`no such module: vec0`) ; activé, elle se lit comme
+n'importe quelle table. Seul le formulaire de connexion le change — aucun agent
+ne le peut ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)).
 
 ## Structure commune du workspace
 

@@ -162,13 +162,14 @@ export const sqliteDriver: DriverChoice = {
       help: null,
     },
     {
-      key: "read_only",
-      label: "Open read only",
+      // The switch `drivers/oxyn-driver-sqlite/src/driver.rs` declares.
+      key: "sqlite_vec",
+      label: "Enable sqlite-vec (vec0 vector tables)",
       kind: { type: "bool" },
       required: false,
       secret: false,
       default: "false",
-      help: null,
+      help: "Runs the bundled sqlite-vec C extension on this file. Enable it only for files you trust. A change applies to sessions opened afterwards: disconnect to apply it to open ones.",
     },
   ],
 }

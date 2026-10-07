@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="6519f743f32e" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="fc8638ef3e81" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -180,7 +180,7 @@ versions --json` ; les plages de dépendances et les licences avec
 |---|---|---|
 | `source-map-js` | `1.2.2` | Première version corrigée pour [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) ; BSD-3-Clause. Les [notes de version](https://github.com/7rulnik/source-map-js/releases/tag/v1.2.2) confirment la correction du déni de service lié aux source maps indexées. Même Vite `8.3.3` autorise PostCSS `8.5.28`, dont la plage `source-map-js` est `^1.2.1` ; une montée de Vite seule n'impose pas la correction. |
 | `katex` | `0.18.2` | Première version corrigée pour [GHSA-238p-pmpm-9mq7](https://github.com/advisories/GHSA-238p-pmpm-9mq7) ; MIT. Les [notes de version](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.2) confirment la correction de la pollution du prototype des paramètres. Mermaid `11.17.2` reste la dernière 11.x ; même `12.1.0` exige encore `katex ^0.16.47`, qui exclut la correction. Garder la cible navigateur existante de Mermaid et imposer KaTeX par override. |
-| `seroval`, `seroval-plugins` | `1.6.8` | Développement seulement (`@tanstack/react-devtools` > `@tanstack/devtools` > `solid-js`). Couvre [GHSA-p6vx-979v-rg4c](https://github.com/advisories/GHSA-p6vx-979v-rg4c) (corrigé en `1.6.2`), [GHSA-jp82-f5mq-hwhp](https://github.com/advisories/GHSA-jp82-f5mq-hwhp) et [GHSA-mv8w-475r-vwqw](https://github.com/advisories/GHSA-mv8w-475r-vwqw) ; MIT ; `1.6.8` publiée le 2026-09-29. Ajouté le 2026-10-06 : `solid-js 1.9.15` fige `seroval ~1.5.4`, et le `solid-js 1.9.16` qui exige `~1.6.8` a été publié ce jour-là à 19:11 UTC, ce que le délai minimal de publication de pnpm 11 refuse encore — l'override évite de contourner ce garde-fou. `seroval-plugins 1.6.8` a pour pair `seroval ^1.0`. À retirer dès que le lockfile résout `solid-js >= 1.9.16`. |
+| `seroval`, `seroval-plugins` | `1.6.8` | **Livré dans le bundle de production** : `@tanstack/react-router` > `@tanstack/router-core` (`seroval ^1.6.2`, `seroval-plugins ^1.6.2`) sérialise l'état du routeur, et son code `seroval/plugins/web/ReadableStream` est dans `dist/client/assets/index-*.js` (vérifié le 2026-10-07 après `pnpm build`). Le chemin de développement `@tanstack/react-devtools` > `@tanstack/devtools` > `solid-js` est celui qui exige l'override ; les devtools elles-mêmes sont absentes du bundle de production depuis le 2026-10-07 (chargées seulement sous `import.meta.env.DEV`). Couvre [GHSA-p6vx-979v-rg4c](https://github.com/advisories/GHSA-p6vx-979v-rg4c) (corrigé en `1.6.2`), [GHSA-jp82-f5mq-hwhp](https://github.com/advisories/GHSA-jp82-f5mq-hwhp) et [GHSA-mv8w-475r-vwqw](https://github.com/advisories/GHSA-mv8w-475r-vwqw) ; MIT ; `1.6.8` publiée le 2026-09-29. Ajouté le 2026-10-06 : `solid-js 1.9.15` fige `seroval ~1.5.4`, et le `solid-js 1.9.16` qui exige `~1.6.8` a été publié ce jour-là à 19:11 UTC, ce que le délai minimal de publication de pnpm 11 refuse encore — l'override évite de contourner ce garde-fou. `seroval-plugins 1.6.8` a pour pair `seroval ^1.0`. À retirer dès que le lockfile résout `solid-js >= 1.9.16`. |
 
 pnpm `11.1.2` ignore `package.json#pnpm` : les overrides vont dans
 `apps/desktop/pnpm-workspace.yaml`, comme l'indique le
@@ -188,6 +188,23 @@ pnpm `11.1.2` ignore `package.json#pnpm` : les overrides vont dans
 et comme le confirme une installation limitée au lockfile. Retirer chaque
 override lorsque la dépendance parente exige une version corrigée. Aucune autre
 dépendance n'est mise à niveau.
+
+### Avis npm corrigés par un rafraîchissement du lockfile — vérifié le 2026-10-07
+
+Rafraîchis par #207 le 2026-10-06 ; consignés le 2026-10-07. Avis lus dans la
+GitHub Advisory Database (`gh api /advisories?ecosystem=npm&affects=<paquet>@<ancienne version>`),
+versions et dates de publication au registre npm (`npm view <paquet> time`),
+plages dans le `package.json` des parents installés. La plage de chaque parent
+admet déjà la version corrigée : **rafraîchissement du lockfile, aucun
+override**, rien à retirer plus tard. Les quatre ne servent qu'au développement
+(CLI shadcn, plugin Vite des devtools TanStack).
+
+| Paquet | Version | Avis | Première version corrigée | Parent et la plage qui l'admet | Source |
+|---|---|---|---|---|---|
+| `@modelcontextprotocol/sdk` | `1.30.0` → `1.32.1` | [GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h) (élevée, `>= 1.12.0, < 1.31.0`) | `1.31.0` | `shadcn 4.21.0` : `^1.26.0` | `1.32.1` publiée le 2026-10-05 ; MIT |
+| `proxy-addr` | `2.0.7` → `2.0.8` | [GHSA-jqcg-44mw-7w3h](https://github.com/advisories/GHSA-jqcg-44mw-7w3h) (critique, `>= 1.1.0, < 2.0.8`) | `2.0.8` | `express 5.2.1` (sous `@modelcontextprotocol/sdk`) : `^2.0.7` | `2.0.8` publiée le 2026-09-15 ; MIT |
+| `shell-quote` | `1.10.0` → `1.12.0` | [GHSA-pqg4-j6r4-53mv](https://github.com/advisories/GHSA-pqg4-j6r4-53mv) (critique, `>= 1.8.4, < 1.11.0`) | `1.11.0` | `launch-editor 2.14.1` (sous `@tanstack/devtools-vite`) : `^1.8.4` | `1.12.0` publiée le 2026-10-02 ; MIT |
+| `fast-uri` | `3.1.7` → `3.1.8` | [GHSA-hrr3-gc8f-f4qj](https://github.com/advisories/GHSA-hrr3-gc8f-f4qj) (moyenne, `>= 3.0.0, < 3.1.8`) | `3.1.8` | `ajv 8.20.0` (sous `@modelcontextprotocol/sdk`, `conf`) : `^3.0.1` | `3.1.8` publiée le 2026-09-15 ; BSD-3-Clause |
 
 ### Faits qui ont décidé du code
 
@@ -2338,3 +2355,27 @@ minutes, et elle est remise à zéro par tout octet — un `ping` ou un commenta
 `:` compte. Il en va de même pour les agents externes : rien dans ce fichier ne
 consigne à quelle fréquence un adaptateur signale sa progression, et leur borne
 est aussi un choix produit.
+
+## sqlite-vec — vérifié le 2026-10-06
+
+Question : le driver SQLite peut-il lire une table `CREATE VIRTUAL TABLE …
+USING vec0(…)` sans charger de fichier natif à l'exécution ? La réponse fonde
+[ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md).
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Crate `sqlite-vec` : dernière stable **0.1.9**, publiée le 2026-03-31 ; la branche 0.1.10 n'existe qu'en pré-version (`0.1.10-alpha.4`, 2026-05-18) | [API crates.io](https://crates.io/api/v1/crates/sqlite-vec), [versions GitHub](https://github.com/asg017/sqlite-vec/releases) | 2026-10-06 |
+| Licence déclarée `MIT/Apache-2.0` ; le dépôt livre `LICENSE-MIT` et `LICENSE-APACHE`. `cargo deny check licenses bans` passe avec elle | manifeste de la crate ; [dépôt](https://github.com/asg017/sqlite-vec) ; exécution locale | 2026-10-06 |
+| Maintenance : non archivé, dernier push le 2026-05-18, 211 tickets ouverts, aucun avis de sécurité publié, aucune entrée RustSec | [API GitHub](https://api.github.com/repos/asg017/sqlite-vec), [rustsec.org](https://rustsec.org/) | 2026-10-06 |
+| La crate n'a aucune dépendance ; son `build.rs` compile `sqlite-vec.c` (320 026 octets) avec `cc` et le seul define `SQLITE_CORE` — aucun drapeau SIMD, donc les chemins de code scalaires. `cc` 1.4.5 est déjà dans `Cargo.lock` | source de la crate, `build.rs` | 2026-10-06 |
+| Avec `SQLITE_CORE`, l'extension appelle directement les `sqlite3_*` : ils se résolvent, à l'édition de liens, vers le SQLite 3.50.2 que compile le `bundled` de `libsqlite3-sys` 0.35.0. La crate compile contre son propre `sqlite3.h` 3.45.3, un en-tête plus ancien : SQLite garde son interface C rétrocompatible | source de la crate `sqlite-vec.c`, `sqlite3.h` ; `libsqlite3-sys-0.35.0/sqlite3/sqlite3.h` ; [compatibilité SQLite](https://www.sqlite.org/capi3ref.html) | 2026-10-06 |
+| `src/lib.rs` déclare `pub fn sqlite3_vec_init();` sans argument ; la définition C est `int sqlite3_vec_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi)`, et en cas d'échec elle écrit `*pzErrMsg` sans tester le pointeur nul | source de la crate `src/lib.rs`, `sqlite-vec.c` l. 10064–10145 | 2026-10-06 |
+| `sqlite3_vec_init` enregistre des fonctions (`vec_f32`, `vec_distance_*`, `vec_to_json`…) et les modules `vec0` et `vec_each`. `vec_npy_file`, qui ouvre un fichier par son chemin, appartient à `sqlite3_vec_numpy_init`, un point d'entrée distinct | source de la crate `sqlite-vec.c` l. 10064–10165 | 2026-10-06 |
+| `rusqlite` 0.37.0 n'offre aucun enregistrement sûr d'une extension liée statiquement : `Connection::handle` et `auto_extension::register_auto_extension` sont `unsafe` ; `load_extension` charge un fichier | source installée `rusqlite-0.37.0/src/lib.rs`, `src/auto_extension.rs` | 2026-10-06 |
+| Un vecteur `float[N]` est stocké et renvoyé comme un BLOB de N `f32` petit-boutistes | observé par `drivers/oxyn-driver-sqlite/src/vector_tests.rs` | 2026-10-06 |
+| La CI de livraison construit macOS sur `macos-latest` (arm64) et Linux sur `ubuntu-24.04` et `ubuntu-24.04-arm` ; les pull requests ne construisent que Linux x86_64. La crate a été construite et testée localement sur macOS arm64 | `.github/workflows/livraison.yml`, `qualite.yml` ; exécution locale | 2026-10-06 |
+| Build release de la crate seule : 8,2 s de temps réel sur un portable Apple arm64 ; l'archive statique contient 96 246 octets de `__TEXT` et 1 152 de `__DATA` | `cargo build -p sqlite-vec --release`, `size` sur `libsqlite_vec0.a` | 2026-10-06 |
+| `oxyn-desktop` release dépouillé (macOS arm64, `lto = "thin"`) : 26 535 280 octets avec l'extension, 26 450 800 sans, soit +84 480 octets ; la réédition des liens après l'avoir retirée a pris 3 min 30 s | deux `cargo build --release -p oxyn-desktop` du même arbre | 2026-10-06 |
+| `assert()` reste actif : `build.rs` ne définit pas `NDEBUG`, l'archive release importe `___assert_rtn` ; `sqlite-vec.c` contient 42 appels `assert(`, certains sur des tailles lues dans les tables fantômes (`vec0_metadata_filter_text`, l. 6155–6156) | `nm -u` sur `libsqlite_vec0.a` ; source de la crate | 2026-10-06 |
+| Un `INSERT` interrompu dans `vec0` peut échouer avec `SQLITE_ERROR`, « Internal sqlite-vec error: Could not find latest chunk », au lieu de `SQLITE_INTERRUPT` | observé par `a_stopped_write_into_vec0_is_ambiguous` avant le correctif (une exécution sur trois) | 2026-10-06 |
+| sqlite-vec n'appelle jamais `sqlite3_vtab_config` : `vec0` n'est marqué ni `SQLITE_VTAB_INNOCUOUS` ni `SQLITE_VTAB_DIRECTONLY`. Le `build.rs` de `libsqlite3-sys` 0.35.0 ne fixe pas `SQLITE_TRUSTED_SCHEMA`, si bien que la valeur par défaut du moteur (activé) s'applique | source de la crate ; `libsqlite3-sys-0.35.0/build.rs` | 2026-10-06 |
