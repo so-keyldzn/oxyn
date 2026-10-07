@@ -2398,6 +2398,25 @@ laptop with 10 cores, in release; they were not repeated on Linux.
 | Cold compilation of the inference crate: 80 s of wall time, 45 s of which is burn-flex on the critical path; demo binary 11.7 MB, 8.6 MB stripped | spike, `cargo build --release` | 2026-10-07 |
 | The generated `model.rs` holds 69 `.unwrap()`, no `expect` nor `panic!`, and some 250 `as` conversions | `grep` on `crates/oxyn-embed/src/generated/model.rs` | 2026-10-07 |
 
+### Measured by `oxyn-embed`
+
+Same machine, release build unless stated, commit `a7233c3`.
+
+| Fact | Source | Checked on |
+|---|---|---|
+| Cold load 0.67 s (hashing the 415 MB of files, mapping, warm-up); one question 18 ms; 256 table names 0.63 s, and 2.2 s in the dev profile (about 3.5 times slower) | `oxyn-embed` ignored tests, commit `a7233c3` | 2026-10-07 |
+| RSS once loaded: 795 MB | same | 2026-10-07 |
+| Real download and conversion: 14 s, RSS peak 1.45 GB; what stays on disk is `tokenizer.json` and `model.bpk`, about 415 MB, the safetensors being deleted once the conversion is verified | same | 2026-10-07 |
+| `BurnpackStore` records each parameter's `ParamId`, a random `u64` drawn when the model is built: two conversions of the same weights differ by 590 header bytes. Written through `burn_pack::Writer` with every `param_id` set to `None`, `model.bpk` is reproducible: 389 816 832 bytes, SHA-256 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` | `crates/oxyn-embed/src/load.rs`, `src/pinned.rs` | 2026-10-07 |
+
+### Dependencies brought by `oxyn-embed`
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `sha2` **0.11.0**, already a workspace dependency; `Cargo.lock` also keeps 0.10.9 for other crates | `Cargo.lock` at `a7233c3` | 2026-10-07 |
+| The new requirements move five existing `Cargo.lock` entries within their semver range: `uuid` 1.26.0 → 1.27.0, `cc` 1.4.5 → 1.6.0, `syn` 3.0.5 → 3.0.6, `rand` 0.10.2 → 0.10.3, `find-msvc-tools` 0.1.12 → 0.1.14 | `git diff` of `Cargo.lock`, `8ec843c..a7233c3` | 2026-10-07 |
+| Python packages pinned by `codegen/reference.py` and `codegen/regenerate.py` (outside the build, run with `uv`): `onnxruntime` **1.30.0** (2026-09-10), `numpy` **2.5.3** (2026-09-06), `tokenizers` **0.23.2** (2026-09-03) | [PyPI JSON API](https://pypi.org/pypi/onnxruntime/1.30.0/json) | 2026-10-07 |
+
 ### Alternatives
 
 | Fact | Source | Checked on |

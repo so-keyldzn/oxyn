@@ -43,6 +43,12 @@ build; recorded in [RESEARCH-NOTES](../RESEARCH-NOTES.md#local-embeddings--check
 - the pure-Rust tokenizer (`tokenizers` with `fancy-regex`) gives the same
   ids as the default Oniguruma build on 17 multilingual cases.
 
+The `oxyn-embed` crate, measured the same day on the same machine in release,
+confirms these orders of magnitude: a cold load in 0.67 s (hashing 415 MB,
+mapping, warm-up), one question in 18 ms, 256 table names in 0.63 s (about
+3.5 times slower in the dev profile: 2.2 s); **795 MB** once loaded; the real
+download and conversion in 14 s, **peaking at 1.45 GB**.
+
 ## Decision
 
 **Oxyn computes text embeddings locally, on the CPU, in a new crate
@@ -166,19 +172,26 @@ the Apache-2.0 license text and the model's attribution beside the two files.
 
 The files live under `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`.
 After the download, the bf16 safetensors is widened to f32 and written as
-`model.bpk` (389,764,608 bytes of weights), which loads by memory mapping;
-the safetensors is then deleted. What stays on disk is `model.bpk` and
-`tokenizer.json`, about 415 MB; the peak during conversion is about 610 MB.
-The checksum of `model.bpk` is a constant too — the widening is exact and
-burn-store writes neither date nor random identifier — so a file damaged later
-is refused like a downloaded one. No file is parsed before its size and
-checksum are checked.
+`model.bpk` (389,816,832 bytes), which loads by memory mapping; the
+safetensors is deleted only once the converted file is verified. What stays on
+disk is `model.bpk` and `tokenizer.json`, about 415 MB. Download and
+conversion together take 14 s and peak at **1.45 GB** of RSS, once.
+
+The checksum of `model.bpk` is a constant too —
+`d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, so a
+file damaged later is refused like a downloaded one. That takes one step
+around burn-store: `BurnpackStore` records each parameter's `ParamId`, a
+random `u64` drawn when the model is built, so two conversions of the same
+weights would differ. The conversion writes through `burn_pack::Writer` with
+every `param_id` set to `None`; the ids only serve to resume training, and the
+widening from bf16 is exact, so the file is a function of the weights alone.
+No file is parsed before its size and checksum are checked.
 
 ### Loaded on demand, dropped after five minutes
 
 `OnDemandEmbedder` loads the model at the first request and drops it **five
 minutes** after its last use. Every call to it blocks — milliseconds on a
-loaded model, seconds while loading — and runs on the blocking pool, never on
+loaded model, 0.67 s for a cold load — and runs on the blocking pool, never on
 the UI thread nor on an async executor thread ([I-05](../../CLAUDE.md#i-05)).
 burn-flex and `tokenizers` use rayon's global pool.
 
@@ -227,7 +240,7 @@ semantic ranking is unavailable and why.
   matched by name.
 * **+** `oxyn-ai` does not depend on Burn: its tests and the external-agent
   path keep their compile time, and the gateway stays one function.
-* **−** **About 750 MB of RAM while the model is loaded**, five minutes after
+* **−** **795 MB of RAM while the model is loaded**, five minutes after
   the last question at most. On an 8 GB machine already holding large
   results, that is the difference between fitting and swapping.
 * **−** **Burn is 0.x and breaks its API between minor versions.** Every bump
@@ -253,8 +266,14 @@ semantic ranking is unavailable and why.
   root `Cargo.toml`, commented, keeps them.
 * **−** **+80 s of cold compilation** in CI and for any build that compiles
   `oxyn-desktop` from scratch; 45 s of it on the critical path.
-* **−** About 415 MB of disk for a user who turns the option on, and a
-  download of 220 MB at first use.
+* **−** About 415 MB of disk for a user who turns the option on, a download
+  of 220 MB at first use, and **1.45 GB of RSS at the peak** of that
+  download and conversion — above the 1 GB of the loaded model, once.
+* **−** The checksum of `model.bpk` holds only because the conversion bypasses
+  `BurnpackStore` and clears every `ParamId`: a Burn bump that changes
+  `burn_pack::Writer` or the parameter collection can make the file
+  non-reproducible, and every user's conversion is then refused until the
+  constant is regenerated.
 * **−** Measured on macOS arm64 only. The release also builds Linux x86_64 and
   arm64, where burn-flex's SIMD paths and the latency are unmeasured.
 

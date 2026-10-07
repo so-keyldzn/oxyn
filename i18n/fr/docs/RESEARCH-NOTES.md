@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="39ccc455b866" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="a2f0c910664a" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2423,6 +2423,25 @@ arm64 à 10 cœurs, en release ; elles n'ont pas été refaites sous Linux.
 | Cosinus question ↔ table pertinente : 0,909 (anglais), 0,865 (français) ; tables non pertinentes au plus 0,773 | spike | 2026-10-07 |
 | Compilation à froid de la crate d'inférence : 80 s de temps réel, dont 45 s de burn-flex sur le chemin critique ; binaire de démonstration 11,7 Mo, 8,6 Mo dépouillé | spike, `cargo build --release` | 2026-10-07 |
 | Le `model.rs` généré contient 69 `.unwrap()`, aucun `expect` ni `panic!`, et quelque 250 conversions `as` | `grep` sur `crates/oxyn-embed/src/generated/model.rs` | 2026-10-07 |
+
+### Mesuré par `oxyn-embed`
+
+Même machine, build release sauf mention contraire, commit `a7233c3`.
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Chargement à froid 0,67 s (hachage des 415 Mo de fichiers, mappage, échauffement) ; une question 18 ms ; 256 noms de tables 0,63 s, et 2,2 s en profil dev (environ 3,5 fois plus lent) | tests ignorés d'`oxyn-embed`, commit `a7233c3` | 2026-10-07 |
+| RSS une fois chargé : 795 Mo | idem | 2026-10-07 |
+| Téléchargement réel et conversion : 14 s, pic de RSS 1,45 Go ; ce qui reste sur disque est `tokenizer.json` et `model.bpk`, environ 415 Mo, le safetensors étant supprimé une fois la conversion vérifiée | idem | 2026-10-07 |
+| `BurnpackStore` enregistre le `ParamId` de chaque paramètre, un `u64` aléatoire tiré à la construction du modèle : deux conversions des mêmes poids diffèrent de 590 octets d'en-tête. Écrit par `burn_pack::Writer` avec chaque `param_id` mis à `None`, `model.bpk` est reproductible : 389 816 832 octets, SHA-256 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` | `crates/oxyn-embed/src/load.rs`, `src/pinned.rs` | 2026-10-07 |
+
+### Dépendances apportées par `oxyn-embed`
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| `sha2` **0.11.0**, déjà dépendance du workspace ; `Cargo.lock` garde aussi la 0.10.9 pour d'autres crates | `Cargo.lock` à `a7233c3` | 2026-10-07 |
+| Les nouvelles exigences déplacent cinq entrées existantes de `Cargo.lock` dans leur plage semver : `uuid` 1.26.0 → 1.27.0, `cc` 1.4.5 → 1.6.0, `syn` 3.0.5 → 3.0.6, `rand` 0.10.2 → 0.10.3, `find-msvc-tools` 0.1.12 → 0.1.14 | `git diff` de `Cargo.lock`, `8ec843c..a7233c3` | 2026-10-07 |
+| Paquets Python épinglés par `codegen/reference.py` et `codegen/regenerate.py` (hors build, exécutés avec `uv`) : `onnxruntime` **1.30.0** (2026-09-10), `numpy` **2.5.3** (2026-09-06), `tokenizers` **0.23.2** (2026-09-03) | [API JSON de PyPI](https://pypi.org/pypi/onnxruntime/1.30.0/json) | 2026-10-07 |
 
 ### Alternatives
 

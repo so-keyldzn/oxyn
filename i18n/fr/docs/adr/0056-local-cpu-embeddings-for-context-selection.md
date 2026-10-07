@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="a38f1dab5b9c" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="6dce82d7db5b" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -51,6 +51,13 @@ release ; consigné dans
   11,7 Mo, 8,6 Mo dépouillé ;
 - le tokenizer pur Rust (`tokenizers` avec `fancy-regex`) donne les mêmes
   identifiants que la build Oniguruma par défaut sur 17 cas multilingues.
+
+La crate `oxyn-embed`, mesurée le même jour sur la même machine en release,
+confirme ces ordres de grandeur : un chargement à froid en 0,67 s (hachage de
+415 Mo, mappage, échauffement), une question en 18 ms, 256 noms de tables en
+0,63 s (environ 3,5 fois plus lent en profil dev : 2,2 s) ; **795 Mo** une
+fois chargé ; le téléchargement réel et la conversion en 14 s, **avec un pic à
+1,45 Go**.
 
 ## Décision
 
@@ -184,20 +191,29 @@ modèle à côté des deux fichiers.
 
 Les fichiers vivent sous `<data dir>/models/granite-embedding-97m-multilingual-r2-835ad140/`.
 Après le téléchargement, le safetensors en bf16 est élargi en f32 et écrit en
-`model.bpk` (389 764 608 octets de poids), qui se charge par mappage mémoire ;
-le safetensors est ensuite supprimé. Ce qui reste sur disque, c'est
-`model.bpk` et `tokenizer.json`, environ 415 Mo ; le pic pendant la conversion
-est d'environ 610 Mo. La somme de `model.bpk` est elle aussi une constante —
-l'élargissement est exact et burn-store n'écrit ni date ni identifiant
-aléatoire —, si bien qu'un fichier endommagé plus tard est refusé comme un
-fichier téléchargé. Aucun fichier n'est analysé avant que sa taille et sa
-somme aient été vérifiées.
+`model.bpk` (389 816 832 octets), qui se charge par mappage mémoire ; le
+safetensors n'est supprimé qu'une fois le fichier converti vérifié. Ce qui
+reste sur disque, c'est `model.bpk` et `tokenizer.json`, environ 415 Mo.
+Téléchargement et conversion prennent ensemble 14 s, avec un pic de RSS à
+**1,45 Go**, une seule fois.
+
+La somme de `model.bpk` est elle aussi une constante —
+`d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, si bien
+qu'un fichier endommagé plus tard est refusé comme un fichier téléchargé. Cela
+demande de contourner burn-store d'un pas : `BurnpackStore` enregistre le
+`ParamId` de chaque paramètre, un `u64` aléatoire tiré à la construction du
+modèle, si bien que deux conversions des mêmes poids différeraient. La
+conversion écrit par `burn_pack::Writer` avec chaque `param_id` mis à `None` ;
+les identifiants ne servent qu'à reprendre un entraînement, et
+l'élargissement depuis le bf16 est exact, si bien que le fichier ne dépend que
+des poids. Aucun fichier n'est analysé avant que sa taille et sa somme aient
+été vérifiées.
 
 ### Chargé à la demande, libéré après cinq minutes
 
 `OnDemandEmbedder` charge le modèle à la première demande et le libère **cinq
 minutes** après sa dernière utilisation. Chaque appel bloque — des
-millisecondes sur un modèle chargé, des secondes pendant le chargement — et
+millisecondes sur un modèle chargé, 0,67 s pour un chargement à froid — et
 s'exécute sur le pool bloquant, jamais sur le thread d'interface ni sur un
 thread d'exécuteur async ([I-05](../../CLAUDE.md#i-05)). burn-flex et
 `tokenizers` utilisent le pool global de rayon.
@@ -255,7 +271,7 @@ indisponible et pourquoi.
 * **+** `oxyn-ai` ne dépend pas de Burn : ses tests et le chemin des agents
   externes gardent leur temps de compilation, et la passerelle reste une seule
   fonction.
-* **−** **Environ 750 Mo de RAM tant que le modèle est chargé**, cinq minutes
+* **−** **795 Mo de RAM tant que le modèle est chargé**, cinq minutes
   au plus après la dernière question. Sur une machine de 8 Go qui tient déjà
   de gros résultats, c'est la différence entre tenir et swapper.
 * **−** **Burn est en 0.x et casse son API entre versions mineures.** Chaque
@@ -284,8 +300,15 @@ indisponible et pourquoi.
 * **−** **+80 s de compilation à froid** en CI et pour toute compilation
   d'`oxyn-desktop` à partir de zéro ; 45 s d'entre elles sur le chemin
   critique.
-* **−** Environ 415 Mo de disque pour l'utilisateur qui active l'option, et un
-  téléchargement de 220 Mo au premier usage.
+* **−** Environ 415 Mo de disque pour l'utilisateur qui active l'option, un
+  téléchargement de 220 Mo au premier usage, et **1,45 Go de RSS au pic** de
+  ce téléchargement et de cette conversion — au-dessus du 1 Go du modèle
+  chargé, une seule fois.
+* **−** La somme de `model.bpk` ne tient que parce que la conversion contourne
+  `BurnpackStore` et efface chaque `ParamId` : une montée de Burn qui change
+  `burn_pack::Writer` ou la collecte des paramètres peut rendre le fichier non
+  reproductible, et la conversion de chaque utilisateur est alors refusée
+  jusqu'à ce que la constante soit régénérée.
 * **−** Mesuré sous macOS arm64 seulement. La release compile aussi Linux
   x86_64 et arm64, où les chemins SIMD de burn-flex et la latence ne sont pas
   mesurés.
