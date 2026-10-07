@@ -105,6 +105,9 @@ pub(crate) struct Inner {
     pub(crate) layouts: windows::Layouts,
     /// The tabs moved to a new window, until its webview adopts them.
     pub(crate) handoffs: windows::Handoffs,
+    /// Local semantic ranking: the model's place, its download, the model
+    /// in memory while used, and the relation vectors (ADR-0056).
+    pub(crate) semantic: semantic::SemanticState,
 }
 
 // Not derived: `Executor` and `Store` reach connection configurations, and a
@@ -159,12 +162,14 @@ impl Backend {
     /// Local state unreadable, driver registry inconsistent, keyring absent.
     pub(crate) fn open(confirm: Arc<dyn HostConfirm>) -> Result<Self> {
         KeyringSecretStore::availability().context("the system keyring is unavailable")?;
-        Self::assemble_with(
+        let backend = Self::assemble_with(
             Arc::new(Store::open_default().context("opening the local workspace state")?),
             Arc::new(KeyringSecretStore::new()),
             confirm::Confirmations::new(confirm, confirm::Timing::HOST),
             oxyn_data::DEFAULT_MEMORY_BUDGET,
-        )
+        )?;
+        backend.place_models();
+        Ok(backend)
     }
 
     /// An ephemeral workspace for local QA: never touches saved state or keyring.
@@ -172,7 +177,11 @@ impl Backend {
     /// # Errors
     /// If the in-memory state cannot be created.
     pub(crate) fn open_temporary_with(confirm: Arc<dyn HostConfirm>) -> Result<Self> {
-        Self::open_in_memory(confirm::Confirmations::new(confirm, confirm::Timing::HOST))
+        let backend =
+            Self::open_in_memory(confirm::Confirmations::new(confirm, confirm::Timing::HOST))?;
+        // The model is the machine's, not the workspace's: see `place_models`.
+        backend.place_models();
+        Ok(backend)
     }
 
     /// A temporary workspace whose host confirms every critical decision at
@@ -347,6 +356,7 @@ impl Backend {
                 windows: windows::WindowRegistry::default(),
                 layouts,
                 handoffs: windows::Handoffs::default(),
+                semantic: semantic::SemanticState::default(),
             }),
         };
         backend.start_heartbeat();
@@ -1759,6 +1769,7 @@ mod object_operations;
 mod proposal;
 mod recovery;
 mod results;
+mod semantic;
 mod settings;
 mod tracking;
 pub(crate) mod windows;

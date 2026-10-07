@@ -558,14 +558,20 @@ fn listings_stop_at_their_bound_and_the_rest_waits_for_the_next_question() {
     let cache = tenants(MAX_LISTINGS + 8);
     let policy = oxyn_ai::ContextPolicy::default();
     let tried = HashSet::new();
+    let unscored = oxyn_ai::SemanticScores::new();
     assert!(matches!(
-        next_read(&cache, question(""), &policy, &tried, 0, 0),
+        next_listing(&cache, question(""), &tried, 0),
         Some(CatalogScope::Namespace(_))
     ));
     assert_eq!(
-        next_read(&cache, question(""), &policy, &tried, MAX_LISTINGS, 0),
+        next_listing(&cache, question(""), &tried, MAX_LISTINGS),
         None,
-        "no listing past the bound, and nothing listed to describe"
+        "no listing past the bound"
+    );
+    assert_eq!(
+        next_description(&cache, question(""), &policy, &tried, 0, &unscored),
+        None,
+        "nothing listed to describe"
     );
     assert_eq!(
         cache.unlisted_count(),
@@ -573,7 +579,7 @@ fn listings_stop_at_their_bound_and_the_rest_waits_for_the_next_question() {
         "announced, not read"
     );
     assert_eq!(
-        next_read(&cache, Want::Mentions(&[]), &policy, &tried, 0, 0),
+        next_listing(&cache, Want::Mentions(&[]), &tried, 0),
         None,
         "a follow-up lists nothing"
     );

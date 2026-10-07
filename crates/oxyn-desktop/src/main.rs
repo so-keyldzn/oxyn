@@ -243,6 +243,13 @@ fn main() -> Result<()> {
             commands::updates::restart_to_update,
             commands::updates::open_release_page,
             commands::updates::take_update_notice,
+            // Local semantic ranking (ADR-0056): a preference on the bus,
+            // the model's files as plumbing
+            commands::semantic::semantic_ranking_state,
+            commands::semantic::subscribe_semantic_ranking,
+            commands::semantic::enable_semantic_ranking,
+            commands::semantic::disable_semantic_ranking,
+            commands::semantic::preload_semantic_model,
         ])
         .build(context)
         .context("building the Tauri application")?

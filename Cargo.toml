@@ -218,6 +218,14 @@ opt-level = 1              # opt-level 0 makes the application too slow to use
 [profile.dev.package."*"]
 opt-level = 2              # dependencies always optimized
 
+# A workspace member, so `"*"` above does not reach it: at the dev profile's
+# level 1 its generated model embeds 256 table names in 2.2 s instead of
+# 0.63 s (ADR-0056), and a question in `make desktop-dev` then spends its
+# whole 2 s semantic budget on a cold catalog. Burn and tokenizers are
+# dependencies and already get level 2.
+[profile.dev.package.oxyn-embed]
+opt-level = 2
+
 [profile.release]
 lto           = "thin"
 codegen-units = 1

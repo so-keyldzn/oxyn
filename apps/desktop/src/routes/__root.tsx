@@ -17,6 +17,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { subscribeToShutdown } from "@/features/consoles/draft-registry"
 import { useFileDrops } from "@/features/file-drops/use-file-drops"
 import { ProviderSettings } from "@/features/assistant/provider-settings"
+import { SemanticRankingSection } from "@/features/assistant/semantic-ranking-section"
 import { ExitTransactionsHost } from "@/features/recovery/exit-transactions-host"
 import { refreshConnection, session } from "@/features/session"
 import {
@@ -58,6 +59,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 // connection (ADR-0023).
 const AI_SECTIONS = [
   { id: "ai", label: "AI providers", content: <ProviderSettings /> },
+  // A workspace preference whose model is the computer's (ADR-0056).
+  {
+    id: "semantic-ranking",
+    label: "Semantic ranking",
+    content: <SemanticRankingSection />,
+  },
 ]
 
 const noSubscription = () => () => undefined

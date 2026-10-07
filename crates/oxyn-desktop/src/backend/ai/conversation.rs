@@ -26,7 +26,7 @@ use oxyn_ai::external::turn::TurnEnd;
 use oxyn_ai::tools::SampleAsk;
 use oxyn_ai::{
     AgentEvent, AgentObserver, AgentOutcome, AgentRuntime, AgentSession, AiError, CallHandle,
-    CallId, CommandSink, ContextBuilder, DispatchOutcome, ToolRegistry, ToolScope,
+    CallId, CommandSink, ContextBuilder, DispatchOutcome, SemanticScores, ToolRegistry, ToolScope,
 };
 use oxyn_core::ai::MAX_PROVIDER_MODEL_BYTES;
 use oxyn_core::{
@@ -47,6 +47,7 @@ use super::threads::{AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRe
 use super::{Backend, check_endpoint};
 use crate::backend::Inner;
 use crate::backend::confirm::text::{self as confirm_text, SampleDescription, SampleDestination};
+use crate::backend::semantic::Ranking;
 use crate::ipc::ai::{
     AgentExit, AgentSettingAnswer, AgentSettingChange, AgentSettingsView, AgentStart, AiEvent,
     AiUpdate, AskRequest, AskStarted, ContextSummary, Cut, Destination, DestinationChoice, Ending,
@@ -1795,9 +1796,17 @@ impl Run<'_> {
     /// mentions select, as they select for the context — never by a model.
     /// The reads are the tree's expansions, through the same bus and gate
     /// ([ADR-0036](../../../../../docs/adr/0036-l-assistant-complete-le-catalogue.md)).
-    async fn complete_catalog(&self, want: Want<'_>) {
+    ///
+    /// With `ranking`, a question's selection is ranked by meaning as well,
+    /// and the scores come back for the gate to select with them
+    /// (ADR-0056); without, they are empty and the selection is lexical.
+    async fn complete_catalog(
+        &self,
+        want: Want<'_>,
+        ranking: Option<&Ranking<'_>>,
+    ) -> SemanticScores {
         let Some(catalog) = self.inner.executor.catalog(self.connection.id) else {
-            return;
+            return SemanticScores::new();
         };
         let sink = ExecutorSink::new(Arc::clone(&self.inner.executor));
         let fill = CatalogFill {
@@ -1807,7 +1816,8 @@ impl Run<'_> {
             catalog,
         };
         let emit = |event| self.emit(event);
-        fill.run(want, self.cancel, &emit).await;
+        let ranking = ranking.filter(|_| matches!(want, Want::Question { .. }));
+        fill.run_ranked(want, self.cancel, &emit, ranking).await.1
     }
 
     /// What the context of a question needs: the whole selection for a
@@ -1842,8 +1852,11 @@ impl Run<'_> {
                 .thread
                 .memory_from(self.parent)
                 .is_some_and(|memory| memory.tier == tier && memory.recipient == recipient);
-        self.complete_catalog(self.want(question, follows)).await;
-        self.prepare_dialogue(agent, recipient, session, question, sample, tier)
+        let ranking = Ranking::new(self.inner, question);
+        let scores = self
+            .complete_catalog(self.want(question, follows), ranking.as_ref())
+            .await;
+        self.prepare_dialogue(agent, recipient, session, question, sample, tier, scores)
     }
 
     fn observer(&self) -> Observer {
@@ -2019,6 +2032,13 @@ impl Run<'_> {
     /// message is not rewritten — they precede the question, rendered by the
     /// same `ContextBuilder` under the same tier. The context returned is the
     /// one that joins the prompt this time, if any.
+    ///
+    /// `semantic` is what the catalog fill ranked with: given to the gate,
+    /// it selects what was described (ADR-0056).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the question's parts, plus the scores its catalog fill computed"
+    )]
     fn prepare_dialogue(
         &self,
         agent: &oxyn_ai::AgentSpec,
@@ -2027,6 +2047,7 @@ impl Run<'_> {
         question: &str,
         sample: Option<oxyn_ai::context::RowSample>,
         tier: PrivacyTier,
+        semantic: SemanticScores,
     ) -> Result<(AgentSession, Option<oxyn_ai::AgentContext>), Failure> {
         let sampled = sample.is_some();
         if sampled {
@@ -2121,6 +2142,9 @@ impl Run<'_> {
                         .with_policy(agent.context.clone())
                         .with_language(QueryLanguage::Sql(dialect))
                         .focused_on(question.to_owned())
+                        // The scores the catalog fill loaded with: the gate
+                        // selects what was described (ADR-0056).
+                        .with_semantic_scores(semantic)
                         .with_mentions(mentions.clone())
                         .with_samples(sample.into_iter().collect())
                         .build()
@@ -2396,7 +2420,10 @@ impl Run<'_> {
         // Before the prompt is rendered, what it needs is read — by Oxyn,
         // through the bus: the whole selection for a session that starts, the
         // mentions alone for one that follows.
-        self.complete_catalog(self.want(question, linked.is_some()))
+        // Unranked: the external agent's prompt is rendered by
+        // `AgentPrompt`, which takes no semantic scores, and the fill must
+        // load what that rendering selects.
+        self.complete_catalog(self.want(question, linked.is_some()), None)
             .await;
         // From the local catalog only: an agent that fetched what it needs
         // would bypass both the gate and the bus. No catalog yet is said to the

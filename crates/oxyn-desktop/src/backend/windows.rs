@@ -87,6 +87,8 @@ pub(crate) enum Stream {
     RefreshSignals,
     /// The update's state (ADR-0051).
     Updates,
+    /// Semantic ranking's option and model (ADR-0056).
+    SemanticRanking,
 }
 
 /// Where a window's close stands. « The last window » is decided on it: a
