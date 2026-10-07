@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/hooks/README.md" sha256="e677793fa4a0" -->
+<!-- oxyn-translation source=".claude/hooks/README.md" sha256="3ae1154b280c" -->
 
 > Traduction française de [.claude/hooks/README.md](../../../../.claude/hooks/README.md). **La version anglaise fait foi.**
 
@@ -70,8 +70,11 @@ guillemets sont conservés à la lecture : `grep '>' fichier` est donc lui aussi
 du texte. La cible est jugée une fois résolue : un lien symbolique sous `/tmp/`
 qui mène dans le dépôt, ou un dépôt qui se trouve lui-même sous une racine
 temporaire, demande toujours, de même qu'une cible que le shell développe
-ensuite (`*`, `?`, `[`, `{`, `~`, `$`). Un programme lancé par `bash -c`,
-`sh -c` ou `eval` est lu de la même façon. Un
+ensuite (`*`, `?`, `[`, `{`, `~`, `$`). Le texte que le shell exécute à
+nouveau — les arguments de `bash`, `sh` ou `eval`, un `$(…)` ou des
+apostrophes inverses hors guillemets simples — est lu de la même façon,
+volontairement plus largement que le strict nécessaire : une chaîne lue en trop
+coûte une question, jamais une écriture laissée passer. Un
 chemin relatif, une variable ou un chemin que `..` fait sortir de ces racines
 demande toujours. Le test sur la ligne brute qu'il remplace demandait à chaque
 commande de test qui gardait un journal : approuver devenait un réflexe,

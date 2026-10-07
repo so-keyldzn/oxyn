@@ -63,8 +63,10 @@ none of them asks. Quotes are kept while reading, so `grep '>' file` is text
 too. The target is judged once resolved: a symlink under `/tmp/` that leads
 into the checkout, or a checkout that itself lives under a temporary root,
 still asks, and so does a target the shell expands afterwards (`*`, `?`, `[`,
-`{`, `~`, `$`). A program run by `bash -c`, `sh -c` or `eval` is read the same
-way. A relative path, a variable or a path that `..` takes out of
+`{`, `~`, `$`). Text the shell runs again — the arguments of `bash`, `sh` or
+`eval`, a `$(…)` or backticks outside single quotes — is read the same way,
+deliberately wider than strictly needed: one string read too many costs a
+question, never a write let through. A relative path, a variable or a path that `..` takes out of
 those roots still asks. The raw-line test it replaced asked on every test
 command that kept a log, so approvals became a reflex — the opposite of a
 safeguard.

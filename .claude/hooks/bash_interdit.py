@@ -116,24 +116,28 @@ def _unquote(token: str) -> str:
 
 
 def _nested_programs(tokens: list[str]) -> list[str]:
-    """The command strings run by `sh -c`, `bash -lc`… and `eval`."""
+    """Text the shell will run again: every argument of a shell (`sh`, `bash`…)
+    or of `eval` up to the next operator, and every token holding a command
+    substitution (`$(…)`, backticks) — except inside single quotes, where the
+    shell substitutes nothing.
+
+    Deliberately wider than where `-c` sits: shell options can take arguments
+    (`bash -O extglob -c '…'`), and reading one string too many costs at most
+    a question, never a write let through."""
     programs = []
-    for i, token in enumerate(tokens):
-        name = Path(_unquote(token)).name
-        if name in SHELLS:
-            j = i + 1
-            while j < len(tokens) and tokens[j].startswith("-"):
-                if "c" in tokens[j][1:] and j + 1 < len(tokens):
-                    programs.append(_unquote(tokens[j + 1]))
-                    break
-                j += 1
-        elif name == "eval":
-            words = []
-            for word in tokens[i + 1:]:
-                if set(word) <= PUNCTUATION:
-                    break
-                words.append(_unquote(word))
-            programs.append(" ".join(words))
+    runner = False
+    for token in tokens:
+        if set(token) <= PUNCTUATION:
+            runner = False
+            continue
+        unquoted = _unquote(token)
+        if Path(unquoted).name in SHELLS | {"eval"}:
+            runner = True
+            continue
+        if runner and not token.startswith("-"):
+            programs.append(unquoted)
+        elif not token.startswith("'") and ("$(" in token or "`" in token):
+            programs.append(unquoted)
     return programs
 
 
