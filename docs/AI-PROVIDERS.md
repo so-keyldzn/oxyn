@@ -299,6 +299,11 @@ CPU embeddings that order the relations the lexical score ties or misses
   threshold. It is bounded at 2 seconds per question, and while the model is
   off, downloading or failing, selection is exactly the lexical one.
 
+**Only the provider path is ranked this way, for now.** The context sent to an
+external agent goes through `AgentPrompt`, which takes no scores: its
+selection stays lexical whatever the option says. Ranking it too is planned
+work, outside the change that introduced semantic ranking.
+
 The embedding model is not a provider: it generates no text, receives no
 prompt, and needs no declaration in `ProviderRegistry`.
 

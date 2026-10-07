@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="55ab8e524e0d" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="1cf5011e9290" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -309,6 +309,12 @@ que le score lexical laisse à égalité ou manque
   trouvé, sans seuil. Il est borné à 2 secondes par question, et tant que le
   modèle est désactivé, en téléchargement ou en échec, la sélection est
   exactement la sélection lexicale.
+
+**Seul le chemin des fournisseurs est classé ainsi, pour l'instant.** Le
+contexte envoyé à un agent externe passe par `AgentPrompt`, qui ne prend pas de
+scores : sa sélection reste lexicale quoi que dise l'option. Le classer lui
+aussi est un travail prévu, hors du changement qui a introduit le classement
+sémantique.
 
 Le modèle d'embeddings n'est pas un fournisseur : il ne génère aucun texte, ne
 reçoit aucun prompt et n'a besoin d'aucune déclaration dans
