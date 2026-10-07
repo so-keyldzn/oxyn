@@ -2158,8 +2158,9 @@ Planned the same day; the three steps below are merged and released in
 0.0.6 (#205): step 1 in #202, step 2 in #198 (store), #200 (picker) and
 #203 (the conversation runs its agent), step 3 in #204.
 [ADR-0049](adr/0049-agents-declared-as-markdown-files.md), amended on
-2026-10-06 (#199), was accepted on 2026-10-06 (#206), and amended on
-2026-10-07 on the default agent (SQL, whatever the display order). The
+2026-10-06 (#199), was accepted on 2026-10-06 (#206); on 2026-10-07,
+[ADR-0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md)
+refines its default agent (SQL, whatever the display order). The
 steps, as planned, each its own pull request, in this order:
 
 1. **Composition, in `oxyn-ai`.** The role files `agents/sql.md` and

@@ -56,7 +56,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 // A new conversation runs the SQL agent whatever the display order: Schema
-// sorts first by name, SQL stays selected (ADR-0049, amended on 2026-10-07).
+// sorts first by name, SQL stays selected (ADR-0055).
 export const Default: Story = {
   play: async ({ args }) => {
     await expect(body().getByRole("combobox")).toHaveTextContent("SQL")

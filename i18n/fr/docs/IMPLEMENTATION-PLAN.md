@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="23d03768ca49" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="1cee80bfd4b2" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2168,8 +2168,9 @@ fusionnées et livrées dans la 0.0.6 (#205) : l'étape 1 dans #202, l'étape 2
 dans #198 (store), #200 (sélecteur) et #203 (la conversation exécute son
 agent), l'étape 3 dans #204.
 L'[ADR-0049](adr/0049-agents-declared-as-markdown-files.md), amendée le
-2026-10-06 (#199), a été acceptée le 2026-10-06 (#206), puis amendée le
-2026-10-07 sur l'agent par défaut (SQL, quel que soit l'ordre d'affichage).
+2026-10-06 (#199), a été acceptée le 2026-10-06 (#206) ; le 2026-10-07,
+l'[ADR-0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md)
+précise son agent par défaut (SQL, quel que soit l'ordre d'affichage).
 Les étapes, telles que prévues, chacune sa pull request, dans cet ordre :
 
 1. **La composition, dans `oxyn-ai`.** Les fichiers de rôle

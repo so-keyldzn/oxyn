@@ -1,6 +1,6 @@
 # ADR-0049 — An agent is a Markdown file with a YAML front matter, composed with a dialect and a recipient fragment, filled only from a closed list of variables
 
-**Status:** accepted (2026-10-06) · **Date:** 2026-09-29 · **Amended on:** 2026-10-06, 2026-10-07 ·
+**Status:** accepted (2026-10-06) · **Date:** 2026-09-29 · **Amended on:** 2026-10-06 ·
 **Deciders:** Nicolas Boromée
 
 **Refines:** [ARCHITECTURE §7.3](../ARCHITECTURE.md#73-agent-runtime), on one
@@ -19,14 +19,6 @@ not implementations, stays as it is.
 > amended in place; nothing of the first version is withdrawn except the
 > sentence "the body is the system prompt, as is", now "the body is the
 > **role** part of the system prompt".
-
-> **Amended on 2026-10-07, after acceptance — the default agent.** The
-> default of a new conversation is the **SQL agent, whatever the display
-> order**. § 4 sorts the picker by `name`, so Schema is listed before SQL;
-> SQL stays the one selected in a blank thread, and a conversation that
-> names no agent runs it on the backend. The clause of § 2 "otherwise the
-> first offered one in the order of § 4" is withdrawn: the default never
-> follows the display order. The rest of § 2 and § 4 stands as written.
 
 ## Context
 
