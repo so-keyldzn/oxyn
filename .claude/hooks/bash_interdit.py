@@ -119,42 +119,63 @@ def _unquote(token: str) -> str:
     return token
 
 
-def _nested_programs(tokens: list[str]) -> list[str]:
-    """Text the shell will run again: every argument of a shell (`sh`, `bash`…)
-    or of `eval` up to the next operator, and every token holding a command
-    substitution (`$(…)`, backticks) — except inside single quotes, where the
-    shell substitutes nothing.
+def _read_commands(tokens: list[str]) -> tuple[list[str], set[str]]:
+    """What the shell will run again, and the names of the commands it runs.
 
-    Deliberately wider than where `-c` sits: shell options can take arguments
-    (`bash -O extglob -c '…'`), and reading one string too many costs at most
-    a question, never a write let through. A command whose name the shell
-    expands (`"$SHELL" -c '…'`) may be a shell, so it counts as one, and the
-    string after any `-c`-style option is read whatever the program."""
-    programs = []
-    runner = False
+    Run again: the arguments of a shell (`sh`, `bash`…) or of `eval`, joined
+    into one string as `eval` itself joins them; the string after any
+    `-c`-style option, whatever the program; every token holding a command
+    substitution (`$(…)`, backticks) outside single quotes. Deliberately wider
+    than where `-c` sits — shell options take arguments (`bash -O extglob -c
+    '…'`) and a command whose name the shell expands (`"$SHELL" -c '…'`) may be
+    a shell: one string read too many costs a question, never a write let
+    through.
+
+    Names: only words in command position, so neither an argument (`echo rm`)
+    nor a redirection target (`> /tmp/rm`) counts as a command."""
+    programs: list[str] = []
+    names: set[str] = set()
+    runner_words: list[str] | None = None
     command_position = True
+    after_target = False
     after_c = False
+
+    def close_runner() -> None:
+        nonlocal runner_words
+        if runner_words:
+            programs.append(" ".join(runner_words))
+        runner_words = None
+
     for token in tokens:
         if set(token) <= PUNCTUATION:
-            runner = False
-            command_position = True
-            after_c = False
+            if "<" in token or ">" in token:
+                after_target = True
+            else:
+                close_runner()
+                command_position = True
+                after_c = False
             continue
         unquoted = _unquote(token)
+        if after_target:
+            after_target = False
+            continue
         if command_position and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", unquoted):
             continue
-        dynamic_name = command_position and ("$" in token or "`" in token)
         if command_position:
             command_position = False
-            if Path(unquoted).name in SHELLS | {"eval"} or dynamic_name:
-                runner = True
+            names.add(Path(unquoted).name)
+            if Path(unquoted).name in SHELLS | {"eval"} or "$" in token or "`" in token:
+                runner_words = []
                 continue
-        if (runner or after_c) and not token.startswith("-"):
+        if runner_words is not None and not token.startswith("-"):
+            runner_words.append(unquoted)
+        elif after_c and not token.startswith("-"):
             programs.append(unquoted)
         elif not token.startswith("'") and ("$(" in token or "`" in token):
             programs.append(unquoted)
         after_c = bool(re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", token))
-    return programs
+    close_runner()
+    return programs, names
 
 
 def _writing_redirection(command: str, depth: int = 0, reshaped: bool = False) -> bool:
@@ -180,11 +201,9 @@ def _writing_redirection(command: str, depth: int = 0, reshaped: bool = False) -
     # The target is resolved now; a command of the same line, nested programs
     # included, can reshape the path before the redirection runs. Then only
     # the device files stay exempted.
-    reshaped = reshaped or any(Path(_unquote(token)).name in RESHAPES_PATHS for token in tokens)
-    if any(
-        _writing_redirection(program, depth + 1, reshaped)
-        for program in _nested_programs(tokens)
-    ):
+    programs, names = _read_commands(tokens)
+    reshaped = reshaped or bool(names & RESHAPES_PATHS)
+    if any(_writing_redirection(program, depth + 1, reshaped) for program in programs):
         return True
 
     def harmless(target: str) -> bool:
