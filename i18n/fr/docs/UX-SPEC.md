@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="be0665c1e5e8" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="947c5d8bfaf0" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1815,3 +1815,71 @@ même version, aucun argument de plus — est confiné au lancement
 préréglage modifié compris, est traité comme inconnu : la liste le marque d'un
 avertissement disant qu'Oxyn ne peut pas l'empêcher d'agir seul sur la machine,
 et le panneau le répète quand il est choisi.
+
+### Classement sémantique
+
+Réglages ▸ Semantic ranking active le classement local du contexte IA
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). C'est la
+préférence du workspace `semantic_ranking`, **désactivée par défaut** ; le
+modèle qu'elle télécharge appartient à l'ordinateur. Seul l'utilisateur la
+change : aucun agent ne le peut.
+
+La vue dit ce que fait l'option — les tables classées par le sens autant que
+par le nom, si bien qu'une question qui ne nomme aucune table, ou qui est
+posée dans une autre langue que le schéma, trouve encore les bonnes —, puis
+l'interrupteur, `Rank tables by meaning with a local model`. Dessous, toujours,
+ce qu'elle coûte et ce qu'elle ne fait pas : calculé sur cet ordinateur, aucun
+nom de table, commentaire ou question envoyé nulle part ; environ **220 Mo**
+téléchargés une fois, environ **415 Mo** gardés sur disque, environ **800 Mo**
+de mémoire pendant qu'on pose des questions, libérés **5 minutes** après la
+dernière. Tant que l'option est activée, une seconde ligne dit que la
+désactiver supprime le modèle de cet ordinateur.
+
+**L'état du modèle, et ce que chacun permet.** Une ligne d'état nomme l'état ;
+les actions à côté sont les seules proposées.
+
+| État | Ligne d'état | Actions |
+|---|---|---|
+| Indisponible | `Not available: this system gives Oxyn no data directory to keep the model in.` | aucune ; l'interrupteur est désactivé |
+| Désactivée | `Off. Questions are ranked by name only.` | l'interrupteur |
+| Activée, sans modèle | `The model is not downloaded: questions are ranked by name only.` | `Download model` |
+| Vérification | `Checking the files already on this computer…`, avec un indicateur d'activité et une barre de progression sans fraction | `Cancel download` |
+| Téléchargement | `Downloading the model — ` suivi des octets reçus sur le total, et une barre de progression en pourcentage | `Cancel download` |
+| Conversion | `Preparing the model for this computer… This last step takes a few seconds and cannot be cancelled.`, avec une barre de progression sans fraction | aucune |
+| Prêt, activée | `Ready. Loaded at the first question, released after 5 minutes without one.` | `Delete model` |
+| Prêt, désactivée | `The model is on this computer, but this workspace does not use it.` | `Delete model` |
+| Endommagé | une alerte, `The model files are damaged` : un fichier n'est pas celui qu'attend Oxyn, tronqué — un disque plein, par exemple — ou remplacé ; tant qu'il n'est pas téléchargé de nouveau, les questions sont classées par le nom seulement | `Download again`, `Delete model` |
+| Échec | une alerte, `The local model is not usable`, avec le message du backend (il ne nomme aucun chemin local), l'étape suivante — vérifier l'espace disque et les permissions du répertoire de données d'Oxyn, puis télécharger de nouveau — et le fait que les questions sont classées par le nom seulement d'ici là | `Download again`, `Delete model` |
+
+* **Activer** enregistre la préférence, puis télécharge en arrière-plan ;
+  l'interrupteur reste activé pendant le téléchargement. La progression arrive
+  au fil de l'eau, par phase. `Download again` est la même demande : elle
+  vérifie les fichiers présents et ne récupère que ce qui manque ou est faux.
+* **`Cancel download` désactive l'option** et supprime ce qui a été
+  téléchargé ; la vue le dit sous le bouton. Il n'y a pas de téléchargement en
+  pause à reprendre.
+* **La conversion n'est pas annulable.** Elle ne propose pas de `Cancel
+  download` ; désactiver l'interrupteur pendant qu'elle tourne attend sa fin —
+  quelques secondes —, puis supprime le modèle.
+* **Désactiver, ou `Delete model`,** enregistre la préférence à désactivée,
+  arrête un téléchargement, libère le modèle de la mémoire et supprime ses
+  fichiers.
+* **En attente.** Tant qu'une demande est en route, l'interrupteur et chaque
+  bouton sont désactivés.
+* **Refusé.** Une demande que le backend refuse — la préférence n'a pas pu
+  être enregistrée, par exemple — laisse tout en l'état, et une ligne sous
+  l'interrupteur dit `Nothing was changed: ` suivi de la raison.
+* **Avant la première réponse**, la vue affiche `Reading the semantic ranking
+  state…` ; si l'état ne peut pas être lu, une alerte dit `The semantic
+  ranking state could not be read`, avec l'étape suivante : fermer et rouvrir
+  les réglages — l'option reste telle qu'elle a été enregistrée.
+
+La ligne d'état est une région live polie : un changement d'état est annoncé,
+les nombres d'octets à côté ne le sont pas ; un échec ou un modèle endommagé
+est annoncé par son alerte. La barre de progression lit les octets reçus
+pendant le téléchargement, `Checking files` et `Preparing the model` sinon.
+
+Ouvrir le panneau de l'assistant charge un modèle prêt avant la première
+question, si bien que son chargement à froid ne compte pas dans la borne de
+2 secondes de cette question. Tant que l'option est désactivée, ouvrir le
+panneau ne fait rien.

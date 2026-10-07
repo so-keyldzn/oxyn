@@ -134,10 +134,13 @@ memory mapping lives inside burn-store.
 
 ### Off by default, turned on by the human
 
-The option is a workspace preference
-([ADR-0013](0013-preferences-workspace.md)), **off by default**, which the
-default policy reserves to `Actor::Human`: no agent turns it on, so no agent
-starts a download. While it is off, nothing of `oxyn-embed` touches the
+The option is the workspace preference `semantic_ranking`, a boolean of
+`WorkspacePreferences` ([ADR-0013](0013-preferences-workspace.md)), **off by
+default**. It is added under ADR-0013's rule — a new field without a version
+change —, so a payload written before it reads as off and never starts a
+download. The default policy reserves its write to `Actor::Human`: no agent
+turns it on, so no agent starts a download. Its screen is in
+[UX-SPEC](../UX-SPEC.md#semantic-ranking). While it is off, nothing of `oxyn-embed` touches the
 network, the disk or memory, and selection is exactly today's.
 
 Turning it on starts `ModelStore::download` in the background, with a

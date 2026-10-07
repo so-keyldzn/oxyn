@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="2e2c5821776e" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="56387698ff32" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -149,10 +149,14 @@ mappage mémoire vit dans burn-store.
 
 ### Désactivée par défaut, activée par l'humain
 
-L'option est une préférence du workspace
-([ADR-0013](0013-preferences-workspace.md)), **désactivée par défaut**, que la
-politique par défaut réserve à `Actor::Human` : aucun agent ne l'active, donc
-aucun agent ne lance un téléchargement. Tant qu'elle est désactivée, rien
+L'option est la préférence du workspace `semantic_ranking`, un booléen de
+`WorkspacePreferences` ([ADR-0013](0013-preferences-workspace.md)),
+**désactivée par défaut**. Elle est ajoutée selon la règle de l'ADR-0013 — un
+nouveau champ sans changement de version —, si bien qu'un contenu écrit avant
+elle se lit comme désactivé et ne lance jamais de téléchargement. La politique
+par défaut réserve son écriture à `Actor::Human` : aucun agent ne l'active,
+donc aucun agent ne lance un téléchargement. Son écran est dans
+[UX-SPEC](../UX-SPEC.md#classement-sémantique). Tant qu'elle est désactivée, rien
 d'`oxyn-embed` ne touche au réseau, au disque ni à la mémoire, et la sélection
 est exactement celle d'aujourd'hui.
 

@@ -1735,3 +1735,66 @@ version, no extra argument — is confined at launch
 modified preset included, is treated as unknown: the list marks it with a
 warning saying Oxyn cannot prevent it from acting alone on the machine, and the
 panel repeats it when it is chosen.
+
+### Semantic ranking
+
+Settings ▸ Semantic ranking turns on the local ranking of the AI context
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). It is
+the workspace preference `semantic_ranking`, **off by default**; the model it
+downloads belongs to the computer. Only the user changes it: no agent can.
+
+The view says what the option does — tables ranked by meaning as well as by
+name, so that a question that names no table, or is asked in another language
+than the schema, still finds the right ones — and then the switch, `Rank
+tables by meaning with a local model`. Beneath it, always, what it costs and
+what it does not do: computed on this computer, no table name, comment or
+question sent anywhere; about **220 MB** downloaded once, about **415 MB** kept
+on disk, about **800 MB** of memory while questions are asked, released
+**5 minutes** after the last one. While the option is on, a second line says
+that turning it off deletes the model from this computer.
+
+**The model's state, and what each one allows.** A status line names the
+state; the actions beside it are the only ones offered.
+
+| State | Status line | Actions |
+|---|---|---|
+| Unavailable | `Not available: this system gives Oxyn no data directory to keep the model in.` | none; the switch is disabled |
+| Off | `Off. Questions are ranked by name only.` | the switch |
+| On, no model | `The model is not downloaded: questions are ranked by name only.` | `Download model` |
+| Verifying | `Checking the files already on this computer…`, with a spinner and a progress bar without a fraction | `Cancel download` |
+| Downloading | `Downloading the model — ` followed by the bytes received out of the total, and a progress bar in percent | `Cancel download` |
+| Converting | `Preparing the model for this computer… This last step takes a few seconds and cannot be cancelled.`, with a progress bar without a fraction | none |
+| Ready, on | `Ready. Loaded at the first question, released after 5 minutes without one.` | `Delete model` |
+| Ready, off | `The model is on this computer, but this workspace does not use it.` | `Delete model` |
+| Corrupt | an alert, `The model files are damaged`: a file is not the one Oxyn expects, truncated — a full disk, for instance — or replaced; until it is downloaded again, questions are ranked by name only | `Download again`, `Delete model` |
+| Failed | an alert, `The local model is not usable`, with the backend's message (it names no local path), the next step — check the disk space and the permissions of Oxyn's data directory, then download again — and that questions are ranked by name only until then | `Download again`, `Delete model` |
+
+* **Turning on** saves the preference, then downloads in the background; the
+  switch stays on during the download. Progress arrives as it happens, by
+  phase. `Download again` is the same request: it verifies the files present
+  and fetches only what is missing or wrong.
+* **`Cancel download` turns the option off** and removes what was downloaded;
+  the view says so beneath the button. There is no paused download to resume.
+* **The conversion is not cancellable.** It offers no `Cancel download`;
+  turning the switch off while it runs waits for its end — a few seconds —,
+  then deletes the model.
+* **Turning off, or `Delete model`,** saves the preference off, stops a
+  download, releases the model from memory and deletes its files.
+* **Pending.** While a request is on its way, the switch and every button are
+  disabled.
+* **Refused.** A request the backend refuses — the preference could not be
+  saved, for instance — leaves everything as it was, and a line beneath the
+  switch says `Nothing was changed: ` followed by the reason.
+* **Before the first answer**, the view shows `Reading the semantic ranking
+  state…`; if the state cannot be read, an alert says `The semantic ranking
+  state could not be read`, with the next step: close and open the settings
+  again — the option stays as it was saved.
+
+The status line is a polite live region: a change of state is announced, the
+byte counts beside it are not; a failure or a damaged model is announced by its
+alert. The progress bar reads the bytes received while downloading, `Checking
+files` and `Preparing the model` otherwise.
+
+Opening the assistant panel loads a ready model ahead of the first question,
+so that its cold load does not count against that question's 2-second bound.
+While the option is off, opening the panel does nothing.
