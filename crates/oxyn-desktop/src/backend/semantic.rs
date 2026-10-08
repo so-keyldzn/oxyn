@@ -496,6 +496,19 @@ fn failed_message(error: &EmbedError) -> String {
     }
 }
 
+/// Says why a question's semantic step did not run.
+///
+/// `reason` is `&'static str`: a fixed word chosen here, so nothing of the
+/// question or the schema can reach the journal through it (I-03).
+pub(crate) fn skip(reason: &'static str) {
+    tracing::debug!(reason, "semantic ranking skipped; lexical ranking only");
+}
+
+/// A duration in whole milliseconds, for a trace.
+fn millis(elapsed: Duration) -> u64 {
+    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// The semantic step of one question, when the option is on.
 pub(crate) struct Ranking<'a> {
     inner: &'a Inner,
@@ -513,11 +526,24 @@ impl<'a> Ranking<'a> {
             inner.semantic.snapshot().model,
             ModelState::Absent | ModelState::Ready
         );
-        let usable = inner.settings.preferences.semantic_ranking()
-            && inner.semantic.store.get().is_some()
-            && model_usable
-            && !question.trim().is_empty();
-        usable.then_some(Self { inner, question })
+        let skipped = if !inner.settings.preferences.semantic_ranking() {
+            Some("option off")
+        } else if inner.semantic.store.get().is_none() {
+            Some("no models directory")
+        } else if !model_usable {
+            Some("model not ready")
+        } else if question.trim().is_empty() {
+            Some("empty question")
+        } else {
+            None
+        };
+        match skipped {
+            Some(reason) => {
+                skip(reason);
+                None
+            }
+            None => Some(Self { inner, question }),
+        }
     }
 
     /// One score per relation `catalog` lists, within `budget`: at most
@@ -537,6 +563,7 @@ impl<'a> Ranking<'a> {
         let deadline = std::time::Instant::now() + budget;
         let state = &self.inner.semantic;
         let Some(store) = state.store.get() else {
+            skip("no models directory");
             return SemanticScores::new();
         };
         let embedder = if state.is_resident() {
@@ -550,11 +577,22 @@ impl<'a> Ranking<'a> {
                 }
                 Ok(Ok(ModelStatus::Corrupt)) => {
                     state.publish_model(ModelState::Corrupt);
+                    skip("model damaged");
                     return SemanticScores::new();
                 }
-                _ => return SemanticScores::new(),
+                Ok(Ok(_)) => {
+                    skip("model absent");
+                    return SemanticScores::new();
+                }
+                _ => {
+                    skip("model directory unreadable");
+                    return SemanticScores::new();
+                }
             }
         };
+        // Whether this question pays the load: `embed` loads a model that
+        // is not in memory.
+        let cold_load = !embedder.is_loaded();
         let relations: Vec<_> = {
             let cache = catalog.read();
             cache
@@ -563,6 +601,7 @@ impl<'a> Ranking<'a> {
                 .collect()
         };
         if relations.is_empty() {
+            skip("catalog empty");
             return SemanticScores::new();
         }
         let total = relations.len();
@@ -582,13 +621,17 @@ impl<'a> Ranking<'a> {
         // task embeds after stays cached for the next question.
         match tokio::time::timeout_at(started + budget, task).await {
             Ok(Ok(Ok(ranked))) => {
-                if ranked.unscored > 0 {
-                    tracing::debug!(
-                        relations = total,
-                        unscored = ranked.unscored,
-                        "semantic ranking reached its deadline; the rest ranks lexically"
-                    );
-                }
+                let scored = ranked.scores.len();
+                tracing::debug!(
+                    relations = total,
+                    scored,
+                    from_cache = scored.saturating_sub(ranked.embedded),
+                    embedded = ranked.embedded,
+                    unscored = ranked.unscored,
+                    elapsed_ms = millis(started.elapsed()),
+                    cold_load,
+                    "semantic ranking done"
+                );
                 ranked.scores
             }
             Ok(Ok(Err(error))) => {

@@ -67,6 +67,7 @@ fn relations_are_scored_by_the_cosine_with_the_question() {
     assert_eq!(ranked.scores.get(&customers), Some(1.0));
     assert_eq!(ranked.scores.get(&audit), Some(0.0));
     assert_eq!(ranked.unscored, 0);
+    assert_eq!(ranked.embedded, 2, "both computed for this question");
     assert_eq!(vectors.lock().len(), 2, "both relations are kept");
 }
 
@@ -435,4 +436,69 @@ fn a_question_still_embedding_when_turned_off_keeps_nothing() {
     .expect("no error");
     assert!(ranked.scores.is_empty());
     assert_eq!(vectors.lock().len(), 0, "the cleared cache stays empty");
+}
+
+/// The journal lines a closure writes on this thread, at `debug`.
+///
+/// A subscriber scoped to the thread, and a current-thread runtime in the
+/// closure: the semantic step's traces are emitted by its async code, which
+/// then runs here. The callsite cache is rebuilt so a callsite another test
+/// saw disabled is evaluated again.
+fn journal_of(work: impl FnOnce()) -> String {
+    #[derive(Clone, Default)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let lines = Lines::default();
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        work();
+    });
+    let bytes = lines.0.lock().clone();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Why the step did not run is traced — a fixed reason —, and neither the
+/// question nor a relation's name ever is (I-03).
+#[test]
+fn a_skipped_ranking_says_why_and_names_nothing() {
+    const QUESTION: &str = "which QUESTION-MARK invoices are unpaid?";
+    let catalog = catalog_of(&["customer_invoices_relation_mark"]);
+    let journal = journal_of(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let (backend, _root) = placed(&runtime);
+        // Off: nothing runs.
+        assert!(Ranking::new(&backend.inner, QUESTION).is_none());
+        // On, and no model on disk.
+        runtime
+            .block_on(backend.save_preferences(|preferences| preferences.semantic_ranking = true))
+            .expect("saved");
+        let ranking = Ranking::new(&backend.inner, QUESTION).expect("on");
+        let scores = runtime.block_on(ranking.scores_within(&catalog, super::SEMANTIC_DEADLINE));
+        assert!(scores.is_empty());
+    });
+    // Presence first: a capture that saw nothing would pass the rest.
+    assert!(
+        journal.contains(r#"semantic ranking skipped; lexical ranking only reason="option off""#),
+        "{journal}"
+    );
+    assert!(journal.contains(r#"reason="model absent""#), "{journal}");
+    assert!(!journal.contains("QUESTION-MARK"), "{journal}");
+    assert!(!journal.contains("relation_mark"), "{journal}");
 }

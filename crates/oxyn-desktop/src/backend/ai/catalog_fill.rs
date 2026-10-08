@@ -272,9 +272,11 @@ impl CatalogFill<'_> {
             // lexically rather than not at all describing what it chose.
             if listing.is_none()
                 && let Some(ranking) = ranking.take()
-                && let Some(budget) = semantic_budget(deadline, Instant::now())
             {
-                scores = ranking.scores_within(&self.catalog, budget).await;
+                match semantic_budget(deadline, Instant::now()) {
+                    Some(budget) => scores = ranking.scores_within(&self.catalog, budget).await,
+                    None => crate::backend::semantic::skip("no time left in the catalog fill"),
+                }
             }
             // The read lock is released before anything awaits. The command is
             // the tree's own for that level: same scope, same capabilities.

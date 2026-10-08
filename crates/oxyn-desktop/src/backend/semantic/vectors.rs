@@ -225,6 +225,9 @@ pub(crate) struct Ranked {
     /// Relations whose vector was not computed before the deadline: they
     /// rank lexically, after the scored ones, this time.
     pub(crate) unscored: usize,
+    /// Relation vectors computed for this question; the other scores came
+    /// from the cache.
+    pub(crate) embedded: usize,
 }
 
 /// Embeds `question`, then the relations the cache does not hold, by
@@ -246,8 +249,8 @@ pub(crate) fn rank(
 ) -> Result<Ranked, EmbedError> {
     if Instant::now() >= deadline {
         return Ok(Ranked {
-            scores: SemanticScores::new(),
             unscored: relations.len(),
+            ..Ranked::default()
         });
     }
     let question = embed(&[question])?
@@ -265,6 +268,7 @@ pub(crate) fn rank(
             .collect();
         (cache.epoch, missing)
     };
+    let mut embedded_count = 0;
     for batch in missing.chunks(BATCH) {
         if Instant::now() >= deadline {
             break;
@@ -281,6 +285,7 @@ pub(crate) fn rank(
         }
         for (relation, vector) in batch.iter().zip(embedded) {
             cache.insert(relation.key, Box::new(vector));
+            embedded_count += 1;
         }
     }
 
@@ -288,7 +293,10 @@ pub(crate) fn rank(
     if cache.epoch != epoch {
         return Ok(Ranked::default());
     }
-    let mut ranked = Ranked::default();
+    let mut ranked = Ranked {
+        embedded: embedded_count,
+        ..Ranked::default()
+    };
     let mut promoted = Vec::new();
     for (path, relation) in relations {
         // `SemanticScores::insert` drops a non-finite score, and `cosine` of
