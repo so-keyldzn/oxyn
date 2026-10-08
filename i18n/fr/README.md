@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="README.md" sha256="627c6f188e28" -->
+<!-- oxyn-translation source="README.md" sha256="bb46358bb331" -->
 
 > Traduction française de [README.md](../../README.md). **La version anglaise fait foi.**
 
@@ -30,6 +30,11 @@ Consultez la [galerie de captures et les vidéos de démonstration](assets/demo/
 
 Enregistrements réalisés dans **Oxyn 0.0.3 pour macOS**, avec un workspace
 temporaire et des [données fictives reproductibles](../../assets/demo/seed.sql).
+
+Pour une visite guidée, regardez la [vue d’ensemble de 46 secondes](../../assets/demo/videos/motion/overview.mp4)
+et les [démonstrations animées](assets/demo/README.md#démonstrations-animées), une
+par fonctionnalité — reconstruites à partir des composants de l’interface, pas
+des enregistrements d’écran.
 
 ## Ce que le dépôt contient
 
