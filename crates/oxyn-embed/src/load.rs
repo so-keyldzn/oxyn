@@ -143,6 +143,7 @@ pub(crate) fn converted(path: &Path, device: &Device) -> Result<Model, EmbedErro
         }
     };
     let map = map_verified(&file).map_err(|err| EmbedError::io("map", path, err))?;
+    mapped_whole(map.len())?;
     let shared = bytes::Bytes::from_owner(map);
     let weights = Bytes::from_shared(shared, AllocationProperty::File);
     let mut model = Model::new(device);
@@ -169,14 +170,41 @@ fn map_verified(file: &File) -> std::io::Result<memmap2::Mmap> {
     // change under the tensors that borrow it. What keeps that from
     // happening here: Oxyn never writes `model.bpk` in place — the conversion
     // writes a `.part` and renames it over, and `ModelStore::remove` unlinks;
-    // both leave an existing mapping on the old inode, intact. The only way
-    // left is a process of the same user writing into the data directory, the
-    // risk SECURITY accepts for this file: a truncation makes the next read
-    // of a missing page kill Oxyn with SIGBUS, an in-place rewrite gives
-    // wrong vectors. The map is read-only, so Oxyn itself cannot write
-    // through it. Who keeps this true: every writer of `model.bpk` in this
-    // crate (`download.rs`) — the rename, never an in-place write.
+    // both leave an existing mapping on the old inode, intact. The map is
+    // read-only, so Oxyn itself cannot write through it.
+    //
+    // What is left is one class of risk, which SECURITY accepts for this
+    // file: a process of the same user, with write access to the data
+    // directory, writing into **this inode** in place. Three ways, one cause:
+    // - a truncation while mapped: the next read of a missing page kills
+    //   Oxyn with SIGBUS;
+    // - a rewrite between the end of the hash and the mapping, or during
+    //   `load_from`: burn-store's burnpack parser then reads unverified
+    //   bytes, and a panic there kills the process too — `panic = "abort"`
+    //   in release;
+    // - a rewrite after the load: wrong vectors, silently.
+    // A file grown or shrunk before the mapping is caught by `mapped_whole`
+    // right after this call; the rest cannot be, short of copying the file,
+    // which is what the mapping exists to avoid.
+    //
+    // Who keeps the first paragraph true: every writer of `model.bpk` in this
+    // crate (`download.rs`, `ModelStore::convert_in_place`) — the rename,
+    // never an in-place write.
     unsafe { memmap2::Mmap::map(file) }
+}
+
+/// Refuses a mapping that is not exactly the size just verified: the file
+/// changed length in place between the hash and the mapping, and what the
+/// mapping holds was never checked.
+fn mapped_whole(len: usize) -> Result<(), EmbedError> {
+    if u64::try_from(len).ok() == Some(CONVERTED.size) {
+        Ok(())
+    } else {
+        Err(EmbedError::Corrupt {
+            file: CONVERTED.name,
+            detail: "the file changed size after its verification".to_owned(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -218,6 +246,28 @@ mod tests {
         );
         // Frequencies of a rotary embedding decrease geometrically.
         assert!(values.windows(2).all(|w| w[0] > w[1]), "{values:?}");
+        Ok(())
+    }
+
+    /// A mapping whose length is not the verified size — the file grew or
+    /// shrank in place after its hash — is refused before the parser sees it.
+    #[test]
+    fn a_mapping_of_another_length_is_refused() -> Result<(), EmbedError> {
+        let dir = tempfile::tempdir().map_err(|e| EmbedError::io("create", "tmp", e))?;
+        let path = dir.path().join("model.bpk");
+        std::fs::write(&path, b"not the verified length")
+            .map_err(|e| EmbedError::io("write", &path, e))?;
+        let file = File::open(&path).map_err(|e| EmbedError::io("open", &path, e))?;
+        let map = map_verified(&file).map_err(|e| EmbedError::io("map", &path, e))?;
+        assert!(matches!(
+            mapped_whole(map.len()),
+            Err(EmbedError::Corrupt { .. })
+        ));
+
+        let exact = usize::try_from(CONVERTED.size).unwrap_or(0);
+        assert!(mapped_whole(exact).is_ok());
+        assert!(mapped_whole(exact + 1).is_err());
+        assert!(mapped_whole(exact - 1).is_err());
         Ok(())
     }
 

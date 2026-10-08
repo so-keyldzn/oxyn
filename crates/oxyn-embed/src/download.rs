@@ -57,7 +57,11 @@ pub enum DownloadPhase {
     Verifying,
     /// Receiving bytes; [`DownloadProgress::received`] moves.
     Fetching,
-    /// Writing the local f32 model, a few seconds of CPU; not cancellable.
+    /// Writing the local f32 model, a few seconds of CPU. In-process
+    /// ([`ModelStore::download`]) it runs to its end whatever `cancel` says;
+    /// through [`ModelStore::download_with_converter`], stopping it is the
+    /// supplied step's business — a child process can be killed, and its
+    /// `.part` is then left for the next download to overwrite.
     Converting,
 }
 
@@ -86,7 +90,11 @@ impl ModelStore {
     ///
     /// `progress` is called on the calling task, at phase changes and every
     /// megabyte; it must not block. `cancel` is honored while verifying and
-    /// fetching; the conversion, once started, runs to its end.
+    /// fetching. The conversion, here in this process, once started runs to
+    /// its end; with [`download_with_converter`](Self::download_with_converter)
+    /// the supplied step decides — a child it kills stops at once, leaves at
+    /// most a `.part` that no reader takes for the model, and the download
+    /// returns the step's error.
     ///
     /// Must run inside a Tokio runtime with a blocking pool: hashing and
     /// conversion go there. Concurrent calls on clones of one store run one
