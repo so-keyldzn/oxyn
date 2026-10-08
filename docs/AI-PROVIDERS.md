@@ -305,7 +305,13 @@ complete the selection with them
 - **it never outranks a name.** A relation matched by name keeps its rank;
   the semantic score breaks ties and orders what matched nothing, without a
   threshold. It is bounded at 2 seconds per question, and while the model is
-  off, downloading or failing, selection is exactly the lexical one.
+  off, downloading or failing, selection is exactly the lexical one;
+- **whether it ran is traced, in counts only.** At `OXYN_LOG=oxyn=debug`,
+  `semantic ranking done` gives the relations listed, scored, from the cache,
+  embedded and left unscored, the elapsed milliseconds and whether the model
+  was loaded cold; `semantic ranking skipped; lexical ranking only` gives a
+  fixed reason chosen in the code. No field carries text from the question
+  or the schema (ADR-0056).
 
 **An external agent's opening schema is ranked the same way.**
 `AgentPrompt::with_schema_ranked` receives the scores the catalog fill ranked

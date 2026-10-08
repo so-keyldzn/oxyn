@@ -2405,9 +2405,25 @@ Same machine, release build unless stated, commit `a7233c3`.
 | Fact | Source | Checked on |
 |---|---|---|
 | Cold load 0.67 s (hashing the 415 MB of files, mapping, warm-up); one question 18 ms; 256 table names 0.63 s, and 2.2 s in the dev profile (about 3.5 times slower) | `oxyn-embed` ignored tests, commit `a7233c3` | 2026-10-07 |
-| RSS once loaded: 795 MB | same | 2026-10-07 |
+| RSS once loaded: 795 MB — with `BurnpackStore::from_file`, which copies the file into the heap (see 2026-10-08 below) | same | 2026-10-07 |
 | Real download and conversion: 14 s, RSS peak 1.45 GB; what stays on disk is `tokenizer.json` and `model.bpk`, about 415 MB, the safetensors being deleted once the conversion is verified | same | 2026-10-07 |
 | `BurnpackStore` records each parameter's `ParamId`, a random `u64` drawn when the model is built: two conversions of the same weights differ by 590 header bytes. Written through `burn_pack::Writer` with every `param_id` set to `None`, `model.bpk` is reproducible: 389 816 832 bytes, SHA-256 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` | `crates/oxyn-embed/src/load.rs`, `src/pinned.rs` | 2026-10-07 |
+
+### Memory measured on 2026-10-08
+
+A dedicated harness reading the process's footprint, RSS and `malloc`
+statistics, release build, macOS 26.2, Apple M1 Max, two runs each.
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `BurnpackStore::from_file` reads the whole `model.bpk` into the heap through burn-pack's `Bytes::from_file`: 434 MB of `malloc`, although burn-store's `memmap` feature is on | harness; `burn-store-0.22.0/src/burnpack.rs` → `burn-pack-0.22.0/src/reader.rs` (`Source::File(Bytes::from_file(…))`) | 2026-10-08 |
+| Loaded with `BurnpackStore::from_file`: footprint 553 MB, then 643 MB after embedding 256 names; RSS 677 then 766 MB | harness, commit `ea98128` message | 2026-10-08 |
+| Loaded from a `memmap2` mapping of the verified file (`ea98128`): footprint 157–179 MB, then 248–268 MB after 256 names; RSS 388–409 then 484–503 MB. The vectors still match onnxruntime | same | 2026-10-08 |
+| After the conversion, the process keeps a footprint of 1,187 MB with 0.2 MB of `malloc` in use: `vmmap` lists 1.1 GB of `MALLOC_LARGE (empty)`. It does not move in 25 s, nor on `malloc_zone_pressure_relief` | harness log, `vmmap` | 2026-10-08 |
+| After unloading the model, about 240 MB stay held by the system allocator | harness | 2026-10-08 |
+| `MallocLargeCache=0` releases those regions but makes inference 31 % slower: 2.51 s on the measured workload | harness | 2026-10-08 |
+| With `mimalloc` as the global allocator, about 70 MB stay held after unloading | harness | 2026-10-08 |
+| `memmap2` **0.9.11**, the version burn-store already pulls, becomes a workspace dependency; `bytes` 1.12.1 was already one | `Cargo.toml`, `Cargo.lock` at `ea98128` | 2026-10-08 |
 
 ### Dependencies brought by `oxyn-embed`
 

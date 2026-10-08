@@ -455,12 +455,15 @@ What enters Oxyn and is untrusted, in order of underestimation:
    before the conversion parses it, and removed when damaged;
    `tokenizer.json` is read once, so the bytes hashed are the bytes parsed.
    A file truncated by a full disk is refused, never handed to a parser.
-   **One risk is accepted**: `model.bpk` is checked, then memory-mapped. A
-   process of the same user that replaces it between the two gets its
-   content loaded unverified, and one that truncates it in place while it is
-   mapped kills Oxyn with `SIGBUS`. Both need write access to the data
-   directory, which already holds everything Oxyn keeps; Oxyn's own
-   replacements — a rename, a deletion — leave a mapping intact.
+   **One risk is accepted**: `model.bpk` is memory-mapped, from the very
+   file handle whose SHA-256 was just checked — replacing the file between
+   the check and the mapping changes nothing, the verified inode is the one
+   mapped. A process of the same user that truncates that inode in place
+   while it is mapped kills Oxyn with `SIGBUS`; one that rewrites it in place
+   gives wrong vectors. Both need write access to the data directory, which
+   already holds everything Oxyn keeps; Oxyn's own replacements — a rename, a
+   deletion — leave a mapping intact. The conversion, which parses the
+   downloaded safetensors, runs in a child process.
 
    **Errors carry fixed texts.** burn-store's messages name a file's full
    path and a tokenizer error can quote the text: the errors of `oxyn-embed`
@@ -475,11 +478,20 @@ What enters Oxyn and is untrusted, in order of underestimation:
 
 **`unsafe` is refused at compile time.** `[workspace.lints.rust]` carries
 `unsafe_code = "deny"`, and of the sixteen crates — thirteen under `crates/`,
-three drivers under `drivers/` — a single function re-allows it:
-`register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
-registers the bundled sqlite-vec extension on a connection — only one where the
-user turned the `sqlite_vec` switch on, off by default, and that no agent can
-change ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)). The manifest is authoritative here, because it is what is
+three drivers under `drivers/` — two functions re-allow it, each under its own
+ADR:
+
+- `register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
+  registers the bundled sqlite-vec extension on a connection — only one where
+  the user turned the `sqlite_vec` switch on, off by default, and that no agent
+  can change ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md));
+- `map_verified` in `crates/oxyn-embed/src/load.rs`, which memory-maps the
+  local embedding model, read-only, from the file handle whose SHA-256 was
+  just verified — only once the user turned semantic ranking on, off by
+  default ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+  Its accepted risk is the `SIGBUS` of item 9 above.
+
+The manifest is authoritative here, because it is what is
 executed: this document previously described a policy of supervised use that
 compilation does not grant, and [ADR-0021](adr/0021-marqueur-d-arret.md) grounded
 an architecture decision — not checking a pid — on the refusal, not on the

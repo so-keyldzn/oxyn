@@ -2227,10 +2227,11 @@ proposed).** In this order, each with its exit gate:
    off by default and refused to `Actor::Agent`; the download with progress
    and cancellation; the in-memory relation-vector cache keyed by `MODEL_ID`;
    the 2-second bound per question; the unavailable state shown in the
-   panel, written into [UX-SPEC](UX-SPEC.md) first. **Exit gate**: the
-   resident memory of `oxyn-desktop` with the model loaded measured against
-   the 1 GB budget of [PERFORMANCE](PERFORMANCE.md#memory-budgets), the
-   unload after 5 minutes observed, the stripped binary size before and after
+   panel, written into [UX-SPEC](UX-SPEC.md) first; the conversion in a child
+   process. **Exit gate**: the footprint of `oxyn-desktop` measured against
+   the budget of [PERFORMANCE](PERFORMANCE.md#memory-budgets) as amended on
+   2026-10-08 — 300 MB with the model loaded, 250 MB kept after unloading,
+   nothing kept from the conversion —, the unload after 5 minutes observed, the stripped binary size before and after
    recorded, and latency measured on Linux x86_64 and arm64 as well as macOS.
 
 ## Phase 3 bis — Beyond the relational

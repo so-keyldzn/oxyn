@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="a3d3faa9289a" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="feb6873c71ee" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -315,7 +315,13 @@ avec elles ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)) 
   son rang ; le score sémantique départage les égalités et ordonne ce qui n'a rien
   trouvé, sans seuil. Il est borné à 2 secondes par question, et tant que le
   modèle est désactivé, en téléchargement ou en échec, la sélection est
-  exactement la sélection lexicale.
+  exactement la sélection lexicale ;
+- **qu'il ait tourné est tracé, en nombres seulement.** À
+  `OXYN_LOG=oxyn=debug`, `semantic ranking done` donne les relations listées,
+  notées, servies par le cache, transformées et laissées sans score, les
+  millisecondes écoulées et si le modèle a été chargé à froid ; `semantic
+  ranking skipped; lexical ranking only` donne une raison fixe choisie dans le
+  code. Aucun champ ne porte de texte de la question ni du schéma (ADR-0056).
 
 **Le schéma d'ouverture d'un agent externe est classé de la même façon.**
 `AgentPrompt::with_schema_ranked` reçoit les scores avec lesquels le complément

@@ -49,6 +49,17 @@ mapping, warm-up), one question in 18 ms, 256 table names in 0.63 s (about
 3.5 times slower in the dev profile: 2.2 s); **795 MB** once loaded; the real
 download and conversion in 14 s, **peaking at 1.45 GB**.
 
+Those 795 MB were not what the code described. A memory harness run on
+2026-10-08 (release, macOS 26.2, Apple M1 Max) found that
+`BurnpackStore::from_file` reads the whole `model.bpk` into the heap — 434 MB
+of `malloc` for a file the documents called memory-mapped — and that the
+system allocator keeps what the conversion freed: about 1.19 GB of empty
+`MALLOC_LARGE` regions remain after it, and `malloc_zone_pressure_relief`
+returns none of them. With a real mapping (`ea98128`), the loaded model
+weighs **157–268 MB of footprint** (157–179 MB loaded, 248–268 MB after
+embedding 256 names), against 553–643 MB before; after unloading, about
+**240 MB** stay held by the system allocator.
+
 ## Decision
 
 **Oxyn computes text embeddings locally, on the CPU, in a new crate
@@ -105,7 +116,10 @@ and `tokenizers` at exactly `=0.23.2`:
   one core without SIMD; the direct declaration is what feature unification
   needs;
 - `burn-store` with `default-features = false`, `std`, `safetensors` and
-  `memmap`;
+  `memmap` — the feature does not make `BurnpackStore::from_file` map the
+  file: it reads it into the heap, which is why `oxyn-embed` maps it itself
+  (below);
+- `memmap2` `0.9.11`, the version burn-store already pulls, for that mapping;
 - `tokenizers` with `default-features = false` and `fancy-regex`: no
   Oniguruma, no C to build.
 
@@ -140,8 +154,36 @@ reported once per build. Never a group such as `clippy::all`, which
 would also silence `disallowed_methods` and `disallowed_types` — the walls
 the workspace denies on purpose. `weights_map.rs` trips none and has no
 exemption; the rest of the crate keeps the workspace's lints,
-[I-09](../../CLAUDE.md#i-09) included. No `unsafe` is written:
-memory mapping lives inside burn-store.
+[I-09](../../CLAUDE.md#i-09) included.
+
+**One `unsafe` block: mapping the verified model.** This ADR lifts the
+workspace's refusal of `unsafe` ([SECURITY](../SECURITY.md#unsafe-policy))
+for one function, `map_verified` in `crates/oxyn-embed/src/load.rs`, under a
+`#[allow(unsafe_code)]` on that function alone. It calls
+`memmap2::Mmap::map` on the `File` that `hash::open_verified` has just hashed
+and accepted — one open handle, so the bytes mapped are the bytes of the
+inode that was verified, not of whatever the path names a moment later. The
+mapping is read-only and handed to burn-store as shared, file-backed bytes
+(`Bytes::from_shared`, `AllocationProperty::File`).
+
+* **What it buys.** The weights stay file pages the system can share, evict
+  and reload, outside the process's footprint: 157–268 MB loaded instead of
+  553–643 MB, measured on 2026-10-08. Without it, burn-store copies the
+  389,816,832-byte file into the heap.
+* **Why it is unsafe.** A mapping is sound only while nobody changes the file
+  under it, and no type can promise that. Oxyn never writes `model.bpk` in
+  place: the conversion writes a `.part` and renames it over,
+  `ModelStore::remove` unlinks, and both leave an existing mapping on the old
+  inode intact. Who keeps it true: every writer of `model.bpk` in
+  `oxyn-embed` (`download.rs`) — a rename, never an in-place write.
+* **The risk accepted.** A process of the same user that truncates the file
+  in place while it is mapped makes the next read of a missing page kill
+  Oxyn with `SIGBUS`; one that rewrites it in place gives wrong vectors. Both
+  need write access to the data directory, which already holds everything
+  Oxyn keeps.
+* **The review.** The block carries its `// SAFETY:` naming that property and
+  who keeps it, and goes through the `relecteur-securite` review the
+  `unsafe` policy requires.
 
 ### Off by default, turned on by the human
 
@@ -225,10 +267,22 @@ development session delete the installed Oxyn's model. It is not the system
 temporary directory, which other accounts can write on Linux, and it
 persists across development launches.
 After the download, the bf16 safetensors is widened to f32 and written as
-`model.bpk` (389,816,832 bytes), which loads by memory mapping; the
-safetensors is deleted only once the converted file is verified. What stays on
-disk is `model.bpk` and `tokenizer.json`, about 415 MB. Download and
-conversion together take 14 s and peak at **1.45 GB** of RSS, once.
+`model.bpk` (389,816,832 bytes), which loads by memory mapping since
+`ea98128` — before it, burn-store read it into the heap; the safetensors is
+deleted only once the converted file is verified. What stays on disk is
+`model.bpk` and `tokenizer.json`, about 415 MB. Download and conversion
+together take 14 s; the conversion peaks at **1.45 GB** of RSS, and the
+system allocator then keeps about 1.19 GB of it in the process that ran it.
+
+**The conversion runs in a child process.** `oxyn-embed` exposes it as a
+self-contained step — `ModelStore::convert_in_place`, and
+`ModelStore::download_with_converter` taking it as a closure, with the
+directory lock held across it and the converted file verified after it
+whatever the step reports — and a child reports a failure as an exit code
+(`EmbedError::exit_code`, one stable code per variant, 70 to 78), never as
+text. `oxyn-desktop` runs it in a child process, so the 1.45 GB peak and what
+the allocator keeps afterwards end with that process instead of staying in
+Oxyn's.
 
 The checksum of `model.bpk` is a constant too —
 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, so a
@@ -240,15 +294,37 @@ every `param_id` set to `None`; the ids only serve to resume training, and the
 widening from bf16 is exact, so the file is a function of the weights alone.
 No file is parsed before its size and checksum are checked.
 
-**An accepted risk: `model.bpk` is checked, then mapped.** Between the
-verification and the memory mapping, a process of the same user that replaces
-the file gets its content loaded unverified; one that truncates it in place
-while it is mapped makes the next read of a missing page kill Oxyn with
-`SIGBUS`. Neither is reachable without write access to the data directory,
-which already holds everything Oxyn keeps. Renaming over the file or deleting
-it — what Oxyn itself does — leaves the mapping intact. Reading the 390 MB
-into memory instead would remove the window at the cost of the mapping's
-memory advantage; the risk is written next to the check in `embedder.rs`.
+**An accepted risk: `model.bpk` is mapped.** The hash and the mapping use one
+open handle, so replacing the file between the two changes nothing: the
+verified inode is the one mapped. What remains is an in-place change of that
+inode while it is mapped — a truncation kills Oxyn with `SIGBUS` at the next
+read of a missing page, a rewrite gives wrong vectors — by a process of the
+same user with write access to the data directory, which already holds
+everything Oxyn keeps. Reading the 390 MB into the heap would close it, at
+the cost the mapping exists to avoid; the risk is written in the `// SAFETY:`
+of `map_verified`.
+
+### Memory budget
+
+| State | Budget | Measured (2026-10-08, footprint) |
+|---|---|---|
+| Option never turned on | **0** — nothing loaded, nothing mapped | — |
+| Model loaded | **≤ 300 MB** of footprint | 157–179 MB loaded, 248–268 MB after embedding 256 names |
+| After unloading | **≤ 250 MB** kept by the system allocator, not by Oxyn's code | about 240 MB |
+| Conversion | **in a child process**: Oxyn's own process keeps none of it | 1.45 GB peak, about 1.19 GB kept afterwards in the process that converts |
+
+The memory kept after unloading is the system allocator's, not a leak: macOS
+`malloc` keeps freed large regions as `MALLOC_LARGE (empty)` and gives them
+back neither on unload nor on `malloc_zone_pressure_relief`. Three ways to
+release it were measured on 2026-10-08 and set aside:
+
+* `MallocLargeCache=0` returns those regions, but inference becomes 31 %
+  slower — 2.51 s on the measured workload, past the 2-second bound;
+* `malloc_zone_pressure_relief` after unloading returns nothing measurable;
+* `mimalloc` as the global allocator keeps about 70 MB after unloading, but it
+  replaces the allocator of every Rust allocation in the application —
+  drivers, Arrow buffers, the catalog — which takes its own ADR and its own
+  benchmarks, not a line in this one.
 
 ### Loaded on demand, dropped after five minutes
 
@@ -304,6 +380,22 @@ stays cached for the next question. While the model is downloading, absent,
 corrupt or failing to load, the ranking is today's, and the panel says that
 semantic ranking is unavailable and why.
 
+**Whether it ran is traced, in counts only.** At `OXYN_LOG=oxyn=debug`, a
+question's semantic step writes `semantic ranking done` with the relations
+listed, scored, served from the cache and embedded for the question, those
+left unscored by the deadline, the elapsed milliseconds and whether the
+question paid the model's cold load. A step that does not run writes
+`semantic ranking skipped; lexical ranking only` with a fixed `reason` — `option
+off`, `no models directory`, `model not ready`, `empty question`, `model
+absent`, `model damaged`, `model directory unreadable`, `catalog empty`, `no
+time left in the catalog fill` —, and a failed one `semantic ranking failed;
+lexical ranking only` with the fixed sentence of its `EmbedError` variant.
+The reason is a `&'static str` chosen in the code and every other field a
+number or a boolean, so nothing of the question or the schema reaches the
+journal ([I-03](../../CLAUDE.md#i-03)); a test captures a skipped step's
+journal with markers in the question and a relation and checks they are
+absent.
+
 ## Consequences
 
 * **+** A question in one language finds tables named in another, and a
@@ -320,9 +412,16 @@ semantic ranking is unavailable and why.
   what grows.
 * **+** `oxyn-ai` does not depend on Burn: its tests and the external-agent
   path keep their compile time, and the gateway stays one function.
-* **−** **795 MB of RAM while the model is loaded**, five minutes after
-  the last question at most. On an 8 GB machine already holding large
-  results, that is the difference between fitting and swapping.
+* **−** **157–268 MB of footprint while the model is loaded**, five minutes
+  after the last question at most, plus the mapped file's pages the system
+  keeps while it has room for them.
+* **−** **About 240 MB stay held after unloading** — the system allocator's,
+  which Oxyn cannot give back without slowing inference past the 2-second
+  bound or replacing the application's allocator. Once the option has been
+  used, an idle Oxyn is that much larger until it quits.
+* **−** **One `unsafe` block**, and with it a crash Oxyn cannot catch: a
+  `SIGBUS` if another process of the same user truncates `model.bpk` in place
+  while it is mapped.
 * **−** **Burn is 0.x and breaks its API between minor versions.** Every bump
   regenerates `model.rs`, `weights_map.rs` and `residual.bpk`, and the
   checksum of `model.bpk` changes with burn-store's format — every user then
@@ -347,8 +446,9 @@ semantic ranking is unavailable and why.
 * **−** **+80 s of cold compilation** in CI and for any build that compiles
   `oxyn-desktop` from scratch; 45 s of it on the critical path.
 * **−** About 415 MB of disk for a user who turns the option on, a download
-  of 220 MB at first use, and **1.45 GB of RSS at the peak** of that
-  download and conversion — above the 1 GB of the loaded model, once.
+  of 220 MB at first use, and **1.45 GB of RSS at the peak** of the
+  conversion, once — in a child process, which ends with what the allocator
+  kept.
 * **−** The checksum of `model.bpk` holds only because the conversion bypasses
   `BurnpackStore` and clears every `ParamId`: a Burn bump that changes
   `burn_pack::Writer` or the parameter collection can make the file
@@ -360,7 +460,9 @@ semantic ranking is unavailable and why.
 **Exit cost:** low, and bounded by the dependency direction. Removing the
 feature deletes `crates/oxyn-embed`, the preference, the scores passed to
 `ContextBuilder` and the in-memory cache in `oxyn-desktop`; the lexical
-ranking keeps working unchanged, since it never depended on the scores. Users
+ranking keeps working unchanged, since it never depended on the scores, and
+the workspace's `unsafe` exceptions shrink back to the one of
+[ADR-0054](0054-bundle-sqlite-vec-in-the-sqlite-driver.md). Users
 keep a directory of about 415 MB under `models/` that a removal release
 should delete. Changing the engine (to candle, or to a remote endpoint)
 replaces `Embedder` behind the same scores; changing the model changes
@@ -369,8 +471,12 @@ dropped by its key.
 
 **Reconsider if** Burn reaches 1.0 or stops breaking its API between minor
 versions (the regeneration cost falls); if a smaller model matches this one's
-quality on the measured question/table pairs; if the resident memory measured
-in `oxyn-desktop` exceeds **1 GB**; if users have an embedding endpoint
+quality on the measured question/table pairs; if the footprint measured in
+`oxyn-desktop` exceeds the budget above — **300 MB** loaded, **250 MB** kept
+after unloading; if the memory kept after unloading becomes a complaint, or
+an allocator change is decided for another reason — `mimalloc`, measured at
+about 70 MB kept, is then the candidate, with its own ADR and benchmarks; if
+users have an embedding endpoint
 available where they work (the remote path then becomes a complement worth
 writing); if candle, measured on the same pairs, matches the output and the
 memory without generated code; or if ModernBERT's operators stop converting —
@@ -393,3 +499,8 @@ memory without generated code; or if ModernBERT's operators stop converting —
 | A cosine threshold that admits a relation on meaning alone | A gap of about 0.1 between relevant and irrelevant tables makes any threshold a tuned number; ordering degrades gracefully where a threshold fails silently |
 | `oxyn-ai` depending on `oxyn-embed` and embedding inside `ContextBuilder::build` | Burn in every `oxyn-ai` build and test, and a gateway that blocks for seconds on a model load. Passing scores keeps the gateway a pure function of what it receives |
 | A `build.rs` that runs burn-onnx at compile time | burn-onnx, its protobuf stack and a 390 MB ONNX file in every build, for code that changes only when the model or Burn does |
+| Loading `model.bpk` with `BurnpackStore::from_file`, without `unsafe` | Reads the whole file into the heap: 553–643 MB of footprint loaded instead of 157–268 MB (2026-10-08). The `unsafe` block costs one function and an accepted `SIGBUS` on a file only the user's own processes can write |
+| Converting in Oxyn's own process | The conversion peaks at 1.45 GB and the system allocator keeps about 1.19 GB of it afterwards, for the rest of the session; a child process gives it all back when it exits |
+| `MallocLargeCache=0` | Returns the regions the allocator keeps, but inference becomes 31 % slower — 2.51 s on the measured workload, past the 2-second bound (2026-10-08) |
+| `malloc_zone_pressure_relief` after unloading | Returned nothing measurable of the ~240 MB kept (2026-10-08) |
+| `mimalloc` as the global allocator, in this change | About 70 MB kept after unloading instead of ~240 MB (2026-10-08), but it changes the allocator of every Rust allocation in the application: a decision for its own ADR and benchmarks, named in the reconsideration condition |

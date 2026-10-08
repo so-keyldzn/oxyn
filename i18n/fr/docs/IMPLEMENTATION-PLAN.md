@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="22bd51d7a7c9" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="e0647e130876" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2245,9 +2245,11 @@ proposée).** Dans cet ordre, chacun avec sa porte de sortie :
    téléchargement avec progression et annulation ; le cache en mémoire des
    vecteurs de relations indexé par `MODEL_ID` ; la borne de 2 secondes par
    question ; l'état indisponible affiché dans le panneau, écrit d'abord dans
-   [UX-SPEC](UX-SPEC.md). **Porte de sortie** : la mémoire résidente
-   d'`oxyn-desktop` modèle chargé mesurée contre le budget de 1 Go de
-   [PERFORMANCE](PERFORMANCE.md#budgets-de-mémoire), le déchargement après
+   [UX-SPEC](UX-SPEC.md) ; la conversion dans un processus enfant. **Porte de
+   sortie** : l'empreinte d'`oxyn-desktop` mesurée contre le budget de
+   [PERFORMANCE](PERFORMANCE.md#budgets-de-mémoire) amendé le 2026-10-08 —
+   300 Mo modèle chargé, 250 Mo retenus après déchargement, rien de retenu de
+   la conversion —, le déchargement après
    5 minutes observé, la taille du binaire dépouillé avant et après
    consignée, et la latence mesurée sous Linux x86_64 et arm64 autant que
    sous macOS.

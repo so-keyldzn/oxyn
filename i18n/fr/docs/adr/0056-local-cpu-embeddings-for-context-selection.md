@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="3484cd5b6214" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="fbaeb931ed94" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -59,6 +59,18 @@ confirme ces ordres de grandeur : un chargement à froid en 0,67 s (hachage de
 fois chargé ; le téléchargement réel et la conversion en 14 s, **avec un pic à
 1,45 Go**.
 
+Ces 795 Mo n'étaient pas ce que décrivait le code. Un harnais de mesure
+mémoire exécuté le 2026-10-08 (release, macOS 26.2, Apple M1 Max) a montré
+que `BurnpackStore::from_file` lit tout `model.bpk` dans le tas — 434 Mo de
+`malloc` pour un fichier que les documents disaient mappé en mémoire — et que
+l'allocateur du système garde ce que la conversion a libéré : environ 1,19 Go
+de régions `MALLOC_LARGE (empty)` restent après elle, et
+`malloc_zone_pressure_relief` n'en rend aucune. Avec un vrai mappage
+(`ea98128`), le modèle chargé pèse **157–268 Mo d'empreinte** (157–179 Mo
+chargé, 248–268 Mo après avoir transformé 256 noms), contre 553–643 Mo avant ;
+après déchargement, environ **240 Mo** restent retenus par l'allocateur du
+système.
+
 ## Décision
 
 **Oxyn calcule des embeddings de texte localement, sur le CPU, dans une
@@ -116,7 +128,10 @@ Le workspace épingle `burn`, `burn-flex` et `burn-store` exactement à
   cœur sans SIMD ; la déclaration directe est ce dont l'unification des
   features a besoin ;
 - `burn-store` avec `default-features = false`, `std`, `safetensors` et
-  `memmap` ;
+  `memmap` — la feature ne fait pas mapper le fichier par
+  `BurnpackStore::from_file` : elle le lit dans le tas, raison pour laquelle
+  `oxyn-embed` le mappe lui-même (plus bas) ;
+- `memmap2` `0.9.11`, la version que burn-store tire déjà, pour ce mappage ;
 - `tokenizers` avec `default-features = false` et `fancy-regex` : pas
   d'Oniguruma, pas de C à compiler.
 
@@ -154,8 +169,37 @@ signalé une fois par compilation. Jamais un groupe comme `clippy::all`, qui fer
 `disallowed_methods` et `disallowed_types` — les murs que le workspace refuse
 exprès. `weights_map.rs` n'en déclenche aucun et n'a pas d'exemption ; le reste
 de la crate garde les lints du workspace, [I-09](../../CLAUDE.md#i-09)
-compris. Aucun `unsafe` n'est écrit : le
-mappage mémoire vit dans burn-store.
+compris.
+
+**Un bloc `unsafe` : mapper le modèle vérifié.** Cet ADR lève le refus de
+`unsafe` du workspace ([SECURITY](../SECURITY.md#politique-unsafe)) pour une
+fonction, `map_verified` dans `crates/oxyn-embed/src/load.rs`, sous un
+`#[allow(unsafe_code)]` posé sur cette seule fonction. Elle appelle
+`memmap2::Mmap::map` sur le `File` que `hash::open_verified` vient de hacher et
+d'accepter — un seul descripteur ouvert, si bien que les octets mappés sont
+ceux de l'inode vérifié, pas de ce que le chemin désigne un instant plus tard.
+Le mappage est en lecture seule et remis à burn-store comme octets partagés
+adossés au fichier (`Bytes::from_shared`, `AllocationProperty::File`).
+
+* **Ce qu'il apporte.** Les poids restent des pages de fichier que le système
+  peut partager, évincer et recharger, hors de l'empreinte du processus :
+  157–268 Mo chargé au lieu de 553–643 Mo, mesuré le 2026-10-08. Sans lui,
+  burn-store copie le fichier de 389 816 832 octets dans le tas.
+* **Pourquoi c'est unsafe.** Un mappage n'est sain que tant que personne ne
+  change le fichier dessous, ce qu'aucun type ne peut promettre. Oxyn
+  n'écrit jamais `model.bpk` sur place : la conversion écrit un `.part` et le
+  renomme par-dessus, `ModelStore::remove` délie, et les deux laissent un
+  mappage existant intact sur l'ancien inode. Qui le garantit : chaque
+  écrivain de `model.bpk` dans `oxyn-embed` (`download.rs`) — un renommage,
+  jamais une écriture sur place.
+* **Le risque accepté.** Un processus du même utilisateur qui tronque le
+  fichier sur place pendant qu'il est mappé fait tuer Oxyn par `SIGBUS` à la
+  prochaine lecture d'une page manquante ; un processus qui le réécrit sur
+  place donne des vecteurs faux. Les deux exigent un accès en écriture au
+  répertoire de données, qui contient déjà tout ce qu'Oxyn garde.
+* **La relecture.** Le bloc porte son `// SAFETY:` qui nomme cette propriété
+  et qui la garantit, et passe par la relecture de l'agent
+  `relecteur-securite` qu'exige la politique `unsafe`.
 
 ### Désactivée par défaut, activée par l'humain
 
@@ -247,11 +291,23 @@ qui désactive l'option de supprimer le modèle de l'Oxyn installé. Ce n'est pa
 le répertoire temporaire du système, où d'autres comptes peuvent écrire sous
 Linux, et il persiste d'un lancement de développement à l'autre.
 Après le téléchargement, le safetensors en bf16 est élargi en f32 et écrit en
-`model.bpk` (389 816 832 octets), qui se charge par mappage mémoire ; le
-safetensors n'est supprimé qu'une fois le fichier converti vérifié. Ce qui
-reste sur disque, c'est `model.bpk` et `tokenizer.json`, environ 415 Mo.
-Téléchargement et conversion prennent ensemble 14 s, avec un pic de RSS à
-**1,45 Go**, une seule fois.
+`model.bpk` (389 816 832 octets), qui se charge par mappage mémoire depuis
+`ea98128` — avant, burn-store le lisait dans le tas ; le safetensors n'est
+supprimé qu'une fois le fichier converti vérifié. Ce qui reste sur disque,
+c'est `model.bpk` et `tokenizer.json`, environ 415 Mo. Téléchargement et
+conversion prennent ensemble 14 s ; la conversion culmine à **1,45 Go** de
+RSS, et l'allocateur du système en garde ensuite environ 1,19 Go dans le
+processus qui l'a exécutée.
+
+**La conversion s'exécute dans un processus enfant.** `oxyn-embed` l'expose
+comme une étape autonome — `ModelStore::convert_in_place`, et
+`ModelStore::download_with_converter` qui la prend en fermeture, le verrou du
+répertoire tenu pendant toute l'étape et le fichier converti vérifié après
+elle quoi qu'elle rapporte —, et un enfant rapporte un échec par un code de
+sortie (`EmbedError::exit_code`, un code stable par variante, de 70 à 78),
+jamais par un texte. `oxyn-desktop` l'exécute dans un processus enfant, si
+bien que le pic de 1,45 Go et ce que l'allocateur garde ensuite finissent avec
+ce processus au lieu de rester dans celui d'Oxyn.
 
 La somme de `model.bpk` est elle aussi une constante —
 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, si bien
@@ -265,16 +321,39 @@ l'élargissement depuis le bf16 est exact, si bien que le fichier ne dépend que
 des poids. Aucun fichier n'est analysé avant que sa taille et sa somme aient
 été vérifiées.
 
-**Un risque accepté : `model.bpk` est vérifié, puis mappé.** Entre la
-vérification et le mappage mémoire, un processus du même utilisateur qui
-remplace le fichier fait charger son contenu sans vérification ; un processus
-qui le tronque sur place pendant qu'il est mappé fait tuer Oxyn par `SIGBUS` à
-la prochaine lecture d'une page manquante. Ni l'un ni l'autre n'est possible
-sans accès en écriture au répertoire de données, qui contient déjà tout ce
-qu'Oxyn garde. Renommer par-dessus le fichier ou le supprimer — ce que fait
-Oxyn lui-même — laisse le mappage intact. Lire les 390 Mo en mémoire fermerait
-la fenêtre au prix de l'avantage mémoire du mappage ; le risque est écrit à
-côté de la vérification, dans `embedder.rs`.
+**Un risque accepté : `model.bpk` est mappé.** Le hachage et le mappage
+utilisent un seul descripteur ouvert, si bien que remplacer le fichier entre
+les deux ne change rien : l'inode vérifié est celui qui est mappé. Ce qui
+reste, c'est une modification sur place de cet inode pendant qu'il est mappé
+— une troncature fait tuer Oxyn par `SIGBUS` à la prochaine lecture d'une page
+manquante, une réécriture donne des vecteurs faux — par un processus du même
+utilisateur ayant accès en écriture au répertoire de données, qui contient
+déjà tout ce qu'Oxyn garde. Lire les 390 Mo dans le tas la fermerait, au prix
+que le mappage existe pour éviter ; le risque est écrit dans le `// SAFETY:`
+de `map_verified`.
+
+### Budget mémoire
+
+| État | Budget | Mesuré (2026-10-08, empreinte) |
+|---|---|---|
+| Option jamais activée | **0** — rien de chargé, rien de mappé | — |
+| Modèle chargé | **≤ 300 Mo** d'empreinte | 157–179 Mo chargé, 248–268 Mo après avoir transformé 256 noms |
+| Après déchargement | **≤ 250 Mo** gardés par l'allocateur du système, pas par le code d'Oxyn | environ 240 Mo |
+| Conversion | **dans un processus enfant** : le processus d'Oxyn n'en garde rien | pic de 1,45 Go, environ 1,19 Go gardés ensuite dans le processus qui convertit |
+
+La mémoire gardée après déchargement est celle de l'allocateur du système, pas
+une fuite : le `malloc` de macOS garde les grandes régions libérées comme
+`MALLOC_LARGE (empty)` et ne les rend ni au déchargement ni sur
+`malloc_zone_pressure_relief`. Trois façons de la libérer ont été mesurées le
+2026-10-08 et écartées :
+
+* `MallocLargeCache=0` rend ces régions, mais l'inférence devient 31 % plus
+  lente — 2,51 s sur la charge mesurée, au-delà de la borne de 2 secondes ;
+* `malloc_zone_pressure_relief` après déchargement ne rend rien de mesurable ;
+* `mimalloc` comme allocateur global garde environ 70 Mo après déchargement,
+  mais il remplace l'allocateur de toute allocation Rust de l'application —
+  drivers, tampons Arrow, catalogue —, ce qui demande son propre ADR et ses
+  propres benchmarks, pas une ligne dans celui-ci.
 
 ### Chargé à la demande, libéré après cinq minutes
 
@@ -337,6 +416,23 @@ absent, corrompu ou en échec de chargement, le classement est celui
 d'aujourd'hui, et le panneau dit que le classement sémantique est
 indisponible et pourquoi.
 
+**Qu'elle ait tourné est tracé, en nombres seulement.** À
+`OXYN_LOG=oxyn=debug`, l'étape sémantique d'une question écrit `semantic
+ranking done` avec les relations listées, notées, servies par le cache et
+transformées pour la question, celles laissées sans score par l'échéance, les
+millisecondes écoulées et si la question a payé le chargement à froid du
+modèle. Une étape qui ne tourne pas écrit `semantic ranking skipped; lexical
+ranking only` avec une `reason` fixe — `option off`, `no models directory`,
+`model not ready`, `empty question`, `model absent`, `model damaged`, `model
+directory unreadable`, `catalog empty`, `no time left in the catalog fill` —,
+et une étape en échec `semantic ranking failed; lexical ranking only` avec la
+phrase fixe de sa variante d'`EmbedError`. La raison est une `&'static str`
+choisie dans le code et tout autre champ un nombre ou un booléen, si bien que
+rien de la question ni du schéma n'atteint le journal
+([I-03](../../CLAUDE.md#i-03)) ; un test capture le journal d'une étape sautée
+avec des marqueurs dans la question et une relation et vérifie qu'ils en sont
+absents.
+
 ## Conséquences
 
 * **+** Une question dans une langue trouve des tables nommées dans une autre,
@@ -357,9 +453,17 @@ indisponible et pourquoi.
 * **+** `oxyn-ai` ne dépend pas de Burn : ses tests et le chemin des agents
   externes gardent leur temps de compilation, et la passerelle reste une seule
   fonction.
-* **−** **795 Mo de RAM tant que le modèle est chargé**, cinq minutes
-  au plus après la dernière question. Sur une machine de 8 Go qui tient déjà
-  de gros résultats, c'est la différence entre tenir et swapper.
+* **−** **157–268 Mo d'empreinte tant que le modèle est chargé**, cinq
+  minutes au plus après la dernière question, plus les pages du fichier mappé
+  que le système garde tant qu'il a de la place pour elles.
+* **−** **Environ 240 Mo restent retenus après déchargement** — ceux de
+  l'allocateur du système, qu'Oxyn ne peut rendre sans ralentir l'inférence
+  au-delà de la borne de 2 secondes ou remplacer l'allocateur de
+  l'application. Une fois l'option utilisée, un Oxyn au repos est plus gros
+  d'autant jusqu'à ce qu'il quitte.
+* **−** **Un bloc `unsafe`**, et avec lui un plantage qu'Oxyn ne peut pas
+  rattraper : un `SIGBUS` si un autre processus du même utilisateur tronque
+  `model.bpk` sur place pendant qu'il est mappé.
 * **−** **Burn est en 0.x et casse son API entre versions mineures.** Chaque
   montée régénère `model.rs`, `weights_map.rs` et `residual.bpk`, et la somme
   de `model.bpk` change avec le format de burn-store — chaque utilisateur
@@ -388,8 +492,8 @@ indisponible et pourquoi.
   critique.
 * **−** Environ 415 Mo de disque pour l'utilisateur qui active l'option, un
   téléchargement de 220 Mo au premier usage, et **1,45 Go de RSS au pic** de
-  ce téléchargement et de cette conversion — au-dessus du 1 Go du modèle
-  chargé, une seule fois.
+  la conversion, une seule fois — dans un processus enfant, qui finit avec ce
+  que l'allocateur a gardé.
 * **−** La somme de `model.bpk` ne tient que parce que la conversion contourne
   `BurnpackStore` et efface chaque `ParamId` : une montée de Burn qui change
   `burn_pack::Writer` ou la collecte des paramètres peut rendre le fichier non
@@ -403,7 +507,9 @@ indisponible et pourquoi.
 fonctionnalité supprime `crates/oxyn-embed`, la préférence, les scores passés
 à `ContextBuilder` et le cache en mémoire d'`oxyn-desktop` ; le classement
 lexical continue de fonctionner tel quel, puisqu'il n'a jamais dépendu des
-scores. Les utilisateurs gardent un répertoire d'environ 415 Mo sous
+scores, et les exceptions `unsafe` du workspace se réduisent de nouveau à
+celle de l'[ADR-0054](0054-bundle-sqlite-vec-in-the-sqlite-driver.md). Les
+utilisateurs gardent un répertoire d'environ 415 Mo sous
 `models/` qu'une release de retrait devrait supprimer. Changer de moteur (pour
 candle, ou pour un endpoint distant) remplace `Embedder` derrière les mêmes
 scores ; changer de modèle change `pinned`, le code généré et `MODEL_ID`, et
@@ -411,9 +517,13 @@ chaque vecteur en cache est jeté par sa clé.
 
 **À réexaminer si** Burn atteint la 1.0 ou cesse de casser son API entre
 versions mineures (le coût de régénération tombe) ; si un modèle plus petit
-égale la qualité de celui-ci sur les paires question/table mesurées ; si la
-mémoire résidente mesurée dans `oxyn-desktop` dépasse **1 Go** ; si les
-utilisateurs disposent d'un endpoint d'embeddings là où ils travaillent (le
+égale la qualité de celui-ci sur les paires question/table mesurées ; si
+l'empreinte mesurée dans `oxyn-desktop` dépasse le budget ci-dessus —
+**300 Mo** modèle chargé, **250 Mo** gardés après déchargement ; si la
+mémoire gardée après déchargement devient une plainte, ou qu'un changement
+d'allocateur est décidé pour une autre raison — `mimalloc`, mesuré à environ
+70 Mo gardés, est alors le candidat, avec son propre ADR et ses benchmarks ;
+si les utilisateurs disposent d'un endpoint d'embeddings là où ils travaillent (le
 chemin distant devient alors un complément qui vaut d'être écrit) ; si
 candle, mesuré sur les mêmes paires, égale la sortie et la mémoire sans code
 généré ; ou si les opérateurs de ModernBERT cessent de se convertir —
@@ -436,3 +546,8 @@ généré ; ou si les opérateurs de ModernBERT cessent de se convertir —
 | Un seuil de cosinus qui admet une relation sur le sens seul | Un écart d'environ 0,1 entre tables pertinentes et non pertinentes fait de tout seuil un nombre réglé ; l'ordre se dégrade proprement là où un seuil échoue en silence |
 | `oxyn-ai` dépendant d'`oxyn-embed` et transformant en vecteurs dans `ContextBuilder::build` | Burn dans chaque compilation et chaque test d'`oxyn-ai`, et une passerelle qui bloque des secondes sur un chargement de modèle. Passer des scores garde la passerelle une fonction pure de ce qu'elle reçoit |
 | Un `build.rs` qui exécute burn-onnx à la compilation | burn-onnx, sa pile protobuf et un fichier ONNX de 390 Mo dans chaque compilation, pour du code qui ne change que quand le modèle ou Burn change |
+| Charger `model.bpk` par `BurnpackStore::from_file`, sans `unsafe` | Lit tout le fichier dans le tas : 553–643 Mo d'empreinte chargé au lieu de 157–268 Mo (2026-10-08). Le bloc `unsafe` coûte une fonction et un `SIGBUS` accepté sur un fichier que seuls les processus de l'utilisateur peuvent écrire |
+| Convertir dans le processus d'Oxyn | La conversion culmine à 1,45 Go et l'allocateur du système en garde ensuite environ 1,19 Go, pour le reste de la session ; un processus enfant rend tout en se terminant |
+| `MallocLargeCache=0` | Rend les régions que garde l'allocateur, mais l'inférence devient 31 % plus lente — 2,51 s sur la charge mesurée, au-delà de la borne de 2 secondes (2026-10-08) |
+| `malloc_zone_pressure_relief` après déchargement | N'a rien rendu de mesurable des ~240 Mo gardés (2026-10-08) |
+| `mimalloc` comme allocateur global, dans ce changement | Environ 70 Mo gardés après déchargement au lieu de ~240 Mo (2026-10-08), mais il change l'allocateur de toute allocation Rust de l'application : une décision pour son propre ADR et ses benchmarks, nommée dans la condition de réexamen |

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="0228b027887e" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="921dff9e9ab4" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2431,9 +2431,26 @@ Même machine, build release sauf mention contraire, commit `a7233c3`.
 | Fait | Source | Vérifié le |
 |---|---|---|
 | Chargement à froid 0,67 s (hachage des 415 Mo de fichiers, mappage, échauffement) ; une question 18 ms ; 256 noms de tables 0,63 s, et 2,2 s en profil dev (environ 3,5 fois plus lent) | tests ignorés d'`oxyn-embed`, commit `a7233c3` | 2026-10-07 |
-| RSS une fois chargé : 795 Mo | idem | 2026-10-07 |
+| RSS une fois chargé : 795 Mo — avec `BurnpackStore::from_file`, qui copie le fichier dans le tas (voir le 2026-10-08 plus bas) | idem | 2026-10-07 |
 | Téléchargement réel et conversion : 14 s, pic de RSS 1,45 Go ; ce qui reste sur disque est `tokenizer.json` et `model.bpk`, environ 415 Mo, le safetensors étant supprimé une fois la conversion vérifiée | idem | 2026-10-07 |
 | `BurnpackStore` enregistre le `ParamId` de chaque paramètre, un `u64` aléatoire tiré à la construction du modèle : deux conversions des mêmes poids diffèrent de 590 octets d'en-tête. Écrit par `burn_pack::Writer` avec chaque `param_id` mis à `None`, `model.bpk` est reproductible : 389 816 832 octets, SHA-256 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` | `crates/oxyn-embed/src/load.rs`, `src/pinned.rs` | 2026-10-07 |
+
+### Mémoire mesurée le 2026-10-08
+
+Un harnais dédié qui lit l'empreinte, le RSS et les statistiques de `malloc`
+du processus, build release, macOS 26.2, Apple M1 Max, deux exécutions
+chacune.
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| `BurnpackStore::from_file` lit tout `model.bpk` dans le tas par le `Bytes::from_file` de burn-pack : 434 Mo de `malloc`, bien que la feature `memmap` de burn-store soit active | harnais ; `burn-store-0.22.0/src/burnpack.rs` → `burn-pack-0.22.0/src/reader.rs` (`Source::File(Bytes::from_file(…))`) | 2026-10-08 |
+| Chargé par `BurnpackStore::from_file` : empreinte 553 Mo, puis 643 Mo après avoir transformé 256 noms ; RSS 677 puis 766 Mo | harnais, message du commit `ea98128` | 2026-10-08 |
+| Chargé depuis un mappage `memmap2` du fichier vérifié (`ea98128`) : empreinte 157–179 Mo, puis 248–268 Mo après 256 noms ; RSS 388–409 puis 484–503 Mo. Les vecteurs égalent toujours ceux d'onnxruntime | idem | 2026-10-08 |
+| Après la conversion, le processus garde une empreinte de 1 187 Mo avec 0,2 Mo de `malloc` en usage : `vmmap` liste 1,1 Go de `MALLOC_LARGE (empty)`. Elle ne bouge pas en 25 s, ni sur `malloc_zone_pressure_relief` | journal du harnais, `vmmap` | 2026-10-08 |
+| Après déchargement du modèle, environ 240 Mo restent retenus par l'allocateur du système | harnais | 2026-10-08 |
+| `MallocLargeCache=0` libère ces régions mais rend l'inférence 31 % plus lente : 2,51 s sur la charge mesurée | harnais | 2026-10-08 |
+| Avec `mimalloc` comme allocateur global, environ 70 Mo restent retenus après déchargement | harnais | 2026-10-08 |
+| `memmap2` **0.9.11**, la version que burn-store tire déjà, devient une dépendance du workspace ; `bytes` 1.12.1 en était déjà une | `Cargo.toml`, `Cargo.lock` à `ea98128` | 2026-10-08 |
 
 ### Dépendances apportées par `oxyn-embed`
 

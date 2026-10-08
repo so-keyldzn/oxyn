@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="1ccbc6bbd59c" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="e0b04c0608ae" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -483,13 +483,16 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    conversion l'analyse, et supprimé s'il est endommagé ; `tokenizer.json` est
    lu une fois, si bien que les octets hachés sont les octets analysés. Un
    fichier tronqué par un disque plein est refusé, jamais remis à un
-   analyseur. **Un risque est accepté** : `model.bpk` est vérifié, puis mappé
-   en mémoire. Un processus du même utilisateur qui le remplace entre les deux
-   fait charger son contenu sans vérification, et un processus qui le tronque
-   sur place pendant qu'il est mappé tue Oxyn par `SIGBUS`. Les deux exigent
-   un accès en écriture au répertoire de données, qui contient déjà tout ce
-   qu'Oxyn garde ; les remplacements d'Oxyn lui-même — un renommage, une
-   suppression — laissent un mappage intact.
+   analyseur. **Un risque est accepté** : `model.bpk` est mappé en mémoire,
+   depuis le descripteur même dont le SHA-256 vient d'être vérifié —
+   remplacer le fichier entre la vérification et le mappage ne change rien,
+   l'inode vérifié est celui qui est mappé. Un processus du même utilisateur
+   qui tronque cet inode sur place pendant qu'il est mappé tue Oxyn par
+   `SIGBUS` ; un processus qui le réécrit sur place donne des vecteurs faux.
+   Les deux exigent un accès en écriture au répertoire de données, qui
+   contient déjà tout ce qu'Oxyn garde ; les remplacements d'Oxyn lui-même —
+   un renommage, une suppression — laissent un mappage intact. La conversion,
+   qui analyse le safetensors téléchargé, s'exécute dans un processus enfant.
 
    **Les erreurs portent des textes fixes.** Les messages de burn-store
    nomment le chemin complet d'un fichier et une erreur du tokenizer peut
@@ -505,12 +508,22 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
 
 **`unsafe` est refusé à la compilation.** `[workspace.lints.rust]` porte
 `unsafe_code = "deny"`, et des seize crates — treize sous `crates/`,
-trois drivers sous `drivers/` — une seule fonction le réautorise :
-`register` dans `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, qui
-enregistre l'extension sqlite-vec embarquée sur une connexion — seulement une
-où l'utilisateur a activé l'interrupteur `sqlite_vec`, désactivé par défaut et
-qu'aucun agent ne peut changer
-([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)). C'est le manifeste qui fait foi ici, parce que c'est lui qui est
+trois drivers sous `drivers/` — deux fonctions le réautorisent, chacune sous
+son propre ADR :
+
+- `register` dans `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, qui
+  enregistre l'extension sqlite-vec embarquée sur une connexion — seulement
+  une où l'utilisateur a activé l'interrupteur `sqlite_vec`, désactivé par
+  défaut et qu'aucun agent ne peut changer
+  ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)) ;
+- `map_verified` dans `crates/oxyn-embed/src/load.rs`, qui mappe en mémoire
+  le modèle d'embeddings local, en lecture seule, depuis le descripteur dont
+  le SHA-256 vient d'être vérifié — seulement une fois que l'utilisateur a
+  activé le classement sémantique, désactivé par défaut
+  ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Son
+  risque accepté est le `SIGBUS` de l'entrée 9 ci-dessus.
+
+C'est le manifeste qui fait foi ici, parce que c'est lui qui est
 exécuté : ce document décrivait auparavant une politique d'encadrement que la
 compilation n'accorde pas, et [ADR-0021](adr/0021-marqueur-d-arret.md) a fondé
 une décision d'architecture — ne pas vérifier un pid — sur le refus, pas sur
