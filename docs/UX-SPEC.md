@@ -1767,7 +1767,7 @@ state; the actions beside it are the only ones offered.
 | On, no model | `The model is not downloaded: questions are ranked by name only.` | `Download model` |
 | Verifying | `Checking the files already on this computer…`, with a spinner and a progress bar without a fraction | `Cancel download` |
 | Downloading | `Downloading the model — ` followed by the bytes received out of the total, and a progress bar in percent | `Cancel download` |
-| Converting | `Preparing the model for this computer… This last step takes a few seconds and cannot be cancelled.`, with a progress bar without a fraction | none |
+| Converting | `Preparing the model for this computer… This last step takes a few seconds.`, with a spinner and a progress bar without a fraction | `Cancel download` |
 | Ready, on | `Ready. Loaded at the first question, released after 5 minutes without one.` | `Delete model` |
 | Ready, off | `The model is on this computer, but this workspace does not use it.` | `Delete model` |
 | Corrupt | an alert, `The model files are damaged`: a file is not the one Oxyn expects, truncated — a full disk, for instance — or replaced; until it is downloaded again, questions are ranked by name only | `Download again`, `Delete model` |
@@ -1779,9 +1779,10 @@ state; the actions beside it are the only ones offered.
   and fetches only what is missing or wrong.
 * **`Cancel download` turns the option off** and removes what was downloaded;
   the view says so beneath the button. There is no paused download to resume.
-* **The conversion is not cancellable.** It offers no `Cancel download`;
-  turning the switch off while it runs waits for its end — a few seconds —,
-  then deletes the model.
+* **Every step can be cancelled, the conversion included.** Verifying,
+  downloading and converting all offer `Cancel download`, with `Cancelling
+  turns semantic ranking off and removes what was downloaded.` beneath it;
+  cancelling during the conversion kills the process that converts.
 * **Turning off, or `Delete model`,** saves the preference off, stops a
   download, releases the model from memory and deletes its files.
 * **Pending.** While a request is on its way, the switch and every button are

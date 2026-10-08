@@ -176,10 +176,17 @@ mapping is read-only and handed to burn-store as shared, file-backed bytes
   `ModelStore::remove` unlinks, and both leave an existing mapping on the old
   inode intact. Who keeps it true: every writer of `model.bpk` in
   `oxyn-embed` (`download.rs`) — a rename, never an in-place write.
-* **The risk accepted.** A process of the same user that truncates the file
-  in place while it is mapped makes the next read of a missing page kill
-  Oxyn with `SIGBUS`; one that rewrites it in place gives wrong vectors. Both
-  need write access to the data directory, which already holds everything
+* **One check before any read.** Right after the mapping, its length must
+  equal `CONVERTED.size`, the size just verified: a file grown or shrunk in
+  place between the hash and the mapping is a `Corrupt` error with a fixed
+  text, before burn-store's parser reads a byte.
+* **The risk accepted** is one class: a process of the same user writing
+  **in place** into the mapped inode. A truncation while it is mapped makes
+  the next read of a missing page kill Oxyn with `SIGBUS`; a rewrite between
+  the end of the hash and the mapping, or during `load_from`, makes the
+  burnpack parser read unverified bytes, and a panic there kills the process
+  (`panic = "abort"` in release); a rewrite after loading gives wrong vectors.
+  All need write access to the data directory, which already holds everything
   Oxyn keeps.
 * **The review.** The block carries its `// SAFETY:` naming that property and
   who keeps it, and goes through the `relecteur-securite` review the
@@ -298,17 +305,31 @@ in Oxyn's:
   conversion failure (76). Any process can launch Oxyn with arguments: this
   one is not a way to convert or write elsewhere.
 * **It inherits almost nothing.** The environment is cleared except `HOME`
-  and `XDG_DATA_HOME` — so the child computes the same data directory — and
-  `SystemRoot`, which a Windows process needs to load system libraries;
-  standard input, output and error are null; the working directory is the
-  models directory; no console window on Windows. The single spawn site is
+  and `XDG_DATA_HOME` — so the child computes the same data directory —,
+  `SystemRoot`, which a Windows process needs to load system libraries, and,
+  when they are set, `LD_LIBRARY_PATH`, `APPDIR` and `APPIMAGE`: the AppRun
+  of a Tauri AppImage sets them before starting Oxyn, and the dynamic loader
+  resolves every linked library — the bundled WebKitGTK included — when any
+  process starts, so without them the child would not start (exit 127). All
+  are paths. **Not yet verified on a real AppImage.** Standard output and
+  error are null; the working directory is the models directory; no console
+  window on Windows. The single spawn site is
   exempted from `clippy.toml`'s ban on `std::process::Command::new` because
   of the `env_clear` right after it, like `oxyn-ai`'s `external/spawn.rs`.
 * **The parent stays in charge.** It holds the model directory's lock for the
   whole download; the child does not take it. It awaits the child through
   Tokio without blocking a thread; cancelling kills and reaps it
   (`kill_on_drop` as well), and the `.part` it leaves is removed like an
-  interrupted download's. An exit code goes through
+  interrupted download's.
+* **A child does not outlive its parent.** `kill_on_drop` does not run when
+  Oxyn leaves through `App::run`'s exit, crashes or is killed, and the lock
+  closes on `exec`: an orphaned child would go on converting while a
+  relaunched Oxyn, or a disable, converts or deletes the same files. So the
+  child's standard input is a pipe the parent keeps open while it waits; a
+  thread in the child reads it, discarding what it carries, and exits with
+  the `Cancelled` code as soon as it ends — which the system ensures when the
+  parent is gone, however it went. A test closes the stdin of a real child
+  and sees it stop at once. An exit code goes through
   `EmbedError::from_exit_code`; a signal reads as a conversion failure; both
   reach the settings as fixed sentences.
 * **Measured** by hand on 2026-10-08, Apple Silicon, dev profile: the child
@@ -326,17 +347,21 @@ random `u64` drawn when the model is built, so two conversions of the same
 weights would differ. The conversion writes through `burn_pack::Writer` with
 every `param_id` set to `None`; the ids only serve to resume training, and the
 widening from bf16 is exact, so the file is a function of the weights alone.
-No file is parsed before its size and checksum are checked.
+No file is parsed before its size and checksum are checked — with one
+residual window on `model.bpk`, below.
 
 **An accepted risk: `model.bpk` is mapped.** The hash and the mapping use one
 open handle, so replacing the file between the two changes nothing: the
-verified inode is the one mapped. What remains is an in-place change of that
-inode while it is mapped — a truncation kills Oxyn with `SIGBUS` at the next
-read of a missing page, a rewrite gives wrong vectors — by a process of the
-same user with write access to the data directory, which already holds
+verified inode is the one mapped, and a mapping of another length than the
+pinned size is refused before any read. What remains is a process of the
+same user writing in place into that inode: a truncation while it is mapped
+kills Oxyn with `SIGBUS`; a rewrite between the end of the hash and the
+mapping, or during `load_from`, hands unverified bytes to the burnpack
+parser, whose panic aborts the process; a rewrite after loading gives wrong
+vectors. It needs write access to the data directory, which already holds
 everything Oxyn keeps. Reading the 390 MB into the heap would close it, at
-the cost the mapping exists to avoid; the risk is written in the `// SAFETY:`
-of `map_verified`.
+the cost the mapping exists to avoid; the whole class is written in the
+`// SAFETY:` of `map_verified`.
 
 ### Memory budget
 
@@ -453,9 +478,9 @@ absent.
   which Oxyn cannot give back without slowing inference past the 2-second
   bound or replacing the application's allocator. Once the option has been
   used, an idle Oxyn is that much larger until it quits.
-* **−** **One `unsafe` block**, and with it a crash Oxyn cannot catch: a
+* **−** **One `unsafe` block**, and with it crashes Oxyn cannot catch: a
   `SIGBUS` if another process of the same user truncates `model.bpk` in place
-  while it is mapped.
+  while it is mapped, an abort if it rewrites it while the parser reads it.
 * **−** **Burn is 0.x and breaks its API between minor versions.** Every bump
   regenerates `model.rs`, `weights_map.rs` and `residual.bpk`, and the
   checksum of `model.bpk` changes with burn-store's format — every user then

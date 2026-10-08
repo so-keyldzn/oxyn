@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="66c03a98ccca" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="cff8a9640d80" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -483,15 +483,24 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    conversion l'analyse, et supprimé s'il est endommagé ; `tokenizer.json` est
    lu une fois, si bien que les octets hachés sont les octets analysés. Un
    fichier tronqué par un disque plein est refusé, jamais remis à un
-   analyseur. **Un risque est accepté** : `model.bpk` est mappé en mémoire,
-   depuis le descripteur même dont le SHA-256 vient d'être vérifié —
-   remplacer le fichier entre la vérification et le mappage ne change rien,
-   l'inode vérifié est celui qui est mappé. Un processus du même utilisateur
-   qui tronque cet inode sur place pendant qu'il est mappé tue Oxyn par
-   `SIGBUS` ; un processus qui le réécrit sur place donne des vecteurs faux.
-   Les deux exigent un accès en écriture au répertoire de données, qui
-   contient déjà tout ce qu'Oxyn garde ; les remplacements d'Oxyn lui-même —
-   un renommage, une suppression — laissent un mappage intact.
+   analyseur. La seule fenêtre résiduelle est celle de `model.bpk`,
+   ci-dessous.
+
+   **Un risque est accepté** : `model.bpk` est mappé en mémoire, depuis le
+   descripteur même dont le SHA-256 vient d'être vérifié — remplacer le
+   fichier entre la vérification et le mappage ne change rien, l'inode
+   vérifié est celui qui est mappé —, et la longueur du mappage doit égaler
+   la taille épinglée avant qu'un octet soit lu, sinon le fichier est refusé
+   comme `Corrupt`. Ce qui reste est une seule classe : un processus du même
+   utilisateur qui écrit **sur place** dans l'inode mappé. Une troncature
+   pendant le mappage tue Oxyn par `SIGBUS` ; une réécriture entre la fin du
+   hachage et le mappage, ou pendant `load_from`, fait lire des octets non
+   vérifiés à l'analyseur burnpack, et une panique y tue le processus
+   (`panic = "abort"` en release) ; une réécriture après le chargement donne
+   des vecteurs faux. Toutes exigent un accès en écriture au répertoire de
+   données, qui contient déjà tout ce qu'Oxyn garde ; les remplacements
+   d'Oxyn lui-même — un renommage, une suppression — laissent un mappage
+   intact.
 
    **La conversion s'exécute dans un processus enfant, et son argument est une
    entrée.** La conversion, qui analyse le safetensors téléchargé, s'exécute
@@ -505,14 +514,22 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    refuse tout le reste avant de toucher au disque (sortie 76). Il n'y fait
    que ce que fait le téléchargement : lire un fichier vérifié sur sa somme
    épinglée, écrire `model.bpk.part`, le renommer une fois vérifié.
-   L'environnement de l'enfant est vidé sauf `HOME`, `XDG_DATA_HOME` et
-   `SystemRoot` — des chemins, jamais un secret ([I-03](../CLAUDE.md#i-03)) —,
-   ses flux standard sont nuls, si bien qu'aucun message d'une dépendance
-   n'atteint un journal par eux, et il ne rapporte un échec que par un code de
-   sortie lu par `EmbedError::from_exit_code`. Le parent tient le verrou du
-   répertoire pendant tout le téléchargement ; l'enfant ne le prend pas.
-   Annuler tue et récolte l'enfant, et le `.part` qu'il a laissé est supprimé
-   comme celui d'un téléchargement interrompu.
+   L'environnement de l'enfant est vidé sauf `HOME`, `XDG_DATA_HOME`,
+   `SystemRoot` et, quand elles sont définies, `LD_LIBRARY_PATH`, `APPDIR` et
+   `APPIMAGE` — que pose l'AppRun d'une AppImage Tauri, et sans lesquelles
+   l'enfant ne démarrerait pas (pas encore vérifié sur une vraie AppImage) — :
+   des chemins, jamais un secret ([I-03](../CLAUDE.md#i-03)). Ses sorties
+   standard et d'erreur sont nulles, si bien qu'aucun message d'une
+   dépendance n'atteint un journal par elles, et il ne rapporte un échec que
+   par un code de sortie lu par `EmbedError::from_exit_code`. Le parent tient
+   le verrou du répertoire pendant tout le téléchargement ; l'enfant ne le
+   prend pas, et le verrou se ferme à l'`exec`. Pour qu'un enfant ne survive
+   jamais à ce verrou, son entrée standard est un tuyau que le parent garde
+   ouvert tant qu'il attend : l'enfant se termine avec le code `Cancelled`
+   dès que le tuyau se ferme, ce qui arrive quand Oxyn quitte, plante ou est
+   tué. Annuler tue et récolte l'enfant — à toute étape, la conversion
+   comprise —, et le `.part` qu'il a laissé est supprimé comme celui d'un
+   téléchargement interrompu.
 
    **Les erreurs portent des textes fixes.** Les messages de burn-store
    nomment le chemin complet d'un fichier et une erreur du tokenizer peut
@@ -541,7 +558,8 @@ son propre ADR :
   le SHA-256 vient d'être vérifié — seulement une fois que l'utilisateur a
   activé le classement sémantique, désactivé par défaut
   ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Son
-  risque accepté est le `SIGBUS` de l'entrée 9 ci-dessus.
+  risque accepté est l'écriture sur place de l'entrée 9 ci-dessus — un
+  `SIGBUS`, un arrêt dans l'analyseur, ou des vecteurs faux.
 
 C'est le manifeste qui fait foi ici, parce que c'est lui qui est
 exécuté : ce document décrivait auparavant une politique d'encadrement que la

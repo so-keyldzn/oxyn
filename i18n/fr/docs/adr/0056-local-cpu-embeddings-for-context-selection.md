@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="118be61aa3c2" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="f0ac4725739c" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -192,11 +192,20 @@ adossés au fichier (`Bytes::from_shared`, `AllocationProperty::File`).
   mappage existant intact sur l'ancien inode. Qui le garantit : chaque
   écrivain de `model.bpk` dans `oxyn-embed` (`download.rs`) — un renommage,
   jamais une écriture sur place.
-* **Le risque accepté.** Un processus du même utilisateur qui tronque le
-  fichier sur place pendant qu'il est mappé fait tuer Oxyn par `SIGBUS` à la
-  prochaine lecture d'une page manquante ; un processus qui le réécrit sur
-  place donne des vecteurs faux. Les deux exigent un accès en écriture au
-  répertoire de données, qui contient déjà tout ce qu'Oxyn garde.
+* **Une vérification avant toute lecture.** Juste après le mappage, sa
+  longueur doit égaler `CONVERTED.size`, la taille qui vient d'être vérifiée :
+  un fichier agrandi ou raccourci sur place entre le hachage et le mappage est
+  une erreur `Corrupt` au texte fixe, avant que l'analyseur de burn-store lise
+  un octet.
+* **Le risque accepté** est une seule classe : un processus du même
+  utilisateur qui écrit **sur place** dans l'inode mappé. Une troncature
+  pendant le mappage fait tuer Oxyn par `SIGBUS` à la prochaine lecture d'une
+  page manquante ; une réécriture entre la fin du hachage et le mappage, ou
+  pendant `load_from`, fait lire des octets non vérifiés à l'analyseur
+  burnpack, et une panique y tue le processus (`panic = "abort"` en release) ;
+  une réécriture après le chargement donne des vecteurs faux. Toutes exigent
+  un accès en écriture au répertoire de données, qui contient déjà tout ce
+  qu'Oxyn garde.
 * **La relecture.** Le bloc porte son `// SAFETY:` qui nomme cette propriété
   et qui la garantit, et passe par la relecture de l'agent
   `relecteur-securite` qu'exige la politique `unsafe`.
@@ -325,18 +334,33 @@ lieu de rester dans celui d'Oxyn :
   lancer Oxyn avec des arguments : celui-ci n'est pas un moyen de convertir
   ou d'écrire ailleurs.
 * **Il n'hérite de presque rien.** L'environnement est vidé sauf `HOME` et
-  `XDG_DATA_HOME` — pour que l'enfant calcule le même répertoire de données —
-  et `SystemRoot`, dont un processus Windows a besoin pour charger les
-  bibliothèques système ; entrée, sortie et erreur standard sont nulles ; le
-  répertoire de travail est celui des modèles ; pas de fenêtre de console sous
-  Windows. Le seul site de lancement est exempté de l'interdiction de
+  `XDG_DATA_HOME` — pour que l'enfant calcule le même répertoire de
+  données —, `SystemRoot`, dont un processus Windows a besoin pour charger
+  les bibliothèques système, et, quand elles sont définies,
+  `LD_LIBRARY_PATH`, `APPDIR` et `APPIMAGE` : l'AppRun d'une AppImage Tauri
+  les pose avant de lancer Oxyn, et le chargeur dynamique résout chaque
+  bibliothèque liée — WebKitGTK embarqué compris — au démarrage de tout
+  processus, si bien que sans elles l'enfant ne démarrerait pas (sortie
+  127). Ce sont toutes des chemins. **Pas encore vérifié sur une vraie
+  AppImage.** Sortie et erreur standard sont nulles ; le répertoire de
+  travail est celui des modèles ; pas de fenêtre de console sous Windows. Le seul site de lancement est exempté de l'interdiction de
   `std::process::Command::new` par `clippy.toml` grâce au `env_clear` qui le
   suit, comme `external/spawn.rs` d'`oxyn-ai`.
 * **Le parent garde la main.** Il tient le verrou du répertoire du modèle
   pendant tout le téléchargement ; l'enfant ne le prend pas. Il attend
   l'enfant par Tokio sans bloquer de thread ; annuler le tue et le récolte
   (`kill_on_drop` aussi), et le `.part` qu'il laisse est supprimé comme celui
-  d'un téléchargement interrompu. Un code de sortie passe par
+  d'un téléchargement interrompu.
+* **Un enfant ne survit pas à son parent.** `kill_on_drop` ne s'exécute pas
+  quand Oxyn sort par la fin d'`App::run`, plante ou est tué, et le verrou se
+  ferme à l'`exec` : un enfant orphelin continuerait de convertir pendant
+  qu'un Oxyn relancé, ou une désactivation, convertit ou supprime les mêmes
+  fichiers. L'entrée standard de l'enfant est donc un tuyau que le parent
+  garde ouvert tant qu'il attend ; un thread de l'enfant la lit, en jetant ce
+  qu'elle porte, et se termine avec le code `Cancelled` dès qu'elle se ferme —
+  ce que le système garantit quand le parent a disparu, quelle qu'en soit la
+  manière. Un test ferme l'entrée standard d'un vrai enfant et le voit
+  s'arrêter aussitôt. Un code de sortie passe par
   `EmbedError::from_exit_code` ; un signal se lit comme un échec de
   conversion ; les deux atteignent les réglages en phrases fixes.
 * **Mesuré** à la main le 2026-10-08, Apple Silicon, profil dev : l'enfant a
@@ -356,18 +380,21 @@ conversion écrit par `burn_pack::Writer` avec chaque `param_id` mis à `None` ;
 les identifiants ne servent qu'à reprendre un entraînement, et
 l'élargissement depuis le bf16 est exact, si bien que le fichier ne dépend que
 des poids. Aucun fichier n'est analysé avant que sa taille et sa somme aient
-été vérifiées.
+été vérifiées — avec une fenêtre résiduelle sur `model.bpk`, ci-dessous.
 
 **Un risque accepté : `model.bpk` est mappé.** Le hachage et le mappage
 utilisent un seul descripteur ouvert, si bien que remplacer le fichier entre
-les deux ne change rien : l'inode vérifié est celui qui est mappé. Ce qui
-reste, c'est une modification sur place de cet inode pendant qu'il est mappé
-— une troncature fait tuer Oxyn par `SIGBUS` à la prochaine lecture d'une page
-manquante, une réécriture donne des vecteurs faux — par un processus du même
-utilisateur ayant accès en écriture au répertoire de données, qui contient
-déjà tout ce qu'Oxyn garde. Lire les 390 Mo dans le tas la fermerait, au prix
-que le mappage existe pour éviter ; le risque est écrit dans le `// SAFETY:`
-de `map_verified`.
+les deux ne change rien : l'inode vérifié est celui qui est mappé, et un
+mappage d'une autre longueur que la taille épinglée est refusé avant toute
+lecture. Ce qui reste, c'est un processus du même utilisateur qui écrit sur
+place dans cet inode : une troncature pendant le mappage tue Oxyn par
+`SIGBUS` ; une réécriture entre la fin du hachage et le mappage, ou pendant
+`load_from`, remet des octets non vérifiés à l'analyseur burnpack, dont la
+panique arrête le processus ; une réécriture après le chargement donne des
+vecteurs faux. Cela exige un accès en écriture au répertoire de données, qui
+contient déjà tout ce qu'Oxyn garde. Lire les 390 Mo dans le tas la
+fermerait, au prix que le mappage existe pour éviter ; toute la classe est
+écrite dans le `// SAFETY:` de `map_verified`.
 
 ### Budget mémoire
 
@@ -498,9 +525,10 @@ absents.
   au-delà de la borne de 2 secondes ou remplacer l'allocateur de
   l'application. Une fois l'option utilisée, un Oxyn au repos est plus gros
   d'autant jusqu'à ce qu'il quitte.
-* **−** **Un bloc `unsafe`**, et avec lui un plantage qu'Oxyn ne peut pas
+* **−** **Un bloc `unsafe`**, et avec lui des plantages qu'Oxyn ne peut pas
   rattraper : un `SIGBUS` si un autre processus du même utilisateur tronque
-  `model.bpk` sur place pendant qu'il est mappé.
+  `model.bpk` sur place pendant qu'il est mappé, un arrêt s'il le réécrit
+  pendant que l'analyseur le lit.
 * **−** **Burn est en 0.x et casse son API entre versions mineures.** Chaque
   montée régénère `model.rs`, `weights_map.rs` et `residual.bpk`, et la somme
   de `model.bpk` change avec le format de burn-store — chaque utilisateur

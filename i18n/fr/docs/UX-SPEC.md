@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="35a4a9e37511" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="c959eeca7d3f" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1850,7 +1850,7 @@ les actions à côté sont les seules proposées.
 | Activée, sans modèle | `The model is not downloaded: questions are ranked by name only.` | `Download model` |
 | Vérification | `Checking the files already on this computer…`, avec un indicateur d'activité et une barre de progression sans fraction | `Cancel download` |
 | Téléchargement | `Downloading the model — ` suivi des octets reçus sur le total, et une barre de progression en pourcentage | `Cancel download` |
-| Conversion | `Preparing the model for this computer… This last step takes a few seconds and cannot be cancelled.`, avec une barre de progression sans fraction | aucune |
+| Conversion | `Preparing the model for this computer… This last step takes a few seconds.`, avec un indicateur d'activité et une barre de progression sans fraction | `Cancel download` |
 | Prêt, activée | `Ready. Loaded at the first question, released after 5 minutes without one.` | `Delete model` |
 | Prêt, désactivée | `The model is on this computer, but this workspace does not use it.` | `Delete model` |
 | Endommagé | une alerte, `The model files are damaged` : un fichier n'est pas celui qu'attend Oxyn, tronqué — un disque plein, par exemple — ou remplacé ; tant qu'il n'est pas téléchargé de nouveau, les questions sont classées par le nom seulement | `Download again`, `Delete model` |
@@ -1863,9 +1863,10 @@ les actions à côté sont les seules proposées.
 * **`Cancel download` désactive l'option** et supprime ce qui a été
   téléchargé ; la vue le dit sous le bouton. Il n'y a pas de téléchargement en
   pause à reprendre.
-* **La conversion n'est pas annulable.** Elle ne propose pas de `Cancel
-  download` ; désactiver l'interrupteur pendant qu'elle tourne attend sa fin —
-  quelques secondes —, puis supprime le modèle.
+* **Chaque étape peut être annulée, la conversion comprise.** Vérification,
+  téléchargement et conversion proposent tous `Cancel download`, avec
+  `Cancelling turns semantic ranking off and removes what was downloaded.`
+  dessous ; annuler pendant la conversion tue le processus qui convertit.
 * **Désactiver, ou `Delete model`,** enregistre la préférence à désactivée,
   arrête un téléchargement, libère le modèle de la mémoire et supprime ses
   fichiers.

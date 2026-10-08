@@ -454,15 +454,22 @@ What enters Oxyn and is untrusted, in order of underestimation:
    SHA-256 match the pinned values: the safetensors is hashed again right
    before the conversion parses it, and removed when damaged;
    `tokenizer.json` is read once, so the bytes hashed are the bytes parsed.
-   A file truncated by a full disk is refused, never handed to a parser.
+   A file truncated by a full disk is refused, never handed to a parser. The
+   one residual window is `model.bpk`'s, below.
+
    **One risk is accepted**: `model.bpk` is memory-mapped, from the very
    file handle whose SHA-256 was just checked — replacing the file between
    the check and the mapping changes nothing, the verified inode is the one
-   mapped. A process of the same user that truncates that inode in place
-   while it is mapped kills Oxyn with `SIGBUS`; one that rewrites it in place
-   gives wrong vectors. Both need write access to the data directory, which
-   already holds everything Oxyn keeps; Oxyn's own replacements — a rename, a
-   deletion — leave a mapping intact.
+   mapped — and the mapping's length must equal the pinned size before any
+   byte is read, or the file is refused as `Corrupt`. What remains is one
+   class: a process of the same user writing **in place** into the mapped
+   inode. A truncation while it is mapped kills Oxyn with `SIGBUS`; a
+   rewrite between the end of the hash and the mapping, or during
+   `load_from`, makes the burnpack parser read unverified bytes, and a panic
+   there kills the process (`panic = "abort"` in release); a rewrite after
+   loading gives wrong vectors. All need write access to the data
+   directory, which already holds everything Oxyn keeps; Oxyn's own
+   replacements — a rename, a deletion — leave a mapping intact.
 
    **The conversion runs in a child process, and its argument is an input.**
    The conversion, which parses the downloaded safetensors, runs in
@@ -476,13 +483,20 @@ What enters Oxyn and is untrusted, in order of underestimation:
    anything else before touching the disk (exit 76). There it does only what
    the download does: read a file checked on its pinned checksum, write
    `model.bpk.part`, rename it once verified. The child's environment is
-   cleared except `HOME`, `XDG_DATA_HOME` and `SystemRoot` — paths, never a
-   secret ([I-03](../CLAUDE.md#i-03)) —, its standard streams are null, so no
+   cleared except `HOME`, `XDG_DATA_HOME`, `SystemRoot` and, when set,
+   `LD_LIBRARY_PATH`, `APPDIR` and `APPIMAGE` — which a Tauri AppImage's
+   AppRun sets, and without which the child would not start (not yet
+   verified on a real AppImage) —: paths, never a secret
+   ([I-03](../CLAUDE.md#i-03)). Its standard output and error are null, so no
    dependency's message reaches a journal through them, and it reports a
    failure only as an exit code read through `EmbedError::from_exit_code`.
    The parent holds the directory lock for the whole download; the child does
-   not take it. Cancelling kills and reaps the child, and the `.part` it left
-   is removed like an interrupted download's.
+   not take it, and the lock closes on `exec`. So that a child never outlives
+   that lock, its standard input is a pipe the parent keeps open while it
+   waits: the child exits with the `Cancelled` code as soon as the pipe ends,
+   which happens when Oxyn quits, crashes or is killed. Cancelling kills and
+   reaps the child — at any step, the conversion included —, and the `.part`
+   it left is removed like an interrupted download's.
 
    **Errors carry fixed texts.** burn-store's messages name a file's full
    path and a tokenizer error can quote the text: the errors of `oxyn-embed`
@@ -508,7 +522,8 @@ ADR:
   local embedding model, read-only, from the file handle whose SHA-256 was
   just verified — only once the user turned semantic ranking on, off by
   default ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
-  Its accepted risk is the `SIGBUS` of item 9 above.
+  Its accepted risk is the in-place write of item 9 above — a `SIGBUS`, an
+  abort in the parser, or wrong vectors.
 
 The manifest is authoritative here, because it is what is
 executed: this document previously described a policy of supervised use that
