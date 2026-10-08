@@ -1,10 +1,10 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="f0ac4725739c" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="765a43401f20" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
 # ADR-0056 — Des embeddings locaux sur CPU classent le contexte IA, le lexical d'abord
 
-**Statut :** proposé · **Date :** 2026-10-07
+**Statut :** accepté (2026-10-08) · **Date :** 2026-10-07
 
 ## Contexte
 
@@ -366,9 +366,10 @@ lieu de rester dans celui d'Oxyn :
 * **Mesuré** à la main le 2026-10-08, Apple Silicon, profil dev : l'enfant a
   converti les poids épinglés en 3,7 s, sortie 0, avec un ensemble résident
   maximal de 1,45 Go dans l'enfant ; un répertoire hors des deux a été refusé
-  avec la sortie 76, à 9 Mo, sans rien créer. La mémoire du parent après une
-  conversion n'a pas encore été mesurée : qu'il n'en garde rien découle de ce
-  que la conversion tourne dans un autre processus.
+  avec la sortie 76, à 9 Mo, sans rien créer. Le parent, mesuré le 2026-10-08
+  (profil release, vrai enfant `--convert-embedding-model`, 2,94 s) : 2,4 Mo
+  d'empreinte avant, 2,5 Mo au pic de l'enfant et 3 s après sa fin — il ne
+  garde rien de la conversion.
 
 La somme de `model.bpk` est elle aussi une constante —
 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, si bien
@@ -403,7 +404,7 @@ fermerait, au prix que le mappage existe pour éviter ; toute la classe est
 | Option jamais activée | **0** — rien de chargé, rien de mappé | — |
 | Modèle chargé | **≤ 300 Mo** d'empreinte | 157–179 Mo chargé, 248–268 Mo après avoir transformé 256 noms |
 | Après déchargement | **≤ 250 Mo** gardés par l'allocateur du système, pas par le code d'Oxyn | environ 240 Mo |
-| Conversion | **dans un processus enfant** : le processus d'Oxyn n'en garde rien, par construction | pic de 1,45 Go dans l'enfant, 3,7 s (profil dev) ; environ 1,19 Go gardés ensuite par un processus qui convertit, rendus quand l'enfant se termine. Mémoire du parent pas encore mesurée |
+| Conversion | **dans un processus enfant** : le processus d'Oxyn n'en garde rien, par construction | pic de 1,45 Go dans l'enfant, 3,7 s (profil dev) ; environ 1,19 Go gardés ensuite par un processus qui convertit, rendus quand l'enfant se termine. Parent : +0,1 Mo d'empreinte pendant et après (release, 2,94 s) |
 
 La mémoire gardée après déchargement est celle de l'allocateur du système, pas
 une fuite : le `malloc` de macOS garde les grandes régions libérées comme

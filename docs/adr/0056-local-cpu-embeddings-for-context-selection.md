@@ -1,6 +1,6 @@
 # ADR-0056 — Local CPU embeddings rank the AI context, lexical first
 
-**Status:** proposed · **Date:** 2026-10-07
+**Status:** accepted (2026-10-08) · **Date:** 2026-10-07
 
 ## Context
 
@@ -335,9 +335,10 @@ in Oxyn's:
 * **Measured** by hand on 2026-10-08, Apple Silicon, dev profile: the child
   converted the pinned weights in 3.7 s, exit 0, with a maximum resident set
   of 1.45 GB in the child; a directory outside the two was refused with
-  exit 76, at 9 MB, creating nothing. The parent's memory after a conversion
-  has not been measured yet: that it keeps nothing of it follows from the
-  conversion running in another process.
+  exit 76, at 9 MB, creating nothing. The parent, measured on 2026-10-08
+  (release profile, real `--convert-embedding-model` child, 2.94 s): 2.4 MB of
+  footprint before, 2.5 MB at the child's peak and 3 s after it exits — it
+  keeps nothing of the conversion.
 
 The checksum of `model.bpk` is a constant too —
 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, so a
@@ -370,7 +371,7 @@ the cost the mapping exists to avoid; the whole class is written in the
 | Option never turned on | **0** — nothing loaded, nothing mapped | — |
 | Model loaded | **≤ 300 MB** of footprint | 157–179 MB loaded, 248–268 MB after embedding 256 names |
 | After unloading | **≤ 250 MB** kept by the system allocator, not by Oxyn's code | about 240 MB |
-| Conversion | **in a child process**: Oxyn's own process keeps none of it, by construction | 1.45 GB peak in the child, 3.7 s (dev profile); about 1.19 GB kept afterwards by a process that converts, released when the child exits. The parent's memory not yet measured |
+| Conversion | **in a child process**: Oxyn's own process keeps none of it, by construction | 1.45 GB peak in the child, 3.7 s (dev profile); about 1.19 GB kept afterwards by a process that converts, released when the child exits. Parent: +0.1 MB of footprint during and after (release, 2.94 s) |
 
 The memory kept after unloading is the system allocator's, not a leak: macOS
 `malloc` keeps freed large regions as `MALLOC_LARGE (empty)` and gives them

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="3dce6f70ac4a" -->
+<!-- oxyn-translation source="docs/README.md" sha256="3ec9fb21fbc5" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -91,7 +91,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0053](adr/0053-redact-sql-passwords-before-persistence.md) | Les littéraux de mot de passe SQL sont caviardés avant persistance ; les lignes d'audit existantes restent en ajout seul | accepté |
 | [0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md) | Le driver SQLite embarque sqlite-vec, enregistrée seulement sur les connexions où l'utilisateur l'a activée (désactivée par défaut) ; aucune extension n'est chargée depuis un fichier | accepté |
 | [0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md) | L'agent SQL est le défaut d'une nouvelle conversation, quel que soit l'ordre d'affichage | accepté |
-| [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Des embeddings locaux sur CPU (Burn, un modèle multilingue épinglé téléchargé sur activation) classent les relations du contexte IA, le lexical d'abord | proposé |
+| [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Des embeddings locaux sur CPU (Burn, un modèle multilingue épinglé téléchargé sur activation) classent les relations du contexte IA, le lexical d'abord | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
