@@ -73,6 +73,14 @@ usages. Grep stays the tool for an exact string and for any conclusive answer:
 and `semantiq_deps` does not follow `pub use` re-exports, so its "Imported by"
 misses most callers. **"Nothing else uses X" is checked with grep.**
 
+The same index answers from the shell: `semantiq calls`, `hierarchy`, `impact`
+and `dead-code` have no grep equivalent. Pass `--no-refresh` while a session's
+MCP server is running: each command otherwise first re-indexes the changed
+files, and that refresh was seen to hang while the server held the database. The
+`semantiq init` command is not for this repository: it rewrites `CLAUDE.md`,
+whose French mirror then falls out of date; `semantiq init --global` installs
+only the skill.
+
 ## Invariants
 
 Thirteen prohibitions. Violating them is **silent**: nothing fails at the moment
