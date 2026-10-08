@@ -49,10 +49,6 @@ const PROGRESS_STEP: u64 = 1 << 20;
 
 const USER_AGENT: &str = concat!("oxyn/", env!("CARGO_PKG_VERSION"));
 
-/// Locked for the whole download, so that a second process refuses rather
-/// than writing the same files.
-const LOCK_FILE: &str = ".lock";
-
 /// What [`ModelStore::download`] is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -121,14 +117,24 @@ impl ModelStore {
         cancel: &CancelToken,
     ) -> Result<(), EmbedError> {
         // Two locks, for two scopes: the mutex makes this process's calls
-        // wait their turn; the file lock refuses a second process — two
-        // instances, or a `make desktop-dev` beside the installed Oxyn —
-        // which would otherwise write the same `.part` files at once.
+        // wait their turn; the file lock beside the directory refuses a
+        // second process — two instances, or a `make desktop-dev` beside the
+        // installed Oxyn — which would otherwise write the same `.part`
+        // files, and a `remove` that would delete them mid-write. It is
+        // taken before the directory is created, so a removal cannot slip in
+        // between.
         let _serialized = self.download_lock.lock().await;
+        let root = self.root();
+        tokio::fs::create_dir_all(root)
+            .await
+            .map_err(|err| EmbedError::io("create", root, err))?;
+        let store = self.clone();
+        let _exclusive = tokio::task::spawn_blocking(move || store.lock_exclusive())
+            .await
+            .map_err(|_| EmbedError::Conversion("the lock task stopped".to_owned()))??;
         tokio::fs::create_dir_all(self.dir())
             .await
             .map_err(|err| EmbedError::io("create", self.dir(), err))?;
-        let _exclusive = self.lock_directory().await?;
 
         progress(DownloadProgress {
             phase: DownloadPhase::Verifying,
@@ -170,30 +176,6 @@ impl ModelStore {
             self.convert().await?;
         }
         Ok(())
-    }
-
-    /// Takes the directory's lock file, exclusively and without waiting.
-    ///
-    /// The lock belongs to the open file, so it is released when the
-    /// returned handle drops — at the end of the download, on an error, on
-    /// cancellation, and by the system if the process dies. The `.lock` file
-    /// itself stays; it is empty and only ever locked.
-    async fn lock_directory(&self) -> Result<std::fs::File, EmbedError> {
-        let path = self.dir().join(LOCK_FILE);
-        let file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .await
-            .map_err(|err| EmbedError::io("open", &path, err))?
-            .into_std()
-            .await;
-        match file.try_lock() {
-            Ok(()) => Ok(file),
-            Err(std::fs::TryLockError::WouldBlock) => Err(EmbedError::DownloadInProgress),
-            Err(std::fs::TryLockError::Error(err)) => Err(EmbedError::io("lock", &path, err)),
-        }
     }
 
     /// Converts the safetensors into the final model file, checks the result

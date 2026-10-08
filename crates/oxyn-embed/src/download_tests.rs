@@ -354,13 +354,8 @@ async fn plain_http_is_refused_by_the_real_client() -> Result<(), EmbedError> {
 async fn a_download_refuses_while_another_process_holds_the_directory() -> Result<(), EmbedError> {
     let root = tempfile::tempdir().map_err(|e| EmbedError::io("create", "tmp", e))?;
     let store = ModelStore::new(root.path());
-    std::fs::create_dir_all(store.dir()).map_err(|e| EmbedError::io("create", store.dir(), e))?;
-    let lock_path = store.dir().join(LOCK_FILE);
-    let other =
-        std::fs::File::create(&lock_path).map_err(|e| EmbedError::io("create", &lock_path, e))?;
-    other
-        .try_lock()
-        .map_err(|_| EmbedError::Inference("the test could not take the lock".to_owned()))?;
+    // Another process: a store of its own — its own mutex — on the same root.
+    let other = ModelStore::new(root.path()).lock_exclusive()?;
 
     let nowhere = fetcher(Scheme::PlainAllowed, Vec::new())?;
     let refused = store
@@ -380,6 +375,44 @@ async fn a_download_refuses_while_another_process_holds_the_directory() -> Resul
         matches!(went_ahead, Err(EmbedError::Download { .. })),
         "{went_ahead:?}"
     );
+    Ok(())
+}
+
+/// The scenario that a lock file inside the directory lost: a removal while
+/// another process downloads. It is refused and the download's files stay;
+/// once the download ends, the removal goes ahead and the lock file — beside
+/// the directory — survives it, so the next process locks the same file.
+#[tokio::test]
+async fn a_removal_waits_for_the_download_of_another_process() -> Result<(), EmbedError> {
+    let root = tempfile::tempdir().map_err(|e| EmbedError::io("create", "tmp", e))?;
+    let downloading = ModelStore::new(root.path());
+    let removing = ModelStore::new(root.path());
+    std::fs::create_dir_all(downloading.dir())
+        .map_err(|e| EmbedError::io("create", downloading.dir(), e))?;
+    let held = downloading.lock_exclusive()?;
+    let part = downloading.part_path(&SAFETENSORS);
+    std::fs::write(&part, b"in flight").map_err(|e| EmbedError::io("write", &part, e))?;
+
+    let refused = removing.remove();
+    assert!(
+        matches!(refused, Err(EmbedError::DownloadInProgress)),
+        "{refused:?}"
+    );
+    assert!(
+        part.exists(),
+        "the download's file must survive a refused removal"
+    );
+    // Nor can a third process start a second download beside the first.
+    assert!(matches!(
+        ModelStore::new(root.path()).lock_exclusive(),
+        Err(EmbedError::DownloadInProgress)
+    ));
+
+    drop(held);
+    removing.remove()?;
+    assert!(!downloading.dir().exists());
+    assert!(removing.lock_path().exists());
+    assert!(!removing.lock_path().starts_with(removing.dir()));
     Ok(())
 }
 

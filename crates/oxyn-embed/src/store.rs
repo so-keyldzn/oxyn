@@ -1,5 +1,6 @@
 //! Where the model lives on disk, and in what state.
 
+use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -15,6 +16,17 @@ const MODEL_DIRECTORY: &str = "granite-embedding-97m-multilingual-r2-835ad140";
 /// Suffix of a file being written. Only ever renamed into place once
 /// verified, so a crash leaves a `.part`, never a damaged final file.
 pub(crate) const PART_SUFFIX: &str = ".part";
+
+/// The lock file, `<root>/<MODEL_DIRECTORY>.lock`: beside the model's
+/// directory, never in it.
+///
+/// A file lock belongs to an open file, not to a path. Kept inside the
+/// directory, it would be unlinked by [`ModelStore::remove`] while a
+/// download in another process still holds it; a third process would then
+/// create a fresh `.lock`, lock that one, and write beside the first — the
+/// serialization would be gone without an error anywhere. Outside, the path
+/// outlives every removal, so every process locks the same file.
+const LOCK_SUFFIX: &str = ".lock";
 
 /// What [`ModelStore::status`] finds, from file sizes alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +49,12 @@ pub enum ModelStatus {
 /// Cheap to clone: clones share the lock that serializes
 /// [`download`](Self::download), so one store per root is enough and two
 /// windows asking for the download at once do not write the same `.part`.
+/// Between processes, [`download`](Self::download) and
+/// [`remove`](Self::remove) exclude each other through a lock file beside the
+/// directory.
 #[derive(Debug, Clone)]
 pub struct ModelStore {
+    root: PathBuf,
     dir: PathBuf,
     pub(crate) download_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -50,8 +66,43 @@ impl ModelStore {
     #[must_use]
     pub fn new(root: impl AsRef<Path>) -> Self {
         Self {
+            root: root.as_ref().to_path_buf(),
             dir: root.as_ref().join(MODEL_DIRECTORY),
             download_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    /// The caller's root, which holds the model's directory and its lock.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn lock_path(&self) -> PathBuf {
+        self.root.join(format!("{MODEL_DIRECTORY}{LOCK_SUFFIX}"))
+    }
+
+    /// Takes the lock file, exclusively and without waiting; `root` must
+    /// exist.
+    ///
+    /// The lock is released when the returned handle drops — at the end of
+    /// the operation, on an error, on a cancellation, and by the system if
+    /// the process dies. The file itself stays: it is empty and only ever
+    /// locked. **Blocks** on an open and a non-blocking `flock`.
+    ///
+    /// Within one process it excludes too: the lock belongs to the open
+    /// file, and a second open is a second owner.
+    pub(crate) fn lock_exclusive(&self) -> Result<File, EmbedError> {
+        let path = self.lock_path();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|err| EmbedError::io("open", &path, err))?;
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(TryLockError::WouldBlock) => Err(EmbedError::DownloadInProgress),
+            Err(TryLockError::Error(err)) => Err(EmbedError::io("lock", &path, err)),
         }
     }
 
@@ -97,9 +148,19 @@ impl ModelStore {
     /// mapped it. The caller unloads first when the point is to free memory —
     /// [`OnDemandEmbedder::unload`](crate::OnDemandEmbedder::unload).
     ///
+    /// Refused while a download holds the directory, in this process or
+    /// another: deleting the files under it would make it fail on its next
+    /// write, and let another process start a second one beside it.
+    ///
     /// # Errors
-    /// [`EmbedError::Io`] when a file cannot be removed.
+    /// [`EmbedError::DownloadInProgress`] while a download runs — cancel it,
+    /// wait for it, then remove; [`EmbedError::Io`] when a file cannot be
+    /// removed.
     pub fn remove(&self) -> Result<(), EmbedError> {
+        if !self.root.is_dir() {
+            return Ok(());
+        }
+        let _exclusive = self.lock_exclusive()?;
         match std::fs::remove_dir_all(&self.dir) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),

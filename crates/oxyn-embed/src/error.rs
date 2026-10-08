@@ -54,9 +54,11 @@ pub enum EmbedError {
         detail: String,
     },
 
-    /// Another Oxyn process is already downloading into the same directory.
-    /// Waiting for it is the fix: the files it writes are the same files.
-    #[error("the embedding model is already being downloaded by another Oxyn process")]
+    /// A download holds the model's directory — in another Oxyn process, or
+    /// a removal attempted in this one before its own download ended. A
+    /// second download or a removal is refused rather than racing it;
+    /// waiting for it, or cancelling it, is the fix.
+    #[error("the embedding model is being downloaded; try again once it ends")]
     DownloadInProgress,
 
     /// The caller cancelled. Nothing partial is left in place.
