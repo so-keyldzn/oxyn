@@ -39,6 +39,39 @@ the original 2560 × 1640 pixels. Download the MP4 links if your
 Markdown viewer does not offer playback. Captures demonstrate these specific
 local workflows; they do not certify other drivers or AI features.
 
+## Animated walkthroughs
+
+One short video per feature, plus an overview that chains the essentials.
+These are **not screen recordings**: the interface is rebuilt from the same
+shadcn/Base UI primitives, OKLCH tokens and fonts as the application, then
+animated frame by frame with Remotion. They follow Oxyn 0.0.8 and the
+[seed.sql](seed.sql) dataset, but some labels, questions and AI answers were
+written for the videos; the recordings above remain the reference for what the
+application actually displays.
+
+| Walkthrough | Duration | Watch | What it shows |
+|---|---|---|---|
+| Overview | 46 s | [MP4](videos/motion/overview.mp4) | Exploration, query and guardrails, chained. |
+| Intro | 4 s | [MP4](videos/motion/intro.mp4) | The mark, the name, the promise. |
+| Connections | 16 s | [MP4](videos/motion/connections.mp4) | Engine choice, form, environment, test, opening the workspace. |
+| Explore a database | 11 s | [MP4](videos/motion/explore-database.mp4) | The catalog unfolds, `orders` opens, then its structure and DDL. |
+| Relations | 16 s | [MP4](videos/motion/relations.mp4) | Indexes, constraints, incoming and outgoing relations, ER diagram. |
+| Run a query | 14 s | [MP4](videos/motion/run-query.mp4) | The revenue query is typed, ⌘↵, rows arrive, the query is saved. |
+| Result tools | 16 s | [MP4](videos/motion/result-tools.mp4) | Search in loaded rows, columns, density, value inspection, export. |
+| Charts | 15 s | [MP4](videos/motion/charts.mp4) | A result becomes a chart, only in the shapes the data allows. |
+| Library | 15 s | [MP4](videos/motion/library.mp4) | Saved queries, modified drafts, kept results. |
+| Command palette | 14 s | [MP4](videos/motion/command-palette.mp4) | ⌘K palette, ⌘P quick open, ⌘/ shortcut sheet. |
+| Object operations | 16 s | [MP4](videos/motion/object-operations.mp4) | Rename… and Drop… go through a review dialog; the name is typed in production. |
+| Guardrails | 15 s | [MP4](videos/motion/guardrails.mp4) | Permanent markers, native production-write dialog, agent proposal kept as text. |
+| Assistant | 19 s | [MP4](videos/motion/assistant.mp4) | Object mention, plan, tool calls, a sample and its native confirmation, sources. |
+| AI privacy | 16 s | [MP4](videos/motion/ai-privacy.mp4) | Local and remote providers, privacy tiers per connection. |
+| Recovery | 15 s | [MP4](videos/motion/recovery.mp4) | Quitting with an open transaction, drafts restored after a crash. |
+| Outro | 4 s | [MP4](videos/motion/outro.mp4) | The signature and the repository address. |
+
+H.264, 1920 × 1080, 30 fps, English captions, with a soundtrack: "The Inner
+Space" by Art Flower via Free Music Archive and interface sound effects from
+Freesound, Kenney and the Remotion library, all under CC0 1.0.
+
 ## Capture provenance
 
 The installed application is not a build verified against this checkout.
