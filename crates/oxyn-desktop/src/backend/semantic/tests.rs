@@ -1,4 +1,4 @@
-//! What semantic ranking protects without its 800 MB model: off changes
+//! What semantic ranking protects without its real model: off changes
 //! nothing, a deadline costs scores and never the question, turning off
 //! leaves nothing behind, and no `NaN` reaches the ordering.
 

@@ -71,8 +71,8 @@ export function SemanticRankingSettings({
             <FieldDescription>
               Computed on this computer: no table name, comment or question is
               sent anywhere. Downloads about 220 MB once, keeps about 415 MB on
-              disk, and uses about 800 MB of memory while you ask questions —
-              released 5 minutes after the last one.
+              disk, and uses up to about 300 MB of memory while you ask
+              questions, mostly released 5 minutes after the last one.
             </FieldDescription>
             {/* What the security review found: a table matched by meaning
                 alone can fill a slot lexical ranking left empty, so the

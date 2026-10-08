@@ -3,7 +3,7 @@
 //!
 //! Pure of any model: the embedding is a function the caller passes, so the
 //! deadline, the cache bound and the batching are tested without the
-//! 800 MB model.
+//! real model.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

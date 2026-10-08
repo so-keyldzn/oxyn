@@ -44,7 +44,13 @@ export const Off: Story = {
     ).toBeVisible()
     await expect(canvas.getByText(/about 220 MB once/)).toBeVisible()
     await expect(canvas.getByText(/about 415 MB on/)).toBeVisible()
-    await expect(canvas.getByText(/about 800 MB of memory/)).toBeVisible()
+    // ADR-0056's budget: the mapped model stays under 300 MB, and the
+    // allocator may keep part of it after the unload — hence « mostly ».
+    await expect(
+      canvas.getByText(
+        /up to about 300 MB of memory while you ask questions, mostly released 5 minutes after the last one\./
+      )
+    ).toBeVisible()
     // The model reads nothing remote, but what it ranks in can be sent:
     // said before the switch is touched.
     await expect(
