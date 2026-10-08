@@ -171,7 +171,7 @@ function statusLine(model: ModelState, enabled: boolean) {
     case "downloading":
       return "Downloading the model"
     case "converting":
-      return "Preparing the model for this computer… This last step takes a few seconds and cannot be cancelled."
+      return "Preparing the model for this computer… This last step takes a few seconds."
     case "ready":
       return enabled
         ? "Ready. Loaded at the first question, released after 5 minutes without one."
@@ -212,8 +212,11 @@ function ModelView({
           </Button>
         </Actions>
       ) : null
+    // The conversion runs in a child process, killed on cancel: every step
+    // of the download can be cancelled the same way.
     case "verifying":
     case "downloading":
+    case "converting":
       return (
         <>
           <DownloadProgress model={model} />
@@ -233,8 +236,6 @@ function ModelView({
           </p>
         </>
       )
-    case "converting":
-      return <DownloadProgress model={model} />
     case "ready":
       return <Actions>{remove}</Actions>
     case "corrupt":

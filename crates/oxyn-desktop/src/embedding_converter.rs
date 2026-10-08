@@ -47,11 +47,29 @@ pub(crate) const TEMPORARY_MODELS_DIRECTORY: &str = "models-temporary-workspace"
 pub(crate) const CONVERT_ARGUMENT: &str = "--convert-embedding-model";
 
 /// Variables the child gets from Oxyn's environment, and nothing else
-/// (I-03): the ones that decide where the data directory is, so the child
-/// computes the same directories as the parent and recognises the one it is
-/// given. Paths, never secrets. `SystemRoot` is what a Windows process
-/// needs to load system libraries at all.
-const PASSED_VARIABLES: &[&str] = &["HOME", "XDG_DATA_HOME", "SystemRoot"];
+/// (I-03). Paths, never secrets, each for a reason:
+///
+/// - `HOME`, `XDG_DATA_HOME`: where the data directory is, so the child
+///   computes the same directories as the parent and recognises the one it
+///   is given;
+/// - `SystemRoot`: what a Windows process needs to load system libraries at
+///   all;
+/// - `LD_LIBRARY_PATH`, `APPDIR`, `APPIMAGE`: what an AppImage's `AppRun`
+///   and runtime set before starting Oxyn from its mount point. The dynamic
+///   loader resolves every library the binary links — the bundled WebKitGTK
+///   included — when it starts, even a child that never opens a window:
+///   without the AppImage's library directories, it would not start (exit
+///   127). The rest `AppRun` sets — Python, Perl, Qt, GStreamer, GSettings,
+///   `XDG_DATA_DIRS` — serves an interface or other languages, not the
+///   conversion.
+const PASSED_VARIABLES: &[&str] = &[
+    "HOME",
+    "XDG_DATA_HOME",
+    "SystemRoot",
+    "LD_LIBRARY_PATH",
+    "APPDIR",
+    "APPIMAGE",
+];
 
 /// The models directories Oxyn computes from the data directory: the one
 /// the saved workspace uses, and the temporary workspace's.
@@ -75,7 +93,34 @@ pub(crate) fn run_if_child() -> Option<u8> {
     }
     let root = arguments.next();
     let extra = arguments.next().is_some();
+    exit_when_the_parent_is_gone();
     Some(child(root, extra, models_directories().as_ref()))
+}
+
+/// Ends this child as soon as its parent is gone.
+///
+/// The parent holds the model directory's lock for the whole conversion,
+/// and keeps the write end of this child's stdin open while it waits. If
+/// Oxyn exits, crashes or is killed, the system closes that end, the read
+/// below sees the end of the stream, and the child stops — rather than
+/// converting on, unlocked, while a new Oxyn converts or deletes the same
+/// files. Nothing travels on stdin: the bytes are read only to see the end.
+fn exit_when_the_parent_is_gone() {
+    let watcher = std::thread::Builder::new().name("parent-watch".to_owned());
+    let started = watcher.spawn(|| {
+        wait_for_end_of(std::io::stdin().lock());
+        std::process::exit(i32::from(EmbedError::Cancelled.exit_code()));
+    });
+    if started.is_err() {
+        // Without the watch, an orphan could convert unlocked: do nothing.
+        std::process::exit(i32::from(refused().exit_code()));
+    }
+}
+
+/// Returns once `input` ends or fails; what it carries is discarded.
+fn wait_for_end_of(mut input: impl std::io::Read) {
+    let mut discarded = [0_u8; 64];
+    while matches!(input.read(&mut discarded), Ok(read) if read > 0) {}
 }
 
 /// The child's work: refuse what is not one of `allowed`, convert there.
@@ -136,10 +181,15 @@ pub(crate) async fn convert_in_child(root: PathBuf, cancel: CancelToken) -> Resu
 }
 
 /// Waits for `child`, or kills it when `cancel` fires.
+///
+/// The write end of the child's stdin is held until then: its closing —
+/// this wait dropped, or this process gone — is what ends an orphan child
+/// (see [`exit_when_the_parent_is_gone`]).
 async fn wait_or_kill(
     mut child: tokio::process::Child,
     cancel: &CancelToken,
 ) -> Result<(), EmbedError> {
+    let _parent_alive = child.stdin.take();
     tokio::select! {
         status = child.wait() => {
             let status = status.map_err(|_| {
@@ -180,10 +230,11 @@ fn command(executable: &Path, arguments: &[OsString], directory: &Path) -> tokio
     }
     // Not the workspace's directory: nothing there concerns the child.
     command.current_dir(directory);
-    // Nothing to read, nothing said: an error is its exit code, and a
-    // dependency's message never reaches a journal through it.
+    // Nothing said: an error is its exit code, and a dependency's message
+    // never reaches a journal through it. Stdin is a pipe that carries
+    // nothing: its end tells the child its parent is gone.
     command
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     #[cfg(windows)]
@@ -195,7 +246,8 @@ fn command(executable: &Path, arguments: &[OsString], directory: &Path) -> tokio
     }
     let mut command = tokio::process::Command::from(command);
     // A parent that drops the wait — a cancelled task — does not leave the
-    // child converting.
+    // child converting. A parent that exits without dropping it is covered by
+    // the closed stdin.
     command.kill_on_drop(true);
     command
 }

@@ -129,19 +129,23 @@ export const Downloading: Story = {
   },
 }
 
-/** The conversion cannot be cancelled: no button promises it. */
+/**
+ * The conversion runs in a child process that cancelling kills: it can be
+ * cancelled like the download before it.
+ */
 export const Converting: Story = {
   args: { snapshot: snapshot({ type: "converting" }) },
-  play: async ({ canvas }) => {
+  play: async ({ canvas, args }) => {
     await expect(canvas.getByRole("status")).toHaveTextContent(
-      /cannot be cancelled/
+      "Preparing the model for this computer… This last step takes a few seconds."
     )
-    await expect(
-      canvas.queryByRole("button", { name: "Cancel download" })
-    ).toBeNull()
     await expect(
       canvas.getByRole("progressbar", { name: "Model download progress" })
     ).toHaveAttribute("aria-valuetext", "Preparing the model")
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Cancel download" })
+    )
+    await expect(args.onDisable).toHaveBeenCalledOnce()
   },
 }
 

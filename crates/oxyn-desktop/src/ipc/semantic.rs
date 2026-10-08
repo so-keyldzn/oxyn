@@ -20,7 +20,8 @@ pub enum ModelState {
     /// `total` is what this download fetches: less than the full model when
     /// a file already present was valid.
     Downloading { received: u64, total: u64 },
-    /// Writing the local model file; a few seconds, not cancellable.
+    /// Writing the local model file, in a child process; a few seconds,
+    /// cancelled by killing that process.
     Converting,
     /// On disk and verified by size; loaded on the next question.
     Ready,

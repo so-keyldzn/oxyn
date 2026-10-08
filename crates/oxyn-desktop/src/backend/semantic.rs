@@ -448,7 +448,8 @@ impl Backend {
         let download = state.download.lock().take();
         if let Some(download) = download {
             download.cancel.cancel();
-            // The conversion, once started, runs to its end: a few seconds.
+            // A conversion under way is killed with its child process, and the
+            // download task ends right after.
             let _ = download.task.await;
         }
         let embedder = state.dismiss();
