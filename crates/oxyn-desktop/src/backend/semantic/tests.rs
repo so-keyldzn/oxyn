@@ -242,6 +242,7 @@ fn an_error_shown_copies_no_error_text() {
         EmbedError::Inference(LEAK.to_owned()),
         EmbedError::NotDownloaded,
         EmbedError::Cancelled,
+        EmbedError::DownloadInProgress,
     ];
     for error in &errors {
         let ModelState::Failed { message, .. } = failed(error) else {
@@ -259,6 +260,14 @@ fn an_error_shown_copies_no_error_text() {
         panic!("a failure");
     };
     assert!(retryable, "a pinned GET can be tried again");
+    let ModelState::Failed { message, retryable } = failed(&EmbedError::DownloadInProgress) else {
+        panic!("a failure");
+    };
+    assert_eq!(
+        message,
+        "Another Oxyn window or process is downloading the model; try again once it ends."
+    );
+    assert!(retryable, "waiting for the other download is the fix");
 }
 
 /// A workspace whose model lives in a directory of its own.

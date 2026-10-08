@@ -274,6 +274,13 @@ fn failed(error: &EmbedError) -> ModelState {
             true,
         ),
         EmbedError::Cancelled => ("The download was cancelled.".to_owned(), false),
+        // Another process holds the model directory's lock: waiting is the
+        // fix, so trying again is offered.
+        EmbedError::DownloadInProgress => (
+            "Another Oxyn window or process is downloading the model; try again once it ends."
+                .to_owned(),
+            true,
+        ),
         EmbedError::Conversion(_) => (
             "The downloaded model could not be prepared for this computer.".to_owned(),
             false,
