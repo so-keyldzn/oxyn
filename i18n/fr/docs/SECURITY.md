@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="e0b04c0608ae" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="66c03a98ccca" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -491,8 +491,28 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    `SIGBUS` ; un processus qui le réécrit sur place donne des vecteurs faux.
    Les deux exigent un accès en écriture au répertoire de données, qui
    contient déjà tout ce qu'Oxyn garde ; les remplacements d'Oxyn lui-même —
-   un renommage, une suppression — laissent un mappage intact. La conversion,
-   qui analyse le safetensors téléchargé, s'exécute dans un processus enfant.
+   un renommage, une suppression — laissent un mappage intact.
+
+   **La conversion s'exécute dans un processus enfant, et son argument est une
+   entrée.** La conversion, qui analyse le safetensors téléchargé, s'exécute
+   dans `oxyn-desktop` relancé avec l'argument interne
+   `--convert-embedding-model <racine>` (`embedding_converter.rs`).
+   N'importe quel processus peut lancer Oxyn avec cet argument, il est donc
+   traité comme non fiable : `main` le reconnaît avant que le journal, le
+   store ou Tauri démarrent, et l'enfant n'accepte qu'une racine égale à l'un
+   des deux répertoires qu'Oxyn calcule depuis son répertoire de données —
+   `models/` ou `models-temporary-workspace/` — sans autre argument, et
+   refuse tout le reste avant de toucher au disque (sortie 76). Il n'y fait
+   que ce que fait le téléchargement : lire un fichier vérifié sur sa somme
+   épinglée, écrire `model.bpk.part`, le renommer une fois vérifié.
+   L'environnement de l'enfant est vidé sauf `HOME`, `XDG_DATA_HOME` et
+   `SystemRoot` — des chemins, jamais un secret ([I-03](../CLAUDE.md#i-03)) —,
+   ses flux standard sont nuls, si bien qu'aucun message d'une dépendance
+   n'atteint un journal par eux, et il ne rapporte un échec que par un code de
+   sortie lu par `EmbedError::from_exit_code`. Le parent tient le verrou du
+   répertoire pendant tout le téléchargement ; l'enfant ne le prend pas.
+   Annuler tue et récolte l'enfant, et le `.part` qu'il a laissé est supprimé
+   comme celui d'un téléchargement interrompu.
 
    **Les erreurs portent des textes fixes.** Les messages de burn-store
    nomment le chemin complet d'un fichier et une erreur du tokenizer peut

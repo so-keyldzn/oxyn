@@ -1749,8 +1749,10 @@ than the schema, still finds the right ones — and then the switch, `Rank
 tables by meaning with a local model`. Beneath it, always, what it costs and
 what it does not do: computed on this computer, no table name, comment or
 question sent anywhere; about **220 MB** downloaded once, about **415 MB** kept
-on disk, about **800 MB** of memory while questions are asked, released
-**5 minutes** after the last one. A second line says what more can leave:
+on disk, up to about **300 MB** of memory while questions are asked, mostly
+released **5 minutes** after the last one — "mostly" because the system
+allocator keeps part of it
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md#memory-budget)). A second line says what more can leave:
 tables found by meaning can be added to the assistant's context, within the
 usual limit and the connection's privacy tier. While the option is on, a
 third line says that turning it off deletes the model from this computer.

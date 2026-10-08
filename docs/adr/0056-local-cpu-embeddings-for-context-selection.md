@@ -280,9 +280,43 @@ self-contained step — `ModelStore::convert_in_place`, and
 directory lock held across it and the converted file verified after it
 whatever the step reports — and a child reports a failure as an exit code
 (`EmbedError::exit_code`, one stable code per variant, 70 to 78), never as
-text. `oxyn-desktop` runs it in a child process, so the 1.45 GB peak and what
-the allocator keeps afterwards end with that process instead of staying in
-Oxyn's.
+text. `oxyn-desktop` runs it in a child process
+(`crates/oxyn-desktop/src/embedding_converter.rs`), so the 1.45 GB peak and
+what the allocator keeps afterwards end with that process instead of staying
+in Oxyn's:
+
+* **The child is Oxyn itself**, relaunched from `std::env::current_exe` with
+  the internal argument `--convert-embedding-model <models directory>`: the
+  same binary in `make desktop-dev` and once installed, on every platform, and
+  no second executable to ship. `main` recognises the argument first —
+  before the journal, the store, Tauri or any window —, calls
+  `ModelStore::convert_in_place` and exits with its code.
+* **It converts only where Oxyn would.** The root must be exactly one of the
+  two directories Oxyn computes from its data directory, `models/` or
+  `models-temporary-workspace/`, and the only argument after the flag;
+  anything else is refused before the disk is touched, with the code of a
+  conversion failure (76). Any process can launch Oxyn with arguments: this
+  one is not a way to convert or write elsewhere.
+* **It inherits almost nothing.** The environment is cleared except `HOME`
+  and `XDG_DATA_HOME` — so the child computes the same data directory — and
+  `SystemRoot`, which a Windows process needs to load system libraries;
+  standard input, output and error are null; the working directory is the
+  models directory; no console window on Windows. The single spawn site is
+  exempted from `clippy.toml`'s ban on `std::process::Command::new` because
+  of the `env_clear` right after it, like `oxyn-ai`'s `external/spawn.rs`.
+* **The parent stays in charge.** It holds the model directory's lock for the
+  whole download; the child does not take it. It awaits the child through
+  Tokio without blocking a thread; cancelling kills and reaps it
+  (`kill_on_drop` as well), and the `.part` it leaves is removed like an
+  interrupted download's. An exit code goes through
+  `EmbedError::from_exit_code`; a signal reads as a conversion failure; both
+  reach the settings as fixed sentences.
+* **Measured** by hand on 2026-10-08, Apple Silicon, dev profile: the child
+  converted the pinned weights in 3.7 s, exit 0, with a maximum resident set
+  of 1.45 GB in the child; a directory outside the two was refused with
+  exit 76, at 9 MB, creating nothing. The parent's memory after a conversion
+  has not been measured yet: that it keeps nothing of it follows from the
+  conversion running in another process.
 
 The checksum of `model.bpk` is a constant too —
 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, so a
@@ -311,7 +345,7 @@ of `map_verified`.
 | Option never turned on | **0** — nothing loaded, nothing mapped | — |
 | Model loaded | **≤ 300 MB** of footprint | 157–179 MB loaded, 248–268 MB after embedding 256 names |
 | After unloading | **≤ 250 MB** kept by the system allocator, not by Oxyn's code | about 240 MB |
-| Conversion | **in a child process**: Oxyn's own process keeps none of it | 1.45 GB peak, about 1.19 GB kept afterwards in the process that converts |
+| Conversion | **in a child process**: Oxyn's own process keeps none of it, by construction | 1.45 GB peak in the child, 3.7 s (dev profile); about 1.19 GB kept afterwards by a process that converts, released when the child exits. The parent's memory not yet measured |
 
 The memory kept after unloading is the system allocator's, not a leak: macOS
 `malloc` keeps freed large regions as `MALLOC_LARGE (empty)` and gives them

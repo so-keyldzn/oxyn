@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="2b8b98b89cb4" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="35a4a9e37511" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1830,9 +1830,11 @@ posée dans une autre langue que le schéma, trouve encore les bonnes —, puis
 l'interrupteur, `Rank tables by meaning with a local model`. Dessous, toujours,
 ce qu'elle coûte et ce qu'elle ne fait pas : calculé sur cet ordinateur, aucun
 nom de table, commentaire ou question envoyé nulle part ; environ **220 Mo**
-téléchargés une fois, environ **415 Mo** gardés sur disque, environ **800 Mo**
-de mémoire pendant qu'on pose des questions, libérés **5 minutes** après la
-dernière. Une seconde ligne dit ce qui peut sortir de plus : des tables
+téléchargés une fois, environ **415 Mo** gardés sur disque, jusqu'à environ
+**300 Mo** de mémoire pendant qu'on pose des questions, libérés pour
+l'essentiel **5 minutes** après la dernière — « pour l'essentiel » parce que
+l'allocateur du système en garde une part
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md#budget-mémoire)). Une seconde ligne dit ce qui peut sortir de plus : des tables
 trouvées par le sens peuvent être ajoutées au contexte de l'assistant, dans la
 limite habituelle et sous le niveau de confidentialité de la connexion. Tant
 que l'option est activée, une troisième ligne dit que la désactiver supprime

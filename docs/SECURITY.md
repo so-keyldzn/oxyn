@@ -462,8 +462,27 @@ What enters Oxyn and is untrusted, in order of underestimation:
    while it is mapped kills Oxyn with `SIGBUS`; one that rewrites it in place
    gives wrong vectors. Both need write access to the data directory, which
    already holds everything Oxyn keeps; Oxyn's own replacements — a rename, a
-   deletion — leave a mapping intact. The conversion, which parses the
-   downloaded safetensors, runs in a child process.
+   deletion — leave a mapping intact.
+
+   **The conversion runs in a child process, and its argument is an input.**
+   The conversion, which parses the downloaded safetensors, runs in
+   `oxyn-desktop` relaunched with the internal argument
+   `--convert-embedding-model <root>` (`embedding_converter.rs`). Any
+   process can launch Oxyn with that argument, so it is handled as untrusted:
+   `main` recognises it before the journal, the store or Tauri start, and the
+   child accepts only a root equal to one of the two directories Oxyn
+   computes from its data directory — `models/` or
+   `models-temporary-workspace/` — with no further argument, and refuses
+   anything else before touching the disk (exit 76). There it does only what
+   the download does: read a file checked on its pinned checksum, write
+   `model.bpk.part`, rename it once verified. The child's environment is
+   cleared except `HOME`, `XDG_DATA_HOME` and `SystemRoot` — paths, never a
+   secret ([I-03](../CLAUDE.md#i-03)) —, its standard streams are null, so no
+   dependency's message reaches a journal through them, and it reports a
+   failure only as an exit code read through `EmbedError::from_exit_code`.
+   The parent holds the directory lock for the whole download; the child does
+   not take it. Cancelling kills and reaps the child, and the `.part` it left
+   is removed like an interrupted download's.
 
    **Errors carry fixed texts.** burn-store's messages name a file's full
    path and a tokenizer error can quote the text: the errors of `oxyn-embed`

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="8ecca2db0541" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="b12b0cc423a2" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -1083,6 +1083,18 @@ leur portée locale globale ; les documents sont filtrés par workspace.
 │  réseau, LLM ; pool bloquant — store, trousseau, disque   │
 └──────────────────────────────────────────────────────────┘
 ```
+
+**Un processus, et un enfant de courte durée.** Avant toute chose — journal,
+store, runtime, fenêtre —, `main.rs` vérifie s'il a été lancé avec l'argument
+interne `--convert-embedding-model <racine>` : il est alors l'enfant de
+conversion du modèle d'embeddings local, convertit, et se termine avec un code
+de sortie. `oxyn-desktop` le lance depuis son propre exécutable quand le
+modèle est téléchargé, pour que le pic de 1,45 Go de la conversion, et ce que
+l'allocateur du système en garde, partent avec ce processus
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Le
+parent l'attend sur le runtime sans bloquer de thread ; les agents externes
+sont les autres processus qu'Oxyn lance
+([ADR-0026](adr/0026-agents-externes-acp.md)).
 
 **Un seul runtime.** `main.rs` construit un runtime Tokio multi-thread et le
 confie à Tauri (`tauri::async_runtime::set`) : les commandes `async` et

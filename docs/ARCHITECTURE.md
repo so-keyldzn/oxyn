@@ -1068,6 +1068,18 @@ their global local scope; documents are filtered by workspace.
 └──────────────────────────────────────────────────────────┘
 ```
 
+**One process, and one short-lived child.** Before anything else — journal,
+store, runtime, window — `main.rs` checks whether it was launched with the
+internal argument `--convert-embedding-model <root>`: then it is the
+conversion child of the local embedding model, converts, and exits with an
+exit code. `oxyn-desktop` launches it from its own executable when the
+model is downloaded, so that the conversion's 1.45 GB peak, and what the
+system allocator keeps of it, leave with that process
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
+parent awaits it on the runtime without blocking a thread; external agents
+are the other processes Oxyn starts
+([ADR-0026](adr/0026-agents-externes-acp.md)).
+
 **A single runtime.** `main.rs` builds a multi-thread Tokio runtime and
 hands it to Tauri (`tauri::async_runtime::set`): the `async` commands and
 the executor run on the same one. Two runtimes meant a result produced on

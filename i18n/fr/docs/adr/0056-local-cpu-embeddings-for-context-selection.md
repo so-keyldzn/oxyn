@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="fbaeb931ed94" -->
+<!-- oxyn-translation source="docs/adr/0056-local-cpu-embeddings-for-context-selection.md" sha256="118be61aa3c2" -->
 
 > Traduction française de [docs/adr/0056-local-cpu-embeddings-for-context-selection.md](../../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md). **La version anglaise fait foi.**
 
@@ -305,9 +305,46 @@ comme une étape autonome — `ModelStore::convert_in_place`, et
 répertoire tenu pendant toute l'étape et le fichier converti vérifié après
 elle quoi qu'elle rapporte —, et un enfant rapporte un échec par un code de
 sortie (`EmbedError::exit_code`, un code stable par variante, de 70 à 78),
-jamais par un texte. `oxyn-desktop` l'exécute dans un processus enfant, si
-bien que le pic de 1,45 Go et ce que l'allocateur garde ensuite finissent avec
-ce processus au lieu de rester dans celui d'Oxyn.
+jamais par un texte. `oxyn-desktop` l'exécute dans un processus enfant
+(`crates/oxyn-desktop/src/embedding_converter.rs`), si bien que le pic de
+1,45 Go et ce que l'allocateur garde ensuite finissent avec ce processus au
+lieu de rester dans celui d'Oxyn :
+
+* **L'enfant est Oxyn lui-même**, relancé depuis `std::env::current_exe` avec
+  l'argument interne `--convert-embedding-model <répertoire des modèles>` : le
+  même binaire dans `make desktop-dev` et une fois installé, sur toutes les
+  plateformes, et aucun second exécutable à livrer. `main` reconnaît
+  l'argument en premier — avant le journal, le store, Tauri ou toute
+  fenêtre —, appelle `ModelStore::convert_in_place` et se termine avec son
+  code.
+* **Il ne convertit que là où Oxyn le ferait.** La racine doit être
+  exactement l'un des deux répertoires qu'Oxyn calcule depuis son répertoire
+  de données, `models/` ou `models-temporary-workspace/`, et le seul argument
+  après le drapeau ; tout le reste est refusé avant de toucher au disque,
+  avec le code d'un échec de conversion (76). N'importe quel processus peut
+  lancer Oxyn avec des arguments : celui-ci n'est pas un moyen de convertir
+  ou d'écrire ailleurs.
+* **Il n'hérite de presque rien.** L'environnement est vidé sauf `HOME` et
+  `XDG_DATA_HOME` — pour que l'enfant calcule le même répertoire de données —
+  et `SystemRoot`, dont un processus Windows a besoin pour charger les
+  bibliothèques système ; entrée, sortie et erreur standard sont nulles ; le
+  répertoire de travail est celui des modèles ; pas de fenêtre de console sous
+  Windows. Le seul site de lancement est exempté de l'interdiction de
+  `std::process::Command::new` par `clippy.toml` grâce au `env_clear` qui le
+  suit, comme `external/spawn.rs` d'`oxyn-ai`.
+* **Le parent garde la main.** Il tient le verrou du répertoire du modèle
+  pendant tout le téléchargement ; l'enfant ne le prend pas. Il attend
+  l'enfant par Tokio sans bloquer de thread ; annuler le tue et le récolte
+  (`kill_on_drop` aussi), et le `.part` qu'il laisse est supprimé comme celui
+  d'un téléchargement interrompu. Un code de sortie passe par
+  `EmbedError::from_exit_code` ; un signal se lit comme un échec de
+  conversion ; les deux atteignent les réglages en phrases fixes.
+* **Mesuré** à la main le 2026-10-08, Apple Silicon, profil dev : l'enfant a
+  converti les poids épinglés en 3,7 s, sortie 0, avec un ensemble résident
+  maximal de 1,45 Go dans l'enfant ; un répertoire hors des deux a été refusé
+  avec la sortie 76, à 9 Mo, sans rien créer. La mémoire du parent après une
+  conversion n'a pas encore été mesurée : qu'il n'en garde rien découle de ce
+  que la conversion tourne dans un autre processus.
 
 La somme de `model.bpk` est elle aussi une constante —
 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` —, si bien
@@ -339,7 +376,7 @@ de `map_verified`.
 | Option jamais activée | **0** — rien de chargé, rien de mappé | — |
 | Modèle chargé | **≤ 300 Mo** d'empreinte | 157–179 Mo chargé, 248–268 Mo après avoir transformé 256 noms |
 | Après déchargement | **≤ 250 Mo** gardés par l'allocateur du système, pas par le code d'Oxyn | environ 240 Mo |
-| Conversion | **dans un processus enfant** : le processus d'Oxyn n'en garde rien | pic de 1,45 Go, environ 1,19 Go gardés ensuite dans le processus qui convertit |
+| Conversion | **dans un processus enfant** : le processus d'Oxyn n'en garde rien, par construction | pic de 1,45 Go dans l'enfant, 3,7 s (profil dev) ; environ 1,19 Go gardés ensuite par un processus qui convertit, rendus quand l'enfant se termine. Mémoire du parent pas encore mesurée |
 
 La mémoire gardée après déchargement est celle de l'allocateur du système, pas
 une fuite : le `malloc` de macOS garde les grandes régions libérées comme
