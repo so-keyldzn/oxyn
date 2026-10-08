@@ -24,9 +24,20 @@
 //! random produces wrong queries (ADR-0006, consequences). Three mechanisms, in
 //! this order:
 //!
-//! 1. **selection** — [`oxyn_catalog::search()`] ranks relations by lexical
-//!    relevance to the question asked; failing a question, the order of the
-//!    paths decides, so that two successive builds render the same context;
+//! 1. **selection** — the `@` mentions first, then
+//!    [`oxyn_catalog::search()`] ranks relations by lexical relevance to the
+//!    question asked; failing a question, the order of the paths decides, so
+//!    that two successive builds render the same context. When the host
+//!    passes [`SemanticScores`] — one number per relation path, computed on
+//!    the machine, no text ([ADR-0056](../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md))
+//!    —, they break ties between equal lexical scores and order the relations
+//!    the search missed, after every lexical match and without a threshold.
+//!    **Scores can increase how many relations are described**, not only
+//!    their order: where the lexical search keeps only its matches, scored
+//!    relations it missed complete the selection up to
+//!    [`ContextPolicy::max_relations`] — more schema leaves, always under
+//!    the connection's tier and within the token budget. A score itself
+//!    carries no text into the prompt;
 //! 2. **normalization** — a description rebuilt from the catalog's common
 //!    model, the same for every database, without the server's writing
 //!    variations;
@@ -60,11 +71,13 @@ use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
 mod mentions;
+mod semantic;
 mod wanted;
 
 pub(crate) use mentions::QUESTION_HEADER;
 pub use mentions::{MAX_MENTIONS, Mention};
-pub use wanted::wanted_relations;
+pub use semantic::SemanticScores;
+pub use wanted::{wanted_relations, wanted_relations_ranked};
 
 /// Bytes counted per token in the budget estimate.
 ///
@@ -318,6 +331,9 @@ pub struct ContextBuilder<'a> {
     /// Complete the mentions by search; false for a question that follows a
     /// session already informed ([`ContextBuilder::mentioned_only`]).
     fill: bool,
+    /// Per-relation scores from the host; empty, the selection is lexical
+    /// only ([`ContextBuilder::with_semantic_scores`]).
+    semantic: SemanticScores,
 }
 
 impl<'a> ContextBuilder<'a> {
@@ -336,6 +352,7 @@ impl<'a> ContextBuilder<'a> {
             samples: Vec::new(),
             mentions: Vec::new(),
             fill: true,
+            semantic: SemanticScores::new(),
         }
     }
 
@@ -543,6 +560,7 @@ impl<'a> ContextBuilder<'a> {
             &self.focus,
             mentioned,
             self.fill,
+            &self.semantic,
         )
     }
 
@@ -1235,3 +1253,6 @@ mod generic_tests;
 
 #[cfg(test)]
 mod mention_tests;
+
+#[cfg(test)]
+mod semantic_tests;

@@ -190,6 +190,14 @@ pub struct WorkspacePreferences {
     /// Absent in every payload written before this field existed, and absent
     /// again as soon as the object it named is too long to store.
     pub object_location: Option<ObjectLocation>,
+    /// Rank the AI context's relations by meaning as well as by name, with
+    /// the local embedding model
+    /// ([ADR-0056](../../../docs/adr/0056-local-cpu-embeddings-for-context-selection.md)).
+    ///
+    /// Off by default, and absent from every payload written before it: an
+    /// older payload reads as off, so no download ever starts on its own. The
+    /// default policy refuses the write to an agent, so no agent turns it on.
+    pub semantic_ranking: bool,
 }
 
 impl Default for WorkspacePreferences {
@@ -207,6 +215,7 @@ impl Default for WorkspacePreferences {
             binary_display: BinaryPreference::Hex,
             cell_max_chars: 512,
             object_location: None,
+            semantic_ranking: false,
         }
     }
 }
@@ -226,6 +235,7 @@ impl std::fmt::Debug for WorkspacePreferences {
             .field("binary_display", &self.binary_display)
             .field("cell_max_chars", &self.cell_max_chars)
             .field("object_location", &self.object_location)
+            .field("semantic_ranking", &self.semantic_ranking)
             .finish()
     }
 }
@@ -380,6 +390,10 @@ mod tests {
         assert!(!older.follow_system_appearance);
         assert_eq!(older.binary_display, BinaryPreference::Hex);
         assert_eq!(older.cell_max_chars, 512);
+        assert!(
+            !older.semantic_ranking,
+            "a payload from before ADR-0056 never starts a download"
+        );
 
         // A rendering a newer Oxyn knows, this one does not: read, not refused.
         let newer: WorkspacePreferences =

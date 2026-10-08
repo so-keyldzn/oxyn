@@ -1845,6 +1845,7 @@ mod approved_samples {
                 "first",
                 None,
                 PrivacyTier::Sampled,
+                oxyn_ai::SemanticScores::new(),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         remembered.ask("EARLIER-EXCHANGE-MARK");
@@ -1884,6 +1885,7 @@ mod approved_samples {
                 "which plans?",
                 Some(sample.rows),
                 sample.tier,
+                oxyn_ai::SemanticScores::new(),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&with_sample);
@@ -1912,6 +1914,7 @@ mod approved_samples {
                 "and then?",
                 None,
                 PrivacyTier::Sampled,
+                oxyn_ai::SemanticScores::new(),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&after);
@@ -2123,6 +2126,7 @@ mod approved_samples {
                 "which plans?",
                 Some(sample),
                 PrivacyTier::Metadata,
+                oxyn_ai::SemanticScores::new(),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&dialogue);
@@ -2578,6 +2582,7 @@ mod approved_samples {
                 "and now?",
                 None,
                 PrivacyTier::Sampled,
+                oxyn_ai::SemanticScores::new(),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&dialogue);

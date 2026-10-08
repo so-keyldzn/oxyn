@@ -100,10 +100,14 @@ only write outside the bus — the secrets of a connection draft — goes throug
 `credentials.rs`: one keychain call per driver would be as many places to
 audit instead of one ([I-03](../CLAUDE.md#i-03)).
 
-**Two subjects are plumbing, not `Command`s**: the menu bar
-([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)) and updates
-([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). Neither
-reaches a driver. The updater is driven from Rust alone: its commands
+**Three subjects are plumbing, not `Command`s**: the menu bar
+([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)), updates
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) and the
+download of the local embedding model
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)), started
+only by the `enable_semantic_ranking` command, which also saves the
+preference as the human — a `true` read from disk starts nothing. None of
+them reaches a driver. The updater is driven from Rust alone: its commands
 (`commands/updates.rs`, `ipc/updates.rs`) take no URL, path or version, and
 the webview holds no `updater:` permission. `tauri-plugin-opener` is not
 registered at all: `open_release_page` calls its free function `open_url`.
@@ -144,7 +148,7 @@ to the webview ([I-03](../CLAUDE.md#i-03)); tests in `ipc.rs` check it.
 
 ## 3. The Cargo workspace
 
-15 crates, as they exist, plus the `apps/desktop` front end
+16 crates, as they exist, plus the `apps/desktop` front end
 ([§2 bis](#2-bis-the-tauri-interface)):
 
 ```
@@ -166,6 +170,8 @@ oxyn/
 │   ├── oxyn-llm/                 # model provider abstraction
 │   ├── oxyn-ai/                  # agent runtime, tools, context, privacy
 │   ├── oxyn-plugin/              # WASM host (wasmtime behind the `wasm-host` feature)
+│   ├── oxyn-embed/               # local text embeddings: pinned model, download, CPU
+│   │                             #   inference (Burn); only oxyn-desktop depends on it (ADR-0056)
 │   └── oxyn-desktop/             # `oxyn-desktop` binary: Tauri host and IPC bridge (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embedded
@@ -883,6 +889,17 @@ The schema context is **compacted** before sending: normalized DDL, irrelevant t
 pruned by searching the catalog. A 5,000-table database does not fit in a
 context window — selecting the relevant tables is a real component.
 
+Selection is lexical first. When the user turned semantic ranking on — off by
+default — local CPU embeddings order the relations the lexical score ties or
+misses, and complete the selection with them up to `max_relations`, so more
+relations can be described than without them
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+`oxyn-desktop` computes them with `oxyn-embed`, on the blocking pool, within
+2 seconds per question, and hands `ContextBuilder` a score per relation;
+`oxyn-ai` never depends on `oxyn-embed`, and a score carries no text into the
+prompt. The model is local whatever the tier: the embedding step sends
+nothing; what reaches a provider is still rendered under the tier.
+
 ### 7.5 Provider abstraction
 
 A single implementation (`OpenAiCompatibleProvider`) covers Ollama, LM Studio, llama.cpp,
@@ -1050,6 +1067,18 @@ their global local scope; documents are filtered by workspace.
 │  disk                                                     │
 └──────────────────────────────────────────────────────────┘
 ```
+
+**One process, and one short-lived child.** Before anything else — journal,
+store, runtime, window — `main.rs` checks whether it was launched with the
+internal argument `--convert-embedding-model <root>`: then it is the
+conversion child of the local embedding model, converts, and exits with an
+exit code. `oxyn-desktop` launches it from its own executable when the
+model is downloaded, so that the conversion's 1.45 GB peak, and what the
+system allocator keeps of it, leave with that process
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
+parent awaits it on the runtime without blocking a thread; external agents
+are the other processes Oxyn starts
+([ADR-0026](adr/0026-agents-externes-acp.md)).
 
 **A single runtime.** `main.rs` builds a multi-thread Tokio runtime and
 hands it to Tauri (`tauri::async_runtime::set`): the `async` commands and

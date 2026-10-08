@@ -2353,3 +2353,102 @@ table without loading a native file at runtime? The answer grounds
 | `assert()` stays live: `build.rs` does not define `NDEBUG`, the release archive imports `___assert_rtn`; `sqlite-vec.c` holds 42 `assert(` calls, some on sizes read from shadow tables (`vec0_metadata_filter_text`, l. 6155–6156) | `nm -u` on `libsqlite_vec0.a`; crate source | 2026-10-06 |
 | An interrupted `INSERT` into `vec0` can fail with `SQLITE_ERROR`, "Internal sqlite-vec error: Could not find latest chunk", instead of `SQLITE_INTERRUPT` | observed by `a_stopped_write_into_vec0_is_ambiguous` before the fix (one run in three) | 2026-10-06 |
 | sqlite-vec never calls `sqlite3_vtab_config`: `vec0` is marked neither `SQLITE_VTAB_INNOCUOUS` nor `SQLITE_VTAB_DIRECTONLY`. `libsqlite3-sys` 0.35.0's `build.rs` does not set `SQLITE_TRUSTED_SCHEMA`, so the engine default (on) applies | crate source; `libsqlite3-sys-0.35.0/build.rs` | 2026-10-06 |
+
+## Local embeddings — checked on 2026-10-07
+
+Question: can Oxyn compute text embeddings in its own process, on the CPU,
+with nothing installed beside it, well enough to rank catalog relations
+against a question? The answer grounds
+[ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md). The
+measurements come from a spike run on 2026-10-07 on an Apple Silicon arm64
+laptop with 10 cores, in release; they were not repeated on Linux.
+
+### Crates
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `burn`, `burn-flex`, `burn-store`, `burn-onnx`: latest stable **0.22.0**, all four published 2026-10-06, `MIT OR Apache-2.0`; `burn` declares `rust-version = "1.95"`, the workspace floor | [crates.io API](https://crates.io/api/v1/crates/burn) | 2026-10-07 |
+| `burn` with `default-features = false` and `flex` enables burn-flex with `std` only; `simd` and `rayon` need burn-flex declared directly | `oxyn-embed` spike; root `Cargo.toml` comment | 2026-10-07 |
+| `tokenizers`: latest stable **0.23.2**, published 2026-09-03, `Apache-2.0`; a `1.0.0-rc.2` pre-release exists (2026-09-21) | [crates.io API](https://crates.io/api/v1/crates/tokenizers) | 2026-10-07 |
+| `tokenizers` with `default-features = false` and `fancy-regex` gives the same token ids as the default Oniguruma build on 17 multilingual cases | spike | 2026-10-07 |
+| Resolved graph of the inference crate: 198 crates, no `-sys` crate; the only MPL-2.0 license, `colored`, is accepted by `deny.toml` | `cargo tree`, `cargo deny check licenses` in the spike | 2026-10-07 |
+| `ort`: no stable 2.0, latest **2.0.0-rc.13** (2026-07-28); depends on `ort-sys =2.0.0-rc.13`; default features include `download-binaries` (prebuilt onnxruntime fetched at build time), `load-dynamic` is the alternative | [crates.io API](https://crates.io/api/v1/crates/ort/2.0.0-rc.13) | 2026-10-07 |
+| `candle-transformers`: latest stable **0.11.0** (2026-06-26); `src/models/modernbert.rs` implements ModernBERT with `global_rope_theta`, `local_rope_theta` and the local attention window from the configuration. Not measured | crate source `candle-transformers-0.11.0` | 2026-10-07 |
+
+### The model
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `ibm-granite/granite-embedding-97m-multilingual-r2`: license `apache-2.0`, pipeline `feature-extraction`, created 2026-04-20, last modified 2026-05-18; pinned revision `835ad14087e140460703cf0fae09f97d469d65c2` | [Hugging Face API](https://huggingface.co/api/models/ibm-granite/granite-embedding-97m-multilingual-r2/revision/835ad14087e140460703cf0fae09f97d469d65c2) | 2026-10-07 |
+| At that revision: `model.safetensors` 194 889 568 bytes, SHA-256 `f3ea88b230492811046145513710e76b4cc8c2ad49e8708da0e7247e548903be`; `tokenizer.json` 25 301 672 bytes, SHA-256 `4f2842d568e2724370aec203652a42ac783c7937f8347a1a2cc7506d71f1582f`; `onnx/model.onnx` 390 004 608 bytes, SHA-256 `68e592b160673d30250824c1116bc6ab33f70efb22b97c9e1d7ce1e69c1c9d70` | same API, `?blobs=true` (LFS checksums) | 2026-10-07 |
+| The safetensors holds 74 tensors, all `BF16`, 97 441 152 parameters: 389 764 608 bytes once widened to f32 | header of `model.safetensors`, read by range request | 2026-10-07 |
+| `config.json`: `ModernBertModel`, `hidden_size` 384, 12 layers, 12 heads, `vocab_size` 180 000, `global_rope_theta` 150 000, `local_rope_theta` 160 000, `local_attention` 128, global attention every 3 layers; `1_Pooling/config.json`: CLS pooling, 384 dimensions | files at the pinned revision | 2026-10-07 |
+| The repository has no `LICENSE` file: the license is declared in the model card metadata | file list at the pinned revision | 2026-10-07 |
+| `resolve/<revision>/model.safetensors` answers `302` towards `us.aws.cdn.hf.co`, with `x-linked-size` and `x-linked-etag` equal to the size and SHA-256 above | `curl -I` | 2026-10-07 |
+
+### Measured by the spike
+
+| Fact | Source | Checked on |
+|---|---|---|
+| burn-onnx 0.22.0 converts the ONNX export without a missing operator; 43 parameters are constant-folded ONNX initializers absent from the safetensors (rotary frequencies, LayerNorm biases, scalars) | spike | 2026-10-07 |
+| Burn output against onnxruntime on the same inputs: maximum absolute gap 4.2e-7, cosine 1.0 | spike | 2026-10-07 |
+| Latency: about 14 ms for one sentence, about 440 ms for 256 table names | spike, release | 2026-10-07 |
+| Peak RSS: 1.15 GB loading the safetensors; about 750 MB loading a `.bpk` in f32; the tokenizer loaded alone, 286 MB | spike, release | 2026-10-07 |
+| Cosine question ↔ relevant table: 0.909 (English), 0.865 (French); irrelevant tables at most 0.773 | spike | 2026-10-07 |
+| Cold compilation of the inference crate: 80 s of wall time, 45 s of which is burn-flex on the critical path; demo binary 11.7 MB, 8.6 MB stripped | spike, `cargo build --release` | 2026-10-07 |
+| The generated `model.rs` holds 69 `.unwrap()`, no `expect` nor `panic!`, and some 250 `as` conversions | `grep` on `crates/oxyn-embed/src/generated/model.rs` | 2026-10-07 |
+
+### Measured by `oxyn-embed`
+
+Same machine, release build unless stated, commit `a7233c3`.
+
+| Fact | Source | Checked on |
+|---|---|---|
+| Cold load 0.67 s (hashing the 415 MB of files, mapping, warm-up); one question 18 ms; 256 table names 0.63 s, and 2.2 s in the dev profile (about 3.5 times slower) | `oxyn-embed` ignored tests, commit `a7233c3` | 2026-10-07 |
+| RSS once loaded: 795 MB — with `BurnpackStore::from_file`, which copies the file into the heap (see 2026-10-08 below) | same | 2026-10-07 |
+| Real download and conversion: 14 s, RSS peak 1.45 GB; what stays on disk is `tokenizer.json` and `model.bpk`, about 415 MB, the safetensors being deleted once the conversion is verified | same | 2026-10-07 |
+| `BurnpackStore` records each parameter's `ParamId`, a random `u64` drawn when the model is built: two conversions of the same weights differ by 590 header bytes. Written through `burn_pack::Writer` with every `param_id` set to `None`, `model.bpk` is reproducible: 389 816 832 bytes, SHA-256 `d5ac67b8e7e85e63ba433faebbe3e5537732ab7e27dde9cf3422710c6abce719` | `crates/oxyn-embed/src/load.rs`, `src/pinned.rs` | 2026-10-07 |
+
+### Memory measured on 2026-10-08
+
+A dedicated harness reading the process's footprint, RSS and `malloc`
+statistics, release build, macOS 26.2, Apple M1 Max, two runs each.
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `BurnpackStore::from_file` reads the whole `model.bpk` into the heap through burn-pack's `Bytes::from_file`: 434 MB of `malloc`, although burn-store's `memmap` feature is on | harness; `burn-store-0.22.0/src/burnpack.rs` → `burn-pack-0.22.0/src/reader.rs` (`Source::File(Bytes::from_file(…))`) | 2026-10-08 |
+| Loaded with `BurnpackStore::from_file`: footprint 553 MB, then 643 MB after embedding 256 names; RSS 677 then 766 MB | harness, commit `ea98128` message | 2026-10-08 |
+| Loaded from a `memmap2` mapping of the verified file (`ea98128`): footprint 157–179 MB, then 248–268 MB after 256 names; RSS 388–409 then 484–503 MB. The vectors still match onnxruntime | same | 2026-10-08 |
+| After the conversion, the process keeps a footprint of 1,187 MB with 0.2 MB of `malloc` in use: `vmmap` lists 1.1 GB of `MALLOC_LARGE (empty)`. It does not move in 25 s, nor on `malloc_zone_pressure_relief` | harness log, `vmmap` | 2026-10-08 |
+| After unloading the model, about 240 MB stay held by the system allocator | harness | 2026-10-08 |
+| `MallocLargeCache=0` releases those regions but makes inference 31 % slower: 2.51 s on the measured workload | harness | 2026-10-08 |
+| With `mimalloc` as the global allocator, about 70 MB stay held after unloading | harness | 2026-10-08 |
+| `memmap2` **0.9.11**, the version burn-store already pulls, becomes a workspace dependency; `bytes` 1.12.1 was already one | `Cargo.toml`, `Cargo.lock` at `ea98128` | 2026-10-08 |
+
+### Dependencies brought by `oxyn-embed`
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `sha2` **0.11.0**, already a workspace dependency; `Cargo.lock` also keeps 0.10.9 for other crates | `Cargo.lock` at `a7233c3` | 2026-10-07 |
+| The new requirements move five existing `Cargo.lock` entries within their semver range: `uuid` 1.26.0 → 1.27.0, `cc` 1.4.5 → 1.6.0, `syn` 3.0.5 → 3.0.6, `rand` 0.10.2 → 0.10.3, `find-msvc-tools` 0.1.12 → 0.1.14 | `git diff` of `Cargo.lock`, `8ec843c..a7233c3` | 2026-10-07 |
+| Python packages pinned by `codegen/reference.py` and `codegen/regenerate.py` (outside the build, run with `uv`): `onnxruntime` **1.30.0** (2026-09-10), `numpy` **2.5.3** (2026-09-06), `tokenizers` **0.23.2** (2026-09-03) | [PyPI JSON API](https://pypi.org/pypi/onnxruntime/1.30.0/json) | 2026-10-07 |
+| `reqwest` 0.13.4 gains the `system-proxy` feature (commit `83e8076`); through `hyper-util`, `Cargo.lock` gains four entries: `system-configuration` **0.7.0** (2025-12-02), `system-configuration-sys` **0.6.0** (2024-01-31), a second `core-foundation` **0.9.4** (2023-11-30) beside the existing 0.10.0, and `windows-registry` **0.6.1** (2025-10-06), all `MIT OR Apache-2.0`. Newer releases exist (`system-configuration` 0.8.0, `windows-registry` 0.100.0, `core-foundation` 0.10.1): these are the versions `hyper-util` asks for | `Cargo.lock` at `83e8076`; [crates.io API](https://crates.io/api/v1/crates/system-configuration) | 2026-10-07 |
+| `system-configuration-sys` 0.6.0 is a `-sys` crate, unlike the spike's graph: its `build.rs` only links the system `SystemConfiguration` framework on Apple targets, and compiles no C | crate source `build.rs` | 2026-10-07 |
+| `reqwest` is a single version in the graph (0.13.4), shared by `oxyn-llm`, `oxyn-embed` and `tauri-plugin-updater` 2.13.1: a feature enabled for one is enabled for all; `oxyn-llm`'s client calls `no_proxy()` (`crates/oxyn-llm/src/http.rs`) | `Cargo.lock`; source | 2026-10-07 |
+
+### Alternatives
+
+| Fact | Source | Checked on |
+|---|---|---|
+| `microsoft/harrier-oss-v1-270m`: MIT, 268 098 176 parameters in BF16, no `.onnx` file in the repository | [Hugging Face API](https://huggingface.co/api/models/microsoft/harrier-oss-v1-270m) | 2026-10-07 |
+| `voyageai/voyage-4-nano`: Apache-2.0, 346 451 968 parameters in BF16; ONNX exports exist only in third-party repositories | [Hugging Face API](https://huggingface.co/api/models/voyageai/voyage-4-nano) | 2026-10-07 |
+| `jinaai/jina-embeddings-v5-text-*`: CC-BY-NC-4.0 | Hugging Face API | 2026-10-07 |
+| `google/embeddinggemma-300m`: Gemma license, 302 863 104 parameters | Hugging Face API | 2026-10-07 |
+| `MongoDB/mdbr-leaf-mt`: Apache-2.0, 22 565 376 parameters in F32, ONNX published, language tag `en` only | Hugging Face API | 2026-10-07 |
+
+### GitHub releases
+
+| Fact | Source | Checked on |
+|---|---|---|
+| "The latest release is the most recent non-prerelease, non-draft release, sorted by the `created_at` attribute"; drafts and pre-releases cannot be set as latest | [GitHub REST API, releases](https://docs.github.com/en/rest/releases/releases#get-the-latest-release) | 2026-10-07 |
+| The fallback [`embedding-model-835ad140`](https://github.com/so-keyldzn/oxyn/releases/tag/embedding-model-835ad140) is published (2026-10-07T16:45:34Z), `prerelease: true`, `draft: false`. Assets and their GitHub digests: `model.safetensors` 194 889 568 bytes `sha256:f3ea88b2…903be`, `tokenizer.json` 25 301 672 bytes `sha256:4f2842d5…1582f` — both equal to the pinned values —, `LICENSE-Apache-2.0.txt` 11 358 bytes, `NOTICE.md` 891 bytes. The latest release stayed `v0.0.7`, and `releases/latest/download/latest.json` answers 200 | `gh api repos/so-keyldzn/oxyn/releases/tags/embedding-model-835ad140`, `…/releases/latest`; `curl -L` | 2026-10-07 |

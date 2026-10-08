@@ -51,6 +51,7 @@ import {
   prunedHistoryQuery,
 } from "./queries"
 import { SQL_AGENT_ID, SQL_ONLY, restrictedToAgent } from "./agent-options"
+import { preloadSemanticModel } from "./semantic-ranking"
 import { useReloadAgents } from "./reload-agents"
 import { ToolRows } from "./tool-rows"
 import { ErdBlock } from "./erd-block"
@@ -120,6 +121,12 @@ export function AssistantPanel({
 
   React.useEffect(() => {
     void resumeAssistant(open.connection)
+  }, [open.connection])
+
+  // The local model's cold load moves out of the first question's two
+  // seconds; Rust does nothing while semantic ranking is off (ADR-0056).
+  React.useEffect(() => {
+    preloadSemanticModel()
   }, [open.connection])
 
   // The conversation's agent decides which destinations stay usable; the

@@ -412,16 +412,120 @@ What enters Oxyn and is untrusted, in order of underestimation:
    lets a script skip the "work would be stopped" dialog — at worst it
    restarts into an update already verified, as `cancel_exit` and the
    ordered exit already allow; open transactions still ask.
+9. **The local embedding model files.** Only when the user turns on semantic
+   ranking — the `enable_semantic_ranking` command, which saves a workspace
+   preference off by default that no agent can change; a `true` read from
+   disk starts nothing —, Oxyn downloads `model.safetensors` and `tokenizer.json` (220,191,240 bytes)
+   ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
+   sources are constants of `oxyn_embed::pinned`: Hugging Face at a pinned
+   commit, then the `embedding-model-835ad140` pre-release of this
+   repository, published on 2026-10-07 with the same two files, the
+   Apache-2.0 text and a `NOTICE.md`. A file is accepted on its pinned size
+   and SHA-256 alone, whichever source served it: streamed to a `.part`,
+   hashed as it arrives, cut off past its pinned size, renamed into place
+   only on a match, removed on any failure. HTTPS only, redirections included
+   (at most 5), TLS verified, 10 s to connect and 60 s of silence at most
+   between two chunks. **The system proxy is honoured**, a choice the user
+   validated, whereas the AI transports of `oxyn-llm` disable it
+   (`no_proxy`): an AI request carries the user's schema and questions, and a
+   proxy is one more party that reads them, while this request carries no
+   user data and its answer is trusted on its checksum, not on its path. A
+   proxy can withhold the model, or see that Oxyn fetches it; it cannot make
+   Oxyn accept other bytes. Refusing the proxy would only make the option
+   impossible to turn on behind a corporate network. It is read through
+   `reqwest`'s `system-proxy` feature — without it, only the `HTTP(S)_PROXY`
+   variables count, which an application started from the Finder does not
+   inherit. The feature applies to every client of the single `reqwest` of
+   the graph: `oxyn-llm`'s only client keeps calling `no_proxy()`, and **the
+   updater of item 8 now follows the system proxy too**, which leaves its
+   integrity where it was — on the minisign signature, not on the route.
+   The request carries no user data — a fixed URL and the `oxyn/<version>`
+   user agent —, and the webview supplies neither a URL nor a path.
+
+   **Two processes.** A download holds an exclusive lock on the model
+   directory's `.lock` file; a second Oxyn process is refused with
+   `EmbedError::DownloadInProgress` instead of writing the same `.part`. The
+   temporary workspace of `make desktop-dev` keeps its model in
+   `models-temporary-workspace/` of the user data directory, apart from the
+   installed Oxyn's `models/` — not in the system temporary directory, which
+   other accounts can write on Linux.
+
+   **The files on disk stay inputs.** No file is parsed before its size and
+   SHA-256 match the pinned values: the safetensors is hashed again right
+   before the conversion parses it, and removed when damaged;
+   `tokenizer.json` is read once, so the bytes hashed are the bytes parsed.
+   A file truncated by a full disk is refused, never handed to a parser. The
+   one residual window is `model.bpk`'s, below.
+
+   **One risk is accepted**: `model.bpk` is memory-mapped, from the very
+   file handle whose SHA-256 was just checked — replacing the file between
+   the check and the mapping changes nothing, the verified inode is the one
+   mapped — and the mapping's length must equal the pinned size before any
+   byte is read, or the file is refused as `Corrupt`. What remains is one
+   class: a process of the same user writing **in place** into the mapped
+   inode. A truncation while it is mapped kills Oxyn with `SIGBUS`; a
+   rewrite between the end of the hash and the mapping, or during
+   `load_from`, makes the burnpack parser read unverified bytes, and a panic
+   there kills the process (`panic = "abort"` in release); a rewrite after
+   loading gives wrong vectors. All need write access to the data
+   directory, which already holds everything Oxyn keeps; Oxyn's own
+   replacements — a rename, a deletion — leave a mapping intact.
+
+   **The conversion runs in a child process, and its argument is an input.**
+   The conversion, which parses the downloaded safetensors, runs in
+   `oxyn-desktop` relaunched with the internal argument
+   `--convert-embedding-model <root>` (`embedding_converter.rs`). Any
+   process can launch Oxyn with that argument, so it is handled as untrusted:
+   `main` recognises it before the journal, the store or Tauri start, and the
+   child accepts only a root equal to one of the two directories Oxyn
+   computes from its data directory — `models/` or
+   `models-temporary-workspace/` — with no further argument, and refuses
+   anything else before touching the disk (exit 76). There it does only what
+   the download does: read a file checked on its pinned checksum, write
+   `model.bpk.part`, rename it once verified. The child's environment is
+   cleared except `HOME`, `XDG_DATA_HOME`, `SystemRoot` and, when set,
+   `LD_LIBRARY_PATH`, `APPDIR` and `APPIMAGE` — which a Tauri AppImage's
+   AppRun sets, and without which the child would not start (not yet
+   verified on a real AppImage) —: paths, never a secret
+   ([I-03](../CLAUDE.md#i-03)). Its standard output and error are null, so no
+   dependency's message reaches a journal through them, and it reports a
+   failure only as an exit code read through `EmbedError::from_exit_code`.
+   The parent holds the directory lock for the whole download; the child does
+   not take it, and the lock closes on `exec`. So that a child never outlives
+   that lock, its standard input is a pipe the parent keeps open while it
+   waits: the child exits with the `Cancelled` code as soon as the pipe ends,
+   which happens when Oxyn quits, crashes or is killed. Cancelling kills and
+   reaps the child — at any step, the conversion included —, and the `.part`
+   it left is removed like an interrupted download's.
+
+   **Errors carry fixed texts.** burn-store's messages name a file's full
+   path and a tokenizer error can quote the text: the errors of `oxyn-embed`
+   and the message the settings show and the journal records are fixed
+   sentences, filled only with a pinned file name, an action or an I/O error
+   kind; tests feed every variant a path and a marker and check that neither
+   comes out. What is embedded — the question and relation names
+   and comments — never leaves the process, and the vector cache keeps only
+   their SHA-256.
 
 ## `unsafe` policy
 
 **`unsafe` is refused at compile time.** `[workspace.lints.rust]` carries
-`unsafe_code = "deny"`, and of the fifteen crates — twelve under `crates/`,
-three drivers under `drivers/` — a single function re-allows it:
-`register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
-registers the bundled sqlite-vec extension on a connection — only one where the
-user turned the `sqlite_vec` switch on, off by default, and that no agent can
-change ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)). The manifest is authoritative here, because it is what is
+`unsafe_code = "deny"`, and of the sixteen crates — thirteen under `crates/`,
+three drivers under `drivers/` — two functions re-allow it, each under its own
+ADR:
+
+- `register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
+  registers the bundled sqlite-vec extension on a connection — only one where
+  the user turned the `sqlite_vec` switch on, off by default, and that no agent
+  can change ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md));
+- `map_verified` in `crates/oxyn-embed/src/load.rs`, which memory-maps the
+  local embedding model, read-only, from the file handle whose SHA-256 was
+  just verified — only once the user turned semantic ranking on, off by
+  default ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+  Its accepted risk is the in-place write of item 9 above — a `SIGBUS`, an
+  abort in the parser, or wrong vectors.
+
+The manifest is authoritative here, because it is what is
 executed: this document previously described a policy of supervised use that
 compilation does not grant, and [ADR-0021](adr/0021-marqueur-d-arret.md) grounded
 an architecture decision — not checking a pid — on the refusal, not on the

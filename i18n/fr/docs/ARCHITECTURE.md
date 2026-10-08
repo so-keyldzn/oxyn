@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="c42a92e6c552" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="b12b0cc423a2" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -105,10 +105,14 @@ seule écriture hors bus — les secrets d'un brouillon de connexion — passe p
 `credentials.rs` : un appel au trousseau par driver serait autant d'endroits à
 auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)).
 
-**Deux sujets sont de la plomberie, pas des `Command`** : la barre de menus
-([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)) et les mises
-à jour ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)).
-Aucun des deux n'atteint un driver. La mise à jour est pilotée depuis Rust
+**Trois sujets sont de la plomberie, pas des `Command`** : la barre de menus
+([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)), les mises
+à jour ([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) et le
+téléchargement du modèle d'embeddings local
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)), lancé
+seulement par la commande `enable_semantic_ranking`, qui enregistre aussi la
+préférence en tant qu'humain — un `true` lu sur disque ne lance rien. Aucun
+d'eux n'atteint un driver. La mise à jour est pilotée depuis Rust
 seul : ses commandes (`commands/updates.rs`, `ipc/updates.rs`) ne prennent ni
 URL, ni chemin, ni version, et la webview ne détient aucune permission
 `updater:`. `tauri-plugin-opener` n'est pas enregistré du tout :
@@ -150,7 +154,7 @@ vers la webview ([I-03](../CLAUDE.md#i-03)) ; des tests d'`ipc.rs` le vérifient
 
 ## 3. Le workspace Cargo
 
-15 crates, telles qu'elles existent, plus le front `apps/desktop`
+16 crates, telles qu'elles existent, plus le front `apps/desktop`
 ([§2 bis](#2-bis-linterface-tauri)) :
 
 ```
@@ -172,6 +176,8 @@ oxyn/
 │   ├── oxyn-llm/                 # abstraction des fournisseurs de modèles
 │   ├── oxyn-ai/                  # runtime d'agents, outils, contexte, confidentialité
 │   ├── oxyn-plugin/              # hôte WASM (wasmtime derrière la feature `wasm-host`)
+│   ├── oxyn-embed/               # embeddings de texte locaux : modèle épinglé, téléchargement,
+│   │                             #   inférence CPU (Burn) ; seul oxyn-desktop en dépend (ADR-0056)
 │   └── oxyn-desktop/             # binaire `oxyn-desktop` : hôte Tauri et pont IPC (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
@@ -897,6 +903,19 @@ Le contexte de schéma est **compacté** avant envoi : DDL normalisé, tables no
 élaguées par recherche sur le catalogue. Une base à 5 000 tables ne rentre pas dans une
 fenêtre de contexte — la sélection des tables pertinentes est un vrai composant.
 
+La sélection est d'abord lexicale. Quand l'utilisateur a activé le classement
+sémantique — désactivé par défaut —, des embeddings locaux sur CPU ordonnent
+les relations que le score lexical laisse à égalité ou manque, et complètent
+la sélection avec elles jusqu'à `max_relations`, si bien que plus de relations
+peuvent être décrites que sans elles
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+`oxyn-desktop` les calcule avec `oxyn-embed`, sur le pool bloquant, en
+2 secondes au plus par question, et remet à `ContextBuilder` un score par
+relation ; `oxyn-ai` ne dépend jamais d'`oxyn-embed`, et un score n'apporte
+aucun texte au prompt. Le modèle est local quel que soit le niveau : l'étape
+de transformation n'envoie rien ; ce qui atteint un fournisseur est toujours
+rendu sous le niveau.
+
 ### 7.5 Abstraction des fournisseurs
 
 Une seule implémentation (`OpenAiCompatibleProvider`) couvre Ollama, LM Studio, llama.cpp,
@@ -1064,6 +1083,18 @@ leur portée locale globale ; les documents sont filtrés par workspace.
 │  réseau, LLM ; pool bloquant — store, trousseau, disque   │
 └──────────────────────────────────────────────────────────┘
 ```
+
+**Un processus, et un enfant de courte durée.** Avant toute chose — journal,
+store, runtime, fenêtre —, `main.rs` vérifie s'il a été lancé avec l'argument
+interne `--convert-embedding-model <racine>` : il est alors l'enfant de
+conversion du modèle d'embeddings local, convertit, et se termine avec un code
+de sortie. `oxyn-desktop` le lance depuis son propre exécutable quand le
+modèle est téléchargé, pour que le pic de 1,45 Go de la conversion, et ce que
+l'allocateur du système en garde, partent avec ce processus
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Le
+parent l'attend sur le runtime sans bloquer de thread ; les agents externes
+sont les autres processus qu'Oxyn lance
+([ADR-0026](adr/0026-agents-externes-acp.md)).
 
 **Un seul runtime.** `main.rs` construit un runtime Tokio multi-thread et le
 confie à Tauri (`tauri::async_runtime::set`) : les commandes `async` et

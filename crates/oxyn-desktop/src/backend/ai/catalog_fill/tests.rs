@@ -558,14 +558,20 @@ fn listings_stop_at_their_bound_and_the_rest_waits_for_the_next_question() {
     let cache = tenants(MAX_LISTINGS + 8);
     let policy = oxyn_ai::ContextPolicy::default();
     let tried = HashSet::new();
+    let unscored = oxyn_ai::SemanticScores::new();
     assert!(matches!(
-        next_read(&cache, question(""), &policy, &tried, 0, 0),
+        next_listing(&cache, question(""), &tried, 0),
         Some(CatalogScope::Namespace(_))
     ));
     assert_eq!(
-        next_read(&cache, question(""), &policy, &tried, MAX_LISTINGS, 0),
+        next_listing(&cache, question(""), &tried, MAX_LISTINGS),
         None,
-        "no listing past the bound, and nothing listed to describe"
+        "no listing past the bound"
+    );
+    assert_eq!(
+        next_description(&cache, question(""), &policy, &tried, 0, &unscored),
+        None,
+        "nothing listed to describe"
     );
     assert_eq!(
         cache.unlisted_count(),
@@ -573,7 +579,7 @@ fn listings_stop_at_their_bound_and_the_rest_waits_for_the_next_question() {
         "announced, not read"
     );
     assert_eq!(
-        next_read(&cache, Want::Mentions(&[]), &policy, &tried, 0, 0),
+        next_listing(&cache, Want::Mentions(&[]), &tried, 0),
         None,
         "a follow-up lists nothing"
     );
@@ -625,4 +631,29 @@ fn a_relation_the_server_does_not_know_says_so() {
         .expect_err("nothing to describe");
     assert!(refused.contains("does not exist"), "{refused}");
     assert!(shop.catalog().read().relation(&path).is_none());
+}
+
+/// The semantic step takes what is left of the fill's deadline, never a
+/// fresh two seconds: listings that end near the deadline leave it little,
+/// and none past it (Codex review of #215).
+#[test]
+fn ranking_never_extends_the_fill_past_its_deadline() {
+    let now = Instant::now();
+    assert_eq!(
+        semantic_budget(now + FILL_DEADLINE, now),
+        Some(SEMANTIC_DEADLINE),
+        "early in the fill, the step's own bound"
+    );
+    let near = Duration::from_millis(300);
+    assert_eq!(
+        semantic_budget(now + near, now),
+        Some(near),
+        "near the end, only what is left"
+    );
+    assert_eq!(semantic_budget(now, now), None, "at the deadline, nothing");
+    assert_eq!(
+        semantic_budget(now, now + Duration::from_millis(1)),
+        None,
+        "past it, nothing"
+    );
 }

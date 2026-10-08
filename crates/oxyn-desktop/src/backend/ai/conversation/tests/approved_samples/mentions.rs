@@ -72,6 +72,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
             "customers emails",
             None,
             PrivacyTier::Sampled,
+            oxyn_ai::SemanticScores::new(),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
     let context = context.expect("a fresh session has a context");
@@ -91,6 +92,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
             "customers",
             None,
             PrivacyTier::Sampled,
+            oxyn_ai::SemanticScores::new(),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
     let system = system_of(&remembered).to_owned();
@@ -121,6 +123,7 @@ fn a_mention_reaches_a_provider_fresh_or_remembered_and_no_value_with_it() {
         "how many are there?",
         None,
         PrivacyTier::Sampled,
+        oxyn_ai::SemanticScores::new(),
     )
     .unwrap_or_else(|failure| panic!("{}", failure.message));
     let sent = sent.expect("the mentioned objects joined this prompt");

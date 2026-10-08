@@ -62,7 +62,12 @@ Checked on 2026-10-02 in the sources of the versions concerned
 TLS feature: its `rustls-tls` would pull `ring` and install it as the
 process's default `CryptoProvider`, under the drivers. It reuses the
 `reqwest` that `oxyn-llm` already builds on `rustls` with `aws-lc-rs`;
-`cargo tree` shows no `ring` and no new duplicate.
+`cargo tree` shows no `ring` and no new duplicate. Since
+[ADR-0056](0056-local-cpu-embeddings-for-context-selection.md), that single
+`reqwest` enables `system-proxy`, so the updater follows the system's proxy
+too — `oxyn-llm`'s client is the one that opts out, with `no_proxy()`. What
+the updater installs is still accepted on its minisign signature, not on its
+route: a proxy can withhold an update, not substitute one.
 Its JavaScript package `@tauri-apps/plugin-updater` is not installed, and
 `capabilities/main.json` grants **no** `updater:*` permission — a test of
 `oxyn-desktop` refuses one. The webview reaches the updater only through

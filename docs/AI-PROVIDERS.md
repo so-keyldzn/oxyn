@@ -278,6 +278,52 @@ The rest of the product benefits without more code: the tree updates through
 the `CatalogUpdated` event, and the list of `@` mentions as well as the `erd`
 diagram read the same cache.
 
+### Semantic ranking stays on the machine
+
+"The search guided by the question" is lexical, and only lexical while
+semantic ranking is off — its default. Turned on by the human, it adds local
+CPU embeddings that order the relations the lexical score ties or misses, and
+complete the selection with them
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)):
+
+- **the embedding step sends nothing.** The question, and each relation's
+  qualified name and comment, are embedded in Oxyn's process by
+  `oxyn-embed`; the vectors are kept in memory only, keyed by a digest, never
+  logged, never written, never sent. The step itself has no `ai_egress`
+  record because it sends nothing, under every tier — `Local` included;
+- **a score is not context, but it changes the context.** `ContextBuilder`
+  receives one number per relation; a score carries no word into the prompt,
+  and each relation is rendered as without it, under the same tier. But the
+  scores decide **which** relations are described, and **can raise their
+  number**: where the lexical search keeps only its matches, the relations it
+  missed complete the selection by cosine, up to `max_relations` (24). More of
+  the schema then reaches the provider — always under the connection's tier,
+  within the token budget, and recorded in `ai_egress` like any context. The
+  settings say so before the option is turned on. The catalog fill reads the
+  same scores through `wanted_relations`, so what is described is still what
+  is kept;
+- **it never outranks a name.** A relation matched by name keeps its rank;
+  the semantic score breaks ties and orders what matched nothing, without a
+  threshold. It is bounded at 2 seconds per question, and while the model is
+  off, downloading or failing, selection is exactly the lexical one;
+- **whether it ran is traced, in counts only.** At `OXYN_LOG=oxyn=debug`,
+  `semantic ranking done` gives the relations listed, scored, from the cache,
+  embedded and left unscored, the elapsed milliseconds and whether the model
+  was loaded cold; `semantic ranking skipped; lexical ranking only` gives a
+  fixed reason chosen in the code. No field carries text from the question
+  or the schema (ADR-0056).
+
+**An external agent's opening schema is ranked the same way.**
+`AgentPrompt::with_schema_ranked` receives the scores the catalog fill ranked
+with — the same ones, computed once per question —, so the structure an
+external agent is told at its first question is selected as a provider's is,
+under the same tier and the same bounds. A session that follows renders its
+mentions only and takes no score; while the option is off, the agent's
+selection is the lexical one, as before.
+
+The embedding model is not a provider: it generates no text, receives no
+prompt, and needs no declaration in `ProviderRegistry`.
+
 ## What is done with the responses
 
 **No model output is executed directly** ([I-07](../CLAUDE.md#i-07)).
@@ -620,7 +666,11 @@ the interface** and Oxyn remains a complete client
 [UX-SPEC](UX-SPEC.md#the-ai-workspace-only-exists-if-it-has-been-configured)). A code path
 that calls a model to produce a result the user expects to be
 deterministic — a sort, formatting, a table name completion — is a
-design defect, not a feature.
+design defect, not a feature. The local embeddings of
+[ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md) do not
+break this rule: they only choose and order what the AI context keeps, a
+result no user sees as a list, and the catalog search, the tree and the `@`
+list stay lexical.
 
 ## What is not settled yet
 
