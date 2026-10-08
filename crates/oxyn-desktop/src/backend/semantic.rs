@@ -33,7 +33,7 @@ mod model_tests;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -50,6 +50,7 @@ use tokio::sync::watch;
 
 use self::vectors::{Embeddable, VectorCache, rank};
 use crate::backend::{Backend, Inner};
+use crate::embedding_converter::{MODELS_DIRECTORY, TEMPORARY_MODELS_DIRECTORY, convert_in_child};
 use crate::ipc::IpcError;
 use crate::ipc::semantic::{ModelState, SemanticSnapshot};
 
@@ -59,13 +60,6 @@ use crate::ipc::semantic::{ModelState, SemanticSnapshot};
 /// 0.6 s in release, so a warm model scores thousands of relations within it
 /// and a cold one still scores the first batches.
 pub(crate) const SEMANTIC_DEADLINE: Duration = Duration::from_secs(2);
-
-/// The directory, next to the local store's file, that holds the models.
-pub(crate) const MODELS_DIRECTORY: &str = "models";
-
-/// The temporary workspace's own models directory, beside
-/// [`MODELS_DIRECTORY`]: see [`Backend::place_models`].
-pub(crate) const TEMPORARY_MODELS_DIRECTORY: &str = "models-temporary-workspace";
 
 /// The model in memory, and the task that drops it once idle.
 struct Resident {
@@ -84,9 +78,11 @@ struct Download {
 
 /// The state this feature adds to [`Inner`].
 pub(crate) struct SemanticState {
-    /// Where the model lives. Unset for a workspace with no data directory:
-    /// the option is then unavailable.
+    /// Where the model lives, and the root it was built on — what the
+    /// conversion child is given. Unset for a workspace with no data
+    /// directory: the option is then unavailable.
     store: OnceLock<ModelStore>,
+    root: OnceLock<PathBuf>,
     /// What the settings show; every change is pushed to their subscribers.
     published: watch::Sender<SemanticSnapshot>,
     /// Created only while the option is on and the model is ready.
@@ -104,6 +100,7 @@ impl Default for SemanticState {
     fn default() -> Self {
         Self {
             store: OnceLock::new(),
+            root: OnceLock::new(),
             published: watch::Sender::new(SemanticSnapshot {
                 enabled: false,
                 model: ModelState::Unavailable,
@@ -130,6 +127,7 @@ impl SemanticState {
     /// move while Oxyn runs.
     pub(crate) fn place(&self, root: &Path) {
         if self.store.set(ModelStore::new(root)).is_ok() {
+            let _ = self.root.set(root.to_path_buf());
             self.published.send_modify(|snapshot| {
                 if snapshot.model == ModelState::Unavailable {
                     snapshot.model = ModelState::Absent;
@@ -317,6 +315,9 @@ impl Backend {
     /// user's own data directory rather than the system's temporary one,
     /// which is shared between accounts on Linux: another user could plant
     /// a link where the download writes.
+    ///
+    /// Both are the directories `embedding_converter::models_directories`
+    /// computes, the only ones its conversion child accepts.
     pub(crate) fn place_models(&self) {
         let store = self.inner.executor.store();
         let root = match store.path() {
@@ -385,9 +386,12 @@ impl Backend {
     pub(crate) async fn enable_semantic_ranking(&self) -> Result<SemanticSnapshot, IpcError> {
         let state = &self.inner.semantic;
         let _one_switch = state.switching.lock().await;
-        let store = state.store.get().cloned().ok_or_else(|| {
-            IpcError::invalid("Semantic ranking needs a data directory, and this system has none")
-        })?;
+        let (Some(store), Some(root)) = (state.store.get().cloned(), state.root.get().cloned())
+        else {
+            return Err(IpcError::invalid(
+                "Semantic ranking needs a data directory, and this system has none",
+            ));
+        };
         if state.snapshot().downloading() {
             return Ok(state.snapshot());
         }
@@ -402,10 +406,14 @@ impl Backend {
             let cancel = cancel.clone();
             tauri::async_runtime::spawn(async move {
                 let state = &backend.inner.semantic;
+                // The conversion's 1.2 GB peak happens in a child process,
+                // which hands the memory back by exiting; cancelling kills it.
+                let converting = cancel.clone();
                 let outcome = store
-                    .download(
+                    .download_with_converter(
                         |progress| state.publish_model(progress_state(progress)),
                         &cancel,
+                        move |_store| convert_in_child(root, converting),
                     )
                     .await;
                 match outcome {

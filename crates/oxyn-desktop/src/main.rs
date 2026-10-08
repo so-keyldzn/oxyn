@@ -11,6 +11,7 @@ mod backend;
 mod catalog;
 mod commands;
 mod credentials;
+mod embedding_converter;
 mod file_drop;
 mod ipc;
 mod logging;
@@ -33,6 +34,12 @@ use crate::logging::FileJournal;
 const FLUSH_BEFORE_EXIT: Duration = Duration::from_secs(2);
 
 fn main() -> Result<()> {
+    // Before anything else — journal, store, window: relaunched as the
+    // embedding model's conversion child, this process converts and exits
+    // (ADR-0056, `embedding_converter`).
+    if let Some(code) = embedding_converter::run_if_child() {
+        std::process::exit(i32::from(code));
+    }
     let context = tauri::generate_context!();
     let journal = logging::start(&context.config().identifier);
 

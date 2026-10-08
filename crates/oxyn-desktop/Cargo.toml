@@ -53,7 +53,9 @@ tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
 tauri-plugin-updater.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+# `process`: the embedding model's conversion child, awaited and killed
+# without blocking a thread (ADR-0056).
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 # A model-listing probe's endpoint, checked and keyed for the cache.

@@ -483,6 +483,13 @@ fn a_skipped_ranking_says_why_and_names_nothing() {
             .build()
             .expect("a test runtime starts");
         let (backend, _root) = placed(&runtime);
+        // Under plain `cargo test`, the other tests of this module reach the
+        // same callsites on their threads, without a subscriber: one that
+        // registers while this one is being set up can cache them as never
+        // enabled. Rebuilt right before each step, the cache sees this
+        // subscriber. Under nextest (`make qualite`), each test has its own
+        // process and the question does not arise.
+        tracing::callsite::rebuild_interest_cache();
         // Off: nothing runs.
         assert!(Ranking::new(&backend.inner, QUESTION).is_none());
         // On, and no model on disk.
@@ -490,6 +497,7 @@ fn a_skipped_ranking_says_why_and_names_nothing() {
             .block_on(backend.save_preferences(|preferences| preferences.semantic_ranking = true))
             .expect("saved");
         let ranking = Ranking::new(&backend.inner, QUESTION).expect("on");
+        tracing::callsite::rebuild_interest_cache();
         let scores = runtime.block_on(ranking.scores_within(&catalog, super::SEMANTIC_DEADLINE));
         assert!(scores.is_empty());
     });
