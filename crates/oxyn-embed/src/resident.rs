@@ -25,7 +25,8 @@ struct Slot {
 /// An [`Embedder`] loaded at the first request and dropped after `idle`
 /// without one.
 ///
-/// A loaded model holds about 800 MB; an Oxyn left open all day must not keep
+/// A loaded model holds about 250 MB of private memory and maps 390 MB of
+/// weights; an Oxyn left open all day must not keep
 /// it for a question asked in the morning. Reloading costs about 0.7 s,
 /// paid by the first request after a pause.
 ///

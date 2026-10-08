@@ -72,23 +72,53 @@ pub(crate) fn read_verified(
     )
 }
 
+/// Opens `path` and verifies it, returning the open file when it is the
+/// pinned one.
+///
+/// For a file that is used through its handle afterwards — the model,
+/// memory-mapped: the bytes mapped are those of the very file that was
+/// hashed, not of whatever sits at the path a moment later.
+///
+/// **Blocks**, like [`verify`].
+pub(crate) fn open_verified(path: &Path, file: &PinnedFile) -> Result<Verdict<File>, EmbedError> {
+    let handle = match File::open(path) {
+        Ok(handle) => handle,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Verdict::Missing),
+        Err(err) => return Err(EmbedError::io("open", path, err)),
+    };
+    Ok(match scan_handle(&handle, path, file, |_| {})? {
+        Verdict::Valid(()) => Verdict::Valid(handle),
+        Verdict::Missing => Verdict::Missing,
+        Verdict::Invalid(detail) => Verdict::Invalid(detail),
+    })
+}
+
 /// Reads `path` once, handing every chunk to `keep` as it is hashed.
-fn scan(
+fn scan(path: &Path, file: &PinnedFile, keep: impl FnMut(&[u8])) -> Result<Verdict, EmbedError> {
+    let handle = match File::open(path) {
+        Ok(handle) => handle,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Verdict::Missing),
+        Err(err) => return Err(EmbedError::io("open", path, err)),
+    };
+    scan_handle(&handle, path, file, keep)
+}
+
+/// Size — of the open file, not of the path — then content, from the start.
+fn scan_handle(
+    handle: &File,
     path: &Path,
     file: &PinnedFile,
     mut keep: impl FnMut(&[u8]),
 ) -> Result<Verdict, EmbedError> {
-    match size_matches(path, file)? {
-        None => return Ok(Verdict::Missing),
-        Some(false) => {
-            return Ok(Verdict::Invalid(format!(
-                "not a file of the expected {} bytes",
-                file.size
-            )));
-        }
-        Some(true) => {}
+    let meta = handle
+        .metadata()
+        .map_err(|err| EmbedError::io("inspect", path, err))?;
+    if !meta.is_file() || meta.len() != file.size {
+        return Ok(Verdict::Invalid(format!(
+            "not a file of the expected {} bytes",
+            file.size
+        )));
     }
-    let handle = File::open(path).map_err(|err| EmbedError::io("open", path, err))?;
     let mut reader = handle.take(file.size.saturating_add(1));
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; CHUNK];

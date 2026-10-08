@@ -102,20 +102,54 @@ impl ModelStore {
         progress: impl FnMut(DownloadProgress) + Send,
         cancel: &CancelToken,
     ) -> Result<(), EmbedError> {
+        self.download_with_converter(progress, cancel, convert_here)
+            .await
+    }
+
+    /// [`download`](Self::download), with the conversion step supplied by
+    /// the caller.
+    ///
+    /// `convert` receives this store and must leave a valid `model.bpk` —
+    /// normally by running [`convert_in_place`](Self::convert_in_place) in a
+    /// child process on [`dir`](Self::dir)'s parent root, and turning its
+    /// exit code back into an error with [`EmbedError::from_exit_code`].
+    /// The directory's lock is held for the whole call, conversion
+    /// included, so the child must not take it. Whatever `convert` reports,
+    /// the converted file is verified afterwards: a step that says `Ok`
+    /// without a valid file is an [`EmbedError::Conversion`].
+    ///
+    /// # Errors
+    /// Those of [`download`](Self::download), and whatever `convert` returns.
+    pub async fn download_with_converter<C, F>(
+        &self,
+        progress: impl FnMut(DownloadProgress) + Send,
+        cancel: &CancelToken,
+        convert: C,
+    ) -> Result<(), EmbedError>
+    where
+        C: FnOnce(ModelStore) -> F + Send,
+        F: Future<Output = Result<(), EmbedError>> + Send,
+    {
         let client = client(Scheme::HttpsOnly)?;
         let fetcher = Fetcher {
             client,
             sources: Box::new(|file| pinned::sources(file).to_vec()),
         };
-        self.download_with(&fetcher, progress, cancel).await
+        self.download_with(&fetcher, progress, cancel, convert)
+            .await
     }
 
-    async fn download_with(
+    async fn download_with<C, F>(
         &self,
         fetcher: &Fetcher,
         mut progress: impl FnMut(DownloadProgress) + Send,
         cancel: &CancelToken,
-    ) -> Result<(), EmbedError> {
+        convert: C,
+    ) -> Result<(), EmbedError>
+    where
+        C: FnOnce(ModelStore) -> F + Send,
+        F: Future<Output = Result<(), EmbedError>> + Send,
+    {
         // Two locks, for two scopes: the mutex makes this process's calls
         // wait their turn; the file lock beside the directory refuses a
         // second process — two instances, or a `make desktop-dev` beside the
@@ -173,39 +207,63 @@ impl ModelStore {
                 received: done,
                 total,
             });
-            self.convert().await?;
+            // The lock stays held across the step, wherever it runs.
+            convert(self.clone()).await?;
+            // The step's word is not taken for it — it may be another
+            // process: the file is what decides.
+            if !is_valid(&self.path(&CONVERTED), CONVERTED, &CancelToken::new()).await? {
+                return Err(EmbedError::Conversion(format!(
+                    "the conversion step ended without a valid {}",
+                    CONVERTED.name
+                )));
+            }
         }
         Ok(())
     }
 
-    /// Converts the safetensors into the final model file, checks the result
-    /// against its pinned checksum, then deletes the safetensors.
-    async fn convert(&self) -> Result<(), EmbedError> {
+    /// The conversion step of a download, on its own: verifies the
+    /// downloaded safetensors, writes `model.bpk` through a `.part`, checks
+    /// it against its pinned checksum, renames it into place and deletes the
+    /// safetensors.
+    ///
+    /// **Blocks** for seconds and peaks at about 1.45 GB, most of which the
+    /// system allocator keeps after the step ends (about 1.2 GB measured on
+    /// macOS, 2026-10-07). That is why it is callable alone: a caller runs it
+    /// in a child process — `ModelStore::new(root).convert_in_place()` — so
+    /// that the memory goes back to the system with the child, and hands
+    /// [`download_with_converter`](Self::download_with_converter) a step that
+    /// waits for it.
+    ///
+    /// It **does not take the directory's lock**: it runs inside a download,
+    /// which already holds it, in this process or in the parent of the child
+    /// that runs it. Taking it here would make the child wait forever on its
+    /// own parent. Called outside a download, nothing guards it against a
+    /// concurrent one.
+    ///
+    /// # Errors
+    /// [`EmbedError::Conversion`] when the safetensors is missing or not the
+    /// pinned file — it is then deleted, and the next download fetches it
+    /// again — or when the converted file is not the pinned one;
+    /// [`EmbedError::Io`] for a local disk failure. Map them across a process
+    /// boundary with [`EmbedError::exit_code`].
+    pub fn convert_in_place(&self) -> Result<(), EmbedError> {
         let source = self.safetensors_path();
         let part = self.part_path(&CONVERTED);
         let target = self.path(&CONVERTED);
-        let outcome = tokio::task::spawn_blocking({
-            let part = part.clone();
-            move || {
-                // Verified again, right before the parse: the safetensors
-                // reader trusts its header's offsets, and the file may have
-                // sat on disk since an earlier, interrupted download.
-                match hash::verify(&source, &SAFETENSORS)? {
-                    Verdict::Valid(()) => {}
-                    Verdict::Missing | Verdict::Invalid(_) => {
-                        let _ignored = std::fs::remove_file(&source);
-                        return Err(EmbedError::Conversion(format!(
-                            "{} is not the pinned file; download the model again",
-                            SAFETENSORS.name
-                        )));
-                    }
-                }
-                load::convert(&source, &part)?;
-                hash::verify(&part, &CONVERTED)
+        // Verified again, right before the parse: the safetensors reader
+        // trusts its header's offsets, and the file may have sat on disk
+        // since an earlier, interrupted download.
+        match hash::verify(&source, &SAFETENSORS)? {
+            Verdict::Valid(()) => {}
+            Verdict::Missing | Verdict::Invalid(_) => {
+                let _ignored = std::fs::remove_file(&source);
+                return Err(EmbedError::Conversion(format!(
+                    "{} is not the pinned file; download the model again",
+                    SAFETENSORS.name
+                )));
             }
-        })
-        .await
-        .map_err(|err| EmbedError::Conversion(format!("the conversion task stopped: {err}")))?;
+        }
+        let outcome = load::convert(&source, &part).and_then(|()| hash::verify(&part, &CONVERTED));
         match outcome {
             Ok(Verdict::Valid(())) => {}
             Ok(Verdict::Missing) => {
@@ -215,25 +273,28 @@ impl ModelStore {
                 )));
             }
             Ok(Verdict::Invalid(detail)) => {
-                remove_quietly(&part).await;
+                let _ignored = std::fs::remove_file(&part);
                 return Err(EmbedError::Conversion(format!(
                     "{} is not the pinned file: {detail}",
                     CONVERTED.name
                 )));
             }
             Err(err) => {
-                remove_quietly(&part).await;
+                let _ignored = std::fs::remove_file(&part);
                 return Err(err);
             }
         }
-        tokio::fs::rename(&part, &target)
-            .await
-            .map_err(|err| EmbedError::io("rename", &part, err))?;
-        let safetensors = self.safetensors_path();
-        tokio::fs::remove_file(&safetensors)
-            .await
-            .map_err(|err| EmbedError::io("remove", &safetensors, err))
+        std::fs::rename(&part, &target).map_err(|err| EmbedError::io("rename", &part, err))?;
+        std::fs::remove_file(&source).map_err(|err| EmbedError::io("remove", &source, err))
     }
+}
+
+/// The default conversion step: [`ModelStore::convert_in_place`] on the
+/// blocking pool of this process.
+pub(crate) async fn convert_here(store: ModelStore) -> Result<(), EmbedError> {
+    tokio::task::spawn_blocking(move || store.convert_in_place())
+        .await
+        .map_err(|_| EmbedError::Conversion("the conversion task stopped".to_owned()))?
 }
 
 /// Hashes `path` on the blocking pool. Cancellation is checked before, not

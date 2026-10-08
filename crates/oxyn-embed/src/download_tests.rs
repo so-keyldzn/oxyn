@@ -359,7 +359,7 @@ async fn a_download_refuses_while_another_process_holds_the_directory() -> Resul
 
     let nowhere = fetcher(Scheme::PlainAllowed, Vec::new())?;
     let refused = store
-        .download_with(&nowhere, |_| {}, &CancelToken::new())
+        .download_with(&nowhere, |_| {}, &CancelToken::new(), convert_here)
         .await;
     assert!(
         matches!(refused, Err(EmbedError::DownloadInProgress)),
@@ -368,7 +368,7 @@ async fn a_download_refuses_while_another_process_holds_the_directory() -> Resul
 
     drop(other);
     let went_ahead = store
-        .download_with(&nowhere, |_| {}, &CancelToken::new())
+        .download_with(&nowhere, |_| {}, &CancelToken::new(), convert_here)
         .await;
     // No source to fetch from: it fails further on, not on the lock.
     assert!(
@@ -429,7 +429,7 @@ async fn a_damaged_safetensors_is_never_converted() -> Result<(), EmbedError> {
     file.set_len(SAFETENSORS.size)
         .map_err(|e| EmbedError::io("extend", &path, e))?;
 
-    let converted = store.convert().await;
+    let converted = store.convert_in_place();
     assert!(
         matches!(converted, Err(EmbedError::Conversion(_))),
         "{converted:?}"
@@ -466,8 +466,22 @@ async fn the_pinned_model_downloads_converts_and_is_kept() -> Result<(), EmbedEr
     };
     let store = ModelStore::new(root);
     let mut steps = Vec::new();
+    // Through a supplied step, as `oxyn-desktop` runs it in a child process:
+    // the download still holds the directory while the step runs, so a
+    // second process could neither convert nor remove beside it.
+    let other = ModelStore::new(store.root());
     store
-        .download(|step| steps.push(step), &CancelToken::new())
+        .download_with_converter(
+            |step| steps.push(step),
+            &CancelToken::new(),
+            |held| async move {
+                assert!(matches!(
+                    other.lock_exclusive(),
+                    Err(EmbedError::DownloadInProgress)
+                ));
+                convert_here(held).await
+            },
+        )
         .await?;
     assert_eq!(store.status()?, crate::ModelStatus::Ready);
     assert!(!store.safetensors_path().exists());

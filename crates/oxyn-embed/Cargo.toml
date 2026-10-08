@@ -22,6 +22,8 @@ sha2.workspace = true
 reqwest.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
+memmap2.workspace = true
+bytes.workspace = true
 # `fs` and `io-util` write the download without blocking the executor; `rt`
 # sends hashing and conversion — seconds of CPU and disk — to the blocking pool.
 tokio = { workspace = true, features = ["fs", "io-util", "rt"] }

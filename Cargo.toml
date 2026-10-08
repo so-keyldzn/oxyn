@@ -169,6 +169,10 @@ burn-store    = { version = "=0.22.0", default-features = false, features = ["st
 # because a tokenizer change moves every vector and invalidates the caches.
 tokenizers    = { version = "=0.23.2", default-features = false, features = ["fancy-regex"] }
 sha2          = "0.11.0"
+# Maps the converted model instead of letting burn-store copy it into the
+# heap (434 MB of `malloc`, measured 2026-10-07). The version burn-store
+# already pulls: one copy in the graph. Checked on crates.io the same day.
+memmap2       = "0.9.11"
 
 # --- plugins (optional, `wasm-host` feature) ---------------------------------
 wasmtime      = "48.0.5"

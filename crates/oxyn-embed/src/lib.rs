@@ -21,7 +21,8 @@
 //!
 //! # Memory
 //!
-//! A loaded model weighs about 800 MB. [`OnDemandEmbedder`] loads it at the
+//! A loaded model weighs about 250 MB of private memory, its weights
+//! mapped from disk beside it. [`OnDemandEmbedder`] loads it at the
 //! first request and drops it after a period of inactivity, so that an idle
 //! Oxyn does not carry it.
 //!

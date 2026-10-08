@@ -10,7 +10,7 @@ use crate::error::EmbedError;
 use crate::generated::model::Model;
 use crate::hash::{self, Verdict};
 use crate::load;
-use crate::pinned::{CONVERTED, DIMENSIONS, MAX_TOKENS, PAD_ID, PinnedFile, TOKENIZER, VOCABULARY};
+use crate::pinned::{CONVERTED, DIMENSIONS, MAX_TOKENS, PAD_ID, TOKENIZER, VOCABULARY};
 use crate::store::{ModelStatus, ModelStore};
 
 /// Texts per forward pass, at most. A catalog of short names fills batches
@@ -85,7 +85,9 @@ pub fn cosine(a: &Embedding, b: &Embedding) -> f32 {
     dot.clamp(-1.0, 1.0)
 }
 
-/// The model and its tokenizer, in memory: about 800 MB.
+/// The model and its tokenizer, in memory: about 250 MB of private memory
+/// once in use, plus the mapped weights — up to 390 MB of file pages the
+/// system can reclaim.
 ///
 /// `Send` and `Sync`: one instance serves every thread, behind an `Arc`.
 /// Concurrent [`embed`](Self::embed) calls share the model's weights and each
@@ -136,18 +138,11 @@ impl Embedder {
                 });
             }
         };
-        // The model cannot be read the same way: it is memory-mapped, not
-        // copied — 390 MB more of resident memory otherwise. Its check and its
-        // mapping are two opens of the same path. The accepted risk: a process
-        // of the same user that replaces the file in between gets its content
-        // loaded unverified, and one that truncates it in place while it is
-        // mapped makes the next read of a missing page kill Oxyn with SIGBUS.
-        // Neither is reachable without write access to the data directory,
-        // which already owns everything Oxyn keeps; renaming over the file or
-        // deleting it, which is what Oxyn itself does, leaves the mapping
-        // intact.
+        // The model cannot be read into a buffer the same way: it is
+        // memory-mapped, not copied. `load::converted` hashes it and maps it
+        // through one open file; its `map_verified` says what risk the
+        // mapping accepts.
         let model_path = store.path(&CONVERTED);
-        check(&model_path, &CONVERTED)?;
 
         let mut tokenizer =
             Tokenizer::from_bytes(&tokenizer_bytes).map_err(|_| EmbedError::Corrupt {
@@ -329,17 +324,6 @@ fn next_batch(order: &[usize], start: usize, len: impl Fn(usize) -> usize) -> us
         count += 1;
     }
     count.max(1)
-}
-
-fn check(path: &std::path::Path, file: &PinnedFile) -> Result<(), EmbedError> {
-    match hash::verify(path, file)? {
-        Verdict::Valid(()) => Ok(()),
-        Verdict::Missing => Err(EmbedError::NotDownloaded),
-        Verdict::Invalid(detail) => Err(EmbedError::Corrupt {
-            file: file.name,
-            detail,
-        }),
-    }
 }
 
 #[cfg(test)]
