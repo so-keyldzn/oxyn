@@ -2798,9 +2798,9 @@ exemption.
 | `react-resizable-panels` | `4.12.4` | `4.14.7` (2026-10-20) | [npm registry](https://registry.npmjs.org/react-resizable-panels) | 2026-10-20 |
 | `recharts` | `3.8.0` | `3.10.1` (2026-07-25) | [npm registry](https://registry.npmjs.org/recharts) | 2026-10-20 |
 | `tw-animate-css` | `1.4.0` | same | [npm registry](https://registry.npmjs.org/tw-animate-css) | 2026-10-20 |
-| `@storybook/addon-a11y` | `10.6.0` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/@storybook%2Faddon-a11y) | 2026-10-20 |
-| `@storybook/addon-docs` | `10.6.0` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/@storybook%2Faddon-docs) | 2026-10-20 |
-| `@storybook/addon-vitest` | `10.6.0` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/@storybook%2Faddon-vitest) | 2026-10-20 |
+| `@storybook/addon-a11y` | `10.6.2` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/@storybook%2Faddon-a11y) | 2026-10-21 |
+| `@storybook/addon-docs` | `10.6.2` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/@storybook%2Faddon-docs) | 2026-10-21 |
+| `@storybook/addon-vitest` | `10.6.2` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/@storybook%2Faddon-vitest) | 2026-10-21 |
 | `@tanstack/devtools-vite` | `0.8.5` | same | [npm registry](https://registry.npmjs.org/@tanstack%2Fdevtools-vite) | 2026-10-20 |
 | `@tanstack/eslint-config` | `0.4.0` | same | [npm registry](https://registry.npmjs.org/@tanstack%2Feslint-config) | 2026-10-20 |
 | `@tanstack/react-devtools` | `0.10.12` | `0.10.13` (2026-09-23) | [npm registry](https://registry.npmjs.org/@tanstack%2Freact-devtools) | 2026-10-20 |
@@ -2815,7 +2815,7 @@ exemption.
 | `@vitest/browser` | `4.1.11` | `5.0.5` (2026-10-15) | [npm registry](https://registry.npmjs.org/@vitest%2Fbrowser) | 2026-10-20 |
 | `@vitest/coverage-v8` | `4.1.11` | `5.0.5` (2026-10-15) | [npm registry](https://registry.npmjs.org/@vitest%2Fcoverage-v8) | 2026-10-20 |
 | `eslint` | `9.39.5` | `10.13.0` (2026-10-16) | [npm registry](https://registry.npmjs.org/eslint) | 2026-10-20 |
-| `eslint-plugin-storybook` | `10.6.0` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/eslint-plugin-storybook) | 2026-10-20 |
+| `eslint-plugin-storybook` | `10.6.2` | `10.6.3` (2026-10-20) | [npm registry](https://registry.npmjs.org/eslint-plugin-storybook) | 2026-10-21 |
 | `jsdom` | `30.0.1` | `30.1.3` (2026-10-15) | [npm registry](https://registry.npmjs.org/jsdom) | 2026-10-20 |
 | `prettier` | `3.9.6` | `3.9.10` (2026-10-10) | [npm registry](https://registry.npmjs.org/prettier) | 2026-10-20 |
 | `prettier-plugin-tailwindcss` | `0.8.1` | same | [npm registry](https://registry.npmjs.org/prettier-plugin-tailwindcss) | 2026-10-20 |
