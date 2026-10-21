@@ -70,7 +70,7 @@ places in the same commit.
 
 On a pull request, the jobs of an untouched area are skipped
 ([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)); on
-`main`, everything runs. A new job that calls `make` is added to the `needs` of
+`main`, everything runs, unless the commit only touches documentation. A new job that calls `make` is added to the `needs` of
 the aggregate `qualite` job (`check_ci_aggregate`), and a new top-level
 directory is classified in `script/zones-ci` — otherwise it triggers everything.
 

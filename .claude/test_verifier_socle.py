@@ -58,6 +58,13 @@ ZONES: list[tuple[str, set[str]]] = [
     ("apps/desktop/pnpm-lock.yaml", {"front"}),
     ("docs/adr/0045-ci-selective-sur-les-pull-requests.md", {"docs"}),
     ("CLAUDE.md", {"docs"}),
+    # Markdown under a cross-cutting directory is read, never built.
+    (".claude/agent-memory/frontiste/MEMORY.md", {"docs"}),
+    (".agents/skills/shadcn/SKILL.md", {"docs"}),
+    (".github/pull_request_template.md", {"docs"}),
+    # Markdown compiled into `oxyn-ai` through `include_str!`.
+    ("crates/oxyn-ai/prompts/dialects/postgres.md", {"rust"}),
+    ("crates/oxyn-ai/agents/sql.md", {"rust"}),
     ("Cargo.lock", EVERYTHING),
     ("Cargo.toml", EVERYTHING),
     ("Makefile", EVERYTHING),

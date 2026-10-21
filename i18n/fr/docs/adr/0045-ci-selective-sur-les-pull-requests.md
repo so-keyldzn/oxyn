@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="bf36ff2ac8f2" -->
+<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="c6893d8a62ef" -->
 
 > Traduction française de [docs/adr/0045-ci-selective-sur-les-pull-requests.md](../../../../docs/adr/0045-ci-selective-sur-les-pull-requests.md). **La version anglaise fait foi.**
 
@@ -110,6 +110,30 @@ toute la porte sur une branche qui n’a pas de pull request ouverte.
 et la matrice macOS s'y ajoute comme avant. C'est le filet : ce qu'une PR aurait
 sauté à tort est rattrapé à la fusion.
 
+**Amendement (2026-10-21).** À la demande du mainteneur, deux restrictions pour
+la documentation, constatées le 2026-10-21 : fusionner une PR de documentation
+lançait toute la matrice sur `main` (`rust` à lui seul a pris 18 minutes sur
+macOS et 11 sur Linux), et modifier la mémoire d'un agent sous `.claude/`
+lançait `rust` et les stories sur sa PR.
+
+* **Sur `push` vers `main`**, un filtre `paths` empêche le workflow de démarrer
+  quand chaque fichier modifié est sous `docs/` ou est un fichier `*.md` hors de
+  `apps/`, `crates/` et `drivers/`. Le Markdown sous ces trois répertoires
+  déclenche toujours : les prompts d'agents d'`oxyn-ai` y sont compilés par
+  `include_str!`. Un commit qui mêle documentation et autre chose fait tout
+  tourner, comme avant. Le filtre reste hors de `pull_request` : un workflow qui
+  ne démarre pas laisse le check requis `qualite` en attente pour toujours.
+* **Dans `script/zones-ci`**, un fichier `*.md` est rangé en `docs` avant la
+  règle transversale : un fichier Markdown de `.claude/`, `.agents/` ou
+  `.github/` est lu, jamais compilé ni exécuté. Les répertoires de code gardent
+  la priorité sur la règle `.md`, pour la même raison que ci-dessus.
+
+Ce que cela coûte : sur `main`, un commit de documentation seule ne rejoue plus
+`make socle`. Il a passé `controles` sur sa PR ; le cas laissé à découvert est
+celui de deux PR fusionnées l'une après l'autre, l'une supprimant un fichier
+vers lequel pointe la documentation de l'autre. Le commit suivant qui fait
+tourner le workflow sur `main` le signale.
+
 `make socle` continue de vérifier que la réunion des `run: make …` du workflow
 couvre `make qualite`. Il vérifie en plus que tout job qui appelle `make` figure
 dans les `needs` du job `qualite` : sans quoi son échec ne bloquerait pas la
@@ -153,5 +177,5 @@ optimiste, et il faut soit élargir une zone, soit revenir à tout exécuter.
 | `paths` / `paths-ignore` sur le déclencheur `pull_request` | filtre le workflow entier, pas un job ; un workflow non déclenché laisse un status check requis en attente pour toujours |
 | Une action tierce de filtrage par chemins | une dépendance externe de plus dans un workflow qui en épingle déjà cinq par empreinte, pour un calcul de trente lignes |
 | Calculer les crates dépendantes et ne tester qu'elles en CI | le graphe se calcule mal sans `cargo metadata`, et la CI est justement l'endroit où le workspace entier doit passer ; le gain réel est dans les jobs entiers sautés |
-| Filtrer aussi sur `main` | supprime le seul endroit où tout est vérifié ensemble ; la moindre erreur de rangement deviendrait invisible |
+| Filtrer aussi sur `main` | supprime le seul endroit où tout est vérifié ensemble ; la moindre erreur de rangement deviendrait invisible. Restreint le 2026-10-21 aux commits de documentation seule, qui ne compilent rien (amendement ci-dessus) |
 | Laisser la CI telle quelle et n'alléger que le local | ne répond pas à l'épuisement du quota, ni à l'attente des agents sur le job `rust` |

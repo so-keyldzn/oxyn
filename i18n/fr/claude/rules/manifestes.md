@@ -13,7 +13,7 @@ paths:
   - "script/*"
 ---
 
-<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="2a49fd9efa62" -->
+<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="3bb741f9b9dd" -->
 
 > Traduction française de [.claude/rules/manifestes.md](../../../../.claude/rules/manifestes.md). **La version anglaise fait foi.**
 
@@ -76,7 +76,8 @@ deux endroits dans le même commit.
 
 Sur une pull request, les jobs d'une zone intacte sont sautés
 ([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)) ; sur
-`main`, tout tourne. Un nouveau job qui appelle `make` s'ajoute aux `needs` du
+`main`, tout tourne, sauf si le commit ne touche que de la documentation. Un
+nouveau job qui appelle `make` s'ajoute aux `needs` du
 job agrégat `qualite` (`check_ci_aggregate`), et un nouveau répertoire de
 premier niveau se range dans `script/zones-ci` — sans quoi il déclenche tout.
 

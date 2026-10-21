@@ -215,7 +215,7 @@ included, goes through `make qualite` — called by CI
 jobs, which adds no check of its own and which `make socle` verifies misses
 none. On a pull request, it skips the jobs whose area — Rust, front end — is not
 touched, and the aggregate `qualite` job is the required check; on `main`,
-everything always runs
+everything runs, unless the commit only touches documentation
 ([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md)):
 
 | What refuses | The invariant held |

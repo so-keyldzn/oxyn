@@ -7,7 +7,9 @@ The classification leans one way only: a file this script cannot classify
 triggers **everything**. An omission then costs runner minutes, never a check.
 
 Outside the `pull_request` event — push to `main`, manual run —, every area is
-returned without looking at anything: that is the safety net.
+returned without looking at anything: that is the safety net. A push to `main`
+that only touches documentation does not reach this script: the `paths` filter
+of `qualite.yml` does not start the workflow at all.
 
     script/zones-ci HEAD^1          compares HEAD with this commit
     GITHUB_EVENT_NAME=push script/zones-ci HEAD^1   every area
@@ -49,14 +51,19 @@ def _matches(path_str: str, pattern: str) -> bool:
 
 
 def zones_of(path_str: str) -> set[str]:
-    if any(_matches(path_str, m) for m in CROSS_CUTTING):
-        return set(ZONES)
     if path_str.startswith("apps/desktop/"):
         return {"front"}
+    # Before the `.md` rule: the agent prompts are Markdown compiled into
+    # `oxyn-ai` through `include_str!`.
     if path_str.startswith(("crates/", "drivers/")):
         return {"rust"}
+    # Before the cross-cutting rule: a Markdown file of `.claude/`, `.agents/`
+    # or `.github/` is read, never built or executed. `controles` still checks
+    # its links, as for every PR.
     if path_str.startswith("docs/") or path_str.endswith(".md"):
         return {"docs"}
+    if any(_matches(path_str, m) for m in CROSS_CUTTING):
+        return set(ZONES)
     return set(ZONES)
 
 

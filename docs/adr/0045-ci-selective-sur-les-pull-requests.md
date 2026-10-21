@@ -105,6 +105,29 @@ gate on a branch that has no pull request open.
 macOS matrix is added as before. It is the safety net: what a PR wrongly
 skipped is caught at merge.
 
+**Amendment (2026-10-21).** At the maintainer's request, two narrowings for
+documentation, observed on 2026-10-21: merging a documentation PR launched the
+whole matrix on `main` (`rust` alone took 18 minutes on macOS and 11 on Linux),
+and editing an agent's memory under `.claude/` ran `rust` and the stories on
+its PR.
+
+* **On `push` to `main`**, a `paths` filter keeps the workflow from starting
+  when every modified file is under `docs/` or is a `*.md` file outside
+  `apps/`, `crates/` and `drivers/`. Markdown under those three directories
+  still triggers: the agent prompts of `oxyn-ai` are compiled in through
+  `include_str!`. A commit that mixes documentation and anything else runs
+  everything, as before. The filter stays off `pull_request`: a workflow that
+  does not start leaves the required `qualite` check pending forever.
+* **In `script/zones-ci`**, a `*.md` file is classified `docs` before the
+  cross-cutting rule: a Markdown file of `.claude/`, `.agents/` or `.github/`
+  is read, never built or executed. The code directories keep precedence over
+  the `.md` rule, for the same reason as above.
+
+What it costs: on `main`, a documentation-only commit no longer replays
+`make socle`. It passed `controles` on its PR; the case left uncovered is two
+PRs merged one after the other, one removing a file the other's documentation
+links to. The next commit that runs the workflow on `main` reports it.
+
 `make socle` keeps verifying that the union of the workflow's `run: make …`
 covers `make qualite`. It additionally verifies that every job calling `make`
 appears in the `needs` of the `qualite` job: otherwise its failure would not
@@ -150,5 +173,5 @@ and one must either widen an area or go back to running everything.
 | `paths` / `paths-ignore` on the `pull_request` trigger | filters the whole workflow, not a job; a workflow not triggered leaves a required status check pending forever |
 | A third-party path-filtering action | one more external dependency in a workflow that already pins five by digest, for a thirty-line computation |
 | Compute the dependent crates and test only them in CI | the graph is hard to compute without `cargo metadata`, and CI is precisely the place where the whole workspace must pass; the real gain is in whole skipped jobs |
-| Also filter on `main` | removes the only place where everything is checked together; the slightest classification error would become invisible |
+| Also filter on `main` | removes the only place where everything is checked together; the slightest classification error would become invisible. Narrowed on 2026-10-21 to documentation-only commits, which build nothing (amendment above) |
 | Leave CI as it is and only lighten local work | answers neither the quota exhaustion nor the agents waiting on the `rust` job |
