@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="c5799ce7b204" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="8ae974a1275a" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -193,8 +193,8 @@ ou de `rfd`** :
 | `vite` · `@vitejs/plugin-react` | `8.3.0` · `6.1.1` | idem | — |
 | `tailwindcss` · `@tailwindcss/vite` | `4.3.3` | idem | — |
 | `typescript` | `6.0.3` | `7.0.2` | voir ADR-0029, alternatives écartées |
-| `storybook` · `@storybook/react-vite` · addons | `10.6.0` | idem | — |
-| `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` exige `vitest ^3 \|\| ^4` |
+| `storybook` · `@storybook/react-vite` · addons · `eslint-plugin-storybook` | `10.6.2` | `10.6.3` | lu le 2026-10-21 (`pnpm view`) : `10.6.2`, publiée le 2026-10-12, est la première version corrigée de [GHSA-f2ph-cmg5-wxc8](https://github.com/advisories/GHSA-f2ph-cmg5-wxc8) (critique, développement seulement) ; `10.6.3` a été publiée le 2026-10-20 |
+| `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` exigeait `vitest ^3 \|\| ^4` ; `10.6.2` accepte aussi `^5` (lu le 2026-10-21), le passage à Vitest 5 n'est pas encore fait |
 | `playwright` | `1.63.0` | idem | Chromium seul, pour les stories |
 | `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | idem | — |
 | `zod` | `4.6.5` | idem | relevé le 2026-09-16 ; valide les réponses IPC ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Était déclaré depuis ADR-0029 et importé nulle part |

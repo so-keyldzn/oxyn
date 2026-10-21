@@ -187,8 +187,8 @@ plugin or of `rfd`**:
 | `vite` · `@vitejs/plugin-react` | `8.3.0` · `6.1.1` | same | — |
 | `tailwindcss` · `@tailwindcss/vite` | `4.3.3` | same | — |
 | `typescript` | `6.0.3` | `7.0.2` | see ADR-0029, rejected alternatives |
-| `storybook` · `@storybook/react-vite` · addons | `10.6.0` | same | — |
-| `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` requires `vitest ^3 \|\| ^4` |
+| `storybook` · `@storybook/react-vite` · addons · `eslint-plugin-storybook` | `10.6.2` | `10.6.3` | read on 2026-10-21 (`pnpm view`): `10.6.2`, published on 2026-10-12, is the first patched version for [GHSA-f2ph-cmg5-wxc8](https://github.com/advisories/GHSA-f2ph-cmg5-wxc8) (critical, development only); `10.6.3` was published on 2026-10-20 |
+| `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` required `vitest ^3 \|\| ^4`; `10.6.2` also accepts `^5` (read on 2026-10-21), the move to Vitest 5 is not made yet |
 | `playwright` | `1.63.0` | same | Chromium only, for the stories |
 | `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | same | — |
 | `zod` | `4.6.5` | same | read on 2026-09-16; validates IPC responses ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Had been declared since ADR-0029 and imported nowhere |
