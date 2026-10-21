@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="06a9d0b08f51" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="4745394d69fa" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -330,7 +330,8 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    libellé ni fenêtre cible). Elle n'atteint rien d'une autre fenêtre.
    Une réserve, qui tient à un secret : `start_dragging` et
    `internal_toggle_maximize` de Tauri acceptent le libellé d'une autre
-   fenêtre (`tauri` 2.11.5, `src/window/plugin.rs`, `get_window`). Aucune
+   fenêtre (`tauri` 2.12.1, `src/window/plugin.rs`, `get_window`, lignes
+   13-21, lu le 2026-10-20 — à relire à chaque montée de `tauri`). Aucune
    commande ne renvoie donc au front le libellé d'une fenêtre, ni même le
    sien ; une commande qui le ferait donnerait à une XSS de quoi déplacer ou
    agrandir les autres fenêtres.
@@ -346,9 +347,17 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    `style-src` y garde `'self' 'unsafe-inline'` : des composants posent un
    `<style>` à l'exécution, dans le DOM de la webview, alors que Tauri ne pose
    un `nonce` que sur les `<style>` déjà présents, en texte, dans le HTML
-   statique du build — et ce fichier n'en contient aucun (vérifié dans le
-   source de `tauri-codegen` 2.6.3 et `tauri-utils` 2.9.3, versions de
-   `Cargo.lock`, le 2026-09-24 — [I-12](../CLAUDE.md#i-12)). En dépendent :
+   statique du build — et ce fichier n'en contient aucun (vérifié le
+   2026-09-24, puis de nouveau le 2026-10-20 sur le build de `e9cd78f` : son
+   seul fichier HTML, `apps/desktop/dist/client/index.html`, ne contient aucun
+   `<style`). Le côté Tauri est vérifié dans le source de `tauri-codegen`
+   2.7.1 (`src/context.rs`, qui appelle `inject_nonce_token` sur chaque
+   fichier HTML), `tauri-utils` 2.10.1 (`src/html2.rs`, `inject_nonce_token`,
+   qui sélectionne les éléments `style` du fichier analysé) et `tauri` 2.12.1
+   (`src/manager/mod.rs`, `replace_csp_nonce`, qui ajoute une source
+   `'nonce-…'` par jeton trouvé dans le fichier servi), versions de
+   `Cargo.lock`, le 2026-10-20 — à relire à chaque montée de `tauri`
+   ([I-12](../CLAUDE.md#i-12)). En dépendent :
 
    - `ChartStyle` (`apps/desktop/src/components/ui/chart.tsx`) ;
    - l'éditeur SQL CodeMirror (`sql-editor.tsx`), via `style-mod` 4.1.3 ;
@@ -433,12 +442,135 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    dialogue « work would be stopped » — au pire, il relance vers une mise à
    jour déjà vérifiée, comme `cancel_exit` et la sortie ordonnée le
    permettent déjà ; les transactions ouvertes demandent toujours.
+9. **Les fichiers du modèle d'embeddings local.** Seulement quand
+   l'utilisateur active le classement sémantique — la commande
+   `enable_semantic_ranking`, qui enregistre une préférence du workspace
+   désactivée par défaut qu'aucun agent ne peut changer ; un `true` lu sur
+   disque ne lance rien —, Oxyn télécharge
+   `model.safetensors` et `tokenizer.json` (220 191 240 octets)
+   ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Les
+   sources sont des constantes de `oxyn_embed::pinned` : Hugging Face à un
+   commit épinglé, puis la pré-version `embedding-model-835ad140` de ce
+   dépôt, publiée le 2026-10-07 avec les deux mêmes fichiers, le texte de
+   l'Apache-2.0 et un `NOTICE.md`. Un fichier est accepté sur sa taille et son
+   SHA-256 épinglés seuls, quelle que soit la source qui l'a servi : écrit en
+   flux dans un `.part`, haché à mesure qu'il arrive, coupé au-delà de sa
+   taille épinglée, renommé en place seulement s'il correspond, supprimé à
+   tout échec. HTTPS seulement, redirections comprises (5 au plus), TLS
+   vérifié, 10 s pour se connecter et 60 s de silence au plus entre deux
+   morceaux. **Le proxy système est respecté**, un choix que l'utilisateur a
+   validé, alors que les transports IA d'`oxyn-llm` le désactivent
+   (`no_proxy`) : une requête IA porte le schéma et les questions de
+   l'utilisateur, et un proxy est un tiers de plus qui les lit, tandis que
+   cette requête ne porte aucune donnée de l'utilisateur et que sa réponse est
+   crue sur sa somme, pas sur son chemin. Un proxy peut retenir le modèle, ou
+   voir qu'Oxyn le récupère ; il ne peut pas faire accepter d'autres octets à
+   Oxyn. Refuser le proxy rendrait seulement l'option impossible à activer
+   derrière un réseau d'entreprise. Il est lu par la feature `system-proxy`
+   de `reqwest` — sans elle, seules comptent les variables `HTTP(S)_PROXY`,
+   dont une application lancée depuis le Finder n'hérite pas. La feature
+   s'applique à tous les clients de l'unique `reqwest` du graphe : le seul
+   client d'`oxyn-llm` continue d'appeler `no_proxy()`, et **le système de
+   mise à jour de l'entrée 8 suit désormais lui aussi le proxy système**, ce
+   qui laisse son intégrité où elle était — sur la signature minisign, pas sur
+   le chemin. La requête ne porte aucune donnée de l'utilisateur — une URL
+   fixe et l'agent utilisateur `oxyn/<version>` —, et la webview ne fournit ni
+   URL ni chemin.
+
+   **Deux processus.** Un téléchargement tient un verrou exclusif sur le
+   fichier `.lock` du répertoire du modèle ; un second processus Oxyn est
+   refusé avec `EmbedError::DownloadInProgress` au lieu d'écrire le même
+   `.part`. L'espace de travail temporaire de `make desktop-dev` garde son
+   modèle dans `models-temporary-workspace/` du répertoire de données de
+   l'utilisateur, à l'écart du `models/` de l'Oxyn installé — pas dans le
+   répertoire temporaire du système, où d'autres comptes peuvent écrire sous
+   Linux.
+
+   **Les fichiers sur disque restent des entrées.** Aucun fichier n'est
+   analysé avant que sa taille et son SHA-256 correspondent aux valeurs
+   épinglées : le safetensors est haché de nouveau juste avant que la
+   conversion l'analyse, et supprimé s'il est endommagé ; `tokenizer.json` est
+   lu une fois, si bien que les octets hachés sont les octets analysés. Un
+   fichier tronqué par un disque plein est refusé, jamais remis à un
+   analyseur. La seule fenêtre résiduelle est celle de `model.bpk`,
+   ci-dessous.
+
+   **Un risque est accepté** : `model.bpk` est mappé en mémoire, depuis le
+   descripteur même dont le SHA-256 vient d'être vérifié — remplacer le
+   fichier entre la vérification et le mappage ne change rien, l'inode
+   vérifié est celui qui est mappé —, et la longueur du mappage doit égaler
+   la taille épinglée avant qu'un octet soit lu, sinon le fichier est refusé
+   comme `Corrupt`. Ce qui reste est une seule classe : un processus du même
+   utilisateur qui écrit **sur place** dans l'inode mappé. Une troncature
+   pendant le mappage tue Oxyn par `SIGBUS` ; une réécriture entre la fin du
+   hachage et le mappage, ou pendant `load_from`, fait lire des octets non
+   vérifiés à l'analyseur burnpack, et une panique y tue le processus
+   (`panic = "abort"` en release) ; une réécriture après le chargement donne
+   des vecteurs faux. Toutes exigent un accès en écriture au répertoire de
+   données, qui contient déjà tout ce qu'Oxyn garde ; les remplacements
+   d'Oxyn lui-même — un renommage, une suppression — laissent un mappage
+   intact.
+
+   **La conversion s'exécute dans un processus enfant, et son argument est une
+   entrée.** La conversion, qui analyse le safetensors téléchargé, s'exécute
+   dans `oxyn-desktop` relancé avec l'argument interne
+   `--convert-embedding-model <racine>` (`embedding_converter.rs`).
+   N'importe quel processus peut lancer Oxyn avec cet argument, il est donc
+   traité comme non fiable : `main` le reconnaît avant que le journal, le
+   store ou Tauri démarrent, et l'enfant n'accepte qu'une racine égale à l'un
+   des deux répertoires qu'Oxyn calcule depuis son répertoire de données —
+   `models/` ou `models-temporary-workspace/` — sans autre argument, et
+   refuse tout le reste avant de toucher au disque (sortie 76). Il n'y fait
+   que ce que fait le téléchargement : lire un fichier vérifié sur sa somme
+   épinglée, écrire `model.bpk.part`, le renommer une fois vérifié.
+   L'environnement de l'enfant est vidé sauf `HOME`, `XDG_DATA_HOME`,
+   `SystemRoot` et, quand elles sont définies, `LD_LIBRARY_PATH`, `APPDIR` et
+   `APPIMAGE` — que pose l'AppRun d'une AppImage Tauri, et sans lesquelles
+   l'enfant ne démarrerait pas (pas encore vérifié sur une vraie AppImage) — :
+   des chemins, jamais un secret ([I-03](../CLAUDE.md#i-03)). Ses sorties
+   standard et d'erreur sont nulles, si bien qu'aucun message d'une
+   dépendance n'atteint un journal par elles, et il ne rapporte un échec que
+   par un code de sortie lu par `EmbedError::from_exit_code`. Le parent tient
+   le verrou du répertoire pendant tout le téléchargement ; l'enfant ne le
+   prend pas, et le verrou se ferme à l'`exec`. Pour qu'un enfant ne survive
+   jamais à ce verrou, son entrée standard est un tuyau que le parent garde
+   ouvert tant qu'il attend : l'enfant se termine avec le code `Cancelled`
+   dès que le tuyau se ferme, ce qui arrive quand Oxyn quitte, plante ou est
+   tué. Annuler tue et récolte l'enfant — à toute étape, la conversion
+   comprise —, et le `.part` qu'il a laissé est supprimé comme celui d'un
+   téléchargement interrompu.
+
+   **Les erreurs portent des textes fixes.** Les messages de burn-store
+   nomment le chemin complet d'un fichier et une erreur du tokenizer peut
+   citer le texte : les erreurs d'`oxyn-embed` et le message qu'affichent les
+   réglages et qu'enregistre le journal sont des phrases fixes, complétées
+   seulement d'un nom de fichier épinglé, d'une action ou d'un type d'erreur
+   d'E/S ; des tests donnent à chaque variante un chemin et un marqueur et
+   vérifient qu'aucun des deux ne ressort. Ce qui est transformé en vecteur —
+   la question, les noms et commentaires des relations — ne quitte jamais le
+   processus, et le cache des vecteurs n'en garde que le SHA-256.
 
 ## Politique `unsafe`
 
 **`unsafe` est refusé à la compilation.** `[workspace.lints.rust]` porte
-`unsafe_code = "deny"`, et aucune des quatorze crates — douze sous `crates/`,
-deux drivers sous `drivers/` — n'en contient ni ne le réautorise. C'est le manifeste qui fait foi ici, parce que c'est lui qui est
+`unsafe_code = "deny"`, et des seize crates — treize sous `crates/`,
+trois drivers sous `drivers/` — deux fonctions le réautorisent, chacune sous
+son propre ADR :
+
+- `register` dans `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, qui
+  enregistre l'extension sqlite-vec embarquée sur une connexion — seulement
+  une où l'utilisateur a activé l'interrupteur `sqlite_vec`, désactivé par
+  défaut et qu'aucun agent ne peut changer
+  ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)) ;
+- `map_verified` dans `crates/oxyn-embed/src/load.rs`, qui mappe en mémoire
+  le modèle d'embeddings local, en lecture seule, depuis le descripteur dont
+  le SHA-256 vient d'être vérifié — seulement une fois que l'utilisateur a
+  activé le classement sémantique, désactivé par défaut
+  ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). Son
+  risque accepté est l'écriture sur place de l'entrée 9 ci-dessus — un
+  `SIGBUS`, un arrêt dans l'analyseur, ou des vecteurs faux.
+
+C'est le manifeste qui fait foi ici, parce que c'est lui qui est
 exécuté : ce document décrivait auparavant une politique d'encadrement que la
 compilation n'accorde pas, et [ADR-0021](adr/0021-marqueur-d-arret.md) a fondé
 une décision d'architecture — ne pas vérifier un pid — sur le refus, pas sur
@@ -486,9 +618,23 @@ ce qui le maintiendra valide.
   Le seul aujourd'hui est RUSTSEC-2024-0429 — une *unsoundness* de
   `glib::VariantStrIter`, atteinte par `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
   La correction est dans `glib 0.20`, que `gtk 0.18` refuse : rien ne se monte
-  ici tant que Tauri n'a pas changé de GTK. Ce code est celui de Linux ; il
-  n'est pas compilé sur macOS, la seule cible livrée aujourd'hui, et Oxyn
-  n'appelle pas cet itérateur. À rouvrir à la prochaine montée de Tauri.
+  ici tant que Tauri n'a pas changé de GTK. Les paquets Linux (x86_64 et
+  aarch64 : deb, rpm, AppImage) livrent `glib 0.18.5` ; macOS ne le compile
+  pas. Le défaut est un déréférencement de NULL : l'itérateur passe à une
+  fonction C l'adresse d'un pointeur de chaîne nul à travers une référence
+  partagée, le compilateur peut ignorer l'écriture, et `CStr::from_ptr` reçoit
+  alors NULL. Il se trouve dans cinq méthodes (`next`, `nth`, `last`,
+  `next_back`, `nth_back`), dont aucune n'est atteignable dans ce qui est
+  livré : `Variant::array_iter_str` (`glib-0.18.5/src/variant.rs`, lignes
+  843-855) est la seule fonction qui construit un `VariantStrIter`, dont le
+  constructeur est `pub(crate)` (`src/variant_iter.rs`, ligne 109), et rien ne
+  l'appelle — ni les 634 crates externes des dépendances normales et de build
+  d'`oxyn-desktop` sur les deux cibles Linux, ni le workspace. Vérifié le
+  2026-10-20 ([I-12](../CLAUDE.md#i-12)). La vérification est refaite à chaque
+  montée de `tauri`, `gtk`, `wry`, `muda`, `tao` ou `webkit2gtk`, puisqu'une
+  nouvelle version pourrait ajouter un appelant ; l'entrée est retirée dès que
+  la chaîne atteint `glib` 0.20 ou plus. `deny.toml` porte la commande, à côté
+  de l'entrée.
 
 Voir aussi [`/securite`](../claude/commands/securite.md) et
 [la liste de contrôle](../claude/checklists/revue-securite.md).

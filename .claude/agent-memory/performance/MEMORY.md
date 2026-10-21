@@ -1,2 +1,3 @@
 - [Measuring on this machine](mesurer-sur-cette-machine.md) — the load average lies; criterion without `--bench` measures nothing; flat sampling beyond 100 ms/iteration
+- [macOS memory and libmalloc](memoire-macos-libmalloc.md) — the large cache keeps freed memory in footprint; pressure_relief = 0; `MallocLargeCache=0` to measure
 - [Scope of cargo fmt](perimetre-cargo-fmt.md) — `cargo fmt -p`, never `--all`: other agents edit the repository at the same time

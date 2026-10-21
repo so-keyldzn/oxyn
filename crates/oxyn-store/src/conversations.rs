@@ -756,6 +756,11 @@ impl<'a> Conversations<'a> {
     /// `created_at` is never overwritten; `updated_at` is the caller's, so
     /// re-saving a header does not move a thread to the top of the list.
     ///
+    /// A recorded `agent_id` is never overwritten either: one conversation has
+    /// one agent (ADR-0049 § 6), and a later save from another role would
+    /// silently change who answers the rest of the thread. A legacy thread
+    /// without one takes the first agent saved with it.
+    ///
     /// # Errors
     /// [`StoreError::TooLarge`] if the title exceeds [`MAX_TITLE_BYTES`];
     /// [`StoreError::Sqlite`] if the workspace does not exist — the foreign key
@@ -782,7 +787,7 @@ impl<'a> Conversations<'a> {
                      model             = excluded.model,
                      title             = excluded.title,
                      updated_at        = excluded.updated_at,
-                     agent_id          = excluded.agent_id",
+                     agent_id          = COALESCE(ai_conversations.agent_id, excluded.agent_id)",
                 params![
                     conversation.id.to_string(),
                     conversation.workspace.to_string(),

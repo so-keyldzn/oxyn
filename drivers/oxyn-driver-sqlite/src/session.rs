@@ -29,8 +29,14 @@
 //! `PRAGMA journal_mode`. SQLite lets the application choose, and a `PRAGMA` set
 //! silently would change the meaning of the user's next queries. Accepted
 //! consequence: foreign keys are **not** checked by default — it is SQLite's
-//! behavior — and a locked file immediately returns `SQLITE_BUSY`, classified as
-//! transient, which the caller may retry if it deems it replayable.
+//! behavior. A locked file is not reported at once either: `rusqlite` 0.37.0
+//! (`Cargo.lock`) calls `sqlite3_busy_timeout(db, 5000)` on every open
+//! (`src/inner_connection.rs`, read on 2026-10-20) and this driver does not
+//! override it, so a lock held by another connection is waited on for up to
+//! 5 seconds before `SQLITE_BUSY` comes back. That error is classified as
+//! transient, which the caller may retry if it deems it replayable — unless an
+//! earlier statement of the same batch already applied, in which case it never
+//! is (`error::after_applied`).
 
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -322,6 +328,7 @@ mod tests {
         let spec = OpenSpec {
             target: OpenTarget::Memory(ConnectionId::new()),
             read_only: false,
+            vector_extension: false,
         };
         let (handle, thread) = worker::spawn(spec, &cancel_token).await.expect("open");
         let session = SqliteSession::new(handle, thread, Capabilities::SQL, BatchLimits::new());

@@ -6,4 +6,6 @@
 - [NOM_SECRET hook trap](piege_hook_nom_secret_token.md) — `derive(Debug)` refused on any type named `…Token…`, `…Dsn…`: rename rather than work around
 - [Disposable PG trap](piege_pg_jetable_scratchpad.md) — Unix socket path too long in the scratchpad (TCP only); psql splits on `;`, write a wire client for the extended protocol
 - [Disposable crate and network trap](piege_crate_jetable_reseau.md) — measuring a `size_of` in a disposable Cargo project triggers a registry access and the SSL failure; do it in the crate
+- [Burn flex features trap](piege_burn_flex_features.md) — `burn/flex` has no rayon/SIMD (declare burn-flex directly); `from_static` .bpk panics on i64
+- [Burnpack random ParamId trap](piege_burnpack_param_id_aleatoire.md) — `save_into` writes random ids: no stable sha256; write via `burn_pack::Writer` with `param_id = None`
 - [rustfmt and array comment trap](piege_rustfmt_commentaire_tableau.md) — a one-line `//` above a short element is glued onto the previous element: write two lines

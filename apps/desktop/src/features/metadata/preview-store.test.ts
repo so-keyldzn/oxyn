@@ -238,6 +238,25 @@ describe("preview store", () => {
       status: "error",
       message: "connection reset",
       retryable: true,
+      missingModule: null,
+    })
+  })
+
+  it("keeps the missing module the backend named", async () => {
+    const { previews, pending } = harness()
+    previews.attach("k", target)
+    previews.read("k", PLAIN_SHAPE)
+    pending.get("cmd1")?.reject(
+      Object.assign(new Error("no such module: vec0"), {
+        retryable: false,
+        missingModule: "vec0",
+      })
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(previews.store.state.k?.state).toMatchObject({
+      status: "error",
+      missingModule: "vec0",
     })
   })
 

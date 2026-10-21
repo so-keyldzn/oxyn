@@ -50,8 +50,14 @@ impl From<Reach> for ProviderReach {
 /// A declared model provider, as the settings screen and the panel show it.
 ///
 /// `id` is opaque and only addresses the declaration in later calls; the views
-/// never render it. `endpoint` is [`redacted_endpoint`]: the domain refuses
-/// credentials in the authority, but a query string may still carry a key.
+/// never render it. `endpoint` is [`redacted_endpoint`], although nothing this
+/// binary writes needs it: the domain refuses credentials, a query string and a
+/// fragment in a base URL ([`AiProviderConfig::validate`]), and the store drops
+/// a query it wrote before that refusal existed the first time it lists the
+/// providers. The redaction stays for a value that would reach the view
+/// without having been through them — written by another binary, edited by
+/// hand — because what is shown on screen is the last place a key can still be
+/// stopped ([I-03](../../../../CLAUDE.md#i-03)).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeclaredProvider {
@@ -59,8 +65,10 @@ pub struct DeclaredProvider {
     pub label: String,
     pub kind: AiProviderKind,
     pub endpoint: String,
-    /// Whether `endpoint` lost a query or fragment on the way: an edit then
-    /// keeps the stored endpoint unless a new one is typed.
+    /// Whether `endpoint` lost user information, a query or a fragment on the
+    /// way: an edit then keeps the stored endpoint unless a new one is typed.
+    /// Expected to stay `false`, for the reason given on the type; `true` means
+    /// a foreign value went through the redaction.
     pub endpoint_redacted: bool,
     pub model: String,
     /// « a key is stored », never where nor what.
@@ -90,9 +98,9 @@ impl DeclaredProvider {
 
 /// An endpoint as it may be shown: no user information, no query, no fragment.
 ///
-/// The domain already refuses `user:password@` ([`AiProviderConfig::validate`]);
-/// stripping it again costs nothing and keeps this function honest on a value
-/// written by another binary.
+/// The domain already refuses `user:password@`, a query string and a fragment
+/// ([`AiProviderConfig::validate`]); stripping them again costs nothing and
+/// keeps this function honest on a value written by another binary.
 pub fn redacted_endpoint(base_url: &str) -> (String, bool) {
     let trimmed = base_url.trim();
     let mut redacted = false;
@@ -264,8 +272,8 @@ pub fn preset_sign_in(
 /// What the user filled in to declare or edit a provider.
 ///
 /// **No `Debug` derive**: `key` is an API key in clear, and `base_url` has not
-/// been validated yet — it may carry the `user:password` the domain is about to
-/// refuse ([I-03](../../../../CLAUDE.md#i-03)).
+/// been validated yet — it may carry the `user:password`, the `?key=…` or the
+/// fragment the domain is about to refuse ([I-03](../../../../CLAUDE.md#i-03)).
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderDraft {

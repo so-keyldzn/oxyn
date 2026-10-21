@@ -23,6 +23,20 @@
 //! `SELECT * FROM t` before running the `CREATE TABLE t` that precedes it would
 //! fail.
 //!
+//! # When an earlier statement already applied
+//!
+//! Each statement is its own atomic unit: one that completed has changed the
+//! data, whatever the next one does. `applied` records it as the batch goes,
+//! **in place**, so that it survives the error that ends the batch — a later
+//! statement that cannot even be prepared (a lock, a schema change, a table
+//! that never existed) is as much "after an applied statement" as one that
+//! fails while running. From then on every failure that leaves the worker thread
+//! goes through `error::after_applied`: never a cancellation, never retryable.
+//!
+//! That wrapping happens at **one point per exit** — the error returns of `run`
+//! and of `stream_rows` — and nowhere below: the functions that read or step
+//! return the engine's own verdict, so nothing is wrapped twice.
+//!
 //! # What is refused, and why
 //!
 //! * **Bound parameters with a batch of several statements.** Nothing says which
@@ -92,6 +106,13 @@ pub(crate) struct StreamStart {
     /// What the streamed statement could do: a Stop ends a read as a
     /// cancellation, a write only on what the engine reports.
     pub effect: Effect,
+    /// An earlier statement of the batch ran to its end and could write.
+    ///
+    /// Kept apart from `effect`, which speaks of the streamed statement alone:
+    /// the row-limit probe of a read must not change because of what came
+    /// before it. The cursor reads this to refuse a "cancelled" for a batch that
+    /// had already changed data.
+    pub applied: bool,
 }
 
 /// An execution handed to the worker thread.
@@ -125,11 +146,19 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
     // when classifying the error rather than guessed from its text (I-03).
     let bound = Bound::of(&request.params);
     let mut affected = 0_u64;
+    let mut applied = false;
     let mut batch = Batch::new(connection, &request.text);
-    let last = match select_last(connection, &mut batch, &request, &mut affected, interrupter) {
+    let last = match select_last(
+        connection,
+        &mut batch,
+        &request,
+        &mut affected,
+        &mut applied,
+        interrupter,
+    ) {
         Ok(statement) => statement,
         Err(err) => {
-            let _ = start.send(Err(err));
+            let _ = start.send(Err(error::after_applied_if(applied, err)));
             return;
         }
     };
@@ -138,22 +167,25 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
     // use, just above.
     let Some(mut statement) = last else {
         // An empty text, or only comments.
-        let _ = start.send(Ok(nothing(affected)));
+        let _ = start.send(Ok(nothing(affected, applied)));
         return;
     };
 
+    // Everything before the last statement has run: `applied` no longer moves
+    // until the last statement itself completes.
+    let fail = |err: OxynError| error::after_applied_if(applied, err);
     if let Err(err) = guard_read_only(&statement, &request) {
-        let _ = start.send(Err(err));
+        let _ = start.send(Err(fail(err)));
         return;
     }
     if let Err(err) = params::bind(&mut statement, &request.params) {
-        let _ = start.send(Err(error::driver(err, ErrorClass::Permanent)));
+        let _ = start.send(Err(fail(error::driver(err, ErrorClass::Permanent))));
         return;
     }
 
     let effect = effect_of(&statement);
     if let Err(err) = interrupter.checkpoint(effect, bound) {
-        let _ = start.send(Err(err));
+        let _ = start.send(Err(fail(err)));
         return;
     }
     if statement.column_count() == 0 {
@@ -161,38 +193,73 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
         // the count of affected rows.
         let before = connection.total_changes();
         if let Err(err) = statement.raw_execute() {
-            let _ = start.send(Err(error::engine_bound(err, effect, bound)));
+            let _ = start.send(Err(fail(error::engine_bound(err, effect, bound))));
             return;
         }
-        affected = affected.saturating_add(changes_since(connection, before));
-        let _ = start.send(Ok(nothing(affected)));
+        let changed = changes_since(connection, before);
+        affected = affected.saturating_add(changed);
+        let _ = start.send(Ok(nothing(affected, applied || wrote(effect, changed))));
         return;
     }
 
-    stream_rows(
-        statement, &request, limits, effect, bound, start, &mut pulls,
-    );
+    let context = FailureContext {
+        effect,
+        bound,
+        applied,
+    };
+    stream_rows(statement, &request, limits, context, start, &mut pulls);
 }
 
 /// The result of an execution that produces no column.
-fn nothing(affected: u64) -> StreamStart {
+fn nothing(affected: u64, applied: bool) -> StreamStart {
     StreamStart {
         schema: Arc::new(Schema::empty()),
         first: Pulled::Done { truncated: false },
         affected,
         // Every statement has already run: there is no stream left to stop.
         effect: Effect::ReadOnly,
+        applied,
     }
+}
+
+/// Did a statement that ran to its end change the database?
+///
+/// Two tests, because neither is enough alone. The engine's read-only flag is a
+/// promise about what the statement *may* do: it is false for `CREATE TABLE`,
+/// which `total_changes` never counts, and for an `UPDATE` that matched no row,
+/// which over-reports — the safe side for a verdict that forbids a replay.
+/// The counter is what actually happened, triggers included.
+const fn wrote(effect: Effect, changed: u64) -> bool {
+    matches!(effect, Effect::Mutating) || changed > 0
+}
+
+/// What a failure of the streamed statement needs to be told correctly.
+///
+/// Fixed before the first row and the same for the whole stream. Grouped to keep
+/// [`stream_rows`] within a readable number of parameters.
+#[derive(Debug, Clone, Copy)]
+struct FailureContext {
+    /// What the streamed statement could do.
+    effect: Effect,
+    /// Where its bound values come from.
+    bound: Bound,
+    /// An earlier statement of the batch applied.
+    applied: bool,
 }
 
 /// Executes every statement but the last, and returns that one.
 ///
 /// Returns `None` if the text contains no statement.
+///
+/// `applied` is raised **in place** when a statement completes and could write,
+/// so the caller still reads it when this function returns the error of a later
+/// statement.
 fn select_last<'conn>(
     connection: &'conn Connection,
     batch: &mut Batch<'conn, '_>,
     request: &ExecRequest,
     affected: &mut u64,
+    applied: &mut bool,
     interrupter: &Interrupter,
 ) -> Result<Option<Statement<'conn>>> {
     let mut pending = next_statement(batch)?;
@@ -215,7 +282,11 @@ fn select_last<'conn>(
             statement
                 .raw_execute()
                 .map_err(|err| error::engine(err, effect))?;
-            *affected = affected.saturating_add(changes_since(connection, before));
+            let changed = changes_since(connection, before);
+            *affected = affected.saturating_add(changed);
+            // Before preparing the next statement: that preparation is where a
+            // lock or a schema change surfaces, and it is already "after".
+            *applied |= wrote(effect, changed);
             pending = next_statement(batch)?;
             continue;
         }
@@ -238,7 +309,7 @@ fn select_last<'conn>(
         interrupter.checkpoint(effect_of(&statement), Bound::Internal)?;
         // This result set is overwritten by the next statement's. It is run all
         // the same — its effects count — and its rows are thrown away.
-        discard(&mut statement, connection, affected)?;
+        discard(&mut statement, connection, affected, applied)?;
         pending = next;
     }
 }
@@ -259,13 +330,16 @@ fn discard(
     statement: &mut Statement<'_>,
     connection: &Connection,
     affected: &mut u64,
+    applied: &mut bool,
 ) -> Result<()> {
     let effect = effect_of(statement);
     let before = connection.total_changes();
     let mut rows = statement.raw_query();
     while step(&mut rows, effect, Bound::Internal)?.is_some() {}
     drop(rows);
-    *affected = affected.saturating_add(changes_since(connection, before));
+    let changed = changes_since(connection, before);
+    *affected = affected.saturating_add(changed);
+    *applied |= wrote(effect, changed);
     Ok(())
 }
 
@@ -273,16 +347,21 @@ fn discard(
 ///
 /// `bound` goes with `effect` down to the read functions: they do not have the
 /// request at hand, and guessing it at their level would be one more
-/// assumption.
+/// assumption. `applied` stops at this function: it wraps every error that
+/// leaves it, so the read functions below return the engine's own verdict.
 fn stream_rows(
     mut statement: Statement<'_>,
     request: &ExecRequest,
     limits: BatchLimits,
-    effect: Effect,
-    bound: Bound,
+    context: FailureContext,
     start: oneshot::Sender<Result<StreamStart>>,
     pulls: &mut mpsc::UnboundedReceiver<Pull>,
 ) {
+    let FailureContext {
+        effect,
+        bound,
+        applied,
+    } = context;
     // Taken before borrowing the statement for reading: `columns()` borrows,
     // `raw_query()` borrows mutably.
     let declared: Vec<(String, Option<String>)> = statement
@@ -302,7 +381,7 @@ fn stream_rows(
     let probed = match probe(&mut rows, width, limits, &mut remaining, effect, bound) {
         Ok(probed) => probed,
         Err(err) => {
-            let _ = start.send(Err(err));
+            let _ = start.send(Err(error::after_applied_if(applied, err)));
             return;
         }
     };
@@ -343,7 +422,7 @@ fn stream_rows(
             Ok(batch) if finished => Pulled::Last { batch, truncated },
             Ok(batch) => Pulled::Batch(batch),
             Err(err) => {
-                let _ = start.send(Err(err));
+                let _ = start.send(Err(error::after_applied_if(applied, err)));
                 return;
             }
         }
@@ -355,6 +434,7 @@ fn stream_rows(
             first,
             affected: 0,
             effect,
+            applied,
         }))
         .is_err()
         || finished
@@ -379,7 +459,7 @@ fn stream_rows(
         ) {
             Ok(filled) => filled,
             Err(err) => {
-                let _ = reply.send(Err(err));
+                let _ = reply.send(Err(error::after_applied_if(applied, err)));
                 return;
             }
         };
@@ -391,7 +471,8 @@ fn stream_rows(
             finish_batch(&mut builders, &schema).map(|batch| Pulled::Last { batch, truncated })
         } else {
             finish_batch(&mut builders, &schema).map(Pulled::Batch)
-        };
+        }
+        .map_err(|err| error::after_applied_if(applied, err));
         let failed = answer.is_err();
         // A finished source joins the two other stop causes for the same reason
         // as above: once the end is announced, keeping the thread only serves

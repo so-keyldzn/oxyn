@@ -27,7 +27,12 @@ export type FacetLoad =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "cancelled" }
-  | { status: "error"; message: string }
+  | {
+      status: "error"
+      message: string
+      /** The engine module the read needed, as the backend named it. */
+      missingModule?: string | null
+    }
 
 export const IDLE: FacetLoad = { status: "idle" }
 

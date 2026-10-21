@@ -377,6 +377,16 @@ pub struct ExecRequest {
     /// by the executor's reclassification, never taken from the caller.
     #[serde(default)]
     pub transaction_control: bool,
+    /// Whether the text changes the session's current database or schema
+    /// (`USE ...`).
+    ///
+    /// Such a statement reads nothing and writes nothing itself, yet it changes
+    /// what the following statements mean: the `DELETE FROM users` typed next
+    /// would hit another database from the one the user believes they target.
+    /// Like the intent, it is replaced by the executor's reclassification,
+    /// never taken from the caller.
+    #[serde(default)]
+    pub context_change: bool,
 }
 
 impl ExecRequest {
@@ -395,6 +405,7 @@ impl ExecRequest {
             risk: MutationRisk::None,
             limits: ExecLimits::default(),
             transaction_control: false,
+            context_change: false,
         }
     }
 
@@ -456,6 +467,7 @@ impl std::fmt::Debug for ExecRequest {
             .field("risk", &self.risk)
             .field("limits", &self.limits)
             .field("transaction_control", &self.transaction_control)
+            .field("context_change", &self.context_change)
             .finish()
     }
 }
@@ -537,6 +549,35 @@ mod tests {
             rendered.contains("SELECT * FROM users"),
             "the shape of the query stays loggable"
         );
+    }
+
+    #[test]
+    fn the_debug_lists_the_context_change() {
+        let mut request = ExecRequest::new(QueryLanguage::SQL, "SELECT 1");
+        assert!(format!("{request:?}").contains("context_change: false"));
+        request.context_change = true;
+        assert!(format!("{request:?}").contains("context_change: true"));
+    }
+
+    #[test]
+    fn a_request_written_before_the_context_flag_still_reads() {
+        // I-11: a history entry or a session file written by an older build
+        // has no `context_change`. It must come back readable, with the flag
+        // lowered — the reclassification raises it again from the text.
+        let mut persisted = serde_json::to_value(ExecRequest::new(QueryLanguage::SQL, "USE shop"))
+            .expect("an ExecRequest serializes to JSON: it holds only plain data");
+        let removed = persisted
+            .as_object_mut()
+            .and_then(|object| object.remove("context_change"));
+        assert!(
+            removed.is_some(),
+            "the flag must be part of the persisted shape, or the test proves nothing"
+        );
+
+        let read: ExecRequest = serde_json::from_value(persisted)
+            .expect("a request without `context_change` stays readable");
+        assert!(!read.context_change);
+        assert_eq!(read.text, "USE shop");
     }
 
     #[test]

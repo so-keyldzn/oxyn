@@ -19,6 +19,15 @@
 //!    user's open transaction, which closing would silently roll back
 //!    (ADR-0050 §7, amended on 2026-09-30).
 //!
+//! # What a confirmed kill does not prove
+//!
+//! A 1317 proves the kill was consumed and the connection can be kept. It does
+//! not prove that a write left nothing behind: a non-transactional table keeps
+//! the rows changed before the interruption, and a procedure keeps what it
+//! already committed. Whether the stopped statement ends on `Cancelled` or on
+//! an unknown outcome is decided by the stream task, from the statement's kind
+//! and what the kill proved (`cursor::terminal_error`), never by this module.
+//!
 //! The kill goes out from a **second connection of the same account**, opened
 //! for it: an account can always kill its own threads, without
 //! `CONNECTION_ADMIN`.
@@ -56,7 +65,7 @@ const KILL_BOUND: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DrainVerdict {
     /// The server answered 1317 on it: the kill is spent, the connection is
-    /// safe to keep.
+    /// safe to keep. Not proof the statement kept nothing.
     Consumed,
     /// Anything else: the kill may still be pending on the connection.
     Unproven,

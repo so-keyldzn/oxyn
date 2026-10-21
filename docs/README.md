@@ -53,7 +53,7 @@ To locate the boards and their states before implementation, see
 | [0019](adr/0019-contexte-de-session.md) | A declared session context, never set silently | accepted |
 | [0020](adr/0020-apercu-trie-filtre-parcouru.md) | Preview: a sort Oxyn composes, a predicate the user writes, a deterministic page | proposed |
 | [0021](adr/0021-marqueur-d-arret.md) | Knowing whether Oxyn stopped normally, and saying it without guessing | accepted |
-| [0022](adr/0022-rafraichissement-automatique.md) | What refreshes on its own, and what never will | proposed |
+| [0022](adr/0022-rafraichissement-automatique.md) | What refreshes on its own, and what never will | accepted |
 | [0023](adr/0023-fournisseurs-declares-et-provenance.md) | A provider is declared per machine, reclassified on every opening, and signs what it proposes | accepted |
 | [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | The draft is written when typing stops, not on every keystroke | proposed |
 | [0025](adr/0025-proposition-de-changement-de-schema.md) | A schema change proposal is SQL to review, never a write | proposed |
@@ -68,7 +68,7 @@ To locate the boards and their states before implementation, see
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | An approved sample reaches any destination through the same gateway, and an agent can request one without ever approving it | proposed |
 | [0035](adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md) | The scheduler's local writes go through the blocking pool, as owned operations | accepted |
 | [0036](adr/0036-l-assistant-complete-le-catalogue.md) | The assistant completes the catalog itself, through the bus and within bounds | proposed |
-| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | A critical decision is confirmed in a native dialog of the host, never in the webview | proposed |
+| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | A critical decision is confirmed in a native dialog of the host, never in the webview | accepted |
 | [0038](adr/0038-un-plantage-s-annonce-une-fois.md) | A crash is announced once, and ⌘Q goes through the orderly shutdown | accepted |
 | [0039](adr/0039-etat-de-transaction-d-une-session.md) | A session returns the transaction state it observed, and the console shows only that one | accepted |
 | [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | An exit that macOS does not let us hold back records its closing | accepted |
@@ -82,9 +82,12 @@ To locate the boards and their states before implementation, see
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | A statement sqlx cannot prepare, or whose result has no binary form, runs in the simple protocol, as text | accepted |
 | [0049](adr/0049-agents-declared-as-markdown-files.md) | An agent is a Markdown file with a YAML front matter, composed with a dialect and a recipient fragment, filled only from a closed list of variables (amended on 2026-10-06) | accepted |
 | [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends | accepted |
-| [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn updates itself from the GitHub Releases, in Rust only, and installs on quit | proposed |
+| [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn updates itself from the GitHub Releases, in Rust only, and installs on quit | accepted |
 | [0052](adr/0052-verified-tls-outside-local.md) | PostgreSQL and MySQL require verified TLS outside Local | accepted |
 | [0053](adr/0053-redact-sql-passwords-before-persistence.md) | SQL password literals are redacted before persistence; existing audit rows remain append-only | accepted |
+| [0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md) | The SQLite driver bundles sqlite-vec, registered only on connections where the user turned it on (off by default); no extension is loaded from a file | accepted |
+| [0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md) | The SQL agent is the default of a new conversation, whatever the display order | accepted |
+| [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Local CPU embeddings (Burn, a pinned multilingual model downloaded on opt-in) rank the relations of the AI context, lexical first | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

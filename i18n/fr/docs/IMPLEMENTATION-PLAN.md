@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="fe02a2e22ee3" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="49c92cfc53da" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -193,9 +193,9 @@ la fenêtre Tauri.
 
 La liste qui restait alors à faire avant de supprimer `oxyn-ui` et `oxyn-app` :
 
-- bascule compacte sous 1 200 px et menu `More` — **en partie** : la bascule
-  existe (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`), le menu `More`
-  et le menu `Actions` non, voir la porte ci-dessous ;
+- ~~bascule compacte sous 1 200 px et menu `More`~~ — fait : la bascule
+  (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`), et depuis le 2026-09-25 le
+  menu `More` et le menu `Actions`, voir la porte ci-dessous ;
 - ~~réglages d'affichage des cellules (`FormatOptions`) et thème clair commutable~~ — fait (`features/settings/`) ;
 - ~~restauration des brouillons après arrêt brutal~~ — fait (`features/recovery/`) ;
 - campagne de mesure des budgets de [PERFORMANCE](PERFORMANCE.md) **dans la webview**,
@@ -227,8 +227,8 @@ GPUI que `6ecb8ce` a supprimés, et qui n'existent pas dans `apps/desktop` :
 | Restauration hors ligne des éditeurs | les brouillons repris restent modifiables et sauvegardables sans session, puis se rattachent à une connexion choisie | **fait**, dans un workspace. Les copies choisies s'ajoutent sans remplacer celles déjà reprises et rouvrent en consoles **sans session** (`features/consoles/use-consoles.ts`) : texte, nom, autosauvegarde et sauvegarde nommée fonctionnent, l'exécution attend. `Connect to …` donne une session à la même console sur la connexion d'origine, `Open a copy on …` ouvre une copie ailleurs ; annuler laisse la console hors ligne. Tenu par `an_offline_copy_attached_to_its_connection_keeps_its_identity`, `a_copy_on_another_connection_leaves_the_original_untouched` et les stories `OfflineConsoleBar`, `ConsoleView/Offline`. Reste : à froid, sans connexion ouverte, les copies attendent le premier workspace — il n'existe pas de workspace sans connexion |
 | Export d'un résultat retenu | la bibliothèque exporte le tampon retenu sans le rejouer | **fait** le 2026-09-25. `retained-result-tab.tsx` monte `ExportMenu` sous la grille, exportable seulement pour un résultat complet, réussi et non tronqué ; l'onglet refuse de se fermer pendant un export, qui survit au changement de vue latérale. Tenu par les stories `RetainedResultView/ExportOffered`, `ExportRefusedWhenIncomplete` et `WorkspaceTabs/ResultExporting` |
 | Panneau DDL latéral | panneau DDL en lecture seule (`193:2433`), redimensionnable | **absent** comme panneau : le DDL est un onglet de la vue d'objet (`RelationDefinition`) |
-| `Edit rows…` désactivé et son infobulle | exigé par [UX-SPEC](UX-SPEC.md) dans l'aperçu en lecture seule | **absent** : aucune occurrence dans `apps/desktop` |
-| La bibliothèque suit les exécutions | la bibliothèque ouverte se relit après une exécution (lot rafraîchissement automatique, ADR-0022) | **absent.** `LIBRARY_QUERY_KEY` n'est invalidée que par Refresh et les actions de la bibliothèque ; le commentaire « a run invalidates it » n'a pas de code derrière lui |
+| `Edit rows…` désactivé et son infobulle | exigé par [UX-SPEC](UX-SPEC.md) dans l'aperçu en lecture seule | **fait le 2026-09-25** (`a7c643d`) : `Edit rows…` est désactivé, avec l'infobulle `EDIT_ROWS_UNAVAILABLE` (`components/oxyn/object-view-frame.tsx`) ; story `Oxyn/ObjectView`, `EditRowsUnavailable` |
+| La bibliothèque suit les exécutions | la bibliothèque ouverte se relit après une exécution (lot rafraîchissement automatique, ADR-0022) | **fait le 2026-09-25** (`2b437ef`) : `useLibraryRefresh` (`features/library/library-refresh.ts`), monté par `library-sidebar-section.tsx`, invalide `LIBRARY_QUERY_KEY` sur `historyRecorded` et `lagged`. Tenu par « reads again when a run of any connection reaches the history » et « reads again after missed signals » (`library-refresh.test.tsx`) |
 | Restauration de l'emplacement d'objet | « réalisée (`ObjectLocation`) », tenue par `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` | **fait le 2026-09-25.** `read_object_location` / `write_object_location` (hors de `ipc/settings.rs`, qui l'exclut toujours) ; l'onglet revient tenu, sans lecture, et l'écran de reprise le propose — voir « Reprise et bibliothèque » |
 
 Le menu Columns, lui, est livré (`ef2ada8`, `components/oxyn/columns-menu.tsx`)
@@ -276,9 +276,10 @@ clic droit sur chaque surface, raccourcis, palette, glisser-déposer, plusieurs
 fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-gestes),
 les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
 [ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
-[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 6 sont faits (le 4 sous
-la liste), le 8 aussi, le 7 pour sa première partie ; les autres ne sont pas
-implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
+[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 8 sont faits (le 4 sous
+la liste ; le 7 les 2026-09-25 et 2026-09-26 ; le 8 pour une fenêtre), et leurs
+restes sont listés sous les lots 7 et 8 ; le lot 9 n'est pas
+implémenté. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
 `alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
 
 Arbitrages de l'utilisateur, le 2026-09-25 : barre de menus aussi sous Windows
@@ -619,8 +620,8 @@ Lots, dans l'ordre :
 7. **Multi-fenêtre** — abonnements par fenêtre, `WindowRegistry`, capability
    par motif `workspace-*`, migration de disposition, `Open in new window`,
    restauration par fenêtre, consoles comprises après une fermeture ordinaire
-   (ADR-0043). Livré en deux pull requests ; **la première est faite**, voir
-   ci-dessous.
+   (ADR-0043). Livré en deux pull requests ; **les deux sont faites** (2026-09-25
+   et 2026-09-26), voir ci-dessous ; les restes sont listés sous `Open in new window`.
 8. **Transaction ouverte à la sortie** — étape avant l'arrêt ordonné,
    `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
    `cancel_exit`, journal de la sortie forcée (ADR-0043). **Fait pour une
@@ -2162,11 +2163,16 @@ chaque champ et borne la commande et chaque argument à 4 096 octets UTF-8.
 Les tests d'hôte scripté couvrent l'accord prématuré, le refus, l'expiration et
 la concurrence.
 
-**Prévu le 2026-10-06 — des prompts composés par rôle × dialecte ×
-destinataire.** L'[ADR-0049](adr/0049-agents-declared-as-markdown-files.md),
-amendée le 2026-10-06, reste `proposed` jusqu'à ce que l'utilisateur
-l'accepte ; son premier commit de code est l'étape 1. Trois étapes, chacune
-sa pull request, dans cet ordre :
+**Fait le 2026-10-06 — des prompts composés par rôle × dialecte ×
+destinataire.** Prévu le même jour ; les trois étapes ci-dessous sont
+fusionnées et livrées dans la 0.0.6 (#205) : l'étape 1 dans #202, l'étape 2
+dans #198 (store), #200 (sélecteur) et #203 (la conversation exécute son
+agent), l'étape 3 dans #204.
+L'[ADR-0049](adr/0049-agents-declared-as-markdown-files.md), amendée le
+2026-10-06 (#199), a été acceptée le 2026-10-06 (#206) ; le 2026-10-07,
+l'[ADR-0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md)
+précise son agent par défaut (SQL, quel que soit l'ordre d'affichage).
+Les étapes, telles que prévues, chacune sa pull request, dans cet ordre :
 
 1. **La composition, dans `oxyn-ai`.** Les fichiers de rôle
    `agents/sql.md` et `agents/schema.md`, les fragments de dialecte (un vrai
@@ -2205,6 +2211,49 @@ sa pull request, dans cet ordre :
    hors UTF-8, une ancre ou un alias, une clé en double, un champ inconnu, un
    marqueur inconnu et une collision d'id, dont aucun ne bloque les fichiers
    valides à côté.
+
+**Planifié le 2026-10-07 — des embeddings locaux classent le contexte IA
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md),
+proposée).** Dans cet ordre, chacun avec sa porte de sortie :
+
+1. **`oxyn-embed`.** La crate, ses fichiers épinglés, le téléchargement, la
+   conversion et `OnDemandEmbedder` ; le test de sortie de référence qui
+   échoue quand une constante résiduelle manque ; la taille et la somme du
+   `model.bpk` converti écrites dans `pinned::CONVERTED` — **fait dans
+   `a7233c3`** (389 816 832 octets, `d5ac67b8…`). **Porte de
+   sortie** : `make qualite` au vert, le test de référence qui passe, une
+   compilation à froid de la crate en CI mesurée et consignée dans
+   RESEARCH-NOTES.
+2. **La release de secours.** Publier `embedding-model-835ad140` comme
+   **pré-version** de `so-keyldzn/oxyn`, avec `model.safetensors`,
+   `tokenizer.json`, le texte de l'Apache-2.0 et l'attribution du modèle.
+   **Porte de sortie** : les deux fichiers téléchargés depuis elle
+   correspondent à leur SHA-256 épinglé, et
+   `releases/latest/download/latest.json` répond toujours la dernière release
+   d'Oxyn. **Fait le 2026-10-07** : publiée comme pré-version avec
+   `LICENSE-Apache-2.0.txt` et `NOTICE.md` ; les empreintes des assets égalent
+   les SHA-256 épinglés, « latest » est resté `v0.0.7`, et `latest.json`
+   répond 200.
+3. **Le classement dans `oxyn-ai`.** Des scores par relation acceptés par
+   `ContextBuilder` et `wanted_relations` ; les trois règles d'ordre de
+   l'ADR. **Porte de sortie** : des tests qu'une correspondance lexicale n'est
+   jamais rétrogradée par un score, que les égalités et les relations sans
+   correspondance suivent le cosinus puis le chemin, et qu'aucun score donne
+   exactement la sélection d'aujourd'hui ; `oxyn-ai` ne dépend pas
+   d'`oxyn-embed`.
+4. **`oxyn-desktop` : préférence, téléchargement, cache, borne.** La
+   préférence, désactivée par défaut et refusée à `Actor::Agent` ; le
+   téléchargement avec progression et annulation ; le cache en mémoire des
+   vecteurs de relations indexé par `MODEL_ID` ; la borne de 2 secondes par
+   question ; l'état indisponible affiché dans le panneau, écrit d'abord dans
+   [UX-SPEC](UX-SPEC.md) ; la conversion dans un processus enfant. **Porte de
+   sortie** : l'empreinte d'`oxyn-desktop` mesurée contre le budget de
+   [PERFORMANCE](PERFORMANCE.md#budgets-de-mémoire) amendé le 2026-10-08 —
+   300 Mo modèle chargé, 250 Mo retenus après déchargement, rien de retenu de
+   la conversion —, le déchargement après
+   5 minutes observé, la taille du binaire dépouillé avant et après
+   consignée, et la latence mesurée sous Linux x86_64 et arm64 autant que
+   sous macOS.
 
 ## Phase 3 bis — Au-delà du relationnel
 
@@ -2446,6 +2495,7 @@ porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | ADR | Statut | Test qui la tient, ou raison du maintien |
 |---|---|---|
 | [0021](adr/0021-marqueur-d-arret.md) | accepté | `a_session_left_open_and_silent_is_an_abnormal_shutdown` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
+| [0022](adr/0022-rafraichissement-automatique.md) | accepté (2026-10-20) | `a_ddl_stales_both_the_catalog_and_the_visible_preview`, `a_read_stales_nothing_but_its_history_entry_is_announced` et `nothing_is_signalled_after_a_failure_or_a_cancellation` (`oxyn-desktop/src/ipc/metadata.rs`), `a_successful_ddl_invalidates_the_catalog_and_broadcasts_it` (`oxyn-exec/src/preview_tests.rs`), « reads the visible preview again, with the shape in force », « leaves a hidden preview stale until it is shown » et « never hides an error behind a new read » (`apps/desktop/src/features/metadata/use-preview-refresh.test.tsx`), « reads again after missed signals » (`apps/desktop/src/features/library/library-refresh.test.tsx`). **Implémenté mais tenu par aucun test nommé** : la branche Write de `RefreshSignal::of` (le bras par défaut `_ => RowsChanged`, par lequel une écriture relit l'aperçu) ; le rechargement de l'arbre sur `catalogInvalidated` et `lagged` (`features/workspace/catalog-sidebar.tsx`, première ligne du tableau de l'ADR), avec la coalescence de ses Conséquences (la boucle `owed`) ; et la branche `lagged` de l'aperçu visible (`features/metadata/use-preview.ts`) et des facettes (`features/metadata/use-relation-facets.ts`) : `use-preview-refresh.test.tsx` n'envoie `lagged` que pendant que le workspace est masqué, et `object-view.test.tsx` simule les facettes |
 | [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepté | `no_url_carrying_credentials_reaches_the_disk` (`oxyn-store/src/providers.rs`), `an_unresolved_endpoint_gets_no_benefit_of_the_doubt` (`oxyn-llm/src/reach.rs`) |
 | [0026](adr/0026-agents-externes-acp.md) | accepté | `an_external_agent_never_serves_a_local_connection` (`oxyn-ai/src/privacy.rs`), `the_table_has_no_secret_column` (`oxyn-store/src/agents/tests.rs`) |
 | [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepté | `under_local_no_prompt_is_composed` (`oxyn-ai/src/external/prompt/tests.rs`), `the_local_tier_refuses_before_even_launching_the_process` (`oxyn-ai/src/external/tests.rs`) |
@@ -2454,14 +2504,18 @@ porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0031](adr/0031-validation-des-reponses-ipc.md) | accepté | « rejects what the grid could not draw, rather than letting it through » (`apps/desktop/src/lib/ipc/types.test.ts`), « degrades an unknown ending instead of refusing the event » (`ai.test.ts`) |
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepté | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
 | [0033](adr/0033-couches-de-configuration-codex.md) | accepté | `every_readable_layer_is_switched_off_by_name_each_once` (`oxyn-ai/src/external/confine/codex_layers.rs`) |
+| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | accepté (2026-10-20) | `an_unbounded_delete_on_production_asks_and_a_refusal_runs_nothing`, `an_unanswered_dialog_is_a_refusal_at_its_deadline`, `a_confirmation_under_a_second_is_a_refusal`, `a_tier_change_on_development_asks_too` et `a_second_critical_decision_meanwhile_is_refused_without_being_consumed` (`oxyn-desktop/src/backend/confirm/tests.rs`), `a_hostile_string_is_escaped_wherever_it_appears` (`backend/confirm/text/tests.rs`), `a_native_refusal_of_a_pinned_sample_reads_and_sends_nothing` (`backend/ai/conversation/tests/approved_samples/native_confirmation.rs`). Le dialogue natif lui-même reste une vérification à la main, comme le dit son § 4 |
+| [0051](adr/0051-automatic-updates-from-github-releases.md) | accepté (2026-10-20) | `the_webview_is_granted_neither_the_updater_nor_the_opener`, `an_archive_is_only_asked_from_github_over_https`, `nothing_is_installed_without_verified_bytes`, `on_linux_only_an_appimage_updates_itself` et `a_development_build_never_updates` (`oxyn-desktop/src/updates/tests.rs`) ; `test_manifest_lists_the_three_platforms_with_their_signatures` et `test_signature_not_bound_to_the_version_writes_no_manifest` (`script/test_livraison.py`) pour la version brouillon, les signatures et le manifeste de mise à jour |
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | proposé | **écart code/ADR** : son § 2 dit que les colonnes « ne rejoignent aucune instruction », alors que depuis `d6cf80b` elles entrent dans le `PreviewRelation` par `PreviewShape::columns`, citées par le driver ([Phase 3](#phase-3--le-workspace-ia)). Le reste est tenu (`an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after`) ; la phrase est à préciser avant d'accepter |
 | [0005](adr/0005-wasm-plugins.md) | proposé | WIT et instanciation des composants renvoient « phase 4 » (`oxyn-plugin/src/host.rs`) |
 | [0007](adr/0007-driver-sidecar.md) | proposé | aucun sidecar, reporté en phase 4 |
 | [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposé | son ordre par défaut sur la clé primaire est contredit par le code et par ADR-0028, qui le précise |
-| [0022](adr/0022-rafraichissement-automatique.md) | proposé | un DDL ne relit pas l'aperçu visible, alors que l'ADR le prévoit ; `RefreshSignal::of` n'a aucun test |
 | [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | proposé | implémenté (`DRAFT_IDLE_MS`), mais ni le délai ni les trois écritures immédiates ne sont testés |
 | [0025](adr/0025-proposition-de-changement-de-schema.md) | proposé | le composeur Rust est testé, mais le geste n'est pas monté : `useSchemaProposal` n'a aucun appelant |
 | [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposé | **écart code/ADR** : le § 2 bis promet une écriture par question, `WriteGate` applique « une demande en attente à la fois » (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — à arbitrer |
+| [0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) | proposé | son § 8 fait passer les liens propres à Oxyn par une commande `open_external` qui n'accepte que des URL `https:`, et cette commande n'existe pas : `help.documentation` est grisée dans `apps/desktop/src/lib/actions/registry.ts`, reportée depuis le lot 1. Le reste est tenu (`the_shipped_manifest_describes_the_macos_bar` dans `oxyn-desktop/src/menu.rs`, `manifest.test.ts` et `keyboard.test.ts` dans `apps/desktop/src/lib/actions`), et ses « Points à vérifier » restent à vérifier à la main |
+| [0042](adr/0042-revue-sur-place-des-operations-destructrices.md) | proposé | **écart code/ADR** : la dernière ligne de son tableau de sources dit que le driver SQLite laisse les clés étrangères non vérifiées, et ses Conséquences disent que le « moteur ne refuse rien » de SQLite. Le moteur embarqué les applique (`foreign_keys_are_enforced_by_the_bundled_engine`, `drivers/oxyn-driver-sqlite/src/ddl_tests.rs` ; écart consigné au lot 4 des interactions de bureau). La décision elle-même est tenue (`object_operations_are_not_tools` dans `oxyn-ai/src/tools.rs` ; `availability_follows_declared_capabilities_never_the_product` et `on_production_the_host_dialog_decides_and_the_webview_approves_nothing` dans `oxyn-desktop/src/backend/object_operations/tests.rs`) ; les phrases sont à préciser avant d'accepter |
+| [0043](adr/0043-multi-fenetre.md) | proposé | « Ce qu'une fenêtre possède, et ce qui est partagé » dit que la fenêtre propriétaire passe au premier plan quand une autre fenêtre rouvre ce qu'elle possède. C'est fait pour une conversation, pas pour un document de la bibliothèque (voir « Reste » au lot 7, `Open in new window`), et le test manuel sous Windows et Linux est en attente. Le reste est tenu (`events_go_to_the_window_of_their_command_and_to_no_other` dans `oxyn-desktop/src/backend/windows/tests.rs`, avec `backend/windows/closing/tests.rs`, `backend/windows/handoff/tests.rs`, et `every_window_comes_from_the_template_with_the_same_three_permissions` dans `oxyn-desktop/src/webview_guard.rs`) |
 
 ADR-0035 était déjà `accepté` ; ADR-0036, écrit le jour même, n'a pas été revu.
 
@@ -2470,6 +2524,25 @@ passe `accepté` le 2026-09-25, une fois son code fusionné (PR #59), selon le
 même critère : `a_forced_exit_records_the_close_and_is_not_offered_recovery` et
 `a_forced_exit_over_a_pending_write_is_bounded_and_leaves_the_close_unwritten`
 (`oxyn-desktop/src/backend/recovery.rs`) le tiennent.
+
+**Revue du 2026-10-20.** ADR-0022, 0037, 0041, 0042, 0043 et 0051 ont été examinés
+de nouveau selon le même critère, décision telle qu'écrite face au code et aux tests.
+0022, 0037 et 0051 passent `accepté` le 2026-10-20 : les lignes ci-dessus nomment les
+tests qui les tiennent. 0041, 0042 et 0043 restent `proposé`, pour les raisons écrites
+dans leur ligne. ADR-0022 et ADR-0042 ne sont pas traités de la même façon, et c'est
+voulu. ADR-0022 est tenu par des tests nommés sur le cœur de sa décision : les signaux
+que produisent un DDL, une lecture et un échec, la relecture de l'aperçu visible avec la
+forme en vigueur, l'absence de relecture quand il est masqué ou après une erreur, et la
+bibliothèque sur `lagged`. Cela satisfait le critère, qui demande au moins un test, non
+que chaque partie de la décision soit testée. Sa ligne liste les parties qu'aucun test
+ne tient alors que leur code existe (la branche Write, le rechargement de l'arbre et la
+coalescence, `lagged` sur l'aperçu et sur les facettes) : elles sont signalées, pas
+tranchées ici. ADR-0042 porte une affirmation fausse sur le code (clés étrangères
+non vérifiées sur SQLite), et un ADR accepté ne se réécrit pas : l'accepter figerait
+l'erreur. Même précédent que la ligne d'ADR-0034 : les phrases sont à préciser
+d'abord. Le contexte d'ADR-0022 décrit aussi encore les abonnements de l'époque GPUI
+(`cx.spawn`, `QueryConsole`) : comme les ADR acceptés signalés plus bas, sa décision
+tient et son texte a vieilli.
 
 **Ce qui reste signalé, sans être corrigé ici.** Plusieurs ADR acceptés citent
 encore `oxyn-app` ou GPUI comme lieu d'implémentation (0021, 0023, 0026, 0029) :

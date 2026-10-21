@@ -25,6 +25,11 @@ Before adding or changing a dependency: [`/versions`](../commands/versions.md).
 The chosen value is recorded in
 [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) **in the same commit**.
 
+`make versions` refuses a version pinned in `Cargo.toml` or in
+`apps/desktop/package.json` that the notes do not record, so a bump pull request,
+Dependabot's included, carries its dated row in the same commit.
+`renovate.json5` is a dormant configuration that enforces nothing.
+
 ## The workspace centralizes
 
 Shared dependencies go in `[workspace.dependencies]`, crates refer to them with
@@ -76,7 +81,7 @@ directory is classified in `script/zones-ci` — otherwise it triggers everythin
 | [clippy.toml](../../clippy.toml) | forbidden call paths — `disallowed-methods`, with the reason and the replacement |
 | [.cargo/config.toml](../../.cargo/config.toml) | nothing; it imposes the flags that must hold for everyone, including the macOS target |
 | [.config/nextest.toml](../../.config/nextest.toml) | a hanging test, and two tests sharing a server |
-| [renovate.json5](../../renovate.json5) | a version copied from memory — it is [I-12](../../CLAUDE.md#i-12) mechanized |
+| [verifier_versions.py](../hooks/verifier_versions.py), through `make versions` | a version pinned in `Cargo.toml` or `apps/desktop/package.json` that [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) does not record, or records differently — offline, [I-12](../../CLAUDE.md#i-12) |
 
 An invariant that boils down to a call path belongs in `clippy.toml`, not in a
 review. `clippy.toml` holds for the **whole** workspace: a prohibition that must

@@ -35,9 +35,9 @@
     "@tanstack/react-form": "1.33.5",
     "@tanstack/react-pacer": "0.23.0",
     "@tanstack/react-query": "5.102.8",
-    "@tanstack/react-router": "1.170.36",
-    "@tanstack/react-start": "1.168.54",
-    "@tanstack/react-store": "0.11.1",
+    "@tanstack/react-router": "1.170.41",
+    "@tanstack/react-start": "1.168.60",
+    "@tanstack/react-store": "0.11.2",
     "@tanstack/react-table": "8.21.3",
     "@tanstack/react-virtual": "3.14.13",
     "@tauri-apps/api": "2.12.1",
@@ -73,7 +73,7 @@
     "@tanstack/react-devtools": "0.10.12",
     "@tanstack/react-query-devtools": "5.102.8",
     "@tanstack/react-router-devtools": "1.167.2",
-    "@tanstack/router-plugin": "1.168.38",
+    "@tanstack/router-plugin": "1.168.42",
     "@tauri-apps/cli": "2.12.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",
@@ -93,7 +93,7 @@
     "shadcn": "4.21.0",
     "storybook": "10.6.0",
     "typescript": "6.0.3",
-    "vite": "8.3.0",
+    "vite": "8.3.3",
     "vitest": "4.1.11"
   }
 }

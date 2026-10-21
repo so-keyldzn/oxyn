@@ -281,6 +281,7 @@ pub mod metadata;
 pub mod object_operations;
 pub mod recovery;
 pub mod results;
+pub mod semantic;
 pub mod settings;
 mod subscriptions;
 pub mod updates;

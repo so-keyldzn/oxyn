@@ -320,25 +320,36 @@ fn a_pinned_agent_sample_names_the_stored_command_and_unresolved_reach() {
 fn a_native_sample_dialog_escapes_catalog_names_and_omits_endpoint_secrets() {
     let (fixture, host) = scripted();
     let _guard = fixture.runtime.enter();
-    let provider = fixture.runtime.block_on(fixture.backend.save_ai_provider(
-        serde_json::from_value(serde_json::json!({
-            "kind":"openai_compatible", "label":"Local trusted provider",
-            "baseUrl":"http://127.0.0.1:11434/private-PATH?token=QUERY-CANARY#FRAGMENT-CANARY",
-            "model":"llama3",
-        })).expect("a provider draft")
-    )).expect("stored provider");
+    let provider = fixture
+        .runtime
+        .block_on(
+            fixture.backend.save_ai_provider(
+                serde_json::from_value(serde_json::json!({
+                    "kind":"openai_compatible", "label":"Local trusted provider",
+                    "baseUrl":"http://127.0.0.1:11434/private-PATH",
+                    "model":"llama3",
+                }))
+                .expect("a provider draft"),
+            ),
+        )
+        .expect("stored provider");
     let offer = fixture.offer_of(&fixture.customers, &provider.id);
     // A hostile catalog name can carry direction controls even though no
     // caller is allowed to choose the dialog's text.
     let mut config = fixture.config();
     config.name = "Production\nSAFE\u{202e}".into();
-    let stored = fixture
+    let mut stored = fixture
         .runtime
         .block_on(fixture.backend.declared_providers())
         .expect("providers")
         .into_iter()
         .find(|candidate| candidate.id.as_str() == provider.id)
         .expect("stored declaration");
+    // `save_ai_provider` refuses a query or a fragment now, so no declaration
+    // reaches the store with one. This value stands for a row written by
+    // another binary, or by hand: the dialog still must not show the query,
+    // the fragment or the path, whatever the validation upstream did.
+    stored.base_url = format!("{}?token=QUERY-CANARY#FRAGMENT-CANARY", stored.base_url);
     let description = SampleDescription {
         source: offer.address.to_path().expect("catalog path"),
         destination: SampleDestination::Provider(stored),

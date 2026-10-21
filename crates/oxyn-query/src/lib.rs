@@ -67,8 +67,8 @@ pub mod redact;
 pub mod split;
 
 pub use classify::{
-    Basis, Classification, StatementInfo, classify, classify_language, only_controls_transactions,
-    reclassify, validate,
+    Basis, Classification, StatementInfo, changes_context, classify, classify_language,
+    only_controls_transactions, reclassify, validate,
 };
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;
@@ -116,6 +116,72 @@ mod tests {
         let decision = policy.authorize(&agent, &order, Environment::Production);
 
         assert!(decision.is_denied(), "{decision:?}");
+    }
+
+    /// Issue #223, end to end. A typed `USE other` was classified a read, so an
+    /// agent's `Execute` of it skipped the refusal of ADR-0019 (which only knew
+    /// `SetSessionContext`) and, on production, the confirmation too. The agent
+    /// declares a read with no context change; the text says otherwise, in
+    /// every environment — development included, where an `Unknown` statement
+    /// would otherwise only ask for an approval.
+    #[test]
+    fn an_agent_cannot_declare_a_typed_use_away() {
+        // The last two are executable comments: MySQL and MariaDB run what is in
+        // them, so they are a `USE` to the server, and the batch once read as
+        // empty — `Unknown` with no flag, which on development only asks for an
+        // approval.
+        for sql in [
+            "USE other",
+            "/*!50000 USE other */",
+            "/*M!100000 USE other */",
+        ] {
+            for env in [
+                Environment::Production,
+                Environment::Staging,
+                Environment::Development,
+                Environment::Local,
+            ] {
+                let policy = DefaultPolicy::new();
+                let conn_config =
+                    ConnectionConfig::new("shop", DriverId::mysql()).with_environment(env);
+                policy.register(&conn_config);
+
+                let mut requested = ExecRequest::new(QueryLanguage::Sql(SqlDialect::MySql), sql)
+                    .with_intent(StatementIntent::Read)
+                    .with_limits(ExecLimits::default().writable());
+                requested.context_change = false;
+
+                let requalified = reclassify(&requested).qualify(requested);
+                assert!(requalified.context_change, "{sql} on {env}");
+                assert_eq!(
+                    requalified.intent,
+                    StatementIntent::Unknown,
+                    "{sql} on {env}"
+                );
+
+                let order = Command::Execute {
+                    connection: conn_config.id,
+                    session: SessionId::new(),
+                    request: Box::new(requalified),
+                };
+                assert!(order.changes_context(), "{sql} on {env}");
+
+                let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
+                let decision = policy.authorize(&agent, &order, env);
+                let Decision::Deny { reason } = &decision else {
+                    panic!("an agent's `{sql}` must be refused on {env}: {decision:?}");
+                };
+                assert!(
+                    reason.contains("context selector"),
+                    "{sql} on {env}: the reason must point to the selector: {reason}"
+                );
+
+                // The refusal is the agent's: the user's own `USE` is not
+                // denied, it is an unreadable-effect write like any other.
+                let human = policy.authorize(&Actor::Human, &order, env);
+                assert!(!human.is_denied(), "{sql} on {env}: {human:?}");
+            }
+        }
     }
 
     /// The same path for a real read: nothing must be asked.

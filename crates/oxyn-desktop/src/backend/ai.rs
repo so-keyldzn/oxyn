@@ -249,6 +249,7 @@ impl Backend {
                         | ListingFailure::Timeout
                         | ListingFailure::Unreachable
                 ),
+                missing_module: None,
             }),
         }
     }

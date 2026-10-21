@@ -54,17 +54,64 @@ convinced their fix is saved.
 ## Destructive operations
 
 A confirmation clicked by reflex protects nobody. On a connection marked
-`production` ([SECURITY](SECURITY.md#connection-marking)), the
-confirmation of a write or a DDL **names the connection** and shows the exact
-SQL. The default button is never the destructive action.
+`production` ([SECURITY](SECURITY.md#connection-marking)), a write or a DDL goes
+through **two steps in a row**, and each follows its own rule:
+
+1. **The review, in the webview**: the approval dialog, or the catalog's review
+   box ([Destructive operations from the catalog](#destructive-operations-from-the-catalog)).
+   It **names the connection** and shows the **exact SQL**, as written, whole and
+   scrollable. `Cancel` takes the initial focus, the action that names the
+   connection is not focused, and Enter alone approves nothing. In this step
+   the default button is never the destructive action.
+2. **The native confirmation**, a dialog the host draws once the review is
+   approved ([The native confirmation of a write in production](#the-native-confirmation-of-a-write-in-production)).
+   It **names the connection** too, but its body shows a cut rendering of the
+   SQL, and on macOS its default button **is** the write.
+
+An agent reaches neither step on `production`: its write is a refusal, and no
+dialog opens ([I-02](../CLAUDE.md#i-02)).
 
 A review only contains the operations of a single connection. A transaction
 open on another connection has its own view, naming its connection and its
 environment; its actions do not appear in the current confirmation.
 
-The catalog's `Drop…`, `Truncate…` and `Rename…` apply this rule in an in-place
-review, described in
+The catalog's `Drop…`, `Truncate…` and `Rename…` apply the review step in an
+in-place box, described in
 [Destructive operations from the catalog](#destructive-operations-from-the-catalog).
+
+### The native confirmation of a write in production
+
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) holds
+the reasons: a button drawn in the webview is one a script running there could
+have clicked. This dialog is composed by the backend, and has these behaviors:
+
+- **Buttons.** The confirming one reads `Write to production`; the other reads
+  `Cancel`. On macOS the confirming button is the **default button**, and Enter
+  triggers it; the plugin offers no way to designate the other one. On Windows
+  and Linux, `rfd` 0.16.0 and the plugin designate no default button; the
+  behavior is the platform toolkit's and is not verified by Oxyn (source read
+  2026-10-20).
+- **One second.** A confirmation received less than **1 s** after the host
+  displays the dialog is a refusal that consumes the decision: the write is
+  rejected and does not stay pending, and the user runs it again. From 1 s on,
+  Enter on macOS confirms the write. The second counts from the display, not
+  from the request: a dialog waiting behind another has its own.
+- **Five minutes.** The decision is refused if the dialog is not answered within
+  **5 min** of the request. Oxyn cannot close the window: a click on it after
+  the deadline is ignored.
+- **Anything else refuses**: `Cancel`, Escape, closing the window, a dialog that
+  could not open. A refusal consumes the decision.
+- **The body shows a cut, escaped rendering of the SQL, never the raw full
+  text.** After the connection (its name, `PRODUCTION`, its non-secret address
+  when it has one) and the intent with the policy's reason, it reads
+  `Statement (N characters):` with the true length, then the statement. Up to
+  **1,000 characters** it is whole; beyond, the first **500** characters, a
+  line `… M more characters …` where M is N minus 1,000, then the last **500**.
+  A newline and a tab appear as `↵` and `⇥`; any other control or invisible
+  character as `\u{XXXX}`.
+
+The exact SQL is read in the review that precedes the dialog: the approval
+dialog's "Statement to approve" region, or the catalog's review box.
 
 ## Cancellation
 
@@ -244,6 +291,19 @@ back to the saved value restores the stored state. The announcement happens
 before saving, not after: the user who fixes a typo in the host learns they
 lose the password at the moment they can still cancel.
 
+### The sqlite-vec switch
+
+A SQLite connection carries, under its file, a switch labelled
+"Enable sqlite-vec (vec0 vector tables)", **off** on every new connection and on
+every `Duplicate`. Its description says what it does and when: "Runs the
+bundled sqlite-vec C extension on this file. Enable it only for files you
+trust. A change applies to sessions opened afterwards: disconnect to apply it
+to open ones." Saving it closes no session; `Disconnect` then `Connect` applies
+it to all. Off, a `vec0` table stays unreadable (`no such module: vec0`); on,
+it reads like any table. Only the
+connection form changes it — no agent can
+([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)).
+
 ## Common workspace structure
 
 The structure chosen is the **dense workbench** of the Figma page
@@ -288,9 +348,11 @@ details, not in this label. The other tiers and the blocked states remain
 explicitly distinguished; this presentation does not change the rules of
 [AI-PROVIDERS](AI-PROVIDERS.md).
 
-In the confirmation of a write in production, `Cancel` receives the visible
+In the webview review of a write in production, `Cancel` receives the visible
 initial focus. The action that names the connection has a destructive style and
-is not focused. Enter alone does not validate the write.
+is not focused. Enter alone does not validate the write. This is the review
+step only: the native confirmation that follows has its own default button
+("Destructive operations").
 
 ### Reduced width
 
@@ -580,10 +642,11 @@ applies "Destructive operations" and adds:
 
 What the box submits then goes through the policy, like any SQL. On
 `production`, the approval is given in Oxyn's **native dialog**, which names the
-connection and quotes the statement
-([ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)): no
-second screen is inserted. Elsewhere, `Drop…` and `Truncate…` ask for approval
-in the same box, and `Rename…` runs.
+connection and shows the statement in a cut rendering
+([The native confirmation of a write in production](#the-native-confirmation-of-a-write-in-production),
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)): no
+second screen is inserted, so the box is where the exact SQL is read. Elsewhere,
+`Drop…` and `Truncate…` ask for approval in the same box, and `Rename…` runs.
 
 An entry the engine cannot perform is greyed out with its reason — on SQLite,
 `Truncate…`; what is offered follows the capabilities declared by the driver
@@ -653,6 +716,21 @@ requests the corresponding tier through the command bus; no demo table replaces
 a missing response. The search covers the objects already loaded and announces
 this scope. Unavailable features do not trigger a simulated query.
 
+A **virtual table** (SQLite `CREATE VIRTUAL TABLE … USING <module>`) is not
+listed as an ordinary table: its row carries `virtual · <module>`, the module's
+name as the schema declares it. When the connection does not provide that
+module, the mark becomes `<module> not loaded`, in the warning color, and its
+hint says the rows cannot be read here. Availability is asked of the engine
+(`pragma_module_list`), for every module alike: `fts5`, built in, shows as
+virtual; a module an extension adds shows as loaded the day Oxyn loads it, with
+no case written for it. When the engine cannot say, the mark stays
+`virtual · <module>` and the hint says availability is unknown. The tables a
+virtual table stores its data in — its **shadow tables** — carry `shadow`, and
+their hint names the virtual table they belong to: SQLite's own word when the
+module is loaded, the `<virtual table>_` naming convention only when it is not.
+The module name comes from the database: it is shown as text and never joins a
+query Oxyn composes.
+
 The form only offers the registered drivers. Every new connection starts in
 `production` until explicitly changed. During a connection change, the old
 workspace stays accessible; a **new** connection copies the SQL text of the
@@ -696,9 +774,9 @@ The form's status bar names the connection being prepared and distinguishes
 for an untested connection; another open session keeps its own explicit
 context.
 
-The preview of a confirmation keeps the full SQL and allows scrolling it with
-the mouse as well as with the arrows, Page Up/Page Down and Home/End. Enter
-alone never validates a write; Escape declines.
+The preview of the webview review keeps the full SQL and allows scrolling it
+with the mouse as well as with the arrows, Page Up/Page Down and Home/End. In
+that review, Enter alone never validates a write; Escape declines.
 
 ## Data of a selected table
 
@@ -714,6 +792,35 @@ preview; its late responses are ignored. **Refresh data** explicitly reloads
 the rows; no automatic refresh follows an error. Loading, empty result, failure
 and cancellation are distinct. Without a requested sort, the order of the rows
 is not guaranteed, and the preview never counts the whole table.
+
+A read that fails **because** the connection does not load the module a table
+needs — the engine's `no such module: <module>`, which the driver names as data
+rather than leaving the front to read the message — is **explained**, not shown
+raw. When the catalog says the selected object **is** the virtual table backed
+by that module: "This table is provided by the SQLite extension `<module>`,
+which Oxyn does not load. Its data is stored in …", followed by its shadow
+tables as links that select them. Otherwise — a plain view whose definition
+reads such a table fails with the same words — the view is not called a virtual
+table and no storage is claimed: "This view reads a virtual table whose module
+`<module>` is not loaded: Oxyn does not load that SQLite extension, so the read
+fails." For `vec0`, which sqlite-vec registers and a connection enables in its
+settings (off by default), one sentence follows either wording: "You can enable
+sqlite-vec for this connection in its settings, if you trust this file." The
+driver's message stays one click away, under `Driver message`, word for word.
+The Data and Structure tabs explain it the same way. The failure is permanent
+([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)):
+nothing offers to run it again, and nothing retries it — while it is shown, the
+Data tab drops `Refresh data`, the filter, the sort and the pages, every one of
+which would read again. They come back with the next read that succeeds, which
+reopening the connection with the module enabled brings. Any other failure of the
+same table — a predicate refused before sending, a locked file — is shown as it
+came, even on a table marked `not loaded`.
+
+An object opened by its address alone — a tab restored from the last session,
+Quick Open, a link from the assistant or from a relationship — takes the facts
+the explorer has loaded for that address: its kind, its module, the virtual
+table it stores data for. A tab opened before its level was read gets them once
+it is.
 
 ### Filter, sort, page through
 
@@ -737,6 +844,12 @@ the server and comes back with **its** message, code included.
 The preview can therefore now fail for a syntax reason, which was not the case
 before. It can however write nothing: the final text is reclassified, the
 session is held read-only by the server, and the row bound applies.
+
+When a read that **changed** the filter, the sort or the page is refused, the
+line under the bar says, in the warning color, that the rows of the previous
+shape were not kept and that the text stays where it can be fixed. A first read,
+or a refresh of the shape in force, that fails had no previous shape: that line
+is not shown, and the failure below says all there is.
 
 `Sort` chooses columns, not an expression: Oxyn composes this part of the
 query, so it answers for it. A column unknown to the relation is refused before
@@ -1672,3 +1785,71 @@ version, no extra argument — is confined at launch
 modified preset included, is treated as unknown: the list marks it with a
 warning saying Oxyn cannot prevent it from acting alone on the machine, and the
 panel repeats it when it is chosen.
+
+### Semantic ranking
+
+Settings ▸ Semantic ranking turns on the local ranking of the AI context
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). It is
+the workspace preference `semantic_ranking`, **off by default**; the model it
+downloads belongs to the computer. Only the user changes it: no agent can.
+
+The view says what the option does — tables ranked by meaning as well as by
+name, so that a question that names no table, or is asked in another language
+than the schema, still finds the right ones — and then the switch, `Rank
+tables by meaning with a local model`. Beneath it, always, what it costs and
+what it does not do: computed on this computer, no table name, comment or
+question sent anywhere; about **220 MB** downloaded once, about **415 MB** kept
+on disk, up to about **300 MB** of memory while questions are asked, mostly
+released **5 minutes** after the last one — "mostly" because the system
+allocator keeps part of it
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md#memory-budget)). A second line says what more can leave:
+tables found by meaning can be added to the assistant's context, within the
+usual limit and the connection's privacy tier. While the option is on, a
+third line says that turning it off deletes the model from this computer.
+
+**The model's state, and what each one allows.** A status line names the
+state; the actions beside it are the only ones offered.
+
+| State | Status line | Actions |
+|---|---|---|
+| Unavailable | `Not available: this system gives Oxyn no data directory to keep the model in.` | none; the switch is disabled |
+| Off | `Off. Questions are ranked by name only.` | the switch |
+| On, no model | `The model is not downloaded: questions are ranked by name only.` | `Download model` |
+| Verifying | `Checking the files already on this computer…`, with a spinner and a progress bar without a fraction | `Cancel download` |
+| Downloading | `Downloading the model — ` followed by the bytes received out of the total, and a progress bar in percent | `Cancel download` |
+| Converting | `Preparing the model for this computer… This last step takes a few seconds.`, with a spinner and a progress bar without a fraction | `Cancel download` |
+| Ready, on | `Ready. Loaded at the first question, released after 5 minutes without one.` | `Delete model` |
+| Ready, off | `The model is on this computer, but this workspace does not use it.` | `Delete model` |
+| Corrupt | an alert, `The model files are damaged`: a file is not the one Oxyn expects, truncated — a full disk, for instance — or replaced; until it is downloaded again, questions are ranked by name only | `Download again`, `Delete model` |
+| Failed | an alert, `The local model is not usable`, with the backend's message (it names no local path), the next step — check the disk space and the permissions of Oxyn's data directory, then download again — and that questions are ranked by name only until then | `Download again`, `Delete model` |
+
+* **Turning on** saves the preference, then downloads in the background; the
+  switch stays on during the download. Progress arrives as it happens, by
+  phase. `Download again` is the same request: it verifies the files present
+  and fetches only what is missing or wrong.
+* **`Cancel download` turns the option off** and removes what was downloaded;
+  the view says so beneath the button. There is no paused download to resume.
+* **Every step can be cancelled, the conversion included.** Verifying,
+  downloading and converting all offer `Cancel download`, with `Cancelling
+  turns semantic ranking off and removes what was downloaded.` beneath it;
+  cancelling during the conversion kills the process that converts.
+* **Turning off, or `Delete model`,** saves the preference off, stops a
+  download, releases the model from memory and deletes its files.
+* **Pending.** While a request is on its way, the switch and every button are
+  disabled.
+* **Refused.** A request the backend refuses — the preference could not be
+  saved, for instance — leaves everything as it was, and a line beneath the
+  switch says `Nothing was changed: ` followed by the reason.
+* **Before the first answer**, the view shows `Reading the semantic ranking
+  state…`; if the state cannot be read, an alert says `The semantic ranking
+  state could not be read`, with the next step: close and open the settings
+  again — the option stays as it was saved.
+
+The status line is a polite live region: a change of state is announced, the
+byte counts beside it are not; a failure or a damaged model is announced by its
+alert. The progress bar reads the bytes received while downloading, `Checking
+files` and `Preparing the model` otherwise.
+
+Opening the assistant panel loads a ready model ahead of the first question,
+so that its cold load does not count against that question's 2-second bound.
+While the option is off, opening the panel does nothing.

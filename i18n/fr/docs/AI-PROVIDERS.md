@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="070e665ea08c" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="feb6873c71ee" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -284,6 +284,57 @@ Ce qui encadre ces lectures :
 Le reste du produit en profite sans code de plus : l'arbre se met à jour par
 l'événement `CatalogUpdated`, et la liste des mentions `@` comme le diagramme
 `erd` lisent le même cache.
+
+### Le classement sémantique reste sur la machine
+
+« La recherche guidée par la question » est lexicale, et seulement lexicale
+tant que le classement sémantique est désactivé — son défaut. Activé par
+l'humain, il ajoute des embeddings locaux sur CPU qui ordonnent les relations
+que le score lexical laisse à égalité ou manque, et complètent la sélection
+avec elles ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)) :
+
+- **l'étape de transformation n'envoie rien.** La question, ainsi que le nom
+  qualifié et le commentaire de chaque relation, sont transformés en vecteurs
+  dans le processus d'Oxyn par `oxyn-embed` ; les vecteurs restent en mémoire
+  seulement, indexés par une empreinte, jamais journalisés, jamais écrits,
+  jamais envoyés. L'étape elle-même n'a pas d'enregistrement `ai_egress`
+  puisqu'elle n'envoie rien, sous tous les niveaux — `Local` compris ;
+- **un score n'est pas du contexte, mais il change le contexte.**
+  `ContextBuilder` reçoit un nombre par relation ; un score n'apporte aucun
+  mot au prompt, et chaque relation est rendue comme sans lui, sous le même
+  niveau. Mais les scores décident **quelles** relations sont décrites, et
+  **peuvent en augmenter le nombre** : là où la recherche lexicale ne garde
+  que ses correspondances, les relations qu'elle a manquées complètent la
+  sélection selon le cosinus, jusqu'à `max_relations` (24). Une plus grande
+  part du schéma atteint alors le fournisseur — toujours sous le niveau de la
+  connexion, dans le budget de jetons, et consignée dans `ai_egress` comme tout
+  contexte. Les réglages le disent avant que l'option soit activée. Le
+  complément du catalogue lit les mêmes scores par `wanted_relations`, si bien
+  que ce qui est décrit reste ce qui est gardé ;
+- **il ne passe jamais devant un nom.** Une relation trouvée par son nom garde
+  son rang ; le score sémantique départage les égalités et ordonne ce qui n'a rien
+  trouvé, sans seuil. Il est borné à 2 secondes par question, et tant que le
+  modèle est désactivé, en téléchargement ou en échec, la sélection est
+  exactement la sélection lexicale ;
+- **qu'il ait tourné est tracé, en nombres seulement.** À
+  `OXYN_LOG=oxyn=debug`, `semantic ranking done` donne les relations listées,
+  notées, servies par le cache, transformées et laissées sans score, les
+  millisecondes écoulées et si le modèle a été chargé à froid ; `semantic
+  ranking skipped; lexical ranking only` donne une raison fixe choisie dans le
+  code. Aucun champ ne porte de texte de la question ni du schéma (ADR-0056).
+
+**Le schéma d'ouverture d'un agent externe est classé de la même façon.**
+`AgentPrompt::with_schema_ranked` reçoit les scores avec lesquels le complément
+du catalogue a classé — les mêmes, calculés une fois par question —, si bien que
+la structure annoncée à un agent externe à sa première question est choisie
+comme celle d'un fournisseur, sous le même niveau et dans les mêmes bornes. Une
+session qui suit ne rend que ses mentions et ne prend aucun score ; tant que
+l'option est désactivée, la sélection de l'agent est la sélection lexicale,
+comme avant.
+
+Le modèle d'embeddings n'est pas un fournisseur : il ne génère aucun texte, ne
+reçoit aucun prompt et n'a besoin d'aucune déclaration dans
+`ProviderRegistry`.
 
 ## Ce qu'on fait des réponses
 
@@ -635,7 +686,11 @@ l'interface** et Oxyn reste un client complet
 [UX-SPEC](UX-SPEC.md#le-workspace-ia-nexiste-que-sil-a-été-configuré)). Un chemin de code
 qui appelle un modèle pour produire un résultat que l'utilisateur attend comme
 déterministe — un tri, un formatage, une complétion de nom de table — est un
-défaut de conception, pas une fonctionnalité.
+défaut de conception, pas une fonctionnalité. Les embeddings locaux de
+l'[ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)
+n'enfreignent pas cette règle : ils ne font que choisir et ordonner ce que
+garde le contexte IA, un résultat qu'aucun utilisateur ne voit comme une liste, et la recherche
+du catalogue, l'arbre et la liste `@` restent lexicaux.
 
 ## Ce qui n'est pas encore tranché
 

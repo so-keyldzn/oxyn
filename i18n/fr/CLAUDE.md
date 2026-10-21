@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CLAUDE.md" sha256="1bb4c149c302" -->
+<!-- oxyn-translation source="CLAUDE.md" sha256="92782b9f8230" -->
 
 > Traduction française de [CLAUDE.md](../../CLAUDE.md). **La version anglaise fait foi.**
 
@@ -45,7 +45,7 @@ Vérifié le 2026-09-05, interface le 2026-09-15 — [détail et sources](docs/R
 
 | | Version | À savoir |
 |---|---|---|
-| Rust | épinglé par `rust-toolchain.toml` ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)) | la machine de dev est en `1.89.0`, la stable en `1.98.1` |
+| Rust | épinglé par `rust-toolchain.toml` ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)) | le canal exact est dans ce fichier, sa vérification datée dans [RESEARCH-NOTES](docs/RESEARCH-NOTES.md#chaîne-doutils-rust) |
 | Édition | **2024** | exige Rust ≥ 1.85 |
 | Interface | **Tauri 2** + TanStack Start en **mode SPA** + shadcn/ui sur **Base UI** ([ADR-0029](docs/adr/0029-interface-tauri-shadcn.md)) | `apps/desktop` (pnpm) servi par `crates/oxyn-desktop` ; aucun serveur, le backend est Rust |
 | Tests de composants | Storybook 10 + `addon-vitest` + `addon-a11y` | une story est un test, axe compris ; Vitest reste en **4** |
@@ -235,4 +235,4 @@ requis ; sur `main`, tout tourne toujours
 | `make front` | un composant sans story passante, une violation d'accessibilité, un type ou un lint faux dans `apps/desktop` |
 | `script/verifier-todo` | une marque de travail restant sans échéance |
 | `script/licences-tierces` | une dépendance npm livrée sous une licence que `deny.toml` n'accepte pas |
-| [renovate.json5](../../renovate.json5) | une version recopiée de mémoire ([I-12](#i-12)) |
+| `make versions` | une version épinglée dans `Cargo.toml` ou `apps/desktop/package.json` que [RESEARCH-NOTES](docs/RESEARCH-NOTES.md) n'enregistre pas, ou enregistre autrement ([I-12](#i-12)) |

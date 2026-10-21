@@ -52,5 +52,6 @@ pub fn set_menu_state(
         .map_err(|error| IpcError {
             message: error.to_string(),
             retryable: false,
+            missing_module: None,
         })
 }

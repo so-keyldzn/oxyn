@@ -31,6 +31,7 @@
 //! `Unknown`, `Unknown` wins: both are as restrictive, and `Unknown` tells the
 //! truth — something was not understood.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -45,7 +46,7 @@ use sqlparser::parser::Parser;
 
 use crate::dialect::parser_dialect;
 use crate::error::QueryError;
-use crate::split::{self, Fragment, Word};
+use crate::split::{self, Fragment, SplitProfile, Word};
 
 /// What the classification of a statement rests on.
 ///
@@ -106,6 +107,10 @@ pub struct StatementInfo {
     /// Whether it begins, ends or marks a transaction: see
     /// [`ExecRequest::transaction_control`].
     pub transaction_control: bool,
+    /// Whether it changes the session's current database or schema: see
+    /// [`ExecRequest::context_change`].
+    #[serde(default)]
+    pub context_change: bool,
 }
 
 /// The result of analyzing a batch.
@@ -117,6 +122,10 @@ pub struct Classification {
     pub risk: MutationRisk,
     /// Whether any of its statements controls a transaction.
     pub transaction_control: bool,
+    /// Whether any of its statements changes the session's context: see
+    /// [`ExecRequest::context_change`].
+    #[serde(default)]
+    pub context_change: bool,
     /// The detail, statement by statement, in text order.
     pub statements: Vec<StatementInfo>,
 }
@@ -164,18 +173,42 @@ impl Classification {
     ///
     /// It is what `oxyn-exec` does before submitting to the `PolicyGate`: the
     /// intent **declared** by the caller is not trustworthy, an agent cannot
-    /// declare itself read-only (ARCHITECTURE §8).
+    /// declare itself read-only (ARCHITECTURE §8). The same goes for the two
+    /// flags the gate refuses an agent on, `transaction_control` and
+    /// `context_change`: both are set from the text, in either direction, so
+    /// that a caller can neither declare one away nor invent one.
     #[must_use]
     pub fn qualify(&self, request: ExecRequest) -> ExecRequest {
         let mut request = request.with_intent(self.intent).with_risk(self.risk);
         request.transaction_control = self.transaction_control;
+        request.context_change = self.context_change;
         request
+    }
+
+    /// Raises this classification to the worst of itself and another reading
+    /// of the same text: intent and risk by [`Facts::merge`], both flags by
+    /// OR. The statement list stays this reading's.
+    ///
+    /// A reading that found no statement says nothing: its `Unknown` is the
+    /// default of an empty batch, not a finding. A text made of an executable
+    /// comment alone is empty as typed and holds a statement as the server runs
+    /// it.
+    fn at_least(&mut self, other: &Self) {
+        if !other.statements.is_empty() {
+            let facts =
+                Facts::new(self.intent, self.risk).merge(Facts::new(other.intent, other.risk));
+            self.intent = facts.intent;
+            self.risk = facts.risk;
+        }
+        self.transaction_control |= other.transaction_control;
+        self.context_change |= other.context_change;
     }
 
     /// The batch nothing is known about: one opaque statement, `Unknown`.
     ///
-    /// Its language is not SQL, so no transaction verb of SQL can be looked
-    /// for: `Unknown` already sends it to a human's approval, preview shown.
+    /// Its language is not SQL, so no transaction verb and no `USE` of SQL can
+    /// be looked for: `Unknown` already sends it to a human's approval, preview
+    /// shown.
     fn opaque(text: &str, error: String) -> Self {
         let trimmed = text.trim();
         let start = text.len() - text.trim_start().len();
@@ -183,6 +216,7 @@ impl Classification {
             intent: StatementIntent::Unknown,
             risk: MutationRisk::None,
             transaction_control: false,
+            context_change: false,
             statements: vec![StatementInfo {
                 text: trimmed.to_owned(),
                 span: start..start + trimmed.len(),
@@ -191,6 +225,7 @@ impl Classification {
                 basis: Basis::Unparsed,
                 error: Some(error),
                 transaction_control: false,
+                context_change: false,
             }],
         }
     }
@@ -201,6 +236,12 @@ impl Classification {
 /// Never returns an error: what does not parse is classified
 /// [`Unknown`](StatementIntent::Unknown). To get the parser's message, see
 /// [`crate::validate`].
+///
+/// For [`SqlDialect::MySql`] the body of an executable comment, `/*!50000 … */`
+/// or MariaDB's `/*M!100000 … */`, is read as code, because the server runs it:
+/// the statements, the intent and the two flags the gate refuses an agent on
+/// all see what hides there. A body gated on a version the server does not
+/// reach is a comment to it, and reading it as code only costs a confirmation.
 ///
 /// ```
 /// use oxyn_core::{MutationRisk, SqlDialect, StatementIntent};
@@ -217,11 +258,35 @@ impl Classification {
 /// ```
 #[must_use]
 pub fn classify(sql: &str, dialect: SqlDialect) -> Classification {
+    // The statements the server runs, which is more than the ones a reader of
+    // the text sees: MySQL and MariaDB run the body of `/*! … */`.
+    let runnable = runnable_text(sql, dialect);
+    let mut outcome = classify_text(&runnable, dialect);
+    if matches!(runnable, Cow::Owned(_)) {
+        // The view and the user's text differ by blanks only, so the span leads
+        // back to what was typed, markers included.
+        for info in &mut outcome.statements {
+            if let Some(typed) = sql.get(info.span.clone()) {
+                typed.clone_into(&mut info.text);
+            }
+        }
+        // The view only ever adds code, but it finds where an executable
+        // comment ends with the scanner's rule, not the server's: a block
+        // comment nested in the body can make it hide what the server runs.
+        // Reading the text as typed is the floor (fail closed): the batch is
+        // never judged milder than either reading says.
+        outcome.at_least(&classify_text(sql, dialect));
+    }
+    outcome
+}
+
+/// The classification of one reading of the text, as the scanner splits it.
+fn classify_text(text: &str, dialect: SqlDialect) -> Classification {
     let grammar = parser_dialect(dialect);
     let mut statements: Vec<StatementInfo> = Vec::new();
     let mut aggregate: Option<Facts> = None;
 
-    for fragment in split::split(sql, dialect) {
+    for fragment in split::split(text, dialect) {
         let info = classify_fragment(&fragment, dialect, grammar);
         let facts = Facts::new(info.intent, info.risk);
         aggregate = Some(match aggregate {
@@ -241,7 +306,55 @@ pub fn classify(sql: &str, dialect: SqlDialect) -> Classification {
         intent: facts.intent,
         risk: facts.risk,
         transaction_control: statements.iter().any(|s| s.transaction_control),
+        // OR-ed over the batch, not read off the last statement: `USE shop;
+        // SELECT 1` changes the context although it ends on a read.
+        context_change: statements.iter().any(|s| s.context_change),
         statements,
+    }
+}
+
+/// Does the text change the session's current database or schema?
+///
+/// True when any statement of the batch opens with `USE`. It is the lexical
+/// rule [`classify`] raises [`Classification::context_change`] with, offered
+/// to a driver so that the two cannot drift apart: a driver refuses a typed
+/// `USE` before sending anything, and does not depend on the server's
+/// one-statement prepare to notice the second statement of `SELECT 1; USE x`.
+///
+/// Read from the leading word, not from the AST, and it **over-reads on
+/// purpose**, like the transaction verbs: over-reading only costs a refusal. A
+/// statement the parser would reject still counts, and so does every form of
+/// `USE` — `sqlparser` reads `USE ROLE` and `USE WAREHOUSE` as the same kind of
+/// statement as `USE shop`. Quoted and commented text is not read: `SELECT
+/// 'use'` and `-- USE x` do not change anything. The body of an executable
+/// comment of MySQL and MariaDB is not commented text, though: the server runs
+/// `/*!50000 USE x */`, so it counts, wherever it sits in the text.
+///
+/// A fragment that [`classify`] cannot read because of a carriage return in a
+/// comment is not reported here: it raises the flag there, as the worst it
+/// could be, whereas a driver only refuses what it can see is a `USE`.
+#[must_use]
+pub fn changes_context(text: &str, dialect: SqlDialect) -> bool {
+    let leads_with_a_use = |text: &str| {
+        split::split(text, dialect)
+            .iter()
+            .any(|fragment| leads_with_use(fragment.text, dialect))
+    };
+    // Both readings, as in [`classify`]: the executable-comment view is where
+    // a `USE` hides, the text as typed is where a nested comment leaves one.
+    leads_with_a_use(&runnable_text(text, dialect)) || leads_with_a_use(text)
+}
+
+/// The text as the server runs it, for every check that reads the text.
+///
+/// Only MySQL and MariaDB run the body of `/*! … */` and `/*M! … */`; to every
+/// other dialect they are comments, and reading them as code there would
+/// refuse what no server runs.
+fn runnable_text(sql: &str, dialect: SqlDialect) -> Cow<'_, str> {
+    if dialect == SqlDialect::MySql {
+        split::executable_sql(sql, SplitProfile::for_dialect(dialect))
+    } else {
+        Cow::Borrowed(sql)
     }
 }
 
@@ -451,9 +564,11 @@ fn classify_fragment(
             risk: MutationRisk::None,
             basis: Basis::Unparsed,
             error: Some(UNREADABLE_COMMENT.to_owned()),
-            // Whether a `COMMIT` hides behind the comment depends on the
-            // server: what cannot be read counts as the worst it could be.
+            // Whether a `COMMIT` or a `USE` hides behind the comment depends
+            // on the server: what cannot be read counts as the worst it could
+            // be.
             transaction_control: true,
+            context_change: true,
         };
     }
     let (facts, basis, error) = match Parser::parse_sql(grammar, fragment.text) {
@@ -512,6 +627,7 @@ fn classify_fragment(
         basis,
         error,
         transaction_control: controls_a_transaction(fragment.text, dialect),
+        context_change: leads_with_use(fragment.text, dialect),
     }
 }
 
@@ -558,18 +674,19 @@ fn statement_facts(statement: &Statement) -> Facts {
         | Statement::ShowViews { .. }
         | Statement::ShowCollation { .. } => Facts::READ,
 
-        // Transaction control and context change: these statements neither
-        // read nor write by themselves. Counting them as mutating would ask for
-        // an approval for `BEGIN; SELECT 1; COMMIT;`; the batch takes the
-        // intent of what it contains anyway. What the transaction verbs do to
-        // the session's open transaction is carried apart, by
-        // `controls_a_transaction`.
+        // Transaction control: these statements neither read nor write by
+        // themselves. Counting them as mutating would ask for an approval for
+        // `BEGIN; SELECT 1; COMMIT;`; the batch takes the intent of what it
+        // contains anyway. What the transaction verbs do to the session's open
+        // transaction is carried apart, by `controls_a_transaction`.
+        //
+        // `USE` is not among them: it reads nothing, but it decides what every
+        // statement after it means, so it is not a read (see below).
         Statement::StartTransaction { .. }
         | Statement::Commit { .. }
         | Statement::Rollback { .. }
         | Statement::Savepoint { .. }
-        | Statement::ReleaseSavepoint { .. }
-        | Statement::Use(_) => Facts::READ,
+        | Statement::ReleaseSavepoint { .. } => Facts::READ,
 
         // ── Write ───────────────────────────────────────────────────────────
         Statement::Insert(insert) => match &insert.source {
@@ -695,6 +812,14 @@ fn statement_facts(statement: &Statement) -> Facts {
         // WRITE` undoes a read-only session. For want of telling them apart one
         // by one, they stay `Unknown`.
         Statement::Set(_) => Facts::UNKNOWN,
+        // `USE shop` writes nothing itself, yet the `DELETE FROM users` typed
+        // next would hit another database from the one the user believes they
+        // target, and the driver's declared context would no longer match the
+        // server's (ADR-0019). The whole family is matched — `USE ROLE` and
+        // `USE SECONDARY ROLES` change the session as well — and it stays
+        // `Unknown`, like `SET`, rather than a guess at how far each one
+        // reaches. `context_change` carries the part the gate refuses an agent.
+        Statement::Use(_) => Facts::UNKNOWN,
 
         // ── The rest ────────────────────────────────────────────────────────
         // `ANALYZE`, `VACUUM`, `PRAGMA`, cursors, `EXECUTE` of a prepared
@@ -958,6 +1083,20 @@ fn controls_a_transaction(text: &str, dialect: SqlDialect) -> bool {
                 .iter()
                 .any(|keyword| second.eq_ignore_ascii_case(keyword))
         })
+}
+
+/// Does the statement open with `USE`?
+///
+/// The rule behind [`StatementInfo::context_change`] and [`changes_context`], in
+/// one place. The same lexical reading as [`controls_a_transaction`], for the
+/// same reasons: a text the parser rejects, or a form it does not know in this
+/// dialect, still leads with its verb. The first bare word is the verb —
+/// quoted and commented text is not a word — so `SELECT 'use'` and ``SELECT
+/// `use` FROM t`` do not count, and `/* c */ USE shop` does.
+fn leads_with_use(text: &str, dialect: SqlDialect) -> bool {
+    split::words(text, dialect)
+        .first()
+        .is_some_and(|verb| verb.text.eq_ignore_ascii_case("use"))
 }
 
 /// Verbs that, leading a statement, always control a transaction.
@@ -1478,6 +1617,302 @@ mod tests {
         let mut declare = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), "SELECT 1");
         declare.transaction_control = true;
         assert!(!pg("SELECT 1").qualify(declare).transaction_control);
+    }
+
+    // ── A typed `USE` (issue #223) ───────────────────────────────────────────
+
+    fn mysql(sql: &str) -> Classification {
+        classify(sql, SqlDialect::MySql)
+    }
+
+    /// The gate refuses these to an agent whatever the environment, and the
+    /// MySQL driver refuses them to everyone: both read this one flag.
+    #[rstest]
+    #[case::bare("USE shop")]
+    #[case::lower_case("use shop")]
+    #[case::quoted_name("use `shop`")]
+    #[case::commented("/* c */ USE shop")]
+    #[case::after_a_read("SELECT 1; USE shop")]
+    #[case::before_a_read("USE shop; SELECT 1")]
+    #[case::hostile_name("USE `a;b`; SELECT 1")]
+    #[case::unparsable("USE")]
+    // The server runs the body of an executable comment: MySQL's `/*!`, and
+    // MariaDB's `/*M!`, with or without the version gate.
+    #[case::executable("/*!50000 USE shop */")]
+    #[case::executable_without_a_gate("/*! USE shop */")]
+    #[case::mariadb_executable("/*M!100000 USE shop */")]
+    #[case::executable_after_a_read("SELECT 1; /*!50000 USE shop */")]
+    #[case::executable_before_a_read("/*!50000 USE shop */; SELECT 1")]
+    #[case::executable_ending_the_statement("SELECT 1 /*!50000 ; USE shop */")]
+    #[case::executable_quoted_name("/*!50000 USE `a;b` */")]
+    fn a_typed_use_changes_the_context(#[case] sql: &str) {
+        let outcome = mysql(sql);
+        assert!(outcome.context_change, "{sql} → {outcome:?}");
+        assert!(changes_context(sql, SqlDialect::MySql), "{sql}");
+        let request = outcome.qualify(mysql_request(sql));
+        assert!(request.context_change, "qualify carries it: {sql}");
+    }
+
+    #[rstest]
+    #[case::read("SELECT 1")]
+    #[case::string("SELECT 'use'")]
+    #[case::line_comment("-- USE x\nSELECT 1")]
+    #[case::block_comment("/* USE x */ SELECT 1")]
+    #[case::quoted_identifier("SELECT `use` FROM t")]
+    #[case::index_hint("SELECT * FROM t USE INDEX (i)")]
+    #[case::column_name("SELECT used, user FROM t")]
+    #[case::transaction("BEGIN")]
+    #[case::write("DELETE FROM t WHERE id = 1")]
+    #[case::second_word("SET @use = 1")]
+    // Dumps carry executable comments all the time; only a leading `USE` in
+    // one changes the context.
+    #[case::executable_set("/*!40101 SET NAMES utf8mb4 */")]
+    #[case::executable_read("/*!50000 SELECT 1 */")]
+    #[case::executable_hint("SELECT /*!50000 DISTINCT */ a FROM t")]
+    #[case::executable_index_hint("SELECT * FROM t /*!50000 USE INDEX (i) */")]
+    #[case::optimizer_hint("SELECT /*+ USE x */ 1")]
+    #[case::executable_in_a_line_comment("-- /*! USE x */\nSELECT 1")]
+    #[case::executable_in_a_string("SELECT '/*!50000 USE x */'")]
+    fn the_rest_does_not_change_the_context(#[case] sql: &str) {
+        let outcome = mysql(sql);
+        assert!(!outcome.context_change, "{sql} → {outcome:?}");
+        assert!(!changes_context(sql, SqlDialect::MySql), "{sql}");
+    }
+
+    /// Checkbox 1 of #223: the classifier no longer takes a context change for
+    /// a read, which is what let an agent's `USE other` skip the refusal of
+    /// ADR-0019 and bypass the production confirmation.
+    #[test]
+    fn a_typed_use_is_not_a_read() {
+        let outcome = mysql("USE shop");
+        assert_eq!(outcome.intent, StatementIntent::Unknown, "{outcome:?}");
+        assert!(outcome.is_mutating());
+        assert!(!outcome.is_read_only());
+        assert!(outcome.context_change);
+        assert!(!outcome.transaction_control, "a different flag");
+        // The part of the family the parser reads as a `USE` is settled by
+        // the AST; the others fall back on the same `Unknown`.
+        assert_eq!(outcome.statements[0].basis, Basis::Ast, "{outcome:?}");
+    }
+
+    /// The executable-comment view ends a comment where the scanner does, at the
+    /// first `*/`, and a block comment nested in the body ends it early. The
+    /// text as typed is the floor: whichever reading shows the statement, the
+    /// batch is judged by it (fail closed).
+    #[rstest]
+    #[case::use_after_a_nested_comment("/*!50000 /* c */ USE other */")]
+    #[case::mariadb_use_after_a_nested_comment("/*M!100000 /* c */ USE other */")]
+    #[case::use_before_a_nested_comment("/*!50000 USE /* c */ other */")]
+    fn a_nested_comment_does_not_hide_a_use(#[case] sql: &str) {
+        let outcome = mysql(sql);
+        assert!(outcome.context_change, "{sql} → {outcome:?}");
+        assert!(changes_context(sql, SqlDialect::MySql), "{sql}");
+        assert!(outcome.is_mutating(), "{sql} → {outcome:?}");
+    }
+
+    /// The floor holds for the other facts too: a `DELETE` behind a nested
+    /// comment is never judged a read, and a `COMMIT` still controls a
+    /// transaction.
+    #[test]
+    fn a_nested_comment_does_not_make_a_batch_milder() {
+        for sql in [
+            "/*!50000 /* c */ DELETE FROM t */",
+            "/*!50000 /* c */ COMMIT */",
+        ] {
+            let outcome = mysql(sql);
+            assert!(outcome.is_mutating(), "{sql} → {outcome:?}");
+        }
+        assert!(mysql("/*!50000 /* c */ COMMIT */").transaction_control);
+    }
+
+    /// Every dialect, not only MySQL: the classifier is dialect-wide, and a
+    /// text that leads with `USE` changes a context wherever it is accepted.
+    #[rstest]
+    #[case::snowflake_role(SqlDialect::Snowflake, "USE ROLE analyst")]
+    #[case::snowflake_warehouse(SqlDialect::Snowflake, "USE WAREHOUSE w")]
+    #[case::snowflake_secondary(SqlDialect::Snowflake, "USE SECONDARY ROLES ALL")]
+    #[case::duckdb(SqlDialect::DuckDb, "USE memory")]
+    #[case::sql_server(SqlDialect::SqlServer, "USE master")]
+    #[case::postgres(SqlDialect::Postgres, "USE shop")]
+    fn every_form_of_use_is_unknown_and_flagged(#[case] dialect: SqlDialect, #[case] sql: &str) {
+        let outcome = classify(sql, dialect);
+        assert_eq!(
+            outcome.intent,
+            StatementIntent::Unknown,
+            "{sql} → {outcome:?}"
+        );
+        assert!(outcome.is_mutating(), "{sql}");
+        assert!(outcome.context_change, "{sql} → {outcome:?}");
+    }
+
+    /// The flag must never come from the last statement only: `USE shop;
+    /// SELECT 1` ends on a read.
+    #[test]
+    fn the_context_change_is_raised_by_any_statement_of_the_batch() {
+        let outcome = mysql("USE shop; SELECT 1; SELECT 2");
+        assert!(outcome.context_change);
+        assert_eq!(
+            outcome
+                .statements
+                .iter()
+                .map(|statement| statement.context_change)
+                .collect::<Vec<_>>(),
+            [true, false, false]
+        );
+    }
+
+    /// `qualify` replaces what the caller declares, in both directions: an
+    /// agent cannot declare a `USE` away, and a read cannot be refused as a
+    /// context change because its caller said so.
+    #[test]
+    fn qualify_replaces_the_declared_context_change() {
+        let mut declare = mysql_request("USE shop");
+        declare.context_change = false;
+        assert!(mysql("USE shop").qualify(declare).context_change);
+
+        let mut declare = mysql_request("SELECT 1");
+        declare.context_change = true;
+        assert!(!mysql("SELECT 1").qualify(declare).context_change);
+    }
+
+    /// `reclassify` reads the request's own text and language, which is what
+    /// the executor calls: nothing the agent declares reaches the gate.
+    #[test]
+    fn an_agent_cannot_declare_a_use_away() {
+        let mut declared = mysql_request("USE other").with_intent(StatementIntent::Read);
+        declared.context_change = false;
+        declared.transaction_control = false;
+
+        let requalified = reclassify(&declared).qualify(declared);
+
+        assert!(requalified.context_change);
+        assert_eq!(requalified.intent, StatementIntent::Unknown);
+        assert!(requalified.is_mutating());
+    }
+
+    /// A `USE` behind a comment whose end depends on the server's lexer cannot
+    /// be ruled out, so it counts, as the transaction verbs do: otherwise an
+    /// agent hides one behind a carriage return.
+    #[test]
+    fn an_unreadable_comment_counts_as_a_context_change() {
+        let sql = "SELECT 1 -- x\rUSE other";
+        let outcome = mysql(sql);
+        assert!(
+            outcome.statements[0].basis == Basis::Unparsed,
+            "{outcome:?}"
+        );
+        assert!(outcome.context_change, "{outcome:?}");
+        assert!(outcome.transaction_control, "the same worst case");
+        assert_eq!(outcome.intent, StatementIntent::Unknown);
+
+        // The lexical rule the driver reads sees no leading `USE` there: it
+        // refuses what it can see, and the gate refuses the agent.
+        assert!(!changes_context(sql, SqlDialect::MySql));
+    }
+
+    #[test]
+    fn changes_context_reads_every_fragment() {
+        assert!(changes_context("SELECT 1; USE x", SqlDialect::MySql));
+        assert!(changes_context(
+            "SELECT 1;\nUSE x;\nSELECT 2",
+            SqlDialect::MySql
+        ));
+        assert!(!changes_context("SELECT 1; SELECT 2", SqlDialect::MySql));
+        assert!(!changes_context("", SqlDialect::MySql));
+        assert!(!changes_context("-- USE x", SqlDialect::MySql));
+    }
+
+    /// A procedure body is one statement for the server, `USE` inside it
+    /// included, and does not lead the fragment: it is the `CREATE`'s business.
+    #[test]
+    fn a_use_inside_a_stored_program_is_not_the_leading_verb() {
+        let sql = "CREATE PROCEDURE p() BEGIN USE other; SELECT 1; END";
+        assert!(!changes_context(sql, SqlDialect::MySql));
+        assert!(!mysql(sql).context_change);
+    }
+
+    /// Executable comments are MySQL's and MariaDB's: to any other dialect
+    /// they are comments, and a refusal there would refuse nothing a server
+    /// runs.
+    #[test]
+    fn an_executable_comment_is_only_code_for_mysql() {
+        for dialect in [SqlDialect::Postgres, SqlDialect::Sqlite, SqlDialect::Ansi] {
+            for sql in ["/*!50000 USE shop */", "/*M!100000 USE shop */"] {
+                let outcome = classify(sql, dialect);
+                assert!(!outcome.context_change, "{dialect:?} {sql} → {outcome:?}");
+                assert!(!changes_context(sql, dialect), "{dialect:?} {sql}");
+            }
+            let outcome = classify("/*!50000 COMMIT */", dialect);
+            assert!(!outcome.transaction_control, "{dialect:?} → {outcome:?}");
+        }
+    }
+
+    /// A `USE` the server runs must not hide behind a comment from the agent
+    /// refusal of ADR-0019, whatever the caller declares: the batch used to be
+    /// empty, hence `Unknown` with no flag, and the gate only asked an agent's
+    /// approval.
+    #[test]
+    fn an_agent_cannot_hide_a_use_in_an_executable_comment() {
+        for sql in [
+            "/*!50000 USE other */",
+            "/*M!100000 USE other */",
+            "SELECT 1 /*!50000 ; USE other */",
+        ] {
+            let mut declared = mysql_request(sql).with_intent(StatementIntent::Read);
+            declared.context_change = false;
+
+            let requalified = reclassify(&declared).qualify(declared);
+
+            assert!(requalified.context_change, "{sql}");
+            assert!(requalified.is_mutating(), "{sql}");
+        }
+    }
+
+    #[rstest]
+    #[case::mysql("/*!50000 COMMIT */")]
+    #[case::mariadb("/*M!100000 ROLLBACK */")]
+    #[case::after_a_read("SELECT 1 /*!50000 ; COMMIT */")]
+    fn a_transaction_verb_in_an_executable_comment_is_flagged(#[case] sql: &str) {
+        let outcome = mysql(sql);
+        assert!(outcome.transaction_control, "{sql} → {outcome:?}");
+        assert!(!outcome.context_change, "a different flag: {sql}");
+    }
+
+    /// The body is classified as the statement it holds, not as a batch with
+    /// no statement: `DELETE` in a comment is a delete to the server.
+    #[test]
+    fn the_body_of_an_executable_comment_is_classified_as_code() {
+        let outcome = mysql("/*!50000 DELETE FROM t */");
+        assert_eq!(outcome.intent, StatementIntent::Write, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete, "{outcome:?}");
+        assert_eq!(outcome.len(), 1);
+
+        // The `;` inside the comment ends the statement before it.
+        let outcome = mysql("SELECT 1 /*!50000 ; DROP TABLE b */");
+        assert_eq!(outcome.len(), 2, "{outcome:?}");
+        assert_eq!(outcome.statements[0].intent, StatementIntent::Read);
+        assert_eq!(outcome.statements[1].intent, StatementIntent::Ddl);
+        assert!(outcome.is_mutating());
+
+        // A harmless dump line stays what it is: no more than a confirmation.
+        let outcome = mysql("/*!40101 SET NAMES utf8mb4 */");
+        assert_eq!(outcome.intent, StatementIntent::Unknown, "{outcome:?}");
+    }
+
+    /// Reading the body as code must not change what the caller sees: the
+    /// statement keeps the text the user typed, and its span still leads back to
+    /// the spot in the buffer.
+    #[test]
+    fn a_statement_with_an_executable_comment_keeps_the_typed_text() {
+        let sql = "SELECT /*!50000 DISTINCT */ a FROM t; /*!50000 USE shop */";
+        let outcome = mysql(sql);
+        let [select, using] = outcome.statements.as_slice() else {
+            panic!("two statements expected: {outcome:?}");
+        };
+        assert_eq!(select.text, "SELECT /*!50000 DISTINCT */ a FROM t");
+        assert_eq!(sql.get(select.span.clone()), Some(select.text.as_str()));
+        assert_eq!(sql.get(using.span.clone()), Some(using.text.as_str()));
+        assert!(using.context_change && !select.context_change);
     }
 
     /// An empty batch does not read as a read: a split that lost statements

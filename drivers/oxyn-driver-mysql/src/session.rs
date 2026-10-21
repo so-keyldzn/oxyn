@@ -6,10 +6,20 @@
 //! parameters, `Conn::close`. The server's prepare **proves** the text is one
 //! statement — the lexer runs without multi-statements, so anything after a
 //! `;` is a 1064 — and values come back in the binary protocol. Only a 1295
-//! (`ER_UNSUPPORTED_PS`: `START TRANSACTION`, `USE`, `CREATE PROCEDURE`…) opens
-//! the text protocol, and only for a request without bound parameters that
+//! (`ER_UNSUPPORTED_PS`: `START TRANSACTION`, `CREATE PROCEDURE`…) opens the
+//! text protocol, and only for a request without bound parameters that
 //! `oxyn-query` splits into exactly one statement. Every other prepare error
 //! is the answer shown to the user.
+//!
+//! # A typed `USE` is refused, whoever types it
+//!
+//! `USE` is the one statement of that list that never reaches the server: the
+//! session owns its database ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md))
+//! and reapplies the declared one after a reconnect, so a database selected
+//! behind its back would be undone without a word. The refusal comes before the
+//! prepare — MariaDB prepares `USE`, and a `COM_STMT_PREPARE` already reaches
+//! the server — and points to the context selector, which is
+//! [`Session::set_context`].
 //!
 //! # Read-only is imposed by the server
 //!
@@ -55,6 +65,13 @@ const SQL_ROLLBACK: &str = "ROLLBACK";
 const READ_ONLY_IN_TRANSACTION: &str = "a read-only bound inside an open transaction \
     (MySQL applies `SET SESSION TRANSACTION READ ONLY` to the next transaction only): \
     commit or roll back first";
+
+/// Why a typed `USE` is refused.
+///
+/// Fixed text: it never echoes the database the user typed
+/// ([I-03](../../../CLAUDE.md#i-03)), and it names the way out.
+const CONTEXT_REFUSED: &str = "a typed `USE`: the session keeps its database itself and would \
+    reapply the declared one after a reconnect, so change it with the context selector";
 
 /// An open MySQL or MariaDB session.
 #[derive(Debug)]
@@ -164,6 +181,35 @@ fn refuse_rewritten(text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuses a typed `USE`, for every actor, before anything is sent.
+///
+/// The user's own `USE` would change the database behind the session's back
+/// (ADR-0019): `Session::context` would go on naming the previous one, and
+/// the first reconnect would silently select it again. The context is changed
+/// by [`Session::set_context`], which composes its own `USE` through
+/// [`use_statement`] and never comes through here. The agents' refusal is the
+/// `PolicyGate`'s (I-01, I-07); this one is the driver's own, and applies to a
+/// human as well.
+///
+/// It reads every fragment of the text, the body of an executable comment
+/// (`/*!50000 USE x */`, `/*M!100000 USE x */`) included since the server runs
+/// it, and does not wait for the server to object: MySQL answers 1064 to
+/// `SELECT 1; USE x` at prepare, but MariaDB
+/// prepares a lone `USE` (ADR-0050), and a refusal placed after the prepare
+/// would come once the statement had already reached the server. Hence the
+/// position of the check: before the prepare, before the lease. Letting the
+/// `USE` run and reading `SELECT DATABASE()` back was not chosen: the declared
+/// context is the session's, not what the driver discovers behind the user's
+/// back.
+fn refuse_context_change(text: &str) -> Result<()> {
+    if oxyn_query::changes_context(text, SqlDialect::MySql) {
+        return Err(OxynError::NotSupported {
+            capability: CONTEXT_REFUSED.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Is the statement a `CALL`, whose extra result sets are the procedure's?
 fn is_call(text: &str) -> bool {
     oxyn_query::words(text, SqlDialect::MySql)
@@ -183,12 +229,16 @@ impl Session for MysqlSession {
     /// schema: a prepare's columns may be missing or differ from the rows'
     /// (the stream task's `cursor::spawn` explains when).
     ///
+    /// A typed `USE` is refused before the connection is touched: the context
+    /// is changed with [`Session::set_context`], never from the user's SQL.
+    ///
     /// # Errors
     /// [`OxynError::NotSupported`] for a language other than MySQL's SQL, a
     /// parameter MySQL cannot receive, a text the library would rewrite, a
-    /// read-only bound inside an open transaction, or a statement MySQL cannot
-    /// prepare that carries parameters or several statements;
-    /// [`OxynError::Cancelled`]; the server's refusal, classified.
+    /// typed `USE` (any statement of the text), a read-only bound inside an
+    /// open transaction, or a statement MySQL cannot prepare that carries
+    /// parameters or several statements; [`OxynError::Cancelled`]; the
+    /// server's refusal, classified.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.capabilities.require_language(request.language)?;
         if cancel.is_cancelled() {
@@ -202,6 +252,9 @@ impl Session for MysqlSession {
             ..
         } = request;
         refuse_rewritten(&text)?;
+        // Before the bound parameters and the lease: nothing has been sent, so
+        // there is no read-only state to put back either.
+        refuse_context_change(&text)?;
         let read_only = limits.read_only;
         let bound = Bound::of(&params);
         let unbound = params.is_empty();
@@ -465,6 +518,69 @@ mod tests {
             "lbl: BEGIN END",
         ] {
             refuse_rewritten(text).expect(text);
+        }
+    }
+
+    /// `execute` calls this before the bound parameters and the lease, which is
+    /// the proof that nothing is sent: a session cannot be built without a live
+    /// connection, so the check is tested on its own, and its position by
+    /// reading `execute`.
+    #[test]
+    fn a_typed_use_is_refused_before_anything_is_sent() {
+        for text in [
+            "USE shop",
+            "use shop;",
+            "  USE\n  shop  ",
+            "/* x */ USE shop",
+            "-- pick it\nUSE shop",
+            "SELECT 1; USE x",
+            "USE shop; SELECT 1",
+            // The quoting cannot hide the verb, nor smuggle a second statement
+            // past the check.
+            "use `a``; DROP`",
+            "USE `oxyn ctx``db`",
+            "USE \"a\"; DROP DATABASE b",
+            // The server runs the body of an executable comment, and MariaDB
+            // prepares a lone `USE`: the lexical rule has to see it.
+            "/*!50000 USE shop */",
+            "/*M!100000 USE shop */",
+            "SELECT 1 /*!50000 ; USE shop */",
+            "/*! USE `a``; DROP` */",
+        ] {
+            let error = refuse_context_change(text).expect_err(text);
+            let OxynError::NotSupported { capability } = &error else {
+                panic!("`{text}` must be a refusal of capability: {error:?}");
+            };
+            assert!(
+                capability.contains("context selector"),
+                "`{text}`: the message points to the selector: {capability}"
+            );
+            // I-03, I-10: the name the user typed is never echoed back.
+            for name in ["shop", "DROP", "oxyn ctx", "`a``"] {
+                assert!(
+                    !capability.contains(name),
+                    "`{text}`: the message echoes `{name}`: {capability}"
+                );
+            }
+        }
+        for text in [
+            "SELECT 'use'",
+            "SELECT `use` FROM t",
+            "SELECT 1 /* USE x */",
+            "-- USE x\nSELECT 1",
+            "UPDATE t SET use_count = use_count + 1",
+            "SELECT * FROM used",
+            "CALL p()",
+            "CREATE PROCEDURE p() BEGIN SELECT 1; END",
+            "SET @use = 1",
+            "",
+            // Dumps carry executable comments all the time: only a `USE`
+            // in one is refused.
+            "/*!40101 SET NAMES utf8mb4 */",
+            "SELECT /*!50000 DISTINCT */ 1",
+            "SELECT * FROM t /*!50000 USE INDEX (i) */",
+        ] {
+            refuse_context_change(text).expect(text);
         }
     }
 

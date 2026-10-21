@@ -188,9 +188,9 @@ the Tauri window.
 
 The list that still had to be done at that time before deleting `oxyn-ui` and `oxyn-app`:
 
-- compact switch below 1,200 px and `More` menu — **partly**: the switch
-  exists (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`), the `More` menu
-  and the `Actions` menu do not, see the gate below;
+- ~~compact switch below 1,200 px and `More` menu~~ — done: the switch
+  (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`), and since 2026-09-25 the
+  `More` menu and the `Actions` menu, see the gate below;
 - ~~cell display settings (`FormatOptions`) and switchable light theme~~ — done (`features/settings/`);
 - ~~restoring drafts after an abrupt shutdown~~ — done (`features/recovery/`);
 - measurement campaign of the [PERFORMANCE](PERFORMANCE.md) budgets **in the webview**,
@@ -222,8 +222,8 @@ tests that `6ecb8ce` deleted, and that do not exist in `apps/desktop`:
 | Offline restoration of editors | recovered drafts remain editable and saveable without a session, then attach to a chosen connection | **done**, within a workspace. The chosen copies are added without replacing those already recovered and reopen as consoles **without a session** (`features/consoles/use-consoles.ts`): text, name, autosave and named save work, execution waits. `Connect to …` gives the same console a session on the original connection, `Open a copy on …` opens a copy elsewhere; cancelling leaves the console offline. Held by `an_offline_copy_attached_to_its_connection_keeps_its_identity`, `a_copy_on_another_connection_leaves_the_original_untouched` and the stories `OfflineConsoleBar`, `ConsoleView/Offline`. Remaining: cold, with no open connection, the copies wait for the first workspace — there is no workspace without a connection |
 | Export of a retained result | the library exports the retained buffer without replaying it | **done** on 2026-09-25. `retained-result-tab.tsx` mounts `ExportMenu` under the grid, exportable only for a complete, successful, untruncated result; the tab refuses to close during an export, which survives a change of side view. Held by the stories `RetainedResultView/ExportOffered`, `ExportRefusedWhenIncomplete` and `WorkspaceTabs/ResultExporting` |
 | Side DDL panel | read-only DDL panel (`193:2433`), resizable | **absent** as a panel: the DDL is a tab of the object view (`RelationDefinition`) |
-| Disabled `Edit rows…` and its tooltip | required by [UX-SPEC](UX-SPEC.md) in the read-only preview | **absent**: no occurrence in `apps/desktop` |
-| The library follows executions | the open library rereads itself after an execution (automatic refresh batch, ADR-0022) | **absent.** `LIBRARY_QUERY_KEY` is only invalidated by Refresh and the library's actions; the comment "a run invalidates it" has no code behind it |
+| Disabled `Edit rows…` and its tooltip | required by [UX-SPEC](UX-SPEC.md) in the read-only preview | **done on 2026-09-25** (`a7c643d`): `Edit rows…` is disabled, with the tooltip `EDIT_ROWS_UNAVAILABLE` (`components/oxyn/object-view-frame.tsx`); story `Oxyn/ObjectView`, `EditRowsUnavailable` |
+| The library follows executions | the open library rereads itself after an execution (automatic refresh batch, ADR-0022) | **done on 2026-09-25** (`2b437ef`): `useLibraryRefresh` (`features/library/library-refresh.ts`), mounted by `library-sidebar-section.tsx`, invalidates `LIBRARY_QUERY_KEY` on `historyRecorded` and `lagged`. Held by "reads again when a run of any connection reaches the history" and "reads again after missed signals" (`library-refresh.test.tsx`) |
 | Restoring the object location | "done (`ObjectLocation`)", held by `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` | **done on 2026-09-25.** `read_object_location` / `write_object_location` (outside `ipc/settings.rs`, which still excludes it); the tab comes back held, without reading, and the recovery screen offers it — see "Recovery and library" |
 
 The Columns menu, for its part, is delivered (`ef2ada8`, `components/oxyn/columns-menu.tsx`)
@@ -271,8 +271,9 @@ right-click on every surface, shortcuts, palette, drag and drop, several
 windows. The behavior is in [UX-SPEC](UX-SPEC.md#menus-shortcuts-and-gestures),
 the decisions in [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
 [ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) and
-[ADR-0043](adr/0043-multi-fenetre.md). Batches 1 to 6 are done (4 under
-the list), 8 too, 7 for its first part; the others are not
+[ADR-0043](adr/0043-multi-fenetre.md). Batches 1 to 8 are done (4 under
+the list; 7 on 2026-09-25 and 2026-09-26; 8 for one window), and their
+leftovers are listed under batches 7 and 8; batch 9 is not
 implemented. The interfaces are written in shadcn/ui (`menubar`, `context-menu`, `command`,
 `alert-dialog`, `kbd`), except the native macOS bar, built in Rust.
 
@@ -614,8 +615,8 @@ Batches, in order:
 7. **Multi-window** — per-window subscriptions, `WindowRegistry`, capability
    by `workspace-*` pattern, layout migration, `Open in new window`,
    per-window restoration, consoles included after an ordinary close
-   (ADR-0043). Delivered in two pull requests; **the first is done**, see
-   below.
+   (ADR-0043). Delivered in two pull requests; **both are done** (2026-09-25
+   and 2026-09-26), see below; the leftovers are listed under `Open in new window`.
 8. **Open transaction at exit** — step before the ordered shutdown,
    `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
    `cancel_exit`, log of the forced exit (ADR-0043). **Done for one
@@ -2153,10 +2154,15 @@ never abbreviated. Validation refuses control, format and line/paragraph separat
 in every field and bounds the command and each argument to 4,096 UTF-8 bytes.
 Scripted host tests cover premature approval, refusal, expiry and contention.
 
-**Planned on 2026-10-06 — prompts composed per role × dialect × recipient.**
+**Done on 2026-10-06 — prompts composed per role × dialect × recipient.**
+Planned the same day; the three steps below are merged and released in
+0.0.6 (#205): step 1 in #202, step 2 in #198 (store), #200 (picker) and
+#203 (the conversation runs its agent), step 3 in #204.
 [ADR-0049](adr/0049-agents-declared-as-markdown-files.md), amended on
-2026-10-06, stays `proposed` until the user accepts it; its first code
-commit is step 1. Three steps, each its own pull request, in this order:
+2026-10-06 (#199), was accepted on 2026-10-06 (#206); on 2026-10-07,
+[ADR-0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md)
+refines its default agent (SQL, whatever the display order). The
+steps, as planned, each its own pull request, in this order:
 
 1. **Composition, in `oxyn-ai`.** The role files `agents/sql.md` and
    `agents/schema.md`, the dialect fragments (real text for `ansi`,
@@ -2192,6 +2198,42 @@ commit is step 1. Three steps, each its own pull request, in this order:
    anchor or alias, a duplicate key, an unknown field, an unknown
    placeholder and an id collision, none of which blocks the valid files
    next to it.
+
+**Planned on 2026-10-07 — local embeddings rank the AI context
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md),
+proposed).** In this order, each with its exit gate:
+
+1. **`oxyn-embed`.** The crate, its pinned files, download, conversion and
+   `OnDemandEmbedder`; the reference-output test that fails when a residual
+   constant is missing; the converted `model.bpk` size and checksum written
+   into `pinned::CONVERTED` — **done in `a7233c3`** (389,816,832 bytes,
+   `d5ac67b8…`). **Exit gate**: `make qualite` green, the
+   reference test passing, a cold CI build of the crate measured and recorded
+   in RESEARCH-NOTES.
+2. **The fallback release.** Publish `embedding-model-835ad140` as a
+   **pre-release** of `so-keyldzn/oxyn`, carrying `model.safetensors`,
+   `tokenizer.json`, the Apache-2.0 text and the model's attribution. **Exit
+   gate**: both files downloaded from it match their pinned SHA-256, and
+   `releases/latest/download/latest.json` still answers the last Oxyn
+   release. **Done on 2026-10-07**: published as a pre-release with
+   `LICENSE-Apache-2.0.txt` and `NOTICE.md`; the asset digests equal the
+   pinned SHA-256, "latest" stayed `v0.0.7`, and `latest.json` answers 200.
+3. **Ranking in `oxyn-ai`.** Per-relation scores accepted by
+   `ContextBuilder` and `wanted_relations`; the three ordering rules of the
+   ADR. **Exit gate**: tests that a lexical match is never demoted by a
+   score, that ties and unmatched relations follow the cosine then the path,
+   and that no score yields exactly today's selection; `oxyn-ai` has no
+   dependency on `oxyn-embed`.
+4. **`oxyn-desktop`: preference, download, cache, bound.** The preference,
+   off by default and refused to `Actor::Agent`; the download with progress
+   and cancellation; the in-memory relation-vector cache keyed by `MODEL_ID`;
+   the 2-second bound per question; the unavailable state shown in the
+   panel, written into [UX-SPEC](UX-SPEC.md) first; the conversion in a child
+   process. **Exit gate**: the footprint of `oxyn-desktop` measured against
+   the budget of [PERFORMANCE](PERFORMANCE.md#memory-budgets) as amended on
+   2026-10-08 — 300 MB with the model loaded, 250 MB kept after unloading,
+   nothing kept from the conversion —, the unload after 5 minutes observed, the stripped binary size before and after
+   recorded, and latency measured on Linux x86_64 and arm64 as well as macOS.
 
 ## Phase 3 bis — Beyond the relational
 
@@ -2433,6 +2475,7 @@ carries `superseded` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | ADR | Status | Test that holds it, or reason for keeping it |
 |---|---|---|
 | [0021](adr/0021-marqueur-d-arret.md) | accepted | `a_session_left_open_and_silent_is_an_abnormal_shutdown` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
+| [0022](adr/0022-rafraichissement-automatique.md) | accepted (2026-10-20) | `a_ddl_stales_both_the_catalog_and_the_visible_preview`, `a_read_stales_nothing_but_its_history_entry_is_announced` and `nothing_is_signalled_after_a_failure_or_a_cancellation` (`oxyn-desktop/src/ipc/metadata.rs`), `a_successful_ddl_invalidates_the_catalog_and_broadcasts_it` (`oxyn-exec/src/preview_tests.rs`), "reads the visible preview again, with the shape in force", "leaves a hidden preview stale until it is shown" and "never hides an error behind a new read" (`apps/desktop/src/features/metadata/use-preview-refresh.test.tsx`), "reads again after missed signals" (`apps/desktop/src/features/library/library-refresh.test.tsx`). **Implemented but held by no named test**: the Write branch of `RefreshSignal::of` (the default arm `_ => RowsChanged`, so a write rereads the preview); the reload of the tree on `catalogInvalidated` and `lagged` (`features/workspace/catalog-sidebar.tsx`, the first row of the ADR's table), with the coalescing of its Consequences (the `owed` loop); and the `lagged` branch of the visible preview (`features/metadata/use-preview.ts`) and of the facets (`features/metadata/use-relation-facets.ts`): `use-preview-refresh.test.tsx` sends `lagged` only while the workspace is hidden, and `object-view.test.tsx` mocks the facets |
 | [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepted | `no_url_carrying_credentials_reaches_the_disk` (`oxyn-store/src/providers.rs`), `an_unresolved_endpoint_gets_no_benefit_of_the_doubt` (`oxyn-llm/src/reach.rs`) |
 | [0026](adr/0026-agents-externes-acp.md) | accepted | `an_external_agent_never_serves_a_local_connection` (`oxyn-ai/src/privacy.rs`), `the_table_has_no_secret_column` (`oxyn-store/src/agents/tests.rs`) |
 | [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepted | `under_local_no_prompt_is_composed` (`oxyn-ai/src/external/prompt/tests.rs`), `the_local_tier_refuses_before_even_launching_the_process` (`oxyn-ai/src/external/tests.rs`) |
@@ -2441,14 +2484,18 @@ carries `superseded` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0031](adr/0031-validation-des-reponses-ipc.md) | accepted | "rejects what the grid could not draw, rather than letting it through" (`apps/desktop/src/lib/ipc/types.test.ts`), "degrades an unknown ending instead of refusing the event" (`ai.test.ts`) |
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepted | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
 | [0033](adr/0033-couches-de-configuration-codex.md) | accepted | `every_readable_layer_is_switched_off_by_name_each_once` (`oxyn-ai/src/external/confine/codex_layers.rs`) |
+| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | accepted (2026-10-20) | `an_unbounded_delete_on_production_asks_and_a_refusal_runs_nothing`, `an_unanswered_dialog_is_a_refusal_at_its_deadline`, `a_confirmation_under_a_second_is_a_refusal`, `a_tier_change_on_development_asks_too` and `a_second_critical_decision_meanwhile_is_refused_without_being_consumed` (`oxyn-desktop/src/backend/confirm/tests.rs`), `a_hostile_string_is_escaped_wherever_it_appears` (`backend/confirm/text/tests.rs`), `a_native_refusal_of_a_pinned_sample_reads_and_sends_nothing` (`backend/ai/conversation/tests/approved_samples/native_confirmation.rs`). The native dialog itself stays a hand check, as its § 4 says |
+| [0051](adr/0051-automatic-updates-from-github-releases.md) | accepted (2026-10-20) | `the_webview_is_granted_neither_the_updater_nor_the_opener`, `an_archive_is_only_asked_from_github_over_https`, `nothing_is_installed_without_verified_bytes`, `on_linux_only_an_appimage_updates_itself` and `a_development_build_never_updates` (`oxyn-desktop/src/updates/tests.rs`); `test_manifest_lists_the_three_platforms_with_their_signatures` and `test_signature_not_bound_to_the_version_writes_no_manifest` (`script/test_livraison.py`) for the draft release, the signatures and the update manifest |
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | proposed | **code/ADR deviation**: its § 2 says that the columns "join no statement", whereas since `d6cf80b` they enter the `PreviewRelation` through `PreviewShape::columns`, quoted by the driver ([Phase 3](#phase-3--the-ai-workspace)). The rest is held (`an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after`); the sentence must be clarified before accepting |
 | [0005](adr/0005-wasm-plugins.md) | proposed | WIT and component instantiation return "phase 4" (`oxyn-plugin/src/host.rs`) |
 | [0007](adr/0007-driver-sidecar.md) | proposed | no sidecar, postponed to phase 4 |
 | [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposed | its default order on the primary key is contradicted by the code and by ADR-0028, which clarifies it |
-| [0022](adr/0022-rafraichissement-automatique.md) | proposed | a DDL does not reread the visible preview, whereas the ADR plans it; `RefreshSignal::of` has no test |
 | [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | proposed | implemented (`DRAFT_IDLE_MS`), but neither the delay nor the three immediate writes are tested |
 | [0025](adr/0025-proposition-de-changement-de-schema.md) | proposed | the Rust composer is tested, but the gesture is not mounted: `useSchemaProposal` has no caller |
 | [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposed | **code/ADR deviation**: § 2 bis promises one write per question, `WriteGate` applies "one pending request at a time" (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — to be decided |
+| [0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) | proposed | its § 8 routes Oxyn's own links through an `open_external` command that accepts only `https:` URLs, and that command does not exist: `help.documentation` is greyed out in `apps/desktop/src/lib/actions/registry.ts`, postponed since batch 1. The rest is held (`the_shipped_manifest_describes_the_macos_bar` in `oxyn-desktop/src/menu.rs`, `manifest.test.ts` and `keyboard.test.ts` in `apps/desktop/src/lib/actions`), and its "Points to check" are still to be checked by hand |
+| [0042](adr/0042-revue-sur-place-des-operations-destructrices.md) | proposed | **code/ADR deviation**: the last row of its table of sources says the SQLite driver leaves foreign keys unchecked, and its Consequences say that SQLite's "engine refuses nothing". The bundled engine enforces them (`foreign_keys_are_enforced_by_the_bundled_engine`, `drivers/oxyn-driver-sqlite/src/ddl_tests.rs`; deviation recorded under batch 4 of the desktop interactions). The decision itself is held (`object_operations_are_not_tools` in `oxyn-ai/src/tools.rs`; `availability_follows_declared_capabilities_never_the_product` and `on_production_the_host_dialog_decides_and_the_webview_approves_nothing` in `oxyn-desktop/src/backend/object_operations/tests.rs`); the sentences must be clarified before accepting |
+| [0043](adr/0043-multi-fenetre.md) | proposed | "What a window owns, and what is shared" says the owning window comes to the front when another window reopens what it owns. That is done for a conversation, not for a library document (see "Remaining" under batch 7, `Open in new window`), and the manual test on Windows and Linux is pending. The rest is held (`events_go_to_the_window_of_their_command_and_to_no_other` in `oxyn-desktop/src/backend/windows/tests.rs`, plus `backend/windows/closing/tests.rs`, `backend/windows/handoff/tests.rs`, and `every_window_comes_from_the_template_with_the_same_three_permissions` in `oxyn-desktop/src/webview_guard.rs`) |
 
 ADR-0035 was already `accepted`; ADR-0036, written the same day, was not reviewed.
 
@@ -2457,6 +2504,24 @@ becomes `accepted` on 2026-09-25, once its code was merged (PR #59), according t
 same criterion: `a_forced_exit_records_the_close_and_is_not_offered_recovery` and
 `a_forced_exit_over_a_pending_write_is_bounded_and_leaves_the_close_unwritten`
 (`oxyn-desktop/src/backend/recovery.rs`) hold it.
+
+**Review of 2026-10-20.** ADR-0022, 0037, 0041, 0042, 0043 and 0051 were examined
+again against the same criterion, decision as written against code and tests. 0022,
+0037 and 0051 become `accepted` on 2026-10-20: the rows above name the tests that
+hold them. 0041, 0042 and 0043 stay `proposed`, for the reasons written in their rows.
+ADR-0022 and ADR-0042 are not treated alike on purpose. ADR-0022 is held by named
+tests on the core of its decision: the signals a DDL, a read and a failure produce, the
+reread of the visible preview with the shape in force, no reread when hidden or after an
+error, and the library on `lagged`. That meets the criterion, which asks for at least one
+test, not for every part of the decision to be tested. Its row lists the parts that no
+test holds although their code exists (the Write branch, the reload of the tree and the
+coalescing, `lagged` on the preview and on the facets): they are reported, not settled
+here. ADR-0042 carries a claim about the
+code that is false (foreign keys unchecked on SQLite), and an accepted ADR is not
+rewritten: accepting it would freeze the error. Same precedent as the row of ADR-0034:
+the sentences must be clarified first. The Context of ADR-0022 also still describes
+the GPUI-era subscriptions (`cx.spawn`, `QueryConsole`): like the accepted ADRs
+reported below, its decision holds and its text has aged.
 
 **What remains reported, without being fixed here.** Several accepted ADRs still cite
 `oxyn-app` or GPUI as the place of implementation (0021, 0023, 0026, 0029):

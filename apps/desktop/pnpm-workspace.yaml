@@ -11,4 +11,6 @@ allowBuilds:
 # in docs/RESEARCH-NOTES.md (npm security overrides).
 overrides:
   katex: 0.18.2
+  seroval: 1.6.8
+  seroval-plugins: 1.6.8
   source-map-js: 1.2.2

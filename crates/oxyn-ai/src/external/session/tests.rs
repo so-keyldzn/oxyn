@@ -94,14 +94,32 @@ fn run<T>(
 }
 
 /// [`run`], for a session that also declares Oxyn's tool endpoint.
+///
+/// The environment is the one `start_process` builds when the tools go over the
+/// protocol: the token is withheld from the child, and redacted all the same.
 fn run_with<T>(
     tools: Option<ToolEndpoint>,
     agent: impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>>,
     scenario: impl AsyncFnOnce(ExternalSession) -> T,
 ) -> T {
+    let environment = tools
+        .as_ref()
+        .map(|tools| Environment::empty().withholding("tool token", tools.token.as_str()))
+        .unwrap_or_default();
+    run_redacting(tools, environment, agent, scenario)
+}
+
+/// [`run_with`], for a session whose error messages are redacted against a
+/// given launch environment.
+fn run_redacting<T>(
+    tools: Option<ToolEndpoint>,
+    environment: Environment,
+    agent: impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>>,
+    scenario: impl AsyncFnOnce(ExternalSession) -> T,
+) -> T {
     let (ours, theirs) = Channel::duplex();
     let (session, driver) =
-        ExternalSession::over_with(ours, private(), tools, None, Limits::default());
+        ExternalSession::over_with(ours, private(), tools, None, environment, Limits::default());
     let background = join(driver, agent(theirs));
     block_on(async move {
         let scenario = pin!(scenario(session));
@@ -1254,18 +1272,309 @@ fn an_agent_that_says_the_token_back_does_not_show_it() {
 }
 
 #[test]
-fn a_token_is_redacted_wherever_it_appears_and_nothing_else_is() {
+fn the_tool_token_is_redacted_even_when_the_launch_environment_forgot_it() {
+    // A launch path that hands the agent the tools but builds an environment
+    // without the token must not bring back the leak `redact_token` closed: the
+    // session withholds the token itself.
+    let failed = run_redacting(
+        Some(ToolEndpoint {
+            url: "http://127.0.0.1:9/mcp".to_owned(),
+            token: TOKEN.to_owned(),
+            over_acp: true,
+            served: Vec::new(),
+        }),
+        Environment::empty(),
+        agent_failing(Fails::NewSession, format!("mcp={TOKEN}")),
+        async |session| session.start().await,
+    );
+
+    let Err(ExternalError::Protocol(message)) = failed else {
+        panic!("expected the agent's error, got {failed:?}");
+    };
+    assert!(!message.contains(TOKEN), "{message}");
+    assert!(message.contains("<tool token redacted>"), "{message}");
+}
+
+#[test]
+fn the_tool_token_is_redacted_wherever_it_appears_and_nothing_else_is() {
+    use crate::external::spawn::redact;
+
+    let withheld = Environment::empty().withholding("tool token", TOKEN);
     assert_eq!(
-        redact_token(&format!("Bearer {TOKEN} and {TOKEN}"), Some(TOKEN)),
+        redact(&format!("Bearer {TOKEN} and {TOKEN}"), &withheld),
         "Bearer <tool token redacted> and <tool token redacted>"
     );
-    assert_eq!(
-        redact_token("nothing to hide", Some(TOKEN)),
-        "nothing to hide"
-    );
-    assert_eq!(redact_token("no endpoint", None), "no endpoint");
+    assert_eq!(redact("nothing to hide", &withheld), "nothing to hide");
+    assert_eq!(redact("no endpoint", &Environment::empty()), "no endpoint");
     // An empty token would « redact » between every character.
-    assert_eq!(redact_token("abc", Some("")), "abc");
+    assert_eq!(
+        redact("abc", &Environment::empty().withholding("tool token", "")),
+        "abc"
+    );
+}
+
+/// A value the keychain resolved for the agent's environment. Improbable on
+/// purpose, and sharing no text with a marker or with [`TOKEN`]: a replacement
+/// that produced it again would not go unnoticed.
+const KEYCHAIN_WITNESS: &str = "oxyn-witness-keychain-5e2b8a91";
+/// A value shorter than the minimum length that is redacted by default
+/// (`spawn::MIN_REDACTED_CHARS`): redacted only because its variable is
+/// declared secret.
+const SHORT_WITNESS: &str = "Qz7w";
+
+const KEYCHAIN_REFERENCE: &str = "oxyn:agent-env:00000000000000000000000000000001";
+const SHORT_REFERENCE: &str = "oxyn:agent-env:00000000000000000000000000000002";
+
+/// The keychain, as far as launching an agent is concerned.
+struct FakeKeychain;
+
+impl crate::external::spawn::EnvironmentSecrets for FakeKeychain {
+    fn resolve(&self, reference: &str) -> Result<String, ExternalError> {
+        match reference {
+            KEYCHAIN_REFERENCE => Ok(KEYCHAIN_WITNESS.to_owned()),
+            SHORT_REFERENCE => Ok(SHORT_WITNESS.to_owned()),
+            _ => Err(ExternalError::Invalid("no such keychain entry".into())),
+        }
+    }
+}
+
+/// What an agent is launched with when the user declared two secrets for it —
+/// one long, one short — and its tools are served over the protocol.
+fn launch_environment() -> Environment {
+    let mut agent = ExternalAgentConfig::new(
+        oxyn_core::ProviderId::for_new_agent(),
+        "Test",
+        "oxyn-test-agent",
+    );
+    agent
+        .env_secret_refs
+        .push(("OPENAI_API_KEY".into(), KEYCHAIN_REFERENCE.into()));
+    agent
+        .env_secret_refs
+        .push(("PIN".into(), SHORT_REFERENCE.into()));
+    Environment::empty()
+        .with_secrets(&agent, Some(&FakeKeychain))
+        .expect("the stub resolves both references")
+        .withholding("tool token", TOKEN)
+}
+
+/// An error message quoting everything the agent was handed.
+fn leaky_message() -> String {
+    format!("config key={KEYCHAIN_WITNESS} pin={SHORT_WITNESS} mcp={TOKEN}")
+}
+
+/// The request an agent answers with an error.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fails {
+    Initialize,
+    NewSession,
+    Authenticate,
+    Prompt,
+}
+
+/// A scripted agent that answers every request correctly but one, and answers
+/// that one with an internal error carrying `message`.
+fn agent_failing(
+    at: Fails,
+    message: String,
+) -> impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>> {
+    move |channel| {
+        let (initialize, new_session, authenticate, prompt) =
+            (message.clone(), message.clone(), message.clone(), message);
+        Agent
+            .builder()
+            .on_receive_request(
+                async move |request: InitializeRequest, responder, _cx| {
+                    if at == Fails::Initialize {
+                        return responder
+                            .respond_with_error(Error::new(-32603, initialize.clone()));
+                    }
+                    responder.respond(
+                        InitializeResponse::new(request.protocol_version).auth_methods(vec![
+                            AuthMethod::Agent(AuthMethodAgent::new("chat-gpt", "ChatGPT")),
+                        ]),
+                    )
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |_: NewSessionRequest, responder, _cx| {
+                    if at == Fails::NewSession {
+                        return responder
+                            .respond_with_error(Error::new(-32603, new_session.clone()));
+                    }
+                    responder.respond(NewSessionResponse::new(session_id()))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |_: AuthenticateRequest, responder, _cx| {
+                    // Not `AuthRequired`: that one is a question, not a failure.
+                    responder.respond_with_error(Error::new(-32603, authenticate.clone()))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                async move |_: PromptRequest, responder, _cx| {
+                    responder.respond_with_error(Error::new(-32603, prompt.clone()))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_to(channel)
+            .boxed()
+    }
+}
+
+/// Runs `scenario` against an agent launched with [`launch_environment`] that
+/// fails `at`.
+fn run_failing<T>(
+    at: Fails,
+    message: String,
+    scenario: impl AsyncFnOnce(ExternalSession) -> T,
+) -> T {
+    run_redacting(
+        Some(ToolEndpoint {
+            url: "http://127.0.0.1:9/mcp".to_owned(),
+            token: TOKEN.to_owned(),
+            over_acp: true,
+            served: Vec::new(),
+        }),
+        launch_environment(),
+        agent_failing(at, message),
+        scenario,
+    )
+}
+
+/// The agent's error, as the user would read it, whatever the channel: the
+/// protocol payload, its `Display`, its `Debug`, and the `OxynError` the desktop
+/// turns it into. Panics unless it is a protocol error.
+fn what_the_user_could_read(failed: Result<impl std::fmt::Debug, ExternalError>) -> Vec<String> {
+    let Err(error) = failed else {
+        panic!("expected the agent's error, got {failed:?}");
+    };
+    let ExternalError::Protocol(message) = &error else {
+        panic!("expected the agent's error, got {error:?}");
+    };
+    let message = message.clone();
+    let converted = oxyn_core::OxynError::from(error.clone());
+    vec![
+        message,
+        format!("{error}"),
+        format!("{error:?}"),
+        format!("{converted}"),
+        format!("{converted:?}"),
+    ]
+}
+
+/// The three markers, and none of the three values, in every channel.
+fn assert_redacted(channels: &[String]) {
+    let [message, ..] = channels else {
+        panic!("no channel to check");
+    };
+    for marker in [
+        "<OPENAI_API_KEY redacted>",
+        "<PIN redacted>",
+        "<tool token redacted>",
+    ] {
+        assert!(message.contains(marker), "{marker} is missing: {message}");
+    }
+    for channel in channels {
+        for value in [KEYCHAIN_WITNESS, SHORT_WITNESS, TOKEN] {
+            assert!(!channel.contains(value), "a value was shown: {channel}");
+        }
+    }
+}
+
+#[test]
+fn an_agent_error_on_session_new_redacts_keychain_and_short_secrets_and_the_token() {
+    let failed = run_failing(Fails::NewSession, leaky_message(), async |session| {
+        session.start().await
+    });
+
+    assert_redacted(&what_the_user_could_read(failed));
+}
+
+#[test]
+fn an_agent_error_on_initialize_is_redacted_too() {
+    let failed = run_failing(Fails::Initialize, leaky_message(), async |session| {
+        session.start().await
+    });
+
+    assert_redacted(&what_the_user_could_read(failed));
+}
+
+#[test]
+fn an_agent_error_on_authenticate_is_redacted_too() {
+    let failed = run_failing(Fails::Authenticate, leaky_message(), async |session| {
+        session.authenticate("chat-gpt").await
+    });
+
+    assert_redacted(&what_the_user_could_read(failed));
+}
+
+#[test]
+fn an_agent_error_on_prompt_is_redacted_too() {
+    let failed = run_failing(Fails::Prompt, leaky_message(), async |session| {
+        session
+            .prompt(
+                &prompt("one"),
+                Arc::new(Seen::default()),
+                &CancelToken::new(),
+            )
+            .await
+    });
+
+    assert_redacted(&what_the_user_could_read(failed));
+}
+
+#[test]
+fn a_secret_straddling_the_message_cut_is_redacted_before_it() {
+    // The secret starts 470 bytes in and ends 30 later: the cut at 480 falls in
+    // the middle of it. Cut first, redact after, and its first ten bytes would
+    // survive as a prefix no redactor can recognise.
+    let message = format!("{}{KEYCHAIN_WITNESS}", "x".repeat(470));
+    assert!(message.len() > MAX_AGENT_MESSAGE, "the message must be cut");
+
+    let failed = run_failing(Fails::NewSession, message, async |session| {
+        session.start().await
+    });
+
+    let Err(ExternalError::Protocol(shown)) = failed else {
+        panic!("expected the agent's error, got {failed:?}");
+    };
+    assert!(shown.ends_with('…'), "the message was not cut: {shown}");
+    assert!(shown.len() <= MAX_AGENT_MESSAGE + '…'.len_utf8(), "{shown}");
+    let prefix = KEYCHAIN_WITNESS
+        .get(..8)
+        .expect("the witness is longer than eight bytes");
+    assert!(
+        !shown.contains(prefix),
+        "the start of the secret survived the cut: {shown}"
+    );
+}
+
+#[test]
+fn an_agent_error_message_never_reaches_the_journal() {
+    // Oxyn logs the method and the code of an agent's error, never its text;
+    // the protocol crate's own lines are capped, as the host caps them.
+    let journal = journal_while(true, || {
+        let failed = run_failing(Fails::NewSession, leaky_message(), async |session| {
+            session.start().await
+        });
+        assert!(
+            matches!(failed, Err(ExternalError::Protocol(_))),
+            "{failed:?}"
+        );
+    });
+
+    assert!(
+        journal.contains("the agent answered a request with an error")
+            && journal.contains("session/new"),
+        "the failure was not exercised, or not logged at all: {journal}"
+    );
+    for value in [KEYCHAIN_WITNESS, SHORT_WITNESS, TOKEN] {
+        assert!(!journal.contains(value), "a value reached the journal");
+    }
 }
 
 /// A conversation with an agent that sends a malformed update quoting the
@@ -1899,8 +2208,14 @@ mod confined {
         };
 
         let (ours, theirs) = Channel::duplex();
-        let (session, driver) =
-            ExternalSession::over_with(ours, private(), None, Some(confinement), Limits::default());
+        let (session, driver) = ExternalSession::over_with(
+            ours,
+            private(),
+            None,
+            Some(confinement),
+            Environment::empty(),
+            Limits::default(),
+        );
         let background = join(driver, wandering(Arc::clone(&said))(theirs));
         let ends = block_on(async move {
             let scenario = pin!(async {

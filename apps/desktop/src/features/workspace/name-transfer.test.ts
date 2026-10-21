@@ -23,6 +23,8 @@ const hostile: CatalogNode = {
   loaded: true,
   stale: false,
   children: [],
+  virtualTable: null,
+  shadowOf: null,
 }
 
 /** An editor under the pointer, as `SqlEditor` registers its zone. */

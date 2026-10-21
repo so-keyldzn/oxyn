@@ -6,10 +6,12 @@
 //! expansion — so a database with fifty thousand relations does not ship them
 //! all to the webview on connect.
 
+use std::collections::HashMap;
+
 use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope};
 use oxyn_core::{Capabilities, CatalogRefreshScope, Command, ConnectionId};
 
-use crate::ipc::{CatalogAddress, CatalogNode, RelationDetail, RelationField};
+use crate::ipc::{CatalogAddress, CatalogNode, RelationDetail, RelationField, VirtualTableMark};
 
 /// The command that loads one level of the tree.
 ///
@@ -82,6 +84,8 @@ pub fn tree(cache: &CatalogCache) -> Vec<CatalogNode> {
                 system: false,
                 comment: catalog.comment.clone(),
                 children,
+                virtual_table: None,
+                shadow_of: None,
             }
         })
         .collect()
@@ -117,21 +121,47 @@ fn namespaces(cache: &CatalogCache, catalog: Option<&str>) -> Vec<CatalogNode> {
                 system: space.is_system,
                 comment: space.comment.clone(),
                 children,
+                virtual_table: None,
+                shadow_of: None,
             }
         })
         .collect()
 }
 
 fn relations(cache: &CatalogCache, parent: &CatalogPath) -> Vec<CatalogNode> {
-    cache
-        .relations(parent)
+    let listed: Vec<_> = cache.relations(parent).collect();
+    // Shadow tables grouped by owner in one pass: looking them up per virtual
+    // table would scan every sibling each time, and a level holds up to
+    // 50,000 objects under the 50 ms expansion budget (PERFORMANCE.md).
+    let mut shadows_of: HashMap<&str, Vec<String>> = HashMap::new();
+    for relation in &listed {
+        if let Some(owner) = relation.shadow_of.as_deref() {
+            shadows_of
+                .entry(owner)
+                .or_default()
+                .push(relation.name().to_owned());
+        }
+    }
+    listed
+        .iter()
         .map(|relation| {
-            CatalogNode::relation(
+            let mut node = CatalogNode::relation(
                 relation.path(),
                 relation.name(),
                 relation.kind,
                 relation.comment.clone(),
-            )
+            );
+            node.shadow_of.clone_from(&relation.shadow_of);
+            node.virtual_table = relation.virtual_table.as_ref().map(|table| {
+                // Its shadow tables are siblings: the Data tab links to them
+                // when the module is missing and they are all that is readable.
+                VirtualTableMark {
+                    module: table.module.clone(),
+                    available: table.available,
+                    shadows: shadows_of.get(relation.name()).cloned().unwrap_or_default(),
+                }
+            });
+            node
         })
         .collect()
 }
@@ -227,6 +257,103 @@ mod tests {
         let node = listed.first().expect("kept after invalidation");
         assert!(node.stale, "an invalidated level is not presented as fresh");
         assert_eq!(node.children.len(), 1, "its data stays until read again");
+    }
+
+    #[test]
+    fn a_virtual_table_crosses_with_its_module_and_its_shadow_tables() {
+        use oxyn_catalog::{RelationKind, RelationRef};
+
+        let mut cache = CatalogCache::new();
+        let main = CatalogPath::for_namespace(None, "main").expect("legal name");
+        cache.set_namespaces(
+            None,
+            vec![oxyn_catalog::NamespaceRef::new(CatalogPath::empty(), "main").expect("legal")],
+        );
+        let table = |name: &str| RelationRef::new(main.clone(), name, RelationKind::Table);
+        cache
+            .set_relations(
+                &main,
+                vec![
+                    table("chunks_vec")
+                        .expect("legal")
+                        .with_virtual_table("vec0", Some(false)),
+                    table("chunks_vec_info")
+                        .expect("legal")
+                        .with_shadow_of("chunks_vec"),
+                    table("chunks_vec_rowids")
+                        .expect("legal")
+                        .with_shadow_of("chunks_vec"),
+                    table("chunks").expect("legal"),
+                ],
+            )
+            .expect("a namespace");
+
+        let listed = tree(&cache);
+        let relations = &listed.first().expect("main").children;
+        let node = |name: &str| {
+            relations
+                .iter()
+                .find(|node| node.name == name)
+                .expect("listed")
+        };
+        let mark = node("chunks_vec").virtual_table.as_ref().expect("virtual");
+        assert_eq!(mark.module, "vec0");
+        assert_eq!(mark.available, Some(false));
+        assert_eq!(mark.shadows, ["chunks_vec_info", "chunks_vec_rowids"]);
+        assert_eq!(
+            node("chunks_vec_info").shadow_of.as_deref(),
+            Some("chunks_vec")
+        );
+        assert!(node("chunks").virtual_table.is_none() && node("chunks").shadow_of.is_none());
+    }
+
+    #[test]
+    fn shadow_tables_are_grouped_in_one_pass_at_the_object_bound() {
+        use oxyn_catalog::{RelationKind, RelationRef};
+
+        // 25,000 virtual tables and their 25,000 shadow tables: the 50,000
+        // objects a level may hold. One scan of the siblings per virtual
+        // table is 1.25 billion comparisons, seconds; grouped once, a blink.
+        const PAIRS: usize = 25_000;
+        let mut cache = CatalogCache::new();
+        let main = CatalogPath::for_namespace(None, "main").expect("legal name");
+        cache.set_namespaces(
+            None,
+            vec![oxyn_catalog::NamespaceRef::new(CatalogPath::empty(), "main").expect("legal")],
+        );
+        let mut listed = Vec::with_capacity(PAIRS * 2);
+        for index in 0..PAIRS {
+            let owner = format!("v{index:05}");
+            listed.push(
+                RelationRef::new(main.clone(), owner.as_str(), RelationKind::Table)
+                    .expect("legal")
+                    .with_virtual_table("fts5", Some(true)),
+            );
+            listed.push(
+                RelationRef::new(main.clone(), format!("{owner}_data"), RelationKind::Table)
+                    .expect("legal")
+                    .with_shadow_of(owner),
+            );
+        }
+        cache.set_relations(&main, listed).expect("a namespace");
+
+        let started = std::time::Instant::now();
+        let built = tree(&cache);
+        let elapsed = started.elapsed();
+
+        let relations = &built.first().expect("main").children;
+        assert_eq!(relations.len(), PAIRS * 2);
+        for node in relations {
+            if let Some(mark) = &node.virtual_table {
+                assert_eq!(mark.shadows, [format!("{}_data", node.name)]);
+            }
+        }
+        // Generous on purpose — a debug build on a loaded CI runner — yet far
+        // under what the quadratic scan takes at this size.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "building the level took {elapsed:?}"
+        );
     }
 
     #[test]

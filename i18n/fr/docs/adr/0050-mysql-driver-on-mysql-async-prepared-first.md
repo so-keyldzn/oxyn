@@ -1,11 +1,12 @@
-<!-- oxyn-translation source="docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md" sha256="65ce22b0ccb2" -->
+<!-- oxyn-translation source="docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md" sha256="79bfa8982c92" -->
 
 > Traduction française de [docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md](../../../../docs/adr/0050-mysql-driver-on-mysql-async-prepared-first.md). **La version anglaise fait foi.**
 
 # ADR-0050 — Le driver MySQL repose sur `mysql_async`, prépare d'abord chaque instruction, et décode tout type que le serveur envoie
 
 **Statut :** accepté · **Date :** 2026-09-30 · **Amendé :** 2026-09-30 (point 7, avant
-l'acceptation), 2026-10-02 (point 7, issue #139)
+l'acceptation), 2026-10-02 (point 7, issue #139), 2026-10-20 (point 7, issue #222 ;
+point 3, issue #223)
 
 ## Contexte
 
@@ -124,6 +125,29 @@ l'Arrow. Vérifié le 2026-09-30 ([RESEARCH-NOTES](../RESEARCH-NOTES.md)) :
    serveur testé :
    `CREATE TRIGGER x BEFORE INSERT ON t FOR EACH ROW SET @a = 1; DROP TABLE t`
    fait échouer la préparation avec 1064, pas 1295.
+
+   *Amendé le 2026-10-20 (issue #223) :* un `USE` tapé ne prend plus ce
+   chemin. Le driver le refuse, pour tout acteur, sur MySQL comme sur MariaDB,
+   avant que rien ne parte vers le serveur. Le contrôle passe avant la
+   préparation : MariaDB prépare `USE` (contexte), si bien qu'un refus placé
+   après la préparation viendrait quand l'instruction a déjà atteint le serveur.
+   Il lit chaque instruction du texte, donc `SELECT 1; USE x` est refusé en
+   entier, et le corps d'un commentaire exécutable aussi : le serveur exécute ce
+   que contiennent `/*!50000 … */` et le `/*M!100000 … */` de MariaDB, si bien
+   qu'`oxyn-query` le lit comme du code pour ce dialecte et que
+   `/*!50000 USE x */` est refusé comme un `USE x` nu
+   ([RESEARCH-NOTES](../RESEARCH-NOTES.md), à la section sur les littéraux de
+   mot de passe SQL, qui consigne les deux formes de commentaire). Le
+   `/*!40101 SET … */` d'un dump n'est pas refusé : seul un `USE` en tête l'est.
+   Le refus est `NotSupported` et renvoie au sélecteur de contexte,
+   c'est-à-dire `Session::set_context`
+   ([ADR-0019](0019-contexte-de-session.md), qui porte la raison : la session
+   possède sa base). Le `USE` que `set_context` et la reconnexion composent
+   eux-mêmes n'est pas un `USE` tapé et n'est pas refusé. Le repli 1295 est
+   inchangé pour `START TRANSACTION`, `CREATE PROCEDURE` et leurs semblables.
+   **À reconsidérer si** un `USE` tapé reçoit un chemin déclaré dans la
+   session, qui consignerait la base qu'il sélectionne comme le fait
+   `set_context` : le refus ne serait alors plus nécessaire.
 4. **`oxyn-query` apprend MySQL avant que le driver parte.** Son scanner MySQL
    garde en un seul fragment un corps `BEGIN … END` dans `CREATE PROCEDURE`,
    `FUNCTION`, `TRIGGER` et `EVENT`, et honore une ligne `DELIMITER` comme le
@@ -174,6 +198,52 @@ l'Arrow. Vérifié le 2026-09-30 ([RESEARCH-NOTES](../RESEARCH-NOTES.md)) :
    signaler. Une écriture arrêtée par un kill auquel le serveur n'a pas
    répondu sur cette instruction même se termine sur `OutcomeUnknown`, pas
    `Cancelled` : elle a pu aller à son terme et valider.
+
+   *Amendé le 2026-10-20 (issue #222) :* un 1317 prouve que le kill a été
+   consommé, ce qui permet à la connexion de survivre, pas que l'instruction n'a
+   rien laissé ; et `Cancelled` se lit « rien n'a été appliqué », ce qui invite
+   à relancer l'écriture ([I-13](../../../../CLAUDE.md#i-13)). Une instruction
+   arrêtée qui est partie et a pu écrire ne se termine donc jamais sur
+   `Cancelled`, un kill confirmé par un 1317 sur cette instruction même compris :
+   elle se termine sur `OutcomeUnknown`. Cela couvre une écriture, en autocommit
+   ou dans une transaction explicite, tout `CALL` quelle que soit son intention
+   déclarée, un DDL, un changement de droits et une instruction d'intention
+   indéterminée. Son message fixe dit qu'une table non transactionnelle garde
+   les lignes modifiées avant l'interruption et qu'une procédure garde ce
+   qu'elle a déjà validé. Un arrêt décidé avant l'envoi de l'instruction, et une
+   instruction qui ne peut pas avoir écrit — une lecture qui n'est pas un
+   `CALL` —, se terminent toujours sur `Cancelled`.
+
+   Pourquoi. La page du manuel de MySQL 8.4 sur `KILL` dit « If you are not
+   using transactions, the changes are not rolled back » (consultée le
+   2026-10-11 pour l'audit à l'origine de l'issue #222). Le driver applique la même règle à MariaDB, servi par la même
+   crate (point 1) : une règle qui ne fait que renoncer à un `Cancelled` n'a pas
+   besoin d'une seconde source. Le driver ne lit pas le corps d'une procédure,
+   si bien que ce qu'elle a validé avant le kill lui est inconnu. Et le moteur
+   des tables qu'une instruction touche n'est pas connu du curseur : le trouver
+   reviendrait à composer des requêtes de schéma à partir des identifiants que
+   l'instruction nomme ([I-10](../../../../CLAUDE.md#i-10)), et une clé
+   étrangère, un déclencheur ou une vue atteignent des tables que l'instruction
+   ne nomme pas.
+
+   Une transaction ouverte n'y change rien. `SERVER_STATUS_IN_TRANS` (point 8 et
+   [ADR-0039](0039-etat-de-transaction-d-une-session.md)) dit qu'une
+   transaction est ouverte, pas sur quel moteur sont les tables que
+   l'instruction a touchées : une table non transactionnelle écrite après
+   `START TRANSACTION` n'est pas annulée par le kill, si bien que le drapeau ne
+   peut pas tenir lieu de la preuve que le verdict exige. Ce n'est pas une
+   entrée du verdict.
+
+   Coût, écrit noir sur blanc. Une écriture interrompue sur un moteur
+   transactionnel, que le serveur annule bel et bien, est `OutcomeUnknown` elle
+   aussi, en autocommit comme dans une transaction : le driver ne peut pas la
+   distinguer d'une écriture sur une table non transactionnelle. Une perte de
+   précision délibérée, qui coûte à l'utilisateur un coup d'œil aux données, pas
+   un doublon. **À reconsidérer si** le curseur peut apprendre le moteur de
+   chaque table qu'une instruction touche à bon compte et sans composer de SQL à
+   partir d'identifiants reçus : une écriture unique hors `CALL` sur des moteurs
+   transactionnels seulement pourrait alors se terminer sur `Cancelled` après un
+   1317.
 8. **L'état de transaction**
    ([ADR-0039](0039-etat-de-transaction-d-une-session.md)) est lu dans
    `SERVER_STATUS_IN_TRANS` après chaque instruction — le serveur le dit, le
@@ -231,7 +301,9 @@ l'Arrow. Vérifié le 2026-09-30 ([RESEARCH-NOTES](../RESEARCH-NOTES.md)) :
   `START TRANSACTION`, `LOCK TABLES` —, seul le découpage d'`oxyn-query`
   protège contre une seconde instruction cachée. Le point 4 ajoute un travail
   sur le scanner dont le driver dépend, et un découpage en désaccord avec le
-  serveur reste possible en général.
+  serveur reste possible en général. *Amendé le 2026-10-20 (issue #223) :*
+  `USE` sort de cette liste, puisque le driver le refuse avant que rien ne
+  parte (point 3).
 * **−** Un aller-retour de plus par instruction (préparation, exécution,
   fermeture) : sur un serveur à 50 ms, environ 100 ms avant la première ligne,
   à mesurer contre le budget [PERFORMANCE](../PERFORMANCE.md) plutôt que
@@ -277,7 +349,7 @@ budget du premier lot sur un serveur distant mesuré.
 |---|---|
 | `sqlx-mysql` 0.9.0, déjà dans le workspace | fait échouer tout le résultat sur une colonne `VECTOR`, perd l'échelle des `DECIMAL`, ne sait pas authentifier `client_ed25519`/`parsec` de MariaDB, et exige sans TLS un `rsa` en release candidate sous un avis sans correctif. Une bibliothèque pour trois drivers ne pèse pas plus lourd qu'un `SELECT *` qui échoue |
 | Protocole texte pour tout, gardé par le seul découpage d'`oxyn-query` | la seule défense contre les multi-instructions serait côté client, sur le chemin que prend l'IA ([I-07](../../../../CLAUDE.md#i-07)) ; la préparation donne une preuve côté serveur pour la plupart des instructions |
-| Préparation seule, en refusant ce que MySQL ne sait pas préparer | un client qui ne peut pas exécuter `START TRANSACTION`, `USE` ou `CREATE PROCEDURE` n'est pas un client MySQL |
+| Préparation seule, en refusant ce que MySQL ne sait pas préparer | un client qui ne peut pas exécuter `START TRANSACTION`, `USE` ou `CREATE PROCEDURE` n'est pas un client MySQL. *Amendé le 2026-10-20 (issue #223) :* un `USE` tapé est refusé quand même, pour une autre raison que la préparation : la session possède sa base et le sélecteur de contexte la change (point 3) |
 | `DECIMAL` en `Utf8`, comme le driver PostgreSQL pour `numeric` | MySQL envoie précision et échelle avec chaque colonne ; le texte renoncerait pour rien au tri et à l'export typés |
 | Les dates nulles en `NULL` ou à l'epoch | invente des données ; le driver PostgreSQL refuse `infinity` pour la même raison |
 | Écrire notre propre implémentation du protocole MySQL | un protocole, plusieurs plugins d'authentification et une intégration TLS à maintenir seuls |

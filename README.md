@@ -26,6 +26,10 @@ Explore the [screenshot gallery and demo videos](assets/demo/README.md):
 Recorded in **Oxyn 0.0.3 for macOS** with a temporary workspace and
 [reproducible synthetic data](assets/demo/seed.sql).
 
+For a guided tour, watch the [46-second overview](assets/demo/videos/motion/overview.mp4)
+and the [animated walkthroughs](assets/demo/README.md#animated-walkthroughs), one
+per feature — rebuilt from the interface components, not screen recordings.
+
 ## What the repository contains
 
 15 crates in a single Cargo workspace: `crates/` for the core, the interface and

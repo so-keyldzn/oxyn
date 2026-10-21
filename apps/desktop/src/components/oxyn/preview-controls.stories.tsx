@@ -90,6 +90,7 @@ export const RefusedFilter: Story = {
   args: {
     status: "failed",
     applied: { ...PLAIN_SHAPE, predicate: "id >< 3" },
+    reshaped: true,
     pagination: { type: "ready", previous: false, next: true, firstRow: 1 },
   },
   play: async ({ canvas }) => {
@@ -97,6 +98,23 @@ export const RefusedFilter: Story = {
       /This read was refused/
     )
     await expect(canvas.queryByRole("button", { name: /Next page/ })).toBeNull()
+  },
+}
+
+/**
+ * The first read of the table failed: there was no previous shape, so nothing
+ * claims one was dropped — the failure below the bar says it all.
+ */
+export const FirstReadFailed: Story = {
+  args: {
+    status: "failed",
+    applied: PLAIN_SHAPE,
+    reshaped: false,
+    pagination: null,
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByRole("status")).toBeNull()
+    await expect(canvas.queryByText(/previous shape/)).toBeNull()
   },
 }
 

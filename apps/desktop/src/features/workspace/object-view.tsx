@@ -22,6 +22,10 @@ import {
 } from "@/components/oxyn/relation-definition"
 import { RelationIndexes } from "@/components/oxyn/relation-indexes"
 import { IncomingKeys, OutgoingKeys } from "@/components/oxyn/relation-keys"
+import {
+  MissingModuleNotice,
+  missingModuleSubject,
+} from "@/components/oxyn/missing-module-notice"
 import { operationOffer } from "@/components/oxyn/object-operations"
 import { RelationStructure } from "@/components/oxyn/relation-structure"
 import { RestoredObjectNotice } from "@/components/oxyn/restored-object-notice"
@@ -233,6 +237,28 @@ export function ObjectView({
 
   const data = facets.facets
   const state = preview.state
+  // While the last read failed for a missing module, nothing offers another:
+  // Refresh, Apply, Sort and the pages would all fail the same way (UX-SPEC).
+  // A read on a new session — the connection reopened with the module
+  // enabled — replaces this state, and the controls come back with it.
+  const moduleMissing =
+    state.status === "error" && state.missingModule ? state.missingModule : null
+  // A read that failed because the connection lacks the engine module the
+  // table needs: explained rather than shown raw (docs/UX-SPEC.md). Only that
+  // failure, as the backend names it — any other is shown as it came.
+  const explainMissing = (module: string, message: string) => (
+    <MissingModuleNotice
+      module={module}
+      // A view reading such a table is not the table: no storage is claimed.
+      subject={missingModuleSubject(node, module)}
+      message={message}
+      onOpenShadow={
+        onOpenRelated
+          ? (name) => onOpenRelated({ ...node.address, relation: name })
+          : undefined
+      }
+    />
+  )
   const result = state.status === "populated" ? state.result : null
   const shownResult =
     state.status === "populated"
@@ -349,7 +375,7 @@ export function ObjectView({
         onWidthChange: onDefinitionWidthChange,
       }}
       toolbar={
-        tab === "data" && previewable ? (
+        tab === "data" && previewable && !moduleMissing ? (
           <PreviewToolbar
             running={preview.running}
             cancelling={preview.cancelling}
@@ -388,23 +414,26 @@ export function ObjectView({
       panels={{
         data: previewable ? (
           <>
-            <PreviewControls
-              canFilter={open.capabilities.includes("PREVIEW_FILTER")}
-              canSort={open.capabilities.includes("PREVIEW_SORT")}
-              columns={
-                data?.detail.value?.fields.map((field) => field.name) ?? null
-              }
-              applied={preview.applied}
-              status={preview.status}
-              pagination={preview.pagination}
-              loadingColumns={detailLoad.status === "loading"}
-              onApplyPredicate={preview.applyPredicate}
-              onApplySort={preview.applySort}
-              onPage={preview.page}
-              onCancel={preview.cancel}
-              onLoadColumns={() => void facets.refresh("detail")}
-              filterRef={filterRef}
-            />
+            {moduleMissing ? null : (
+              <PreviewControls
+                canFilter={open.capabilities.includes("PREVIEW_FILTER")}
+                canSort={open.capabilities.includes("PREVIEW_SORT")}
+                columns={
+                  data?.detail.value?.fields.map((field) => field.name) ?? null
+                }
+                applied={preview.applied}
+                reshaped={preview.reshaped}
+                status={preview.status}
+                pagination={preview.pagination}
+                loadingColumns={detailLoad.status === "loading"}
+                onApplyPredicate={preview.applyPredicate}
+                onApplySort={preview.applySort}
+                onPage={preview.page}
+                onCancel={preview.cancel}
+                onLoadColumns={() => void facets.refresh("detail")}
+                filterRef={filterRef}
+              />
+            )}
             {preview.approvalRefused ? (
               <Alert className="rounded-none border-x-0 border-t-0 py-2">
                 <AlertTitle>Preview not read</AlertTitle>
@@ -415,86 +444,95 @@ export function ObjectView({
               </Alert>
             ) : null}
             <div className="min-h-0 flex-1">
-              <ResultPanel
-                state={state}
-                initialHint="Refresh data reads the first rows of this object."
-                fetchPage={fetchPage}
-                onCancel={preview.cancel}
-                onRetry={preview.refresh}
-                context={{ connectionName: open.name, statement: null }}
-                footerNote="Preview · total row count not requested"
-                density={density}
-                gridMenu={gridMenu}
-                // Compact: the export sits in `Actions`, and the footer shows
-                // only a running export's progress and its Cancel.
-                footerActions={
-                  !compact || exporter.state.status === "exporting"
-                    ? exportMenu
-                    : null
-                }
-                compactActions={
-                  compact ? (
-                    <>
-                      <ExportSubmenu
-                        {...exportChoice}
-                        exporting={exporter.state.status === "exporting"}
-                        onExport={exporter.run}
-                      />
-                      <DropdownMenuItem
-                        disabled={!selected || !onInspectRow}
-                        onClick={onInspectRow}
-                      >
-                        <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
-                        Inspect row
-                      </DropdownMenuItem>
-                    </>
-                  ) : undefined
-                }
-                {...gridInspection({
-                  source,
-                  open,
-                  result,
-                  columns: state.status === "populated" ? state.columns : [],
-                })}
-              />
+              {moduleMissing && state.status === "error" ? (
+                explainMissing(moduleMissing, state.message)
+              ) : (
+                <ResultPanel
+                  state={state}
+                  initialHint="Refresh data reads the first rows of this object."
+                  fetchPage={fetchPage}
+                  onCancel={preview.cancel}
+                  onRetry={preview.refresh}
+                  context={{ connectionName: open.name, statement: null }}
+                  footerNote="Preview · total row count not requested"
+                  density={density}
+                  gridMenu={gridMenu}
+                  // Compact: the export sits in `Actions`, and the footer shows
+                  // only a running export's progress and its Cancel.
+                  footerActions={
+                    !compact || exporter.state.status === "exporting"
+                      ? exportMenu
+                      : null
+                  }
+                  compactActions={
+                    compact ? (
+                      <>
+                        <ExportSubmenu
+                          {...exportChoice}
+                          exporting={exporter.state.status === "exporting"}
+                          onExport={exporter.run}
+                        />
+                        <DropdownMenuItem
+                          disabled={!selected || !onInspectRow}
+                          onClick={onInspectRow}
+                        >
+                          <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+                          Inspect row
+                        </DropdownMenuItem>
+                      </>
+                    ) : undefined
+                  }
+                  {...gridInspection({
+                    source,
+                    open,
+                    result,
+                    columns: state.status === "populated" ? state.columns : [],
+                  })}
+                />
+              )}
             </div>
             <ValueInspectionDialog source={source} />
           </>
         ) : null,
 
-        structure: data ? (
-          <FacetFrame
-            label="columns"
-            freshness={data.detail.freshness}
-            load={detailLoad}
-            unsupported={null}
-            hasValue={data.detail.value !== null}
-            empty={data.detail.value?.fields.length === 0}
-            emptyText="No columns reported for this object."
-            onRefresh={() => void facets.refresh("detail")}
-            onCancel={() => facets.cancel("detail")}
-          >
+        structure:
+          detailLoad.status === "error" && detailLoad.missingModule ? (
+            explainMissing(detailLoad.missingModule, detailLoad.message)
+          ) : data ? (
+            <FacetFrame
+              label="columns"
+              freshness={data.detail.freshness}
+              load={detailLoad}
+              unsupported={null}
+              hasValue={data.detail.value !== null}
+              empty={data.detail.value?.fields.length === 0}
+              emptyText="No columns reported for this object."
+              onRefresh={() => void facets.refresh("detail")}
+              onCancel={() => facets.cancel("detail")}
+            >
+              <RelationStructure
+                detail={data.detail.value}
+                renameColumn={{
+                  offer: operationOffer("rename", node, open.capabilities),
+                  onRename: (column) =>
+                    columnOperation.start(node, "rename", column),
+                }}
+              />
+              {/* Modal while open: no tab change can unmount it mid-review. */}
+              {columnOperation.element}
+            </FacetFrame>
+          ) : (
             <RelationStructure
-              detail={data.detail.value}
-              renameColumn={{
-                offer: operationOffer("rename", node, open.capabilities),
-                onRename: (column) =>
-                  columnOperation.start(node, "rename", column),
-              }}
+              detail={undefined}
+              error={
+                facets.error
+                  ? { message: facets.error, retryable: false }
+                  : null
+              }
+              onRefresh={() => void facets.refresh("detail")}
+              refreshing={detailLoad.status === "loading"}
             />
-            {/* Modal while open: no tab change can unmount it mid-review. */}
-            {columnOperation.element}
-          </FacetFrame>
-        ) : (
-          <RelationStructure
-            detail={undefined}
-            error={
-              facets.error ? { message: facets.error, retryable: false } : null
-            }
-            onRefresh={() => void facets.refresh("detail")}
-            refreshing={detailLoad.status === "loading"}
-          />
-        ),
+          ),
 
         indexes: data ? (
           <FacetFrame

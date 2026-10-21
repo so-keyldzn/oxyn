@@ -109,6 +109,8 @@ export function useRelationFacets(
           status: "error",
           message:
             error instanceof BackendError ? error.message : String(error),
+          missingModule:
+            error instanceof BackendError ? error.missingModule : null,
         }
       }
       if (running.current[facet] !== id) return

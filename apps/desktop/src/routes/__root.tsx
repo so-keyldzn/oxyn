@@ -8,9 +8,6 @@ import {
   createRootRouteWithContext,
 } from "@tanstack/react-router"
 import { useStore } from "@tanstack/react-store"
-import { TanStackDevtools } from "@tanstack/react-devtools"
-import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools"
-import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 
 import { Toaster } from "@/components/ui/toast"
 import { ActionOverlays } from "@/features/actions/action-overlays"
@@ -20,6 +17,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { subscribeToShutdown } from "@/features/consoles/draft-registry"
 import { useFileDrops } from "@/features/file-drops/use-file-drops"
 import { ProviderSettings } from "@/features/assistant/provider-settings"
+import { SemanticRankingSection } from "@/features/assistant/semantic-ranking-section"
 import { ExitTransactionsHost } from "@/features/recovery/exit-transactions-host"
 import { refreshConnection, session } from "@/features/session"
 import {
@@ -61,9 +59,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 // connection (ADR-0023).
 const AI_SECTIONS = [
   { id: "ai", label: "AI providers", content: <ProviderSettings /> },
+  // A workspace preference whose model is the computer's (ADR-0056).
+  {
+    id: "semantic-ranking",
+    label: "Semantic ranking",
+    content: <SemanticRankingSection />,
+  },
 ]
 
 const noSubscription = () => () => undefined
+
+// `import.meta.env.DEV` is a constant at build time: in a production build the
+// dynamic import is dead code, and the devtools — router state, query cache —
+// never reach the shipped bundle.
+const Devtools = import.meta.env.DEV
+  ? React.lazy(() => import("@/features/devtools/tanstack-devtools"))
+  : null
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext()
@@ -137,13 +148,11 @@ function RootComponent() {
           </Toaster>
         </PreferredNullText>
       </TooltipProvider>
-      <TanStackDevtools
-        config={{ position: "bottom-left", hideUntilHover: true }}
-        plugins={[
-          { name: "TanStack Router", render: <TanStackRouterDevtoolsPanel /> },
-          { name: "TanStack Query", render: <ReactQueryDevtoolsPanel /> },
-        ]}
-      />
+      {Devtools && (
+        <React.Suspense fallback={null}>
+          <Devtools />
+        </React.Suspense>
+      )}
     </QueryClientProvider>
   )
 }

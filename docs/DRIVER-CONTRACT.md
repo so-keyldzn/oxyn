@@ -80,6 +80,19 @@ user's data, without any error message anywhere. It is the most expensive case,
 and the most tempting to handle with a simple retry loop:
 ambiguity is not retried.
 
+**A stopped write is not a cancelled write until the server proves it.** A Stop,
+a closed tab or a kill that reaches a write does not say what the statement left
+behind: it may have committed an instant before, a procedure keeps what it
+already committed, a non-transactional table keeps the rows it changed, and a
+batch keeps the statements that ran before the one interrupted. `Cancelled`
+means that **nothing was applied**, and the interface reads it that way, so a
+driver answers it with proof — the server's own interruption error on a
+statement it undoes as a whole, or a write that was never sent — and answers
+`OutcomeUnknown` otherwise. A failure after an earlier statement of a batch
+applied is never transient: replaying the batch would apply that statement
+twice. What counts as proof for each protocol is written in
+[ARCHITECTURE](ARCHITECTURE.md), where the executor's verdict is.
+
 **An unknown column is a permanent refusal, even when pronounced before sending.**
 A preview column that the relation does not declare — in projection as in
 sort, see [§6](#6-it-escapes-every-identifier-it-composes) — is returned as
@@ -220,5 +233,6 @@ The procedure is in [`/driver`](../.claude/commands/driver.md) and the review in
 [the checklist](../.claude/checklists/revue-driver.md). In short: the
 capability declaration, the type mapping table **in both
 directions** with the documented loss cases, the error classification, a cancellation
-test that proves the stop on the server side, and a streaming test on a volume
+test that proves the stop on the server side, a test of the verdict a stopped
+write gets (`Cancelled` only with proof), and a streaming test on a volume
 that would not fit in memory.

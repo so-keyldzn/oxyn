@@ -34,6 +34,11 @@
 //! [`OxynError::OutcomeUnknown`] — never a cancellation the engine did not
 //! report ([I-13](../../../CLAUDE.md#i-13)).
 //!
+//! The same goes for a read that ends a batch whose earlier statements already
+//! applied (`INSERT …; SELECT …`): a cancellation would claim that nothing
+//! changed. The cursor then waits for the worker thread's verdict as it does for
+//! a write, and a Stop at rest says that the earlier statements were applied.
+//!
 //! # After a cancellation, the cursor does not resume
 //!
 //! An interrupted statement leaves the engine at a point nothing allows resuming
@@ -68,6 +73,10 @@ pub struct SqliteCursor {
     work: WorkId,
     /// What the statement could do: decides what a Stop may claim.
     effect: Effect,
+    /// An earlier statement of the batch ran to its end and could write: a Stop
+    /// can then claim neither a cancellation nor a transient failure, whatever
+    /// the streamed statement does.
+    applied: bool,
     cancel: CancelToken,
     stats: ExecStats,
     started: Instant,
@@ -114,6 +123,7 @@ impl SqliteCursor {
             worker,
             work,
             effect: start.effect,
+            applied: start.applied,
             cancel,
             stats,
             started,
@@ -163,15 +173,20 @@ impl SqliteCursor {
     /// not in `sqlite3_step`. Setting the interruption flag on an engine at rest
     /// would cancel nothing and could land on the next statement.
     ///
-    /// A read is cancelled. A write is not known to be: its statement is still
-    /// open, after a first step that may already have applied it, and what
-    /// releasing it keeps is not established here.
+    /// A read is cancelled, unless an earlier statement of its batch applied: it
+    /// then says so, because "cancelled" would claim the batch changed nothing.
+    /// A write is not known to be cancelled: its statement is still open, after a
+    /// first step that may already have applied it, and what releasing it keeps
+    /// is not established here.
     fn abort(&mut self) -> OxynError {
         self.close(true);
-        match self.effect {
+        let stopped = match self.effect {
             Effect::ReadOnly => OxynError::Cancelled,
             Effect::Mutating => stopped_write(),
-        }
+        };
+        // An ambiguous write stays ambiguous through this: `after_applied` only
+        // lowers transient and cancelled.
+        error::after_applied_if(self.applied, stopped)
     }
 }
 
@@ -214,12 +229,16 @@ impl Cursor for SqliteCursor {
         // The token is cloned: the wait borrows it, and `self` is already
         // mutably borrowed. From here on, the worker thread may be in
         // `sqlite3_step`: if this future is abandoned, the wait interrupts the
-        // stream's task. A read lets go at the Stop; a write waits for what the
-        // engine says of it.
+        // stream's task. A read lets go at the Stop — `await_reply` answers a bare
+        // cancellation; a write waits for what the engine says of it. So does a
+        // read whose batch already applied a statement: the worker's reply is
+        // wrapped there, and `await_verdict` keeps it from being replaced by a
+        // cancellation.
         let cancel = self.cancel.clone();
-        let pulled = match self.effect {
-            Effect::ReadOnly => self.worker.await_reply(answer, &cancel, self.work).await,
-            Effect::Mutating => self.worker.await_verdict(answer, &cancel, self.work).await,
+        let pulled = if self.effect == Effect::Mutating || self.applied {
+            self.worker.await_verdict(answer, &cancel, self.work).await
+        } else {
+            self.worker.await_reply(answer, &cancel, self.work).await
         };
 
         match pulled {

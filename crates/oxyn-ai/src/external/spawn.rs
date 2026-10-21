@@ -223,7 +223,14 @@ impl Environment {
 /// prints its own environment, and an agent that crashes may echo what it was
 /// given. The only secrets it could hold are the ones we passed, so those are
 /// what disappear.
-fn redact(text: &str, environment: &Environment) -> String {
+///
+/// This is **the** redactor for everything an agent says: its `stderr` tail and
+/// every error message it sends over the protocol (`super::session` runs each
+/// one through it before cutting it). Two redactors would disagree the day one
+/// learns a rule the other does not — a keychain value shown by the channel
+/// nobody updated. A value shorter than `MIN_REDACTED_CHARS` is replaced only
+/// when its name is a declared secret, and the longest values go first.
+pub(super) fn redact(text: &str, environment: &Environment) -> String {
     let mut clean = text.to_owned();
     let mut values: Vec<_> = environment
         .pairs()

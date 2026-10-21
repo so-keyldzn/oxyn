@@ -4,9 +4,12 @@
 # It covers two things no other step looks at: published security advisories
 # (RUSTSEC) and licenses.
 #
-# The `make deny` target warns without blocking when `cargo-deny` is not
-# installed. A gate that fails on a missing tool ends up bypassed, and then the
-# whole check disappears.
+# Without `cargo-deny` installed, the `make deny` target fails when the `CI`
+# variable is set ("cargo-deny is required in CI; dependency checks did NOT
+# run.") and only prints an explicit warning on a local clone. CI installs the
+# pinned binary, so a missing installation there must fail rather than turn the
+# dependency check into a no-op; a local clone without the optional tool is
+# not blocked.
 
 [advisories]
 # An advisory published on a dependency is an error: that is the point of the
@@ -25,12 +28,44 @@ unsound = "all"
 # Every entry carries its reason: an advisory ignored without a written reason
 # becomes a forgotten advisory. Reviewing it is the job of `/versions`.
 ignore = [
-    # `glib::VariantStrIter` can produce a dangling reference. The chain is
-    # `tauri` → `gtk 0.18` → `atk` → `glib 0.18`, on Linux only: the fix is in
-    # `glib 0.20`, which `gtk 0.18` refuses. Nothing to bump here until Tauri
-    # changes GTK, and nothing compiled on macOS, the only target shipped today.
-    # Oxyn does not call this iterator.
-    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 via Tauri's gtk 0.18; fixed in 0.20, which gtk 0.18 refuses; Linux code, not compiled for the shipped target" },
+    # RUSTSEC-2024-0429, "unsound", reviewed on 2026-10-20 (advisory text read
+    # in the local advisory-db checkout, HEAD of 2026-10-08).
+    #
+    # The defect: `glib::VariantStrIter::{next, nth, last, next_back, nth_back}`
+    # in `glib` >= 0.15.0, < 0.20.0. `impl_get` passes `&p`, a reference to a
+    # null `*mut c_char`, to `g_variant_get_child`, a C function that writes
+    # through it; the compiler may disregard that write, and `CStr::from_ptr`
+    # then receives NULL: a NULL-dereference crash (`glib 0.18.5`,
+    # `src/variant_iter.rs`: `&p` at line 126, `CStr::from_ptr` at line 129).
+    #
+    # The code IS shipped. `glib 0.18.5` is the only `glib` in `Cargo.lock`, and
+    # it is compiled into the Linux packages: x86_64 and aarch64, deb, rpm and
+    # AppImage (job `paquets` of `.github/workflows/livraison.yml`). The chain
+    # is `tauri` → `muda`, `tao`, `wry` → `gtk 0.18` → `atk` → `glib 0.18`;
+    # `gdk`, `gio`, `pango` and `webkit2gtk` pull it too. macOS does not
+    # compile it: `cargo tree -i glib@0.18.5 -e normal,build` prints nothing
+    # for the two apple-darwin targets. The fix is in `glib 0.20`, which
+    # `gtk 0.18` refuses (`glib = "0.18"`): nothing to bump until Tauri moves
+    # to another GTK.
+    #
+    # Why the entry stands: the five methods are unreachable.
+    # `Variant::array_iter_str` (`src/variant.rs`, lines 843-855) is the only
+    # function that builds a `VariantStrIter`, because `VariantStrIter::new` is
+    # `pub(crate)` (`src/variant_iter.rs`, line 109); every other call site is
+    # under `#[cfg(test)]` (`variant.rs:2191`, `variant_iter.rs:203`). On
+    # 2026-10-20, none of the 634 external crates of the two Linux dependency
+    # graphs (`-e normal,build`, x86_64 and aarch64) other than `glib` itself,
+    # and nothing in `crates/`, `drivers/` or `apps/`, calls `array_iter_str`
+    # or names `VariantStrIter`.
+    #
+    # Re-check at every bump of `tauri`, `gtk`, `wry`, `muda`, `tao` or
+    # `webkit2gtk`: list the crates with
+    #   cargo tree --offline -p oxyn-desktop --target <t> -e normal,build --prefix none
+    # for <t> = x86_64-unknown-linux-gnu and aarch64-unknown-linux-gnu, then
+    # grep their registry sources for `array_iter_str` and `VariantStrIter`.
+    # Only `glib` itself may match. Drop this entry once the chain reaches
+    # `glib` >= 0.20.
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 via Tauri's gtk 0.18, compiled into the Linux packages; fixed in 0.20, which gtk 0.18 refuses; VariantStrIter unreachable: nothing calls Variant::array_iter_str (checked 2026-10-20)" },
 ]
 
 [licenses]

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { postgresDriver } from "@/components/oxyn/fixtures"
+import { postgresDriver, sqliteDriver } from "@/components/oxyn/fixtures"
 import { duplicatePrefill } from "@/features/connections/duplicate-connection"
 import type { ConnectionDetails } from "@/lib/ipc/settings"
 
@@ -48,5 +48,17 @@ describe("duplicatePrefill", () => {
     // A copy starts as a new connection: production, default tier (I-02).
     expect(prefill).not.toHaveProperty("environment")
     expect(prefill).not.toHaveProperty("privacyTier")
+  })
+
+  it("does not carry the sqlite-vec switch (ADR-0054)", () => {
+    const vectors = {
+      ...source,
+      name: "semantiq",
+      driver: "sqlite",
+      values: { path: "/data/semantiq.sqlite", sqlite_vec: "true" },
+    } as ConnectionDetails
+    expect(duplicatePrefill(sqliteDriver, vectors).values).toEqual({
+      path: "/data/semantiq.sqlite",
+    })
   })
 })

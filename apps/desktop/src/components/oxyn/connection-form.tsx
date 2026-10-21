@@ -47,14 +47,22 @@ export interface FormValues {
 /**
  * What a new connection starts from when it copies another (`Duplicate`):
  * its name and its declared non-secret parameters. Never a secret, and
- * neither the environment nor the privacy tier — a copy is a new connection,
- * and starts as every new one does.
+ * neither the environment, the privacy tier nor the sqlite-vec switch — a
+ * copy is a new connection, and starts as every new one does.
  */
 export interface ConnectionPrefill {
   name: string
   readOnly: boolean
   values: Record<string, string>
 }
+
+/**
+ * Parameters a copy does not inherit. Turning sqlite-vec on is trusting one
+ * file with bundled C code (ADR-0054); a copy is a new connection, often to
+ * another file, and starts with it off like every new one. `duplicatePrefill`
+ * leaves them out too; the form drops them again for any other caller.
+ */
+export const NOT_COPIED: ReadonlySet<string> = new Set(["sqlite_vec"])
 
 function initialValues(
   driver: DriverChoice,
@@ -70,7 +78,7 @@ function initialValues(
       // (I-03). Empty means « keep what the keyring holds » when editing, and
       // « type it » for a copy.
       values[field.key] = ""
-    } else if (copied) {
+    } else if (copied && !(prefill && !existing && NOT_COPIED.has(field.key))) {
       values[field.key] =
         copied[field.key] ?? (field.kind.type === "bool" ? "false" : "")
     } else {

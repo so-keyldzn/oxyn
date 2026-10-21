@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="e61246393d68" -->
+<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="bf36ff2ac8f2" -->
 
 > Traduction française de [docs/adr/0045-ci-selective-sur-les-pull-requests.md](../../../../docs/adr/0045-ci-selective-sur-les-pull-requests.md). **La version anglaise fait foi.**
 
@@ -84,6 +84,26 @@ administrateur passe à `bypass_mode: always` : un administrateur peut pousser
 directement sur `main`, si bien qu’un commit dont la CI est rouge peut y arriver
 par ce chemin. Tous les autres ont toujours besoin d’une pull request avec un
 `qualite` vert, et le run complet sur `main` reste le filet de sécurité.
+
+**Amendement (2026-10-20).** Le dépôt est public (`private: false`,
+`visibility: public` d’après `gh api repos/so-keyldzn/oxyn`), et la
+documentation de GitHub l’énonce : « Use of the standard GitHub-hosted runners
+is free and unlimited on public repositories. »
+([référence des runners hébergés par GitHub](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+lue le 2026-10-20, consignée dans
+[RESEARCH-NOTES](../RESEARCH-NOTES.md#suivi-de-laudit--vérifié-le-2026-10-20)).
+Le quota épuisé le 2026-09-24, quand le dépôt était privé, est ce qui avait
+retiré la matrice macOS des pull requests (Contexte ci-dessus) : il ne
+s’applique plus. Les jobs `controles`, `stories` et `rust` exécutent donc de
+nouveau leur branche `macos-latest` sur les pull requests, comme sur `main`.
+Cela remplace la phrase plus bas, « la matrice macOS s'y ajoute comme avant » :
+macOS n’est plus quelque chose que seul `main` ajoute.
+
+Rien d’autre ne change. Le job `zones` choisit toujours les zones, un job sauté
+compte toujours comme réussi, et le job agrégat `qualite` reste le seul check
+que le ruleset exige. Les branches macOS ne sont pas des checks requis : leur
+retour ne renomme aucun check requis. `workflow_dispatch` demeure, pour exécuter
+toute la porte sur une branche qui n’a pas de pull request ouverte.
 
 **Sur `push` vers `main` et sur `workflow_dispatch`, tout tourne toujours.**
 `script/zones-ci` renvoie toutes les zones hors de l'événement `pull_request`,

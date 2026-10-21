@@ -13,9 +13,20 @@
 //! interruption is therefore returned as:
 //!
 //! * [`OxynError::Cancelled`] if the statement could modify nothing
-//!   (`sqlite3_stmt_readonly`) — the effect is known: none;
+//!   (`sqlite3_stmt_readonly`) **and no earlier statement of the batch
+//!   applied** — the effect is known: none;
 //! * [`ErrorClass::Ambiguous`] otherwise. Ambiguity is **never** retried
 //!   ([I-13](../../../CLAUDE.md#i-13)).
+//!
+//! # A failure after an earlier statement of the batch applied
+//!
+//! A batch runs its statements in order, each in autocommit unless the user
+//! opened a transaction. Once one of them completed and could write, a later
+//! failure — or interruption — no longer speaks for the batch: replaying the
+//! batch would apply the earlier statements twice, and a Stop has reached a
+//! batch that already changed data. `after_applied` therefore remaps the failure
+//! whatever its cause: never [`OxynError::Cancelled`], never transient
+//! ([`SqliteError::AfterApplied`]).
 //!
 //! # What never leaves this module
 //!
@@ -194,9 +205,48 @@ pub enum SqliteError {
     #[error("bound parameters cannot be used with a multi-statement batch: split it first")]
     ParametersWithBatch,
 
+    /// A statement of a batch failed after an earlier one had applied.
+    ///
+    /// Built by `after_applied`, which also decides the family. The wording is
+    /// neutral on the transaction: outside one, the earlier statements are
+    /// committed; inside an explicit transaction (ADR-0039) they belong to it and
+    /// follow its fate. Saying "committed" would be false there, and so would
+    /// "pending": the engine rolls a transaction back by itself after some
+    /// failures (a full disk, an interruption). The driver does not read the
+    /// transaction state on this path.
+    ///
+    /// The cause is shown as the driver built it, so a message withheld because
+    /// the statement carried bound values stays withheld (I-03).
+    #[error(
+        "earlier statements of this batch were already applied (committed, unless a \
+         transaction is open: then they follow its fate, committed or rolled back \
+         with it); check the data before running the batch again. The statement that \
+         followed failed: {}",
+        cause_text(.cause)
+    )]
+    AfterApplied {
+        /// What happened to the statement that followed, before it was remapped.
+        #[source]
+        cause: Box<OxynError>,
+    },
+
     /// Building the `RecordBatch` failed.
     #[error("arrow: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
+}
+
+/// How the failure of the statement that followed is told inside
+/// [`SqliteError::AfterApplied`].
+///
+/// A driver error is shown by its source alone: the wrapper would name the
+/// family the failure had before [`after_applied`] remapped it ("transient error"
+/// next to a verdict that forbids replaying).
+fn cause_text(cause: &OxynError) -> String {
+    match cause {
+        OxynError::Driver { source, .. } => source.to_string(),
+        OxynError::Cancelled => "the statement was interrupted".to_owned(),
+        other => other.to_string(),
+    }
 }
 
 /// The family of an engine error.
@@ -260,8 +310,36 @@ pub(crate) fn engine_bound(error: rusqlite::Error, effect: Effect, bound: Bound)
         // The `Display` of this variant contains the path (I-03).
         return driver(SqliteError::Path, ErrorClass::Permanent);
     }
+    if let Some(module) = missing_module(&error) {
+        // Named as data for the interface, which explains this failure rather
+        // than parsing a message. Kept even when the message is otherwise
+        // withheld: the engine composes it from the schema's module name,
+        // never from a bound value (I-03). Permanent: reading again changes
+        // nothing until the module is loaded (I-13).
+        return OxynError::driver(
+            DriverId::sqlite(),
+            ErrorClass::Permanent,
+            oxyn_core::MissingModule { module },
+        );
+    }
     let class = classify(&error);
     driver(hide(error, code, bound), class)
+}
+
+/// The module of an engine `no such module: <name>` failure.
+///
+/// The driver is the one place that may read its engine's words: the
+/// `SQLITE_ERROR` code alone does not say which failure it is, and the caller
+/// then reads the module as data, never the text.
+fn missing_module(error: &rusqlite::Error) -> Option<String> {
+    let rusqlite::Error::SqliteFailure(failure, Some(message)) = error else {
+        return None;
+    };
+    if failure.code != ErrorCode::Unknown {
+        return None;
+    }
+    let module = message.strip_prefix("no such module: ")?.trim();
+    (!module.is_empty()).then(|| module.to_owned())
 }
 
 /// The error the driver returns: the engine's, or its code alone when the
@@ -284,6 +362,69 @@ pub(crate) fn hide(
         }
         Bound::Internal | Bound::Caller => SqliteError::Engine(error),
     }
+}
+
+/// The failure of a task interrupted while running, for a request not declared
+/// read-only (the ones [`WorkerHandle::await_verdict`] waits for).
+///
+/// [`WorkerHandle::await_verdict`]: crate::worker::WorkerHandle::await_verdict
+///
+/// Every driver error becomes [`ErrorClass::Ambiguous`], its message kept:
+/// what the task applied before failing is unknown, whatever the code says —
+/// the thread disappearing mid-write included. A task that had already failed
+/// when the interruption arrived is reclassified too: the caller cannot tell
+/// the two apart, and the ambiguous reading is the one never retried. Other
+/// variants (a policy refusal, a cancellation) are not engine verdicts and keep
+/// their meaning.
+pub(crate) fn interrupted_write(error: OxynError) -> OxynError {
+    match error {
+        OxynError::Driver { driver, source, .. } => OxynError::Driver {
+            driver,
+            class: ErrorClass::Ambiguous,
+            source,
+        },
+        other => other,
+    }
+}
+
+/// The failure of a statement that came after an earlier statement of the batch
+/// had applied: never a cancellation, never retryable.
+///
+/// The family is remapped **by cause**, not flattened:
+///
+/// * transient (`SQLITE_BUSY`, `SQLITE_LOCKED`, the locking protocol, a schema
+///   change) and a bare [`OxynError::Cancelled`] become permanent. The failing
+///   statement itself applied nothing, but replaying the *batch* would apply the
+///   earlier statements a second time, which is what a transient family invites;
+/// * ambiguous stays ambiguous: the failing statement may have applied too;
+/// * permanent stays permanent: a constraint or a syntax error is not made more
+///   alarming than it is.
+///
+/// The message says the earlier statements were applied in every case.
+///
+/// Called at one point on the worker side (the exits of `stream::run` and
+/// `stream::stream_rows`) and once by the cursor when a Stop arrives at rest, so
+/// that no failure is wrapped twice.
+pub(crate) fn after_applied(error: OxynError) -> OxynError {
+    let class = match error.class() {
+        ErrorClass::Ambiguous => ErrorClass::Ambiguous,
+        // Transient or permanent. `ErrorClass` is `#[non_exhaustive]`: a family
+        // added later reads as permanent here — not retried — until this
+        // function is told otherwise.
+        _ => ErrorClass::Permanent,
+    };
+    driver(
+        SqliteError::AfterApplied {
+            cause: Box::new(error),
+        },
+        class,
+    )
+}
+
+/// [`after_applied`] when an earlier statement applied, the error untouched
+/// otherwise: the one place that holds the condition.
+pub(crate) fn after_applied_if(applied: bool, error: OxynError) -> OxynError {
+    if applied { after_applied(error) } else { error }
 }
 
 /// Wraps a driver error, naming its family.
@@ -506,6 +647,152 @@ mod tests {
             Bound::of(&[ScalarValue::Text("S3NT1N3L-42".to_owned())]),
             Bound::Caller
         );
+    }
+
+    /// Every cause a statement can fail with after an earlier one applied,
+    /// as the worker would have built it before `after_applied` sees it.
+    fn causes() -> Vec<(&'static str, OxynError)> {
+        vec![
+            (
+                "busy",
+                engine(failure_with(ErrorCode::DatabaseBusy), Effect::Mutating),
+            ),
+            (
+                "locked",
+                engine(failure_with(ErrorCode::DatabaseLocked), Effect::Mutating),
+            ),
+            (
+                "schema",
+                engine(failure_with(ErrorCode::SchemaChanged), Effect::ReadOnly),
+            ),
+            (
+                "interrupted read",
+                engine(
+                    failure_with(ErrorCode::OperationInterrupted),
+                    Effect::ReadOnly,
+                ),
+            ),
+            (
+                "interrupted write",
+                engine(
+                    failure_with(ErrorCode::OperationInterrupted),
+                    Effect::Mutating,
+                ),
+            ),
+            (
+                "constraint",
+                engine(
+                    failure_with(ErrorCode::ConstraintViolation),
+                    Effect::Mutating,
+                ),
+            ),
+        ]
+    }
+
+    #[test]
+    fn after_applied_is_never_retryable_nor_cancelled() {
+        // I-13: a failure after an applied statement must not invite a replay
+        // of the batch, nor claim that nothing was applied.
+        for (name, cause) in causes() {
+            let err = after_applied(cause);
+            assert!(!err.is_retryable(), "{name}: {err:?}");
+            assert!(!err.is_cancelled(), "{name}: {err:?}");
+            assert!(
+                err.to_string().contains("already applied"),
+                "{name}: the message must say what applied: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn after_applied_keeps_ambiguous_and_permanent_causes_as_they_are() {
+        let interrupted_write = after_applied(engine(
+            failure_with(ErrorCode::OperationInterrupted),
+            Effect::Mutating,
+        ));
+        assert_eq!(
+            interrupted_write.class(),
+            ErrorClass::Ambiguous,
+            "the failing statement may have applied too: {interrupted_write:?}"
+        );
+
+        let stopped = after_applied(OxynError::OutcomeUnknown(
+            "the write was stopped".to_owned(),
+        ));
+        assert_eq!(stopped.class(), ErrorClass::Ambiguous, "{stopped:?}");
+
+        let constraint = after_applied(engine(
+            failure_with(ErrorCode::ConstraintViolation),
+            Effect::Mutating,
+        ));
+        assert_eq!(
+            constraint.class(),
+            ErrorClass::Permanent,
+            "a constraint is not made more alarming than it is: {constraint:?}"
+        );
+        assert!(
+            constraint.to_string().contains("engine message"),
+            "the cause stays readable: {constraint}"
+        );
+    }
+
+    #[test]
+    fn after_applied_turns_transient_and_cancelled_into_permanent() {
+        for (name, cause) in causes() {
+            let before = cause.class();
+            let was_cancelled = cause.is_cancelled();
+            if before != ErrorClass::Transient && !was_cancelled {
+                continue;
+            }
+            let err = after_applied(cause);
+            assert_eq!(err.class(), ErrorClass::Permanent, "{name}: {err:?}");
+            // The family the cause had before is no longer true: it must not be
+            // read next to a verdict that forbids replaying.
+            let shown = err.to_string();
+            assert!(!shown.contains("transient"), "{name}: {shown}");
+            assert!(!shown.contains("operation cancelled"), "{name}: {shown}");
+        }
+
+        let interrupted_read = after_applied(OxynError::Cancelled);
+        assert_eq!(interrupted_read.class(), ErrorClass::Permanent);
+        assert!(!interrupted_read.is_cancelled());
+        assert!(
+            interrupted_read.to_string().contains("interrupted"),
+            "{interrupted_read}"
+        );
+    }
+
+    #[test]
+    fn after_applied_keeps_a_withheld_message_withheld() {
+        // I-03: the wrapper adds fixed text only. The cause was built with the
+        // caller's bound value in the statement: its message stays withheld.
+        let cause = engine_bound(chatty_failure(), Effect::Mutating, Bound::Caller);
+        let err = after_applied(cause);
+        for shown in [format!("{err}"), format!("{err:?}")] {
+            assert!(!shown.contains("S3NT1N3L-42"), "bound value: {shown}");
+            assert!(!shown.contains("balance"), "engine message: {shown}");
+        }
+        assert!(err.to_string().contains("withheld"), "{err}");
+        assert!(err.to_string().contains("1811"), "{err}");
+        assert!(err.to_string().contains("already applied"), "{err}");
+    }
+
+    #[test]
+    fn without_an_applied_statement_the_error_is_untouched() {
+        // The first statement of a batch that hits a lock is replayable: nothing
+        // ran before it.
+        let busy = after_applied_if(
+            false,
+            engine(failure_with(ErrorCode::DatabaseBusy), Effect::Mutating),
+        );
+        assert!(busy.is_retryable(), "{busy:?}");
+        assert!(!busy.to_string().contains("already applied"), "{busy}");
+
+        let cancelled = after_applied_if(false, OxynError::Cancelled);
+        assert!(cancelled.is_cancelled());
+
+        let wrapped = after_applied_if(true, OxynError::Cancelled);
+        assert!(!wrapped.is_cancelled());
     }
 
     #[test]

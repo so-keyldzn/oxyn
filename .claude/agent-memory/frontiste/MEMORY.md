@@ -27,4 +27,5 @@
 - [base-ui-menus-contextuels-imbriques](base-ui-menus-contextuels-imbriques.md) — Base UI ContextMenu.Trigger stops the propagation of contextmenu — nested menus (code block in an answer, chip in a question) open at the deepest level, with no extra code
 - [menu-rend-le-focus](menu-rend-le-focus.md) — A Base UI menu gives focus back to its trigger after the closing animation, overriding a focus given by an item's handler
 - [pieges-context-menu-et-stories](pieges-context-menu-et-stories.md) — Tooling traps of Base UI ContextMenu (select-none, refusing to open) and Storybook (vi missing, animated dialog, pointer coords)
+- [Base UI Switch and toBeDisabled](switch-base-ui-pas-tobedisabled.md) — a disabled Switch is a span: assert `aria-disabled="true"`
 - [story-menu-ouvert-axe](story-menu-ouvert-axe.md) — A story that ends with a Base UI menu still open or closing fails on axe (aria-hidden-focus of the focus guards)

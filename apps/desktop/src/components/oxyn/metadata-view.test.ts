@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { addressKey, staleExpanded } from "./catalog-tree"
 import { freshnessLabel } from "./facet-frame"
 import { sizeLabel } from "./object-inspector"
-import { draftDiffers, previewNotice } from "./preview-controls"
+import { draftDiffers, previewNotice, sameShape } from "./preview-controls"
 import { findSummary } from "./result-find-bar"
 import { renderedBytes } from "./value-page-dialog"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
@@ -15,16 +15,44 @@ describe("previewNotice", () => {
     pending: false,
     filtered: false,
     applied: PLAIN_SHAPE,
+    reshaped: false,
   }
 
   it("warns on a refused read, whatever the pagination says", () => {
     const notice = previewNotice({
       ...loaded,
       status: "failed",
+      reshaped: true,
       pagination: { type: "ready", previous: true, next: true, firstRow: 201 },
     })
     expect(notice?.warning).toBe(true)
     expect(notice?.text).toMatch(/refused/)
+  })
+
+  it("claims no previous shape when the read changed none", () => {
+    // A first read, or a refresh, that fails: nothing was dropped.
+    expect(
+      previewNotice({ ...loaded, status: "failed", pagination: null })
+    ).toBeNull()
+  })
+
+  it("compares shapes by what they read", () => {
+    const sorted = {
+      ...PLAIN_SHAPE,
+      sort: [{ column: "id", descending: false }],
+    }
+    expect(sameShape(PLAIN_SHAPE, { ...PLAIN_SHAPE, predicate: "  " })).toBe(
+      true
+    )
+    expect(sameShape(sorted, { ...sorted, sort: [...sorted.sort] })).toBe(true)
+    expect(
+      sameShape(sorted, {
+        ...sorted,
+        sort: [{ column: "id", descending: true }],
+      })
+    ).toBe(false)
+    expect(sameShape(PLAIN_SHAPE, { ...PLAIN_SHAPE, offset: 200 })).toBe(false)
+    expect(sameShape(PLAIN_SHAPE, sorted)).toBe(false)
   })
 
   it("tells an empty filter from an empty table", () => {
@@ -192,6 +220,8 @@ describe("staleExpanded", () => {
     loaded: true,
     stale,
     children,
+    virtualTable: null,
+    shadowOf: null,
   })
 
   it("lists only the stale levels the user has open", () => {

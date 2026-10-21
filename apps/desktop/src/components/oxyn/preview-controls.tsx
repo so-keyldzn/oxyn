@@ -45,6 +45,23 @@ export function draftDiffers(draft: string, applied: string | null) {
   return draft.trim() !== (applied ?? "").trim()
 }
 
+/** Whether two shapes read the same rows. */
+export function sameShape(a: PreviewShape, b: PreviewShape) {
+  return (
+    a.offset === b.offset &&
+    (a.predicate ?? "").trim() === (b.predicate ?? "").trim() &&
+    a.sort.length === b.sort.length &&
+    a.sort.every((key, index) => {
+      const other = b.sort.at(index)
+      return (
+        other !== undefined &&
+        key.column === other.column &&
+        key.descending === other.descending
+      )
+    })
+  )
+}
+
 /**
  * The sentence under the bar: what it cannot say in its own width. Pure, so it
  * is tested without a DOM.
@@ -55,19 +72,26 @@ export function previewNotice({
   filtered,
   pagination,
   applied,
+  reshaped,
 }: {
   status: PreviewStatus
   pending: boolean
   filtered: boolean
   pagination: Pagination | null
   applied: PreviewShape
+  /** The failed read asked for another shape than the one in force. */
+  reshaped: boolean
 }): { text: string; warning: boolean } | null {
   switch (status) {
     case "failed":
-      return {
-        text: "This read was refused. The rows of the previous shape were not kept under the new one, and the text stays where it can be fixed.",
-        warning: true,
-      }
+      // A first read, or a refresh of the shape in force, had no previous
+      // shape to fall back on: the failure below says all there is.
+      return reshaped
+        ? {
+            text: "This read was refused. The rows of the previous shape were not kept under the new one, and the text stays where it can be fixed.",
+            warning: true,
+          }
+        : null
     case "empty":
       return filtered
         ? {
@@ -362,6 +386,7 @@ export function PreviewControls({
   canSort,
   columns,
   applied,
+  reshaped = false,
   status,
   pagination,
   loadingColumns = false,
@@ -378,6 +403,8 @@ export function PreviewControls({
   columns: Array<string> | null
   /** The shape the rows on screen came from. */
   applied: PreviewShape
+  /** The last read asked for another shape than `applied`. */
+  reshaped?: boolean
   status: PreviewStatus
   pagination: Pagination | null
   loadingColumns?: boolean
@@ -400,6 +427,7 @@ export function PreviewControls({
     filtered: (applied.predicate ?? "").trim() !== "",
     pagination,
     applied,
+    reshaped,
   })
   const pages =
     (status === "loaded" || status === "empty") &&

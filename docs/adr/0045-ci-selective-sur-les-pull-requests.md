@@ -80,6 +80,26 @@ bypass is now `bypass_mode: always`: an administrator may push directly to
 needs a pull request with a green `qualite`, and the full run on `main` stays
 the safety net.
 
+**Amendment (2026-10-20).** The repository is public (`private: false`,
+`visibility: public` through `gh api repos/so-keyldzn/oxyn`), and GitHub's
+documentation states: "Use of the standard GitHub-hosted runners is free and
+unlimited on public repositories."
+([GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+read on 2026-10-20, recorded in
+[RESEARCH-NOTES](../RESEARCH-NOTES.md#audit-follow-up--checked-on-2026-10-20)).
+The quota exhausted on 2026-09-24, while the repository was private, is what
+removed the macOS matrix from pull requests (Context above): it no longer
+applies. The `controles`, `stories` and `rust` jobs therefore run their
+`macos-latest` leg on pull requests again, as they do on `main`. This
+supersedes the sentence below, "the macOS matrix is added as before": macOS is
+no longer something only `main` adds.
+
+Nothing else changes. The `zones` job still selects the areas, a skipped job
+still counts as successful, and the aggregate `qualite` job is still the only
+check the ruleset requires. The macOS legs are not required checks, so their
+return renames no required check. `workflow_dispatch` stays, to run the whole
+gate on a branch that has no pull request open.
+
 **On `push` to `main` and on `workflow_dispatch`, everything always runs.**
 `script/zones-ci` returns all areas outside the `pull_request` event, and the
 macOS matrix is added as before. It is the safety net: what a PR wrongly

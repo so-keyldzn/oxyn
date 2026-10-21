@@ -46,8 +46,9 @@ impl Agents {
     }
 }
 
-/// The SQL agent's id: what a conversation runs when it names no agent, and
-/// what replaces one that no longer exists.
+/// The SQL agent's id: what a conversation runs when it names no agent,
+/// whatever the picker's order (ADR-0055), and what replaces one that no
+/// longer exists.
 pub(crate) fn sql_agent_id() -> AgentId {
     sql_agent().id
 }

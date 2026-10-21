@@ -985,6 +985,265 @@ async fn a_write_cut_during_its_drain_is_ambiguous() {
     session.close().await.expect("close");
 }
 
+/// Issue #220: a write without `RETURNING` stopped while it runs is cancelled
+/// — and the proof is the server's, not the cursor's return. The statement
+/// sleeps inside its `WHERE`, so it has certainly left and is certainly not
+/// finished when Stop is pressed.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn a_long_write_without_returning_stopped_mid_run_is_cancelled_and_changes_nothing() {
+    let Some(session) = session().await else {
+        return;
+    };
+    apply(session.as_ref(), "DROP TABLE IF EXISTS oxyn_stopped_write").await;
+    apply(
+        session.as_ref(),
+        "CREATE TABLE oxyn_stopped_write (i integer, touched boolean NOT NULL DEFAULT false)",
+    )
+    .await;
+    apply(
+        session.as_ref(),
+        "INSERT INTO oxyn_stopped_write (i) SELECT i FROM generate_series(1, 100) AS s(i)",
+    )
+    .await;
+    let Some(witness) = self::session().await else {
+        return;
+    };
+
+    let token = CancelToken::new();
+    let mut cursor = session
+        .execute(
+            write_request(
+                "UPDATE oxyn_stopped_write SET touched = true \
+                 WHERE (SELECT true FROM pg_sleep(30))",
+            ),
+            &token,
+        )
+        .await
+        .expect("execution");
+
+    // The write must be inside the server, not merely queued: a Stop before
+    // it left would be cancelled whatever the driver did after.
+    let mut sleeping = false;
+    for _ in 0..1_000 {
+        let waiting = first_text(
+            witness.as_ref(),
+            "SELECT count(*)::text FROM pg_stat_activity \
+             WHERE wait_event = 'PgSleep' AND query LIKE 'UPDATE oxyn_stopped_write%'",
+        )
+        .await;
+        if waiting != "0" {
+            sleeping = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(sleeping, "the write never reached its sleep");
+    token.cancel();
+
+    let error = refusal(cursor.next_batch().await, "a stopped write must not finish");
+    assert!(
+        error.is_cancelled(),
+        "the server reported the interruption, so the write is cancelled: {error:?}"
+    );
+    drop(cursor);
+
+    // The proof, from another session: the backend no longer runs the
+    // statement, and nothing it was going to write is there.
+    let mut running = String::new();
+    for _ in 0..100 {
+        running = first_text(
+            witness.as_ref(),
+            "SELECT count(*)::text FROM pg_stat_activity \
+             WHERE query LIKE 'UPDATE oxyn_stopped_write%' AND state = 'active' \
+             AND pid <> pg_backend_pid()",
+        )
+        .await;
+        if running == "0" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(running, "0", "the server is still running the write");
+    let touched = first_text(
+        witness.as_ref(),
+        "SELECT count(*)::text FROM oxyn_stopped_write WHERE touched",
+    )
+    .await;
+    assert_eq!(touched, "0", "a cancelled write changed the table");
+    witness.close().await.expect("close");
+
+    apply(session.as_ref(), "DROP TABLE oxyn_stopped_write").await;
+    session.close().await.expect("close");
+}
+
+/// A `CALL` whose procedure commits an `INSERT` and is stopped while a later
+/// statement sleeps. The server's `57014` interrupts that one statement and
+/// leaves what the procedure already committed, so the verdict is an unknown
+/// outcome, never `Cancelled` — replaying the `CALL` would duplicate the row.
+/// The request carries the intent the executor gives a `CALL`: `Unknown`.
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL test server"]
+async fn a_call_stopped_after_its_procedure_committed_is_not_cancelled() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(witness) = self::session().await else {
+        return;
+    };
+    apply(
+        session.as_ref(),
+        "DROP PROCEDURE IF EXISTS oxyn_commits_then_waits",
+    )
+    .await;
+    apply(session.as_ref(), "DROP TABLE IF EXISTS oxyn_call_log").await;
+    apply(session.as_ref(), "CREATE TABLE oxyn_call_log (id integer)").await;
+    apply(
+        session.as_ref(),
+        "CREATE PROCEDURE oxyn_commits_then_waits() LANGUAGE plpgsql AS $$ \
+         BEGIN INSERT INTO oxyn_call_log VALUES (1); COMMIT; PERFORM pg_sleep(30); END $$",
+    )
+    .await;
+
+    let token = CancelToken::new();
+    let mut cursor = session
+        .execute(
+            ExecRequest::new(
+                QueryLanguage::Sql(SqlDialect::Postgres),
+                "CALL oxyn_commits_then_waits()",
+            )
+            .with_intent(StatementIntent::Unknown)
+            .with_limits(ExecLimits::default().writable().with_max_rows(None)),
+            &token,
+        )
+        .await
+        .expect("execution");
+
+    // The procedure is inside its sleep, so its `INSERT` is committed: Stop
+    // before that would be a plain cancellation.
+    let mut sleeping = false;
+    for _ in 0..1_000 {
+        let waiting = first_text(
+            witness.as_ref(),
+            "SELECT count(*)::text FROM pg_stat_activity \
+             WHERE wait_event = 'PgSleep' AND query LIKE 'CALL oxyn_commits_then_waits%'",
+        )
+        .await;
+        if waiting != "0" {
+            sleeping = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(sleeping, "the procedure never reached its sleep");
+    token.cancel();
+
+    let error = refusal(cursor.next_batch().await, "a stopped CALL must not finish");
+    assert!(
+        matches!(error, OxynError::OutcomeUnknown(_)),
+        "a procedure keeps what it committed before the interruption: {error:?}"
+    );
+    assert!(!error.is_cancelled(), "{error:?}");
+    assert_eq!(error.class(), oxyn_core::ErrorClass::Ambiguous);
+    assert!(!error.is_retryable(), "never replayed (I-13): {error:?}");
+    drop(cursor);
+
+    // From another session: the server stopped the sleep, and the committed
+    // row is there, which is exactly what `Cancelled` would have denied.
+    let mut running = String::new();
+    for _ in 0..100 {
+        running = first_text(
+            witness.as_ref(),
+            "SELECT count(*)::text FROM pg_stat_activity \
+             WHERE query LIKE 'CALL oxyn_commits_then_waits%' AND state = 'active' \
+             AND pid <> pg_backend_pid()",
+        )
+        .await;
+        if running == "0" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(running, "0", "the server is still running the CALL");
+    assert_eq!(
+        first_text(witness.as_ref(), "SELECT count(*)::text FROM oxyn_call_log").await,
+        "1",
+        "the row the procedure committed before the stop is there"
+    );
+    witness.close().await.expect("close");
+
+    apply(session.as_ref(), "DROP PROCEDURE oxyn_commits_then_waits").await;
+    apply(session.as_ref(), "DROP TABLE oxyn_call_log").await;
+    session.close().await.expect("close");
+}
+
+/// Issue #220: Stop pressed as the statement finishes. Whatever the timing —
+/// the write not yet sent, in flight, or already committed — the verdict must
+/// agree with the table: `Cancelled` only if nothing changed, `Finished` only
+/// if the write is there, and an unknown outcome is allowed to be either but
+/// never retryable. The delays sweep the window around the commit; the
+/// invariant is what the test asserts, not which branch a run lands on.
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn a_stop_racing_the_commit_never_reports_a_write_that_ran_as_cancelled() {
+    let Some(session) = session().await else {
+        return;
+    };
+    apply(session.as_ref(), "DROP TABLE IF EXISTS oxyn_stop_race").await;
+    apply(session.as_ref(), "CREATE TABLE oxyn_stop_race (n integer)").await;
+    apply(session.as_ref(), "INSERT INTO oxyn_stop_race VALUES (0)").await;
+    let Some(witness) = self::session().await else {
+        return;
+    };
+
+    for round in 0..5_u64 {
+        for delay_us in [0_u64, 100, 300, 600, 1_000, 2_000, 4_000, 8_000] {
+            let before: i64 = first_text(witness.as_ref(), "SELECT n::text FROM oxyn_stop_race")
+                .await
+                .parse()
+                .expect("a counter");
+            let token = CancelToken::new();
+            let mut cursor = session
+                .execute(write_request("UPDATE oxyn_stop_race SET n = n + 1"), &token)
+                .await
+                .expect("execution");
+            tokio::time::sleep(Duration::from_micros(delay_us)).await;
+            token.cancel();
+
+            let issue = cursor.next_batch().await;
+            let rows = cursor.stats().rows;
+            drop(cursor);
+            let after: i64 = first_text(witness.as_ref(), "SELECT n::text FROM oxyn_stop_race")
+                .await
+                .parse()
+                .expect("a counter");
+
+            let context = format!("round {round}, stop after {delay_us} us");
+            match issue {
+                Err(error) if error.is_cancelled() => {
+                    assert_eq!(after, before, "{context}: cancelled, yet applied");
+                }
+                Ok(None) => {
+                    assert_eq!(after, before + 1, "{context}: finished, yet not applied");
+                    assert_eq!(rows, 1, "{context}: the affected row count is reported");
+                }
+                Ok(Some(_)) => panic!("{context}: an UPDATE returns no batch"),
+                Err(error) => {
+                    assert_eq!(error.class(), oxyn_core::ErrorClass::Ambiguous, "{context}");
+                    assert!(!error.is_retryable(), "{context}: {error:?}");
+                    // The server may still be finishing the write: let it,
+                    // so that the next round starts from a settled counter.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+
+    witness.close().await.expect("close");
+    apply(session.as_ref(), "DROP TABLE oxyn_stop_race").await;
+    session.close().await.expect("close");
+}
+
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn read_only_is_enforced_by_the_server() {

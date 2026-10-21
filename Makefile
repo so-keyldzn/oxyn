@@ -15,7 +15,7 @@
 #
 # See .claude/rules/manifestes.md and .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite verif-rapide format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm audit-npm
+.PHONY: qualite verif-rapide format lint test doc deny todo versions hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm audit-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -45,6 +45,7 @@ aide:
 	@echo "make socle     checks the Claude and Codex foundation (usable without Rust code)"
 	@echo "make hooks     replays the hook tests"
 	@echo "make todo      refuses a remaining-work marker without a deadline"
+	@echo "make versions  refuses a pinned version missing from docs/RESEARCH-NOTES.md"
 	@echo "make front     checks the front end: npm licenses, format, lint, types, tests, stories, build"
 	@echo "make rust      checks the Rust: format, clippy, tests, doc, dependencies"
 	@echo "make desktop-dev  runs the Tauri application with hot reload"
@@ -81,7 +82,7 @@ $(TAURI):
 # --- The gate -----------------------------------------------------------------
 # As long as no Cargo.toml exists, the Rust targets are skipped and only the
 # foundation is checked. Silence is not success: the message says so.
-qualite: socle todo
+qualite: socle todo versions
 ifeq ($(wildcard Cargo.toml),)
 	@echo ""
 	@echo "No Cargo.toml: the Rust checks did NOT run."
@@ -180,12 +181,21 @@ audit-npm: $(TAURI)
 todo:
 	@python3 script/verifier-todo
 
+# Every version pinned in the root Cargo.toml and in apps/desktop/package.json
+# must be recorded, dated, in docs/RESEARCH-NOTES.md (I-12). Offline on
+# purpose: the gate cannot depend on the network. The comparison with the
+# registries stays manual, through `/versions`.
+versions:
+	@python3 .claude/hooks/verifier_versions.py --manifests
+
 # --- The foundation -----------------------------------------------------------
 socle: hooks
 	@python3 .claude/test_verifier_socle.py
 	@python3 script/test_livraison.py
 	@python3 script/test_apple_release.py
+	@python3 script/test_verifier_todo.py
 	@python3 .claude/verifier_socle.py
 
 hooks:
 	@python3 .claude/hooks/test_hooks.py
+	@python3 .claude/hooks/test_verifier_versions.py

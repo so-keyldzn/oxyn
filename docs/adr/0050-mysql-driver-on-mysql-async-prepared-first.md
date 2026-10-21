@@ -1,7 +1,8 @@
 # ADR-0050 — The MySQL driver runs on `mysql_async`, prepares every statement first, and decodes every type the server sends
 
 **Status:** accepted · **Date:** 2026-09-30 · **Amended:** 2026-09-30 (point 7, before
-acceptance), 2026-10-02 (point 7, issue #139)
+acceptance), 2026-10-02 (point 7, issue #139), 2026-10-20 (point 7, issue #222;
+point 3, issue #223)
 
 ## Context
 
@@ -108,6 +109,27 @@ wire, and how values become Arrow. Checked on 2026-09-30
    the context on each tested server:
    `CREATE TRIGGER x BEFORE INSERT ON t FOR EACH ROW SET @a = 1; DROP TABLE t`
    fails the prepare with 1064, not 1295.
+
+   *Amended on 2026-10-20 (issue #223):* a typed `USE` no longer takes this
+   path. The driver refuses it, for every actor, on MySQL and MariaDB alike,
+   before anything is sent to the server. The check runs ahead of the prepare:
+   MariaDB prepares `USE` (context), so a refusal placed after the prepare
+   would come once the statement had already reached the server. It reads
+   every statement of the text, so `SELECT 1; USE x` is refused whole, and the
+   body of an executable comment too: the server runs what `/*!50000 … */` and
+   MariaDB's `/*M!100000 … */` hold, so `oxyn-query` reads it as code for this
+   dialect and `/*!50000 USE x */` is refused like a bare `USE x`
+   ([RESEARCH-NOTES](../RESEARCH-NOTES.md), on SQL password literals, which
+   records both comment forms). A dump's `/*!40101 SET … */` is not refused:
+   only a leading `USE` is. The
+   refusal is `NotSupported` and points to the context selector, that is
+   `Session::set_context` ([ADR-0019](0019-contexte-de-session.md), which holds
+   the reason: the session owns its database). The `USE` that `set_context` and
+   the reconnect compose themselves is not a typed one and is not refused. The
+   1295 fallback is unchanged for `START TRANSACTION`, `CREATE PROCEDURE` and
+   the like. **Reconsider if** a typed `USE` gets a declared path in the
+   session, which would record the database it selects as `set_context` does:
+   the refusal would then no longer be needed.
 4. **`oxyn-query` learns MySQL before the driver ships.** Its MySQL scanner keeps
    a `BEGIN … END` body inside `CREATE PROCEDURE`, `FUNCTION`, `TRIGGER` and
    `EVENT` as one fragment, and honors a `DELIMITER` line as the `mysql` client
@@ -154,6 +176,47 @@ wire, and how values become Arrow. Checked on 2026-09-30
    and reported nothing. A write stopped by a kill the server did not answer on
    that very statement ends on `OutcomeUnknown`, not `Cancelled`: it may have
    run to its end and committed.
+
+   *Amended on 2026-10-20 (issue #222):* a 1317 proves the kill was spent,
+   which is what lets the connection live on, not that the statement kept
+   nothing; and `Cancelled` reads as "nothing was applied", which invites
+   running the write again ([I-13](../../CLAUDE.md#i-13)). A stopped statement
+   that was sent and may have written therefore never ends on `Cancelled`, a
+   kill confirmed by a 1317 on that very statement included: it ends on
+   `OutcomeUnknown`. That covers a write, in autocommit or inside an explicit
+   transaction, any `CALL` whatever its declared intent, DDL, a privilege
+   change and a statement of undetermined intent. Its fixed message says that a
+   non-transactional table keeps the rows changed before the interruption and
+   that a procedure keeps what it already committed. A stop decided before the
+   statement was sent, and a statement that cannot have written — a read that
+   is not a `CALL` —, still end on `Cancelled`.
+
+   Why. The MySQL 8.4 manual's page on `KILL` says "If you are not using
+   transactions, the changes are not rolled back" (consulted on 2026-10-11 for
+   the audit behind issue #222). The driver applies
+   the same rule to MariaDB, served by the same crate (point 1): a rule that
+   only gives up a `Cancelled` needs no second source. The driver does not read
+   the body of a procedure, so what it committed before the kill is unknown to
+   it. And the engine of the tables a statement touches is not known to the
+   cursor: finding it would mean composing schema lookups from the identifiers
+   the statement names ([I-10](../../CLAUDE.md#i-10)), and a foreign key, a
+   trigger or a view reaches tables the statement does not name.
+
+   An open transaction does not change this. `SERVER_STATUS_IN_TRANS` (point 8
+   and [ADR-0039](0039-etat-de-transaction-d-une-session.md)) says that a
+   transaction is open, not on which engine the tables the statement touched
+   are: a non-transactional table written after `START TRANSACTION` is not
+   rolled back by the kill, so the flag cannot stand for the proof the verdict
+   needs. It is not an input of the verdict.
+
+   Cost, written down. A write interrupted on a transactional engine, which the
+   server does roll back, is `OutcomeUnknown` too, in autocommit and inside a
+   transaction alike: the driver cannot tell it from a write on a
+   non-transactional table. A deliberate loss of precision that costs the user
+   a look at the data, not a duplicate. **Reconsider if** the cursor can learn
+   the engine of every table a statement touches cheaply and without composing
+   SQL from received identifiers: a single non-`CALL` write on transactional
+   engines only could then end on `Cancelled` after a 1317.
 8. **Transaction state** ([ADR-0039](0039-etat-de-transaction-d-une-session.md))
    is read from `SERVER_STATUS_IN_TRANS` after each statement — the server says
    it, the driver does not infer it from the text.
@@ -206,7 +269,9 @@ wire, and how values become Arrow. Checked on 2026-09-30
 * **−** On MySQL, for non-preparable statements — routines, `USE`,
   `START TRANSACTION`, `LOCK TABLES` — only `oxyn-query`'s split protects against a hidden second
   statement. Point 4 adds scanner work the driver waits on, and a split that
-  disagrees with the server stays possible in general.
+  disagrees with the server stays possible in general. *Amended on 2026-10-20
+  (issue #223):* `USE` leaves this list, since the driver refuses it before
+  anything is sent (point 3).
 * **−** One extra round trip per statement (prepare, execute, close): on a
   server 50 ms away, about 100 ms before the first row, to measure against the
   [PERFORMANCE](../PERFORMANCE.md) budget rather than assume.
@@ -247,7 +312,7 @@ round trip exceeds the first-batch budget on a measured remote server.
 |---|---|
 | `sqlx-mysql` 0.9.0, already in the workspace | fails the whole result on a `VECTOR` column, loses the `DECIMAL` scale, cannot authenticate MariaDB's `client_ed25519`/`parsec`, and needs a release-candidate `rsa` under an unpatched advisory without TLS. One library for three drivers does not outweigh a `SELECT *` that fails |
 | Text protocol for everything, guarded by `oxyn-query`'s split only | the only multi-statement defense would be client-side, on the path the AI takes ([I-07](../../CLAUDE.md#i-07)); the prepare gives a server-side proof for most statements |
-| Prepare only, refusing what MySQL cannot prepare | a client that cannot run `START TRANSACTION`, `USE` or `CREATE PROCEDURE` is not a MySQL client |
+| Prepare only, refusing what MySQL cannot prepare | a client that cannot run `START TRANSACTION`, `USE` or `CREATE PROCEDURE` is not a MySQL client. *Amended on 2026-10-20 (issue #223):* a typed `USE` is refused all the same, for another reason than the prepare: the session owns its database and the context selector changes it (point 3) |
 | Map `DECIMAL` to `Utf8`, as the PostgreSQL driver does for `numeric` | MySQL sends precision and scale with every column; text would give up a typed sort and export for nothing |
 | Map zero dates to `NULL` or to the epoch | invents data; the PostgreSQL driver refuses `infinity` for the same reason |
 | Write our own MySQL wire implementation | a protocol, several authentication plugins and a TLS integration to maintain alone |

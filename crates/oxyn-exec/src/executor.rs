@@ -2605,11 +2605,15 @@ impl Deadline {
 
 /// How long a stopped write may take to say how it ended.
 ///
-/// Past a Stop, a write's driver stops the server and waits for its answer:
-/// the PostgreSQL cancellation request, the MySQL kill drained for
-/// `ER_QUERY_INTERRUPTED` within its own five seconds. The bound sits above
-/// those, so that it only fires for a driver that no longer answers — and then
-/// the outcome is reported as unknown, never as cancelled (I-13).
+/// Past a Stop, a write's driver stops the server and waits for its answer, each
+/// within a bound of its own. The PostgreSQL driver sends the cancellation
+/// request and keeps reading its own connection for at most its five-second
+/// settle bound, to learn whether the write was cancelled, ran, or neither; the
+/// MySQL driver drains the kill for `ER_QUERY_INTERRUPTED` within its own five
+/// seconds. This grace sits above both, so that it only fires for a driver that
+/// no longer answers — and then the outcome is reported as unknown, never as
+/// cancelled (I-13). Were it lower, it would hide the verdict a driver is about
+/// to give.
 const WRITE_SETTLE_GRACE: Duration = Duration::from_secs(10);
 
 /// Why a drain was abandoned before its source ended.
@@ -3690,6 +3694,252 @@ mod tests {
             !format!("{record:?}").contains("hunter2"),
             "no bound value reaches the history (I-03)"
         );
+    }
+
+    // ── A typed context change (issue #223) ─────────────────────────────────
+
+    /// A typed `USE other`, as a caller that wants it to pass would send it: a
+    /// declared read, with `context_change` left down. `execution` builds a
+    /// PostgreSQL request, and `USE` is a MySQL statement.
+    fn typed_use(conn: ConnectionId) -> Command {
+        typed_context_change(conn, "USE other")
+    }
+
+    /// A typed context change in `text`, declared as a read.
+    fn typed_context_change(conn: ConnectionId, text: &str) -> Command {
+        Command::Execute {
+            connection: conn,
+            session: SessionId::new(),
+            request: Box::new(
+                ExecRequest::new(QueryLanguage::Sql(SqlDialect::MySql), text)
+                    .with_intent(StatementIntent::Read)
+                    .with_limits(
+                        ExecLimits::default()
+                            .writable()
+                            .with_timeout(None::<Duration>),
+                    ),
+            ),
+        }
+    }
+
+    /// **An agent does not move the session's database by typing it.**
+    ///
+    /// `USE other` was classified a read: an agent's `Execute` of it passed as
+    /// one, and neither the refusal of `SetSessionContext` (ADR-0019), which only
+    /// matches that variant, nor any confirmation applied. The agent declares a
+    /// read with no context change; the text says otherwise.
+    /// Reclassification happens before the gate, so the gate refuses it in every
+    /// environment — development included, where an `Unknown` statement would
+    /// only ask for an approval, and an approval ends up being clicked (I-02,
+    /// I-07).
+    ///
+    /// On production too, the reason is the context one and not the production
+    /// one: the user is sent to the selector either way. No driver is
+    /// registered, so the refusal is proven to precede any dispatch.
+    ///
+    /// The server runs the body of an executable comment, so the same refusal
+    /// holds when the `USE` hides in one: the batch used to read as empty,
+    /// `Unknown` with no flag, and development only asked for an approval.
+    #[test]
+    fn an_agent_cannot_type_a_context_change_on_mysql() {
+        for (env, text) in [Environment::Production, Environment::Development]
+            .into_iter()
+            .flat_map(|env| {
+                ["USE other", "/*!50000 USE other */"]
+                    .into_iter()
+                    .map(move |text| (env, text))
+            })
+        {
+            let conn = ConnectionConfig::new("shop", DriverId::mysql()).with_environment(env);
+            let bench = Harness::new(&conn);
+            let mut events = bench.executor.subscribe();
+
+            let cmd = typed_context_change(conn.id, text);
+            // Only the text can raise the flag by the time the gate decides.
+            assert!(
+                !cmd.changes_context(),
+                "{env}: the caller declared no context change"
+            );
+
+            let outcome = block_on(bench.executor.dispatch(agent(), cmd, &CancelToken::new()))
+                .expect("a denial is not a failure");
+            let Outcome::Denied { command, reason } = outcome else {
+                panic!("an agent's typed USE must be refused on {env}: {outcome:?}");
+            };
+            assert!(
+                reason.contains("context selector"),
+                "{env}: the reason must send the user to the selector: {reason}"
+            );
+            assert!(
+                !reason.contains("production") && !reason.contains("read-only"),
+                "{env}: the production or read-only reason won over the context one: {reason}"
+            );
+
+            // A refusal, not a confirmation; and nothing started.
+            assert!(
+                bench.executor.approvals().is_empty(),
+                "{env}: a denial puts nothing on hold for approval"
+            );
+            assert!(bench.executor.running().is_empty(), "{env}");
+
+            // The log holds it, with the intent the text carries and not the
+            // one the agent declared.
+            assert_eq!(
+                bench.store.journal().count().expect("count"),
+                1,
+                "{env}: a denied command is logged like the others"
+            );
+            let trace = bench
+                .store
+                .journal()
+                .recent(1)
+                .expect("reading the log back")
+                .pop()
+                .expect("one entry");
+            assert_eq!(trace.record.command_id, Some(command), "{env}");
+            assert_eq!(trace.record.actor_kind, ActorKind::Agent, "{env}");
+            assert_eq!(trace.record.connection, Some(conn.id), "{env}");
+            assert_eq!(trace.record.command_kind, "Execute", "{env}");
+            assert_eq!(trace.record.decision, PolicyOutcome::Denied, "{env}");
+            assert_eq!(
+                trace.record.intent,
+                StatementIntent::Unknown,
+                "{env}: the declared read must have been overwritten"
+            );
+            assert_eq!(trace.record.statement.as_deref(), Some(text), "{env}");
+            assert!(
+                trace
+                    .record
+                    .decision_reason
+                    .as_deref()
+                    .is_some_and(|recorded| recorded.contains("context selector")),
+                "{env}: the journal keeps the reason: {:?}",
+                trace.record.decision_reason
+            );
+
+            // The history shows the denial too, once, with the same reason.
+            let entries = bench.store.history().recent(10).expect("read back");
+            assert_eq!(entries.len(), 1, "{env}: one denial, one row — not two");
+            let record = &entries[0].record;
+            assert_eq!(record.status, HistoryStatus::Denied, "{env}");
+            assert_eq!(record.statement, text, "{env}");
+            assert!(
+                record
+                    .error
+                    .as_deref()
+                    .is_some_and(|recorded| recorded.contains("context selector")),
+                "{env}: {:?}",
+                record.error
+            );
+
+            // And the interface learns it through the channel.
+            let received = events.try_recv().expect("an event was emitted");
+            assert_eq!(received.command, command, "{env}");
+            assert!(
+                matches!(received.event, Event::Failed { .. }),
+                "{env}: {received:?}"
+            );
+        }
+    }
+
+    /// **The refusal is the agent's.**
+    ///
+    /// The user types `USE other` in their own console. It is `Unknown`, so a
+    /// write for the gate: nothing to confirm off production, and on production
+    /// the confirmation that names the connection (I-02). Without this
+    /// counterpart, a refusal applied to everyone would pass the test above.
+    #[test]
+    fn a_user_typed_use_is_not_refused_by_the_agent_rule() {
+        // Development: the gate lets it through. This bench has no session to
+        // run it on, so what comes back is that failure — the proof is that the
+        // journal says `Allowed` and no denial exists anywhere.
+        let development = ConnectionConfig::new("shop", DriverId::mysql())
+            .with_environment(Environment::Development);
+        let bench = Harness::new(&development);
+        let error = block_on(bench.executor.dispatch(
+            Actor::Human,
+            typed_use(development.id),
+            &CancelToken::new(),
+        ))
+        .expect_err("the gate lets a user's USE through, and this bench has no session to run it");
+        assert!(
+            !matches!(error, OxynError::PolicyDenied { .. }),
+            "the agent's refusal reached the user: {error}"
+        );
+        let trace = bench
+            .store
+            .journal()
+            .recent(1)
+            .expect("read back")
+            .pop()
+            .expect("one entry");
+        assert_eq!(trace.record.actor_kind, ActorKind::Human);
+        assert_eq!(trace.record.decision, PolicyOutcome::Allowed);
+        assert!(
+            trace
+                .record
+                .decision_reason
+                .as_deref()
+                .is_none_or(|recorded| !recorded.contains("context selector")),
+            "{:?}",
+            trace.record.decision_reason
+        );
+        assert!(
+            bench
+                .store
+                .history()
+                .recent(10)
+                .expect("read back")
+                .iter()
+                .all(|entry| entry.record.status != HistoryStatus::Denied),
+            "no denial is recorded for the user"
+        );
+
+        // Production: the same statement waits for the confirmation that names
+        // the connection, and runs nothing until it comes.
+        let production = ConnectionConfig::new("shop", DriverId::mysql())
+            .with_environment(Environment::Production);
+        let bench = Harness::new(&production);
+        let outcome = block_on(bench.executor.dispatch(
+            Actor::Human,
+            typed_use(production.id),
+            &CancelToken::new(),
+        ))
+        .expect("an approval request is not a failure");
+        let Outcome::NeedsApproval {
+            command,
+            reason,
+            preview,
+        } = outcome
+        else {
+            panic!("a user's USE on production must ask for a confirmation: {outcome:?}");
+        };
+        assert!(
+            reason.contains("shop"),
+            "the confirmation must name the connection: {reason}"
+        );
+        assert_eq!(
+            preview.expect("a preview").connection,
+            "shop",
+            "the preview names the connection, never its identifier"
+        );
+        assert_eq!(bench.executor.approvals().len(), 1);
+        assert!(bench.executor.running().is_empty());
+        let trace = bench
+            .store
+            .journal()
+            .recent(1)
+            .expect("read back")
+            .pop()
+            .expect("one entry");
+        assert_eq!(trace.record.command_id, Some(command));
+        assert_eq!(trace.record.decision, PolicyOutcome::ApprovalRequired);
+        assert_eq!(
+            trace.record.intent,
+            StatementIntent::Unknown,
+            "the user's USE is no longer a read: that is what asks for the confirmation"
+        );
+        assert_eq!(trace.record.statement.as_deref(), Some("USE other"));
     }
 
     /// **The history records only executions.**

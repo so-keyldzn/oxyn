@@ -44,13 +44,14 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use oxyn_ai::context::wanted_relations;
-use oxyn_ai::{ContextPolicy, Mention};
+use oxyn_ai::context::{wanted_relations, wanted_relations_ranked};
+use oxyn_ai::{ContextPolicy, Mention, SemanticScores};
 use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope, Freshness, Relation, SharedCatalog};
 use oxyn_core::{Actor, CancelToken, Capabilities, Command, ConnectionId};
 use oxyn_exec::{DispatchReport, ExecutorSink};
 use tokio::time::Instant;
 
+use crate::backend::semantic::{Ranking, SEMANTIC_DEADLINE};
 use crate::ipc::ai::AiEvent;
 
 /// The longest a completion may take, reads included.
@@ -198,6 +199,24 @@ impl CatalogFill<'_> {
             .await
     }
 
+    /// [`Self::run`], ranked by meaning as well when `ranking` is given
+    /// (ADR-0056), and the scores it ranked with.
+    ///
+    /// The scores are computed once the listings are read — before them the
+    /// cache may hold no relation to score — and before the first
+    /// description, so what is described is what the gate will select with
+    /// the **same** scores, which the caller passes on to it.
+    pub(super) async fn run_ranked(
+        &self,
+        want: Want<'_>,
+        cancel: &CancelToken,
+        emit: &(dyn Fn(AiEvent) + Send + Sync),
+        ranking: Option<&Ranking<'_>>,
+    ) -> (Filled, SemanticScores) {
+        self.fill(want, cancel, emit, Instant::now() + FILL_DEADLINE, ranking)
+            .await
+    }
+
     /// [`Self::run`], against a deadline given by the caller — a test's.
     pub(super) async fn run_until(
         &self,
@@ -206,7 +225,19 @@ impl CatalogFill<'_> {
         emit: &(dyn Fn(AiEvent) + Send + Sync),
         deadline: Instant,
     ) -> Filled {
+        self.fill(want, cancel, emit, deadline, None).await.0
+    }
+
+    async fn fill(
+        &self,
+        want: Want<'_>,
+        cancel: &CancelToken,
+        emit: &(dyn Fn(AiEvent) + Send + Sync),
+        deadline: Instant,
+        mut ranking: Option<&Ranking<'_>>,
+    ) -> (Filled, SemanticScores) {
         let policy = ContextPolicy::default();
+        let mut scores = SemanticScores::new();
         let mut tried: HashSet<CatalogScope> = HashSet::new();
         if want.relists() {
             // The tool's own command has just read the server level — and
@@ -230,11 +261,31 @@ impl CatalogFill<'_> {
                 filled.stopped = Some(Stop::Deadline);
                 break;
             }
+            let listing = {
+                let cache = self.catalog.read();
+                next_listing(&cache, want, &tried, listings)
+            };
+            // Every listing read: the relations to describe are chosen from
+            // here on, so this is where they are scored, once.
+            // Within what is left of the fill's own deadline: the question
+            // never waits past it for scores, and a fill out of time ranks
+            // lexically rather than not at all describing what it chose.
+            if listing.is_none()
+                && let Some(ranking) = ranking.take()
+            {
+                match semantic_budget(deadline, Instant::now()) {
+                    Some(budget) => scores = ranking.scores_within(&self.catalog, budget).await,
+                    None => crate::backend::semantic::skip("no time left in the catalog fill"),
+                }
+            }
             // The read lock is released before anything awaits. The command is
             // the tree's own for that level: same scope, same capabilities.
             let next = {
                 let cache = self.catalog.read();
-                next_read(&cache, want, &policy, &tried, listings, descriptions).map(|scope| {
+                let scope = listing.or_else(|| {
+                    next_description(&cache, want, &policy, &tried, descriptions, &scores)
+                });
+                scope.map(|scope| {
                     let capabilities = cache
                         .server_info()
                         .map_or(Capabilities::empty(), |server| server.capabilities);
@@ -273,7 +324,7 @@ impl CatalogFill<'_> {
         {
             let cache = self.catalog.read();
             filled.unlisted = cache.unlisted_count();
-            filled.not_loaded = wanted(&cache, want, &policy)
+            filled.not_loaded = wanted(&cache, want, &policy, &scores)
                 .iter()
                 .filter(|path| !fetched(cache.freshness(&CatalogScope::Relation((*path).clone()))))
                 .count();
@@ -281,7 +332,7 @@ impl CatalogFill<'_> {
         if filled.attempted > 0 {
             emit(filled.event());
         }
-        filled
+        (filled, scores)
     }
 
     /// Submits one read, and stops it at the deadline or with the question.
@@ -359,45 +410,71 @@ impl CatalogFill<'_> {
     }
 }
 
-/// The next level to read, or `None` when the completion is done.
-fn next_read(
+/// What the semantic step may take of a fill that must end at `deadline`:
+/// its own [`SEMANTIC_DEADLINE`], or what is left if less, or nothing when
+/// the fill is out of time — the fill's bound is the question's
+/// (AI-PROVIDERS), and scores computed past it would rank relations nobody
+/// can describe any more.
+fn semantic_budget(deadline: Instant, now: Instant) -> Option<Duration> {
+    let left = deadline.saturating_duration_since(now);
+    (!left.is_zero()).then(|| left.min(SEMANTIC_DEADLINE))
+}
+
+/// The next listing to read, or `None` when every listing is read — or none
+/// is wanted.
+fn next_listing(
+    cache: &CatalogCache,
+    want: Want<'_>,
+    tried: &HashSet<CatalogScope>,
+    listings: usize,
+) -> Option<CatalogScope> {
+    if !want.lists() {
+        return None;
+    }
+    // The server level first: without the session's capabilities, the
+    // cache cannot tell which levels exist.
+    let server = CatalogScope::Server;
+    let server_read = cache.server_info().is_some() && fetched(cache.freshness(&server));
+    if !server_read && !tried.contains(&server) {
+        return Some(server);
+    }
+    if listings >= MAX_LISTINGS {
+        return None;
+    }
+    cache.listing_scopes().into_iter().find(|scope| {
+        !tried.contains(scope) && (want.relists() || !fetched(cache.freshness(scope)))
+    })
+}
+
+/// The next relation to describe, or `None` when the completion is done.
+fn next_description(
     cache: &CatalogCache,
     want: Want<'_>,
     policy: &ContextPolicy,
     tried: &HashSet<CatalogScope>,
-    listings: usize,
     descriptions: usize,
+    scores: &SemanticScores,
 ) -> Option<CatalogScope> {
-    if want.lists() {
-        // The server level first: without the session's capabilities, the
-        // cache cannot tell which levels exist.
-        let server = CatalogScope::Server;
-        let server_read = cache.server_info().is_some() && fetched(cache.freshness(&server));
-        if !server_read && !tried.contains(&server) {
-            return Some(server);
-        }
-        if listings < MAX_LISTINGS
-            && let Some(scope) = cache.listing_scopes().into_iter().find(|scope| {
-                !tried.contains(scope) && (want.relists() || !fetched(cache.freshness(scope)))
-            })
-        {
-            return Some(scope);
-        }
-    }
     if descriptions >= MAX_DESCRIPTIONS {
         return None;
     }
-    wanted(cache, want, policy)
+    wanted(cache, want, policy, scores)
         .into_iter()
         .map(CatalogScope::Relation)
         .find(|scope| !tried.contains(scope) && !fetched(cache.freshness(scope)))
 }
 
-/// The relations the gate will describe for `want`, as it selects them.
-fn wanted(cache: &CatalogCache, want: Want<'_>, policy: &ContextPolicy) -> Vec<CatalogPath> {
+/// The relations the gate will describe for `want`, as it selects them —
+/// with the semantic scores it will be given, empty when the option is off.
+fn wanted(
+    cache: &CatalogCache,
+    want: Want<'_>,
+    policy: &ContextPolicy,
+    scores: &SemanticScores,
+) -> Vec<CatalogPath> {
     match want {
         Want::Question { focus, mentions } => {
-            wanted_relations(cache, policy, focus, mentions, true)
+            wanted_relations_ranked(cache, policy, focus, mentions, true, scores)
         }
         Want::Mentions(mentions) => wanted_relations(cache, policy, "", mentions, false),
         Want::Search(focus) => wanted_relations(cache, policy, focus, &[], true),

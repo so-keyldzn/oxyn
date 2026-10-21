@@ -4,7 +4,7 @@ use std::{borrow::Cow, ops::Range};
 
 use oxyn_core::{QueryLanguage, SqlDialect};
 
-use crate::split::{SplitProfile, Tok, scan};
+use crate::split::{SplitProfile, Tok, executable_sql, scan};
 
 /// The stable, readable marker kept in place of a password literal.
 pub const REDACTED_LITERAL: &str = "'<redacted>'";
@@ -220,40 +220,6 @@ fn collect_with_profile(
         }
         Tok::Symbol | Tok::SingleQuoted | Tok::Quoted => {}
     });
-}
-
-/// Keep original byte offsets while exposing executable comment bodies to the
-/// shared lexer. Changing only ASCII delimiters preserves valid UTF-8.
-fn executable_sql(statement: &str, profile: SplitProfile) -> Cow<'_, str> {
-    let mut unmasked: Option<Vec<u8>> = None;
-    scan(statement, profile, &mut |token, span| {
-        let Some(comment) = statement.get(span.clone()) else {
-            return;
-        };
-        if token != Tok::Comment {
-            return;
-        }
-        let prefix_len = if comment.starts_with("/*!") {
-            3
-        } else if comment.starts_with("/*M!") {
-            4
-        } else {
-            return;
-        };
-        let bytes = unmasked.get_or_insert_with(|| statement.as_bytes().to_vec());
-        if let Some(prefix) = bytes.get_mut(span.start..span.start + prefix_len) {
-            prefix.fill(b' ');
-        }
-        if comment.ends_with("*/")
-            && let Some(suffix) = bytes.get_mut(span.end.saturating_sub(2)..span.end)
-        {
-            suffix.fill(b' ');
-        }
-    });
-    match unmasked {
-        Some(bytes) => Cow::Owned(String::from_utf8_lossy(&bytes).into_owned()),
-        None => Cow::Borrowed(statement),
-    }
 }
 
 #[cfg(test)]

@@ -1,10 +1,10 @@
-<!-- oxyn-translation source="docs/adr/0022-rafraichissement-automatique.md" sha256="09f82dea07fd" -->
+<!-- oxyn-translation source="docs/adr/0022-rafraichissement-automatique.md" sha256="2bcbb42bd5a1" -->
 
 > Traduction française de [docs/adr/0022-rafraichissement-automatique.md](../../../../docs/adr/0022-rafraichissement-automatique.md). **La version anglaise fait foi.**
 
 # ADR-0022 — Ce qui se rafraîchit tout seul, et ce qui ne le fera jamais
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Statut :** accepté (2026-10-20) · **Date :** 2026-09-10
 
 **Précise :** [ADR-0004](0004-command-bus.md), sur ce que le bus publie en plus
 de ce qu'il exécute.

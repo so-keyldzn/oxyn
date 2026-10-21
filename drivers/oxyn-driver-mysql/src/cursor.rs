@@ -19,6 +19,25 @@
 //! user's transaction, live on (ADR-0050 §7). `Drop` asks the
 //! task to stop; it never aborts it, since an aborted task can kill nothing.
 //!
+//! # What a confirmed stop proves
+//!
+//! The server's `ER_QUERY_INTERRUPTED` (1317) on the statement proves the kill
+//! was spent, so the connection is kept. It does not prove the statement left
+//! nothing behind: a non-transactional table keeps the rows changed before the
+//! interruption, a procedure keeps what it already committed, and a structure
+//! or privilege change may already be committed. `Cancelled` reads as "nothing
+//! was applied" and invites running the statement again
+//! ([I-13](../../../CLAUDE.md#i-13)), so a stopped statement that may have
+//! written never ends on it: it ends on [`OxynError::OutcomeUnknown`], inside a
+//! transaction as in autocommit. An open transaction (`SERVER_STATUS_IN_TRANS`)
+//! is no proof either: it says nothing of the engine of the tables the
+//! statement touched, and a non-transactional table written inside it is not
+//! rolled back. The engine is not asked, since finding it would compose schema
+//! lookups from identifiers the statement names
+//! ([I-10](../../../CLAUDE.md#i-10)), and foreign keys, triggers and views reach
+//! tables the statement does not name. A read, and a stop decided before the
+//! statement was sent, stay `Cancelled`; the rule is `Stopped::interruption`.
+//!
 //! # One statement, one result
 //!
 //! ADR-0050 §5: a `CALL` legitimately returns several result sets — the first
@@ -287,7 +306,15 @@ struct Pump {
     /// Did the row bound cut rows off, even when no kill was needed?
     truncated: bool,
     /// The outcome of the kill, once one was needed.
+    ///
+    /// Empty only when the stop was decided before the statement was sent:
+    /// every stop of a statement in flight sends a kill and records how it
+    /// went, a failed one included (see [`Pump::proof`]).
     kill: Option<std::result::Result<DrainVerdict, Arc<OxynError>>>,
+    /// Is the statement a `CALL`? A procedure keeps what it already committed
+    /// however the kill ends, and the intent a caller declared for it may say
+    /// otherwise.
+    call: bool,
     /// Must the connection be closed whatever the kill said?
     close: bool,
     /// Was the connection left with a result the library could only drain by
@@ -342,6 +369,7 @@ async fn run(
         extra_sets: 0,
         truncated: false,
         kill: None,
+        call: matches!(source, Source::Prepared { call: true, .. }),
         close: false,
         poisoned: false,
         binary: matches!(source, Source::Prepared { .. }),
@@ -722,6 +750,15 @@ impl Pump {
         self.kill = Some(Ok(verdict));
     }
 
+    /// What the kill proved about the statement it targeted.
+    const fn proof(&self) -> StopProof {
+        match self.kill {
+            None => StopProof::NoKill,
+            Some(Ok(DrainVerdict::Consumed)) => StopProof::KillConfirmed,
+            Some(Ok(DrainVerdict::Unproven) | Err(_)) => StopProof::Unproven,
+        }
+    }
+
     fn fail_with(&mut self, error: &MyError) {
         let mapped = map_stream_error(
             &self.driver,
@@ -746,7 +783,7 @@ impl Pump {
         before: TransactionState,
         sent: bool,
     ) -> bool {
-        let unproven = !matches!(self.kill, None | Some(Ok(DrainVerdict::Consumed)));
+        let unproven = self.proof() == StopProof::Unproven;
         if self.poisoned {
             lease.abandon();
             return before == TransactionState::Open;
@@ -808,13 +845,16 @@ impl Pump {
         // terminal event is queued, or it would never read the channel.
         drop(self.schema_sender.take());
         let failure = self.failure.take();
-        // Nothing was sent, or the kill was answered on the statement itself.
-        let stop_proven = matches!(self.kill, None | Some(Ok(DrainVerdict::Consumed)));
+        let stopped = Stopped {
+            stop,
+            proof: self.proof(),
+            call: self.call,
+        };
         if let Some(error) = terminal_error(
             &self.driver,
             self.intent,
             self.limits.timeout,
-            (stop, stop_proven),
+            stopped,
             lost,
             failure,
         ) {
@@ -853,19 +893,90 @@ impl Pump {
     }
 }
 
+/// What the kill, if one went out, proved about the statement it targeted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopProof {
+    /// No kill went out: the stop was decided before the statement was sent,
+    /// so nothing ran. [`Pump::kill`] is empty in no other case.
+    NoKill,
+    /// The server answered 1317 on the statement itself: it was interrupted.
+    /// That is not proof it kept nothing, see [`Stopped::interruption`].
+    KillConfirmed,
+    /// The kill failed, went unanswered, or the statement ended on its own:
+    /// it may have run to its end and committed.
+    Unproven,
+}
+
+/// How an execution was stopped, and what is known of what it left behind.
+///
+/// Grouped so that [`terminal_error`] stays a pure function with a short
+/// argument list: every verdict below is a table a test drives without a
+/// server.
+#[derive(Debug, Clone, Copy)]
+struct Stopped {
+    stop: Halt,
+    proof: StopProof,
+    /// Was the statement a `CALL`?
+    call: bool,
+}
+
+/// The server interrupted the statement, which proves neither that it kept
+/// nothing nor that a replay is harmless: fixed text, no server message.
+const INTERRUPTED_BUT_KEPT: &str = "the server interrupted the statement, but a non-transactional \
+     table keeps the rows changed before the interruption, a procedure keeps what it already \
+     committed, and a structure or privilege change may already be committed; check the data \
+     before running it again";
+
+/// The kill was lost or never answered: the statement may have run to its end.
+const KILL_UNCONFIRMED: &str = "the write was stopped, but the server did not confirm it \
+     interrupted it: it may have run to its end; check the data before running it again";
+
+impl Stopped {
+    /// The error of a statement the user stopped: `Cancelled` only with
+    /// proof that nothing was applied ([I-13](../../../CLAUDE.md#i-13)),
+    /// `OutcomeUnknown` otherwise.
+    ///
+    /// * nothing was sent, or a statement that cannot have written — a read,
+    ///   not a `CALL`: `Cancelled`;
+    /// * the kill was confirmed (1317) on a statement that may have written:
+    ///   unknown, whether a transaction is open or not. The server rolls an
+    ///   interrupted statement back only on a transactional engine; a
+    ///   non-transactional table keeps the rows changed before the
+    ///   interruption, and an open transaction (`SERVER_STATUS_IN_TRANS`) says
+    ///   nothing of the engine of the tables the statement touched. A
+    ///   procedure keeps what it already committed, and a structure or
+    ///   privilege change may commit implicitly. The message says why;
+    /// * the kill was not confirmed: unknown.
+    ///
+    /// The transaction state is deliberately not an input: it was the proof
+    /// this rule used to rely on, and a MyISAM table written after `BEGIN` is
+    /// the case it got wrong. A transactional write interrupted inside a
+    /// transaction is thus `OutcomeUnknown` too, a deliberate loss of precision
+    /// that costs the user a look at the data, not a duplicate.
+    fn interruption(self, intent: StatementIntent) -> OxynError {
+        let may_have_written = intent.is_mutating() || self.call;
+        match self.proof {
+            StopProof::NoKill => OxynError::Cancelled,
+            _ if !may_have_written => OxynError::Cancelled,
+            StopProof::KillConfirmed => OxynError::OutcomeUnknown(INTERRUPTED_BUT_KEPT.to_owned()),
+            StopProof::Unproven => OxynError::OutcomeUnknown(KILL_UNCONFIRMED.to_owned()),
+        }
+    }
+}
+
 /// The one error an execution ends on, or `None` when it ends on its rows.
 ///
 /// A lost transaction outranks the failure that cost the connection: it is
 /// what the user must act upon, and the failure is kept in its message.
 ///
-/// `stop` comes with whether it is proven to have reached the statement: a
-/// write stopped by a kill the server did not answer on that very statement —
-/// or that never went out — may have run to its end and committed.
+/// A stop by the token or a dropped cursor is judged by
+/// [`Stopped::interruption`]: it is not `Cancelled` unless the statement
+/// provably left nothing behind.
 fn terminal_error(
     driver: &DriverId,
     intent: StatementIntent,
     timeout: Option<std::time::Duration>,
-    (stop, stop_proven): (Halt, bool),
+    stopped: Stopped,
     lost: bool,
     failure: Option<OxynError>,
 ) -> Option<OxynError> {
@@ -896,17 +1007,10 @@ fn terminal_error(
     if failure.is_some() {
         return failure;
     }
-    match stop {
-        // Not `Cancelled`: that would read as "nothing happened" and invite
-        // running the write again (I-13).
-        Halt::Cancelled | Halt::Abandoned if intent.is_mutating() && !stop_proven => {
-            Some(OxynError::OutcomeUnknown(
-                "the write was stopped, but the server did not confirm it interrupted it: \
-                 it may have run to its end; check the data before running it again"
-                    .to_owned(),
-            ))
-        }
-        Halt::Cancelled | Halt::Abandoned => Some(OxynError::Cancelled),
+    match stopped.stop {
+        // `Cancelled` would read as "nothing happened" and invite running the
+        // write again (I-13): the statement has to prove it.
+        Halt::Cancelled | Halt::Abandoned => Some(stopped.interruption(intent)),
         // Ambiguous by construction: a write may have been applied.
         Halt::TimedOut => Some(OxynError::Timeout {
             after: timeout.unwrap_or_default(),
@@ -1063,6 +1167,7 @@ mod tests {
 
     use mysql_async::Column;
     use mysql_async::consts::ColumnType;
+    use rstest::rstest;
     use std::time::Duration;
 
     #[test]
@@ -1117,12 +1222,22 @@ mod tests {
             extra_sets: 0,
             truncated: false,
             kill: None,
+            call: false,
             close: true,
             poisoned: false,
             binary: false,
             failure: None,
         };
         (pump, reception, schema_reception)
+    }
+
+    /// A stop of a statement that is no `CALL`.
+    const fn stopped_by(stop: Halt, proof: StopProof) -> Stopped {
+        Stopped {
+            stop,
+            proof,
+            call: false,
+        }
     }
 
     #[tokio::test]
@@ -1164,7 +1279,7 @@ mod tests {
             &pump.driver,
             pump.intent,
             None,
-            (Halt::Failed, true),
+            stopped_by(Halt::Failed, StopProof::NoKill),
             false,
             pump.failure.take(),
         )
@@ -1174,7 +1289,7 @@ mod tests {
             &DriverId::mysql(),
             StatementIntent::Read,
             None,
-            (Halt::Cancelled, true),
+            stopped_by(Halt::Cancelled, StopProof::KillConfirmed),
             true,
             None,
         )
@@ -1189,7 +1304,7 @@ mod tests {
                 &DriverId::mysql(),
                 StatementIntent::Read,
                 None,
-                (Halt::Exhausted, true),
+                stopped_by(Halt::Exhausted, StopProof::NoKill),
                 false,
                 None,
             )
@@ -1197,35 +1312,212 @@ mod tests {
         );
     }
 
+    /// The error a stop ends on, with the facts `conclude` hands to
+    /// `terminal_error`.
+    fn stop_error(stop: Halt, intent: StatementIntent, proof: StopProof, call: bool) -> OxynError {
+        terminal_error(
+            &DriverId::mysql(),
+            intent,
+            None,
+            Stopped { stop, proof, call },
+            false,
+            None,
+        )
+        .expect("a stop is an error")
+    }
+
+    /// Asserts the verdict: `Cancelled`, or an unknown outcome that is
+    /// ambiguous and never replayed.
+    fn assert_verdict(error: &OxynError, cancelled: bool) {
+        if cancelled {
+            assert!(error.is_cancelled(), "{error:?}");
+        } else {
+            assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
+            assert_eq!(error.class(), ErrorClass::Ambiguous);
+            assert!(!error.is_retryable(), "never replayed (I-13)");
+        }
+    }
+
+    // The rule, row by row. A kill confirmed with 1317 proves the kill was
+    // spent, not that the statement kept nothing: a statement that may have
+    // written is `Cancelled` in no case once it was sent. Whether a transaction
+    // was open is not a column: it proves nothing about the engine of the tables
+    // (a MyISAM table written after `BEGIN` keeps its rows), so no row of this
+    // table can turn on it.
+    #[rstest]
+    // Nothing was sent: nothing ran, whatever the statement.
+    #[case::write_never_sent(StatementIntent::Write, StopProof::NoKill, false, true)]
+    #[case::call_never_sent(StatementIntent::Unknown, StopProof::NoKill, true, true)]
+    // A read has nothing to commit, whatever the kill said.
+    #[case::read_unproven(StatementIntent::Read, StopProof::Unproven, false, true)]
+    #[case::read_kill_confirmed(StatementIntent::Read, StopProof::KillConfirmed, false, true)]
+    // A kill the server did not answer on the statement: it may have committed.
+    #[case::write_unproven(StatementIntent::Write, StopProof::Unproven, false, false)]
+    // A confirmed kill still proves nothing for a write: an update of a MyISAM
+    // table keeps the rows changed before the kill (issue #222).
+    #[case::write_killconfirmed_is_unknown(
+        StatementIntent::Write,
+        StopProof::KillConfirmed,
+        false,
+        false
+    )]
+    // A CALL keeps what the procedure committed, and whatever intent the caller
+    // declared for it.
+    #[case::call_killconfirmed_is_unknown(
+        StatementIntent::Unknown,
+        StopProof::KillConfirmed,
+        true,
+        false
+    )]
+    #[case::call_declared_write_killconfirmed_is_unknown(
+        StatementIntent::Write,
+        StopProof::KillConfirmed,
+        true,
+        false
+    )]
+    #[case::call_declared_read_killconfirmed_is_unknown(
+        StatementIntent::Read,
+        StopProof::KillConfirmed,
+        true,
+        false
+    )]
+    #[case::call_declared_read_unproven_is_unknown(
+        StatementIntent::Read,
+        StopProof::Unproven,
+        true,
+        false
+    )]
+    // A structure, privilege or undetermined statement may commit implicitly.
+    #[case::ddl_killconfirmed_is_unknown(
+        StatementIntent::Ddl,
+        StopProof::KillConfirmed,
+        false,
+        false
+    )]
+    #[case::grant_killconfirmed_is_unknown(
+        StatementIntent::Grant,
+        StopProof::KillConfirmed,
+        false,
+        false
+    )]
+    #[case::unknown_killconfirmed_is_unknown(
+        StatementIntent::Unknown,
+        StopProof::KillConfirmed,
+        false,
+        false
+    )]
+    fn a_stop_is_cancelled_only_when_the_statement_provably_kept_nothing(
+        #[case] intent: StatementIntent,
+        #[case] proof: StopProof,
+        #[case] call: bool,
+        #[case] cancelled: bool,
+        // The token and a dropped cursor reach the same verdict.
+        #[values(Halt::Cancelled, Halt::Abandoned)] stop: Halt,
+    ) {
+        let error = stop_error(stop, intent, proof, call);
+        assert_verdict(&error, cancelled);
+    }
+
     #[test]
-    fn a_stopped_write_is_cancelled_only_when_the_server_confirmed_the_kill() {
-        let stopped = |intent, proven| {
-            terminal_error(
-                &DriverId::mysql(),
-                intent,
-                None,
-                (Halt::Cancelled, proven),
-                false,
-                None,
-            )
-            .expect("a stop is an error")
+    fn every_combination_of_facts_ends_a_stop_on_cancelled_or_an_ambiguous_outcome() {
+        // The table above names the rows that matter; this sweeps all 60, so
+        // a combination nobody wrote down cannot end on anything else — a
+        // permanent or transient class would offer the user a replay.
+        let intents = [
+            StatementIntent::Read,
+            StatementIntent::Write,
+            StatementIntent::Ddl,
+            StatementIntent::Grant,
+            StatementIntent::Unknown,
+        ];
+        let proofs = [
+            StopProof::NoKill,
+            StopProof::KillConfirmed,
+            StopProof::Unproven,
+        ];
+        for intent in intents {
+            for proof in proofs {
+                for call in [false, true] {
+                    for stop in [Halt::Cancelled, Halt::Abandoned] {
+                        let cancelled = proof == StopProof::NoKill
+                            || (intent == StatementIntent::Read && !call);
+                        let error = stop_error(stop, intent, proof, call);
+                        assert_verdict(&error, cancelled);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_unknown_outcomes_say_why_the_statement_may_have_kept_its_effects() {
+        let OxynError::OutcomeUnknown(interrupted) = stop_error(
+            Halt::Cancelled,
+            StatementIntent::Write,
+            StopProof::KillConfirmed,
+            false,
+        ) else {
+            panic!("an interrupted write is an unknown outcome");
         };
-        // The kill missed, or never went out: the write may have committed.
-        let unknown = stopped(StatementIntent::Write, false);
         assert!(
-            matches!(unknown, OxynError::OutcomeUnknown(_)),
-            "{unknown:?}"
+            interrupted.contains("a non-transactional table keeps the rows changed"),
+            "{interrupted}"
         );
-        assert!(!unknown.is_retryable(), "never replayed (I-13)");
-        // `ER_QUERY_INTERRUPTED` on the statement itself: nothing applied.
-        assert!(matches!(
-            stopped(StatementIntent::Write, true),
-            OxynError::Cancelled
-        ));
-        // A read has nothing to commit.
-        assert!(matches!(
-            stopped(StatementIntent::Read, false),
-            OxynError::Cancelled
-        ));
+        assert!(
+            interrupted.contains("a procedure keeps what it already committed"),
+            "{interrupted}"
+        );
+        let OxynError::OutcomeUnknown(unconfirmed) = stop_error(
+            Halt::Cancelled,
+            StatementIntent::Write,
+            StopProof::Unproven,
+            false,
+        ) else {
+            panic!("an unconfirmed kill is an unknown outcome");
+        };
+        assert!(
+            unconfirmed.contains("did not confirm it interrupted it"),
+            "{unconfirmed}"
+        );
+    }
+
+    #[rstest]
+    fn a_timeout_stays_ambiguous_whatever_the_kill_proved(
+        #[values(StopProof::NoKill, StopProof::KillConfirmed, StopProof::Unproven)]
+        proof: StopProof,
+        #[values(StatementIntent::Read, StatementIntent::Write)] intent: StatementIntent,
+    ) {
+        let error = stop_error(Halt::TimedOut, intent, proof, true);
+        assert!(matches!(error, OxynError::Timeout { .. }), "{error:?}");
+        assert_eq!(error.class(), ErrorClass::Ambiguous);
+        assert!(!error.is_retryable(), "never replayed (I-13)");
+    }
+
+    // The table above drives the verdict; this drives what feeds it: how
+    // `conclude` reads the kill's outcome and the `CALL` off the pump.
+    #[rstest]
+    #[case::no_kill(None, false, true)]
+    #[case::confirmed(Some(Ok(DrainVerdict::Consumed)), false, false)]
+    #[case::confirmed_in_a_call(Some(Ok(DrainVerdict::Consumed)), true, false)]
+    #[case::unproven(Some(Ok(DrainVerdict::Unproven)), false, false)]
+    #[case::kill_that_failed(
+        Some(Err(Arc::new(OxynError::Connection("the killing connection did not open".to_owned())))),
+        false,
+        false
+    )]
+    #[tokio::test]
+    async fn the_pump_hands_the_kill_and_the_call_to_the_verdict(
+        #[case] kill: Option<std::result::Result<DrainVerdict, Arc<OxynError>>>,
+        #[case] call: bool,
+        #[case] cancelled: bool,
+    ) {
+        let (mut pump, mut events, _schema) = pump_awaiting_its_schema(StatementIntent::Write);
+        pump.kill = kill;
+        pump.call = call;
+        pump.conclude(Halt::Cancelled, false).await;
+        let Some(CursorEvent::Failed(error)) = events.recv().await else {
+            panic!("a stopped write ends on one terminal error");
+        };
+        assert_verdict(&error, cancelled);
     }
 }

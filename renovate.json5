@@ -1,14 +1,21 @@
-// I-12, run by a machine.
+// NOT ACTIVE. Renovate is not installed on this repository and has never run:
+// this file is a configuration ready to be activated, not a mechanism in force.
 //
-// "No version, no external limit copied from memory. Checked against the
-// registry, dated." Renovate does nothing else: it reads the registry, opens
-// one PR per bump, and the date is the commit's. It is `/versions` without the
-// risk that a plausible and wrong value gets through — it shows up neither at
-// compile time, nor in tests, nor in review.
+// I-12 ("no version, no external limit copied from memory; checked against the
+// registry, dated") is held elsewhere, and does not depend on this file:
+// `make versions` refuses a version pinned in Cargo.toml or in
+// apps/desktop/package.json that docs/RESEARCH-NOTES.md does not record, and
+// `/versions` compares the notes with the registries.
 //
-// What it does NOT do, and what stays with the human: record the value and its
-// source in docs/RESEARCH-NOTES.md, in the same commit. That is why no PR is
-// merged automatically.
+// If it is activated: Renovate would read the registry and open one PR per
+// bump, the date being the commit's. What it cannot do stays with the human:
+// record the value and its source in docs/RESEARCH-NOTES.md, in the same
+// commit — `make versions` fails the PR otherwise. That is why no PR is merged
+// automatically.
+//
+// Before activating it: the labels it adds (`sécurité`, `frontière`) do not
+// exist in the repository (labels read on 2026-10-20). Create them, or rename
+// them below.
 //
 // JSON5 and not JSON: this file needs to say why, and JSON cannot carry a
 // comment. Renovate reads `renovate.json5` natively.
@@ -61,8 +68,8 @@
 
   packageRules: [
     // Crates that talk to a server or an AI provider change behavior on an
-    // external boundary. They are reviewed, not skimmed. The label names are
-    // the repository's existing GitHub labels.
+    // external boundary. They are reviewed, not skimmed. The label does not
+    // exist yet (see the header).
     {
       matchPackageNames: ["sqlx", "reqwest", "arrow", "wasmtime", "keyring", "secrecy"],
       addLabels: ["frontière"],

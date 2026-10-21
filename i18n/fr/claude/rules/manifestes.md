@@ -13,7 +13,7 @@ paths:
   - "script/*"
 ---
 
-<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="8972c1a3c544" -->
+<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="2a49fd9efa62" -->
 
 > Traduction française de [.claude/rules/manifestes.md](../../../../.claude/rules/manifestes.md). **La version anglaise fait foi.**
 
@@ -28,6 +28,11 @@ construire le projet six mois plus tard.
 Avant d'ajouter ou de modifier une dépendance : [`/versions`](../commands/versions.md).
 La valeur retenue est reportée dans
 [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) **dans le même commit**.
+
+`make versions` refuse une version épinglée dans `Cargo.toml` ou dans
+`apps/desktop/package.json` que les notes n'enregistrent pas : une pull request de
+montée de version, celle de Dependabot comprise, porte donc sa ligne datée dans le
+même commit. `renovate.json5` est une configuration dormante qui n'impose rien.
 
 ## Le workspace centralise
 
@@ -82,7 +87,7 @@ premier niveau se range dans `script/zones-ci` — sans quoi il déclenche tout.
 | [clippy.toml](../../../../clippy.toml) | les chemins d'appel interdits — `disallowed-methods`, avec la raison et le remplacement |
 | [.cargo/config.toml](../../../../.cargo/config.toml) | rien ; il impose les drapeaux qui doivent valoir pour tout le monde, dont la cible macOS |
 | [.config/nextest.toml](../../../../.config/nextest.toml) | un test qui pend, et deux tests qui se partagent un serveur |
-| [renovate.json5](../../../../renovate.json5) | une version recopiée de mémoire — c'est [I-12](../../CLAUDE.md#i-12) mécanisé |
+| [verifier_versions.py](../../../../.claude/hooks/verifier_versions.py), via `make versions` | une version épinglée dans `Cargo.toml` ou `apps/desktop/package.json` que [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) n'enregistre pas, ou enregistre autrement — hors ligne, [I-12](../../CLAUDE.md#i-12) |
 
 Un invariant qui se ramène à un chemin d'appel appartient à `clippy.toml`, pas à
 une relecture. `clippy.toml` vaut pour **tout** le workspace : un interdit qui ne

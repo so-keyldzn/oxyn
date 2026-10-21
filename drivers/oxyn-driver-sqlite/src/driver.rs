@@ -1,15 +1,20 @@
 //! The driver: what SQLite says about itself, and opening a session.
 //!
-//! # A single connection field
+//! # Two connection fields
 //!
 //! SQLite has no host, no port, no user, no password: it has a **file**. The form
-//! therefore carries a single field, `path`, of kind [`FieldKind::Path`], and the
+//! therefore carries the field `path`, of kind [`FieldKind::Path`], and the
 //! special value [`SqliteDriver::MEMORY`] opens an in-memory database.
 //!
 //! A second "in-memory database" checkbox would have been more explicit on one
 //! side and wrong on the other: two ways of saying the same thing always end up
 //! contradicting each other — what to do with a checked box and a filled path?
 //! The single field has no such state.
+//!
+//! The other field, [`SqliteDriver::VECTOR_EXTENSION`], is a different subject:
+//! whether the bundled sqlite-vec extension runs on this file. It is off unless
+//! the user turned it on for the connection
+//! ([ADR-0054](../../../docs/adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)).
 //!
 //! # The capabilities, and what makes them vary from one session to another
 //!
@@ -68,8 +73,16 @@ impl SqliteDriver {
     /// SQLite's own convention, not an Oxyn invention.
     pub const MEMORY: &'static str = ":memory:";
 
-    /// The key of the only connection field.
+    /// The key of the database file field.
     pub const PATH: &'static str = "path";
+
+    /// The key of the switch that registers sqlite-vec on the connection.
+    ///
+    /// `"true"` turns it on; absent or `"false"` leaves it off, which is what a
+    /// workspace saved before the field existed reads as. sqlite-vec's C code
+    /// parses the file's `vec0` shadow tables and keeps its `assert()`s live:
+    /// it only runs on a file the user chose to trust (ADR-0054).
+    pub const VECTOR_EXTENSION: &'static str = "sqlite_vec";
 
     /// The driver, with the default batch bounds.
     #[must_use]
@@ -159,6 +172,39 @@ fn metadata() -> DriverMetadata {
                      shared by the sessions of this connection and lost when the last one closes.",
                 ),
         )
+        .with_field(
+            ConnectionField::new(
+                SqliteDriver::VECTOR_EXTENSION,
+                "Enable sqlite-vec (vec0 vector tables)",
+                FieldKind::Bool,
+            )
+            .with_default("false")
+            .with_help(
+                "Runs the bundled sqlite-vec C extension on this file. Enable it only for files \
+                 you trust. A change applies to sessions opened afterwards: disconnect to apply \
+                 it to open ones.",
+            ),
+        )
+}
+
+/// Reads the sqlite-vec switch: off unless the value is exactly `"true"`.
+///
+/// Any other non-empty value is refused rather than read as off: a switch the
+/// user believes on would fail later, on `no such module: vec0`, far from its
+/// cause.
+fn vector_extension(config: &ConnectionConfig) -> Result<bool> {
+    match config
+        .params
+        .get(SqliteDriver::VECTOR_EXTENSION)
+        .map(|value| value.trim())
+    {
+        None | Some("" | "false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(_) => Err(OxynError::Config(format!(
+            "driver `sqlite`: parameter `{}` is `true` or `false`",
+            SqliteDriver::VECTOR_EXTENSION
+        ))),
+    }
 }
 
 #[async_trait]
@@ -220,6 +266,7 @@ impl Driver for SqliteDriver {
             // the engine**. It is a far stronger guarantee than client-side
             // filtering — and it does not replace the `PolicyGate`, it doubles it.
             read_only: config.read_only,
+            vector_extension: vector_extension(config)?,
         };
 
         let (worker, thread) = worker::spawn(spec, cancel).await?;
@@ -263,20 +310,34 @@ mod tests {
     }
 
     #[test]
-    fn the_form_fits_in_one_path_field() {
+    fn the_form_is_a_path_and_the_sqlite_vec_switch() {
         let driver = SqliteDriver::new();
         let fields = &driver.metadata().connection_fields;
-        assert_eq!(fields.len(), 1);
-        let only_field = fields.first().expect("one field");
-        assert_eq!(only_field.key, SqliteDriver::PATH);
-        assert_eq!(only_field.kind, FieldKind::Path);
-        assert!(only_field.required);
+        assert_eq!(fields.len(), 2);
+        let path = driver.metadata().field(SqliteDriver::PATH).expect("path");
+        assert_eq!(path.kind, FieldKind::Path);
+        assert!(path.required);
         assert!(
-            only_field
-                .help
+            path.help
                 .as_deref()
                 .is_some_and(|text| text.contains(SqliteDriver::MEMORY)),
             "the in-memory option must be stated somewhere"
+        );
+        // Off by default, and its help says what turning it on runs.
+        let switch = driver
+            .metadata()
+            .field(SqliteDriver::VECTOR_EXTENSION)
+            .expect("sqlite-vec switch");
+        assert_eq!(switch.kind, FieldKind::Bool);
+        assert!(!switch.required);
+        assert_eq!(switch.default.as_deref(), Some("false"));
+        assert!(
+            switch
+                .help
+                .as_deref()
+                .is_some_and(|text| text.contains("C extension") && text.contains("trust")),
+            "{:?}",
+            switch.help
         );
         assert_eq!(
             driver.metadata().secret_fields().count(),

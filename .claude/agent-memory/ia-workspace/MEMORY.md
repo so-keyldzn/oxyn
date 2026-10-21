@@ -9,3 +9,5 @@
 - [Trap: cargo-nextest missing](piege-nextest-absent.md) — the gate falls back to `cargo test`; target with `-p`, not `nextest run`
 - [clippy trap: `thread::sleep` in a test](piege-clippy-sleep-dans-les-tests.md) — refused in tests too; and a test `ExecRequest` is read-only by default
 - [Trait trap: default method not forwarded](piege-methode-par-defaut-non-relayee.md) — a wrapper inherits the default instead of delegating; the compiler stays silent
+- [verif-rapide trap: no front build](piege-verif-rapide-sans-build-front.md) — a fresh worktree stops on missing `apps/desktop/dist/client`; run the Rust steps by hand
+- [Hook trap: Write is not formatted](piege-write-non-formate.md) — only Edit triggers the formatter hook; a new .rs file can fail `cargo fmt --check`

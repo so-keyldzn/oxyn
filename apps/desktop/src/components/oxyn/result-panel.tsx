@@ -74,7 +74,13 @@ export type ResultState =
       elapsedMs?: number
     }
   | { status: "empty"; message: string }
-  | { status: "error"; message: string; retryable: boolean }
+  | {
+      status: "error"
+      message: string
+      retryable: boolean
+      /** The engine module the read needed, as the backend named it. */
+      missingModule?: string | null
+    }
 
 /** Where a failed statement ran, for the line under the error title. */
 export interface ErrorContext {

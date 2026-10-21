@@ -16,6 +16,8 @@ function relation(name: string, holdsRecords = true): CatalogNode {
     loaded: true,
     stale: false,
     children: [],
+    virtualTable: null,
+    shadowOf: null,
   }
 }
 

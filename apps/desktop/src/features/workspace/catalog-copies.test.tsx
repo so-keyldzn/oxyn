@@ -66,6 +66,8 @@ const orders: CatalogNode = {
   loaded: false,
   stale: false,
   children: [],
+  virtualTable: null,
+  shadowOf: null,
 }
 
 const INSERT = 'INSERT INTO "public"."orders" ("id") VALUES (?)'

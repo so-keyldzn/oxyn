@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="a4945ad2e4c4" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="914f8ab1ee80" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -59,16 +59,66 @@ repart convaincu que sa correction est enregistrée.
 
 Une confirmation qui se clique par réflexe ne protège personne. Sur une
 connexion marquée `production` ([SECURITY](SECURITY.md#marquage-des-connexions)),
-la confirmation d'une écriture ou d'un DDL **nomme la connexion** et affiche le
-SQL exact. Le bouton par défaut n'est jamais l'action destructrice.
+une écriture ou un DDL passe par **deux étapes à la suite**, et chacune suit sa
+propre règle :
+
+1. **La revue, dans la webview** : la boîte d'approbation, ou la boîte de revue
+   du catalogue ([Opérations destructrices depuis le catalogue](#opérations-destructrices-depuis-le-catalogue)).
+   Elle **nomme la connexion** et affiche le **SQL exact**, tel qu'il a été
+   écrit, en entier et défilable. `Cancel` reçoit le focus initial, l'action qui
+   nomme la connexion n'est pas focalisée, et Entrée seule n'approuve rien. À
+   cette étape, le bouton par défaut n'est jamais l'action destructrice.
+2. **La confirmation native**, un dialogue que l'hôte dessine une fois la revue
+   approuvée ([La confirmation native d'une écriture en production](#la-confirmation-native-dune-écriture-en-production)).
+   Elle **nomme aussi la connexion**, mais son corps montre un rendu coupé
+   du SQL, et sous macOS son bouton par défaut **est** l'écriture.
+
+Un agent n'atteint aucune des deux étapes sur `production` : son écriture est un
+refus, et aucun dialogue ne s'ouvre ([I-02](../CLAUDE.md#i-02)).
 
 Une revue ne contient les opérations que d'une seule connexion. Une transaction
 ouverte sur une autre connexion dispose de sa propre vue, nommant sa connexion
 et son environnement ; ses actions ne figurent pas dans la confirmation courante.
 
-`Drop…`, `Truncate…` et `Rename…` du catalogue appliquent cette règle dans une
-revue sur place, décrite dans
+`Drop…`, `Truncate…` et `Rename…` du catalogue appliquent l'étape de revue dans
+une boîte sur place, décrite dans
 [Opérations destructrices depuis le catalogue](#opérations-destructrices-depuis-le-catalogue).
+
+### La confirmation native d'une écriture en production
+
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) en porte
+les raisons : un bouton dessiné dans la webview est un bouton qu'un script qui
+s'y exécute aurait pu cliquer. Ce dialogue est composé par le backend, et se
+comporte ainsi :
+
+- **Boutons.** Celui qui confirme se lit `Write to production` ; l'autre se lit
+  `Cancel`. Sous macOS, le bouton de confirmation est le **bouton par défaut**,
+  et Entrée le déclenche ; le plugin ne permet pas de désigner l'autre. Sous
+  Windows et Linux, `rfd` 0.16.0 et le plugin ne désignent aucun bouton par
+  défaut ; le comportement est celui du toolkit de la plateforme et n'est pas
+  vérifié par Oxyn (source lue le 2026-10-20).
+- **Une seconde.** Une confirmation reçue moins de **1 s** après que l'hôte a
+  affiché le dialogue est un refus qui consomme la décision : l'écriture est
+  rejetée et ne reste pas en attente, et l'utilisateur la relance. À partir de
+  1 s, Entrée sous macOS confirme l'écriture. La seconde court depuis
+  l'affichage, pas depuis la demande : un dialogue qui attend derrière un autre
+  a la sienne.
+- **Cinq minutes.** La décision est refusée si le dialogue n'a pas reçu de
+  réponse dans les **5 min** qui suivent la demande. Oxyn ne peut pas fermer la
+  fenêtre : un clic dessus après l'échéance est ignoré.
+- **Tout le reste refuse** : `Cancel`, Échap, la fermeture de la fenêtre, un
+  dialogue qui n'a pas pu s'ouvrir. Un refus consomme la décision.
+- **Le corps montre un rendu coupé et échappé du SQL, jamais le texte brut
+  intégral.** Après la connexion (son nom, `PRODUCTION`, son adresse non secrète
+  quand elle en a une) et l'intention avec la raison de la politique, il se lit
+  `Statement (N characters):` avec la longueur réelle, puis l'instruction.
+  Jusqu'à **1 000 caractères** elle est entière ; au-delà, les **500** premiers
+  caractères, une ligne `… M more characters …` où M vaut N moins 1 000, puis
+  les **500** derniers. Un saut de ligne et une tabulation apparaissent en `↵`
+  et `⇥` ; tout autre caractère de contrôle ou invisible en `\u{XXXX}`.
+
+Le SQL exact se lit dans la revue qui précède le dialogue : la zone « Statement
+to approve » de la boîte d'approbation, ou la boîte de revue du catalogue.
 
 ## Annulation
 
@@ -260,6 +310,19 @@ la valeur enregistrée rétablit l'état stocké. L'annonce se fait avant
 l'enregistrement, pas après : l'utilisateur qui corrige une faute de frappe dans
 l'hôte apprend qu'il perd le mot de passe au moment où il peut encore annuler.
 
+### L'interrupteur sqlite-vec
+
+Une connexion SQLite porte, sous son fichier, un interrupteur libellé
+« Enable sqlite-vec (vec0 vector tables) », **désactivé** sur toute nouvelle
+connexion et sur tout `Duplicate`. Sa description dit ce qu'il fait et quand :
+« Runs the bundled sqlite-vec C extension on this file. Enable it only for files
+you trust. A change applies to sessions opened afterwards: disconnect to apply
+it to open ones. » L'enregistrer ne ferme aucune session ; `Disconnect` puis
+`Connect` l'applique partout. Désactivé, une table
+`vec0` reste illisible (`no such module: vec0`) ; activé, elle se lit comme
+n'importe quelle table. Seul le formulaire de connexion le change — aucun agent
+ne le peut ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md)).
+
 ## Structure commune du workspace
 
 La structure retenue est le **workbench dense** de la page Figma
@@ -308,9 +371,11 @@ dans cette étiquette. Les autres niveaux et les états bloqués restent
 explicitement distingués ; cette présentation ne modifie pas les règles de
 [AI-PROVIDERS](AI-PROVIDERS.md).
 
-Dans la confirmation d'une écriture en production, `Cancel` reçoit le focus
+Dans la revue webview d'une écriture en production, `Cancel` reçoit le focus
 initial visible. L'action qui nomme la connexion a un style destructif et
-n'est pas focalisée. Entrée seule ne valide pas l'écriture.
+n'est pas focalisée. Entrée seule ne valide pas l'écriture. Ce n'est que l'étape
+de revue : la confirmation native qui suit a son propre bouton par défaut
+(« Les opérations destructrices »).
 
 ### Largeur réduite
 
@@ -613,10 +678,12 @@ Elle applique « Les opérations destructrices » et y ajoute :
 
 Ce que la boîte soumet passe ensuite par la politique, comme tout SQL. Sur
 `production`, l'accord est donné dans le **dialogue natif** d'Oxyn, qui nomme
-la connexion et cite l'instruction
-([ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)) :
-aucun second écran ne s'intercale. Ailleurs, `Drop…` et `Truncate…`
-demandent l'approbation dans la même boîte, et `Rename…` s'exécute.
+la connexion et montre l'instruction dans un rendu coupé
+([La confirmation native d'une écriture en production](#la-confirmation-native-dune-écriture-en-production),
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)) :
+aucun second écran ne s'intercale, donc la boîte est l'endroit où le SQL exact
+se lit. Ailleurs, `Drop…` et `Truncate…` demandent l'approbation dans la même
+boîte, et `Rename…` s'exécute.
 
 Une entrée que le moteur ne sait pas faire est grisée avec sa raison — sur
 SQLite, `Truncate…` ; ce qui est offert suit les capacités déclarées par le
@@ -692,6 +759,23 @@ démonstration ne remplace une réponse manquante. La recherche porte sur les
 objets déjà chargés et annonce cette portée. Les fonctionnalités non disponibles
 ne déclenchent pas de requête simulée.
 
+Une **table virtuelle** (SQLite `CREATE VIRTUAL TABLE … USING <module>`) n'est
+pas listée comme une table ordinaire : sa ligne porte `virtual · <module>`, le
+nom du module tel que le schéma le déclare. Quand la connexion ne fournit pas ce
+module, la marque devient `<module> not loaded`, dans la couleur d'avertissement,
+et son infobulle dit que ses lignes ne peuvent pas être lues ici. La
+disponibilité est demandée au moteur (`pragma_module_list`), pour tout module à
+l'identique : `fts5`, intégré, apparaît virtuel ; un module qu'ajoute une
+extension apparaît chargé le jour où Oxyn la charge, sans cas écrit pour lui.
+Quand le moteur ne peut pas le dire, la marque reste `virtual · <module>` et
+l'infobulle dit que la disponibilité est inconnue. Les tables où une table
+virtuelle range ses données — ses **tables fantômes** — portent `shadow`, et
+leur infobulle nomme la table virtuelle à laquelle elles appartiennent : le mot
+de SQLite quand le module est chargé, la convention de nommage
+`<table virtuelle>_` seulement quand il ne l'est pas. Le nom du module vient de
+la base : il s'affiche comme du texte et ne rejoint jamais une requête qu'Oxyn
+compose.
+
 Le formulaire propose uniquement les drivers enregistrés. Toute nouvelle
 connexion commence en `production` jusqu'à changement explicite. Pendant un
 changement de connexion, l'ancien workspace reste accessible ; une **nouvelle**
@@ -736,9 +820,9 @@ La barre d'état du formulaire nomme la connexion en préparation et distingue
 `Connected` pour une connexion non testée ; une autre session ouverte conserve
 son propre contexte explicite.
 
-L'aperçu d'une confirmation conserve le SQL intégral et permet son défilement
+L'aperçu de la revue webview conserve le SQL intégral et permet son défilement
 à la souris ainsi que par les flèches, Page précédente/suivante et Début/Fin.
-Entrée seule ne valide jamais une écriture ; Échap refuse.
+Dans cette revue, Entrée seule ne valide jamais une écriture ; Échap refuse.
 
 ## Données d'une table sélectionnée
 
@@ -755,6 +839,37 @@ relit explicitement les lignes ; aucun rafraîchissement automatique ne suit une
 erreur. Le chargement, le résultat vide, l'échec et l'annulation sont distincts.
 Sans tri demandé, l'ordre des lignes n'est pas garanti, et l'aperçu ne compte
 jamais la table entière.
+
+Une lecture qui échoue **parce que** la connexion ne charge pas le module dont
+une table a besoin — le `no such module: <module>` du moteur, que le driver
+nomme comme une donnée plutôt que de laisser le front lire le message — est
+**expliquée**, pas montrée brute. Quand le catalogue dit que l'objet
+sélectionné **est** la table virtuelle portée par ce module : « This table is
+provided by the SQLite extension `<module>`, which Oxyn does not load. Its data
+is stored in … », suivi de ses tables fantômes en liens qui les sélectionnent.
+Sinon — une vue ordinaire dont la définition lit une telle table échoue avec les
+mêmes mots — la vue n'est pas appelée table virtuelle et aucun stockage n'est
+affirmé : « This view reads a virtual table whose module `<module>` is not
+loaded: Oxyn does not load that SQLite extension, so the read fails. » Pour
+`vec0`, que sqlite-vec enregistre et qu'une connexion active dans ses réglages
+(désactivé par défaut), une phrase suit l'une ou l'autre formulation : « You can
+enable sqlite-vec for this connection in its settings, if you trust this
+file. » Le message du driver reste à un clic, sous `Driver message`, mot pour
+mot. Les onglets Data et Structure l'expliquent de la même façon. L'échec est
+permanent
+([DRIVER-CONTRACT §4](DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)) :
+rien ne propose de le relancer, et rien ne le retente — tant qu'il est affiché,
+l'onglet Data retire `Refresh data`, le filtre, le tri et les pages, qui tous
+reliraient. Ils reviennent avec la prochaine lecture qui réussit, ce qu'apporte
+la réouverture de la connexion avec le module activé. Tout autre échec de la
+même table — un prédicat refusé avant envoi, un fichier verrouillé — s'affiche
+tel qu'il est venu, même sur une table marquée `not loaded`.
+
+Un objet ouvert par sa seule adresse — un onglet restauré de la dernière
+session, Quick Open, un lien de l'assistant ou d'une relation — prend les faits
+que l'explorateur a chargés pour cette adresse : sa nature, son module, la table
+virtuelle dont il range les données. Un onglet ouvert avant que son niveau soit
+lu les reçoit dès qu'il l'est.
 
 ### Filtrer, trier, parcourir
 
@@ -779,6 +894,13 @@ L'aperçu peut donc désormais échouer pour une raison de syntaxe, ce qui n'ét
 pas le cas avant. Il ne peut en revanche rien écrire : le texte final est
 reclassifié, la session est tenue en lecture seule par le serveur, et la borne
 de lignes s'applique.
+
+Quand une lecture qui **changeait** le filtre, le tri ou la page est refusée, la
+ligne sous la barre dit, dans la couleur d'avertissement, que les lignes de la
+forme précédente n'ont pas été gardées et que le texte reste là où on peut le
+corriger. Une première lecture, ou le rafraîchissement de la forme en vigueur,
+qui échoue n'avait pas de forme précédente : cette ligne n'apparaît pas, et
+l'échec dessous dit tout ce qu'il y a à dire.
 
 `Sort` choisit des colonnes, pas une expression : c'est Oxyn qui compose cette
 partie de la requête, donc il en répond. Une colonne inconnue de la relation est
@@ -1747,3 +1869,77 @@ même version, aucun argument de plus — est confiné au lancement
 préréglage modifié compris, est traité comme inconnu : la liste le marque d'un
 avertissement disant qu'Oxyn ne peut pas l'empêcher d'agir seul sur la machine,
 et le panneau le répète quand il est choisi.
+
+### Classement sémantique
+
+Réglages ▸ Semantic ranking active le classement local du contexte IA
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). C'est la
+préférence du workspace `semantic_ranking`, **désactivée par défaut** ; le
+modèle qu'elle télécharge appartient à l'ordinateur. Seul l'utilisateur la
+change : aucun agent ne le peut.
+
+La vue dit ce que fait l'option — les tables classées par le sens autant que
+par le nom, si bien qu'une question qui ne nomme aucune table, ou qui est
+posée dans une autre langue que le schéma, trouve encore les bonnes —, puis
+l'interrupteur, `Rank tables by meaning with a local model`. Dessous, toujours,
+ce qu'elle coûte et ce qu'elle ne fait pas : calculé sur cet ordinateur, aucun
+nom de table, commentaire ou question envoyé nulle part ; environ **220 Mo**
+téléchargés une fois, environ **415 Mo** gardés sur disque, jusqu'à environ
+**300 Mo** de mémoire pendant qu'on pose des questions, libérés pour
+l'essentiel **5 minutes** après la dernière — « pour l'essentiel » parce que
+l'allocateur du système en garde une part
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md#budget-mémoire)). Une seconde ligne dit ce qui peut sortir de plus : des tables
+trouvées par le sens peuvent être ajoutées au contexte de l'assistant, dans la
+limite habituelle et sous le niveau de confidentialité de la connexion. Tant
+que l'option est activée, une troisième ligne dit que la désactiver supprime
+le modèle de cet ordinateur.
+
+**L'état du modèle, et ce que chacun permet.** Une ligne d'état nomme l'état ;
+les actions à côté sont les seules proposées.
+
+| État | Ligne d'état | Actions |
+|---|---|---|
+| Indisponible | `Not available: this system gives Oxyn no data directory to keep the model in.` | aucune ; l'interrupteur est désactivé |
+| Désactivée | `Off. Questions are ranked by name only.` | l'interrupteur |
+| Activée, sans modèle | `The model is not downloaded: questions are ranked by name only.` | `Download model` |
+| Vérification | `Checking the files already on this computer…`, avec un indicateur d'activité et une barre de progression sans fraction | `Cancel download` |
+| Téléchargement | `Downloading the model — ` suivi des octets reçus sur le total, et une barre de progression en pourcentage | `Cancel download` |
+| Conversion | `Preparing the model for this computer… This last step takes a few seconds.`, avec un indicateur d'activité et une barre de progression sans fraction | `Cancel download` |
+| Prêt, activée | `Ready. Loaded at the first question, released after 5 minutes without one.` | `Delete model` |
+| Prêt, désactivée | `The model is on this computer, but this workspace does not use it.` | `Delete model` |
+| Endommagé | une alerte, `The model files are damaged` : un fichier n'est pas celui qu'attend Oxyn, tronqué — un disque plein, par exemple — ou remplacé ; tant qu'il n'est pas téléchargé de nouveau, les questions sont classées par le nom seulement | `Download again`, `Delete model` |
+| Échec | une alerte, `The local model is not usable`, avec le message du backend (il ne nomme aucun chemin local), l'étape suivante — vérifier l'espace disque et les permissions du répertoire de données d'Oxyn, puis télécharger de nouveau — et le fait que les questions sont classées par le nom seulement d'ici là | `Download again`, `Delete model` |
+
+* **Activer** enregistre la préférence, puis télécharge en arrière-plan ;
+  l'interrupteur reste activé pendant le téléchargement. La progression arrive
+  au fil de l'eau, par phase. `Download again` est la même demande : elle
+  vérifie les fichiers présents et ne récupère que ce qui manque ou est faux.
+* **`Cancel download` désactive l'option** et supprime ce qui a été
+  téléchargé ; la vue le dit sous le bouton. Il n'y a pas de téléchargement en
+  pause à reprendre.
+* **Chaque étape peut être annulée, la conversion comprise.** Vérification,
+  téléchargement et conversion proposent tous `Cancel download`, avec
+  `Cancelling turns semantic ranking off and removes what was downloaded.`
+  dessous ; annuler pendant la conversion tue le processus qui convertit.
+* **Désactiver, ou `Delete model`,** enregistre la préférence à désactivée,
+  arrête un téléchargement, libère le modèle de la mémoire et supprime ses
+  fichiers.
+* **En attente.** Tant qu'une demande est en route, l'interrupteur et chaque
+  bouton sont désactivés.
+* **Refusé.** Une demande que le backend refuse — la préférence n'a pas pu
+  être enregistrée, par exemple — laisse tout en l'état, et une ligne sous
+  l'interrupteur dit `Nothing was changed: ` suivi de la raison.
+* **Avant la première réponse**, la vue affiche `Reading the semantic ranking
+  state…` ; si l'état ne peut pas être lu, une alerte dit `The semantic
+  ranking state could not be read`, avec l'étape suivante : fermer et rouvrir
+  les réglages — l'option reste telle qu'elle a été enregistrée.
+
+La ligne d'état est une région live polie : un changement d'état est annoncé,
+les nombres d'octets à côté ne le sont pas ; un échec ou un modèle endommagé
+est annoncé par son alerte. La barre de progression lit les octets reçus
+pendant le téléchargement, `Checking files` et `Preparing the model` sinon.
+
+Ouvrir le panneau de l'assistant charge un modèle prêt avant la première
+question, si bien que son chargement à froid ne compte pas dans la borne de
+2 secondes de cette question. Tant que l'option est désactivée, ouvrir le
+panneau ne fait rien.

@@ -178,9 +178,11 @@ fn map_bound_error(
     err: sqlx::Error,
 ) -> OxynError {
     // A cancellation confirmed by the server is not a failure: it is the
-    // "Cancel" button that worked.
-    if sqlstate_of(&err).as_deref() == Some(SQLSTATE_QUERY_CANCELED) {
-        return OxynError::Cancelled;
+    // "Cancel" button that worked. A `57014` Oxyn did not ask for (a role's
+    // `statement_timeout`, an administrator's `pg_cancel_backend`) proves the
+    // same thing and no more, so it goes through the same verdict.
+    if is_query_canceled(&err) {
+        return interruption_verdict(intent);
     }
     if let Some(error) = as_config_error(&err) {
         return error;
@@ -287,6 +289,43 @@ pub(crate) fn sqlstate_of(err: &sqlx::Error) -> Option<String> {
     }
 }
 
+/// Did the server answer that it interrupted the statement (`57014`)?
+///
+/// For a statement that writes, this answer is what proves the autocommit
+/// statement was rolled back — the cursor's only licence to report a stopped
+/// write as cancelled. It is read from the SQLSTATE, never from the message.
+#[must_use]
+pub(crate) fn is_query_canceled(err: &sqlx::Error) -> bool {
+    sqlstate_of(err).as_deref() == Some(SQLSTATE_QUERY_CANCELED)
+}
+
+/// What a statement that is not a plain data write says when the server did
+/// interrupt it.
+///
+/// The interruption (`57014`) reaches the one statement the server was running,
+/// not what a procedure had already committed, and not every command is undone
+/// as a whole. Fixed text: nothing the server sent, no bound value, no host
+/// (I-03).
+pub(crate) const INTERRUPTED_BUT_KEPT_MESSAGE: &str = "the server interrupted the statement, but \
+     it is not a plain data write: a CALL or a DO block may already have committed part of its \
+     work, and some commands are not undone as a whole; check the data before running it again";
+
+/// What the server's `57014` proves about a statement of this intent.
+///
+/// A read changed nothing, and an autocommit data write is rolled back as a
+/// whole: both are `Cancelled`, the "nothing happened" of I-13. Everything else
+/// is `Unknown`, `Ddl` or `Grant`, which is what a `CALL` or a `DO` block
+/// classifies as: its earlier commits survive, and structure or privilege
+/// changes are not all undone as a whole. That outcome is unknown, and
+/// `Cancelled` would invite running the statement again.
+#[must_use]
+pub(crate) fn interruption_verdict(intent: StatementIntent) -> OxynError {
+    match intent {
+        StatementIntent::Read | StatementIntent::Write => OxynError::Cancelled,
+        _ => OxynError::OutcomeUnknown(INTERRUPTED_BUT_KEPT_MESSAGE.to_owned()),
+    }
+}
+
 /// The message of an error, preferring the server's to ours.
 fn message_of(err: &sqlx::Error) -> String {
     match err {
@@ -371,11 +410,12 @@ pub(crate) fn map_stream_error(
     map_bound_error(driver, intent, bound, err)
 }
 
+/// Stand-ins for the errors `sqlx` raises, for tests that need no server.
+///
+/// Shared by this module's tests and by the cursor's: both classify what a
+/// server answers without having one.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    // Only the test implements this trait: at the module root, it would be an
-    // unused import in the `lib` target.
+pub(crate) mod fakes {
     use sqlx::error::DatabaseError;
 
     /// A fake database error carrying a given SQLSTATE.
@@ -383,9 +423,9 @@ mod tests {
     /// `sqlx` does not allow building a `PgDatabaseError` from outside; the
     /// trait is therefore implemented, which is enough for `classify`.
     #[derive(Debug)]
-    struct FakeDatabase {
-        code: &'static str,
-        message: &'static str,
+    pub(crate) struct FakeDatabase {
+        pub(crate) code: &'static str,
+        pub(crate) message: &'static str,
     }
 
     impl std::fmt::Display for FakeDatabase {
@@ -422,16 +462,24 @@ mod tests {
         }
     }
 
-    fn server_error(code: &'static str) -> sqlx::Error {
+    /// The server answered with this SQLSTATE.
+    pub(crate) fn server_error(code: &'static str) -> sqlx::Error {
         sqlx::Error::Database(Box::new(FakeDatabase {
             code,
             message: "fake error",
         }))
     }
 
-    fn cut() -> sqlx::Error {
+    /// The transport gave way.
+    pub(crate) fn cut() -> sqlx::Error {
         sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset))
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fakes::{FakeDatabase, cut, server_error};
+    use super::*;
 
     #[test]
     fn a_cut_during_a_write_is_ambiguous() {
@@ -526,6 +574,54 @@ mod tests {
             server_error(SQLSTATE_QUERY_CANCELED),
         );
         assert!(error.is_cancelled(), "{error:?}");
+    }
+
+    #[test]
+    fn a_57014_the_stop_did_not_ask_for_proves_a_rollback_only_for_data_writes_and_reads() {
+        // A role's `statement_timeout` interrupts a `CALL` between two of its
+        // commits: the cursor sees a plain stream error, no Stop is involved.
+        for intent in [StatementIntent::Read, StatementIntent::Write] {
+            let error = map_stream_error(
+                &DriverId::postgres(),
+                intent,
+                false,
+                Bound::Internal,
+                server_error(SQLSTATE_QUERY_CANCELED),
+            );
+            assert!(error.is_cancelled(), "{intent:?}: {error:?}");
+        }
+        for intent in [
+            StatementIntent::Unknown,
+            StatementIntent::Ddl,
+            StatementIntent::Grant,
+        ] {
+            let error = map_stream_error(
+                &DriverId::postgres(),
+                intent,
+                false,
+                Bound::Internal,
+                server_error(SQLSTATE_QUERY_CANCELED),
+            );
+            assert!(!error.is_cancelled(), "{intent:?}: {error:?}");
+            assert!(!error.is_retryable(), "{intent:?}: {error:?}");
+            assert_eq!(
+                error.class(),
+                ErrorClass::Ambiguous,
+                "{intent:?}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_server_s_57014_answer_proves_an_interruption() {
+        // The proof is a SQLSTATE the server sent. A transport error, or any
+        // other server answer, proves nothing about what became of a write.
+        assert!(is_query_canceled(&server_error(SQLSTATE_QUERY_CANCELED)));
+        for other in ["23505", "40001", "57P01", "08006"] {
+            assert!(!is_query_canceled(&server_error(other)), "{other}");
+        }
+        assert!(!is_query_canceled(&cut()));
+        assert!(!is_query_canceled(&sqlx::Error::WorkerCrashed));
     }
 
     #[test]

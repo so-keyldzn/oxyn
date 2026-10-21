@@ -15,6 +15,7 @@
 //! |---|---|
 //! | agent + `GRANT`/`REVOKE` | `Deny` |
 //! | agent + `SetSessionContext` | `Deny` — the effect bears on the following statements |
+//! | agent + typed context change (`USE`) | `Deny` — same effect, reached through `Execute`; the user changes it with the context selector |
 //! | agent + transaction control (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`…) | `Deny` — the effect bears on the session's transaction, perhaps the user's |
 //! | mutating command on a connection marked read-only | `Deny`, human included |
 //! | mutating command on a connection **unknown** to the gate | `Deny` |
@@ -354,6 +355,19 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent() && matches!(cmd, Command::TestConnection { .. }) {
             return Decision::deny("only the human may test a connection configuration");
         }
+        // A connection's configuration is the human's: the host a session
+        // opens on, its markings, and switches like sqlite-vec's, which decides
+        // whether bundled C code parses the file (ADR-0054). No tool produces
+        // these commands; the gate refuses them anyway, a refusal and not an
+        // approval — a confirmation ends up being clicked (I-02).
+        if actor.is_agent()
+            && matches!(
+                cmd,
+                Command::CreateConnection { .. } | Command::UpdateConnection { .. }
+            )
+        {
+            return Decision::deny("only the human may create or change a connection");
+        }
         // Reconciling means declaring one inspected the server. An agent
         // inspected nothing: accepting it would silence the warning of a write
         // with an unknown outcome that nobody looked at (I-13). A refusal, not
@@ -388,6 +402,22 @@ impl PolicyGate for DefaultPolicy {
             return Decision::deny(
                 "an agent may not change the session context: \
                  it changes the meaning of the statements that follow",
+            );
+        }
+
+        // The same move typed as a statement. `USE other` travels as an
+        // `Execute`, so the variant check above never sees it: the flag is
+        // what carries it, set by the executor's reclassification from the
+        // text and not by the caller. Its intent is `Unknown`, which for an
+        // agent on a development database would only ask for an approval —
+        // and an approval is what this refusal exists to rule out: a
+        // confirmation ends up being clicked (I-02), and the session would
+        // not even record the new context.
+        if actor.is_agent() && cmd.changes_context() {
+            return Decision::deny(
+                "an agent may not change the session context by typing it (USE): \
+                 it changes the meaning of the statements that follow; \
+                 the user changes it with the context selector",
             );
         }
 
@@ -917,14 +947,41 @@ mod tests {
         };
 
         let decision = policy.authorize(&agent(), &cmd, Environment::Local);
-        assert!(
-            !decision.is_allowed(),
-            "an agent does not create a connection without agreement: {decision:?}"
+        assert_eq!(
+            Shape::of(&decision),
+            Shape::Deny,
+            "an agent does not create a connection, even with agreement: {decision:?}"
         );
 
         // A human, on the other hand, is not hindered: the connection is not
         // registered yet, and the "closed by default" rule only targets what
         // reaches a server.
+        assert!(
+            policy
+                .authorize(&human(), &cmd, Environment::Local)
+                .is_allowed()
+        );
+    }
+
+    #[test]
+    fn an_agent_cannot_change_a_connection_switch() {
+        // Turning sqlite-vec on is what lets bundled C code parse a file
+        // (ADR-0054): a connection edit, the human's alone.
+        let policy = DefaultPolicy::new();
+        let config = ConnectionConfig::new("vectors", DriverId::sqlite())
+            .with_environment(Environment::Local)
+            .with_param("path", "/data/semantiq.sqlite");
+        policy.register(&config);
+        let cmd = Command::UpdateConnection {
+            config: Box::new(config.with_param("sqlite_vec", "true")),
+        };
+        for env in ENVS {
+            assert_eq!(
+                Shape::of(&policy.authorize(&agent(), &cmd, env)),
+                Shape::Deny,
+                "{env}"
+            );
+        }
         assert!(
             policy
                 .authorize(&human(), &cmd, Environment::Local)
@@ -1093,6 +1150,119 @@ mod tests {
                 assert!(
                     for_agent.is_denied(),
                     "env={env} read_only={read_only} → {for_agent:?}"
+                );
+            }
+        }
+    }
+
+    /// An `Execute` whose reclassified text moves the session's context, as
+    /// the executor hands it to the gate for `USE other`.
+    fn typed_context_change(bench: &Bench, read_only: bool) -> Command {
+        let mut cmd = bench.execute(read_only, StatementIntent::Unknown);
+        if let Command::Execute { request, .. } = &mut cmd {
+            request.context_change = true;
+        }
+        cmd
+    }
+
+    #[test]
+    fn an_agent_does_not_type_a_context_change() {
+        // `USE other` is `Unknown`, so on a development database an agent's
+        // statement would only ask for an approval — and an approval ends up
+        // being clicked (I-02). The flag turns it into a refusal in every
+        // environment, and that refusal prevails over the production and
+        // read-only ones: the reason must send the user to the selector.
+        let bench = Bench::new();
+        for read_only in [false, true] {
+            let cmd = typed_context_change(&bench, read_only);
+            assert!(cmd.changes_context());
+            for env in ENVS {
+                let decision = bench.policy.authorize(&agent(), &cmd, env);
+                let Decision::Deny { reason } = &decision else {
+                    panic!("a refusal is expected: env={env} read_only={read_only} → {decision:?}");
+                };
+                assert!(
+                    reason.contains("context selector"),
+                    "env={env} read_only={read_only}: the reason must point to the selector: \
+                     {reason}"
+                );
+                assert!(
+                    !reason.contains("read-only"),
+                    "env={env} read_only={read_only}: the read-only or production reason won \
+                     over the context one: {reason}"
+                );
+            }
+        }
+
+        // The control: without the flag, the same agent statement on a
+        // development database only asks for an approval. Without this, the
+        // loop above could pass for another reason.
+        let plain = bench.execute(false, StatementIntent::Unknown);
+        assert!(!plain.changes_context());
+        let decision = bench
+            .policy
+            .authorize(&agent(), &plain, Environment::Development);
+        assert!(decision.requires_approval(), "{decision:?}");
+    }
+
+    #[test]
+    fn a_typed_context_change_is_not_refused_to_the_user() {
+        // The refusal is the agent's. The user types `USE other` in their own
+        // console; being `Unknown`, it is a write for the gate: free off
+        // production, and on production it asks for the confirmation that
+        // names the connection (I-02).
+        let bench = Bench::new();
+
+        let open = typed_context_change(&bench, false);
+        for env in [
+            Environment::Local,
+            Environment::Development,
+            Environment::Staging,
+        ] {
+            let decision = bench.policy.authorize(&human(), &open, env);
+            assert!(!decision.is_denied(), "env={env} → {decision:?}");
+        }
+        let decision = bench
+            .policy
+            .authorize(&human(), &open, Environment::Production);
+        let Decision::RequireApproval { reason, .. } = &decision else {
+            panic!("an approval is expected on production: {decision:?}");
+        };
+        assert!(
+            reason.contains("workshop"),
+            "the confirmation must name the connection: {reason}"
+        );
+
+        // On a read-only connection the statement stays refused to the user as
+        // a write, and for the read-only reason, not for the context one: this
+        // is what changes for a human now that `USE` is no longer a `Read`.
+        let read_only = typed_context_change(&bench, true);
+        for env in ENVS {
+            let decision = bench.policy.authorize(&human(), &read_only, env);
+            let Decision::Deny { reason } = &decision else {
+                panic!("a write on a read-only connection is refused: env={env} → {decision:?}");
+            };
+            assert!(reason.contains("marked read-only"), "env={env}: {reason}");
+            assert!(
+                !reason.contains("context selector"),
+                "env={env}: the agent's reason leaked to the user: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_typed_context_change_keeps_the_agent_at_least_as_restricted_as_the_human() {
+        // The test `/commande` asks for, on the one flag the generic matrix
+        // does not vary.
+        let bench = Bench::new();
+        for read_only in [false, true] {
+            let cmd = typed_context_change(&bench, read_only);
+            for env in ENVS {
+                let for_human = bench.policy.authorize(&human(), &cmd, env);
+                let for_agent = bench.policy.authorize(&agent(), &cmd, env);
+                assert!(
+                    for_agent.restrictiveness() >= for_human.restrictiveness(),
+                    "env={env} read_only={read_only}: agent={for_agent:?} human={for_human:?}"
                 );
             }
         }

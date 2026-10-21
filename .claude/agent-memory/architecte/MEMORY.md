@@ -1,3 +1,5 @@
 - [The foundation does not check the ADR index](socle-ne-verifie-pas-index-adr.md) — make socle passes with an ADR missing from docs/README.md; check by hand
 - [Read the source of the Tauri crates](lire-le-source-des-crates-tauri.md) — check a Tauri/muda/wry behavior in ~/.cargo/registry without running into the hooks
+- [verif-rapide in a fresh worktree](verif-rapide-worktree-sans-front.md) — fails on missing dist/client once Cargo.toml changes; socle proves a docs commit
+- [clippy --all-targets counts twice](clippy-all-targets-compte-double.md) — lib lints reported per build; count with --lib, lift an allow in a throwaway worktree
 - [Tauri sources in the local registry](sources-tauri-registre-local.md) — source a Tauri behavior (I-12) in the unpacked sources; hook trap on `cd` to a glob

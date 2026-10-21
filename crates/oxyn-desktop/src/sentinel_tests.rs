@@ -82,6 +82,17 @@ const SENTINEL: &str = "oxyn-sentinel-6c1f2b9e-must-never-leave-the-keyring";
 /// it: a bound against a malformed test input, not a real HTTP limit.
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 
+/// The words of `oxyn-core`'s refusal of a query string or a fragment in a base
+/// URL (`validate_base_url`), repeated here on purpose: without them a test
+/// that only checks "an error free of the sentinel" would stay green if that
+/// declaration were refused for another reason, or by no rule of the domain at
+/// all.
+const QUERY_REFUSAL: &str = "must not carry a query string or a fragment";
+
+/// The part of the same refusal that sends the user to the key field, which is
+/// the only place a key is kept.
+const KEY_FIELD_HINT: &str = "its own field";
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -278,6 +289,10 @@ struct Scenario {
     /// (ii) A provider declaration whose base URL carries the sentinel as
     /// credentials: refused by `validate_base_url` before any network call.
     credentials_in_url: IpcError,
+    /// (ii-b) A provider declaration whose base URL carries the sentinel as a
+    /// query (`?key=…`, the shape some vendors document): refused by
+    /// `validate_base_url` before the keyring or the network is touched.
+    query_in_url: IpcError,
     /// (iv) Listing a declared provider's models against the hostile fake
     /// provider: must fail, with a fixed sentence chosen from the status.
     provider_models_failed: IpcError,
@@ -344,6 +359,23 @@ async fn run_scenario(backend: &Backend) -> Scenario {
         })
         .await
         .expect_err("credentials in the base URL are refused");
+
+    // (ii-b) The same, for a key pasted after `?key=`. Pointed at the hostile
+    // fake, so that a refusal skipped upstream would put the sentinel on the
+    // wire where `fake_requests` shows it. No key is typed: the draft cannot
+    // reach the keyring, and the one thing planted is the query.
+    let query_in_url = backend
+        .save_ai_provider(ProviderDraft {
+            id: None,
+            kind: AiProviderKind::OpenAiCompatible,
+            label: "sentinel probe (query in URL)".into(),
+            base_url: format!("http://127.0.0.1:{hostile_port}/v1?key={SENTINEL}"),
+            model: "sentinel-model".into(),
+            key: None,
+            clear_key: false,
+        })
+        .await
+        .expect_err("a query in the base URL is refused");
 
     // (iii) A provider declared onto the hostile fake, then edited: both
     // succeed, the key travelling once each time.
@@ -425,6 +457,7 @@ async fn run_scenario(backend: &Backend) -> Scenario {
     Scenario {
         connect_refused,
         credentials_in_url,
+        query_in_url,
         provider_models_failed,
         ask_started,
         ask_events,
@@ -433,9 +466,10 @@ async fn run_scenario(backend: &Backend) -> Scenario {
 }
 
 /// No sentinel — planted in a connection's name and password, and in a
-/// provider's label, base URL and key — reaches an [`IpcError`] or a
-/// `Channel<AiUpdate>` message, the two shapes an error takes on its way to
-/// the front.
+/// provider's label, base URL (as credentials, then as a query) and key —
+/// reaches an [`IpcError`], a `Channel<AiUpdate>` message or the provider list
+/// the front is given, the shapes an error and a stored declaration take on
+/// their way to the front.
 ///
 /// Presence checks come first: without them, a bug that stops the scenario
 /// from ever reaching the hostile provider would leave this test vacuously
@@ -448,9 +482,9 @@ fn no_sentinel_reaches_an_error_shown_to_the_front() {
     let backend = Backend::open_temporary().expect("temporary backend");
     let scenario = runtime.block_on(run_scenario(&backend));
 
-    // Presence: (i), (ii) and (iv) already had to render `Err` for `scenario`
-    // to exist at all — `run_scenario` calls `expect_err` on each, so a
-    // regression that turned one of them into `Ok` would panic there, not
+    // Presence: (i), (ii), (ii-b) and (iv) already had to render `Err` for
+    // `scenario` to exist at all — `run_scenario` calls `expect_err` on each,
+    // so a regression that turned one of them into `Ok` would panic there, not
     // pass silently here. What is left to check is that the fake provider was
     // truly reached, not refused earlier by something else.
     assert!(
@@ -460,6 +494,64 @@ fn no_sentinel_reaches_an_error_shown_to_the_front() {
             .any(|request| request.contains(&format!("Bearer {SENTINEL}"))),
         "the fake provider never received the sentinel key: {:#?}",
         scenario.fake_requests
+    );
+
+    // (ii-b) The refusal is the domain's own sentence, and it sends the user
+    // to the key field. Any other error free of the sentinel — a parse failure,
+    // a keyring refusal — would leave the sweep below green for a wrong reason.
+    assert!(
+        scenario.query_in_url.message.contains(QUERY_REFUSAL)
+            && scenario.query_in_url.message.contains(KEY_FIELD_HINT),
+        "the query was not refused by the domain's rule: {}",
+        scenario.query_in_url.message
+    );
+
+    // (ii-b) Nothing travelled on its account. A request URL is built with a
+    // relative join, which drops a base's query, so this sweeps the wire rather
+    // than proves the refusal — the message above and the stored state below
+    // do.
+    assert!(
+        !scenario
+            .fake_requests
+            .iter()
+            .any(|request| request.contains(&format!("key={SENTINEL}"))),
+        "the query reached the fake provider: {:#?}",
+        scenario.fake_requests
+    );
+
+    // What the front receives when it lists the providers, and what the store
+    // gave the bus for it. The endpoint shown is redacted, which would hide a
+    // stored query from the sweep: so every endpoint must also be unredacted
+    // (nothing stored had a query to lose), and the two refused declarations
+    // must have left no row at all. One row survives — the hostile provider,
+    // relabeled — which keeps the sweep from running over an empty list.
+    let (stored, listed) = runtime.block_on(async {
+        let stored = backend
+            .declared_providers()
+            .await
+            .expect("the declarations are listed");
+        let listed = backend
+            .ai_providers()
+            .await
+            .expect("the declarations are classified");
+        (stored, listed)
+    });
+    let [kept] = stored.as_slice() else {
+        panic!(
+            "only the hostile provider was declared, the refused drafts left no row: {} stored",
+            stored.len()
+        );
+    };
+    assert_eq!(kept.label, "sentinel probe (hostile provider, relabeled)");
+    assert!(
+        !kept.base_url.contains(SENTINEL) && !kept.base_url.contains(['?', '#']),
+        "the stored base URL carries a query or a fragment: {}",
+        kept.base_url
+    );
+    assert_eq!(listed.len(), stored.len());
+    assert!(
+        listed.iter().all(|provider| !provider.endpoint_redacted),
+        "an endpoint lost something to the redaction: a stored URL carried more than an address"
     );
 
     // (iv) no longer recopies the fake provider's body: a model listing's
@@ -474,8 +566,10 @@ fn no_sentinel_reaches_an_error_shown_to_the_front() {
     let mut shown = vec![
         serde_json::to_string(&scenario.connect_refused).expect("serializable"),
         serde_json::to_string(&scenario.credentials_in_url).expect("serializable"),
+        serde_json::to_string(&scenario.query_in_url).expect("serializable"),
         serde_json::to_string(&scenario.provider_models_failed).expect("serializable"),
         serde_json::to_string(&scenario.ask_started).expect("serializable"),
+        serde_json::to_string(&listed).expect("serializable"),
     ];
     shown.extend(scenario.ask_events.clone());
 

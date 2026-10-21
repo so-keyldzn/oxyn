@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="9e1bf388dead" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="84823b500745" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -83,6 +83,21 @@ appliqué. Classé « transitoire » et rejoué, il crée un doublon dans les do
 de l'utilisateur, sans aucun message d'erreur nulle part. C'est le cas qui coûte
 le plus cher et le plus tentant à traiter par une simple boucle de retry :
 l'ambiguïté ne se retente pas.
+
+**Une écriture arrêtée n'est pas une écriture annulée tant que le serveur ne
+l'a pas prouvé.** Un Stop, un onglet fermé ou un kill qui atteint une écriture
+ne dit pas ce que l'instruction a laissé derrière elle : elle a pu valider un
+instant avant, une procédure garde ce qu'elle a déjà validé, une table non
+transactionnelle garde les lignes qu'elle a changées, et un lot garde les
+instructions qui ont tourné avant celle qui a été interrompue. `Cancelled`
+signifie que **rien n'a été appliqué**, et l'interface le lit ainsi : un pilote
+ne le répond donc qu'avec une preuve — l'erreur d'interruption du serveur sur
+une instruction qu'il défait en entier, ou une écriture qui n'est jamais
+partie — et répond `OutcomeUnknown` sinon. Un échec après qu'une instruction
+antérieure d'un lot a été appliquée n'est jamais transitoire : rejouer le lot
+appliquerait cette instruction deux fois. Ce qui fait preuve pour chaque
+protocole est écrit dans [ARCHITECTURE](ARCHITECTURE.md), là où se trouve le
+verdict de l'exécuteur.
 
 **Une colonne inconnue est un refus permanent, même prononcé avant l'envoi.**
 Une colonne d'aperçu que la relation ne déclare pas — en projection comme en
@@ -225,5 +240,6 @@ La procédure est dans [`/driver`](../claude/commands/driver.md) et la revue dan
 [la liste de contrôle](../claude/checklists/revue-driver.md). En résumé : la
 déclaration de capacités, la table de correspondance des types **dans les deux
 sens** avec les cas de perte documentés, la classification d'erreurs, un test
-d'annulation qui prouve l'arrêt côté serveur, et un test de flux sur un volume
-qui ne tiendrait pas en mémoire.
+d'annulation qui prouve l'arrêt côté serveur, un test du verdict que reçoit une
+écriture arrêtée (`Cancelled` seulement avec une preuve), et un test de flux sur
+un volume qui ne tiendrait pas en mémoire.

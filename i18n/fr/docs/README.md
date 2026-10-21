@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="34ccf7d24169" -->
+<!-- oxyn-translation source="docs/README.md" sha256="65320db340ed" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -57,7 +57,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0019](adr/0019-contexte-de-session.md) | Contexte de session déclaré, jamais posé en silence | accepté |
 | [0020](adr/0020-apercu-trie-filtre-parcouru.md) | Aperçu : tri composé, prédicat écrit, page déterministe | proposé |
 | [0021](adr/0021-marqueur-d-arret.md) | Arrêt propre ou anormal constaté, jamais deviné | accepté |
-| [0022](adr/0022-rafraichissement-automatique.md) | Ce qui se rafraîchit tout seul, et ce qui ne le fera jamais | proposé |
+| [0022](adr/0022-rafraichissement-automatique.md) | Ce qui se rafraîchit tout seul, et ce qui ne le fera jamais | accepté |
 | [0023](adr/0023-fournisseurs-declares-et-provenance.md) | Fournisseurs déclarés par machine, reclassés à chaque ouverture, provenance persistée | accepté |
 | [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | Le brouillon s'écrit quand la frappe s'arrête, pas à chaque touche | proposé |
 | [0025](adr/0025-proposition-de-changement-de-schema.md) | Une proposition de changement de schéma est du SQL à relire, jamais une écriture | proposé |
@@ -72,7 +72,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | Un échantillon approuvé atteint toute destination par la même porte, et un agent peut en demander un sans jamais l'approuver | proposé |
 | [0035](adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md) | Les écritures locales de l'ordonnanceur passent par le pool bloquant, en opérations possédées | accepté |
 | [0036](adr/0036-l-assistant-complete-le-catalogue.md) | L'assistant complète lui-même le catalogue, par le bus et sous des bornes | proposé |
-| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview | proposé |
+| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview | accepté |
 | [0038](adr/0038-un-plantage-s-annonce-une-fois.md) | Un plantage s'annonce une fois, et ⌘Q passe par l'arrêt ordonné | accepté |
 | [0039](adr/0039-etat-de-transaction-d-une-session.md) | Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là | accepté |
 | [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | Une sortie que macOS ne laisse pas retenir inscrit sa fermeture | accepté |
@@ -86,9 +86,12 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0048](adr/0048-simple-protocol-for-types-sqlx-cannot-prepare.md) | Une instruction que sqlx ne sait pas préparer, ou dont le résultat n'a pas de forme binaire, passe par le protocole simple, en texte | accepté |
 | [0049](adr/0049-agents-declared-as-markdown-files.md) | Un agent est un fichier Markdown à en-tête YAML, composé avec un fragment de dialecte et un fragment de destinataire, rempli seulement par une liste fermée de variables (amendée le 2026-10-06) | accepté |
 | [0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md) | Le driver MySQL repose sur `mysql_async`, prépare d'abord chaque instruction, et décode tout type que le serveur envoie | accepté |
-| [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn se met à jour depuis les GitHub Releases, en Rust seulement, et installe à la fermeture | proposé |
+| [0051](adr/0051-automatic-updates-from-github-releases.md) | Oxyn se met à jour depuis les GitHub Releases, en Rust seulement, et installe à la fermeture | accepté |
 | [0052](adr/0052-verified-tls-outside-local.md) | PostgreSQL et MySQL exigent TLS vérifié hors de Local | accepté |
 | [0053](adr/0053-redact-sql-passwords-before-persistence.md) | Les littéraux de mot de passe SQL sont caviardés avant persistance ; les lignes d'audit existantes restent en ajout seul | accepté |
+| [0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md) | Le driver SQLite embarque sqlite-vec, enregistrée seulement sur les connexions où l'utilisateur l'a activée (désactivée par défaut) ; aucune extension n'est chargée depuis un fichier | accepté |
+| [0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md) | L'agent SQL est le défaut d'une nouvelle conversation, quel que soit l'ordre d'affichage | accepté |
+| [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Des embeddings locaux sur CPU (Burn, un modèle multilingue épinglé téléchargé sur activation) classent les relations du contexte IA, le lexical d'abord | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

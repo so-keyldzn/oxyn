@@ -1,6 +1,6 @@
 # ADR-0022 — What refreshes on its own, and what never will
 
-**Status:** proposed · **Date:** 2026-09-10
+**Status:** accepted (2026-10-20) · **Date:** 2026-09-10
 
 **Clarifies:** [ADR-0004](0004-command-bus.md), on what the bus publishes besides
 what it executes.

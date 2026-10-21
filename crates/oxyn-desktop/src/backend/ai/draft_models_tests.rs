@@ -19,6 +19,11 @@ use crate::ipc::ai::{ListingFailure, ModelChoice, ModelListing, ModelProbe, Prov
 /// Recognizable wherever it must not be.
 const TYPED_KEY: &str = "sk-typed-draft-0000";
 const STORED_KEY: &str = "sk-stored-draft-1111";
+/// Stands for a key pasted after `?key=` in an address. URL-safe on purpose
+/// (letters, digits, dashes): the parser's percent-encoding could not hide it
+/// from an assertion. And shaped like no vendor's key (I-03, what does not go
+/// into a test).
+const QUERY_WITNESS: &str = "oxyn-witness-draft-5c1e";
 
 /// A server answering the same bytes to every request, or nothing at all.
 struct Mock {
@@ -328,9 +333,11 @@ fn a_failure_message_is_only_ever_oxyns_own_sentence() {
         ));
         for (case, reply) in replies {
             let server = Mock::start(reply).await;
-            // A Gemini-style key in the query, which the request never sends
-            // and the message never quotes.
-            let base = format!("{}/v1?key={PLANTED}", server.origin);
+            // Query-less, so that the request goes out and the reply is what
+            // the message is built from: an address carrying a query is
+            // refused before any request, and would leave every case here
+            // untested (see `a_query_in_the_draft_endpoint_is_refused_before_any_request`).
+            let base = format!("{}/v1", server.origin);
             for key in [Some(TYPED_KEY), None] {
                 let listing = backend
                     .list_draft_models(
@@ -343,7 +350,9 @@ fn a_failure_message_is_only_ever_oxyns_own_sentence() {
                 assert_own(&message, &case);
                 assert!(!message.contains(TYPED_KEY), "{case}: {message}");
             }
-            assert!(!server.seen().contains(PLANTED), "{case}: the query went out");
+            // The message above is only Oxyn's own sentence if there was a
+            // reply to turn into one: each probe went out.
+            assert!(server.hits() >= 2, "{case}: a probe never left");
         }
 
         // Nothing answering, and addresses refused before any request.
@@ -414,6 +423,10 @@ fn a_server_that_is_not_running_is_unreachable() {
 fn an_unusable_address_is_refused_before_any_request() {
     let runtime = runtime();
     let backend = Backend::open_temporary().expect("temporary backend");
+    // A host that does not resolve: were a request to go out, the reason would
+    // be `Unreachable`, not the refusal expected below.
+    let with_query = format!("https://models.example/v1?key={QUERY_WITNESS}");
+    let with_fragment = format!("https://models.example/v1#{QUERY_WITNESS}");
     for (kind, base, key, expected) in [
         (
             AiProviderKind::OpenAiCompatible,
@@ -440,6 +453,25 @@ fn an_unusable_address_is_refused_before_any_request() {
             ListingFailure::InvalidEndpoint,
         ),
         (
+            AiProviderKind::OpenAiCompatible,
+            with_query.as_str(),
+            None,
+            ListingFailure::InvalidEndpoint,
+        ),
+        (
+            AiProviderKind::OpenAiCompatible,
+            with_fragment.as_str(),
+            None,
+            ListingFailure::InvalidEndpoint,
+        ),
+        // A bare delimiter is a query too: it parses to an empty one.
+        (
+            AiProviderKind::OpenAiCompatible,
+            "https://models.example/v1?",
+            None,
+            ListingFailure::InvalidEndpoint,
+        ),
+        (
             AiProviderKind::Anthropic,
             "https://192.0.2.1",
             None,
@@ -452,7 +484,72 @@ fn an_unusable_address_is_refused_before_any_request() {
         let (reason, message) = failure(&listing);
         assert_eq!(reason, expected, "`{base}`: {message}");
         assert!(!message.contains("hunter2"), "{message}");
+        assert!(!message.contains(QUERY_WITNESS), "{message}");
+        assert!(!message.contains("key="), "{message}");
     }
+}
+
+/// A query or a fragment on a draft address is refused by the same check that
+/// refuses it at save time, so the probe never goes out: the typed key is not
+/// sent to an address the form would not let the user save.
+#[test]
+fn a_query_in_the_draft_endpoint_is_refused_before_any_request() {
+    let runtime = runtime();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    runtime.block_on(async {
+        let server = Mock::start(json(200, TWO_MODELS)).await;
+        for base in [
+            format!("{}/v1?key={QUERY_WITNESS}", server.origin),
+            format!("{}/v1#{QUERY_WITNESS}", server.origin),
+            format!("{}/v1?", server.origin),
+        ] {
+            let listing = backend
+                .list_draft_models(
+                    probe(
+                        None,
+                        AiProviderKind::OpenAiCompatible,
+                        &base,
+                        Some(TYPED_KEY),
+                    ),
+                    true,
+                )
+                .await
+                .expect("well-formed probe");
+            let (reason, message) = failure(&listing);
+            assert_eq!(
+                reason,
+                ListingFailure::InvalidEndpoint,
+                "`{base}`: {message}"
+            );
+            for text in [&message, &format!("{listing:?}")] {
+                assert!(!text.contains(QUERY_WITNESS), "`{base}`: {text}");
+                assert!(!text.contains("key="), "`{base}`: {text}");
+                assert!(!text.contains(TYPED_KEY), "`{base}`: {text}");
+            }
+            assert!(
+                server.seen().is_empty(),
+                "`{base}`: a request went out: {}",
+                server.seen()
+            );
+        }
+
+        // The control: the same server, the same key, without the query. It
+        // answers, so the silence above is the refusal and not a dead mock.
+        let plain = backend
+            .list_draft_models(
+                probe(
+                    None,
+                    AiProviderKind::OpenAiCompatible,
+                    &format!("{}/v1", server.origin),
+                    Some(TYPED_KEY),
+                ),
+                true,
+            )
+            .await
+            .expect("well-formed probe");
+        assert_eq!(ids(&plain), ["alpha", "beta"]);
+        assert_eq!(server.hits(), 1);
+    });
 }
 
 #[test]

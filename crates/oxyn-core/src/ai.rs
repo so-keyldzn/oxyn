@@ -22,10 +22,10 @@
 //! shape as [`ConnectionConfig::secret_ref`](crate::ConnectionConfig). Its
 //! `Debug` is written by hand to mask that reference, and
 //! [`AiProviderConfig::validate`] **refuses** a base URL carrying a
-//! `user:password` pair: cleaning it silently would give the user back a
-//! configuration different from the one they entered, without telling them
-//! their key just went through a field not meant for it
-//! ([I-03](../../../CLAUDE.md#i-03)).
+//! `user:password` pair, a query string or a fragment: cleaning it silently
+//! would give the user back a configuration different from the one they
+//! entered, without telling them their key just went through a field not meant
+//! for it ([I-03](../../../CLAUDE.md#i-03)).
 //!
 //! # What is **not** here
 //!
@@ -373,8 +373,10 @@ pub struct AiProviderConfig {
     /// The name the user gives this declaration. It is **this** that is
     /// shown.
     pub label: String,
-    /// The endpoint, **stripped of its credentials**: see
-    /// [`validate`](Self::validate).
+    /// The endpoint, **free of credentials, query and fragment**:
+    /// [`validate`](Self::validate) refuses a value that carries any of them
+    /// rather than cleaning it. The store rewrites rows saved before that rule
+    /// when it lists them.
     pub base_url: String,
     /// The default model of this declaration.
     pub model: String,
@@ -420,16 +422,20 @@ impl AiProviderConfig {
 
     /// Checks what must be checked **before** the declaration reaches the disk.
     ///
-    /// The rule that matters: a base URL carrying a `user:password` pair is
-    /// **refused**. Cleaning it silently would write a configuration the user
-    /// did not enter and leave their key without an owner — a password pasted
-    /// into the "endpoint" field must produce a message, not an invisible
-    /// correction (I-03).
+    /// The rule that matters: a base URL carrying a `user:password` pair, a
+    /// query string or a fragment is **refused**. Cleaning it silently would
+    /// write a configuration the user did not enter and leave their key without
+    /// an owner — a password or an API key pasted into the "endpoint" field
+    /// must produce a message, not an invisible correction (I-03). The query
+    /// loses nothing by being refused: the transports build every request URL
+    /// with a relative join, which discards the base's query, so it was never
+    /// sent anywhere — it was only stored, in clear.
     ///
     /// # Errors
-    /// [`OxynError::Config`]: credentials in the URL, unreadable URL or URL
-    /// without a host, empty name, or a field outside its bound. No message
-    /// copies the faulty value.
+    /// [`OxynError::Config`]: credentials, query string or fragment in the URL,
+    /// unreadable URL or URL without a host, empty name, or a field outside its
+    /// bound. No message copies the faulty value; the one for a query or a
+    /// fragment points to the key field and quotes nothing of the URL.
     pub fn validate(&self) -> Result<()> {
         if self.label.trim().is_empty() || self.label.len() > MAX_PROVIDER_LABEL_BYTES {
             return Err(OxynError::Config(
@@ -470,6 +476,13 @@ impl AiProviderConfig {
     /// same query. The fragment is not compared: it never leaves the process
     /// on the wire.
     ///
+    /// The query is still compared although [`validate`](Self::validate) now
+    /// refuses one: a **validated** declaration has none, so for it the clause
+    /// is vacuous. It earns its keep on the values `validate` has not seen —
+    /// the candidate a form submits before it is checked, and a row written by
+    /// another binary — where, in doubt, a different query must not inherit a
+    /// stored key.
+    ///
     /// An unreadable `base_url` on either side is never equal to anything —
     /// in doubt, the key is forgotten, which only costs a retype
     /// ([I-03](../../../CLAUDE.md#i-03)). No I/O, and no URL is ever quoted in a
@@ -492,12 +505,22 @@ impl AiProviderConfig {
     }
 }
 
-/// Refuses an unusable base URL or one carrying credentials.
+/// Refuses an unusable base URL, one carrying credentials, or one carrying a
+/// query string or a fragment.
 ///
 /// The scheme is not constrained here: what a transport can reach is
 /// `oxyn-llm`'s business, and `oxyn-core` knows no transport. A host is
 /// required, though — a URL without an authority (`data:`, `mailto:`) is not an
 /// endpoint.
+///
+/// A query or a fragment is refused rather than stripped, for the reason the
+/// credentials are: a silent cleanup stores an endpoint the user did not type,
+/// and a key pasted there (`?key=…`, the shape some vendors document) would go
+/// on being believed saved while it was thrown away. Refusing costs no working
+/// configuration: every request path is built with a relative [`Url::join`],
+/// which replaces the base's query and fragment, so a query on the base never
+/// reached a server. The presence is tested, not the content — a bare `?` or
+/// `#` parses to `Some("")` and is as much a query as `?a=b`.
 fn validate_base_url(raw: &str) -> Result<()> {
     let url = Url::parse(raw)
         .map_err(|_| OxynError::Config("provider base URL is not a valid absolute URL".into()))?;
@@ -512,6 +535,15 @@ fn validate_base_url(raw: &str) -> Result<()> {
         return Err(OxynError::Config(
             "provider base URL must not carry credentials; \
              keep the key in the system keychain and reference it"
+                .into(),
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        // Same rule for the message: it names neither the query nor any value
+        // of it, only the place where a key belongs.
+        return Err(OxynError::Config(
+            "provider base URL must not carry a query string or a fragment; \
+             enter the key in its own field, it is kept in the system keychain"
                 .into(),
         ));
     }
@@ -985,6 +1017,137 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    /// Stands for a key pasted after `?key=`. URL-safe on purpose (letters,
+    /// digits, dashes): percent-encoding by the parser could not hide it from
+    /// an assertion. And not shaped like any vendor's key (I-03, what does not
+    /// go into a test).
+    const QUERY_WITNESS: &str = "oxyn-witness-query-3b9d";
+
+    #[test]
+    fn a_url_carrying_a_query_or_fragment_is_refused_without_quoting_it() {
+        // Presence is what is refused, not content: the two bare delimiters
+        // parse to `Some("")` and slip through a test on emptiness.
+        for suffix in [
+            format!("?key={QUERY_WITNESS}"),
+            format!("#{QUERY_WITNESS}"),
+            format!("?key={QUERY_WITNESS}#{QUERY_WITNESS}"),
+            "?".to_owned(),
+            "#".to_owned(),
+            "?region=eu".to_owned(),
+        ] {
+            let mut config = ollama();
+            config.base_url = format!("https://api.example.com/v1{suffix}");
+
+            let error = config
+                .validate()
+                .expect_err("a query or a fragment is not written");
+            assert!(
+                matches!(error, OxynError::Config(_)),
+                "a refusal of the input, not another family: {error:?}"
+            );
+            for rendered in [error.to_string(), format!("{error:?}")] {
+                assert!(
+                    !rendered.contains(QUERY_WITNESS),
+                    "witness leaked for `{suffix}`: {rendered}"
+                );
+                assert!(!rendered.contains("key="), "{rendered}");
+                assert!(!rendered.contains("region"), "{rendered}");
+                assert!(
+                    rendered.contains("its own field"),
+                    "the refusal points to the key field: {rendered}"
+                );
+            }
+        }
+    }
+
+    /// The `Debug` protects a configuration **not yet validated**, for a query
+    /// as it does for credentials: the key a user pastes after `?key=` lives in
+    /// the `Command::SaveAiProvider` until the executor refuses it.
+    #[test]
+    fn a_url_carrying_a_query_is_not_rendered_before_validation() {
+        for suffix in [format!("?key={QUERY_WITNESS}"), format!("#{QUERY_WITNESS}")] {
+            let mut config = ollama();
+            config.base_url = format!("https://api.example.com/v1{suffix}");
+
+            // Without this line the test would prove the easy case.
+            assert!(
+                config.validate().is_err(),
+                "validation does refuse a query or a fragment"
+            );
+
+            let rendered = format!("{config:?}");
+            assert!(
+                !rendered.contains(QUERY_WITNESS),
+                "secret leaked for `{suffix}`: {rendered}"
+            );
+            assert!(
+                rendered.contains("api.example.com"),
+                "the host stays diagnosable: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_query_less_url_is_still_accepted() {
+        for base_url in [
+            "http://localhost:11434/v1",
+            "https://api.example.com",
+            "https://api.example.com/v1/",
+            "https://api.example.com:8443/openai/v1",
+            "http://127.0.0.1:8080/",
+        ] {
+            let mut config = ollama();
+            config.base_url = base_url.to_owned();
+            assert!(config.validate().is_ok(), "wrongly refused: `{base_url}`");
+        }
+    }
+
+    /// The justification of the refusal, proved rather than remembered
+    /// ([I-12](../../../CLAUDE.md#i-12)): every transport appends its path with
+    /// a relative `Url::join`, and the version of `url` in `Cargo.lock` drops
+    /// the base's query and fragment when it does. A query on a base URL was
+    /// therefore never sent — refusing it loses no working configuration. The
+    /// test fails if a `url` upgrade changes that.
+    #[test]
+    fn a_relative_join_drops_the_base_query() {
+        for base in [
+            format!("https://h/v1/?key={QUERY_WITNESS}"),
+            format!("https://h/v1/#{QUERY_WITNESS}"),
+            format!("https://h/v1/?key={QUERY_WITNESS}#{QUERY_WITNESS}"),
+        ] {
+            let base = Url::parse(&base).expect("the fixture is an absolute URL");
+            for path in ["chat/completions", "models"] {
+                let joined = base.join(path).expect("a relative path joins");
+                assert_eq!(joined.query(), None, "{path}");
+                assert_eq!(joined.fragment(), None, "{path}");
+                assert!(!joined.as_str().contains(QUERY_WITNESS), "{path}");
+                assert_eq!(joined.path(), format!("/v1/{path}"));
+            }
+        }
+    }
+
+    #[test]
+    fn same_endpoint_as_still_holds_for_query_less_urls() {
+        let mine = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        for written in [
+            "https://api.example.com/v1",
+            "https://api.example.com/v1/",
+            "https://api.example.com:443/v1",
+            "HTTPS://API.Example.com:443/v1/",
+        ] {
+            let theirs = config_with(AiProviderKind::OpenAi, written);
+            // The premise: both are declarations `validate` lets through, the
+            // only kind that is stored now.
+            assert!(mine.validate().is_ok() && theirs.validate().is_ok());
+            assert!(mine.same_endpoint_as(&theirs), "`{written}`");
+            assert!(theirs.same_endpoint_as(&mine), "`{written}`");
+        }
+        // And the line is still drawn where it was: another path is another
+        // endpoint.
+        let elsewhere = config_with(AiProviderKind::OpenAi, "https://api.example.com/v2");
+        assert!(!mine.same_endpoint_as(&elsewhere));
+    }
+
     #[test]
     fn a_url_without_host_or_unreadable_is_refused() {
         for brut in [
@@ -1282,6 +1445,10 @@ mod tests {
 
     #[test]
     fn same_endpoint_as_is_false_for_a_different_query() {
+        // `validate` refuses a query now, so no stored declaration carries one:
+        // this covers the values it has not seen — an unvalidated draft, a row
+        // written by another binary — where a different query must not inherit
+        // a stored key.
         let mine = config_with(
             AiProviderKind::OpenAi,
             "https://api.example.com/v1?region=eu",

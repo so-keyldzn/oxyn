@@ -100,10 +100,14 @@ only write outside the bus — the secrets of a connection draft — goes throug
 `credentials.rs`: one keychain call per driver would be as many places to
 audit instead of one ([I-03](../CLAUDE.md#i-03)).
 
-**Two subjects are plumbing, not `Command`s**: the menu bar
-([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)) and updates
-([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). Neither
-reaches a driver. The updater is driven from Rust alone: its commands
+**Three subjects are plumbing, not `Command`s**: the menu bar
+([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md)), updates
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) and the
+download of the local embedding model
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)), started
+only by the `enable_semantic_ranking` command, which also saves the
+preference as the human — a `true` read from disk starts nothing. None of
+them reaches a driver. The updater is driven from Rust alone: its commands
 (`commands/updates.rs`, `ipc/updates.rs`) take no URL, path or version, and
 the webview holds no `updater:` permission. `tauri-plugin-opener` is not
 registered at all: `open_release_page` calls its free function `open_url`.
@@ -144,7 +148,7 @@ to the webview ([I-03](../CLAUDE.md#i-03)); tests in `ipc.rs` check it.
 
 ## 3. The Cargo workspace
 
-15 crates, as they exist, plus the `apps/desktop` front end
+16 crates, as they exist, plus the `apps/desktop` front end
 ([§2 bis](#2-bis-the-tauri-interface)):
 
 ```
@@ -166,6 +170,8 @@ oxyn/
 │   ├── oxyn-llm/                 # model provider abstraction
 │   ├── oxyn-ai/                  # agent runtime, tools, context, privacy
 │   ├── oxyn-plugin/              # WASM host (wasmtime behind the `wasm-host` feature)
+│   ├── oxyn-embed/               # local text embeddings: pinned model, download, CPU
+│   │                             #   inference (Burn); only oxyn-desktop depends on it (ADR-0056)
 │   └── oxyn-desktop/             # `oxyn-desktop` binary: Tauri host and IPC bridge (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embedded
@@ -197,17 +203,25 @@ of SQLite — carries a `Browse…` button that opens the platform's file picker
 is CodeMirror 6, with `@codemirror/lang-sql`.
 
 The workspace keeps the session returned by `Connect`. Only one
-execution is active per editor; its events are filtered by command identifier
-and connection. The final result is also sent through a reliable
+execution is active per editor; its events are filtered by command identifier,
+connection and window. The final result is also sent through a reliable
 channel, so that a loss of intermediate events does not leave the grid
 stuck. Cancellation passes the same `CancelToken` down to the driver.
 `RequireApproval` decisions open a confirmation before resuming the
 corresponding command. Closing the last window quits the application.
 
-This paragraph describes today's single-window host.
-[ADR-0043](adr/0043-multi-fenetre.md) (proposed) makes it a multi-window
-host: session, event stream and consoles become specific to a
-window, and closing a window that is not the last one closes its consoles.
+The host is multi-window ([ADR-0043](adr/0043-multi-fenetre.md) (proposed)):
+every window lives in this process, on the same backend, and the session, the
+event stream and the consoles of a window are its own. `WindowRegistry`
+(`backend/windows.rs`) is the one source of truth on what each window owns —
+the sessions it opened, the commands it sent, the results it was given — and a
+command that names what another window owns is refused, `cancel` included. A
+window is labelled `workspace-<uuid>` by Rust and opens only through Oxyn's own
+bounded command: at most 16 windows (`MAX_WINDOWS`). What the capability
+grants them is written once, in [SECURITY](SECURITY.md#input-surface). Closing
+a window that is not the last one closes its consoles, cancels the commands it
+still had running and disconnects the connections no other window holds. The
+event subscription is per window too (§9).
 [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) (proposed)
 adds macOS's native menu bar, built in Rust from the front end's
 action registry.
@@ -274,14 +288,58 @@ executor does not second-guess — `Cancelled`, an ambiguous `OutcomeUnknown` or
 wait is bounded by what is left of the deadline and by a ten-second grace after
 the Stop; past it, or when the caller abandons the execution, the outcome is
 `OutcomeUnknown`, never a cancellation (I-13). A read keeps letting go at once.
-The verdict is only as sound as the driver's: MySQL answers `Cancelled` for a
-write only once the server reported the kill on that very statement, but
-PostgreSQL still answers it for a write stopped before any of its rows arrived
-— any write without `RETURNING` — without reading the server's answer to its
-cancel request, a known gap, not a guarantee. SQLite answers `Cancelled` only
-for a write that never started; a write it interrupts is ambiguous, one whose
-last row was read is `Completed`, and a `RETURNING` stopped between two batches
-— its changes already made at its first step — is `OutcomeUnknown`.
+The verdict is only as sound as the driver's, and `Cancelled` means that
+nothing was applied: a driver answers it with proof or not at all. What counts
+as proof depends on the protocol.
+
+* **PostgreSQL** settles a write that was sent on its own connection. The task
+  sends the cancellation request from a second connection and keeps reading the
+  same stream, for at most five seconds — below the executor's grace, or its
+  verdict would never be seen. The server's cancellation error (`57014`) is
+  `Cancelled` for a read or a plain data write only, since it interrupts the
+  one statement the server was running and not what a procedure had already
+  committed: a `CALL`, a `DO` block, a structure or privilege change or a
+  statement of unknown form is `OutcomeUnknown` on it. The same holds for a
+  `57014` the Stop did not ask for, such as a role's `statement_timeout`: the
+  verdict follows the statement, not the cause. The end of the stream is
+  `Completed`, with its affected rows: the end of the stream, not the
+  statement's `CommandComplete`, since an autocommit statement commits at
+  `Sync`, after it. Any other error, or silence until the bound, is
+  `OutcomeUnknown`. A write stopped before it was sent is `Cancelled`. A write
+  cut while its returned rows were being read stays `OutcomeUnknown`, and a
+  write that was sent and whose cursor was abandoned is never `Cancelled`:
+  nobody reads its answer.
+* **MySQL** never answers `Cancelled` for a statement that was sent and may
+  have written, a kill the server reported on that very statement
+  (`ER_QUERY_INTERRUPTED`) included. That report proves the kill was spent — the
+  connection and the transaction live on — not that nothing was kept: a
+  non-transactional table may keep the rows changed before the interruption, a
+  procedure what it already committed, and a structure change may be committed
+  already. Such a statement is `OutcomeUnknown`, inside an explicit transaction
+  as in autocommit: an open transaction says nothing of the engine of the tables
+  the statement touched, and the engine is not asked, since finding it would
+  compose schema lookups from identifiers the statement names
+  ([I-10](../CLAUDE.md#i-10)) and a foreign key or a trigger reaches tables it
+  does not name. A write on a transactional engine, which the server rolls back,
+  is therefore `OutcomeUnknown` too: a deliberate loss of precision. A stop
+  decided before the statement was sent, and a statement that cannot have
+  written, stay `Cancelled`. The sources of these server behaviors and the
+  condition to reconsider are in
+  [ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md), point 7.
+* **SQLite** answers `Cancelled` only for a write that never started; a write
+  it interrupts is ambiguous, one whose last row was read is `Completed`, and a
+  `RETURNING` stopped between two batches — its changes already made at its
+  first step — is `OutcomeUnknown`. Once an earlier statement of a batch has
+  completed and could write (the engine's read-only flag says it may, or its
+  changes counter moved), no later failure and no interruption is `Cancelled` or
+  transient, even when the statement concerned is a read: replaying the batch
+  would apply the earlier statements a second time. The failure is permanent, or
+  ambiguous when the failing statement may itself have written, and its message
+  says that the earlier statements were applied — committed, unless a
+  transaction is open
+  ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)), in which case they
+  follow its fate. A lock on the very first statement stays transient: nothing ran
+  before it.
 
 PostgreSQL preparation examines the column types, including domain
 bases and array elements. Types without binary output, internal
@@ -461,6 +519,7 @@ pub struct ExecRequest {
     pub risk: MutationRisk,          // declared; likewise
     pub limits: ExecLimits,
     pub transaction_control: bool,   // BEGIN, COMMIT, ROLLBACK…; reclassified, see §7.2
+    pub context_change: bool,        // USE…; reclassified likewise, see §7.2
 }
 
 pub struct ExecLimits {
@@ -814,13 +873,28 @@ Four rules govern this table, and their **order** matters:
    a file or run a program on the database server. `COPY TO STDOUT` remains a read.
    The dedicated reason explains the effect better than "write by an agent".
 
-Two additions, outside the table:
+Three additions, outside the table:
 
 * **An agent does not drive a transaction.** `BEGIN`, `COMMIT`, `ROLLBACK`,
   `SAVEPOINT`, `RELEASE` are classified `Read`, and pass for a human; the
   reclassification flags them separately (`ExecRequest::transaction_control`), and
   the gate refuses them to an agent everywhere: on a shared session, they
   would settle the user's transaction ([SECURITY](SECURITY.md#connection-marking)).
+* **An agent does not change the session's context.** `SetSessionContext` is
+  refused to an agent ([ADR-0019](adr/0019-contexte-de-session.md)), and so is
+  a statement that opens with `USE`. `USE other` reaches the bus as an `Execute`,
+  where that refusal never looks, so the classifier no longer reads it as a
+  `Read`: it is `Unknown`, and the reclassification flags it separately
+  (`ExecRequest::context_change`, read through `Command::changes_context()`).
+  The gate refuses it to an agent in every environment, development included:
+  a refusal, never a confirmation, and journaled like any other denial. The
+  reason sends the user to the context selector. For a human, a typed `USE` is
+  an `Unknown` statement like any other in the table. The MySQL driver refuses it
+  for every actor, before anything is sent to the server, and points to the same
+  selector ([ADR-0050](adr/0050-mysql-driver-on-mysql-async-prepared-first.md),
+  point 3). For MySQL and MariaDB the classifier reads the body of an executable
+  comment (`/*!50000 … */`, `/*M!100000 … */`) as code, because the server runs
+  it: a `USE` hidden there raises the flag too, for the gate and for the driver.
 * **A production read goes out read-only.** The gate allows it without
   confirmation; `oxyn-exec` then sets `limits.read_only`, on sending as on
   approval, so that a function that writes behind a `SELECT` is
@@ -882,6 +956,17 @@ Three tiers, chosen **per connection**, never globally:
 The schema context is **compacted** before sending: normalized DDL, irrelevant tables
 pruned by searching the catalog. A 5,000-table database does not fit in a
 context window — selecting the relevant tables is a real component.
+
+Selection is lexical first. When the user turned semantic ranking on — off by
+default — local CPU embeddings order the relations the lexical score ties or
+misses, and complete the selection with them up to `max_relations`, so more
+relations can be described than without them
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+`oxyn-desktop` computes them with `oxyn-embed`, on the blocking pool, within
+2 seconds per question, and hands `ContextBuilder` a score per relation;
+`oxyn-ai` never depends on `oxyn-embed`, and a score carries no text into the
+prompt. The model is local whatever the tier: the embedding step sends
+nothing; what reaches a provider is still rendered under the tier.
 
 ### 7.5 Provider abstraction
 
@@ -1051,6 +1136,18 @@ their global local scope; documents are filtered by workspace.
 └──────────────────────────────────────────────────────────┘
 ```
 
+**One process, and one short-lived child.** Before anything else — journal,
+store, runtime, window — `main.rs` checks whether it was launched with the
+internal argument `--convert-embedding-model <root>`: then it is the
+conversion child of the local embedding model, converts, and exits with an
+exit code. `oxyn-desktop` launches it from its own executable when the
+model is downloaded, so that the conversion's 1.45 GB peak, and what the
+system allocator keeps of it, leave with that process
+([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
+parent awaits it on the runtime without blocking a thread; external agents
+are the other processes Oxyn starts
+([ADR-0026](adr/0026-agents-externes-acp.md)).
+
 **A single runtime.** `main.rs` builds a multi-thread Tokio runtime and
 hands it to Tauri (`tauri::async_runtime::set`): the `async` commands and
 the executor run on the same one. Two runtimes meant a result produced on
@@ -1101,10 +1198,17 @@ decision is written. Details and accepted abandonment windows: [ADR-0035](adr/00
 (`subscribe_events`), fed by the executor's broadcast channel. A
 slow webview loses some — it is logged, never hidden —, but the outcome of each
 command comes back as the response to its `invoke`: a loss of intermediate
-events does not leave a view stuck. This subscription is today
-unique for the whole process: a second window would cut the stream of the
-first. [ADR-0043](adr/0043-multi-fenetre.md) makes it specific to each
-window, filtered in Rust.
+events does not leave a view stuck. The subscription is **per window**:
+`subscribe_events` resolves the window that calls it from the `Webview` Tauri
+provides, and a reload of that window subscribes again, which ends the previous
+task of this window and of no other. Every task reads the same broadcast but
+forwards an event only if `WindowRegistry::route` assigns it to its window: the
+events of a command go to the window that owns the command, a transaction state
+to the window that owns the session, and nothing else goes anywhere. The filter
+is in Rust, not in the webview, and `clippy.toml` forbids the `tauri::Emitter`
+methods that would broadcast ([ADR-0043](adr/0043-multi-fenetre.md)). A
+command's cancellation follows the same ownership: `cancel` refuses a command
+that belongs to another window.
 
 **A second reactor comes in through external agents.** `agent-client-protocol`
 ([ADR-0026](adr/0026-agents-externes-acp.md)) pulls `async-io` and `blocking` as

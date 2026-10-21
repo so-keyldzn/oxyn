@@ -27,6 +27,8 @@ oxyn-driver.workspace = true
 oxyn-driver-mysql.workspace = true
 oxyn-driver-postgres.workspace = true
 oxyn-driver-sqlite.workspace = true
+# The only crate that depends on it (ADR-0056): oxyn-ai receives scores.
+oxyn-embed.workspace = true
 oxyn-exec.workspace = true
 oxyn-llm.workspace = true
 oxyn-query.workspace = true
@@ -44,12 +46,16 @@ parking_lot.workspace = true
 rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The key of a relation vector: a digest, so the cache keeps no schema text.
+sha2.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-opener.workspace = true
 tauri-plugin-updater.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+# `process`: the embedding model's conversion child, awaited and killed
+# without blocking a thread (ADR-0056).
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 # A model-listing probe's endpoint, checked and keyed for the cache.

@@ -215,6 +215,65 @@ fn an_external_agent_is_told_the_tables_at_its_first_question() {
     assert!(events.contains(r#""kind":"catalogReading""#), "{events}");
 }
 
+/// The opening prompt an external agent receives for its first question.
+fn external_opening(semantic: Option<&std::path::Path>) -> String {
+    // The tier under which the scripted agent is reachable, as above.
+    let fixture = unexpanded(PrivacyTier::Sampled);
+    let _guard = fixture.runtime.enter();
+    if let Some(root) = semantic {
+        fixture.backend.inner.semantic.place(root);
+        fixture
+            .runtime
+            .block_on(
+                fixture
+                    .backend
+                    .save_preferences(|preferences| preferences.semantic_ranking = true),
+            )
+            .expect("semantic ranking turned on");
+    }
+    let config = fixture.config();
+    let declared = agent("unused");
+    let (session, prompts) = scripted_agent(&fixture);
+    waiting(&fixture, &declared, session);
+    let thread = fixture
+        .backend
+        .inner
+        .ai
+        .thread_for(fixture.connection, None, None)
+        .expect("a conversation");
+    let cancel = CancelToken::new();
+    let nothing = &crate::backend::ai::mentions::NO_MENTIONS;
+    let (channel, _received) = recording();
+    let node = fixture.begin(&thread, None, channel);
+    fixture
+        .runtime
+        .block_on(
+            run(&fixture, &thread, node, None, &config, &cancel, nothing).ask_agent(
+                fixture.session,
+                &declared,
+                "total of the orders per customer",
+                None,
+            ),
+        )
+        .map_err(|failure| failure.message)
+        .expect("the agent answers");
+    thread.finish(node);
+    prompts.lock().first().cloned().expect("one prompt")
+}
+
+/// The external agent's opening schema takes the fill's semantic scores
+/// (#217): with the option on and no model to compute them, the scores are
+/// empty and the prompt is exactly the one the option off gives — the
+/// semantic step never changes a prompt it cannot rank.
+#[test]
+fn an_external_agent_without_scores_is_told_what_it_was_told_before() {
+    let off = external_opening(None);
+    let root = tempfile::tempdir().expect("an empty models directory");
+    let on_without_model = external_opening(Some(root.path()));
+    assert!(off.contains("Describing 2 of 2 known relations"), "{off}");
+    assert_eq!(on_without_model, off);
+}
+
 #[test]
 fn describe_schema_on_an_empty_cache_reads_as_the_agent_then_describes() {
     let fixture = unexpanded(PrivacyTier::Metadata);

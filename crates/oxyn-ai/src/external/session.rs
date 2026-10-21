@@ -532,11 +532,14 @@ impl ExternalSession {
         // The session's working directory is the process's own: announcing
         // another would point the agent at a directory it was not given.
         let directory = guard.directory().to_path_buf();
+        // The environment `spawn` borrowed, moved rather than rebuilt: what the
+        // session redacts is exactly what the child was handed or denied.
         let (session, protocol) = Self::over_with(
             transport,
             directory,
             declaration,
             confinement,
+            environment,
             Limits::default(),
         );
         let exit = Arc::clone(&session.exit);
@@ -572,17 +575,38 @@ impl ExternalSession {
         transport: impl ConnectTo<Client> + 'static,
         directory: std::path::PathBuf,
     ) -> (Self, SessionDriver) {
-        Self::over_with(transport, directory, None, None, Limits::default())
+        // No child and no tools: nothing was handed to the agent, so nothing
+        // is redacted from what it says.
+        Self::over_with(
+            transport,
+            directory,
+            None,
+            None,
+            Environment::empty(),
+            Limits::default(),
+        )
     }
 
     /// A session that also hands the agent Oxyn's tools.
+    ///
+    /// `environment` is what the agent's process was launched with: its error
+    /// messages are redacted against it. The tool token is added here, whatever
+    /// the caller put in it, so that a launch path cannot forget to withhold the
+    /// one secret the agent receives over the protocol rather than in its
+    /// environment. Saying it twice is harmless: the second occurrence is
+    /// already replaced.
     fn over_with(
         transport: impl ConnectTo<Client> + 'static,
         directory: std::path::PathBuf,
         tools: Option<ToolEndpoint>,
         confinement: Option<super::confine::Confinement>,
+        environment: Environment,
         limits: Limits,
     ) -> (Self, SessionDriver) {
+        let environment = match &tools {
+            Some(tools) => environment.withholding("tool token", tools.token.as_str()),
+            None => environment,
+        };
         let (requests, inbox) = mpsc::unbounded();
         let (declared, settings) = tokio::sync::watch::channel(AgentSettings::default());
         let driver = drive(
@@ -591,6 +615,7 @@ impl ExternalSession {
             directory,
             tools,
             confinement,
+            environment,
             Arc::new(declared),
             limits,
         )
@@ -742,12 +767,14 @@ struct State {
     liveness: Arc<Liveness>,
     /// How long a silence, and a stop, are waited for.
     limits: Limits,
-}
-
-impl State {
-    fn token(&self) -> Option<&str> {
-        self.tools.as_ref().map(|tools| tools.token.as_str())
-    }
+    /// Everything the child was handed or denied: its environment, keychain
+    /// values included, and the tool token. Every error message the agent sends
+    /// goes through `spawn::redact` against it, exactly like the child's
+    /// `stderr` — the agent can say back what it received.
+    ///
+    /// `State` has no `Debug` ([I-03](../../../../CLAUDE.md#i-03)); the
+    /// environment's own is written by hand and shows names only.
+    redactor: Environment,
 }
 
 /// What `session/new` hands the agent so it can reach the database.
@@ -766,12 +793,18 @@ struct ToolEndpoint {
     served: Vec<String>,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the launch's parts, each moved as it is into the session state or its callbacks; \
+              a bundle would only rename them"
+)]
 async fn drive(
     transport: impl ConnectTo<Client> + 'static,
     inbox: mpsc::UnboundedReceiver<Request>,
     directory: std::path::PathBuf,
     tools: Option<ToolEndpoint>,
     confinement: Option<Confinement>,
+    environment: Environment,
     settings: Settings,
     limits: Limits,
 ) {
@@ -889,6 +922,7 @@ async fn drive(
                     watch,
                     liveness,
                     limits,
+                    redactor: environment,
                     ..State::default()
                 };
                 serve(&connection, inbox, &watcher, &settings, state).await;
@@ -929,7 +963,13 @@ async fn serve(
                         .block_task()
                         .await
                         .map_err(|e| {
-                            classify(connection, "authenticate", e, &state.methods, state.token())
+                            classify(
+                                connection,
+                                "authenticate",
+                                e,
+                                &state.methods,
+                                &state.redactor,
+                            )
                         })?;
                     // A session refused before sign-in is opened again on the
                     // next question.
@@ -989,7 +1029,7 @@ async fn serve(
                                         "session/prompt",
                                         e,
                                         &state.methods,
-                                        state.token(),
+                                        &state.redactor,
                                     )
                                 }),
                         );
@@ -1085,7 +1125,7 @@ async fn initialize(
         )
         .block_task()
         .await
-        .map_err(|e| classify(connection, "initialize", e, &[], state.token()))?;
+        .map_err(|e| classify(connection, "initialize", e, &[], &state.redactor))?;
     if response.protocol_version != ProtocolVersion::V1 {
         return Err(ExternalError::Incompatible {
             agent: response.protocol_version.to_string(),
@@ -1155,7 +1195,15 @@ async fn ensure(
         })
         .block_task()
         .await
-        .map_err(|e| classify(connection, "session/new", e, &state.methods, state.token()))?;
+        .map_err(|e| {
+            classify(
+                connection,
+                "session/new",
+                e,
+                &state.methods,
+                &state.redactor,
+            )
+        })?;
     // A new session starts from what it declares, never from the previous
     // one's: a session opened again after sign-in may offer other models.
     settings.send_replace(AgentSettings::declared_with(
@@ -1278,12 +1326,17 @@ async fn change_setting(
     })
 }
 
+/// Turns an error the agent answered a request with into ours.
+///
+/// Only `error.message` and `error.code` are read. `error.data` is whatever the
+/// agent put there, and `Display` on the whole error appends it: neither it nor
+/// the error as a whole ever reaches a message or a log.
 fn classify(
     connection: &ConnectionTo<Agent>,
     method: &'static str,
     error: agent_client_protocol::Error,
     methods: &[AuthOption],
-    token: Option<&str>,
+    redactor: &Environment,
 ) -> ExternalError {
     // Oxyn's own trace, since the protocol crate's are capped
     // (`super::is_protocol_chatter`): the method and the code, which Oxyn
@@ -1303,8 +1356,15 @@ fn classify(
     if connection.incoming_closed().now_or_never().is_some() {
         return ExternalError::Exited;
     }
+    // The agent received the tool token and its environment, so it can say
+    // them back: an error that reports its MCP configuration, or the variables
+    // it was launched with. Shown in the panel, copied, kept with the
+    // conversation — a live token, or a keychain value, in the clear
+    // ([I-03](../../../../CLAUDE.md#i-03)). The same redactor as the child's
+    // `stderr`, so the two channels cannot disagree.
+    //
     // Before the cut: a token cut in half is half a token shown.
-    let mut message = redact_token(&error.message, token);
+    let mut message = super::spawn::redact(&error.message, redactor);
     if message.len() > MAX_AGENT_MESSAGE {
         let mut end = MAX_AGENT_MESSAGE;
         while !message.is_char_boundary(end) {
@@ -1314,19 +1374,6 @@ fn classify(
         message.push('…');
     }
     ExternalError::Protocol(message)
-}
-
-/// Removes the tool endpoint's token from text an agent wrote.
-///
-/// The agent received it in `session/new`, so it can say it back: an agent
-/// that reports its MCP configuration in an error, or prints it to `stderr`
-/// on the way out. Shown in the panel, copied, kept with the conversation — a
-/// token that is still alive while the session is ([I-03](../../../../CLAUDE.md#i-03)).
-pub(crate) fn redact_token(text: &str, token: Option<&str>) -> String {
-    match token {
-        Some(token) if !token.is_empty() => text.replace(token, "<tool token redacted>"),
-        _ => text.to_owned(),
-    }
 }
 
 fn auth_option(method: &AuthMethod) -> Option<AuthOption> {

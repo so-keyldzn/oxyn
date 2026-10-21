@@ -313,7 +313,8 @@ What enters Oxyn and is untrusted, in order of underestimation:
    label nor a target window). It reaches nothing of another window.
    One caveat, which comes down to a secret: Tauri's `start_dragging` and
    `internal_toggle_maximize` accept the label of another
-   window (`tauri` 2.11.5, `src/window/plugin.rs`, `get_window`). No
+   window (`tauri` 2.12.1, `src/window/plugin.rs`, `get_window`, lines 13-21,
+   read on 2026-10-20 — to re-read at every bump of `tauri`). No
    command therefore returns to the front end the label of a window, not even its
    own; a command that did would give an XSS the means to move or
    maximize the other windows.
@@ -329,9 +330,17 @@ What enters Oxyn and is untrusted, in order of underestimation:
    `style-src` keeps `'self' 'unsafe-inline'` there: components insert a
    `<style>` at runtime, into the webview's DOM, whereas Tauri only puts
    a `nonce` on the `<style>` elements already present, as text, in the static
-   HTML of the build — and that file contains none (checked in the
-   source of `tauri-codegen` 2.6.3 and `tauri-utils` 2.9.3, the versions in
-   `Cargo.lock`, on 2026-09-24 — [I-12](../CLAUDE.md#i-12)). Depending on it:
+   HTML of the build — and that file contains none (checked on 2026-09-24,
+   and again on 2026-10-20 on the build of `e9cd78f`: its only HTML file,
+   `apps/desktop/dist/client/index.html`, holds no `<style`).
+   The Tauri side is checked in the source of `tauri-codegen` 2.7.1
+   (`src/context.rs`, which calls `inject_nonce_token` on each HTML asset),
+   `tauri-utils` 2.10.1 (`src/html2.rs`, `inject_nonce_token`, which selects
+   the `style` elements of the parsed file) and `tauri` 2.12.1
+   (`src/manager/mod.rs`, `replace_csp_nonce`, which adds a `'nonce-…'` source
+   per token found in the served file), the versions in `Cargo.lock`, on
+   2026-10-20 — to re-read at every bump of `tauri`
+   ([I-12](../CLAUDE.md#i-12)). Depending on it:
 
    - `ChartStyle` (`apps/desktop/src/components/ui/chart.tsx`);
    - the CodeMirror SQL editor (`sql-editor.tsx`), through `style-mod` 4.1.3;
@@ -412,12 +421,120 @@ What enters Oxyn and is untrusted, in order of underestimation:
    lets a script skip the "work would be stopped" dialog — at worst it
    restarts into an update already verified, as `cancel_exit` and the
    ordered exit already allow; open transactions still ask.
+9. **The local embedding model files.** Only when the user turns on semantic
+   ranking — the `enable_semantic_ranking` command, which saves a workspace
+   preference off by default that no agent can change; a `true` read from
+   disk starts nothing —, Oxyn downloads `model.safetensors` and `tokenizer.json` (220,191,240 bytes)
+   ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)). The
+   sources are constants of `oxyn_embed::pinned`: Hugging Face at a pinned
+   commit, then the `embedding-model-835ad140` pre-release of this
+   repository, published on 2026-10-07 with the same two files, the
+   Apache-2.0 text and a `NOTICE.md`. A file is accepted on its pinned size
+   and SHA-256 alone, whichever source served it: streamed to a `.part`,
+   hashed as it arrives, cut off past its pinned size, renamed into place
+   only on a match, removed on any failure. HTTPS only, redirections included
+   (at most 5), TLS verified, 10 s to connect and 60 s of silence at most
+   between two chunks. **The system proxy is honoured**, a choice the user
+   validated, whereas the AI transports of `oxyn-llm` disable it
+   (`no_proxy`): an AI request carries the user's schema and questions, and a
+   proxy is one more party that reads them, while this request carries no
+   user data and its answer is trusted on its checksum, not on its path. A
+   proxy can withhold the model, or see that Oxyn fetches it; it cannot make
+   Oxyn accept other bytes. Refusing the proxy would only make the option
+   impossible to turn on behind a corporate network. It is read through
+   `reqwest`'s `system-proxy` feature — without it, only the `HTTP(S)_PROXY`
+   variables count, which an application started from the Finder does not
+   inherit. The feature applies to every client of the single `reqwest` of
+   the graph: `oxyn-llm`'s only client keeps calling `no_proxy()`, and **the
+   updater of item 8 now follows the system proxy too**, which leaves its
+   integrity where it was — on the minisign signature, not on the route.
+   The request carries no user data — a fixed URL and the `oxyn/<version>`
+   user agent —, and the webview supplies neither a URL nor a path.
+
+   **Two processes.** A download holds an exclusive lock on the model
+   directory's `.lock` file; a second Oxyn process is refused with
+   `EmbedError::DownloadInProgress` instead of writing the same `.part`. The
+   temporary workspace of `make desktop-dev` keeps its model in
+   `models-temporary-workspace/` of the user data directory, apart from the
+   installed Oxyn's `models/` — not in the system temporary directory, which
+   other accounts can write on Linux.
+
+   **The files on disk stay inputs.** No file is parsed before its size and
+   SHA-256 match the pinned values: the safetensors is hashed again right
+   before the conversion parses it, and removed when damaged;
+   `tokenizer.json` is read once, so the bytes hashed are the bytes parsed.
+   A file truncated by a full disk is refused, never handed to a parser. The
+   one residual window is `model.bpk`'s, below.
+
+   **One risk is accepted**: `model.bpk` is memory-mapped, from the very
+   file handle whose SHA-256 was just checked — replacing the file between
+   the check and the mapping changes nothing, the verified inode is the one
+   mapped — and the mapping's length must equal the pinned size before any
+   byte is read, or the file is refused as `Corrupt`. What remains is one
+   class: a process of the same user writing **in place** into the mapped
+   inode. A truncation while it is mapped kills Oxyn with `SIGBUS`; a
+   rewrite between the end of the hash and the mapping, or during
+   `load_from`, makes the burnpack parser read unverified bytes, and a panic
+   there kills the process (`panic = "abort"` in release); a rewrite after
+   loading gives wrong vectors. All need write access to the data
+   directory, which already holds everything Oxyn keeps; Oxyn's own
+   replacements — a rename, a deletion — leave a mapping intact.
+
+   **The conversion runs in a child process, and its argument is an input.**
+   The conversion, which parses the downloaded safetensors, runs in
+   `oxyn-desktop` relaunched with the internal argument
+   `--convert-embedding-model <root>` (`embedding_converter.rs`). Any
+   process can launch Oxyn with that argument, so it is handled as untrusted:
+   `main` recognises it before the journal, the store or Tauri start, and the
+   child accepts only a root equal to one of the two directories Oxyn
+   computes from its data directory — `models/` or
+   `models-temporary-workspace/` — with no further argument, and refuses
+   anything else before touching the disk (exit 76). There it does only what
+   the download does: read a file checked on its pinned checksum, write
+   `model.bpk.part`, rename it once verified. The child's environment is
+   cleared except `HOME`, `XDG_DATA_HOME`, `SystemRoot` and, when set,
+   `LD_LIBRARY_PATH`, `APPDIR` and `APPIMAGE` — which a Tauri AppImage's
+   AppRun sets, and without which the child would not start (not yet
+   verified on a real AppImage) —: paths, never a secret
+   ([I-03](../CLAUDE.md#i-03)). Its standard output and error are null, so no
+   dependency's message reaches a journal through them, and it reports a
+   failure only as an exit code read through `EmbedError::from_exit_code`.
+   The parent holds the directory lock for the whole download; the child does
+   not take it, and the lock closes on `exec`. So that a child never outlives
+   that lock, its standard input is a pipe the parent keeps open while it
+   waits: the child exits with the `Cancelled` code as soon as the pipe ends,
+   which happens when Oxyn quits, crashes or is killed. Cancelling kills and
+   reaps the child — at any step, the conversion included —, and the `.part`
+   it left is removed like an interrupted download's.
+
+   **Errors carry fixed texts.** burn-store's messages name a file's full
+   path and a tokenizer error can quote the text: the errors of `oxyn-embed`
+   and the message the settings show and the journal records are fixed
+   sentences, filled only with a pinned file name, an action or an I/O error
+   kind; tests feed every variant a path and a marker and check that neither
+   comes out. What is embedded — the question and relation names
+   and comments — never leaves the process, and the vector cache keeps only
+   their SHA-256.
 
 ## `unsafe` policy
 
 **`unsafe` is refused at compile time.** `[workspace.lints.rust]` carries
-`unsafe_code = "deny"`, and none of the fourteen crates — twelve under `crates/`,
-two drivers under `drivers/` — contains it or re-allows it. The manifest is authoritative here, because it is what is
+`unsafe_code = "deny"`, and of the sixteen crates — thirteen under `crates/`,
+three drivers under `drivers/` — two functions re-allow it, each under its own
+ADR:
+
+- `register` in `drivers/oxyn-driver-sqlite/src/vector_extension.rs`, which
+  registers the bundled sqlite-vec extension on a connection — only one where
+  the user turned the `sqlite_vec` switch on, off by default, and that no agent
+  can change ([ADR-0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md));
+- `map_verified` in `crates/oxyn-embed/src/load.rs`, which memory-maps the
+  local embedding model, read-only, from the file handle whose SHA-256 was
+  just verified — only once the user turned semantic ranking on, off by
+  default ([ADR-0056](adr/0056-local-cpu-embeddings-for-context-selection.md)).
+  Its accepted risk is the in-place write of item 9 above — a `SIGBUS`, an
+  abort in the parser, or wrong vectors.
+
+The manifest is authoritative here, because it is what is
 executed: this document previously described a policy of supervised use that
 compilation does not grant, and [ADR-0021](adr/0021-marqueur-d-arret.md) grounded
 an architecture decision — not checking a pid — on the refusal, not on the
@@ -465,9 +582,21 @@ what will keep it valid.
   The only one today is RUSTSEC-2024-0429 — an *unsoundness* in
   `glib::VariantStrIter`, reached through `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
   The fix is in `glib 0.20`, which `gtk 0.18` refuses: nothing can be upgraded
-  here until Tauri changes GTK. This code is Linux's; it
-  is not compiled on macOS, the only target shipped today, and Oxyn
-  does not call this iterator. To reopen at the next Tauri upgrade.
+  here until Tauri changes GTK. The Linux packages (x86_64 and aarch64: deb,
+  rpm, AppImage) ship `glib 0.18.5`; macOS does not compile it. The defect is a
+  NULL dereference: the iterator passes the address of a null string pointer to
+  a C function through a shared reference, the compiler may ignore the write,
+  and `CStr::from_ptr` then receives NULL. It sits in five methods (`next`,
+  `nth`, `last`, `next_back`, `nth_back`), and none of them is reachable in
+  what ships: `Variant::array_iter_str` (`glib-0.18.5/src/variant.rs`, lines
+  843-855) is the only function that builds a `VariantStrIter`, whose
+  constructor is `pub(crate)` (`src/variant_iter.rs`, line 109), and nothing
+  calls it — neither the 634 external crates of the normal and build
+  dependencies of `oxyn-desktop` on the two Linux targets, nor the workspace.
+  Checked on 2026-10-20 ([I-12](../CLAUDE.md#i-12)). The check is redone at
+  every bump of `tauri`, `gtk`, `wry`, `muda`, `tao` or `webkit2gtk`, since a
+  new release could add a caller; the entry is dropped once the chain reaches
+  `glib` 0.20 or later. `deny.toml` holds the command, next to the entry.
 
 See also [`/securite`](../.claude/commands/securite.md) and
 [the checklist](../.claude/checklists/revue-securite.md).

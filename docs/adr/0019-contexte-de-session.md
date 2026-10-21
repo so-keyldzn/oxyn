@@ -1,6 +1,7 @@
 # ADR-0019 — A declared session context, never set silently
 
-**Status:** accepted · **Date:** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10 · **Amended:** 2026-10-20 (typed
+`USE`, issue #223)
 
 **Clarifies:** [ADR-0015](0015-consoles-independantes.md), on what a session
 carries besides its transaction.
@@ -59,6 +60,25 @@ The session context is a **declared operation**, not a side effect.
   effect outlives the command — the `DELETE` the human writes next would hit a
   different schema than the one they think they target
   ([I-07](../../CLAUDE.md#i-07)). It is a refusal, not a confirmation.
+- *Amended on 2026-10-20 (issue #223):* the same move typed as SQL, a
+  `USE other` on MySQL, reaches the bus as a `Command::Execute`, not as
+  `SetSessionContext`, and the refusal above never saw it: the classifier read
+  `USE` as a read. It is now `Unknown`, and the classifier raises
+  `ExecRequest::context_change`, which the executor's reclassification sets
+  from the text alone, so a caller cannot declare it away. For MySQL and
+  MariaDB that text includes the body of an executable comment, which the
+  server runs: `/*!50000 USE other */` raises the flag like a bare `USE other`.
+  `Command::changes_context()` reads it, and the `PolicyGate` refuses it to
+  `Actor::Agent` as it refuses `SetSessionContext`: a refusal on every
+  environment, development included, never a confirmation
+  ([I-01](../../CLAUDE.md#i-01), [I-07](../../CLAUDE.md#i-07)). The MySQL
+  driver refuses a typed `USE` to **every** actor, before anything is sent to
+  the server, and points to the context selector: a database selected behind
+  the session's back would leave `Session::context` naming the previous one,
+  and the next reconnect would select that one again. The driver does not read
+  the database back with `SELECT DATABASE()`: the declared context stays the
+  only one, and a driver that discovers it behind the user's back reintroduces
+  the divergence this ADR exists to prevent.
 - The `Session` trait gains `async fn set_context(&self, context: &SessionContext,
   cancel: &CancelToken) -> Result<()>`, defaulting to `NotSupported`, and
   `fn context(&self) -> Option<SessionContext>`, which returns what the server

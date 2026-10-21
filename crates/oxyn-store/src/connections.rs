@@ -334,6 +334,38 @@ mod tests {
     }
 
     #[test]
+    fn the_sqlite_vec_switch_round_trips_and_its_absence_stays_absent() {
+        // The switch of ADR-0054 is an ordinary driver parameter: saved as
+        // readable JSON text, and absent from a connection saved without it —
+        // which the SQLite driver reads as off.
+        let (store, workspace) = store_with_workspace();
+        let on = ConnectionConfig::new("vectors", DriverId::sqlite())
+            .with_param("path", "/data/semantiq.sqlite")
+            .with_param("sqlite_vec", "true");
+        let older = ConnectionConfig::new("older", DriverId::sqlite())
+            .with_param("path", "/data/semantiq.sqlite");
+        store.connections().save(workspace, &on).expect("write");
+        store.connections().save(workspace, &older).expect("write");
+
+        let read = |id| store.connections().get(id).expect("read").expect("present");
+        assert_eq!(
+            read(on.id).params.get("sqlite_vec").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(read(older.id).params.get("sqlite_vec"), None);
+        let stored: String = store
+            .with_connection(|conn| {
+                Ok(conn.query_row(
+                    "SELECT params FROM connections WHERE id = ?1",
+                    params![on.id.to_string()],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("raw row");
+        assert!(stored.contains(r#""sqlite_vec":"true""#), "{stored}");
+    }
+
+    #[test]
     fn parameter_order_is_preserved() {
         // A configuration file that reorders itself produces unreadable
         // diffs; `ConnectionConfig` relies on this order.

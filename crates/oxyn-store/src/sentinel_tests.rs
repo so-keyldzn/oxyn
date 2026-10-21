@@ -19,13 +19,18 @@
 //! Only one of I-03's six channels. The log, the displayed error, the crash
 //! report, the AI prompt and the clipboard have their own guards, elsewhere.
 
+use std::io::ErrorKind;
+use std::path::Path;
+
 use crate::{
     Conversation, Destination, Store, ToolCallRecord, ToolCallStatus, TurnRecord, TurnRole,
 };
+use chrono::Utc;
 use oxyn_core::{
     AiProviderConfig, AiProviderKind, ConnectionConfig, DriverId, Environment, ExternalAgentConfig,
     PrivacyTier, ProviderId,
 };
+use rusqlite::params;
 
 /// The witness value. Improbable by construction: if it shows up somewhere, a
 /// write path put it there.
@@ -173,5 +178,108 @@ fn no_sentinel_reaches_the_workspace_file() {
     assert!(
         !leaks.is_empty(),
         "no trace at all: the test proves nothing if the writes did not happen"
+    );
+}
+
+/// The store file and its write-ahead log, as bytes: what a hex editor or a
+/// backup tool sees, which a query over the rows does not.
+fn on_disk(file: &Path) -> Vec<u8> {
+    let mut bytes = std::fs::read(file).expect("the store file is readable");
+    let mut log = file.as_os_str().to_owned();
+    log.push("-wal");
+    match std::fs::read(&log) {
+        Ok(frames) => bytes.extend(frames),
+        // SQLite removes the log when the last connection closes cleanly.
+        Err(error) => assert_eq!(error.kind(), ErrorKind::NotFound, "the log is unreadable"),
+    }
+    bytes
+}
+
+fn contains_bytes(haystack: &[u8], needle: &str) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+}
+
+/// A key pasted in a provider's base URL by an older binary does not survive
+/// the first listing — not in a row, and not in the file either.
+///
+/// Two halves, because they do not prove the same thing. A refused `save`
+/// writes nothing. A row **already** on the disk is rewritten by `list`, and
+/// the rewrite is only half a cleanup: with the write-ahead log on, the page
+/// image that held the key stays in the log until a checkpoint copies the new
+/// image over it. The byte-level check is what turns red if the truncation
+/// disappears.
+#[test]
+fn no_query_sentinel_survives_in_the_store_file() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let file = directory.path().join("oxyn.db");
+    let store = Store::open_at(&file).expect("open");
+
+    // Written around `save`, which refuses it: this is the row an older
+    // binary left behind.
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO ai_providers
+                     (id, kind, label, base_url, model, secret_ref, created_at, updated_at)
+                 VALUES ('legacy', ?1, 'Legacy provider', ?2, 'a-model',
+                         'keychain://oxyn/legacy', ?3, ?3)",
+                params![
+                    AiProviderKind::OpenAiCompatible.as_str(),
+                    format!("http://127.0.0.1:11434/v1?key={SENTINEL}"),
+                    Utc::now(),
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("legacy row");
+    assert!(
+        whole_text(&store)
+            .iter()
+            .any(|(table, column, value)| table == "ai_providers"
+                && column == "base_url"
+                && value.contains(SENTINEL)),
+        "the test proves nothing if the legacy row does not carry the witness"
+    );
+    assert!(
+        contains_bytes(&on_disk(&file), SENTINEL),
+        "the test proves nothing if the witness is not in the file before the cleaning"
+    );
+
+    // The same value, through the only door a caller has: refused.
+    let incoming = AiProviderConfig::new(
+        ProviderId::new("incoming").expect("identifier"),
+        AiProviderKind::OpenAiCompatible,
+        "Incoming provider",
+        format!("http://127.0.0.1:11434/v1?key={SENTINEL}"),
+        "a-model",
+    );
+    let error = store
+        .providers()
+        .save(&incoming)
+        .expect_err("a query is not written");
+    for text in [error.to_string(), format!("{error:?}")] {
+        assert!(
+            !text.contains(SENTINEL),
+            "the witness is in the error: {text}"
+        );
+    }
+
+    let listed = store.providers().list().expect("list");
+    assert_eq!(listed.len(), 1, "the legacy provider is repaired, not lost");
+    assert_eq!(listed[0].base_url, "http://127.0.0.1:11434/v1");
+
+    let rows: Vec<_> = whole_text(&store)
+        .into_iter()
+        .filter(|(_, _, value)| value.contains(SENTINEL))
+        .collect();
+    assert!(
+        rows.is_empty(),
+        "the witness is still in a table after the first listing: {rows:#?}"
+    );
+    assert!(
+        !contains_bytes(&on_disk(&file), SENTINEL),
+        "the witness is still in the store file or its write-ahead log"
     );
 }

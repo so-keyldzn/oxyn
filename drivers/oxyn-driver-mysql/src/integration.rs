@@ -29,11 +29,15 @@
 //! on: 1064 before 1295, read-only refusals, `LOCAL INFILE` refused, zero
 //! dates, `DECIMAL(65,30)`, `BIGINT UNSIGNED`, `VECTOR`, `CALL` with two
 //! result sets, the transaction state, the transaction kept across a proven
-//! kill (ADR-0050 §7 as amended), a MariaDB write returning rows past its
-//! bound drained rather than killed, the single error of an execution that loses
-//! its transaction, the statements an introspection closes, the columns only
-//! the execution gives, the transaction kept across a failing statement, and
-//! the bound on a kill the server accepts and never answers.
+//! kill (ADR-0050 §7 as amended), the verdict of a stopped write (never
+//! `Cancelled` once it was sent: a MyISAM update, in a transaction or not, an
+//! InnoDB update in a transaction, a `CALL`), a MariaDB
+//! write returning rows past its bound drained rather than killed, the single
+//! error of an execution that loses its transaction, the statements an
+//! introspection closes, the columns only the execution gives, the
+//! transaction kept across a failing statement, the bound on a kill the
+//! server accepts and never answers, and a typed `USE` refused before anything
+//! reaches the server (ADR-0019).
 
 use std::time::Duration;
 
@@ -78,6 +82,28 @@ fn long_rows() -> String {
     format!(
         "{DIGITS} SELECT a.i, REPEAT('x', 200) AS oxyn_long_marker \
          FROM d a, d b, d c, d e, d f, d g, d h"
+    )
+}
+
+/// Ten rows as a derived table, for a subquery that runs for minutes inside an
+/// `UPDATE`: [`DIGITS`] is a `WITH`, which has to open the statement.
+fn ten_rows(alias: char) -> String {
+    format!(
+        "(SELECT 0 AS i UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 \
+         UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 \
+         UNION ALL SELECT 8 UNION ALL SELECT 9) {alias}"
+    )
+}
+
+/// An `UPDATE` of `table` (`id`, `n`) that changes row 1 at once and then
+/// spends minutes in a subquery for any other row, marked as [`long_count`] so
+/// the process list finds it. The row changed first is what a table without
+/// rollback keeps when the statement is killed.
+fn long_update(table: &str) -> String {
+    let product = ('a'..='j').map(ten_rows).collect::<Vec<_>>().join(", ");
+    format!(
+        "UPDATE {table} SET n = n + 1 \
+         WHERE id = 1 OR (SELECT COUNT(*) AS oxyn_long_marker FROM {product}) > 0"
     )
 }
 
@@ -238,6 +264,35 @@ async fn settled_long(observer: &dyn Session) -> u64 {
         remaining = running_long(observer).await;
     }
     remaining
+}
+
+/// Is the server thread `id` executing a statement? From another connection.
+///
+/// The process list says whether the thread is busy, not which text it runs:
+/// a procedure shows the statement it is in, not the `CALL`, so the marker of
+/// [`running_long`] cannot find one.
+async fn thread_is_busy(observer: &dyn Session, id: u64) -> bool {
+    first(
+        observer,
+        &format!(
+            "SELECT COUNT(*) FROM information_schema.PROCESSLIST \
+             WHERE ID = {id} AND COMMAND <> 'Sleep'"
+        ),
+    )
+    .await
+        != "0"
+}
+
+/// [`thread_is_busy`], given two seconds to turn false: a killed thread
+/// leaves its statement when it notices.
+async fn thread_goes_idle(observer: &dyn Session, id: u64) -> bool {
+    for _ in 0..20 {
+        if !thread_is_busy(observer, id).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    false
 }
 
 #[tokio::test]
@@ -437,6 +492,273 @@ async fn a_cancelled_statement_keeps_the_open_transaction() {
         "the row written before the cancellation is committed"
     );
     apply(&*session, "DROP TABLE oxyn_tx_cancel").await;
+    observer.close().await.expect("close");
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_myisam_update_interrupted_by_stop_is_not_cancelled() {
+    // A 1317 proves the kill was spent, not that the statement kept nothing:
+    // a MyISAM table has no rollback, so what the update changed before the
+    // kill stays. `Cancelled` would invite running it again (I-13).
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    apply(&*session, "DROP TABLE IF EXISTS oxyn_myisam_stop").await;
+    apply(
+        &*session,
+        "CREATE TABLE oxyn_myisam_stop (id INT PRIMARY KEY, n INT NOT NULL) ENGINE=MyISAM",
+    )
+    .await;
+    apply(
+        &*session,
+        "INSERT INTO oxyn_myisam_stop VALUES (1, 0), (2, 0)",
+    )
+    .await;
+    let (running, issue) = cancel_through_the_token(
+        &*session,
+        &*observer,
+        write_request(&long_update("oxyn_myisam_stop")),
+    )
+    .await;
+    assert_eq!(running, 1, "the update runs");
+    let Err(error) = issue else {
+        panic!("a stopped update is an error");
+    };
+    assert!(
+        !error.is_cancelled(),
+        "a MyISAM update stopped mid-way kept its first rows: {error:?}"
+    );
+    assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
+    assert_eq!(error.class(), ErrorClass::Ambiguous);
+    assert!(!error.is_retryable(), "never replayed (I-13)");
+    // The server stopped it all the same: the verdict is about the data.
+    assert_eq!(
+        settled_long(&*observer).await,
+        0,
+        "the server still runs the stopped update"
+    );
+    // The session goes on, with its connection kept or reopened.
+    assert_eq!(
+        first(&*session, "SELECT COUNT(*) FROM oxyn_myisam_stop").await,
+        "2"
+    );
+    apply(&*session, "DROP TABLE oxyn_myisam_stop").await;
+    observer.close().await.expect("close");
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_call_killed_after_its_procedure_committed_an_insert_is_outcome_unknown() {
+    // Whether the server answers 1317 on the CALL or lets it end after the
+    // interrupted SLEEP, the procedure keeps the INSERT it committed: a CALL
+    // is never `Cancelled`, in a transaction or not.
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    apply(
+        &*session,
+        "DROP PROCEDURE IF EXISTS oxyn_commits_then_waits",
+    )
+    .await;
+    apply(&*session, "DROP TABLE IF EXISTS oxyn_call_log").await;
+    apply(&*session, "CREATE TABLE oxyn_call_log (id INT PRIMARY KEY)").await;
+    apply(
+        &*session,
+        "CREATE PROCEDURE oxyn_commits_then_waits() \
+         BEGIN INSERT INTO oxyn_call_log VALUES (1); DO SLEEP(30); END",
+    )
+    .await;
+    let id: u64 = first(&*session, "SELECT CONNECTION_ID()")
+        .await
+        .parse()
+        .expect("a connection id");
+
+    let token = CancelToken::new();
+    let executing = async {
+        let mut cursor = session
+            .execute(write_request("CALL oxyn_commits_then_waits()"), &token)
+            .await?;
+        end_of(&mut cursor).await
+    };
+    let stopping = async {
+        // The INSERT is committed once the observer sees its row: the
+        // procedure is then in its SLEEP, with something to keep.
+        let mut committed = false;
+        for _ in 0..100 {
+            if first(&*observer, "SELECT COUNT(*) FROM oxyn_call_log").await == "1" {
+                committed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(committed, "the procedure committed its INSERT");
+        assert!(
+            thread_is_busy(&*observer, id).await,
+            "the CALL is still running when the stop arrives"
+        );
+        token.cancel();
+    };
+    // Shorter than the procedure's SLEEP: a stop that does not cut fails here.
+    let (ended, ()) = tokio::time::timeout(
+        Duration::from_secs(25),
+        futures::future::join(executing, stopping),
+    )
+    .await
+    .expect("the stop cuts the CALL instead of waiting for its SLEEP");
+
+    let Err(error) = ended else {
+        panic!("a CALL stopped before its end is an error");
+    };
+    assert!(
+        matches!(error, OxynError::OutcomeUnknown(_)),
+        "a procedure keeps what it already committed: {error:?}"
+    );
+    assert_eq!(error.class(), ErrorClass::Ambiguous);
+    assert!(!error.is_retryable(), "never replayed (I-13)");
+    assert_eq!(
+        first(&*observer, "SELECT COUNT(*) FROM oxyn_call_log").await,
+        "1",
+        "the row the procedure committed before the stop is there"
+    );
+    assert!(
+        thread_goes_idle(&*observer, id).await,
+        "the server still runs the stopped CALL"
+    );
+    apply(&*session, "DROP PROCEDURE oxyn_commits_then_waits").await;
+    apply(&*session, "DROP TABLE oxyn_call_log").await;
+    observer.close().await.expect("close");
+    session.close().await.expect("close");
+}
+
+/// Opens a transaction on a fresh two-row table of `engine`, writes a third
+/// row, then stops a long `UPDATE` of the table through the token. Returns how
+/// many long statements ran and how the execution ended; the transaction is
+/// still open when it returns.
+async fn stop_an_update_inside_a_transaction(
+    session: &dyn Session,
+    observer: &dyn Session,
+    table: &str,
+    engine: &str,
+) -> (u64, Result<(), OxynError>) {
+    apply(session, &format!("DROP TABLE IF EXISTS {table}")).await;
+    apply(
+        session,
+        &format!("CREATE TABLE {table} (id INT PRIMARY KEY, n INT NOT NULL) ENGINE={engine}"),
+    )
+    .await;
+    apply(
+        session,
+        &format!("INSERT INTO {table} VALUES (1, 0), (2, 0)"),
+    )
+    .await;
+    apply(session, "START TRANSACTION").await;
+    apply(session, &format!("INSERT INTO {table} VALUES (3, 0)")).await;
+    // Not bounded to read-only: that bound is refused inside a transaction.
+    cancel_through_the_token(session, observer, write_request(&long_update(table))).await
+}
+
+/// What a stopped write must say whatever the engine: not `Cancelled`.
+fn assert_unknown_outcome(issue: &Result<(), OxynError>) {
+    let Err(error) = issue else {
+        panic!("a stopped update is an error: {issue:?}");
+    };
+    assert!(
+        matches!(error, OxynError::OutcomeUnknown(_)),
+        "a transaction proves nothing of the tables' engine: {error:?}"
+    );
+    assert_eq!(error.class(), ErrorClass::Ambiguous);
+    assert!(!error.is_retryable(), "never replayed (I-13)");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn an_innodb_update_in_a_transaction_stopped_by_the_kill_is_an_unknown_outcome() {
+    // The server undoes an interrupted InnoDB statement alone and keeps the
+    // transaction. The driver cannot see the engine without composing schema
+    // lookups from the statement's identifiers (I-10), and an open transaction
+    // proves nothing about it: it reports `OutcomeUnknown`, which criterion 3
+    // of #222 allows ("can stay Cancelled"). What the server did is checked
+    // here from another connection, not read off the verdict.
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    let (running, issue) =
+        stop_an_update_inside_a_transaction(&*session, &*observer, "oxyn_tx_stop", "InnoDB").await;
+    assert_eq!(running, 1, "the update runs");
+    assert_unknown_outcome(&issue);
+    assert_eq!(
+        settled_long(&*observer).await,
+        0,
+        "the server still runs the stopped update"
+    );
+    assert_eq!(
+        session.transaction_state(&CancelToken::new()).await,
+        TransactionState::Open,
+        "the transaction survives the kill"
+    );
+    // Committed, not rolled back: the data shows what InnoDB did.
+    apply(&*session, "COMMIT").await;
+    assert_eq!(
+        first(&*observer, "SELECT COUNT(*) FROM oxyn_tx_stop").await,
+        "3",
+        "the row written before the stopped statement is committed"
+    );
+    assert_eq!(
+        first(&*observer, "SELECT COUNT(*) FROM oxyn_tx_stop WHERE n <> 0").await,
+        "0",
+        "the interrupted update changed nothing"
+    );
+    apply(&*session, "DROP TABLE oxyn_tx_stop").await;
+    observer.close().await.expect("close");
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_myisam_update_in_a_transaction_stopped_by_the_kill_is_not_cancelled() {
+    // The case an open transaction used to turn into `Cancelled`: the kill is
+    // confirmed and the transaction survives, but a MyISAM table has no
+    // rollback, so the rows the update changed before the kill stay. Replaying
+    // would apply them twice (I-13).
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    let (running, issue) =
+        stop_an_update_inside_a_transaction(&*session, &*observer, "oxyn_tx_myisam", "MyISAM")
+            .await;
+    assert_eq!(running, 1, "the update runs");
+    assert!(
+        !matches!(issue, Err(ref error) if error.is_cancelled()),
+        "a MyISAM table written inside a transaction keeps its rows: {issue:?}"
+    );
+    assert_unknown_outcome(&issue);
+    assert_eq!(
+        settled_long(&*observer).await,
+        0,
+        "the server still runs the stopped update"
+    );
+    assert_eq!(
+        session.transaction_state(&CancelToken::new()).await,
+        TransactionState::Open,
+        "the transaction survives the kill"
+    );
+    apply(&*session, "ROLLBACK").await;
+    apply(&*session, "DROP TABLE oxyn_tx_myisam").await;
     observer.close().await.expect("close");
     session.close().await.expect("close");
 }
@@ -725,8 +1047,25 @@ async fn what_mysql_cannot_prepare_runs_through_the_text_protocol() {
         "the second result set is not dropped in silence"
     );
     drop(cursor);
-    // `USE` and a bound parameter on an unpreparable statement.
-    apply(&*session, "USE t").await;
+    // `START TRANSACTION` is what MySQL refuses to prepare (1295) and the text
+    // protocol runs; MariaDB prepares it. Either way the server opened the
+    // transaction, and says so in its status flags.
+    apply(&*session, "START TRANSACTION").await;
+    assert_eq!(
+        session.transaction_state(&CancelToken::new()).await,
+        TransactionState::Open
+    );
+    apply(&*session, "ROLLBACK").await;
+    // `USE` no longer takes this path, on MySQL or on MariaDB (which prepares
+    // it): a typed `USE` is refused before the prepare. The refusal and what
+    // it leaves untouched are the subject of
+    // `a_typed_use_is_refused_and_points_to_the_context_selector`.
+    let error = refusal(
+        run(&*session, write_request("USE t")).await,
+        "a typed USE is refused",
+    );
+    assert!(matches!(error, OxynError::NotSupported { .. }), "{error:?}");
+    // A bound parameter on an unpreparable statement.
     let bound =
         write_request("DROP PROCEDURE IF EXISTS oxyn_two").with_params(vec![ScalarValue::Int64(1)]);
     if !is_mariadb(&*session).await {
@@ -1279,6 +1618,114 @@ async fn a_context_selects_the_database_and_is_quoted() {
             .is_err()
     );
     apply(&*session, "DROP DATABASE `oxyn ctx``db`").await;
+    session.close().await.expect("close");
+}
+
+/// A per-session status counter of the server, from `SHOW SESSION STATUS`.
+async fn session_counter(session: &dyn Session, name: &str) -> u64 {
+    let batches = run(
+        session,
+        read_request(&format!("SHOW SESSION STATUS LIKE '{name}'")),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("`{name}`: {error}"));
+    let batch = batches.first().expect("one batch");
+    array_value_to_string(batch.column(1), 0)
+        .expect("printable")
+        .parse()
+        .expect("a count")
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_typed_use_is_refused_and_points_to_the_context_selector() {
+    // Issue #223. A `USE` typed in a statement would select a database the
+    // session never declared: `Session::context` would go on naming the
+    // previous one, and the next reconnect would select that one again. It is
+    // refused for every actor, before the prepare — MariaDB prepares `USE`, so
+    // the server would not refuse it —, and the declared context stays the
+    // only one.
+    let Some(session) = session().await else {
+        return;
+    };
+    for database in ["oxyn_use_declared", "oxyn_use_other"] {
+        apply(&*session, &format!("DROP DATABASE IF EXISTS {database}")).await;
+        apply(&*session, &format!("CREATE DATABASE {database}")).await;
+    }
+    let declared = SessionContext::new(None, Some("oxyn_use_declared".to_owned()));
+    session
+        .set_context(&declared, &CancelToken::new())
+        .await
+        .expect("context");
+    let connection = first(&*session, "SELECT CONNECTION_ID()").await;
+
+    // What a refusal that reached the server would move is measured, not
+    // assumed: two reads with nothing between them give the counter's step.
+    let first_read = session_counter(&*session, "Com_stmt_prepare").await;
+    let second_read = session_counter(&*session, "Com_stmt_prepare").await;
+    let step = second_read - first_read;
+    assert!(step >= 1, "a read is prepared, the counter must move");
+
+    for text in [
+        "USE oxyn_use_other",
+        "use `oxyn_use_other`;",
+        "/* x */ USE oxyn_use_other",
+        "SELECT 1; USE oxyn_use_other",
+        // The server runs the body of an executable comment, and MariaDB
+        // prepares it: nothing else would stop these two.
+        "/*!50000 USE oxyn_use_other */",
+        "/*M!100000 USE oxyn_use_other */",
+    ] {
+        // With the read-only bound or without: the refusal looks at the text
+        // only, and the driver never sees who typed it.
+        for request in [write_request(text), read_request(text)] {
+            let error = refusal(run(&*session, request).await, text);
+            let OxynError::NotSupported { capability } = &error else {
+                panic!("`{text}` must be refused as unsupported: {error:?}");
+            };
+            assert!(
+                capability.contains("context selector"),
+                "`{text}`: the message points to the selector: {capability}"
+            );
+            assert!(
+                !capability.contains("oxyn_use_other"),
+                "`{text}`: the message echoes the name: {capability}"
+            );
+        }
+    }
+
+    // Nothing was sent: no `COM_STMT_PREPARE` reached the server for any of
+    // the twelve refusals, and the same connection is still the session's.
+    assert_eq!(
+        session_counter(&*session, "Com_stmt_prepare").await - second_read,
+        step,
+        "a refused USE must not even be prepared"
+    );
+    assert_eq!(
+        first(&*session, "SELECT DATABASE()").await,
+        "oxyn_use_declared"
+    );
+    assert_eq!(session.context(), Some(declared.clone()));
+    assert_eq!(
+        first(&*session, "SELECT CONNECTION_ID()").await,
+        connection,
+        "a refusal costs no reconnection"
+    );
+
+    // The way out the message points to does work.
+    let other = SessionContext::new(None, Some("oxyn_use_other".to_owned()));
+    session
+        .set_context(&other, &CancelToken::new())
+        .await
+        .expect("the selector");
+    assert_eq!(
+        first(&*session, "SELECT DATABASE()").await,
+        "oxyn_use_other"
+    );
+    assert_eq!(session.context(), Some(other));
+    for database in ["oxyn_use_declared", "oxyn_use_other"] {
+        apply(&*session, &format!("DROP DATABASE {database}")).await;
+    }
     session.close().await.expect("close");
 }
 

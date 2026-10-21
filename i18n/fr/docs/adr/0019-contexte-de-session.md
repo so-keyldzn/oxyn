@@ -1,10 +1,11 @@
-<!-- oxyn-translation source="docs/adr/0019-contexte-de-session.md" sha256="a164ef524085" -->
+<!-- oxyn-translation source="docs/adr/0019-contexte-de-session.md" sha256="1ee5d84a286f" -->
 
 > Traduction française de [docs/adr/0019-contexte-de-session.md](../../../../docs/adr/0019-contexte-de-session.md). **La version anglaise fait foi.**
 
 # ADR-0019 — Un contexte de session déclaré, jamais posé en silence
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Statut :** accepté · **Date :** 2026-09-10 · **Amendé :** 2026-10-20 (`USE`
+tapé, issue #223)
 
 **Précise :** [ADR-0015](0015-consoles-independantes.md), sur ce qu'une session
 porte en plus de sa transaction.
@@ -63,6 +64,26 @@ Le contexte de session est une **opération déclarée**, pas un effet de bord.
   et l'effet survit à la commande — le `DELETE` que l'humain écrira ensuite
   frapperait un autre schéma que celui qu'il croit viser
   ([I-07](../../CLAUDE.md#i-07)). C'est un refus, pas une confirmation.
+- *Amendé le 2026-10-20 (issue #223) :* le même geste tapé en SQL, un
+  `USE other` sur MySQL, arrive au bus comme un `Command::Execute`, pas comme
+  `SetSessionContext`, et le refus ci-dessus ne le voyait pas : le classifieur
+  lisait `USE` comme une lecture. Il est désormais `Unknown`, et le classifieur
+  lève `ExecRequest::context_change`, que la reclassification de l'exécuteur
+  pose à partir du seul texte : un appelant ne peut donc pas le déclarer faux.
+  Pour MySQL et MariaDB, ce texte comprend le corps d'un commentaire
+  exécutable, que le serveur exécute : `/*!50000 USE other */` lève le drapeau
+  comme un `USE other` nu.
+  `Command::changes_context()` le lit, et le `PolicyGate` le refuse à
+  `Actor::Agent` comme il refuse `SetSessionContext` : un refus sur tous les
+  environnements, développement compris, jamais une confirmation
+  ([I-01](../../CLAUDE.md#i-01), [I-07](../../CLAUDE.md#i-07)). Le driver MySQL
+  refuse un `USE` tapé à **tout** acteur, avant d'envoyer quoi que ce soit au
+  serveur, et renvoie au sélecteur de contexte : une base choisie dans le dos
+  de la session laisserait `Session::context` nommer la précédente, et la
+  prochaine reconnexion sélectionnerait celle-là de nouveau. Le driver ne
+  relit pas la base par `SELECT DATABASE()` : le contexte déclaré reste le
+  seul, et un driver qui le découvre dans le dos de l'utilisateur réintroduit
+  la divergence que cet ADR existe pour empêcher.
 - Le trait `Session` gagne `async fn set_context(&self, context: &SessionContext,
   cancel: &CancelToken) -> Result<()>`, de défaut `NotSupported`, et
   `fn context(&self) -> Option<SessionContext>` qui rend ce que le serveur a

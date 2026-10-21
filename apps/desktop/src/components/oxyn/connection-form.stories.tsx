@@ -114,6 +114,76 @@ export const SQLite: Story = {
 }
 
 /**
+ * sqlite-vec is off on a new connection, and its description says what turning
+ * it on runs and when it applies (ADR-0054). Turned on, the switch is saved as
+ * the driver parameter `sqlite_vec`.
+ */
+export const SQLiteVecIsOffUntilTurnedOn: Story = {
+  args: { driver: sqliteDriver },
+  play: async ({ canvas, args }) => {
+    const vec = canvas.getByRole("switch", { name: /Enable sqlite-vec/ })
+    await expect(vec).not.toBeChecked()
+    await expect(vec).toHaveAccessibleDescription(
+      /bundled sqlite-vec C extension.*only for files you trust.*sessions opened afterwards.*disconnect/
+    )
+
+    await userEvent.type(canvas.getByLabelText(/^Name/), "semantiq")
+    await userEvent.click(canvas.getByRole("button", { name: /Browse/ }))
+    await waitFor(() =>
+      expect(canvas.getByLabelText(/^Database file/)).toHaveValue(
+        "/Users/me/data/scratch.sqlite"
+      )
+    )
+    await userEvent.click(vec)
+    await expect(vec).toBeChecked()
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: expect.objectContaining({ sqlite_vec: "true" }),
+        })
+      )
+    )
+  },
+}
+
+/** Editing keeps the saved choice; a copy does not inherit it. */
+export const SQLiteVecIsKeptOnEditNotOnCopy: Story = {
+  args: {
+    driver: sqliteDriver,
+    existing: {
+      ...savedConnections[2]!,
+      values: { path: "/Users/me/data/semantiq.sqlite", sqlite_vec: "true" },
+      hasStoredSecrets: false,
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByRole("switch", { name: /Enable sqlite-vec/ })
+    ).toBeChecked()
+  },
+}
+
+export const SQLiteVecIsNotCopied: Story = {
+  args: {
+    driver: sqliteDriver,
+    prefill: {
+      name: "semantiq copy",
+      readOnly: false,
+      values: { path: "/Users/me/data/semantiq.sqlite", sqlite_vec: "true" },
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByLabelText(/^Database file/)).toHaveValue(
+      "/Users/me/data/semantiq.sqlite"
+    )
+    await expect(
+      canvas.getByRole("switch", { name: /Enable sqlite-vec/ })
+    ).not.toBeChecked()
+  },
+}
+
+/**
  * A `.sqlite` file dropped on the window: its path is in the form, and that is
  * all — the connection starts as production like any other, and nothing is
  * sent until Connect (UX-SPEC « Mouse and drag »).

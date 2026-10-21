@@ -273,6 +273,39 @@ impl OxynError {
     pub const fn is_cancelled(&self) -> bool {
         matches!(self, Self::Cancelled)
     }
+
+    /// The engine module the failed statement needed and this connection does
+    /// not provide, when that is why it failed.
+    ///
+    /// It is data the driver attached, never a reading of the message: the
+    /// interface explains this failure — the table needs an extension — and
+    /// shows every other one as it came.
+    #[must_use]
+    pub fn missing_module(&self) -> Option<&str> {
+        match self {
+            Self::Driver { source, .. } => source
+                .downcast_ref::<MissingModule>()
+                .map(|missing| missing.module.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// A statement needs an engine module this connection does not provide: an
+/// SQLite virtual table `USING vec0(…)` read without the extension that
+/// registers `vec0`.
+///
+/// A driver returns it as the source of [`OxynError::Driver`], classified
+/// **permanent**: reading again changes nothing until the module is loaded.
+/// Its message is the engine's own words.
+///
+/// The module name comes from the database: shown as text, never run, and
+/// framed as database content if it reaches a prompt.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("no such module: {module}")]
+pub struct MissingModule {
+    /// The module's name, as the engine names it.
+    pub module: String,
 }
 
 impl From<crate::ids::IdParseError> for OxynError {
@@ -284,6 +317,25 @@ impl From<crate::ids::IdParseError> for OxynError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_module_is_data_not_a_reading_of_the_message() {
+        let missing = OxynError::driver(
+            DriverId::sqlite(),
+            ErrorClass::Permanent,
+            MissingModule {
+                module: "vec0".into(),
+            },
+        );
+        assert_eq!(missing.missing_module(), Some("vec0"));
+        assert!(missing.to_string().ends_with("no such module: vec0"));
+        assert!(!missing.is_retryable());
+
+        // The same words from anything else carry no module: only the driver
+        // attaches one.
+        let lookalike = OxynError::Query("no such module: vec0".into());
+        assert_eq!(lookalike.missing_module(), None);
+    }
 
     #[derive(Debug, thiserror::Error)]
     #[error("the socket was closed by the peer")]

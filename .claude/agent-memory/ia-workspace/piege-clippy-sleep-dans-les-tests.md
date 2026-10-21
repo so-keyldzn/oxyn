@@ -9,6 +9,6 @@ metadata:
 
 **Why:** the rule targets the UI thread, but `disallowed-methods` does not distinguish test targets.
 
-**How to apply:** to wait in a synchronous test that holds a `tokio::runtime::Runtime`, write `runtime.block_on(tokio::time::sleep(d))` (or `fixture.runtime.block_on(...)`), like the existing tests of `oxyn-desktop`.
+**How to apply:** to wait in a synchronous test that holds a `tokio::runtime::Runtime`, write `runtime.block_on(tokio::time::sleep(d))` (or `fixture.runtime.block_on(...)`), like the existing tests of `oxyn-desktop`. That form only works under `let _guard = runtime.enter()`: `tokio::time::sleep(d)` is built **before** `block_on` enters, and without an entered runtime it panics "there is no reactor running" (seen 2026-10-04). Without a guard, write `runtime.block_on(async { tokio::time::sleep(d).await })`.
 
 Another neighboring trap, same family: an `ExecRequest::new(..)` written by hand in a test keeps the default limits **read-only**; an approved agent write then fails with "bounded to read-only". `execute_query` sets `ExecLimits::default().writable()` when the text writes: the test must do the same.

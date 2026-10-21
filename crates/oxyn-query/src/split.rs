@@ -26,7 +26,7 @@
 //! `PolicyGate` asks for an approval. A splitting error costs one confirmation
 //! too many, never one write too few.
 
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use oxyn_core::SqlDialect;
 
@@ -644,6 +644,64 @@ pub fn words_with(sql: &str, profile: SplitProfile) -> Vec<Word<'_>> {
     out
 }
 
+/// The text as a MySQL or MariaDB server runs it: the body of an executable
+/// comment is code.
+///
+/// `/*!50000 USE x */` and, on MariaDB, `/*M!100000 USE x */` are comments to
+/// every other server and statements to these two. The scanner reads them as
+/// comments, since it cannot know the server's version, so `split` and `words`
+/// never see what hides there: a `USE`, a `COMMIT`, a `DELETE`, or the `;` that
+/// ends the statement before it. A reader built on them is told "nothing
+/// here", and the check it implements is skipped (issue #223).
+///
+/// This view blanks, with spaces, the opening marker, the run of digits that
+/// gates the version, and the closing `*/` of each such comment, and leaves
+/// every other byte alone. The length is unchanged, so a byte offset in the view
+/// is the same offset in the original. Only ASCII bytes are replaced, so the
+/// result is valid UTF-8 whatever the body holds.
+///
+/// It reads **more** code than a given server version would run, never less: a
+/// body gated on a version above the server's is a comment to it, and reading
+/// it as code costs a confirmation at worst. Comments the scanner does not
+/// tokenize as such — inside a string, behind `--` — are not touched, and the
+/// profile decides what a string is.
+///
+/// The view is for *reading*. What is sent to the server stays the user's text.
+pub(crate) fn executable_sql(sql: &str, profile: SplitProfile) -> Cow<'_, str> {
+    let mut unmasked: Option<Vec<u8>> = None;
+    scan(sql, profile, &mut |token, span| {
+        let Some(comment) = sql.get(span.clone()) else {
+            return;
+        };
+        if token != Tok::Comment {
+            return;
+        }
+        let prefix_len = if comment.starts_with("/*!") {
+            3
+        } else if comment.starts_with("/*M!") {
+            4
+        } else {
+            return;
+        };
+        let gate_len = comment.as_bytes().get(prefix_len..).map_or(0, |body| {
+            body.iter().take_while(|b| b.is_ascii_digit()).count()
+        });
+        let bytes = unmasked.get_or_insert_with(|| sql.as_bytes().to_vec());
+        if let Some(opening) = bytes.get_mut(span.start..span.start + prefix_len + gate_len) {
+            opening.fill(b' ');
+        }
+        if comment.ends_with("*/")
+            && let Some(closing) = bytes.get_mut(span.end.saturating_sub(2)..span.end)
+        {
+            closing.fill(b' ');
+        }
+    });
+    match unmasked {
+        Some(bytes) => Cow::Owned(String::from_utf8_lossy(&bytes).into_owned()),
+        None => Cow::Borrowed(sql),
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The scanner
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1003,6 +1061,61 @@ mod tests {
             .into_iter()
             .map(|f| f.text.to_owned())
             .collect()
+    }
+
+    fn executable(sql: &str) -> String {
+        executable_sql(sql, SplitProfile::for_dialect(SqlDialect::MySql)).into_owned()
+    }
+
+    #[test]
+    fn the_executable_view_blanks_the_markers_and_the_version_gate_only() {
+        assert_eq!(executable("/*!50000 USE x */"), "         USE x   ");
+        assert_eq!(executable("/*M!100000 USE x */"), "           USE x   ");
+        assert_eq!(executable("/*! USE x */"), "    USE x   ");
+        assert_eq!(
+            executable("SELECT 1 /*!50000 ; DROP t */"),
+            "SELECT 1          ; DROP t   "
+        );
+        // Only the digits that follow the marker are the gate.
+        assert_eq!(
+            executable("/*!50000 SELECT 5000 */"),
+            "         SELECT 5000   "
+        );
+    }
+
+    #[test]
+    fn the_executable_view_keeps_every_offset_and_every_character() {
+        let sql = "SELECT 'é' /*!50000 , 'ü' */ FROM `ñ` -- ça";
+        let view = executable(sql);
+        assert_eq!(view.len(), sql.len());
+        for (index, (original, seen)) in sql.bytes().zip(view.bytes()).enumerate() {
+            assert!(
+                original == seen || (seen == b' ' && original.is_ascii()),
+                "byte {index} changed from {original:#x} to {seen:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_executable_view_leaves_every_other_comment_alone() {
+        for sql in [
+            "SELECT 1 /* USE x */",
+            "SELECT /*+ USE x */ 1",
+            "SELECT '/*!50000 USE x */'",
+            "SELECT `/*!50000 USE x */`",
+            "-- /*!50000 USE x */\nSELECT 1",
+            "# /*!50000 USE x */\nSELECT 1",
+        ] {
+            let view = executable_sql(sql, SplitProfile::for_dialect(SqlDialect::MySql));
+            assert!(matches!(view, Cow::Borrowed(_)), "{sql}");
+        }
+    }
+
+    #[test]
+    fn an_unclosed_executable_comment_is_read_to_the_end() {
+        // The server fails the statement; reading the body as code costs a
+        // confirmation at worst.
+        assert_eq!(executable("/*!50000 USE x"), "         USE x");
     }
 
     #[test]

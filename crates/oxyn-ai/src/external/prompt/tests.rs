@@ -507,4 +507,101 @@ mod schema {
         }
         assert!(rendered.contains("redacted"), "{rendered}");
     }
+
+    fn main_path(relation: &str) -> CatalogPath {
+        CatalogPath::for_namespace(None, "main")
+            .and_then(|main| main.with_relation(relation))
+            .expect("valid path")
+    }
+
+    fn ranked(tier: PrivacyTier, question: &str, semantic: SemanticScores) -> AgentPrompt {
+        AgentPrompt::with_schema_ranked(
+            tier,
+            question,
+            &nbc(),
+            SQLITE,
+            Vec::new(),
+            Vec::new(),
+            sql_instructions(),
+            semantic,
+        )
+        .expect("valid prompt")
+    }
+
+    /// No term of this question matches `nbc`'s names.
+    const FRENCH: &str = "quels clients ont commandé hier ?";
+
+    #[test]
+    fn without_scores_the_ranked_opening_is_exactly_with_schemas() {
+        for question in ["orders", FRENCH] {
+            let plain = AgentPrompt::with_schema(
+                PrivacyTier::Metadata,
+                question,
+                &nbc(),
+                SQLITE,
+                Vec::new(),
+                Vec::new(),
+                sql_instructions(),
+            )
+            .expect("valid prompt");
+            let empty = ranked(PrivacyTier::Metadata, question, SemanticScores::new());
+            assert_eq!(plain, empty, "{question}");
+        }
+    }
+
+    /// The same selection as the internal assistant's gate for the same input:
+    /// ranking is not written twice (ADR-0056).
+    #[test]
+    fn the_scores_rank_as_the_gateway_does() {
+        let cache = nbc();
+        for (question, expected) in [
+            // Matches nothing: by meaning, `customers` before `orders`.
+            (FRENCH, vec!["customers", "orders"]),
+            // Matches `orders`: it leads, `customers` completes by meaning.
+            ("orders", vec!["orders", "customers"]),
+        ] {
+            let semantic: SemanticScores =
+                [(main_path("customers"), 0.9), (main_path("orders"), 0.2)]
+                    .into_iter()
+                    .collect();
+            let opening = ranked(PrivacyTier::Metadata, question, semantic.clone());
+            let gateway = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+                .with_policy(crate::builtin::sql_agent().context)
+                .with_language(SQLITE)
+                .focused_on(question)
+                .with_semantic_scores(semantic)
+                .build();
+            let context = opening.context().expect("a schema is attached");
+            let wanted: Vec<CatalogPath> = expected.into_iter().map(main_path).collect();
+            assert_eq!(context.relations(), wanted.as_slice(), "{question}");
+            assert_eq!(context.prompt_block(), gateway.prompt_block(), "{question}");
+        }
+    }
+
+    /// A score carries no text (I-04): keyed on a name the catalog does not
+    /// list, it changes nothing and that name never reaches the prompt; under
+    /// `Local`, nothing is composed with scores either.
+    #[test]
+    fn a_score_puts_no_text_in_the_prompt() {
+        let ghost: SemanticScores = [(main_path("hiv_status_by_patient"), 1.0)]
+            .into_iter()
+            .collect();
+        let with_ghost = ranked(PrivacyTier::Metadata, FRENCH, ghost.clone());
+        let without = ranked(PrivacyTier::Metadata, FRENCH, SemanticScores::new());
+        assert_eq!(with_ghost, without);
+        assert!(!with_ghost.as_str().contains("hiv_status"));
+        assert!(!format!("{ghost:?}").contains("hiv_status"));
+
+        let refused = AgentPrompt::with_schema_ranked(
+            PrivacyTier::Local,
+            FRENCH,
+            &nbc(),
+            SQLITE,
+            Vec::new(),
+            Vec::new(),
+            sql_instructions(),
+            ghost,
+        );
+        assert!(refused.is_err(), "Local closes the gate, scores or not");
+    }
 }

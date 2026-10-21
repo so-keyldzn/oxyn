@@ -37,6 +37,8 @@
 //!   declared name; foreign-key records keep an empty name.
 //! * **The internal `sqlite_*` tables are listed** like the others. Hiding them
 //!   would mean deciding in the user's place what exists.
+//! * **A virtual table is listed with its module**, and its shadow tables with
+//!   their owner: see `virtual_tables.rs`. Neither is hidden.
 
 use async_trait::async_trait;
 use oxyn_catalog::model::{
@@ -152,35 +154,28 @@ impl CatalogProvider for SqliteCatalog {
         let database = Self::database_of(namespace).to_owned();
         let parent = CatalogPath::for_namespace(None, database.clone())?;
 
-        let rows: Vec<(String, String)> = self
+        let token = cancel.clone();
+        let rows = self
             .worker
             .call(cancel, move |connection: &Connection| {
-                let sql = format!(
-                    "SELECT name, type FROM {}.sqlite_master \
-                     WHERE type IN ('table', 'view') ORDER BY type, name",
-                    // I-10: the name of an attached database comes from the user.
-                    quote_identifier(&database, QuoteStyle::Double)
-                );
-                let mut statement = connection.prepare(&sql).map_err(read)?;
-                let mut rows = statement.query([]).map_err(read)?;
-                let mut collected = Vec::new();
-                while let Some(row) = rows.next().map_err(read)? {
-                    collected.push((
-                        row.get("name").map_err(read)?,
-                        row.get("type").map_err(read)?,
-                    ));
-                }
-                Ok(collected)
+                crate::virtual_tables::list(connection, &database, &token)
             })
             .await?;
 
         rows.into_iter()
-            .map(|(name, kind)| {
-                let kind = match kind.as_str() {
+            .map(|listed| {
+                let kind = match listed.kind.as_str() {
                     "view" => RelationKind::View,
                     _ => RelationKind::Table,
                 };
-                Ok(RelationRef::new(parent.clone(), name, kind)?)
+                let mut relation = RelationRef::new(parent.clone(), listed.name, kind)?;
+                if let Some((module, available)) = listed.virtual_table {
+                    relation = relation.with_virtual_table(module, available);
+                }
+                if let Some(owner) = listed.shadow_of {
+                    relation = relation.with_shadow_of(owner);
+                }
+                Ok(relation)
             })
             .collect()
     }

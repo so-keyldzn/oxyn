@@ -158,13 +158,22 @@ def verify_manifest(rel: str, body: str) -> None:
 # rule, a command, a checklist — legitimately contains some: this is a false
 # positive seen in real use, and a false positive blocks the work every turn
 # until the hook is disabled.
+#
+# This list is what the hook looks at on write, and no more. The quality gate,
+# `script/verifier-todo` in `make qualite`, scans a wider set of tracked files:
+# these extensions plus .sh .yml .yaml .json .ts .tsx .js .mjs .cjs, the
+# extensionless commands directly under `script/` and the root `Makefile` —
+# minus `apps/desktop/src/components/ui/` (generated) and the two files that
+# are this hook and its test. On TypeScript and JavaScript the gate is
+# therefore stricter than the hook: it is the gate that is the wall, the hook
+# only saves a round trip.
 CODE_EXTENSIONS = (".rs", ".toml", ".py", ".wit", ".sql")
 
-# The two accepted forms, and the same definition as `script/verifier-todo`,
-# which applies the check to the whole repository in `make qualite`. A phase of
-# the implementation plan counts as a date: the plan says what it contains, so
-# when it arrives. If either definition moves, the other must follow —
-# otherwise the hook refuses what the quality gate accepts.
+# The two accepted forms, and the same definition as `script/verifier-todo`:
+# a date or a phase right after the opening parenthesis. A phase of the
+# implementation plan counts as a date: the plan says what it contains, so when
+# it arrives. If either definition moves, the other must follow — otherwise the
+# hook refuses what the quality gate accepts.
 DEADLINE_PATTERN = r"TODO\s*\(\s*(?:\d{4}-\d{2}-\d{2}|phase\s+\d+)"
 
 

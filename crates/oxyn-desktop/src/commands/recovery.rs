@@ -149,6 +149,9 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJour
             // recovery (ADR-0040). The window is gone: these waits freeze
             // nothing (I-05).
             let backend = app.state::<Backend>();
+            // The model's download and idle task end with the process
+            // rather than past it (ADR-0056).
+            backend.inner.semantic.stop();
             if !backend.shutdown_finished() && !backend.close_on_forced_exit(FORCED_EXIT_GRACE) {
                 tracing::warn!(
                     "exiting without the ordered shutdown; the close is not recorded yet"

@@ -1,6 +1,6 @@
 # ADR-0037 — A critical decision is confirmed in a native dialog of the host, never in the webview
 
-**Status:** proposed · **Date:** 2026-09-25
+**Status:** accepted (2026-10-20) · **Date:** 2026-09-25
 
 **Clarifies:** [ADR-0029](0029-interface-tauri-shadcn.md), whose Consequences
 name the new surface — "an XSS in the webview reaches the Tauri commands" —
@@ -162,6 +162,54 @@ the decision like any refusal. The second starts when the host presents the
 dialog, not at the request: a dialog waiting its turn behind another still on
 screen (deadline below) is displayed late, and has not been read for all that.
 Each dialog of such a queue has its own second.
+
+**Amendment (2026-10-20).** The next three paragraphs record, without changing
+the decision or the code, what the dialog does on each platform and what its
+body shows, so that [UX-SPEC](../UX-SPEC.md#destructive-operations) and this
+ADR describe the same dialog (audit issue #227). The rest of this section
+stands as written.
+
+**Enter after the second confirms.** The one-second delay rejects the
+keystroke that was already on its way when the dialog appeared; it does not
+change which button is the default. `NativeDialog` passes
+`OkCancelCustom("Write to production", "Cancel")` and no parent window, and in
+`user_alert.rs` the first label of that list becomes the
+`default_button_title` of `CFUserNotificationDisplayAlert`, the second its
+`alternate_button_title` (`rfd` 0.16.0, re-read on 2026-10-20). So on macOS,
+from one second after the display, Enter confirms the write; before, it is a
+refusal that consumes the decision, and the user starts again from the screen.
+The rule of UX-SPEC that the default button is never the destructive action
+governs the webview review of § 5, which precedes this dialog, not this
+dialog. `NativeDialog` is only exercised by hand (§ 4): the default button is
+what the `rfd` source says.
+
+**Windows and Linux.** `rfd` 0.16.0 and the plugin designate no default
+button; the behavior is the platform toolkit's and is not verified by Oxyn
+(source read 2026-10-20). On Windows, `tauri-plugin-dialog` 2.7.3 enables the
+`common-controls-v6` feature of `rfd` (its `Cargo.toml`), so the dialog goes
+through `TaskDialogIndirect` with the custom buttons in the order confirmation,
+`Cancel`, and `nDefaultButton: 0` (`src/backend/win_cid/message_dialog.rs`). On
+Linux, the plugin's default `gtk3` feature builds a `GTK_BUTTONS_NONE` dialog,
+adds the two custom buttons and sets no default response
+(`src/backend/gtk3/message_dialog.rs`). The second, the deadline and the refusal
+of anything but the confirming button live in `confirm.rs`, the same code on the
+three platforms.
+
+**What the body shows, and where the exact text is read.** The body of a write
+dialog shows a cut, escaped rendering of the statement, never the raw text.
+`text.rs` counts in characters, not bytes. The line `Statement (N characters):`
+carries the true length. Up to 1,000 characters (`STATEMENT_WHOLE`) the
+statement is shown whole; beyond, the first 500 (`STATEMENT_EDGE`), a line
+`… M more characters …` with M = N − 1,000, then the last 500. Either way the
+text goes through `visible()`: a newline and a tab appear as `↵` and `⇥`, any
+other control or invisible character as `\u{XXXX}`. This cut is the
+statement's: the other free-text fields — a name, a reason — are bounded to 200
+characters with a marker of their own, and the connection dialogs (creation,
+edit, deletion) carry no statement. The exact statement is read in the webview:
+`Preview.statement` (`oxyn-core`, `policy.rs`) holds it as the user or the agent
+wrote it, `ApprovalPreview` (`ipc.rs`) copies it unchanged, and the approval
+dialog shows it in a scrollable region (§ 5). The middle of a cut statement can
+only be read there (Consequences).
 
 **A deadline for every dialog: five minutes**, the bound
 [ADR-0034](0034-echantillon-pour-toute-destination.md) already sets for the

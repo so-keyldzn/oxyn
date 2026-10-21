@@ -28,11 +28,20 @@ import type { CatalogAddress, ConnectionDraft } from "./types"
 
 export class BackendError extends Error {
   readonly retryable: boolean
+  /**
+   * The engine module the failed statement needed, when that is why it
+   * failed: the view explains it, and shows every other failure as it came.
+   */
+  readonly missingModule: string | null
 
-  constructor(error: IpcError) {
+  /** `missingModule` defaults to none: only the backend names one. */
+  constructor(
+    error: Omit<IpcError, "missingModule"> & { missingModule?: string | null }
+  ) {
     super(error.message)
     this.name = "BackendError"
     this.retryable = error.retryable
+    this.missingModule = error.missingModule ?? null
   }
 }
 

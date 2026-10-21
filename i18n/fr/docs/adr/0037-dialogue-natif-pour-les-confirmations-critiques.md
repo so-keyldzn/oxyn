@@ -1,10 +1,10 @@
-<!-- oxyn-translation source="docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md" sha256="6a4b2188804a" -->
+<!-- oxyn-translation source="docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md" sha256="ea4fff8d4962" -->
 
 > Traduction française de [docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md](../../../../docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md). **La version anglaise fait foi.**
 
 # ADR-0037 — Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview
 
-**Statut :** proposé · **Date :** 2026-09-25
+**Statut :** accepté (2026-10-20) · **Date :** 2026-09-25
 
 **Précise :** [ADR-0029](0029-interface-tauri-shadcn.md), dont les Conséquences
 nomment la surface nouvelle — « une XSS dans la webview atteint les commandes
@@ -171,6 +171,57 @@ décision comme tout refus. La seconde part du moment où l'hôte présente le
 dialogue, pas de la demande : un dialogue qui attend son tour derrière un autre
 encore à l'écran (échéance ci-dessous) s'affiche tard, et n'a pas été lu pour
 autant. Chaque dialogue d'une telle file a sa propre seconde.
+
+**Amendement (2026-10-20).** Les trois paragraphes qui suivent consignent, sans
+changer la décision ni le code, ce que fait le dialogue sur chaque plateforme et
+ce que montre son corps, pour que [UX-SPEC](../UX-SPEC.md#les-opérations-destructrices)
+et cet ADR décrivent le même dialogue (ticket d'audit #227). Le reste de cette
+section reste tel qu'il est écrit.
+
+**Entrée après la seconde confirme.** Le délai d'une seconde rejette la frappe
+qui était déjà en route quand le dialogue est apparu ; il ne change pas quel
+bouton est celui par défaut. `NativeDialog` passe
+`OkCancelCustom("Write to production", "Cancel")` et aucune fenêtre parente, et
+dans `user_alert.rs` la première étiquette de cette liste devient le
+`default_button_title` de `CFUserNotificationDisplayAlert`, la seconde son
+`alternate_button_title` (`rfd` 0.16.0, relu le 2026-10-20). Donc sous macOS, à
+partir d'une seconde après l'affichage, Entrée confirme l'écriture ; avant,
+c'est un refus qui consomme la décision, et l'utilisateur reprend depuis
+l'écran. La règle d'UX-SPEC selon laquelle le bouton par défaut n'est jamais
+l'action destructrice gouverne la revue webview du § 5, qui précède ce
+dialogue, pas ce dialogue. `NativeDialog` n'est exercé qu'à la main (§ 4) : le
+bouton par défaut est ce que dit la source de `rfd`.
+
+**Windows et Linux.** `rfd` 0.16.0 et le plugin ne désignent aucun bouton par
+défaut ; le comportement est celui du toolkit de la plateforme et n'est pas
+vérifié par Oxyn (source lue le 2026-10-20). Sous Windows,
+`tauri-plugin-dialog` 2.7.3 active la fonctionnalité `common-controls-v6` de
+`rfd` (son `Cargo.toml`), si bien que le dialogue passe par `TaskDialogIndirect`
+avec les boutons personnalisés dans l'ordre confirmation, `Cancel`, et
+`nDefaultButton: 0` (`src/backend/win_cid/message_dialog.rs`). Sous Linux, la
+fonctionnalité `gtk3`, par défaut dans le plugin, construit un dialogue
+`GTK_BUTTONS_NONE`, y ajoute les deux boutons personnalisés et ne fixe aucune
+réponse par défaut (`src/backend/gtk3/message_dialog.rs`). La seconde,
+l'échéance et le refus de tout ce qui n'est pas le bouton de confirmation
+vivent dans `confirm.rs`, le même code sur les trois plateformes.
+
+**Ce que montre le corps, et où se lit le texte exact.** Le corps d'un dialogue
+d'écriture montre un rendu coupé et échappé de l'instruction, jamais le texte
+brut. `text.rs` compte en caractères, pas en octets. La ligne
+`Statement (N characters):` porte la longueur réelle. Jusqu'à 1 000 caractères
+(`STATEMENT_WHOLE`) l'instruction est montrée entière ; au-delà, les 500
+premiers (`STATEMENT_EDGE`), une ligne `… M more characters …` avec
+M = N − 1 000, puis les 500 derniers. Dans les deux cas le texte passe par
+`visible()` : un saut de ligne et une tabulation apparaissent en `↵` et `⇥`,
+tout autre caractère de contrôle ou invisible en `\u{XXXX}`. Cette coupe est
+celle de l'instruction : les autres champs de texte libre — un nom, une raison —
+sont bornés à 200 caractères avec un marqueur à eux, et les dialogues de
+connexion (création, édition, suppression) ne portent aucune instruction.
+L'instruction exacte se lit dans la webview : `Preview.statement` (`oxyn-core`,
+`policy.rs`) la tient telle que l'utilisateur ou l'agent l'a écrite,
+`ApprovalPreview` (`ipc.rs`) la copie sans la modifier, et la boîte
+d'approbation l'affiche dans une zone défilante (§ 5). Le milieu d'une
+instruction coupée ne peut se lire que là (Conséquences).
 
 **Une échéance pour tout dialogue : cinq minutes**, la borne qu'[ADR-0034](0034-echantillon-pour-toute-destination.md)
 fixe déjà à la demande d'échantillon. Le plugin ne peut pas fermer un dialogue

@@ -146,7 +146,8 @@ export function createPreviewStore(effects: PreviewEffects) {
     key: string,
     id: string,
     message: string,
-    retryable: boolean
+    retryable: boolean,
+    missingModule: string | null
   ) => {
     effects.unwatch(id)
     if (store.state[key]?.running !== id) return
@@ -155,7 +156,7 @@ export function createPreviewStore(effects: PreviewEffects) {
       running: null,
       cancelling: false,
       startedAt: null,
-      state: { status: "error", message, retryable },
+      state: { status: "error", message, retryable, missingModule },
     }))
   }
 
@@ -296,7 +297,13 @@ export function createPreviewStore(effects: PreviewEffects) {
             typeof error === "object" &&
               error !== null &&
               "retryable" in error &&
-              error.retryable === true
+              error.retryable === true,
+            typeof error === "object" &&
+              error !== null &&
+              "missingModule" in error &&
+              typeof error.missingModule === "string"
+              ? error.missingModule
+              : null
           )
       )
     },

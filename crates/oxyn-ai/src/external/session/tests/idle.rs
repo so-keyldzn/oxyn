@@ -24,7 +24,8 @@ fn run_limited<T>(
     scenario: impl AsyncFnOnce(ExternalSession) -> T,
 ) -> T {
     let (ours, theirs) = Channel::duplex();
-    let (session, driver) = ExternalSession::over_with(ours, private(), None, None, SHORT);
+    let (session, driver) =
+        ExternalSession::over_with(ours, private(), None, None, Environment::empty(), SHORT);
     block_on(async move {
         tokio::spawn(driver);
         tokio::spawn(agent(theirs));

@@ -15,6 +15,11 @@ access fails here with `[60] SSL peer certificate or SSH remote key was
 not OK`. This failure cut off a whole session while the measurement fit in
 three lines. A build inside the workspace does not touch the network.
 
+**Not always:** on 2026-10-07 a disposable project in the scratchpad resolved
+and fetched from crates.io without trouble (local-embeddings spike). The SSL
+failure depends on the session's network, so try once before giving up; the
+crates.io API itself refuses `curl` without a `-A` User-Agent.
+
 **How to apply:** at the moment of wanting "just a small binary to print
 `size_of::<T>()`". The temporary test also becomes the permanent test the
 measured constant calls for — a layout constant that nothing watches is exactly

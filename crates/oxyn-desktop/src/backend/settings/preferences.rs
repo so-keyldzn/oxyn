@@ -41,6 +41,17 @@ pub(crate) struct PreferenceState {
     loaded: tokio::sync::Mutex<bool>,
 }
 
+impl PreferenceState {
+    /// Whether semantic ranking is on, as applied now (ADR-0056).
+    ///
+    /// Off until the preferences were read: the front reads them at startup,
+    /// before a question can be asked, and off is what a missing payload
+    /// means anyway.
+    pub(crate) fn semantic_ranking(&self) -> bool {
+        self.applied.lock().preferences.semantic_ranking
+    }
+}
+
 fn state_of(snapshot: &PreferencesSnapshot) -> PreferencesState {
     PreferencesState {
         revision: snapshot.revision,
@@ -99,8 +110,8 @@ impl Backend {
 
     /// Applies `change` to what is applied now and saves it under the next
     /// revision: the one path every preference write takes, the display
-    /// settings' and the restored object's alike.
-    pub(super) async fn save_preferences(
+    /// settings', the restored object's and semantic ranking's alike.
+    pub(crate) async fn save_preferences(
         &self,
         change: impl FnOnce(&mut WorkspacePreferences),
     ) -> Result<PreferencesSaved, IpcError> {
