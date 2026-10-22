@@ -28,10 +28,10 @@ authors       = ["Oxyn contributors"]
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.dependencies]
 # --- internal crates ---------------------------------------------------------
-oxyn-core     = { path = "crates/oxyn-core" }
-oxyn-catalog  = { path = "crates/oxyn-catalog" }
-oxyn-data     = { path = "crates/oxyn-data" }
-oxyn-driver   = { path = "crates/oxyn-driver" }
+oxyn-core     = { path = "crates/oxyn-core", version = "=0.0.10" }
+oxyn-catalog  = { path = "crates/oxyn-catalog", version = "=0.0.10" }
+oxyn-data     = { path = "crates/oxyn-data", version = "=0.0.10" }
+oxyn-driver   = { path = "crates/oxyn-driver", version = "=0.0.10" }
 oxyn-query    = { path = "crates/oxyn-query" }
 oxyn-exec     = { path = "crates/oxyn-exec" }
 oxyn-store    = { path = "crates/oxyn-store" }

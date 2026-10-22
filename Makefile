@@ -15,7 +15,7 @@
 #
 # See .claude/rules/manifestes.md and .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite verif-rapide format lint test doc deny todo versions hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm audit-npm
+.PHONY: qualite verif-rapide format lint test doc deny todo versions hooks socle aide front front-controles front-tests front-build rust package-contracts desktop desktop-dev licences-npm audit-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -47,7 +47,7 @@ aide:
 	@echo "make todo      refuses a remaining-work marker without a deadline"
 	@echo "make versions  refuses a pinned version missing from docs/RESEARCH-NOTES.md"
 	@echo "make front     checks the front end: npm licenses, format, lint, types, tests, stories, build"
-	@echo "make rust      checks the Rust: format, clippy, tests, doc, dependencies"
+	@echo "make rust      checks the Rust: format, clippy, tests, doc, dependencies, package contracts"
 	@echo "make desktop-dev  runs the Tauri application with hot reload"
 	@echo "make desktop   builds the Tauri application (PROFIL=release to publish)"
 	@echo ""
@@ -93,7 +93,7 @@ else
 	@echo "Quality gate passed."
 endif
 
-rust: format lint test doc deny
+rust: format lint test doc deny package-contracts
 
 # Outside the gate, deliberately: it sees neither the dependent crates nor what
 # CI checks alone. The details are in the script.
@@ -140,6 +140,11 @@ endif
 
 doc:
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps --all-features
+
+# The Apache driver contract is consumed outside this workspace. Package each
+# crate so a missing dependency version fails before a release reaches crates.io.
+package-contracts:
+	$(CARGO) package -p oxyn-core -p oxyn-catalog -p oxyn-data -p oxyn-driver --no-verify
 
 # Before the Rust targets, not after: the front-end build produces the
 # directory `oxyn-desktop` embeds at compile time. A CI job that runs `rust`
