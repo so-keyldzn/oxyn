@@ -85,7 +85,7 @@ import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
 import { metadata } from "@/lib/ipc/metadata"
 import { windows } from "@/lib/ipc/windows"
-import type { HistoryRow } from "@/lib/ipc/library"
+import type { HistoryDetail, HistoryRow } from "@/lib/ipc/library"
 import type { SectionChoice } from "@/lib/ipc/location"
 import type {
   CatalogAddress,
@@ -148,6 +148,20 @@ export function historyCopyFailure(error: unknown) {
     title: "History copy not opened",
     description: `${backendError?.message ?? "The history copy could not be opened."} ${retryable ? "The copy can be tried again as is." : "Trying the same copy again gives the same result."}`,
     type: "error" as const,
+  }
+}
+
+/** Opens a history statement, reporting the read or console-opening failure. */
+export async function openHistoryCopy(
+  row: Pick<HistoryRow, "id">,
+  readHistoryEntry: (entry: number) => Promise<HistoryDetail>,
+  open: (entry: HistoryDetail) => Promise<unknown>,
+  report: typeof toast.add
+) {
+  try {
+    await open(await readHistoryEntry(row.id))
+  } catch (error) {
+    report(historyCopyFailure(error))
   }
 }
 
@@ -445,13 +459,13 @@ export function WorkspaceScreen({
     work.handles.current.get(key)?.focus()
   }
 
-  const openHistoryCopy = async (row: HistoryRow) => {
-    try {
-      await work.openHistoryCopy(await library.readHistoryEntry(row.id))
-    } catch (error) {
-      toast.add(historyCopyFailure(error))
-    }
-  }
+  const onOpenHistoryCopy = (row: HistoryRow) =>
+    openHistoryCopy(
+      row,
+      library.readHistoryEntry,
+      work.openHistoryCopy,
+      toast.add
+    )
 
   const entriesRef = React.useRef(work.entries)
   entriesRef.current = work.entries
@@ -949,7 +963,7 @@ export function WorkspaceScreen({
               onOpenCopy={
                 tab.history && !tab.history.needsInspection
                   ? () => {
-                      if (tab.history) void openHistoryCopy(tab.history)
+                      if (tab.history) void onOpenHistoryCopy(tab.history)
                     }
                   : undefined
               }
