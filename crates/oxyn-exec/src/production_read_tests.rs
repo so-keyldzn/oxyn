@@ -328,18 +328,19 @@ async fn an_approved_read_on_production_is_bounded_too() {
 // ── Against a real server ───────────────────────────────────────────────────
 //
 // `#[ignore]`, like the driver's own server tests. Unlike their Local fixture,
-// these tests exercise production connections: `OXYN_PG_TEST_URL` must name a
-// TLS-enabled disposable server with a trusted certificate and matching host,
-// using `sslmode=verify-full` (also the default). A weaker mode is refused
-// before these tests reach their read-only assertions (ADR-0052).
-// Without `OXYN_PG_TEST_URL`, each test stops without failing and says so.
+// these tests exercise production connections:
+// `OXYN_PG_PRODUCTION_TEST_URL` must name a TLS-enabled disposable server with
+// a trusted certificate and matching host, using `sslmode=verify-full` (also
+// the default). A weaker mode is refused before these tests reach their
+// read-only assertions (ADR-0052). Without that variable, each test stops
+// without failing and says so.
 
 mod server {
     use super::*;
     use oxyn_driver::{Credentials, Driver as _, ParsedDsn};
     use oxyn_driver_postgres::PostgresDriver;
 
-    const VARIABLE: &str = "OXYN_PG_TEST_URL";
+    const VARIABLE: &str = "OXYN_PG_PRODUCTION_TEST_URL";
 
     /// The login role the connection under test uses: it may write, so that
     /// only the executor's bound stands between a read and a write. It has no

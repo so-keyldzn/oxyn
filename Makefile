@@ -15,7 +15,7 @@
 #
 # See .claude/rules/manifestes.md and .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite verif-rapide format lint test doc deny todo versions hooks socle aide front front-controles front-tests front-build rust package-contracts desktop desktop-dev licences-npm audit-npm
+.PHONY: qualite verif-rapide format lint test test-serveurs doc deny todo versions hooks socle aide front front-controles front-tests front-build rust package-contracts desktop desktop-dev licences-npm audit-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -48,6 +48,7 @@ aide:
 	@echo "make versions  refuses a pinned version missing from docs/RESEARCH-NOTES.md"
 	@echo "make front     checks the front end: npm licenses, format, lint, types, tests, stories, build"
 	@echo "make rust      checks the Rust: format, clippy, tests, doc, dependencies, package contracts"
+	@echo "make test-serveurs  runs the ignored database-server suites (requires their test URLs)"
 	@echo "make desktop-dev  runs the Tauri application with hot reload"
 	@echo "make desktop   builds the Tauri application (PROFIL=release to publish)"
 	@echo ""
@@ -82,7 +83,7 @@ $(TAURI):
 # --- The gate -----------------------------------------------------------------
 # As long as no Cargo.toml exists, the Rust targets are skipped and only the
 # foundation is checked. Silence is not success: the message says so.
-qualite: socle todo versions
+qualite: socle todo versions test-serveurs
 ifeq ($(wildcard Cargo.toml),)
 	@echo ""
 	@echo "No Cargo.toml: the Rust checks did NOT run."
@@ -136,6 +137,24 @@ ifeq ($(NEXTEST),)
 else
 	$(CARGO) nextest run --workspace --all-features
 	$(CARGO) test --doc --workspace --all-features
+endif
+
+# The ignored suites exercise actual server behavior that unit tests cannot
+# emulate. They need disposable servers and URLs; their dedicated CI job
+# provides both and rejects an unset URL rather than silently skipping a suite.
+test-serveurs: front-build
+ifeq ($(NEXTEST),)
+	@echo "cargo-nextest is required for server tests; the shared-server profile must apply."
+	@exit 1
+else
+	@output="$$( $(CARGO) nextest run --run-ignored only --nocapture \
+		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
+	printf '%s\n' "$$output"; \
+	test $$status -eq 0; \
+	if printf '%s\n' "$$output" | grep -Fq 'not set: test skipped'; then \
+		echo "A server test URL is missing; refusing a silently skipped suite."; \
+		exit 1; \
+	fi
 endif
 
 doc:
