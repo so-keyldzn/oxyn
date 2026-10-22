@@ -61,11 +61,9 @@ fn opened(
 ) -> (ConnectionId, SessionId) {
     let open = open(runtime, backend, "billing");
     let connection: ConnectionId = open.connection.parse().expect("an id");
-    let windows = &backend.inner.windows;
-    windows.hold_connection(window, connection);
-    for session in [&open.session, &open.console.session] {
-        windows.claim_session(window, connection, session.parse().expect("an id"));
-    }
+    runtime
+        .block_on(backend.adopt_open(window, &open))
+        .expect("an open window");
     (connection, open.console.session.parse().expect("an id"))
 }
 
@@ -134,7 +132,11 @@ fn the_result_keeps_a_reader_while_it_moves() {
     let source = backend.reserve_window(true).expect("a window");
     let (connection, session) = opened(&runtime, &backend, source);
     let result = run(&runtime, &backend, (connection, session), "SELECT 1");
-    backend.inner.windows.claim_result(source, result, true);
+    backend
+        .inner
+        .windows
+        .claim_result(source, result, true)
+        .expect("an open window");
     let target = backend.reserve_window(false).expect("a target");
     let handed = HandedResult {
         result: result.to_string(),

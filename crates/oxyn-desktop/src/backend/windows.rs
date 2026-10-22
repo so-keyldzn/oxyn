@@ -190,6 +190,13 @@ fn elsewhere(what: &str) -> IpcError {
     IpcError::invalid(format!("This {what} belongs to another window"))
 }
 
+/// The refusal of a record for a window that is gone. A command still running
+/// when its window closed answers after `forget`: what it recorded then would
+/// name a key nothing releases any more (ADR-0043).
+fn closed() -> IpcError {
+    IpcError::invalid("This window has closed")
+}
+
 impl WindowRegistry {
     /// Reserves a new window, before it is built: the bound is checked here,
     /// under the lock, so two `New window` at once cannot both pass it.
@@ -347,13 +354,16 @@ impl WindowRegistry {
     /// dispatched: no event of it can precede the record.
     ///
     /// # Errors
-    /// The id is already another window's.
+    /// The id is already another window's, or the window is gone.
     pub(crate) fn claim_command(
         &self,
         window: WindowKey,
         command: CommandId,
     ) -> Result<(), IpcError> {
         let mut state = self.state.lock();
+        if state.window(window).is_none() {
+            return Err(closed());
+        }
         match state.commands.get(&command) {
             Some(owner) if *owner != window => Err(elsewhere("command")),
             _ => {
@@ -398,19 +408,27 @@ impl WindowRegistry {
     }
 
     /// Records a session this window opened, and the connection it holds.
+    ///
+    /// # Errors
+    /// The window is gone: the caller closes the session, which nothing else
+    /// would.
     pub(crate) fn claim_session(
         &self,
         window: WindowKey,
         connection: ConnectionId,
         session: SessionId,
-    ) {
+    ) -> Result<(), IpcError> {
         let mut state = self.state.lock();
+        if state.window(window).is_none() {
+            return Err(closed());
+        }
         state.sessions.insert(session, (window, connection));
         state
             .connections
             .entry(window)
             .or_default()
             .insert(connection);
+        Ok(())
     }
 
     /// Checks that `session` is this window's.
@@ -491,13 +509,25 @@ impl WindowRegistry {
     }
 
     /// Records that this window holds a workspace on `connection`.
-    pub(crate) fn hold_connection(&self, window: WindowKey, connection: ConnectionId) {
-        self.state
-            .lock()
+    ///
+    /// # Errors
+    /// The window is gone: held for it, the connection would refuse its
+    /// deletion and never be disconnected.
+    pub(crate) fn hold_connection(
+        &self,
+        window: WindowKey,
+        connection: ConnectionId,
+    ) -> Result<(), IpcError> {
+        let mut state = self.state.lock();
+        if state.window(window).is_none() {
+            return Err(closed());
+        }
+        state
             .connections
             .entry(window)
             .or_default()
             .insert(connection);
+        Ok(())
     }
 
     /// This window lets `connection` go. Returns whether no window holds it
@@ -538,6 +568,23 @@ impl WindowRegistry {
             .collect()
     }
 
+    /// Whether any record still names `key`: a window that closed must leave
+    /// none behind.
+    #[cfg(test)]
+    pub(crate) fn names(&self, key: WindowKey) -> bool {
+        let state = self.state.lock();
+        state.window(key).is_some()
+            || state.sessions.values().any(|(owner, _)| *owner == key)
+            || state.commands.values().any(|owner| *owner == key)
+            || state
+                .results
+                .values()
+                .any(|readers| readers.contains_key(&key))
+            || state.assistants.values().any(|owner| *owner == key)
+            || state.connections.contains_key(&key)
+            || state.documents.values().any(|owner| *owner == key)
+    }
+
     /// Every window holding `connection`.
     pub(crate) fn holders(&self, connection: ConnectionId) -> Vec<WindowKey> {
         self.state
@@ -551,8 +598,20 @@ impl WindowRegistry {
 
     /// Records that this window reads `result`; `view` counts one more view
     /// whose `forget_result` will come.
-    pub(crate) fn claim_result(&self, window: WindowKey, result: ResultId, view: bool) {
+    ///
+    /// # Errors
+    /// The window is gone: no `forget_result` will come from it, and the
+    /// caller lets the view go itself.
+    pub(crate) fn claim_result(
+        &self,
+        window: WindowKey,
+        result: ResultId,
+        view: bool,
+    ) -> Result<(), IpcError> {
         let mut state = self.state.lock();
+        if state.window(window).is_none() {
+            return Err(closed());
+        }
         let views = state
             .results
             .entry(result)
@@ -562,6 +621,7 @@ impl WindowRegistry {
         if view {
             *views = views.saturating_add(1);
         }
+        Ok(())
     }
 
     /// Checks that this window reads `result`. A result nobody was given —

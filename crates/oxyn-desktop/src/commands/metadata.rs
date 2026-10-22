@@ -48,7 +48,7 @@ pub async fn preview_relation(
         outcome_waits,
     )
     .await?;
-    adopt_outcome(&backend, window, &outcome);
+    adopt_outcome(&backend, window, &outcome).await?;
     Ok(outcome)
 }
 

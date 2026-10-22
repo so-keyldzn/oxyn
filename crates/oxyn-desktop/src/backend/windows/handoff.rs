@@ -168,7 +168,10 @@ impl Backend {
                 let config = self.read_config(moved.connection).await?;
                 let catalog = self.catalog_session(&config, &CancelToken::new()).await?;
                 let windows = &self.inner.windows;
-                windows.claim_session(target, moved.connection, catalog);
+                if let Err(refusal) = windows.claim_session(target, moved.connection, catalog) {
+                    self.release_unclaimed(moved.connection, &[catalog]).await;
+                    return Err(refusal);
+                }
                 let console = self.console_session(moved.session, config.read_only, state)?;
                 let open = self.workspace_of(&config, catalog, console)?;
                 windows.hand_over(
@@ -180,12 +183,13 @@ impl Backend {
                 )?;
                 // The target reads the result before the source lets its view
                 // go: in between, retention never finds it without a reader
-                // (ADR-0017).
+                // (ADR-0017). A target gone since reads nothing: no reader is
+                // added that no `forget_result` would ever take back.
                 if let Some((id, _)) = &moved.result
                     && let Some(buffer) = self.inner.executor.result(*id)
+                    && windows.claim_result(target, *id, true).is_ok()
                 {
                     self.add_reader(*id, &buffer, true);
-                    windows.claim_result(target, *id, true);
                 }
                 self.inner
                     .layouts
@@ -214,13 +218,7 @@ impl Backend {
                 let open = self
                     .reconnect(oxyn_core::CommandId::new(), connection)
                     .await?;
-                let windows = &self.inner.windows;
-                windows.hold_connection(target, connection);
-                for session in [&open.session, &open.console.session] {
-                    if let Ok(session) = session.parse::<SessionId>() {
-                        windows.claim_session(target, connection, session);
-                    }
-                }
+                self.adopt_open(target, &open).await?;
                 // The workspace reopens its window's object tab as a place,
                 // as it does at launch: nothing is read until it is shown.
                 self.write_object_location(target, connection, Some(place))

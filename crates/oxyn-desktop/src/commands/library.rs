@@ -174,8 +174,11 @@ pub async fn open_retained_result(
     let opened = backend
         .open_retained_result(parse("connection", &connection)?, result)
         .await?;
-    if matches!(opened, RetainedResult::Open { .. }) {
-        backend.inner.windows.claim_result(window, result, true);
+    if matches!(opened, RetainedResult::Open { .. })
+        && let Err(refusal) = backend.inner.windows.claim_result(window, result, true)
+    {
+        backend.release_unclaimed_result(result).await;
+        return Err(refusal);
     }
     Ok(opened)
 }

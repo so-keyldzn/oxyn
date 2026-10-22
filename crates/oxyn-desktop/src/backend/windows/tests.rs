@@ -112,7 +112,9 @@ fn a_console_of_another_window_is_refused() {
     let (registry, left, right) = two();
     let connection = ConnectionId::new();
     let session = SessionId::new();
-    registry.claim_session(left, connection, session);
+    registry
+        .claim_session(left, connection, session)
+        .expect("open");
     assert!(registry.check_session(left, session).is_ok());
     assert_eq!(
         registry
@@ -134,7 +136,9 @@ fn events_go_to_the_window_of_their_command_and_to_no_other() {
     let (registry, left, right) = two();
     let connection = ConnectionId::new();
     let session = SessionId::new();
-    registry.claim_session(left, connection, session);
+    registry
+        .claim_session(left, connection, session)
+        .expect("open");
     let command = CommandId::new();
     registry.claim_command(left, command).expect("free");
 
@@ -186,8 +190,8 @@ fn a_result_is_read_by_the_windows_it_was_given_to() {
     assert!(registry.check_result(left, agents).is_err());
     // A retained result opened in both windows is read by both.
     let retained = ResultId::new();
-    registry.claim_result(left, retained, true);
-    registry.claim_result(right, retained, true);
+    registry.claim_result(left, retained, true).expect("open");
+    registry.claim_result(right, retained, true).expect("open");
     assert!(registry.check_result(left, retained).is_ok());
     registry.forget_result(left, retained);
     assert!(registry.check_result(right, retained).is_ok());
@@ -230,8 +234,8 @@ fn the_assistant_of_a_connection_belongs_to_one_window() {
 fn a_connection_is_disconnected_when_the_last_window_lets_it_go() {
     let (registry, left, right) = two();
     let connection = ConnectionId::new();
-    registry.hold_connection(left, connection);
-    registry.hold_connection(right, connection);
+    registry.hold_connection(left, connection).expect("open");
+    registry.hold_connection(right, connection).expect("open");
     assert_eq!(registry.other_holders(left, connection), vec![right]);
     assert!(
         !registry.release_connection(left, connection),
@@ -242,23 +246,45 @@ fn a_connection_is_disconnected_when_the_last_window_lets_it_go() {
 }
 
 #[test]
+fn nothing_is_recorded_for_a_window_that_is_gone() {
+    let (registry, left, _) = two();
+    let _ = registry.forget(left);
+    let connection = ConnectionId::new();
+    for refused in [
+        registry.claim_command(left, CommandId::new()),
+        registry.claim_session(left, connection, SessionId::new()),
+        registry.hold_connection(left, connection),
+        registry.claim_result(left, ResultId::new(), true),
+    ] {
+        assert_eq!(
+            refused.expect_err("a closed window").message,
+            "This window has closed"
+        );
+    }
+    assert!(!registry.names(left), "no record names the closed window");
+}
+
+#[test]
 fn forgetting_a_window_returns_what_it_owned_and_nothing_of_the_other() {
     let (registry, left, right) = two();
     let shared = ConnectionId::new();
     let own = ConnectionId::new();
     let (mine, theirs) = (SessionId::new(), SessionId::new());
-    registry.claim_session(left, shared, mine);
-    registry.claim_session(left, own, SessionId::new());
-    registry.claim_session(right, shared, theirs);
+    registry.claim_session(left, shared, mine).expect("open");
+    registry
+        .claim_session(left, own, SessionId::new())
+        .expect("open");
+    registry.claim_session(right, shared, theirs).expect("open");
     let command = CommandId::new();
     registry.claim_command(left, command).expect("free");
     let result = ResultId::new();
-    registry.claim_result(left, result, true);
-    registry.claim_result(left, result, true);
+    registry.claim_result(left, result, true).expect("open");
+    registry.claim_result(left, result, true).expect("open");
     registry.claim_assistant(left, own).expect("free");
     registry.focus(&left.label(), true);
 
     let owned = registry.forget(left);
+    assert!(!registry.names(left));
     assert_eq!(owned.sessions.len(), 2);
     assert!(owned.sessions.contains(&(shared, mine)));
     assert_eq!(owned.commands, vec![command]);

@@ -720,8 +720,12 @@ impl Backend {
         let session = self.catalog_session(&config, cancel).await?;
         // The first console gets its own session: catalog and preview work
         // stay out of its transaction, and it may change context where the
-        // catalog's session may not (ADR-0015, ADR-0019).
-        let console = match self.open_console(CommandId::new(), config.id).await {
+        // catalog's session may not (ADR-0015, ADR-0019). Under the opening's
+        // token: a window closed meanwhile cancels both sessions, not one.
+        let console = match self
+            .open_console_under(CommandId::new(), config.id, cancel)
+            .await
+        {
             Ok(console) => console,
             Err(error) => {
                 let _ = self.close_console(config.id, session).await;
@@ -760,6 +764,12 @@ impl Backend {
         let Outcome::Connected { session, .. } = outcome else {
             return Err(IpcError::invalid("The executor did not open a session"));
         };
+        // Cancelled while the server answered — its window closed: nobody
+        // will use the session, and it must not outlive the gesture.
+        if cancel.is_cancelled() {
+            self.close_console(config.id, session).await?;
+            return Err(IpcError::invalid("Opening the connection was cancelled."));
+        }
         Ok(session)
     }
 

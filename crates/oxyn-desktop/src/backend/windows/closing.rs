@@ -12,14 +12,14 @@
 
 use std::time::Duration;
 
-use oxyn_core::{Command, CommandId, ConnectionId};
+use oxyn_core::{Command, CommandId, ConnectionId, ResultId, SessionId};
 
 use super::{Closing, WindowKey};
 use crate::backend::Backend;
 use crate::backend::exit::warn_unacknowledged;
 use crate::ipc::recovery::{ExitScope, ShutdownSignal};
 use crate::ipc::windows::WindowSignal;
-use crate::ipc::{CommandOutcome, IpcError};
+use crate::ipc::{CommandOutcome, IpcError, OpenConnection};
 
 /// How long a webview may take to acknowledge its window's close: the grace
 /// of the drafts' flush (`backend/recovery.rs`), for the same reason — a
@@ -266,6 +266,73 @@ impl Backend {
         Ok(CommandOutcome::Done)
     }
 
+    /// Records the sessions an opened connection gives this window: the
+    /// catalog's and the first console's.
+    ///
+    /// # Errors
+    /// The window closed while the connection opened, too late for the
+    /// cancellation to stop it: nothing is recorded under its key, the
+    /// sessions are closed, and the connection is disconnected if no other
+    /// window holds it (ADR-0043).
+    pub(crate) async fn adopt_open(
+        &self,
+        window: WindowKey,
+        open: &OpenConnection,
+    ) -> Result<(), IpcError> {
+        let windows = &self.inner.windows;
+        let Ok(connection) = open.connection.parse::<ConnectionId>() else {
+            return Ok(());
+        };
+        let sessions: Vec<SessionId> = [&open.session, &open.console.session]
+            .into_iter()
+            .filter_map(|session| session.parse().ok())
+            .collect();
+        // A window is never registered again once forgotten: past the first
+        // refusal, every record is refused, and what `forget` took of the
+        // first ones `release_window` releases.
+        let adopted = windows.hold_connection(window, connection).and_then(|()| {
+            sessions
+                .iter()
+                .try_for_each(|session| windows.claim_session(window, connection, *session))
+        });
+        if let Err(refusal) = adopted {
+            self.release_unclaimed(connection, &sessions).await;
+            return Err(refusal);
+        }
+        Ok(())
+    }
+
+    /// Lets go of what an opening produced for a window that closed before it
+    /// could claim it: its sessions are closed, and the connection is
+    /// disconnected if no window holds it. `release_window` already ran and
+    /// saw none of it; nothing else would ever close them (ADR-0043).
+    pub(crate) async fn release_unclaimed(&self, connection: ConnectionId, sessions: &[SessionId]) {
+        for session in sessions {
+            if let Err(error) = self.close_console(connection, *session).await {
+                tracing::warn!(
+                    session = %session,
+                    error = %error.message,
+                    "a closed window's late session could not be closed"
+                );
+            }
+        }
+        if self.inner.windows.holders(connection).is_empty() {
+            self.disconnect_released(connection).await;
+        }
+    }
+
+    /// Lets go of a view of `result` delivered to a window that closed before
+    /// it could claim it: its `forget_result` will never come.
+    pub(crate) async fn release_unclaimed_result(&self, result: ResultId) {
+        // Forgetting may delete spill files: off the async workers.
+        let _ = self
+            .on_blocking_pool(move |backend| {
+                backend.forget_result(result);
+                Ok(())
+            })
+            .await;
+    }
+
     /// Disconnects a connection a closed window was the last to hold.
     async fn disconnect_released(&self, connection: ConnectionId) {
         self.inner.ai.release_agents(connection);
@@ -278,5 +345,7 @@ impl Backend {
     }
 }
 
+#[cfg(test)]
+mod opening_tests;
 #[cfg(test)]
 mod tests;

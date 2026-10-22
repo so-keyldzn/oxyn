@@ -14,7 +14,7 @@ use tauri::ipc::Channel;
 use tauri::{State, Webview};
 
 use self::subscriptions::Superseded;
-use self::windows::{adopt_open, adopt_outcome, caller, outcome_waits, run_owned};
+use self::windows::{adopt_outcome, caller, outcome_waits, run_owned};
 use crate::backend::Backend;
 use crate::backend::windows::Stream;
 use crate::ipc::{
@@ -68,7 +68,7 @@ pub async fn connect(
     )
     .await?;
     if let ConnectResponse::Open(open) = &response {
-        adopt_open(&backend, window, open);
+        backend.adopt_open(window, open).await?;
     }
     Ok(response)
 }
@@ -110,7 +110,7 @@ pub async fn decide_connection(
     )
     .await?;
     if let Some(ConnectResponse::Open(open)) = &response {
-        adopt_open(&backend, window, open);
+        backend.adopt_open(window, open).await?;
     }
     Ok(response)
 }
@@ -133,7 +133,7 @@ pub async fn reconnect(
         |_| false,
     )
     .await?;
-    adopt_open(&backend, window, &open);
+    backend.adopt_open(window, &open).await?;
     Ok(open)
 }
 
@@ -175,7 +175,7 @@ pub async fn execute(
         outcome_waits,
     )
     .await?;
-    adopt_outcome(&backend, window, &outcome);
+    adopt_outcome(&backend, window, &outcome).await?;
     Ok(outcome)
 }
 
@@ -199,7 +199,7 @@ pub async fn decide(
         outcome_waits,
     )
     .await?;
-    adopt_outcome(&backend, window, &outcome);
+    adopt_outcome(&backend, window, &outcome).await?;
     Ok(outcome)
 }
 
