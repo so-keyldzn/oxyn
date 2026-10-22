@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RELEASE.md" sha256="597a06e3aac2" -->
+<!-- oxyn-translation source="docs/RELEASE.md" sha256="ab6798faffb3" -->
 # Livraisons GitHub
 
 GitHub Actions construit les paquets ; le mainteneur publie le brouillon
@@ -313,9 +313,14 @@ une CLI Tauri simulés ; la paire réelle — `tauri signer sign` 2.12.1, puis
 une autre clé — a été vérifiée à la main le 2026-10-02, puis de nouveau le
 2026-10-22 avec le binaire publié `cargo-tauri` 2.12.1 qu'épingle le job
 `signature` ([RESEARCH-NOTES](RESEARCH-NOTES.md#ci-et-livraison-github)).
-Aucune pull request n'exécute le workflow lui-même : le découpage entre
-`paquets`, `signature` et `depot`, les artefacts et les permissions des
-jetons sont exercés pour la première fois par une livraison. Rien de tout
+Aucune pull request n'exécute le workflow lui-même.
+`script/test_livraison_workflow.py`, lancé lui aussi par `make socle`, le lit
+et refuse un changement de la frontière
+d'[ADR-0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) —
+quel job détient la clé de mise à jour, l'environnement ou un jeton qui
+écrit, une étape de build dans `signature`, un nom ou un chemin d'artefact qui
+diverge entre deux jobs ; les actions elles-mêmes, les artefacts et les
+permissions des jetons sont exercés pour la première fois par une livraison. Rien de tout
 cela ne prouve qu'un Oxyn installé accepte le résultat. Il y faut deux
 étapes :
 

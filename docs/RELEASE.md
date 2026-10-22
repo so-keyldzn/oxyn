@@ -289,9 +289,13 @@ minisign and Tauri CLI; the real pair — `tauri signer sign` 2.12.1, then
 another key — was checked by hand on 2026-10-02, and again on 2026-10-22
 with the `cargo-tauri` 2.12.1 release binary the `signature` job pins
 ([RESEARCH-NOTES](RESEARCH-NOTES.md#ci-and-github-delivery)). No pull request
-runs the workflow itself: the split between `paquets`, `signature` and
-`depot`, the artifacts and the token permissions are first exercised by a
-release. None of this proves that an installed Oxyn accepts the result. That
+runs the workflow itself. `script/test_livraison_workflow.py`, also run by
+`make socle`, reads it and refuses a change to the boundary of
+[ADR-0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) —
+which job holds the updater key, the environment or a writing token, a build
+step in `signature`, an artifact name or path that diverges between two jobs;
+the actions themselves, the artifacts and the token permissions are first
+exercised by a release. None of this proves that an installed Oxyn accepts the result. That
 takes two steps:
 
 1. **Local rehearsal**, with the `update-rehearsal` cargo feature, never
