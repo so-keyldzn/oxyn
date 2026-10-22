@@ -290,6 +290,63 @@ gain a permanent check of [I-06](../CLAUDE.md#i-06), or is the manual, dated
 measurement enough? This document does not settle it: an exception to an
 invariant rule is decided by an ADR, not in a table of measurements.
 
+## Editor completion snapshot — measurement of 2026-10-21
+
+[ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md) has the editor
+read the catalog cache as one message, which the webview parses on its main
+thread. The cache bounds objects (50,000) and not bytes, so the message had to
+be measured before it was bounded.
+
+### Conditions
+
+`completion::snapshot` over a PostgreSQL-shaped cache, then `serde_json` of the
+result, in the `completion` tests of `oxyn-desktop` (the workspace's `dev`
+profile, which is optimized; one machine, a few runs, no loaded CI). The names
+are short (`table_00001`, `column_01`). The parse is `JSON.parse` of the same
+kind of message under Node `22.23.2` (V8): the macOS webview runs another
+engine, JavaScriptCore, so that figure is an order of magnitude, not the
+webview's.
+
+### Result
+
+| Cache | Bounds | Built | Serialized | Message |
+|---|---|---|---|---|
+| 2,000 tables × 24 columns (50,000 objects) | none | 9–15 ms | 5.5–7.6 ms | 4,011 KiB |
+| the same | product | 14–15 ms | 1.2 ms | 816 KiB |
+| 50,000 tables, no column | none | 38–50 ms | 14 ms | 8,545 KiB |
+| the same | product | 2.7 ms | 0.8 ms | 513 KiB |
+| 40 tables × 300 columns, names of 255 bytes | product | — | — | 1,006 KiB |
+
+`JSON.parse` costs about **3 ms per MiB** on V8. Unbounded, the message of the
+heaviest cache the executor allows is 4 to 8.5 MiB: **12 to 26 ms on the main
+thread**, over the 8 ms frame of [Interaction budgets](#interaction-budgets), for
+every `catalogChanged`. Bounded, it stays at or under about 1 MiB — about 3 ms —
+whatever the shape.
+
+### What was chosen, and why
+
+`PRODUCT_BOUNDS` (`crates/oxyn-desktop/src/completion.rs`): **3,000 relations,
+6,000 columns, 1 MiB of text, 256 bytes a name**.
+
+* 3,000 relations at about 175 bytes and 6,000 columns at about 80 make 1.0 MiB
+  with ordinary names; the counts are what an ordinary schema meets.
+* The byte budget, which also pays for namespaces, holds the same 1 MiB when the
+  names are not ordinary: the last row is 12,000 columns and 40 tables of 255
+  bytes a name, cut to 1,006 KiB.
+* 256 bytes is four times PostgreSQL's 63-byte identifier and the 64 UTF-8
+  characters of MySQL ([RESEARCH-NOTES](RESEARCH-NOTES.md#editor-completion--check-of-2026-10-21)):
+  no name of those two engines is left out for its length.
+
+What a bound cuts is counted and returned (`truncated`), never dropped silently.
+
+### What is not measured yet
+
+The parse on **JavaScriptCore**, the frame time while the list is open, and the
+100 ms of visible feedback after a keystroke: they need the webview and the
+editor's adapter, which are the second and fourth pull requests of the ADR. The
+test asserts only generous ceilings (5 s) on the Rust side, so nothing gates the
+two interaction budgets yet.
+
 ## The rule that prevents gratuitous optimization
 
 **Clear code is not replaced by fast code without the measurement showing

@@ -36,6 +36,8 @@ use crate::variant::MysqlVariant;
 /// The databases the account sees.
 const SQL_DATABASES: &str =
     "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME";
+/// The database the session has selected, `NULL` when it has none.
+const SQL_CURRENT_DATABASE: &str = "SELECT DATABASE()";
 /// The relations of a database.
 const SQL_RELATIONS: &str = "SELECT TABLE_NAME, TABLE_TYPE, TABLE_COMMENT \
      FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME";
@@ -362,6 +364,42 @@ impl CatalogProvider for MysqlCatalog {
             namespaces.push(namespace);
         }
         Ok(namespaces)
+    }
+
+    /// The one database the server says this session selected.
+    ///
+    /// MySQL resolves an unqualified name in the selected database only. It is
+    /// asked of the server rather than read off the connection form: the server
+    /// may spell the name another way (`lower_case_table_names`) or select
+    /// another one (`init_connect`, a proxy), and the path must be where names
+    /// resolve, not where the user meant them to. This session serves the
+    /// catalog and the executor refuses it a context, so the answer is the
+    /// database the connection opened on. With none selected (`NULL`), nothing
+    /// resolves: an empty path, which is then the truth and not an absence of
+    /// answer. A console that switched database with `USE` resolves against its
+    /// own context, which this does not see.
+    ///
+    /// # Errors
+    /// [`OxynError::CatalogUnavailable`] when the answer is not one row of text
+    /// or `NULL` — an unreadable name is not an empty path.
+    async fn resolution_path(&self, cancel: &CancelToken) -> Result<Vec<String>> {
+        let rows = self.rows(SQL_CURRENT_DATABASE, Vec::new(), cancel).await?;
+        match rows.first().and_then(|row| row.first()) {
+            Some(None | Some(Value::NULL)) => Ok(Vec::new()),
+            Some(Some(value)) => {
+                value_text(value)
+                    .map(|database| vec![database])
+                    .ok_or_else(|| {
+                        OxynError::CatalogUnavailable(
+                            "the server named the selected database in bytes that are not text"
+                                .to_owned(),
+                        )
+                    })
+            }
+            None => Err(OxynError::CatalogUnavailable(
+                "the server answered `SELECT DATABASE()` with no value".to_owned(),
+            )),
+        }
     }
 
     async fn list_relations(

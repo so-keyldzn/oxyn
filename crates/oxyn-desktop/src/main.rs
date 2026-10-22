@@ -10,6 +10,7 @@
 mod backend;
 mod catalog;
 mod commands;
+mod completion;
 mod credentials;
 mod embedding_converter;
 mod file_drop;
@@ -136,6 +137,7 @@ fn main() -> Result<()> {
             commands::metadata::refresh_catalog,
             commands::metadata::refresh_relation_facet,
             commands::metadata::catalog_tree,
+            commands::metadata::completion_catalog,
             commands::metadata::relation_detail,
             commands::metadata::relation_facets,
             commands::metadata::search_catalog,

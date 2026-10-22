@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="351aa936a17a" -->
+<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="165224facbe8" -->
 
 > Traduction française de [docs/adr/0057-editor-completion-reads-the-catalog-cache.md](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md). **La version anglaise fait foi.**
 
@@ -92,12 +92,12 @@ cache, dans des bornes, jamais au rythme des frappes.**
 
 1. **Une lecture en bloc du cache.** Une seule commande IPC en lecture seule,
    `completion_catalog` (nom fixé par la première pull request), de la famille de
-   `catalog_tree` : construite dans `crates/oxyn-desktop/src/catalog.rs` à partir
+   `catalog_tree` : construite dans `crates/oxyn-desktop/src/completion.rs` à partir
    du cache, sur le pool bloquant, sans appeler de driver. Pour une connexion, elle
    renvoie les espaces de noms et, pour chacun, les relations que le cache détient
    — nature, `system`, `stale`, marques de table virtuelle et fantôme telles que
-   `CatalogNode` les porte —, avec les champs de celles qui sont chargées et
-   `fieldsLoaded: false` pour les autres, jamais une liste vide qui passerait pour
+   `CatalogNode` les porte —, avec les champs de celles qui sont chargées, et un état qui dit
+   `notLoaded` ou `omitted` pour les autres, jamais une liste vide qui passerait pour
    « aucune colonne ». Elle renvoie aussi le chemin de résolution (4) et, si une
    borne l'a coupé, `truncated` avec les décomptes (6). L'éditeur la lit au
    montage et quand un signal (5) dit que le cache a changé, garde la réponse en
@@ -133,12 +133,14 @@ cache, dans des bornes, jamais au rythme des frappes.**
    nécessaire pour cette partie** ; la commande IPC qui reçoit les noms est une
    enveloppe sur les commandes existantes.
 3. **Le texte d'insertion est composé en Rust, une seule fois.** Chaque nom de
-   l'instantané porte sa forme `insert`, produite par une fonction de
-   `oxyn-catalog::path` à côté de `quote_identifier` : nu seulement quand le nom
-   est un identifiant simple en minuscules **et** n'est pas un mot réservé du
-   dialecte, cité avec `quote_identifier` sinon ; un chemin qualifié passe par
-   `CatalogPath::qualify_sql`. La table des mots réservés de chaque dialecte est
-   une donnée externe : elle est sourcée et datée dans
+   l'instantané porte sa forme `insert`, produite par `oxyn-catalog::insertion_form`, qui
+   s'appuie sur `quote_identifier` : nu seulement quand le nom est un identifiant
+   simple en minuscules **et** n'est pas un mot réservé du dialecte, cité avec
+   `quote_identifier` sinon ; un nom qualifié est les formes de ses niveaux
+   jointes par des points (`CatalogPath::insertion_sql`), tandis que
+   `qualify_sql`, qui cite chaque niveau, reste la forme qu'Oxyn envoie
+   lui-même. La table des mots réservés de chaque dialecte est une donnée
+   externe : elle est sourcée et datée dans
    [RESEARCH-NOTES](../RESEARCH-NOTES.md) par la pull request qui l'ajoute, et
    **un nom dont on ne sait pas qu'il est sûr est cité**. Le front donne à chaque
    `Completion` un `apply` explicite égal à `insert`, si bien que `nameCompletion`
@@ -146,33 +148,77 @@ cache, dans des bornes, jamais au rythme des frappes.**
    porter, le front écrit sa propre source de complétion sur l'instantané — ce que
    décide un spike au début de la deuxième pull request, pas cet ADR. Un test du
    front insère `"users"; DROP TABLE audit; --`, `a"b`, `order` et un nom contenant
-   `<img onerror=…>` sur chaque dialecte.
+   `<img onerror=…>` sur chaque dialecte. **Un nom qui cache du texte n'est pas
+   suggéré du tout** : le quoting garde le SQL intact, mais un éditeur qui affiche
+   un contrôle de direction ou un séparateur de ligne montre un texte autre que
+   celui qui s'exécute. Le prédicat — les catégories Unicode `Cc`, `Cf`, `Zl` et
+   `Zp` plus quatre caractères de remplissage blancs — vit en Rust à côté de
+   `insertion_form` (`hides_text`), est aussi celui qu'applique la revue des
+   opérations destructrices, et ce qu'il refuse est compté dans `truncated`, pas
+   écarté en silence : un nom, le type d'une colonne affiché à côté d'elle, un
+   espace de noms ou une entrée du chemin de résolution. **Le dialecte est celui du
+   serveur, pas seulement celui du driver** : le driver `postgres` sert aussi
+   Redshift, qui réserve des mots que PostgreSQL ne réserve pas, si bien que
+   l'instantané est composé pour `Redshift` quand le serveur s'annonce comme tel, et
+   que `Redshift` cite chaque nom (ses mots réservés ne sont pas consignés).
 4. **Le chemin de résolution est lu du serveur, jamais supposé.** `CatalogCache`
    détient, pour la connexion, la liste ordonnée des espaces de noms dans lesquels
    un nom non qualifié se résout, ou « inconnu ». Une nouvelle variante de
-   `CatalogRefreshScope` le lit avec le premier niveau du serveur, sur la session
-   réservée au catalogue — qui est sur le `search_path` par défaut par construction
-   (la remise à zéro décrite plus haut). Le driver PostgreSQL répond à partir du
-   chemin effectif du serveur (`current_schemas`) ; un fournisseur qui ne sait pas
-   répondre **refuse**, et le cache garde « inconnu », ce qui n'est pas une liste
-   vide
-   ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-il-déclare-ses-capacités-par-session-et-ne-simule-rien) ;
-   la réponse de chaque driver y est spécifiée par la première pull request). Le
+   `CatalogRefreshScope`, `ResolutionPath`, le lit sur la session réservée au
+   catalogue, que le contexte d'aucune console n'atteint jamais : l'exécuteur lui
+   refuse un contexte, et PostgreSQL remet `search_path` à zéro avant que la
+   connexion retourne au pool. Chaque driver répond dans ses propres termes, aucun
+   n'étant supposé :
+
+   * **PostgreSQL** lit le chemin effectif du serveur avec `current_schemas` ;
+     **Amazon Redshift refuse**, la requête s'appuyant sur `unnest … WITH
+     ORDINALITY`, que Redshift (qui s'annonce PostgreSQL 8.0.2) n'est pas connu pour
+     accepter ;
+   * **MySQL et MariaDB** lisent `DATABASE()` : le serveur dit quelle base la
+     session a sélectionnée, ce que le formulaire de connexion ne peut pas
+     (`lower_case_table_names` l'écrit autrement, `init_connect` ou un proxy en
+     sélectionne une autre). `NULL` est un chemin vide, qui est une réponse ; un nom
+     illisible est une erreur, jamais un chemin vide ;
+   * **SQLite** répond `temp`, puis `main`, puis les bases attachées dans l'ordre où
+     elles l'ont été (`sqlite3FindTable`, SQLite 3.50.2).
+
+   Un fournisseur qui ne sait pas répondre **refuse**, et le cache garde
+   « inconnu », ce qui n'est pas une liste vide
+   ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-il-déclare-ses-capacités-par-session-et-ne-simule-rien)
+   spécifie la réponse de chaque driver). Une console qui a changé de contexte
+   après l'ouverture résout dans son propre contexte, et le suivre est le travail de
+   contexte de session de l'éditeur, pas celui de cette lecture. Le
    chemin qu'utilise la complétion est le seul espace de noms déclaré par la
    console quand elle en a déclaré un — `SET search_path TO "<schéma>"` remplace le
    chemin — et le défaut du serveur sinon. Une relation est suggérée **non
    qualifiée** seulement si son espace de noms est dans ce chemin et qu'aucun
-   espace de noms antérieur du chemin ne porte le même nom ; toute relation est
-   suggérée qualifiée une fois son qualificatif tapé. Les espaces de noms système
+   espace de noms antérieur du chemin ne porte le même nom — ce qu'on ne peut
+   savoir que si chaque espace de noms antérieur du chemin est `listed` et non
+   `stale` et que l'instantané n'est pas `truncated`, faute de quoi un espace de
+   noms que personne n'a lu peut masquer le nom et la suggestion ne se résout pas
+   là où elle le prétend. Les entrées du chemin sont des clés de comparaison
+   opaques : jamais affichées comme du texte saisi, jamais composées dans du SQL.
+   Toute relation est suggérée qualifiée une fois son qualificatif tapé. Les espaces de noms système
    ne sont suggérés qu'après leur qualificatif. Quand le chemin est inconnu, rien
    n'est suggéré non qualifié : des noms qualifiés seulement, et **`public` n'est
-   jamais supposé.** Un `SET search_path` tapé dans un script n'est pas suivi.
+   jamais supposé.** Un chemin que l'instantané ne peut pas porter en entier — plus
+   long que sa borne (un chemin est une poignée de schémas), ou dont une entrée
+   cache du texte ou est trop longue — passe pour inconnu plutôt qu'avec une entrée
+   écartée : la première correspondance l'emporte, si bien qu'un chemin auquel il
+   en manque une ferait passer un espace de noms plus tardif pour elle. Un espace
+   de noms laissé de côté par l'instantané est compté dans `truncated` même quand le
+   cache ne détient rien de lui, pour que le front n'ait jamais à le déduire d'une
+   absence. Un `SET search_path` tapé dans un script n'est pas suivi.
 5. **Un signal de plus.** `RefreshSignal::of` fait correspondre
-   `Event::CatalogUpdated` à un nouveau `catalogChanged { connection }` — « le
-   contenu du cache a changé : chargement, éviction ou invalidation » —, remis
-   comme les autres aux fenêtres qui détiennent la connexion
+   `Event::CatalogUpdated` à un nouveau `catalogChanged { connection }` — « une
+   lecture du catalogue de cette connexion s'est terminée », ce qui ne dit pas que
+   quoi que ce soit a changé, seulement que le cache peut détenir un autre contenu
+   —, remis comme les autres aux fenêtres qui détiennent la connexion
    ([ADR-0043](0043-multi-fenetre.md)). L'éditeur relit l'instantané sur
-   `catalogChanged` et `catalogInvalidated`, de façon coalescée. Le
+   `catalogChanged` et `catalogInvalidated`, de façon coalescée. **Un signal ne
+   lance aucun chargement** : il invite seulement à relire le cache ; les
+   chargements partent de la passe de l'éditeur (2), dont les lectures produisent le
+   signal suivant, si bien qu'un signal ne peut pas s'alimenter lui-même. Le
    `catalogVersion` global n'est pas utilisé, et le cache n'a pas de compteur de
    révision : les signaux disent déjà ce qui a changé. Après une DDL, les noms
    `stale` restent suggérés, signalés, pendant que la prochaine passe de l'éditeur
@@ -182,14 +228,18 @@ cache, dans des bornes, jamais au rythme des frappes.**
    le cache l'évince.
 6. **Des bornes mesurées avant d'être écrites.** Cet ADR n'écrit aucun chiffre
    pour `MAX_COMPLETION_LISTINGS`, `MAX_COMPLETION_DESCRIPTIONS`,
-   `COMPLETION_DEADLINE` ni pour les plafonds de l'instantané. La première pull
+   `COMPLETION_DEADLINE` ni pour les plafonds de l'instantané — relations,
+   colonnes, octets de noms (payés aussi par les espaces de noms : un schéma par
+   client en fait des milliers), et longueur d'un nom, parce que le cache compte des
+   objets et non des octets et qu'un nom peut être long. La première pull
    request les mesure avec [`/benchmark`](../../claude/commands/benchmark.md) sur
    un catalogue au budget du cache (50 000 objets), contre les deux budgets
    existants (100 ms, 8 ms p99), consigne le résultat dans PERFORMANCE et écrit
-   les constantes avec leur argument. Un instantané coupé par un plafond le dit
-   (`truncated`, avec les décomptes de ce qui a été laissé de côté), et la liste de
-   complétion le dit aussi — la formulation va dans UX-SPEC à la deuxième pull
-   request. **Une réponse partielle n'est jamais présentée comme complète.**
+   les constantes avec leur argument. Le message est analysé sur le fil principal
+   de la webview : sa taille est le coût qui décide. Un instantané coupé par un
+   plafond le dit (`truncated`, avec les décomptes de ce qui a été laissé de côté),
+   et la liste de complétion le dit aussi — la formulation va dans UX-SPEC à la
+   deuxième pull request. **Une réponse partielle n'est jamais présentée comme complète.**
 7. **Ce qu'elle ne promet pas.** Les colonnes sont proposées pour les relations que
    l'instruction nomme selon la règle lexicale ci-dessus, avec leurs alias ; les
    expressions de table communes, les sous-requêtes, `RETURNING`, les fonctions de
@@ -222,7 +272,19 @@ cache, dans des bornes, jamais au rythme des frappes.**
 * **−** Une table de mots réservés par dialecte à tenir à jour, sourcée et datée :
   un mot réservé par une version ultérieure du serveur et absent de la table est
   inséré nu, et le serveur rejette l'instruction en nommant ce mot — un échec
-  visible, pas silencieux.
+  visible, pas silencieux. Les listes MySQL et MariaDB sont lues dans la grammaire
+  de MySQL 8.4.0 et de MariaDB 11.8, pas sur le serveur : un serveur 9.x n'est pas
+  vérifié, et les listes sont réextraites par `/versions`.
+* **−** Le rang de `temp` et de `main` parmi les bases de SQLite est lu dans
+  `build.c` de la 3.50.2, non dans une garantie documentée : la page ATTACH dit que
+  la base attachée depuis le plus longtemps l'emporte parmi les bases attachées et se
+  tait sur ces deux-là. Une version ultérieure peut changer l'ordre ; la source est
+  relue par `/versions`.
+* **−** Un fournisseur qui refuse le chemin de résolution (Redshift aujourd'hui)
+  laisse le cache sur « inconnu », ce qu'aucune lecture ne peut changer : redemandé à
+  chaque passe, il publierait un `catalogChanged` pour rien. La passe de l'éditeur
+  doit le demander une fois par rafraîchissement de la racine et passer son chemin
+  sur un refus — décidé avec les chargements, à la troisième pull request.
 * **−** Modifie la surface du contrat : une variante de `CatalogRefreshScope` dans
   `oxyn-core`, une méthode optionnelle du fournisseur dans `oxyn-catalog`, une
   réponse de chaque driver, une variante de signal, les sections de DRIVER-CONTRACT

@@ -2052,9 +2052,10 @@ confirms or amends the budgets through an ADR.
 > in the webview. The editor is CodeMirror 6, highlighted per dialect, with the
 > basic completion of `basicSetup`; a completion fed by the catalog is not
 > wired to it yet — [ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)
-> decides how, in four pull requests: the snapshot and its measured bounds, the
-> editor's adapter and insertion text, the loads and the PostgreSQL resolution
-> path, then eviction, `stale` names and the measurement.
+> decides how, in four pull requests: the Rust side — the snapshot, the
+> insertion form, the resolution-path read and the signal, with their measured
+> bounds —, the editor's adapter, the bounded loads and the session context, then
+> eviction, `stale` names and the measurement on the webview.
 
 > **[ADR]** ~~This is the last phase where switching to egui remains a rewrite
 > of two crates ([ADR-0001](adr/0001-ui-toolkit.md)). After that, the cost changes

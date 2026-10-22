@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="63f5b1aba4f7" -->
+<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="9c815351e115" -->
 
 > Traduction française de [docs/PERFORMANCE.md](../../../docs/PERFORMANCE.md). **La version anglaise fait foi.**
 
@@ -293,6 +293,65 @@ pour un invariant.
 gagner une vérification permanente de [I-06](../CLAUDE.md#i-06), ou la mesure
 manuelle et datée suffit-elle ? Ce document ne tranche pas : une exception à une
 règle d'invariant se décide par un ADR, pas dans un tableau de mesures.
+
+## Instantané de complétion de l'éditeur — mesure du 2026-10-21
+
+L'[ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md) fait lire le
+cache du catalogue à l'éditeur sous la forme d'un seul message, que la webview
+analyse sur son fil principal. Le cache borne des objets (50 000) et non des
+octets : le message devait être mesuré avant d'être borné.
+
+### Conditions
+
+`completion::snapshot` sur un cache de la forme de PostgreSQL, puis `serde_json`
+du résultat, dans les tests `completion` d'`oxyn-desktop` (le profil `dev` du
+workspace, qui est optimisé ; une machine, quelques exécutions, pas de CI
+chargée). Les noms sont courts (`table_00001`, `column_01`). L'analyse est un
+`JSON.parse` d'un message du même genre sous Node `22.23.2` (V8) : la webview
+macOS exécute un autre moteur, JavaScriptCore, si bien que ce chiffre est un
+ordre de grandeur, pas celui de la webview.
+
+### Résultat
+
+| Cache | Bornes | Construit | Sérialisé | Message |
+|---|---|---|---|---|
+| 2 000 tables × 24 colonnes (50 000 objets) | aucune | 9–15 ms | 5,5–7,6 ms | 4 011 Kio |
+| idem | produit | 14–15 ms | 1,2 ms | 816 Kio |
+| 50 000 tables, aucune colonne | aucune | 38–50 ms | 14 ms | 8 545 Kio |
+| idem | produit | 2,7 ms | 0,8 ms | 513 Kio |
+| 40 tables × 300 colonnes, noms de 255 octets | produit | — | — | 1 006 Kio |
+
+`JSON.parse` coûte environ **3 ms par Mio** sur V8. Sans borne, le message du
+cache le plus lourd que l'exécuteur admet fait 4 à 8,5 Mio : **12 à 26 ms sur le
+fil principal**, au-delà de la frame de 8 ms des
+[Budgets d'interaction](#budgets-dinteraction), à chaque `catalogChanged`. Borné,
+il reste autour d'1 Mio au plus — environ 3 ms — quelle que soit la forme.
+
+### Ce qui a été choisi, et pourquoi
+
+`PRODUCT_BOUNDS` (`crates/oxyn-desktop/src/completion.rs`) : **3 000 relations,
+6 000 colonnes, 1 Mio de texte, 256 octets par nom**.
+
+* 3 000 relations d'environ 175 octets et 6 000 colonnes d'environ 80 font 1,0 Mio
+  avec des noms ordinaires ; les décomptes sont ce qu'un schéma ordinaire rencontre.
+* Le budget d'octets, qui paie aussi les espaces de noms, tient le même 1 Mio quand
+  les noms ne sont pas ordinaires : la dernière ligne offre 12 000 colonnes et 40
+  tables de 255 octets par nom, coupées à 1 006 Kio.
+* 256 octets, c'est quatre fois l'identifiant de 63 octets de PostgreSQL et les 64
+  caractères UTF-8 de MySQL
+  ([RESEARCH-NOTES](RESEARCH-NOTES.md#complétion-de-léditeur--vérification-du-2026-10-21)) :
+  aucun nom de ces deux moteurs n'est écarté pour sa longueur.
+
+Ce qu'une borne coupe est compté et renvoyé (`truncated`), jamais écarté en
+silence.
+
+### Ce qui n'est pas encore mesuré
+
+L'analyse sur **JavaScriptCore**, le temps de frame pendant que la liste est
+ouverte, et les 100 ms de retour visible après une frappe : il y faut la webview et
+l'adaptateur de l'éditeur, qui sont les deuxième et quatrième pull requests de
+l'ADR. Le test n'affirme que des plafonds généreux (5 s) côté Rust : rien ne
+garde donc encore les deux budgets d'interaction.
 
 ## La règle qui empêche l'optimisation gratuite
 

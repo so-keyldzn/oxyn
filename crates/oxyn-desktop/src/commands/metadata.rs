@@ -17,6 +17,7 @@ use super::subscriptions::Superseded;
 use super::windows::{adopt_outcome, caller, outcome_waits, run_owned};
 use crate::backend::Backend;
 use crate::backend::windows::Stream;
+use crate::ipc::completion::CompletionCatalog;
 use crate::ipc::metadata::{
     CatalogSearchHit, ObjectSqlForm, Pagination, PreviewShapeDraft, RefreshSignal,
     RelatedRowsQuery, RelatedRowsSource, RelationFacet, RelationFacets,
@@ -120,6 +121,21 @@ pub async fn catalog_tree(
     let connection = parse("connection", &connection)?;
     backend
         .on_blocking_pool(move |backend| backend.catalog_tree(connection))
+        .await
+}
+
+/// What the editor's completion reads of the cache, in one pass.
+///
+/// A cache read: it asks no server, and the editor calls it when the cache
+/// changed, never on a keystroke.
+#[tauri::command]
+pub async fn completion_catalog(
+    backend: State<'_, Backend>,
+    connection: String,
+) -> Result<CompletionCatalog, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.completion_catalog(connection))
         .await
 }
 

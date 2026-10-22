@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="93a1c91672bb" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="ee92e6305d6e" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -657,6 +657,15 @@ validés par `CatalogPath` dans l'exécuteur, sans dépendance de `oxyn-core` ve
 `oxyn-catalog`. La racine lit l'identité et les catalogues ; en l'absence de ce
 palier, elle lit les schémas si la session déclare `SCHEMAS`, sinon les relations.
 Elle ne décrit jamais les relations et ne charge ni index ni clés étrangères.
+
+Le scope `ResolutionPath` lit les espaces de noms dans lesquels un nom non qualifié
+se résout, premier trouvé d'abord
+([ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)). Il ne nomme
+aucun objet et ne décrit rien. Le cache garde la réponse à côté de l'identité du
+serveur, et **garde la dernière après une invalidation**, signalée : un chemin
+qui était juste il y a un instant sert mieux que rien le temps de le relire. Un
+fournisseur qui ne sait pas répondre refuse, et le cache reste sur « inconnu » —
+jamais sur un chemin vide, qui affirmerait que rien ne se résout.
 
 Le scope `Relation` descend au détail : champs, puis index si la
 session déclare `INDEXES`, puis clés étrangères si elle déclare `FOREIGN_KEYS`.

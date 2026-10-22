@@ -88,12 +88,12 @@ lacks, within bounds, never at the pace of the keystrokes.**
 
 1. **A bulk cache read.** One read-only IPC command, `completion_catalog`
    (name fixed by the first pull request), of the family of `catalog_tree`:
-   built in `crates/oxyn-desktop/src/catalog.rs` from the cache on the blocking
-   pool, calling no driver. For a connection it returns the namespaces and, for
-   each, the relations the cache holds — kind, `system`, `stale`, virtual and
-   shadow marks as `CatalogNode` carries them — with the fields of those that
-   are loaded and `fieldsLoaded: false` for the others, never an empty list that
-   would pass for "no columns". It also returns the resolution path (4) and, if
+   built in `crates/oxyn-desktop/src/completion.rs` from the cache on the
+   blocking pool, calling no driver. For a connection it returns the namespaces
+   and, for each, the relations the cache holds — kind, `system`, `stale`,
+   virtual and shadow marks as `CatalogNode` carries them — with the fields of
+   those that are loaded, and a state that says `notLoaded` or `omitted` for the
+   others, never an empty list that would pass for "no columns". It also returns the resolution path (4) and, if
    a bound cut it, `truncated` with counts (6). The editor reads it on mount and
    when a signal (5) says the cache changed, keeps the answer in memory, and the
    completion source reads that copy: **no IPC is sent on a keystroke.**
@@ -125,12 +125,13 @@ lacks, within bounds, never at the pace of the keystrokes.**
    this part**; the IPC command that takes the names is a wrapper over the
    existing commands.
 3. **The insertion text is composed in Rust, once.** Each name in the snapshot
-   carries its `insert` form, produced by a function of `oxyn-catalog::path`
-   next to `quote_identifier`: bare only when the name is a simple lowercase
+   carries its `insert` form, produced by `oxyn-catalog::insertion_form`, which
+   builds on `quote_identifier`: bare only when the name is a simple lowercase
    identifier **and** not a reserved word of the dialect, quoted with
-   `quote_identifier` otherwise; a qualified path goes through
-   `CatalogPath::qualify_sql`. The reserved-word table of each dialect is
-   external data: it is sourced and dated in
+   `quote_identifier` otherwise; a qualified name is the forms of its levels
+   joined by dots (`CatalogPath::insertion_sql`), while `qualify_sql`, which
+   quotes every level, stays the form Oxyn itself sends. The reserved-word table
+   of each dialect is external data: it is sourced and dated in
    [RESEARCH-NOTES](../RESEARCH-NOTES.md) by the pull request that adds it, and
    **a name not known to be safe is quoted**. The front gives every
    `Completion` an explicit `apply` equal to `insert`, so `nameCompletion` never
@@ -138,33 +139,75 @@ lacks, within bounds, never at the pace of the keystrokes.**
    writes its own completion source over the snapshot — decided by a spike at the
    start of the second pull request, not by this ADR. A front test inserts
    `"users"; DROP TABLE audit; --`, `a"b`, `order` and a name containing
-   `<img onerror=…>` on each dialect.
+   `<img onerror=…>` on each dialect. **A name that hides text is not suggested
+   at all**: quoting keeps the SQL intact, but an editor that shows a direction
+   control or a line separator shows text other than the one that runs. The
+   predicate — Unicode `Cc`, `Cf`, `Zl` and `Zp` plus four blank fillers —
+   lives in Rust beside `insertion_form` (`hides_text`), is the one the review
+   of destructive operations applies too, and what it refuses is counted in
+   `truncated`, not dropped silently: a name, a column's type shown beside it,
+   a namespace or an entry of the resolution path. **The dialect is the
+   server's, not only the driver's**: the `postgres` driver serves Redshift,
+   which reserves words PostgreSQL does not, so the snapshot is composed for
+   `Redshift` when the server announces itself as one, and `Redshift` quotes
+   every name (its reserved words are not recorded).
 4. **The resolution path is read from the server, never assumed.**
    `CatalogCache` holds, for the connection, an ordered list of the namespaces
    an unqualified name resolves in, or "unknown". A new `CatalogRefreshScope`
-   variant reads it with the server's first level, on the catalog's reserved
-   session — which is on the default `search_path` by construction (the reset
-   described above). The PostgreSQL driver answers from the server's effective path
-   (`current_schemas`); a provider that cannot answer **refuses**, and the cache
-   keeps "unknown", which is not an empty list
-   ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-it-declares-its-capabilities-per-session-and-simulates-nothing);
-   each driver's answer is specified there by the first pull request). The
+   variant, `ResolutionPath`, reads it on the catalog's reserved session, which
+   no console's context ever reaches: the executor refuses it a context, and
+   PostgreSQL resets `search_path` before the connection returns to the pool.
+   Each driver answers in its own terms, none of them assumed:
+
+   * **PostgreSQL** reads the server's effective path with `current_schemas`;
+     **Amazon Redshift refuses**, the query leaning on `unnest … WITH
+     ORDINALITY`, which Redshift (announcing PostgreSQL 8.0.2) is not known to
+     accept;
+   * **MySQL and MariaDB** read `DATABASE()`: the server says which database
+     the session selected, which the connection form cannot (`lower_case_table_names`
+     spells it another way, `init_connect` or a proxy selects another). `NULL`
+     is an empty path, which is an answer; an unreadable name is an error,
+     never an empty path;
+   * **SQLite** answers `temp`, then `main`, then the attached databases in the
+     order they were attached (`sqlite3FindTable`, SQLite 3.50.2).
+
+   A provider that cannot answer **refuses**, and the cache keeps "unknown",
+   which is not an empty list
+   ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-it-declares-its-capabilities-per-session-and-simulates-nothing)
+   specifies each driver's answer). A console that changed context after
+   opening resolves in its own context, and following it is the editor's
+   session-context work, not this read's. The
    path the completion uses is the console's declared namespace alone when it
    declared one — `SET search_path TO "<schema>"` replaces the path — and the
    server default otherwise. A relation is suggested **unqualified** only if its
    namespace is in that path and no earlier namespace of the path holds the same
-   name; every relation is suggested qualified after its qualifier is typed.
+   name — which can only be told if every earlier namespace of the path is
+   `listed` and not `stale` and the snapshot is not `truncated`, otherwise a
+   namespace nobody read may shadow the name and the suggestion does not resolve
+   where it claims to. The path's entries are opaque match keys: never displayed
+   as typed text, never composed into SQL. Every relation is suggested qualified
+   after its qualifier is typed.
    System namespaces are suggested only after their qualifier. When the path is
    unknown, nothing is suggested unqualified: qualified names only, and
-   **`public` is never assumed.** A `SET search_path` typed inside a script is
+   **`public` is never assumed.** A path the snapshot cannot carry whole — longer
+   than its bound (a path is a handful of schemas), or with an entry that hides
+   text or is too long — crosses as
+   unknown rather than with an entry dropped: the first match wins, so a path
+   with one missing would make a later namespace pass for it. A namespace left
+   out of the snapshot is counted in `truncated` even when the cache holds
+   nothing of it, so the front never has to infer it from an absence. A `SET search_path` typed inside a script is
    not followed.
 5. **One signal more.** `RefreshSignal::of` maps `Event::CatalogUpdated`
-   to a new `catalogChanged { connection }` — "the cache's content changed:
-   load, eviction or invalidation" — delivered like the others to the windows
+   to a new `catalogChanged { connection }` — "a catalog read of this
+   connection finished", which does not say that anything changed, only that
+   the cache may hold other content — delivered like the others to the windows
    that hold the connection ([ADR-0043](0043-multi-fenetre.md)). The editor
    re-reads the snapshot on `catalogChanged` and `catalogInvalidated`, coalesced.
-   The global `catalogVersion` is not used, and the cache gets no revision
-   counter: the signals already say what changed. After a DDL, `stale` names stay
+   **A signal starts no load**: it only prompts a re-read of the cache; loads
+   start from the editor's pass (2), whose reads are what produce the next
+   signal, so a signal cannot feed itself. The global `catalogVersion` is not
+   used, and the cache gets no revision counter: the signals already say what
+   changed. After a DDL, `stale` names stay
    suggested, flagged, while the editor's next pass re-reads them: the executor
    invalidates the whole catalog after any DDL, and emptying the completion
    after a `CREATE INDEX` would be worse than suggesting a name for a moment
@@ -172,12 +215,17 @@ lacks, within bounds, never at the pace of the keystrokes.**
    evicts it.
 6. **Bounds measured before they are written.** This ADR writes no number for
    `MAX_COMPLETION_LISTINGS`, `MAX_COMPLETION_DESCRIPTIONS`,
-   `COMPLETION_DEADLINE` or the snapshot's caps. The first pull request measures
+   `COMPLETION_DEADLINE` or the snapshot's caps — relations, columns, bytes of
+   names (paid by namespaces too: a schema per tenant is thousands of them), and
+   the length of one name, because the cache counts objects and not bytes and a
+   name can be long. The first pull request measures
    them with [`/benchmark`](../../.claude/commands/benchmark.md) on a catalog at
    the cache budget (50,000 objects), against the two existing budgets
    (100 ms, 8 ms p99), records the result in PERFORMANCE, and writes the
-   constants with their argument. A snapshot cut by a cap says so (`truncated`,
-   with the counts of what was left out), and the completion list says so too —
+   constants with their argument. The message is parsed on the webview's main
+   thread, so its size is the cost that decides. A snapshot cut by a cap says so
+   (`truncated`, with the counts of what was left out), and the completion list
+   says so too —
    the wording goes into UX-SPEC in the second pull request. **A partial answer
    is never presented as complete.**
 7. **What it does not promise.** Columns are proposed for relations the
@@ -210,11 +258,23 @@ lacks, within bounds, never at the pace of the keystrokes.**
 * **−** A reserved-word table per dialect to keep current, sourced and dated: a
   word reserved by a later server version and missing from the table is inserted
   bare, and the server rejects the statement naming that word — a visible
-  failure, not a silent one.
+  failure, not a silent one. The MySQL and MariaDB lists are read from the
+  grammar of MySQL 8.4.0 and MariaDB 11.8, not from the server: a 9.x server
+  is not checked, and the lists are re-extracted by `/versions`.
+* **−** Where `temp` and `main` rank among SQLite's databases is read from
+  `build.c` of 3.50.2, not from a documented guarantee: the ATTACH page says the
+  least recently attached database wins among the attached ones and is silent
+  on those two. A later release may change the order; the source is re-read by
+  `/versions`.
 * **−** Changes the contract surface: a `CatalogRefreshScope` variant in
   `oxyn-core`, an optional provider method in `oxyn-catalog`, an answer from each
   driver, a signal variant, the sections of DRIVER-CONTRACT and ARCHITECTURE that
   list them.
+* **−** A provider that refuses the resolution path (Redshift today) leaves the
+  cache on "unknown", which no read can change: asked again at every pass, it
+  would publish a `catalogChanged` for nothing. The editor's pass must ask once
+  per root refresh and skip a refusal — decided with the loads, in the third
+  pull request.
 * **−** The default path is read once per connection: an `ALTER ROLE … SET
   search_path` made meanwhile is seen at the next root refresh.
 * **−** A copy of the snapshot lives in the webview's memory, bounded by the

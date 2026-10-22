@@ -47,7 +47,7 @@ use sqlx::postgres::{PgPool, PgRow};
 use crate::cancel::BackendCanceller;
 use crate::error::{map_connect_error, map_exec_error};
 use crate::session::backend_pid;
-use crate::variant::PostgresVariant;
+use crate::variant::{PostgresFlavor, PostgresVariant};
 
 // Bound rows and definition bytes before materializing catalog metadata.
 const SQL_CONSTRAINTS: &str = r#"
@@ -91,6 +91,19 @@ SELECT n.nspname::text, \
        (n.nspname = 'information_schema' OR n.nspname LIKE 'pg\\_%') \
 FROM pg_catalog.pg_namespace n \
 ORDER BY n.nspname";
+
+/// The schemas an unqualified name resolves in, first match first.
+///
+/// `current_schemas` returns the effective `search_path`: it leaves out the
+/// entries that do not exist or that the role cannot search (a `$user` with no
+/// schema of that name, a schema that was dropped), and `false` leaves out the
+/// implicitly searched `pg_catalog`, which the tree lists on its own. The
+/// ordinality keeps the priority order that `unnest` would otherwise only
+/// happen to preserve.
+const SQL_RESOLUTION_PATH: &str = "\
+SELECT s.name::text \
+FROM pg_catalog.unnest(pg_catalog.current_schemas(false)) WITH ORDINALITY AS s(name, position) \
+ORDER BY s.position";
 
 /// The relations of a schema.
 ///
@@ -459,6 +472,35 @@ impl CatalogProvider for PostgresCatalog {
             namespaces.push(ns);
         }
         Ok(namespaces)
+    }
+
+    /// The schemas of the server's effective `search_path`, first match first.
+    ///
+    /// Read on the session reserved for the catalog, whose `search_path` is the
+    /// server's default: a console's declared schema is applied to its own
+    /// executions and reset before the connection goes back to the pool.
+    ///
+    /// Amazon Redshift refuses: the query leans on `unnest … WITH ORDINALITY`
+    /// (PostgreSQL 9.4), and Redshift announces itself as PostgreSQL 8.0.2. A
+    /// refusal leaves the cache on "unknown", which the completion reads as
+    /// "qualified names only"; a query the server rejects would fail the same
+    /// read at every pass.
+    ///
+    /// # Errors
+    /// [`OxynError::NotSupported`] on Redshift; any session error, or
+    /// [`OxynError::Cancelled`].
+    async fn resolution_path(&self, cancel: &CancelToken) -> Result<Vec<String>> {
+        if self.variant.flavor == PostgresFlavor::Redshift {
+            return Err(OxynError::NotSupported {
+                capability: "RESOLUTION_PATH on Amazon Redshift".to_owned(),
+            });
+        }
+        let rows = self.fetch(cancel, SQL_RESOLUTION_PATH, &[]).await?;
+        let mut schemas = Vec::with_capacity(rows.len());
+        for row in &rows {
+            schemas.push(read_text(row, 0)?);
+        }
+        Ok(schemas)
     }
 
     /// The relations of a schema.

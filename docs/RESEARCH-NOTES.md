@@ -1497,12 +1497,44 @@ The PostgreSQL pages were fetched on 2026-10-21 and are those of
 | The default `search_path` shows as `"$user", public`. A `$user` entry with no schema of that name "is ignored". `pg_catalog` "is always effectively part of the search path". "If there is no match in the search path, an error is reported, even if matching table names exist in other schemas in the database." | [PostgreSQL 18: Schemas, the schema search path](https://www.postgresql.org/docs/18/ddl-schemas.html#DDL-SCHEMAS-PATH) |
 | `ORDER` and `GROUP` are "reserved, requires `AS`", `USER` and `TABLE` "reserved", in the PostgreSQL column. "Labeled "reserved" are those tokens that are not allowed as column or table names." | [PostgreSQL 18: SQL Key Words](https://www.postgresql.org/docs/18/sql-keywords-appendix.html) |
 | `@codemirror/lang-sql` `6.10.0`, as installed in `apps/desktop/node_modules`: `nameCompletion` leaves a label bare when it matches `^[a-z_][a-z_\d]*$` (case-insensitively only if the dialect sets `caseInsensitiveIdentifiers`, default `false`), and otherwise sets `apply` to the first `identifierQuotes` character, the label and the closing character, **without doubling an embedded quote**. `identifierQuotes` defaults to `"` and is `` ` `` for MySQL. `SQLNamespace` accepts `{ self: Completion, children }`, so a completion can carry its own label and `apply`. | `dist/index.js` and `dist/index.d.ts` of the package |
+| SQLite: "If the name of the table is unique across all attached databases and the main and temp databases, then the *schema-name* prefix is not required. If two or more tables in different databases have the same name and the *schema-name* prefix is not used on a table reference, then the table chosen is the one in the database that was least recently attached." The page does not say where `main` and `temp` rank in that tie. | [SQLite: ATTACH DATABASE](https://www.sqlite.org/lang_attach.html) |
+| SQLite resolves an unqualified table name in `sqlite3FindTable` by looking in `temp` first (`aDb[1]`), "the main database is second" (`aDb[0]`), then "attached databases are in order of attachment" (`aDb[2…]`, the first match wins) — which is the ATTACH page's "least recently attached". Read at tag `version-3.50.2`, the version the driver bundles. | [`src/build.c`](https://github.com/sqlite/sqlite/blob/version-3.50.2/src/build.c), `sqlite3FindTable` |
+| PostgreSQL: "The system uses no more than `NAMEDATALEN`-1 bytes of an identifier […] By default, `NAMEDATALEN` is 64 so the maximum identifier length is 63 bytes." | [PostgreSQL 18: Identifiers and Key Words](https://www.postgresql.org/docs/18/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS) |
+| MySQL 8.4: database, table and column names are at most 64 characters, and "identifiers are stored using Unicode (UTF-8)" — up to four bytes a character, hence 256 bytes at most. | [MySQL 8.4: Identifier Length Limits](https://dev.mysql.com/doc/refman/8.4/en/identifier-length.html) |
+| Amazon Redshift's list of reserved words differs from PostgreSQL's: it includes `TIMESTAMP`, `TOP`, `OPEN`, `OFF`, `OLD`, `NEW`, `TAG`, `RAW`, `SYSTEM`, `PARTITION`, `PERCENT`, `IDENTITY`, `INTERVAL`, `SNAPSHOT`, `WITHOUT`, `NULLS` and `UNNEST`, none of which PostgreSQL 18.6 reserves as a table name (`VERSION` is on neither list). "You can use the reserved words with delimited identifiers (double quotation marks)." | [Amazon Redshift: Reserved words](https://docs.aws.amazon.com/redshift/latest/dg/r_pg_keywords.html), read on 2026-10-21 |
+| Redshift does not support, among PostgreSQL's functions, "Array functions and operators", the "Set returning functions" `GENERATE_SERIES()` and `GENERATE_SUBSCRIPTS()`, and the "Schema visibility inquiry functions"; "some unsupported functions will not return an error when run on the leader node". Whether `unnest(…) WITH ORDINALITY` runs on a cluster was **not** tested: the driver refuses the resolution path on Redshift rather than ask. | [Amazon Redshift: Unsupported PostgreSQL functions](https://docs.aws.amazon.com/redshift/latest/dg/c_unsupported-postgresql-functions.html), read on 2026-10-21 |
+| Unicode general categories `Cf` (format), `Zl` and `Zp` (line and paragraph separators): `00AD`, `0600–0605`, `061C`, `06DD`, `070F`, `0890–0891`, `08E2`, `180E`, `200B–200F`, `2028–202E`, `2060–2064`, `2066–206F`, `FEFF`, `FFF9–FFFB`, `110BD`, `110CD`, `13430–1343F`, `1BCA0–1BCA3`, `1D173–1D17A`, `E0001`, `E0020–E007F` — the list of `hides_text`, with `Cc` from the standard library and four fillers (`115F`, `1160`, `3164`, `FFA0`) that render blank. A character added to those categories by a later Unicode version is not caught until the list is refreshed. | Unicode 16.0.0 as shipped with Python 3.14.6 (`unicodedata.category` over every code point), 2026-10-21 |
+| `JSON.parse` of a completion-shaped message (relations and columns with short names), Node `22.23.2` (V8): about 3 ms per MiB, measured on 2026-10-21 on the development machine with a throwaway script (`JSON.parse` of the serialized snapshot, median of repeated runs). The macOS webview runs JavaScriptCore, not V8: the figure is an order of magnitude, not the webview's. | measurement, recorded in [PERFORMANCE](PERFORMANCE.md) |
 
-**Not checked.** The reserved words of MySQL, MariaDB and SQLite, and how each
-resolves an unqualified name: the pull request that adds the reserved-word
-table sources them. How `lang-sql` resolves a qualified prefix and an alias
-with an explicit `apply` on every completion: the spike at the start of the
-second pull request of the ADR.
+### Reserved words — `crates/oxyn-catalog/src/reserved.rs`
+
+Extracted on 2026-10-21. Each list is the words an engine refuses as an
+unquoted table or column name, and errs toward quoting.
+
+| List | Source | Result |
+|---|---|---|
+| PostgreSQL | [`kwlist.h` at tag `REL_18_6`](https://github.com/postgres/postgres/blob/REL_18_6/src/include/parser/kwlist.h) | 494 keywords: 330 `UNRESERVED_KEYWORD`, 63 `COL_NAME_KEYWORD`, 23 `TYPE_FUNC_NAME_KEYWORD`, 78 `RESERVED_KEYWORD`. The 101 of the last two are kept: Appendix C reads them "reserved". |
+| SQLite | [SQLite keywords](https://www.sqlite.org/lang_keywords.html) | 147 keywords, all kept. The page names no version. |
+| MySQL | [`sql/lex.h`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/lex.h) and [`sql/sql_yacc.yy`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/sql_yacc.yy) at tag `mysql-8.4.0` | 731 words declared by `SYM` and `SYM_HK` (not the 36 `SYM_FN` function names, nor the `SYM_H` optimizer hints). 462 tokens appear in the rules `ident_keyword`, `ident_keywords_*` and `label_keyword`, which the parser takes as identifiers. The 264 words whose token appears in none are kept. |
+| MariaDB | [`sql/lex.h`](https://github.com/MariaDB/server/blob/11.8/sql/lex.h) and [`sql/sql_yacc.yy`](https://github.com/MariaDB/server/blob/11.8/sql/sql_yacc.yy), branch `11.8` at commit `c20c21d7a1cd` | 690 words in `symbols[]`. 443 tokens belong to the closure of `keyword_ident` (`keyword_data_type`, `keyword_cast_type`, `keyword_set_special_case`, `keyword_sp_block_section`, `keyword_sp_head`, `keyword_sp_var_and_label`, `keyword_sp_var_not_label`, their `keyword_func_*` parts, `keyword_sysvar_type`, `keyword_verb_clause`, plus `FUNCTION_SYM`, `WINDOW_SYM`, `EXCEPTION_ORACLE_SYM`, `IGNORED_SYM`). The 247 words outside it are kept. |
+
+The pages of the MySQL and MariaDB manuals that list reserved words are not the
+source: `dev.mysql.com` answers a scripted request with a 403, and the archived
+copy is not the list. The lists above are therefore **a superset of the
+documentation's**: the grammar reserves what the parser cannot take as an
+identifier, the manual says what a user may not. The extraction is an `awk` pass
+per grammar (a word is reserved when its token is in no identifier rule),
+checked on `select`, `table`, `order`, `group`, `key` and `index` (reserved) and
+on `status`, `name`, `type`, `date`, `comment` and `count` (not). A new server
+release is re-extracted the same way; the sizes are pinned by a test, so a hand
+edit that drops a row fails. **The MySQL list is that of 8.4.0 and the MariaDB
+list that of 11.8**: a word a later release reserves is inserted bare until the
+lists are re-extracted, and a 9.x MySQL server has not been checked.
+
+**Not checked.** Whether the MariaDB list equals the manual's page; how MySQL
+and MariaDB resolve an unqualified name beyond the selected database; how
+`lang-sql` resolves a qualified prefix and an alias with an explicit `apply` on
+every completion — the spike at the start of the second pull request of the ADR.
 
 ## Anthropic provider — check of 2026-09-16
 

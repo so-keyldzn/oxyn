@@ -18,6 +18,8 @@ use oxyn_core::{
 
 use super::Backend;
 use crate::catalog;
+use crate::completion::{self, PRODUCT_BOUNDS};
+use crate::ipc::completion::CompletionCatalog;
 use crate::ipc::consoles::ParameterKind;
 use crate::ipc::metadata::{
     BoundValue, CatalogSearchHit, ConstraintRow, DefinitionView, Facet, ForeignKeyRow,
@@ -179,6 +181,22 @@ impl Backend {
         let cache = self.catalog_cache(connection)?;
         let cache = cache.read();
         Ok(catalog::tree(&cache))
+    }
+
+    /// What the editor's completion reads of the cache, in one pass.
+    ///
+    /// A cache read like [`Self::catalog_tree`], and nothing more: no driver,
+    /// no round trip. What the cache lacks is read by the bus, in bounded
+    /// passes ([ADR-0057](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md)).
+    pub fn completion_catalog(
+        &self,
+        connection: ConnectionId,
+    ) -> Result<CompletionCatalog, IpcError> {
+        let driver_dialect = self.dialect_of(connection)?;
+        let cache = self.catalog_cache(connection)?;
+        let cache = cache.read();
+        let dialect = completion::dialect_of_server(driver_dialect, cache.server_info());
+        Ok(completion::snapshot(&cache, dialect, PRODUCT_BOUNDS))
     }
 
     /// A relation's structure, if it has been loaded.

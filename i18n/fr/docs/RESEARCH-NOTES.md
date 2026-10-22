@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="480ed16cfab9" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="98238327fe98" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1510,12 +1510,47 @@ Les pages PostgreSQL ont été récupérées le 2026-10-21 et sont celles de
 | Le `search_path` par défaut s'affiche `"$user", public`. Une entrée `$user` sans schéma de ce nom « is ignored ». `pg_catalog` « is always effectively part of the search path ». « If there is no match in the search path, an error is reported, even if matching table names exist in other schemas in the database. » | [PostgreSQL 18 : Schemas, the schema search path](https://www.postgresql.org/docs/18/ddl-schemas.html#DDL-SCHEMAS-PATH) |
 | `ORDER` et `GROUP` sont « reserved, requires `AS` », `USER` et `TABLE` « reserved », dans la colonne PostgreSQL. « Labeled "reserved" are those tokens that are not allowed as column or table names. » | [PostgreSQL 18 : SQL Key Words](https://www.postgresql.org/docs/18/sql-keywords-appendix.html) |
 | `@codemirror/lang-sql` `6.10.0`, tel qu'installé dans `apps/desktop/node_modules` : `nameCompletion` laisse un libellé nu quand il correspond à `^[a-z_][a-z_\d]*$` (sans tenir compte de la casse seulement si le dialecte fixe `caseInsensitiveIdentifiers`, `false` par défaut), et sinon fixe `apply` au premier caractère de `identifierQuotes`, au libellé et au caractère fermant, **sans doubler un guillemet interne**. `identifierQuotes` vaut `"` par défaut et `` ` `` pour MySQL. `SQLNamespace` accepte `{ self: Completion, children }` : une complétion peut donc porter son propre libellé et son propre `apply`. | `dist/index.js` et `dist/index.d.ts` du paquet |
+| SQLite : « If the name of the table is unique across all attached databases and the main and temp databases, then the *schema-name* prefix is not required. If two or more tables in different databases have the same name and the *schema-name* prefix is not used on a table reference, then the table chosen is the one in the database that was least recently attached. » La page ne dit pas où `main` et `temp` se classent dans cette égalité. | [SQLite : ATTACH DATABASE](https://www.sqlite.org/lang_attach.html) |
+| SQLite résout un nom de table non qualifié dans `sqlite3FindTable` en cherchant d'abord dans `temp` (`aDb[1]`), « the main database is second » (`aDb[0]`), puis « attached databases are in order of attachment » (`aDb[2…]`, la première correspondance l'emporte) — ce qui est le « least recently attached » de la page ATTACH. Lu au tag `version-3.50.2`, la version qu'embarque le driver. | [`src/build.c`](https://github.com/sqlite/sqlite/blob/version-3.50.2/src/build.c), `sqlite3FindTable` |
+| PostgreSQL : « The system uses no more than `NAMEDATALEN`-1 bytes of an identifier […] By default, `NAMEDATALEN` is 64 so the maximum identifier length is 63 bytes. » | [PostgreSQL 18 : Identifiers and Key Words](https://www.postgresql.org/docs/18/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS) |
+| MySQL 8.4 : les noms de base, de table et de colonne font 64 caractères au plus, et « identifiers are stored using Unicode (UTF-8) » — jusqu'à quatre octets par caractère, donc 256 octets au plus. | [MySQL 8.4 : Identifier Length Limits](https://dev.mysql.com/doc/refman/8.4/en/identifier-length.html) |
+| La liste des mots réservés d'Amazon Redshift diffère de celle de PostgreSQL : elle contient `TIMESTAMP`, `TOP`, `OPEN`, `OFF`, `OLD`, `NEW`, `TAG`, `RAW`, `SYSTEM`, `PARTITION`, `PERCENT`, `IDENTITY`, `INTERVAL`, `SNAPSHOT`, `WITHOUT`, `NULLS` et `UNNEST`, dont aucun n'est réservé comme nom de table par PostgreSQL 18.6 (`VERSION` figure sur aucune des deux listes). « You can use the reserved words with delimited identifiers (double quotation marks). » | [Amazon Redshift : Reserved words](https://docs.aws.amazon.com/redshift/latest/dg/r_pg_keywords.html), lu le 2026-10-21 |
+| Redshift ne prend pas en charge, parmi les fonctions de PostgreSQL, « Array functions and operators », les « Set returning functions » `GENERATE_SERIES()` et `GENERATE_SUBSCRIPTS()`, ni les « Schema visibility inquiry functions » ; « some unsupported functions will not return an error when run on the leader node ». Que `unnest(…) WITH ORDINALITY` s'exécute sur un cluster n'a **pas** été testé : le driver refuse le chemin de résolution sur Redshift plutôt que de le demander. | [Amazon Redshift : Unsupported PostgreSQL functions](https://docs.aws.amazon.com/redshift/latest/dg/c_unsupported-postgresql-functions.html), lu le 2026-10-21 |
+| Catégories générales Unicode `Cf` (format), `Zl` et `Zp` (séparateurs de ligne et de paragraphe) : `00AD`, `0600–0605`, `061C`, `06DD`, `070F`, `0890–0891`, `08E2`, `180E`, `200B–200F`, `2028–202E`, `2060–2064`, `2066–206F`, `FEFF`, `FFF9–FFFB`, `110BD`, `110CD`, `13430–1343F`, `1BCA0–1BCA3`, `1D173–1D17A`, `E0001`, `E0020–E007F` — la liste de `hides_text`, avec `Cc` pris à la bibliothèque standard et quatre caractères de remplissage (`115F`, `1160`, `3164`, `FFA0`) qui s'affichent en blanc. Un caractère ajouté à ces catégories par une version ultérieure d'Unicode n'est pas détecté tant que la liste n'est pas rafraîchie. | Unicode 16.0.0 tel que livré avec Python 3.14.6 (`unicodedata.category` sur chaque point de code), 2026-10-21 |
+| `JSON.parse` d'un message de forme complétion (relations et colonnes aux noms courts), Node `22.23.2` (V8) : environ 3 ms par Mio, mesuré le 2026-10-21 sur la machine de développement avec un script jetable (`JSON.parse` du snapshot sérialisé, médiane de plusieurs exécutions). La webview macOS exécute JavaScriptCore, non V8 : le chiffre est un ordre de grandeur, pas celui de la webview. | mesure, consignée dans [PERFORMANCE](PERFORMANCE.md) |
 
-**Non vérifié.** Les mots réservés de MySQL, MariaDB et SQLite, et la façon dont
-chacun résout un nom non qualifié : la pull request qui ajoute la table de mots
-réservés les source. La façon dont `lang-sql` résout un préfixe qualifié et un
-alias avec un `apply` explicite sur chaque complétion : le spike au début de la
-deuxième pull request de l'ADR.
+### Mots réservés — `crates/oxyn-catalog/src/reserved.rs`
+
+Extraits le 2026-10-21. Chaque liste est l'ensemble des mots qu'un moteur refuse
+comme nom de table ou de colonne non cité, et penche vers la citation.
+
+| Liste | Source | Résultat |
+|---|---|---|
+| PostgreSQL | [`kwlist.h` au tag `REL_18_6`](https://github.com/postgres/postgres/blob/REL_18_6/src/include/parser/kwlist.h) | 494 mots-clés : 330 `UNRESERVED_KEYWORD`, 63 `COL_NAME_KEYWORD`, 23 `TYPE_FUNC_NAME_KEYWORD`, 78 `RESERVED_KEYWORD`. Les 101 des deux dernières catégories sont gardés : l'annexe C les dit « reserved ». |
+| SQLite | [SQLite keywords](https://www.sqlite.org/lang_keywords.html) | 147 mots-clés, tous gardés. La page ne nomme aucune version. |
+| MySQL | [`sql/lex.h`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/lex.h) et [`sql/sql_yacc.yy`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/sql_yacc.yy) au tag `mysql-8.4.0` | 731 mots déclarés par `SYM` et `SYM_HK` (ni les 36 noms de fonction `SYM_FN`, ni les indices d'optimiseur `SYM_H`). 462 jetons apparaissent dans les règles `ident_keyword`, `ident_keywords_*` et `label_keyword`, que l'analyseur prend pour des identifiants. Les 264 mots dont le jeton n'apparaît dans aucune sont gardés. |
+| MariaDB | [`sql/lex.h`](https://github.com/MariaDB/server/blob/11.8/sql/lex.h) et [`sql/sql_yacc.yy`](https://github.com/MariaDB/server/blob/11.8/sql/sql_yacc.yy), branche `11.8` au commit `c20c21d7a1cd` | 690 mots dans `symbols[]`. 443 jetons appartiennent à la fermeture de `keyword_ident` (`keyword_data_type`, `keyword_cast_type`, `keyword_set_special_case`, `keyword_sp_block_section`, `keyword_sp_head`, `keyword_sp_var_and_label`, `keyword_sp_var_not_label`, leurs parties `keyword_func_*`, `keyword_sysvar_type`, `keyword_verb_clause`, plus `FUNCTION_SYM`, `WINDOW_SYM`, `EXCEPTION_ORACLE_SYM`, `IGNORED_SYM`). Les 247 mots hors de cette fermeture sont gardés. |
+
+Les pages des manuels MySQL et MariaDB qui listent les mots réservés ne sont pas
+la source : `dev.mysql.com` répond 403 à une requête scriptée, et la copie
+archivée n'est pas la liste. Les listes ci-dessus sont donc **un sur-ensemble de
+celles de la documentation** : la grammaire réserve ce que l'analyseur ne peut
+pas prendre pour un identifiant, le manuel dit ce qu'un utilisateur ne peut pas.
+L'extraction est un passage `awk` par grammaire (un mot est réservé quand son
+jeton figure dans aucune règle d'identifiant), vérifié sur `select`, `table`,
+`order`, `group`, `key` et `index` (réservés) et sur `status`, `name`, `type`,
+`date`, `comment` et `count` (non). Une nouvelle version du serveur se
+réextrait de la même façon ; les tailles sont fixées par un test, si bien qu'une
+modification à la main qui supprime une ligne échoue. **La liste MySQL est celle
+de la 8.4.0 et la liste MariaDB celle de la 11.8** : un mot qu'une version
+ultérieure réserve est inséré nu jusqu'à ce que les listes soient réextraites, et
+un serveur MySQL 9.x n'a pas été vérifié.
+
+**Non vérifié.** Si la liste MariaDB égale la page du manuel ; la façon dont MySQL
+et MariaDB résolvent un nom non qualifié au-delà de la base sélectionnée ; la
+façon dont `lang-sql` résout un préfixe qualifié et un alias avec un `apply`
+explicite sur chaque complétion — le spike au début de la deuxième pull request de
+l'ADR.
 
 ## Fournisseur Anthropic — vérification du 2026-09-16
 
