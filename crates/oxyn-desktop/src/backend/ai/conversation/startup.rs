@@ -183,7 +183,7 @@ fn ready_of(
     session: &oxyn_ai::external::session::ExternalSession,
 ) -> AgentStart {
     AgentStart::Ready {
-        version: version_of(ready),
+        version: version_of(&ready),
         settings: AgentSettingsView::of(&session.settings().borrow()),
     }
 }

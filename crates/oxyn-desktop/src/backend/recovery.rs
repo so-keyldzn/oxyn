@@ -40,6 +40,13 @@ const WRITES_GRACE: Duration = Duration::from_secs(10);
 /// keep the application open. The statements were still told to stop.
 const SESSIONS_GRACE: Duration = Duration::from_secs(5);
 
+/// How long the ordered shutdown spends removing external agents' directories.
+///
+/// Every process group is signalled before this wait starts. Two seconds keeps
+/// cleanup imperceptible after a normal quit without making a stalled temporary
+/// filesystem hold the application open.
+const AGENT_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
 /// This launch, what the previous one left, and the local writes in flight.
 pub(crate) struct LocalWork {
     pub(crate) session: AppSessionId,
@@ -316,6 +323,15 @@ impl Backend {
             Err(_) => {
                 tracing::warn!("local writes still pending at exit; the close is not recorded");
             }
+        }
+        // `app.exit` bypasses task and state drops. Signal every process group
+        // first, then give the private directories one bounded cleanup pass
+        // while this ordered path is still off Tauri's event-loop thread.
+        if tokio::time::timeout(AGENT_SHUTDOWN_GRACE, self.inner.ai.shutdown_agents())
+            .await
+            .is_err()
+        {
+            tracing::warn!("some external-agent directories were not removed before exit");
         }
         // `app.exit` ends the process without dropping a future: whatever runs
         // on a server keeps running unless it is cancelled here.

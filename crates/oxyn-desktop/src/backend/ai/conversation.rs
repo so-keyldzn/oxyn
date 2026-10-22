@@ -21,7 +21,9 @@ use async_trait::async_trait;
 use oxyn_ai::external::locate::SearchPath;
 use oxyn_ai::external::mcp::{TierSource, ToolService, ToolTurns};
 use oxyn_ai::external::prompt::{AgentInstructions, AgentPrompt};
-use oxyn_ai::external::session::{AgentReady, ExternalError, ExternalSession, ToolBridge};
+use oxyn_ai::external::session::{
+    AgentReady, ExternalError, ExternalSession, PromptStart, ToolBridge,
+};
 use oxyn_ai::external::turn::TurnEnd;
 use oxyn_ai::tools::SampleAsk;
 use oxyn_ai::{
@@ -2575,7 +2577,7 @@ impl Run<'_> {
                 label: agent.label.clone(),
                 model: None,
                 reach: Reach::Unresolved.into(),
-                agent_version: version_of(ready),
+                agent_version: version_of(ready.ready()),
             },
             tier,
             // What left with the question, shown as the provider path shows it.
@@ -2614,7 +2616,7 @@ impl Run<'_> {
             Arc::clone(&observer),
             self.cancel.clone(),
         );
-        let end = match session.prompt(&prompt, observer, self.cancel).await {
+        let end = match ready.prompt(&session, &prompt, observer, self.cancel).await {
             Ok(end) => end,
             Err(error) => {
                 let failure = agent_failure_of(agent, error, &session).await;
@@ -2655,9 +2657,9 @@ impl Run<'_> {
         &self,
         agent: &ExternalAgentConfig,
         session: &ExternalSession,
-    ) -> Result<Option<AgentReady>, Failure> {
+    ) -> Result<Option<PromptStart>, Failure> {
         tokio::select! {
-            ready = start_bounded(agent, session) => ready.map(Some).inspect_err(|failure| {
+            ready = start_for_prompt_bounded(agent, session) => ready.map(Some).inspect_err(|failure| {
                 if failure.ends_agent {
                     self.thread.link_agent(None);
                 }
@@ -2844,11 +2846,23 @@ async fn start_bounded(
     }
 }
 
+/// Starts `session` for a question while reserving it against setting changes.
+async fn start_for_prompt_bounded(
+    agent: &ExternalAgentConfig,
+    session: &ExternalSession,
+) -> Result<PromptStart, Failure> {
+    match tokio::time::timeout(AGENT_START_TIMEOUT, session.start_for_prompt()).await {
+        Ok(Ok(ready)) => Ok(ready),
+        Ok(Err(error)) => Err(agent_failure_of(agent, error, session).await),
+        Err(_elapsed) => Err(timed_out(agent)),
+    }
+}
+
 /// « Claude Code 0.78.0 », or whichever half the agent said.
-fn version_of(ready: AgentReady) -> Option<String> {
-    match (ready.name, ready.version) {
+fn version_of(ready: &AgentReady) -> Option<String> {
+    match (&ready.name, &ready.version) {
         (Some(name), Some(version)) => Some(format!("{name} {version}")),
-        (name, version) => name.or(version),
+        (name, version) => name.clone().or_else(|| version.clone()),
     }
 }
 
