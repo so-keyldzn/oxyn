@@ -1749,6 +1749,130 @@ async fn a_typed_use_is_refused_and_points_to_the_context_selector() {
 
 #[tokio::test]
 #[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn a_typed_set_of_the_time_zone_or_names_is_refused_and_values_stay_utc() {
+    // Issue #254. The decoders tag a TIMESTAMP UTC because the setup of every
+    // connection pins `+00:00`. A typed `SET time_zone = '+02:00'` would make
+    // the same stored instant arrive two hours late under a UTC tag, and a
+    // reconnect would flip it back. It is refused before anything is sent, so
+    // the value read never depends on what was typed — nor on a reconnect.
+    let Some(session) = session().await else {
+        return;
+    };
+    let Some(observer) = self::session().await else {
+        return;
+    };
+    apply(&*session, "DROP TABLE IF EXISTS oxyn_pinned").await;
+    apply(
+        &*session,
+        "CREATE TABLE oxyn_pinned (ts TIMESTAMP(6) NULL, s VARCHAR(10))",
+    )
+    .await;
+    apply(
+        &*session,
+        "INSERT INTO oxyn_pinned VALUES ('2026-09-30 12:00:00', 'é')",
+    )
+    .await;
+    let read = "SELECT ts FROM oxyn_pinned";
+    let utc = first(&*session, read).await;
+    assert!(
+        utc.contains("12:00:00"),
+        "stored as UTC, read as UTC: {utc}"
+    );
+
+    // Every spelling the server accepts as an assignment of the setting: the
+    // quoted names and the executable comments are as valid to MySQL 8.4 as the
+    // bare form, and were the ones that slipped through.
+    let refused = [
+        "SET time_zone = '+02:00'",
+        "SET SESSION time_zone = 'Europe/Paris'",
+        "SET @@session.time_zone = '+02:00'",
+        "SET @@session.`time_zone` = '+02:00'",
+        "SET @@`session`.`time_zone` = '+02:00'",
+        "SET `time_zone` = '+02:00'",
+        "/*!50000 SET time_zone = '+02:00' */",
+        "/*!50000 SET @@session.`time_zone` = '+02:00' */",
+        "SELECT 1 /*!50000 ; SET time_zone = '+02:00' */",
+        "SET NAMES latin1",
+        "/*!40101 SET NAMES latin1 */",
+        "SET CHARACTER SET latin1",
+        "SET character_set_results = latin1",
+        "SELECT 1; SET time_zone = '+02:00'",
+    ];
+    let assert_refused = async |session: &dyn Session| {
+        for text in refused {
+            for request in [write_request(text), read_request(text)] {
+                let error = refusal(run(session, request).await, text);
+                let OxynError::NotSupported { capability } = &error else {
+                    panic!("`{text}` must be refused as unsupported: {error:?}");
+                };
+                assert!(
+                    capability.contains("CONVERT_TZ"),
+                    "`{text}`: the message names the way out: {capability}"
+                );
+                assert!(
+                    !capability.contains("Paris") && !capability.contains("latin1"),
+                    "`{text}`: the message echoes the value: {capability}"
+                );
+            }
+        }
+        assert_eq!(first(session, "SELECT @@session.time_zone").await, "+00:00");
+        assert_eq!(
+            first(session, "SELECT @@session.character_set_results").await,
+            "utf8mb4"
+        );
+    };
+    assert_refused(&*session).await;
+    assert_eq!(first(&*session, read).await, utc);
+    assert_eq!(first(&*session, "SELECT s FROM oxyn_pinned").await, "é");
+
+    // What the refusal does not stop is a read — on the right-hand side of a
+    // `SET` too, compared or not —, and the way out it points to.
+    apply(&*session, "SET @tz = @@session.time_zone").await;
+    apply(&*session, "SET @is_utc = @@session.time_zone = '+00:00'").await;
+    assert_eq!(first(&*session, "SELECT @is_utc").await, "1");
+    assert!(
+        first(
+            &*session,
+            "SELECT CONVERT_TZ(ts, '+00:00', '+02:00') FROM oxyn_pinned"
+        )
+        .await
+        .contains("14:00:00")
+    );
+
+    // The same after a reconnect: the connection is killed from outside, the
+    // first statement that notices fails, the next one reopens it.
+    let before = first(&*session, "SELECT CONNECTION_ID()").await;
+    apply(&*observer, &format!("KILL {before}")).await;
+    let mut after = None;
+    for _ in 0..3 {
+        if let Ok(batches) = run(&*session, read_request(read)).await
+            && let Some(batch) = batches.first()
+        {
+            after = Some(array_value_to_string(batch.column(0), 0).expect("printable"));
+            break;
+        }
+    }
+    assert_eq!(
+        after.as_deref(),
+        Some(utc.as_str()),
+        "same value after a reconnect"
+    );
+    assert_ne!(
+        first(&*session, "SELECT CONNECTION_ID()").await,
+        before,
+        "the session really reconnected"
+    );
+    // The refusal does not depend on the connection either: what was refused
+    // before the reconnect is refused after it, and the value has not moved.
+    assert_refused(&*session).await;
+    assert_eq!(first(&*session, read).await, utc);
+    apply(&*session, "DROP TABLE oxyn_pinned").await;
+    session.close().await.expect("close");
+    observer.close().await.expect("close observer");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
 async fn truncate_is_accepted_as_declared() {
     // ADR-0042: a declared flag is held by a test against the engine.
     let Some(session) = session().await else {

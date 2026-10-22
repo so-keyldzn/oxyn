@@ -349,8 +349,11 @@ pub fn changes_context(text: &str, dialect: SqlDialect) -> bool {
 ///
 /// Only MySQL and MariaDB run the body of `/*! … */` and `/*M! … */`; to every
 /// other dialect they are comments, and reading them as code there would
-/// refuse what no server runs.
-fn runnable_text(sql: &str, dialect: SqlDialect) -> Cow<'_, str> {
+/// refuse what no server runs. Public for a driver's own lexical check, which
+/// must read the same code as [`changes_context`]. Allocates only when the text
+/// holds such a comment; byte offsets are the original text's.
+#[must_use]
+pub fn runnable_text(sql: &str, dialect: SqlDialect) -> Cow<'_, str> {
     if dialect == SqlDialect::MySql {
         split::executable_sql(sql, SplitProfile::for_dialect(dialect))
     } else {

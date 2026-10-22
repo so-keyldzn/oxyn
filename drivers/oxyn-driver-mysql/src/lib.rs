@@ -72,6 +72,7 @@ mod connection;
 mod error;
 mod options;
 mod params;
+mod pinned;
 mod preview;
 
 /// The tests that need a server. All `#[ignore]`.
