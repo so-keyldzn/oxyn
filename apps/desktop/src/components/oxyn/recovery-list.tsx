@@ -78,6 +78,8 @@ function openingNotice(abnormal: boolean, empty: boolean) {
 export function RecoveryList({
   abnormal,
   unresolvedWrite,
+  statusError = null,
+  onRetryStatus,
   state,
   selected,
   onToggle,
@@ -98,6 +100,13 @@ export function RecoveryList({
   abnormal: boolean
   /** History holds a write whose outcome is unknown: warn to inspect it. */
   unresolvedWrite: boolean
+  /**
+   * How the previous launch ended could not be read: neither a crash nor a
+   * write in doubt can be ruled out, so the screen says so instead of
+   * reading as a clean shutdown.
+   */
+  statusError?: BackendFailure | null
+  onRetryStatus?: () => void
   state: RecoveryState
   selected: ReadonlySet<string>
   onToggle: (entry: DocumentEntry) => void
@@ -155,6 +164,20 @@ export function RecoveryList({
               : openingNotice(abnormal, state.entries.length === 0)}
         </p>
       </header>
+
+      {statusError ? (
+        <BackendErrorAlert
+          title="How Oxyn last closed could not be read"
+          error={statusError}
+          onRetry={onRetryStatus}
+        >
+          <p className="text-xs text-muted-foreground">
+            A write may have an unknown outcome. Before running anything, look
+            for a “Needs inspection” row in the library&apos;s History. Recovery
+            never retries a write.
+          </p>
+        </BackendErrorAlert>
+      ) : null}
 
       {unresolvedWrite ? (
         <Alert>

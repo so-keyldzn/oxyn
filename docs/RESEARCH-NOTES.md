@@ -283,6 +283,7 @@ tag: a tag moves, a SHA does not.
 | `actions/cache` | `v6.1.0`, `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`, published on 2026-06-26; only saves after a successful job (`post-if: "success()"`) | GitHub API, `action.yml` at that SHA | 2026-09-24 |
 | Node required by the front end | vite 8.3.0: `^20.19.0 \|\| >=22.12.0`; vitest 4.1.11: `^20.0.0 \|\| ^22.0.0 \|\| >=24.0.0`; CI takes the 22 line, the dev machine's (22.23.2) | `engines` field of the installed packages | 2026-09-24 |
 | Tauri system libraries on Debian/Ubuntu | `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` | `tauri-apps/tauri-docs`, branch `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` of 2026-08-20 | 2026-09-24 |
+| Tauri system dependency on macOS for desktop-only development | Xcode, or the Xcode Command Line Tools (`xcode-select --install`) when not targeting iOS | `tauri-apps/tauri-docs`, branch `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` of 2026-08-20 (section "macOS") | 2026-10-22 |
 | GitHub-hosted runner `ubuntu-24.04-arm`: standard runner, listed for public and private repositories, 4 CPUs and 16 GB of RAM on a public repository; "Use of the standard GitHub-hosted runners is free and unlimited on public repositories". `RUNNER_ARCH` is `ARM64` there. `livraison.yml` builds the ARM64 Linux packages natively on it — no cross toolchain, no multiarch WebKitGTK sysroot, no QEMU — and the Tauri bundler's AppImage tooling runs as on x86_64 | [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners); proven by run `37246283509` of the temporary `essai-linux-arm64` workflow (PR branch `linux-arm64-release`) | 2026-10-04 |
 | `keyring` 4.2.0 on Linux goes through `zbus-secret-service-keyring-store` and `secret-service` 5.2.0: pure Rust, without `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
 | `cargo-nextest` CI binary | `0.9.146`; `universal-apple-darwin` SHA-256 `39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8`; `x86_64-unknown-linux-gnu` SHA-256 `682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428` | [nextest release cargo-nextest-0.9.146](https://github.com/nextest-rs/nextest/releases/tag/cargo-nextest-0.9.146) and its `.sha256` assets | 2026-10-03 |
@@ -2395,6 +2396,31 @@ Sources: the installed crates.io registry source, and PostgreSQL **18**
 2026-10-03. PostgreSQL executes `PROGRAM` on the database server and resolves
 file paths there; `STDOUT` transfers data through the client connection.
 No live database was used for this verification.
+
+## PostgreSQL EXPLAIN options and classification — checked 2026-10-22
+
+PostgreSQL **18** (documentation 18.6,
+[`EXPLAIN`](https://www.postgresql.org/docs/18/sql-explain.html)) lists twelve
+parenthesized options: `ANALYZE`, `VERBOSE`, `COSTS`, `SETTINGS`,
+`GENERIC_PLAN`, `BUFFERS`, `SERIALIZE`, `WAL`, `TIMING`, `SUMMARY`, `MEMORY`,
+`FORMAT`. Only `ANALYZE` runs the statement; `SERIALIZE`, `WAL` and `TIMING`
+are refused without it, and `GENERIC_PLAN` is refused with it. The grammar
+(`src/backend/parser/gram.y`, branch `REL_18_STABLE`, rules `analyze_keyword`
+and `utility_option_name`) accepts `ANALYSE` as well as `ANALYZE`, in the
+option list and in the legacy `EXPLAIN ANALYSE statement` form, and gives
+both the option name `analyze`; any other non-reserved word is passed on as
+an option name.
+
+`sqlparser` **0.62.0** has no `ANALYSE` keyword (`src/keywords.rs`): in the
+parenthesized form it is a `UtilityOption` named `ANALYSE`, and the legacy
+form does not parse. The classification therefore keeps `Read` only for the
+eleven options that shape the plan, and gives any other option the explained
+statement's intent (issue #246).
+
+The [`COPY`](https://www.postgresql.org/docs/18/sql-copy.html) page, read the
+same day: its `query` may be a `SELECT`, `VALUES`, `INSERT`, `UPDATE`,
+`DELETE` or `MERGE`, the last four with a `RETURNING` clause — a `COPY (…) TO
+STDOUT` can therefore write. No live database was used for this verification.
 
 ## SQL password literals before persistence
 

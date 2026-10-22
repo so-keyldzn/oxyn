@@ -524,7 +524,7 @@ impl Backend {
                     preview: preview.map(Into::into),
                 })
             }
-            Outcome::ConnectionSaved { .. } => Ok(self.finish_creation(pending, &cancel).await),
+            Outcome::ConnectionSaved { .. } => Ok(self.finish_creation(id, pending, &cancel).await),
             Outcome::Denied { reason, .. } => Err(IpcError::invalid(reason)),
             _ => Err(IpcError::invalid("The connection was not saved")),
         }
@@ -649,11 +649,12 @@ impl Backend {
             Outcome::Denied { reason, .. } => return Err(IpcError::invalid(reason)),
             _ => return Err(IpcError::invalid("The connection was not saved")),
         }
-        Ok(Some(self.finish_creation(pending, &cancel).await))
+        Ok(Some(self.finish_creation(command, pending, &cancel).await))
     }
 
     async fn finish_creation(
         &self,
+        id: CommandId,
         pending: PendingConnection,
         cancel: &CancelToken,
     ) -> ConnectResponse {
@@ -682,7 +683,7 @@ impl Backend {
                 };
             }
         }
-        self.open_saved(config, cancel).await
+        self.open_saved(id, config, cancel).await
     }
 
     /// Opens a connection just saved.
@@ -690,9 +691,14 @@ impl Backend {
     /// A failed opening does not unsave it: the answer names the saved
     /// connection, so that connecting again from the same form edits it
     /// rather than saving one more.
-    async fn open_saved(&self, config: ConnectionConfig, cancel: &CancelToken) -> ConnectResponse {
+    async fn open_saved(
+        &self,
+        id: CommandId,
+        config: ConnectionConfig,
+        cancel: &CancelToken,
+    ) -> ConnectResponse {
         let saved = ipc::SavedConnection::of(&config);
-        match self.open_session(config, cancel).await {
+        match self.open_session(id, config, cancel).await {
             Ok(open) => ConnectResponse::Open(open),
             Err(error) => ConnectResponse::Saved {
                 connection: saved,
@@ -712,20 +718,34 @@ impl Backend {
         let cancel = self.track(id)?;
         let config = self.read_config(connection).await?;
         inner.policy.register(&config);
-        self.open_session(config, &cancel).await
+        self.open_session(id, config, &cancel).await
     }
 
     /// `Command::Connect`, then what the workspace may know about it.
+    ///
+    /// The opening of `id`, if a window recorded it, names its connection
+    /// first: from before its first session until its window adopts them,
+    /// another window's cleanup does not disconnect them and a deletion is
+    /// refused (ADR-0043).
     async fn open_session(
         &self,
+        id: CommandId,
         config: ConnectionConfig,
         cancel: &CancelToken,
     ) -> Result<OpenConnection, IpcError> {
+        self.inner
+            .windows
+            .bind_opening(id, config.id, cancel)
+            .await?;
         let session = self.catalog_session(&config, cancel).await?;
         // The first console gets its own session: catalog and preview work
         // stay out of its transaction, and it may change context where the
-        // catalog's session may not (ADR-0015, ADR-0019).
-        let console = match self.open_console(CommandId::new(), config.id).await {
+        // catalog's session may not (ADR-0015, ADR-0019). Under the opening's
+        // token: a window closed meanwhile cancels both sessions, not one.
+        let console = match self
+            .open_console_under(CommandId::new(), config.id, cancel)
+            .await
+        {
             Ok(console) => console,
             Err(error) => {
                 let _ = self.close_console(config.id, session).await;
@@ -764,6 +784,12 @@ impl Backend {
         let Outcome::Connected { session, .. } = outcome else {
             return Err(IpcError::invalid("The executor did not open a session"));
         };
+        // Cancelled while the server answered — its window closed: nobody
+        // will use the session, and it must not outlive the gesture.
+        if cancel.is_cancelled() {
+            self.close_console(config.id, session).await?;
+            return Err(IpcError::invalid("Opening the connection was cancelled."));
+        }
         Ok(session)
     }
 

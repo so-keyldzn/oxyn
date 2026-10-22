@@ -105,13 +105,25 @@ impl Backend {
         id: CommandId,
         connection: ConnectionId,
     ) -> Result<ConsoleSession, IpcError> {
-        let inner = &self.inner;
         let cancel = self.track(id)?;
+        self.open_console_under(id, connection, &cancel).await
+    }
+
+    /// [`Self::open_console`] under a token the caller tracks: the first
+    /// console of a connection opens under its opening's, so that cancelling
+    /// the opening — its window closing — reaches it too.
+    pub(crate) async fn open_console_under(
+        &self,
+        id: CommandId,
+        connection: ConnectionId,
+        cancel: &CancelToken,
+    ) -> Result<ConsoleSession, IpcError> {
+        let inner = &self.inner;
         let config = self.read_config(connection).await?;
         inner.policy.register(&config);
         let outcome = inner
             .executor
-            .dispatch_as(id, Actor::Human, Command::Connect { connection }, &cancel)
+            .dispatch_as(id, Actor::Human, Command::Connect { connection }, cancel)
             .await;
         let (session, transaction_state) = match outcome {
             Ok(Outcome::Connected {

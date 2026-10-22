@@ -35,7 +35,9 @@ from verifier_socle import (  # noqa: E402
     _slug,
     fingerprint,
     aggregate_errors,
+    check_readme_make_targets,
     dependency_tool_errors,
+    readme_make_errors,
     translation_errors,
 )
 
@@ -216,6 +218,44 @@ def translation_failures() -> list[str]:
     return failures
 
 
+README_BEFORE = """Run `make lancer` for the prose, which is not checked.
+
+```sh
+make app
+make lancer
+```
+"""
+
+README_AFTER = """Run `make lancer` for the prose, which is not checked.
+
+make app outside a fence is not checked either.
+
+```sh
+make desktop-dev              # the application with hot reload
+make desktop PROFIL=release   # the optimized build
+make -j4 qualite
+```
+"""
+
+
+def readme_failures() -> list[str]:
+    """Only a fenced `make <target>` line naming a missing target is refused."""
+    failures = []
+    targets = {"desktop", "desktop-dev", "qualite"}
+    refused = readme_make_errors(README_BEFORE, targets)
+    if len(refused) != 2 or "`make app`" not in refused[0] or "`make lancer`" not in refused[1]:
+        failures.append(f"the old README commands are not refused: {refused}")
+    if readme_make_errors(README_AFTER, targets):
+        failures.append(f"valid README commands refused: {readme_make_errors(README_AFTER, targets)}")
+    if readme_make_errors(README_AFTER, targets - {"desktop-dev"}) != [
+        "README.md runs `make desktop-dev`, a target missing from the Makefile"
+    ]:
+        failures.append("a target removed from the Makefile is not refused")
+    if check_readme_make_targets():
+        failures.append(f"the real README names a missing target: {check_readme_make_targets()}")
+    return failures
+
+
 def main() -> int:
     failures = [
         f"_slug({heading!r}) = {_slug(heading)!r}, expected {expected!r}"
@@ -238,10 +278,11 @@ def main() -> int:
     failures += ci_failures()
     failures += translation_failures()
     failures += dependency_failures()
+    failures += readme_failures()
 
     for failure in failures:
         print(f"FAIL  {failure}")
-    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 13
+    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 13 + 4
     print(f"\n{total - len(failures)}/{total} cases pass")
     return 1 if failures else 0
 

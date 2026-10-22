@@ -32,25 +32,56 @@ per feature — rebuilt from the interface components, not screen recordings.
 
 ## What the repository contains
 
-15 crates in a single Cargo workspace: `crates/` for the core, the interface and
-the binary; `drivers/` for the protocol implementations. The split and the
-direction of dependencies are authoritative in
+A single Cargo workspace, whose members are `crates/*` (the core, the Tauri
+application and its binary) and `drivers/*` (the protocol implementations), and
+the front end of the application in `apps/desktop`. The split and the direction
+of dependencies are authoritative in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Download
+
+Packages are attached to the
+[GitHub releases](https://github.com/so-keyldzn/oxyn/releases): a DMG for Apple
+Silicon macOS (13 or later), and a DEB, an RPM and an AppImage for x86_64 and
+ARM64 Linux. Intel macOS and Windows are not built
+([docs/RELEASE.md](docs/RELEASE.md)).
 
 ## Building
 
-Prerequisites: macOS 13 or later, `python3`, and nothing else — the Rust
-toolchain is pinned by `rust-toolchain.toml` and rustup installs it by itself on
-the first `cargo` ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)).
+The application is Tauri 2 with a front end in `apps/desktop`
+([ADR-0029](docs/adr/0029-interface-tauri-shadcn.md)). Prerequisites:
+
+- **Rust**: the toolchain is pinned by `rust-toolchain.toml` and rustup installs
+  it on the first `cargo`
+  ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)).
+- **Node 22**: the version CI uses; the front end accepts `^20.19.0` or
+  `>=22.12.0`.
+- **pnpm**, at the version of the `packageManager` field of
+  [apps/desktop/package.json](apps/desktop/package.json). The Makefile stops
+  with a message if `pnpm` is missing, and installs the front-end dependencies
+  itself (`pnpm install --frozen-lockfile`).
+- **Linux only**, the system libraries CI installs before building:
+  `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev
+  libayatana-appindicator3-dev librsvg2-dev` (Debian and Ubuntu names, from the
+  Tauri prerequisites recorded in [RESEARCH-NOTES](docs/RESEARCH-NOTES.md)).
+- **macOS only**, the Xcode Command Line Tools (`xcode-select --install`) — or
+  Xcode — which the Tauri host needs to compile; the macOS CI image already has
+  them, so only a fresh machine shows the omission (Tauri prerequisites recorded
+  in [RESEARCH-NOTES](docs/RESEARCH-NOTES.md)).
+- **`python3`**, for `make desktop PROFIL=release` and for the quality gate.
 
 ```sh
-make app      # assembles target/debug/Oxyn.app
-make lancer   # assembles then opens the application
+make desktop-dev              # the application with hot reload, on a temporary workspace
+make desktop                  # a debug build, without a bundle
+make desktop PROFIL=release   # the optimized build and its packages
 ```
 
-`PROFIL=release` produces the optimized bundle. The `.app` bundle is not a
-release step: without it, macOS treats the binary as an accessory — no Dock, no
-activation, no correct keyboard focus.
+`make desktop PROFIL=release` regenerates the third-party notices the
+application ships, and refuses to build without `cargo-about` installed. The
+packages land in `target/release/bundle`. The release workflow
+([.github/workflows/livraison.yml](.github/workflows/livraison.yml)) runs that
+same target, then signs and notarizes the macOS packages
+([docs/RELEASE.md](docs/RELEASE.md)).
 
 ## The quality gate
 
@@ -63,8 +94,10 @@ It is the **only** entry point: CI calls its targets in parallel jobs
 reminds of it, the definition of "done" rests on it. A check added elsewhere is
 an optional check.
 
-It chains: consistency of the steering foundation, dated `TODO`s, format,
-clippy, tests, documentation. `make aide` lists the other targets.
+It chains: consistency of the steering foundation, dated `TODO`s, pinned
+versions, the front end (npm licenses and advisories, format, lint, types, the
+stories, the build), then the Rust (format, clippy, tests, documentation,
+dependency licenses and advisories). `make aide` lists the other targets.
 
 ## Where the truth lives
 
