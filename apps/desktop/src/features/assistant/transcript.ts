@@ -978,4 +978,8 @@ export const MEMORY_RESET_LINES: Record<MemoryReset, string> = {
     "An approved sample served one question only: the assistant answers this one without the exchanges around it.",
   restarted:
     "This conversation was reopened from the workspace. What the assistant was told is not kept, so it starts over from here.",
+  historyTooLong:
+    "This conversation has grown too long to send to the model again: the assistant starts over from here, without the earlier answers. A new conversation keeps it short.",
+  historyRefused:
+    "The model refused the previous question as too long, with this conversation's earlier exchanges: the assistant starts over from here, without them. A new conversation keeps it short.",
 }

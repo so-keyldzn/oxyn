@@ -41,6 +41,7 @@ use oxyn_exec::Outcome;
 
 use crate::backend::Backend;
 use crate::backend::confirm::{self, HostAnswer};
+use crate::backend::windows::open_elsewhere;
 use crate::credentials::KeyringCredentials;
 use crate::ipc::settings::{ConnectionChange, ConnectionDetails, ConnectionEdit};
 use crate::ipc::{IpcError, SavedConnection};
@@ -190,6 +191,10 @@ impl Backend {
         connection: ConnectionId,
     ) -> Result<ConnectionChange, IpcError> {
         let _serial = self.inner.settings.decisions.lock().await;
+        // Under the lock, as an approved deletion checks again: a window
+        // that opened the connection since this command was sent is seen,
+        // and until the deletion has run no window starts opening it.
+        let _deleting = self.inner.windows.begin_deletion(id, connection)?;
         let config = self.read_config(connection).await?;
         let inner = &self.inner;
         let cancel = self.track(id)?;
@@ -321,6 +326,24 @@ impl Backend {
                 pending.origin().name
             )));
         }
+        // The dialog may stay open minutes, and another window may open the
+        // connection meanwhile: `DeleteConnection` would close its sessions
+        // under its consoles, transactions included (ADR-0043). Checked under
+        // the lock and just before the approval, like the configuration, and
+        // marked with the check: until the deletion has run, no window starts
+        // opening the connection.
+        let _deleting = match &pending {
+            PendingChange::Delete { .. } => {
+                match inner.windows.begin_deletion(command, connection) {
+                    Ok(deleting) => Some(deleting),
+                    Err(refusal) => {
+                        inner.executor.reject(command);
+                        return Err(refusal);
+                    }
+                }
+            }
+            PendingChange::Update { .. } => None,
+        };
         let outcome = inner.executor.approve("human", command, &cancel).await?;
         match (outcome, pending) {
             (
@@ -335,6 +358,29 @@ impl Backend {
             }
             (Outcome::Denied { reason, .. }, _) => Err(IpcError::invalid(reason)),
             _ => Err(IpcError::invalid("The connection was not changed")),
+        }
+    }
+
+    /// Refuses deleting `connection` while a window other than the one that
+    /// sent `command` holds it, or a window is opening it: its consoles would
+    /// lose the configuration they run on (ADR-0043).
+    ///
+    /// Not conclusive: it only spares a dialog that would be refused. The
+    /// deletion itself checks again with `begin_deletion`, which marks the
+    /// connection under the same lock, so that no opening starts between that
+    /// check and the deletion.
+    ///
+    /// # Errors
+    /// Another window holds the connection, or a window is opening it.
+    pub(crate) fn refuse_if_held_elsewhere(
+        &self,
+        command: CommandId,
+        connection: ConnectionId,
+    ) -> Result<(), IpcError> {
+        if self.inner.windows.held_elsewhere(command, connection) {
+            Err(open_elsewhere())
+        } else {
+            Ok(())
         }
     }
 

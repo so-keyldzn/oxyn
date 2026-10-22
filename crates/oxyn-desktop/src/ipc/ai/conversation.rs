@@ -568,6 +568,14 @@ pub enum MemoryReset {
     /// model was told is not written — the store keeps no tool arguments and
     /// no results — so the conversation starts again from a fresh context.
     Restarted,
+    /// The remembered session grew past the share of the model's context
+    /// window it may fill: sending it again would cost the whole thread at
+    /// every question, then be refused once the window is full.
+    HistoryTooLong,
+    /// The provider refused the previous question, which carried the
+    /// remembered session, as longer than the model's context window:
+    /// sending it again would be refused the same way.
+    HistoryRefused,
 }
 
 /// An amount and its ISO 4217 currency, as the agent gives them.

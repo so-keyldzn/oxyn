@@ -18,6 +18,17 @@ the values of this file and reports the gaps. It changes nothing: deciding on
 a version bump is a human's call. The `/versions` command does the same while
 explaining the gaps.
 
+## PostgreSQL-compatible session reset — check of 2026-10-22
+
+Amazon Redshift documents `RESET ALL` as resetting all runtime parameters,
+including session context variables. Its [`SET SESSION AUTHORIZATION` page](https://docs.aws.amazon.com/redshift/latest/dg/r_SET_SESSION_AUTHORIZATION.html)
+documents `SET ... DEFAULT` but requires a database superuser for the command;
+it does not document `RESET SESSION AUTHORIZATION`. The PostgreSQL driver's
+Redshift flavor therefore sends only the documented unprivileged reset,
+`RESET ALL`, after a writable execution; PostgreSQL keeps its fuller reset
+sequence. Source: [Amazon Redshift RESET](https://docs.aws.amazon.com/redshift/latest/dg/r_RESET.html),
+read on 2026-10-22.
+
 
 ## AI transport confinement — 2026-10-03
 
@@ -287,9 +298,11 @@ tag: a tag moves, a SHA does not.
 | The macOS binary of the same release (`cargo-tauri-aarch64-apple-darwin.zip`, SHA-256 `ee35ee364a0c626df7852d9a5bc0c5394b6440772e9864cfb9b11dcb8d33f527`) prints `tauri-cli 2.12.1`. `script/livraison signer` run with it as `$TAURI` and a throwaway key from `cargo-tauri signer generate` wrote a `.sig` whose trusted comment is `timestamp:…\tfile:…\tversion:0.0.10`; `minisign -V` 0.12, from the macOS archive of its release, accepted it and refused the archive once one byte was appended. The Linux binary was not run: no Linux machine was used | run by hand, throwaway key and file | 2026-10-22 |
 | Node required by the front end | vite 8.3.0: `^20.19.0 \|\| >=22.12.0`; vitest 4.1.11: `^20.0.0 \|\| ^22.0.0 \|\| >=24.0.0`; CI takes the 22 line, the dev machine's (22.23.2) | `engines` field of the installed packages | 2026-09-24 |
 | Tauri system libraries on Debian/Ubuntu | `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` | `tauri-apps/tauri-docs`, branch `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` of 2026-08-20 | 2026-09-24 |
+| Tauri system dependency on macOS for desktop-only development | Xcode, or the Xcode Command Line Tools (`xcode-select --install`) when not targeting iOS | `tauri-apps/tauri-docs`, branch `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` of 2026-08-20 (section "macOS") | 2026-10-22 |
 | GitHub-hosted runner `ubuntu-24.04-arm`: standard runner, listed for public and private repositories, 4 CPUs and 16 GB of RAM on a public repository; "Use of the standard GitHub-hosted runners is free and unlimited on public repositories". `RUNNER_ARCH` is `ARM64` there. `livraison.yml` builds the ARM64 Linux packages natively on it — no cross toolchain, no multiarch WebKitGTK sysroot, no QEMU — and the Tauri bundler's AppImage tooling runs as on x86_64 | [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners); proven by run `37246283509` of the temporary `essai-linux-arm64` workflow (PR branch `linux-arm64-release`) | 2026-10-04 |
 | `keyring` 4.2.0 on Linux goes through `zbus-secret-service-keyring-store` and `secret-service` 5.2.0: pure Rust, without `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
 | `cargo-nextest` CI binary | `0.9.146`; `universal-apple-darwin` SHA-256 `39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8`; `x86_64-unknown-linux-gnu` SHA-256 `682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428` | [nextest release cargo-nextest-0.9.146](https://github.com/nextest-rs/nextest/releases/tag/cargo-nextest-0.9.146) and its `.sha256` assets | 2026-10-03 |
+| Server integration CI images | Docker Official Images `postgres:17` and `mysql:8.4`, the major/minor tags used by the PostgreSQL and MySQL integration-test headers. On this check, the tags resolve to PostgreSQL 17.11 and MySQL 8.4.11; the production-read companion starts the same PostgreSQL tag with an ephemeral, job-local TLS certificate. | [PostgreSQL Docker Hub tags](https://hub.docker.com/_/postgres/tags?name=17.&page=1); [MySQL Docker Hub tags](https://hub.docker.com/_/mysql/tags?name=8.&page=1) | 2026-10-22 |
 | `cargo-deny` CI binary | `0.20.2`; `aarch64-apple-darwin` SHA-256 `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3`; `x86_64-unknown-linux-musl` SHA-256 `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` | [cargo-deny release 0.20.2](https://github.com/EmbarkStudios/cargo-deny/releases/tag/0.20.2) and its `.sha256` assets | 2026-10-03 |
 | CI failed at every push since at least 2026-09-21, in about twenty seconds: pnpm missing from the runner, `make qualite` stopped before the front end | log of run `36034960589` | 2026-09-24 |
 | None of the runs of the gate had saved a Cargo cache: all of them failed, and the step "Post Restaurer le cache Cargo" was `skipped`. Only the pnpm caches existed. On Linux, the stories took 275 s (1045 tests) before the failure | runs `36037137682` and `36036585873`, `GET /actions/caches` | 2026-09-24 |
@@ -1660,6 +1673,39 @@ for which replaying fails until the next month. Oxyn never replays on its own
 (I-13): this header is therefore not read yet, and noting it here keeps anyone
 from believing it is handled.
 
+### Context window overflow — reading of 2026-10-22
+
+What a provider does with a request larger than the model's context window,
+read for the bound on a remembered session (#271):
+
+| Provider | What it documents | Source |
+|---|---|---|
+| Anthropic | "Everything in the request counts toward the context window": the system prompt, every message with its tool results, **the tool definitions**, and the output it generates. An input that alone exceeds the window gets a `400 invalid_request_error` ("prompt is too long") on every model; from Claude 4.5, an input that fits but leaves too little room stops the generation with `model_context_window_exceeded` | [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows), § "How the context window works" and "Context window overflow behavior" |
+| Anthropic | The error type is **not** specific: `invalid_request_error` is every `400` — "an issue with the format or content of your request", a spend limit, a refused prefill, a thinking setting. Errors have the shape `{"type":"error","error":{"type":…,"message":…}}`; `402` is `billing_error` | [Errors](https://platform.claude.com/docs/en/api/errors), § "HTTP errors" and "Error shapes" |
+| OpenAI | **nothing**: the error-codes page lists no context-length code or type; a `400` is a request "malformed or missing some required parameters". A `context_length_exceeded` code circulates in forum reports only | [Error codes](https://developers.openai.com/api/docs/guides/error-codes) |
+| Gemini | **nothing**: no code of the error table names an input over the window; `400 invalid_request` is "malformed or contains invalid parameters", `400 failed_precondition` a prerequisite such as billing, `402 payment_required` depleted Prepay credit, and the troubleshooting page says not to retry a `400`, `402` or `403` | [API errors](https://ai.google.dev/gemini-api/docs/api-errors), § "Standard API error codes"; [Troubleshooting](https://ai.google.dev/gemini-api/docs/troubleshooting) |
+
+All four pages read on 2026-10-22.
+
+Consequences in Oxyn. No provider documents a field of its own for the
+overflow, so a status family cannot stand for it: a `400` or a `402` is just as
+often a parameter or the credit, which a fresh context does not fix. Only
+Anthropic's documented refusal becomes `OxynError::ContextTooLong` — a `400`
+whose `error.type` is `invalid_request_error` **and** whose `error.message`
+starts with "prompt is too long". The phrase is the documented one, read at the
+start of the message only; if Anthropic rewords it, the refusal reads as an
+ordinary one, which drops nothing. That refusal alone drops a remembered
+session. **The gap that remains**: an overflow OpenAI, Gemini or an
+OpenAI-compatible server refuses in its own words keeps the session, and the
+same follow-up is refused again until the user starts a new conversation — the
+failure says so.
+
+The bound before sending is therefore the protection: a remembered session
+may fill **half** of the window the model's listing declares
+(`ModelInfo::context_window`), the tool definitions it offers counted with it,
+since the window also holds the next question, its tool results and the
+answer.
+
 ### Reasoning: two distinct settings
 
 This is the point that gets missed, because the two names look alike and do
@@ -2399,6 +2445,31 @@ Sources: the installed crates.io registry source, and PostgreSQL **18**
 2026-10-03. PostgreSQL executes `PROGRAM` on the database server and resolves
 file paths there; `STDOUT` transfers data through the client connection.
 No live database was used for this verification.
+
+## PostgreSQL EXPLAIN options and classification — checked 2026-10-22
+
+PostgreSQL **18** (documentation 18.6,
+[`EXPLAIN`](https://www.postgresql.org/docs/18/sql-explain.html)) lists twelve
+parenthesized options: `ANALYZE`, `VERBOSE`, `COSTS`, `SETTINGS`,
+`GENERIC_PLAN`, `BUFFERS`, `SERIALIZE`, `WAL`, `TIMING`, `SUMMARY`, `MEMORY`,
+`FORMAT`. Only `ANALYZE` runs the statement; `SERIALIZE`, `WAL` and `TIMING`
+are refused without it, and `GENERIC_PLAN` is refused with it. The grammar
+(`src/backend/parser/gram.y`, branch `REL_18_STABLE`, rules `analyze_keyword`
+and `utility_option_name`) accepts `ANALYSE` as well as `ANALYZE`, in the
+option list and in the legacy `EXPLAIN ANALYSE statement` form, and gives
+both the option name `analyze`; any other non-reserved word is passed on as
+an option name.
+
+`sqlparser` **0.62.0** has no `ANALYSE` keyword (`src/keywords.rs`): in the
+parenthesized form it is a `UtilityOption` named `ANALYSE`, and the legacy
+form does not parse. The classification therefore keeps `Read` only for the
+eleven options that shape the plan, and gives any other option the explained
+statement's intent (issue #246).
+
+The [`COPY`](https://www.postgresql.org/docs/18/sql-copy.html) page, read the
+same day: its `query` may be a `SELECT`, `VALUES`, `INSERT`, `UPDATE`,
+`DELETE` or `MERGE`, the last four with a `RETURNING` clause — a `COPY (…) TO
+STDOUT` can therefore write. No live database was used for this verification.
 
 ## SQL password literals before persistence
 

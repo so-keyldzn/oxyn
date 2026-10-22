@@ -278,6 +278,25 @@ impl ModelLists {
         })
     }
 
+    /// The context window `model` declared in the last list `config`'s
+    /// endpoint gave, however old — `None` if none was listed or it declared
+    /// none.
+    ///
+    /// Read from memory only: a question does not pay a listing round trip to
+    /// bound its own memory. Past [`LIST_TTL`] is fine here: a model's window
+    /// does not change between two listings, and a stale one only moves when
+    /// a conversation starts over.
+    pub(crate) fn context_window(&self, config: &AiProviderConfig, model: &str) -> Option<u32> {
+        let key = ListKey::of(config.kind, &endpoint(config).ok()?);
+        self.entries
+            .lock()
+            .get(&key)?
+            .models
+            .iter()
+            .find(|choice| choice.id == model)?
+            .context_window
+    }
+
     fn put(&self, key: ListKey, models: Vec<ModelChoice>, fetched_at_ms: u64, now: Instant) {
         let mut entries = self.entries.lock();
         entries.retain(|_, listed| now.saturating_duration_since(listed.at) < LIST_TTL);

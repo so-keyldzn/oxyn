@@ -268,6 +268,23 @@ preceded by any other statement keeps the bound.
 console, where the function inserts a row: the write went out without
 confirmation, classified as a read.
 
+A connection **marked read-only** is held to the same bound, whatever its
+environment. The `PolicyGate` refuses every command classified as mutating
+there, human included; what the text hides — the same `SELECT` of a writing
+function, a view over one — is left to the server: `oxyn-exec` bounds every
+execution classified as a read to read-only, with the same exception for bare
+transaction verbs, and re-applies the bound when an approval is given. The
+marking it bounds on is the more restrictive of the executor's and the
+`PolicyGate`'s. The read-only marking is therefore enforced **by the server**
+on every driver declaring `READ_ONLY_SESSION` — PostgreSQL and MySQL through a
+read-only transaction or session, SQLite by opening the file read-only — and
+by the classification alone on a driver that does not declare it.
+
+**Concrete failure:** a shared staging connection marked read-only, where the
+gate refused `UPDATE` but let `SELECT public.audit_touch()` through as a read,
+in a read-write transaction: the marking meant "refused" on SQLite and
+"written" on PostgreSQL.
+
 For an `Actor::Agent`, a `production` connection is **strictly
 read-only** — it is not a stronger confirmation, it is a refusal
 ([ADR-0004](adr/0004-command-bus.md#default-policy)). The difference
@@ -629,7 +646,9 @@ what will keep it valid.
 - an unmaintained crate on an external boundary is a risk to document,
   not to ignore;
 - a dismissed security advisory is dismissed **in `deny.toml`, with its written reason**.
-  The only one today is RUSTSEC-2024-0429 — an *unsoundness* in
+  The current entries are RUSTSEC-2024-0429, RUSTSEC-2024-0436,
+  RUSTSEC-2024-0370, RUSTSEC-2026-0370, RUSTSEC-2026-0371 and
+  RUSTSEC-2026-0372. RUSTSEC-2024-0429 is an *unsoundness* in
   `glib::VariantStrIter`, reached through `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
   The fix is in `glib 0.20`, which `gtk 0.18` refuses: nothing can be upgraded
   here until Tauri changes GTK. The Linux packages (x86_64 and aarch64: deb,
@@ -646,7 +665,12 @@ what will keep it valid.
   Checked on 2026-10-20 ([I-12](../CLAUDE.md#i-12)). The check is redone at
   every bump of `tauri`, `gtk`, `wry`, `muda`, `tao` or `webkit2gtk`, since a
   new release could add a caller; the entry is dropped once the chain reaches
-  `glib` 0.20 or later. `deny.toml` holds the command, next to the entry.
+  `glib` 0.20 or later. `deny.toml` holds the command, next to the entry. The
+  other current entries are unmaintained transitive crates: `paste` through the
+  local embeddings stack, `proc-macro-error` through GTK 3, and `zbus_names`,
+  `zvariant` and `zvariant_derive` through zbus 5. Each advisory declares no
+  safe upgrade; their replacements require upstream major-version migrations.
+  They are re-evaluated when the corresponding upstream dependency changes.
 
 See also [`/securite`](../.claude/commands/securite.md) and
 [the checklist](../.claude/checklists/revue-securite.md).

@@ -76,8 +76,9 @@ use crate::cancel::{BackendCanceller, StatementRegistry, Verdict, VerdictSender}
 use crate::decode::BatchAssembler;
 use crate::error::{Bound, INTERRUPTED_BUT_KEPT_MESSAGE, is_query_canceled, map_stream_error};
 use crate::lease::Lease;
-use crate::session::{SQL_RESET_AFTER_WRITE, SQL_RESET_SEARCH_PATH, SQL_ROLLBACK};
+use crate::session::{SQL_RESET_SEARCH_PATH, SQL_ROLLBACK, reset_after_write};
 use crate::types::{META_FALLBACK, META_PG_TYPE, PgDecoding};
+use crate::variant::PostgresFlavor;
 
 /// Accumulated bytes beyond which a batch is closed and emitted.
 ///
@@ -399,6 +400,8 @@ impl PostgresCursor {
 pub(crate) struct StreamRequest {
     /// The driver, to classify errors.
     pub(crate) driver: DriverId,
+    /// The server flavor, which limits the session reset syntax.
+    pub(crate) flavor: PostgresFlavor,
     /// The connection that will carry the execution, borrowed from the pool and
     /// already marked dirty: it goes back only if the task resets it to the
     /// default.
@@ -559,6 +562,7 @@ async fn run(
 ) {
     let StreamRequest {
         driver,
+        flavor,
         mut connection,
         source,
         bound,
@@ -810,7 +814,7 @@ async fn run(
             // another connection. A console's schema goes through its session
             // context (ADR-0019), which this reset undoes too.
             pendings.push((
-                SQL_RESET_AFTER_WRITE,
+                reset_after_write(flavor),
                 "the session state could not be reset after a write",
             ));
         }

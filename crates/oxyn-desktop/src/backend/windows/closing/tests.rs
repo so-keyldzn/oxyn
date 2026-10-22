@@ -151,11 +151,13 @@ fn bench_on(environment: Environment, left_answers: bool, right_answers: bool) -
         backend
             .inner
             .windows
-            .claim_session(key, connection, catalog);
+            .claim_session(key, connection, catalog)
+            .expect("an open window");
         backend
             .inner
             .windows
-            .claim_session(key, connection, console);
+            .claim_session(key, connection, console)
+            .expect("an open window");
         Pane {
             key,
             catalog,

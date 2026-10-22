@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="67354e55fc13" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="2f2512dfd6b4" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -289,6 +289,25 @@ instruction garde la borne.
 **Panne concrète :** `SELECT public.audit_touch()` dans une console de
 production, où la fonction insère une ligne : l'écriture partait sans
 confirmation, classée comme une lecture.
+
+Une connexion **marquée en lecture seule** est tenue à la même borne, quel que
+soit son environnement. Le `PolicyGate` y refuse toute commande classée
+mutante, humain compris ; ce que le texte cache — le même `SELECT` d'une
+fonction qui écrit, une vue qui en appelle une — est laissé au serveur :
+`oxyn-exec` borne en lecture seule toute exécution classée comme une lecture,
+avec la même exception pour les verbes de transaction nus, et réapplique la
+borne quand une approbation est donnée. Le marquage sur lequel il borne est le
+plus restrictif de celui de l'exécuteur et de celui du `PolicyGate`. Le
+marquage lecture seule est donc imposé **par le serveur** sur tout driver qui
+déclare `READ_ONLY_SESSION` — PostgreSQL et MySQL par une transaction ou une
+session en lecture seule, SQLite en ouvrant le fichier en lecture seule — et
+par la seule classification sur un driver qui ne la déclare pas.
+
+**Panne concrète :** une connexion de staging partagée, marquée en lecture
+seule, où le gate refusait `UPDATE` mais laissait passer
+`SELECT public.audit_touch()` comme une lecture, dans une transaction en
+lecture-écriture : le marquage voulait dire « refusé » sous SQLite et « écrit »
+sous PostgreSQL.
 
 Pour un `Actor::Agent`, une connexion `production` est en **lecture seule
 stricte** — ce n'est pas une confirmation renforcée, c'est un refus
@@ -672,7 +691,9 @@ ce qui le maintiendra valide.
 - une crate non maintenue sur une frontière externe est un risque à documenter,
   pas à ignorer ;
 - un avis de sécurité écarté l'est **dans `deny.toml`, avec sa raison écrite**.
-  Le seul aujourd'hui est RUSTSEC-2024-0429 — une *unsoundness* de
+  Les entrées actuelles sont RUSTSEC-2024-0429, RUSTSEC-2024-0436,
+  RUSTSEC-2024-0370, RUSTSEC-2026-0370, RUSTSEC-2026-0371 et
+  RUSTSEC-2026-0372. RUSTSEC-2024-0429 est une *unsoundness* de
   `glib::VariantStrIter`, atteinte par `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
   La correction est dans `glib 0.20`, que `gtk 0.18` refuse : rien ne se monte
   ici tant que Tauri n'a pas changé de GTK. Les paquets Linux (x86_64 et
@@ -691,7 +712,13 @@ ce qui le maintiendra valide.
   montée de `tauri`, `gtk`, `wry`, `muda`, `tao` ou `webkit2gtk`, puisqu'une
   nouvelle version pourrait ajouter un appelant ; l'entrée est retirée dès que
   la chaîne atteint `glib` 0.20 ou plus. `deny.toml` porte la commande, à côté
-  de l'entrée.
+  de l'entrée. Les autres entrées actuelles sont des crates transitives non
+  maintenues : `paste` via la pile d'embeddings locale,
+  `proc-macro-error` via GTK 3, et `zbus_names`, `zvariant` et
+  `zvariant_derive` via zbus 5. Chaque avis indique qu'aucune mise à jour sûre
+  n'est disponible ; leurs remplacements nécessitent des migrations majeures
+  en amont. Elles sont réévaluées quand la dépendance amont correspondante
+  change.
 
 Voir aussi [`/securite`](../claude/commands/securite.md) et
 [la liste de contrôle](../claude/checklists/revue-securite.md).

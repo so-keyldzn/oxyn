@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="914f8ab1ee80" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="b1fe2c3935b5" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1228,6 +1228,25 @@ Le sélecteur est inerte pendant qu'une réponse s'écrit. Changer de destinatio
 entre deux questions ne transmet pas les échanges précédents : le panneau le dit
 par une ligne (`destinationChanged`), puisque les réponses antérieures n'étaient
 pas celles du nouveau destinataire.
+
+Une question de suite adressée à un fournisseur renvoie la session mémorisée,
+entière, avec les définitions des outils qu'elle offre. Elle est bornée :
+au-delà de **la moitié de la fenêtre de contexte** que déclare la liste des
+modèles — 30 000 jetons estimés quand elle n'en déclare aucune —, la question
+suivante repart d'un contexte neuf, avec une ligne qui le dit et qui indique
+qu'une nouvelle conversation garde le fil court (`historyTooLong`). Cette borne
+est la protection ; le refus qui suit ne rattrape que ce qu'elle a manqué. Une
+question que le fournisseur refuse **comme plus longue que la fenêtre de
+contexte du modèle**, alors qu'elle portait cette session, l'abandonne : l'échec
+dit que la question suivante repart d'un contexte neuf, et la question suivante
+— reposée ou de suite — le fait, avec sa ligne (`historyRefused`). Seul compte
+un refus que le fournisseur marque comme tel, et seul Anthropic en documente un
+([RESEARCH-NOTES](RESEARCH-NOTES.md#dépassement-de-la-fenêtre-de-contexte--relevé-le-2026-10-22)) :
+tout autre refus — un paramètre invalide, un crédit épuisé, ou un dépassement
+qu'un autre fournisseur refuse dans ses propres mots — garde la session, et son
+échec le dit, ainsi qu'une nouvelle conversation corrige un dépassement. Dans
+tous les cas, la transcription garde tous les échanges ; seul ce qui est renvoyé
+change.
 
 Un agent choisi est accompagné de deux mentions permanentes : « Oxyn ne voit pas
 où il envoie la question », et, pour un agent qu'Oxyn ne confine pas, qu'il

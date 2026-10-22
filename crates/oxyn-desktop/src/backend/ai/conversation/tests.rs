@@ -767,6 +767,7 @@ fn linked(
         tier: PrivacyTier::Sampled,
         leaf: None,
         session: Arc::new(session),
+        service: None,
         tools: ToolTurns::new(8, Arc::new(|| false)),
         actor: (AgentId::new(), AgentSessionId::new()),
         _requests: WithdrawOnRelease::new(
@@ -864,7 +865,11 @@ fn closing_the_connection_releases_its_agents() {
     let (thread, _driver) = linked(&backend, connection);
     // The last window that holds the connection lets it go (ADR-0043).
     let window = backend.reserve_window(true).expect("a window");
-    backend.inner.windows.hold_connection(window, connection);
+    backend
+        .inner
+        .windows
+        .hold_connection(window, connection)
+        .expect("an open window");
 
     runtime
         .block_on(backend.release_connection(window, connection))
@@ -1196,6 +1201,7 @@ fn an_agents_settings_reach_the_panel_between_two_questions() {
         tier: PrivacyTier::Sampled,
         leaf: Some(node),
         session: Arc::clone(&session),
+        service: None,
         tools: ToolTurns::new(8, Arc::new(|| false)),
         actor: (AgentId::new(), AgentSessionId::new()),
         _requests: WithdrawOnRelease::new(
@@ -1667,6 +1673,56 @@ mod approved_samples {
             .join("\n")
     }
 
+    /// Replaces fresh fence nonces after proving that every fence is complete.
+    /// Separate contexts, and separate prompt builds, must not share a nonce.
+    pub(super) fn normalize_fence_nonce(prompt: &str) -> String {
+        const OPEN_PREFIX: &str = "<untrusted-database-content-";
+        const CLOSE_PREFIX: &str = "</untrusted-database-content-";
+        let mut remaining = prompt;
+        let mut normalized = String::with_capacity(prompt.len());
+        let mut fences = std::collections::BTreeMap::<&str, (usize, usize)>::new();
+
+        while let Some((start, prefix, opening)) =
+            match (remaining.find(OPEN_PREFIX), remaining.find(CLOSE_PREFIX)) {
+                (Some(open), Some(close)) if open < close => Some((open, OPEN_PREFIX, true)),
+                (Some(_), Some(close)) => Some((close, CLOSE_PREFIX, false)),
+                (Some(open), None) => Some((open, OPEN_PREFIX, true)),
+                (None, Some(close)) => Some((close, CLOSE_PREFIX, false)),
+                (None, None) => None,
+            }
+        {
+            normalized.push_str(remaining.get(..start).expect("text before a fence"));
+            let after_prefix = remaining
+                .get(start + prefix.len()..)
+                .expect("text after a fence prefix");
+            let nonce_end = after_prefix.find('>').expect("a fence terminator");
+            let nonce = after_prefix.get(..nonce_end).expect("a fence nonce");
+            assert!(!nonce.is_empty(), "a fence nonce is present");
+
+            let counts = fences.entry(nonce).or_default();
+            if opening {
+                counts.0 += 1;
+            } else {
+                counts.1 += 1;
+            }
+            normalized.push_str(prefix);
+            normalized.push_str("<nonce>>");
+            remaining = after_prefix
+                .get(nonce_end + 1..)
+                .expect("text after a complete fence");
+        }
+        normalized.push_str(remaining);
+
+        assert!(!fences.is_empty(), "a prompt contains a fence: {prompt}");
+        for (nonce, (opens, closes)) in fences {
+            assert_eq!(
+                opens, closes,
+                "every opening fence for {nonce:?} has the matching closing fence: {prompt}"
+            );
+        }
+        normalized
+    }
+
     #[test]
     fn an_offer_names_columns_and_a_bound_never_a_value() {
         let fixture = fixture();
@@ -1846,6 +1902,7 @@ mod approved_samples {
                 None,
                 PrivacyTier::Sampled,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         remembered.ask("EARLIER-EXCHANGE-MARK");
@@ -1886,6 +1943,7 @@ mod approved_samples {
                 Some(sample.rows),
                 sample.tier,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&with_sample);
@@ -1915,6 +1973,7 @@ mod approved_samples {
                 None,
                 PrivacyTier::Sampled,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&after);
@@ -2127,6 +2186,7 @@ mod approved_samples {
                 Some(sample),
                 PrivacyTier::Metadata,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&dialogue);
@@ -2583,6 +2643,7 @@ mod approved_samples {
                 None,
                 PrivacyTier::Sampled,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&dialogue);
@@ -2706,6 +2767,7 @@ mod approved_samples {
                     tier: PrivacyTier::Sampled,
                     leaf: None,
                     session: Arc::new(session),
+                    service: None,
                     tools: ToolTurns::new(8, Arc::new(|| false)),
                     actor: (AgentId::new(), AgentSessionId::new()),
                     _requests: WithdrawOnRelease::new(
@@ -2948,7 +3010,11 @@ mod approved_samples {
             .expect("a text block")
             .to_owned();
 
-        assert_eq!(internal, external, "one path, one rendering");
+        assert_eq!(
+            normalize_fence_nonce(&internal),
+            normalize_fence_nonce(&external),
+            "one path, one rendering"
+        );
         for expected in [
             "status: completed",
             "query language: sql (dialect: sqlite)",
@@ -3039,6 +3105,10 @@ mod approved_samples {
     /// A sample of a relation whose columns were never read: Oxyn reads
     /// them, for the user's offer and for an agent's request alike.
     mod columns_on_demand;
+
+    /// #271: a remembered session past its ceiling, or refused by the
+    /// provider, is not sent again — on this fixture's connection.
+    mod memory_bound;
 }
 
 /// The conversation's agent, rendered for whoever answers (ADR-0049).

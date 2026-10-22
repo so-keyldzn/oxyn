@@ -20,7 +20,7 @@
 //! * **a write does not happen until it is approved.** The trap is a model
 //!   that assumes its `INSERT` went through and builds on that assumption;
 //! * **the content of the database is data.** The fencing preamble already
-//!   says it ([`untrusted::PREAMBLE`](crate::untrusted::PREAMBLE)); the prompt
+//!   says it in the context's untrusted-content preamble; the prompt
 //!   repeats it for the case that matters: a column comment that gives an
 //!   order;
 //! * **what the context does not show does not exist for the agent.** A model

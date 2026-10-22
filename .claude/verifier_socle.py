@@ -340,6 +340,54 @@ def check_dependency_graph() -> list[str]:
     return problems
 
 
+CONTRACT_CRATES = ("oxyn-core", "oxyn-catalog", "oxyn-data", "oxyn-driver")
+
+
+def contract_pin_errors(manifest: dict) -> list[str]:
+    """Keep publishable contract pins aligned with the workspace release."""
+    package = manifest.get("workspace", {}).get("package", {})
+    dependencies = manifest.get("workspace", {}).get("dependencies", {})
+    workspace_version = package.get("version") if isinstance(package, dict) else None
+    if not isinstance(workspace_version, str) or not workspace_version:
+        return ["Cargo.toml: [workspace.package].version is required for contract dependency pins"]
+    if not isinstance(dependencies, dict):
+        return ["Cargo.toml: [workspace.dependencies] is required for contract dependency pins"]
+
+    expected = f"={workspace_version}"
+    problems = []
+    for crate_name in CONTRACT_CRATES:
+        declaration = dependencies.get(crate_name)
+        version = declaration.get("version") if isinstance(declaration, dict) else None
+        if version != expected:
+            problems.append(
+                f"Cargo.toml: `{crate_name}` must pin version `{expected}` to match "
+                "[workspace.package].version"
+            )
+
+    for dependency_name, declaration in dependencies.items():
+        if not isinstance(declaration, dict) or not declaration.get("path"):
+            continue
+        version = declaration.get("version")
+        if isinstance(version, str) and version.startswith("=") and version != expected:
+            problems.append(
+                f"Cargo.toml: internal dependency `{dependency_name}` pins `{version}`, "
+                f"not workspace version `{expected}`"
+            )
+    return problems
+
+
+def check_contract_dependency_versions() -> list[str]:
+    """Reject a release whose Apache contract pins drift from its workspace version."""
+    root_manifest = REPO_ROOT / "Cargo.toml"
+    if not root_manifest.is_file():
+        return []
+    try:
+        manifest = tomllib.loads(root_manifest.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as err:
+        return [f"Cargo.toml: unreadable TOML — {err}"]
+    return contract_pin_errors(manifest)
+
+
 # `make qualite` and the CI workflow must say the same thing. CI calls the
 # gate's targets in pieces, in parallel jobs: a target added to `qualite`
 # without being added to the workflow would never run on a machine, and nothing
@@ -479,6 +527,34 @@ def check_ci_aggregate() -> list[str]:
     return aggregate_errors(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
 
 
+# A README that tells a visitor to run `make app` after the target was renamed
+# is the first thing they copy and the last thing anyone re-reads. Only the
+# command lines of fenced blocks count: prose may name a target without
+# promising that it runs.
+README = REPO_ROOT / "README.md"
+FENCE_PATTERN = re.compile(r"^\s*```")
+README_MAKE_PATTERN = re.compile(r"^\s*make\s+([A-Za-z][\w-]*)(?:\s|$)")
+
+
+def readme_make_errors(body: str, targets: set[str]) -> list[str]:
+    problems = []
+    in_fence = False
+    for line in body.splitlines():
+        if FENCE_PATTERN.match(line):
+            in_fence = not in_fence
+            continue
+        m = README_MAKE_PATTERN.match(line) if in_fence else None
+        if m and m.group(1) not in targets:
+            problems.append(f"README.md runs `make {m.group(1)}`, a target missing from the Makefile")
+    return problems
+
+
+def check_readme_make_targets() -> list[str]:
+    if not README.is_file() or not MAKEFILE.is_file():
+        return []
+    return readme_make_errors(README.read_text(encoding="utf-8"), set(_makefile_rules()))
+
+
 def dependency_tool_errors(body: str) -> list[str]:
     """Keep cargo-deny installed on every runner that executes make rust.
 
@@ -533,8 +609,10 @@ def main() -> int:
         + check_rules()
         + check_hooks()
         + check_dependency_graph()
+        + check_contract_dependency_versions()
         + check_ci_coverage()
         + check_ci_aggregate()
+        + check_readme_make_targets()
         + check_ci_dependency_tools()
         + check_translations()
     )

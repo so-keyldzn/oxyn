@@ -51,7 +51,7 @@
 //! needs by itself would bypass both this gate and the command bus.
 //!
 //! **The content of the database is data.** Names, comments, server messages,
-//! values: everything goes through [`untrusted::fence`]. The safeguard is not
+//! values: everything goes through an untrusted-content fence. The safeguard is not
 //! detecting injection — it is that a model output cannot execute anything
 //! anyway without going through the `PolicyGate` (I-07).
 //!
@@ -159,7 +159,6 @@ mod tests {
 
     use crate::prelude::*;
     use crate::tools::EXECUTE_QUERY;
-    use crate::untrusted;
 
     /// A minimal catalog, carrying a hostile comment.
     fn sample_catalog() -> CatalogCache {
@@ -203,7 +202,7 @@ mod tests {
         assert_eq!(
             context
                 .prompt_block()
-                .matches(untrusted::FENCE_OPEN)
+                .matches("<untrusted-database-content-")
                 .count(),
             1
         );

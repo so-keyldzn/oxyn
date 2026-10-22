@@ -137,6 +137,15 @@ Locally, [`make verif-rapide`](../../Makefile) applies the same idea to
 day-to-day work — only check what changed since `origin/main` — without
 changing what is conclusive: **`make qualite` remains the gate**.
 
+**Amendment (2026-10-22).** `make test-serveurs` is a target of `make qualite`
+and the Linux-only `serveurs` job runs it alongside `rust` when the Rust area is
+touched, against disposable PostgreSQL, TLS PostgreSQL and MySQL services. In
+CI, a missing nextest binary, an unset server URL or a skipped URL-dependent
+suite fails the target. Outside CI, when no server URL is configured, the
+target explicitly reports `server suites NOT run` and succeeds; setting any
+server URL is an intentional local server-suite run and keeps the CI failure
+semantics.
+
 ## Consequences
 
 * **+** a documentation PR launches neither Rust nor stories; a front-end PR

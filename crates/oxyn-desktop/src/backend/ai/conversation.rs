@@ -21,7 +21,9 @@ use async_trait::async_trait;
 use oxyn_ai::external::locate::SearchPath;
 use oxyn_ai::external::mcp::{TierSource, ToolService, ToolTurns};
 use oxyn_ai::external::prompt::{AgentInstructions, AgentPrompt};
-use oxyn_ai::external::session::{AgentReady, ExternalError, ExternalSession, ToolBridge};
+use oxyn_ai::external::session::{
+    AgentReady, ExternalError, ExternalSession, PromptStart, ToolBridge,
+};
 use oxyn_ai::external::turn::TurnEnd;
 use oxyn_ai::tools::SampleAsk;
 use oxyn_ai::{
@@ -32,7 +34,7 @@ use oxyn_core::ai::MAX_PROVIDER_MODEL_BYTES;
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, AiProviderConfig, CancelToken, Capabilities, Command,
     CommandId, ConnectionConfig, ConnectionId, Environment, ErrorClass, ExternalAgentConfig,
-    PrivacyTier, Provenance, QueryLanguage, SessionId,
+    OxynError, PrivacyTier, Provenance, QueryLanguage, SessionId,
 };
 use oxyn_exec::{DispatchReport, Executor, ExecutorSink};
 use oxyn_llm::Reach;
@@ -43,7 +45,7 @@ use super::agents;
 use super::catalog_fill::{CatalogFill, Filled, Want};
 use super::persistence;
 use super::samples::{self, Grant, Offer, Presented, Recipient, RecipientKind, SampleRefused};
-use super::threads::{AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRelease};
+use super::threads::{self, AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRelease};
 use super::{Backend, check_endpoint};
 use crate::backend::Inner;
 use crate::backend::confirm::text::{self as confirm_text, SampleDescription, SampleDestination};
@@ -1836,8 +1838,12 @@ impl Run<'_> {
     /// Completes the catalog, then assembles the provider conversation from it.
     ///
     /// The completion follows [`Self::prepare_dialogue`]'s own choice: a
-    /// remembered session under the same tier receives its mentions only, so
-    /// only they are read.
+    /// remembered session under the same tier, within `ceiling`, receives its
+    /// mentions only, so only they are read.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the question's parts, plus the bound of the memory it may continue"
+    )]
     async fn prepare(
         &self,
         agent: &oxyn_ai::AgentSpec,
@@ -1846,17 +1852,21 @@ impl Run<'_> {
         question: &str,
         sample: Option<oxyn_ai::context::RowSample>,
         tier: PrivacyTier,
+        ceiling: usize,
     ) -> Result<(AgentSession, Option<oxyn_ai::AgentContext>), Failure> {
         let follows = sample.is_none()
-            && self
-                .thread
-                .memory_from(self.parent)
-                .is_some_and(|memory| memory.tier == tier && memory.recipient == recipient);
+            && self.thread.memory_from(self.parent).is_some_and(|memory| {
+                memory.tier == tier
+                    && memory.recipient == recipient
+                    && memory.fits(ceiling, &offered_tools(agent))
+            });
         let ranking = Ranking::new(self.inner, question);
         let scores = self
             .complete_catalog(self.want(question, follows), ranking.as_ref())
             .await;
-        self.prepare_dialogue(agent, recipient, session, question, sample, tier, scores)
+        self.prepare_dialogue(
+            agent, recipient, session, question, sample, tier, scores, ceiling,
+        )
     }
 
     fn observer(&self) -> Observer {
@@ -2035,9 +2045,14 @@ impl Run<'_> {
     ///
     /// `semantic` is what the catalog fill ranked with: given to the gate,
     /// it selects what was described (ADR-0056).
+    ///
+    /// A remembered session larger than `ceiling` estimated tokens
+    /// ([`threads::memory_ceiling`]) is not continued: every follow-up would
+    /// send it whole again, until the model refuses it. The question starts
+    /// from a fresh context and says so; the transcript keeps every exchange.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the question's parts, plus the scores its catalog fill computed"
+        reason = "the question's parts, plus the scores its catalog fill computed and the memory's bound"
     )]
     fn prepare_dialogue(
         &self,
@@ -2048,6 +2063,7 @@ impl Run<'_> {
         sample: Option<oxyn_ai::context::RowSample>,
         tier: PrivacyTier,
         semantic: SemanticScores,
+        ceiling: usize,
     ) -> Result<(AgentSession, Option<oxyn_ai::AgentContext>), Failure> {
         let sampled = sample.is_some();
         if sampled {
@@ -2067,7 +2083,11 @@ impl Run<'_> {
             // The same recipient too: another protocol reads another
             // recipient fragment, and a history is not put under a prompt it
             // was not written with (ADR-0049 § 6).
-            Some(memory) if memory.tier == tier && memory.recipient == recipient => {
+            Some(memory)
+                if memory.tier == tier
+                    && memory.recipient == recipient
+                    && memory.fits(ceiling, &offered_tools(agent)) =>
+            {
                 let mut dialogue = memory.session;
                 if mentions.is_empty() {
                     dialogue.ask(question);
@@ -2096,10 +2116,12 @@ impl Run<'_> {
             other => {
                 if let Some(memory) = other {
                     self.emit(AiEvent::MemoryReset {
-                        reason: if memory.tier == tier {
+                        reason: if memory.tier != tier {
+                            MemoryReset::TierChanged
+                        } else if memory.recipient != recipient {
                             MemoryReset::DestinationChanged
                         } else {
-                            MemoryReset::TierChanged
+                            MemoryReset::HistoryTooLong
                         },
                     });
                 } else if self.parent.is_some()
@@ -2107,6 +2129,10 @@ impl Run<'_> {
                 {
                     self.emit(AiEvent::MemoryReset {
                         reason: MemoryReset::SampleNotKept,
+                    });
+                } else if self.thread.memory_outgrown(self.parent) {
+                    self.emit(AiEvent::MemoryReset {
+                        reason: MemoryReset::HistoryRefused,
                     });
                 } else if self.thread.memory_restored(self.parent) {
                     // Read back from the workspace: what the model was told is
@@ -2185,6 +2211,10 @@ impl Run<'_> {
         let recipient = agents::provider_recipient(&provider);
         let agent = agents::rendered(self.role, &self.target(recipient))
             .map_err(|message| Failure::new(message, FailureCategory::Setup))?;
+        // The window the model's listing declared, read from the lists the
+        // panel already fetched: bounding the memory costs no round trip.
+        let ceiling =
+            threads::memory_ceiling(self.inner.ai.model_lists.context_window(&provider, &model));
         // First, before anything can fail: a sampled exchange must be marked
         // as leaving no memory whatever happens next.
         let (mut dialogue, context) = self
@@ -2195,6 +2225,7 @@ impl Run<'_> {
                 &question,
                 sample.map(|sample| sample.rows),
                 tier,
+                ceiling,
             )
             .await?;
 
@@ -2321,9 +2352,30 @@ impl Run<'_> {
         let outcome = runtime
             .run(&mut dialogue, &sink, &self.observer(), self.cancel)
             .await
-            .map_err(|error| Failure {
-                class: class_of(&error),
-                ..Failure::new(error.to_string(), category_of(&error))
+            .map_err(|error| {
+                let mut failure = Failure {
+                    class: class_of(&error),
+                    ..Failure::new(error.to_string(), category_of(&error))
+                };
+                // Only a memory this question continued: a fresh context the
+                // provider refused would be refused the same way, memory or not.
+                match &error {
+                    AiError::Core(OxynError::ContextTooLong(_))
+                        if self.thread.outgrow_memory(self.parent, dialogue.id()) =>
+                    {
+                        failure.message = format!("{} {HISTORY_REFUSED}", failure.message);
+                    }
+                    // Any other refusal keeps the memory: an invalid parameter
+                    // or exhausted credit fails a fresh context too, and the
+                    // exchanges would be lost for nothing.
+                    AiError::Core(OxynError::Query(_))
+                        if self.thread.continues_memory(self.parent, dialogue.id()) =>
+                    {
+                        failure.message = format!("{} {HISTORY_KEPT}", failure.message);
+                    }
+                    _ => {}
+                }
+                failure
             })?;
         // Only an exchange that ends on the model's own message is a base to
         // follow: a refusal leaves the question unanswered, a cancel or a turn
@@ -2462,8 +2514,10 @@ impl Run<'_> {
         }
         .map_err(|error| Failure::new(error.to_string(), FailureCategory::Refused))?;
 
+        let opening = linked.is_none();
         let LinkedAgent {
             session,
+            service,
             tools,
             actor: (identity, conversation),
         } = match linked {
@@ -2510,6 +2564,7 @@ impl Run<'_> {
                 };
                 let linked = LinkedAgent {
                     session: Arc::clone(&link.session),
+                    service: link.service.as_ref().map(Arc::clone),
                     tools: link.tools.clone(),
                     actor: link.actor,
                 };
@@ -2519,6 +2574,9 @@ impl Run<'_> {
             }
         };
 
+        if opening && let (Some(context), Some(service)) = (prompt.context(), service.as_ref()) {
+            service.bind_opening_context(context);
+        }
         let Some(ready) = self.start(agent, &session).await? else {
             return Ok(());
         };
@@ -2541,7 +2599,7 @@ impl Run<'_> {
                 label: agent.label.clone(),
                 model: None,
                 reach: Reach::Unresolved.into(),
-                agent_version: version_of(ready),
+                agent_version: version_of(ready.ready()),
             },
             tier,
             // What left with the question, shown as the provider path shows it.
@@ -2580,7 +2638,7 @@ impl Run<'_> {
             Arc::clone(&observer),
             self.cancel.clone(),
         );
-        let end = match session.prompt(&prompt, observer, self.cancel).await {
+        let end = match ready.prompt(&session, &prompt, observer, self.cancel).await {
             Ok(end) => end,
             Err(error) => {
                 let failure = agent_failure_of(agent, error, &session).await;
@@ -2621,9 +2679,9 @@ impl Run<'_> {
         &self,
         agent: &ExternalAgentConfig,
         session: &ExternalSession,
-    ) -> Result<Option<AgentReady>, Failure> {
+    ) -> Result<Option<PromptStart>, Failure> {
         tokio::select! {
-            ready = start_bounded(agent, session) => ready.map(Some).inspect_err(|failure| {
+            ready = start_for_prompt_bounded(agent, session) => ready.map(Some).inspect_err(|failure| {
                 if failure.ends_agent {
                     self.thread.link_agent(None);
                 }
@@ -2810,11 +2868,23 @@ async fn start_bounded(
     }
 }
 
+/// Starts `session` for a question while reserving it against setting changes.
+async fn start_for_prompt_bounded(
+    agent: &ExternalAgentConfig,
+    session: &ExternalSession,
+) -> Result<PromptStart, Failure> {
+    match tokio::time::timeout(AGENT_START_TIMEOUT, session.start_for_prompt()).await {
+        Ok(Ok(ready)) => Ok(ready),
+        Ok(Err(error)) => Err(agent_failure_of(agent, error, session).await),
+        Err(_elapsed) => Err(timed_out(agent)),
+    }
+}
+
 /// « Claude Code 0.78.0 », or whichever half the agent said.
-fn version_of(ready: AgentReady) -> Option<String> {
-    match (ready.name, ready.version) {
+fn version_of(ready: &AgentReady) -> Option<String> {
+    match (&ready.name, &ready.version) {
         (Some(name), Some(version)) => Some(format!("{name} {version}")),
-        (name, version) => name.or(version),
+        (name, version) => name.clone().or_else(|| version.clone()),
     }
 }
 
@@ -2865,14 +2935,15 @@ async fn launch_agent(
     // agent runs its own loop, and a file does not widen what Oxyn bounds it
     // by (ADR-0049 § 7).
     let tools = ToolTurns::new(oxyn_ai::spec::DEFAULT_MAX_TURNS, Arc::new(waiting));
+    let service = Arc::new(tool_service(
+        inner,
+        connection,
+        session,
+        role,
+        Actor::agent(identity, conversation),
+    ));
     let bridge = ToolBridge {
-        service: Arc::new(tool_service(
-            inner,
-            connection,
-            session,
-            role,
-            Actor::agent(identity, conversation),
-        )),
+        service: Arc::clone(&service),
         turns: tools.clone(),
     };
     // Bounded: callers hold the lock every other agent launch waits on, and a
@@ -2903,6 +2974,7 @@ async fn launch_agent(
         tier,
         leaf: None,
         session: Arc::new(session),
+        service: Some(service),
         tools,
         actor: (identity, conversation),
         _requests: WithdrawOnRelease::new(
@@ -2943,6 +3015,17 @@ fn setup(message: impl Into<String>) -> Failure {
     Failure::new(message, FailureCategory::Setup)
 }
 
+/// The tool definitions every request of `agent` carries, as the runtime
+/// offers them: they count toward the window as much as the session does.
+///
+/// An allowlist naming a tool the registry does not know fails the runtime
+/// before any request; counted as none here, it bounds nothing that is sent.
+fn offered_tools(agent: &oxyn_ai::AgentSpec) -> Vec<oxyn_llm::ToolSpec> {
+    ToolRegistry::builtin()
+        .specs_for(&agent.allowed_tools)
+        .unwrap_or_default()
+}
+
 /// The class a runtime error carries — `Ambiguous` for a stream cut before
 /// the turn ended — read from the error, never from its words.
 const fn class_of(error: &AiError) -> Option<ErrorClass> {
@@ -2970,6 +3053,21 @@ fn with_effort(
         .with_reasoning_effort(effort, info)
         .map_err(|error| Failure::new(error.to_string(), category_of(&error)))
 }
+
+/// Said after a question that carried a remembered session and that the
+/// provider refused as longer than the model's window
+/// ([`OxynError::ContextTooLong`]): the session is dropped.
+const HISTORY_REFUSED: &str = "This question carried the earlier exchanges of this \
+     conversation: the next question here starts from a fresh context, without them.";
+
+/// Said after any other refusal of a question that carried a remembered
+/// session, which is kept: only a refusal the provider marks as a context
+/// overflow drops it, and Anthropic alone documents one (RESEARCH-NOTES,
+/// « Context window overflow »). An overflow another provider refuses in its
+/// own words lands here, and the user is the one who can tell.
+const HISTORY_KEPT: &str = "The earlier exchanges of this conversation are kept: if the model \
+     refused this question as longer than its context window, start a new conversation — Oxyn \
+     did not recognize this refusal as one.";
 
 fn category_of(error: &AiError) -> FailureCategory {
     match error {

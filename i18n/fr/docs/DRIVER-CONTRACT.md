@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="c1e5904626ea" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="678f706eab7b" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -74,9 +74,9 @@ Deux conséquences que les drivers ratent le plus souvent :
 
 | Famille | Exemples | Ce que fait l'appelant |
 |---|---|---|
-| Transitoire | coupure réseau, `too many connections`, verrou expiré | peut retenter, avec recul exponentiel |
+| Transitoire | coupure réseau durant une lecture, trop de connexions, expiration de verrou / interblocage / erreur de ressource sur une lecture ou une écriture de données simple après un rollback de l'instruction entière | peut retenter, avec recul exponentiel |
 | Permanente | erreur de syntaxe, table ou colonne absente, droits insuffisants | ne retente **jamais**, affiche |
-| Ambiguë | expiration côté client pendant une écriture | ne retente **jamais**, signale l'incertitude |
+| Ambiguë | expiration côté client pendant une écriture ; erreur de concurrence ou de ressource dans une procédure, une commande non transactionnelle ou une intention inconnue | ne retente **jamais**, signale l'incertitude |
 
 **Panne concrète :** un `INSERT` expire côté client alors que le serveur l'a
 appliqué. Classé « transitoire » et rejoué, il crée un doublon dans les données
@@ -213,6 +213,14 @@ et le SQL arbitraire est la fonctionnalité. Le SQL qu'**Oxyn compose**
 suggestion IA — ne concatène jamais un nom reçu : il passe par la fonction de
 citation d'identifiant du driver, et les valeurs sont liées.
 
+**Envoyé tel quel, ou refusé — jamais réécrit.** Un driver ne refuse une
+instruction que l'utilisateur a écrite, avant de l'envoyer, que lorsque
+l'exécuter rendrait fausse sa propre lecture de ce qui suit : un `USE` tapé,
+puisque le contexte est celui de la session, et sur MySQL et MariaDB un `SET`
+tapé d'un réglage sur lequel reposent les décodeurs
+([§7](#7-il-traite-les-fuseaux-et-les-types-temporels-comme-des-données-pas-comme-du-texte)).
+Il ne modifie jamais le texte pour le rendre acceptable.
+
 **La projection d'un aperçu suit la même règle.** `PreviewShape::columns`
 nomme les seules colonnes à lire : le driver prend la liste par
 `PreviewShape::projection`, qui la déduplique et la borne à
@@ -255,6 +263,23 @@ de fuseau d'affichage — le fuseau qu'Oxyn annonce pour un résultat est dédui
 du schéma (`oxyn_data::timestamp_display`), ce n'est pas un réglage. Si une telle
 préférence venait à exister, elle ne toucherait que le rendu (`oxyn-data`,
 `cell.rs`), jamais le driver.
+
+**Un réglage de session sur lequel repose un décodeur est épinglé, et son
+changement tapé est refusé.** Le driver MySQL ouvre chaque connexion à
+`time_zone = '+00:00'` et en `utf8mb4`, et étiquette un `TIMESTAMP` UTC sur
+cette base. Un `SET time_zone`, `SET NAMES`, `SET CHARACTER SET` ou
+`SET character_set_*` que tape l'utilisateur est refusé par
+`OxynError::NotSupported` avant tout envoi — quels que soient sa portée, sa
+citation (`` @@session.`time_zone` ``), et à l'intérieur d'un commentaire
+exécutable aussi, lignes `/*!40103 SET TIME_ZONE=… */` d'un dump comprises —, si
+bien qu'une valeur se lit de la même façon avant et après une reconnexion. Lire
+le réglage n'est pas refusé, à droite d'un `SET` compris. **Ce qu'une
+vérification lexicale ne voit pas reste possible :** le corps d'une procédure
+appelée par `CALL`, une instruction construite à l'exécution
+(`PREPARE … FROM @sql`, l'`EXECUTE IMMEDIATE` de MariaDB), et un texte lu sous
+`NO_BACKSLASH_ESCAPES`, où une chaîne se termine plus tôt que la vérification ne
+la lit. Un fuseau changé ainsi s'affiche sous l'étiquette UTC, faux, jusqu'à ce
+que la reconnexion suivante remette `+00:00`.
 
 **Panne concrète :** Oxyn affiche une valeur convertie dans le fuseau du poste,
 l'utilisateur la recopie dans un `UPDATE`, et décale la donnée de deux heures en

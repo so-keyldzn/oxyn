@@ -137,6 +137,7 @@ fn a_provider_question_on_a_never_expanded_connection_is_told_the_tables_and_the
                 "total of the orders per customer",
                 None,
                 PrivacyTier::Metadata,
+                crate::backend::ai::threads::memory_ceiling(None),
             ),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
@@ -271,7 +272,11 @@ fn an_external_agent_without_scores_is_told_what_it_was_told_before() {
     let root = tempfile::tempdir().expect("an empty models directory");
     let on_without_model = external_opening(Some(root.path()));
     assert!(off.contains("Describing 2 of 2 known relations"), "{off}");
-    assert_eq!(on_without_model, off);
+    assert_eq!(
+        normalize_fence_nonce(&on_without_model),
+        normalize_fence_nonce(&off),
+        "semantic ranking does not change the fenced prompt without scores"
+    );
 }
 
 #[test]
@@ -409,6 +414,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
                 "customers",
                 None,
                 PrivacyTier::Metadata,
+                crate::backend::ai::threads::memory_ceiling(None),
             ),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
@@ -455,6 +461,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
                 "and this one?",
                 None,
                 PrivacyTier::Metadata,
+                crate::backend::ai::threads::memory_ceiling(None),
             ),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));

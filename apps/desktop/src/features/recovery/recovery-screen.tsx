@@ -181,6 +181,8 @@ export function RecoveryScreen() {
           // opening that followed the launch may repeat it.
           abnormal={startup && (status.data?.abnormal ?? false)}
           unresolvedWrite={status.data?.unresolvedWrite ?? false}
+          statusError={status.isError ? failureOf(status.error) : null}
+          onRetryStatus={() => void status.refetch()}
           state={state}
           selected={new Set(selected.keys())}
           onToggle={(entry) =>

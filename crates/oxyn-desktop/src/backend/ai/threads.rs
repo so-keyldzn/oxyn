@@ -28,7 +28,7 @@ use std::fmt;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
-use oxyn_ai::external::mcp::ToolTurns;
+use oxyn_ai::external::mcp::{ToolService, ToolTurns};
 use oxyn_ai::external::session::ExternalSession;
 use oxyn_ai::{AgentSession, CallId};
 use oxyn_core::{
@@ -55,6 +55,43 @@ const MAX_THREADS: usize = 64;
 /// Each keeps a copy of its provider session: the bound keeps a conversation
 /// regenerated in a loop from growing without limit.
 const MAX_NODES: usize = 256;
+
+/// The share of a model's declared context window a remembered session may
+/// fill, as a divisor: past half, the next question starts from a fresh
+/// context.
+///
+/// Half, because the window holds more than the session: the next question,
+/// what its tools read back over the agent's turns, and the answer itself
+/// count toward it too (RESEARCH-NOTES, « Context window overflow »). And the
+/// estimate is four bytes per token, which a tokenizer reading SQL or JSON can
+/// beat. Oxyn's choice: no provider publishes a share.
+const MEMORY_WINDOW_DIVISOR: usize = 2;
+
+/// The ceiling of a remembered session when the model declares no window, in
+/// estimated tokens.
+///
+/// Oxyn's choice, not a provider's limit: no window is assumed
+/// ([I-12](../../../../../CLAUDE.md#i-12)). It is the cost bound — every
+/// follow-up sends the whole session again, so a thread costs the square of
+/// its length — set at five fresh contexts of the default policy
+/// (`ContextPolicy::default()`, 6,000 tokens). A model whose window is smaller
+/// refuses the question instead; that refusal resets the memory only from a
+/// provider that marks it as such ([`Thread::outgrow_memory`]).
+const UNDECLARED_WINDOW_CEILING: usize = 30_000;
+
+/// How large a remembered session may grow, in estimated tokens, before the
+/// next question to a model whose declared window is `window` starts from a
+/// fresh context.
+///
+/// `window` is what the provider's model list declared
+/// (`ModelInfo::context_window`), never a value Oxyn knows of a model.
+pub(crate) fn memory_ceiling(window: Option<u32>) -> usize {
+    window
+        .and_then(|tokens| usize::try_from(tokens).ok())
+        .map_or(UNDECLARED_WINDOW_CEILING, |tokens| {
+            tokens / MEMORY_WINDOW_DIVISOR
+        })
+}
 
 /// Events kept per exchange for a replay. Fragments are merged, so an exchange
 /// costs a handful; past the bound live events still reach the panel.
@@ -156,6 +193,7 @@ impl Waiting {
     /// with the last handle on its session.
     fn release(self) {
         self.stop.cancel();
+        self.link.session.signal_process();
     }
 }
 
@@ -184,6 +222,70 @@ impl fmt::Debug for AiState {
 }
 
 impl AiState {
+    /// Signals every external-agent process without dropping its links.
+    ///
+    /// The final Tauri exit hook uses this only synchronous half: it cannot
+    /// wait for an agent or remove a directory on the event-loop thread.
+    pub(crate) fn signal_agents(&self) {
+        for session in self.agent_sessions() {
+            session.signal_process();
+        }
+    }
+
+    /// Releases every external agent and removes its private directory.
+    ///
+    /// This is the ordered shutdown path, off Tauri's event-loop thread. The
+    /// caller supplies the total timeout: all agents are signalled before any
+    /// directory cleanup starts, so a slow filesystem cannot leave one alive.
+    pub(crate) async fn shutdown_agents(&self) {
+        let waiting = std::mem::take(&mut *self.waiting.lock());
+        let mut sessions: Vec<Arc<ExternalSession>> = waiting
+            .into_values()
+            .map(|waiting| {
+                waiting.stop.cancel();
+                waiting.link.session
+            })
+            .collect();
+        let threads: Vec<Arc<Thread>> = self
+            .threads
+            .lock()
+            .values()
+            .flat_map(|threads| threads.iter().cloned())
+            .collect();
+        for thread in threads {
+            if let Some(session) = thread.release_agent() {
+                sessions.push(session);
+            }
+        }
+        for session in &sessions {
+            session.signal_process();
+        }
+        for session in sessions {
+            session.shutdown().await;
+        }
+    }
+
+    fn agent_sessions(&self) -> Vec<Arc<ExternalSession>> {
+        let mut sessions: Vec<Arc<ExternalSession>> = self
+            .waiting
+            .lock()
+            .values()
+            .map(|waiting| Arc::clone(&waiting.link.session))
+            .collect();
+        let threads: Vec<Arc<Thread>> = self
+            .threads
+            .lock()
+            .values()
+            .flat_map(|threads| threads.iter().cloned())
+            .collect();
+        for thread in threads {
+            if let Some(session) = thread.agent_session_for_shutdown() {
+                sessions.push(session);
+            }
+        }
+        sessions
+    }
+
     /// The lock held while an agent for `connection` is looked for and
     /// launched. Never removed — a lock replaced while held would let two
     /// launches run under two locks —, and it costs one entry per connection
@@ -283,6 +385,7 @@ impl AiState {
                 memory: None,
                 loaded: true,
                 withheld: node.withheld,
+                outgrown: false,
             });
         }
         let thread = Arc::new_cyclic(|me| Thread {
@@ -340,7 +443,9 @@ impl AiState {
             .cloned()
             .unwrap_or_default();
         for thread in threads {
-            thread.state.lock().agent = None;
+            if let Some(session) = thread.release_agent() {
+                session.signal_process();
+            }
         }
     }
 
@@ -434,8 +539,11 @@ impl AiState {
             .cloned()
             .unwrap_or_default();
         for thread in threads {
-            if thread.id != keep && !thread.is_running() {
-                thread.state.lock().agent = None;
+            if thread.id != keep
+                && !thread.is_running()
+                && let Some(session) = thread.release_agent()
+            {
+                session.signal_process();
             }
         }
     }
@@ -568,6 +676,10 @@ struct Node {
     /// This exchange used an approved sample: it leaves no memory, and the
     /// ones after it do not reach past it for an older one.
     withheld: bool,
+    /// The provider refused a question that continued this exchange's
+    /// memory as longer than the model's window: the memory is dropped, and the questions after it start from a
+    /// fresh context instead of failing the same way.
+    outgrown: bool,
 }
 
 /// What a provider conversation knows after a node.
@@ -579,6 +691,65 @@ pub(crate) struct Memory {
     /// protocol starts from a fresh context, under its own recipient
     /// fragment (ADR-0049 § 6).
     pub(crate) recipient: oxyn_ai::Recipient,
+}
+
+impl Memory {
+    /// Whether the session can be sent again offering `tools` within
+    /// `ceiling` estimated tokens — see [`memory_ceiling`].
+    pub(crate) fn fits(&self, ceiling: usize, tools: &[oxyn_llm::ToolSpec]) -> bool {
+        self.session.estimated_tokens(tools) <= ceiling
+    }
+}
+
+/// Where the walk up from a question stops, looking for a memory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nearest {
+    /// This node holds the memory.
+    Memory(u32),
+    /// This exchange used a sample, and left none.
+    Withheld,
+    /// The provider refused this node's memory as too long, and it was
+    /// dropped.
+    Outgrown,
+}
+
+/// The nearest answered ancestor from `parent`, or why the walk stopped short
+/// of one. `None` once the walk reaches the root without either.
+fn nearest_memory(state: &ThreadState, parent: Option<u32>) -> Option<Nearest> {
+    let mut cursor = parent;
+    while let Some(index) = cursor {
+        let node = state.nodes.get(index as usize)?;
+        if node.withheld {
+            return Some(Nearest::Withheld);
+        }
+        if node.outgrown {
+            return Some(Nearest::Outgrown);
+        }
+        if node.memory.is_some() {
+            return Some(Nearest::Memory(index));
+        }
+        cursor = node.parent;
+    }
+    None
+}
+
+/// The node whose memory a question from `parent` continued, when that memory
+/// is still `session`'s: one replaced meanwhile is not the one sent.
+fn continued_memory(
+    state: &ThreadState,
+    parent: Option<u32>,
+    session: AgentSessionId,
+) -> Option<u32> {
+    let Some(Nearest::Memory(index)) = nearest_memory(state, parent) else {
+        return None;
+    };
+    state
+        .nodes
+        .get(index as usize)?
+        .memory
+        .as_ref()
+        .is_some_and(|memory| memory.session.id() == session)
+        .then_some(index)
 }
 
 /// A live external agent session, and the node it last answered.
@@ -593,6 +764,8 @@ pub(crate) struct AgentLink {
     pub(crate) tier: PrivacyTier,
     pub(crate) leaf: Option<u32>,
     pub(crate) session: Arc<ExternalSession>,
+    /// The service's fence is bound to the opening context before it is sent.
+    pub(crate) service: Option<Arc<ToolService>>,
     /// Where each question opens the agent's access to Oxyn's tools.
     pub(crate) tools: ToolTurns,
     /// Who the agent acts as, for the whole session: the executor refuses a
@@ -641,6 +814,7 @@ impl Drop for WithdrawOnRelease {
 /// A live agent session, with what a new question needs to open its turn.
 pub(crate) struct LinkedAgent {
     pub(crate) session: Arc<ExternalSession>,
+    pub(crate) service: Option<Arc<ToolService>>,
     pub(crate) tools: ToolTurns,
     pub(crate) actor: (AgentId, AgentSessionId),
 }
@@ -823,6 +997,7 @@ impl Thread {
             memory: None,
             loaded: false,
             withheld: false,
+            outgrown: false,
         });
         state.selections.insert(parent, node);
         if !state.renamed && parent.is_none() && node == 0 {
@@ -981,41 +1156,53 @@ impl Thread {
     /// exchange leaves none, and the one before it answers for it.
     ///
     /// An exchange that used a sample stops the search: reaching past it would
-    /// continue a conversation with a hole the user cannot see.
+    /// continue a conversation with a hole the user cannot see. So does a
+    /// memory the provider refused: an older one would leave the same hole.
     pub(crate) fn memory_from(&self, parent: Option<u32>) -> Option<Memory> {
         let state = self.state.lock();
-        let mut cursor = parent;
-        while let Some(index) = cursor {
-            let node = state.nodes.get(index as usize)?;
-            if node.withheld {
-                return None;
-            }
-            if let Some(memory) = &node.memory {
-                return Some(memory.clone());
-            }
-            cursor = node.parent;
+        match nearest_memory(&state, parent)? {
+            Nearest::Memory(index) => state.nodes.get(index as usize)?.memory.clone(),
+            Nearest::Withheld | Nearest::Outgrown => None,
         }
-        None
     }
 
     /// Whether the nearest exchange that could have left a memory used a
     /// sample instead.
     pub(crate) fn memory_withheld(&self, parent: Option<u32>) -> bool {
-        let state = self.state.lock();
-        let mut cursor = parent;
-        while let Some(index) = cursor {
-            let Some(node) = state.nodes.get(index as usize) else {
-                return false;
-            };
-            if node.withheld {
-                return true;
-            }
-            if node.memory.is_some() {
-                return false;
-            }
-            cursor = node.parent;
-        }
-        false
+        nearest_memory(&self.state.lock(), parent) == Some(Nearest::Withheld)
+    }
+
+    /// Whether the nearest memory was dropped because the provider refused
+    /// the question that continued it.
+    pub(crate) fn memory_outgrown(&self, parent: Option<u32>) -> bool {
+        nearest_memory(&self.state.lock(), parent) == Some(Nearest::Outgrown)
+    }
+
+    /// Drops the memory a question from `parent` continued, when it is still
+    /// `session`'s: the provider refused that question as longer than the
+    /// model's window, and every later one sending the same session again
+    /// would be refused the same way.
+    ///
+    /// Only what is re-sent changes: the exchanges stay in the transcript.
+    /// Answers whether a memory was dropped. `session` guards against a
+    /// memory replaced meanwhile — a version answered while this question ran
+    /// is not the one refused.
+    pub(crate) fn outgrow_memory(&self, parent: Option<u32>, session: AgentSessionId) -> bool {
+        let mut state = self.state.lock();
+        let Some(node) = continued_memory(&state, parent, session)
+            .and_then(|index| state.nodes.get_mut(index as usize))
+        else {
+            return false;
+        };
+        node.memory = None;
+        node.outgrown = true;
+        true
+    }
+
+    /// Whether a question from `parent` continued the memory that is still
+    /// `session`'s — what [`Self::outgrow_memory`] would drop, left in place.
+    pub(crate) fn continues_memory(&self, parent: Option<u32>, session: AgentSessionId) -> bool {
+        continued_memory(&self.state.lock(), parent, session).is_some()
     }
 
     /// Marks an exchange that used a sample: nothing of it is remembered.
@@ -1053,6 +1240,7 @@ impl Thread {
             })
             .map(|link| LinkedAgent {
                 session: Arc::clone(&link.session),
+                service: link.service.as_ref().map(Arc::clone),
                 tools: link.tools.clone(),
                 actor: link.actor,
             })
@@ -1066,6 +1254,22 @@ impl Thread {
             .as_ref()
             .filter(|link| link.session.is_open())
             .map(|link| Arc::clone(&link.session))
+    }
+
+    fn agent_session_for_shutdown(&self) -> Option<Arc<ExternalSession>> {
+        self.state
+            .lock()
+            .agent
+            .as_ref()
+            .map(|link| Arc::clone(&link.session))
+    }
+
+    fn release_agent(&self) -> Option<Arc<ExternalSession>> {
+        let mut state = self.state.lock();
+        if let Some(running) = &state.running {
+            running.token.cancel();
+        }
+        state.agent.take().map(|link| link.session)
     }
 
     pub(crate) fn has_agent_link(&self) -> bool {

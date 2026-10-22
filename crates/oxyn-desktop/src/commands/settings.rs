@@ -9,7 +9,7 @@
 use oxyn_core::{CommandId, ConnectionId};
 use tauri::{State, Webview};
 
-use crate::backend::{Backend, WindowKey};
+use crate::backend::Backend;
 use crate::commands::parse;
 use crate::commands::windows::{caller, run_owned};
 use crate::ipc::settings::{
@@ -95,7 +95,8 @@ pub async fn update_connection(
 }
 
 /// Refused while another window holds the connection: its consoles would
-/// lose the configuration they run on (ADR-0043).
+/// lose the configuration they run on (ADR-0043). The backend checks it under
+/// the lock of the decisions, against the window that owns `command_id`.
 #[tauri::command]
 pub async fn delete_connection(
     webview: Webview,
@@ -106,7 +107,6 @@ pub async fn delete_connection(
     let window = caller(&backend, &webview)?;
     let id: CommandId = parse("command id", &command_id)?;
     let connection: ConnectionId = parse("connection", &connection)?;
-    refuse_if_held_elsewhere(&backend, window, connection)?;
     run_owned(
         &backend,
         window,
@@ -115,25 +115,6 @@ pub async fn delete_connection(
         |change| matches!(change, ConnectionChange::Approval { .. }),
     )
     .await
-}
-
-fn refuse_if_held_elsewhere(
-    backend: &Backend,
-    window: WindowKey,
-    connection: ConnectionId,
-) -> Result<(), IpcError> {
-    if backend
-        .inner
-        .windows
-        .other_holders(window, connection)
-        .is_empty()
-    {
-        Ok(())
-    } else {
-        Err(IpcError::invalid(
-            "This connection is open in another window. Close it there first.",
-        ))
-    }
 }
 
 #[tauri::command]
@@ -147,8 +128,10 @@ pub async fn decide_connection_change(
     let command: CommandId = parse("command id", &command)?;
     backend.inner.windows.check_command(window, command)?;
     let target = backend.pending_change_connection(command);
+    // Before the dialog, which would be refused: the pending deletion stays
+    // pending. The backend checks again after it, under the lock.
     if approved && let Some((connection, true)) = target {
-        refuse_if_held_elsewhere(&backend, window, connection)?;
+        backend.refuse_if_held_elsewhere(command, connection)?;
     }
     let change = run_owned(
         &backend,

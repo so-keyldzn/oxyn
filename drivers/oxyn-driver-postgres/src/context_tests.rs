@@ -18,12 +18,13 @@
 
 use std::time::{Duration, Instant};
 
+use oxyn_catalog::path::{QuoteStyle, quote_identifier};
 use oxyn_core::{
     CancelToken, DriverId, ExecLimits, ExecRequest, QueryLanguage, SqlDialect, StatementIntent,
 };
 use oxyn_driver::{Session, SessionContext};
 use sqlx::postgres::{PgConnection, PgPool, PgPoolOptions};
-use sqlx::{ConnectOptions as _, Connection as _, Executor as _};
+use sqlx::{AssertSqlSafe, ConnectOptions as _, Connection as _, Executor as _};
 
 use crate::driver::postgres_metadata;
 use crate::integration::target;
@@ -103,7 +104,7 @@ fn exec_request(sql: &str, read_only: bool) -> ExecRequest {
 }
 
 /// Executes and drains, returning the number of rows.
-async fn execute(session: &PostgresSession, sql: &str, read_only: bool) -> usize {
+async fn execute(session: &dyn Session, sql: &str, read_only: bool) -> usize {
     let mut cursor = session
         .execute(exec_request(sql, read_only), &CancelToken::new())
         .await
@@ -421,6 +422,157 @@ async fn a_search_path_typed_in_a_console_does_not_follow_the_connection() {
 
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
+async fn every_writable_session_setting_returns_to_the_pool_default() {
+    // These settings outlive an ordinary statement. Reusing the sole pool
+    // connection makes a passing test prove the reset rather than a fresh
+    // connection hiding the leak.
+    let Some((session, _pool, mut control)) = bench(None, &[]).await else {
+        return;
+    };
+    control
+        .execute("DROP ROLE IF EXISTS oxyn_state_reset_role")
+        .await
+        .expect("stale test role cleanup");
+    control
+        .execute("CREATE ROLE oxyn_state_reset_role NOLOGIN")
+        .await
+        .expect("test role");
+
+    let original_pid = pid(&session).await;
+    for (setting, observed) in [
+        (
+            "SET ROLE oxyn_state_reset_role",
+            "SELECT current_user::text",
+        ),
+        (
+            "SET session_replication_role = replica",
+            "SHOW session_replication_role",
+        ),
+        ("SET statement_timeout = 1", "SHOW statement_timeout"),
+    ] {
+        let expected = first_value(&session, observed).await;
+        execute(&session, setting, false).await;
+        assert_eq!(
+            pid(&session).await,
+            original_pid,
+            "the connection must return to the pool after `{setting}`"
+        );
+        assert_eq!(
+            first_value(&session, observed).await,
+            expected,
+            "the next borrower inherited `{setting}`"
+        );
+    }
+
+    control
+        .execute("DROP ROLE oxyn_state_reset_role")
+        .await
+        .expect("test role cleanup");
+    let _ = control.close().await;
+    Box::new(session).close().await.expect("closing");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
+async fn a_login_default_role_survives_a_writable_execution() {
+    // `ALTER ROLE … SET role` is a server-side startup default, not a console
+    // setting. The driver must give the reused connection back in that default
+    // state after a write; otherwise permission checks can change between
+    // executions without a user action.
+    let Some((config, credentials)) = target() else {
+        eprintln!("OXYN_PG_TEST_URL is not set: test skipped");
+        return;
+    };
+    let spec = ConnectSpec::from_config(&postgres_metadata(), &config, &credentials)
+        .expect("complete test configuration");
+    let mut control = spec.options().connect().await.expect("control connection");
+    let login_name: String = sqlx::query_scalar("SELECT session_user::text")
+        .fetch_one(&mut control)
+        .await
+        .expect("test login");
+    let login = quote_identifier(&login_name, QuoteStyle::for_dialect(SqlDialect::Postgres));
+    let restricted = quote_identifier(
+        "oxyn_state_startup_role",
+        QuoteStyle::for_dialect(SqlDialect::Postgres),
+    );
+
+    let drop_restricted = format!("DROP ROLE IF EXISTS {restricted}");
+    control
+        .execute(sqlx::raw_sql(AssertSqlSafe(drop_restricted.as_str())))
+        .await
+        .expect("stale restricted role cleanup");
+    let create_restricted = format!("CREATE ROLE {restricted} NOLOGIN");
+    control
+        .execute(sqlx::raw_sql(AssertSqlSafe(create_restricted.as_str())))
+        .await
+        .expect("restricted role");
+    let grant_restricted = format!("GRANT {restricted} TO {login}");
+    control
+        .execute(sqlx::raw_sql(AssertSqlSafe(grant_restricted.as_str())))
+        .await
+        .expect("restricted role membership");
+    let configure_default_role = format!("ALTER ROLE {login} SET role = {restricted}");
+    control
+        .execute(sqlx::raw_sql(AssertSqlSafe(
+            configure_default_role.as_str(),
+        )))
+        .await
+        .expect("login default role");
+
+    let session_spec = ConnectSpec::from_config(&postgres_metadata(), &config, &credentials)
+        .expect("complete login configuration");
+    let session_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .min_connections(0)
+        .test_before_acquire(true)
+        .connect_with(session_spec.options().clone())
+        .await
+        .expect("login session pool");
+    let session_database = session_spec.database().to_owned();
+    let session = PostgresSession::new(
+        DriverId::postgres(),
+        session_pool,
+        session_spec,
+        PostgresVariant::detect("PostgreSQL", "", Vec::new()),
+        session_database,
+    );
+    let initial_pid = first_value(&session, "SELECT pg_catalog.pg_backend_pid()::text").await;
+    let initial_user = first_value(&session, "SELECT current_user::text").await;
+
+    execute(&session, "SET statement_timeout = '1s'", false).await;
+
+    let observed_pid = first_value(&session, "SELECT pg_catalog.pg_backend_pid()::text").await;
+    let observed_user = first_value(&session, "SELECT current_user::text").await;
+    let observed_login = first_value(&session, "SELECT session_user::text").await;
+
+    Box::new(session).close().await.expect("closing");
+    let cleanup = format!("ALTER ROLE {login} RESET role; DROP ROLE {restricted}");
+    control
+        .execute(sqlx::raw_sql(AssertSqlSafe(cleanup.as_str())))
+        .await
+        .expect("test role cleanup");
+    let _ = control.close().await;
+
+    assert_eq!(
+        initial_user, "oxyn_state_startup_role",
+        "the server must apply the login's configured default role"
+    );
+    assert_eq!(
+        observed_pid, initial_pid,
+        "the observation must reuse the connection that completed the write"
+    );
+    assert_eq!(
+        observed_user, "oxyn_state_startup_role",
+        "the reset must restore the login's configured default role"
+    );
+    assert_eq!(
+        observed_login, login_name,
+        "the reset must retain the authenticated login"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
 async fn transaction_control_is_refused_before_the_server() {
     // Each transaction control statement is refused without anything going
     // out: neither a new connection, nor a query visible on the server. The
@@ -539,7 +691,7 @@ async fn setting(session: &PostgresSession) -> String {
     .await
 }
 
-async fn pid(session: &PostgresSession) -> String {
+async fn pid(session: &dyn Session) -> String {
     first_value(session, "SELECT pg_catalog.pg_backend_pid()::text").await
 }
 
@@ -551,7 +703,7 @@ async fn counts(session: &PostgresSession) -> i64 {
 }
 
 /// The first text value of a read.
-async fn first_value(session: &PostgresSession, sql: &str) -> String {
+async fn first_value(session: &dyn Session, sql: &str) -> String {
     use arrow::array::{Array, StringArray};
     let mut cursor = session
         .execute(exec_request(sql, true), &CancelToken::new())

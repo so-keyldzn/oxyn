@@ -378,12 +378,32 @@ answer that keeps arriving is never cut —; both have a bound on **silence**.
 | Provider request and stream (`oxyn-llm`, `IDLE_TIMEOUT`) | **300 s**, until the response headers, then between two chunks | any byte received, `ping` frames and `:` comments included | before the headers, `LlmError::ResponseTimeout`; during the stream, the end is `StopReason::Interrupted`. Both are ambiguous and never replayed ([I-13](../CLAUDE.md#i-13)) |
 | External agent's answer (`external::session`, `AGENT_IDLE_LIMIT`) | **300 s**, outside a tool call | any session update, any permission request | `session/cancel` is sent, and the question ends with "the agent sent nothing for 300 seconds" |
 | External agent's confirmation of a stop (`CANCEL_GRACE`) | **10 s** | — | the agent's process group is stopped; the next question starts a fresh agent |
+| External agent's sign-in or setting result (`external::session`, `USER_REQUEST_LIMIT`) | **60 s** | — | the request fails without retrying it; a queued request proceeds after at most this bound |
+| Ordered external-agent cleanup (`backend::recovery`, `AGENT_SHUTDOWN_GRACE`) | **2 s** | — | process groups were already signalled; a slow temporary filesystem does not hold quit open |
 
 No provider documents how often it speaks while the model thinks
 ([RESEARCH-NOTES](RESEARCH-NOTES.md#idle-streams--checked-on-2026-10-04)): the
 values are Oxyn's, chosen long so that a reasoning model thinking for minutes
 is not cut. "Stop" remains the fast way out, and it frees the session whatever
 the agent does.
+
+Sign-in can hand control to a browser, so its bound leaves time for one
+ordinary hand-off. A setting change should be immediate; the same minute is
+its upper limit because a missing agent must not hold a later question behind
+an abandoned panel. A queued question waits for that user-side request for at
+most this bound, unless its Stop is selected while it is still queued. If a
+setting change reaches the bound, Oxyn ends the session rather than let a late
+agent response change a later question; that question starts a fresh agent.
+These actions are never replayed by Oxyn.
+
+On an ordered application exit, process groups are signalled before their
+private directories are removed. The two-second cleanup bound applies to the
+whole set of agents, so one stalled temporary filesystem cannot keep quit
+open. A final operating-system exit signals groups only: Tauri's event hook
+runs on its main thread and must not wait or perform filesystem work there.
+An agent that calls `setsid` or `setpgid` and leaves the process group Oxyn
+created escapes this signal; that pre-existing escape is outside the process
+group boundary and is not covered by this cleanup.
 
 A tool call in flight suspends the external agent's count: a call to Oxyn's
 tools can wait on an approval the user is reading, or on a long query, and the
@@ -431,6 +451,15 @@ A table name, a column comment, a row value can contain
 text imitating an instruction. They are **data**, at every tier,
 including when they arrive in a prompt. See
 [SECURITY](SECURITY.md#input-surface).
+
+`ContextBuilder` gives each opening prompt's database-content fence a fresh
+random nonce, and its preamble names the exact opening and closing tags. The
+session reuses that fence for every later tool result. While it recognizes a
+tag word in database content, it ignores Unicode format characters without
+removing them from the rendered content, and folds dashes, fullwidth ASCII, and
+a listed set of Cyrillic look-alikes. This folding is defence in depth, not a
+universal confusable mapping: the fresh nonce is the primary boundary, and the
+`PolicyGate` still decides whether a model proposal can run.
 
 ## Mentions
 

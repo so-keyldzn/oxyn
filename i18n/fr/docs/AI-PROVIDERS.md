@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="feb6873c71ee" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="b0b4f977ca2d" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -392,6 +392,8 @@ deux ont une borne sur le **silence**.
 | Requête et flux d'un fournisseur (`oxyn-llm`, `IDLE_TIMEOUT`) | **300 s**, jusqu'aux en-têtes de réponse, puis entre deux morceaux | tout octet reçu, trames `ping` et commentaires `:` compris | avant les en-têtes, `LlmError::ResponseTimeout` ; pendant le flux, la fin est `StopReason::Interrupted`. Les deux sont ambigus et jamais rejoués ([I-13](../CLAUDE.md#i-13)) |
 | Réponse d'un agent externe (`external::session`, `AGENT_IDLE_LIMIT`) | **300 s**, hors appel d'outil | toute mise à jour de session, toute demande de permission | `session/cancel` est envoyé, et la question se termine par « l'agent n'a rien envoyé pendant 300 secondes » |
 | Confirmation d'un arrêt par l'agent externe (`CANCEL_GRACE`) | **10 s** | — | le groupe de processus de l'agent est arrêté ; la question suivante lance un agent neuf |
+| Résultat de connexion ou de réglage d'un agent externe (`external::session`, `USER_REQUEST_LIMIT`) | **60 s** | — | la demande échoue sans être rejouée ; une demande en attente avance au plus tard à l'expiration de cette limite |
+| Nettoyage ordonné d'un agent externe (`backend::recovery`, `AGENT_SHUTDOWN_GRACE`) | **2 s** | — | les groupes de processus ont déjà reçu le signal ; un système temporaire lent ne retient pas la sortie |
 
 Aucun fournisseur ne documente à quelle fréquence il parle pendant que le
 modèle réfléchit
@@ -399,6 +401,26 @@ modèle réfléchit
 les valeurs sont celles d'Oxyn, choisies longues pour qu'un modèle de
 raisonnement qui réfléchit plusieurs minutes ne soit pas coupé. « Arrêter »
 reste la sortie rapide, et elle libère la session quoi que fasse l'agent.
+
+La connexion peut passer par un navigateur, sa limite laisse donc le temps à
+un transfert ordinaire. Un changement de réglage devrait être immédiat ; la
+même minute est sa limite haute, car un agent absent ne doit pas retenir une
+question ultérieure derrière un panneau abandonné. Une question en attente
+attend cette action côté utilisateur au plus jusqu'à cette limite, sauf si son
+arrêt est demandé alors qu'elle est encore en attente. Si un changement de
+réglage atteint la limite, Oxyn termine la session plutôt que de laisser une
+réponse tardive de l'agent changer une question ultérieure ; cette question
+lance un agent neuf. Ces actions ne sont jamais rejouées par Oxyn.
+
+Lors d'une sortie ordonnée de l'application, les groupes de processus reçoivent
+un signal avant la suppression de leurs répertoires privés. La limite de deux
+secondes couvre l'ensemble des agents, afin qu'un système temporaire bloqué ne
+retienne pas la sortie. Une sortie finale du système d'exploitation ne fait que
+signaler les groupes : le hook Tauri s'exécute sur le thread principal et ne
+doit ni attendre ni effectuer d'opération sur le système de fichiers. Un agent
+qui appelle `setsid` ou `setpgid` et quitte le groupe de processus créé par
+Oxyn échappe à ce signal ; cette échappée préexistante est hors de la frontière
+du groupe de processus et n'est pas couverte par ce nettoyage.
 
 Un appel d'outil en cours suspend le décompte de l'agent externe : un appel aux
 outils d'Oxyn peut attendre une approbation que l'utilisateur est en train de
@@ -450,6 +472,17 @@ Un nom de table, un commentaire de colonne, une valeur de ligne peuvent contenir
 du texte imitant une instruction. Ce sont des **données**, à tout niveau, y
 compris quand elles arrivent dans une invite. Voir
 [SECURITY](SECURITY.md#surface-dentrée).
+
+`ContextBuilder` donne à la clôture du contenu de base de chaque invite
+d'ouverture un nonce aléatoire nouveau, et son préambule nomme exactement les
+balises d'ouverture et de fermeture. La session réutilise cette clôture pour
+chaque résultat d'outil ultérieur. Lorsqu'il reconnaît un mot de balise dans le
+contenu de la base, il ignore les caractères de format Unicode sans les retirer
+du contenu rendu, et replie les tirets, l'ASCII pleine chasse et un ensemble
+listé de sosies cyrilliques. Ce repli est une défense en profondeur, pas un
+mappage universel des confusables : le nonce nouveau est la frontière principale,
+et le `PolicyGate` décide toujours si une proposition du modèle peut être
+exécutée.
 
 ## Mentions
 

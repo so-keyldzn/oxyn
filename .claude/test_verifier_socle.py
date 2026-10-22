@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -33,9 +34,12 @@ from verifier_socle import (  # noqa: E402
     HEADING_PATTERN,
     _anchors,
     _slug,
+    contract_pin_errors,
     fingerprint,
     aggregate_errors,
+    check_readme_make_targets,
     dependency_tool_errors,
+    readme_make_errors,
     translation_errors,
 )
 
@@ -192,6 +196,98 @@ def dependency_failures() -> list[str]:
     return failures
 
 
+def server_suite_failures() -> list[str]:
+    """Server suites fail closed in CI and deliberately skip locally without URLs."""
+    failures = []
+    root = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory() as folder:
+        temporary = Path(folder)
+        cargo = temporary / "cargo"
+        cargo.write_text(
+            "#!/bin/sh\nprintf 'SERVER_SUITE_STUB_INVOKED\\nFAILED\\n'\nexit 1\n",
+            encoding="utf-8",
+        )
+        cargo.chmod(0o755)
+        override = temporary / "override.mk"
+        override.write_text("front-build:\n\t@:\n", encoding="utf-8")
+        command = [
+            shutil.which("make"),
+            "--no-print-directory",
+            "-f",
+            str(root / "Makefile"),
+            "-f",
+            str(override),
+            "test-serveurs",
+            "NEXTEST=present",
+            f"CARGO={cargo}",
+            "TAURI=/dev/null",
+            "MENTIONS=/dev/null",
+        ]
+        result = subprocess.run(
+            command,
+            cwd=root,
+            env=dict(os.environ, CI="true"),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 or "FAILED" not in result.stdout:
+            failures.append("a failing server suite exits successfully")
+        local_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            not in {
+                "CI",
+                "OXYN_PG_TEST_URL",
+                "OXYN_MYSQL_TEST_URL",
+                "OXYN_PG_PRODUCTION_TEST_URL",
+            }
+        }
+        local = subprocess.run(
+            command,
+            cwd=root,
+            env=local_environment,
+            capture_output=True,
+            text=True,
+        )
+        if (
+            local.returncode
+            or (
+                "server suites NOT run outside CI: no server test URLs are set."
+                not in local.stdout
+            )
+            or "SERVER_SUITE_STUB_INVOKED" in local.stdout
+        ):
+            failures.append("a local gate without server URLs does not explain its skipped suites")
+        nextest_missing = subprocess.run(
+            [*command, "NEXTEST="],
+            cwd=root,
+            env=local_environment,
+            capture_output=True,
+            text=True,
+        )
+        if (
+            nextest_missing.returncode
+            or "cargo-nextest missing: server suites NOT run outside CI." not in nextest_missing.stdout
+        ):
+            failures.append("a local gate without cargo-nextest does not explain its skipped suites")
+    return failures
+
+
+def contract_pin_failures() -> list[str]:
+    """The four publishable contracts must track the workspace release version."""
+    root = Path(__file__).resolve().parents[1]
+    manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    failures = []
+    if contract_pin_errors(manifest):
+        failures.append("current contract pins do not match the workspace version")
+    manifest["workspace"]["dependencies"]["oxyn-driver"]["version"] = "=0.0.0"
+    errors = contract_pin_errors(manifest)
+    if not any("oxyn-driver" in error for error in errors):
+        failures.append("a mismatched contract pin is accepted")
+    return failures
+
+
 def translation_failures() -> list[str]:
     """A fresh mirror passes; an edited source or a missing header fails."""
     failures = []
@@ -213,6 +309,44 @@ def translation_failures() -> list[str]:
         mirror.write_text("# Oxyn\n", encoding="utf-8")
         if not any("header" in e for e in translation_errors(root)):
             failures.append("a mirror without a header is not refused")
+    return failures
+
+
+README_BEFORE = """Run `make lancer` for the prose, which is not checked.
+
+```sh
+make app
+make lancer
+```
+"""
+
+README_AFTER = """Run `make lancer` for the prose, which is not checked.
+
+make app outside a fence is not checked either.
+
+```sh
+make desktop-dev              # the application with hot reload
+make desktop PROFIL=release   # the optimized build
+make -j4 qualite
+```
+"""
+
+
+def readme_failures() -> list[str]:
+    """Only a fenced `make <target>` line naming a missing target is refused."""
+    failures = []
+    targets = {"desktop", "desktop-dev", "qualite"}
+    refused = readme_make_errors(README_BEFORE, targets)
+    if len(refused) != 2 or "`make app`" not in refused[0] or "`make lancer`" not in refused[1]:
+        failures.append(f"the old README commands are not refused: {refused}")
+    if readme_make_errors(README_AFTER, targets):
+        failures.append(f"valid README commands refused: {readme_make_errors(README_AFTER, targets)}")
+    if readme_make_errors(README_AFTER, targets - {"desktop-dev"}) != [
+        "README.md runs `make desktop-dev`, a target missing from the Makefile"
+    ]:
+        failures.append("a target removed from the Makefile is not refused")
+    if check_readme_make_targets():
+        failures.append(f"the real README names a missing target: {check_readme_make_targets()}")
     return failures
 
 
@@ -238,10 +372,13 @@ def main() -> int:
     failures += ci_failures()
     failures += translation_failures()
     failures += dependency_failures()
+    failures += readme_failures()
+    failures += server_suite_failures()
+    failures += contract_pin_failures()
 
     for failure in failures:
         print(f"FAIL  {failure}")
-    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 13
+    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 16 + 4
     print(f"\n{total - len(failures)}/{total} cases pass")
     return 1 if failures else 0
 

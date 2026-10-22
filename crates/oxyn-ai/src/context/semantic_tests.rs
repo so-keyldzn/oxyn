@@ -222,10 +222,12 @@ fn the_order_of_the_scores_given_changes_nothing() {
 
     for focus in ["order", FRENCH, ""] {
         let first = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("score-order-test-nonce")
             .focused_on(focus)
             .with_semantic_scores(forward.clone())
             .build();
         let second = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("score-order-test-nonce")
             .focused_on(focus)
             .with_semantic_scores(backward.clone())
             .build();
@@ -245,9 +247,11 @@ fn without_scores_the_selection_is_exactly_todays() {
     let policy = ContextPolicy::default();
     for focus in ["order", "customers audit", FRENCH, ""] {
         let today = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("empty-score-test-nonce")
             .focused_on(focus)
             .build();
         let empty = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("empty-score-test-nonce")
             .focused_on(focus)
             .with_semantic_scores(SemanticScores::new())
             .build();
@@ -314,8 +318,11 @@ fn a_score_adds_no_text_and_the_debug_names_nothing() {
     // The tier and the rendering are the gate's: the same relations, the same
     // block, whether they were ordered by meaning or by path.
     let cache = listed(&["alpha", "beta"]);
-    let by_path = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+    let by_path = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+        .with_fence_nonce("semantic-debug-test-nonce")
+        .build();
     let by_meaning = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+        .with_fence_nonce("semantic-debug-test-nonce")
         .with_semantic_scores(scores(&[("alpha", 0.9), ("beta", 0.1)]))
         .build();
     assert_eq!(by_path.prompt_block(), by_meaning.prompt_block());
