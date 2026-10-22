@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="84823b500745" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="c1e5904626ea" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -162,6 +162,44 @@ tient par `sqlite3_stmt_readonly`, qui ne touche pas à la transaction.
 **Panne concrète :** un `SELECT` dans une console de production où une
 transaction est ouverte, et les `INSERT` confirmés juste avant disparaissent
 sans message.
+
+**Une session dit où un nom non qualifié se résout, ou dit qu'elle ne peut pas
+le dire.** `CatalogProvider::resolution_path` renvoie les espaces de noms,
+premier trouvé d'abord,
+([ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)) — lus sur la
+session réservée au catalogue, dans son état par défaut, jamais sur la session
+d'une console, dont l'utilisateur a pu changer le contexte :
+
+* PostgreSQL répond par le `search_path` effectif du serveur
+  (`current_schemas(true)` : les entrées qui n'existent pas ou qu'on ne peut pas
+  parcourir sont omises, et `pg_catalog`, parcouru implicitement, est **conservé**
+  — le serveur y cherche avant le chemin, sauf si le chemin le nomme, si bien
+  qu'une relation de `public` portant le nom d'une des siennes n'est pas celle
+  qu'atteint un nom non qualifié). Le schéma temporaire de la session est laissé
+  de côté : la session réservée au catalogue ne tient aucun objet temporaire, et
+  celui d'une console vit sur sa propre session. Amazon Redshift refuse par
+  `NotSupported` : la requête s'appuie sur `unnest … WITH ORDINALITY`, et une
+  requête que le serveur rejette ferait échouer la même lecture à chaque passe ;
+* MySQL et MariaDB répondent par `DATABASE()`, la base que le serveur dit avoir
+  sélectionnée pour la session — non celle que le formulaire de connexion nomme,
+  que le serveur peut écrire autrement (`lower_case_table_names`) ou remplacer
+  (`init_connect`, un proxy). `NULL` est un chemin vide : rien ne se résout alors,
+  ce qui est une réponse ; un nom qui n'est pas du texte est une erreur, jamais un
+  chemin vide. Une console qui a changé de base avec `USE` résout dans son propre
+  contexte, que cette réponse ne voit pas ;
+* SQLite répond `temp`, puis `main`, puis les bases attachées dans l'ordre où
+  elles l'ont été — l'ordre dans lequel `sqlite3FindTable` les parcourt (SQLite
+  3.50.2, `src/build.c`). La page ATTACH dit que la base attachée depuis le plus
+  longtemps l'emporte parmi les bases attachées et se tait sur `main` et `temp` :
+  leur rang est celui du code source, non une garantie documentée
+  ([RESEARCH-NOTES](RESEARCH-NOTES.md#complétion-de-léditeur--vérification-du-2026-10-21)) ;
+* tout autre driver garde le défaut, `NotSupported` : une liste vide affirmerait
+  qu'aucun espace de noms ne résout quoi que ce soit, et un driver qui ne sait pas
+  ne peut pas l'affirmer.
+
+**Panne concrète :** une complétion qui suppose `public` suggère un nom que le
+serveur refuse ensuite — PostgreSQL signale une erreur « even if matching table
+names exist in other schemas ».
 
 Corollaire pour un driver non-SQL : une requête porte un `QueryLanguage`
 explicite. Le SQL est un cas parmi d'autres, pas le défaut auquel les autres se

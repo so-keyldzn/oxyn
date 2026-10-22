@@ -88,6 +88,7 @@ To locate the boards and their states before implementation, see
 | [0054](adr/0054-bundle-sqlite-vec-in-the-sqlite-driver.md) | The SQLite driver bundles sqlite-vec, registered only on connections where the user turned it on (off by default); no extension is loaded from a file | accepted |
 | [0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md) | The SQL agent is the default of a new conversation, whatever the display order | accepted |
 | [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Local CPU embeddings (Burn, a pinned multilingual model downloaded on opt-in) rank the relations of the AI context, lexical first | accepted |
+| [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | The SQL editor completes from the catalog cache, reads what is missing within bounds, and takes its insertion text from Rust | proposed |
 
 ADRs stay `proposed` until the first code commit that implements them.
 
