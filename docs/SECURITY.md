@@ -67,7 +67,8 @@ Values are resolved on the blocking pool only while preparing a launch, after
 the privacy check, and injected into the child's cleared environment. Missing
 entries or keychain errors abort launch; no plaintext fallback exists. The
 agent receives these credentials and may use them to authenticate; they never
-join an AI prompt. Debug and child error reports redact them, including short
+join an AI prompt. Debug output, child error reports and the agent's streamed
+answer, reasoning and plan, as shown and as stored, redact them, including short
 explicitly secret values.
 
 Replacing a declaration writes fresh entries before saving through the bus;

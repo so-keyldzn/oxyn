@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="4745394d69fa" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="abe494439155" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -75,8 +75,10 @@ Les valeurs sont résolues sur le pool bloquant uniquement lors de la préparati
 du lancement, après le contrôle de confidentialité, puis injectées dans
 l'environnement vidé du processus enfant. Une entrée absente ou une erreur du
 trousseau refuse le lancement, sans repli en clair. L'agent reçoit ces identifiants
-pour s'authentifier ; ils ne rejoignent jamais un prompt IA. Debug et les rapports
-d'erreur du processus les masquent, même les valeurs courtes explicitement secrètes.
+pour s'authentifier ; ils ne rejoignent jamais un prompt IA. La sortie Debug, les
+rapports d'erreur du processus et la réponse, le raisonnement et le plan que
+l'agent diffuse, tels qu'affichés et tels qu'enregistrés, les masquent, même les
+valeurs courtes explicitement secrètes.
 
 Le remplacement écrit de nouvelles entrées avant l'enregistrement par le bus ;
 seul un enregistrement ou une suppression réussi permet d'oublier les anciennes.

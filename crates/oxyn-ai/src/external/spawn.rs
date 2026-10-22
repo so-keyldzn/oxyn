@@ -101,6 +101,11 @@ pub struct Environment {
     /// its report all the same. Keyed by the label its marker shows.
     withheld: BTreeMap<String, String>,
     secret_names: BTreeSet<String>,
+    /// The names Oxyn filled itself with values that are not secrets: the
+    /// essentials and the confinement. Never redacted, since the redactor also
+    /// rewrites the agent's answers: a user's name, a path under their home or
+    /// the word `read-only` would turn into markers in plain text.
+    ordinary: BTreeSet<String>,
 }
 
 /// Written by hand, names only. The values are what the user declared for the
@@ -124,7 +129,8 @@ impl Environment {
     ///
     /// `source` is the host's environment, passed in rather than read here so a
     /// test can state it. Only the names in `ALWAYS_PASSED` are looked up;
-    /// anything else in `source` is ignored.
+    /// anything else in `source` is ignored. None of them names a credential,
+    /// so none is redacted.
     #[must_use]
     pub fn with_essentials<F>(mut self, source: F) -> Self
     where
@@ -133,12 +139,16 @@ impl Environment {
         for name in ALWAYS_PASSED {
             if let Some(value) = source(name) {
                 self.passed.insert(name.to_owned(), value);
+                self.ordinary.insert(name.to_owned());
             }
         }
         self
     }
 
     /// Adds what the user confirmed when declaring the agent.
+    ///
+    /// Always redacted, even under an essential's name: a value the user typed
+    /// may be a credential, whatever it is called.
     #[must_use]
     pub fn with_declared<I, K, V>(mut self, declared: I) -> Self
     where
@@ -147,7 +157,22 @@ impl Environment {
         V: Into<String>,
     {
         for (name, value) in declared {
-            self.passed.insert(name.into(), value.into());
+            let name = name.into();
+            self.ordinary.remove(&name);
+            self.passed.insert(name, value.into());
+        }
+        self
+    }
+
+    /// Adds the variables that confine the agent. They come last, so a
+    /// declared variable cannot undo them, and they are not redacted: Oxyn
+    /// wrote them, and they hold modes and names, never a credential (the tool
+    /// token travels on its own, see `super::session`).
+    #[must_use]
+    pub(super) fn with_confinement(mut self, confinement: &super::confine::Confinement) -> Self {
+        for (name, value) in &confinement.env {
+            self.passed.insert((*name).to_owned(), value.clone());
+            self.ordinary.insert((*name).to_owned());
         }
         self
     }
@@ -168,6 +193,7 @@ impl Environment {
             })?;
             let value = resolver.resolve(reference)?;
             self.secret_names.insert(name.clone());
+            self.ordinary.remove(name);
             self.passed.insert(name.clone(), value);
         }
         Ok(self)
@@ -206,6 +232,25 @@ impl Environment {
             .unwrap_or(0)
     }
 
+    /// Every value [`redact`] replaces, with the label its marker shows.
+    ///
+    /// The one place that decides what is redacted: a report and a stream both
+    /// read it, so they cannot disagree. What Oxyn filled itself is not a
+    /// secret; short ordinary values are noise; explicitly marked secrets are
+    /// neither.
+    fn redactable(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.passed
+            .iter()
+            .filter(|(name, _)| !self.ordinary.contains(*name))
+            .chain(self.withheld.iter())
+            .filter(|(name, value)| {
+                !value.is_empty()
+                    && (self.secret_names.contains(*name)
+                        || value.chars().count() >= MIN_REDACTED_CHARS)
+            })
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+    }
+
     /// The names passed, for a report. **Values are never rendered** (I-03).
     #[must_use]
     pub fn names(&self) -> Vec<&str> {
@@ -228,26 +273,92 @@ impl Environment {
 /// every error message it sends over the protocol (`super::session` runs each
 /// one through it before cutting it). Two redactors would disagree the day one
 /// learns a rule the other does not — a keychain value shown by the channel
-/// nobody updated. A value shorter than `MIN_REDACTED_CHARS` is replaced only
-/// when its name is a declared secret, and the longest values go first.
+/// nobody updated. What it replaces is [`Environment::redactable`], the longest
+/// values first.
 pub(super) fn redact(text: &str, environment: &Environment) -> String {
     let mut clean = text.to_owned();
-    let mut values: Vec<_> = environment
-        .pairs()
-        .chain(environment.withheld.iter())
-        .collect();
+    let mut values: Vec<_> = environment.redactable().collect();
     // A shorter value must not cut a longer secret before it can be removed.
     values.sort_by_key(|(_, value)| std::cmp::Reverse(value.len()));
     for (name, value) in values {
-        // Short ordinary values are noise; explicitly marked secrets are not.
-        if !value.is_empty()
-            && (environment.secret_names.contains(name)
-                || value.chars().count() >= MIN_REDACTED_CHARS)
-        {
-            clean = clean.replace(value.as_str(), &format!("<{name} redacted>"));
-        }
+        clean = clean.replace(value, &format!("<{name} redacted>"));
     }
     clean
+}
+
+/// Redacts a text stream without exposing a secret split between chunks.
+///
+/// A complete secret is replaced as soon as it is available. A suffix that is
+/// a prefix of a secret stays pending until the next chunk or the end of the
+/// stream, so the already emitted prefix can never reveal part of a value.
+#[derive(Default)]
+pub(super) struct StreamingRedactor {
+    pending: String,
+}
+
+impl StreamingRedactor {
+    /// Adds one chunk and returns the safe prefix that can be shown now.
+    pub(super) fn push(&mut self, chunk: &str, environment: &Environment) -> String {
+        self.pending.push_str(chunk);
+        let values: Vec<&str> = environment.redactable().map(|(_, value)| value).collect();
+        let starts = || self.pending.char_indices().map(|(start, _)| start);
+        // The first position from which the text may still grow into a value.
+        let mut safe_end = starts()
+            .find(|&start| {
+                self.pending.get(start..).is_some_and(|suffix| {
+                    values
+                        .iter()
+                        .any(|value| suffix.len() < value.len() && value.starts_with(suffix))
+                })
+            })
+            .unwrap_or(self.pending.len());
+        // Nor through a complete value: its first part would be shown before
+        // `redact` could recognise it.
+        while let Some(start) = starts()
+            .take_while(|&start| start < safe_end)
+            .find(|&start| {
+                self.pending.get(start..).is_some_and(|rest| {
+                    values
+                        .iter()
+                        .any(|value| rest.starts_with(value) && start + value.len() > safe_end)
+                })
+            })
+        {
+            safe_end = start;
+        }
+        let tail = self.pending.split_off(safe_end);
+        let safe = redact(&self.pending, environment);
+        self.pending = tail;
+        safe
+    }
+
+    /// Finishes the stream and returns its pending tail after redaction.
+    ///
+    /// A stream that stops inside a secret — the user clicking Stop while the
+    /// agent prints a key — leaves its first part pending. Released as is, it
+    /// would show up to all but one character of the value. A tail long enough
+    /// to be one under [`redact`]'s own rule, or of an explicit secret, is
+    /// replaced by the marker; a shorter one is too common to hide.
+    pub(super) fn finish(&mut self, environment: &Environment) -> String {
+        let mut clean = redact(std::mem::take(&mut self.pending).as_str(), environment);
+        let partial = clean.char_indices().find_map(|(start, _)| {
+            let tail = clean.get(start..)?;
+            environment
+                .redactable()
+                .find(|(name, value)| {
+                    tail.len() < value.len()
+                        && value.starts_with(tail)
+                        && (environment.secret_names.contains(*name)
+                            || tail.chars().count() >= MIN_REDACTED_CHARS)
+                })
+                .map(|(name, _)| (start, format!("<{name} redacted>")))
+        });
+        if let Some((start, marker)) = partial {
+            clean.truncate(start);
+            clean.push_str(&marker);
+        }
+        clean
+    }
 }
 
 /// Below this, a value is too short to be a secret and too common to replace.

@@ -59,7 +59,7 @@ use oxyn_calls::OxynCalls;
 use super::confine::{Confinement, ModeWatch};
 use super::prompt::AgentPrompt;
 use super::settings::{AgentSettings, SettingChange, SettingRefused, SettingValue};
-use super::spawn::{Environment, ExitReport, Spawned, spawn};
+use super::spawn::{Environment, ExitReport, Spawned, StreamingRedactor, redact, spawn};
 use super::turn::TurnEnd;
 use super::{PermissionVerdict, check_launchable, option_for, permission_for};
 use crate::observer::{
@@ -70,6 +70,49 @@ use crate::privacy::{PrivacyTier, allows_external_agent};
 /// The longest agent message kept in an error. An agent may put a stack trace
 /// there; the user needs the first sentence, not a wall.
 const MAX_AGENT_MESSAGE: usize = 480;
+
+/// Redaction state for the streams relayed during one prompt.
+///
+/// Text and thought chunks are kept independently because a secret split at the
+/// end of one channel must not be joined with unrelated content from another.
+struct RelayRedactor {
+    environment: Environment,
+    text: StreamingRedactor,
+    thinking: StreamingRedactor,
+}
+
+impl RelayRedactor {
+    fn new(environment: Environment) -> Self {
+        Self {
+            environment,
+            text: StreamingRedactor::default(),
+            thinking: StreamingRedactor::default(),
+        }
+    }
+
+    fn flush(&mut self, observer: &dyn AgentObserver) {
+        let text = self.text.finish(&self.environment);
+        if !text.is_empty() {
+            observer.observe(AgentEvent::TextDelta { text: &text });
+        }
+        let thinking = self.thinking.finish(&self.environment);
+        if !thinking.is_empty() {
+            observer.observe(AgentEvent::ThinkingDelta { text: &thinking });
+        }
+    }
+
+    fn text(&mut self, chunk: &str) -> String {
+        self.text.push(chunk, &self.environment)
+    }
+
+    fn thinking(&mut self, chunk: &str) -> String {
+        self.thinking.push(chunk, &self.environment)
+    }
+
+    fn plan(&self, content: &str) -> String {
+        redact(content, &self.environment)
+    }
+}
 
 /// A way to sign in that the agent advertises.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,9 +287,12 @@ enum Request {
     },
 }
 
-/// Who is watching the prompt in progress. Swapped per prompt, so an update
-/// that arrives after a cancel reaches nobody.
-type Watcher = Arc<Mutex<Option<Arc<dyn AgentObserver>>>>;
+/// Who is watching the prompt in progress, and what its streams still hold
+/// back. Swapped per prompt, so an update that arrives after a cancel reaches
+/// nobody. The held-back text lives in the same slot as its observer: it is
+/// taken with it, under one lock, so nothing can be added between its flush
+/// and the clear, and the next prompt starts from nothing.
+type Watcher = Arc<Mutex<Option<(Arc<dyn AgentObserver>, RelayRedactor)>>>;
 
 /// The agent's settings as last declared: by `session/new`, then by its
 /// notifications and its answers to changes.
@@ -498,12 +544,10 @@ impl ExternalSession {
             .as_ref()
             .is_some_and(|confinement| confinement.tools_in_env);
         // The confinement comes last: a declared variable cannot undo it.
-        let mut environment = environment.with_declared(
-            confinement
-                .iter()
-                .flat_map(|confinement| confinement.env.iter())
-                .map(|(name, value)| (*name, value.clone())),
-        );
+        let mut environment = match &confinement {
+            Some(confinement) => environment.with_confinement(confinement),
+            None => environment,
+        };
         if let Some((endpoint, _)) = &tools {
             environment = if tools_in_env {
                 // Given to the child, for the configuration that names it:
@@ -848,9 +892,12 @@ async fn drive(
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
                             .hides(&notification.update)
-                        && let Some(observer) = current(&watcher)
+                        && let Some((observer, redactor)) = watcher
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .as_mut()
                     {
-                        relay(&*observer, notification.update);
+                        relay(&**observer, notification.update, redactor);
                     }
                     Ok(())
                 }
@@ -1001,7 +1048,7 @@ async fn serve(
                 if !declared.is_empty() {
                     observer.observe(AgentEvent::AgentSettings(&declared));
                 }
-                set_watcher(watcher, Some(observer));
+                set_watcher(watcher, observer, &state.redactor);
                 state.liveness.begin();
                 let sent = connection
                     .send_request(PromptRequest::new(
@@ -1013,7 +1060,9 @@ async fn serve(
                 let halted = pin!(halted(&cancel, &state.liveness, state.limits.idle));
                 match select(sent, halted).await {
                     Either::Left((answer, _)) => {
-                        set_watcher(watcher, None);
+                        if let Some((observer, mut streams)) = take_watcher(watcher) {
+                            streams.flush(&*observer);
+                        }
                         // Cut short because it left its mode: said as such,
                         // not as a cancel the user did not ask for.
                         if state.watch.left() {
@@ -1035,7 +1084,11 @@ async fn serve(
                         );
                     }
                     Either::Right((halt, sent)) => {
-                        set_watcher(watcher, None);
+                        // What the streams held back is shown, or replaced by
+                        // its marker, before the stop is reported.
+                        if let Some((observer, mut streams)) = take_watcher(watcher) {
+                            streams.flush(&*observer);
+                        }
                         let _ = connection.send_notification(CancelNotification::new(session));
                         let _ = reply.send(match halt {
                             Halt::Cancelled => Ok(TurnEnd::Cancelled),
@@ -1410,11 +1463,23 @@ fn current(watcher: &Watcher) -> Option<Arc<dyn AgentObserver>> {
     watcher
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+        .as_ref()
+        .map(|(observer, _)| Arc::clone(observer))
 }
 
-fn set_watcher(watcher: &Watcher, observer: Option<Arc<dyn AgentObserver>>) {
-    *watcher.lock().unwrap_or_else(PoisonError::into_inner) = observer;
+/// Starts a prompt's watch with streams that hold nothing back yet: a tail
+/// left by the previous prompt must not be glued to this answer.
+fn set_watcher(watcher: &Watcher, observer: Arc<dyn AgentObserver>, environment: &Environment) {
+    *watcher.lock().unwrap_or_else(PoisonError::into_inner) =
+        Some((observer, RelayRedactor::new(environment.clone())));
+}
+
+/// Ends the watch: the observer and what its streams held back, together.
+fn take_watcher(watcher: &Watcher) -> Option<(Arc<dyn AgentObserver>, RelayRedactor)> {
+    watcher
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
 }
 
 /// Keeps what the agent says about its settings. Says whether `update` was
@@ -1435,16 +1500,22 @@ fn remember(settings: &Settings, update: &SessionUpdate) -> bool {
 /// Passes on what the agent streams. Only what Oxyn can show honestly: the
 /// answer, the reasoning, the kind and progress of the agent's own tools —
 /// its calls to Oxyn's are kept out before this, by [`OxynCalls`].
-fn relay(observer: &dyn AgentObserver, update: SessionUpdate) {
+fn relay(observer: &dyn AgentObserver, update: SessionUpdate, redactor: &mut RelayRedactor) {
     match update {
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let ContentBlock::Text(text) = chunk.content {
-                observer.observe(AgentEvent::TextDelta { text: &text.text });
+                let text = redactor.text(&text.text);
+                if !text.is_empty() {
+                    observer.observe(AgentEvent::TextDelta { text: &text });
+                }
             }
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
             if let ContentBlock::Text(text) = chunk.content {
-                observer.observe(AgentEvent::ThinkingDelta { text: &text.text });
+                let text = redactor.thinking(&text.text);
+                if !text.is_empty() {
+                    observer.observe(AgentEvent::ThinkingDelta { text: &text });
+                }
             }
         }
         // The title is not relayed: the agent composes it, and it can quote a
@@ -1474,12 +1545,11 @@ fn relay(observer: &dyn AgentObserver, update: SessionUpdate) {
         // The whole plan, every time: the protocol has no delta and no entry
         // identifier, so the panel replaces rather than merges.
         SessionUpdate::Plan(plan) => {
-            let steps: Vec<PlanStep<'_>> = plan
+            let entries: Vec<(String, PlanPriority, PlanStatus)> = plan
                 .entries
                 .iter()
-                .map(|entry| PlanStep {
-                    content: entry.content.as_str(),
-                    priority: match entry.priority {
+                .map(|entry| {
+                    let priority = match entry.priority {
                         PlanEntryPriority::High => PlanPriority::High,
                         PlanEntryPriority::Medium => PlanPriority::Medium,
                         PlanEntryPriority::Low => PlanPriority::Low,
@@ -1487,15 +1557,24 @@ fn relay(observer: &dyn AgentObserver, update: SessionUpdate) {
                         // middle one: inventing « high » would reorder the
                         // user's attention on a guess.
                         _ => PlanPriority::Medium,
-                    },
-                    status: match entry.status {
+                    };
+                    let status = match entry.status {
                         PlanEntryStatus::Pending => PlanStatus::Pending,
                         PlanEntryStatus::InProgress => PlanStatus::InProgress,
                         PlanEntryStatus::Completed => PlanStatus::Completed,
                         // Never « completed » on a guess: a step wrongly shown
                         // as done is a step the user stops watching.
                         _ => PlanStatus::Pending,
-                    },
+                    };
+                    (redactor.plan(&entry.content), priority, status)
+                })
+                .collect();
+            let steps: Vec<PlanStep<'_>> = entries
+                .iter()
+                .map(|(content, priority, status)| PlanStep {
+                    content,
+                    priority: *priority,
+                    status: *status,
                 })
                 .collect();
             observer.observe(AgentEvent::Plan { steps: &steps });

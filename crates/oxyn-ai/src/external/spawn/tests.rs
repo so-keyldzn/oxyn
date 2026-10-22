@@ -305,8 +305,9 @@ fn the_child_really_receives_the_identity_variable() {
     .expect("a shell starts");
 
     let exit = block_on(spawned.watch);
+    // Not redacted: an essential is not a secret, so the value itself shows.
     assert!(
-        exit.stderr.contains("user=[<USER redacted>]"),
+        exit.stderr.contains("user=[someone]"),
         "the child must see USER: {}",
         exit.stderr
     );
@@ -454,4 +455,138 @@ fn a_program_on_a_protected_path_can_be_spawned() {
         .expect("the child's PATH finds its program");
     assert_eq!(block_on(spawned.watch).code, Some(0));
     std::fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+const STREAMED_SECRET: &str = "oxyn-stream-secret-9f0c";
+
+/// What each chunk let through, then what the end of the stream flushed.
+fn stream(chunks: &[&str], environment: &Environment) -> (Vec<String>, String) {
+    let mut redactor = StreamingRedactor::default();
+    let shown = chunks
+        .iter()
+        .map(|chunk| redactor.push(chunk, environment))
+        .collect();
+    (shown, redactor.finish(environment))
+}
+
+fn joined((shown, end): &(Vec<String>, String)) -> String {
+    format!("{}{end}", shown.concat())
+}
+
+#[test]
+fn a_secret_split_between_chunks_is_held_then_redacted() {
+    let environment = Environment::empty().with_declared([("KEY", STREAMED_SECRET)]);
+    let streamed = stream(&["key=oxyn-stream-", "secret-9f0c!"], &environment);
+    assert_eq!(streamed.0, ["key=", "<KEY redacted>!"]);
+    assert_eq!(streamed.1, "");
+}
+
+#[test]
+fn a_long_prefix_left_at_the_end_is_redacted_a_broken_or_short_one_is_not() {
+    let environment = Environment::empty().with_declared([("KEY", STREAMED_SECRET)]);
+    // Broken by the next chunk: released as it was.
+    let broken = stream(&["see oxyn-stream-", "s and more"], &environment);
+    assert_eq!(broken.0, ["see ", "oxyn-stream-s and more"]);
+    // Still pending at the end, as when the user stops the agent mid-key:
+    // 12 of its 23 characters are hidden behind the marker.
+    let pending = stream(&["see oxyn-stream-"], &environment);
+    assert_eq!(pending.0, ["see "]);
+    assert_eq!(pending.1, "<KEY redacted>");
+    // Too short to hide: the same rule as `redact`'s.
+    let short = stream(&["see oxyn"], &environment);
+    assert_eq!(short.0, ["see "]);
+    assert_eq!(short.1, "oxyn");
+}
+
+#[test]
+fn a_secret_that_starts_a_longer_one_waits_for_the_longer() {
+    let environment =
+        Environment::empty().with_declared([("SHORT", "abcdef-123"), ("LONG", "abcdef-123-xyz")]);
+    let longer = stream(&["a abcdef-123", "-xyz b"], &environment);
+    assert_eq!(longer.0[0], "a ", "the shorter must not be decided early");
+    assert_eq!(joined(&longer), "a <LONG redacted> b");
+    let shorter = stream(&["a abcdef-123", " b"], &environment);
+    assert_eq!(joined(&shorter), "a <SHORT redacted> b");
+}
+
+#[test]
+fn an_empty_chunk_changes_nothing() {
+    let environment = Environment::empty().with_declared([("KEY", STREAMED_SECRET)]);
+    let streamed = stream(&["", "x oxyn-stream-", "", "secret-9f0c"], &environment);
+    assert_eq!(streamed.0, ["", "x ", "", "<KEY redacted>"]);
+    assert_eq!(streamed.1, "");
+}
+
+#[test]
+fn a_chunk_that_is_exactly_a_secret_is_redacted_at_once() {
+    let environment = Environment::empty().with_declared([("KEY", STREAMED_SECRET)]);
+    let streamed = stream(&[STREAMED_SECRET], &environment);
+    assert_eq!(streamed.0, ["<KEY redacted>"]);
+    assert_eq!(streamed.1, "");
+}
+
+#[test]
+fn a_complete_secret_is_never_cut_by_the_hold_back() {
+    // The key ends with `e`, the first letter of another declared value: the
+    // hold-back starts at that `e`, inside the complete key. Its first part
+    // must not be shown.
+    let environment = Environment::empty().with_declared([
+        ("REGION", "eu-west-3-private"),
+        ("API_KEY", "sk-test-4f9a2e"),
+    ]);
+    let streamed = stream(&["key sk-test-4f9a2e", " done"], &environment);
+    assert_eq!(joined(&streamed), "key <API_KEY redacted> done");
+}
+
+#[test]
+fn a_secret_whose_end_repeats_its_start_is_never_cut() {
+    let environment = Environment::empty().with_declared([("TOKEN", "abc-123-abc")]);
+    let streamed = stream(&["x abc-123-abc", "!"], &environment);
+    assert_eq!(joined(&streamed), "x <TOKEN redacted>!");
+}
+
+#[test]
+fn an_answer_keeps_ordinary_values_and_loses_a_declared_key() {
+    // What Oxyn filled itself is not a secret: an answer quoting a path under
+    // the home directory, the user's name or the confinement's mode is shown
+    // as written. A declared key in the same answer is not.
+    let confinement = super::super::confine::Confinement {
+        env: vec![("INITIAL_AGENT_MODE", "read-only".to_owned())],
+        session_meta: None,
+        mode: "read-only",
+        tools_in_env: false,
+    };
+    let environment = Environment::empty()
+        .with_essentials(|name| match name {
+            "HOME" => Some("/Users/someone".to_owned()),
+            "USER" => Some("someone".to_owned()),
+            _ => None,
+        })
+        .with_declared([("KEY", STREAMED_SECRET)])
+        .with_confinement(&confinement);
+    let streamed = stream(
+        &[
+            "Your dump is in /Users/someone/backups; ",
+            "connected as someone, read-only, with oxyn-stream-",
+            "secret-9f0c.",
+        ],
+        &environment,
+    );
+    assert_eq!(
+        joined(&streamed),
+        "Your dump is in /Users/someone/backups; connected as someone, read-only, \
+         with <KEY redacted>."
+    );
+}
+
+#[test]
+fn an_essential_the_user_declares_again_is_redacted() {
+    // The user typed this value: it may be anything, so it is treated as one.
+    let environment = Environment::empty()
+        .with_essentials(|name| (name == "HOME").then(|| "/Users/someone".to_owned()))
+        .with_declared([("HOME", "/private/vault-home")]);
+    assert_eq!(
+        redact("cd /private/vault-home", &environment),
+        "cd <HOME redacted>"
+    );
 }
