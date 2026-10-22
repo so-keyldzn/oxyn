@@ -14,13 +14,23 @@ import type { EditorSelection } from "@codemirror/state"
 import { EditorView, keymap, runScopeHandlers } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
 import { ActionMenuContent } from "./action-menu-items"
+import { sqlEditorSearch } from "./sql-editor-search"
 import { TEXT_FIELD_DOM_ATTRIBUTES } from "./text-field"
 
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { toast } from "@/components/ui/toast"
+import { catalogNeeds } from "@/features/consoles/sql-catalog-needs"
+import { sqlCompletionSource } from "@/features/consoles/sql-completion"
+import {
+  completionNote,
+  partialNote,
+  showCompletionNote,
+} from "@/features/consoles/sql-completion-note"
 import { setZoneHandle } from "@/lib/actions/context"
 import type { ActionSources } from "@/lib/actions/context"
 import { writeClipboard } from "@/lib/clipboard"
+import type { CompletionCatalog } from "@/lib/ipc/completion"
+import type { NamePart } from "@/lib/sql-identifiers"
 
 function dialectFor(driver: string) {
   switch (driver) {
@@ -72,6 +82,26 @@ const theme = EditorView.theme({
     color: "var(--popover-foreground)",
     border: "1px solid var(--border)",
     borderRadius: "6px",
+  },
+  ".cm-panels": {
+    backgroundColor: "var(--card)",
+    color: "var(--foreground)",
+    borderTop: "1px solid var(--border)",
+  },
+  // The matches of the find bar: the library's own decorations, in the colors
+  // of the theme.
+  ".cm-searchMatch": {
+    backgroundColor: "color-mix(in oklab, var(--warning) 28%, transparent)",
+    outline: "1px solid color-mix(in oklab, var(--warning) 55%, transparent)",
+  },
+  ".cm-searchMatch.cm-searchMatch-selected": {
+    backgroundColor: "color-mix(in oklab, var(--primary) 38%, transparent)",
+    outline: "1px solid var(--primary)",
+  },
+  ".cm-completion-note": {
+    padding: "2px 12px",
+    fontFamily: "var(--font-sans)",
+    fontSize: "0.85em",
   },
 })
 
@@ -178,6 +208,8 @@ export function SqlEditor({
   onBlur,
   onEditor,
   menu,
+  completion = null,
+  onCatalogNeeds,
   autoFocus = false,
 }: {
   value: string
@@ -192,6 +224,19 @@ export function SqlEditor({
   /** The CodeMirror view, to focus it or put text in it. */
   onEditor?: (view: EditorView) => void
   menu?: SqlEditorMenu
+  /**
+   * The names of the catalog cache, for the completion (ADR-0057). `null`
+   * leaves the keywords only: a read-only view, or a connection whose cache is
+   * not read yet.
+   */
+  completion?: CompletionCatalog | null
+  /**
+   * The names of the statement under the cursor that the cache may lack,
+   * after a pause in typing and when the editor opens — for the host to read
+   * what they need (ADR-0057 § 2). Omitted by a view that completes from what
+   * is loaded and asks for nothing more.
+   */
+  onCatalogNeeds?: (names: Array<Array<NamePart>>) => void
   autoFocus?: boolean
 }) {
   // Handlers change every render; the keymap is built once and reads the
@@ -200,16 +245,25 @@ export function SqlEditor({
     onCancel,
     onTargetChange,
     onBlur,
+    onCatalogNeeds,
     running,
   })
   handlers.current = {
     onCancel,
     onTargetChange,
     onBlur,
+    onCatalogNeeds,
     running,
   }
+  // The snapshot is read the same way: a new one is no reason to rebuild the
+  // editor's extensions, and the source reads the latest when it is asked.
+  const snapshot = React.useRef(completion)
+  snapshot.current = completion
   const zone = React.useRef<HTMLDivElement>(null)
   const [view, setView] = React.useState<EditorView | null>(null)
+  React.useEffect(() => {
+    if (view) showCompletionNote(view, partialNote(completion))
+  }, [view, completion])
   React.useEffect(() => {
     const element = zone.current
     if (!element || !view) return
@@ -262,9 +316,21 @@ export function SqlEditor({
     })
   }
 
-  const extensions = React.useMemo(
-    () => [
-      sql({ dialect: dialectFor(driver), upperCaseKeywords: true }),
+  const extensions = React.useMemo(() => {
+    const language = sql({
+      dialect: dialectFor(driver),
+      upperCaseKeywords: true,
+    })
+    return [
+      language,
+      // The library keeps the keywords and the aliases; the names come from
+      // here, because it cannot insert the form Rust composed (see the source).
+      language.language.data.of({
+        autocomplete: sqlCompletionSource(() => snapshot.current),
+      }),
+      completionNote,
+      catalogNeeds(() => handlers.current.onCatalogNeeds),
+      sqlEditorSearch,
       theme,
       highlight,
       EditorView.lineWrapping,
@@ -315,9 +381,8 @@ export function SqlEditor({
           },
         ])
       ),
-    ],
-    [driver]
-  )
+    ]
+  }, [driver])
 
   const sources =
     target && view ? menuSources(view, target, readOnly, menu) : {}
