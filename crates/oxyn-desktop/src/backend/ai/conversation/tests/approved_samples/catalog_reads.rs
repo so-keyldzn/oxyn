@@ -137,6 +137,7 @@ fn a_provider_question_on_a_never_expanded_connection_is_told_the_tables_and_the
                 "total of the orders per customer",
                 None,
                 PrivacyTier::Metadata,
+                crate::backend::ai::threads::memory_ceiling(None),
             ),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
@@ -413,6 +414,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
                 "customers",
                 None,
                 PrivacyTier::Metadata,
+                crate::backend::ai::threads::memory_ceiling(None),
             ),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
@@ -459,6 +461,7 @@ fn a_mention_in_a_session_already_open_is_read_before_it_is_described() {
                 "and this one?",
                 None,
                 PrivacyTier::Metadata,
+                crate::backend::ai::threads::memory_ceiling(None),
             ),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));

@@ -522,6 +522,8 @@ export const MemoryReset = z.enum([
   "destinationChanged",
   "sampleNotKept",
   "restarted",
+  "historyTooLong",
+  "historyRefused",
 ])
 export type MemoryReset = z.infer<typeof MemoryReset>
 

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="c91f0b685823" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="6bbcace88717" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1686,6 +1686,40 @@ mensuel, reconnaissable à `error.details.error_code = enforced_spend_limit_reac
 et pour lequel rejouer échoue jusqu'au mois suivant. Oxyn ne rejoue jamais de
 lui-même (I-13) : cet en-tête n'est donc pas encore lu, et le noter ici évite
 qu'on le croie traité.
+
+### Dépassement de la fenêtre de contexte — relevé le 2026-10-22
+
+Ce que fait un fournisseur d'une requête plus grande que la fenêtre de contexte
+du modèle, relevé pour la borne d'une session mémorisée (#271) :
+
+| Fournisseur | Ce qu'il documente | Source |
+|---|---|---|
+| Anthropic | « Everything in the request counts toward the context window » : l'instruction système, chaque message avec ses résultats d'outils, **les définitions des outils**, et la sortie générée. Une entrée qui dépasse à elle seule la fenêtre reçoit un `400 invalid_request_error` (« prompt is too long ») sur tous les modèles ; à partir de Claude 4.5, une entrée qui tient mais laisse trop peu de place arrête la génération avec `model_context_window_exceeded` | [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows), § « How the context window works » et « Context window overflow behavior » |
+| Anthropic | Le type d'erreur n'est **pas** spécifique : `invalid_request_error` couvre tout `400` — « an issue with the format or content of your request », un plafond de dépense, un préremplissage refusé, un réglage de raisonnement. Les erreurs ont la forme `{"type":"error","error":{"type":…,"message":…}}` ; `402` est `billing_error` | [Errors](https://platform.claude.com/docs/en/api/errors), § « HTTP errors » et « Error shapes » |
+| OpenAI | **rien** : la page des codes d'erreur ne liste aucun code ni type de longueur de contexte ; un `400` est une requête « malformed or missing some required parameters ». Un code `context_length_exceeded` ne circule que dans des signalements de forum | [Error codes](https://developers.openai.com/api/docs/guides/error-codes) |
+| Gemini | **rien** : aucun code du tableau des erreurs ne nomme une entrée qui dépasse la fenêtre ; `400 invalid_request` est « malformed or contains invalid parameters », `400 failed_precondition` un prérequis comme la facturation, `402 payment_required` un crédit prépayé épuisé, et la page de dépannage dit de ne pas retenter un `400`, `402` ou `403` | [API errors](https://ai.google.dev/gemini-api/docs/api-errors), § « Standard API error codes » ; [Troubleshooting](https://ai.google.dev/gemini-api/docs/troubleshooting) |
+
+Les quatre pages lues le 2026-10-22.
+
+Conséquences dans Oxyn. Aucun fournisseur ne documente de champ propre au
+dépassement : une famille de statuts ne peut donc pas en tenir lieu, un `400`
+ou un `402` étant aussi souvent un paramètre ou le crédit, qu'un contexte neuf
+ne corrige pas. Seul le refus documenté d'Anthropic devient
+`OxynError::ContextTooLong` — un `400` dont `error.type` vaut
+`invalid_request_error` **et** dont `error.message` commence par « prompt is
+too long ». La phrase est celle de la documentation, lue au seul début du
+message ; si Anthropic la reformule, le refus se lit comme un refus ordinaire,
+qui n'abandonne rien. Ce refus seul abandonne une session mémorisée. **Le
+manque qui reste** : un dépassement qu'OpenAI, Gemini ou un serveur compatible
+OpenAI refuse dans ses propres mots garde la session, et la même question de
+suite est refusée de nouveau jusqu'à ce que l'utilisateur ouvre une nouvelle
+conversation — l'échec le dit.
+
+La borne avant l'envoi est donc la protection : une session mémorisée peut
+occuper **la moitié** de la fenêtre que déclare la liste des modèles
+(`ModelInfo::context_window`), les définitions des outils qu'elle offre
+comptées avec elle, car la fenêtre contient aussi la question suivante, les
+résultats de ses outils et la réponse.
 
 ### Raisonnement : deux réglages distincts
 

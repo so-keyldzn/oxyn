@@ -286,15 +286,29 @@ impl AnthropicProvider {
     /// Turns a failure response into an error, body scrubbed.
     ///
     /// The status decides the retry; the body only serves display, and it is
-    /// truncated and rid of the key by [`LlmError::from_response`].
+    /// truncated and rid of the key by [`LlmError::from_response`] — except
+    /// for the documented context overflow, which becomes
+    /// [`LlmError::ContextTooLong`]. It is read on that scrubbed body: a body
+    /// cut past the display bound no longer parses, and stays an ordinary
+    /// refusal.
     async fn failure(&self, response: reqwest::Response, cancel: Option<&CancelToken>) -> LlmError {
-        http::failure(
+        match http::failure(
             &ProviderId::anthropic(),
             response,
             Some(&self.api_key),
             cancel,
         )
         .await
+        {
+            LlmError::Http {
+                provider,
+                status,
+                message,
+            } if wire::is_context_overflow(status, &message) => {
+                LlmError::ContextTooLong { provider, message }
+            }
+            other => other,
+        }
     }
 
     /// Sends a request and returns its response, yielding to cancellation.
@@ -945,6 +959,58 @@ mod tests {
             let err = LlmError::from_response(ProviderId::anthropic(), statut, body, Some(&key));
             assert_eq!(err.is_retryable(), retryable, "HTTP {statut} : {err}");
         }
+    }
+
+    /// Only the documented overflow is recognized: the generic type of every
+    /// `400`, the phrase elsewhere in a message, another status or another
+    /// shape stay ordinary refusals — the side that drops nothing.
+    #[test]
+    fn only_the_documented_overflow_is_a_context_too_long() {
+        let overflow = r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 215000 tokens > 200000 maximum"},"request_id":"req_1"}"#;
+        assert!(wire::is_context_overflow(400, overflow));
+
+        for (status, body) in [
+            (413, overflow),
+            (
+                400,
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"This model does not support assistant message prefill."}}"#,
+            ),
+            (
+                400,
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages.0: the prompt is too long"}}"#,
+            ),
+            (
+                400,
+                r#"{"type":"error","error":{"type":"api_error","message":"prompt is too long"}}"#,
+            ),
+            (
+                400,
+                r#"{"error":{"type":"invalid_request_error","message":"prompt is too long"}}"#,
+            ),
+            (
+                402,
+                r#"{"type":"error","error":{"type":"billing_error","message":"prompt is too long"}}"#,
+            ),
+            (400, "prompt is too long"),
+            (400, ""),
+        ] {
+            assert!(!wire::is_context_overflow(status, body), "{status} {body}");
+        }
+    }
+
+    #[test]
+    fn a_context_too_long_reaches_the_domain_typed_and_final() {
+        let err = LlmError::ContextTooLong {
+            provider: ProviderId::anthropic(),
+            message: "prompt is too long".to_owned(),
+        };
+        assert!(!err.is_retryable());
+        let projected: OxynError = err.into();
+        assert!(
+            matches!(projected, OxynError::ContextTooLong(_)),
+            "{projected}"
+        );
+        assert!(!projected.is_retryable());
     }
 
     #[test]

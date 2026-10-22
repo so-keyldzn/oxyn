@@ -1902,6 +1902,7 @@ mod approved_samples {
                 None,
                 PrivacyTier::Sampled,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         remembered.ask("EARLIER-EXCHANGE-MARK");
@@ -1942,6 +1943,7 @@ mod approved_samples {
                 Some(sample.rows),
                 sample.tier,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&with_sample);
@@ -1971,6 +1973,7 @@ mod approved_samples {
                 None,
                 PrivacyTier::Sampled,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&after);
@@ -2183,6 +2186,7 @@ mod approved_samples {
                 Some(sample),
                 PrivacyTier::Metadata,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&dialogue);
@@ -2639,6 +2643,7 @@ mod approved_samples {
                 None,
                 PrivacyTier::Sampled,
                 oxyn_ai::SemanticScores::new(),
+                threads::memory_ceiling(None),
             )
             .unwrap_or_else(|failure| panic!("{}", failure.message));
         let prompt = prompt_of(&dialogue);
@@ -3100,6 +3105,10 @@ mod approved_samples {
     /// A sample of a relation whose columns were never read: Oxyn reads
     /// them, for the user's offer and for an agent's request alike.
     mod columns_on_demand;
+
+    /// #271: a remembered session past its ceiling, or refused by the
+    /// provider, is not sent again — on this fixture's connection.
+    mod memory_bound;
 }
 
 /// The conversation's agent, rendered for whoever answers (ADR-0049).
