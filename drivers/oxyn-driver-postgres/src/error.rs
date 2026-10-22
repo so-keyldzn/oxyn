@@ -226,7 +226,9 @@ pub(crate) fn classify(err: &sqlx::Error, intent: StatementIntent) -> ErrorClass
 
     match err {
         // The server spoke: its SQLSTATE is authoritative.
-        sqlx::Error::Database(_) => classify_sqlstate(sqlstate_of(err).as_deref(), transport),
+        sqlx::Error::Database(_) => {
+            classify_sqlstate(sqlstate_of(err).as_deref(), intent, transport)
+        }
 
         // The transport gave way. What was sent may have been executed.
         sqlx::Error::Io(_) | sqlx::Error::Protocol(_) | sqlx::Error::WorkerCrashed => transport,
@@ -241,31 +243,51 @@ pub(crate) fn classify(err: &sqlx::Error, intent: StatementIntent) -> ErrorClass
 }
 
 /// The family associated with an SQLSTATE.
-fn classify_sqlstate(code: Option<&str>, transport: ErrorClass) -> ErrorClass {
+fn classify_sqlstate(
+    code: Option<&str>,
+    intent: StatementIntent,
+    transport: ErrorClass,
+) -> ErrorClass {
     let Some(code) = code else {
         return ErrorClass::Permanent;
     };
     match code {
-        // Concurrency conflicts: replaying is exactly the right answer.
+        // A deadlock, lock conflict, or resource shortage can leave a procedure
+        // or non-transactional command partly applied. Only a read or plain
+        // data write has the whole-statement rollback proof needed to retry.
         SQLSTATE_SERIALIZATION_FAILURE
         | SQLSTATE_DEADLOCK
         | SQLSTATE_LOCK_NOT_AVAILABLE
-        | SQLSTATE_TOO_MANY_CONNECTIONS
+        | SQLSTATE_OUT_OF_MEMORY
+        | SQLSTATE_DISK_FULL => retry_class(intent),
+
+        // These failures refuse a connection before the user's statement can
+        // run, so their outcome is certain for every statement intent.
+        SQLSTATE_TOO_MANY_CONNECTIONS
         | SQLSTATE_CONFIG_LIMIT
         | SQLSTATE_CANNOT_CONNECT_NOW
-        | SQLSTATE_IDLE_TIMEOUT
-        | SQLSTATE_OUT_OF_MEMORY
-        | SQLSTATE_DISK_FULL => ErrorClass::Transient,
+        | SQLSTATE_IDLE_TIMEOUT => ErrorClass::Transient,
 
         // The server stopped midway: like a cut.
         SQLSTATE_ADMIN_SHUTDOWN | SQLSTATE_CRASH_SHUTDOWN => transport,
 
         other if other.starts_with(SQLSTATE_CLASS_CONNECTION) => transport,
-        other if other.starts_with(SQLSTATE_CLASS_RESOURCES) => ErrorClass::Transient,
+        other if other.starts_with(SQLSTATE_CLASS_RESOURCES) => retry_class(intent),
 
         // Syntax, missing object, violated constraint, rights, read-only
         // transaction: display it, do not retry.
         _ => ErrorClass::Permanent,
+    }
+}
+
+/// The class for a server failure that is retryable only after a whole-statement
+/// rollback. `CALL` and `DO` classify as the non-plain intents below.
+const fn retry_class(intent: StatementIntent) -> ErrorClass {
+    match intent {
+        StatementIntent::Read | StatementIntent::Write => ErrorClass::Transient,
+        StatementIntent::Unknown | StatementIntent::Ddl | StatementIntent::Grant => {
+            ErrorClass::Ambiguous
+        }
     }
 }
 
@@ -511,18 +533,57 @@ mod tests {
     }
 
     #[test]
-    fn a_deadlock_is_retried() {
-        assert_eq!(
-            classify(&server_error(SQLSTATE_DEADLOCK), StatementIntent::Write),
-            ErrorClass::Transient
-        );
-        assert_eq!(
-            classify(
-                &server_error(SQLSTATE_SERIALIZATION_FAILURE),
-                StatementIntent::Write
-            ),
-            ErrorClass::Transient
-        );
+    fn concurrency_and_resource_errors_follow_the_statement_intent() {
+        for code in [
+            SQLSTATE_SERIALIZATION_FAILURE,
+            SQLSTATE_DEADLOCK,
+            SQLSTATE_LOCK_NOT_AVAILABLE,
+            SQLSTATE_OUT_OF_MEMORY,
+            SQLSTATE_DISK_FULL,
+        ] {
+            for intent in [StatementIntent::Read, StatementIntent::Write] {
+                assert_eq!(
+                    classify(&server_error(code), intent),
+                    ErrorClass::Transient,
+                    "{code}, {intent:?}"
+                );
+            }
+            for intent in [
+                StatementIntent::Unknown,
+                StatementIntent::Ddl,
+                StatementIntent::Grant,
+            ] {
+                assert_eq!(
+                    classify(&server_error(code), intent),
+                    ErrorClass::Ambiguous,
+                    "{code}, {intent:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_admission_errors_are_transient_for_every_intent() {
+        for code in [
+            SQLSTATE_TOO_MANY_CONNECTIONS,
+            SQLSTATE_CONFIG_LIMIT,
+            SQLSTATE_CANNOT_CONNECT_NOW,
+            SQLSTATE_IDLE_TIMEOUT,
+        ] {
+            for intent in [
+                StatementIntent::Read,
+                StatementIntent::Write,
+                StatementIntent::Unknown,
+                StatementIntent::Ddl,
+                StatementIntent::Grant,
+            ] {
+                assert_eq!(
+                    classify(&server_error(code), intent),
+                    ErrorClass::Transient,
+                    "{code}, {intent:?}"
+                );
+            }
+        }
     }
 
     #[test]

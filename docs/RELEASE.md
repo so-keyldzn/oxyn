@@ -203,9 +203,11 @@ the secrets, and audit the published releases' `.sig` against the archives.
 
 1. Merge the reviewed workflow and scripts into `main`. Run `make qualite`
    on the intended source and review the matching GitHub quality run.
-2. Set the release version consistently in the workspace and Tauri config,
-   commit the intended source, then push the matching version tag. A tag push
-   triggers delivery automatically; ordinary branch pushes do not create releases.
+2. Set the release version consistently in `[workspace.package]`, the exact
+   `oxyn-core`, `oxyn-catalog`, `oxyn-data` and `oxyn-driver` dependency pins,
+   and the Tauri config; commit the intended source, then push the matching
+   version tag. A tag push triggers delivery automatically; ordinary branch
+   pushes do not create releases.
 3. Alternatively, select **Actions → livraison → Run workflow**, choose the
    version tag itself under **Use workflow from**, and enter that same tag,
    or run:

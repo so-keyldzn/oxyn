@@ -32,8 +32,22 @@ filter = 'package(oxyn-driver-postgres)'
 test-group = 'serveur-partage'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
+# The MySQL integration tests create and drop objects in one disposable
+# database. Keeping them in the same group also prevents them racing the
+# PostgreSQL and desktop suites that use the CI services.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-mysql)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # Production reads exercised through the bus create a schema and a role of the
 # same name on the same test server.
 [[profile.default.overrides]]
 filter = 'package(oxyn-exec) & test(/production_read_tests::server::/)'
+test-group = 'serveur-partage'
+
+# This suite observes a real server-side cancellation through the desktop
+# backend. It shares the PostgreSQL service with the driver tests.
+[[profile.default.overrides]]
+filter = 'package(oxyn-desktop) & test(/server_cancel::/)'
 test-group = 'serveur-partage'

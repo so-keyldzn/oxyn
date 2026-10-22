@@ -13,16 +13,16 @@
 
 [advisories]
 # An advisory published on a dependency is an error: that is the point of the
-# check. `unmaintained` warns rather than blocks — an unmaintained crate on an
-# external boundary is "a risk to document, not to ignore" (SECURITY), and
-# blocking it outright would fail the gate on a decision that needs a human
-# call.
+# check. `unmaintained = "all"` makes every advisory in the resolved graph
+# fail, including transitive crates. Each currently unavoidable one is then
+# listed below with its reason: an unmaintained crate on an external boundary
+# is "a risk to document, not to ignore" (SECURITY).
 yanked = "deny"
-unmaintained = "workspace"
+unmaintained = "all"
 # An "unsoundness" advisory is informational for `cargo-deny`, and its default
-# is `none`: without this line, RUSTSEC-2024-0429 went through the gate without
-# a word, while GitHub displayed it. `all` makes it visible, including on a
-# transitive dependency — which is where it is.
+# is `workspace`: without this line, RUSTSEC-2024-0429 went through the gate
+# without a word, while GitHub displayed it. `all` makes it visible, including
+# on a transitive dependency — which is where it is.
 unsound = "all"
 
 # Every entry carries its reason: an advisory ignored without a written reason
@@ -66,6 +66,18 @@ ignore = [
     # Only `glib` itself may match. Drop this entry once the chain reaches
     # `glib` >= 0.20.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 via Tauri's gtk 0.18, compiled into the Linux packages; fixed in 0.20, which gtk 0.18 refuses; VariantStrIter unreachable: nothing calls Variant::array_iter_str (checked 2026-10-20)" },
+    # `paste` is transitive through the local embeddings stack. `burn` 0.22
+    # does not provide a release without it; the advisory has no safe upgrade.
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is transitive through burn 0.22 and tokenizers in oxyn-embed; the advisory offers no safe upgrade (checked 2026-10-22)" },
+    # GTK 0.18 cannot move away from this macro crate without Tauri replacing
+    # its GTK 3 stack; the advisory has no safe upgrade.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4 is transitive through gtk 0.18 and glib-macros from Tauri's Linux stack; the advisory offers no safe upgrade (checked 2026-10-22)" },
+    # `zbus` 5 supplies both the keyring backend and a Tauri plugin. The
+    # migration is a major-version move to zbus 6, which the current graph does
+    # not accept.
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.4 is transitive through zbus 5 from keyring and Tauri plugins; its replacement is merged into zbus 6, a graph-wide major upgrade (checked 2026-10-22)" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5.15.0 is transitive through zbus 5 from keyring and Tauri plugins; its replacement is merged into zbus 6, a graph-wide major upgrade (checked 2026-10-22)" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.15.0 is transitive through zvariant 5 from keyring and Tauri plugins; its replacement is merged into zbus 6, a graph-wide major upgrade (checked 2026-10-22)" },
 ]
 
 [licenses]

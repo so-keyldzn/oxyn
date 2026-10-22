@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="c6893d8a62ef" -->
+<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="21a1a03b504e" -->
 
 > Traduction française de [docs/adr/0045-ci-selective-sur-les-pull-requests.md](../../../../docs/adr/0045-ci-selective-sur-les-pull-requests.md). **La version anglaise fait foi.**
 
@@ -142,6 +142,15 @@ fusion.
 En local, [`make verif-rapide`](../../../../Makefile) applique la même idée au
 travail courant — ne vérifier que ce qui a changé depuis `origin/main` — sans
 changer ce qui fait foi : **`make qualite` reste la porte**.
+
+**Amendement (2026-10-22).** `make test-serveurs` est une cible de `make qualite`
+et le job Linux `serveurs` l'exécute à côté de `rust` quand la zone Rust est
+touchée, contre des services PostgreSQL, PostgreSQL TLS et MySQL jetables. En
+CI, l'absence du binaire nextest, une URL de serveur absente ou une suite dépendante
+d'une URL sautée font échouer la cible. Hors CI, quand aucune URL de serveur n'est
+configurée, la cible affiche explicitement `server suites NOT run` et réussit ;
+configurer une URL de serveur est une exécution locale volontaire des suites
+serveur et conserve la sémantique d'échec de la CI.
 
 ## Conséquences
 

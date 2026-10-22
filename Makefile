@@ -5,17 +5,18 @@
 # check.
 #
 # CI (.github/workflows/qualite.yml) calls its pieces in parallel jobs —
-# `front-controles`, `front-tests`, `front-build`, `rust` — so that Rust does
-# not wait behind the stories. It adds nothing: `make socle` refuses a workflow
-# that would forget a target reached by `qualite`. On a pull request, it skips
-# the jobs whose area is not touched; on `main`, everything runs (ADR-0045).
+# `front-controles`, `front-tests`, `front-build`, `rust`, `test-serveurs` — so
+# that Rust does not wait behind the stories. It adds nothing: `make socle`
+# refuses a workflow that would forget a target reached by `qualite`. On a pull
+# request, it skips the jobs whose area is not touched; on `main`, everything
+# runs (ADR-0045).
 #
 # `make verif-rapide` is for day-to-day work: it only checks what changed since
 # `origin/main`. It is not conclusive, `qualite` is.
 #
 # See .claude/rules/manifestes.md and .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite verif-rapide format lint test doc deny todo versions hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm audit-npm
+.PHONY: qualite verif-rapide format lint test test-serveurs doc deny todo versions hooks socle aide front front-controles front-tests front-build rust package-contracts desktop desktop-dev licences-npm audit-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -47,7 +48,8 @@ aide:
 	@echo "make todo      refuses a remaining-work marker without a deadline"
 	@echo "make versions  refuses a pinned version missing from docs/RESEARCH-NOTES.md"
 	@echo "make front     checks the front end: npm licenses, format, lint, types, tests, stories, build"
-	@echo "make rust      checks the Rust: format, clippy, tests, doc, dependencies"
+	@echo "make rust      checks the Rust: format, clippy, tests, doc, dependencies, package contracts"
+	@echo "make test-serveurs  runs the ignored database-server suites (requires their test URLs)"
 	@echo "make desktop-dev  runs the Tauri application with hot reload"
 	@echo "make desktop   builds the Tauri application (PROFIL=release to publish)"
 	@echo ""
@@ -82,7 +84,7 @@ $(TAURI):
 # --- The gate -----------------------------------------------------------------
 # As long as no Cargo.toml exists, the Rust targets are skipped and only the
 # foundation is checked. Silence is not success: the message says so.
-qualite: socle todo versions
+qualite: socle todo versions test-serveurs
 ifeq ($(wildcard Cargo.toml),)
 	@echo ""
 	@echo "No Cargo.toml: the Rust checks did NOT run."
@@ -93,7 +95,7 @@ else
 	@echo "Quality gate passed."
 endif
 
-rust: format lint test doc deny
+rust: format lint test doc deny package-contracts
 
 # Outside the gate, deliberately: it sees neither the dependent crates nor what
 # CI checks alone. The details are in the script.
@@ -138,8 +140,39 @@ else
 	$(CARGO) test --doc --workspace --all-features
 endif
 
+# The ignored suites exercise actual server behavior that unit tests cannot
+# emulate. They need disposable servers and URLs; their dedicated CI job
+# provides both and rejects an unset URL rather than silently skipping a suite.
+# A local gate without any server URL states explicitly that those suites did
+# not run, so the ordinary edit-check-commit loop remains usable.
+test-serveurs: front-build
+ifeq ($(NEXTEST),)
+ifeq ($(origin CI),undefined)
+	@echo "cargo-nextest missing: server suites NOT run outside CI."
+else
+	@echo "cargo-nextest is required for server tests; the shared-server profile must apply."
+	@exit 1
+endif
+else ifeq ($(origin CI)$(OXYN_PG_TEST_URL)$(OXYN_MYSQL_TEST_URL)$(OXYN_PG_PRODUCTION_TEST_URL),undefined)
+	@echo "server suites NOT run outside CI: no server test URLs are set."
+else
+	@output="$$( $(CARGO) nextest run --run-ignored only --nocapture \
+		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
+	printf '%s\n' "$$output"; \
+	if printf '%s\n' "$$output" | grep -Fq 'not set: test skipped'; then \
+		echo "A server test URL is missing; refusing a silently skipped suite."; \
+		exit 1; \
+	fi; \
+	exit $$status
+endif
+
 doc:
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps --all-features
+
+# The Apache driver contract is consumed outside this workspace. Package each
+# crate so a missing dependency version fails before a release reaches crates.io.
+package-contracts:
+	$(CARGO) package -p oxyn-core -p oxyn-catalog -p oxyn-data -p oxyn-driver --no-verify --allow-dirty
 
 # Before the Rust targets, not after: the front-end build produces the
 # directory `oxyn-desktop` embeds at compile time. A CI job that runs `rust`

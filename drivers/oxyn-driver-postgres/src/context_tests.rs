@@ -421,6 +421,58 @@ async fn a_search_path_typed_in_a_console_does_not_follow_the_connection() {
 
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
+async fn every_writable_session_setting_returns_to_the_pool_default() {
+    // These settings outlive an ordinary statement. Reusing the sole pool
+    // connection makes a passing test prove the reset rather than a fresh
+    // connection hiding the leak.
+    let Some((session, _pool, mut control)) = bench(None, &[]).await else {
+        return;
+    };
+    control
+        .execute("DROP ROLE IF EXISTS oxyn_state_reset_role")
+        .await
+        .expect("stale test role cleanup");
+    control
+        .execute("CREATE ROLE oxyn_state_reset_role NOLOGIN")
+        .await
+        .expect("test role");
+
+    let original_pid = pid(&session).await;
+    for (setting, observed) in [
+        (
+            "SET ROLE oxyn_state_reset_role",
+            "SELECT current_user::text",
+        ),
+        (
+            "SET session_replication_role = replica",
+            "SHOW session_replication_role",
+        ),
+        ("SET statement_timeout = 1", "SHOW statement_timeout"),
+    ] {
+        let expected = first_value(&session, observed).await;
+        execute(&session, setting, false).await;
+        assert_eq!(
+            pid(&session).await,
+            original_pid,
+            "the connection must return to the pool after `{setting}`"
+        );
+        assert_eq!(
+            first_value(&session, observed).await,
+            expected,
+            "the next borrower inherited `{setting}`"
+        );
+    }
+
+    control
+        .execute("DROP ROLE oxyn_state_reset_role")
+        .await
+        .expect("test role cleanup");
+    let _ = control.close().await;
+    Box::new(session).close().await.expect("closing");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the documentation of `integration`"]
 async fn transaction_control_is_refused_before_the_server() {
     // Each transaction control statement is refused without anything going
     // out: neither a new connection, nor a query visible on the server. The
