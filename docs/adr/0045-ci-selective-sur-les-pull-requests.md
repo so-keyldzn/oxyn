@@ -50,12 +50,17 @@ The jobs depend on it as follows:
 | `controles` | always | `make front-controles` and the Node installation, if `front` is not touched; `make socle todo` always runs |
 | `stories` | `front` | the whole job |
 | `rust` | `rust` or `front` | `make rust` and its tooling if only `front` is touched; `make front-build` runs as soon as either is |
+| `serveurs` | `rust` | the whole job, including `make test-serveurs` against disposable PostgreSQL, TLS PostgreSQL and MySQL services |
 
 `rust` runs for a front-end PR because it carries `front-build`:
 `oxyn-desktop` embeds `apps/desktop/dist` at compile time, and the front-end
 build has no other job. The `docs` area drives no job: `controles`, which
 checks the links and the ADR index, always runs. It is displayed in the
 `zones` job's log, so that one can read what was decided.
+
+`serveurs` runs alongside `rust` when Rust changes. It uses the same gate
+target, with disposable database services, to exercise the ignored suites that
+cannot run without a server.
 
 A final **`qualite`** job depends on all the others (`if: always()`), and
 succeeds if and only if `zones` succeeded and no other job failed or was
@@ -136,6 +141,14 @@ block the merge.
 Locally, [`make verif-rapide`](../../Makefile) applies the same idea to
 day-to-day work — only check what changed since `origin/main` — without
 changing what is conclusive: **`make qualite` remains the gate**.
+
+**Amendment (2026-10-22).** `make test-serveurs` is a target of `make qualite`
+and is run by the Linux-only `serveurs` job when the Rust area is touched. In
+CI, a missing nextest binary, an unset server URL or a skipped URL-dependent
+suite fails the target. Outside CI, when no server URL is configured, the
+target explicitly reports `server suites NOT run` and succeeds; setting any
+server URL is an intentional local server-suite run and keeps the CI failure
+semantics.
 
 ## Consequences
 

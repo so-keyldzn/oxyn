@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -33,6 +34,7 @@ from verifier_socle import (  # noqa: E402
     HEADING_PATTERN,
     _anchors,
     _slug,
+    contract_pin_errors,
     fingerprint,
     aggregate_errors,
     dependency_tool_errors,
@@ -192,6 +194,65 @@ def dependency_failures() -> list[str]:
     return failures
 
 
+def server_suite_failures() -> list[str]:
+    """A test failure must remain the target's exit status after its output is read."""
+    failures = []
+    root = Path(__file__).resolve().parents[1]
+    with tempfile.TemporaryDirectory() as folder:
+        temporary = Path(folder)
+        cargo = temporary / "cargo"
+        cargo.write_text("#!/bin/sh\nprintf 'FAILED\\n'\nexit 1\n", encoding="utf-8")
+        cargo.chmod(0o755)
+        override = temporary / "override.mk"
+        override.write_text("front-build:\n\t@:\n", encoding="utf-8")
+        command = [
+            shutil.which("make"),
+            "--no-print-directory",
+            "-f",
+            str(root / "Makefile"),
+            "-f",
+            str(override),
+            "test-serveurs",
+            "NEXTEST=present",
+            f"CARGO={cargo}",
+            "TAURI=/dev/null",
+            "MENTIONS=/dev/null",
+        ]
+        result = subprocess.run(
+            command,
+            cwd=root,
+            env=dict(os.environ, CI="true"),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 or "FAILED" not in result.stdout:
+            failures.append("a failing server suite exits successfully")
+        local = subprocess.run(
+            command[:9] + ["NEXTEST=", "TAURI=/dev/null", "MENTIONS=/dev/null"],
+            cwd=root,
+            env={key: value for key, value in os.environ.items() if key != "CI"},
+            capture_output=True,
+            text=True,
+        )
+        if local.returncode or "server suites NOT run" not in local.stdout:
+            failures.append("a local gate without server URLs does not explain its skipped suites")
+    return failures
+
+
+def contract_pin_failures() -> list[str]:
+    """The four publishable contracts must track the workspace release version."""
+    root = Path(__file__).resolve().parents[1]
+    manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    failures = []
+    if contract_pin_errors(manifest):
+        failures.append("current contract pins do not match the workspace version")
+    manifest["workspace"]["dependencies"]["oxyn-driver"]["version"] = "=0.0.0"
+    errors = contract_pin_errors(manifest)
+    if not any("oxyn-driver" in error for error in errors):
+        failures.append("a mismatched contract pin is accepted")
+    return failures
+
+
 def translation_failures() -> list[str]:
     """A fresh mirror passes; an edited source or a missing header fails."""
     failures = []
@@ -238,10 +299,12 @@ def main() -> int:
     failures += ci_failures()
     failures += translation_failures()
     failures += dependency_failures()
+    failures += server_suite_failures()
+    failures += contract_pin_failures()
 
     for failure in failures:
         print(f"FAIL  {failure}")
-    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 13
+    total = len(SLUGS) + len(HEADINGS) + 1 + len(ZONES) + 6 + 3 + 16
     print(f"\n{total - len(failures)}/{total} cases pass")
     return 1 if failures else 0
 

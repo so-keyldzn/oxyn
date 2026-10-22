@@ -364,7 +364,7 @@ mod server {
     fn target() -> Option<(ConnectionConfig, Credentials)> {
         let url = std::env::var(VARIABLE).ok()?;
         let (parts, credentials) = ParsedDsn::parse(&url)
-            .expect("OXYN_PG_TEST_URL must be a `postgres://` URL")
+            .expect("OXYN_PG_PRODUCTION_TEST_URL must be a `postgres://` URL")
             .into_parts();
         Some((
             parts.to_config("production reads", DriverId::postgres()),

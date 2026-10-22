@@ -8,6 +8,7 @@
 #   controles  make socle todo versions front-controles
 #   stories    make front-tests SHARD=i/n, one job per shard
 #   rust       make front-build rust
+#   serveurs   make test-serveurs
 #
 # Together they are `make qualite`. `make socle` checks it: a workflow that
 # forgot a target reached by `qualite` fails the gate.
@@ -351,7 +352,7 @@ jobs:
         image: mysql:8.4
         env:
           MYSQL_ROOT_PASSWORD: oxyn
-          MYSQL_DATABASE: oxyn
+          MYSQL_DATABASE: t
         ports:
           - 3306:3306
         options: >-
@@ -423,18 +424,36 @@ jobs:
       - name: Start PostgreSQL with trusted TLS for production reads
         run: |
           certificate_dir="$RUNNER_TEMP/oxyn-postgres-tls"
-          mkdir -p "$certificate_dir"
+          server_dir="$certificate_dir/server"
+          mkdir -p "$server_dir"
           openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-            -keyout "$certificate_dir/server.key" \
-            -out "$certificate_dir/server.crt" \
-            -subj "/CN=localhost" \
-            -addext "subjectAltName=DNS:localhost"
-          sudo chown 999:999 "$certificate_dir/server.key"
-          chmod 600 "$certificate_dir/server.key"
+            -keyout "$certificate_dir/ca.key" \
+            -out "$certificate_dir/ca.crt" \
+            -subj "/CN=Oxyn disposable test CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout "$server_dir/server.key" \
+            -out "$certificate_dir/server.csr" \
+            -subj "/CN=localhost"
+          openssl x509 -req -days 1 \
+            -in "$certificate_dir/server.csr" \
+            -CA "$certificate_dir/ca.crt" \
+            -CAkey "$certificate_dir/ca.key" \
+            -CAcreateserial \
+            -out "$server_dir/server.crt" \
+            -extfile <(printf '%s\n' \
+              'basicConstraints=critical,CA:FALSE' \
+              'subjectAltName=DNS:localhost' \
+              'keyUsage=critical,digitalSignature,keyEncipherment' \
+              'extendedKeyUsage=serverAuth')
+          chmod 600 "$server_dir/server.key"
+          sudo chown 999:999 "$server_dir/server.key"
           docker run --detach --rm --name oxyn-production-read-tls \
             --publish 127.0.0.1:5433:5432 \
-            --volume "$certificate_dir:/certs:ro" \
+            --volume "$server_dir:/certs:ro" \
             --env POSTGRES_PASSWORD=oxyn \
+            --env POSTGRES_HOST_AUTH_METHOD=trust \
             postgres:17 -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
           for attempt in {1..30}; do
             docker exec oxyn-production-read-tls pg_isready -U postgres && exit 0
@@ -446,9 +465,10 @@ jobs:
       - name: make test-serveurs
         env:
           OXYN_PG_TEST_URL: postgres://postgres:oxyn@localhost:5432/postgres?sslmode=disable
-          OXYN_MYSQL_TEST_URL: mysql://root:oxyn@localhost:3306/oxyn?sslmode=prefer
+          OXYN_MYSQL_TEST_URL: mysql://root:oxyn@localhost:3306/t?sslmode=prefer
           OXYN_PG_PRODUCTION_TEST_URL: postgres://postgres:oxyn@localhost:5433/postgres?sslmode=verify-full
-          PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/server.crt
+          # sqlx trusts this disposable CA while verify-full validates the leaf SAN.
+          PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/ca.crt
         run: make test-serveurs
 
       - name: Remove the TLS test server

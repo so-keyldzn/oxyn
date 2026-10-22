@@ -5,10 +5,11 @@
 # check.
 #
 # CI (.github/workflows/qualite.yml) calls its pieces in parallel jobs —
-# `front-controles`, `front-tests`, `front-build`, `rust` — so that Rust does
-# not wait behind the stories. It adds nothing: `make socle` refuses a workflow
-# that would forget a target reached by `qualite`. On a pull request, it skips
-# the jobs whose area is not touched; on `main`, everything runs (ADR-0045).
+# `front-controles`, `front-tests`, `front-build`, `rust`, `test-serveurs` — so
+# that Rust does not wait behind the stories. It adds nothing: `make socle`
+# refuses a workflow that would forget a target reached by `qualite`. On a pull
+# request, it skips the jobs whose area is not touched; on `main`, everything
+# runs (ADR-0045).
 #
 # `make verif-rapide` is for day-to-day work: it only checks what changed since
 # `origin/main`. It is not conclusive, `qualite` is.
@@ -142,19 +143,31 @@ endif
 # The ignored suites exercise actual server behavior that unit tests cannot
 # emulate. They need disposable servers and URLs; their dedicated CI job
 # provides both and rejects an unset URL rather than silently skipping a suite.
+# A local gate without any server URL states explicitly that those suites did
+# not run, so the ordinary edit-check-commit loop remains usable.
 test-serveurs: front-build
 ifeq ($(NEXTEST),)
+ifeq ($(origin CI),undefined)
+	@echo "cargo-nextest missing: server suites NOT run outside CI."
+else
 	@echo "cargo-nextest is required for server tests; the shared-server profile must apply."
 	@exit 1
+endif
 else
+ifeq ($(origin CI),undefined)
+	@if [ -z "$(OXYN_PG_TEST_URL)" ] && [ -z "$(OXYN_MYSQL_TEST_URL)" ] && [ -z "$(OXYN_PG_PRODUCTION_TEST_URL)" ]; then \
+		echo "server suites NOT run outside CI: no server test URLs are set."; \
+		exit 0; \
+	fi
+endif
 	@output="$$( $(CARGO) nextest run --run-ignored only --nocapture \
 		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
 	printf '%s\n' "$$output"; \
-	test $$status -eq 0; \
 	if printf '%s\n' "$$output" | grep -Fq 'not set: test skipped'; then \
 		echo "A server test URL is missing; refusing a silently skipped suite."; \
 		exit 1; \
-	fi
+	fi; \
+	exit $$status
 endif
 
 doc:
