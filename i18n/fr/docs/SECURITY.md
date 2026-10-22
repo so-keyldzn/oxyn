@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="919758f04cda" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="98b7cc42a962" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -234,6 +234,25 @@ instruction garde la borne.
 **Panne concrète :** `SELECT public.audit_touch()` dans une console de
 production, où la fonction insère une ligne : l'écriture partait sans
 confirmation, classée comme une lecture.
+
+Une connexion **marquée en lecture seule** est tenue à la même borne, quel que
+soit son environnement. Le `PolicyGate` y refuse toute commande classée
+mutante, humain compris ; ce que le texte cache — le même `SELECT` d'une
+fonction qui écrit, une vue qui en appelle une — est laissé au serveur :
+`oxyn-exec` borne en lecture seule toute exécution classée comme une lecture,
+avec la même exception pour les verbes de transaction nus, et réapplique la
+borne quand une approbation est donnée. Le marquage sur lequel il borne est le
+plus restrictif de celui de l'exécuteur et de celui du `PolicyGate`. Le
+marquage lecture seule est donc imposé **par le serveur** sur tout driver qui
+déclare `READ_ONLY_SESSION` — PostgreSQL et MySQL par une transaction ou une
+session en lecture seule, SQLite en ouvrant le fichier en lecture seule — et
+par la seule classification sur un driver qui ne la déclare pas.
+
+**Panne concrète :** une connexion de staging partagée, marquée en lecture
+seule, où le gate refusait `UPDATE` mais laissait passer
+`SELECT public.audit_touch()` comme une lecture, dans une transaction en
+lecture-écriture : le marquage voulait dire « refusé » sous SQLite et « écrit »
+sous PostgreSQL.
 
 Pour un `Actor::Agent`, une connexion `production` est en **lecture seule
 stricte** — ce n'est pas une confirmation renforcée, c'est un refus

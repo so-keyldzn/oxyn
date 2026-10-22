@@ -219,6 +219,23 @@ preceded by any other statement keeps the bound.
 console, where the function inserts a row: the write went out without
 confirmation, classified as a read.
 
+A connection **marked read-only** is held to the same bound, whatever its
+environment. The `PolicyGate` refuses every command classified as mutating
+there, human included; what the text hides — the same `SELECT` of a writing
+function, a view over one — is left to the server: `oxyn-exec` bounds every
+execution classified as a read to read-only, with the same exception for bare
+transaction verbs, and re-applies the bound when an approval is given. The
+marking it bounds on is the more restrictive of the executor's and the
+`PolicyGate`'s. The read-only marking is therefore enforced **by the server**
+on every driver declaring `READ_ONLY_SESSION` — PostgreSQL and MySQL through a
+read-only transaction or session, SQLite by opening the file read-only — and
+by the classification alone on a driver that does not declare it.
+
+**Concrete failure:** a shared staging connection marked read-only, where the
+gate refused `UPDATE` but let `SELECT public.audit_touch()` through as a read,
+in a read-write transaction: the marking meant "refused" on SQLite and
+"written" on PostgreSQL.
+
 For an `Actor::Agent`, a `production` connection is **strictly
 read-only** — it is not a stronger confirmation, it is a refusal
 ([ADR-0004](adr/0004-command-bus.md#default-policy)). The difference
