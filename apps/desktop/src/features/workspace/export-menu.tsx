@@ -137,7 +137,8 @@ export function useResultExport({
       } else if (outcome.type === "cancelled") {
         toast.add({
           title: "Export cancelled",
-          description: "The file may be partially written.",
+          description:
+            "No file was written; an existing file was left unchanged.",
           type: "warning",
         })
       }
