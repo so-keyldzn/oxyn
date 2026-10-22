@@ -22,9 +22,11 @@ const NO_TRUNCATE = "This database has no TRUNCATE statement."
 const NOT_KNOWN =
   "No session here to run it: do it from the object in the workspace's catalog."
 
-// Control characters (Unicode Cc), line and paragraph separators, and the
-// direction controls: shown or escaped, the name would not be the one run.
-const HIDDEN = /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]/u
+// Control and format characters (Unicode Cc and Cf: direction controls,
+// zero-width characters), line and paragraph separators, and the four fillers
+// that render blank: shown or escaped, the name would not be the one run. The
+// same set as `oxyn_catalog::hides_text`, which the backend applies.
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0]/u
 
 export function hidesText(name: string) {
   return HIDDEN.test(name)

@@ -56,6 +56,9 @@ use crate::worker::WorkerHandle;
 /// The default namespace of an SQLite session.
 pub const MAIN: &str = "main";
 
+/// The database of a session's temporary objects, searched before `main`.
+const TEMP: &str = "temp";
+
 /// The introspection of an SQLite session.
 #[derive(Debug)]
 pub struct SqliteCatalog {
@@ -79,6 +82,24 @@ impl SqliteCatalog {
     /// The namespace targeted by a path, `main` by default.
     fn database_of(path: &CatalogPath) -> &str {
         path.namespace().unwrap_or(MAIN)
+    }
+
+    /// The databases of the connection — `main`, `temp`, then the attached
+    /// ones — in the order `PRAGMA database_list` gives them, which is the
+    /// order they were opened in.
+    async fn database_names(&self, cancel: &CancelToken) -> Result<Vec<String>> {
+        self.worker
+            .call(cancel, |connection: &Connection| {
+                let mut names = Vec::new();
+                connection
+                    .pragma_query(None, "database_list", |row| {
+                        names.push(row.get::<_, String>("name")?);
+                        Ok(())
+                    })
+                    .map_err(read)?;
+                Ok(names)
+            })
+            .await
     }
 
     /// The relation name of a path.
@@ -116,26 +137,14 @@ impl CatalogProvider for SqliteCatalog {
             // Nothing can be found under a tier that does not exist.
             return Ok(Vec::new());
         }
-        let names: Vec<String> = self
-            .worker
-            .call(cancel, |connection: &Connection| {
-                let mut names = Vec::new();
-                connection
-                    .pragma_query(None, "database_list", |row| {
-                        names.push(row.get::<_, String>("name")?);
-                        Ok(())
-                    })
-                    .map_err(read)?;
-                Ok(names)
-            })
-            .await?;
+        let names = self.database_names(cancel).await?;
 
         names
             .into_iter()
             .map(|name| {
                 // `temp` carries the session's temporary objects: real, but
                 // collapsed by default in the tree.
-                let is_system = name == "temp";
+                let is_system = name == TEMP;
                 let reference = NamespaceRef::new(CatalogPath::empty(), name)?;
                 Ok(if is_system {
                     reference.with_system()
@@ -144,6 +153,24 @@ impl CatalogProvider for SqliteCatalog {
                 })
             })
             .collect()
+    }
+
+    /// Where an unqualified table name is looked for, in the engine's order:
+    /// `temp`, then `main`, then the attached databases in the order they were
+    /// attached (`sqlite3FindTable`, `src/build.c`; the documentation only says
+    /// the one attached the longest ago wins a tie).
+    ///
+    /// `PRAGMA database_list` gives `main` before `temp`, so the two are put in
+    /// the order the engine searches them in; the attached ones keep theirs.
+    async fn resolution_path(&self, cancel: &CancelToken) -> Result<Vec<String>> {
+        let mut names = self.database_names(cancel).await?;
+        // Stable: only `temp` and `main` move, ahead of the attached ones.
+        names.sort_by_key(|name| match name.as_str() {
+            TEMP => 0,
+            MAIN => 1,
+            _ => 2,
+        });
+        Ok(names)
     }
 
     async fn list_relations(

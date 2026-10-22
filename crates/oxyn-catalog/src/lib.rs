@@ -13,6 +13,7 @@
 //! | [`model`] | the five-level hierarchy, its relations and its fields | ARCHITECTURE §6 |
 //! | [`path`] | the qualified path, and identifier quoting | DRIVER-CONTRACT §6, I-10 |
 //! | [`literal`] | the SQL string literal composed from a value | I-10 |
+//! | [`insertion`] | the form an editor inserts for a name, bare or quoted, and whether the name may be shown | ADR-0057, I-10 |
 //! | [`provider`] | what a session can tell about its structure | DRIVER-CONTRACT §5 |
 //! | [`cache`] | the in-memory tree, its freshness, its invalidation | ARCHITECTURE §6 |
 //! | [`mod@search`] | the lexical selection of relevant relations | ARCHITECTURE §7.4 |
@@ -67,15 +68,18 @@
 
 pub mod cache;
 pub mod definition;
+pub mod insertion;
 pub mod literal;
 pub mod model;
 pub mod nesting;
 pub mod path;
 pub mod provider;
+mod reserved;
 pub mod search;
 
 pub use cache::{CacheError, CatalogCache, CatalogHandle, CatalogScope, Freshness, SharedCatalog};
 pub use definition::{DefinitionSource, RelationDefinition};
+pub use insertion::{hides_text, insertion_form};
 pub use literal::{LiteralError, check_identifier, push_string_literal};
 pub use model::{
     CatalogRef, Constraint, ConstraintKind, Field, ForeignKey, ForeignKeyTarget,

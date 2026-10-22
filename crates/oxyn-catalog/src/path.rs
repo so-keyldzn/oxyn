@@ -44,6 +44,8 @@ use std::str::FromStr;
 use oxyn_core::query::SqlDialect;
 use serde::{Deserialize, Serialize};
 
+use crate::insertion::insertion_form;
+
 /// Number of nameable levels in a path.
 const TIERS: usize = 3;
 
@@ -469,6 +471,24 @@ impl CatalogPath {
         self.qualify(QuoteStyle::for_dialect(dialect))
     }
 
+    /// The path as an editor inserts it: each level in its
+    /// [`insertion_form`], joined by dots.
+    ///
+    /// For text the user will read and send. [`Self::qualify_sql`] stays the
+    /// form Oxyn itself sends: it quotes every level, so that nothing depends on
+    /// a list of reserved words.
+    #[must_use]
+    pub fn insertion_sql(&self, dialect: SqlDialect) -> String {
+        let mut text = String::new();
+        for (i, segment) in self.segments().enumerate() {
+            if i > 0 {
+                text.push('.');
+            }
+            text.push_str(&insertion_form(segment, dialect));
+        }
+        text
+    }
+
     /// Is this path located under `prefix`?
     ///
     /// A level missing in `prefix` imposes nothing; a present level must match
@@ -809,6 +829,34 @@ mod tests {
         // No empty `.` in query text: it would be a syntax error, where the
         // reversible rendering needs it.
         assert_eq!(neo4j.qualify(QuoteStyle::Double), r#""graph"."Person""#);
+    }
+
+    #[test]
+    fn insertion_sql_joins_the_forms_of_the_levels() {
+        let table = CatalogPath::for_relation(None, Some("public"), "order").expect("valid");
+        // Bare where it can be, quoted where it must: the form a user reads.
+        assert_eq!(
+            table.insertion_sql(SqlDialect::Postgres),
+            r#"public."order""#
+        );
+        // `qualify_sql` is what Oxyn sends itself: every level quoted.
+        assert_eq!(
+            table.qualify_sql(SqlDialect::Postgres),
+            r#""public"."order""#
+        );
+        let neo4j = CatalogPath::for_relation(Some("graph"), None, "Person").expect("valid");
+        assert_eq!(neo4j.insertion_sql(SqlDialect::Ansi), r#""graph"."Person""#);
+    }
+
+    #[test]
+    fn insertion_sql_quotes_a_hostile_name_like_qualify_sql_does() {
+        let hostile = CatalogPath::for_relation(None, Some("public"), HOSTILE_NAME).expect("valid");
+        assert_eq!(
+            hostile.insertion_sql(SqlDialect::Postgres),
+            hostile
+                .qualify_sql(SqlDialect::Postgres)
+                .replacen(r#""public""#, "public", 1)
+        );
     }
 
     #[test]
