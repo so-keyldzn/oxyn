@@ -63,6 +63,14 @@ describe("execution progress", () => {
     expect(executionProgress.state).toEqual({})
   })
 
+  it("keeps the store unchanged when forgetting an unknown command", () => {
+    const before = executionProgress.state
+
+    forget("unknown")
+
+    expect(executionProgress.state).toBe(before)
+  })
+
   it("bumps the catalog version when the backend says it changed", () => {
     const before = catalogVersion.state
     applyEvent({ command: "any", type: "catalogUpdated" })
