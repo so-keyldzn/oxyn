@@ -3,7 +3,7 @@
 //! A table name, a column comment, a server error message or a cell value can
 //! contain any byte, including text imitating an instruction
 //! ([SECURITY](../../../docs/SECURITY.md), input surface). Everything that
-//! comes from there and reaches a prompt goes through [`Fence::fence`].
+//! comes from there and reaches a prompt goes through `Fence::fence`.
 //!
 //! # What this module protects, and what it does not
 //!
@@ -100,7 +100,7 @@ impl Fence {
 /// Cleans a text that came from the database, without fencing it.
 ///
 /// Only to be used when the fence is set elsewhere — otherwise, prefer
-/// [`fence`], which cannot be called halfway.
+/// `Fence::fence`, which cannot be called halfway.
 #[must_use]
 pub fn sanitize(raw: &str) -> String {
     neutralize_marker(&strip_controls(raw))

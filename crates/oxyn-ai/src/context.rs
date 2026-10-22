@@ -56,7 +56,7 @@
 //! # Everything that comes from the database is fenced
 //!
 //! Object names, comments, values: the body of the context goes whole through
-//! [`untrusted::Fence`], which neutralizes control sequences and uses a fresh,
+//! `untrusted::Fence`, which neutralizes control sequences and uses a fresh,
 //! per-prompt nonce in its closing tag. The nonce makes a fake closing tag
 //! impractical to predict; Unicode folding is only a secondary defence. A
 //! column comment is not an instruction (I-07, SECURITY).

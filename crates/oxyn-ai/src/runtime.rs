@@ -510,7 +510,7 @@ impl ToolOutcome {
 
 impl fmt::Display for ToolOutcome {
     /// The body meant for the model, **in English**: it is a prompt, not an
-    /// interface message. Not fenced — see [`ToolOutcome::render`].
+    /// interface message. Not fenced — see `ToolOutcome::render`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Completed { summary } => write!(f, "status: completed\n{summary}"),
