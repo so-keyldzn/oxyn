@@ -197,9 +197,45 @@ export function WorkspaceLayout({
     node.dataset.slot = "workspace-aside-content"
     return node
   })
+  // A node taken out of the document loses focus, and the caret with it: a
+  // keyboard user typing in the composer would keep typing into nothing. The
+  // old slot lets go before React removes it from the document, so the focus
+  // and selection are still readable there, and given back in the new slot.
+  const asideFocus = React.useRef<{
+    element: HTMLElement
+    selection: [Node, number, Node, number] | null
+  } | null>(null)
   const placeAside = React.useCallback(
     (slot: HTMLDivElement | null) => {
-      if (slot) slot.appendChild(asideNode)
+      if (!slot) return
+      slot.appendChild(asideNode)
+      const saved = asideFocus.current
+      asideFocus.current = null
+      if (saved && asideNode.contains(saved.element)) {
+        saved.element.focus({ preventScroll: true })
+        if (saved.selection)
+          document.getSelection()?.setBaseAndExtent(...saved.selection)
+      }
+      return () => {
+        const active = document.activeElement
+        if (!(active instanceof HTMLElement) || !asideNode.contains(active))
+          return
+        const selection = document.getSelection()
+        asideFocus.current = {
+          element: active,
+          selection:
+            selection?.anchorNode &&
+            selection.focusNode &&
+            asideNode.contains(selection.anchorNode)
+              ? [
+                  selection.anchorNode,
+                  selection.anchorOffset,
+                  selection.focusNode,
+                  selection.focusOffset,
+                ]
+              : null,
+        }
+      }
     },
     [asideNode]
   )

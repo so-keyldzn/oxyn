@@ -627,12 +627,13 @@ export const AssistantColumnSurvivesTheCompactThreshold: Story = {
 
     // Docked: the draft and both choices are made in the resizable panel.
     await expect(field.closest('[data-slot="resizable-panel"]')).not.toBeNull()
-    await userEvent.click(field)
-    await userEvent.type(field, "Which invoices are unpaid?")
     await choose("Model", "model-lyra-1")
     await choose("Reasoning effort: Default", "High")
+    await userEvent.click(field)
+    await userEvent.type(field, "Which invoices are unpaid?")
 
-    // Wide to compact: the same column, now overlaid.
+    // Wide to compact: the same column, now overlaid, and a keyboard user
+    // typing in it keeps typing there, after what they had typed.
     await resize(1050)
     await waitFor(() =>
       expect(
@@ -640,15 +641,28 @@ export const AssistantColumnSurvivesTheCompactThreshold: Story = {
       ).not.toBeNull()
     )
     await expectKept("Which invoices are unpaid?", "High")
+    await expect(field).toHaveFocus()
+    await userEvent.keyboard(" This month?")
+    await expect(field).toHaveTextContent(
+      "Which invoices are unpaid? This month?"
+    )
 
     // Compact to wide, with what was changed while overlaid.
-    await userEvent.type(field, " This month?")
     await choose("Reasoning effort: High", "Low")
+    await userEvent.type(field, " Over 1,000?")
     await resize(1280)
     await waitFor(() =>
       expect(field.closest('[data-slot="resizable-panel"]')).not.toBeNull()
     )
-    await expectKept("Which invoices are unpaid? This month?", "Low")
+    await expectKept(
+      "Which invoices are unpaid? This month? Over 1,000?",
+      "Low"
+    )
+    await expect(field).toHaveFocus()
+    await userEvent.keyboard(" Sorted?")
+    await expect(field).toHaveTextContent(
+      "Which invoices are unpaid? This month? Over 1,000? Sorted?"
+    )
   },
 }
 
