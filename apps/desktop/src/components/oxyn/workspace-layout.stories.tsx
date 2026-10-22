@@ -4,8 +4,11 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { DatabaseIcon, InformationCircleIcon } from "@hugeicons/core-free-icons"
 
+import { AssistantComposer } from "./assistant-composer"
 import { AssistantEntryButton } from "./assistant-entry-button"
-import { enabledEntry } from "./assistant-fixtures"
+import { destinations, enabledEntry } from "./assistant-fixtures"
+import { AssistantHeader } from "./assistant-header"
+import { draftModels } from "./model-picker-fixtures"
 import { ConsoleView } from "./console-view"
 import { invoiceColumns, syntheticPages } from "./fixtures"
 import { ObjectViewFrame } from "./object-view-frame"
@@ -27,6 +30,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
 import { TabsContent } from "@/components/ui/tabs"
+import type { ReasoningEffort } from "@/lib/ipc/ai"
 
 const tabs: Array<WorkspaceTabItem> = [
   {
@@ -385,8 +389,7 @@ export const CompactSidePanel: Story = {
  * is read on the frame's measured width, so the play resizes a real box and
  * the layout crosses the threshold as a window would.
  */
-function ResizingWorkspace(args: React.ComponentProps<typeof WorkspaceLayout>) {
-  const frame = React.useRef<HTMLDivElement>(null)
+function useCompactFrame(frame: React.RefObject<HTMLDivElement | null>) {
   const [compact, setCompact] = React.useState(false)
   React.useLayoutEffect(() => {
     const element = frame.current
@@ -396,7 +399,13 @@ function ResizingWorkspace(args: React.ComponentProps<typeof WorkspaceLayout>) {
     )
     observer.observe(element)
     return () => observer.disconnect()
-  }, [])
+  }, [frame])
+  return compact
+}
+
+function ResizingWorkspace(args: React.ComponentProps<typeof WorkspaceLayout>) {
+  const frame = React.useRef<HTMLDivElement>(null)
+  const compact = useCompactFrame(frame)
   // The wide preference comes back on widening; the overlay starts closed.
   const [inspectorOpen, setInspectorOpen] = React.useState(
     args.asideOpen ?? false
@@ -488,6 +497,158 @@ export const SidePanelKeepsItsWidthWhenTheWorkspaceNarrows: Story = {
     await expectAsideWidth(panel, 280)
     canvas.getByTestId("resizing-frame").style.width = "1210px"
     await expectAsideWidth(panel, 280)
+  },
+}
+
+/**
+ * What the assistant column holds and nothing saves: the draft in the
+ * composer, the model and the reasoning effort chosen for this conversation.
+ */
+function AssistantColumn() {
+  const selected = destinations[0] ?? null
+  const [model, setModel] = React.useState(selected?.model ?? null)
+  const [effort, setEffort] = React.useState<ReasoningEffort | null>(null)
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <AssistantHeader
+        connectionName="billing primary"
+        environment="production"
+        tier="metadata"
+        destinations={destinations}
+        selected={selected}
+        model={model}
+        models={draftModels}
+        running={false}
+        context={null}
+        onSelectDestination={() => undefined}
+        onSelectModel={setModel}
+        efforts={["low", "medium", "high"]}
+        effort={effort}
+        onSelectEffort={setEffort}
+      />
+      <div className="mt-auto p-2">
+        <AssistantComposer
+          running={false}
+          onSubmit={() => false}
+          onStop={() => undefined}
+        />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The column stays open on both sides of 1200 px here, so that the play can
+ * work in it in each presentation; the screen's own rule — the overlay
+ * starts closed — is `ResizeAcrossCompactWithSidePanelClosed`'s.
+ */
+function ResizingAssistantWorkspace(
+  args: React.ComponentProps<typeof WorkspaceLayout>
+) {
+  const frame = React.useRef<HTMLDivElement>(null)
+  const compact = useCompactFrame(frame)
+  const [asideOpen, setAsideOpen] = React.useState(true)
+  return (
+    <div
+      ref={frame}
+      data-testid="resizing-frame"
+      className="h-[640px] w-[1280px] overflow-hidden border"
+    >
+      <WorkspaceLayout
+        {...args}
+        compact={compact}
+        asideOpen={asideOpen}
+        onAsideOpenChange={setAsideOpen}
+        aside={
+          <WorkspaceAside
+            items={[
+              {
+                id: "assistant",
+                label: "Assistant",
+                icon: InformationCircleIcon,
+                content: <AssistantColumn />,
+              },
+            ]}
+            active="assistant"
+            onActiveChange={fn()}
+            onClose={fn()}
+          />
+        }
+        statusBar={null}
+      />
+    </div>
+  )
+}
+
+async function choose(combobox: string, option: string) {
+  const page = within(document.body)
+  await userEvent.click(page.getByRole("combobox", { name: combobox }))
+  await userEvent.click(await page.findByRole("option", { name: option }))
+  // Base UI's focus guards outlive the list for a few frames.
+  await waitFor(() =>
+    expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
+  )
+}
+
+/**
+ * Crossing 1200 px moved the column to another parent, and React remounted
+ * it: the question being typed, the chosen model and the chosen effort were
+ * lost, and a pending sample approval vanished with its promise unsettled.
+ * The column is now the same mounted tree in both presentations — the same
+ * field element, holding what was typed on either side of the threshold.
+ */
+export const AssistantColumnSurvivesTheCompactThreshold: Story = {
+  render: ResizingAssistantWorkspace,
+  play: async ({ canvas }) => {
+    const frame = canvas.getByTestId("resizing-frame")
+    const sidebar = frame.querySelector('[data-slot="sidebar"]')
+    const resize = async (width: number) => {
+      frame.style.width = `${width}px`
+      await waitFor(() =>
+        expect(sidebar).toHaveAttribute(
+          "data-state",
+          width < 1200 ? "collapsed" : "expanded"
+        )
+      )
+    }
+    const field = canvas.getByLabelText("Question for the assistant")
+    const expectKept = async (text: string, effort: string) => {
+      await expect(canvas.getByLabelText("Question for the assistant")).toBe(
+        field
+      )
+      await expect(field).toHaveTextContent(text)
+      await expect(
+        canvas.getByRole("combobox", { name: "Model" })
+      ).toHaveTextContent("model-lyra-1")
+      await expect(
+        canvas.getByRole("combobox", { name: `Reasoning effort: ${effort}` })
+      ).toBeVisible()
+    }
+
+    // Docked: the draft and both choices are made in the resizable panel.
+    await expect(field.closest('[data-slot="resizable-panel"]')).not.toBeNull()
+    await userEvent.click(field)
+    await userEvent.type(field, "Which invoices are unpaid?")
+    await choose("Model", "model-lyra-1")
+    await choose("Reasoning effort: Default", "High")
+
+    // Wide to compact: the same column, now overlaid.
+    await resize(1050)
+    await waitFor(() =>
+      expect(
+        field.closest('[data-slot="workspace-aside-overlay"]')
+      ).not.toBeNull()
+    )
+    await expectKept("Which invoices are unpaid?", "High")
+
+    // Compact to wide, with what was changed while overlaid.
+    await userEvent.type(field, " This month?")
+    await choose("Reasoning effort: High", "Low")
+    await resize(1280)
+    await waitFor(() =>
+      expect(field.closest('[data-slot="resizable-panel"]')).not.toBeNull()
+    )
+    await expectKept("Which invoices are unpaid? This month?", "Low")
   },
 }
 

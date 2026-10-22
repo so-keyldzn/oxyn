@@ -1,4 +1,5 @@
 import * as React from "react"
+import { createPortal } from "react-dom"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Settings01Icon,
@@ -164,7 +165,7 @@ export function WorkspaceLayout({
   children: React.ReactNode
   /** The `Ask AI` entry, absent when nothing is declared (docs/UX-SPEC.md). */
   aiEntry?: React.ReactNode
-  /** The right column, kept mounted while closed. */
+  /** The right column, kept mounted while closed and across 1200 px. */
   aside?: React.ReactNode
   asideOpen?: boolean
   onAsideOpenChange?: (open: boolean) => void
@@ -183,6 +184,25 @@ export function WorkspaceLayout({
   // Only lives while compact: leaving compact drops it.
   const [compactOpen, setCompactOpen] = React.useState(false)
   React.useEffect(() => setCompactOpen(false), [compact])
+
+  // The right column is rendered once, into this node, and only the node
+  // moves between the resizable panel and the overlay. Rendered in either
+  // parent instead, crossing 1200 px remounted it: the composer's draft, the
+  // chosen model and effort, a pending sample approval — all lost.
+  // `contents`: the node adds no box, so each parent lays the column out as
+  // its direct child.
+  const [asideNode] = React.useState(() => {
+    const node = document.createElement("div")
+    node.className = "contents"
+    node.dataset.slot = "workspace-aside-content"
+    return node
+  })
+  const placeAside = React.useCallback(
+    (slot: HTMLDivElement | null) => {
+      if (slot) slot.appendChild(asideNode)
+    },
+    [asideNode]
+  )
 
   // The resizable column only exists in wide mode. When it comes back, its
   // handle is filled at once but the group derives its constraints a render
@@ -404,9 +424,10 @@ export function WorkspaceLayout({
                         onAsideOpenChange?.(false)
                     }}
                   >
-                    <div className={cn("h-full", !asideOpen && "hidden")}>
-                      {aside}
-                    </div>
+                    <div
+                      ref={placeAside}
+                      className={cn("h-full", !asideOpen && "hidden")}
+                    />
                   </ResizablePanel>
                 </>
               ) : null}
@@ -417,15 +438,18 @@ export function WorkspaceLayout({
               // not here: it is opened from a button in the bar, and a key
               // pressed there would never reach this subtree.
               <div
+                ref={placeAside}
                 data-slot="workspace-aside-overlay"
                 className={cn(
                   "absolute inset-y-0 right-0 z-30 w-80 border-l bg-background shadow-lg",
                   !asideOpen && "hidden"
                 )}
-              >
-                {aside}
-              </div>
+              />
             ) : null}
+            {/* Here in the React tree whatever its place in the document:
+                contexts and events reach the column from this point, in both
+                presentations. */}
+            {aside !== null ? createPortal(aside, asideNode) : null}
           </div>
         </Tabs>
         {statusBar}
