@@ -157,6 +157,7 @@ fn the_budget_holds_and_the_dropped_mention_is_named() {
     // The same context, `purchases` dropped by the relation ceiling: it
     // measures what the header, the announcements and `prices` cost.
     let reference = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+        .with_fence_nonce("budget-test-nonce")
         .with_policy(ContextPolicy {
             max_relations: 1,
             ..ContextPolicy::default()
@@ -169,6 +170,7 @@ fn the_budget_holds_and_the_dropped_mention_is_named() {
     let budget = reference.estimated_tokens() + 30;
 
     let context = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+        .with_fence_nonce("budget-test-nonce")
         .with_policy(ContextPolicy {
             max_context_tokens: budget,
             ..ContextPolicy::default()
