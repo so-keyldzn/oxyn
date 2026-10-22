@@ -2342,6 +2342,31 @@ Sources: the installed crates.io registry source, and PostgreSQL **18**
 file paths there; `STDOUT` transfers data through the client connection.
 No live database was used for this verification.
 
+## PostgreSQL EXPLAIN options and classification — checked 2026-10-22
+
+PostgreSQL **18** (documentation 18.6,
+[`EXPLAIN`](https://www.postgresql.org/docs/18/sql-explain.html)) lists twelve
+parenthesized options: `ANALYZE`, `VERBOSE`, `COSTS`, `SETTINGS`,
+`GENERIC_PLAN`, `BUFFERS`, `SERIALIZE`, `WAL`, `TIMING`, `SUMMARY`, `MEMORY`,
+`FORMAT`. Only `ANALYZE` runs the statement; `SERIALIZE`, `WAL` and `TIMING`
+are refused without it, and `GENERIC_PLAN` is refused with it. The grammar
+(`src/backend/parser/gram.y`, branch `REL_18_STABLE`, rules `analyze_keyword`
+and `utility_option_name`) accepts `ANALYSE` as well as `ANALYZE`, in the
+option list and in the legacy `EXPLAIN ANALYSE statement` form, and gives
+both the option name `analyze`; any other non-reserved word is passed on as
+an option name.
+
+`sqlparser` **0.62.0** has no `ANALYSE` keyword (`src/keywords.rs`): in the
+parenthesized form it is a `UtilityOption` named `ANALYSE`, and the legacy
+form does not parse. The classification therefore keeps `Read` only for the
+eleven options that shape the plan, and gives any other option the explained
+statement's intent (issue #246).
+
+The [`COPY`](https://www.postgresql.org/docs/18/sql-copy.html) page, read the
+same day: its `query` may be a `SELECT`, `VALUES`, `INSERT`, `UPDATE`,
+`DELETE` or `MERGE`, the last four with a `RETURNING` clause — a `COPY (…) TO
+STDOUT` can therefore write. No live database was used for this verification.
+
 ## SQL password literals before persistence
 
 Checked on 2026-10-03 for [ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md).

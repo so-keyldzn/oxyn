@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b36cbc955264" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="dac816c4c497" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2359,6 +2359,32 @@ Sources : le source installé du registre crates.io et
 consultés le 2026-10-03. PostgreSQL exécute `PROGRAM` sur le serveur de base de
 données et y résout les chemins de fichiers ; `STDOUT` transmet les données par
 la connexion cliente. Aucune base réelle n'a été utilisée pour cette vérification.
+
+## Options d'EXPLAIN de PostgreSQL et classification — vérifié le 2026-10-22
+
+PostgreSQL **18** (documentation 18.6,
+[`EXPLAIN`](https://www.postgresql.org/docs/18/sql-explain.html)) liste douze
+options entre parenthèses : `ANALYZE`, `VERBOSE`, `COSTS`, `SETTINGS`,
+`GENERIC_PLAN`, `BUFFERS`, `SERIALIZE`, `WAL`, `TIMING`, `SUMMARY`, `MEMORY`,
+`FORMAT`. Seule `ANALYZE` exécute l'instruction ; `SERIALIZE`, `WAL` et
+`TIMING` sont refusées sans elle, et `GENERIC_PLAN` est refusée avec elle. La
+grammaire (`src/backend/parser/gram.y`, branche `REL_18_STABLE`, règles
+`analyze_keyword` et `utility_option_name`) accepte `ANALYSE` autant
+qu'`ANALYZE`, dans la liste d'options comme dans la forme historique
+`EXPLAIN ANALYSE instruction`, et donne aux deux le nom d'option `analyze` ;
+tout autre mot non réservé est transmis comme nom d'option.
+
+`sqlparser` **0.62.0** n'a pas de mot-clé `ANALYSE` (`src/keywords.rs`) : dans
+la forme entre parenthèses, c'est une `UtilityOption` nommée `ANALYSE`, et la
+forme historique ne s'analyse pas. La classification ne garde donc `Read` que
+pour les onze options qui façonnent le plan, et donne à toute autre option
+l'intention de l'instruction expliquée (issue #246).
+
+La page [`COPY`](https://www.postgresql.org/docs/18/sql-copy.html), lue le même
+jour : sa `query` peut être un `SELECT`, `VALUES`, `INSERT`, `UPDATE`, `DELETE`
+ou `MERGE`, les quatre derniers avec une clause `RETURNING` — un `COPY (…) TO
+STDOUT` peut donc écrire. Aucune base réelle n'a été utilisée pour cette
+vérification.
 
 <a id="sql-password-literals-before-persistence"></a>
 ## Littéraux de mot de passe SQL avant persistance
