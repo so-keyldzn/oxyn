@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="README.md" sha256="bb46358bb331" -->
+<!-- oxyn-translation source="README.md" sha256="c5d4dba1901e" -->
 
 > Traduction française de [README.md](../../README.md). **La version anglaise fait foi.**
 
@@ -38,25 +38,52 @@ des enregistrements d’écran.
 
 ## Ce que le dépôt contient
 
-15 crates dans un seul workspace Cargo : `crates/` pour le cœur, l'interface et
-le binaire ; `drivers/` pour les implémentations de protocoles. Le découpage et
-le sens des dépendances font autorité dans
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Un seul workspace Cargo, dont les membres sont `crates/*` (le cœur, l'application
+Tauri et son binaire) et `drivers/*` (les implémentations de protocoles), et le
+front end de l'application dans `apps/desktop`. Le découpage et le sens des
+dépendances font autorité dans [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Télécharger
+
+Les paquets sont joints aux
+[releases GitHub](https://github.com/so-keyldzn/oxyn/releases) : un DMG pour
+macOS Apple Silicon (13 ou plus récent), et un DEB, un RPM et une AppImage pour
+Linux x86_64 et ARM64. macOS Intel et Windows ne sont pas construits
+([docs/RELEASE.md](../../docs/RELEASE.md)).
 
 ## Construire
 
-Prérequis : macOS 13 ou plus récent, `python3`, et rien d'autre — la chaîne
-d'outils Rust est épinglée par `rust-toolchain.toml` et rustup l'installe seul
-au premier `cargo` ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)).
+L'application est en Tauri 2, avec un front end dans `apps/desktop`
+([ADR-0029](docs/adr/0029-interface-tauri-shadcn.md)). Prérequis :
+
+- **Rust** : la chaîne d'outils est épinglée par `rust-toolchain.toml` et rustup
+  l'installe au premier `cargo`
+  ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)).
+- **Node 22** : la version qu'utilise la CI ; le front end accepte `^20.19.0` ou
+  `>=22.12.0`.
+- **pnpm**, à la version du champ `packageManager` de
+  [apps/desktop/package.json](../../apps/desktop/package.json). Le Makefile
+  s'arrête avec un message si `pnpm` manque, et installe lui-même les
+  dépendances du front end (`pnpm install --frozen-lockfile`).
+- **Linux uniquement**, les bibliothèques système que la CI installe avant de
+  construire : `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev
+  libssl-dev libayatana-appindicator3-dev librsvg2-dev` (noms Debian et Ubuntu,
+  tirés des prérequis de Tauri consignés dans
+  [RESEARCH-NOTES](docs/RESEARCH-NOTES.md)).
+- **`python3`**, pour `make desktop PROFIL=release` et pour la porte de qualité.
 
 ```sh
-make app      # assemble target/debug/Oxyn.app
-make lancer   # assemble puis ouvre l'application
+make desktop-dev              # l'application avec rechargement à chaud, sur un workspace temporaire
+make desktop                  # une construction debug, sans paquet
+make desktop PROFIL=release   # la construction optimisée et ses paquets
 ```
 
-`PROFIL=release` produit le paquet optimisé. Le paquet `.app` n'est pas une
-étape de publication : sans lui, macOS traite le binaire comme un accessoire —
-ni Dock, ni activation, ni focus clavier correct.
+`make desktop PROFIL=release` régénère les mentions des dépendances tierces que
+l'application embarque, et refuse de construire sans `cargo-about` installé. Les
+paquets atterrissent dans `target/release/bundle`. Le workflow de livraison
+([.github/workflows/livraison.yml](../../.github/workflows/livraison.yml)) lance
+cette même cible, puis signe et notarise les paquets macOS
+([docs/RELEASE.md](../../docs/RELEASE.md)).
 
 ## La porte de qualité
 
@@ -69,8 +96,11 @@ parallèles ([.github/workflows/qualite.yml](../../.github/workflows/qualite.yml
 le rappelle, la définition de « terminé » s'y adosse. Un contrôle ajouté
 ailleurs est un contrôle optionnel.
 
-Elle enchaîne : cohérence du socle de pilotage, `TODO` datés, format, clippy,
-tests, documentation. `make aide` liste les autres cibles.
+Elle enchaîne : cohérence du socle de pilotage, `TODO` datés, versions
+épinglées, le front end (licences et avis de sécurité npm, format, lint, types,
+stories, construction), puis le Rust (format, clippy, tests, documentation,
+licences et avis de sécurité des dépendances). `make aide` liste les autres
+cibles.
 
 ## Où se trouve la vérité
 
