@@ -98,6 +98,25 @@ export const MemoryResetByARestartedAgent: Story = {
   render: () => <AssistantMemoryReset reason="agentRestarted" />,
 }
 
+/** #271: the user learns why the model no longer knows the earlier answers. */
+export const MemoryResetByALongHistory: Story = {
+  render: () => <AssistantMemoryReset reason="historyTooLong" />,
+  play: async ({ canvasElement }) => {
+    const note = within(canvasElement).getByRole("note")
+    await expect(note).toHaveTextContent(/grown too long/)
+    await expect(note).toHaveTextContent(/A new conversation/)
+  },
+}
+
+export const MemoryResetByARefusedHistory: Story = {
+  render: () => <AssistantMemoryReset reason="historyRefused" />,
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByRole("note")).toHaveTextContent(
+      /refused the previous question/
+    )
+  },
+}
+
 export const Waiting: Story = {
   render: () => <AssistantWaiting label="Waiting for the model…" />,
 }

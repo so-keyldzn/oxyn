@@ -1172,6 +1172,17 @@ between two questions does not transmit the previous exchanges: the panel says
 so with a line (`destinationChanged`), since the earlier answers were not those
 of the new recipient.
 
+A provider's follow-up sends the remembered session again, whole. It is
+bounded: past **half the context window** the model's listing declares —
+30,000 estimated tokens when it declares none —, the next question starts from
+a fresh context, with a line that says so and that a new conversation keeps
+the thread short (`historyTooLong`). A question the provider **refuses** while
+carrying that session (a permanent HTTP refusal, such as a context too long)
+drops it: the failure says the next question starts from a fresh context, and
+the next question — asked again or following up — does, with its line
+(`historyRefused`). In both cases the transcript keeps every exchange; only
+what is sent again changes.
+
 A chosen agent comes with two permanent mentions: "Oxyn cannot see where it
 sends the question", and, for an agent that Oxyn does not confine, that it
 **cannot prevent it from launching commands or modifying files on the machine

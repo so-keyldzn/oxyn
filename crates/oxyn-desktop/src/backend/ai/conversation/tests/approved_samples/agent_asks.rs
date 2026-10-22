@@ -648,6 +648,7 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
             None,
             PrivacyTier::Sampled,
             oxyn_ai::SemanticScores::new(),
+            crate::backend::ai::threads::memory_ceiling(None),
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
     let prompt = prompt_of(&dialogue);

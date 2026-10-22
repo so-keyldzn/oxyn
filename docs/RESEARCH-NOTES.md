@@ -1656,6 +1656,25 @@ for which replaying fails until the next month. Oxyn never replays on its own
 (I-13): this header is therefore not read yet, and noting it here keeps anyone
 from believing it is handled.
 
+### Context window overflow — reading of 2026-10-22
+
+What a provider does with a request larger than the model's context window,
+read for the bound on a remembered session (#271):
+
+| Provider | What it documents | Source |
+|---|---|---|
+| Anthropic | "Everything in the request counts toward the context window", the output it generates included. An input that alone exceeds the window gets a `400 invalid_request_error` ("prompt is too long") on every model; from Claude 4.5, an input that fits but leaves too little room stops the generation with `model_context_window_exceeded` | [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows), § "Context window overflow behavior" |
+| OpenAI | **nothing**: the error-codes page lists no context-length code | [Error codes](https://developers.openai.com/api/docs/guides/error-codes) |
+| Gemini | **nothing official found**; forum reports only | — |
+
+Consequences in Oxyn. The refusal is recognized on its **status family**, not
+on the message: a permanent HTTP refusal other than `401`/`403`, which
+`oxyn-llm` maps to `OxynError::Query`. No provider-specific code is matched —
+OpenAI and Gemini document none, and the Anthropic wording is not a contract.
+And a remembered session may fill **half** of the window the model's listing
+declares (`ModelInfo::context_window`), since the window also holds the next
+question, its tool results and the answer.
+
 ### Reasoning: two distinct settings
 
 This is the point that gets missed, because the two names look alike and do

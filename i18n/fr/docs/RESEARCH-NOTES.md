@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="4541a79cb997" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="a43d7ad26d41" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1672,6 +1672,26 @@ mensuel, reconnaissable à `error.details.error_code = enforced_spend_limit_reac
 et pour lequel rejouer échoue jusqu'au mois suivant. Oxyn ne rejoue jamais de
 lui-même (I-13) : cet en-tête n'est donc pas encore lu, et le noter ici évite
 qu'on le croie traité.
+
+### Dépassement de la fenêtre de contexte — relevé le 2026-10-22
+
+Ce que fait un fournisseur d'une requête plus grande que la fenêtre de contexte
+du modèle, relevé pour la borne d'une session mémorisée (#271) :
+
+| Fournisseur | Ce qu'il documente | Source |
+|---|---|---|
+| Anthropic | « Everything in the request counts toward the context window », la sortie générée comprise. Une entrée qui dépasse à elle seule la fenêtre reçoit un `400 invalid_request_error` (« prompt is too long ») sur tous les modèles ; à partir de Claude 4.5, une entrée qui tient mais laisse trop peu de place arrête la génération avec `model_context_window_exceeded` | [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows), § « Context window overflow behavior » |
+| OpenAI | **rien** : la page des codes d'erreur ne liste aucun code de longueur de contexte | [Error codes](https://developers.openai.com/api/docs/guides/error-codes) |
+| Gemini | **rien d'officiel trouvé** ; des signalements de forum seulement | — |
+
+Conséquences dans Oxyn. Le refus se reconnaît à la **famille de son statut**,
+pas au message : un refus HTTP permanent autre que `401`/`403`, qu'`oxyn-llm`
+projette sur `OxynError::Query`. Aucun code propre à un fournisseur n'est
+reconnu — OpenAI et Gemini n'en documentent pas, et la formulation d'Anthropic
+n'est pas un contrat. Et une session mémorisée peut occuper **la moitié** de la
+fenêtre que déclare la liste des modèles (`ModelInfo::context_window`), car la
+fenêtre contient aussi la question suivante, les résultats de ses outils et la
+réponse.
 
 ### Raisonnement : deux réglages distincts
 

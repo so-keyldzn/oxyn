@@ -64,7 +64,7 @@ use oxyn_llm::reasoning::ReasoningBlock;
 use oxyn_llm::{ChatEvent, ChatMessage, ChatRequest, LlmProvider, Reach, StopReason, ToolCall};
 
 use crate::call::{CallHandle, CallId};
-use crate::context::{AgentContext, ContextBuilder, ContextPolicy, RowSample};
+use crate::context::{AgentContext, ContextBuilder, ContextPolicy, RowSample, estimate_tokens};
 use crate::error::AiError;
 use crate::failure::FailureReport;
 use crate::observer::{AgentEvent, AgentObserver, TokenUsage};
@@ -748,6 +748,40 @@ impl AgentSession {
     #[must_use]
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
+    }
+
+    /// Estimated cost of sending this conversation again, in tokens.
+    ///
+    /// The context budget's estimate ([`estimate_tokens`]), summed over
+    /// everything the next request carries again: the texts, the tool calls
+    /// and their arguments, the reasoning blocks and their signatures. As
+    /// coarse as that estimate — a caller compares it with a model's window to
+    /// decide when to start over, never to bill. Walks every message and
+    /// serializes each call's arguments: linear in the conversation's size.
+    #[must_use]
+    pub fn estimated_tokens(&self) -> usize {
+        self.messages
+            .iter()
+            .map(|message| {
+                let calls = message.tool_calls.iter().map(|call| {
+                    estimate_tokens(&call.id)
+                        .saturating_add(estimate_tokens(&call.name))
+                        .saturating_add(estimate_tokens(&call.arguments.to_string()))
+                });
+                let reasoning = message.reasoning.iter().map(|block| match block {
+                    ReasoningBlock::Summarized { text, signature } => estimate_tokens(text)
+                        .saturating_add(signature.as_deref().map_or(0, estimate_tokens)),
+                    ReasoningBlock::Redacted { data } => estimate_tokens(data),
+                    // A kind this version cannot read: the provider's refusal,
+                    // if it is too much, still resets the memory.
+                    _ => 0,
+                });
+                calls
+                    .chain(reasoning)
+                    .fold(estimate_tokens(&message.content), usize::saturating_add)
+                    .saturating_add(message.tool_call_id.as_deref().map_or(0, estimate_tokens))
+            })
+            .fold(0, usize::saturating_add)
     }
 
     /// Adds a question from the user.
@@ -1801,6 +1835,39 @@ mod tests {
     fn runtime(provider: Arc<ScriptedProvider>, reach: Reach) -> AgentRuntime {
         AgentRuntime::new(spec(), provider, reach, ToolRegistry::builtin(), "llama3.2")
             .expect("valid declaration")
+    }
+
+    /// The estimate counts what a follow-up sends again, not only the texts:
+    /// a `describe_schema` result and a signed reasoning block weigh as much
+    /// as the answer around them.
+    #[test]
+    fn the_estimate_counts_tool_traffic_and_reasoning() {
+        let mut session = session(PrivacyTier::Metadata);
+        let asked = session.estimated_tokens();
+        assert!(asked > 0, "the system message and the question count");
+
+        let result = "x".repeat(4_000);
+        session.messages.push(
+            ChatMessage::assistant("")
+                .with_tool_calls(vec![ToolCall::new(
+                    "call-1",
+                    EXECUTE_QUERY,
+                    json!({ "statement": "y".repeat(400) }),
+                )])
+                .with_reasoning(vec![ReasoningBlock::Redacted {
+                    data: "z".repeat(800),
+                }]),
+        );
+        session
+            .messages
+            .push(ChatMessage::tool_result("call-1", result));
+        let grown = session.estimated_tokens();
+        // 4,000 bytes of result, 400 of argument, 800 of reasoning: at four
+        // bytes per token, at least 1,300 more.
+        assert!(grown >= asked + 1_300, "{asked} → {grown}");
+
+        session.ask("and then?");
+        assert!(session.estimated_tokens() > grown);
     }
 
     #[test]

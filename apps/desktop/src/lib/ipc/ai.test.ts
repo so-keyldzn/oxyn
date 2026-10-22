@@ -244,4 +244,14 @@ describe("an approved sample", () => {
       reason: "sampleNotKept",
     })
   })
+
+  it("reads that a bounded history starts over", () => {
+    for (const reason of ["historyTooLong", "historyRefused"] as const) {
+      const reset = AiUpdate.parse({
+        node: 3,
+        event: { kind: "memoryReset", reason },
+      })
+      expect(reset.event).toEqual({ kind: "memoryReset", reason })
+    }
+  })
 })
