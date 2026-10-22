@@ -223,7 +223,7 @@ fn neutralize_marker(text: &str) -> String {
 }
 
 /// Folds only characters that can make `MARKER` look closed to a reader.
-const fn fold_marker_char(c: char) -> char {
+fn fold_marker_char(c: char) -> char {
     let folded = match c {
         // Unicode dashes and their compatibility forms.
         '\u{058A}'

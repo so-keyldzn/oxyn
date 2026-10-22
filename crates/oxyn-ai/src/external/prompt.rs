@@ -79,7 +79,6 @@ use crate::context::{
 };
 use crate::privacy::PrivacyTier;
 use crate::spec::AgentSpec;
-use crate::untrusted;
 
 /// What opens the conversation's agent block, so that the external agent reads
 /// it as Oxyn's and not as the user's question.
