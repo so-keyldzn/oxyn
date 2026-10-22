@@ -463,12 +463,33 @@ async fn a_read_approved_after_the_connection_was_marked_read_only_is_bounded() 
 
 // ── Against a real server ───────────────────────────────────────────────────
 //
-// `#[ignore]`, like the driver's own server tests. Unlike their Local fixture,
-// these tests exercise production connections: `OXYN_PG_TEST_URL` must name a
-// TLS-enabled disposable server with a trusted certificate and matching host,
-// using `sslmode=verify-full` (also the default). A weaker mode is refused
-// before these tests reach their read-only assertions (ADR-0052).
-// Without `OXYN_PG_TEST_URL`, each test stops without failing and says so.
+// `#[ignore]`, like the driver's own server tests. Without `OXYN_PG_TEST_URL`,
+// each test stops without failing and says so.
+//
+// Every test logs in as `ROLE`, which the fixture creates without a password:
+// the server must accept it with `trust` authentication, so it must be a
+// disposable server — a stock `postgres` image asks TCP clients for a password
+// and the fixture's connection fails. The tests share `ROLE` and `SCHEMA`,
+// hence `--test-threads=1`.
+//
+// What `OXYN_PG_TEST_URL` must be depends on the environment a test marks:
+//
+// - the production test needs a TLS-enabled server with a trusted certificate
+//   and matching host, using `sslmode=verify-full` (also the default). A
+//   weaker mode is refused before it reaches its read-only assertions
+//   (ADR-0052);
+// - the tests whose name says `outside_production` mark their connection
+//   `Local`, which accepts a server without TLS:
+//
+//   ```sh
+//   docker run --rm -d -p 5434:5432 -e POSTGRES_HOST_AUTH_METHOD=trust \
+//     --name oxyn-pg-reads postgres:17
+//
+//   OXYN_PG_TEST_URL='postgres://postgres@localhost:5434/postgres?sslmode=disable' \
+//     cargo test -p oxyn-exec outside_production -- --ignored --test-threads=1
+//
+//   docker rm -f oxyn-pg-reads
+//   ```
 
 mod server {
     use super::*;
@@ -479,8 +500,8 @@ mod server {
 
     /// The login role the connection under test uses: it may write, so that
     /// only the executor's bound stands between a read and a write. It has no
-    /// password: the test server trusts local connections, as the driver's
-    /// own server tests assume.
+    /// password: the test server must authenticate it with `trust` (see the
+    /// set-up above).
     const ROLE: &str = "oxyn_production_reader";
 
     /// The schema every synthetic object lives in, dropped at the start and
