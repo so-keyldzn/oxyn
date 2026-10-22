@@ -12,9 +12,7 @@
 
 use std::time::Duration;
 
-use oxyn_core::{
-    CommandId, ConnectionId, DocumentId, ResultId, SessionId, WindowGeometry, WindowLayout,
-};
+use oxyn_core::{CommandId, DocumentId, ResultId, WindowGeometry, WindowLayout};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager as _, Runtime, State, Webview, WebviewWindow};
 
@@ -24,7 +22,7 @@ use crate::commands::recovery::{ExitJournal, begin_exit};
 use crate::file_drop::FileDrops;
 use crate::ipc::library::DocumentEntry;
 use crate::ipc::windows::{ConsoleHandoff, HandoffRequest, WindowConsoles, WindowSignal};
-use crate::ipc::{CommandOutcome, IpcError, OpenConnection};
+use crate::ipc::{CommandOutcome, IpcError};
 use crate::menu::MenuBar;
 use crate::webview_guard;
 
@@ -455,25 +453,21 @@ pub(crate) fn outcome_waits(outcome: &CommandOutcome) -> bool {
 
 /// Records the result an outcome delivers as one more view of this window:
 /// its `forget_result` will come from there.
-pub(crate) fn adopt_outcome(backend: &Backend, window: WindowKey, outcome: &CommandOutcome) {
+///
+/// # Errors
+/// The window closed while the command ran: the view is let go here, since
+/// no `forget_result` will come from it.
+pub(crate) async fn adopt_outcome(
+    backend: &Backend,
+    window: WindowKey,
+    outcome: &CommandOutcome,
+) -> Result<(), IpcError> {
     if let CommandOutcome::Executed { result, .. } = outcome
         && let Ok(result) = result.parse::<ResultId>()
+        && let Err(refusal) = backend.inner.windows.claim_result(window, result, true)
     {
-        backend.inner.windows.claim_result(window, result, true);
+        backend.release_unclaimed_result(result).await;
+        return Err(refusal);
     }
-}
-
-/// Records the sessions an opened connection gives this window: the
-/// catalog's and the first console's.
-pub(crate) fn adopt_open(backend: &Backend, window: WindowKey, open: &OpenConnection) {
-    let windows = &backend.inner.windows;
-    let Ok(connection) = open.connection.parse::<ConnectionId>() else {
-        return;
-    };
-    windows.hold_connection(window, connection);
-    for session in [&open.session, &open.console.session] {
-        if let Ok(session) = session.parse::<SessionId>() {
-            windows.claim_session(window, connection, session);
-        }
-    }
+    Ok(())
 }

@@ -498,9 +498,15 @@ impl Backend {
                 (Some(owner), _) => owner,
                 // Claimed by the window asked about it: its dialog's
                 // `Commit` and `Rollback` go through `run_console`, which
-                // refuses a session the window does not own.
+                // refuses a session the window does not own. Closed since it
+                // was listed, it is asked about nothing.
                 (None, Some(first)) => {
-                    windows.claim_session(first, entry.connection, entry.session);
+                    if windows
+                        .claim_session(first, entry.connection, entry.session)
+                        .is_err()
+                    {
+                        continue;
+                    }
                     first
                 }
                 (None, None) => continue,

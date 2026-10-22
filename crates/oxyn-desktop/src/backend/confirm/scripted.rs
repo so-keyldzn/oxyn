@@ -20,6 +20,9 @@ pub(crate) enum Answer {
     /// Never answers, and leaves the screen once nobody awaits it: the
     /// dialog left on screen is [`Answer::ConfirmAfter`] past the deadline.
     Never,
+    /// Confirms once [`ScriptedConfirm::release`] is called: the user acts in
+    /// another window while the dialog waits. One such dialog at a time.
+    Held,
 }
 
 /// Records every confirmation it is asked, and answers from its script.
@@ -33,6 +36,8 @@ pub(crate) struct ScriptedConfirm {
     /// When the dialog on screen closes.
     screen_free: Mutex<Instant>,
     asked: Notify,
+    /// Answers the [`Answer::Held`] dialog.
+    released: Arc<Notify>,
 }
 
 impl ScriptedConfirm {
@@ -42,7 +47,13 @@ impl ScriptedConfirm {
             shown: Mutex::new(Vec::new()),
             screen_free: Mutex::new(Instant::now()),
             asked: Notify::new(),
+            released: Arc::new(Notify::new()),
         })
+    }
+
+    /// Confirms the [`Answer::Held`] dialog, or the next one if none is shown.
+    pub(crate) fn release(&self) {
+        self.released.notify_one();
     }
 
     /// Changes the answer to the next confirmations.
@@ -85,6 +96,13 @@ impl HostConfirm for ScriptedConfirm {
                 Answer::Confirm | Answer::Refuse => shown,
                 Answer::ConfirmAfter(delay) => shown + delay,
                 Answer::Never => return Box::pin(std::future::pending()),
+                Answer::Held => {
+                    let released = Arc::clone(&self.released);
+                    return Box::pin(async move {
+                        released.notified().await;
+                        Reply::Confirmed { shown }
+                    });
+                }
             };
             *screen_free = closed;
             (shown, closed)
