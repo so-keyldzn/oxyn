@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="0d23c3d32473" -->
+<!-- oxyn-translation source="docs/README.md" sha256="8e09813832ce" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -93,6 +93,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0055](adr/0055-sql-agent-is-the-default-of-a-new-conversation.md) | L'agent SQL est le défaut d'une nouvelle conversation, quel que soit l'ordre d'affichage | accepté |
 | [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Des embeddings locaux sur CPU (Burn, un modèle multilingue épinglé téléchargé sur activation) classent les relations du contexte IA, le lexical d'abord | accepté |
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | L'éditeur SQL complète depuis le cache du catalogue, lit ce qui manque dans des bornes, et tire son texte d'insertion de Rust | proposé |
+| [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
