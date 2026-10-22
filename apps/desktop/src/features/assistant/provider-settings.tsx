@@ -64,8 +64,23 @@ function presetStateOf(
 }
 
 interface AgentSave {
-  draft: AgentDraft
+  draft: AgentDraftWithoutSecrets
   operation: "save-agent" | "declare-preset"
+}
+
+interface ProviderSave {
+  draft: ProviderDraftWithoutKey
+  keyMustBeRetyped: boolean
+}
+
+type ProviderDraftWithoutKey = Omit<ProviderDraft, "key"> & { key?: never }
+
+type SecretFreeEnvVar =
+  | { name: string; value: string; secret?: false | undefined }
+  | { name: string; secret: true; value?: never }
+
+type AgentDraftWithoutSecrets = Omit<AgentDraft, "env"> & {
+  env: Array<SecretFreeEnvVar>
 }
 
 /**
@@ -96,6 +111,61 @@ export function ProviderSettings() {
   )
   const [declaringPreset, setDeclaringPreset] =
     React.useState<AgentPresetId | null>(null)
+  const heldProviderKeys = React.useRef(new WeakMap<object, string | null>())
+  const heldAgentValues = React.useRef(
+    new WeakMap<object, Map<number, string>>()
+  )
+
+  const holdProviderKey = React.useCallback((draft: ProviderDraft) => {
+    const { key, ...withoutKey } = draft
+    heldProviderKeys.current.set(withoutKey, key)
+    return withoutKey
+  }, [])
+
+  const takeProviderKey = React.useCallback(
+    (draft: ProviderDraftWithoutKey) => {
+      const key = heldProviderKeys.current.get(draft)
+      heldProviderKeys.current.delete(draft)
+      if (key === undefined)
+        throw new Error("Provider key was not held for this save.")
+      return key
+    },
+    []
+  )
+
+  const holdAgentSecrets = React.useCallback((draft: AgentDraft) => {
+    const secretValues = new Map<number, string>()
+    const env = draft.env.map((variable, index): SecretFreeEnvVar => {
+      if (variable.secret) {
+        secretValues.set(index, variable.value)
+        return { name: variable.name, secret: true }
+      }
+      return { name: variable.name, value: variable.value }
+    })
+    const withoutSecrets = { ...draft, env }
+    heldAgentValues.current.set(withoutSecrets, secretValues)
+    return withoutSecrets
+  }, [])
+
+  const takeAgentSecrets = React.useCallback(
+    (draft: AgentDraftWithoutSecrets): AgentDraft => {
+      const secretValues = heldAgentValues.current.get(draft)
+      heldAgentValues.current.delete(draft)
+      if (!secretValues)
+        throw new Error("Agent secret values were not held for this save.")
+      return {
+        ...draft,
+        env: draft.env.map((variable, index) => {
+          if (!variable.secret) return variable
+          const value = secretValues.get(index)
+          if (value === undefined)
+            throw new Error("An agent secret value was not held for this save.")
+          return { name: variable.name, secret: true, value }
+        }),
+      }
+    },
+    []
+  )
 
   const settle = {
     // A new attempt replaces the failure of the previous one.
@@ -103,13 +173,15 @@ export function ProviderSettings() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: aiKeys.all }),
   }
   const saveProvider = useMutation({
-    mutationFn: (draft: ProviderDraft) => ai.saveProvider(draft),
+    mutationFn: ({ draft }: ProviderSave) =>
+      ai.saveProvider({ ...draft, key: takeProviderKey(draft) }),
     ...settle,
-    onError: (error, draft) =>
-      setFailure(failureOf("save-provider", error, draft.key !== null)),
+    onError: (error, { keyMustBeRetyped }) =>
+      setFailure(failureOf("save-provider", error, keyMustBeRetyped)),
   })
   const saveAgent = useMutation({
-    mutationFn: ({ draft }: AgentSave) => ai.saveExternalAgent(draft),
+    mutationFn: ({ draft }: AgentSave) =>
+      ai.saveExternalAgent(takeAgentSecrets(draft)),
     ...settle,
     onError: (error, { operation }) =>
       setFailure(failureOf(operation, error, false)),
@@ -127,7 +199,10 @@ export function ProviderSettings() {
 
   const onSaveProvider = async (draft: ProviderDraft) => {
     try {
-      await saveProvider.mutateAsync(draft)
+      await saveProvider.mutateAsync({
+        draft: holdProviderKey(draft),
+        keyMustBeRetyped: draft.key !== null,
+      })
     } catch {
       // Shown by `onError`, in the form that sent it.
       return false
@@ -144,7 +219,10 @@ export function ProviderSettings() {
   const onSaveAgent = async (draft: AgentDraft) => {
     let saved: ExternalAgent | null
     try {
-      saved = await saveAgent.mutateAsync({ draft, operation: "save-agent" })
+      saved = await saveAgent.mutateAsync({
+        draft: holdAgentSecrets(draft),
+        operation: "save-agent",
+      })
     } catch {
       return false
     }
@@ -168,13 +246,13 @@ export function ProviderSettings() {
     setDeclaringPreset(draft.id)
     saveAgent.mutate(
       {
-        draft: {
+        draft: holdAgentSecrets({
           id: null,
           label: draft.label,
           command: draft.command,
           args: draft.args,
           env: draft.env,
-        },
+        }),
         operation: "declare-preset",
       },
       {

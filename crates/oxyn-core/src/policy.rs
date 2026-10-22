@@ -193,6 +193,19 @@ pub trait PolicyGate: Send + Sync {
         announced
     }
 
+    /// Whether `authorize` holds the target of `cmd` to be marked read-only,
+    /// when the caller announces `announced`.
+    ///
+    /// The executor bounds every read on such a connection to a read-only
+    /// execution, for the reason it bounds production reads, and on the same
+    /// reckoning: an implementation that knows the marking keeps the more
+    /// restrictive of the two. The default knows no marking but the announced
+    /// one.
+    fn retained_read_only(&self, cmd: &Command, announced: bool) -> bool {
+        let _ = cmd;
+        announced
+    }
+
     /// Name of the policy, for the audit log.
     fn name(&self) -> &'static str {
         "policy"
@@ -501,6 +514,14 @@ impl PolicyGate for DefaultPolicy {
         Self::retained_environment(self, cmd, announced)
     }
 
+    fn retained_read_only(&self, cmd: &Command, announced: bool) -> bool {
+        announced
+            || cmd
+                .target_connection()
+                .and_then(|id| self.facts(id))
+                .is_some_and(|facts| facts.read_only)
+    }
+
     fn name(&self) -> &'static str {
         "DefaultPolicy"
     }
@@ -803,6 +824,25 @@ mod tests {
         };
         let decision = bench.policy.authorize(&human(), &cmd, Environment::Local);
         assert!(decision.is_denied(), "{decision:?}");
+    }
+
+    /// The read-only bound rests on the gate's marking: a caller that does not
+    /// know it cannot lift it, and one that knows it keeps it.
+    #[test]
+    fn the_read_only_marking_retained_is_the_more_restrictive() {
+        let bench = Bench::new();
+        let gate: &dyn PolicyGate = &bench.policy;
+        let marked = bench.execute(true, StatementIntent::Read);
+        let open = bench.execute(false, StatementIntent::Read);
+
+        assert!(gate.retained_read_only(&marked, false));
+        assert!(gate.retained_read_only(&marked, true));
+        assert!(!gate.retained_read_only(&open, false));
+        assert!(gate.retained_read_only(&open, true));
+
+        // A command without a target keeps what its caller announced.
+        let untargeted = Command::ListAiProviders;
+        assert!(!gate.retained_read_only(&untargeted, false));
     }
 
     #[test]
