@@ -53,20 +53,20 @@ export const Route = createFileRoute("/")({
       reportUnread("How Oxyn last closed could not be read", status.reason)
     if (copies.status === "rejected")
       reportUnread("This window's consoles could not be read", copies.reason)
-    // The screen, not the connection list, whenever the outcome is not known
+    // The screen, not the connection list, whenever the shutdown is not known
     // to be clean: an abnormal stop with no copy left still carries the
-    // unknown-outcome warning (I-13), and an unread answer is no clean
+    // unknown-outcome warning (I-13), and an unread status is no clean
     // shutdown — the backend reads an unreadable history the same way.
-    if (
-      status.status === "rejected" ||
-      status.value.abnormal ||
-      copies.status === "rejected"
-    ) {
+    if (status.status === "rejected" || status.value.abnormal) {
       // Unread, the screen lists every open copy instead of this window's.
       if (copies.status === "fulfilled") setLaunchCopies(copies.value)
       throw redirect({ to: "/recovery", search: { startup: true } })
     }
-    if (copies.value.length > 0) restoreWorkingCopies(copies.value)
+    // A clean shutdown whose console list could not be read is still a clean
+    // shutdown: the screen is for abnormal stops only (docs/UX-SPEC.md). The
+    // warning said it; the copies stay in the library, nothing is lost.
+    if (copies.status === "fulfilled" && copies.value.length > 0)
+      restoreWorkingCopies(copies.value)
   },
   component: ConnectionScreen,
 })

@@ -106,14 +106,28 @@ describe("the index route at launch", () => {
     )
   })
 
-  it("reports unread consoles and lets the screen list every open copy", async () => {
+  it("reports unread consoles after a clean shutdown without the screen", async () => {
+    // The screen is for abnormal stops only: a flaky list read is no crash.
     status.mockResolvedValue({ abnormal: false, unresolvedWrite: false })
+    restoredConsoles.mockRejectedValue(new Error("restored_consoles failed"))
+    await expect(launch()).resolves.toBeNull()
+    expect(toastAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "This window's consoles could not be read",
+        description: "Error: restored_consoles failed",
+      })
+    )
+    expect(session.state.launchCopies).toBeNull()
+    expect(session.state.restored).toEqual([])
+  })
+
+  it("reports unread consoles after an abnormal stop and lists every open copy", async () => {
+    status.mockResolvedValue({ abnormal: true, unresolvedWrite: false })
     restoredConsoles.mockRejectedValue(new Error("restored_consoles failed"))
     await expect(launch()).resolves.toEqual(toRecovery)
     expect(toastAdd).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "This window's consoles could not be read",
-        description: "Error: restored_consoles failed",
       })
     )
     // Not this window's list, which was not read: the library's open copies.
