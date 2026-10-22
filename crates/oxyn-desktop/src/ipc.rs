@@ -784,6 +784,7 @@ mod tests {
 
 pub mod about;
 pub mod ai;
+pub mod completion;
 pub mod consoles;
 pub mod file_drops;
 pub mod library;

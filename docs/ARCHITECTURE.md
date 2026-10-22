@@ -640,6 +640,15 @@ validated by `CatalogPath` in the executor, with no dependency from `oxyn-core` 
 tier, it reads the schemas if the session declares `SCHEMAS`, otherwise the relations.
 It never describes the relations and loads neither indexes nor foreign keys.
 
+The `ResolutionPath` scope reads the namespaces an unqualified name resolves in,
+first match first
+([ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)). It names no
+object and describes nothing. The cache keeps the answer beside the server's
+identity, and **keeps the last one after an invalidation**, flagged: a path that
+was right a moment ago serves better than none while it is read again. A
+provider that cannot say refuses, and the cache stays on "unknown" — never on an
+empty path, which would assert that nothing resolves.
+
 The `Relation` scope goes down to the detail: fields, then indexes if the
 session declares `INDEXES`, then foreign keys if it declares `FOREIGN_KEYS`.
 **A missing capability leaves the field unread**, never an empty list: the cache

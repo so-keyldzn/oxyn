@@ -33,6 +33,8 @@ import { loadedObject, nameAt } from "@/features/consoles/object-under-cursor"
 import { useConsoleDocument } from "@/features/consoles/use-console-document"
 import type { ConsoleSeed } from "@/features/consoles/use-console-document"
 import { releaseResult } from "@/features/metadata/inspection"
+import { useCompletionCatalog } from "@/features/metadata/use-completion-catalog"
+import { useCompletionLoad } from "@/features/metadata/use-completion-load"
 import { useResultFind } from "@/features/metadata/use-result-find"
 import {
   ValueInspectionDialog,
@@ -617,6 +619,12 @@ export function ConsolePanel({
   // against the tree the sidebar already read, then opened as a click in the
   // catalog would (UX-SPEC, « Context menus »).
   const queryClient = useQueryClient()
+  // The names the editor completes with: a read of the cache, made when the
+  // console opens and when a signal says the cache changed, never per key.
+  const completion = useCompletionCatalog(open.connection)
+  // And what the cache lacks for the statement is read after a pause in
+  // typing: the namespaces and columns of the relations it names.
+  const loadCompletion = useCompletionLoad(open.connection, active)
   const editorMenu: SqlEditorMenu = {
     onRun: (runTarget) => void run(runTarget),
     objectAt: (text, offset) => {
@@ -746,6 +754,8 @@ export function ConsolePanel({
               view.current = editor
             }}
             menu={editorMenu}
+            completion={completion}
+            onCatalogNeeds={loadCompletion}
             autoFocus={active}
           />
         }

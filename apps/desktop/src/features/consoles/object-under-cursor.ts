@@ -5,7 +5,7 @@
 
 import type { CatalogAddress, CatalogNode } from "@/lib/ipc/types"
 
-import { readIdentifierChain } from "@/lib/sql-identifiers"
+import { readIdentifierChain, sameName } from "@/lib/sql-identifiers"
 import type { IdentifierQuote, NamePart } from "@/lib/sql-identifiers"
 
 /**
@@ -52,13 +52,6 @@ export function nameAt(
   return null
 }
 
-function same(part: NamePart, name: string | null) {
-  if (name === null) return false
-  return part.quoted
-    ? part.text === name
-    : part.text.toLowerCase() === name.toLowerCase()
-}
-
 /**
  * The relation of the loaded tree that `parts` names, or null when none does
  * or when several do: an ambiguous name opens nothing rather than a guess.
@@ -82,10 +75,10 @@ export function loadedObject(
       if (node.system) continue
       if (node.address.relation !== null) {
         if (
-          same(relation, node.name) &&
+          sameName(relation, node.name) &&
           (namespace === undefined ||
-            same(namespace, node.address.namespace)) &&
-          (catalog === undefined || same(catalog, node.address.catalog))
+            sameName(namespace, node.address.namespace)) &&
+          (catalog === undefined || sameName(catalog, node.address.catalog))
         )
           found.push(node)
       } else walk(node.children)

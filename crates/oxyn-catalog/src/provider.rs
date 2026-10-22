@@ -190,6 +190,30 @@ pub trait CatalogProvider: Send + Sync {
         })
     }
 
+    /// The namespaces an unqualified name resolves in on this session, first
+    /// match first.
+    ///
+    /// What a statement typed with no qualifier means depends on it: PostgreSQL
+    /// searches its `search_path`, MySQL one database. Completion suggests an
+    /// unqualified name only where this list says it would resolve.
+    ///
+    /// Returns [`OxynError::NotSupported`] by default, for the same reason as
+    /// [`Self::list_indexes`]: an empty list would assert that no namespace
+    /// resolves anything, and a driver that cannot tell cannot assert it.
+    /// `ResolutionPath` is read on the session reserved for the catalog, in its
+    /// default state — never on a console's session, whose context a user may
+    /// have changed.
+    ///
+    /// # Errors
+    /// [`OxynError::NotSupported`] if the session cannot say, or any session
+    /// error.
+    async fn resolution_path(&self, cancel: &CancelToken) -> Result<Vec<String>> {
+        let _ = cancel;
+        Err(OxynError::NotSupported {
+            capability: "RESOLUTION_PATH".to_owned(),
+        })
+    }
+
     /// The foreign keys carried by a relation.
     ///
     /// Returns [`OxynError::NotSupported`] by default, for the same reason as

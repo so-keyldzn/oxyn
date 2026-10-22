@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import * as ai from "./ai"
 import * as client from "./client"
+import * as completion from "./completion"
 import * as consoles from "./consoles"
 import * as events from "./events"
 import * as library from "./library"
@@ -20,6 +21,7 @@ import * as types from "./types"
 const modules = {
   ai,
   client,
+  completion,
   consoles,
   events,
   library,
