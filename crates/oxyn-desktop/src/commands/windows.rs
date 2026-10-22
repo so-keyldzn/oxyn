@@ -12,9 +12,7 @@
 
 use std::time::Duration;
 
-use oxyn_core::{
-    CommandId, ConnectionId, DocumentId, ResultId, SessionId, WindowGeometry, WindowLayout,
-};
+use oxyn_core::{CommandId, DocumentId, ResultId, WindowGeometry, WindowLayout};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager as _, Runtime, State, Webview, WebviewWindow};
 
@@ -24,7 +22,7 @@ use crate::commands::recovery::{ExitJournal, begin_exit};
 use crate::file_drop::FileDrops;
 use crate::ipc::library::DocumentEntry;
 use crate::ipc::windows::{ConsoleHandoff, HandoffRequest, WindowConsoles, WindowSignal};
-use crate::ipc::{CommandOutcome, IpcError, OpenConnection};
+use crate::ipc::{CommandOutcome, IpcError};
 use crate::menu::MenuBar;
 use crate::webview_guard;
 
