@@ -2625,7 +2625,7 @@ impl Run<'_> {
         session: &ExternalSession,
     ) -> Result<Option<PromptStart>, Failure> {
         tokio::select! {
-            ready = start_bounded(agent, session) => ready.map(Some).inspect_err(|failure| {
+            ready = start_for_prompt_bounded(agent, session) => ready.map(Some).inspect_err(|failure| {
                 if failure.ends_agent {
                     self.thread.link_agent(None);
                 }
@@ -2802,6 +2802,18 @@ fn timed_out(agent: &ExternalAgentConfig) -> Failure {
 /// Starts `session` — once: a second call waits for the first one's answer —
 /// within [`AGENT_START_TIMEOUT`].
 async fn start_bounded(
+    agent: &ExternalAgentConfig,
+    session: &ExternalSession,
+) -> Result<AgentReady, Failure> {
+    match tokio::time::timeout(AGENT_START_TIMEOUT, session.start()).await {
+        Ok(Ok(ready)) => Ok(ready),
+        Ok(Err(error)) => Err(agent_failure_of(agent, error, session).await),
+        Err(_elapsed) => Err(timed_out(agent)),
+    }
+}
+
+/// Starts `session` for a question while reserving it against setting changes.
+async fn start_for_prompt_bounded(
     agent: &ExternalAgentConfig,
     session: &ExternalSession,
 ) -> Result<PromptStart, Failure> {

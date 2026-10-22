@@ -160,12 +160,15 @@ fn the_end_of_stderr_is_kept_when_an_agent_floods_it() {
 fn dropping_the_guard_kills_the_agent() {
     // An agent left running holds the user's subscription and may still be
     // talking to a provider. Closing the panel must end it.
-    let spawned = spawn(
-        SHELL,
-        &script("sleep 30 & child=$!; echo $child >&2; wait"),
-        &Environment::empty(),
-    )
-    .expect("a shell starts");
+    let temporary = tempfile::tempdir().expect("a temporary marker directory");
+    let marker = temporary.path().join("agent-child-pid");
+    let arguments = vec![
+        "-c".to_owned(),
+        "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait".to_owned(),
+        "agent".to_owned(),
+        marker.to_string_lossy().into_owned(),
+    ];
+    let spawned = spawn(SHELL, &arguments, &Environment::empty()).expect("a shell starts");
     let Spawned {
         transport,
         watch,
@@ -175,6 +178,19 @@ fn dropping_the_guard_kills_the_agent() {
 
     let pid = guard.pid;
     assert!(alive(pid), "the child should be running");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !marker.is_file() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the shell did not start its child"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let child = std::fs::read_to_string(&marker)
+        .expect("the child pid marker is readable")
+        .parse::<i32>()
+        .expect("the child pid marker is numeric");
+    let child = rustix::process::Pid::from_raw(child).expect("the child pid is positive");
     drop(guard);
 
     // Awaiting the watch reaps the child. Without it the process stays a
@@ -183,12 +199,13 @@ fn dropping_the_guard_kills_the_agent() {
     let exit = block_on(watch);
     assert_eq!(exit.code, None, "a killed process has no exit code");
     assert!(!alive(pid), "the agent survived the guard");
-    let child = exit
-        .stderr
-        .trim()
-        .parse::<i32>()
-        .expect("the shell reported its child pid");
-    let child = rustix::process::Pid::from_raw(child).expect("the child pid is positive");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while rustix::process::test_kill_process(child).is_ok() && std::time::Instant::now() < deadline
+    {
+        // The shell cannot reap a child after the whole group is killed; macOS
+        // briefly reports that zombie until its new parent has reaped it.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     assert!(
         rustix::process::test_kill_process(child).is_err(),
         "a launcher child survived the guard's process-group signal"
