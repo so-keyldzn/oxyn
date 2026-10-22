@@ -714,7 +714,7 @@ impl AgentSession {
         let system = format!(
             "{}\n\n{}\n\n{}",
             spec.system_prompt.trim(),
-            untrusted::PREAMBLE,
+            context.untrusted_preamble(),
             context.prompt_block()
         );
         Self {
@@ -2120,10 +2120,14 @@ mod tests {
             .expect("a system message")
             .content
             .clone();
-        let preamble = system.find(untrusted::PREAMBLE).expect("the preamble");
+        let preamble = system
+            .find("Blocks delimited by <untrusted-database-content-")
+            .expect("the preamble");
         // `rfind`: the preamble itself quotes the tag to explain it to the
         // model, so the first occurrence is its own.
-        let fenced = system.rfind(untrusted::FENCE_OPEN).expect("the fence");
+        let fenced = system
+            .rfind("<untrusted-database-content-")
+            .expect("the fence");
         assert!(
             preamble < fenced,
             "a model that reads the instruction after the data has already read the data"

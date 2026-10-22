@@ -239,7 +239,11 @@ fn a_hostile_name_in_a_mention_stays_data() {
         .build();
     assert_eq!(context.ignored_mentions(), 0, "the mention is recognized");
     let block = context.prompt_block();
-    assert_eq!(block.matches(untrusted::FENCE_CLOSE).count(), 1, "{block}");
+    assert_eq!(
+        block.matches("</untrusted-database-content-").count(),
+        1,
+        "{block}"
+    );
     assert!(
         block.contains("DROP TABLE audit"),
         "the name leaves, as data: {block}"
@@ -277,7 +281,11 @@ fn a_mentioned_saved_query_is_fenced_and_bounded() {
     let block = context.prompt_block();
     assert!(block.contains(r#"saved query "Monthly prices""#), "{block}");
     assert!(block.contains("    from prices"), "{block}");
-    assert_eq!(block.matches(untrusted::FENCE_CLOSE).count(), 1, "{block}");
+    assert_eq!(
+        block.matches("</untrusted-database-content-").count(),
+        1,
+        "{block}"
+    );
 
     let tight = ContextBuilder::new(&cache, PrivacyTier::Metadata)
         .with_policy(ContextPolicy {
@@ -374,7 +382,8 @@ fn an_external_agent_receives_the_mentions_open_or_not() {
         !text.contains("client_id"),
         "nothing but the mention: {text}"
     );
-    assert!(text.find(untrusted::PREAMBLE) < text.find(untrusted::FENCE_OPEN));
+    let context = follow_up.context().expect("a context is attached");
+    assert!(text.find(context.untrusted_preamble()) < text.find("<untrusted-database-content-"));
     assert_eq!(
         follow_up.context().map(AgentContext::tier),
         Some(PrivacyTier::Metadata)

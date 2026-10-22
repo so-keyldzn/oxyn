@@ -287,7 +287,7 @@ impl AgentPrompt {
         let text = format!(
             "{AGENT_HEADER}\n\n{instructions}\n\n{}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{}",
             schema_intro(),
-            untrusted::PREAMBLE,
+            context.untrusted_preamble(),
             context.prompt_block(),
             asked.text
         );

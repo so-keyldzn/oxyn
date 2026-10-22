@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(
             context
                 .prompt_block()
-                .matches(untrusted::FENCE_OPEN)
+                .matches("<untrusted-database-content-")
                 .count(),
             1
         );

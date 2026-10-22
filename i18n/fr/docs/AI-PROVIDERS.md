@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="feb6873c71ee" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="f03bc4f1f812" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -450,6 +450,15 @@ Un nom de table, un commentaire de colonne, une valeur de ligne peuvent contenir
 du texte imitant une instruction. Ce sont des **données**, à tout niveau, y
 compris quand elles arrivent dans une invite. Voir
 [SECURITY](SECURITY.md#surface-dentrée).
+
+`ContextBuilder` donne à la clôture du contenu de base de chaque invite un nonce
+aléatoire nouveau, et son préambule nomme exactement les balises d'ouverture et
+de fermeture. Avant de neutraliser un mot de balise dans le contenu de la base,
+il retire les caractères de format Unicode et replie les tirets, les formes de
+compatibilité et les sosies cyrilliques pertinents. Ce repli est une défense en
+profondeur, pas un mappage universel des confusables : le nonce nouveau est la
+frontière principale, et le `PolicyGate` décide toujours si une proposition du
+modèle peut être exécutée.
 
 ## Mentions
 

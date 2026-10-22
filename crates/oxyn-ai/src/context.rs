@@ -56,9 +56,10 @@
 //! # Everything that comes from the database is fenced
 //!
 //! Object names, comments, values: the body of the context goes whole through
-//! [`untrusted::fence`], which neutralizes control sequences and makes forging
-//! a fake closing tag impossible. A column comment is not an instruction
-//! (I-07, SECURITY).
+//! [`untrusted::Fence`], which neutralizes control sequences and uses a fresh,
+//! per-prompt nonce in its closing tag. The nonce makes a fake closing tag
+//! impractical to predict; Unicode folding is only a secondary defence. A
+//! column comment is not an instruction (I-07, SECURITY).
 
 use std::fmt;
 
@@ -215,6 +216,7 @@ impl fmt::Debug for RowSample {
 #[derive(Clone, PartialEq)]
 pub struct AgentContext {
     tier: PrivacyTier,
+    preamble: String,
     block: String,
     relations: Vec<CatalogPath>,
     estimated_tokens: usize,
@@ -245,6 +247,12 @@ impl AgentContext {
     #[must_use]
     pub fn prompt_block(&self) -> &str {
         &self.block
+    }
+
+    /// The instruction that names this context's unpredictable fence.
+    #[must_use]
+    pub(crate) fn untrusted_preamble(&self) -> &str {
+        &self.preamble
     }
 
     /// The tier that was applied.
@@ -334,6 +342,8 @@ pub struct ContextBuilder<'a> {
     /// Per-relation scores from the host; empty, the selection is lexical
     /// only ([`ContextBuilder::with_semantic_scores`]).
     semantic: SemanticScores,
+    #[cfg(test)]
+    fence_nonce: Option<String>,
 }
 
 impl<'a> ContextBuilder<'a> {
@@ -353,7 +363,17 @@ impl<'a> ContextBuilder<'a> {
             mentions: Vec::new(),
             fill: true,
             semantic: SemanticScores::new(),
+            #[cfg(test)]
+            fence_nonce: None,
         }
+    }
+
+    /// Supplies a deterministic fence nonce for a test.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_fence_nonce(mut self, nonce: impl Into<String>) -> Self {
+        self.fence_nonce = Some(nonce.into());
+        self
     }
 
     /// Sets the compaction policy.
@@ -395,6 +415,13 @@ impl<'a> ContextBuilder<'a> {
     /// Assembles the context. **The single gateway of I-04.**
     #[must_use]
     pub fn build(self) -> AgentContext {
+        #[cfg(test)]
+        let fence = match self.fence_nonce.as_deref() {
+            Some(nonce) => untrusted::Fence::with_nonce(nonce),
+            None => untrusted::Fence::fresh(),
+        };
+        #[cfg(not(test))]
+        let fence = untrusted::Fence::fresh();
         let naming = Naming::for_language(self.language);
         let known = self.cache.relation_count();
 
@@ -529,11 +556,12 @@ impl<'a> ContextBuilder<'a> {
                 "{unlisted} schemas not listed yet: their relations are not counted above.\n"
             ));
         }
-        block.push_str(&untrusted::fence(&body));
+        block.push_str(&fence.fence(&body));
 
         let estimated_tokens = estimate_tokens(&block);
         AgentContext {
             tier: self.tier,
+            preamble: fence.preamble().to_owned(),
             block,
             relations: kept,
             estimated_tokens,
@@ -1150,11 +1178,40 @@ mod tests {
         let context = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
         let block = context.prompt_block();
         assert_eq!(
-            block.matches(untrusted::FENCE_CLOSE).count(),
+            block.matches("</untrusted-database-content-").count(),
             1,
             "the comment closed the fence: {block}"
         );
-        assert_eq!(block.matches(untrusted::FENCE_OPEN).count(), 1, "{block}");
+        assert_eq!(
+            block.matches("<untrusted-database-content-").count(),
+            1,
+            "{block}"
+        );
+    }
+
+    #[test]
+    fn each_prompt_build_names_its_own_fence_nonce() {
+        let cache = cache();
+        let first = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("first-test-nonce")
+            .build();
+        let second = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("second-test-nonce")
+            .build();
+
+        assert!(first.untrusted_preamble().contains("first-test-nonce"));
+        assert!(second.untrusted_preamble().contains("second-test-nonce"));
+        assert!(
+            first
+                .prompt_block()
+                .contains("</untrusted-database-content-first-test-nonce>")
+        );
+        assert!(
+            second
+                .prompt_block()
+                .contains("</untrusted-database-content-second-test-nonce>")
+        );
+        assert_ne!(first.untrusted_preamble(), second.untrusted_preamble());
     }
 
     #[test]

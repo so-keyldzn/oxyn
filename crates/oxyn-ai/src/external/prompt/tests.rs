@@ -72,8 +72,6 @@ mod schema {
     const SQLITE: QueryLanguage = QueryLanguage::Sql(SqlDialect::Sqlite);
 
     use super::*;
-    use crate::untrusted;
-
     /// A small SQLite database: two described tables, and — in a comment and a
     /// default value — what looks like an instruction.
     fn nbc() -> CatalogCache {
@@ -172,19 +170,27 @@ mod schema {
         .expect("valid prompt");
         let text = launch_request.as_str();
 
-        let preamble = text
-            .find(untrusted::PREAMBLE)
-            .expect("the preamble is there");
+        let context = launch_request.context().expect("a schema is attached");
+        let preamble_text = context.untrusted_preamble();
+        let preamble = text.find(preamble_text).expect("the preamble is there");
         // The preamble names the tags itself: we count after it.
         let after = text
-            .get(preamble + untrusted::PREAMBLE.len()..)
+            .get(preamble + preamble_text.len()..)
             .expect("the preamble is a slice of the text");
-        assert_eq!(after.matches(untrusted::FENCE_OPEN).count(), 1, "{text}");
-        assert_eq!(after.matches(untrusted::FENCE_CLOSE).count(), 1, "{text}");
+        assert_eq!(
+            after.matches("<untrusted-database-content-").count(),
+            1,
+            "{text}"
+        );
+        assert_eq!(
+            after.matches("</untrusted-database-content-").count(),
+            1,
+            "{text}"
+        );
         let fenced = preamble
-            + untrusted::PREAMBLE.len()
+            + preamble_text.len()
             + after
-                .find(untrusted::FENCE_OPEN)
+                .find("<untrusted-database-content-")
                 .expect("the fence is there");
         let question = text
             .find("how many customers?")
@@ -262,24 +268,19 @@ mod schema {
         assert!(text.contains("dupont@example.com"), "{text}");
         let value = text.find("dupont@example.com").expect("the value is there");
         let opening = text
-            .rfind(untrusted::FENCE_OPEN)
+            .rfind("<untrusted-database-content-")
             .expect("a fence opens the data");
         let closing = text
-            .rfind(untrusted::FENCE_CLOSE)
+            .rfind("</untrusted-database-content-")
             .expect("a fence closes the data");
         assert!(opening < value && value < closing, "{text}");
 
-        let expected = ContextBuilder::new(&cache, PrivacyTier::Sampled)
-            .with_language(SQLITE)
-            .focused_on("how are the emails written?")
-            .with_samples(vec![sample()])
-            .build();
         assert_eq!(
             launch_request
                 .context()
-                .map(crate::AgentContext::prompt_block),
-            Some(expected.prompt_block()),
-            "a single rendering: the gateway's"
+                .map(crate::AgentContext::dropped_samples),
+            Some(0),
+            "the gateway keeps the approved sample"
         );
     }
 
@@ -391,8 +392,9 @@ mod schema {
         let schema = text
             .find("You are working inside Oxyn")
             .expect("the schema intro is there");
+        let context = opening.context().expect("a schema is attached");
         let fence = text
-            .find(untrusted::PREAMBLE)
+            .find(context.untrusted_preamble())
             .expect("the preamble is there");
         assert!(block < schema && schema < fence, "{text}");
         // What the recipient fragment and the dialect fragment add are there:

@@ -432,6 +432,14 @@ text imitating an instruction. They are **data**, at every tier,
 including when they arrive in a prompt. See
 [SECURITY](SECURITY.md#input-surface).
 
+`ContextBuilder` gives each prompt's database-content fence a fresh random
+nonce, and its preamble names the exact opening and closing tags. Before it
+neutralizes a tag word in database content, it removes Unicode format
+characters and folds dashes, compatibility forms, and relevant Cyrillic
+look-alikes. This folding is defence in depth, not a universal confusable
+mapping: the fresh nonce is the primary boundary, and the `PolicyGate` still
+decides whether a model proposal can run.
+
 ## Mentions
 
 An object the user names with an `@` in their question
