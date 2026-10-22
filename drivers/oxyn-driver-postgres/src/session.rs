@@ -83,20 +83,20 @@ pub(crate) const SQL_RESET_SEARCH_PATH: &str = "SET search_path TO DEFAULT";
 /// Resets the session state to the default after a **writable** execution,
 /// which has no `ROLLBACK` to undo what the user may have set.
 ///
-/// A literal, two statements in a single round trip (simple protocol):
+/// A literal, three statements in a single round trip (simple protocol):
 ///
-/// * `standard_conforming_strings`: `oxyn-query`'s splitter assumes `on`. A
-///   connection returned to the pool with `off` would make the server read a
-///   `DELETE` where the splitter saw a string, hence a write classified as a
-///   read, without the confirmation that names the connection
-///   ([I-02](../../../CLAUDE.md#i-02)). See [`ConnectSpec`](crate::ConnectSpec)
-///   for the value set at opening;
+/// * `RESET SESSION AUTHORIZATION` removes both a changed session
+///   authorization and a role selected by the console. Otherwise a later
+///   borrower could receive the previous console's privileges;
+/// * `RESET ALL` gives every session GUC back to the connection's startup
+///   values. That preserves the imposed `standard_conforming_strings = on`
+///   and the configured `application_name`; see [`ConnectSpec`](crate::ConnectSpec).
 /// * `search_path`: a `SET` typed in a console would otherwise travel to the
 ///   next borrower. It is not reliable for the user anyway, whose next query
 ///   may go out on another connection; a console's schema goes through its
 ///   session context.
 pub(crate) const SQL_RESET_AFTER_WRITE: &str =
-    "SET standard_conforming_strings TO on; SET search_path TO DEFAULT";
+    "RESET SESSION AUTHORIZATION; RESET ALL; SET search_path TO DEFAULT";
 /// The pid of the server process executing on this connection.
 const SQL_BACKEND_PID: &str = "SELECT pg_catalog.pg_backend_pid()";
 
