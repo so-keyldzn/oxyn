@@ -10,6 +10,8 @@ mod location;
 mod preferences;
 
 #[cfg(test)]
+mod deletion_tests;
+#[cfg(test)]
 mod location_tests;
 #[cfg(test)]
 mod tests;
@@ -32,7 +34,8 @@ pub(crate) struct SettingsState {
     pub(crate) pending_changes: Mutex<HashMap<CommandId, PendingChange>>,
     /// Held while a connection change is computed and saved, or checked
     /// against the saved configuration and applied: two approvals must not
-    /// both pass the check, nor a direct save slip between check and save.
+    /// both pass the check, nor a direct save slip between check and save. A
+    /// deletion checks under it that no other window holds the connection.
     pub(crate) decisions: tokio::sync::Mutex<()>,
 }
 

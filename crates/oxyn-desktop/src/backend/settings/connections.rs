@@ -190,6 +190,9 @@ impl Backend {
         connection: ConnectionId,
     ) -> Result<ConnectionChange, IpcError> {
         let _serial = self.inner.settings.decisions.lock().await;
+        // Under the lock, as an approved deletion checks again: a window
+        // that opened the connection since this command was sent is seen.
+        self.refuse_if_held_elsewhere(id, connection)?;
         let config = self.read_config(connection).await?;
         let inner = &self.inner;
         let cancel = self.track(id)?;
@@ -321,6 +324,16 @@ impl Backend {
                 pending.origin().name
             )));
         }
+        // The dialog may stay open minutes, and another window may open the
+        // connection meanwhile: `DeleteConnection` would close its sessions
+        // under its consoles, transactions included (ADR-0043). Checked under
+        // the lock and just before the approval, like the configuration.
+        if matches!(pending, PendingChange::Delete { .. })
+            && let Err(refusal) = self.refuse_if_held_elsewhere(command, connection)
+        {
+            inner.executor.reject(command);
+            return Err(refusal);
+        }
         let outcome = inner.executor.approve("human", command, &cancel).await?;
         match (outcome, pending) {
             (
@@ -335,6 +348,32 @@ impl Backend {
             }
             (Outcome::Denied { reason, .. }, _) => Err(IpcError::invalid(reason)),
             _ => Err(IpcError::invalid("The connection was not changed")),
+        }
+    }
+
+    /// Refuses deleting `connection` while a window other than the one that
+    /// sent `command` holds it: its consoles would lose the configuration
+    /// they run on (ADR-0043).
+    ///
+    /// Conclusive only under `settings.decisions`, which every deletion takes
+    /// before it is dispatched or approved; unlocked, it only spares a dialog
+    /// that would be refused. Opening a connection does not take the lock: a
+    /// window may still open it right after the check, and that opening then
+    /// fails on, or is closed by, the deletion.
+    ///
+    /// # Errors
+    /// Another window holds the connection.
+    pub(crate) fn refuse_if_held_elsewhere(
+        &self,
+        command: CommandId,
+        connection: ConnectionId,
+    ) -> Result<(), IpcError> {
+        if self.inner.windows.held_elsewhere(command, connection) {
+            Err(IpcError::invalid(
+                "This connection is open in another window. Close it there first.",
+            ))
+        } else {
+            Ok(())
         }
     }
 

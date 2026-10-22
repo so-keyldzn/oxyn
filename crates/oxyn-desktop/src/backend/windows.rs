@@ -553,19 +553,17 @@ impl WindowRegistry {
             .is_some_and(|held| held.contains(&connection))
     }
 
-    /// The windows other than `window` that hold `connection`.
-    pub(crate) fn other_holders(
-        &self,
-        window: WindowKey,
-        connection: ConnectionId,
-    ) -> Vec<WindowKey> {
-        self.state
-            .lock()
+    /// Whether a window other than the one that sent `command` holds
+    /// `connection`. Read under one lock, owner and holders together. A
+    /// command no window claims has no window of its own: every holder is
+    /// another, so the answer fails closed.
+    pub(crate) fn held_elsewhere(&self, command: CommandId, connection: ConnectionId) -> bool {
+        let state = self.state.lock();
+        let sender = state.commands.get(&command).copied();
+        state
             .connections
             .iter()
-            .filter(|(key, held)| **key != window && held.contains(&connection))
-            .map(|(key, _)| *key)
-            .collect()
+            .any(|(key, held)| Some(*key) != sender && held.contains(&connection))
     }
 
     /// Whether any record still names `key`: a window that closed must leave

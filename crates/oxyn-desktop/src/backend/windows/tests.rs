@@ -236,12 +236,19 @@ fn a_connection_is_disconnected_when_the_last_window_lets_it_go() {
     let connection = ConnectionId::new();
     registry.hold_connection(left, connection).expect("open");
     registry.hold_connection(right, connection).expect("open");
-    assert_eq!(registry.other_holders(left, connection), vec![right]);
+    let mine = CommandId::new();
+    registry.claim_command(left, mine).expect("free");
+    assert!(registry.held_elsewhere(mine, connection), "by the right");
+    assert!(
+        registry.held_elsewhere(CommandId::new(), connection),
+        "a command no window sent has no window of its own"
+    );
     assert!(
         !registry.release_connection(left, connection),
         "the right still holds it"
     );
     assert!(!registry.holds(left, connection));
+    assert!(!registry.held_elsewhere(CommandId::new(), ConnectionId::new()));
     assert!(registry.release_connection(right, connection));
 }
 
