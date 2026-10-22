@@ -380,6 +380,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_decimal_column_streams_whole_values_then_a_fraction_without_conflict() {
+        // Under NUMERIC affinity `10.00` is stored as INTEGER and `12.5` as REAL.
+        // The first batch (100 rows here) holds only whole amounts: typing the
+        // column `Int64` from it would fail the stream at the first fraction.
+        let session = session(BatchLimits::new().with_max_rows(100)).await;
+        run_to_end(
+            session.as_ref(),
+            "CREATE TABLE orders(amount DECIMAL(10,2))",
+        )
+        .await;
+        run_to_end(
+            session.as_ref(),
+            "WITH RECURSIVE series(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM series WHERE n < 250) \
+             INSERT INTO orders(amount) SELECT n FROM series",
+        )
+        .await;
+        run_to_end(session.as_ref(), "INSERT INTO orders(amount) VALUES (12.5)").await;
+
+        let cancel_token = CancelToken::new();
+        let mut batch_cursor = session
+            .execute(
+                ExecRequest::new(
+                    QueryLanguage::SQL,
+                    "SELECT amount FROM orders ORDER BY rowid",
+                )
+                .with_limits(ExecLimits::unbounded()),
+                &cancel_token,
+            )
+            .await
+            .expect("execution");
+        let all_batches = drain_all(&mut batch_cursor).await;
+
+        assert!(all_batches.len() > 1, "the test needs several batches");
+        let schema = all_batches[0].schema();
+        assert_eq!(
+            schema.field(0).data_type(),
+            &arrow::datatypes::DataType::Utf8
+        );
+        let last = all_batches.last().expect("at least one batch");
+        let last_values = last
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Utf8");
+        assert_eq!(last_values.value(last_values.len() - 1), "12.5");
+        let row_count: usize = all_batches.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(row_count, 251);
+    }
+
+    #[tokio::test]
     async fn a_write_is_refused_when_the_request_declares_itself_read_only() {
         // The `ExecLimits` default is cautious: read-only. The question is asked
         // of the engine (`sqlite3_stmt_readonly`), not of the text.

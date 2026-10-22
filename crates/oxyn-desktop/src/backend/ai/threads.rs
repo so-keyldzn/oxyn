@@ -28,7 +28,7 @@ use std::fmt;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
-use oxyn_ai::external::mcp::ToolTurns;
+use oxyn_ai::external::mcp::{ToolService, ToolTurns};
 use oxyn_ai::external::session::ExternalSession;
 use oxyn_ai::{AgentSession, CallId};
 use oxyn_core::{
@@ -764,6 +764,8 @@ pub(crate) struct AgentLink {
     pub(crate) tier: PrivacyTier,
     pub(crate) leaf: Option<u32>,
     pub(crate) session: Arc<ExternalSession>,
+    /// The service's fence is bound to the opening context before it is sent.
+    pub(crate) service: Option<Arc<ToolService>>,
     /// Where each question opens the agent's access to Oxyn's tools.
     pub(crate) tools: ToolTurns,
     /// Who the agent acts as, for the whole session: the executor refuses a
@@ -812,6 +814,7 @@ impl Drop for WithdrawOnRelease {
 /// A live agent session, with what a new question needs to open its turn.
 pub(crate) struct LinkedAgent {
     pub(crate) session: Arc<ExternalSession>,
+    pub(crate) service: Option<Arc<ToolService>>,
     pub(crate) tools: ToolTurns,
     pub(crate) actor: (AgentId, AgentSessionId),
 }
@@ -1237,6 +1240,7 @@ impl Thread {
             })
             .map(|link| LinkedAgent {
                 session: Arc::clone(&link.session),
+                service: link.service.as_ref().map(Arc::clone),
                 tools: link.tools.clone(),
                 actor: link.actor,
             })

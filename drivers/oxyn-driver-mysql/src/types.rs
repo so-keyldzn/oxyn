@@ -13,11 +13,11 @@
 //! | `DECIMAL(p, s)` | `Decimal128(p, s)` up to 38, `Decimal256(p, s)` beyond | none; a definition the driver cannot read back into `(p, s)` is `Utf8`, marked |
 //! | `DATE` | `Date32` | zero and partial dates refused, see [`crate::decode`] |
 //! | `DATETIME` | `Timestamp(µs, None)` | none; no time zone invented |
-//! | `TIMESTAMP` | `Timestamp(µs, "UTC")` | none; the session runs at `+00:00` |
+//! | `TIMESTAMP` | `Timestamp(µs, "UTC")` | none while the session runs at `+00:00`: a typed `SET time_zone` is refused, quoted (`` @@session.`time_zone` ``) or in an executable comment, but a `CALL`ed procedure, a dynamic `PREPARE`/`EXECUTE IMMEDIATE` or a text lexed under `NO_BACKSLASH_ESCAPES` can still change it, see DRIVER-CONTRACT §7 and the `pinned` module |
 //! | `TIME` | `Duration(µs)` | none; ±838:59:59 is not a time of day |
 //! | `YEAR` | `UInt16` | none |
 //! | `BIT(n)` | `UInt64` | none |
-//! | text types, `ENUM`, `SET` | `Utf8`, or `Binary` in the `binary` character set | none |
+//! | text types, `ENUM`, `SET` | `Utf8`, or `Binary` in the `binary` character set | none while the session runs in `utf8mb4`: a typed `SET NAMES` or `SET character_set_*` is refused like `SET time_zone`, with the same limits |
 //! | `JSON` | `Utf8` | none, although MySQL announces it in `binary` |
 //! | `BINARY`, `VARBINARY`, `BLOB` | `Binary` | none |
 //! | `GEOMETRY` | `Binary`, marked | the server's SRID then WKB, not decoded |

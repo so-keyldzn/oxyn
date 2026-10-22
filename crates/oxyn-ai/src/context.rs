@@ -56,9 +56,10 @@
 //! # Everything that comes from the database is fenced
 //!
 //! Object names, comments, values: the body of the context goes whole through
-//! [`untrusted::fence`], which neutralizes control sequences and makes forging
-//! a fake closing tag impossible. A column comment is not an instruction
-//! (I-07, SECURITY).
+//! `untrusted::Fence`, which neutralizes control sequences and uses a fresh,
+//! per-prompt nonce in its closing tag. The nonce makes a fake closing tag
+//! impractical to predict; Unicode folding is only a secondary defence. A
+//! column comment is not an instruction (I-07, SECURITY).
 
 use std::fmt;
 
@@ -215,6 +216,7 @@ impl fmt::Debug for RowSample {
 #[derive(Clone, PartialEq)]
 pub struct AgentContext {
     tier: PrivacyTier,
+    fence: untrusted::Fence,
     block: String,
     relations: Vec<CatalogPath>,
     estimated_tokens: usize,
@@ -245,6 +247,18 @@ impl AgentContext {
     #[must_use]
     pub fn prompt_block(&self) -> &str {
         &self.block
+    }
+
+    /// The instruction that names this context's unpredictable fence.
+    #[must_use]
+    pub(crate) fn untrusted_preamble(&self) -> &str {
+        self.fence.preamble()
+    }
+
+    /// The session fence that names this context in its opening instruction.
+    #[must_use]
+    pub(crate) const fn fence(&self) -> &untrusted::Fence {
+        &self.fence
     }
 
     /// The tier that was applied.
@@ -334,6 +348,9 @@ pub struct ContextBuilder<'a> {
     /// Per-relation scores from the host; empty, the selection is lexical
     /// only ([`ContextBuilder::with_semantic_scores`]).
     semantic: SemanticScores,
+    /// Reused for a later block in an existing conversation, so the opening
+    /// instruction continues to name every database-content fence it sees.
+    fence: Option<untrusted::Fence>,
 }
 
 impl<'a> ContextBuilder<'a> {
@@ -353,7 +370,23 @@ impl<'a> ContextBuilder<'a> {
             mentions: Vec::new(),
             fill: true,
             semantic: SemanticScores::new(),
+            fence: None,
         }
+    }
+
+    /// Reuses a conversation's fence for a later context block.
+    #[must_use]
+    pub(crate) fn with_fence(mut self, fence: untrusted::Fence) -> Self {
+        self.fence = Some(fence);
+        self
+    }
+
+    /// Supplies a deterministic fence nonce for a test.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_fence_nonce(mut self, nonce: impl Into<String>) -> Self {
+        self.fence = Some(untrusted::Fence::with_nonce(&nonce.into()));
+        self
     }
 
     /// Sets the compaction policy.
@@ -395,6 +428,7 @@ impl<'a> ContextBuilder<'a> {
     /// Assembles the context. **The single gateway of I-04.**
     #[must_use]
     pub fn build(self) -> AgentContext {
+        let fence = self.fence.clone().unwrap_or_else(untrusted::Fence::fresh);
         let naming = Naming::for_language(self.language);
         let known = self.cache.relation_count();
 
@@ -529,11 +563,12 @@ impl<'a> ContextBuilder<'a> {
                 "{unlisted} schemas not listed yet: their relations are not counted above.\n"
             ));
         }
-        block.push_str(&untrusted::fence(&body));
+        block.push_str(&fence.fence(&body));
 
         let estimated_tokens = estimate_tokens(&block);
         AgentContext {
             tier: self.tier,
+            fence,
             block,
             relations: kept,
             estimated_tokens,
@@ -1150,11 +1185,32 @@ mod tests {
         let context = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
         let block = context.prompt_block();
         assert_eq!(
-            block.matches(untrusted::FENCE_CLOSE).count(),
+            block.matches("</untrusted-database-content-").count(),
             1,
             "the comment closed the fence: {block}"
         );
-        assert_eq!(block.matches(untrusted::FENCE_OPEN).count(), 1, "{block}");
+        assert_eq!(
+            block.matches("<untrusted-database-content-").count(),
+            1,
+            "{block}"
+        );
+    }
+
+    #[test]
+    fn each_prompt_build_names_its_own_fence_nonce() {
+        let cache = cache();
+        let first = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+        let second = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+
+        assert_ne!(first.untrusted_preamble(), second.untrusted_preamble());
+        for context in [&first, &second] {
+            let open = context
+                .prompt_block()
+                .lines()
+                .find(|line| line.starts_with("<untrusted-database-content-"))
+                .expect("the context is fenced");
+            assert!(context.untrusted_preamble().contains(open));
+        }
     }
 
     #[test]
@@ -1176,12 +1232,16 @@ mod tests {
     }
 
     #[test]
-    fn two_identical_builds_render_the_same_context() {
+    fn identical_inputs_keep_the_same_context_body_with_an_injected_fence() {
         // A context that changes from one build to the next makes the model's
         // answers irreproducible, hence undebuggable.
         let cache = cache();
-        let first = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
-        let second = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
+        let first = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("reproducible-test-nonce")
+            .build();
+        let second = ContextBuilder::new(&cache, PrivacyTier::Metadata)
+            .with_fence_nonce("reproducible-test-nonce")
+            .build();
         assert_eq!(first.prompt_block(), second.prompt_block());
         assert_eq!(first.relations(), second.relations());
     }

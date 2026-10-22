@@ -352,6 +352,7 @@ impl ToolOutcome {
         outcome: DispatchOutcome,
         language: QueryLanguage,
         focus: Option<&str>,
+        fence: &untrusted::Fence,
     ) -> Self {
         match outcome {
             DispatchOutcome::Completed { summary } => Self::Completed { summary },
@@ -360,6 +361,7 @@ impl ToolOutcome {
                 let context = ContextBuilder::new(&cache, tier)
                     .with_language(language)
                     .focused_on(focus.unwrap_or_default())
+                    .with_fence(fence.clone())
                     .build();
                 Self::Described {
                     block: context.prompt_block().to_owned(),
@@ -367,7 +369,7 @@ impl ToolOutcome {
             }
             DispatchOutcome::Sampled {
                 catalog, sample, ..
-            } => Self::from_sample(tier, &catalog, sample, language),
+            } => Self::from_sample(tier, &catalog, sample, language, fence),
             DispatchOutcome::AwaitingApproval { reason } => Self::AwaitingApproval { reason },
             DispatchOutcome::Denied { reason } => Self::Denied { reason },
             DispatchOutcome::Failed { class, message } => Self::Failed {
@@ -391,6 +393,7 @@ impl ToolOutcome {
         catalog: &CatalogHandle,
         sample: RowSample,
         language: QueryLanguage,
+        fence: &untrusted::Fence,
     ) -> Self {
         let rows = usize::try_from(MAX_SAMPLE_ROWS).unwrap_or(usize::MAX);
         let context = {
@@ -403,6 +406,7 @@ impl ToolOutcome {
                 })
                 .with_language(language)
                 .with_samples(vec![sample])
+                .with_fence(fence.clone())
                 .build()
         };
         if context.dropped_samples() > 0 {
@@ -491,22 +495,22 @@ impl ToolOutcome {
     /// What decides what *enters* the fence is the tier, applied upstream by
     /// `from_dispatch`.
     #[must_use]
-    pub fn render(&self) -> String {
+    pub(crate) fn render(&self, fence: &untrusted::Fence) -> String {
         match self {
             // The block comes out of the gateway, which already fenced it:
             // fencing it again would neutralize its tags and make it differ
             // from a prompt's context. The status is fenced like the others.
             Self::Described { block } | Self::Sampled { block } => {
-                format!("{}\n{block}", untrusted::fence("status: completed"))
+                format!("{}\n{block}", fence.fence("status: completed"))
             }
-            _ => untrusted::fence(&self.to_string()),
+            _ => fence.fence(&self.to_string()),
         }
     }
 }
 
 impl fmt::Display for ToolOutcome {
     /// The body meant for the model, **in English**: it is a prompt, not an
-    /// interface message. Not fenced — see [`ToolOutcome::render`].
+    /// interface message. Not fenced — see `ToolOutcome::render`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Completed { summary } => write!(f, "status: completed\n{summary}"),
@@ -699,6 +703,7 @@ pub struct AgentSession {
     id: AgentSessionId,
     tier: PrivacyTier,
     scope: ToolScope,
+    fence: untrusted::Fence,
     messages: Vec<ChatMessage>,
 }
 
@@ -714,13 +719,14 @@ impl AgentSession {
         let system = format!(
             "{}\n\n{}\n\n{}",
             spec.system_prompt.trim(),
-            untrusted::PREAMBLE,
+            context.untrusted_preamble(),
             context.prompt_block()
         );
         Self {
             id: AgentSessionId::new(),
             tier: context.tier(),
             scope,
+            fence: context.fence().clone(),
             messages: vec![ChatMessage::system(system)],
         }
     }
@@ -1088,6 +1094,7 @@ impl AgentRuntime {
                             name: call.name.clone(),
                             detail,
                         },
+                        &session.fence,
                     ),
                     None => {
                         self.run_one_tool(&call, actor, session, sink, observer, cancel)
@@ -1121,6 +1128,7 @@ impl AgentRuntime {
             actor,
             &session.scope,
             session.tier,
+            &session.fence,
             sink,
             observer,
             cancel,
@@ -1146,6 +1154,7 @@ pub(crate) async fn run_tool_call(
     actor: Actor,
     scope: &ToolScope,
     tier: PrivacyTier,
+    fence: &untrusted::Fence,
     sink: &dyn CommandSink,
     observer: &dyn AgentObserver,
     cancel: &CancelToken,
@@ -1156,7 +1165,7 @@ pub(crate) async fn run_tool_call(
             // An invented tool name or malformed arguments can be fixed on the
             // next turn: we tell the model rather than interrupt.
             Err(err) if err.is_recoverable_by_model() => {
-                return Ok(rejection(observer, &call.name, &err));
+                return Ok(rejection(observer, &call.name, &err, fence));
             }
             Err(err) => return Err(err),
         };
@@ -1206,8 +1215,13 @@ pub(crate) async fn run_tool_call(
         // The session's tier is the connection's. It is the only place on the
         // error path where it is known, hence the only place where it can
         // apply (I-04).
-        let outcome =
-            ToolOutcome::from_dispatch(tier, dispatched.clone(), scope.language, focus.as_deref());
+        let outcome = ToolOutcome::from_dispatch(
+            tier,
+            dispatched.clone(),
+            scope.language,
+            focus.as_deref(),
+            fence,
+        );
         let (outcome, dispatched) = settle_sample(outcome, dispatched).await;
         // The user sees the facts; the model sees `outcome`. The gap is
         // carried by the event, observed on the two values held here — the
@@ -1218,7 +1232,7 @@ pub(crate) async fn run_tool_call(
             outcome: &dispatched,
             withheld: outcome.withholds_from(&dispatched),
         });
-        Ok(outcome.render())
+        Ok(outcome.render(fence))
     }
 }
 
@@ -1227,10 +1241,15 @@ pub(crate) async fn run_tool_call(
 /// One wording for every such refusal — an unknown tool, arguments that do not
 /// fit, arguments that are not JSON at all —: the model corrects them the same
 /// way, on its next turn.
-fn rejection(observer: &dyn AgentObserver, tool: &str, err: &AiError) -> String {
+fn rejection(
+    observer: &dyn AgentObserver,
+    tool: &str,
+    err: &AiError,
+    fence: &untrusted::Fence,
+) -> String {
     tracing::debug!(tool = %tool, "tool call refused at translation");
     observer.observe(AgentEvent::CallRejected { tool, error: err });
-    untrusted::fence(&format!("status: rejected\nerror: {err}"))
+    fence.fence(&format!("status: rejected\nerror: {err}"))
 }
 
 /// Releases a rendered sample, or says what actually happened.
@@ -1481,7 +1500,8 @@ mod tests {
     /// `from_dispatch` for an outcome that is not a read catalog: the
     /// language and search words play no part.
     fn outside_catalog(tier: PrivacyTier, outcome: DispatchOutcome) -> ToolOutcome {
-        ToolOutcome::from_dispatch(tier, outcome, oxyn_core::QueryLanguage::SQL, None)
+        let fence = untrusted::Fence::with_nonce("test-fence");
+        ToolOutcome::from_dispatch(tier, outcome, oxyn_core::QueryLanguage::SQL, None, &fence)
     }
 
     use std::sync::Mutex;
@@ -2021,7 +2041,7 @@ mod tests {
             .rev()
             .find(|message| message.role == oxyn_llm::Role::Tool)
             .expect("the tool's result is in the conversation");
-        assert!(tool.content.contains(untrusted::FENCE_OPEN));
+        assert!(tool.content.contains("<untrusted-database-content-"));
         let last = session
             .messages()
             .last()
@@ -2214,10 +2234,14 @@ mod tests {
             .expect("a system message")
             .content
             .clone();
-        let preamble = system.find(untrusted::PREAMBLE).expect("the preamble");
+        let preamble = system
+            .find("Blocks delimited by <untrusted-database-content-")
+            .expect("the preamble");
         // `rfind`: the preamble itself quotes the tag to explain it to the
         // model, so the first occurrence is its own.
-        let fenced = system.rfind(untrusted::FENCE_OPEN).expect("the fence");
+        let fenced = system
+            .rfind("<untrusted-database-content-")
+            .expect("the fence");
         assert!(
             preamble < fenced,
             "a model that reads the instruction after the data has already read the data"
@@ -2399,9 +2423,10 @@ mod tests {
             reason: "an agent is requesting a write operation on \"retail\"".to_owned(),
         };
         assert!(!awaiting.is_completed());
-        let rendered = awaiting.render();
+        let fence = untrusted::Fence::with_nonce("pending-test-nonce");
+        let rendered = awaiting.render(&fence);
         assert!(rendered.contains("Nothing ran"), "{rendered}");
-        assert!(rendered.contains(untrusted::FENCE_OPEN), "{rendered}");
+        assert!(rendered.contains("pending-test-nonce"), "{rendered}");
     }
 
     #[test]
@@ -2437,10 +2462,13 @@ mod tests {
                     .to_owned(),
             },
         );
-        let rendered = failure.render();
+        let fence = untrusted::Fence::with_nonce("failure-test-nonce");
+        let rendered = failure.render(&fence);
         assert!(rendered.contains("does not exist"), "{rendered}");
         assert_eq!(
-            rendered.matches(untrusted::FENCE_CLOSE).count(),
+            rendered
+                .matches("</untrusted-database-content-failure-test-nonce>")
+                .count(),
             1,
             "{rendered}"
         );
@@ -2503,7 +2531,7 @@ mod tests {
             let channels = [
                 failure.to_string(),
                 format!("{failure:?}"),
-                failure.render(),
+                failure.render(&untrusted::Fence::with_nonce("redaction-test-nonce")),
                 conversation,
                 format!("{messages:?}"),
             ];
@@ -2521,7 +2549,7 @@ mod tests {
 
             // What remains must stay usable: the model must know it is final,
             // and the code tells it what to fix.
-            let rendered = failure.render();
+            let rendered = failure.render(&untrusted::Fence::with_nonce("redaction-test-nonce"));
             assert!(rendered.contains("status: failed"), "{rendered}");
             assert!(rendered.contains("retryable: false"), "{rendered}");
             assert!(rendered.contains("SQLSTATE 23505"), "{rendered}");

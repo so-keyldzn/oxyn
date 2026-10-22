@@ -23,7 +23,8 @@
 //! text. A built-in type with a documented layout is rendered as the text the
 //! server prints (`render` module). The only values that really make a row
 //! fail are those Arrow cannot represent *without lying*: an infinite date, an
-//! interval longer than 292 years in microseconds, a multi-dimensional array.
+//! interval longer than 292 years in microseconds, a `time` of 24:00:00, a
+//! multi-dimensional array or one whose lower bound is not 1.
 //! Rendering them `NULL` would be a silent lie about real data.
 //!
 //! # Batch sizing
@@ -58,6 +59,8 @@ use crate::types::PgDecoding;
 const EPOCH_SHIFT_MICROS: i64 = 946_684_800_000_000;
 /// Days between the Unix epoch and PostgreSQL's.
 const EPOCH_SHIFT_DAYS: i32 = 10_957;
+/// Microseconds in a day: the exclusive bound of an Arrow `Time64`.
+const MICROS_PER_DAY: i64 = 86_400_000_000;
 /// Bytes of a `uuid` on the wire.
 const UUID_LEN: usize = 16;
 /// Version expected at the head of a `jsonb`.
@@ -636,7 +639,14 @@ fn read_date(bytes: &[u8]) -> Result<i32, &'static str> {
 /// A `time`: microseconds since midnight.
 fn read_time(bytes: &[u8]) -> Result<i64, &'static str> {
     let micros = read_i64(bytes)?;
-    if !(0..=86_400_000_000).contains(&micros) {
+    if micros == MICROS_PER_DAY {
+        // `'24:00:00'::time` is legal in PostgreSQL — a closing time — but
+        // `Time64` stops at 23:59:59.999999: the grid cell would fail to format
+        // and Arrow's CSV and JSON writers would abort the whole export with a
+        // cast error. Same family as an infinite date.
+        return Err("time 24:00:00, not representable as Time64 — cast it to text");
+    }
+    if !(0..MICROS_PER_DAY).contains(&micros) {
         return Err("time outside the bounds of a day");
     }
     Ok(micros)
@@ -688,7 +698,15 @@ pub(crate) fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static s
     }
 
     let length = reader.i32().ok_or("truncated array dimension")?;
-    let _lower_bound = reader.i32().ok_or("truncated array dimension")?;
+    let lower_bound = reader.i32().ok_or("truncated array dimension")?;
+    if lower_bound != 1 {
+        // `'[0:2]={10,20,30}'::int[]` is legal, and an Arrow list has no bound:
+        // shown as `[10, 20, 30]`, it makes `arr[1]` read the wrong element.
+        // Refusing names it, as for a second dimension.
+        return Err(
+            "array whose lower bound is not 1, not representable as an Arrow list — cast it to text",
+        );
+    }
     let length = usize::try_from(length).map_err(|_| "negative array length")?;
 
     // Each element costs at least its four length bytes: a value larger than
@@ -803,11 +821,21 @@ mod tests {
     fn a_time_outside_the_bounds_of_a_day_is_refused() {
         assert_eq!(read_time(&0_i64.to_be_bytes()), Ok(0));
         assert_eq!(
-            read_time(&86_400_000_000_i64.to_be_bytes()),
-            Ok(86_400_000_000)
+            read_time(&86_399_999_999_i64.to_be_bytes()),
+            Ok(86_399_999_999)
         );
         assert!(read_time(&(-1_i64).to_be_bytes()).is_err());
         assert!(read_time(&86_400_000_001_i64.to_be_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_time_of_24_hours_is_refused_with_an_explicit_message() {
+        // Legal in PostgreSQL (`SELECT '24:00'::time`) and not a `Time64`: it
+        // must not reach a column whose cells then fail to format and whose
+        // CSV and JSON exports abort.
+        let error = read_time(&86_400_000_000_i64.to_be_bytes()).expect_err("refusal expected");
+        assert!(error.contains("24:00:00"), "{error}");
+        assert!(error.contains("cast it to text"), "{error}");
     }
 
     #[test]
@@ -952,6 +980,27 @@ mod tests {
         encoded.extend_from_slice(&23_u32.to_be_bytes());
         let error = split_array(&encoded).expect_err("refusal expected");
         assert!(error.contains("dimensional"), "{error}");
+    }
+
+    #[test]
+    fn an_array_whose_lower_bound_is_not_one_is_refused_not_shifted() {
+        // `'[0:2]={10,20,30}'::int[]`: one dimension of three elements, indexed
+        // from 0. The list would lose the index, so `arr[1]` would read 20.
+        for lower_bound in [0_i32, 2, -5, i32::MIN] {
+            let mut encoded = Vec::new();
+            encoded.extend_from_slice(&1_i32.to_be_bytes());
+            encoded.extend_from_slice(&0_i32.to_be_bytes());
+            encoded.extend_from_slice(&23_u32.to_be_bytes());
+            encoded.extend_from_slice(&3_i32.to_be_bytes());
+            encoded.extend_from_slice(&lower_bound.to_be_bytes());
+            for element in [10_i32, 20, 30] {
+                encoded.extend_from_slice(&4_i32.to_be_bytes());
+                encoded.extend_from_slice(&element.to_be_bytes());
+            }
+            let error = split_array(&encoded).expect_err("refusal expected");
+            assert!(error.contains("lower bound"), "{error}");
+            assert!(error.contains("cast it to text"), "{error}");
+        }
     }
 
     #[test]

@@ -79,7 +79,6 @@ use crate::context::{
 };
 use crate::privacy::PrivacyTier;
 use crate::spec::AgentSpec;
-use crate::untrusted;
 
 /// What opens the conversation's agent block, so that the external agent reads
 /// it as Oxyn's and not as the user's question.
@@ -287,7 +286,7 @@ impl AgentPrompt {
         let text = format!(
             "{AGENT_HEADER}\n\n{instructions}\n\n{}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{}",
             schema_intro(),
-            untrusted::PREAMBLE,
+            context.untrusted_preamble(),
             context.prompt_block(),
             asked.text
         );

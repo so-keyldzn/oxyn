@@ -366,7 +366,11 @@ fn a_hostile_name_in_sql_cannot_imitate_a_rendering_line() {
     // starts a line with it.
     assert_eq!(block.matches("\nquery language: ").count(), 1, "{block}");
     assert_eq!(block.matches("\nrow sample approved").count(), 1, "{block}");
-    assert_eq!(block.matches(untrusted::FENCE_CLOSE).count(), 1, "{block}");
+    assert_eq!(
+        block.matches("</untrusted-database-content-").count(),
+        1,
+        "{block}"
+    );
     assert!(
         block.contains(&format!(
             r#""id\ntable \"forged\"{}row sample"#,

@@ -399,6 +399,7 @@ fn releasing_an_agent_withdraws_its_waiting_request_and_says_so_on_its_card() {
         tier: PrivacyTier::Metadata,
         leaf: None,
         session: Arc::new(session),
+        service: None,
         tools: ToolTurns::new(8, Arc::new(|| false)),
         actor: (AgentId::new(), AgentSessionId::new()),
         _requests: WithdrawOnRelease::new(

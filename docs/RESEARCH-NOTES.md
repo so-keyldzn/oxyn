@@ -18,6 +18,17 @@ the values of this file and reports the gaps. It changes nothing: deciding on
 a version bump is a human's call. The `/versions` command does the same while
 explaining the gaps.
 
+## PostgreSQL-compatible session reset — check of 2026-10-22
+
+Amazon Redshift documents `RESET ALL` as resetting all runtime parameters,
+including session context variables. Its [`SET SESSION AUTHORIZATION` page](https://docs.aws.amazon.com/redshift/latest/dg/r_SET_SESSION_AUTHORIZATION.html)
+documents `SET ... DEFAULT` but requires a database superuser for the command;
+it does not document `RESET SESSION AUTHORIZATION`. The PostgreSQL driver's
+Redshift flavor therefore sends only the documented unprivileged reset,
+`RESET ALL`, after a writable execution; PostgreSQL keeps its fuller reset
+sequence. Source: [Amazon Redshift RESET](https://docs.aws.amazon.com/redshift/latest/dg/r_RESET.html),
+read on 2026-10-22.
+
 
 ## AI transport confinement — 2026-10-03
 
@@ -287,6 +298,7 @@ tag: a tag moves, a SHA does not.
 | GitHub-hosted runner `ubuntu-24.04-arm`: standard runner, listed for public and private repositories, 4 CPUs and 16 GB of RAM on a public repository; "Use of the standard GitHub-hosted runners is free and unlimited on public repositories". `RUNNER_ARCH` is `ARM64` there. `livraison.yml` builds the ARM64 Linux packages natively on it — no cross toolchain, no multiarch WebKitGTK sysroot, no QEMU — and the Tauri bundler's AppImage tooling runs as on x86_64 | [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners); proven by run `37246283509` of the temporary `essai-linux-arm64` workflow (PR branch `linux-arm64-release`) | 2026-10-04 |
 | `keyring` 4.2.0 on Linux goes through `zbus-secret-service-keyring-store` and `secret-service` 5.2.0: pure Rust, without `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
 | `cargo-nextest` CI binary | `0.9.146`; `universal-apple-darwin` SHA-256 `39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8`; `x86_64-unknown-linux-gnu` SHA-256 `682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428` | [nextest release cargo-nextest-0.9.146](https://github.com/nextest-rs/nextest/releases/tag/cargo-nextest-0.9.146) and its `.sha256` assets | 2026-10-03 |
+| Server integration CI images | Docker Official Images `postgres:17` and `mysql:8.4`, the major/minor tags used by the PostgreSQL and MySQL integration-test headers. On this check, the tags resolve to PostgreSQL 17.11 and MySQL 8.4.11; the production-read companion starts the same PostgreSQL tag with an ephemeral, job-local TLS certificate. | [PostgreSQL Docker Hub tags](https://hub.docker.com/_/postgres/tags?name=17.&page=1); [MySQL Docker Hub tags](https://hub.docker.com/_/mysql/tags?name=8.&page=1) | 2026-10-22 |
 | `cargo-deny` CI binary | `0.20.2`; `aarch64-apple-darwin` SHA-256 `fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3`; `x86_64-unknown-linux-musl` SHA-256 `9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f` | [cargo-deny release 0.20.2](https://github.com/EmbarkStudios/cargo-deny/releases/tag/0.20.2) and its `.sha256` assets | 2026-10-03 |
 | CI failed at every push since at least 2026-09-21, in about twenty seconds: pnpm missing from the runner, `make qualite` stopped before the front end | log of run `36034960589` | 2026-09-24 |
 | None of the runs of the gate had saved a Cargo cache: all of them failed, and the step "Post Restaurer le cache Cargo" was `skipped`. Only the pnpm caches existed. On Linux, the stories took 275 s (1045 tests) before the failure | runs `36037137682` and `36036585873`, `GET /actions/caches` | 2026-09-24 |

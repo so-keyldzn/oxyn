@@ -21,6 +21,17 @@
 //! the server — and points to the context selector, which is
 //! [`Session::set_context`].
 //!
+//! # A typed `SET` of the time zone or a character set is refused too
+//!
+//! The setup of every connection pins `+00:00` and `utf8mb4`, and the decoders
+//! tag a `TIMESTAMP` UTC and read text as `utf8mb4` on that basis. A typed
+//! `SET time_zone` or `SET NAMES` would make them lie, and a reconnect would flip
+//! the values back: it is refused, before the prepare, with a message that
+//! points to `CONVERT_TZ`. What the lexical check covers, and the procedure and
+//! dynamic-SQL cases it cannot, are in
+//! [DRIVER-CONTRACT §7](../../../docs/DRIVER-CONTRACT.md) and in the private
+//! `pinned` module.
+//!
 //! # Read-only is imposed by the server
 //!
 //! `SET SESSION TRANSACTION READ ONLY` before the statement, `READ WRITE`
@@ -47,6 +58,7 @@ use crate::connection::{Lease, Shared, race_cancel, use_statement};
 use crate::cursor::{self, Source, StreamRequest};
 use crate::error::{Bound, is_unsupported_prepare, map_stream_error};
 use crate::params::bind_params;
+use crate::pinned::changes_pinned_setting;
 use crate::types::panics_in_binary_protocol;
 use crate::variant::MysqlVariant;
 
@@ -72,6 +84,16 @@ const READ_ONLY_IN_TRANSACTION: &str = "a read-only bound inside an open transac
 /// ([I-03](../../../CLAUDE.md#i-03)), and it names the way out.
 const CONTEXT_REFUSED: &str = "a typed `USE`: the session keeps its database itself and would \
     reapply the declared one after a reconnect, so change it with the context selector";
+
+/// Why a typed `SET` of the time zone or of a character set is refused.
+///
+/// Fixed text, for the same reason as [`CONTEXT_REFUSED`]: the value the user
+/// typed is never echoed.
+const PINNED_SETTING_REFUSED: &str = "a typed `SET` of the time zone or of the character sets: \
+    the session pins `+00:00` and `utf8mb4` so that every TIMESTAMP and every text is read as \
+    such, and applies them again after a reconnect; convert in the query instead \
+    (`CONVERT_TZ`, `CONVERT(… USING …)`). A dump's `/*!… SET …*/` lines only save and \
+    restore these settings: run the dump without them";
 
 /// An open MySQL or MariaDB session.
 #[derive(Debug)]
@@ -210,6 +232,24 @@ fn refuse_context_change(text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Refuses a typed `SET` of a setting the decoders rest on, before anything is
+/// sent.
+///
+/// A `TIMESTAMP` is tagged UTC and text is read as `utf8mb4` because the setup
+/// of every connection says so: a `SET time_zone` or `SET NAMES latin1` typed
+/// by the user would make the tag and the decoding lie, and the next reconnect
+/// would flip them back. What the check reads and what it cannot is in
+/// [`crate::pinned`]. Placed with [`refuse_context_change`], for the same
+/// reason: nothing has been sent, so there is no read-only state to put back.
+fn refuse_pinned_setting(text: &str) -> Result<()> {
+    if changes_pinned_setting(text) {
+        return Err(OxynError::NotSupported {
+            capability: PINNED_SETTING_REFUSED.to_owned(),
+        });
+    }
+    Ok(())
+}
+
 /// Is the statement a `CALL`, whose extra result sets are the procedure's?
 fn is_call(text: &str) -> bool {
     oxyn_query::words(text, SqlDialect::MySql)
@@ -231,11 +271,14 @@ impl Session for MysqlSession {
     ///
     /// A typed `USE` is refused before the connection is touched: the context
     /// is changed with [`Session::set_context`], never from the user's SQL.
+    /// So is a typed `SET` of the time zone or of a character set, which the
+    /// decoders rest on.
     ///
     /// # Errors
     /// [`OxynError::NotSupported`] for a language other than MySQL's SQL, a
     /// parameter MySQL cannot receive, a text the library would rewrite, a
-    /// typed `USE` (any statement of the text), a read-only bound inside an
+    /// typed `USE` or a typed `SET` of a pinned setting (any statement of the
+    /// text), a read-only bound inside an
     /// open transaction, or a statement MySQL cannot prepare that carries
     /// parameters or several statements; [`OxynError::Cancelled`]; the
     /// server's refusal, classified.
@@ -255,6 +298,7 @@ impl Session for MysqlSession {
         // Before the bound parameters and the lease: nothing has been sent, so
         // there is no read-only state to put back either.
         refuse_context_change(&text)?;
+        refuse_pinned_setting(&text)?;
         let read_only = limits.read_only;
         let bound = Bound::of(&params);
         let unbound = params.is_empty();
@@ -582,6 +626,30 @@ mod tests {
         ] {
             refuse_context_change(text).expect(text);
         }
+    }
+
+    #[test]
+    fn a_typed_set_of_a_pinned_setting_is_refused_with_a_fixed_message() {
+        for text in [
+            "SET time_zone = 'Europe/Paris'",
+            "SET NAMES latin1",
+            "SELECT 1; SET character_set_results = latin1",
+            "SET @@session.`time_zone` = 'Europe/Paris'",
+            "/*!50000 SET NAMES latin1 */",
+        ] {
+            let error = refuse_pinned_setting(text).expect_err(text);
+            let OxynError::NotSupported { capability } = &error else {
+                panic!("`{text}` must be a refusal of capability: {error:?}");
+            };
+            assert!(capability.contains("CONVERT_TZ"), "{capability}");
+            // I-03: what the user typed is never echoed back.
+            for typed in ["Paris", "latin1"] {
+                assert!(!capability.contains(typed), "`{text}`: {capability}");
+            }
+        }
+        refuse_pinned_setting("SELECT @@session.time_zone").expect("a read is not refused");
+        refuse_pinned_setting("SET @is_utc = @@session.time_zone = '+00:00'")
+            .expect("a comparison on the right-hand side is a read");
     }
 
     #[test]

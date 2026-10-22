@@ -27,7 +27,7 @@
 //! unwraps, and an unreadable message becomes an error reply rather than a
 //! panic ([I-09](../../../../CLAUDE.md#i-09)).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use oxyn_core::{Actor, OxynError};
@@ -35,6 +35,7 @@ use oxyn_llm::{Reach, ToolCall};
 use serde_json::{Value, json};
 
 use crate::AiError;
+use crate::context::AgentContext;
 use crate::observer::{AgentEvent, AgentObserver};
 use crate::privacy::{PrivacyTier, allows_endpoint};
 use crate::runtime::run_tool_call;
@@ -119,6 +120,9 @@ pub struct ToolService {
     scope: ToolScope,
     tier: Arc<dyn TierSource>,
     actor: Actor,
+    /// One fence for the lifetime of this agent conversation. Its tag is named
+    /// by the opening prompt, so every later tool result keeps that framing.
+    fence: Mutex<untrusted::Fence>,
 }
 
 impl std::fmt::Debug for ToolService {
@@ -145,7 +149,24 @@ impl ToolService {
             scope,
             tier,
             actor,
+            fence: Mutex::new(untrusted::Fence::fresh()),
         }
+    }
+
+    /// Names every tool result with the fence that an opening prompt announced.
+    ///
+    /// This is called once before that prompt reaches the external agent. A
+    /// service started ahead of a question has a temporary fence until then,
+    /// but it has no admitted tool call before an opening context exists.
+    pub fn bind_opening_context(&self, context: &AgentContext) {
+        *self.fence.lock().unwrap_or_else(PoisonError::into_inner) = context.fence().clone();
+    }
+
+    fn fence(&self) -> untrusted::Fence {
+        self.fence
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The names of the tools the server announces, as `tools/list` gives them.
@@ -248,7 +269,7 @@ impl ToolService {
                         .to_owned(),
                 },
             );
-            return Ok(refusal(
+            return Ok(self.refusal(
                 "this connection is no longer in the workspace, or its privacy tier cannot be \
                  read. Nothing ran.",
             ));
@@ -266,7 +287,7 @@ impl ToolService {
                     ),
                 },
             );
-            return Ok(refusal(
+            return Ok(self.refusal(
                 "this connection is now local-only: nothing leaves the machine, so an external \
                  agent may not read it. Nothing ran; do not retry.",
             ));
@@ -275,7 +296,7 @@ impl ToolService {
             Admission::Admitted(admitted) => admitted,
             // No question: no panel to show it in, and nobody looking.
             Admission::NoQuestion => {
-                return Ok(refusal(
+                return Ok(self.refusal(
                     "no question is in progress in Oxyn: tools run only while the user waits \
                      for an answer. Nothing ran.",
                 ));
@@ -288,7 +309,7 @@ impl ToolService {
                         reason: format!("this answer has used its {max} tool calls"),
                     },
                 );
-                return Ok(refusal(&format!(
+                return Ok(self.refusal(&format!(
                     "this answer has used its {max} tool calls. Nothing ran; answer with what \
                      you have."
                 )));
@@ -306,6 +327,7 @@ impl ToolService {
             self.actor,
             &self.scope,
             tier,
+            &self.fence(),
             &admitted.sink,
             admitted.observer.as_ref(),
             &admitted.cancel,
@@ -333,9 +355,11 @@ impl ToolService {
                     name,
                     OxynError::Internal("Oxyn could not translate this tool call".to_owned()),
                 );
-                Ok(refusal(
-                    "Oxyn could not run this tool call. Nothing ran; do not retry it.",
-                ))
+                Ok(
+                    self.refusal(
+                        "Oxyn could not run this tool call. Nothing ran; do not retry it.",
+                    ),
+                )
             }
         }
     }
@@ -361,14 +385,14 @@ impl ToolService {
             error: &AiError::Core(error),
         });
     }
-}
 
-/// A tool result that says a call was not run, as an error the agent stops on.
-fn refusal(text: &str) -> Value {
-    json!({
-        "content": [{ "type": "text", "text": untrusted::fence(&format!("status: refused\n{text}")) }],
-        "isError": true,
-    })
+    /// Fences a refusal with the tag this service's opening prompt named.
+    fn refusal(&self, text: &str) -> Value {
+        json!({
+            "content": [{ "type": "text", "text": self.fence().fence(&format!("status: refused\n{text}")) }],
+            "isError": true,
+        })
+    }
 }
 
 /// A shareable service, for a server that answers on several connections.

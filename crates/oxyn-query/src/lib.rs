@@ -68,14 +68,15 @@ pub mod split;
 
 pub use classify::{
     Basis, Classification, StatementInfo, changes_context, classify, classify_language,
-    only_controls_transactions, reclassify, validate,
+    only_controls_transactions, reclassify, runnable_text, validate,
 };
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;
 pub use format::{FormatReport, format, format_report};
 pub use redact::{REDACTED_LITERAL, redact_password_literals};
 pub use split::{
-    Fragment, LineCommentEnd, SplitProfile, Word, contains_comment, current_statement, split, words,
+    Fragment, LineCommentEnd, SplitProfile, Token, TokenKind, Word, contains_comment,
+    current_statement, split, tokens, words,
 };
 
 #[cfg(test)]
