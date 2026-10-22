@@ -285,7 +285,10 @@ pub struct ConnectionConfig {
     ///
     /// The `PolicyGate` turns it into a **refusal** of any mutating command,
     /// human actor included: marking a connection read-only is a declaration
-    /// of intent, not a display preference.
+    /// of intent, not a display preference. What the text hides — a `SELECT`
+    /// of a function that writes — the server refuses: `oxyn-exec` bounds
+    /// every read on such a connection to a read-only execution, which a
+    /// driver declaring `READ_ONLY_SESSION` has the server enforce.
     #[serde(default)]
     pub read_only: bool,
 }

@@ -463,7 +463,10 @@ impl Executor {
         // 2. The environment of the target connection, not the announced one.
         let env = self.environment_of(&command);
         let retained = self.policy.retained_environment(&command, env);
-        let command = bounded_to(command, retained);
+        let read_only = self
+            .policy
+            .retained_read_only(&command, self.marked_read_only(&command));
+        let command = bounded_to(command, retained, read_only);
 
         // 3. The single passage point.
         let decision = self.policy.authorize(&actor, &command, env);
@@ -579,10 +582,14 @@ impl Executor {
         let mut pending = self.approvals.take(command)?;
         let connection = pending.command.target_connection();
 
-        // The connection may have been marked production while waiting.
+        // The connection may have been marked production or read-only while
+        // waiting.
         let env = self.environment_of(&pending.command);
         let retained = self.policy.retained_environment(&pending.command, env);
-        pending.command = bounded_to(pending.command, retained);
+        let read_only = self
+            .policy
+            .retained_read_only(&pending.command, self.marked_read_only(&pending.command));
+        pending.command = bounded_to(pending.command, retained, read_only);
         let decision = self.policy.authorize(&pending.actor, &pending.command, env);
 
         if let Decision::Deny { reason } = &decision {
@@ -2290,6 +2297,18 @@ impl Executor {
         }
     }
 
+    /// Does the executor know the target connection as marked read-only?
+    ///
+    /// Only what the bound announces to the `PolicyGate`, which keeps the more
+    /// restrictive of this and its own marking. An unknown connection needs no
+    /// bound here: it counts as production, whose reads are bounded already.
+    fn marked_read_only(&self, command: &Command) -> bool {
+        command
+            .target_connection()
+            .and_then(|id| self.connections.read().get(&id).map(|c| c.read_only))
+            .unwrap_or(false)
+    }
+
     // ── Access ──────────────────────────────────────────────────────────────
 
     /// The event channel.
@@ -2692,7 +2711,8 @@ fn reclassified(command: Command) -> Command {
     }
 }
 
-/// Bounds a read aimed at production to a read-only execution.
+/// Bounds a read aimed at production, or at a connection marked read-only, to
+/// a read-only execution.
 ///
 /// A read passes the gate without confirmation, yet a `SELECT` that calls a
 /// `VOLATILE` function — directly or through a view — writes, and no reading
@@ -2701,18 +2721,22 @@ fn reclassified(command: Command) -> Command {
 /// for it (I-02). A write keeps the bounds its caller lifted: it was confirmed
 /// under the connection's name before reaching here.
 ///
+/// A connection marked read-only promises more: the gate refuses every
+/// mutating command there, human included, so the same hidden write must not
+/// get through as a read either, whatever the environment (issue #247).
+///
 /// A request made only of transaction verbs is not a read and stays unbounded:
 /// it calls no function, and a bound the driver cannot honor inside an open
 /// transaction would refuse the `COMMIT` or `ROLLBACK` that ends it (issue
 /// #182). Who may send one is the gate's question, and an agent may not.
-fn bounded_to(command: Command, env: Environment) -> Command {
+fn bounded_to(command: Command, env: Environment, read_only: bool) -> Command {
     match command {
         Command::Execute {
             connection,
             session,
             mut request,
         } => {
-            if env.is_production()
+            if (env.is_production() || read_only)
                 && !request.is_mutating()
                 && !(request.transaction_control
                     && oxyn_query::only_controls_transactions(&request))

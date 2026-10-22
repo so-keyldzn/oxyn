@@ -1,11 +1,13 @@
-//! A read aimed at production leaves bounded to read-only (issue #11).
+//! A read aimed at production leaves bounded to read-only (issue #11), and so
+//! does a read aimed at a connection marked read-only, in any environment
+//! (issue #247).
 //!
 //! A read passes the gate without confirmation, and a `SELECT` that calls a
 //! writing function looks exactly like one. The executor therefore bounds
-//! every production read to read-only, whatever its caller asked, and the
-//! driver makes the server refuse the write. The first tests prove the bound
-//! at the driver boundary, with no server; the last ones prove the refusal on
-//! a real PostgreSQL, through the bus.
+//! every such read to read-only, whatever its caller asked, and the driver
+//! makes the server refuse the write. The first tests prove the bound at the
+//! driver boundary, with no server; the last ones prove the refusal on a real
+//! PostgreSQL, through the bus.
 
 use super::*;
 use async_trait::async_trait;
@@ -290,6 +292,109 @@ async fn an_agent_still_may_not_settle_a_production_transaction() {
     assert!(reached(&bench).is_empty(), "nothing reached the driver");
 }
 
+// ── A connection marked read-only (issue #247) ──────────────────────────────
+
+fn agent() -> Actor {
+    Actor::agent(AgentId::new(), AgentSessionId::new())
+}
+
+/// The marking is a promise about every command, the human's included: the
+/// gate refuses what is classified as a write, the server what is not.
+#[tokio::test]
+async fn a_read_on_a_read_only_staging_connection_reaches_the_driver_read_only() {
+    let connection = ConnectionConfig::new("shared staging", DriverId::postgres())
+        .with_environment(Environment::Staging)
+        .read_only();
+    let bench = bench(&connection, default_policy(&connection));
+
+    for actor in [Actor::Human, agent()] {
+        let outcome = bench
+            .executor
+            .dispatch(
+                actor,
+                writable(&bench, "SELECT public.audit_touch()"),
+                &CancelToken::new(),
+            )
+            .await;
+        assert!(
+            matches!(outcome, Err(OxynError::Query(_))),
+            "the read was allowed and reached the recording session: {outcome:?}"
+        );
+    }
+
+    assert_eq!(reached(&bench), [true, true]);
+}
+
+#[tokio::test]
+async fn every_environment_bounds_the_reads_of_a_read_only_connection() {
+    for environment in [
+        Environment::Local,
+        Environment::Development,
+        Environment::Staging,
+    ] {
+        let connection = ConnectionConfig::new("replica", DriverId::postgres())
+            .with_environment(environment)
+            .read_only();
+        let bench = bench(&connection, default_policy(&connection));
+
+        let _ = bench
+            .executor
+            .dispatch(
+                Actor::Human,
+                writable(&bench, "SELECT * FROM v_touching"),
+                &CancelToken::new(),
+            )
+            .await;
+
+        assert_eq!(reached(&bench), [true], "{environment:?}");
+    }
+}
+
+#[tokio::test]
+async fn the_read_only_bound_follows_the_gates_marking_when_the_executors_lags() {
+    // The executor still knows the connection as writable; the gate has
+    // learned it is read-only. The bound rests on the more restrictive.
+    let lagging = ConnectionConfig::new("replica", DriverId::postgres())
+        .with_environment(Environment::Staging);
+    let policy = Arc::new(DefaultPolicy::new());
+    policy.register(&lagging.clone().read_only());
+    let bench = bench(&lagging, policy);
+
+    let _ = bench
+        .executor
+        .dispatch(
+            Actor::Human,
+            writable(&bench, "SELECT public.audit_touch()"),
+            &CancelToken::new(),
+        )
+        .await;
+
+    assert_eq!(reached(&bench), [true]);
+}
+
+/// The exception of issue #182 holds on a read-only connection too: a bare
+/// `COMMIT` must still settle the transaction the user opened.
+#[tokio::test]
+async fn a_transaction_verb_on_a_read_only_connection_reaches_the_driver_unbounded() {
+    let connection = ConnectionConfig::new("replica", DriverId::mysql())
+        .with_environment(Environment::Staging)
+        .read_only();
+    let bench = bench(&connection, default_policy(&connection));
+
+    for text in [
+        "START TRANSACTION",
+        "COMMIT",
+        "COMMIT; SELECT audit_touch()",
+    ] {
+        let _ = bench
+            .executor
+            .dispatch(Actor::Human, mysql(&bench, text), &CancelToken::new())
+            .await;
+    }
+
+    assert_eq!(reached(&bench), [false, false, true]);
+}
+
 /// A policy that asks about everything, to reach `approve` with a read.
 struct AskAlways;
 
@@ -317,6 +422,37 @@ async fn an_approved_read_on_production_is_bounded_too() {
     else {
         panic!("the fixture policy asks about everything");
     };
+    let _ = bench
+        .executor
+        .approve("tester", command, &CancelToken::new())
+        .await;
+
+    assert_eq!(reached(&bench), [true]);
+}
+
+/// The user marks the connection read-only while a read waits for its
+/// approval: `approve` bounds it on the marking of the moment.
+#[tokio::test]
+async fn a_read_approved_after_the_connection_was_marked_read_only_is_bounded() {
+    let connection = ConnectionConfig::new("workbench", DriverId::postgres())
+        .with_environment(Environment::Staging);
+    let bench = bench(&connection, Arc::new(AskAlways));
+
+    let Outcome::NeedsApproval { command, .. } = bench
+        .executor
+        .dispatch(
+            Actor::Human,
+            writable(&bench, "SELECT public.audit_touch()"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("a decision")
+    else {
+        panic!("the fixture policy asks about everything");
+    };
+    bench
+        .executor
+        .register_connection(&connection.clone().read_only());
     let _ = bench
         .executor
         .approve("tester", command, &CancelToken::new())
@@ -409,8 +545,8 @@ mod server {
     /// A fresh schema holding a table, a `VOLATILE` function that inserts into
     /// it, and a view that calls the function; a login role that may do all of
     /// it; and an executor with a session opened as that role, on a connection
-    /// marked `environment`.
-    async fn server(environment: Option<Environment>) -> Option<Server> {
+    /// marked `environment`, and read-only when `read_only` says so.
+    async fn server(environment: Option<Environment>, read_only: bool) -> Option<Server> {
         let Some((admin_config, credentials)) = target() else {
             eprintln!("{VARIABLE} is not set: test skipped");
             return None;
@@ -446,6 +582,11 @@ mod server {
         let connection = match environment {
             Some(environment) => base.with_environment(environment),
             None => base,
+        };
+        let connection = if read_only {
+            connection.read_only()
+        } else {
+            connection
         };
         let policy = Arc::new(DefaultPolicy::new());
         policy.register(&connection);
@@ -534,7 +675,7 @@ mod server {
     #[ignore = "requires an isolated PostgreSQL test server"]
     async fn a_writing_function_does_not_write_on_production_directly_or_through_a_view() {
         for environment in [Some(Environment::Production), None] {
-            let Some(server) = server(environment).await else {
+            let Some(server) = server(environment, false).await else {
                 return;
             };
 
@@ -565,7 +706,7 @@ mod server {
     #[tokio::test]
     #[ignore = "requires an isolated PostgreSQL test server"]
     async fn outside_production_the_same_call_writes() {
-        let Some(server) = server(Some(Environment::Local)).await else {
+        let Some(server) = server(Some(Environment::Local), false).await else {
             return;
         };
 
@@ -574,6 +715,46 @@ mod server {
         let view = console(&server, &format!("SELECT * FROM {SCHEMA}.touching")).await;
         assert!(view.is_ok(), "{:?}", view.as_ref().err());
         assert_eq!(touched(&*server.admin).await, 2);
+
+        tear_down(server).await;
+    }
+
+    /// Issue #247: outside production, a connection marked read-only refuses
+    /// the same call — the server does, since the text reads as a read. The
+    /// control above proves the role could write on the unmarked connection.
+    /// `Local` is the non-production marking a server without TLS accepts
+    /// (ADR-0052); the bound does not look at the environment.
+    #[tokio::test]
+    #[ignore = "requires an isolated PostgreSQL test server"]
+    async fn a_writing_function_does_not_write_on_a_read_only_connection_outside_production() {
+        let Some(server) = server(Some(Environment::Local), true).await else {
+            return;
+        };
+
+        let direct = console(&server, &format!("SELECT {SCHEMA}.audit_touch()")).await;
+        assert!(refused(&direct), "direct call must be refused: {direct:?}");
+        let view = console(&server, &format!("SELECT * FROM {SCHEMA}.touching")).await;
+        assert!(refused(&view), "the view must be refused: {view:?}");
+        // `EXPLAIN (ANALYSE)` runs the call it analyzes (issue #246): it is
+        // the read it wraps, and leaves under the same bound.
+        let analysed = console(
+            &server,
+            &format!("EXPLAIN (ANALYSE) SELECT {SCHEMA}.audit_touch()"),
+        )
+        .await;
+        assert!(
+            refused(&analysed),
+            "EXPLAIN (ANALYSE) must be refused: {analysed:?}"
+        );
+        assert_eq!(touched(&*server.admin).await, 0);
+
+        // A plain read stays usable.
+        let read = console(&server, &format!("SELECT count(*) FROM {SCHEMA}.audit")).await;
+        assert!(
+            matches!(read, Ok(Outcome::Executed { .. })),
+            "a plain read must run: {:?}",
+            read.as_ref().err()
+        );
 
         tear_down(server).await;
     }
