@@ -51,7 +51,7 @@
 //! needs by itself would bypass both this gate and the command bus.
 //!
 //! **The content of the database is data.** Names, comments, server messages,
-//! values: everything goes through [`untrusted::fence`]. The safeguard is not
+//! values: everything goes through an untrusted-content fence. The safeguard is not
 //! detecting injection — it is that a model output cannot execute anything
 //! anyway without going through the `PolicyGate` (I-07).
 //!
