@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="60244706b272" -->
+<!-- oxyn-translation source="docs/adr/0045-ci-selective-sur-les-pull-requests.md" sha256="21a1a03b504e" -->
 
 > Traduction française de [docs/adr/0045-ci-selective-sur-les-pull-requests.md](../../../../docs/adr/0045-ci-selective-sur-les-pull-requests.md). **La version anglaise fait foi.**
 
@@ -54,17 +54,12 @@ Les jobs en dépendent ainsi :
 | `controles` | toujours | `make front-controles` et l'installation de Node, si `front` n'est pas touchée ; `make socle todo` tourne toujours |
 | `stories` | `front` | tout le job |
 | `rust` | `rust` ou `front` | `make rust` et son outillage si seule `front` est touchée ; `make front-build` tourne dès que l'une des deux l'est |
-| `serveurs` | `rust` | tout le job, y compris `make test-serveurs` contre des services PostgreSQL, PostgreSQL TLS et MySQL jetables |
 
 `rust` tourne pour une PR front parce que c'est lui qui porte `front-build` :
 `oxyn-desktop` embarque `apps/desktop/dist` à la compilation, et le build du
 front n'a pas d'autre job. La zone `docs` ne commande aucun job : `controles`,
 qui vérifie les liens et l'index des ADR, tourne toujours. Elle est affichée
 dans le journal du job `zones`, pour qu'on lise ce qui a été décidé.
-
-`serveurs` tourne à côté de `rust` quand Rust change. Il utilise la même cible
-de gate, avec des services de base de données jetables, pour exécuter les
-suites ignorées qui ne peuvent pas tourner sans serveur.
 
 Un job final **`qualite`** dépend de tous les autres (`if: always()`), et
 réussit si et seulement si `zones` a réussi et qu'aucun autre job n'a échoué ni
@@ -149,8 +144,9 @@ travail courant — ne vérifier que ce qui a changé depuis `origin/main` — s
 changer ce qui fait foi : **`make qualite` reste la porte**.
 
 **Amendement (2026-10-22).** `make test-serveurs` est une cible de `make qualite`
-et tourne dans le job Linux `serveurs` quand la zone Rust est touchée. En CI,
-l'absence du binaire nextest, une URL de serveur absente ou une suite dépendante
+et le job Linux `serveurs` l'exécute à côté de `rust` quand la zone Rust est
+touchée, contre des services PostgreSQL, PostgreSQL TLS et MySQL jetables. En
+CI, l'absence du binaire nextest, une URL de serveur absente ou une suite dépendante
 d'une URL sautée font échouer la cible. Hors CI, quand aucune URL de serveur n'est
 configurée, la cible affiche explicitement `server suites NOT run` et réussit ;
 configurer une URL de serveur est une exécution locale volontaire des suites

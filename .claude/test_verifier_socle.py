@@ -195,13 +195,16 @@ def dependency_failures() -> list[str]:
 
 
 def server_suite_failures() -> list[str]:
-    """A test failure must remain the target's exit status after its output is read."""
+    """Server suites fail closed in CI and deliberately skip locally without URLs."""
     failures = []
     root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory() as folder:
         temporary = Path(folder)
         cargo = temporary / "cargo"
-        cargo.write_text("#!/bin/sh\nprintf 'FAILED\\n'\nexit 1\n", encoding="utf-8")
+        cargo.write_text(
+            "#!/bin/sh\nprintf 'SERVER_SUITE_STUB_INVOKED\\nFAILED\\n'\nexit 1\n",
+            encoding="utf-8",
+        )
         cargo.chmod(0o755)
         override = temporary / "override.mk"
         override.write_text("front-build:\n\t@:\n", encoding="utf-8")
@@ -227,15 +230,45 @@ def server_suite_failures() -> list[str]:
         )
         if result.returncode == 0 or "FAILED" not in result.stdout:
             failures.append("a failing server suite exits successfully")
+        local_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key
+            not in {
+                "CI",
+                "OXYN_PG_TEST_URL",
+                "OXYN_MYSQL_TEST_URL",
+                "OXYN_PG_PRODUCTION_TEST_URL",
+            }
+        }
         local = subprocess.run(
-            command[:9] + ["NEXTEST=", "TAURI=/dev/null", "MENTIONS=/dev/null"],
+            command,
             cwd=root,
-            env={key: value for key, value in os.environ.items() if key != "CI"},
+            env=local_environment,
             capture_output=True,
             text=True,
         )
-        if local.returncode or "server suites NOT run" not in local.stdout:
+        if (
+            local.returncode
+            or (
+                "server suites NOT run outside CI: no server test URLs are set."
+                not in local.stdout
+            )
+            or "SERVER_SUITE_STUB_INVOKED" in local.stdout
+        ):
             failures.append("a local gate without server URLs does not explain its skipped suites")
+        nextest_missing = subprocess.run(
+            [*command, "NEXTEST="],
+            cwd=root,
+            env=local_environment,
+            capture_output=True,
+            text=True,
+        )
+        if (
+            nextest_missing.returncode
+            or "cargo-nextest missing: server suites NOT run outside CI." not in nextest_missing.stdout
+        ):
+            failures.append("a local gate without cargo-nextest does not explain its skipped suites")
     return failures
 
 
