@@ -108,6 +108,9 @@ pub(crate) struct Inner {
     /// Local semantic ranking: the model's place, its download, the model
     /// in memory while used, and the relation vectors (ADR-0056).
     pub(crate) semantic: semantic::SemanticState,
+    /// The editor's completion pass each connection has running, so that a
+    /// newer one cancels the older (ADR-0057).
+    pub(crate) completion_passes: completion_load::Passes,
 }
 
 // Not derived: `Executor` and `Store` reach connection configurations, and a
@@ -357,6 +360,7 @@ impl Backend {
                 layouts,
                 handoffs: windows::Handoffs::default(),
                 semantic: semantic::SemanticState::default(),
+                completion_passes: completion_load::Passes::default(),
             }),
         };
         backend.start_heartbeat();
@@ -1769,6 +1773,7 @@ mod tests {
 }
 
 mod ai;
+mod completion_load;
 pub(crate) mod confirm;
 mod consoles;
 mod documents;

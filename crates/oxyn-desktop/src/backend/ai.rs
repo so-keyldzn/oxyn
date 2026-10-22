@@ -24,7 +24,7 @@
 //! every AI entry on it.
 
 mod agents;
-mod catalog_fill;
+pub(in crate::backend) mod catalog_fill;
 mod conversation;
 mod draft_models;
 #[cfg(test)]
