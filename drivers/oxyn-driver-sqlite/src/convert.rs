@@ -28,6 +28,7 @@
 //! | REAL alone | `Float64` | exact |
 //! | TEXT (or anything + TEXT) | `Utf8` | an integer and a float render as text without loss |
 //! | INTEGER **and** REAL | `Utf8` | **no `f64` holds every `i64`**: beyond 2⁵³, the conversion corrupts |
+//! | INTEGER and/or REAL, **declared NUMERIC** (`DECIMAL(10,2)`) | `Utf8` | SQLite stores `10.00` as INTEGER and `10.50` as REAL: the first batch cannot know which comes later |
 //! | anything + BLOB | `Binary` | only bytes contain everything: a blob has no textual rendering |
 //!
 //! The `INTEGER + REAL → Utf8` case is the one that gets missed: it is exactly
@@ -141,27 +142,52 @@ impl fmt::Display for ColumnKind {
 /// "I don't know" and let the values decide.
 #[must_use]
 pub fn affinity(declared: Option<&str>) -> Option<ColumnKind> {
+    declared_affinity(declared).map(|class| match class {
+        Affinity::Integer => ColumnKind::Int64,
+        Affinity::Real => ColumnKind::Float64,
+        Affinity::Blob => ColumnKind::Binary,
+        // SQLite stores the value as integer, float or text depending on what is
+        // exact. No Arrow type covers all three; text is the only rendering that
+        // loses nothing — it is the case of `DECIMAL(10,2)`.
+        Affinity::Text | Affinity::Numeric => ColumnKind::Utf8,
+    })
+}
+
+/// SQLite's affinity classes, as the five determination rules name them.
+///
+/// Kept distinct from [`ColumnKind`] because NUMERIC maps to `Utf8` for an empty
+/// column yet must also be recognised on its own: a column of that affinity
+/// stores `10.00` as an INTEGER and `10.50` as a REAL, so what the first batch
+/// observed says nothing about the later ones ([`ColumnPlan::resolve`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Affinity {
+    Integer,
+    Text,
+    Blob,
+    Real,
+    Numeric,
+}
+
+/// The affinity class of a declared type, `None` when nothing is declared.
+fn declared_affinity(declared: Option<&str>) -> Option<Affinity> {
     let declared = declared?.trim();
     if declared.is_empty() {
         return None;
     }
     let upper = declared.to_ascii_uppercase();
     if upper.contains("INT") {
-        return Some(ColumnKind::Int64);
+        return Some(Affinity::Integer);
     }
     if upper.contains("CHAR") || upper.contains("CLOB") || upper.contains("TEXT") {
-        return Some(ColumnKind::Utf8);
+        return Some(Affinity::Text);
     }
     if upper.contains("BLOB") {
-        return Some(ColumnKind::Binary);
+        return Some(Affinity::Blob);
     }
     if upper.contains("REAL") || upper.contains("FLOA") || upper.contains("DOUB") {
-        return Some(ColumnKind::Float64);
+        return Some(Affinity::Real);
     }
-    // NUMERIC affinity: SQLite stores the value as integer, float or text
-    // depending on what is exact. No Arrow type covers all three; text is the only
-    // rendering that loses nothing — it is the case of `DECIMAL(10,2)`.
-    Some(ColumnKind::Utf8)
+    Some(Affinity::Numeric)
 }
 
 /// The storage classes encountered in a column.
@@ -275,8 +301,17 @@ impl ColumnPlan {
     /// schema declares.
     pub(crate) fn resolve(name: String, declared: Option<String>, observed: Observed) -> Self {
         let declared_kind = affinity(declared.as_deref());
+        let numeric = declared_affinity(declared.as_deref()) == Some(Affinity::Numeric);
         let kind = observed
             .join()
+            // Under NUMERIC affinity, `10.00` is stored as INTEGER and `10.50` as
+            // REAL: a first batch of whole amounts must not type the column
+            // `Int64`, or the first fraction after it fails the whole stream with
+            // a `ColumnConflict`. Rendering both as text is lossless.
+            .map(|joined| match joined {
+                ColumnKind::Int64 | ColumnKind::Float64 if numeric => ColumnKind::Utf8,
+                other => other,
+            })
             .or(declared_kind)
             // Nothing seen, nothing declared: text loses the least.
             .unwrap_or(ColumnKind::Utf8);
@@ -613,6 +648,33 @@ mod tests {
         assert_eq!(plan.kind, ColumnKind::Utf8);
         assert!(plan.observed.is_mixed());
         assert_eq!(plan.observed.names(), "integer|real");
+    }
+
+    #[test]
+    fn a_numeric_affinity_column_of_whole_values_stays_text() {
+        // Under NUMERIC affinity `10.00` is stored as INTEGER, but `12.50` comes
+        // back as REAL: typing the column `Int64` from the first batch would fail
+        // the stream at the first fraction.
+        for declared in ["DECIMAL(10,2)", "NUMERIC"] {
+            let plan = resolve(
+                &[ValueRef::Integer(10), ValueRef::Integer(20)],
+                Some(declared),
+            );
+            assert_eq!(plan.kind, ColumnKind::Utf8, "{declared}");
+            assert!(!plan.inferred, "text is what the affinity implies");
+        }
+        let plan = resolve(&[ValueRef::Real(12.5)], Some("DECIMAL(10,2)"));
+        assert_eq!(plan.kind, ColumnKind::Utf8);
+    }
+
+    #[test]
+    fn integer_and_real_declarations_keep_their_exact_type() {
+        let whole = [ValueRef::Integer(10), ValueRef::Integer(20)];
+        assert_eq!(resolve(&whole, Some("INTEGER")).kind, ColumnKind::Int64);
+        assert_eq!(
+            resolve(&[ValueRef::Real(1.5)], Some("REAL")).kind,
+            ColumnKind::Float64
+        );
     }
 
     #[test]

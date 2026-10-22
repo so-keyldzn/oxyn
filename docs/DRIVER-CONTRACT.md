@@ -205,6 +205,13 @@ and arbitrary SQL is the feature. The SQL **Oxyn composes**
 AI suggestion — never concatenates a received name: it goes through the driver's
 identifier-quoting function, and values are bound.
 
+**Sent as is, or refused — never rewritten.** A driver refuses a statement the
+user wrote, before sending it, only when running it would make the driver's own
+reading of what follows false: a typed `USE`, since the context is the
+session's, and on MySQL and MariaDB a typed `SET` of a setting the decoders rest
+on ([§7](#7-it-treats-time-zones-and-temporal-types-as-data-not-as-text)). It
+never edits the text to make it acceptable.
+
 **The projection of a preview follows the same rule.** `PreviewShape::columns`
 names the only columns to read: the driver takes the list through
 `PreviewShape::projection`, which deduplicates it and bounds it to
@@ -247,6 +254,21 @@ preference — the time zone Oxyn announces for a result is derived
 from the schema (`oxyn_data::timestamp_display`), it is not a setting. If such a
 preference ever came to exist, it would only affect rendering (`oxyn-data`,
 `cell.rs`), never the driver.
+
+**A session setting a decoder rests on is pinned, and a typed change of it is
+refused.** The MySQL driver opens every connection at `time_zone = '+00:00'` and
+in `utf8mb4`, and tags a `TIMESTAMP` UTC on that basis. A `SET time_zone`,
+`SET NAMES`, `SET CHARACTER SET` or `SET character_set_*` the user types is
+refused with `OxynError::NotSupported` before anything is sent — whatever its
+scope, its quoting (`` @@session.`time_zone` ``), and inside an executable
+comment too, a dump's `/*!40103 SET TIME_ZONE=… */` lines included — so a value
+reads the same before and after a reconnect. Reading the setting is not
+refused, on the right-hand side of a `SET` included. **What a lexical check
+cannot see stays possible:** the body of a `CALL`ed procedure, a statement built
+at run time (`PREPARE … FROM @sql`, MariaDB's `EXECUTE IMMEDIATE`), and a text
+lexed under `NO_BACKSLASH_ESCAPES`, where a string ends earlier than the check
+reads it. A zone changed that way is shown under the UTC tag, wrong, until the
+next reconnect puts `+00:00` back.
 
 **Concrete failure:** Oxyn displays a value converted into the machine's time zone,
 the user copies it into an `UPDATE`, and shifts the data by two hours in
