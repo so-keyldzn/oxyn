@@ -767,6 +767,7 @@ fn linked(
         tier: PrivacyTier::Sampled,
         leaf: None,
         session: Arc::new(session),
+        service: None,
         tools: ToolTurns::new(8, Arc::new(|| false)),
         actor: (AgentId::new(), AgentSessionId::new()),
         _requests: WithdrawOnRelease::new(
@@ -1196,6 +1197,7 @@ fn an_agents_settings_reach_the_panel_between_two_questions() {
         tier: PrivacyTier::Sampled,
         leaf: Some(node),
         session: Arc::clone(&session),
+        service: None,
         tools: ToolTurns::new(8, Arc::new(|| false)),
         actor: (AgentId::new(), AgentSessionId::new()),
         _requests: WithdrawOnRelease::new(
@@ -2706,6 +2708,7 @@ mod approved_samples {
                     tier: PrivacyTier::Sampled,
                     leaf: None,
                     session: Arc::new(session),
+                    service: None,
                     tools: ToolTurns::new(8, Arc::new(|| false)),
                     actor: (AgentId::new(), AgentSessionId::new()),
                     _requests: WithdrawOnRelease::new(

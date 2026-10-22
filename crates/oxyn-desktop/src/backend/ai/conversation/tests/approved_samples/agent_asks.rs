@@ -228,10 +228,20 @@ fn an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after() 
     assert_eq!(said.matches("@example.com").count(), 3, "{said}");
     assert!(!said.contains("SECRET-"), "an unticked column left: {said}");
     let value = said.find("user1@example.com").expect("a value arrived");
-    let fence = said
-        .rfind(oxyn_ai::untrusted::FENCE_OPEN)
-        .expect("fenced as database content");
-    assert!(fence < value, "{said}");
+    let opening_at = said[..value]
+        .rfind("<untrusted-database-content-")
+        .expect("a nonce fence opens before the value");
+    let opening_end = said[opening_at..]
+        .find('>')
+        .map(|offset| opening_at + offset + 1)
+        .expect("the nonce fence opening ends");
+    let opening = &said[opening_at..opening_end];
+    let closing = format!("</{}", opening.strip_prefix('<').expect("an opening tag"));
+    let closing_at = said[value..]
+        .find(&closing)
+        .map(|offset| value + offset)
+        .expect("the same nonce fence closes after the value");
+    assert!(opening_at < value && value < closing_at, "{said}");
 
     assert!(fixture.reads() > 0, "the audit shows the real read");
     let recorded = fixture.egress();
@@ -723,6 +733,7 @@ pub(super) fn waiting(fixture: &Fixture, declared: &ExternalAgentConfig, session
                 tier: PrivacyTier::Sampled,
                 leaf: None,
                 session: Arc::new(session),
+                service: None,
                 tools: ToolTurns::new(8, Arc::new(|| false)),
                 actor: (AgentId::new(), AgentSessionId::new()),
                 _requests: WithdrawOnRelease::new(

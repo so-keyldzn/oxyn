@@ -230,8 +230,8 @@ mod schema {
             .focused_on("the last 10 rows")
             .build();
         assert_eq!(
-            context.prompt_block(),
-            expected.prompt_block(),
+            body_without_fence(context),
+            body_without_fence(&expected),
             "the schema is the gateway's, with nothing added"
         );
     }
@@ -516,6 +516,15 @@ mod schema {
             .expect("valid path")
     }
 
+    fn body_without_fence(context: &AgentContext) -> String {
+        context
+            .prompt_block()
+            .lines()
+            .filter(|line| !line.starts_with('<'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn ranked(tier: PrivacyTier, question: &str, semantic: SemanticScores) -> AgentPrompt {
         AgentPrompt::with_schema_ranked(
             tier,
@@ -534,7 +543,7 @@ mod schema {
     const FRENCH: &str = "quels clients ont commandé hier ?";
 
     #[test]
-    fn without_scores_the_ranked_opening_is_exactly_with_schemas() {
+    fn without_scores_the_ranked_opening_selects_the_same_schema() {
         for question in ["orders", FRENCH] {
             let plain = AgentPrompt::with_schema(
                 PrivacyTier::Metadata,
@@ -547,7 +556,18 @@ mod schema {
             )
             .expect("valid prompt");
             let empty = ranked(PrivacyTier::Metadata, question, SemanticScores::new());
-            assert_eq!(plain, empty, "{question}");
+            let plain_context = plain.context().expect("a schema is attached");
+            let ranked_context = empty.context().expect("a schema is attached");
+            assert_eq!(
+                plain_context.relations(),
+                ranked_context.relations(),
+                "{question}"
+            );
+            assert_eq!(
+                body_without_fence(plain_context),
+                body_without_fence(ranked_context),
+                "{question}"
+            );
         }
     }
 
@@ -576,7 +596,11 @@ mod schema {
             let context = opening.context().expect("a schema is attached");
             let wanted: Vec<CatalogPath> = expected.into_iter().map(main_path).collect();
             assert_eq!(context.relations(), wanted.as_slice(), "{question}");
-            assert_eq!(context.prompt_block(), gateway.prompt_block(), "{question}");
+            assert_eq!(
+                body_without_fence(context),
+                body_without_fence(&gateway),
+                "{question}"
+            );
         }
     }
 
@@ -590,7 +614,13 @@ mod schema {
             .collect();
         let with_ghost = ranked(PrivacyTier::Metadata, FRENCH, ghost.clone());
         let without = ranked(PrivacyTier::Metadata, FRENCH, SemanticScores::new());
-        assert_eq!(with_ghost, without);
+        let with_ghost_context = with_ghost.context().expect("a schema is attached");
+        let without_context = without.context().expect("a schema is attached");
+        assert_eq!(with_ghost_context.relations(), without_context.relations());
+        assert_eq!(
+            body_without_fence(with_ghost_context),
+            body_without_fence(without_context)
+        );
         assert!(!with_ghost.as_str().contains("hiv_status"));
         assert!(!format!("{ghost:?}").contains("hiv_status"));
 

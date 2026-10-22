@@ -682,7 +682,7 @@ fn the_agent_receives_the_structure_of_the_database_and_no_value() {
         "and its columns: {text}"
     );
     assert!(
-        text.contains(crate::untrusted::FENCE_OPEN),
+        text.contains("<untrusted-database-content-"),
         "fenced: {text}"
     );
     assert!(

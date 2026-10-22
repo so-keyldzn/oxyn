@@ -158,6 +158,7 @@ fn waiting(
             tier: PrivacyTier::Metadata,
             leaf: None,
             session: std::sync::Arc::new(session),
+            service: None,
             tools: ToolTurns::new(8, std::sync::Arc::new(|| false)),
             actor: (AgentId::new(), AgentSessionId::new()),
             _requests: WithdrawOnRelease::new(

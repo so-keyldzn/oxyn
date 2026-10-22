@@ -19,26 +19,23 @@
 //!
 //! # The two treatments, and why in this order
 //!
-//! 1. **Control characters become spaces**, except line feed and tab. Format
-//!    characters are removed: they can hide a tag boundary without conveying
-//!    readable content. An `ESC` opens an ANSI sequence; a null byte cuts a
-//!    string in a consumer written in C. Controls are replaced and not removed,
-//!    so as not to weld two words they separated.
+//! 1. **Control characters become spaces**, except line feed and tab. An `ESC`
+//!    opens an ANSI sequence; a null byte cuts a string in a consumer written
+//!    in C. Controls are replaced and not removed, so as not to weld two words
+//!    they separated. Format characters stay in the rendered content: some,
+//!    such as the zero-width non-joiner, are meaningful in identifiers. They
+//!    are ignored only while recognizing the tag word.
 //! 2. **The tag word is neutralized.** The recognition folds the separator,
-//!    compatibility forms, and the relevant Cyrillic look-alikes before it
+//!    fullwidth ASCII, and a listed set of Cyrillic look-alikes before it
 //!    compares. It is deliberately not a general confusable detector: a fresh
-//!    nonce is the primary defence, and this folding only keeps look-alikes from
-//!    defeating the secondary defence.
+//!    nonce is the primary defence, and this folding only keeps common
+//!    look-alikes from defeating the secondary defence.
 //!
 //! The order matters: content that would write `untrusted-\u{0}database-content`
 //! first has its null byte turned into a space, which already breaks the tag;
 //! step 2 handles the direct case.
 
-/// Opening of the untrusted content fence.
-pub const FENCE_OPEN: &str = "<untrusted-database-content>";
-
-/// Closing of the untrusted content fence.
-pub const FENCE_CLOSE: &str = "</untrusted-database-content>";
+use std::fmt;
 
 /// The word the content must never be able to write itself.
 const MARKER: &str = "untrusted-database-content";
@@ -50,10 +47,17 @@ const NEUTRALIZED: &str = "untrusted_database_content";
 const ELLIPSIS: &str = "…[truncated]";
 
 /// A fence whose unpredictable tag is named in the prompt's preamble.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Fence {
     open: String,
     close: String,
     preamble: String,
+}
+
+impl fmt::Debug for Fence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Fence(<redacted>)")
+    }
 }
 
 impl Fence {
@@ -138,26 +142,14 @@ pub fn sanitize_inline(raw: &str, max_chars: usize) -> String {
     sanitize_clamped(raw, max_chars).replace(['\n', '\r', '\t'], " ")
 }
 
-/// Cleans a standalone text that came from the database **and** fences it.
-///
-/// Prompt context uses [`Fence`] so its preamble can name a fresh tag. This
-/// helper keeps the established static tag for tool results that do not belong
-/// to a prompt build.
-#[must_use]
-pub fn fence(raw: &str) -> String {
-    format!("{FENCE_OPEN}\n{}\n{FENCE_CLOSE}", sanitize(raw))
-}
-
 /// Replaces control characters with spaces, except `\n` and `\t`.
 fn strip_controls(text: &str) -> String {
     text.chars()
-        .filter_map(|c| {
-            if is_format_character(c) {
-                None
-            } else if c == '\n' || c == '\t' || !c.is_control() {
-                Some(c)
+        .map(|c| {
+            if c == '\n' || c == '\t' || !c.is_control() {
+                c
             } else {
-                Some(' ')
+                ' '
             }
         })
         .collect()
@@ -204,13 +196,22 @@ fn neutralize_marker(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut index = 0;
     while let Some(current) = chars.get(index) {
-        let end = index.saturating_add(marker.len());
-        let matches_marker = end <= chars.len()
-            && marker.iter().enumerate().all(|(offset, marker_char)| {
-                chars
-                    .get(index.saturating_add(offset))
-                    .is_some_and(|candidate| fold_marker_char(*candidate) == *marker_char)
-            });
+        let mut end = index;
+        let matches_marker = marker.iter().all(|marker_char| {
+            while chars
+                .get(end)
+                .is_some_and(|candidate| is_format_character(*candidate))
+            {
+                end = end.saturating_add(1);
+            }
+            let matches = chars
+                .get(end)
+                .is_some_and(|candidate| fold_marker_char(*candidate) == *marker_char);
+            if matches {
+                end = end.saturating_add(1);
+            }
+            matches
+        });
         if matches_marker {
             out.push_str(NEUTRALIZED);
             index = end;
@@ -252,7 +253,7 @@ fn fold_marker_char(c: char) -> char {
         '\u{0421}' | '\u{0441}' => 'c',
         '\u{0500}' | '\u{0501}' => 'd',
         '\u{0415}' | '\u{0435}' => 'e',
-        '\u{0418}' | '\u{0438}' => 'n',
+        '\u{041F}' | '\u{043F}' => 'n',
         '\u{0406}' | '\u{0456}' => 'i',
         '\u{041E}' | '\u{043E}' => 'o',
         '\u{0420}' | '\u{0440}' => 'p',
@@ -347,6 +348,14 @@ mod tests {
         // The DDL rendered by `context` is made of them: crushing them would
         // make the context unreadable for the model.
         assert_eq!(sanitize("a\nb\tc"), "a\nb\tc");
+    }
+
+    #[test]
+    fn format_characters_outside_a_marker_survive() {
+        // A zero-width non-joiner is orthographically meaningful in Persian
+        // identifiers. Fence recognition may ignore it, but rendering must not
+        // change a name the model could later quote in a query.
+        assert_eq!(sanitize("کتاب\u{200C}ها"), "کتاب\u{200C}ها");
     }
 
     #[test]
