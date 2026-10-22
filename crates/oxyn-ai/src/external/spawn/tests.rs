@@ -176,7 +176,7 @@ async fn dropping_the_guard_kills_the_agent() {
     } = spawned;
     drop(transport);
 
-    let pid = guard.pid;
+    let pid = guard.process.pid;
     assert!(alive(pid), "the child should be running");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !marker.is_file() {
@@ -261,7 +261,7 @@ fn the_agent_starts_in_a_directory_of_its_own() {
     // workspace, next to the files that describe the user's connections.
     let spawned =
         spawn(SHELL, &script("pwd >&2; ls -a >&2"), &Environment::empty()).expect("a shell starts");
-    let workspace = spawned.guard.workspace.clone();
+    let workspace = spawned.guard.process.workspace.clone();
     let exit = block_on(spawned.watch);
 
     assert!(
@@ -282,7 +282,7 @@ fn the_agent_starts_in_a_directory_of_its_own() {
 #[test]
 fn the_scratch_directory_does_not_outlive_the_agent() {
     let spawned = spawn(SHELL, &script("exit 0"), &Environment::empty()).expect("a shell starts");
-    let workspace = spawned.guard.workspace.clone();
+    let workspace = spawned.guard.process.workspace.clone();
     assert!(workspace.is_dir(), "it should exist while the agent runs");
 
     let Spawned {

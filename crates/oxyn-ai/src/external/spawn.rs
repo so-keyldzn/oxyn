@@ -38,6 +38,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::ByteStreams;
@@ -395,16 +396,51 @@ impl ExitReport {
 /// subscription and may still be talking to a provider.
 #[derive(Debug)]
 pub struct Guard {
+    process: Arc<Process>,
+}
+
+/// The part of a child that sessions may use without extending the guard's
+/// lifetime.
+///
+/// The driver owns [`Guard`], so ending it always performs the final cleanup.
+/// A session holds this handle only to signal an ordered shutdown without
+/// waiting for its driver to notice the child exit.
+#[derive(Debug)]
+pub(crate) struct Process {
     pid: u32,
     child: Arc<Mutex<Child>>,
+    /// A process-group id is only safe to signal while it belongs to this
+    /// child. Once the first signal has been sent, a reused pid is never
+    /// targeted by a later session release.
+    signalled: AtomicBool,
     /// Removed with the guard: an agent's scratch directory outlives nothing.
     workspace: std::path::PathBuf,
 }
 
 impl Guard {
+    /// Lets the session request the driver's process shutdown without keeping
+    /// the guard itself alive past the driver.
+    #[must_use]
+    pub(crate) fn process(&self) -> Arc<Process> {
+        Arc::clone(&self.process)
+    }
+
+    /// Signals the group while the driver still owns it.
+    pub(crate) fn terminate(&self) {
+        self.process.terminate();
+    }
+}
+
+impl Process {
+    /// The leader of the process group this handle signals.
+    #[must_use]
+    pub(crate) const fn pid(&self) -> u32 {
+        self.pid
+    }
+
     /// The private directory the child runs in, removed with the guard.
     #[must_use]
-    pub fn directory(&self) -> &std::path::Path {
+    pub(crate) fn directory(&self) -> &std::path::Path {
         &self.workspace
     }
 
@@ -412,7 +448,13 @@ impl Guard {
     ///
     /// This performs no wait or filesystem work, so an application's final
     /// exit hook can use it without holding its event loop.
-    pub fn terminate(&self) {
+    pub(crate) fn terminate(&self) {
+        let Ok(mut child) = self.child.lock() else {
+            return;
+        };
+        if self.signalled.swap(true, Ordering::SeqCst) {
+            return;
+        }
         #[cfg(unix)]
         {
             // The child leads its own group (`process_group(0)` below), so the
@@ -423,9 +465,7 @@ impl Guard {
                     rustix::process::kill_process_group(pid, rustix::process::Signal::Kill);
             }
         }
-        if let Ok(mut child) = self.child.lock() {
-            let _ignored = child.kill();
-        }
+        let _ignored = child.kill();
     }
 
     /// Removes the private directory created for this child.
@@ -433,17 +473,17 @@ impl Guard {
     /// Callers that still have a running application invoke this from a
     /// blocking worker after [`Self::terminate`]. Failures stay best effort:
     /// they must not hide an already-delivered process-group signal.
-    pub fn remove_directory(&self) {
+    pub(crate) fn remove_directory(&self) {
         let _ignored = std::fs::remove_dir_all(&self.workspace);
     }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        self.terminate();
+        self.process.terminate();
         // Best effort: a directory left behind is untidy, not unsafe, and a
         // failure here must not mask the kill above.
-        self.remove_directory();
+        self.process.remove_directory();
     }
 }
 
@@ -610,9 +650,12 @@ fn launch_in(
         transport: ByteStreams::new(stdin, stdout),
         watch,
         guard: Guard {
-            pid,
-            child,
-            workspace,
+            process: Arc::new(Process {
+                pid,
+                child,
+                signalled: AtomicBool::new(false),
+                workspace,
+            }),
         },
     })
 }

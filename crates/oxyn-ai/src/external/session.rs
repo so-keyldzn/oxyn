@@ -59,7 +59,7 @@ use oxyn_calls::OxynCalls;
 use super::confine::{Confinement, ModeWatch};
 use super::prompt::AgentPrompt;
 use super::settings::{AgentSettings, SettingChange, SettingRefused, SettingValue};
-use super::spawn::{Environment, ExitReport, Guard, Spawned, StreamingRedactor, redact, spawn};
+use super::spawn::{Environment, ExitReport, Process, Spawned, StreamingRedactor, redact, spawn};
 use super::turn::TurnEnd;
 use super::{PermissionVerdict, check_launchable, option_for, permission_for};
 use crate::observer::{
@@ -291,6 +291,7 @@ enum Request {
         text: String,
         observer: Arc<dyn AgentObserver>,
         cancel: CancelToken,
+        state: Arc<Mutex<PromptState>>,
         reply: oneshot::Sender<Result<TurnEnd, ExternalError>>,
     },
     ChangeSetting {
@@ -298,6 +299,18 @@ enum Request {
         cancel: CancelToken,
         reply: oneshot::Sender<Result<AgentSettings, ExternalError>>,
     },
+}
+
+/// Which side won the race between taking a queued prompt and its Stop.
+///
+/// This lock makes the handoff atomic: a Stop wins before `serve` takes the
+/// request, while a taken request waits for `serve` to flush its final stream
+/// fragment before reporting its end.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromptState {
+    Queued,
+    Taken,
+    Cancelled,
 }
 
 /// Who is watching the prompt in progress, and what its streams still hold
@@ -331,8 +344,9 @@ pub struct ExternalSession {
     answering: Arc<std::sync::atomic::AtomicUsize>,
     /// Filled once the agent's process has exited, by the driver.
     exit: Arc<Mutex<Option<ExitReport>>>,
-    /// The child to signal on shutdown, when this session owns one.
-    process: Option<Arc<Guard>>,
+    /// The child to signal on shutdown, when this session owns one. The driver
+    /// retains the guard, so finishing it always kills its process group.
+    process: Option<Arc<Process>>,
     /// Ends a sign-in or settings wait while this process is being released.
     stop: CancelToken,
 }
@@ -543,7 +557,14 @@ impl ExternalSession {
     ) -> Result<(Self, SessionDriver), ExternalError> {
         refuse_before_launch(agent, tier)?;
         let (confinement, environment) = prepare_launch(agent, None, secrets).await?;
-        Self::start_process(agent, tier, None, confinement, environment)
+        Self::start_process(
+            agent,
+            tier,
+            None,
+            confinement,
+            environment,
+            Limits::default(),
+        )
     }
 
     /// The same, plus Oxyn's tools served to the agent on the loopback.
@@ -580,6 +601,7 @@ impl ExternalSession {
             Some((endpoint, serving)),
             confinement,
             environment,
+            Limits::default(),
         )
     }
 
@@ -594,6 +616,7 @@ impl ExternalSession {
         )>,
         confinement: Option<super::confine::Confinement>,
         environment: Environment,
+        limits: Limits,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         refuse_before_launch(agent, tier)?;
         let tools_in_env = confinement
@@ -621,7 +644,7 @@ impl ExternalSession {
             watch,
             guard,
         } = spawned;
-        let process = Arc::new(guard);
+        let process = guard.process();
 
         let declaration = tools.as_ref().map(|(endpoint, _)| ToolEndpoint {
             url: endpoint.url().to_owned(),
@@ -641,17 +664,16 @@ impl ExternalSession {
             declaration,
             confinement,
             environment,
-            Limits::default(),
+            limits,
         );
         session.process = Some(Arc::clone(&process));
         let exit = Arc::clone(&session.exit);
         let driver = async move {
-            // The guard lives exactly as long as the driver: dropping the
-            // driver — because the panel closed, or the conversation was
-            // forgotten — kills the agent's process group. It is dropped last,
-            // after the tool server wound down.
-            let _guard = process;
+            // The guard belongs to this driver, not the session: after an
+            // unconfirmed Stop, the desktop can retain the session while this
+            // task ends. Its process group must still die here.
             live(protocol, watch, tools, exit).await;
+            guard.terminate();
         }
         .boxed();
         Ok((session, driver))
@@ -799,15 +821,33 @@ impl ExternalSession {
             return Ok(TurnEnd::Cancelled);
         }
         let (reply, answer) = oneshot::channel();
+        let state = Arc::new(Mutex::new(PromptState::Queued));
         self.send(Request::Prompt {
             text: prompt.as_str().to_owned(),
             observer,
             cancel: cancel.clone(),
+            state: Arc::clone(&state),
             reply,
         })?;
+        let mut answer = pin!(answer);
         tokio::select! {
-            answer = answer => answer.unwrap_or(Err(ExternalError::Exited)),
-            () = cancel.cancelled() => Ok(TurnEnd::Cancelled),
+            answer = &mut answer => answer.unwrap_or(Err(ExternalError::Exited)),
+            () = cancel.cancelled() => {
+                let cancelled_while_queued = {
+                    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                    if *state == PromptState::Queued {
+                        *state = PromptState::Cancelled;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if cancelled_while_queued {
+                    Ok(TurnEnd::Cancelled)
+                } else {
+                    answer.await.unwrap_or(Err(ExternalError::Exited))
+                }
+            },
         }
     }
 
@@ -1155,16 +1195,34 @@ async fn serve(
                 cancel,
                 reply,
             } => {
-                let _ =
-                    reply.send(change_setting(connection, &state, settings, change, &cancel).await);
+                let outcome = change_setting(connection, &state, settings, change, &cancel).await;
+                let timed_out = matches!(outcome, Err(ExternalError::RequestTimedOut { .. }));
+                let _ = reply.send(outcome);
+                if timed_out {
+                    // The agent can still apply a timed-out change. Ending the
+                    // session prevents that late result from affecting a later
+                    // question under a setting the user was told had failed.
+                    return;
+                }
             }
             Request::Prompt {
                 text,
                 observer,
                 cancel,
+                state: prompt_state,
                 reply,
             } => {
-                if cancel.is_cancelled() {
+                let taken = {
+                    let mut prompt_state =
+                        prompt_state.lock().unwrap_or_else(PoisonError::into_inner);
+                    if *prompt_state == PromptState::Queued {
+                        *prompt_state = PromptState::Taken;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !taken || cancel.is_cancelled() {
                     let _ = reply.send(Ok(TurnEnd::Cancelled));
                     continue;
                 }

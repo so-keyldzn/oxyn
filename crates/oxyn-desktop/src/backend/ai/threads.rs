@@ -156,6 +156,7 @@ impl Waiting {
     /// with the last handle on its session.
     fn release(self) {
         self.stop.cancel();
+        self.link.session.signal_process();
     }
 }
 
@@ -404,7 +405,9 @@ impl AiState {
             .cloned()
             .unwrap_or_default();
         for thread in threads {
-            thread.state.lock().agent = None;
+            if let Some(session) = thread.release_agent() {
+                session.signal_process();
+            }
         }
     }
 
@@ -499,7 +502,9 @@ impl AiState {
             .unwrap_or_default();
         for thread in threads {
             if thread.id != keep && !thread.is_running() {
-                thread.state.lock().agent = None;
+                if let Some(session) = thread.release_agent() {
+                    session.signal_process();
+                }
             }
         }
     }

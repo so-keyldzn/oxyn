@@ -25,9 +25,19 @@ fn run_limited<T>(
     agent: impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>>,
     scenario: impl AsyncFnOnce(ExternalSession) -> T,
 ) -> T {
+    run_limited_with_environment(Environment::empty(), agent, scenario)
+}
+
+/// [`run_limited`] with an environment the session redacts from the agent's
+/// stream, so a test can exercise its held-back final fragment.
+fn run_limited_with_environment<T>(
+    environment: Environment,
+    agent: impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>>,
+    scenario: impl AsyncFnOnce(ExternalSession) -> T,
+) -> T {
     let (ours, theirs) = Channel::duplex();
     let (session, driver) =
-        ExternalSession::over_with(ours, private(), None, None, Environment::empty(), SHORT);
+        ExternalSession::over_with(ours, private(), None, None, environment, SHORT);
     block_on(async move {
         tokio::spawn(driver);
         tokio::spawn(agent(theirs));
@@ -35,6 +45,61 @@ fn run_limited<T>(
             .await
             .expect("the scenario ends within its guard")
     })
+}
+
+#[test]
+fn stopping_a_taken_prompt_flushes_its_held_back_stream_before_returning() {
+    let cancel = CancelToken::new();
+    let stop = cancel.clone();
+    let seen = Arc::new(Seen::default());
+    let observer: Arc<dyn AgentObserver> = seen.clone();
+    let stopped = run_limited_with_environment(
+        Environment::empty().with_declared([("AGENT_TOKEN", "synthetic-agent-token")]),
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: NewSessionRequest, responder, _cx| {
+                        responder.respond(NewSessionResponse::new(session_id()))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_: PromptRequest, responder, cx| {
+                        cx.send_notification(SessionNotification::new(
+                            session_id(),
+                            text("synthetic"),
+                        ))?;
+                        stop.cancel();
+                        cx.spawn(async move {
+                            futures::future::pending::<()>().await;
+                            responder.respond(PromptResponse::new(StopReason::Cancelled))
+                        })
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        },
+        async move |session| {
+            session
+                .prompt(
+                    &prompt("stop after a held-back fragment"),
+                    observer,
+                    &cancel,
+                )
+                .await
+        },
+    );
+
+    assert_eq!(stopped, Ok(TurnEnd::Cancelled));
+    assert_eq!(seen.lines(), vec!["text:<AGENT_TOKEN redacted>".to_owned()]);
 }
 
 fn text(t: &str) -> SessionUpdate {
@@ -314,7 +379,7 @@ fn an_unanswered_sign_in_does_not_block_the_question_queued_after_it() {
 }
 
 #[test]
-fn an_unanswered_setting_does_not_block_the_question_queued_after_it() {
+fn an_unanswered_setting_ends_the_session_before_a_queued_question_runs() {
     use agent_client_protocol::schema::v1::{SessionMode, SessionModeState, SetSessionModeRequest};
 
     let (setting, question) = run_limited(
@@ -385,7 +450,7 @@ fn an_unanswered_setting_does_not_block_the_question_queued_after_it() {
             after: SHORT.user_request,
         })
     );
-    assert_eq!(question, Ok(TurnEnd::Answered { truncated: false }));
+    assert_eq!(question, Err(ExternalError::Exited));
 }
 
 #[test]

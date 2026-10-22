@@ -2544,4 +2544,106 @@ fn shutting_down_a_live_session_signals_its_guard_and_removes_its_directory() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn ending_the_driver_kills_its_group_while_the_session_is_held() {
+    let temporary = tempfile::tempdir().expect("a temporary marker directory");
+    let prompt_seen = temporary.path().join("prompt-seen");
+    let child_pid = temporary.path().join("agent-child-pid");
+    let script = concat!(
+        "sleep 60 & printf '%s' \"$!\" > \"$2\"; ",
+        "while IFS= read -r line; do id=${line#*\\\"id\\\":}; id=${id%%,*}; ",
+        "case \"$line\" in ",
+        "*\\\"method\\\":\\\"initialize\\\"*) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"protocolVersion\":1}}\\n' \"$id\" ;; ",
+        "*\\\"method\\\":\\\"session/new\\\"*) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"sessionId\":\"s-1\"}}\\n' \"$id\" ;; ",
+        "*\\\"method\\\":\\\"session/prompt\\\"*) : > \"$1\" ;; ",
+        "esac; done"
+    );
+    let agent = ExternalAgentConfig::new(oxyn_core::ProviderId::for_new_agent(), "Test", "/bin/sh")
+        .with_args([
+            "-c",
+            script,
+            "agent",
+            &prompt_seen.to_string_lossy(),
+            &child_pid.to_string_lossy(),
+        ]);
+    let limits = Limits {
+        idle: std::time::Duration::from_secs(5),
+        cancel_grace: std::time::Duration::from_millis(100),
+        user_request: std::time::Duration::from_secs(5),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let (session, driver) = ExternalSession::start_process(
+            &agent,
+            PrivacyTier::Metadata,
+            None,
+            None,
+            Environment::empty(),
+            limits,
+        )
+        .expect("agent starts");
+        let leader = session
+            .process
+            .as_ref()
+            .expect("a launched session signals its process")
+            .pid();
+        let driver = tokio::spawn(driver);
+        let cancel = CancelToken::new();
+        let stop = cancel.clone();
+        let question = tokio::spawn(async move {
+            session
+                .prompt(&prompt("stop this prompt"), Arc::new(()), &cancel)
+                .await
+        });
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !prompt_seen.is_file() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the shell agent did not receive the prompt"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        stop.cancel();
+        assert_eq!(
+            question.await.expect("the prompt task joins"),
+            Ok(TurnEnd::Cancelled)
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), driver)
+            .await
+            .expect("the driver ends after the cancel grace")
+            .expect("the driver task joins");
+        let child = std::fs::read_to_string(&child_pid)
+            .expect("the grandchild pid marker is readable")
+            .trim()
+            .parse::<u32>()
+            .expect("the grandchild pid marker is numeric");
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while (process_is_running(leader) || process_is_running(child))
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            !process_is_running(leader) && !process_is_running(child),
+            "the driver ended while its agent group survived"
+        );
+    });
+}
+
+#[cfg(unix)]
+fn process_is_running(pid: u32) -> bool {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps runs in the test environment");
+    output.status.success()
+        && !String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .starts_with('Z')
+}
+
 mod idle;
