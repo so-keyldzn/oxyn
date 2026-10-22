@@ -64,7 +64,7 @@ use crate::transaction_text::{controls_transaction, opens_transaction};
 const TRANSACTIONS_REFUSED: &str = "TRANSACTIONS (transactions are not supported in the console \
                                     yet: each statement commits on its own)";
 use crate::types::{lacks_binary_output, schema_for};
-use crate::variant::PostgresVariant;
+use crate::variant::{PostgresFlavor, PostgresVariant};
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
 use oxyn_driver::SessionContext;
 
@@ -95,8 +95,23 @@ pub(crate) const SQL_RESET_SEARCH_PATH: &str = "SET search_path TO DEFAULT";
 ///   next borrower. It is not reliable for the user anyway, whose next query
 ///   may go out on another connection; a console's schema goes through its
 ///   session context.
-pub(crate) const SQL_RESET_AFTER_WRITE: &str =
+pub(crate) const SQL_RESET_AFTER_WRITE_POSTGRES: &str =
     "RESET SESSION AUTHORIZATION; RESET ALL; SET search_path TO DEFAULT";
+/// Resets the runtime parameters that Amazon Redshift documents for an
+/// unprivileged user after a writable execution.
+///
+/// Redshift documents `SET SESSION AUTHORIZATION` as superuser-only, including
+/// its `DEFAULT` form, so it must not share PostgreSQL's reset sequence.
+pub(crate) const SQL_RESET_AFTER_WRITE_REDSHIFT: &str = "RESET ALL";
+
+/// The reset sequence that the detected server flavor permits after a write.
+#[must_use]
+pub(crate) const fn reset_after_write(flavor: PostgresFlavor) -> &'static str {
+    match flavor {
+        PostgresFlavor::Postgres => SQL_RESET_AFTER_WRITE_POSTGRES,
+        PostgresFlavor::Redshift => SQL_RESET_AFTER_WRITE_REDSHIFT,
+    }
+}
 /// The pid of the server process executing on this connection.
 const SQL_BACKEND_PID: &str = "SELECT pg_catalog.pg_backend_pid()";
 
@@ -462,6 +477,7 @@ impl Session for PostgresSession {
         let cursor = cursor::spawn(
             StreamRequest {
                 driver: self.driver.clone(),
+                flavor: self.variant.flavor,
                 connection,
                 source,
                 bound,
@@ -950,7 +966,8 @@ mod tests {
             SQL_BEGIN_READ_ONLY,
             SQL_ROLLBACK,
             SQL_RESET_SEARCH_PATH,
-            SQL_RESET_AFTER_WRITE,
+            SQL_RESET_AFTER_WRITE_POSTGRES,
+            SQL_RESET_AFTER_WRITE_REDSHIFT,
             SQL_BACKEND_PID,
             SQL_CANCEL_BACKEND,
         ] {
@@ -960,6 +977,18 @@ mod tests {
         assert!(
             SQL_CANCEL_BACKEND.contains("$1"),
             "the pid must be a bound parameter"
+        );
+    }
+
+    #[test]
+    fn writable_reset_uses_only_the_redshift_syntax_documented_for_users() {
+        assert_eq!(
+            reset_after_write(PostgresFlavor::Postgres),
+            SQL_RESET_AFTER_WRITE_POSTGRES
+        );
+        assert_eq!(
+            reset_after_write(PostgresFlavor::Redshift),
+            SQL_RESET_AFTER_WRITE_REDSHIFT
         );
     }
 }

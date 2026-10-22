@@ -429,6 +429,10 @@ async fn every_writable_session_setting_returns_to_the_pool_default() {
         return;
     };
     control
+        .execute("DROP ROLE IF EXISTS oxyn_state_reset_role")
+        .await
+        .expect("stale test role cleanup");
+    control
         .execute("CREATE ROLE oxyn_state_reset_role NOLOGIN")
         .await
         .expect("test role");

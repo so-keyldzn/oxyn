@@ -258,12 +258,15 @@ fn classify_sqlstate(
         SQLSTATE_SERIALIZATION_FAILURE
         | SQLSTATE_DEADLOCK
         | SQLSTATE_LOCK_NOT_AVAILABLE
-        | SQLSTATE_TOO_MANY_CONNECTIONS
-        | SQLSTATE_CONFIG_LIMIT
-        | SQLSTATE_CANNOT_CONNECT_NOW
-        | SQLSTATE_IDLE_TIMEOUT
         | SQLSTATE_OUT_OF_MEMORY
         | SQLSTATE_DISK_FULL => retry_class(intent),
+
+        // These failures refuse a connection before the user's statement can
+        // run, so their outcome is certain for every statement intent.
+        SQLSTATE_TOO_MANY_CONNECTIONS
+        | SQLSTATE_CONFIG_LIMIT
+        | SQLSTATE_CANNOT_CONNECT_NOW
+        | SQLSTATE_IDLE_TIMEOUT => ErrorClass::Transient,
 
         // The server stopped midway: like a cut.
         SQLSTATE_ADMIN_SHUTDOWN | SQLSTATE_CRASH_SHUTDOWN => transport,
@@ -553,6 +556,30 @@ mod tests {
                 assert_eq!(
                     classify(&server_error(code), intent),
                     ErrorClass::Ambiguous,
+                    "{code}, {intent:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_admission_errors_are_transient_for_every_intent() {
+        for code in [
+            SQLSTATE_TOO_MANY_CONNECTIONS,
+            SQLSTATE_CONFIG_LIMIT,
+            SQLSTATE_CANNOT_CONNECT_NOW,
+            SQLSTATE_IDLE_TIMEOUT,
+        ] {
+            for intent in [
+                StatementIntent::Read,
+                StatementIntent::Write,
+                StatementIntent::Unknown,
+                StatementIntent::Ddl,
+                StatementIntent::Grant,
+            ] {
+                assert_eq!(
+                    classify(&server_error(code), intent),
+                    ErrorClass::Transient,
                     "{code}, {intent:?}"
                 );
             }

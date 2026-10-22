@@ -198,7 +198,7 @@ impl ConnectSpec {
         // written for an up-to-date server — it is PostgreSQL's default value. A
         // server that refused the parameter refuses the connection, which shows;
         // the cursor restores this startup value after any execution that
-        // could have changed it (`SQL_RESET_AFTER_WRITE`).
+        // could have changed it (`reset_after_write`).
         options = options.options([("standard_conforming_strings", "on")]);
 
         Ok(Self {

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="4541a79cb997" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="d800028d331e" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -21,6 +21,18 @@ Le script interroge crates.io et le canal stable de Rust, compare avec les
 valeurs de ce fichier et signale les écarts. Il ne modifie rien : c'est à un
 humain de décider d'une montée de version. La commande `/versions` fait la
 même chose en expliquant les écarts.
+
+## Réinitialisation de session compatible PostgreSQL — vérification du 2026-10-22
+
+Amazon Redshift documente `RESET ALL` comme réinitialisant tous les paramètres
+d'exécution, y compris les variables de contexte de session. Sa [page `SET SESSION AUTHORIZATION`](https://docs.aws.amazon.com/redshift/latest/dg/r_SET_SESSION_AUTHORIZATION.html)
+documente `SET ... DEFAULT` mais exige un superutilisateur de base de données
+pour cette commande ; elle ne documente pas `RESET SESSION AUTHORIZATION`. La
+variante Redshift du driver PostgreSQL envoie donc seulement la réinitialisation
+non privilégiée documentée, `RESET ALL`, après une exécution qui écrit ;
+PostgreSQL conserve sa séquence de réinitialisation plus complète. Source :
+[Amazon Redshift RESET](https://docs.aws.amazon.com/redshift/latest/dg/r_RESET.html),
+lue le 2026-10-22.
 
 
 ## Confinement du transport IA — 2026-10-03
