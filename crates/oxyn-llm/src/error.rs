@@ -113,6 +113,23 @@ pub enum LlmError {
         message: String,
     },
 
+    /// The provider refused the request as longer than the model's context
+    /// window, and said so in a form it documents. Permanent family.
+    ///
+    /// Recognized per provider, from its own failure shape: a provider that
+    /// documents no such signal never produces it, and its refusal stays an
+    /// [`Http`](Self::Http) error like any other (RESEARCH-NOTES, « Context
+    /// window overflow »).
+    #[error(
+        "provider `{provider}` refused the request as longer than the model's context window: {message}"
+    )]
+    ContextTooLong {
+        /// Target provider.
+        provider: ProviderId,
+        /// Body of the response, truncated and scrubbed of the key.
+        message: String,
+    },
+
     /// The response arrived but cannot be read: malformed JSON, truncated SSE
     /// event, outsized line.
     #[error("unreadable response from provider `{provider}`: {detail}")]
@@ -255,7 +272,8 @@ impl LlmError {
                 504 => ErrorClass::Ambiguous,
                 _ => ErrorClass::Permanent,
             },
-            Self::Decode { .. }
+            Self::ContextTooLong { .. }
+            | Self::Decode { .. }
             | Self::MissingApiKey { .. }
             | Self::Config { .. }
             | Self::Unsupported { .. }
@@ -383,6 +401,7 @@ impl From<LlmError> for OxynError {
             LlmError::ConnectionLost { .. } => Self::OutcomeUnknown(err.to_string()),
             LlmError::MissingApiKey { .. } => Self::Authentication(err.to_string()),
             LlmError::Config { .. } => Self::Config(err.to_string()),
+            LlmError::ContextTooLong { .. } => Self::ContextTooLong(err.to_string()),
             LlmError::Decode { .. } => Self::Serialization(err.to_string()),
             LlmError::Unsupported { capability, .. } => Self::NotSupported { capability },
             // `NotSupported` and not `Internal`: for the caller, the fact is

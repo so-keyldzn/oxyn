@@ -126,6 +126,17 @@ pub enum OxynError {
     #[error("query rejected: {0}")]
     Query(String),
 
+    /// A model provider refused the request as longer than the model's
+    /// context window. Permanent family: the same request is refused again.
+    ///
+    /// Distinct from [`Query`](Self::Query) because one thing fixes it that
+    /// fixes no other refusal: sending less. A conversation that carried its
+    /// earlier exchanges starts over without them — a reason to drop them
+    /// that an invalid parameter or exhausted credit is not. Only built from
+    /// a signal the provider documents, never guessed from a status.
+    #[error("context too long: {0}")]
+    ContextTooLong(String),
+
     /// The allotted time has elapsed **on the client side**.
     ///
     /// Ambiguous family: nothing says the server did not apply the write.
@@ -262,6 +273,7 @@ impl OxynError {
             Self::Config(_)
                 | Self::Authentication(_)
                 | Self::Query(_)
+                | Self::ContextTooLong(_)
                 | Self::PolicyDenied { .. }
                 | Self::ApprovalRequired { .. }
                 | Self::NotSupported { .. }
@@ -435,6 +447,9 @@ mod tests {
     #[test]
     fn classification_of_usage_errors() {
         assert!(OxynError::Query("relation \"users\" does not exist".into()).is_user_error());
+        let too_long = OxynError::ContextTooLong("prompt is too long".into());
+        assert!(too_long.is_user_error());
+        assert_eq!(too_long.class(), ErrorClass::Permanent);
         assert!(
             OxynError::PolicyDenied {
                 reason: "read-only connection".into()

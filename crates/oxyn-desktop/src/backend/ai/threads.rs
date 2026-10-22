@@ -75,8 +75,8 @@ const MEMORY_WINDOW_DIVISOR: usize = 2;
 /// follow-up sends the whole session again, so a thread costs the square of
 /// its length — set at five fresh contexts of the default policy
 /// (`ContextPolicy::default()`, 6,000 tokens). A model whose window is smaller
-/// refuses the question instead, and the refusal resets the memory as well
-/// ([`Thread::outgrow_memory`]).
+/// refuses the question instead; that refusal resets the memory only from a
+/// provider that marks it as such ([`Thread::outgrow_memory`]).
 const UNDECLARED_WINDOW_CEILING: usize = 30_000;
 
 /// How large a remembered session may grow, in estimated tokens, before the
@@ -677,7 +677,7 @@ struct Node {
     /// ones after it do not reach past it for an older one.
     withheld: bool,
     /// The provider refused a question that continued this exchange's
-    /// memory: the memory is dropped, and the questions after it start from a
+    /// memory as longer than the model's window: the memory is dropped, and the questions after it start from a
     /// fresh context instead of failing the same way.
     outgrown: bool,
 }
@@ -708,7 +708,8 @@ enum Nearest {
     Memory(u32),
     /// This exchange used a sample, and left none.
     Withheld,
-    /// The provider refused this node's memory, which was dropped.
+    /// The provider refused this node's memory as too long, and it was
+    /// dropped.
     Outgrown,
 }
 
@@ -730,6 +731,25 @@ fn nearest_memory(state: &ThreadState, parent: Option<u32>) -> Option<Nearest> {
         cursor = node.parent;
     }
     None
+}
+
+/// The node whose memory a question from `parent` continued, when that memory
+/// is still `session`'s: one replaced meanwhile is not the one sent.
+fn continued_memory(
+    state: &ThreadState,
+    parent: Option<u32>,
+    session: AgentSessionId,
+) -> Option<u32> {
+    let Some(Nearest::Memory(index)) = nearest_memory(state, parent) else {
+        return None;
+    };
+    state
+        .nodes
+        .get(index as usize)?
+        .memory
+        .as_ref()
+        .is_some_and(|memory| memory.session.id() == session)
+        .then_some(index)
 }
 
 /// A live external agent session, and the node it last answered.
@@ -1156,8 +1176,9 @@ impl Thread {
     }
 
     /// Drops the memory a question from `parent` continued, when it is still
-    /// `session`'s: the provider refused that question, and every later one
-    /// sending the same session again would be refused the same way.
+    /// `session`'s: the provider refused that question as longer than the
+    /// model's window, and every later one sending the same session again
+    /// would be refused the same way.
     ///
     /// Only what is re-sent changes: the exchanges stay in the transcript.
     /// Answers whether a memory was dropped. `session` guards against a
@@ -1165,22 +1186,20 @@ impl Thread {
     /// is not the one refused.
     pub(crate) fn outgrow_memory(&self, parent: Option<u32>, session: AgentSessionId) -> bool {
         let mut state = self.state.lock();
-        let Some(Nearest::Memory(index)) = nearest_memory(&state, parent) else {
+        let Some(node) = continued_memory(&state, parent, session)
+            .and_then(|index| state.nodes.get_mut(index as usize))
+        else {
             return false;
         };
-        let Some(node) = state.nodes.get_mut(index as usize) else {
-            return false;
-        };
-        if node
-            .memory
-            .as_ref()
-            .is_none_or(|memory| memory.session.id() != session)
-        {
-            return false;
-        }
         node.memory = None;
         node.outgrown = true;
         true
+    }
+
+    /// Whether a question from `parent` continued the memory that is still
+    /// `session`'s — what [`Self::outgrow_memory`] would drop, left in place.
+    pub(crate) fn continues_memory(&self, parent: Option<u32>, session: AgentSessionId) -> bool {
+        continued_memory(&self.state.lock(), parent, session).is_some()
     }
 
     /// Marks an exchange that used a sample: nothing of it is remembered.

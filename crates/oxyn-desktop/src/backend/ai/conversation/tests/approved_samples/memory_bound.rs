@@ -285,27 +285,70 @@ fn http(status: &str, content_type: &str, body: &str) -> String {
     )
 }
 
-fn answer() -> String {
-    http(
-        "200 OK",
-        "text/event-stream",
-        "data: {\"choices\":[{\"delta\":{\"content\":\"SELECT 1;\"}}]}\n\n\
-         data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
-         data: [DONE]\n\n",
-    )
+/// The protocol a fake provider speaks, and how the fixture declares it.
+#[derive(Clone, Copy)]
+enum Protocol {
+    Anthropic,
+    OpenAiCompatible,
 }
 
-/// The refusal of a context too long, as a `400` without a body Oxyn reads:
-/// what decides is the status, never the provider's wording.
-fn too_long() -> String {
+/// A complete answer, `SELECT 1;`, in `protocol`'s stream.
+fn answer(protocol: Protocol) -> String {
+    let stream = match protocol {
+        Protocol::Anthropic => {
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":25,\"output_tokens\":1}}}\n\n\
+             data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+             data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"SELECT 1;\"}}\n\n\
+             data: {\"type\":\"content_block_stop\",\"index\":0}\n\n\
+             data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n\
+             data: {\"type\":\"message_stop\"}\n\n"
+        }
+        Protocol::OpenAiCompatible => {
+            "data: {\"choices\":[{\"delta\":{\"content\":\"SELECT 1;\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n"
+        }
+    };
+    http("200 OK", "text/event-stream", stream)
+}
+
+/// Anthropic's refusal of an input larger than the window: the type and the
+/// phrase its documentation gives (RESEARCH-NOTES, « Context window
+/// overflow »), followed by figures the documentation does not fix.
+fn context_overflow() -> String {
     http(
         "400 Bad Request",
         "application/json",
-        r#"{"error":{"message":"this request exceeds the model's context"}}"#,
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 215000 tokens > 200000 maximum"},"request_id":"req_test"}"#,
     )
 }
 
 impl Fixture {
+    /// Declares a provider speaking `protocol` on the loopback `port`.
+    fn declare_speaking(&self, protocol: Protocol, port: u16) -> String {
+        match protocol {
+            Protocol::OpenAiCompatible => self.declare_at(port),
+            Protocol::Anthropic => {
+                self.runtime
+                    .block_on(
+                        self.backend.save_ai_provider(
+                            serde_json::from_value(serde_json::json!({
+                                "kind": "anthropic",
+                                "label": "Listening Anthropic",
+                                "baseUrl": format!("http://127.0.0.1:{port}"),
+                                "model": "claude-under-test",
+                                // A placeholder, kept in the in-memory store.
+                                "key": "test-key-not-a-secret",
+                            }))
+                            .expect("a valid draft"),
+                        ),
+                    )
+                    .expect("declared")
+                    .id
+            }
+        }
+    }
+
     /// Asks `question` after `parent` in `thread`, and waits for the run to end.
     fn ask_and_wait(
         &self,
@@ -350,39 +393,168 @@ impl Fixture {
     }
 }
 
-/// The acceptance of #271, through `ai_ask` and a real HTTP exchange: after a
-/// refusal, the next question in the same thread does not fail the same way.
-#[test]
-fn after_a_refused_follow_up_the_next_question_starts_fresh() {
-    let fixture = fixture();
-    let _guard = fixture.runtime.enter();
-    let (port, requests) = fixture
-        .runtime
-        .block_on(served(vec![answer(), too_long(), answer()]));
-    let provider = fixture.declare_at(port);
+/// What a thread of three questions to a fake provider gave, the second one
+/// refused with `refusal`.
+struct Refused {
+    /// The events of the refused question.
+    refused: String,
+    /// The events of the question after it.
+    next: String,
+    /// The three requests the provider read, in order.
+    requests: Vec<String>,
+}
+
+/// Asks a first question, a follow-up the provider refuses with `refusal`,
+/// then a third question after the refused one — through `ai_ask` and real
+/// HTTP exchanges.
+fn refused_follow_up(fixture: &Fixture, protocol: Protocol, refusal: String) -> Refused {
+    let (port, requests) =
+        fixture
+            .runtime
+            .block_on(served(vec![answer(protocol), refusal, answer(protocol)]));
+    let provider = fixture.declare_speaking(protocol, port);
 
     let (first, _) = fixture.ask_and_wait(&provider, None, None, "FIRST-QUESTION-MARK");
     let thread = Some(first.thread.clone());
-    let (refused, events) =
+    let (refused_at, refused) =
         fixture.ask_and_wait(&provider, thread.clone(), Some(first.node), "second");
-    assert!(events.contains(r#""kind":"failed""#), "{events}");
-    assert!(
-        events.contains("the next question here starts from a fresh context"),
-        "the failure says what happens next: {events}"
-    );
-    let (_, events) = fixture.ask_and_wait(&provider, thread, Some(refused.node), "third");
-    assert!(!events.contains(r#""kind":"failed""#), "{events}");
-    assert!(events.contains(r#""reason":"historyRefused""#), "{events}");
+    assert!(refused.contains(r#""kind":"failed""#), "{refused}");
+    let (_, next) = fixture.ask_and_wait(&provider, thread, Some(refused_at.node), "third");
+    assert!(!next.contains(r#""kind":"failed""#), "{next}");
 
-    let requests = requests.lock();
+    let requests = requests.lock().clone();
     assert_eq!(requests.len(), 3, "one request per question");
     assert!(
         requests[1].contains("FIRST-QUESTION-MARK"),
         "the refused question carried the memory"
     );
+    Refused {
+        refused,
+        next,
+        requests,
+    }
+}
+
+/// The acceptance of #271, through `ai_ask` and a real HTTP exchange: after
+/// the documented context-overflow refusal, the next question in the same
+/// thread does not fail the same way.
+#[test]
+fn after_a_context_overflow_the_next_question_starts_fresh() {
+    let fixture = fixture();
+    let _guard = fixture.runtime.enter();
+    let exchange = refused_follow_up(&fixture, Protocol::Anthropic, context_overflow());
+
     assert!(
-        !requests[2].contains("FIRST-QUESTION-MARK"),
-        "the next one does not: {}",
-        requests[2]
+        exchange
+            .refused
+            .contains("the next question here starts from a fresh context"),
+        "the failure says what happens next: {}",
+        exchange.refused
     );
+    assert!(
+        exchange.next.contains(r#""reason":"historyRefused""#),
+        "{}",
+        exchange.next
+    );
+    assert!(
+        !exchange.requests[2].contains("FIRST-QUESTION-MARK"),
+        "the next one does not carry the memory: {}",
+        exchange.requests[2]
+    );
+}
+
+/// Any refusal but the documented overflow keeps the memory: an invalid
+/// parameter, exhausted credit or a provider that marks nothing fail a fresh
+/// context just as well, and dropping the exchanges would lose them for
+/// nothing.
+#[test]
+fn an_unrelated_refusal_keeps_the_memory() {
+    let fixture = fixture();
+    let _guard = fixture.runtime.enter();
+    let anthropic = |status: &str, kind: &str, message: &str| {
+        http(
+            status,
+            "application/json",
+            &format!(r#"{{"type":"error","error":{{"type":"{kind}","message":"{message}"}}}}"#),
+        )
+    };
+    let cases = [
+        (
+            "Anthropic, another invalid request",
+            Protocol::Anthropic,
+            anthropic(
+                "400 Bad Request",
+                "invalid_request_error",
+                "This model does not support assistant message prefill.",
+            ),
+        ),
+        (
+            "Anthropic, the phrase inside another message",
+            Protocol::Anthropic,
+            anthropic(
+                "400 Bad Request",
+                "invalid_request_error",
+                "messages.0: the prompt is too long for this field",
+            ),
+        ),
+        (
+            "Anthropic, the phrase under another type",
+            Protocol::Anthropic,
+            anthropic("400 Bad Request", "api_error", "prompt is too long"),
+        ),
+        (
+            "Anthropic, exhausted credit",
+            Protocol::Anthropic,
+            anthropic(
+                "402 Payment Required",
+                "billing_error",
+                "Your credit balance is too low.",
+            ),
+        ),
+        (
+            "OpenAI-compatible, a 400 in its own words",
+            Protocol::OpenAiCompatible,
+            http(
+                "400 Bad Request",
+                "application/json",
+                r#"{"error":{"message":"prompt is too long","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
+            ),
+        ),
+        (
+            "OpenAI-compatible, exhausted credit",
+            Protocol::OpenAiCompatible,
+            http(
+                "402 Payment Required",
+                "application/json",
+                r#"{"error":{"message":"insufficient credit","type":"insufficient_quota"}}"#,
+            ),
+        ),
+    ];
+    for (case, protocol, refusal) in cases {
+        let exchange = refused_follow_up(&fixture, protocol, refusal);
+        assert!(
+            exchange
+                .refused
+                .contains("The earlier exchanges of this conversation are kept"),
+            "{case}: the failure says the memory stays: {}",
+            exchange.refused
+        );
+        assert!(
+            !exchange.refused.contains("historyRefused")
+                && !exchange.next.contains("historyRefused"),
+            "{case}: {}\n{}",
+            exchange.refused,
+            exchange.next
+        );
+        assert!(
+            !exchange.next.contains("memoryReset"),
+            "{case}: {}",
+            exchange.next
+        );
+        assert!(
+            exchange.requests[2].contains("FIRST-QUESTION-MARK"),
+            "{case}: the next question still carries the memory: {}",
+            exchange.requests[2]
+        );
+    }
 }

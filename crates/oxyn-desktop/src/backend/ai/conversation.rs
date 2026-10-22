@@ -34,7 +34,7 @@ use oxyn_core::ai::MAX_PROVIDER_MODEL_BYTES;
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, AiProviderConfig, CancelToken, Capabilities, Command,
     CommandId, ConnectionConfig, ConnectionId, Environment, ErrorClass, ExternalAgentConfig,
-    PrivacyTier, Provenance, QueryLanguage, SessionId,
+    OxynError, PrivacyTier, Provenance, QueryLanguage, SessionId,
 };
 use oxyn_exec::{DispatchReport, Executor, ExecutorSink};
 use oxyn_llm::Reach;
@@ -2359,9 +2359,21 @@ impl Run<'_> {
                 };
                 // Only a memory this question continued: a fresh context the
                 // provider refused would be refused the same way, memory or not.
-                if refuses_request(&error) && self.thread.outgrow_memory(self.parent, dialogue.id())
-                {
-                    failure.message = format!("{} {HISTORY_REFUSED}", failure.message);
+                match &error {
+                    AiError::Core(OxynError::ContextTooLong(_))
+                        if self.thread.outgrow_memory(self.parent, dialogue.id()) =>
+                    {
+                        failure.message = format!("{} {HISTORY_REFUSED}", failure.message);
+                    }
+                    // Any other refusal keeps the memory: an invalid parameter
+                    // or exhausted credit fails a fresh context too, and the
+                    // exchanges would be lost for nothing.
+                    AiError::Core(OxynError::Query(_))
+                        if self.thread.continues_memory(self.parent, dialogue.id()) =>
+                    {
+                        failure.message = format!("{} {HISTORY_KEPT}", failure.message);
+                    }
+                    _ => {}
                 }
                 failure
             })?;
@@ -3034,25 +3046,20 @@ fn with_effort(
         .map_err(|error| Failure::new(error.to_string(), category_of(&error)))
 }
 
-/// Said after a refused question that carried a remembered session, which is
-/// dropped: nothing says the session's length is what the provider refused,
-/// so the sentence does not claim it.
+/// Said after a question that carried a remembered session and that the
+/// provider refused as longer than the model's window
+/// ([`OxynError::ContextTooLong`]): the session is dropped.
 const HISTORY_REFUSED: &str = "This question carried the earlier exchanges of this \
-     conversation, which may be more than the model accepts: the next question here starts \
-     from a fresh context, without them.";
+     conversation: the next question here starts from a fresh context, without them.";
 
-/// Whether the provider refused the request itself: a permanent HTTP refusal
-/// other than an authentication one, which `oxyn-llm` projects onto
-/// `OxynError::Query` — read on the variant, never on the message.
-///
-/// A context too long for the model is one: Anthropic answers it with a
-/// `400 invalid_request_error` (RESEARCH-NOTES, « Context window overflow »),
-/// and no other provider documents a code of its own. It is the one refusal a
-/// fresh context fixes; the others fail again either way, so dropping the
-/// memory for them costs that memory, and the failure says so.
-const fn refuses_request(error: &AiError) -> bool {
-    matches!(error, AiError::Core(oxyn_core::OxynError::Query(_)))
-}
+/// Said after any other refusal of a question that carried a remembered
+/// session, which is kept: only a refusal the provider marks as a context
+/// overflow drops it, and Anthropic alone documents one (RESEARCH-NOTES,
+/// « Context window overflow »). An overflow another provider refuses in its
+/// own words lands here, and the user is the one who can tell.
+const HISTORY_KEPT: &str = "The earlier exchanges of this conversation are kept: if the model \
+     refused this question as longer than its context window, start a new conversation — Oxyn \
+     did not recognize this refusal as one.";
 
 fn category_of(error: &AiError) -> FailureCategory {
     match error {

@@ -1172,16 +1172,22 @@ between two questions does not transmit the previous exchanges: the panel says
 so with a line (`destinationChanged`), since the earlier answers were not those
 of the new recipient.
 
-A provider's follow-up sends the remembered session again, whole. It is
-bounded: past **half the context window** the model's listing declares —
-30,000 estimated tokens when it declares none —, the next question starts from
-a fresh context, with a line that says so and that a new conversation keeps
-the thread short (`historyTooLong`). A question the provider **refuses** while
-carrying that session (a permanent HTTP refusal, such as a context too long)
-drops it: the failure says the next question starts from a fresh context, and
-the next question — asked again or following up — does, with its line
-(`historyRefused`). In both cases the transcript keeps every exchange; only
-what is sent again changes.
+A provider's follow-up sends the remembered session again, whole, with the
+definitions of the tools it offers. It is bounded: past **half the context
+window** the model's listing declares — 30,000 estimated tokens when it
+declares none —, the next question starts from a fresh context, with a line
+that says so and that a new conversation keeps the thread short
+(`historyTooLong`). This bound is the protection; the refusal below only
+catches what it missed. A question the provider refuses **as longer than the
+model's context window**, while carrying that session, drops it: the failure
+says the next question starts from a fresh context, and the next question —
+asked again or following up — does, with its line (`historyRefused`). Only a
+refusal the provider marks as such counts, and only Anthropic documents one
+([RESEARCH-NOTES](RESEARCH-NOTES.md#context-window-overflow--reading-of-2026-10-22)):
+any other refusal — an invalid parameter, exhausted credit, or an overflow
+another provider refuses in its own words — keeps the session, and its failure
+says so and that a new conversation fixes an overflow. In every case the
+transcript keeps every exchange; only what is sent again changes.
 
 A chosen agent comes with two permanent mentions: "Oxyn cannot see where it
 sends the question", and, for an agent that Oxyn does not confine, that it

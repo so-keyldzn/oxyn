@@ -1664,17 +1664,31 @@ read for the bound on a remembered session (#271):
 
 | Provider | What it documents | Source |
 |---|---|---|
-| Anthropic | "Everything in the request counts toward the context window", the output it generates included. An input that alone exceeds the window gets a `400 invalid_request_error` ("prompt is too long") on every model; from Claude 4.5, an input that fits but leaves too little room stops the generation with `model_context_window_exceeded` | [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows), § "Context window overflow behavior" |
-| OpenAI | **nothing**: the error-codes page lists no context-length code | [Error codes](https://developers.openai.com/api/docs/guides/error-codes) |
-| Gemini | **nothing official found**; forum reports only | — |
+| Anthropic | "Everything in the request counts toward the context window": the system prompt, every message with its tool results, **the tool definitions**, and the output it generates. An input that alone exceeds the window gets a `400 invalid_request_error` ("prompt is too long") on every model; from Claude 4.5, an input that fits but leaves too little room stops the generation with `model_context_window_exceeded` | [Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows), § "How the context window works" and "Context window overflow behavior" |
+| Anthropic | The error type is **not** specific: `invalid_request_error` is every `400` — "an issue with the format or content of your request", a spend limit, a refused prefill, a thinking setting. Errors have the shape `{"type":"error","error":{"type":…,"message":…}}`; `402` is `billing_error` | [Errors](https://platform.claude.com/docs/en/api/errors), § "HTTP errors" and "Error shapes" |
+| OpenAI | **nothing**: the error-codes page lists no context-length code or type; a `400` is a request "malformed or missing some required parameters". A `context_length_exceeded` code circulates in forum reports only | [Error codes](https://developers.openai.com/api/docs/guides/error-codes) |
+| Gemini | **nothing**: no code of the error table names an input over the window; `400 invalid_request` is "malformed or contains invalid parameters", `400 failed_precondition` a prerequisite such as billing, `402 payment_required` depleted Prepay credit, and the troubleshooting page says not to retry a `400`, `402` or `403` | [API errors](https://ai.google.dev/gemini-api/docs/api-errors), § "Standard API error codes"; [Troubleshooting](https://ai.google.dev/gemini-api/docs/troubleshooting) |
 
-Consequences in Oxyn. The refusal is recognized on its **status family**, not
-on the message: a permanent HTTP refusal other than `401`/`403`, which
-`oxyn-llm` maps to `OxynError::Query`. No provider-specific code is matched —
-OpenAI and Gemini document none, and the Anthropic wording is not a contract.
-And a remembered session may fill **half** of the window the model's listing
-declares (`ModelInfo::context_window`), since the window also holds the next
-question, its tool results and the answer.
+All four pages read on 2026-10-22.
+
+Consequences in Oxyn. No provider documents a field of its own for the
+overflow, so a status family cannot stand for it: a `400` or a `402` is just as
+often a parameter or the credit, which a fresh context does not fix. Only
+Anthropic's documented refusal becomes `OxynError::ContextTooLong` — a `400`
+whose `error.type` is `invalid_request_error` **and** whose `error.message`
+starts with "prompt is too long". The phrase is the documented one, read at the
+start of the message only; if Anthropic rewords it, the refusal reads as an
+ordinary one, which drops nothing. That refusal alone drops a remembered
+session. **The gap that remains**: an overflow OpenAI, Gemini or an
+OpenAI-compatible server refuses in its own words keeps the session, and the
+same follow-up is refused again until the user starts a new conversation — the
+failure says so.
+
+The bound before sending is therefore the protection: a remembered session
+may fill **half** of the window the model's listing declares
+(`ModelInfo::context_window`), the tool definitions it offers counted with it,
+since the window also holds the next question, its tool results and the
+answer.
 
 ### Reasoning: two distinct settings
 

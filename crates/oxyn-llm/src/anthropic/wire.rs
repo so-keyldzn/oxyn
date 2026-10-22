@@ -460,6 +460,35 @@ impl WireError {
     }
 }
 
+/// How Anthropic's "Context window overflow behavior" says an input larger
+/// than the window is refused: `400 invalid_request_error`, "prompt is too
+/// long" (RESEARCH-NOTES, « Context window overflow », read on 2026-10-22).
+const PROMPT_TOO_LONG: &str = "prompt is too long";
+
+/// Whether a failure is the documented context-window overflow.
+///
+/// The type alone does not say it: `invalid_request_error` is every `400` of
+/// this API — a spend limit, a refused prefill, a thinking setting. The
+/// documented phrase is what tells this one apart, read at the start of the
+/// message only. A body that does not parse, a changed wording or another
+/// message answers `false`: the refusal then stays an ordinary one, which
+/// drops nothing — the safe side of a wrong reading.
+pub(crate) fn is_context_overflow(status: u16, body: &str) -> bool {
+    if status != 400 {
+        return false;
+    }
+    let Ok(envelope) = serde_json::from_str::<Envelope>(body) else {
+        return false;
+    };
+    envelope.r#type.as_deref() == Some("error")
+        && envelope.error.is_some_and(|error| {
+            error.r#type.as_deref() == Some("invalid_request_error")
+                && error
+                    .message
+                    .is_some_and(|message| message.starts_with(PROMPT_TOO_LONG))
+        })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Model list
 // ─────────────────────────────────────────────────────────────────────────────

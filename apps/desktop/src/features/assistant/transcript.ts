@@ -981,5 +981,5 @@ export const MEMORY_RESET_LINES: Record<MemoryReset, string> = {
   historyTooLong:
     "This conversation has grown too long to send to the model again: the assistant starts over from here, without the earlier answers. A new conversation keeps it short.",
   historyRefused:
-    "The model refused the previous question with this conversation's earlier exchanges: the assistant starts over from here, without them. A new conversation keeps it short.",
+    "The model refused the previous question as too long, with this conversation's earlier exchanges: the assistant starts over from here, without them. A new conversation keeps it short.",
 }

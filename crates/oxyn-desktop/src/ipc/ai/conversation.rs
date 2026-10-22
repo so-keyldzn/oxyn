@@ -573,7 +573,8 @@ pub enum MemoryReset {
     /// every question, then be refused once the window is full.
     HistoryTooLong,
     /// The provider refused the previous question, which carried the
-    /// remembered session: sending it again would be refused the same way.
+    /// remembered session, as longer than the model's context window:
+    /// sending it again would be refused the same way.
     HistoryRefused,
 }
 
