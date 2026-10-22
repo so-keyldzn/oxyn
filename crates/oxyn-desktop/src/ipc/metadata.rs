@@ -487,6 +487,19 @@ pub enum RefreshSignal {
     /// A DDL succeeded: the catalog of this connection is invalidated.
     #[serde(rename_all = "camelCase")]
     CatalogInvalidated { connection: String },
+    /// A catalog read of this connection finished and published its result —
+    /// even a read that brought nothing new, since the event does not say. The
+    /// cache may hold other content than before: a level read, another evicted
+    /// under the budget. It is a prompt to read the snapshot again, never a
+    /// statement that something changed, and it starts no load: the editor's
+    /// completion only re-reads what the cache holds
+    /// ([ADR-0057](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md)).
+    ///
+    /// Not [`Self::CatalogInvalidated`], which only a finished DDL emits: a
+    /// plain load changes what the cache holds just as surely, and nothing
+    /// else tells the webview which connection it concerns.
+    #[serde(rename_all = "camelCase")]
+    CatalogChanged { connection: String },
     /// A write or a DDL succeeded: the **visible** preview is read again, with
     /// the shape in force. A DDL counts: `ALTER`, `TRUNCATE` or `DROP COLUMN`
     /// change the rows a preview shows as surely as an `UPDATE`.
@@ -526,6 +539,7 @@ impl RefreshSignal {
                 _ => vec![Self::RowsChanged { connection }],
             },
             oxyn_core::Event::HistoryRecorded => vec![Self::HistoryRecorded { connection }],
+            oxyn_core::Event::CatalogUpdated => vec![Self::CatalogChanged { connection }],
             _ => Vec::new(),
         }
     }
@@ -822,6 +836,29 @@ mod tests {
                 connection: connection.to_string()
             }]
         );
+    }
+
+    #[test]
+    fn a_catalog_load_is_announced_for_its_connection_only() {
+        let connection = oxyn_core::ConnectionId::new();
+        let loaded = oxyn_exec::ExecEvent::new(
+            oxyn_core::CommandId::new(),
+            Some(connection),
+            oxyn_core::Event::CatalogUpdated,
+        );
+        assert_eq!(
+            RefreshSignal::of(&loaded),
+            vec![RefreshSignal::CatalogChanged {
+                connection: connection.to_string()
+            }]
+        );
+        // Without a connection there is no one to tell which cache changed.
+        let anonymous = oxyn_exec::ExecEvent::new(
+            oxyn_core::CommandId::new(),
+            None,
+            oxyn_core::Event::CatalogUpdated,
+        );
+        assert!(RefreshSignal::of(&anonymous).is_empty());
     }
 
     #[test]

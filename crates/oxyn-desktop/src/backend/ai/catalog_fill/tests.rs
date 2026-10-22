@@ -15,16 +15,18 @@ use super::*;
 use crate::backend::Backend;
 use crate::ipc::{ConnectResponse, ConnectionDraft};
 
-struct Opened {
-    runtime: tokio::runtime::Runtime,
-    backend: Backend,
-    connection: ConnectionId,
+// Shared with the editor's pass (`completion_load`): the same real SQLite
+// connection, opened as the user opens one.
+pub(in crate::backend) struct Opened {
+    pub(in crate::backend) runtime: tokio::runtime::Runtime,
+    pub(in crate::backend) backend: Backend,
+    pub(in crate::backend) connection: ConnectionId,
     session: SessionId,
 }
 
 /// A connection opened as the user opens one — nothing expanded — on which
 /// `statements` ran.
-fn opened(environment: Environment, statements: &[&str]) -> Opened {
+pub(in crate::backend) fn opened(environment: Environment, statements: &[&str]) -> Opened {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -77,7 +79,7 @@ fn opened(environment: Environment, statements: &[&str]) -> Opened {
 }
 
 /// Three tables, rows whose values must never leave, and nothing expanded.
-fn shop(environment: Environment) -> Opened {
+pub(in crate::backend) fn shop(environment: Environment) -> Opened {
     opened(
         environment,
         &[
@@ -94,7 +96,7 @@ fn shop(environment: Environment) -> Opened {
 
 impl Opened {
     /// Runs a statement as the user, approving it when the connection asks.
-    fn sql(&self, statement: &str) {
+    pub(in crate::backend) fn sql(&self, statement: &str) {
         let id = CommandId::new();
         let outcome = self
             .runtime
@@ -110,7 +112,7 @@ impl Opened {
         }
     }
 
-    fn catalog(&self) -> SharedCatalog {
+    pub(in crate::backend) fn catalog(&self) -> SharedCatalog {
         self.backend
             .inner
             .executor
@@ -132,7 +134,7 @@ impl Opened {
     }
 
     /// What the executor journaled of the catalog reads, oldest first.
-    fn reads(&self) -> Vec<oxyn_store::JournalRecord> {
+    pub(in crate::backend) fn reads(&self) -> Vec<oxyn_store::JournalRecord> {
         let mut reads: Vec<_> = self
             .backend
             .inner

@@ -713,6 +713,15 @@ mod tests {
     /// server. The behavior against a real server is exercised by the
     /// `#[ignore]` tests of [`crate::integration`].
     fn offline_session() -> PostgresSession {
+        offline_session_on(PostgresVariant::detect(
+            "PostgreSQL 17.11",
+            "17.11",
+            Vec::new(),
+        ))
+    }
+
+    /// The same, for a server that announced itself as `variant`.
+    fn offline_session_on(variant: PostgresVariant) -> PostgresSession {
         let config = ConnectionConfig::new("trial", DriverId::postgres())
             .with_param("host", "127.0.0.1")
             .with_param("database", "shop")
@@ -722,13 +731,7 @@ mod tests {
         let pool = PgPoolOptions::new()
             .max_connections(1)
             .connect_lazy_with(spec.options().clone());
-        PostgresSession::new(
-            DriverId::postgres(),
-            pool,
-            spec,
-            PostgresVariant::detect("PostgreSQL 17.11", "17.11", Vec::new()),
-            "shop".to_owned(),
-        )
+        PostgresSession::new(DriverId::postgres(), pool, spec, variant, "shop".to_owned())
     }
 
     /// Forces the retained context without going through the server.
@@ -740,6 +743,28 @@ mod tests {
             .context
             .lock()
             .expect("no other thread holds this lock") = context;
+    }
+
+    #[tokio::test]
+    async fn redshift_refuses_the_resolution_path_before_any_round_trip() {
+        // `unnest … WITH ORDINALITY` is PostgreSQL 9.4 and Redshift announces
+        // 8.0.2: the pool here opens nothing, so an answer other than the
+        // refusal would be a connection error.
+        let session = offline_session_on(PostgresVariant::detect(
+            "PostgreSQL 8.0.2 on i686-pc-linux-gnu, Redshift 1.0.76",
+            "8.0.2",
+            Vec::new(),
+        ));
+
+        let refused = session
+            .catalog()
+            .resolution_path(&oxyn_core::CancelToken::new())
+            .await;
+
+        assert!(
+            matches!(refused, Err(OxynError::NotSupported { .. })),
+            "{refused:?}"
+        );
     }
 
     #[tokio::test]

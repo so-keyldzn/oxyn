@@ -49,6 +49,8 @@ pub(crate) struct CatalogPatch {
     constraints: Option<(CatalogPath, Vec<Constraint>)>,
     incoming_keys: Option<(CatalogPath, Vec<IncomingForeignKey>)>,
     definition: Option<(CatalogPath, RelationDefinition)>,
+    // Absent means "not read" or "the source cannot say", never "empty".
+    resolution_path: Option<Vec<String>>,
 }
 
 impl CatalogPatch {
@@ -76,6 +78,7 @@ impl CatalogPatch {
                 .as_ref()
                 .map_or(0, |(_, values)| values.len())
             + usize::from(self.definition.is_some())
+            + self.resolution_path.as_ref().map_or(0, Vec::len)
             + self.indexes.as_ref().map_or(0, |(_, values)| values.len())
             + self
                 .foreign_keys
@@ -115,6 +118,9 @@ impl CatalogPatch {
         }
         if let Some((path, definition)) = self.definition {
             cache.set_definition(&path, definition)?;
+        }
+        if let Some(namespaces) = self.resolution_path {
+            cache.set_resolution_path(namespaces);
         }
         Ok(())
     }
@@ -244,6 +250,14 @@ pub(crate) async fn read(
             patch.definition = Some((target.clone(), definition));
             patch.relation = Some((target, detail));
         }
+        CatalogRefreshScope::ResolutionPath => match provider.resolution_path(cancel).await {
+            Ok(namespaces) => patch.resolution_path = Some(namespaces),
+            // A source that cannot say publishes nothing: the cache keeps
+            // "unknown". Failing the pass, or publishing an empty path, would
+            // each tell the completion something the source never said.
+            Err(OxynError::NotSupported { .. }) => {}
+            Err(other) => return Err(other),
+        },
         _ => {
             return Err(OxynError::NotSupported {
                 capability: "catalog scope".to_owned(),

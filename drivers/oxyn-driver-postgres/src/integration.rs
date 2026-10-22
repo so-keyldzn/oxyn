@@ -1731,6 +1731,57 @@ async fn on_whole_pool(
 
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn the_resolution_path_is_the_servers_default_whatever_a_console_declared() {
+    // ADR-0057 reads the path on the connection the catalog uses. A console's
+    // schema is applied to its executions and reset before the connection goes
+    // back to the pool: were that reset missing, the catalog would answer with
+    // the schema of the last console, and the completion would suggest names
+    // that resolve nowhere for the next one.
+    let Some(session) = session().await else {
+        return;
+    };
+    prepare_twins(&*session).await;
+    let token = CancelToken::new();
+    let before = session
+        .catalog()
+        .resolution_path(&token)
+        .await
+        .expect("the effective search_path");
+    assert!(!before.is_empty(), "the default path resolves somewhere");
+    // The server looks in `pg_catalog` before the path unless the path names it:
+    // an unqualified name that `public` shares with it is the system one's.
+    assert_eq!(
+        before.first().map(String::as_str),
+        Some("pg_catalog"),
+        "{before:?}"
+    );
+    assert!(
+        !before.iter().any(|schema| schema.starts_with("pg_temp_")),
+        "the session's temporary schema is not part of the path: {before:?}"
+    );
+
+    session
+        .set_context(&context(SCHEMA_A), &token)
+        .await
+        .expect("the context must be accepted");
+    // Every connection of the pool carries the declared schema through an
+    // execution, then goes back reset.
+    on_whole_pool(&*session, MARKER_QUERY).await;
+
+    let after = session
+        .catalog()
+        .resolution_path(&token)
+        .await
+        .expect("the effective search_path");
+    assert_eq!(before, after, "a console's context leaked into the catalog");
+    assert!(!after.iter().any(|schema| schema == SCHEMA_A), "{after:?}");
+
+    drop_twins(&*session).await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn the_context_applies_to_every_connection_of_the_pool() {
     // The test that decides the design (ADR-0019). An Oxyn PostgreSQL session
     // is a pool of four connections and `search_path` is a **per-connection**

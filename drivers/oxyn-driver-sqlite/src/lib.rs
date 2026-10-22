@@ -886,6 +886,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_resolution_path_is_searched_temp_then_main_then_attached_in_order() {
+        let session = workshop().await;
+        // A temporary table brings `temp` into existence for sure.
+        run_to_end(session.as_ref(), "CREATE TEMP TABLE scratch(x)").await;
+        run_to_end(session.as_ref(), "ATTACH ':memory:' AS archive").await;
+        // Legal, and data once it comes back: the name is never SQL.
+        run_to_end(session.as_ref(), r#"ATTACH ':memory:' AS "odd""; schema""#).await;
+
+        let path = session
+            .catalog()
+            .resolution_path(&CancelToken::new())
+            .await
+            .expect("the databases of the connection");
+
+        // The engine looks in `temp` first, then in `main`, then in the
+        // attached databases in the order they were attached
+        // (`sqlite3FindTable`, SQLite 3.50.2).
+        let expected = ["temp", "main", "archive", r#"odd"; schema"#];
+        assert_eq!(path, expected, "{path:?}");
+    }
+
+    #[tokio::test]
     async fn introspection_describes_what_the_database_contains() {
         let session = workshop().await;
         run_to_end(
