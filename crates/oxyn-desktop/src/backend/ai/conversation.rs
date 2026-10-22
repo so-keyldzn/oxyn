@@ -2522,10 +2522,8 @@ impl Run<'_> {
             }
         };
 
-        if opening {
-            if let (Some(context), Some(service)) = (prompt.context(), service.as_ref()) {
-                service.bind_opening_context(context);
-            }
+        if opening && let (Some(context), Some(service)) = (prompt.context(), service.as_ref()) {
+            service.bind_opening_context(context);
         }
         let Some(ready) = self.start(agent, &session).await? else {
             return Ok(());

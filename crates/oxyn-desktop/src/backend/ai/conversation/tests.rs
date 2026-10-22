@@ -1673,6 +1673,56 @@ mod approved_samples {
             .join("\n")
     }
 
+    /// Replaces fresh fence nonces after proving that every fence is complete.
+    /// Separate contexts, and separate prompt builds, must not share a nonce.
+    pub(super) fn normalize_fence_nonce(prompt: &str) -> String {
+        const OPEN_PREFIX: &str = "<untrusted-database-content-";
+        const CLOSE_PREFIX: &str = "</untrusted-database-content-";
+        let mut remaining = prompt;
+        let mut normalized = String::with_capacity(prompt.len());
+        let mut fences = std::collections::BTreeMap::<&str, (usize, usize)>::new();
+
+        while let Some((start, prefix, opening)) =
+            match (remaining.find(OPEN_PREFIX), remaining.find(CLOSE_PREFIX)) {
+                (Some(open), Some(close)) if open < close => Some((open, OPEN_PREFIX, true)),
+                (Some(_), Some(close)) => Some((close, CLOSE_PREFIX, false)),
+                (Some(open), None) => Some((open, OPEN_PREFIX, true)),
+                (None, Some(close)) => Some((close, CLOSE_PREFIX, false)),
+                (None, None) => None,
+            }
+        {
+            normalized.push_str(remaining.get(..start).expect("text before a fence"));
+            let after_prefix = remaining
+                .get(start + prefix.len()..)
+                .expect("text after a fence prefix");
+            let nonce_end = after_prefix.find('>').expect("a fence terminator");
+            let nonce = after_prefix.get(..nonce_end).expect("a fence nonce");
+            assert!(!nonce.is_empty(), "a fence nonce is present");
+
+            let counts = fences.entry(nonce).or_default();
+            if opening {
+                counts.0 += 1;
+            } else {
+                counts.1 += 1;
+            }
+            normalized.push_str(prefix);
+            normalized.push_str("<nonce>>");
+            remaining = after_prefix
+                .get(nonce_end + 1..)
+                .expect("text after a complete fence");
+        }
+        normalized.push_str(remaining);
+
+        assert!(!fences.is_empty(), "a prompt contains a fence: {prompt}");
+        for (nonce, (opens, closes)) in fences {
+            assert_eq!(
+                opens, closes,
+                "every opening fence for {nonce:?} has the matching closing fence: {prompt}"
+            );
+        }
+        normalized
+    }
+
     #[test]
     fn an_offer_names_columns_and_a_bound_never_a_value() {
         let fixture = fixture();
@@ -2955,7 +3005,11 @@ mod approved_samples {
             .expect("a text block")
             .to_owned();
 
-        assert_eq!(internal, external, "one path, one rendering");
+        assert_eq!(
+            normalize_fence_nonce(&internal),
+            normalize_fence_nonce(&external),
+            "one path, one rendering"
+        );
         for expected in [
             "status: completed",
             "query language: sql (dialect: sqlite)",

@@ -271,7 +271,11 @@ fn an_external_agent_without_scores_is_told_what_it_was_told_before() {
     let root = tempfile::tempdir().expect("an empty models directory");
     let on_without_model = external_opening(Some(root.path()));
     assert!(off.contains("Describing 2 of 2 known relations"), "{off}");
-    assert_eq!(on_without_model, off);
+    assert_eq!(
+        normalize_fence_nonce(&on_without_model),
+        normalize_fence_nonce(&off),
+        "semantic ranking does not change the fenced prompt without scores"
+    );
 }
 
 #[test]
