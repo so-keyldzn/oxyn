@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="19029ee96491" -->
+<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="0617c0d82704" -->
 
 > Traduction française de [docs/adr/0057-editor-completion-reads-the-catalog-cache.md](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md). **La version anglaise fait foi.**
 
@@ -145,10 +145,12 @@ cache, dans des bornes, jamais au rythme des frappes.**
    précédente travaille pour une instruction que l'utilisateur a déjà changée. Un
    niveau `Fetched` n'est pas relu, un niveau `Invalidated` l'est, et une lecture
    en échec n'est pas retentée dans la passe. Le front envoie une fois les noms
-   d'une instruction ; il les renvoie après un DDL (`catalogInvalidated`) et quand
+   d'une instruction ; il les renvoie après un DDL (`catalogInvalidated`), quand
    une passe s'est terminée avant d'avoir fini — faute de temps, ou remplacée par
-   celle d'une autre console de la connexion. Rien ne tourne sur le fil de
-   l'interface ([I-05](../../CLAUDE.md#i-05)). **Aucune nouvelle variante de
+   celle d'une autre console de la connexion —, et dix secondes après l'échec
+   d'une lecture (pas plus tôt : une table que le rôle ne peut pas décrire serait
+   demandée à chaque pause). Seule la console à l'écran envoie. Rien ne tourne sur
+   le fil de l'interface ([I-05](../../CLAUDE.md#i-05)). **Aucune nouvelle variante de
    `Command` n'est nécessaire pour cette partie** ; la commande IPC qui reçoit les
    noms est une enveloppe sur les commandes existantes, et répond par des
    décomptes (`attempted`, `failed`, `stopped`) — ce qu'une passe a lu parvient à
@@ -191,7 +193,19 @@ cache, dans des bornes, jamais au rythme des frappes.**
    connexion retourne au pool. Chaque driver répond dans ses propres termes, aucun
    n'étant supposé :
 
-   * **PostgreSQL** lit le chemin effectif du serveur avec `current_schemas` ;
+   * **PostgreSQL** lit le chemin effectif du serveur avec
+     `current_schemas(true)`, qui conserve `pg_catalog`, parcouru implicitement :
+     le serveur y cherche d'abord, sauf si le chemin le nomme, et une relation de
+     `public` portant le nom d'une des siennes n'est pas celle qu'atteint un nom
+     non qualifié (une relecture de la première version l'a trouvé avec `false`).
+     Le schéma temporaire de la session est laissé de côté. Quand le chemin nomme
+     un espace de noms système, la passe le liste quand même — l'arbre le replie,
+     et l'ombrage ne se lit que dans ses relations. Un nom écrit sans guillemets
+     est replié **par le dialecte** : PostgreSQL et Redshift le ramènent en
+     minuscules, lettres ASCII seulement, et comparent exactement, si bien que
+     `users` n'est jamais `"Users"` ; les autres comparent sans la casse, le nom
+     tel que saisi d'abord. L'instantané porte la règle (`folding`), parce que
+     c'est l'hôte qui connaît le dialecte ;
      **Amazon Redshift refuse**, la requête s'appuyant sur `unnest … WITH
      ORDINALITY`, que Redshift (qui s'annonce PostgreSQL 8.0.2) n'est pas connu pour
      accepter ;
@@ -269,9 +283,11 @@ cache, dans des bornes, jamais au rythme des frappes.**
    deuxième pull request. **Une réponse partielle n'est jamais présentée comme complète.**
 7. **Ce qu'elle ne promet pas.** Les colonnes sont proposées pour les relations que
    l'instruction nomme selon la règle lexicale ci-dessus, avec leurs alias ; les
-   expressions de table communes, les sous-requêtes, `RETURNING`, les fonctions de
-   table et le SQL dynamique ne sont pas inférés, et ce que la règle ne sait pas
-   résoudre reçoit des relations et des mots-clés, jamais une colonne devinée.
+   noms qu'un `WITH` en tête déclare sont distingués des relations du catalogue
+   qu'ils peuvent masquer, et leurs corps ne sont pas lus ; les sous-requêtes,
+   `RETURNING`, les fonctions de table et le SQL dynamique ne sont pas inférés, et
+   ce que la règle ne sait pas résoudre reçoit des relations et des mots-clés,
+   jamais une colonne devinée.
    L'instantané va à la webview et nulle part ailleurs — pas à `oxyn-ai`, qui garde
    sa passerelle unique ([I-04](../../CLAUDE.md#i-04)) —, contient des noms et des
    natures, aucune ligne, et n'est pas persisté ([I-11](../../CLAUDE.md#i-11)).

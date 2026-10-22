@@ -12,7 +12,12 @@ import type { CompletionCatalog } from "@/lib/ipc/completion"
 function snapshot(
   truncated: CompletionCatalog["truncated"]
 ): CompletionCatalog {
-  return { namespaces: [], resolution: { state: "unknown" }, truncated }
+  return {
+    namespaces: [],
+    resolution: { state: "unknown" },
+    folding: "insensitive",
+    truncated,
+  }
 }
 
 describe("the note of a partial snapshot", () => {

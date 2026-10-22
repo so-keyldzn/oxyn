@@ -22,8 +22,28 @@ pub struct CompletionCatalog {
     pub namespaces: Vec<CompletionNamespace>,
     /// Where an unqualified name resolves.
     pub resolution: CompletionResolution,
+    /// How a name typed without quotes is compared with the names above.
+    pub folding: CompletionFolding,
     /// Present when a bound cut the answer: a partial answer says so.
     pub truncated: Option<CompletionTruncation>,
+}
+
+/// How a name typed without quotes is compared with the names of the cache.
+///
+/// A quoted name is always compared exactly. The rule of the others is the
+/// server's, so it is the host that says it, from the dialect: a second rule in
+/// the webview would diverge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompletionFolding {
+    /// Folded to lowercase, then compared exactly — PostgreSQL and Redshift:
+    /// `users` is `users`, never `"Users"`, which only a quoted name reaches.
+    Lower,
+    /// Compared without regard to case — the others. MySQL's rule for table
+    /// names depends on a server setting and a file system the cache does not
+    /// hold, and SQLite ignores case; a name written exactly as typed wins when
+    /// two differ by case alone.
+    Insensitive,
 }
 
 /// One level of qualification — a PostgreSQL schema, a MySQL or SQLite

@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useCompletionLoad } from "./use-completion-load"
+import { RETRY_AFTER_MS, useCompletionLoad } from "./use-completion-load"
 import type { RefreshSignal } from "@/lib/ipc/metadata"
 
 const channel = vi.hoisted(() => ({
@@ -128,13 +128,61 @@ describe("the editor's request for what the catalog cache lacks", () => {
     expect(loads.calls.map((call) => call.names)).toEqual([users, orders])
   })
 
-  it("tries again when the host could not be asked", async () => {
-    loads.answer = () => Promise.reject(new Error("not connected"))
-    const hook = renderHook(() => useCompletionLoad("c1", true))
-    hook.result.current(users)
-    await waitFor(() => {
+  describe("when a read fails", () => {
+    const now = vi.spyOn(Date, "now")
+    let clock = 1_000_000
+
+    beforeEach(() => {
+      clock = 1_000_000
+      now.mockImplementation(() => clock)
+    })
+    afterEach(() => now.mockReset())
+
+    it("tries again once the delay went by, not at every pause", async () => {
+      loads.answer = () =>
+        Promise.resolve({ attempted: 3, failed: 1, stopped: null })
+      const hook = renderHook(() => useCompletionLoad("c1", true))
       hook.result.current(users)
-      expect(loads.calls.length).toBeGreaterThan(1)
+      await act(() => Promise.resolve())
+
+      // The editor speaks again with the same names, a moment later.
+      clock += RETRY_AFTER_MS - 1
+      hook.result.current(users)
+      expect(loads.calls).toHaveLength(1)
+
+      clock += 1
+      hook.result.current(users)
+      expect(loads.calls).toHaveLength(2)
+    })
+
+    it("does the same when the host could not be asked", async () => {
+      loads.answer = () => Promise.reject(new Error("not connected"))
+      const hook = renderHook(() => useCompletionLoad("c1", true))
+      hook.result.current(users)
+      await act(() => Promise.resolve())
+      hook.result.current(users)
+      expect(loads.calls).toHaveLength(1)
+
+      clock += RETRY_AFTER_MS
+      hook.result.current(users)
+      expect(loads.calls).toHaveLength(2)
+    })
+
+    it("sends other names at once, and the same ones after a DDL", async () => {
+      loads.answer = () =>
+        Promise.resolve({ attempted: 3, failed: 1, stopped: null })
+      const hook = renderHook(() => useCompletionLoad("c1", true))
+      hook.result.current(users)
+      await act(() => Promise.resolve())
+
+      hook.result.current(orders)
+      expect(loads.calls.map((call) => call.names)).toEqual([users, orders])
+
+      hook.result.current(users)
+      // The pass of `orders` is not settled yet: `users` is its own failure's.
+      await act(() => Promise.resolve())
+      send({ type: "catalogInvalidated", connection: "c1" })
+      expect(loads.calls.at(-1)?.names).toEqual(users)
     })
   })
 

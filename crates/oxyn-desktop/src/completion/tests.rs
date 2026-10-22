@@ -852,6 +852,20 @@ fn the_heaviest_snapshot_the_cache_can_hold_builds_and_serializes_fast_enough() 
 }
 
 #[test]
+fn the_dialect_says_how_a_bare_name_is_folded() {
+    for lowercase in [SqlDialect::Postgres, SqlDialect::Redshift] {
+        assert_eq!(folding_of(lowercase), CompletionFolding::Lower);
+    }
+    for other in [SqlDialect::MySql, SqlDialect::Sqlite, SqlDialect::Ansi] {
+        assert_eq!(folding_of(other), CompletionFolding::Insensitive);
+    }
+    let cache = CatalogCache::new();
+    let of = |dialect| snapshot(&cache, dialect, UNBOUNDED).folding;
+    assert_eq!(of(SqlDialect::Redshift), CompletionFolding::Lower);
+    assert_eq!(of(SqlDialect::MySql), CompletionFolding::Insensitive);
+}
+
+#[test]
 fn the_snapshot_crosses_in_camel_case_with_tagged_states() {
     let mut cache = postgres(false);
     list(&mut cache, &app("public"), &["users"]);
@@ -865,6 +879,7 @@ fn the_snapshot_crosses_in_camel_case_with_tagged_states() {
         serde_json::json!({ "state": "known", "namespaces": ["public"], "stale": false })
     );
     assert_eq!(json["truncated"], serde_json::Value::Null);
+    assert_eq!(json["folding"], "lower");
     let users = &json["namespaces"][0]["relations"][0];
     assert_eq!(users["virtualTable"], false);
     assert_eq!(

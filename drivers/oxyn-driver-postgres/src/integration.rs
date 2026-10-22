@@ -1748,6 +1748,17 @@ async fn the_resolution_path_is_the_servers_default_whatever_a_console_declared(
         .await
         .expect("the effective search_path");
     assert!(!before.is_empty(), "the default path resolves somewhere");
+    // The server looks in `pg_catalog` before the path unless the path names it:
+    // an unqualified name that `public` shares with it is the system one's.
+    assert_eq!(
+        before.first().map(String::as_str),
+        Some("pg_catalog"),
+        "{before:?}"
+    );
+    assert!(
+        !before.iter().any(|schema| schema.starts_with("pg_temp_")),
+        "the session's temporary schema is not part of the path: {before:?}"
+    );
 
     session
         .set_context(&context(SCHEMA_A), &token)

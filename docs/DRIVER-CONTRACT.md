@@ -164,8 +164,12 @@ the session reserved for the catalog, in its default state, never on a console's
 session, whose context a user may have changed:
 
 * PostgreSQL answers with the server's effective `search_path`
-  (`current_schemas(false)`: the entries that do not exist or cannot be searched
-  are omitted, and the implicitly searched `pg_catalog` is left out). Amazon
+  (`current_schemas(true)`: the entries that do not exist or cannot be searched
+  are omitted, and the implicitly searched `pg_catalog` is **kept** — the server
+  looks in it before the path unless the path names it, so a relation of
+  `public` called like one of its own is not what an unqualified name reaches).
+  The session's own temporary schema is left out: the catalog's reserved session
+  holds no temporary object, and a console's lives on its own session. Amazon
   Redshift refuses with `NotSupported`: the query leans on `unnest … WITH
   ORDINALITY`, and a query the server rejects would fail the same read at every
   pass;

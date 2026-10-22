@@ -51,6 +51,7 @@ const crossing = {
     },
   ],
   resolution: { state: "known", namespaces: ["public"], stale: false },
+  folding: "lower",
   truncated: { namespacesLeftOut: 1, relationsLeftOut: 2, fieldsLeftOut: 3 },
 }
 
@@ -81,6 +82,7 @@ describe("CompletionCatalog", () => {
         },
       ],
       resolution: { state: "unknown" },
+      folding: "insensitive",
       truncated: null,
     })
     expect(parsed.namespaces[0]?.name).toBeNull()
@@ -91,6 +93,7 @@ describe("CompletionCatalog", () => {
     const parsed = CompletionCatalog.parse({
       namespaces: [],
       resolution: { state: "known", namespaces: [], stale: false },
+      folding: "lower",
       truncated: null,
     })
     expect(parsed.resolution).toEqual({
@@ -98,6 +101,15 @@ describe("CompletionCatalog", () => {
       namespaces: [],
       stale: false,
     })
+  })
+
+  it("refuses a folding rule it does not know rather than guess one", () => {
+    expect(
+      CompletionCatalog.safeParse({ ...crossing, folding: "upper" }).success
+    ).toBe(false)
+    expect(
+      CompletionCatalog.safeParse({ ...crossing, folding: undefined }).success
+    ).toBe(false)
   })
 
   it("refuses a column state it does not know rather than guess one", () => {

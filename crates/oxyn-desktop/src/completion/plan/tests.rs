@@ -37,8 +37,29 @@ fn read_server(path: &[&str]) -> CatalogCache {
     cache
 }
 
+/// The plan under the rule most dialects share. The tests of PostgreSQL's own
+/// call [`super::next_read`] with `Lower`.
+fn next_read(
+    cache: &CatalogCache,
+    names: &[Vec<CompletionNamePart>],
+    tried: &HashSet<Read>,
+    spent: Spent,
+) -> Option<Read> {
+    super::next_read(cache, CompletionFolding::Insensitive, names, tried, spent)
+}
+
 fn next(cache: &CatalogCache, names: &[Vec<CompletionNamePart>]) -> Option<Read> {
     next_read(cache, names, &HashSet::new(), Spent::default())
+}
+
+fn next_in_postgres(cache: &CatalogCache, names: &[Vec<CompletionNamePart>]) -> Option<Read> {
+    super::next_read(
+        cache,
+        CompletionFolding::Lower,
+        names,
+        &HashSet::new(),
+        Spent::default(),
+    )
 }
 
 fn namespace(name: &str) -> Read {
@@ -388,5 +409,76 @@ fn a_namespace_path_is_built_from_the_cache_not_from_the_name() {
                 .with_relation("users")
                 .expect("legal name")
         )))
+    );
+}
+
+#[test]
+fn postgres_folds_a_bare_name_to_lowercase_and_reaches_only_that_one() {
+    let mut cache = read_server(&["public"]);
+    list(&mut cache, &app("public"), &["Users", "users"]);
+
+    // Both spellings fold to `users`; `"Users"` is reached by quoting only.
+    for typed in [bare("users"), bare("USERS"), bare("Users")] {
+        assert_eq!(
+            next_in_postgres(&cache, &[vec![typed.clone()]]),
+            Some(relation("public", "users")),
+            "{typed:?}"
+        );
+    }
+    assert_eq!(
+        next_in_postgres(&cache, &[vec![quoted("Users")]]),
+        Some(relation("public", "Users"))
+    );
+
+    // With only `"Users"`, a bare `users` names nothing the server would find.
+    let mut only = read_server(&["public"]);
+    list(&mut only, &app("public"), &["Users"]);
+    assert_eq!(next_in_postgres(&only, &[vec![bare("users")]]), None);
+}
+
+#[test]
+fn a_dialect_that_ignores_case_prefers_the_name_as_typed() {
+    let mut cache = read_server(&["public"]);
+    list(&mut cache, &app("public"), &["users", "Users"]);
+
+    assert_eq!(
+        next(&cache, &[vec![bare("Users")]]),
+        Some(relation("public", "Users")),
+        "written as typed"
+    );
+    assert_eq!(
+        next(&cache, &[vec![bare("users")]]),
+        Some(relation("public", "users"))
+    );
+    // Neither is exact: the first of the cache.
+    assert_eq!(
+        next(&cache, &[vec![bare("USERS")]]),
+        Some(relation("public", "users"))
+    );
+}
+
+#[test]
+fn the_system_namespace_the_server_searches_first_is_listed_before_a_name_is_resolved() {
+    // PostgreSQL looks in `pg_catalog` before `public`: a `pg_class` of `public`
+    // is not what an unqualified `pg_class` reaches.
+    let mut cache = read_server(&["pg_catalog", "public"]);
+    list(&mut cache, &app("public"), &["pg_class", "users"]);
+    let names = [vec![bare("pg_class")]];
+
+    assert_eq!(
+        next_in_postgres(&cache, &names),
+        Some(namespace("pg_catalog")),
+        "a system namespace on the path is listed all the same"
+    );
+    list(&mut cache, &app("pg_catalog"), &["pg_class", "pg_type"]);
+    assert_eq!(
+        next_in_postgres(&cache, &names),
+        Some(relation("pg_catalog", "pg_class")),
+        "the system one shadows the user's"
+    );
+    assert_eq!(
+        next_in_postgres(&cache, &[vec![bare("users")]]),
+        Some(relation("public", "users")),
+        "a name `pg_catalog` does not hold resolves in the next"
     );
 }

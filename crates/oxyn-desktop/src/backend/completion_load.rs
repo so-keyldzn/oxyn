@@ -25,7 +25,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use oxyn_catalog::CatalogScope;
-use oxyn_core::{Actor, CancelToken, Capabilities, CatalogRefreshScope, Command, ConnectionId};
+use oxyn_core::{
+    Actor, CancelToken, Capabilities, CatalogRefreshScope, Command, ConnectionId, SqlDialect,
+};
 use oxyn_exec::ExecutorSink;
 use parking_lot::Mutex;
 use tokio::time::Instant;
@@ -33,8 +35,8 @@ use tokio::time::Instant;
 use super::Backend;
 use super::ai::catalog_fill::{CatalogFill, Step, Stop};
 use crate::catalog;
-use crate::completion::PRODUCT_BOUNDS;
 use crate::completion::plan::{self, DEADLINE, Read, Spent};
+use crate::completion::{self, PRODUCT_BOUNDS};
 use crate::ipc::IpcError;
 use crate::ipc::completion::{CompletionLoad, CompletionNamePart};
 
@@ -117,6 +119,7 @@ impl Backend {
             .executor
             .catalog(connection)
             .ok_or_else(|| IpcError::invalid("This connection has no catalog cache"))?;
+        let driver = self.dialect_of(connection)?;
         let names = bounded(names);
         let sink = ExecutorSink::new(std::sync::Arc::clone(&self.inner.executor));
         let fill = CatalogFill {
@@ -127,7 +130,7 @@ impl Backend {
         };
         let passes = &self.inner.completion_passes;
         let (generation, cancel) = passes.begin(connection);
-        let load = pass(&fill, &names, &cancel, Instant::now() + DEADLINE).await;
+        let load = pass(&fill, driver, &names, &cancel, Instant::now() + DEADLINE).await;
         passes.end(connection, generation);
         Ok(load)
     }
@@ -136,6 +139,7 @@ impl Backend {
 /// The loop: ask the plan, read, ask again.
 async fn pass(
     fill: &CatalogFill<'_>,
+    driver: SqlDialect,
     names: &[Vec<CompletionNamePart>],
     cancel: &CancelToken,
     deadline: Instant,
@@ -159,7 +163,12 @@ async fn pass(
         // The read lock is released before anything awaits.
         let next = {
             let cache = fill.catalog.read();
-            plan::next_read(&cache, names, &tried, spent).map(|read| {
+            // Read each time: the server's own name for itself, which tells
+            // Redshift from PostgreSQL, is in the cache only after the first
+            // read.
+            let dialect = completion::dialect_of_server(driver, cache.server_info());
+            let folding = completion::folding_of(dialect);
+            plan::next_read(&cache, folding, names, &tried, spent).map(|read| {
                 let capabilities = cache
                     .server_info()
                     .map_or(Capabilities::empty(), |server| server.capabilities);

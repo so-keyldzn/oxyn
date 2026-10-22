@@ -27,7 +27,7 @@ import type {
   CompletionRelation,
 } from "@/lib/ipc/completion"
 import { sameName } from "@/lib/sql-identifiers"
-import type { NamePart } from "@/lib/sql-identifiers"
+import type { Folding, NamePart } from "@/lib/sql-identifiers"
 
 type Tree = ReturnType<typeof syntaxTree>
 type Node = ReturnType<Tree["resolveInner"]>
@@ -50,6 +50,11 @@ interface Where {
 interface Named {
   path: Array<NamePart>
   alias: NamePart | null
+  /**
+   * Declared by the statement's own `WITH`, not a relation of the catalog: it
+   * shadows one of the same name, and its columns are not inferred.
+   */
+  cte: boolean
 }
 
 /** Where a name was found in the snapshot. */
@@ -156,9 +161,11 @@ export function wantedNames(
   ensureSyntaxTree(state, state.doc.length, 25)
   const where = whereAt(state, pos)
   if (where === null || where.statement === null) return []
-  const chains = namedRelations(state.doc, where.statement).map(
-    (named) => named.path
-  )
+  // A common table expression is not a relation of the catalog: asking for the
+  // one it shadows would describe a table the statement never reads.
+  const chains = namedRelations(state.doc, where.statement)
+    .filter((named) => !named.cte)
+    .map((named) => named.path)
   if (where.parents.length > 0) {
     const typed = state.sliceDoc(where.from, pos)
     chains.push([
@@ -320,13 +327,59 @@ function pathOf(doc: Text, node: Node): Array<NamePart> {
 // --- The statement ------------------------------------------------------------
 
 /**
+ * The names a leading `WITH` declares — `a` and `b` in
+ * `WITH a AS (…), b (x) AS MATERIALIZED (…) SELECT …` — lowercased. What the
+ * bodies hold is not read: a name declared here is only known not to be a
+ * relation of the catalog.
+ */
+function commonTableNames(doc: Text, statement: Node): Array<string> {
+  const names: Array<string> = []
+  let state: "start" | "name" | "as" | "body" | "comma" = "start"
+  for (let scan = statement.firstChild; scan; scan = scan.nextSibling) {
+    if (/Comment/.test(scan.name)) continue
+    const word =
+      scan.name === "Keyword"
+        ? doc.sliceString(scan.from, scan.to).toLowerCase()
+        : null
+    if (state === "start") {
+      if (word !== "with") return names
+      state = "name"
+    } else if (state === "name") {
+      if (word === "recursive") continue
+      if (!isIdentifier(scan)) return names
+      names.push(partOf(doc, scan).text.toLowerCase())
+      state = "as"
+    } else if (state === "as") {
+      // The optional column list, then `AS`.
+      if (scan.name === "Parens") continue
+      if (word !== "as") return names
+      state = "body"
+    } else if (state === "body") {
+      if (word === "not" || word === "materialized") continue
+      if (scan.name !== "Parens") return names
+      state = "comma"
+    } else {
+      if (
+        scan.name !== "Punctuation" ||
+        doc.sliceString(scan.from, scan.to) !== ","
+      )
+        return names
+      state = "name"
+    }
+  }
+  return names
+}
+
+/**
  * The relations the statement names after `FROM`, `JOIN`, `UPDATE`, `INTO` and
- * `TABLE`, with their aliases — and nothing more. A subquery, a common table
- * expression or a function is not followed: what this cannot read yields no
- * column, never a guessed one.
+ * `TABLE`, with their aliases — and nothing more. A subquery or a function is
+ * not followed, and a common table expression is told apart (`cte`) so that
+ * the catalog relation it shadows is not taken for it: what this cannot read
+ * yields no column, never a guessed one.
  */
 function namedRelations(doc: Text, statement: Node): Array<Named> {
   const named: Array<Named> = []
+  const declared = commonTableNames(doc, statement)
   let mode: "none" | "relation" | "alias" | "subquery" = "none"
   let list = false
   for (let scan = statement.firstChild; scan; scan = scan.nextSibling) {
@@ -361,7 +414,18 @@ function namedRelations(doc: Text, statement: Node): Array<Named> {
       mode === "relation" &&
       (identifier || scan.name === "CompositeIdentifier")
     ) {
-      named.push({ path: pathOf(doc, scan), alias: null })
+      const path = pathOf(doc, scan)
+      const [only] = path
+      named.push({
+        path,
+        alias: null,
+        // Case aside whatever the dialect: a doubtful match withholds columns,
+        // which is the safe side of it.
+        cte:
+          path.length === 1 &&
+          only !== undefined &&
+          declared.includes(only.text.toLowerCase()),
+      })
       mode = "alias"
     } else if (mode === "relation" && scan.name === "Parens") {
       mode = "subquery"
@@ -483,33 +547,44 @@ function bareNames(
   return bare
 }
 
+/**
+ * The relation `part` names among `relations`, by the dialect's rule. When two
+ * differ by case alone and the rule ignores it (MySQL on a case-sensitive file
+ * system), the one written as typed is the one meant.
+ */
+function relationNamed(
+  relations: Array<CompletionRelation>,
+  part: NamePart,
+  folding: Folding
+): CompletionRelation | undefined {
+  const matching = relations.filter((one) => sameName(part, one.name, folding))
+  return matching.find((one) => one.name === part.text) ?? matching[0]
+}
+
 /** The relation `path` names, or null when the snapshot cannot say which. */
 function resolve(index: Index, path: Array<NamePart>): Found | null {
   const { catalog } = index
+  const { folding } = catalog
   const [first, second] = path
   if (first === undefined || path.length > 2) return null
   if (path.length === 2 && second !== undefined) {
     for (const namespace of catalog.namespaces) {
-      if (!sameName(first, namespace.name)) continue
-      const relation = namespace.relations.find((one) =>
-        sameName(second, one.name)
-      )
+      if (!sameName(first, namespace.name, folding)) continue
+      const relation = relationNamed(namespace.relations, second, folding)
       if (relation) return { namespace, relation }
     }
     return null
   }
   // A source without namespaces: its relations are reached by their name.
   const rootless = catalog.namespaces.find((one) => one.name === null)
-  const direct = rootless?.relations.find((one) => sameName(first, one.name))
+  const direct = rootless && relationNamed(rootless.relations, first, folding)
   if (rootless && direct) return { namespace: rootless, relation: direct }
   if (catalog.resolution.state !== "known") return null
   let known = true
   for (const [position, entry] of catalog.resolution.namespaces.entries()) {
     const namespace = catalog.namespaces.find((one) => one.name === entry)
     if (namespace === undefined) return null
-    const relation = namespace.relations.find((one) =>
-      sameName(first, one.name)
-    )
+    const relation = relationNamed(namespace.relations, first, folding)
     if (relation)
       return known && (position === 0 || catalog.truncated === null)
         ? { namespace, relation }
@@ -535,6 +610,9 @@ function fieldOptions(fields: CompletionFields): Array<Completion> {
 function columnsOf(index: Index, named: Array<Named>): Array<Completion> {
   const columns = new Map<string, Completion>()
   for (const one of named) {
+    // Declared by the statement itself: its columns are the body's, which is
+    // not read.
+    if (one.cte) continue
     const found = resolve(index, one.path)
     if (found === null) continue
     for (const option of fieldOptions(found.relation.fields)) {
@@ -558,21 +636,34 @@ function afterQualifier(
   named: Array<Named>
 ): Array<Completion> {
   const [only] = parents
+  const { folding } = index.catalog
   if (only !== undefined && parents.length === 1) {
     // An alias of the statement stands for its relation, and shadows nothing
     // else: `o.` after `FROM orders o` is the columns of `orders`.
     const aliased = named.find(
-      (one) => one.alias && sameName(only, one.alias.text)
+      (one) => one.alias && sameName(only, one.alias.text, folding)
     )
     if (aliased) {
+      if (aliased.cte) return []
       const found = resolve(index, aliased.path)
       return found ? fieldOptions(found.relation.fields) : []
     }
+    // The name of a common table expression stands for it, not for the
+    // relation of the catalog it shadows.
+    if (
+      named.some(
+        (one) =>
+          one.cte &&
+          one.path.length === 1 &&
+          one.path[0]?.text.toLowerCase() === only.text.toLowerCase()
+      )
+    )
+      return []
   }
   const options: Array<Completion> = []
   if (only !== undefined && parents.length === 1) {
     for (const namespace of index.catalog.namespaces)
-      if (sameName(only, namespace.name))
+      if (sameName(only, namespace.name, folding))
         options.push(...(index.inside.get(namespace) ?? []))
   }
   const found = resolve(index, parents)

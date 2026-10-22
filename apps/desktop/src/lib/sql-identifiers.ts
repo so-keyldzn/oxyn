@@ -13,13 +13,30 @@ export interface NamePart {
 }
 
 /**
- * Whether `part`, as typed, names `name`: a quoted part exactly, an unquoted
- * one without case, as the servers Oxyn speaks to fold it.
+ * How a name typed without quotes is compared with a stored one. The rule is
+ * the dialect's, and the host says which (the snapshot's `folding`):
+ *
+ * - `lower`: PostgreSQL folds the ASCII letters to lowercase and compares
+ *   exactly, so `users` is never `"Users"`;
+ * - `insensitive`: the others, whose rule depends on a server setting or
+ *   ignores case.
  */
-export function sameName(part: NamePart, name: string | null) {
+export type Folding = "lower" | "insensitive"
+
+/**
+ * Whether `part`, as typed, names `name`: a quoted part exactly, an unquoted
+ * one by `folding`. Without it, case is ignored — the rule of a name matched
+ * against the tree, which knows no dialect.
+ */
+export function sameName(
+  part: NamePart,
+  name: string | null,
+  folding: Folding = "insensitive"
+) {
   if (name === null) return false
-  return part.quoted
-    ? part.text === name
+  if (part.quoted) return part.text === name
+  return folding === "lower"
+    ? part.text.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) === name
     : part.text.toLowerCase() === name.toLowerCase()
 }
 

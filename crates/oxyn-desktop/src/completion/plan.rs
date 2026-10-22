@@ -33,7 +33,7 @@ use std::time::Duration;
 use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope, Freshness};
 
 use super::{Space, spaces};
-use crate::ipc::completion::CompletionNamePart;
+use crate::ipc::completion::{CompletionFolding, CompletionNamePart};
 
 /// The most namespaces one pass lists the relations of.
 ///
@@ -80,13 +80,17 @@ const fn fetched(freshness: Freshness) -> bool {
 }
 
 /// Whether a name typed in the editor is `name`: a quoted part exactly, an
-/// unquoted one without case, as the servers Oxyn speaks to fold it — the rule
-/// of the editor's own matching (`sameName`).
-fn same(part: &CompletionNamePart, name: &str) -> bool {
+/// unquoted one by the dialect's rule — the rule of the editor's own matching
+/// (`sameName`), which the snapshot's `folding` tells it.
+///
+/// PostgreSQL folds ASCII letters only, whatever the encoding.
+fn same(part: &CompletionNamePart, name: &str, folding: CompletionFolding) -> bool {
     if part.quoted {
-        part.text == name
-    } else {
-        part.text.to_lowercase() == name.to_lowercase()
+        return part.text == name;
+    }
+    match folding {
+        CompletionFolding::Lower => part.text.to_ascii_lowercase() == name,
+        CompletionFolding::Insensitive => part.text.to_lowercase() == name.to_lowercase(),
     }
 }
 
@@ -98,6 +102,7 @@ fn same(part: &CompletionNamePart, name: &str) -> bool {
 #[must_use]
 pub fn next_read(
     cache: &CatalogCache,
+    folding: CompletionFolding,
     names: &[Vec<CompletionNamePart>],
     tried: &HashSet<Read>,
     spent: Spent,
@@ -118,12 +123,12 @@ pub fn next_read(
     }
     let spaces = spaces(cache);
     if spent.listings < MAX_LISTINGS
-        && let Some(scope) = next_listing(cache, &spaces, names, tried)
+        && let Some(scope) = next_listing(cache, &spaces, folding, names, tried)
     {
         return Some(Read::Scope(scope));
     }
     if spent.descriptions < MAX_DESCRIPTIONS
-        && let Some(scope) = next_description(cache, &spaces, names, tried)
+        && let Some(scope) = next_description(cache, &spaces, folding, names, tried)
     {
         return Some(Read::Scope(scope));
     }
@@ -136,9 +141,15 @@ fn unread(cache: &CatalogCache, scope: &CatalogScope, tried: &HashSet<Read>) -> 
 
 /// The next level to list: the schemas of the database, then the relations of
 /// the namespaces the path names, then those the statement qualifies with.
+///
+/// The path's namespaces are listed whatever they are, a system one included:
+/// PostgreSQL searches `pg_catalog` before `public`, so a relation of `public`
+/// that is called like one of its own is not what an unqualified name reaches,
+/// and that can only be told from its listing.
 fn next_listing(
     cache: &CatalogCache,
     spaces: &[Space],
+    folding: CompletionFolding,
     names: &[Vec<CompletionNamePart>],
     tried: &HashSet<Read>,
 ) -> Option<CatalogScope> {
@@ -152,11 +163,20 @@ fn next_listing(
         },
         _ => true,
     };
+    let path_namespaces = path
+        .iter()
+        .filter_map(|entry| {
+            spaces
+                .iter()
+                .find(|space| space.name.as_deref() == Some(entry))
+        })
+        .map(|space| CatalogScope::Namespace(space.path.clone()));
     cache
         .listing_scopes()
         .into_iter()
         .filter(on_path)
-        .chain(qualified_namespaces(spaces, names))
+        .chain(path_namespaces)
+        .chain(qualified_namespaces(spaces, folding, names))
         .find(|scope| unread(cache, scope, tried))
 }
 
@@ -167,6 +187,7 @@ fn next_listing(
 /// schema is called `orders` too.
 fn qualified_namespaces<'a>(
     spaces: &'a [Space],
+    folding: CompletionFolding,
     names: &'a [Vec<CompletionNamePart>],
 ) -> impl Iterator<Item = CatalogScope> + 'a {
     names
@@ -176,7 +197,12 @@ fn qualified_namespaces<'a>(
         .flat_map(move |first| {
             spaces
                 .iter()
-                .filter(move |space| space.name.as_deref().is_some_and(|name| same(first, name)))
+                .filter(move |space| {
+                    space
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| same(first, name, folding))
+                })
                 .map(|space| CatalogScope::Namespace(space.path.clone()))
         })
 }
@@ -185,11 +211,12 @@ fn qualified_namespaces<'a>(
 fn next_description(
     cache: &CatalogCache,
     spaces: &[Space],
+    folding: CompletionFolding,
     names: &[Vec<CompletionNamePart>],
     tried: &HashSet<Read>,
 ) -> Option<CatalogScope> {
     names.iter().find_map(|chain| {
-        let scope = CatalogScope::Relation(resolve(cache, spaces, chain)?);
+        let scope = CatalogScope::Relation(resolve(cache, spaces, folding, chain)?);
         unread(cache, &scope, tried).then_some(scope)
     })
 }
@@ -199,6 +226,7 @@ fn next_description(
 fn resolve(
     cache: &CatalogCache,
     spaces: &[Space],
+    folding: CompletionFolding,
     chain: &[CompletionNamePart],
 ) -> Option<CatalogPath> {
     match chain {
@@ -208,10 +236,10 @@ fn resolve(
                 space
                     .name
                     .as_deref()
-                    .is_some_and(|name| same(namespace, name))
+                    .is_some_and(|name| same(namespace, name, folding))
             })
-            .find_map(|space| relation_in(cache, space, relation)),
-        [relation] => resolve_bare(cache, spaces, relation),
+            .find_map(|space| relation_in(cache, space, folding, relation)),
+        [relation] => resolve_bare(cache, spaces, folding, relation),
         // `database.schema.table` is not resolved: one connection sees one
         // database, and the editor does not complete across them.
         _ => None,
@@ -221,12 +249,20 @@ fn resolve(
 fn relation_in(
     cache: &CatalogCache,
     space: &Space,
+    folding: CompletionFolding,
     relation: &CompletionNamePart,
 ) -> Option<CatalogPath> {
-    cache
+    let matching: Vec<_> = cache
         .relations(&space.path)
-        .find(|candidate| same(relation, candidate.name()))
-        .map(oxyn_catalog::RelationRef::path)
+        .filter(|candidate| same(relation, candidate.name(), folding))
+        .collect();
+    // Two names that differ by case alone (a case-sensitive file system under
+    // MySQL): the one written as typed is the one meant.
+    matching
+        .iter()
+        .find(|candidate| candidate.name() == relation.text)
+        .or(matching.first())
+        .map(|candidate| candidate.path())
 }
 
 /// An unqualified name: the first namespace of the resolution path that holds
@@ -234,17 +270,18 @@ fn relation_in(
 fn resolve_bare(
     cache: &CatalogCache,
     spaces: &[Space],
+    folding: CompletionFolding,
     relation: &CompletionNamePart,
 ) -> Option<CatalogPath> {
     if let Some(root) = spaces.iter().find(|space| space.name.is_none()) {
-        return relation_in(cache, root, relation);
+        return relation_in(cache, root, folding, relation);
     }
     let mut every_earlier_read = true;
     for entry in cache.resolution_path()? {
         let space = spaces
             .iter()
             .find(|space| space.name.as_deref() == Some(entry))?;
-        if let Some(found) = relation_in(cache, space, relation) {
+        if let Some(found) = relation_in(cache, space, folding, relation) {
             return every_earlier_read.then_some(found);
         }
         let listed = cache.freshness(&CatalogScope::Namespace(space.path.clone()));

@@ -28,8 +28,8 @@ use oxyn_catalog::{
 use oxyn_core::query::SqlDialect;
 
 use crate::ipc::completion::{
-    CompletionCatalog, CompletionField, CompletionFields, CompletionNamespace, CompletionRelation,
-    CompletionResolution, CompletionTruncation,
+    CompletionCatalog, CompletionField, CompletionFields, CompletionFolding, CompletionNamespace,
+    CompletionRelation, CompletionResolution, CompletionTruncation,
 };
 
 pub mod plan;
@@ -132,6 +132,20 @@ pub fn dialect_of_server(driver: SqlDialect, server: Option<&ServerInfo>) -> Sql
     }
 }
 
+/// How the dialect compares a name written without quotes with the stored one.
+///
+/// PostgreSQL folds it to lowercase and compares exactly, so a schema holding
+/// both `"Users"` and `users` has one of them for `users`. Redshift is
+/// PostgreSQL's in this. The others compare without regard to case, or depend
+/// on a server setting the cache does not hold.
+#[must_use]
+pub const fn folding_of(dialect: SqlDialect) -> CompletionFolding {
+    match dialect {
+        SqlDialect::Postgres | SqlDialect::Redshift => CompletionFolding::Lower,
+        _ => CompletionFolding::Insensitive,
+    }
+}
+
 /// The snapshot of a connection's cache.
 ///
 /// Namespaces that are not system come first in the budget's order, so a bound
@@ -192,6 +206,7 @@ pub fn snapshot(
     CompletionCatalog {
         namespaces: built.into_iter().flatten().collect(),
         resolution: resolution(cache, &budget),
+        folding: folding_of(dialect),
         truncated: cut.then_some(CompletionTruncation {
             namespaces_left_out: budget.namespaces_left_out,
             relations_left_out: budget.relations_left_out,

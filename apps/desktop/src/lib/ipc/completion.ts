@@ -86,6 +86,11 @@ export type CompletionTruncation = z.infer<typeof CompletionTruncation>
 export const CompletionCatalog = z.object({
   namespaces: z.array(CompletionNamespace),
   resolution: CompletionResolution,
+  /**
+   * How a name typed without quotes is compared with the names above — the
+   * dialect's rule, which the host knows and the webview does not.
+   */
+  folding: z.enum(["lower", "insensitive"]),
   /** Present when a bound cut the answer: a partial answer says so. */
   truncated: CompletionTruncation.nullable(),
 })

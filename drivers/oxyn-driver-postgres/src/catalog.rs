@@ -96,13 +96,18 @@ ORDER BY n.nspname";
 ///
 /// `current_schemas` returns the effective `search_path`: it leaves out the
 /// entries that do not exist or that the role cannot search (a `$user` with no
-/// schema of that name, a schema that was dropped), and `false` leaves out the
-/// implicitly searched `pg_catalog`, which the tree lists on its own. The
-/// ordinality keeps the priority order that `unnest` would otherwise only
-/// happen to preserve.
+/// schema of that name, a schema that was dropped). `true` keeps the implicitly
+/// searched `pg_catalog`, which the server looks in **before** the path when
+/// the path does not name it: a relation of `public` called like one of its own
+/// is not what an unqualified name reaches, and `false` would hide that. The
+/// session's own temporary schema, which comes first when it exists, is left
+/// out: the catalog's reserved session holds no temporary object, and a
+/// console's lives on its own session. The ordinality keeps the priority order
+/// that `unnest` would otherwise only happen to preserve.
 const SQL_RESOLUTION_PATH: &str = "\
 SELECT s.name::text \
-FROM pg_catalog.unnest(pg_catalog.current_schemas(false)) WITH ORDINALITY AS s(name, position) \
+FROM pg_catalog.unnest(pg_catalog.current_schemas(true)) WITH ORDINALITY AS s(name, position) \
+WHERE s.name::text NOT LIKE 'pg\\_temp\\_%' \
 ORDER BY s.position";
 
 /// The relations of a schema.

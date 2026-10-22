@@ -136,9 +136,11 @@ lacks, within bounds, never at the pace of the keystrokes.**
    the older one works for a statement the user has already changed. A
    `Fetched` level is not re-read, an `Invalidated` one is, and a read that
    failed is not retried within the pass. The front sends a statement's names
-   once; it sends them again after a DDL (`catalogInvalidated`) and when a pass
+   once; it sends them again after a DDL (`catalogInvalidated`), when a pass
    ended before it was done — out of time, or replaced by another console of the
-   connection. Nothing runs on the UI thread
+   connection —, and ten seconds after a read failed (not sooner: a table the
+   role cannot describe would be asked at every pause). Only the console on
+   screen sends. Nothing runs on the UI thread
    ([I-05](../../CLAUDE.md#i-05)). **No new `Command` variant is needed for
    this part**; the IPC command that takes the names is a wrapper over the
    existing commands, and answers with counts (`attempted`, `failed`, `stopped`)
@@ -179,7 +181,19 @@ lacks, within bounds, never at the pace of the keystrokes.**
    PostgreSQL resets `search_path` before the connection returns to the pool.
    Each driver answers in its own terms, none of them assumed:
 
-   * **PostgreSQL** reads the server's effective path with `current_schemas`;
+   * **PostgreSQL** reads the server's effective path with
+     `current_schemas(true)`, which keeps the implicitly searched `pg_catalog`:
+     the server looks in it first unless the path names it, and a relation of
+     `public` called like one of its own is not what an unqualified name
+     reaches (a review of the first version found it with `false`). The
+     session's own temporary schema is left out. Where the path names a system
+     namespace, the pass lists it all the same — the tree folds it, and the
+     shadowing can only be told from its relations. A name written without
+     quotes is folded **by the dialect**: PostgreSQL and Redshift fold it to
+     lowercase, ASCII letters only, and compare exactly, so `users` is never
+     `"Users"`; the others compare without case, the name as typed first. The
+     snapshot carries the rule (`folding`), because the host is the one that
+     knows the dialect;
      **Amazon Redshift refuses**, the query leaning on `unnest … WITH
      ORDINALITY`, which Redshift (announcing PostgreSQL 8.0.2) is not known to
      accept;
@@ -254,10 +268,11 @@ lacks, within bounds, never at the pace of the keystrokes.**
    the wording goes into UX-SPEC in the second pull request. **A partial answer
    is never presented as complete.**
 7. **What it does not promise.** Columns are proposed for relations the
-   statement names by the lexical rule above, with their aliases; common table
-   expressions, subqueries, `RETURNING`, table functions and dynamic SQL are not
-   inferred, and what the rule cannot resolve gets relations and keywords, never
-   a guessed column. The snapshot goes to the webview and nowhere else — not to
+   statement names by the lexical rule above, with their aliases; the names a
+   leading `WITH` declares are told apart from the relations of the catalog they
+   may shadow, and their bodies are not read; subqueries, `RETURNING`, table
+   functions and dynamic SQL are not inferred, and what the rule cannot resolve
+   gets relations and keywords, never a guessed column. The snapshot goes to the webview and nowhere else — not to
    `oxyn-ai`, which keeps its single gateway
    ([I-04](../../CLAUDE.md#i-04)) —, holds names and kinds, no row, and is not
    persisted ([I-11](../../CLAUDE.md#i-11)).

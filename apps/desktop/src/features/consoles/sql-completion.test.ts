@@ -72,7 +72,8 @@ function namespace(
 function snapshot(
   namespaces: Array<CompletionNamespace>,
   path: Array<string> | null = ["public"],
-  truncated: CompletionCatalog["truncated"] = null
+  truncated: CompletionCatalog["truncated"] = null,
+  folding: CompletionCatalog["folding"] = "insensitive"
 ): CompletionCatalog {
   return {
     namespaces,
@@ -80,6 +81,7 @@ function snapshot(
       path === null
         ? { state: "unknown" }
         : { state: "known", namespaces: path, stale: false },
+    folding,
     truncated,
   }
 }
@@ -242,6 +244,26 @@ describe("the resolution path", () => {
     expect(names).toContain("x")
     expect(names).toContain("b.y")
     expect(names).not.toContain("y")
+  })
+
+  it("qualifies a relation that a system namespace searched first also holds", () => {
+    // PostgreSQL looks in `pg_catalog` before `public`: an unqualified
+    // `pg_class` is the system one, whatever `public` holds.
+    const shadowed = snapshot(
+      [
+        namespace("pg_catalog", [relation("pg_class")], { system: true }),
+        namespace("public", [relation("pg_class"), relation("users")]),
+      ],
+      ["pg_catalog", "public"]
+    )
+    const labels = applied("SELECT * FROM pg_|", shadowed).map((o) => o.label)
+    expect(labels).toContain("public.pg_class")
+    expect(labels).not.toContain("pg_class")
+    // A name the system namespace does not hold is bare, and the system
+    // namespace's own relations still wait for their qualifier.
+    expect(
+      applied("SELECT * FROM us|", shadowed).map((o) => o.label)
+    ).toContain("users")
   })
 
   it("reaches a source with no namespaces by the bare name", () => {
@@ -524,5 +546,103 @@ describe("what the statement asks of the cache", () => {
 
   it("does not follow a subquery", () => {
     expect(wanted("SELECT | FROM (SELECT 1) t")).toEqual([])
+  })
+
+  it("leaves out the names its own WITH declares, and only those", () => {
+    expect(
+      wanted(
+        "WITH users AS (SELECT 1 AS n) SELECT | FROM users u JOIN orders o ON true"
+      )
+    ).toEqual([[bare("orders")]])
+    // Several, a column list, `MATERIALIZED`, `RECURSIVE`, and the case aside.
+    expect(
+      wanted(
+        "WITH RECURSIVE A AS (SELECT 1), b (x) AS MATERIALIZED (SELECT 2) SELECT | FROM a, B, orders"
+      )
+    ).toEqual([[bare("orders")]])
+    // Qualified, it is a relation of the catalog whatever the WITH declares.
+    expect(
+      wanted("WITH users AS (SELECT 1) SELECT | FROM public.users")
+    ).toEqual([[bare("public"), bare("users")]])
+  })
+})
+
+/** The columns offered, by name, at the `|` of `text`. */
+function columnsAt(text: string, catalog: CompletionCatalog) {
+  return (complete(text, catalog)?.options ?? [])
+    .filter((option) => option.type === "property")
+    .map((option) => option.label)
+}
+
+describe("the case of a name written without quotes", () => {
+  const twins = (folding: CompletionCatalog["folding"]) =>
+    snapshot(
+      [
+        namespace("public", [
+          relation("Users", loaded(["capital", "text"])),
+          relation("users", loaded(["lower", "text"])),
+        ]),
+      ],
+      ["public"],
+      null,
+      folding
+    )
+
+  it("is folded to lowercase where the dialect folds it, and reaches that one only", () => {
+    const folded = twins("lower")
+    expect(columnsAt("SELECT l| FROM users", folded)).toEqual(["lower"])
+    expect(columnsAt("SELECT l| FROM Users", folded)).toEqual(["lower"])
+    // Only a quoted name reaches the other.
+    expect(columnsAt('SELECT c| FROM "Users"', folded)).toEqual(["capital"])
+    const alone = snapshot(
+      [namespace("public", [relation("Users", loaded(["capital", "text"]))])],
+      ["public"],
+      null,
+      "lower"
+    )
+    expect(columnsAt("SELECT c| FROM users", alone)).toEqual([])
+  })
+
+  it("is compared without case elsewhere, the name as typed first", () => {
+    const loose = twins("insensitive")
+    expect(columnsAt("SELECT c| FROM Users", loose)).toEqual(["capital"])
+    expect(columnsAt("SELECT l| FROM users", loose)).toEqual(["lower"])
+    expect(
+      columnsAt("SELECT c| FROM USERS", snapshot(loose.namespaces.slice(0, 1)))
+    ).toEqual(["capital"])
+  })
+})
+
+describe("a common table expression", () => {
+  it("is not the relation of the catalog it shadows", () => {
+    // `users` is the WITH's, not the table: its columns are the body's.
+    expect(
+      complete("WITH users AS (SELECT 1 AS n) SELECT u.| FROM users u")
+    ).toBeNull()
+    expect(
+      columnsAt("WITH users AS (SELECT 1 AS n) SELECT na| FROM users", SHOP)
+    ).toEqual([])
+    expect(
+      complete("WITH users AS (SELECT 1 AS n) SELECT users.| FROM users")
+    ).toBeNull()
+  })
+
+  it("leaves the other relations of the statement their columns", () => {
+    const text =
+      "WITH recent AS (SELECT 1) SELECT o.| FROM recent r JOIN orders o ON true"
+    expect(columnsAt(text, SHOP)).toEqual(["id", "user_id"])
+    expect(
+      complete(
+        "WITH recent AS (SELECT 1) SELECT r.| FROM recent r JOIN orders o ON true"
+      )
+    ).toBeNull()
+  })
+
+  it("is told apart by its name even when a later WITH item follows", () => {
+    expect(
+      complete(
+        "WITH a AS (SELECT 1), users AS (SELECT 2) SELECT u.| FROM users u"
+      )
+    ).toBeNull()
   })
 })

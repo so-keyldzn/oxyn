@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="e409f5b56c76" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="c1e5904626ea" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -171,11 +171,15 @@ session réservée au catalogue, dans son état par défaut, jamais sur la sessi
 d'une console, dont l'utilisateur a pu changer le contexte :
 
 * PostgreSQL répond par le `search_path` effectif du serveur
-  (`current_schemas(false)` : les entrées qui n'existent pas ou qu'on ne peut pas
-  parcourir sont omises, et `pg_catalog`, parcouru implicitement, est laissé de
-  côté). Amazon Redshift refuse par `NotSupported` : la requête s'appuie sur
-  `unnest … WITH ORDINALITY`, et une requête que le serveur rejette ferait échouer
-  la même lecture à chaque passe ;
+  (`current_schemas(true)` : les entrées qui n'existent pas ou qu'on ne peut pas
+  parcourir sont omises, et `pg_catalog`, parcouru implicitement, est **conservé**
+  — le serveur y cherche avant le chemin, sauf si le chemin le nomme, si bien
+  qu'une relation de `public` portant le nom d'une des siennes n'est pas celle
+  qu'atteint un nom non qualifié). Le schéma temporaire de la session est laissé
+  de côté : la session réservée au catalogue ne tient aucun objet temporaire, et
+  celui d'une console vit sur sa propre session. Amazon Redshift refuse par
+  `NotSupported` : la requête s'appuie sur `unnest … WITH ORDINALITY`, et une
+  requête que le serveur rejette ferait échouer la même lecture à chaque passe ;
 * MySQL et MariaDB répondent par `DATABASE()`, la base que le serveur dit avoir
   sélectionnée pour la session — non celle que le formulaire de connexion nomme,
   que le serveur peut écrire autrement (`lower_case_table_names`) ou remplacer
