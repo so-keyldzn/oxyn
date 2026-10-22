@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b36cbc955264" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="480ed16cfab9" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1497,6 +1497,25 @@ Non vérifié :
 
 - MySQL, SQL Server, ClickHouse, DuckDB, Snowflake, BigQuery, Oracle ;
 - le traitement d'un NUL dans le message Parse de PostgreSQL.
+
+## Complétion de l'éditeur — vérification du 2026-10-21
+
+Relevé pour l'[ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md).
+Les pages PostgreSQL ont été récupérées le 2026-10-21 et sont celles de
+**PostgreSQL 18.6**, la version courante ce jour-là.
+
+| Fait | Source |
+|---|---|
+| `current_schemas(include_implicit boolean)` renvoie un `name[]` : « all schemas presently in the effective search path, in their priority order ». Les entrées du réglage `search_path` « that do not correspond to existing, searchable schemas are omitted ». Avec `true`, les schémas système implicitement parcourus, comme `pg_catalog`, sont inclus. | [PostgreSQL 18 : System Information Functions](https://www.postgresql.org/docs/18/functions-info.html) |
+| Le `search_path` par défaut s'affiche `"$user", public`. Une entrée `$user` sans schéma de ce nom « is ignored ». `pg_catalog` « is always effectively part of the search path ». « If there is no match in the search path, an error is reported, even if matching table names exist in other schemas in the database. » | [PostgreSQL 18 : Schemas, the schema search path](https://www.postgresql.org/docs/18/ddl-schemas.html#DDL-SCHEMAS-PATH) |
+| `ORDER` et `GROUP` sont « reserved, requires `AS` », `USER` et `TABLE` « reserved », dans la colonne PostgreSQL. « Labeled "reserved" are those tokens that are not allowed as column or table names. » | [PostgreSQL 18 : SQL Key Words](https://www.postgresql.org/docs/18/sql-keywords-appendix.html) |
+| `@codemirror/lang-sql` `6.10.0`, tel qu'installé dans `apps/desktop/node_modules` : `nameCompletion` laisse un libellé nu quand il correspond à `^[a-z_][a-z_\d]*$` (sans tenir compte de la casse seulement si le dialecte fixe `caseInsensitiveIdentifiers`, `false` par défaut), et sinon fixe `apply` au premier caractère de `identifierQuotes`, au libellé et au caractère fermant, **sans doubler un guillemet interne**. `identifierQuotes` vaut `"` par défaut et `` ` `` pour MySQL. `SQLNamespace` accepte `{ self: Completion, children }` : une complétion peut donc porter son propre libellé et son propre `apply`. | `dist/index.js` et `dist/index.d.ts` du paquet |
+
+**Non vérifié.** Les mots réservés de MySQL, MariaDB et SQLite, et la façon dont
+chacun résout un nom non qualifié : la pull request qui ajoute la table de mots
+réservés les source. La façon dont `lang-sql` résout un préfixe qualifié et un
+alias avec un `apply` explicite sur chaque complétion : le spike au début de la
+deuxième pull request de l'ADR.
 
 ## Fournisseur Anthropic — vérification du 2026-09-16
 

@@ -1485,6 +1485,25 @@ Not checked:
 - MySQL, SQL Server, ClickHouse, DuckDB, Snowflake, BigQuery, Oracle;
 - the handling of a NUL in PostgreSQL's Parse message.
 
+## Editor completion — check of 2026-10-21
+
+Read for [ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md).
+The PostgreSQL pages were fetched on 2026-10-21 and are those of
+**PostgreSQL 18.6**, the current release that day.
+
+| Fact | Source |
+|---|---|
+| `current_schemas(include_implicit boolean)` returns `name[]`: "all schemas presently in the effective search path, in their priority order". Entries of the `search_path` setting "that do not correspond to existing, searchable schemas are omitted". With `true`, implicitly searched system schemas such as `pg_catalog` are included. | [PostgreSQL 18: System Information Functions](https://www.postgresql.org/docs/18/functions-info.html) |
+| The default `search_path` shows as `"$user", public`. A `$user` entry with no schema of that name "is ignored". `pg_catalog` "is always effectively part of the search path". "If there is no match in the search path, an error is reported, even if matching table names exist in other schemas in the database." | [PostgreSQL 18: Schemas, the schema search path](https://www.postgresql.org/docs/18/ddl-schemas.html#DDL-SCHEMAS-PATH) |
+| `ORDER` and `GROUP` are "reserved, requires `AS`", `USER` and `TABLE` "reserved", in the PostgreSQL column. "Labeled "reserved" are those tokens that are not allowed as column or table names." | [PostgreSQL 18: SQL Key Words](https://www.postgresql.org/docs/18/sql-keywords-appendix.html) |
+| `@codemirror/lang-sql` `6.10.0`, as installed in `apps/desktop/node_modules`: `nameCompletion` leaves a label bare when it matches `^[a-z_][a-z_\d]*$` (case-insensitively only if the dialect sets `caseInsensitiveIdentifiers`, default `false`), and otherwise sets `apply` to the first `identifierQuotes` character, the label and the closing character, **without doubling an embedded quote**. `identifierQuotes` defaults to `"` and is `` ` `` for MySQL. `SQLNamespace` accepts `{ self: Completion, children }`, so a completion can carry its own label and `apply`. | `dist/index.js` and `dist/index.d.ts` of the package |
+
+**Not checked.** The reserved words of MySQL, MariaDB and SQLite, and how each
+resolves an unqualified name: the pull request that adds the reserved-word
+table sources them. How `lang-sql` resolves a qualified prefix and an alias
+with an explicit `apply` on every completion: the spike at the start of the
+second pull request of the ADR.
+
 ## Anthropic provider — check of 2026-09-16
 
 Read for the implementation of `crates/oxyn-llm/src/anthropic/`. **The

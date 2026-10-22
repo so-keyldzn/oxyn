@@ -1,0 +1,254 @@
+# ADR-0057 — The SQL editor completes from the catalog cache, reads what is missing within bounds, and takes its insertion text from Rust
+
+**Status:** proposed · **Date:** 2026-10-21
+
+**Refines:** [ADR-0036](0036-l-assistant-complete-le-catalogue.md), on the
+following point: the editor is a second reader of the catalog cache that
+completes it itself. The mechanism — the bus, `Actor::Human`, sequential reads
+on the session reserved for the catalog, nothing read twice — is ADR-0036's; the
+selection of what to read is the editor's.
+
+**Builds on:** [ADR-0022](0022-rafraichissement-automatique.md), for the
+per-connection signals the editor listens to, which gain one variant.
+
+## Context
+
+[Issue #275](https://github.com/so-keyldzn/oxyn/issues/275) asks that the
+console suggest the tables and columns of the connected database. Today the
+editor calls `sql({ dialect, upperCaseKeywords })` without a `schema`
+(`apps/desktop/src/components/oxyn/sql-editor.tsx`): it suggests the keywords
+of the dialect and nothing else, as
+[IMPLEMENTATION-PLAN](../IMPLEMENTATION-PLAN.md) (Phase 1) already records.
+Five facts decide the design.
+
+**The cache is empty where the user needs it first.** The catalog loads on
+demand ([ARCHITECTURE](../ARCHITECTURE.md#6-the-catalog)): a schema's relations
+when it is expanded, a table's fields when it is opened. A completion that
+reads only the cache suggests nothing on a connection whose tree was never
+expanded — the failure [ADR-0036](0036-l-assistant-complete-le-catalogue.md)
+observed for the assistant ("0 of 0 known relations" on eleven tables).
+`catalog_tree` returns nodes without fields, and `relation_detail` returns
+`None` until a relation is loaded: there is no bulk read of what the cache
+knows.
+
+**Catalog reads are serial and shared.** The executor reads a connection's
+catalog on one session reserved for it, under one lock
+(`crates/oxyn-desktop/src/backend/ai/catalog_fill.rs`): the tree's expansion,
+the assistant's completion and the editor's would queue on the same lock. The
+cache itself is bounded — 1,024 scopes and 50,000 metadata objects
+(`crates/oxyn-exec/src/catalog/budget.rs`) — and evicts under that budget, so a
+name known a minute ago can be gone.
+
+**The webview cannot tell which connection gained names.**
+`RefreshSignal::of` (`crates/oxyn-desktop/src/ipc/metadata.rs`) emits
+`catalogInvalidated { connection }` for a finished DDL only. The
+`CatalogUpdated` event a *load* publishes reaches the webview as `catalogUpdated`
+on the execution channel, which bumps `catalogVersion`
+(`apps/desktop/src/lib/ipc/events.ts`): a counter without a connection.
+
+**The library composes SQL from received names, and does it wrongly.**
+`@codemirror/lang-sql` 6.10.0 (read in the installed sources on 2026-10-21)
+inserts a name bare when it matches `^[a-z_][a-z_\d]*$`, and otherwise wraps it
+in the dialect's first `identifierQuotes` character **without doubling an
+embedded quote** (`nameCompletion`). A relation named `a"b` is inserted as
+`"a"b"`; a relation named `order` or `user`, reserved words on PostgreSQL 18
+([Appendix C](https://www.postgresql.org/docs/18/sql-keywords-appendix.html):
+"tokens that are not allowed as column or table names"), is inserted bare. A
+name is hostile input (`"users"; DROP TABLE audit; --` is legal on
+PostgreSQL). `oxyn-catalog::path::quote_identifier` doubles the closing
+character in each style and is the project's one quoting
+([DRIVER-CONTRACT §6](../DRIVER-CONTRACT.md#6-it-escapes-every-identifier-it-composes),
+[I-10](../../CLAUDE.md#i-10)).
+
+**PostgreSQL resolves an unqualified name through a state the front does not
+know.** `search_path` is per connection. The driver sets `SET search_path TO
+"<schema>"` before an execution when the console declared a context, `SET
+search_path TO DEFAULT` otherwise, and resets it before the connection returns
+to the pool, so that introspection never carries a console's context
+(`drivers/oxyn-driver-postgres/src/session.rs`). A console with no declared
+context is `serverDefault` (`console-panel.tsx`), and nothing in the front or
+in the driver reports what that default is. The server's documentation
+(PostgreSQL 18.6, read on 2026-10-21): the default is `"$user", public`; a
+`$user` entry with no such schema is ignored; `pg_catalog` is always effectively
+searched; `current_schemas(include_implicit)` returns the schemas of the
+effective path "in their priority order", omitting those that do not exist or
+are not searchable; and a name matching nothing in the path is an error "even if
+matching table names exist in other schemas".
+[RESEARCH-NOTES](../RESEARCH-NOTES.md#editor-completion--check-of-2026-10-21)
+records these sources.
+
+[PERFORMANCE](../PERFORMANCE.md#interaction-budgets) sets two numbers that
+apply and none specific to completion: **100 ms** of visible feedback after a
+keystroke, and an interface frame under **8 ms** p99 while typing.
+
+## Decision
+
+**The editor completes from the cache, and Oxyn itself reads what the cache
+lacks, within bounds, never at the pace of the keystrokes.**
+
+1. **A bulk cache read.** One read-only IPC command, `completion_catalog`
+   (name fixed by the first pull request), of the family of `catalog_tree`:
+   built in `crates/oxyn-desktop/src/catalog.rs` from the cache on the blocking
+   pool, calling no driver. For a connection it returns the namespaces and, for
+   each, the relations the cache holds — kind, `system`, `stale`, virtual and
+   shadow marks as `CatalogNode` carries them — with the fields of those that
+   are loaded and `fieldsLoaded: false` for the others, never an empty list that
+   would pass for "no columns". It also returns the resolution path (4) and, if
+   a bound cut it, `truncated` with counts (6). The editor reads it on mount and
+   when a signal (5) says the cache changed, keeps the answer in memory, and the
+   completion source reads that copy: **no IPC is sent on a keystroke.**
+2. **Bounded loads, through the bus, driven by the editor.** After a short
+   debounce, never on a keystroke, the editor asks the host to complete the
+   cache for what the statement under the cursor names: the identifiers it
+   lexes after `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE` and before a `.`. The
+   host **resolves those names in Rust** — dialect and resolution path decide,
+   not a second rule in TypeScript — and only against relations the cache has
+   *listed*, so a typo or a name nobody listed costs no query and cannot steer a
+   read toward an arbitrary object. Per pass it reads:
+   1. on opening a console, and after the root is invalidated, the server level,
+      the resolution path and the relations of each namespace of that path never
+      listed — at most `MAX_COMPLETION_LISTINGS`;
+   2. the fields of the resolved relations not loaded, or `Invalidated` — at most
+      `MAX_COMPLETION_DESCRIPTIONS`;
+
+   all within `COMPLETION_DEADLINE`, as argued constants beside `catalog_fill`
+   (values fixed by measurement, 6). Each read is a
+   `Command::RefreshCatalogScope` through `ExecutorSink`, the commands of a tree
+   expansion: `StatementIntent::Read`, allowed everywhere, `production`
+   included ([I-01](../../CLAUDE.md#i-01)); the actor is `Actor::Human`, since
+   typing is the user's gesture. Reads are submitted **one at a time**, never
+   queued ahead, so a tree expansion issued meanwhile waits behind at most the
+   read in progress; a newer edit cancels the pass through its `CancelToken`.
+   A `Fetched` level is not re-read, an `Invalidated` one is re-read once, and a
+   failed read is not retried within the pass. Nothing runs on the UI thread
+   ([I-05](../../CLAUDE.md#i-05)). **No new `Command` variant is needed for
+   this part**; the IPC command that takes the names is a wrapper over the
+   existing commands.
+3. **The insertion text is composed in Rust, once.** Each name in the snapshot
+   carries its `insert` form, produced by a function of `oxyn-catalog::path`
+   next to `quote_identifier`: bare only when the name is a simple lowercase
+   identifier **and** not a reserved word of the dialect, quoted with
+   `quote_identifier` otherwise; a qualified path goes through
+   `CatalogPath::qualify_sql`. The reserved-word table of each dialect is
+   external data: it is sourced and dated in
+   [RESEARCH-NOTES](../RESEARCH-NOTES.md) by the pull request that adds it, and
+   **a name not known to be safe is quoted**. The front gives every
+   `Completion` an explicit `apply` equal to `insert`, so `nameCompletion` never
+   composes SQL. If `lang-sql`'s schema model cannot carry that, the front
+   writes its own completion source over the snapshot — decided by a spike at the
+   start of the second pull request, not by this ADR. A front test inserts
+   `"users"; DROP TABLE audit; --`, `a"b`, `order` and a name containing
+   `<img onerror=…>` on each dialect.
+4. **The resolution path is read from the server, never assumed.**
+   `CatalogCache` holds, for the connection, an ordered list of the namespaces
+   an unqualified name resolves in, or "unknown". A new `CatalogRefreshScope`
+   variant reads it with the server's first level, on the catalog's reserved
+   session — which is on the default `search_path` by construction (the reset
+   described above). The PostgreSQL driver answers from the server's effective path
+   (`current_schemas`); a provider that cannot answer **refuses**, and the cache
+   keeps "unknown", which is not an empty list
+   ([DRIVER-CONTRACT §5](../DRIVER-CONTRACT.md#5-it-declares-its-capabilities-per-session-and-simulates-nothing);
+   each driver's answer is specified there by the first pull request). The
+   path the completion uses is the console's declared namespace alone when it
+   declared one — `SET search_path TO "<schema>"` replaces the path — and the
+   server default otherwise. A relation is suggested **unqualified** only if its
+   namespace is in that path and no earlier namespace of the path holds the same
+   name; every relation is suggested qualified after its qualifier is typed.
+   System namespaces are suggested only after their qualifier. When the path is
+   unknown, nothing is suggested unqualified: qualified names only, and
+   **`public` is never assumed.** A `SET search_path` typed inside a script is
+   not followed.
+5. **One signal more.** `RefreshSignal::of` maps `Event::CatalogUpdated`
+   to a new `catalogChanged { connection }` — "the cache's content changed:
+   load, eviction or invalidation" — delivered like the others to the windows
+   that hold the connection ([ADR-0043](0043-multi-fenetre.md)). The editor
+   re-reads the snapshot on `catalogChanged` and `catalogInvalidated`, coalesced.
+   The global `catalogVersion` is not used, and the cache gets no revision
+   counter: the signals already say what changed. After a DDL, `stale` names stay
+   suggested, flagged, while the editor's next pass re-reads them: the executor
+   invalidates the whole catalog after any DDL, and emptying the completion
+   after a `CREATE INDEX` would be worse than suggesting a name for a moment
+   longer. A name leaves when a re-read no longer lists it, or when the cache
+   evicts it.
+6. **Bounds measured before they are written.** This ADR writes no number for
+   `MAX_COMPLETION_LISTINGS`, `MAX_COMPLETION_DESCRIPTIONS`,
+   `COMPLETION_DEADLINE` or the snapshot's caps. The first pull request measures
+   them with [`/benchmark`](../../.claude/commands/benchmark.md) on a catalog at
+   the cache budget (50,000 objects), against the two existing budgets
+   (100 ms, 8 ms p99), records the result in PERFORMANCE, and writes the
+   constants with their argument. A snapshot cut by a cap says so (`truncated`,
+   with the counts of what was left out), and the completion list says so too —
+   the wording goes into UX-SPEC in the second pull request. **A partial answer
+   is never presented as complete.**
+7. **What it does not promise.** Columns are proposed for relations the
+   statement names by the lexical rule above, with their aliases; common table
+   expressions, subqueries, `RETURNING`, table functions and dynamic SQL are not
+   inferred, and what the rule cannot resolve gets relations and keywords, never
+   a guessed column. The snapshot goes to the webview and nowhere else — not to
+   `oxyn-ai`, which keeps its single gateway
+   ([I-04](../../CLAUDE.md#i-04)) —, holds names and kinds, no row, and is not
+   persisted ([I-11](../../CLAUDE.md#i-11)).
+
+## Consequences
+
+* **+** The first keystroke on a connection never expanded already suggests the
+  schema's tables, and `alias.` suggests the columns of a table nobody opened.
+* **+** An inserted name is correct on each dialect: quotes doubled, reserved
+  words quoted, a hostile name inert. One quoting, in Rust, tested once.
+* **+** PostgreSQL suggests what resolves: the unqualified names of the real
+  path, and nothing invented when the path is unknown.
+* **+** No IPC on a keystroke; the loads reuse the commands, the policy and the
+  journal of the tree's expansion, and no `Command` variant is added for them.
+* **−** **Oxyn reads the server where nobody clicked**, including a production
+  database: bounded per pass, but a console left open and edited produces
+  catalog queries all day. That is what makes the decision expensive to undo for
+  whoever audits a server.
+* **−** The audit journal gains one entry per level read, as in ADR-0036.
+* **−** Editor, tree and assistant share one session and one lock: the editor's
+  reads can delay a tree expansion by one read, and fill the cache toward its
+  50,000-object budget faster, hence evict sooner.
+* **−** A reserved-word table per dialect to keep current, sourced and dated: a
+  word reserved by a later server version and missing from the table is inserted
+  bare, and the server rejects the statement naming that word — a visible
+  failure, not a silent one.
+* **−** Changes the contract surface: a `CatalogRefreshScope` variant in
+  `oxyn-core`, an optional provider method in `oxyn-catalog`, an answer from each
+  driver, a signal variant, the sections of DRIVER-CONTRACT and ARCHITECTURE that
+  list them.
+* **−** The default path is read once per connection: an `ALTER ROLE … SET
+  search_path` made meanwhile is seen at the next root refresh.
+* **−** A copy of the snapshot lives in the webview's memory, bounded by the
+  caps of (6).
+* **−** If `lang-sql` cannot carry the explicit `apply`, the front owns a
+  completion source: more code than a configuration option.
+
+**Exit cost:** low on the front — the snapshot command, the adapter and the
+loads are isolated, and removing them returns the editor to keyword completion.
+The resolution path, the `catalogChanged` signal and the insertion function stay
+useful without it (the tree, "Copy as…"). The real cost is elsewhere: users will
+have stopped expanding the tree to get their names.
+
+**Reconsider if** a connection must forbid every server read nobody clicked (an
+audited server): ADR-0036 already names that condition, and a connection marking
+read by the `PolicyGate` would then switch the editor to cache-only — which the
+design allows, since loading is a separate layer; if the measured completion
+exceeds the 100 ms or 8 ms budgets on a catalog at the cache budget with no cap
+that keeps it under; or if `@codemirror/lang-sql` stops being the editor's
+language package.
+
+## Rejected alternatives
+
+| Alternative | Reason for rejection |
+|---|---|
+| Complete from the cache only | Empty on a connection whose tree was never expanded — the observed failure of ADR-0036, for the editor this time |
+| Introspect the whole catalog on connect | Costs everyone, and a database of 10,000 tables exceeds the cache budget (ADR-0036 rejected the same) |
+| Ask the server on each keystroke, or from the webview | Breaks [I-01](../../CLAUDE.md#i-01) and [I-05](../../CLAUDE.md#i-05) and the 100 ms budget; a typo would cost a query |
+| Let `lang-sql` quote what it inserts | Does not double an embedded quote and inserts reserved words bare (read in 6.10.0): SQL composed from a received name, [I-10](../../CLAUDE.md#i-10) |
+| Quote in TypeScript | A second implementation of DRIVER-CONTRACT §6, which diverges |
+| Quote every inserted name | Safe, and it avoids the reserved-word table, but `FROM "users"` for every table makes users stop accepting suggestions |
+| Assume `public` on PostgreSQL | The path can differ, and a name that exists only in a schema outside it is an error for the server: the completion would suggest names that do not resolve |
+| Read the path on the console's session | That session may be running or in a transaction, and `search_path` is per connection; the catalog's reserved session is on the default by construction |
+| Resolve the statement's names in TypeScript | Case folding and quoting depend on the dialect and the server; a second rule next to the Rust one |
+| A revision counter in the cache | The signals already say what changed ([ADR-0022](0022-rafraichissement-automatique.md)); a counter is state to keep in step |
+| Keep using the global `catalogVersion` | No connection: every editor would re-read on any connection's change |
+| Empty the completion on `stale` | The executor invalidates the whole catalog after any DDL: the completion would go blank after each `CREATE INDEX` |

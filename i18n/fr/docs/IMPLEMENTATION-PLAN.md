@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="49c92cfc53da" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="4c2dea9fea41" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2056,7 +2056,10 @@ confirme ou amende les budgets par un ADR.
 > bout en bout, et le défilement d'une grille peuplée sous instrument, désormais
 > dans la webview. L'éditeur est CodeMirror 6, coloré par dialecte, avec la
 > complétion de base de `basicSetup` ; une complétion nourrie du catalogue n'y est
-> pas branchée.
+> pas encore branchée — l'[ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)
+> décide comment, en quatre pull requests : l'instantané et ses bornes mesurées,
+> l'adaptateur de l'éditeur et le texte d'insertion, les chargements et le chemin
+> de résolution PostgreSQL, puis l'éviction, les noms `stale` et la mesure.
 
 > **[ADR]** ~~C'est la dernière phase où la bascule vers egui reste une réécriture
 > de deux crates ([ADR-0001](adr/0001-ui-toolkit.md)). Après, le coût change de
