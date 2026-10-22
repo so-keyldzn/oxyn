@@ -479,6 +479,34 @@ def check_ci_aggregate() -> list[str]:
     return aggregate_errors(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
 
 
+# A README that tells a visitor to run `make app` after the target was renamed
+# is the first thing they copy and the last thing anyone re-reads. Only the
+# command lines of fenced blocks count: prose may name a target without
+# promising that it runs.
+README = REPO_ROOT / "README.md"
+FENCE_PATTERN = re.compile(r"^\s*```")
+README_MAKE_PATTERN = re.compile(r"^\s*make\s+([A-Za-z][\w-]*)(?:\s|$)")
+
+
+def readme_make_errors(body: str, targets: set[str]) -> list[str]:
+    problems = []
+    in_fence = False
+    for line in body.splitlines():
+        if FENCE_PATTERN.match(line):
+            in_fence = not in_fence
+            continue
+        m = README_MAKE_PATTERN.match(line) if in_fence else None
+        if m and m.group(1) not in targets:
+            problems.append(f"README.md runs `make {m.group(1)}`, a target missing from the Makefile")
+    return problems
+
+
+def check_readme_make_targets() -> list[str]:
+    if not README.is_file() or not MAKEFILE.is_file():
+        return []
+    return readme_make_errors(README.read_text(encoding="utf-8"), set(_makefile_rules()))
+
+
 def dependency_tool_errors(body: str) -> list[str]:
     """Keep cargo-deny installed on every runner that executes make rust.
 
@@ -535,6 +563,7 @@ def main() -> int:
         + check_dependency_graph()
         + check_ci_coverage()
         + check_ci_aggregate()
+        + check_readme_make_targets()
         + check_ci_dependency_tools()
         + check_translations()
     )
