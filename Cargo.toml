@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "drivers/*"]
 
 [workspace.package]
-version       = "0.0.10"
+version       = "0.0.11"
 edition       = "2024"
 # 1.95 and not 1.94: `sqlx 0.9.0` requires 1.94.0, but `wasmtime 48.0.5`
 # requires 1.95.0. wasmtime is behind oxyn-plugin's `wasm-host` feature, off by
@@ -28,10 +28,10 @@ authors       = ["Oxyn contributors"]
 # ─────────────────────────────────────────────────────────────────────────────
 [workspace.dependencies]
 # --- internal crates ---------------------------------------------------------
-oxyn-core     = { path = "crates/oxyn-core", version = "=0.0.10" }
-oxyn-catalog  = { path = "crates/oxyn-catalog", version = "=0.0.10" }
-oxyn-data     = { path = "crates/oxyn-data", version = "=0.0.10" }
-oxyn-driver   = { path = "crates/oxyn-driver", version = "=0.0.10" }
+oxyn-core     = { path = "crates/oxyn-core", version = "=0.0.11" }
+oxyn-catalog  = { path = "crates/oxyn-catalog", version = "=0.0.11" }
+oxyn-data     = { path = "crates/oxyn-data", version = "=0.0.11" }
+oxyn-driver   = { path = "crates/oxyn-driver", version = "=0.0.11" }
 oxyn-query    = { path = "crates/oxyn-query" }
 oxyn-exec     = { path = "crates/oxyn-exec" }
 oxyn-store    = { path = "crates/oxyn-store" }

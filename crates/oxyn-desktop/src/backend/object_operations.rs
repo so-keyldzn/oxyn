@@ -46,20 +46,14 @@ pub(crate) struct ReviewSessions {
     held: Mutex<HashMap<CommandId, (ConnectionId, SessionId)>>,
 }
 
-/// A character that would make the shown name differ from the one executed.
+/// A name with a character that would make the shown name differ from the one
+/// executed.
 ///
 /// Escaping it, as `proposal::visible` does for a template nobody runs, would
-/// show another object than the one the statement names.
-fn hides_text(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-        )
-}
-
+/// show another object than the one the statement names. The one predicate is
+/// [`oxyn_catalog::hides_text`], which the editor's completion applies too.
 fn hostile(name: &str) -> bool {
-    name.chars().any(hides_text)
+    oxyn_catalog::hides_text(name)
 }
 
 /// Why `operation` is not offered on this relation, or `None` when it is.

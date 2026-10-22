@@ -24,6 +24,9 @@ pub(crate) struct Probe {
     wait: AtomicBool,
     observed_cancel: AtomicBool,
     failure: Mutex<Option<ErrorClass>>,
+    /// What the source answers to `resolution_path`; `None` is a source that
+    /// cannot say.
+    resolution: Option<Vec<String>>,
 }
 
 #[async_trait]
@@ -72,6 +75,14 @@ impl CatalogProvider for Probe {
             HOSTILE,
             RelationKind::Table,
         )?])
+    }
+    async fn resolution_path(&self, _: &CancelToken) -> Result<Vec<String>> {
+        self.calls.lock().push("resolution_path".into());
+        self.resolution
+            .clone()
+            .ok_or_else(|| OxynError::NotSupported {
+                capability: "RESOLUTION_PATH".to_owned(),
+            })
     }
     async fn describe_relation(&self, path: &CatalogPath, _: &CancelToken) -> Result<Relation> {
         self.calls.lock().push("describe".into());
@@ -250,6 +261,60 @@ fn human_and_agent_read_lazily_through_policy_and_audit() {
         );
         assert!(!format!("{journal:?}").contains(HOSTILE));
     }
+}
+
+#[test]
+fn the_resolution_path_scope_publishes_what_the_source_says_and_nothing_else() {
+    let probe = Arc::new(Probe {
+        resolution: Some(vec!["analytics".into(), "public".into()]),
+        ..Probe::default()
+    });
+    let (executor, connection) = bench(probe.clone());
+    let mut events = executor.subscribe();
+    let outcome = block_on(executor.dispatch(
+        Actor::Human,
+        refresh(connection, CatalogRefreshScope::ResolutionPath),
+        &CancelToken::new(),
+    ))
+    .expect("a metadata read");
+    assert!(matches!(
+        outcome,
+        Outcome::CatalogRefreshed {
+            scope: CatalogRefreshScope::ResolutionPath,
+            ..
+        }
+    ));
+    // One call, no level of the tree: the scope names no object.
+    assert_eq!(*probe.calls.lock(), ["resolution_path"]);
+    assert!(matches!(
+        events.try_recv().expect("catalog event").event,
+        Event::CatalogUpdated
+    ));
+    let cache = executor.catalog(connection).expect("connected cache");
+    let cache = cache.read();
+    assert_eq!(
+        cache.resolution_path(),
+        Some(["analytics".to_owned(), "public".to_owned()].as_slice())
+    );
+    assert!(cache.resolution_path_freshness().is_known());
+}
+
+#[test]
+fn a_source_that_cannot_say_leaves_the_resolution_path_unknown_without_failing() {
+    // An empty path would assert that no namespace resolves anything, and
+    // failing the pass would turn "I cannot say" into an incident.
+    let probe = Arc::new(Probe::default());
+    let (executor, connection) = bench(probe.clone());
+    block_on(executor.dispatch(
+        Actor::Human,
+        refresh(connection, CatalogRefreshScope::ResolutionPath),
+        &CancelToken::new(),
+    ))
+    .expect("not an error");
+    let cache = executor.catalog(connection).expect("connected cache");
+    let cache = cache.read();
+    assert_eq!(cache.resolution_path(), None);
+    assert!(!cache.resolution_path_freshness().is_known());
 }
 
 #[test]
