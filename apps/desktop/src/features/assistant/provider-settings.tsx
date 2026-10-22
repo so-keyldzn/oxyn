@@ -124,8 +124,10 @@ export function ProviderSettings() {
 
   const takeProviderKey = React.useCallback(
     (draft: ProviderDraftWithoutKey) => {
-      const key = heldProviderKeys.current.get(draft) ?? null
+      const key = heldProviderKeys.current.get(draft)
       heldProviderKeys.current.delete(draft)
+      if (key === undefined)
+        throw new Error("Provider key was not held for this save.")
       return key
     },
     []
@@ -149,17 +151,17 @@ export function ProviderSettings() {
     (draft: AgentDraftWithoutSecrets): AgentDraft => {
       const secretValues = heldAgentValues.current.get(draft)
       heldAgentValues.current.delete(draft)
+      if (!secretValues)
+        throw new Error("Agent secret values were not held for this save.")
       return {
         ...draft,
-        env: draft.env.map((variable, index) =>
-          variable.secret
-            ? {
-                name: variable.name,
-                secret: true,
-                value: secretValues?.get(index) ?? "",
-              }
-            : variable
-        ),
+        env: draft.env.map((variable, index) => {
+          if (!variable.secret) return variable
+          const value = secretValues.get(index)
+          if (value === undefined)
+            throw new Error("An agent secret value was not held for this save.")
+          return { name: variable.name, secret: true, value }
+        }),
       }
     },
     []

@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, render, waitFor } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { ProviderSettingsViewProps } from "@/components/oxyn/provider-settings-view"
 import type { AgentDraft, ProviderDraft } from "@/lib/ipc/ai"
@@ -92,6 +92,12 @@ function cacheText(client: QueryClient) {
 }
 
 describe("provider setting secrets", () => {
+  beforeEach(() => {
+    calls.saveProvider.mockReset()
+    calls.saveExternalAgent.mockReset()
+    calls.view = null
+  })
+
   it("keeps provider keys and secret agent environment values out of mutation variables", async () => {
     calls.saveProvider.mockResolvedValueOnce({})
     calls.saveExternalAgent.mockResolvedValueOnce({ id: "agent-1" })
@@ -117,5 +123,76 @@ describe("provider setting secrets", () => {
     expect(calls.saveExternalAgent).toHaveBeenCalledWith(agent)
     expect(cacheText(client)).not.toContain("provider-key-sentinel")
     expect(cacheText(client)).not.toContain("agent-secret-sentinel")
+  })
+
+  it("keeps a provider key out of the observed cache after a failed save", async () => {
+    calls.saveProvider.mockRejectedValueOnce(
+      new Error("provider is unavailable")
+    )
+    const client = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <ProviderSettings />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(calls.view).not.toBeNull())
+
+    let saved: boolean | undefined
+    await act(async () => {
+      saved = await view().onSaveProvider(provider)
+    })
+
+    expect(saved).toBe(false)
+    expect(calls.saveProvider).toHaveBeenCalledWith(provider)
+    expect(cacheText(client)).not.toContain("provider-key-sentinel")
+  })
+
+  it("keeps each double-submit provider key out of mutation variables", async () => {
+    calls.saveProvider.mockResolvedValueOnce({}).mockResolvedValueOnce({})
+    const client = new QueryClient({
+      defaultOptions: {
+        mutations: { retry: false },
+        queries: { retry: false },
+      },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <ProviderSettings />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(calls.view).not.toBeNull())
+
+    await act(async () => {
+      await Promise.all([
+        view().onSaveProvider({
+          ...provider,
+          label: "First",
+          key: "first-provider-key-sentinel",
+        }),
+        view().onSaveProvider({
+          ...provider,
+          label: "Second",
+          key: "second-provider-key-sentinel",
+        }),
+      ])
+    })
+
+    expect(calls.saveProvider).toHaveBeenCalledWith({
+      ...provider,
+      label: "First",
+      key: "first-provider-key-sentinel",
+    })
+    expect(calls.saveProvider).toHaveBeenCalledWith({
+      ...provider,
+      label: "Second",
+      key: "second-provider-key-sentinel",
+    })
+    expect(cacheText(client)).not.toContain("first-provider-key-sentinel")
+    expect(cacheText(client)).not.toContain("second-provider-key-sentinel")
   })
 })
