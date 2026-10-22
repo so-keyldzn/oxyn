@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RELEASE.md" sha256="42d5b7900910" -->
+<!-- oxyn-translation source="docs/RELEASE.md" sha256="e4dd2bc774a6" -->
 # Livraisons GitHub
 
 GitHub Actions construit les paquets ; le mainteneur publie le brouillon
@@ -220,10 +220,12 @@ releases publiées à leurs archives.
 
 1. Intégrer le workflow et les scripts relus dans `main`. Exécuter `make qualite`
    sur les sources choisies et examiner l'exécution qualité GitHub correspondante.
-2. Régler la version de livraison de façon cohérente dans le workspace et la
-   configuration Tauri, committer les sources choisies, puis pousser le tag
-   correspondant. Le push d'un tag déclenche automatiquement la livraison ;
-   les push de branches ordinaires ne créent pas de release.
+2. Régler la version de livraison de façon cohérente dans `[workspace.package]`,
+   les versions exactes des dépendances `oxyn-core`, `oxyn-catalog`,
+   `oxyn-data` et `oxyn-driver`, et la configuration Tauri ; committer les
+   sources choisies, puis pousser le tag correspondant. Le push d'un tag
+   déclenche automatiquement la livraison ; les push de branches ordinaires ne
+   créent pas de release.
 3. Autre possibilité : **Actions → livraison → Run workflow**, en choisissant
    le tag de version lui-même sous **Use workflow from** et en indiquant ce
    même tag, ou :

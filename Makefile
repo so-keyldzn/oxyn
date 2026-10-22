@@ -176,7 +176,7 @@ doc:
 # The Apache driver contract is consumed outside this workspace. Package each
 # crate so a missing dependency version fails before a release reaches crates.io.
 package-contracts:
-	$(CARGO) package -p oxyn-core -p oxyn-catalog -p oxyn-data -p oxyn-driver --no-verify
+	$(CARGO) package -p oxyn-core -p oxyn-catalog -p oxyn-data -p oxyn-driver --no-verify --allow-dirty
 
 # Before the Rust targets, not after: the front-end build produces the
 # directory `oxyn-desktop` embeds at compile time. A CI job that runs `rust`

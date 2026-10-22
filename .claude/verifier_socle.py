@@ -340,6 +340,54 @@ def check_dependency_graph() -> list[str]:
     return problems
 
 
+CONTRACT_CRATES = ("oxyn-core", "oxyn-catalog", "oxyn-data", "oxyn-driver")
+
+
+def contract_pin_errors(manifest: dict) -> list[str]:
+    """Keep publishable contract pins aligned with the workspace release."""
+    package = manifest.get("workspace", {}).get("package", {})
+    dependencies = manifest.get("workspace", {}).get("dependencies", {})
+    workspace_version = package.get("version") if isinstance(package, dict) else None
+    if not isinstance(workspace_version, str) or not workspace_version:
+        return ["Cargo.toml: [workspace.package].version is required for contract dependency pins"]
+    if not isinstance(dependencies, dict):
+        return ["Cargo.toml: [workspace.dependencies] is required for contract dependency pins"]
+
+    expected = f"={workspace_version}"
+    problems = []
+    for crate_name in CONTRACT_CRATES:
+        declaration = dependencies.get(crate_name)
+        version = declaration.get("version") if isinstance(declaration, dict) else None
+        if version != expected:
+            problems.append(
+                f"Cargo.toml: `{crate_name}` must pin version `{expected}` to match "
+                "[workspace.package].version"
+            )
+
+    for dependency_name, declaration in dependencies.items():
+        if not isinstance(declaration, dict) or not declaration.get("path"):
+            continue
+        version = declaration.get("version")
+        if isinstance(version, str) and version.startswith("=") and version != expected:
+            problems.append(
+                f"Cargo.toml: internal dependency `{dependency_name}` pins `{version}`, "
+                f"not workspace version `{expected}`"
+            )
+    return problems
+
+
+def check_contract_dependency_versions() -> list[str]:
+    """Reject a release whose Apache contract pins drift from its workspace version."""
+    root_manifest = REPO_ROOT / "Cargo.toml"
+    if not root_manifest.is_file():
+        return []
+    try:
+        manifest = tomllib.loads(root_manifest.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as err:
+        return [f"Cargo.toml: unreadable TOML — {err}"]
+    return contract_pin_errors(manifest)
+
+
 # `make qualite` and the CI workflow must say the same thing. CI calls the
 # gate's targets in pieces, in parallel jobs: a target added to `qualite`
 # without being added to the workflow would never run on a machine, and nothing
@@ -533,6 +581,7 @@ def main() -> int:
         + check_rules()
         + check_hooks()
         + check_dependency_graph()
+        + check_contract_dependency_versions()
         + check_ci_coverage()
         + check_ci_aggregate()
         + check_ci_dependency_tools()
