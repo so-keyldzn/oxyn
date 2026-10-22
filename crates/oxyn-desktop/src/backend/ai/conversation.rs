@@ -2464,8 +2464,10 @@ impl Run<'_> {
         }
         .map_err(|error| Failure::new(error.to_string(), FailureCategory::Refused))?;
 
+        let opening = linked.is_none();
         let LinkedAgent {
             session,
+            service,
             tools,
             actor: (identity, conversation),
         } = match linked {
@@ -2512,6 +2514,7 @@ impl Run<'_> {
                 };
                 let linked = LinkedAgent {
                     session: Arc::clone(&link.session),
+                    service: link.service.as_ref().map(Arc::clone),
                     tools: link.tools.clone(),
                     actor: link.actor,
                 };
@@ -2521,6 +2524,9 @@ impl Run<'_> {
             }
         };
 
+        if opening && let (Some(context), Some(service)) = (prompt.context(), service.as_ref()) {
+            service.bind_opening_context(context);
+        }
         let Some(ready) = self.start(agent, &session).await? else {
             return Ok(());
         };
@@ -2879,14 +2885,15 @@ async fn launch_agent(
     // agent runs its own loop, and a file does not widen what Oxyn bounds it
     // by (ADR-0049 § 7).
     let tools = ToolTurns::new(oxyn_ai::spec::DEFAULT_MAX_TURNS, Arc::new(waiting));
+    let service = Arc::new(tool_service(
+        inner,
+        connection,
+        session,
+        role,
+        Actor::agent(identity, conversation),
+    ));
     let bridge = ToolBridge {
-        service: Arc::new(tool_service(
-            inner,
-            connection,
-            session,
-            role,
-            Actor::agent(identity, conversation),
-        )),
+        service: Arc::clone(&service),
         turns: tools.clone(),
     };
     // Bounded: callers hold the lock every other agent launch waits on, and a
@@ -2917,6 +2924,7 @@ async fn launch_agent(
         tier,
         leaf: None,
         session: Arc::new(session),
+        service: Some(service),
         tools,
         actor: (identity, conversation),
         _requests: WithdrawOnRelease::new(

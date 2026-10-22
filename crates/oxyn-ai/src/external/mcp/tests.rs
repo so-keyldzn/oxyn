@@ -574,6 +574,11 @@ mod request_sample {
     fn an_approved_sample_reaches_the_agent_fenced() {
         let desk = Desk::new(User::TicksEmail);
         let service = served(PrivacyTier::Sampled);
+        let opening =
+            crate::ContextBuilder::new(&oxyn_catalog::CatalogCache::new(), PrivacyTier::Sampled)
+                .with_fence_nonce("external-session-test-nonce")
+                .build();
+        service.bind_opening_context(&opening);
         let reply = call(
             &desk,
             &service,
@@ -584,12 +589,18 @@ mod request_sample {
         assert!(said.contains("status: completed"), "{said}");
         let value = said.find("dupont@example.com").expect("the value arrived");
         let open = said
-            .rfind(crate::untrusted::FENCE_OPEN)
-            .expect("a fence opens the data");
+            .rfind("<untrusted-database-content-external-session-test-nonce>")
+            .expect("the opening prompt's fence opens the data");
         let close = said
-            .rfind(crate::untrusted::FENCE_CLOSE)
-            .expect("a fence closes the data");
+            .rfind("</untrusted-database-content-external-session-test-nonce>")
+            .expect("the opening prompt's fence closes the data");
         assert!(open < value && value < close, "{said}");
+        assert!(
+            opening
+                .untrusted_preamble()
+                .contains("external-session-test-nonce"),
+            "the preamble names the same fence"
+        );
         assert!(said.contains("row sample approved by the user"), "{said}");
         assert_eq!(desk.released(), 1, "what left is recorded, once");
 
@@ -620,8 +631,9 @@ mod request_sample {
             sampled(desk.receipt()),
             QueryLanguage::SQL,
             None,
+            &crate::untrusted::Fence::with_nonce("metadata-test-nonce"),
         );
-        let said = outcome.render();
+        let said = outcome.render(&crate::untrusted::Fence::with_nonce("metadata-test-nonce"));
         assert!(said.contains("status: denied"), "{said}");
         assert!(!said.contains("dupont@example.com"), "{said}");
     }

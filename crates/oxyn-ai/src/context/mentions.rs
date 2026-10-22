@@ -292,7 +292,7 @@ impl AgentContext {
     pub(crate) fn follow_up(&self, question: &str) -> String {
         format!(
             "{FOLLOW_UP_INTRO}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{question}",
-            untrusted::PREAMBLE,
+            self.untrusted_preamble(),
             self.prompt_block()
         )
     }

@@ -148,7 +148,7 @@ impl FailureReport {
 impl fmt::Display for FailureReport {
     /// The body meant for the model, **in English**: it is a prompt.
     ///
-    /// A single rendering, here: [`ToolOutcome::render`](crate::ToolOutcome::render)
+    /// A single rendering, here: `ToolOutcome::render`,
     /// relies on it rather than composing a second text that would diverge.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "class: {}", class_label(self.class))?;
