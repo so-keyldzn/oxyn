@@ -141,6 +141,16 @@ function relatedNode(address: CatalogAddress): CatalogNode {
   }
 }
 
+export function historyCopyFailure(error: unknown) {
+  const backendError = error instanceof BackendError ? error : null
+  const retryable = backendError?.retryable ?? false
+  return {
+    title: "History copy not opened",
+    description: `${backendError?.message ?? "The history copy could not be opened."} ${retryable ? "The copy can be tried again as is." : "Trying the same copy again gives the same result."}`,
+    type: "error" as const,
+  }
+}
+
 /**
  * The dense workbench (ADR-0011) for one open connection: explorer or library,
  * object, console and result tabs, right column and status bar.
@@ -436,8 +446,11 @@ export function WorkspaceScreen({
   }
 
   const openHistoryCopy = async (row: HistoryRow) => {
-    const entry = await library.readHistoryEntry(row.id).catch(() => null)
-    if (entry) await work.openHistoryCopy(entry)
+    try {
+      await work.openHistoryCopy(await library.readHistoryEntry(row.id))
+    } catch (error) {
+      toast.add(historyCopyFailure(error))
+    }
   }
 
   const entriesRef = React.useRef(work.entries)
