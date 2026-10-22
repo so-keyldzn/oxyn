@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="abe494439155" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="919758f04cda" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -617,7 +617,9 @@ ce qui le maintiendra valide.
 - une crate non maintenue sur une frontière externe est un risque à documenter,
   pas à ignorer ;
 - un avis de sécurité écarté l'est **dans `deny.toml`, avec sa raison écrite**.
-  Le seul aujourd'hui est RUSTSEC-2024-0429 — une *unsoundness* de
+  Les entrées actuelles sont RUSTSEC-2024-0429, RUSTSEC-2024-0436,
+  RUSTSEC-2024-0370, RUSTSEC-2026-0370, RUSTSEC-2026-0371 et
+  RUSTSEC-2026-0372. RUSTSEC-2024-0429 est une *unsoundness* de
   `glib::VariantStrIter`, atteinte par `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
   La correction est dans `glib 0.20`, que `gtk 0.18` refuse : rien ne se monte
   ici tant que Tauri n'a pas changé de GTK. Les paquets Linux (x86_64 et
@@ -636,7 +638,13 @@ ce qui le maintiendra valide.
   montée de `tauri`, `gtk`, `wry`, `muda`, `tao` ou `webkit2gtk`, puisqu'une
   nouvelle version pourrait ajouter un appelant ; l'entrée est retirée dès que
   la chaîne atteint `glib` 0.20 ou plus. `deny.toml` porte la commande, à côté
-  de l'entrée.
+  de l'entrée. Les autres entrées actuelles sont des crates transitives non
+  maintenues : `paste` via la pile d'embeddings locale,
+  `proc-macro-error` via GTK 3, et `zbus_names`, `zvariant` et
+  `zvariant_derive` via zbus 5. Chaque avis indique qu'aucune mise à jour sûre
+  n'est disponible ; leurs remplacements nécessitent des migrations majeures
+  en amont. Elles sont réévaluées quand la dépendance amont correspondante
+  change.
 
 Voir aussi [`/securite`](../claude/commands/securite.md) et
 [la liste de contrôle](../claude/checklists/revue-securite.md).
