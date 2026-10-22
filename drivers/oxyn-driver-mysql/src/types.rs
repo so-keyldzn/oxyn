@@ -13,7 +13,7 @@
 //! | `DECIMAL(p, s)` | `Decimal128(p, s)` up to 38, `Decimal256(p, s)` beyond | none; a definition the driver cannot read back into `(p, s)` is `Utf8`, marked |
 //! | `DATE` | `Date32` | zero and partial dates refused, see [`crate::decode`] |
 //! | `DATETIME` | `Timestamp(µs, None)` | none; no time zone invented |
-//! | `TIMESTAMP` | `Timestamp(µs, "UTC")` | none while the session runs at `+00:00`: a typed `SET time_zone` is refused, quoted (`` @@session.`time_zone` ``) or in an executable comment, but a `CALL`ed procedure, a dynamic `PREPARE`/`EXECUTE IMMEDIATE` or a text lexed under `NO_BACKSLASH_ESCAPES` can still change it, see [`crate::pinned`] |
+//! | `TIMESTAMP` | `Timestamp(µs, "UTC")` | none while the session runs at `+00:00`: a typed `SET time_zone` is refused, quoted (`` @@session.`time_zone` ``) or in an executable comment, but a `CALL`ed procedure, a dynamic `PREPARE`/`EXECUTE IMMEDIATE` or a text lexed under `NO_BACKSLASH_ESCAPES` can still change it, see DRIVER-CONTRACT §7 and the `pinned` module |
 //! | `TIME` | `Duration(µs)` | none; ±838:59:59 is not a time of day |
 //! | `YEAR` | `UInt16` | none |
 //! | `BIT(n)` | `UInt64` | none |

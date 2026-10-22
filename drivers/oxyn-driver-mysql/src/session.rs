@@ -28,7 +28,9 @@
 //! `SET time_zone` or `SET NAMES` would make them lie, and a reconnect would flip
 //! the values back: it is refused, before the prepare, with a message that
 //! points to `CONVERT_TZ`. What the lexical check covers, and the procedure and
-//! dynamic-SQL cases it cannot, are in [`crate::pinned`].
+//! dynamic-SQL cases it cannot, are in
+//! [DRIVER-CONTRACT §7](../../../docs/DRIVER-CONTRACT.md) and in the private
+//! `pinned` module.
 //!
 //! # Read-only is imposed by the server
 //!
