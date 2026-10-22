@@ -184,6 +184,70 @@ impl fmt::Debug for AiState {
 }
 
 impl AiState {
+    /// Signals every external-agent process without dropping its links.
+    ///
+    /// The final Tauri exit hook uses this only synchronous half: it cannot
+    /// wait for an agent or remove a directory on the event-loop thread.
+    pub(crate) fn signal_agents(&self) {
+        for session in self.agent_sessions() {
+            session.signal_process();
+        }
+    }
+
+    /// Releases every external agent and removes its private directory.
+    ///
+    /// This is the ordered shutdown path, off Tauri's event-loop thread. The
+    /// caller supplies the total timeout: all agents are signalled before any
+    /// directory cleanup starts, so a slow filesystem cannot leave one alive.
+    pub(crate) async fn shutdown_agents(&self) {
+        let waiting = std::mem::take(&mut *self.waiting.lock());
+        let mut sessions: Vec<Arc<ExternalSession>> = waiting
+            .into_values()
+            .map(|waiting| {
+                waiting.stop.cancel();
+                waiting.link.session
+            })
+            .collect();
+        let threads: Vec<Arc<Thread>> = self
+            .threads
+            .lock()
+            .values()
+            .flat_map(|threads| threads.iter().cloned())
+            .collect();
+        for thread in threads {
+            if let Some(session) = thread.release_agent() {
+                sessions.push(session);
+            }
+        }
+        for session in &sessions {
+            session.signal_process();
+        }
+        for session in sessions {
+            session.shutdown().await;
+        }
+    }
+
+    fn agent_sessions(&self) -> Vec<Arc<ExternalSession>> {
+        let mut sessions: Vec<Arc<ExternalSession>> = self
+            .waiting
+            .lock()
+            .values()
+            .map(|waiting| Arc::clone(&waiting.link.session))
+            .collect();
+        let threads: Vec<Arc<Thread>> = self
+            .threads
+            .lock()
+            .values()
+            .flat_map(|threads| threads.iter().cloned())
+            .collect();
+        for thread in threads {
+            if let Some(session) = thread.agent_session_for_shutdown() {
+                sessions.push(session);
+            }
+        }
+        sessions
+    }
+
     /// The lock held while an agent for `connection` is looked for and
     /// launched. Never removed — a lock replaced while held would let two
     /// launches run under two locks —, and it costs one entry per connection
@@ -1066,6 +1130,22 @@ impl Thread {
             .as_ref()
             .filter(|link| link.session.is_open())
             .map(|link| Arc::clone(&link.session))
+    }
+
+    fn agent_session_for_shutdown(&self) -> Option<Arc<ExternalSession>> {
+        self.state
+            .lock()
+            .agent
+            .as_ref()
+            .map(|link| Arc::clone(&link.session))
+    }
+
+    fn release_agent(&self) -> Option<Arc<ExternalSession>> {
+        let mut state = self.state.lock();
+        if let Some(running) = &state.running {
+            running.token.cancel();
+        }
+        state.agent.take().map(|link| link.session)
     }
 
     pub(crate) fn has_agent_link(&self) -> bool {

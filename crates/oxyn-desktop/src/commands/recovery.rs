@@ -149,6 +149,10 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJour
             // recovery (ADR-0040). The window is gone: these waits freeze
             // nothing (I-05).
             let backend = app.state::<Backend>();
+            // Tauri exits without dropping the tasks that own the children.
+            // Signal only: this hook runs on the event loop, so directory
+            // cleanup remains the ordered shutdown path's responsibility.
+            backend.inner.ai.signal_agents();
             // The model's download and idle task end with the process
             // rather than past it (ADR-0056).
             backend.inner.semantic.stop();

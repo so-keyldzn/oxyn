@@ -409,7 +409,10 @@ impl Guard {
     }
 
     /// Signals the group, then the child itself.
-    fn terminate(&self) {
+    ///
+    /// This performs no wait or filesystem work, so an application's final
+    /// exit hook can use it without holding its event loop.
+    pub fn terminate(&self) {
         #[cfg(unix)]
         {
             // The child leads its own group (`process_group(0)` below), so the
@@ -424,6 +427,15 @@ impl Guard {
             let _ignored = child.kill();
         }
     }
+
+    /// Removes the private directory created for this child.
+    ///
+    /// Callers that still have a running application invoke this from a
+    /// blocking worker after [`Self::terminate`]. Failures stay best effort:
+    /// they must not hide an already-delivered process-group signal.
+    pub fn remove_directory(&self) {
+        let _ignored = std::fs::remove_dir_all(&self.workspace);
+    }
 }
 
 impl Drop for Guard {
@@ -431,7 +443,7 @@ impl Drop for Guard {
         self.terminate();
         // Best effort: a directory left behind is untidy, not unsafe, and a
         // failure here must not mask the kill above.
-        let _ignored = std::fs::remove_dir_all(&self.workspace);
+        self.remove_directory();
     }
 }
 

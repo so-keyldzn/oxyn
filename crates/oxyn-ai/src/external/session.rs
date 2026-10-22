@@ -59,7 +59,7 @@ use oxyn_calls::OxynCalls;
 use super::confine::{Confinement, ModeWatch};
 use super::prompt::AgentPrompt;
 use super::settings::{AgentSettings, SettingChange, SettingRefused, SettingValue};
-use super::spawn::{Environment, ExitReport, Spawned, StreamingRedactor, redact, spawn};
+use super::spawn::{Environment, ExitReport, Guard, Spawned, StreamingRedactor, redact, spawn};
 use super::turn::TurnEnd;
 use super::{PermissionVerdict, check_launchable, option_for, permission_for};
 use crate::observer::{
@@ -238,6 +238,17 @@ pub enum ExternalError {
         /// The silence accepted, as configured.
         after: std::time::Duration,
     },
+    /// The agent did not complete a user-side request soon enough.
+    #[error(
+        "the agent did not finish {request} within {} seconds; try again",
+        .after.as_secs()
+    )]
+    RequestTimedOut {
+        /// The fixed request name, never data supplied by the agent.
+        request: &'static str,
+        /// The product limit that expired.
+        after: std::time::Duration,
+    },
     /// The agent answered with an error.
     #[error("the agent reported an error: {0}")]
     Protocol(String),
@@ -273,6 +284,7 @@ enum Request {
     },
     Authenticate {
         method: String,
+        cancel: CancelToken,
         reply: oneshot::Sender<Result<(), ExternalError>>,
     },
     Prompt {
@@ -283,6 +295,7 @@ enum Request {
     },
     ChangeSetting {
         change: SettingChange,
+        cancel: CancelToken,
         reply: oneshot::Sender<Result<AgentSettings, ExternalError>>,
     },
 }
@@ -318,6 +331,49 @@ pub struct ExternalSession {
     answering: Arc<std::sync::atomic::AtomicUsize>,
     /// Filled once the agent's process has exited, by the driver.
     exit: Arc<Mutex<Option<ExitReport>>>,
+    /// The child to signal on shutdown, when this session owns one.
+    process: Option<Arc<Guard>>,
+    /// Ends a sign-in or settings wait while this process is being released.
+    stop: CancelToken,
+}
+
+/// A started session reserved for the question that caused its start.
+///
+/// The reservation keeps settings changes out from `start` through `prompt`.
+/// It is consumed by [`Self::prompt`], or released when starting fails or the
+/// question is stopped before it can be sent.
+pub struct PromptStart {
+    ready: AgentReady,
+    answering: Answering,
+}
+
+impl std::fmt::Debug for PromptStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptStart")
+            .field("ready", &self.ready)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PromptStart {
+    /// What the agent declared while this question's session started.
+    #[must_use]
+    pub fn ready(&self) -> &AgentReady {
+        &self.ready
+    }
+
+    /// Sends the reserved question and releases its reservation when it ends.
+    pub async fn prompt(
+        self,
+        session: &ExternalSession,
+        prompt: &AgentPrompt,
+        observer: Arc<dyn AgentObserver>,
+        cancel: &CancelToken,
+    ) -> Result<TurnEnd, ExternalError> {
+        session
+            .prompt_with(self.answering, prompt, observer, cancel)
+            .await
+    }
 }
 
 impl std::fmt::Debug for ExternalSession {
@@ -565,6 +621,7 @@ impl ExternalSession {
             watch,
             guard,
         } = spawned;
+        let process = Arc::new(guard);
 
         let declaration = tools.as_ref().map(|(endpoint, _)| ToolEndpoint {
             url: endpoint.url().to_owned(),
@@ -575,10 +632,10 @@ impl ExternalSession {
         });
         // The session's working directory is the process's own: announcing
         // another would point the agent at a directory it was not given.
-        let directory = guard.directory().to_path_buf();
+        let directory = process.directory().to_path_buf();
         // The environment `spawn` borrowed, moved rather than rebuilt: what the
         // session redacts is exactly what the child was handed or denied.
-        let (session, protocol) = Self::over_with(
+        let (mut session, protocol) = Self::over_with(
             transport,
             directory,
             declaration,
@@ -586,13 +643,14 @@ impl ExternalSession {
             environment,
             Limits::default(),
         );
+        session.process = Some(Arc::clone(&process));
         let exit = Arc::clone(&session.exit);
         let driver = async move {
             // The guard lives exactly as long as the driver: dropping the
             // driver — because the panel closed, or the conversation was
             // forgotten — kills the agent's process group. It is dropped last,
             // after the tool server wound down.
-            let _guard = guard;
+            let _guard = process;
             live(protocol, watch, tools, exit).await;
         }
         .boxed();
@@ -670,6 +728,8 @@ impl ExternalSession {
                 settings,
                 answering: Arc::default(),
                 exit: Arc::new(Mutex::new(None)),
+                process: None,
+                stop: CancelToken::new(),
             },
             driver,
         )
@@ -686,6 +746,17 @@ impl ExternalSession {
         answer.await.unwrap_or(Err(ExternalError::Exited))
     }
 
+    /// Starts an agent for a question that will immediately be sent.
+    ///
+    /// Unlike [`Self::start`], this reserves the session for that question so
+    /// a setting cannot land between its start and its prompt.
+    pub async fn start_for_prompt(&self) -> Result<PromptStart, ExternalError> {
+        let answering = Answering::count(&self.answering);
+        self.start()
+            .await
+            .map(|ready| PromptStart { ready, answering })
+    }
+
     /// Asks the agent to run one of its own sign-in methods.
     ///
     /// Only for [`AuthKind::Agent`]: a terminal method is shown, not run.
@@ -696,6 +767,7 @@ impl ExternalSession {
         let (reply, answer) = oneshot::channel();
         self.send(Request::Authenticate {
             method: method.to_owned(),
+            cancel: self.stop.clone(),
             reply,
         })?;
         answer.await.unwrap_or(Err(ExternalError::Exited))
@@ -712,10 +784,20 @@ impl ExternalSession {
         observer: Arc<dyn AgentObserver>,
         cancel: &CancelToken,
     ) -> Result<TurnEnd, ExternalError> {
+        self.prompt_with(Answering::count(&self.answering), prompt, observer, cancel)
+            .await
+    }
+
+    async fn prompt_with(
+        &self,
+        _answering: Answering,
+        prompt: &AgentPrompt,
+        observer: Arc<dyn AgentObserver>,
+        cancel: &CancelToken,
+    ) -> Result<TurnEnd, ExternalError> {
         if cancel.is_cancelled() {
             return Ok(TurnEnd::Cancelled);
         }
-        let _answering = Answering::count(&self.answering);
         let (reply, answer) = oneshot::channel();
         self.send(Request::Prompt {
             text: prompt.as_str().to_owned(),
@@ -723,7 +805,10 @@ impl ExternalSession {
             cancel: cancel.clone(),
             reply,
         })?;
-        answer.await.unwrap_or(Err(ExternalError::Exited))
+        tokio::select! {
+            answer = answer => answer.unwrap_or(Err(ExternalError::Exited)),
+            () = cancel.cancelled() => Ok(TurnEnd::Cancelled),
+        }
     }
 
     /// Asks the agent to switch mode or set an option, and returns the
@@ -754,8 +839,35 @@ impl ExternalSession {
             return Err(SettingRefused::QuestionInProgress.into());
         }
         let (reply, answer) = oneshot::channel();
-        self.send(Request::ChangeSetting { change, reply })?;
+        self.send(Request::ChangeSetting {
+            change,
+            cancel: self.stop.clone(),
+            reply,
+        })?;
         answer.await.unwrap_or(Err(ExternalError::Exited))
+    }
+
+    /// Signals this session's process group without waiting for it to exit.
+    ///
+    /// The application's final exit hook uses this synchronous half only: it
+    /// cannot perform filesystem work on Tauri's event-loop thread.
+    pub fn signal_process(&self) {
+        self.stop.cancel();
+        if let Some(process) = &self.process {
+            process.terminate();
+        }
+    }
+
+    /// Stops this session's process and removes its private directory.
+    ///
+    /// Directory removal runs on Tokio's blocking pool. Callers bound this
+    /// future as part of their own ordered shutdown.
+    pub async fn shutdown(&self) {
+        self.signal_process();
+        if let Some(process) = &self.process {
+            let process = Arc::clone(process);
+            let _cleaned = tokio::task::spawn_blocking(move || process.remove_directory()).await;
+        }
     }
 
     /// The agent's settings, as it declares them, for the whole conversation —
@@ -1000,16 +1112,20 @@ async fn serve(
                         .map(|(ready, _)| ready),
                 );
             }
-            Request::Authenticate { method, reply } => {
+            Request::Authenticate {
+                method,
+                cancel,
+                reply,
+            } => {
                 let outcome = async {
                     if state.initialized.is_none() {
                         initialize(connection, &mut state).await?;
                     }
-                    connection
+                    let answer = connection
                         .send_request(AuthenticateRequest::new(method))
-                        .block_task()
-                        .await
-                        .map_err(|e| {
+                        .block_task();
+                    match user_response(answer, &cancel, state.limits.user_request).await {
+                        UserResponse::Answer(answer) => answer.map_err(|e| {
                             classify(
                                 connection,
                                 "authenticate",
@@ -1017,7 +1133,15 @@ async fn serve(
                                 &state.methods,
                                 &state.redactor,
                             )
-                        })?;
+                        })?,
+                        UserResponse::Cancelled => return Err(ExternalError::Exited),
+                        UserResponse::TimedOut => {
+                            return Err(ExternalError::RequestTimedOut {
+                                request: "the sign-in request",
+                                after: state.limits.user_request,
+                            });
+                        }
+                    };
                     // A session refused before sign-in is opened again on the
                     // next question.
                     state.session = None;
@@ -1026,8 +1150,13 @@ async fn serve(
                 .await;
                 let _ = reply.send(outcome);
             }
-            Request::ChangeSetting { change, reply } => {
-                let _ = reply.send(change_setting(connection, &state, settings, change).await);
+            Request::ChangeSetting {
+                change,
+                cancel,
+                reply,
+            } => {
+                let _ =
+                    reply.send(change_setting(connection, &state, settings, change, &cancel).await);
             }
             Request::Prompt {
                 text,
@@ -1035,6 +1164,10 @@ async fn serve(
                 cancel,
                 reply,
             } => {
+                if cancel.is_cancelled() {
+                    let _ = reply.send(Ok(TurnEnd::Cancelled));
+                    continue;
+                }
                 let session = match ensure(connection, &mut state, settings).await {
                     Ok((_, session)) => session,
                     Err(error) => {
@@ -1115,6 +1248,29 @@ async fn serve(
                 }
             }
         }
+    }
+}
+
+/// Which event ended a request whose answer depends on the user or agent.
+enum UserResponse<T> {
+    /// The agent answered before either bound.
+    Answer(T),
+    /// The session was released while the request was pending.
+    Cancelled,
+    /// The user-side request was not completed within its product bound.
+    TimedOut,
+}
+
+/// Waits for an agent's sign-in or settings result without holding `serve` forever.
+async fn user_response<T>(
+    answer: impl std::future::Future<Output = T>,
+    cancel: &CancelToken,
+    limit: std::time::Duration,
+) -> UserResponse<T> {
+    tokio::select! {
+        answer = answer => UserResponse::Answer(answer),
+        () = cancel.cancelled() => UserResponse::Cancelled,
+        () = tokio::time::sleep(limit) => UserResponse::TimedOut,
     }
 }
 
@@ -1289,6 +1445,7 @@ async fn change_setting(
     state: &State,
     settings: &Settings,
     change: SettingChange,
+    cancel: &CancelToken,
 ) -> Result<AgentSettings, ExternalError> {
     // Checked again here, against the settings as they are when the request
     // leaves: the agent may have changed them since the call was made.
@@ -1358,9 +1515,19 @@ async fn change_setting(
     if registered.is_err() {
         return Err(ExternalError::Exited);
     }
-    let Ok(answer) = answer.await else {
-        // Never delivered: the connection ended first.
-        return Err(ExternalError::Exited);
+    let answer = match user_response(answer, cancel, state.limits.user_request).await {
+        UserResponse::Answer(Ok(answer)) => answer,
+        // Never delivered: the connection ended first or the session was
+        // released while a user-side request was pending.
+        UserResponse::Answer(Err(_)) | UserResponse::Cancelled => {
+            return Err(ExternalError::Exited);
+        }
+        UserResponse::TimedOut => {
+            return Err(ExternalError::RequestTimedOut {
+                request: "the setting change",
+                after: state.limits.user_request,
+            });
+        }
     };
     answer.map_err(|error| {
         tracing::warn!(

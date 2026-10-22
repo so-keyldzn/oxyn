@@ -2509,4 +2509,39 @@ fn a_one_shot_launch_resolves_secrets_after_the_tier_check() {
     assert_eq!(reads.load(Ordering::SeqCst), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn shutting_down_a_live_session_signals_its_guard_and_removes_its_directory() {
+    let agent = ExternalAgentConfig::new(oxyn_core::ProviderId::for_new_agent(), "Test", "/bin/sh")
+        .with_args(["-c", "sleep 30"]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let (session, driver) = ExternalSession::launch(&agent, PrivacyTier::Metadata, None)
+            .await
+            .expect("agent starts");
+        let directory = session
+            .process
+            .as_ref()
+            .expect("a launched session owns its process guard")
+            .directory()
+            .to_path_buf();
+        let driver = tokio::spawn(driver);
+
+        session.shutdown().await;
+
+        assert!(
+            !directory.exists(),
+            "the private directory survives the ordered shutdown: {}",
+            directory.display()
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), driver)
+            .await
+            .expect("the signalled driver ends")
+            .expect("the driver task joins");
+    });
+}
+
 mod idle;

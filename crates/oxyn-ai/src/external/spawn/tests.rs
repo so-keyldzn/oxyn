@@ -160,7 +160,12 @@ fn the_end_of_stderr_is_kept_when_an_agent_floods_it() {
 fn dropping_the_guard_kills_the_agent() {
     // An agent left running holds the user's subscription and may still be
     // talking to a provider. Closing the panel must end it.
-    let spawned = spawn(SHELL, &script("sleep 30"), &Environment::empty()).expect("a shell starts");
+    let spawned = spawn(
+        SHELL,
+        &script("sleep 30 & child=$!; echo $child >&2; wait"),
+        &Environment::empty(),
+    )
+    .expect("a shell starts");
     let Spawned {
         transport,
         watch,
@@ -178,6 +183,16 @@ fn dropping_the_guard_kills_the_agent() {
     let exit = block_on(watch);
     assert_eq!(exit.code, None, "a killed process has no exit code");
     assert!(!alive(pid), "the agent survived the guard");
+    let child = exit
+        .stderr
+        .trim()
+        .parse::<i32>()
+        .expect("the shell reported its child pid");
+    let child = rustix::process::Pid::from_raw(child).expect("the child pid is positive");
+    assert!(
+        rustix::process::test_kill_process(child).is_err(),
+        "a launcher child survived the guard's process-group signal"
+    );
 }
 
 #[cfg(unix)]
