@@ -156,11 +156,19 @@ fn the_end_of_stderr_is_kept_when_an_agent_floods_it() {
 }
 
 #[cfg(unix)]
-#[test]
-fn dropping_the_guard_kills_the_agent() {
+#[tokio::test]
+async fn dropping_the_guard_kills_the_agent() {
     // An agent left running holds the user's subscription and may still be
     // talking to a provider. Closing the panel must end it.
-    let spawned = spawn(SHELL, &script("sleep 30"), &Environment::empty()).expect("a shell starts");
+    let temporary = tempfile::tempdir().expect("a temporary marker directory");
+    let marker = temporary.path().join("agent-child-pid");
+    let arguments = vec![
+        "-c".to_owned(),
+        "sleep 30 & child=$!; printf '%s' \"$child\" > \"$1\"; wait".to_owned(),
+        "agent".to_owned(),
+        marker.to_string_lossy().into_owned(),
+    ];
+    let spawned = spawn(SHELL, &arguments, &Environment::empty()).expect("a shell starts");
     let Spawned {
         transport,
         watch,
@@ -168,16 +176,40 @@ fn dropping_the_guard_kills_the_agent() {
     } = spawned;
     drop(transport);
 
-    let pid = guard.pid;
+    let pid = guard.process.pid;
     assert!(alive(pid), "the child should be running");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !marker.is_file() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the shell did not start its child"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let child = std::fs::read_to_string(&marker)
+        .expect("the child pid marker is readable")
+        .parse::<i32>()
+        .expect("the child pid marker is numeric");
+    let child = rustix::process::Pid::from_raw(child).expect("the child pid is positive");
     drop(guard);
 
     // Awaiting the watch reaps the child. Without it the process stays a
     // zombie, which still answers « alive » — and a test that stopped here
     // would pass whether or not the kill worked.
-    let exit = block_on(watch);
+    let exit = watch.await;
     assert_eq!(exit.code, None, "a killed process has no exit code");
     assert!(!alive(pid), "the agent survived the guard");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while rustix::process::test_kill_process(child).is_ok() && std::time::Instant::now() < deadline
+    {
+        // The shell cannot reap a child after the whole group is killed; macOS
+        // briefly reports that zombie until its new parent has reaped it.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        rustix::process::test_kill_process(child).is_err(),
+        "a launcher child survived the guard's process-group signal"
+    );
 }
 
 #[cfg(unix)]
@@ -229,7 +261,7 @@ fn the_agent_starts_in_a_directory_of_its_own() {
     // workspace, next to the files that describe the user's connections.
     let spawned =
         spawn(SHELL, &script("pwd >&2; ls -a >&2"), &Environment::empty()).expect("a shell starts");
-    let workspace = spawned.guard.workspace.clone();
+    let workspace = spawned.guard.process.workspace.clone();
     let exit = block_on(spawned.watch);
 
     assert!(
@@ -250,7 +282,7 @@ fn the_agent_starts_in_a_directory_of_its_own() {
 #[test]
 fn the_scratch_directory_does_not_outlive_the_agent() {
     let spawned = spawn(SHELL, &script("exit 0"), &Environment::empty()).expect("a shell starts");
-    let workspace = spawned.guard.workspace.clone();
+    let workspace = spawned.guard.process.workspace.clone();
     assert!(workspace.is_dir(), "it should exist while the agent runs");
 
     let Spawned {

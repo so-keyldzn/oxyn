@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b7401b5ecaed" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="86799c6a5439" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -292,6 +292,7 @@ pas le tag : un tag se déplace, un SHA non.
 | `actions/cache` | `v6.1.0`, `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`, publiée le 2026-06-26 ; n'enregistre qu'après un job réussi (`post-if: "success()"`) | API GitHub, `action.yml` à ce SHA | 2026-09-24 |
 | Node exigé par le front | vite 8.3.0 : `^20.19.0 \|\| >=22.12.0` ; vitest 4.1.11 : `^20.0.0 \|\| ^22.0.0 \|\| >=24.0.0` ; la CI prend la ligne 22, celle de la machine de dev (22.23.2) | champ `engines` des paquets installés | 2026-09-24 |
 | Bibliothèques système de Tauri sous Debian/Ubuntu | `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` | `tauri-apps/tauri-docs`, branche `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` du 2026-08-20 | 2026-09-24 |
+| Dépendance système de Tauri sous macOS pour le développement desktop seul | Xcode, ou les Xcode Command Line Tools (`xcode-select --install`) quand iOS n'est pas visé | `tauri-apps/tauri-docs`, branche `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` du 2026-08-20 (section « macOS ») | 2026-10-22 |
 | Runner hébergé GitHub `ubuntu-24.04-arm` : runner standard, listé pour les dépôts publics et privés, 4 CPU et 16 Go de RAM sur un dépôt public ; « Use of the standard GitHub-hosted runners is free and unlimited on public repositories ». `RUNNER_ARCH` y vaut `ARM64`. `livraison.yml` y construit nativement les paquets Linux ARM64 — sans chaîne croisée, sans sysroot WebKitGTK multiarch, sans QEMU — et l'outillage AppImage du bundler Tauri s'y exécute comme sur x86_64 | [référence des runners hébergés GitHub](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) ; prouvé par l'exécution `37246283509` du workflow temporaire `essai-linux-arm64` (branche de PR `linux-arm64-release`) | 2026-10-04 |
 | `keyring` 4.2.0 sous Linux passe par `zbus-secret-service-keyring-store` et `secret-service` 5.2.0 : du Rust pur, sans `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
 | Binaire CI `cargo-nextest` | `0.9.146` ; SHA-256 `universal-apple-darwin` `39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8` ; SHA-256 `x86_64-unknown-linux-gnu` `682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428` | release GitHub `cargo-nextest-0.9.146` de `nextest-rs/nextest` et ses ressources `.sha256` | 2026-10-03 |
