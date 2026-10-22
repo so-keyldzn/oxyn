@@ -210,15 +210,18 @@ impl Backend {
             }
             HandoffRequest::Object { connection, place } => {
                 let connection: ConnectionId = parse("connection", &connection)?;
-                if !self.inner.windows.holds(source, connection) {
+                let windows = &self.inner.windows;
+                if !windows.holds(source, connection) {
                     return Err(IpcError::invalid(
                         "This connection is not open in this window",
                     ));
                 }
-                let open = self
-                    .reconnect(oxyn_core::CommandId::new(), connection)
-                    .await?;
-                self.adopt_open(target, &open).await?;
+                // Recorded for the target before anything opens, as the
+                // connection screen's opening is.
+                let id = oxyn_core::CommandId::new();
+                let opening = windows.begin_opening(target, id)?;
+                let open = self.reconnect(id, connection).await?;
+                self.adopt_open(opening, &open).await?;
                 // The workspace reopens its window's object tab as a place,
                 // as it does at launch: nothing is read until it is shown.
                 self.write_object_location(target, connection, Some(place))

@@ -49,7 +49,9 @@ pub async fn list_connections(
 }
 
 /// The connection's catalog session and first console belong to the window
-/// that opened it (ADR-0043); an approval asked for it too.
+/// that opened it (ADR-0043); an approval asked for it too. The opening is
+/// recorded for the window before anything opens, and until it adopts what
+/// opened.
 #[tauri::command]
 pub async fn connect(
     webview: Webview,
@@ -59,6 +61,7 @@ pub async fn connect(
 ) -> Result<ConnectResponse, IpcError> {
     let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
+    let opening = backend.inner.windows.begin_opening(window, id)?;
     let response = run_owned(
         &backend,
         window,
@@ -68,7 +71,7 @@ pub async fn connect(
     )
     .await?;
     if let ConnectResponse::Open(open) = &response {
-        backend.adopt_open(window, open).await?;
+        backend.adopt_open(opening, open).await?;
     }
     Ok(response)
 }
@@ -101,6 +104,7 @@ pub async fn decide_connection(
 ) -> Result<Option<ConnectResponse>, IpcError> {
     let window = caller(&backend, &webview)?;
     let command = parse("command id", &command)?;
+    let opening = backend.inner.windows.begin_opening(window, command)?;
     let response = run_owned(
         &backend,
         window,
@@ -110,7 +114,7 @@ pub async fn decide_connection(
     )
     .await?;
     if let Some(ConnectResponse::Open(open)) = &response {
-        backend.adopt_open(window, open).await?;
+        backend.adopt_open(opening, open).await?;
     }
     Ok(response)
 }
@@ -125,6 +129,7 @@ pub async fn reconnect(
     let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let connection: ConnectionId = parse("connection", &connection)?;
+    let opening = backend.inner.windows.begin_opening(window, id)?;
     let open = run_owned(
         &backend,
         window,
@@ -133,7 +138,7 @@ pub async fn reconnect(
         |_| false,
     )
     .await?;
-    backend.adopt_open(window, &open).await?;
+    backend.adopt_open(opening, &open).await?;
     Ok(open)
 }
 

@@ -13,7 +13,7 @@ use oxyn_exec::Outcome;
 
 use crate::backend::Backend;
 use crate::backend::confirm::{Answer, ScriptedConfirm, Timing};
-use crate::backend::windows::WindowKey;
+use crate::backend::windows::{Opening, WindowKey};
 use crate::commands::windows::run_owned;
 use crate::ipc::settings::ConnectionChange;
 use crate::ipc::{IpcError, OpenConnection};
@@ -94,15 +94,36 @@ impl Bench {
 
     /// The other window opens the connection, as `reconnect` adopts it.
     fn open_elsewhere(&self) -> OpenConnection {
-        let backend = &self.backend;
-        let open = self
-            .runtime
-            .block_on(backend.reconnect(CommandId::new(), self.connection))
-            .expect("the connection opens");
+        let (opening, open) = self.opening_elsewhere().expect("the connection opens");
         self.runtime
-            .block_on(backend.adopt_open(self.opening, &open))
+            .block_on(self.backend.adopt_open(opening, &open))
             .expect("an open window");
         open
+    }
+
+    /// The other window's `reconnect`, up to the adoption: its sessions are
+    /// open, not adopted yet.
+    fn opening_elsewhere(&self) -> Result<(Opening<'_>, OpenConnection), IpcError> {
+        let backend = &self.backend;
+        let id = CommandId::new();
+        let opening = backend.inner.windows.begin_opening(self.opening, id)?;
+        let open = self
+            .runtime
+            .block_on(backend.reconnect(id, self.connection))?;
+        Ok((opening, open))
+    }
+
+    /// The sessions the executor holds open on the connection.
+    fn open_sessions(&self) -> Vec<SessionId> {
+        self.backend
+            .inner
+            .executor
+            .sessions()
+            .for_connection(self.connection)
+            .iter()
+            .filter(|slot| slot.is_open())
+            .map(|slot| slot.id())
+            .collect()
     }
 
     fn survives(&self, open: &OpenConnection) {
@@ -194,4 +215,72 @@ fn a_direct_deletion_is_refused_while_another_window_holds_the_connection() {
         bench.runtime.block_on(bench.delete()),
         Ok(ConnectionChange::Deleted)
     ));
+}
+
+#[test]
+fn a_deletion_is_refused_while_another_window_opening_is_in_flight() {
+    let bench = bench(Environment::Development);
+    let _guard = bench.runtime.enter();
+    // Its sessions are open, its window has not adopted them: no window
+    // holds the connection yet.
+    let (opening, open) = bench.opening_elsewhere().expect("the connection opens");
+    assert!(
+        bench
+            .backend
+            .inner
+            .windows
+            .holders(bench.connection)
+            .is_empty()
+    );
+
+    refused_as_held(bench.runtime.block_on(bench.delete()));
+    bench.survives(&open);
+    bench
+        .runtime
+        .block_on(bench.backend.adopt_open(opening, &open))
+        .expect("adopted after the refusal");
+    bench.survives(&open);
+}
+
+#[test]
+fn an_opening_started_after_the_deletion_last_check_is_refused() {
+    let bench = bench(Environment::Development);
+    let _guard = bench.runtime.enter();
+    let backend = &bench.backend;
+    let id = CommandId::new();
+    backend
+        .inner
+        .windows
+        .claim_command(bench.asking, id)
+        .expect("free");
+    // Where both deletion paths stand once their last check passed, until
+    // `DeleteConnection` has run: the check and this mark are one step.
+    let deletion = backend
+        .inner
+        .windows
+        .begin_deletion(id, bench.connection)
+        .expect("nobody holds it");
+
+    let refused = bench.opening_elsewhere().err();
+    assert_eq!(
+        refused.map(|refusal| refusal.message),
+        Some("This connection is being deleted.".to_owned())
+    );
+    assert!(
+        bench.open_sessions().is_empty(),
+        "nothing opened on a connection being deleted"
+    );
+    assert!(
+        bench
+            .backend
+            .inner
+            .windows
+            .holders(bench.connection)
+            .is_empty()
+    );
+
+    // A deletion that ends without deleting lets the opening through.
+    drop(deletion);
+    let open = bench.open_elsewhere();
+    bench.survives(&open);
 }

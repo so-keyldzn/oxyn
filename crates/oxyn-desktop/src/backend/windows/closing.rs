@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use oxyn_core::{Command, CommandId, ConnectionId, ResultId, SessionId};
 
-use super::{Closing, WindowKey};
+use super::{Closing, Opening, WindowKey};
 use crate::backend::Backend;
 use crate::backend::exit::warn_unacknowledged;
 use crate::ipc::recovery::{ExitScope, ShutdownSignal};
@@ -203,8 +203,9 @@ impl Backend {
                 Ok(())
             })
             .await;
-        for connection in owned.released {
-            self.disconnect_released(connection).await;
+        // Each mark lasts until its `Disconnect` has run.
+        for unused in owned.released {
+            self.disconnect_released(unused.connection()).await;
         }
     }
 
@@ -257,7 +258,9 @@ impl Backend {
             self.close_ai_conversation(connection);
             windows.release_assistant(window, connection);
         }
-        if windows.release_connection(window, connection) {
+        // Marked until the `Disconnect` has run: an opening started meanwhile
+        // waits for it rather than lose its sessions to it.
+        if let Some(_unused) = windows.release_connection(window, connection) {
             self.inner.ai.release_agents(connection);
             return self
                 .run(CommandId::new(), Command::Disconnect { connection })
@@ -266,20 +269,20 @@ impl Backend {
         Ok(CommandOutcome::Done)
     }
 
-    /// Records the sessions an opened connection gives this window: the
-    /// catalog's and the first console's.
+    /// Records the sessions an opened connection gives the window of
+    /// `opening` — the catalog's and the first console's — and ends the
+    /// opening, under one lock.
     ///
     /// # Errors
     /// The window closed while the connection opened, too late for the
     /// cancellation to stop it: nothing is recorded under its key, the
-    /// sessions are closed, and the connection is disconnected if no other
-    /// window holds it (ADR-0043).
+    /// sessions are closed, and the connection is disconnected if no window
+    /// holds it or is opening it (ADR-0043).
     pub(crate) async fn adopt_open(
         &self,
-        window: WindowKey,
+        opening: Opening<'_>,
         open: &OpenConnection,
     ) -> Result<(), IpcError> {
-        let windows = &self.inner.windows;
         let Ok(connection) = open.connection.parse::<ConnectionId>() else {
             return Ok(());
         };
@@ -287,15 +290,7 @@ impl Backend {
             .into_iter()
             .filter_map(|session| session.parse().ok())
             .collect();
-        // A window is never registered again once forgotten: past the first
-        // refusal, every record is refused, and what `forget` took of the
-        // first ones `release_window` releases.
-        let adopted = windows.hold_connection(window, connection).and_then(|()| {
-            sessions
-                .iter()
-                .try_for_each(|session| windows.claim_session(window, connection, *session))
-        });
-        if let Err(refusal) = adopted {
+        if let Err(refusal) = opening.adopt(connection, &sessions) {
             self.release_unclaimed(connection, &sessions).await;
             return Err(refusal);
         }
@@ -304,8 +299,10 @@ impl Backend {
 
     /// Lets go of what an opening produced for a window that closed before it
     /// could claim it: its sessions are closed, and the connection is
-    /// disconnected if no window holds it. `release_window` already ran and
-    /// saw none of it; nothing else would ever close them (ADR-0043).
+    /// disconnected if no window holds it or is opening it — another
+    /// window's opening, not adopted yet, keeps its sessions.
+    /// `release_window` already ran and saw none of it; nothing else would
+    /// ever close them (ADR-0043).
     pub(crate) async fn release_unclaimed(&self, connection: ConnectionId, sessions: &[SessionId]) {
         for session in sessions {
             if let Err(error) = self.close_console(connection, *session).await {
@@ -316,7 +313,7 @@ impl Backend {
                 );
             }
         }
-        if self.inner.windows.holders(connection).is_empty() {
+        if let Some(_unused) = self.inner.windows.disconnect_if_unused(connection) {
             self.disconnect_released(connection).await;
         }
     }

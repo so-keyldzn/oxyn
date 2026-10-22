@@ -244,12 +244,12 @@ fn a_connection_is_disconnected_when_the_last_window_lets_it_go() {
         "a command no window sent has no window of its own"
     );
     assert!(
-        !registry.release_connection(left, connection),
+        registry.release_connection(left, connection).is_none(),
         "the right still holds it"
     );
     assert!(!registry.holds(left, connection));
     assert!(!registry.held_elsewhere(CommandId::new(), ConnectionId::new()));
-    assert!(registry.release_connection(right, connection));
+    assert!(registry.release_connection(right, connection).is_some());
 }
 
 #[test]
@@ -298,7 +298,11 @@ fn forgetting_a_window_returns_what_it_owned_and_nothing_of_the_other() {
     assert_eq!(owned.results, vec![(result, 2)], "one release per view");
     assert_eq!(owned.assistants, vec![own]);
     assert_eq!(
-        owned.released,
+        owned
+            .released
+            .iter()
+            .map(super::Disconnecting::connection)
+            .collect::<Vec<_>>(),
         vec![own],
         "the shared connection stays open"
     );

@@ -147,13 +147,15 @@ fn bench() -> Bench {
     }
 }
 
-/// `reconnect` as the Tauri command runs it: owned by `window`, then adopted.
+/// `reconnect` as the Tauri command runs it: recorded as `window`'s opening,
+/// owned by it, then adopted.
 async fn reconnect_in(
     backend: Backend,
     window: WindowKey,
     connection: ConnectionId,
 ) -> Result<OpenConnection, IpcError> {
     let id = CommandId::new();
+    let opening = backend.inner.windows.begin_opening(window, id)?;
     let open = run_owned(
         &backend,
         window,
@@ -162,8 +164,25 @@ async fn reconnect_in(
         |_| false,
     )
     .await?;
-    backend.adopt_open(window, &open).await?;
+    backend.adopt_open(opening, &open).await?;
     Ok(open)
+}
+
+/// `reconnect` as the Tauri command runs it, up to the adoption: the
+/// sessions are open, and the window has not adopted them yet.
+fn opened_unadopted(bench: &Bench, window: WindowKey) -> (super::Opening<'_>, OpenConnection) {
+    let backend = &bench.backend;
+    let id = CommandId::new();
+    let opening = backend
+        .inner
+        .windows
+        .begin_opening(window, id)
+        .expect("an open window");
+    let open = bench
+        .runtime
+        .block_on(backend.reconnect(id, bench.connection))
+        .expect("reopens");
+    (opening, open)
 }
 
 fn sessions_of(open: &OpenConnection) -> [SessionId; 2] {
@@ -281,15 +300,12 @@ fn an_opening_adopted_after_its_window_closed_is_closed_and_disconnected() {
     let stray = bench.stray_console();
     // Opened to the end before the window closed: too late for the
     // cancellation, only the adoption sees it.
-    let open = bench
-        .runtime
-        .block_on(backend.reconnect(CommandId::new(), bench.connection))
-        .expect("reopens");
+    let (opening, open) = opened_unadopted(&bench, closing);
     bench.runtime.block_on(backend.release_window(closing));
 
     let refused = bench
         .runtime
-        .block_on(backend.adopt_open(closing, &open))
+        .block_on(backend.adopt_open(opening, &open))
         .expect_err("the window has closed");
     assert_eq!(refused.message, "This window has closed");
     assert!(!backend.inner.windows.names(closing));
@@ -311,16 +327,13 @@ fn a_late_adoption_leaves_another_window_connection_open() {
     let live = backend.reserve_window(true).expect("a window");
     let closing = backend.reserve_window(false).expect("a window");
     let kept = bench.reopen_in(live);
-    let open = bench
-        .runtime
-        .block_on(backend.reconnect(CommandId::new(), bench.connection))
-        .expect("reopens");
+    let (opening, open) = opened_unadopted(&bench, closing);
     bench.runtime.block_on(backend.release_window(closing));
 
     assert!(
         bench
             .runtime
-            .block_on(backend.adopt_open(closing, &open))
+            .block_on(backend.adopt_open(opening, &open))
             .is_err()
     );
     let open_now = bench.open_sessions();
@@ -330,6 +343,55 @@ fn a_late_adoption_leaves_another_window_connection_open() {
     for session in kept {
         assert!(open_now.contains(&session), "the live window's stay open");
     }
+}
+
+#[test]
+fn a_closing_window_leaves_another_window_opening_in_flight() {
+    let bench = bench();
+    let _guard = bench.runtime.enter();
+    let backend = &bench.backend;
+    let closing = backend.reserve_window(true).expect("a window");
+    let other = backend.reserve_window(false).expect("a window");
+    // The closing window holds the connection, and opens it once more; the
+    // other window has opened its sessions and not adopted them yet: no
+    // window but the closing one holds the connection.
+    let held = bench.reopen_in(closing);
+    let (late, late_open) = opened_unadopted(&bench, closing);
+    let (in_flight, flying) = opened_unadopted(&bench, other);
+    assert_eq!(
+        backend.inner.windows.holders(bench.connection),
+        vec![closing]
+    );
+
+    // Its close lets go of what it held, then its late opening is refused:
+    // two decisions to disconnect, and neither may.
+    bench.runtime.block_on(backend.release_window(closing));
+    assert!(
+        bench
+            .runtime
+            .block_on(backend.adopt_open(late, &late_open))
+            .is_err()
+    );
+
+    let open_now = bench.open_sessions();
+    for session in held.into_iter().chain(sessions_of(&late_open)) {
+        assert!(
+            !open_now.contains(&session),
+            "the closed window's are closed"
+        );
+    }
+    for session in sessions_of(&flying) {
+        assert!(
+            open_now.contains(&session),
+            "the opening in flight keeps its sessions: no `Disconnect` ran"
+        );
+    }
+    bench
+        .runtime
+        .block_on(backend.adopt_open(in_flight, &flying))
+        .expect("an open window");
+    assert_eq!(backend.inner.windows.holders(bench.connection), vec![other]);
+    assert!(!backend.inner.windows.names(closing));
 }
 
 #[test]
