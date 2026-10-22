@@ -32,6 +32,7 @@
 //! | `uuid` | `Utf8` | none: canonical lowercase rendering with hyphens |
 //! | `timetz` | `Utf8` | none: time and offset rendered as is |
 //! | `interval` | `Interval(MonthDayNano)` | beyond ±292 years of microsecond component, the conversion to nanoseconds overflows: decoding **fails** instead of truncating |
+//! | `time` of `24:00:00` | — | legal in PostgreSQL (a closing time) and not a `Time64`, which stops at 23:59:59.999999; an Arrow cell, a CSV or a JSON export would fail on it. Decoding **fails** with a message to cast it to text, as for an infinite date. Any other `time`, `time[]` elements included, is `Time64(µs)` |
 //! | `money` | `Binary` | raw representation retained; the currency depends on `lc_monetary`, which is not transmitted |
 //! | a column array with more than one dimension | — | not representable by an Arrow list: decoding **fails** rather than silently flattening. Nested in a record or a range, it is text like `array_out` prints it, shape and lower bounds included |
 //! | `record`, composite types | `Utf8` | the structure is not split into an Arrow `Struct`: text as `record_out` prints it. In a named composite — a table's row, a `CREATE TYPE` — every field is rendered with the decoding `sqlx` resolved, domains and enums included; in an anonymous `record` (`ROW(…)`), a field whose type is not built in keeps its bytes as `\\x…` |

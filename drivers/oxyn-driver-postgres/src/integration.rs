@@ -1346,6 +1346,35 @@ async fn the_type_table_crosses_the_wire_losslessly() {
 
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn a_time_of_24_hours_is_refused_with_its_way_out_instead_of_breaking_exports() {
+    // Issue #266. `24:00:00` is a legal `time` and not a `Time64`: it used to
+    // reach the column, where the cell failed to format and a CSV or JSON
+    // export aborted with a cast error. It now stops at the decoder, naming
+    // the cast that works.
+    let Some(session) = session().await else {
+        return;
+    };
+    for sql in [
+        "SELECT '24:00'::time",
+        "SELECT ARRAY['12:00'::time, '24:00'::time]",
+    ] {
+        let message = fail(&*session, read_request(sql)).await.to_string();
+        assert!(message.contains("24:00:00"), "`{sql}`: {message}");
+        assert!(message.contains("cast it to text"), "`{sql}`: {message}");
+    }
+    assert_eq!(
+        first_text(&*session, "SELECT '24:00'::time::text").await,
+        "24:00:00"
+    );
+    assert_eq!(
+        first_text(&*session, "SELECT '23:59:59.999999'::time::text").await,
+        "23:59:59.999999"
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn an_unknown_type_does_not_fail_the_query() {
     use arrow::array::AsArray as _;
 

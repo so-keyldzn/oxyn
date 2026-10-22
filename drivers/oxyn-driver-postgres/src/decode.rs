@@ -58,6 +58,8 @@ use crate::types::PgDecoding;
 const EPOCH_SHIFT_MICROS: i64 = 946_684_800_000_000;
 /// Days between the Unix epoch and PostgreSQL's.
 const EPOCH_SHIFT_DAYS: i32 = 10_957;
+/// Microseconds in a day: the exclusive bound of an Arrow `Time64`.
+const MICROS_PER_DAY: i64 = 86_400_000_000;
 /// Bytes of a `uuid` on the wire.
 const UUID_LEN: usize = 16;
 /// Version expected at the head of a `jsonb`.
@@ -636,7 +638,14 @@ fn read_date(bytes: &[u8]) -> Result<i32, &'static str> {
 /// A `time`: microseconds since midnight.
 fn read_time(bytes: &[u8]) -> Result<i64, &'static str> {
     let micros = read_i64(bytes)?;
-    if !(0..=86_400_000_000).contains(&micros) {
+    if micros == MICROS_PER_DAY {
+        // `'24:00:00'::time` is legal in PostgreSQL — a closing time — but
+        // `Time64` stops at 23:59:59.999999: the grid cell would fail to format
+        // and Arrow's CSV and JSON writers would abort the whole export with a
+        // cast error. Same family as an infinite date.
+        return Err("time 24:00:00, not representable as Time64 — cast it to text");
+    }
+    if !(0..MICROS_PER_DAY).contains(&micros) {
         return Err("time outside the bounds of a day");
     }
     Ok(micros)
@@ -803,11 +812,21 @@ mod tests {
     fn a_time_outside_the_bounds_of_a_day_is_refused() {
         assert_eq!(read_time(&0_i64.to_be_bytes()), Ok(0));
         assert_eq!(
-            read_time(&86_400_000_000_i64.to_be_bytes()),
-            Ok(86_400_000_000)
+            read_time(&86_399_999_999_i64.to_be_bytes()),
+            Ok(86_399_999_999)
         );
         assert!(read_time(&(-1_i64).to_be_bytes()).is_err());
         assert!(read_time(&86_400_000_001_i64.to_be_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_time_of_24_hours_is_refused_with_an_explicit_message() {
+        // Legal in PostgreSQL (`SELECT '24:00'::time`) and not a `Time64`: it
+        // must not reach a column whose cells then fail to format and whose
+        // CSV and JSON exports abort.
+        let error = read_time(&86_400_000_000_i64.to_be_bytes()).expect_err("refusal expected");
+        assert!(error.contains("24:00:00"), "{error}");
+        assert!(error.contains("cast it to text"), "{error}");
     }
 
     #[test]
