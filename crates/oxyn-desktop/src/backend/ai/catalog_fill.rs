@@ -118,13 +118,13 @@ impl Want<'_> {
 
 /// Why a completion stopped before it was done.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Stop {
+pub(in crate::backend) enum Stop {
     Deadline,
     Cancelled,
 }
 
 impl Stop {
-    const fn as_str(self) -> &'static str {
+    pub(in crate::backend) const fn as_str(self) -> &'static str {
         match self {
             Self::Deadline => "deadline",
             Self::Cancelled => "cancelled",
@@ -165,7 +165,11 @@ impl Filled {
 }
 
 /// One completion of one connection's catalog, by one actor.
-pub(super) struct CatalogFill<'a> {
+///
+/// The editor's pass ([`crate::backend::completion_load`]) submits its reads
+/// through [`Self::read`] too: one way to send a metadata read under a
+/// deadline, and one place where a read held for approval is withdrawn.
+pub(in crate::backend) struct CatalogFill<'a> {
     /// The scheduler's sink: unbound for the user, bound to the agent for
     /// its tool calls — where it refuses any other actor.
     pub sink: &'a ExecutorSink,
@@ -174,7 +178,7 @@ pub(super) struct CatalogFill<'a> {
     pub catalog: SharedCatalog,
 }
 
-enum Step {
+pub(in crate::backend) enum Step {
     Done,
     /// What went wrong, in words the user can read: the server's own, or
     /// the gate's.
@@ -336,7 +340,12 @@ impl CatalogFill<'_> {
     }
 
     /// Submits one read, and stops it at the deadline or with the question.
-    async fn read(&self, command: Command, cancel: &CancelToken, deadline: Instant) -> Step {
+    pub(in crate::backend) async fn read(
+        &self,
+        command: Command,
+        cancel: &CancelToken,
+        deadline: Instant,
+    ) -> Step {
         // A child: the deadline stops this read, never the question.
         let operation = cancel.child();
         let dispatch = self.sink.dispatch(self.actor, command, &operation);
@@ -489,4 +498,4 @@ const fn fetched(freshness: Freshness) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::backend) mod tests;

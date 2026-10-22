@@ -421,6 +421,13 @@ impl std::fmt::Display for CatalogScope {
 pub struct CatalogCache {
     server: Cached<Option<ServerInfo>>,
     catalogs: Cached<IndexMap<String, CatalogNode>>,
+    /// The namespaces an unqualified name resolves in, first match first.
+    ///
+    /// `None` is "never read" **or** "the source cannot say": both leave the
+    /// completion on qualified names, and neither is an empty path, which
+    /// would assert that nothing resolves.
+    #[serde(default)]
+    resolution_path: Cached<Option<Vec<String>>>,
 }
 
 impl CatalogCache {
@@ -435,6 +442,14 @@ impl CatalogCache {
     /// Records the server identity and the session capabilities.
     pub fn set_server_info(&mut self, info: ServerInfo) {
         self.server.set(Some(info));
+    }
+
+    /// Records the namespaces an unqualified name resolves in, in priority
+    /// order ([ADR-0057](../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md)).
+    ///
+    /// The names are the server's words: data, never composed into SQL here.
+    pub fn set_resolution_path(&mut self, path: Vec<String>) {
+        self.resolution_path.set(Some(path));
     }
 
     /// Records the list of catalogs.
@@ -695,6 +710,24 @@ impl CatalogCache {
         self.server.value.as_ref()
     }
 
+    /// The namespaces an unqualified name resolves in, first match first.
+    ///
+    /// `None` when it was never read or when the source cannot tell — not an
+    /// empty slice, which would say that no namespace resolves anything.
+    /// After an invalidation the last value stays readable, flagged by
+    /// [`Self::resolution_path_freshness`]: a path that was right a moment ago
+    /// serves better than none while it is read again.
+    #[must_use]
+    pub fn resolution_path(&self) -> Option<&[String]> {
+        self.resolution_path.value.as_deref()
+    }
+
+    /// Freshness of [`Self::resolution_path`].
+    #[must_use]
+    pub fn resolution_path_freshness(&self) -> Freshness {
+        self.resolution_path.freshness
+    }
+
     /// The known catalogs, in the order the server gave them.
     ///
     /// The "missing level" node is not among them: a source without a catalog
@@ -890,6 +923,9 @@ impl CatalogCache {
         match scope {
             CatalogScope::Server => {
                 self.server.freshness.invalidate();
+                // A `CREATE SCHEMA` or a `DROP SCHEMA` changes which entries of
+                // the path exist.
+                self.resolution_path.freshness.invalidate();
                 self.catalogs.freshness.invalidate();
                 for catalogue in self.catalogs.value.values_mut() {
                     Self::invalidate_catalog(catalogue);
@@ -1823,6 +1859,61 @@ mod tests {
                 .count(),
             MAX_DEFINITIONS - 1
         );
+    }
+
+    #[test]
+    fn the_resolution_path_is_unknown_until_read_and_survives_an_invalidation() {
+        let mut cache = CatalogCache::new();
+        assert_eq!(cache.resolution_path(), None);
+        assert_eq!(cache.resolution_path_freshness(), Freshness::Never);
+
+        cache.set_resolution_path(vec!["analytics".into(), "public".into()]);
+        assert_eq!(
+            cache.resolution_path(),
+            Some(["analytics".to_owned(), "public".to_owned()].as_slice())
+        );
+        assert!(matches!(
+            cache.resolution_path_freshness(),
+            Freshness::Fetched(_)
+        ));
+
+        // A DDL may have created or dropped a schema: the path is to be read
+        // again, and stays usable in the meantime.
+        cache.invalidate_all();
+        assert!(cache.resolution_path().is_some());
+        assert_eq!(cache.resolution_path_freshness(), Freshness::Invalidated);
+
+        // Only forgetting the server drops it.
+        cache.forget(&CatalogScope::Server);
+        assert_eq!(cache.resolution_path(), None);
+    }
+
+    #[test]
+    fn invalidating_a_path_never_read_does_not_make_it_stale() {
+        // "A level never read is not stale": nobody asked for it.
+        let mut cache = CatalogCache::new();
+        cache.invalidate_all();
+        assert_eq!(cache.resolution_path_freshness(), Freshness::Never);
+    }
+
+    #[test]
+    fn an_empty_path_is_an_answer_and_not_unknown() {
+        // MySQL with no database selected resolves nothing: that is the truth,
+        // and it differs from a source that cannot say.
+        let mut cache = CatalogCache::new();
+        cache.set_resolution_path(Vec::new());
+        assert_eq!(cache.resolution_path(), Some([].as_slice()));
+    }
+
+    #[test]
+    fn a_cache_serialized_before_the_path_existed_still_reads() {
+        // I-11: what Oxyn writes stays readable, and so does what it wrote
+        // before this field.
+        let mut value = serde_json::to_value(CatalogCache::new()).expect("serializes");
+        let object = value.as_object_mut().expect("a JSON object");
+        assert!(object.remove("resolution_path").is_some());
+        let cache: CatalogCache = serde_json::from_value(value).expect("reads without the field");
+        assert_eq!(cache.resolution_path(), None);
     }
 
     #[test]

@@ -1638,6 +1638,24 @@ async fn session_counter(session: &dyn Session, name: &str) -> u64 {
 
 #[tokio::test]
 #[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
+async fn the_resolution_path_is_the_database_the_connection_selected() {
+    // ADR-0057: MySQL resolves an unqualified name in the selected database
+    // only, and the catalog session selects the one the form names. The test
+    // URL names `t`.
+    let Some(session) = session().await else {
+        return;
+    };
+    let path = session
+        .catalog()
+        .resolution_path(&CancelToken::new())
+        .await
+        .expect("the selected database");
+    assert_eq!(path, ["t"]);
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MySQL or MariaDB server: see the module documentation"]
 async fn a_typed_use_is_refused_and_points_to_the_context_selector() {
     // Issue #223. A `USE` typed in a statement would select a database the
     // session never declared: `Session::context` would go on naming the
