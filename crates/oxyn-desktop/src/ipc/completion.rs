@@ -10,7 +10,7 @@
 //! ([SECURITY](../../../../docs/SECURITY.md)): the front displays it as text and
 //! inserts the `insert` form beside it, never a form it composed itself.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The cache of one connection, as completion sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -119,4 +119,31 @@ pub struct CompletionTruncation {
     pub namespaces_left_out: u64,
     pub relations_left_out: u64,
     pub fields_left_out: u64,
+}
+
+/// One part of a name the editor lexed in the statement: `public` and
+/// `Order Lines` in `public."Order Lines"`.
+///
+/// What the webview sends: compared with the names of the cache, never
+/// composed into SQL nor into the path of a read, so a hostile script gains
+/// nothing but a read the cache would have made for a real name
+/// ([I-10](../../../../CLAUDE.md#i-10)).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CompletionNamePart {
+    pub text: String,
+    /// Written between identifier quotes: compared exactly, case included.
+    pub quoted: bool,
+}
+
+/// What one pass of the editor read — counts only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionLoad {
+    /// Reads submitted, successful or not. Zero: nothing was missing.
+    pub attempted: u32,
+    /// Reads that failed or were refused.
+    pub failed: u32,
+    /// Why the pass ended before it was done, if it did: `deadline` or
+    /// `cancelled` (a newer pass took its place).
+    pub stopped: Option<&'static str>,
 }

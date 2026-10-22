@@ -6,6 +6,7 @@
 import { z } from "zod"
 
 import { call } from "./client"
+import type { NamePart } from "@/lib/sql-identifiers"
 
 export const CompletionField = z.object({
   name: z.string(),
@@ -90,6 +91,17 @@ export const CompletionCatalog = z.object({
 })
 export type CompletionCatalog = z.infer<typeof CompletionCatalog>
 
+/** What one pass of the editor read — counts only. */
+export const CompletionLoad = z.object({
+  /** Reads submitted, successful or not. Zero: nothing was missing. */
+  attempted: z.number().int().nonnegative(),
+  /** Reads that failed or were refused. */
+  failed: z.number().int().nonnegative(),
+  /** Why the pass ended before it was done: `deadline` or `cancelled`. */
+  stopped: z.string().nullable(),
+})
+export type CompletionLoad = z.infer<typeof CompletionLoad>
+
 export const completion = {
   /**
    * What the cache of a connection holds, for the editor's completion. A cache
@@ -98,4 +110,17 @@ export const completion = {
    */
   catalog: (connection: string) =>
     call("completion_catalog", CompletionCatalog, { connection }),
+
+  /**
+   * Has the host read, through the bus, what the cache lacks for the names of
+   * the statement under the cursor — bounded, and replaced by the next call
+   * for the same connection. Resolves when the pass is over; what it read
+   * reaches the snapshot through the refresh signals, not through this answer.
+   *
+   * The names are as the editor lexed them: the host compares them with the
+   * cache's and never composes them into a read (I-10). After a pause in
+   * typing, never on a keystroke.
+   */
+  load: (connection: string, names: Array<Array<NamePart>>) =>
+    call("completion_load", CompletionLoad, { connection, names }),
 }

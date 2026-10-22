@@ -12,6 +12,17 @@ export interface NamePart {
   quoted: boolean
 }
 
+/**
+ * Whether `part`, as typed, names `name`: a quoted part exactly, an unquoted
+ * one without case, as the servers Oxyn speaks to fold it.
+ */
+export function sameName(part: NamePart, name: string | null) {
+  if (name === null) return false
+  return part.quoted
+    ? part.text === name
+    : part.text.toLowerCase() === name.toLowerCase()
+}
+
 const WORD = /[\p{L}\p{N}_$]/u
 
 /** A chain of parts separated by dots, starting at `index`. */

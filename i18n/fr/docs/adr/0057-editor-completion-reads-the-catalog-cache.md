@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="165224facbe8" -->
+<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="19029ee96491" -->
 
 > Traduction française de [docs/adr/0057-editor-completion-reads-the-catalog-cache.md](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md). **La version anglaise fait foi.**
 
@@ -103,35 +103,56 @@ cache, dans des bornes, jamais au rythme des frappes.**
    montage et quand un signal (5) dit que le cache a changé, garde la réponse en
    mémoire, et la source de complétion lit cette copie : **aucune IPC n'est
    envoyée à une frappe.**
-2. **Des chargements bornés, par le bus, pilotés par l'éditeur.** Après un court
-   anti-rebond, jamais à une frappe, l'éditeur demande à l'hôte de compléter le
-   cache pour ce que l'instruction sous le curseur nomme : les identifiants qu'il
-   repère lexicalement après `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE` et avant un
-   `.`. L'hôte **résout ces noms en Rust** — le dialecte et le chemin de résolution
-   décident, pas une seconde règle en TypeScript — et seulement parmi les
-   relations que le cache a *listées* : une faute de frappe ou un nom que personne
-   n'a listé ne coûte aucune requête et ne peut pas orienter une lecture vers un
-   objet arbitraire. Par passe, il lit :
-   1. à l'ouverture d'une console, et après invalidation de la racine, le niveau
-      serveur, le chemin de résolution et les relations de chaque espace de noms de
-      ce chemin jamais listé — au plus `MAX_COMPLETION_LISTINGS` ;
-   2. les champs des relations résolues non chargées, ou `Invalidated` — au plus
-      `MAX_COMPLETION_DESCRIPTIONS` ;
+2. **Des chargements bornés, par le bus, pilotés par l'éditeur.** Après 300 ms
+   sans frappe ni déplacement du curseur, et une fois à l'ouverture d'une
+   console — jamais à une frappe —, l'éditeur envoie à l'hôte, par
+   `completion_load`, les noms que l'instruction sous le curseur contient : les
+   relations qu'elle nomme après `FROM`, `JOIN`, `INTO`, `UPDATE` et `TABLE`, et
+   le nom qualifié en cours de frappe (`public.us|` est `public`, puis `us`
+   inachevé). Un nom a une ou deux parties, telles que lexées, citées ou non ;
+   64 au plus sont acceptés, aucun plus long qu'un nom de l'instantané. L'hôte
+   **résout ces noms en Rust** (`completion::plan`) — le dialecte et le chemin de
+   résolution décident, pas une seconde règle en TypeScript ; le rapprochement
+   propre à l'éditeur ne choisit que ce qu'il faut *suggérer* — et seulement
+   parmi les relations que le cache a *listées* : une faute de frappe ou un nom
+   que personne n'a listé ne coûte aucune requête et ne peut pas orienter une
+   lecture vers un objet arbitraire : un nom est comparé à ceux du cache, et le
+   chemin de chaque lecture est celui du cache, jamais composé à partir de ce que
+   la webview a envoyé ([I-10](../../CLAUDE.md#i-10)). Une passe lit, dans cet
+   ordre et seulement ce que le cache n'a pas ou a invalidé :
+   1. le niveau serveur, puis le chemin de résolution (4), chacun une fois ;
+   2. les relations de chaque espace de noms de ce chemin jamais listé — et de
+      chaque espace de noms que l'instruction qualifie, systèmes compris, que
+      l'arbre replie — au plus `MAX_LISTINGS` ;
+   3. les champs des relations résolues non chargées — au plus
+      `MAX_DESCRIPTIONS` ;
 
-   le tout dans `COMPLETION_DEADLINE`, en constantes argumentées à côté de
-   `catalog_fill` (valeurs fixées par la mesure, 6). Chaque lecture est une
+   le tout dans `DEADLINE`. Un nom nu se résout dans le premier espace de noms du
+   chemin qui le contient, et seulement une fois que chaque espace de noms
+   précédent du chemin a été lu : un espace de noms que personne n'a lu peut
+   contenir le même nom et le masquer, et décrire la mauvaise relation serait pire
+   que n'en décrire aucune. Chaque lecture est une
    `Command::RefreshCatalogScope` passant par `ExecutorSink`, les commandes d'un
    dépliage d'arbre : `StatementIntent::Read`, autorisée partout, `production`
    comprise ([I-01](../../CLAUDE.md#i-01)) ; l'acteur est `Actor::Human`, puisque
-   taper est un geste de l'utilisateur. Les lectures sont soumises **une à la
-   fois**, jamais mises en file à l'avance, si bien qu'un dépliage d'arbre émis
-   entre-temps attend derrière une lecture au plus, celle en cours ; une édition
-   plus récente annule la passe par son `CancelToken`. Un niveau `Fetched` n'est
-   pas relu, un niveau `Invalidated` l'est une fois, et une lecture en échec n'est
-   pas retentée dans la passe. Rien ne tourne sur le fil de l'interface
-   ([I-05](../../CLAUDE.md#i-05)). **Aucune nouvelle variante de `Command` n'est
-   nécessaire pour cette partie** ; la commande IPC qui reçoit les noms est une
-   enveloppe sur les commandes existantes.
+   taper est un geste de l'utilisateur. Elles sont soumises par la même fonction
+   que les remplissages de l'assistant (`CatalogFill::read`) : l'échéance,
+   l'annulation et le retrait d'une lecture retenue pour approbation ont une seule
+   implémentation. Les lectures sont soumises **une à la fois**, jamais mises en
+   file à l'avance, si bien qu'un dépliage d'arbre émis entre-temps attend
+   derrière une lecture au plus, celle en cours ; **une passe plus récente de la
+   même connexion annule la précédente** par son `CancelToken`, puisque la
+   précédente travaille pour une instruction que l'utilisateur a déjà changée. Un
+   niveau `Fetched` n'est pas relu, un niveau `Invalidated` l'est, et une lecture
+   en échec n'est pas retentée dans la passe. Le front envoie une fois les noms
+   d'une instruction ; il les renvoie après un DDL (`catalogInvalidated`) et quand
+   une passe s'est terminée avant d'avoir fini — faute de temps, ou remplacée par
+   celle d'une autre console de la connexion. Rien ne tourne sur le fil de
+   l'interface ([I-05](../../CLAUDE.md#i-05)). **Aucune nouvelle variante de
+   `Command` n'est nécessaire pour cette partie** ; la commande IPC qui reçoit les
+   noms est une enveloppe sur les commandes existantes, et répond par des
+   décomptes (`attempted`, `failed`, `stopped`) — ce qu'une passe a lu parvient à
+   l'éditeur par les signaux (5), pas par cette réponse.
 3. **Le texte d'insertion est composé en Rust, une seule fois.** Chaque nom de
    l'instantané porte sa forme `insert`, produite par `oxyn-catalog::insertion_form`, qui
    s'appuie sur `quote_identifier` : nu seulement quand le nom est un identifiant
@@ -227,15 +248,21 @@ cache, dans des bornes, jamais au rythme des frappes.**
    un instant de plus. Un nom part quand une relecture ne le liste plus, ou quand
    le cache l'évince.
 6. **Des bornes mesurées avant d'être écrites.** Cet ADR n'écrit aucun chiffre
-   pour `MAX_COMPLETION_LISTINGS`, `MAX_COMPLETION_DESCRIPTIONS`,
-   `COMPLETION_DEADLINE` ni pour les plafonds de l'instantané — relations,
+   pour les plafonds de l'instantané — relations,
    colonnes, octets de noms (payés aussi par les espaces de noms : un schéma par
    client en fait des milliers), et longueur d'un nom, parce que le cache compte des
    objets et non des octets et qu'un nom peut être long. La première pull
    request les mesure avec [`/benchmark`](../../claude/commands/benchmark.md) sur
    un catalogue au budget du cache (50 000 objets), contre les deux budgets
    existants (100 ms, 8 ms p99), consigne le résultat dans PERFORMANCE et écrit
-   les constantes avec leur argument. Le message est analysé sur le fil principal
+   les constantes avec leur argument. Les constantes des chargements sont un
+   autre genre de chiffre : `MAX_LISTINGS` (32) et `DEADLINE` (5 s) sont ceux de
+   l'assistant (`catalog_fill`), et `MAX_DESCRIPTIONS` vaut 16 contre ses 24,
+   puisqu'une instruction nomme quelques relations et que la passe se répète à
+   chaque pause. Elles sont argumentées par l'arithmétique de ce module et **non
+   re-mesurées** : cela demande un serveur à une latence connue, et une passe est
+   bornée par construction — une lecture à la fois, sous une échéance, remplacée
+   par la suivante. Le message est analysé sur le fil principal
    de la webview : sa taille est le coût qui décide. Un instantané coupé par un
    plafond le dit (`truncated`, avec les décomptes de ce qui a été laissé de côté),
    et la liste de complétion le dit aussi — la formulation va dans UX-SPEC à la
@@ -281,10 +308,13 @@ cache, dans des bornes, jamais au rythme des frappes.**
   tait sur ces deux-là. Une version ultérieure peut changer l'ordre ; la source est
   relue par `/versions`.
 * **−** Un fournisseur qui refuse le chemin de résolution (Redshift aujourd'hui)
-  laisse le cache sur « inconnu », ce qu'aucune lecture ne peut changer : redemandé à
-  chaque passe, il publierait un `catalogChanged` pour rien. La passe de l'éditeur
-  doit le demander une fois par rafraîchissement de la racine et passer son chemin
-  sur un refus — décidé avec les chargements, à la troisième pull request.
+  laisse le cache sur « inconnu », ce qu'aucune lecture ne peut changer, et le refus
+  s'achève quand même comme une lecture : la passe demande le chemin une fois, et
+  chaque passe sur une telle connexion coûte une lecture et un `catalogChanged`
+  pour rien. Le front envoie une fois les noms d'une instruction, ce qui le borne à
+  une par instruction distincte ; retenir le refus serait un état à tenir en
+  phase avec le rafraîchissement de la racine, et ne vaut pas une lecture bon
+  marché.
 * **−** Modifie la surface du contrat : une variante de `CatalogRefreshScope` dans
   `oxyn-core`, une méthode optionnelle du fournisseur dans `oxyn-catalog`, une
   réponse de chaque driver, une variante de signal, les sections de DRIVER-CONTRACT

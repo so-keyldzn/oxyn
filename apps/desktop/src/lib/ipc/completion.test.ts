@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { CompletionCatalog } from "./completion"
+import { CompletionCatalog, CompletionLoad } from "./completion"
 
 // The shape `crates/oxyn-desktop/src/completion/tests.rs` serializes
 // (`the_snapshot_crosses_in_camel_case_with_tagged_states`): a field renamed on
@@ -105,5 +105,25 @@ describe("CompletionCatalog", () => {
     const relation = wrong.namespaces[0]?.relations[0]
     if (relation) relation.fields = { state: "partial" }
     expect(CompletionCatalog.safeParse(wrong).success).toBe(false)
+  })
+})
+
+describe("CompletionLoad", () => {
+  // `CompletionLoad` of `crates/oxyn-desktop/src/ipc/completion.rs`: counts, and
+  // why the pass ended early, if it did.
+  it("reads the counts of a pass and why it stopped", () => {
+    expect(
+      CompletionLoad.parse({ attempted: 4, failed: 1, stopped: "deadline" })
+    ).toEqual({ attempted: 4, failed: 1, stopped: "deadline" })
+    expect(
+      CompletionLoad.parse({ attempted: 0, failed: 0, stopped: null }).stopped
+    ).toBeNull()
+  })
+
+  it("refuses a count that is not one", () => {
+    expect(
+      CompletionLoad.safeParse({ attempted: -1, failed: 0, stopped: null })
+        .success
+    ).toBe(false)
   })
 })

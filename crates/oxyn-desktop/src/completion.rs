@@ -32,6 +32,8 @@ use crate::ipc::completion::{
     CompletionResolution, CompletionTruncation,
 };
 
+pub mod plan;
+
 /// How much of the cache one snapshot may carry.
 ///
 /// The cache bounds objects, not bytes, and a name can be long: the snapshot

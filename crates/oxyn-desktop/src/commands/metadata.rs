@@ -17,7 +17,7 @@ use super::subscriptions::Superseded;
 use super::windows::{adopt_outcome, caller, outcome_waits, run_owned};
 use crate::backend::Backend;
 use crate::backend::windows::Stream;
-use crate::ipc::completion::CompletionCatalog;
+use crate::ipc::completion::{CompletionCatalog, CompletionLoad, CompletionNamePart};
 use crate::ipc::metadata::{
     CatalogSearchHit, ObjectSqlForm, Pagination, PreviewShapeDraft, RefreshSignal,
     RelatedRowsQuery, RelatedRowsSource, RelationFacet, RelationFacets,
@@ -137,6 +137,23 @@ pub async fn completion_catalog(
     backend
         .on_blocking_pool(move |backend| backend.completion_catalog(connection))
         .await
+}
+
+/// Reads, through the bus, what the cache lacks for the names the editor
+/// lexed in the statement under the cursor — bounded, and replaced by the next
+/// call for the same connection. Resolves once the pass is over; the editor
+/// learns what changed from the refresh signal, not from this answer.
+///
+/// Not on the blocking pool: it awaits the bus, and holds the cache's lock
+/// only to decide the next read.
+#[tauri::command]
+pub async fn completion_load(
+    backend: State<'_, Backend>,
+    connection: String,
+    names: Vec<Vec<CompletionNamePart>>,
+) -> Result<CompletionLoad, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend.load_completion(connection, names).await
 }
 
 #[tauri::command]

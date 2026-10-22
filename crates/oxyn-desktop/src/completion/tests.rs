@@ -16,11 +16,11 @@ const UNBOUNDED: CompletionBounds = CompletionBounds {
     name_bytes: usize::MAX,
 };
 
-fn namespace_path(catalog: Option<&str>, name: &str) -> CatalogPath {
+pub(super) fn namespace_path(catalog: Option<&str>, name: &str) -> CatalogPath {
     CatalogPath::for_namespace(catalog, name).expect("legal name")
 }
 
-fn list(cache: &mut CatalogCache, namespace: &CatalogPath, names: &[&str]) {
+pub(super) fn list(cache: &mut CatalogCache, namespace: &CatalogPath, names: &[&str]) {
     let relations = names
         .iter()
         .map(|name| {
@@ -32,7 +32,7 @@ fn list(cache: &mut CatalogCache, namespace: &CatalogPath, names: &[&str]) {
         .expect("a namespace");
 }
 
-fn describe(
+pub(super) fn describe(
     cache: &mut CatalogCache,
     namespace: &CatalogPath,
     name: &str,
@@ -61,7 +61,7 @@ fn describe(
 
 /// A PostgreSQL connection: one database, a schema of the user's and a system
 /// one, in the order the server lists them.
-fn postgres(system_first: bool) -> CatalogCache {
+pub(super) fn postgres(system_first: bool) -> CatalogCache {
     let mut cache = CatalogCache::new();
     cache.set_catalogs(vec![CatalogRef::new("app").expect("legal name")]);
     let parent = CatalogPath::for_catalog("app").expect("legal name");
@@ -78,7 +78,7 @@ fn postgres(system_first: bool) -> CatalogCache {
     cache
 }
 
-fn app(name: &str) -> CatalogPath {
+pub(super) fn app(name: &str) -> CatalogPath {
     namespace_path(Some("app"), name)
 }
 

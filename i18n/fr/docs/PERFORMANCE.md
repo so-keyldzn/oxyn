@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="9c815351e115" -->
+<!-- oxyn-translation source="docs/PERFORMANCE.md" sha256="3622adb95eec" -->
 
 > Traduction française de [docs/PERFORMANCE.md](../../../docs/PERFORMANCE.md). **La version anglaise fait foi.**
 
@@ -352,6 +352,13 @@ ouverte, et les 100 ms de retour visible après une frappe : il y faut la webvie
 l'adaptateur de l'éditeur, qui sont les deuxième et quatrième pull requests de
 l'ADR. Le test n'affirme que des plafonds généreux (5 s) côté Rust : rien ne
 garde donc encore les deux budgets d'interaction.
+
+Les chargements de l'éditeur ne sont pas mesurés non plus : `MAX_LISTINGS`,
+`MAX_DESCRIPTIONS` et `DEADLINE` (`crates/oxyn-desktop/src/completion/plan.rs`)
+sont ceux de l'assistant (`catalog_fill`) ou dérivés de son arithmétique, et une
+passe coûte les allers-retours d'un serveur, que seul un serveur à latence connue
+peut mesurer. Les tests de bout en bout tournent sur un SQLite en mémoire et
+vérifient ce qu'une passe lit, pas combien de temps elle prend.
 
 ## La règle qui empêche l'optimisation gratuite
 

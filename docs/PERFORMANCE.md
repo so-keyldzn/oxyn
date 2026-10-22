@@ -347,6 +347,12 @@ editor's adapter, which are the second and fourth pull requests of the ADR. The
 test asserts only generous ceilings (5 s) on the Rust side, so nothing gates the
 two interaction budgets yet.
 
+The editor's loads are not measured either: `MAX_LISTINGS`, `MAX_DESCRIPTIONS`
+and `DEADLINE` (`crates/oxyn-desktop/src/completion/plan.rs`) are the assistant's
+(`catalog_fill`) or derived from its arithmetic, and a pass costs a server's
+round trips, which only a server at a known latency can measure. The end-to-end
+tests run on an in-memory SQLite and check what a pass reads, not how long.
+
 ## The rule that prevents gratuitous optimization
 
 **Clear code is not replaced by fast code without the measurement showing

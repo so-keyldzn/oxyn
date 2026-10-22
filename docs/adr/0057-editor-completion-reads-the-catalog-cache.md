@@ -97,33 +97,53 @@ lacks, within bounds, never at the pace of the keystrokes.**
    a bound cut it, `truncated` with counts (6). The editor reads it on mount and
    when a signal (5) says the cache changed, keeps the answer in memory, and the
    completion source reads that copy: **no IPC is sent on a keystroke.**
-2. **Bounded loads, through the bus, driven by the editor.** After a short
-   debounce, never on a keystroke, the editor asks the host to complete the
-   cache for what the statement under the cursor names: the identifiers it
-   lexes after `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE` and before a `.`. The
-   host **resolves those names in Rust** — dialect and resolution path decide,
-   not a second rule in TypeScript — and only against relations the cache has
-   *listed*, so a typo or a name nobody listed costs no query and cannot steer a
-   read toward an arbitrary object. Per pass it reads:
-   1. on opening a console, and after the root is invalidated, the server level,
-      the resolution path and the relations of each namespace of that path never
-      listed — at most `MAX_COMPLETION_LISTINGS`;
-   2. the fields of the resolved relations not loaded, or `Invalidated` — at most
-      `MAX_COMPLETION_DESCRIPTIONS`;
+2. **Bounded loads, through the bus, driven by the editor.** After 300 ms
+   without typing or moving the caret, and once when a console opens — never on
+   a keystroke —, the editor sends the host the names the statement under the
+   cursor holds, through `completion_load`: the relations it names after
+   `FROM`, `JOIN`, `INTO`, `UPDATE` and `TABLE`, and the qualified name being
+   typed (`public.us|` is `public`, then the unfinished `us`). A name is one or
+   two parts, as lexed, quoted or not; at most 64 are accepted, none longer
+   than a name of the snapshot. The host **resolves those names in Rust**
+   (`completion::plan`) — dialect and resolution path decide, not a second rule
+   in TypeScript; the editor's own matching only chooses what to *suggest* —
+   and only against relations the cache has *listed*, so a typo or a name
+   nobody listed costs no query and cannot steer a read toward an arbitrary
+   object: a name is compared with the cache's, and the path of every read is
+   the cache's, never composed from what the webview sent
+   ([I-10](../../CLAUDE.md#i-10)). A pass reads, in this order and only what
+   the cache lacks or has invalidated:
+   1. the server level, then the resolution path (4), each once;
+   2. the relations of each namespace of that path never listed — and of each
+      namespace the statement qualifies with, system ones included, which the
+      tree folds — at most `MAX_LISTINGS`;
+   3. the fields of the resolved relations not loaded — at most
+      `MAX_DESCRIPTIONS`;
 
-   all within `COMPLETION_DEADLINE`, as argued constants beside `catalog_fill`
-   (values fixed by measurement, 6). Each read is a
-   `Command::RefreshCatalogScope` through `ExecutorSink`, the commands of a tree
-   expansion: `StatementIntent::Read`, allowed everywhere, `production`
+   all within `DEADLINE`. A bare name resolves in the first namespace of the
+   path that holds it, and only once every earlier namespace of the path was
+   read: a namespace nobody read may hold the same name and shadow it, and
+   describing the wrong relation would be worse than describing none. Each read
+   is a `Command::RefreshCatalogScope` through `ExecutorSink`, the commands of a
+   tree expansion: `StatementIntent::Read`, allowed everywhere, `production`
    included ([I-01](../../CLAUDE.md#i-01)); the actor is `Actor::Human`, since
-   typing is the user's gesture. Reads are submitted **one at a time**, never
-   queued ahead, so a tree expansion issued meanwhile waits behind at most the
-   read in progress; a newer edit cancels the pass through its `CancelToken`.
-   A `Fetched` level is not re-read, an `Invalidated` one is re-read once, and a
-   failed read is not retried within the pass. Nothing runs on the UI thread
+   typing is the user's gesture. They are submitted by the same function as the
+   assistant's fills (`CatalogFill::read`), so the deadline, the cancellation
+   and the withdrawal of a read held for approval are one implementation. Reads
+   are submitted **one at a time**, never queued ahead, so a tree expansion
+   issued meanwhile waits behind at most the read in progress; **a newer pass
+   of the same connection cancels the older** through its `CancelToken`, since
+   the older one works for a statement the user has already changed. A
+   `Fetched` level is not re-read, an `Invalidated` one is, and a read that
+   failed is not retried within the pass. The front sends a statement's names
+   once; it sends them again after a DDL (`catalogInvalidated`) and when a pass
+   ended before it was done — out of time, or replaced by another console of the
+   connection. Nothing runs on the UI thread
    ([I-05](../../CLAUDE.md#i-05)). **No new `Command` variant is needed for
    this part**; the IPC command that takes the names is a wrapper over the
-   existing commands.
+   existing commands, and answers with counts (`attempted`, `failed`, `stopped`)
+   — what a pass read reaches the editor through the signals (5), not through
+   that answer.
 3. **The insertion text is composed in Rust, once.** Each name in the snapshot
    carries its `insert` form, produced by `oxyn-catalog::insertion_form`, which
    builds on `quote_identifier`: bare only when the name is a simple lowercase
@@ -214,15 +234,20 @@ lacks, within bounds, never at the pace of the keystrokes.**
    longer. A name leaves when a re-read no longer lists it, or when the cache
    evicts it.
 6. **Bounds measured before they are written.** This ADR writes no number for
-   `MAX_COMPLETION_LISTINGS`, `MAX_COMPLETION_DESCRIPTIONS`,
-   `COMPLETION_DEADLINE` or the snapshot's caps — relations, columns, bytes of
+   the snapshot's caps — relations, columns, bytes of
    names (paid by namespaces too: a schema per tenant is thousands of them), and
    the length of one name, because the cache counts objects and not bytes and a
    name can be long. The first pull request measures
    them with [`/benchmark`](../../.claude/commands/benchmark.md) on a catalog at
    the cache budget (50,000 objects), against the two existing budgets
    (100 ms, 8 ms p99), records the result in PERFORMANCE, and writes the
-   constants with their argument. The message is parsed on the webview's main
+   constants with their argument. The loads' constants are another kind of
+   figure: `MAX_LISTINGS` (32) and `DEADLINE` (5 s) are the assistant's own
+   (`catalog_fill`), and `MAX_DESCRIPTIONS` is 16 against its 24, since a
+   statement names a few relations and the pass is repeated at each pause. They
+   are argued from that module's arithmetic and **not re-measured**: it takes a
+   server at a known round trip, and a pass is bounded by construction — one
+   read at a time, under a deadline, replaced by the next. The message is parsed on the webview's main
    thread, so its size is the cost that decides. A snapshot cut by a cap says so
    (`truncated`, with the counts of what was left out), and the completion list
    says so too —
@@ -271,10 +296,12 @@ lacks, within bounds, never at the pace of the keystrokes.**
   driver, a signal variant, the sections of DRIVER-CONTRACT and ARCHITECTURE that
   list them.
 * **−** A provider that refuses the resolution path (Redshift today) leaves the
-  cache on "unknown", which no read can change: asked again at every pass, it
-  would publish a `catalogChanged` for nothing. The editor's pass must ask once
-  per root refresh and skip a refusal — decided with the loads, in the third
-  pull request.
+  cache on "unknown", which no read can change, and the refusal still completes
+  as a read: the pass asks the path once, and each pass on such a connection
+  costs one read and one `catalogChanged` for nothing. The front sends a
+  statement's names once, which bounds it to one per distinct statement;
+  remembering the refusal would be state to keep in step with the root's
+  refresh, and is not worth it for one cheap read.
 * **−** The default path is read once per connection: an `ALTER ROLE … SET
   search_path` made meanwhile is seen at the next root refresh.
 * **−** A copy of the snapshot lives in the webview's memory, bounded by the
