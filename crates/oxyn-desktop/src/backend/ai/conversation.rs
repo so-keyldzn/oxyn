@@ -1856,7 +1856,9 @@ impl Run<'_> {
     ) -> Result<(AgentSession, Option<oxyn_ai::AgentContext>), Failure> {
         let follows = sample.is_none()
             && self.thread.memory_from(self.parent).is_some_and(|memory| {
-                memory.tier == tier && memory.recipient == recipient && memory.fits(ceiling)
+                memory.tier == tier
+                    && memory.recipient == recipient
+                    && memory.fits(ceiling, &offered_tools(agent))
             });
         let ranking = Ranking::new(self.inner, question);
         let scores = self
@@ -2082,7 +2084,9 @@ impl Run<'_> {
             // recipient fragment, and a history is not put under a prompt it
             // was not written with (ADR-0049 § 6).
             Some(memory)
-                if memory.tier == tier && memory.recipient == recipient && memory.fits(ceiling) =>
+                if memory.tier == tier
+                    && memory.recipient == recipient
+                    && memory.fits(ceiling, &offered_tools(agent)) =>
             {
                 let mut dialogue = memory.session;
                 if mentions.is_empty() {
@@ -2989,6 +2993,17 @@ fn tool_service(
 
 fn setup(message: impl Into<String>) -> Failure {
     Failure::new(message, FailureCategory::Setup)
+}
+
+/// The tool definitions every request of `agent` carries, as the runtime
+/// offers them: they count toward the window as much as the session does.
+///
+/// An allowlist naming a tool the registry does not know fails the runtime
+/// before any request; counted as none here, it bounds nothing that is sent.
+fn offered_tools(agent: &oxyn_ai::AgentSpec) -> Vec<oxyn_llm::ToolSpec> {
+    ToolRegistry::builtin()
+        .specs_for(&agent.allowed_tools)
+        .unwrap_or_default()
 }
 
 /// The class a runtime error carries — `Ambiguous` for a stream cut before

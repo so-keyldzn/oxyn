@@ -694,10 +694,10 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
-    /// Whether the session can be sent again within `ceiling` estimated
-    /// tokens — see [`memory_ceiling`].
-    pub(crate) fn fits(&self, ceiling: usize) -> bool {
-        self.session.estimated_tokens() <= ceiling
+    /// Whether the session can be sent again offering `tools` within
+    /// `ceiling` estimated tokens — see [`memory_ceiling`].
+    pub(crate) fn fits(&self, ceiling: usize, tools: &[oxyn_llm::ToolSpec]) -> bool {
+        self.session.estimated_tokens(tools) <= ceiling
     }
 }
 

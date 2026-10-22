@@ -750,38 +750,35 @@ impl AgentSession {
         &self.messages
     }
 
-    /// Estimated cost of sending this conversation again, in tokens.
+    /// Estimated cost of sending this conversation again offering `tools`, in
+    /// tokens.
     ///
-    /// The context budget's estimate ([`estimate_tokens`]), summed over
-    /// everything the next request carries again: the texts, the tool calls
-    /// and their arguments, the reasoning blocks and their signatures. As
-    /// coarse as that estimate — a caller compares it with a model's window to
-    /// decide when to start over, never to bill. Walks every message and
-    /// serializes each call's arguments: linear in the conversation's size.
+    /// The context budget's estimate ([`estimate_tokens`]) of what the next
+    /// request serializes: every message — texts, tool calls and their
+    /// arguments, tool results, reasoning blocks and their signatures — and
+    /// the definitions of the tools, which every request carries again and a
+    /// provider counts in the window (RESEARCH-NOTES, « Context window
+    /// overflow »). Read on Oxyn's own JSON form of the request: its field
+    /// names and quoting stand for each protocol's framing, which this does
+    /// not copy. As coarse as the estimate — a caller compares it with a
+    /// model's window to decide when to start over, never to bill. Serializes
+    /// the conversation once: linear in its size.
     #[must_use]
-    pub fn estimated_tokens(&self) -> usize {
-        self.messages
-            .iter()
-            .map(|message| {
-                let calls = message.tool_calls.iter().map(|call| {
-                    estimate_tokens(&call.id)
-                        .saturating_add(estimate_tokens(&call.name))
-                        .saturating_add(estimate_tokens(&call.arguments.to_string()))
-                });
-                let reasoning = message.reasoning.iter().map(|block| match block {
-                    ReasoningBlock::Summarized { text, signature } => estimate_tokens(text)
-                        .saturating_add(signature.as_deref().map_or(0, estimate_tokens)),
-                    ReasoningBlock::Redacted { data } => estimate_tokens(data),
-                    // A kind this version cannot read: the provider's refusal,
-                    // if it is too much, still resets the memory.
-                    _ => 0,
-                });
-                calls
-                    .chain(reasoning)
-                    .fold(estimate_tokens(&message.content), usize::saturating_add)
-                    .saturating_add(message.tool_call_id.as_deref().map_or(0, estimate_tokens))
-            })
-            .fold(0, usize::saturating_add)
+    pub fn estimated_tokens(&self, tools: &[oxyn_llm::ToolSpec]) -> usize {
+        /// What a request carries again at every turn, borrowed: the estimate
+        /// does not copy the conversation it measures.
+        #[derive(serde::Serialize)]
+        struct Resent<'a> {
+            messages: &'a [ChatMessage],
+            tools: &'a [oxyn_llm::ToolSpec],
+        }
+        // A conversation that does not serialize cannot be sent either:
+        // counted as too large, it starts over rather than fail later.
+        serde_json::to_string(&Resent {
+            messages: &self.messages,
+            tools,
+        })
+        .map_or(usize::MAX, |json| estimate_tokens(&json))
     }
 
     /// Adds a question from the user.
@@ -1495,7 +1492,7 @@ mod tests {
     use oxyn_core::{
         AgentId, ConnectionId, QueryLanguage, Result as CoreResult, SessionId, StatementIntent,
     };
-    use oxyn_llm::ModelInfo;
+    use oxyn_llm::{ModelInfo, ToolSpec};
     use serde_json::json;
 
     use crate::context::ContextBuilder;
@@ -1843,7 +1840,7 @@ mod tests {
     #[test]
     fn the_estimate_counts_tool_traffic_and_reasoning() {
         let mut session = session(PrivacyTier::Metadata);
-        let asked = session.estimated_tokens();
+        let asked = session.estimated_tokens(&[]);
         assert!(asked > 0, "the system message and the question count");
 
         let result = "x".repeat(4_000);
@@ -1861,13 +1858,43 @@ mod tests {
         session
             .messages
             .push(ChatMessage::tool_result("call-1", result));
-        let grown = session.estimated_tokens();
+        let grown = session.estimated_tokens(&[]);
         // 4,000 bytes of result, 400 of argument, 800 of reasoning: at four
         // bytes per token, at least 1,300 more.
         assert!(grown >= asked + 1_300, "{asked} → {grown}");
 
         session.ask("and then?");
-        assert!(session.estimated_tokens() > grown);
+        assert!(session.estimated_tokens(&[]) > grown);
+    }
+
+    /// Every request carries the tool definitions again: a schema weighs in
+    /// the estimate as much as a message of its size, and the agent's own
+    /// tools are never free.
+    #[test]
+    fn the_estimate_counts_the_offered_tool_definitions() {
+        let session = session(PrivacyTier::Metadata);
+        let bare = session.estimated_tokens(&[]);
+
+        let schema = ToolSpec::new(
+            "wide_tool",
+            "d".repeat(2_000),
+            json!({
+                "type": "object",
+                "properties": (0..100)
+                    .map(|n| (format!("field_{n}"), json!({ "type": "string", "description": "e".repeat(40) })))
+                    .collect::<serde_json::Map<_, _>>(),
+            }),
+        );
+        let offered = session.estimated_tokens(std::slice::from_ref(&schema));
+        // 2,000 bytes of description and 100 properties of at least 40 bytes
+        // each: at four bytes per token, at least 1,500 more.
+        assert!(offered >= bare + 1_500, "{bare} → {offered}");
+
+        let builtin = ToolRegistry::builtin()
+            .specs_for(&spec().allowed_tools)
+            .expect("the agent's tools are registered");
+        assert!(!builtin.is_empty());
+        assert!(session.estimated_tokens(&builtin) > bare);
     }
 
     #[test]

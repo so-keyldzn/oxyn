@@ -34,7 +34,7 @@ fn remembered(fixture: &Fixture, channel: Channel<AiUpdate>) -> (Arc<Thread>, u3
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message));
     session.ask(EARLIER);
-    let size = session.estimated_tokens();
+    let size = session.estimated_tokens(&offered_tools(&sql_agent()));
     thread.remember(
         first,
         Memory {
@@ -98,6 +98,63 @@ fn the_ceiling_follows_the_declared_window_or_a_fixed_bound() {
     assert_eq!(memory_ceiling(Some(8_192)), 4_096);
     assert_eq!(memory_ceiling(Some(1_000_000)), 500_000);
     assert_eq!(memory_ceiling(None), 30_000);
+    // A listing that declares no room at all bounds every memory to nothing,
+    // never to the undeclared ceiling.
+    assert_eq!(memory_ceiling(Some(0)), 0);
+    assert_eq!(memory_ceiling(Some(1)), 0);
+    assert_eq!(memory_ceiling(Some(u32::MAX)), 2_147_483_647);
+}
+
+/// A window declared at zero, or too small for anything: no memory fits, so
+/// every follow-up starts fresh — and says so — instead of failing.
+#[test]
+fn a_zero_or_tiny_window_starts_every_follow_up_fresh() {
+    let fixture = fixture();
+    let _guard = fixture.runtime.enter();
+    let (channel, received) = recording();
+    let (thread, first, _) = remembered(&fixture, channel.clone());
+
+    for window in [0, 1, 2] {
+        let (node, dialogue) = next_dialogue(
+            &fixture,
+            &thread,
+            first,
+            memory_ceiling(Some(window)),
+            channel.clone(),
+        );
+        let prompt = prompt_of(&dialogue);
+        assert!(!prompt.contains(EARLIER), "window {window}: {prompt}");
+        assert!(prompt.contains("and then?"), "window {window}: {prompt}");
+        thread.finish(node);
+    }
+    let events = received.lock().join("\n");
+    assert_eq!(
+        events.matches(r#""reason":"historyTooLong""#).count(),
+        3,
+        "{events}"
+    );
+}
+
+/// The tool definitions every request carries count toward the ceiling: a
+/// session whose messages alone fit exactly does not, once they are added.
+#[test]
+fn the_offered_tools_count_toward_the_ceiling() {
+    let fixture = fixture();
+    let _guard = fixture.runtime.enter();
+    let (channel, received) = recording();
+    let (thread, first, size) = remembered(&fixture, channel.clone());
+    let messages_only = thread
+        .memory_from(Some(first))
+        .expect("remembered")
+        .session
+        .estimated_tokens(&[]);
+    assert!(messages_only < size, "{messages_only} < {size}");
+
+    let (node, dialogue) = next_dialogue(&fixture, &thread, first, messages_only, channel);
+    assert!(!prompt_of(&dialogue).contains(EARLIER));
+    thread.finish(node);
+    let events = received.lock().join("\n");
+    assert!(events.contains(r#""reason":"historyTooLong""#), "{events}");
 }
 
 #[test]
