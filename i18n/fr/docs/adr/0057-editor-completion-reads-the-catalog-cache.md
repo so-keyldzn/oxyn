@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="0617c0d82704" -->
+<!-- oxyn-translation source="docs/adr/0057-editor-completion-reads-the-catalog-cache.md" sha256="29a850cccb7d" -->
 
 > Traduction française de [docs/adr/0057-editor-completion-reads-the-catalog-cache.md](../../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md). **La version anglaise fait foi.**
 
@@ -282,7 +282,16 @@ cache, dans des bornes, jamais au rythme des frappes.**
    et la liste de complétion le dit aussi — la formulation va dans UX-SPEC à la
    deuxième pull request. **Une réponse partielle n'est jamais présentée comme complète.**
 7. **Ce qu'elle ne promet pas.** Les colonnes sont proposées pour les relations que
-   l'instruction nomme selon la règle lexicale ci-dessus, avec leurs alias ; les
+   l'instruction nomme selon la règle lexicale ci-dessus, avec leurs alias. Une
+   instruction qui n'a pas encore ouvert de clause de relation — une liste de
+   sélection écrite avant son `FROM` — n'en nomme aucune, et rien ne dit quelle
+   table est visée : on lui propose les colonnes de chaque relation non système
+   **déjà décrite**, chacune à côté de sa table (qualifiée par son espace de noms
+   quand le chemin ne l'atteint pas), insérée sous la forme propre à la colonne.
+   Cela lit le cache et ne charge rien — sur une connexion où rien n'a été décrit,
+   il n'y a rien à proposer — et cela s'arrête dès que l'instruction nomme une
+   relation, une sous-requête ou un nom que l'instantané ne sait pas placer, où la
+   même liste serait une supposition. Les
    noms qu'un `WITH` en tête déclare sont distingués des relations du catalogue
    qu'ils peuvent masquer, et leurs corps ne sont pas lus ; les sous-requêtes,
    `RETURNING`, les fonctions de table et le SQL dynamique ne sont pas inférés, et

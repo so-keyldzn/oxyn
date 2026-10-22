@@ -268,7 +268,15 @@ lacks, within bounds, never at the pace of the keystrokes.**
    the wording goes into UX-SPEC in the second pull request. **A partial answer
    is never presented as complete.**
 7. **What it does not promise.** Columns are proposed for relations the
-   statement names by the lexical rule above, with their aliases; the names a
+   statement names by the lexical rule above, with their aliases. A statement
+   that has opened no relation clause yet — a select list written ahead of its
+   `FROM` — names none, so nothing says which table is meant: it is offered the
+   columns of every non-system relation **already described**, each beside its
+   table (qualified by its namespace when the path does not reach it), inserted
+   as the column's own form. That reads the cache and loads nothing — on a
+   connection where nothing was described, there is nothing to offer — and it
+   stops as soon as the statement names a relation, a subquery or a name the
+   snapshot cannot place, where the same list would be a guess. The names a
    leading `WITH` declares are told apart from the relations of the catalog they
    may shadow, and their bodies are not read; subqueries, `RETURNING`, table
    functions and dynamic SQL are not inferred, and what the rule cannot resolve

@@ -68,6 +68,11 @@ interface Index {
   top: Array<Completion>
   /** The relations of each namespace, for after its qualifier. */
   inside: Map<CompletionNamespace, Array<Completion>>
+  /**
+   * The columns of every relation already described, for a statement that
+   * names no relation yet — the select list written before its `FROM`.
+   */
+  described: Array<Completion>
   catalog: CompletionCatalog
 }
 
@@ -113,9 +118,20 @@ export function sqlCompletionSource(
     const named = where.statement
       ? namedRelations(context.state.doc, where.statement)
       : []
+    // Before the statement names a relation, no column can be told from
+    // another: the ones of every relation already described are offered, with
+    // the table beside them. Once it names one — or a subquery, or a name the
+    // snapshot cannot place — they would be a guess, and are not.
+    const unnamed =
+      where.statement !== null &&
+      !namesARelation(context.state.doc, where.statement)
     const options =
       where.parents.length === 0
-        ? [...index.top, ...columnsOf(index, named)]
+        ? [
+            ...index.top,
+            ...columnsOf(index, named),
+            ...(unnamed ? index.described : []),
+          ]
         : afterQualifier(index, where.parents, named)
     if (options.length === 0) return null
 
@@ -326,6 +342,17 @@ function pathOf(doc: Text, node: Node): Array<NamePart> {
 
 // --- The statement ------------------------------------------------------------
 
+/** Whether the statement has opened a relation clause: `FROM`, `JOIN`, `INTO`… */
+function namesARelation(doc: Text, statement: Node): boolean {
+  for (let scan = statement.firstChild; scan; scan = scan.nextSibling)
+    if (
+      scan.name === "Keyword" &&
+      OPENS.has(doc.sliceString(scan.from, scan.to).toLowerCase())
+    )
+      return true
+  return false
+}
+
 /**
  * The names a leading `WITH` declares — `a` and `b` in
  * `WITH a AS (…), b (x) AS MATERIALIZED (…) SELECT …` — lowercased. What the
@@ -470,6 +497,7 @@ function relationOption(
 
 function buildIndex(catalog: CompletionCatalog): Index {
   const top: Array<Completion> = []
+  const described: Array<Completion> = []
   const inside = new Map<CompletionNamespace, Array<Completion>>()
   const bare = bareNames(catalog)
   for (const namespace of catalog.namespaces) {
@@ -490,7 +518,28 @@ function buildIndex(catalog: CompletionCatalog): Index {
     }
     // A system namespace is suggested only once its qualifier is typed.
     if (namespace.system) continue
+    // A namespace the path does not reach is named beside its columns: the
+    // table they come from is `public.users`, not `users`.
+    const reached =
+      namespace.name === null ||
+      (catalog.resolution.state === "known" &&
+        catalog.resolution.namespaces.includes(namespace.name))
     for (const relation of namespace.relations) {
+      if (relation.fields.state === "loaded") {
+        const table = reached
+          ? relation.name
+          : `${namespace.name}.${relation.name}`
+        for (const item of relation.fields.items)
+          described.push({
+            label: item.name,
+            apply: item.insert,
+            type: "property",
+            detail: [table, item.dataType === "" ? "" : item.dataType]
+              .filter(Boolean)
+              .join(" · "),
+            boost: -1,
+          })
+      }
       if (namespace.name === null || bare.get(namespace)?.has(relation.name))
         top.push(relationOption(relation, relation.name, relation.insert, 2))
       else
@@ -504,7 +553,7 @@ function buildIndex(catalog: CompletionCatalog): Index {
         )
     }
   }
-  return { top, inside, catalog }
+  return { top, inside, described, catalog }
 }
 
 /**

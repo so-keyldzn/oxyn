@@ -613,6 +613,103 @@ describe("the case of a name written without quotes", () => {
   })
 })
 
+describe("a select list written before its FROM", () => {
+  const described = (text: string, catalog: CompletionCatalog = SHOP) =>
+    (complete(text, catalog)?.options ?? [])
+      .filter((option) => option.type === "property")
+      .map((option) => ({
+        label: option.label,
+        apply: option.apply,
+        detail: option.detail,
+      }))
+
+  it("offers the columns of the relations already described, beside their table", () => {
+    const columns = described("SELECT na|")
+    expect(columns).toContainEqual({
+      label: "name",
+      apply: "name",
+      detail: "users · text",
+    })
+    expect(columns).toContainEqual({
+      label: "user_id",
+      apply: "user_id",
+      detail: "orders · int8",
+    })
+    // The same column of two tables is two entries: the table tells them apart.
+    expect(
+      columns.filter((column) => column.label === "id").map((c) => c.detail)
+    ).toEqual(expect.arrayContaining(["users · int8", "orders · int8"]))
+  })
+
+  it("inserts the column as Rust composed it", () => {
+    const columns = described("SELECT Fu|")
+    expect(columns).toContainEqual({
+      label: "Full Name",
+      apply: '"Full Name"',
+      detail: "users · text",
+    })
+  })
+
+  it("names the namespace of a relation the path does not reach", () => {
+    // The source returns every candidate; the editor narrows them by what is typed.
+    expect(described("SELECT old|")).toContainEqual({
+      label: "old_id",
+      apply: "old_id",
+      detail: "archive.users · int8",
+    })
+  })
+
+  it("offers nothing from a relation never described, or a system one", () => {
+    const quiet = snapshot([
+      namespace("public", [relation("order"), relation("things")]),
+      namespace(
+        "pg_catalog",
+        [relation("pg_class", loaded(["relname", "name"]))],
+        { system: true }
+      ),
+    ])
+    expect(described("SELECT re|", quiet)).toEqual([])
+  })
+
+  it("stops once the statement names a relation: the columns are then that one's", () => {
+    expect(described("SELECT na| FROM nowhere")).toEqual([])
+    expect(described("SELECT na| FROM (SELECT 1) s")).toEqual([])
+    // With a FROM, only the columns of the relations it names — `orders` is not.
+    const named = described("SELECT na| FROM users")
+    expect(named.map((column) => column.detail)).toEqual([
+      "users · int8",
+      "users · text",
+      "users · text",
+    ])
+    expect(named.some((column) => column.label === "user_id")).toBe(false)
+  })
+
+  it("is the statement's own: a statement before it names a relation, this one does not", () => {
+    const columns = described("SELECT 1 FROM orders; SELECT na|")
+    expect(columns.map((column) => column.label)).toContain("name")
+  })
+
+  it("is not offered after a qualifier, nor inside a string or a comment", () => {
+    expect(described("SELECT x.|")).toEqual([])
+    expect(complete("SELECT 'na|'")).toBeNull()
+    expect(complete("-- na|")).toBeNull()
+  })
+
+  it("inserts a hostile column name as Rust composed it, never as typed", () => {
+    const hostile = snapshot([
+      namespace("public", [
+        relation("t", loaded([HOSTILE, "text"], ["ok", "int4"])),
+      ]),
+    ])
+    const columns = described("SELECT users|", hostile)
+    expect(columns).toContainEqual({
+      label: HOSTILE,
+      apply: HOSTILE_INSERT,
+      detail: "t · text",
+    })
+  })
+})
+
 describe("a common table expression", () => {
   it("is not the relation of the catalog it shadows", () => {
     // `users` is the WITH's, not the table: its columns are the body's.
