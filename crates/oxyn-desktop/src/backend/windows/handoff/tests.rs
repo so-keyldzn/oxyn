@@ -15,7 +15,12 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("a test runtime starts")
 }
 
-fn open(runtime: &tokio::runtime::Runtime, backend: &Backend, name: &str) -> OpenConnection {
+fn open(
+    runtime: &tokio::runtime::Runtime,
+    backend: &Backend,
+    id: CommandId,
+    name: &str,
+) -> OpenConnection {
     let draft = ConnectionDraft {
         driver: "sqlite".into(),
         name: name.into(),
@@ -28,7 +33,7 @@ fn open(runtime: &tokio::runtime::Runtime, backend: &Backend, name: &str) -> Ope
         secrets: std::collections::BTreeMap::new(),
     };
     match runtime
-        .block_on(backend.connect(CommandId::new(), draft))
+        .block_on(backend.connect(id, draft))
         .expect("connects")
     {
         ConnectResponse::Open(open) => open,
@@ -59,13 +64,17 @@ fn opened(
     backend: &Backend,
     window: WindowKey,
 ) -> (ConnectionId, SessionId) {
-    let open = open(runtime, backend, "billing");
+    let id = CommandId::new();
+    let opening = backend
+        .inner
+        .windows
+        .begin_opening(window, id)
+        .expect("an open window");
+    let open = open(runtime, backend, id, "billing");
     let connection: ConnectionId = open.connection.parse().expect("an id");
-    let windows = &backend.inner.windows;
-    windows.hold_connection(window, connection);
-    for session in [&open.session, &open.console.session] {
-        windows.claim_session(window, connection, session.parse().expect("an id"));
-    }
+    runtime
+        .block_on(backend.adopt_open(opening, &open))
+        .expect("an open window");
     (connection, open.console.session.parse().expect("an id"))
 }
 
@@ -134,7 +143,11 @@ fn the_result_keeps_a_reader_while_it_moves() {
     let source = backend.reserve_window(true).expect("a window");
     let (connection, session) = opened(&runtime, &backend, source);
     let result = run(&runtime, &backend, (connection, session), "SELECT 1");
-    backend.inner.windows.claim_result(source, result, true);
+    backend
+        .inner
+        .windows
+        .claim_result(source, result, true)
+        .expect("an open window");
     let target = backend.reserve_window(false).expect("a target");
     let handed = HandedResult {
         result: result.to_string(),

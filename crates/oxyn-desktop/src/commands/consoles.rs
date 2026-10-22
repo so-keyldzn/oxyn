@@ -41,11 +41,14 @@ pub async fn open_console(
         |_| false,
     )
     .await?;
-    if let Ok(session) = console.session.parse::<SessionId>() {
-        backend
+    if let Ok(session) = console.session.parse::<SessionId>()
+        && let Err(refusal) = backend
             .inner
             .windows
-            .claim_session(window, connection, session);
+            .claim_session(window, connection, session)
+    {
+        backend.release_unclaimed(connection, &[session]).await;
+        return Err(refusal);
     }
     Ok(console)
 }
@@ -88,7 +91,7 @@ pub async fn run_console(
         outcome_waits,
     )
     .await?;
-    adopt_outcome(&backend, window, &outcome);
+    adopt_outcome(&backend, window, &outcome).await?;
     Ok(outcome)
 }
 
