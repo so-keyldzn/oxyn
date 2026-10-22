@@ -644,6 +644,91 @@ pub fn words_with(sql: &str, profile: SplitProfile) -> Vec<Word<'_>> {
     out
 }
 
+/// What the scanner tells a [`Token`] is. It does not understand SQL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TokenKind {
+    /// A bare word (keyword, unquoted identifier).
+    Word,
+    /// A quoted identifier, or a double-quoted string: which of the two
+    /// depends on the server's mode, not on the text.
+    Quoted,
+    /// A single-quoted string literal.
+    String,
+    /// One byte of punctuation, operator or number.
+    Symbol,
+    /// The statement separator.
+    Separator,
+}
+
+/// A lexical element of the text, comments left out.
+///
+/// For a reader that must see more than [`words`]: the `@@`, the `.` and the
+/// `=` around a word, or a quoted identifier, decide whether a `SET` assigns
+/// it or reads it.
+///
+/// `Debug` leaves the text out: a token is the user's text, and `SET PASSWORD =
+/// 'x'` holds a secret in one (I-03).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Token<'a> {
+    /// What the token is.
+    pub kind: TokenKind,
+    /// The token, as written, quotes included.
+    pub text: &'a str,
+    /// Byte bounds in the original text.
+    pub span: Range<usize>,
+}
+
+impl std::fmt::Debug for Token<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Token")
+            .field("kind", &self.kind)
+            .field("span", &self.span)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The elements of the text, in order, as the scanner reads them for
+/// [`words`]: one reading, so the two cannot disagree on where a string ends.
+///
+/// Comments are absent, whatever their form — including a MySQL executable
+/// comment, which [`runnable_text`](crate::runnable_text()) turns into code
+/// first when the caller wants it read.
+///
+/// ```
+/// use oxyn_core::SqlDialect;
+/// use oxyn_query::split::{TokenKind, tokens};
+///
+/// let read = tokens("SET @@`x` = 'a' /* b */", SqlDialect::MySql);
+/// let kinds: Vec<TokenKind> = read.iter().map(|t| t.kind).collect();
+/// assert_eq!(kinds, [
+///     TokenKind::Word, TokenKind::Symbol, TokenKind::Symbol,
+///     TokenKind::Quoted, TokenKind::Symbol, TokenKind::String,
+/// ]);
+/// ```
+#[must_use]
+pub fn tokens(sql: &str, dialect: SqlDialect) -> Vec<Token<'_>> {
+    let mut out: Vec<Token<'_>> = Vec::new();
+    scan(
+        sql,
+        SplitProfile::for_dialect(dialect),
+        &mut |token, span| {
+            let kind = match token {
+                Tok::Word => TokenKind::Word,
+                Tok::Quoted => TokenKind::Quoted,
+                Tok::SingleQuoted => TokenKind::String,
+                Tok::Symbol => TokenKind::Symbol,
+                Tok::Semicolon => TokenKind::Separator,
+                Tok::Comment | Tok::UnreadableComment => return,
+            };
+            if let Some(text) = sql.get(span.clone()) {
+                out.push(Token { kind, text, span });
+            }
+        },
+    );
+    out
+}
+
 /// The text as a MySQL or MariaDB server runs it: the body of an executable
 /// comment is code.
 ///

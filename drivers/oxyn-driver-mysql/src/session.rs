@@ -90,7 +90,8 @@ const CONTEXT_REFUSED: &str = "a typed `USE`: the session keeps its database its
 const PINNED_SETTING_REFUSED: &str = "a typed `SET` of the time zone or of the character sets: \
     the session pins `+00:00` and `utf8mb4` so that every TIMESTAMP and every text is read as \
     such, and applies them again after a reconnect; convert in the query instead \
-    (`CONVERT_TZ`, `CONVERT(… USING …)`)";
+    (`CONVERT_TZ`, `CONVERT(… USING …)`). A dump's `/*!… SET …*/` lines only save and \
+    restore these settings: run the dump without them";
 
 /// An open MySQL or MariaDB session.
 #[derive(Debug)]
@@ -631,6 +632,8 @@ mod tests {
             "SET time_zone = 'Europe/Paris'",
             "SET NAMES latin1",
             "SELECT 1; SET character_set_results = latin1",
+            "SET @@session.`time_zone` = 'Europe/Paris'",
+            "/*!50000 SET NAMES latin1 */",
         ] {
             let error = refuse_pinned_setting(text).expect_err(text);
             let OxynError::NotSupported { capability } = &error else {
@@ -643,6 +646,8 @@ mod tests {
             }
         }
         refuse_pinned_setting("SELECT @@session.time_zone").expect("a read is not refused");
+        refuse_pinned_setting("SET @is_utc = @@session.time_zone = '+00:00'")
+            .expect("a comparison on the right-hand side is a read");
     }
 
     #[test]
