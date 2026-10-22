@@ -37,19 +37,28 @@ pub(super) const AGENT_IDLE_LIMIT: Duration = Duration::from_secs(300);
 /// next question starts a fresh one instead of waiting behind this one.
 pub(super) const CANCEL_GRACE: Duration = Duration::from_secs(10);
 
+/// Longest wait for the agent to complete a sign-in or a settings change.
+///
+/// A minute leaves time for the user to complete a browser hand-off, while a
+/// vanished tab or a silent agent cannot hold every request queued behind it.
+/// The panel can ask again; Oxyn never retries the agent's action itself.
+pub(super) const USER_REQUEST_LIMIT: Duration = Duration::from_secs(60);
+
 /// Open tool calls tracked, at most. An agent that announces calls without
 /// ever finishing them cannot grow the set without limit; past this, the
 /// watch stays suspended until the question ends, which is the side that does
 /// not cut a user's approval.
 const MAX_OPEN_CALLS: usize = 256;
 
-/// The two bounds of a question, replaced only by the tests.
+/// The bounds of an external-agent request, replaced only by the tests.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Limits {
     /// See [`AGENT_IDLE_LIMIT`].
     pub(super) idle: Duration,
     /// See [`CANCEL_GRACE`].
     pub(super) cancel_grace: Duration,
+    /// See [`USER_REQUEST_LIMIT`].
+    pub(super) user_request: Duration,
 }
 
 impl Default for Limits {
@@ -57,6 +66,7 @@ impl Default for Limits {
         Self {
             idle: AGENT_IDLE_LIMIT,
             cancel_grace: CANCEL_GRACE,
+            user_request: USER_REQUEST_LIMIT,
         }
     }
 }

@@ -4,12 +4,14 @@
 use std::time::Duration;
 
 use super::*;
+use crate::external::settings::SettingChange;
 
 /// The bounds, short enough for a test and long enough for a loaded machine
 /// to deliver a message within them.
 const SHORT: Limits = Limits {
     idle: Duration::from_millis(200),
     cancel_grace: Duration::from_millis(150),
+    user_request: Duration::from_millis(200),
 };
 
 /// Safety bound: past it, something still waits — the defect these tests
@@ -23,9 +25,19 @@ fn run_limited<T>(
     agent: impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>>,
     scenario: impl AsyncFnOnce(ExternalSession) -> T,
 ) -> T {
+    run_limited_with_environment(Environment::empty(), agent, scenario)
+}
+
+/// [`run_limited`] with an environment the session redacts from the agent's
+/// stream, so a test can exercise its held-back final fragment.
+fn run_limited_with_environment<T>(
+    environment: Environment,
+    agent: impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>>,
+    scenario: impl AsyncFnOnce(ExternalSession) -> T,
+) -> T {
     let (ours, theirs) = Channel::duplex();
     let (session, driver) =
-        ExternalSession::over_with(ours, private(), None, None, Environment::empty(), SHORT);
+        ExternalSession::over_with(ours, private(), None, None, environment, SHORT);
     block_on(async move {
         tokio::spawn(driver);
         tokio::spawn(agent(theirs));
@@ -33,6 +45,61 @@ fn run_limited<T>(
             .await
             .expect("the scenario ends within its guard")
     })
+}
+
+#[test]
+fn stopping_a_taken_prompt_flushes_its_held_back_stream_before_returning() {
+    let cancel = CancelToken::new();
+    let stop = cancel.clone();
+    let seen = Arc::new(Seen::default());
+    let observer: Arc<dyn AgentObserver> = seen.clone();
+    let stopped = run_limited_with_environment(
+        Environment::empty().with_declared([("AGENT_TOKEN", "synthetic-agent-token")]),
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: NewSessionRequest, responder, _cx| {
+                        responder.respond(NewSessionResponse::new(session_id()))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_: PromptRequest, responder, cx| {
+                        cx.send_notification(SessionNotification::new(
+                            session_id(),
+                            text("synthetic"),
+                        ))?;
+                        stop.cancel();
+                        cx.spawn(async move {
+                            futures::future::pending::<()>().await;
+                            responder.respond(PromptResponse::new(StopReason::Cancelled))
+                        })
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        },
+        async move |session| {
+            session
+                .prompt(
+                    &prompt("stop after a held-back fragment"),
+                    observer,
+                    &cancel,
+                )
+                .await
+        },
+    );
+
+    assert_eq!(stopped, Ok(TurnEnd::Cancelled));
+    assert_eq!(seen.lines(), vec!["text:<AGENT_TOKEN redacted>".to_owned()]);
 }
 
 fn text(t: &str) -> SessionUpdate {
@@ -253,4 +320,198 @@ fn an_agent_that_keeps_talking_or_works_in_a_tool_is_not_cut() {
 
     assert_eq!(first, Ok(TurnEnd::Answered { truncated: false }));
     assert_eq!(second, Ok(TurnEnd::Answered { truncated: false }));
+}
+
+#[test]
+fn an_unanswered_sign_in_does_not_block_the_question_queued_after_it() {
+    let (sign_in, question) = run_limited(
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: AuthenticateRequest, responder, cx| {
+                        cx.spawn(async move {
+                            futures::future::pending::<()>().await;
+                            responder.respond(AuthenticateResponse::new())
+                        })
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: NewSessionRequest, responder, _cx| {
+                        responder.respond(NewSessionResponse::new(session_id()))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: PromptRequest, responder, _cx| {
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        },
+        async move |session| {
+            let question = prompt("what changed?");
+            let cancel = CancelToken::new();
+            tokio::join!(
+                session.authenticate("browser"),
+                session.prompt(&question, Arc::new(()), &cancel),
+            )
+        },
+    );
+
+    assert_eq!(
+        sign_in,
+        Err(ExternalError::RequestTimedOut {
+            request: "the sign-in request",
+            after: SHORT.user_request,
+        })
+    );
+    assert_eq!(question, Ok(TurnEnd::Answered { truncated: false }));
+}
+
+#[test]
+fn an_unanswered_setting_ends_the_session_before_a_queued_question_runs() {
+    use agent_client_protocol::schema::v1::{SessionMode, SessionModeState, SetSessionModeRequest};
+
+    let (setting, question) = run_limited(
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: NewSessionRequest, responder, _cx| {
+                        responder.respond(NewSessionResponse::new(session_id()).modes(
+                            SessionModeState::new(
+                                "ask",
+                                vec![
+                                    SessionMode::new("ask", "Ask"),
+                                    SessionMode::new("plan", "Plan"),
+                                ],
+                            ),
+                        ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: SetSessionModeRequest, responder, cx| {
+                        cx.spawn(async move {
+                            futures::future::pending::<()>().await;
+                            responder.respond(
+                                agent_client_protocol::schema::v1::SetSessionModeResponse::new(),
+                            )
+                        })
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: PromptRequest, responder, _cx| {
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        },
+        async move |session| {
+            let started = session.start().await;
+            assert!(
+                started.is_ok(),
+                "the session starts before its setting changes"
+            );
+            let question = prompt("what changed?");
+            let cancel = CancelToken::new();
+            tokio::join!(
+                session.change_setting(SettingChange::Mode {
+                    id: "plan".to_owned(),
+                }),
+                session.prompt(&question, Arc::new(()), &cancel),
+            )
+        },
+    );
+
+    assert_eq!(
+        setting,
+        Err(ExternalError::RequestTimedOut {
+            request: "the setting change",
+            after: SHORT.user_request,
+        })
+    );
+    assert_eq!(question, Err(ExternalError::Exited));
+}
+
+#[test]
+fn stopping_a_question_queued_behind_sign_in_returns_without_waiting_for_it() {
+    let (started, wait_for_start) = oneshot::channel();
+    let started = Arc::new(Mutex::new(Some(started)));
+    let told = Arc::clone(&started);
+    let stopped = run_limited(
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_: AuthenticateRequest, responder, cx| {
+                        if let Some(started) =
+                            told.lock().unwrap_or_else(PoisonError::into_inner).take()
+                        {
+                            let _ = started.send(());
+                        }
+                        cx.spawn(async move {
+                            futures::future::pending::<()>().await;
+                            responder.respond(AuthenticateResponse::new())
+                        })
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        },
+        async move |session| {
+            let session = Arc::new(session);
+            let signing_in = tokio::spawn({
+                let session = Arc::clone(&session);
+                async move { session.authenticate("browser").await }
+            });
+            let _ = wait_for_start.await;
+            let cancel = CancelToken::new();
+            let question = tokio::spawn({
+                let session = Arc::clone(&session);
+                let cancel = cancel.clone();
+                async move {
+                    session
+                        .prompt(&prompt("stop before this starts"), Arc::new(()), &cancel)
+                        .await
+                }
+            });
+            tokio::task::yield_now().await;
+            cancel.cancel();
+            let stopped = tokio::time::timeout(SHORT.user_request, question)
+                .await
+                .expect("Stop must not wait behind sign-in")
+                .expect("the question task completes");
+            signing_in.abort();
+            stopped
+        },
+    );
+
+    assert_eq!(stopped, Ok(TurnEnd::Cancelled));
 }
