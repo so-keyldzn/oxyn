@@ -294,6 +294,17 @@ class Delivery(unittest.TestCase):
         self.assertEqual(output.returncode, 1)
         self.assertIn("not supported here", output.stderr)
 
+    def test_placeholder_pubkey_fails_before_the_build_without_creating_anything(self) -> None:
+        # The key check moved to the signing job, after the build: the draft
+        # job is what still refuses a missing public key before an hour of build.
+        for pubkey in ("REPLACE_WITH_UPDATER_PUBLIC_KEY", None):
+            with self.subTest(pubkey=pubkey):
+                self.version("0.0.1", pubkey=pubkey)
+                output = self.launch("brouillon", "v0.0.1", REPO_DIR)
+                self.assertEqual(output.returncode, 1)
+                self.assertIn("plugins.updater.pubkey is not set", output.stderr)
+                self.assertEqual(self.state()["appels"], [])
+
     # --- #20: nothing touches a published release -------------------------
 
     def test_rerun_on_published_release_fails_at_first_job(self) -> None:
@@ -650,6 +661,13 @@ class Delivery(unittest.TestCase):
             (("signer", "v9.9.9", file), self.secrets(), "expected v0.0.1"),
             (("signer", "v0.0.1", str(self.folder / "absent.AppImage")), self.secrets(), "does not exist"),
             (("signer", "v0.0.1"), self.secrets(), "no updater artifact"),
+            # The CLI a build installed never receives the key, nor a default.
+            (("signer", "v0.0.1", file), self.secrets(TAURI=""), "TAURI is not set"),
+            (
+                ("signer", "v0.0.1", file),
+                self.secrets(TAURI=str(self.folder / "apps/desktop/node_modules/.bin/tauri")),
+                "comes from node_modules",
+            ),
         )
         for args, variables, reason in cases:
             with self.subTest(reason=reason):

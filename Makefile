@@ -65,8 +65,8 @@ desktop-dev: $(TAURI)
 #
 # No build signs the updater artifacts (ADR-0051): `tauri build` runs every
 # build.rs and Vite plugin, which must never see the updater private key. The
-# release workflow signs them afterwards, in a step of its own
-# (`script/livraison signer`).
+# release workflow signs them afterwards, in a job of its own that runs neither
+# `pnpm install` nor this target (`script/livraison signer`).
 desktop: $(TAURI)
 ifeq ($(PROFIL),release)
 	@python3 script/licences-tierces generer --exiger $(MENTIONS)

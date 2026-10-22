@@ -1,11 +1,11 @@
-<!-- oxyn-translation source="docs/RELEASE.md" sha256="42d5b7900910" -->
+<!-- oxyn-translation source="docs/RELEASE.md" sha256="597a06e3aac2" -->
 # Livraisons GitHub
 
 GitHub Actions construit les paquets ; le mainteneur publie le brouillon
 obtenu après relecture. `.github/workflows/livraison.yml` démarre au push d'un
 tag `v*`, ou manuellement avec un tag existant. Le tag doit être exactement
-`v` suivi de la version de `crates/oxyn-desktop/tauri.conf.json`. Les deux jobs
-extraient ce tag précis, même si le lancement manuel sélectionne une autre branche.
+`v` suivi de la version de `crates/oxyn-desktop/tauri.conf.json`. Chaque job
+extrait ce tag précis, même si le lancement manuel sélectionne une autre branche.
 
 `macos-latest` produit un DMG Apple Silicon ; `ubuntu-24.04` (x86_64) et
 `ubuntu-24.04-arm` (ARM64) produisent chacun les paquets DEB, RPM et AppImage,
@@ -19,17 +19,33 @@ installe le binaire épinglé de `cargo-about` après vérification de son empre
 pour inclure les mentions obligatoires des licences tierces.
 
 Le workflow construit aussi ce dont les copies installées se mettent à jour
-([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)) : après le
-build, une étape à part signe les artefacts de mise à jour —
-`Oxyn_<version>_aarch64.app.tar.gz`, `Oxyn_<version>_amd64.AppImage` et
-`Oxyn_<version>_aarch64.AppImage`, chacun avec son `.sig` —
-et un dernier job, `manifeste`, les vérifie et écrit `latest.json`.
+([ADR-0051](adr/0051-automatic-updates-from-github-releases.md)). Les jobs
+s'enchaînent dans cet ordre :
+
+1. `brouillon` vérifie le tag et la clé publique des mises à jour, et crée le
+   brouillon ;
+2. `paquets`, un job par plateforme, construit les paquets **non signés pour
+   les mises à jour** et les dépose comme artefacts du workflow — sans clé
+   des mises à jour, avec un jeton qui ne peut que lire ;
+3. `signature`, le seul job de l'environnement `release`, signe les artefacts
+   de mise à jour — `Oxyn_<version>_aarch64.app.tar.gz`,
+   `Oxyn_<version>_amd64.AppImage` et `Oxyn_<version>_aarch64.AppImage` —
+   sans rien construire, et dépose leurs `.sig` comme artefact ;
+4. `depot` dépose chaque paquet et chaque signature dans le brouillon ;
+5. `manifeste` les vérifie et écrit `latest.json`.
+
+Seuls `brouillon`, `depot` et `manifeste` détiennent un jeton qui peut écrire
+dans la release ; aucun d'eux ne détient de secret de signature.
 
 ## Configuration Apple
 
-Le job macOS exige les sept **secrets Actions du dépôt** ci-dessous. Une valeur
-manquante l'arrête avant l'installation des dépendances ; il ne produit jamais
-une livraison non signée par défaut. Linux ne reçoit pas les secrets Apple.
+Le job de build macOS exige les sept **secrets Actions du dépôt** ci-dessous.
+Une valeur manquante l'arrête avant l'installation des dépendances ; il ne
+produit jamais une livraison non signée par défaut. Linux ne reçoit pas les
+secrets Apple. Le build macOS les détient pendant que `pnpm install` et
+`tauri build` s'exécutent, puisque Tauri signe et notarise à l'intérieur du
+bundling : un risque accepté, dont la raison et la condition de réexamen sont
+dans [SECURITY](SECURITY.md#les-identifiants-de-livraison-apple).
 
 | Secret | Valeur |
 |---|---|
@@ -110,20 +126,30 @@ n'en est délégué à un agent.
 | `TAURI_SIGNING_PRIVATE_KEY` | Contenu du fichier de clé privée écrit par `tauri signer generate` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Le mot de passe choisi à la génération |
 
-**Quelles étapes détiennent la clé.** Seulement deux étapes des jobs de
-paquets : la vérification de la clé, `script/livraison cle`, qui refuse un
-secret vide ou la clé publique de substitution avant une heure de build et
-nomme les variables, jamais leurs valeurs ; et l'étape de signature,
-`script/livraison signer`, qui lance le `tauri signer sign --app-version
-<version>` épinglé sur l'artefact construit, et rien d'autre. Le build
-lui-même — `tauri build`, chaque `build.rs` et chaque proc-macro de
-`Cargo.lock`, Vite et ses plugins — s'exécute sans elle : n'importe lequel
-d'entre eux pourrait lire son environnement, et une seule version compromise
-d'une dépendance suffirait à prendre la clé. C'est pourquoi aucun build ne
-produit d'artefacts de mise à jour signés (`createUpdaterArtifacts` reste
+**Quelles étapes détiennent la clé.** Seulement deux étapes du job
+`signature` : la vérification de la clé, `script/livraison cle`, qui refuse
+un secret vide ou la clé publique de substitution et nomme les variables,
+jamais leurs valeurs ; et l'étape de signature, `script/livraison signer`,
+qui lance `tauri signer sign --app-version <version>` sur chaque artefact
+téléchargé, et rien d'autre. La CLI est `cargo-tauri`, le binaire publié de
+la CLI Tauri à la version de `apps/desktop/package.json`, téléchargé depuis
+la release GitHub de Tauri et contrôlé contre la somme SHA-256 consignée dans
+[RESEARCH-NOTES](RESEARCH-NOTES.md#ci-et-livraison-github) ; `signer` refuse
+de s'exécuter sans `$TAURI` qui le nomme, ou avec une CLI située sous
+`node_modules`. Ce job part d'un checkout neuf du tag et ne lance ni
+`pnpm install`, ni `cargo build`, ni `tauri build`. Le build —
+`pnpm install`, `tauri build`, chaque `build.rs` et chaque proc-macro de
+`Cargo.lock`, Vite et ses plugins — s'exécute dans les jobs `paquets`, qui ne
+détiennent jamais la clé : n'importe lequel d'entre eux pourrait lire son
+environnement, ou réécrire `node_modules` et les scripts auxquels une étape
+ultérieure du même job la confierait. C'est pourquoi aucun build ne produit
+d'artefacts de mise à jour signés (`createUpdaterArtifacts` reste
 désactivé) : l'archive macOS est faite par `script/apple-release build` à
 partir du `.app` agrafé, et chaque AppImage est signée telle que le bundler
-l'a écrite.
+l'a écrite. La clé publique de substitution, qu'aucun secret n'est
+nécessaire pour détecter, est refusée par `brouillon`, avant une heure de
+build ; un secret manquant se découvre au démarrage de `signature`, après le
+build.
 
 **L'environnement `release`.** Les secrets du dépôt sont lisibles par
 n'importe quelle exécution de workflow, sur n'importe quelle branche : un
@@ -140,8 +166,8 @@ environment** :
    ou n'importe quelle branche ne peut alors pas atteindre les secrets, y
    compris une exécution manuelle.
 3. **Required reviewers** : le mainteneur. Chaque release attend alors une
-   approbation avant que les jobs de paquets ne lisent la clé — disponible
-   parce que le dépôt est public.
+   approbation avant que le job `signature` ne lise la clé, une fois les
+   paquets construits — disponible parce que le dépôt est public.
 4. Ajouter les deux secrets ci-dessus à l'environnement (commandes
    ci-dessous), puis supprimer tout secret de dépôt du même nom.
 5. Protéger les tags `v*` par un ruleset de tags (**Settings → Rules →
@@ -149,12 +175,13 @@ environment** :
    suppression réservées au mainteneur) : sinon, quiconque peut pousser un
    tag peut encore lancer une exécution que l'environnement admet.
 
-Le job de paquets est le seul qui nomme `release` ; `brouillon` et
-`manifeste` ne détiennent aucun secret. GitHub crée un environnement qu'un
-job nomme et qui n'existe pas encore, **sans aucune règle** : le créer
-d'abord avec ses règles. Déplacer les sept secrets Apple dans le même
-environnement est conseillé pour la même raison ; le workflow les lit à
-l'identique.
+Le job `signature` est le seul qui nomme `release` ; `brouillon`, `depot` et
+`manifeste` ne détiennent aucun secret hormis `GH_TOKEN`. GitHub crée un
+environnement qu'un job nomme et qui n'existe pas encore, **sans aucune
+règle** : le créer d'abord avec ses règles. **Ne jamais déplacer les sept
+secrets Apple dans `release`** : le build macOS devrait alors le nommer, et se
+trouverait à une ligne de la clé des mises à jour
+([SECURITY](SECURITY.md#les-identifiants-de-livraison-apple)).
 
 **Pourquoi la vérification.** La CLI Tauri ne fait qu'*avertir* lorsque la
 clé privée ne correspond pas à la clé publique committée, et une relance peut
@@ -169,8 +196,8 @@ l'implémentation de référence, minisign 0.12, installée depuis l'archive de
 sa release GitHub épinglée par SHA-256
 ([RESEARCH-NOTES](RESEARCH-NOTES.md#contrats-de-mise-à-jour-tauri--vérifiés-le-2026-10-02)),
 comme `cargo-about` ; elle vérifie le `.sig` qu'écrit Tauri une fois décodé
-du Base64. Elle s'exécute dans `manifeste` plutôt que dans les jobs de
-paquets parce que là, elle contrôle les octets que les utilisateurs
+du Base64. Elle s'exécute dans `manifeste` plutôt que dans le job de
+signature parce que là, elle contrôle les octets que les utilisateurs
 téléchargeront, sur une seule plateforme, avec un seul binaire épinglé. La
 bibliothèque standard de Python n'a pas d'Ed25519, et le dépôt n'a aucun
 précédent d'implémentation vendorisée.
@@ -236,10 +263,13 @@ releases publiées à leurs archives.
    depuis une branche, l'exécution est refusée par la règle de tag de
    l'environnement `release`. Remplacer la version de l'exemple lorsque la
    version configurée change.
-4. Attendre les trois jobs de paquets, examiner les contrôles puis télécharger
-   et installer les paquets du brouillon.
-5. Attendre le job `manifeste`. Il démarre une fois les trois jobs de paquets
-   au vert, sans autre secret que `GH_TOKEN` : il exige exactement un
+4. Attendre les trois jobs `paquets`, puis approuver le déploiement du job
+   `signature` vers `release` quand il le demande. Rien n'atteint le
+   brouillon avant que `signature` et `depot` soient au vert : une branche de
+   build en échec arrête l'exécution avant que la clé soit lue. Puis
+   télécharger et installer les paquets du brouillon.
+5. Attendre le job `manifeste`. Il démarre une fois `depot` au vert, sans
+   autre secret que `GH_TOKEN` : il exige exactement un
    `*_aarch64.app.tar.gz`, une `*_amd64.AppImage` et une `*_aarch64.AppImage`
    dans le brouillon, chacun avec sa signature, et aucun autre `.app.tar.gz`
    ni `.AppImage` ; les télécharge, vérifie chaque archive contre sa
@@ -249,10 +279,10 @@ releases publiées à leurs archives.
    C'est le seul job qui dépose `latest.json`, et il refuse un brouillon qui
    en contient déjà un. Une signature qui ne se vérifie pas signifie une
    paire de clés qui ne correspond pas, ou une archive et une signature
-   issues de deux exécutions : supprimer les deux du brouillon et relancer le
-   job de paquets de cette plateforme.
-6. **Ne publier le brouillon que lorsque les jobs de paquets et
-   `manifeste` sont au vert et que `latest.json` est joint.** C'est la
+   issues de deux exécutions : supprimer les paquets et les signatures du
+   brouillon et relancer le workflow.
+6. **Ne publier le brouillon que lorsque tous les jobs et `manifeste` sont
+   au vert et que `latest.json` est joint.** C'est la
    publication qui propose la mise à jour :
    `https://github.com/so-keyldzn/oxyn/releases/latest/download/latest.json`
    ne sert que la dernière release publiée et non préliminaire. Une release
@@ -260,7 +290,10 @@ releases publiées à leurs archives.
    installée jusqu'à la suivante.
 
 Les relances ne remplacent jamais les fichiers. Retirer manuellement un fichier
-précis d'un **brouillon** avant de le reconstruire. Une release publiée est
+précis d'un **brouillon** avant de le reconstruire. `depot` dépose les fichiers
+de toutes les plateformes dans un seul job : s'il a échoué en cours de route,
+supprimer les fichiers qu'il a laissés dans le brouillon avant de le relancer.
+Une release publiée est
 refusée avant création/envoi ; son état est vérifié autour de chaque transfert.
 Si la publication survient pendant un transfert, ce fichier peut arriver ; le
 workflow s'arrête sans le supprimer. Garder la release en brouillon jusqu'à la
@@ -277,8 +310,14 @@ vierge constituent les preuves de bout en bout. Sources et contrats vérifiés :
 Les mêmes tests couvrent `manifeste`, `cle` et `signer`, avec un minisign et
 une CLI Tauri simulés ; la paire réelle — `tauri signer sign` 2.12.1, puis
 `minisign -V` 0.12 acceptant le résultat et refusant une archive modifiée ou
-une autre clé — a été vérifiée à la main le 2026-10-02. Ils ne prouvent pas
-qu'un Oxyn installé accepte le résultat. Il y faut deux étapes :
+une autre clé — a été vérifiée à la main le 2026-10-02, puis de nouveau le
+2026-10-22 avec le binaire publié `cargo-tauri` 2.12.1 qu'épingle le job
+`signature` ([RESEARCH-NOTES](RESEARCH-NOTES.md#ci-et-livraison-github)).
+Aucune pull request n'exécute le workflow lui-même : le découpage entre
+`paquets`, `signature` et `depot`, les artefacts et les permissions des
+jetons sont exercés pour la première fois par une livraison. Rien de tout
+cela ne prouve qu'un Oxyn installé accepte le résultat. Il y faut deux
+étapes :
 
 1. **Répétition locale**, avec la feature cargo `update-rehearsal`, jamais
    activée en CI : une clé jetable, des bundles 0.0.1 et 0.0.2 servis sur

@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Fail closed before a signed macOS build and before its release upload.
 
-Tauri owns certificate import, signing and notarization. The API key exists
-only in a private temporary file during the build; diagnostics omit values.
+Tauri owns certificate import, signing and notarization, inside `tauri
+build`. The API key exists only in a private temporary file during the build;
+diagnostics omit values. The Developer ID certificate, its password and that
+file are therefore reachable by every build script of the build: an accepted
+risk, recorded with its reason in docs/SECURITY.md (the Apple release credentials).
 
 The build also writes the updater archive (ADR-0051), `Oxyn.app.tar.gz`, from
 the `.app` Tauri signed, notarized and stapled. Tauri would write it only with
 the updater private key in the environment of the whole build; the archive is
 therefore made here, the way `tauri-bundler` 2.10.1 makes it — the `.app`
-directory at the root, symbolic links kept as links — and signed in a later
-step that alone holds the key (`script/livraison signer`). `verify` checks the
-`.app` it contains like the one beside it.
+directory at the root, symbolic links kept as links — and signed by the
+release workflow's signing job, which alone holds the key and builds nothing
+(`script/livraison signer`). `verify` checks the `.app` it contains like the
+one beside it.
 """
 
 from __future__ import annotations

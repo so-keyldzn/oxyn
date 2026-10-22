@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="abe494439155" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="67354e55fc13" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -97,24 +97,79 @@ La clé privée minisign qui signe les mises à jour est un secret de la
 `TAURI_SIGNING_PRIVATE_KEY` et `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` de
 l'environnement GitHub `release`, vers lequel seuls les tags `v*` peuvent
 déployer — un workflow poussé sur une branche ne peut pas les lire —, et dans
-deux sauvegardes hors ligne. Au sein d'une exécution de livraison, elle
-atteint deux étapes : la vérification de sa présence, et l'étape de
-signature, qui lance seule le `tauri signer sign` épinglé. **Le build ne la
-détient jamais** : `tauri build` exécute chaque `build.rs`, chaque proc-macro
-et chaque plugin Vite du graphe de dépendances, et une seule version
-compromise d'une dépendance pourrait lire son environnement. Elle n'est
-jamais dans le dépôt, un journal, une conversation ou le presse-papiers ; les
-scripts nomment les variables, jamais leurs valeurs, et ne relaient pas la
-sortie de la CLI de signature. Seule sa moitié publique est committée, dans
-`tauri.conf.json` ; tant qu'elle ne l'est pas, la valeur de substitution qui
-s'y trouve fait échouer les livraisons en position fermée — le workflow la
-refuse avant de construire et avant d'écrire un manifeste. Procédure,
-renouvellement et perte :
+deux sauvegardes hors ligne. Au sein d'une exécution de livraison, un seul
+job nomme cet environnement, `signature`, et il ne construit rien : il part
+d'un checkout neuf du tag, ne lance ni `pnpm install`, ni `cargo build`, ni
+`tauri build`, reçoit les paquets non signés sous forme d'artefacts, et ne
+confie la clé qu'à deux étapes — la vérification de sa présence, et
+`tauri signer sign`, lancé depuis le binaire publié de la CLI Tauri épinglé
+par somme de contrôle, jamais depuis `node_modules` (`script/livraison` le
+refuse). Son jeton ne peut que lire : les signatures sortent sous forme
+d'artefact, qu'un job sans la clé dépose. **Le build ne la détient jamais, et
+ne partage jamais un job avec elle** : `tauri build` exécute chaque
+`build.rs`, chaque proc-macro et chaque plugin Vite du graphe de dépendances,
+et `pnpm install` écrit `node_modules` ; dans le même job, une seule version
+compromise d'une dépendance pourrait lire la clé, ou réécrire le programme
+auquel une étape ultérieure la confie — restreindre le secret à cette étape
+n'isolerait rien. L'isolement protège la clé, pas les paquets : un build
+compromis produit toujours un paquet compromis, et le job de signature le
+signe. La clé n'est jamais dans le dépôt, un journal, une conversation ou le
+presse-papiers ; les scripts nomment les variables, jamais leurs valeurs, et
+ne relaient pas la sortie de la CLI de signature. Seule sa moitié publique
+est committée, dans `tauri.conf.json` ; tant qu'elle ne l'est pas, la valeur
+de substitution qui s'y trouve fait échouer les livraisons en position
+fermée — le workflow la refuse avant de construire et avant d'écrire un
+manifeste. Procédure, renouvellement et perte :
 [RELEASE](RELEASE.md#clé-de-signature-des-mises-à-jour).
 
 **Panne concrète :** la clé collée dans une conversation « pour configurer le
 secret », et quiconque lit ce journal peut signer une mise à jour que toute
 copie installée accepte.
+
+### Les identifiants de livraison Apple
+
+Le certificat Developer ID Application (`APPLE_CERTIFICATE`, un `.p12`, et
+`APPLE_CERTIFICATE_PASSWORD`) et la clé d'API de notarisation
+(`APPLE_API_PRIVATE_KEY` et ses identifiants) sont des secrets Actions **du
+dépôt**, lus par la branche macOS du job de build du workflow de livraison,
+`paquets`, et par aucun autre job. Ce job lance aussi `pnpm install` et
+`tauri build` : Tauri importe le certificat dans un trousseau temporaire,
+signe et notarise **à l'intérieur** du bundling, si bien que
+`script/apple-release build` passe le certificat, son mot de passe et le
+chemin du fichier de clé d'API en mode 0600 dans l'environnement du build.
+Chaque `build.rs`, chaque proc-macro et chaque plugin Vite du build macOS
+peut les lire. **C'est un risque accepté**, décidé quand la clé des mises à
+jour a été sortie du build (#248) :
+
+- sortir la signature et la notarisation du build, c'est refaire hors de
+  Tauri ce que le bundler y fait — signer chaque binaire imbriqué avec le
+  runtime renforcé et les entitlements, notariser et agrafer le `.app`, puis
+  reconstruire et signer le DMG autour — dans un job macOS que seule une
+  vraie livraison, avec le vrai certificat, pourrait exercer. Une erreur y
+  livre une application que Gatekeeper refuse, découverte au moment de la
+  livraison ;
+- les enjeux diffèrent : les identifiants Apple peuvent être révoqués et
+  remplacés depuis le compte développeur Apple
+  ([RELEASE](RELEASE.md#configuration-apple)), et les copies installées
+  d'Oxyn ne leur font pas confiance pour les mises à jour ; la clé des mises
+  à jour n'a pas de révocation — toute copie installée lui fait confiance
+  jusqu'à ce qu'une livraison qu'elle a signée livre sa remplaçante
+  ([RELEASE](RELEASE.md#clé-de-signature-des-mises-à-jour)).
+
+Secrets du dépôt, ils sont aussi lisibles par un workflow poussé sur
+n'importe quelle branche. Ils ne doivent jamais passer dans `release` : le
+build macOS devrait alors nommer cet environnement, et une ligne suffirait à
+lui confier la clé des mises à jour. Un environnement à eux, nommé par le
+seul build macOS et n'admettant que les tags `v*`, fermerait l'exposition aux
+branches ; le configurer revient au mainteneur. Le risque accepté se
+réexamine quand le bundler Tauri saura signer et notariser un bundle dans une
+invocation distincte du build, ou quand un job de signature macOS pourra être
+répété sans livraison.
+
+**Panne concrète :** le `build.rs` d'une version compromise d'une dépendance
+lit `APPLE_CERTIFICATE` et son mot de passe pendant le build macOS, et signe
+des logiciels au nom du développeur d'Oxyn jusqu'à la révocation du
+certificat.
 
 ### Un secret ne suit pas sa connexion ailleurs
 

@@ -7,14 +7,15 @@ go into a DRAFT release, and the tag carries the version of
 neither was checked, and nothing could test it without pushing a tag. They
 therefore live here, tested by `script/test_livraison.py`.
 
-    livraison brouillon <tag> <repo>             checks the tag, then creates or
+    livraison brouillon <tag> <repo>             checks the tag and the updater
+                                                 public key, then creates or
                                                  finds the draft
     livraison deposer <tag> <repo> <file>…       uploads each file to the draft,
                                                  one by one
     livraison cle                                checks the updater signing key
-                                                 before an hour of build
+                                                 before the signing job starts
     livraison signer <tag> <file>…               signs each updater artifact,
-                                                 after the build
+                                                 in a job that built nothing
     livraison manifeste <tag> <repo>             verifies the draft's archives,
                                                  writes latest.json, uploads it
     livraison architecture <arch> <bundle> <bin> checks that the Linux packages
@@ -44,14 +45,20 @@ private key of `TAURI_SIGNING_PRIVATE_KEY`, protected by
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the application checks them against the
 public key of `tauri.conf.json`. `cle` refuses an empty secret and the
 placeholder public key, naming the variables, never printing a value (I-03).
+`brouillon` refuses the placeholder too, so that a missing public key stops
+the run before an hour of build rather than after it.
 
-**Signing is its own step** (SECURITY, the updater signing key). `tauri build`
-runs every `build.rs`, proc-macro and Vite plugin of the dependency graph: the
-key in its environment would be readable by any of them. The build therefore
-runs without the key and produces no updater signature; `signer` then runs
-only the pinned `tauri signer sign`, with `--app-version` so that the
-signature's trusted comment carries the version, as `tauri build` writes it.
-The CLI's output is not relayed: it is the one process that holds the key.
+**Signing is its own job** (SECURITY, the updater signing key). `tauri build`
+runs every `build.rs`, proc-macro and Vite plugin of the dependency graph, and
+`pnpm install` writes `node_modules`: in the same job, any of them could read
+the key or rewrite the program that later receives it. The build therefore
+runs in a job without the key and produces no updater signature; `signer`
+runs in another job, from a fresh checkout, and only runs the Tauri CLI named
+by `$TAURI` — the release binary that job installs, pinned by checksum —, with
+`--app-version` so that the signature's trusted comment carries the version,
+as `tauri build` writes it. It refuses a CLI under `node_modules`, the one a
+build installs. The CLI's output is not relayed: it is the one process that
+holds the key.
 
 **The manifest.** `latest.json` is what every installed Oxyn reads. It is
 written last, from the signatures actually uploaded to the draft, and only if
@@ -79,9 +86,9 @@ AppImage's runtime and the binary it carries. Each package job builds
 natively, so a wrong one means the runner or the bundler did not do what the
 matrix says.
 
-`gh`, the Tauri CLI, `minisign`, `file`, `dpkg-deb` and `rpm` are read from
-`$GH`, `$TAURI`, `$MINISIGN`, `$FILE`, `$DPKG_DEB` and `$RPM` if set — that is
-what lets the tests simulate them.
+`gh`, `minisign`, `file`, `dpkg-deb` and `rpm` are read from `$GH`,
+`$MINISIGN`, `$FILE`, `$DPKG_DEB` and `$RPM` if set, and the Tauri CLI from
+`$TAURI`, which has no default — that is what lets the tests simulate them.
 """
 
 from __future__ import annotations
@@ -100,7 +107,6 @@ from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_TAURI = REPO_ROOT / "crates" / "oxyn-desktop" / "tauri.conf.json"
-TAURI_CLI = REPO_ROOT / "apps" / "desktop" / "node_modules" / ".bin" / "tauri"
 KEY_VARIABLES = ("TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
 PUBKEY_PLACEHOLDER = "REPLACE_WITH_UPDATER_PUBLIC_KEY"
 MANIFEST = "latest.json"
@@ -194,6 +200,7 @@ def require_draft_after_upload(tag: str, repo: str) -> bool:
 
 def draft(tag: str, repo: str, config: Path) -> None:
     prerelease = verify_tag(tag, config)
+    updater_pubkey(config)
     if read_release(tag, repo) is None:
         # `--verify-tag`: the release only attaches to a tag that already
         # exists on the repository, never to a tag gh would create itself.
@@ -263,6 +270,19 @@ def check_key(environment: dict[str, str], config: Path) -> None:
     print("Updater signing key present: " + ", ".join(KEY_VARIABLES) + ".")
 
 
+def signing_cli(environment: dict[str, str]) -> str:
+    """The Tauri CLI that will receive the key: never one a build installed."""
+    tauri = environment.get("TAURI", "").strip()
+    if not tauri:
+        raise Refusal("TAURI is not set: name the Tauri CLI binary the signing job installed by checksum")
+    if "node_modules" in Path(tauri).parts:
+        raise Refusal(
+            f"{tauri} comes from node_modules, which `pnpm install` and the build can rewrite: "
+            "sign with the Tauri CLI binary the signing job installed by checksum"
+        )
+    return tauri
+
+
 def sign(tag: str, file_list: list[Path], environment: dict[str, str], config: Path) -> None:
     """Signs each updater artifact for the configured version, after the build."""
     verify_tag(tag, config)
@@ -270,7 +290,7 @@ def sign(tag: str, file_list: list[Path], environment: dict[str, str], config: P
     version = configured_version(config)
     if not file_list:
         raise Refusal("no updater artifact to sign")
-    tauri = environment.get("TAURI", str(TAURI_CLI))
+    tauri = signing_cli(environment)
     for file_path in file_list:
         if not file_path.is_file():
             raise Refusal(f"{file_path} does not exist: the build did not produce it")
