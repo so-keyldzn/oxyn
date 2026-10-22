@@ -3140,6 +3140,40 @@ mod tests {
         }
     }
 
+    /// Issue #246: `ANALYSE` is PostgreSQL's other spelling of `ANALYZE`. An
+    /// agent announcing a read is held for approval, and the command set aside
+    /// carries the true intent, which the history will record.
+    #[test]
+    fn an_agents_explain_analyse_of_a_delete_needs_approval() {
+        let connection = ConnectionConfig::new("customer database", DriverId::postgres())
+            .with_environment(Environment::Development);
+        let bench = Harness::new(&connection);
+        let command = execution(
+            connection.id,
+            "EXPLAIN (ANALYSE) DELETE FROM orders",
+            StatementIntent::Read,
+        );
+
+        let outcome = block_on(
+            bench
+                .executor
+                .dispatch(agent(), command, &CancelToken::new()),
+        )
+        .expect("the gate decides before looking for a session");
+
+        let Outcome::NeedsApproval { reason, .. } = outcome else {
+            panic!("EXPLAIN (ANALYSE) DELETE runs the DELETE: {outcome:?}");
+        };
+        assert!(reason.contains("DELETE without a WHERE clause"), "{reason}");
+        let pending = bench.executor.approvals().pending();
+        let [held] = pending.as_slice() else {
+            panic!("exactly one command waits: {pending:?}");
+        };
+        assert_eq!(held.command.intent(), StatementIntent::Write);
+        assert_eq!(held.command.mutation_risk(), MutationRisk::UnboundedDelete);
+        assert!(bench.executor.running().is_empty());
+    }
+
     #[test]
     fn an_unknown_or_stale_approval_executes_nothing() {
         let connection = ConnectionConfig::new("atelier", DriverId::sqlite())
