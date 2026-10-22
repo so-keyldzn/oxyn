@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use oxyn_core::{CancelToken, CommandId, ConnectionId, Environment, SessionId};
+use oxyn_core::{CancelToken, CommandId, ConnectionId, DocumentId, Environment, SessionId};
 use oxyn_secrets::{MemorySecretStore, SecretRef, SecretStore, SecretString};
 use oxyn_store::Store;
 use parking_lot::Mutex;
@@ -21,6 +21,7 @@ use crate::backend::Backend;
 use crate::backend::windows::WindowKey;
 use crate::commands::windows::run_owned;
 use crate::ipc::settings::ConnectionChange;
+use crate::ipc::windows::HandoffRequest;
 use crate::ipc::{ConnectResponse, ConnectionDraft, IpcError, OpenConnection};
 
 /// Long enough for a loaded machine to reach the held read.
@@ -392,6 +393,54 @@ fn a_closing_window_leaves_another_window_opening_in_flight() {
         .expect("an open window");
     assert_eq!(backend.inner.windows.holders(bench.connection), vec![other]);
     assert!(!backend.inner.windows.names(closing));
+}
+
+#[test]
+fn a_move_whose_target_closed_while_its_catalog_opened_leaves_the_console_home() {
+    let bench = bench();
+    let _guard = bench.runtime.enter();
+    let backend = &bench.backend;
+    let source = backend.reserve_window(true).expect("a window");
+    let [_, console] = bench.reopen_in(source);
+    let target = backend.reserve_window(false).expect("a target");
+    let before = bench.open_sessions();
+    let request = HandoffRequest::Console {
+        connection: bench.connection.to_string(),
+        session: console.to_string(),
+        document: DocumentId::new().to_string(),
+        result: None,
+        parameters: Vec::new(),
+    };
+
+    // The target's catalog session is held at its credential read.
+    let (reached, release) = bench.keyring.hold_after(0);
+    let moving = bench.runtime.spawn({
+        let backend = backend.clone();
+        async move { backend.hand_off(source, target, request).await }
+    });
+    reached
+        .recv_timeout(PATIENCE)
+        .expect("the target's catalog reads the keyring");
+    bench.runtime.block_on(backend.release_window(target));
+    release.send(()).expect("the read is still held");
+    let answer = bench.runtime.block_on(moving).expect("joins");
+
+    assert_eq!(
+        answer.expect_err("the target has closed").message,
+        "This window has closed"
+    );
+    let windows = &backend.inner.windows;
+    assert!(!windows.names(target), "no record names the closed target");
+    assert!(
+        windows.check_session(source, console).is_ok(),
+        "the console stays the source's"
+    );
+    assert_eq!(
+        bench.open_sessions(),
+        before,
+        "only the target's fresh catalog is closed"
+    );
+    assert!(backend.inner.handoffs.take(target).is_none());
 }
 
 #[test]

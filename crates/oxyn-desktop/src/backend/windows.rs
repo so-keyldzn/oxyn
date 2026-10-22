@@ -341,6 +341,11 @@ impl WindowRegistry {
         owned
     }
 
+    /// Whether `key` is a registered window.
+    pub(crate) fn is_registered(&self, key: WindowKey) -> bool {
+        self.state.lock().window(key).is_some()
+    }
+
     /// How many windows are registered.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
@@ -490,13 +495,17 @@ impl WindowRegistry {
         }
     }
 
-    /// Moves a console to another window: its session, its document, and the
-    /// connection held for it. Under one lock, so no command sees the console
-    /// owned by neither window, nor by both.
+    /// Moves a console to another window: its session, its document, the
+    /// connection held for it, and `catalog`, the session `to` opened for its
+    /// own catalog. Under one lock, so no command sees the console owned by
+    /// neither window, nor by both, and so that `to` cannot close between
+    /// its catalog's record and the console's: either both are its, or
+    /// neither is and nothing names it (ADR-0043).
     ///
     /// # Errors
-    /// The session is not `from`'s on `connection`, or another window writes
-    /// the document.
+    /// `to` is gone, the session is not `from`'s on `connection`, or another
+    /// window writes the document. Nothing changed: the caller closes
+    /// `catalog`, the console stays `from`'s.
     pub(crate) fn hand_over(
         &self,
         from: WindowKey,
@@ -504,8 +513,12 @@ impl WindowRegistry {
         connection: ConnectionId,
         session: SessionId,
         document: DocumentId,
+        catalog: Option<SessionId>,
     ) -> Result<(), IpcError> {
         let mut state = self.state.lock();
+        if state.window(to).is_none() {
+            return Err(closed());
+        }
         if state.sessions.get(&session) != Some(&(from, connection)) {
             return Err(elsewhere("console"));
         }
@@ -517,6 +530,9 @@ impl WindowRegistry {
             return Err(IpcError::invalid("This query is open in another window"));
         }
         state.sessions.insert(session, (to, connection));
+        if let Some(catalog) = catalog {
+            state.sessions.insert(catalog, (to, connection));
+        }
         state.documents.insert(document, to);
         state.connections.entry(to).or_default().insert(connection);
         Ok(())

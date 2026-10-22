@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use oxyn_core::{CancelToken, ConnectionId, DocumentId, ResultId, SessionId};
 use parking_lot::Mutex;
 
-use super::WindowKey;
+use super::{WindowKey, WindowRegistry};
 use crate::backend::Backend;
 use crate::ipc::IpcError;
 use crate::ipc::windows::{ConsoleHandoff, HandedResult, HandoffRequest};
@@ -27,8 +27,14 @@ use crate::ipc::windows::{ConsoleHandoff, HandedResult, HandoffRequest};
 pub(crate) struct Handoffs(Mutex<HashMap<WindowKey, ConsoleHandoff>>);
 
 impl Handoffs {
-    fn put(&self, window: WindowKey, handoff: ConsoleHandoff) {
+    /// Keeps `handoff` for `window`, unless it closed: `release_window`
+    /// forgets the window before taking its move, so a move put after that
+    /// take sees the window gone here and takes itself back (I-03).
+    fn put(&self, windows: &WindowRegistry, window: WindowKey, handoff: ConsoleHandoff) {
         self.0.lock().insert(window, handoff);
+        if !windows.is_registered(window) {
+            drop(self.take(window));
+        }
     }
 
     /// The move prepared for `window`, once. Dropped with its bound values
@@ -168,19 +174,37 @@ impl Backend {
                 let config = self.read_config(moved.connection).await?;
                 let catalog = self.catalog_session(&config, &CancelToken::new()).await?;
                 let windows = &self.inner.windows;
-                if let Err(refusal) = windows.claim_session(target, moved.connection, catalog) {
-                    self.release_unclaimed(moved.connection, &[catalog]).await;
-                    return Err(refusal);
-                }
-                let console = self.console_session(moved.session, config.read_only, state)?;
-                let open = self.workspace_of(&config, catalog, console)?;
-                windows.hand_over(
-                    source,
-                    target,
-                    moved.connection,
-                    moved.session,
-                    moved.document,
-                )?;
+                // The target's catalog and the console become its own in one
+                // transaction, which checks that both windows are still
+                // there: refused, only the fresh catalog closes, and the
+                // console stays with the window that held it.
+                let transferred = self
+                    .console_session(moved.session, config.read_only, state)
+                    .and_then(|console| self.workspace_of(&config, catalog, console))
+                    .and_then(|open| {
+                        windows
+                            .hand_over(
+                                source,
+                                target,
+                                moved.connection,
+                                moved.session,
+                                moved.document,
+                                Some(catalog),
+                            )
+                            .map(|()| open)
+                    });
+                let open = match transferred {
+                    Ok(open) => open,
+                    Err(refusal) => {
+                        if let Err(error) = self.close_console(moved.connection, catalog).await {
+                            tracing::warn!(
+                                error = %error.message,
+                                "a refused move's catalog session could not be closed"
+                            );
+                        }
+                        return Err(refusal);
+                    }
+                };
                 // The target reads the result before the source lets its view
                 // go: in between, retention never finds it without a reader
                 // (ADR-0017). A target gone since reads nothing: no reader is
@@ -195,6 +219,7 @@ impl Backend {
                     .layouts
                     .move_console(source, target, moved.document);
                 self.inner.handoffs.put(
+                    windows,
                     target,
                     ConsoleHandoff::Console {
                         open,
@@ -228,7 +253,7 @@ impl Backend {
                     .await?;
                 self.inner
                     .handoffs
-                    .put(target, ConsoleHandoff::Object { open });
+                    .put(windows, target, ConsoleHandoff::Object { open });
                 Ok(())
             }
         }
@@ -251,7 +276,7 @@ impl Backend {
         match self
             .inner
             .windows
-            .hand_over(target, source, connection, session, document)
+            .hand_over(target, source, connection, session, document, None)
         {
             Ok(()) => self.inner.layouts.move_console(target, source, document),
             Err(error) => {

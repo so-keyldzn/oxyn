@@ -252,6 +252,41 @@ fn a_connection_is_disconnected_when_the_last_window_lets_it_go() {
     assert!(registry.release_connection(right, connection).is_some());
 }
 
+/// The target's catalog and the console are recorded in one transaction:
+/// a target gone before it is refused whole, and nothing names it.
+#[test]
+fn a_console_is_not_handed_over_to_a_window_that_is_gone() {
+    let (registry, source, target) = two();
+    let connection = ConnectionId::new();
+    let (console, catalog) = (SessionId::new(), SessionId::new());
+    let document = DocumentId::new();
+    registry
+        .claim_session(source, connection, console)
+        .expect("open");
+    registry.claim_document(source, document).expect("free");
+    let _ = registry.forget(target);
+
+    assert_eq!(
+        registry
+            .hand_over(source, target, connection, console, document, Some(catalog))
+            .expect_err("the target has closed")
+            .message,
+        "This window has closed"
+    );
+    assert!(registry.check_session(source, console).is_ok());
+    assert!(registry.check_document(source, document).is_ok());
+    assert_eq!(registry.owner_of_session(catalog), None);
+    assert!(!registry.names(target));
+
+    let other = registry.reserve(false, None).expect("another target");
+    registry
+        .hand_over(source, other, connection, console, document, Some(catalog))
+        .expect("moved");
+    assert!(registry.check_session(other, catalog).is_ok());
+    assert!(registry.check_session(other, console).is_ok());
+    assert!(registry.holds(other, connection));
+}
+
 #[test]
 fn nothing_is_recorded_for_a_window_that_is_gone() {
     let (registry, left, _) = two();
