@@ -537,29 +537,13 @@ async fn a_login_default_role_survives_a_writable_execution() {
         session_database,
     );
     let initial_pid = first_value(&session, "SELECT pg_catalog.pg_backend_pid()::text").await;
-    assert_eq!(
-        first_value(&session, "SELECT current_user::text").await,
-        "oxyn_state_startup_role",
-        "the server must apply the login's configured default role"
-    );
+    let initial_user = first_value(&session, "SELECT current_user::text").await;
 
     execute(&session, "SET statement_timeout = '1s'", false).await;
 
-    assert_eq!(
-        first_value(&session, "SELECT pg_catalog.pg_backend_pid()::text").await,
-        initial_pid,
-        "the observation must reuse the connection that completed the write"
-    );
-    assert_eq!(
-        first_value(&session, "SELECT current_user::text").await,
-        "oxyn_state_startup_role",
-        "the reset must restore the login's configured default role"
-    );
-    assert_eq!(
-        first_value(&session, "SELECT session_user::text").await,
-        login_name,
-        "the reset must retain the authenticated login"
-    );
+    let observed_pid = first_value(&session, "SELECT pg_catalog.pg_backend_pid()::text").await;
+    let observed_user = first_value(&session, "SELECT current_user::text").await;
+    let observed_login = first_value(&session, "SELECT session_user::text").await;
 
     Box::new(session).close().await.expect("closing");
     let cleanup = format!("ALTER ROLE {login} RESET role; DROP ROLE {restricted}");
@@ -568,6 +552,23 @@ async fn a_login_default_role_survives_a_writable_execution() {
         .await
         .expect("test role cleanup");
     let _ = control.close().await;
+
+    assert_eq!(
+        initial_user, "oxyn_state_startup_role",
+        "the server must apply the login's configured default role"
+    );
+    assert_eq!(
+        observed_pid, initial_pid,
+        "the observation must reuse the connection that completed the write"
+    );
+    assert_eq!(
+        observed_user, "oxyn_state_startup_role",
+        "the reset must restore the login's configured default role"
+    );
+    assert_eq!(
+        observed_login, login_name,
+        "the reset must retain the authenticated login"
+    );
 }
 
 #[tokio::test]
