@@ -1375,6 +1375,39 @@ async fn a_time_of_24_hours_is_refused_with_its_way_out_instead_of_breaking_expo
 
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server: see the module documentation"]
+async fn an_array_with_a_lower_bound_other_than_one_is_refused_not_shifted() {
+    // Issue #267. `arr[1]` of `'[0:2]={10,20,30}'` is 20; shown as
+    // `[10, 20, 30]` it would read as 10.
+    let Some(session) = session().await else {
+        return;
+    };
+    let message = fail(&*session, read_request("SELECT '[0:2]={10,20,30}'::int4[]"))
+        .await
+        .to_string();
+    assert!(message.contains("lower bound"), "{message}");
+    assert_eq!(
+        first_text(&*session, "SELECT '[0:2]={10,20,30}'::int4[]::text").await,
+        "[0:2]={10,20,30}"
+    );
+    assert_eq!(
+        first_text(&*session, "SELECT '[1:3]={10,20,30}'::int4[]::text").await,
+        "{10,20,30}"
+    );
+    let mut cursor = session
+        .execute(
+            read_request("SELECT ARRAY[10, 20, 30]::int4[]"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("a default-bound array is still decoded");
+    let batch = cursor.next_batch().await.expect("stream").expect("one row");
+    assert_eq!(batch.num_rows(), 1);
+    drop(cursor);
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a PostgreSQL server: see the module documentation"]
 async fn an_unknown_type_does_not_fail_the_query() {
     use arrow::array::AsArray as _;
 
