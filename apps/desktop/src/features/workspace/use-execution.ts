@@ -157,6 +157,7 @@ export function useExecution({
       if (outcome.type === "needsApproval")
         void backend.decide(outcome.command, false)
       if (outcome.type === "executed") void backend.forgetResult(outcome.result)
+      forget(id)
       return
     }
     const next = stateFromOutcome(outcome)
@@ -173,7 +174,10 @@ export function useExecution({
   }
 
   const fail = (id: string, error: unknown) => {
-    if (current.current !== id) return
+    if (current.current !== id) {
+      forget(id)
+      return
+    }
     const message = error instanceof Error ? error.message : String(error)
     const retryable = error instanceof BackendError ? error.retryable : false
     setState({ status: "error", message, retryable })
@@ -192,7 +196,10 @@ export function useExecution({
     run: (id: string) => Promise<CommandOutcome>,
     options: { session?: string | null } = {}
   ) => {
-    if (current.current) void backend.cancel(current.current)
+    if (current.current) {
+      void backend.cancel(current.current)
+      forget(current.current)
+    }
     release()
     const id = newCommandId()
     current.current = id
@@ -255,7 +262,10 @@ export function useExecution({
   }
 
   const reset = () => {
-    if (current.current) void backend.cancel(current.current)
+    if (current.current) {
+      void backend.cancel(current.current)
+      forget(current.current)
+    }
     if (pendingApproval.current)
       void backend.decide(pendingApproval.current, false).catch(() => undefined)
     pendingApproval.current = null
@@ -274,7 +284,10 @@ export function useExecution({
   // lands in `settle` with no current id — which forgets its result.
   React.useEffect(
     () => () => {
-      if (current.current) void backend.cancel(current.current)
+      if (current.current) {
+        void backend.cancel(current.current)
+        forget(current.current)
+      }
       if (pendingApproval.current)
         void backend
           .decide(pendingApproval.current, false)

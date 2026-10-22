@@ -162,6 +162,58 @@ export const NoWorkingCopy: Story = {
   args: { state: { status: "ready", entries: [] }, selected: new Set() },
 }
 
+/**
+ * A write interrupted with no console open: nothing to restore, and the
+ * screen still appears at launch, for the warning alone.
+ */
+export const AbnormalWithoutCopyButAWriteInDoubt: Story = {
+  args: {
+    state: { status: "ready", entries: [] },
+    selected: new Set(),
+    unresolvedWrite: true,
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText(/No saved working copies/)).toBeVisible()
+    await expect(
+      canvas.getByText("A write may have an unknown outcome")
+    ).toBeVisible()
+  },
+}
+
+/**
+ * How the last launch ended could not be read: no crash is asserted, none is
+ * ruled out, and the warning about writes stands in for the answer.
+ */
+export const StatusUnreadable: Story = {
+  args: {
+    abnormal: false,
+    statusError: { message: "IPC response did not match", retryable: false },
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByText("How Oxyn last closed could not be read")
+    ).toBeVisible()
+    await expect(canvas.getByText("IPC response did not match")).toBeVisible()
+    await expect(canvas.getByText(/Needs inspection/)).toBeVisible()
+    await expect(canvas.queryByText(/did not close normally/)).toBeNull()
+  },
+}
+
+/** A transient read failure: tried again on the user's click only. */
+export const StatusUnreadableRetryable: Story = {
+  args: {
+    abnormal: false,
+    statusError: { message: "database is locked", retryable: true },
+    onRetryStatus: fn(),
+  },
+  play: async ({ canvas, args }) => {
+    await expect(args.onRetryStatus).not.toHaveBeenCalled()
+    await userEvent.click(canvas.getByRole("button", { name: "Try again" }))
+    await expect(args.onRetryStatus).toHaveBeenCalledTimes(1)
+    await expect(args.onRefresh).not.toHaveBeenCalled()
+  },
+}
+
 /** A permanent failure: the server's words, and no button to try again. */
 export const Failed: Story = {
   args: {

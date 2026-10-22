@@ -85,6 +85,8 @@ export function watch(command: string, session: string | null = null) {
 
 export function forget(command: string) {
   executionProgress.setState((all) => {
+    // Defensive cleanup after a replacement must not wake progress observers.
+    if (!(command in all)) return all
     const { [command]: _removed, ...rest } = all
     return rest
   })

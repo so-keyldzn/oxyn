@@ -38,8 +38,8 @@ use std::ops::Range;
 use oxyn_core::{ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{
-    BinaryOperator, CopyIntoSnowflakeKind, CopyTarget, Expr, ObjectType, Query, Set, SetExpr,
-    Statement, UnaryOperator, UtilityOption, Value,
+    BinaryOperator, CopyIntoSnowflakeKind, CopySource, CopyTarget, Expr, ObjectType, Query, Set,
+    SetExpr, Statement, UnaryOperator, UtilityOption, Value,
 };
 use sqlparser::dialect::Dialect;
 use sqlparser::parser::Parser;
@@ -579,16 +579,19 @@ fn classify_fragment(
                 .reduce(Facts::merge)
                 .unwrap_or(Facts::UNKNOWN);
 
-            // An `EXPLAIN` of a mutation necessarily contains the mutating
-            // keyword, and its form was already settled by the AST — with or
-            // without `ANALYZE`. Letting the net act would turn
-            // `EXPLAIN DELETE …`, which only computes a plan, into a statement
-            // to approve.
-            let sweepable = parsed.iter().all(|statement| {
-                !matches!(
-                    statement,
-                    Statement::Explain { .. } | Statement::ExplainTable { .. }
-                )
+            // An `EXPLAIN` that only computes a plan necessarily contains the
+            // mutating keyword of what it explains, and the AST already
+            // settled that it runs none of it: letting the net act would turn
+            // `EXPLAIN DELETE …` into a statement to approve. An `EXPLAIN` that
+            // runs its statement is swept like that statement would be on its
+            // own — otherwise prefixing `EXPLAIN ANALYZE` would switch the net
+            // off for exactly the forms it exists to catch.
+            let sweepable = parsed.iter().all(|statement| match statement {
+                Statement::Explain {
+                    analyze, options, ..
+                } => explain_executes(*analyze, options.as_deref()),
+                Statement::ExplainTable { .. } => false,
+                _ => true,
             });
 
             if facts == Facts::READ && sweepable && hides_a_mutation(fragment.text, dialect) {
@@ -648,7 +651,7 @@ fn statement_facts(statement: &Statement) -> Facts {
             statement: inner,
             ..
         } => {
-            if *analyze || analyze_requested(options.as_deref()) {
+            if explain_executes(*analyze, options.as_deref()) {
                 // `EXPLAIN ANALYZE` really runs what it analyzes (I-07): the
                 // statement inherits everything, intent as well as risk.
                 statement_facts(inner)
@@ -719,16 +722,27 @@ fn statement_facts(statement: &Statement) -> Facts {
 
         // Server-side files and programs escape PostgreSQL's READ ONLY
         // transaction: only STDOUT exports through the client connection.
-        Statement::Copy { to, target, .. } => match (to, target) {
-            (true, CopyTarget::Stdout) => Facts::READ,
-            (true, CopyTarget::File { .. }) => {
-                Facts::new(StatementIntent::Write, MutationRisk::CopyToServerFile)
+        Statement::Copy {
+            source, to, target, ..
+        } => {
+            let target = match (to, target) {
+                (true, CopyTarget::Stdout) => Facts::READ,
+                (true, CopyTarget::File { .. }) => {
+                    Facts::new(StatementIntent::Write, MutationRisk::CopyToServerFile)
+                }
+                (_, CopyTarget::Program { .. }) => {
+                    Facts::new(StatementIntent::Write, MutationRisk::CopyServerProgram)
+                }
+                _ => Facts::WRITE,
+            };
+            // PostgreSQL copies the output of `(DELETE FROM t RETURNING *)` as
+            // readily as that of a `SELECT`: the statement runs, whatever the
+            // target.
+            match source {
+                CopySource::Query(query) => target.merge(query_facts(query)),
+                CopySource::Table { .. } => target,
             }
-            (_, CopyTarget::Program { .. }) => {
-                Facts::new(StatementIntent::Write, MutationRisk::CopyServerProgram)
-            }
-            _ => Facts::WRITE,
-        },
+        }
         Statement::CopyIntoSnowflake { kind, .. } => match kind {
             CopyIntoSnowflakeKind::Table => Facts::WRITE,
             CopyIntoSnowflakeKind::Location => Facts::READ,
@@ -866,18 +880,48 @@ fn set_expr_facts(body: &SetExpr) -> Facts {
     }
 }
 
-/// PostgreSQL's `EXPLAIN (ANALYZE, VERBOSE) …` goes through the options, not
-/// through the AST's `analyze` flag.
+/// The options of a parenthesized `EXPLAIN` that only shape the plan shown.
 ///
-/// The option's argument is not looked at: `EXPLAIN (ANALYZE false) DELETE` is
+/// PostgreSQL 18's synopsis lists twelve options; `ANALYZE` is the one that
+/// runs the statement, and the others are these (sources in RESEARCH-NOTES,
+/// under "PostgreSQL EXPLAIN options").
+const PLAN_ONLY_EXPLAIN_OPTIONS: [&str; 11] = [
+    "verbose",
+    "costs",
+    "settings",
+    "generic_plan",
+    "buffers",
+    "serialize",
+    "wal",
+    "timing",
+    "summary",
+    "memory",
+    "format",
+];
+
+/// Does an `EXPLAIN` run the statement it explains?
+///
+/// The bare `ANALYZE` keyword sets the AST's flag. PostgreSQL's parenthesized
+/// form goes through the options, and its grammar takes `ANALYSE` there as well
+/// as `ANALYZE`: `sqlparser` knows no `ANALYSE` keyword and keeps it as a plain
+/// identifier, so a test on the name `analyze` let `EXPLAIN (ANALYSE) DELETE`
+/// pass for a read (issue #246). The options are therefore read the other way
+/// round: only names known to shape the plan keep the statement a plan; any
+/// other — either spelling, a quoted `"analyze"`, an option a later version
+/// adds — counts as running it.
+///
+/// The arguments are not looked at: `EXPLAIN (ANALYZE false) DELETE` is
 /// treated as if it analyzed. Over-classifying costs a confirmation;
 /// under-classifying runs the `DELETE`.
-fn analyze_requested(options: Option<&[UtilityOption]>) -> bool {
-    options.is_some_and(|options| {
-        options
-            .iter()
-            .any(|option| option.name.value.eq_ignore_ascii_case("analyze"))
-    })
+fn explain_executes(analyze: bool, options: Option<&[UtilityOption]>) -> bool {
+    analyze
+        || options.is_some_and(|options| {
+            options.iter().any(|option| {
+                !PLAN_ONLY_EXPLAIN_OPTIONS
+                    .iter()
+                    .any(|known| option.name.value.eq_ignore_ascii_case(known))
+            })
+        })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1332,16 +1376,168 @@ mod tests {
         }
     }
 
+    /// PostgreSQL also spells it `ANALYSE`, which `sqlparser` reads as an
+    /// unknown option: that spelling ran the `DELETE` as a read (#246).
+    #[rstest]
+    #[case("EXPLAIN (ANALYSE) DELETE FROM orders", MutationRisk::UnboundedDelete)]
+    #[case("EXPLAIN (analyse) DELETE FROM orders", MutationRisk::UnboundedDelete)]
+    #[case(
+        "EXPLAIN (AnAlYsE true) DELETE FROM orders",
+        MutationRisk::UnboundedDelete
+    )]
+    #[case(
+        "EXPLAIN (VERBOSE, analyse true) UPDATE t SET a = 1",
+        MutationRisk::UnboundedUpdate
+    )]
+    #[case(
+        "EXPLAIN (FORMAT JSON, ANALYSE on) DELETE FROM orders",
+        MutationRisk::UnboundedDelete
+    )]
+    #[case(
+        "EXPLAIN (\"analyze\") DELETE FROM orders",
+        MutationRisk::UnboundedDelete
+    )]
+    #[case(
+        "EXPLAIN (analyze 1) DELETE FROM orders",
+        MutationRisk::UnboundedDelete
+    )]
+    // The argument is not read: a disabled `ANALYSE` costs a confirmation.
+    #[case(
+        "EXPLAIN (analyse off) DELETE FROM orders",
+        MutationRisk::UnboundedDelete
+    )]
+    #[case(
+        "EXPLAIN (ANALYZE false) DELETE FROM orders",
+        MutationRisk::UnboundedDelete
+    )]
+    #[case("EXPLAIN (ANALYSE) DELETE FROM t WHERE id = 1", MutationRisk::None)]
+    fn explain_with_the_british_spelling_is_not_a_read(
+        #[case] sql: &str,
+        #[case] risk: MutationRisk,
+    ) {
+        let outcome = pg(sql);
+        assert_eq!(
+            outcome.intent,
+            StatementIntent::Write,
+            "{sql} → {outcome:?}"
+        );
+        assert_eq!(outcome.risk, risk, "{sql}");
+        assert_eq!(outcome.statements[0].basis, Basis::Ast, "{sql}");
+        assert!(outcome.is_mutating());
+    }
+
+    /// The other grammars that take PostgreSQL's option list run it the same.
+    #[rstest]
+    #[case(SqlDialect::DuckDb)]
+    #[case(SqlDialect::Ansi)]
+    #[case(SqlDialect::Redshift)]
+    fn explain_analyse_is_not_a_read_in_other_grammars(#[case] dialect: SqlDialect) {
+        let outcome = classify("EXPLAIN (ANALYSE) DELETE FROM orders", dialect);
+        assert_eq!(outcome.intent, StatementIntent::Write, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
+    }
+
+    /// The legacy form `EXPLAIN ANALYSE statement` does not parse: it is
+    /// `Unknown`, hence mutating, never a read.
+    #[rstest]
+    #[case("EXPLAIN ANALYSE DELETE FROM orders", SqlDialect::Postgres)]
+    #[case("explain analyse verbose DELETE FROM orders", SqlDialect::Postgres)]
+    #[case("EXPLAIN ANALYSE SELECT 1", SqlDialect::Postgres)]
+    #[case("EXPLAIN ANALYSE DELETE FROM orders", SqlDialect::MySql)]
+    fn the_legacy_analyse_form_is_unknown(#[case] sql: &str, #[case] dialect: SqlDialect) {
+        let outcome = classify(sql, dialect);
+        assert_eq!(
+            outcome.intent,
+            StatementIntent::Unknown,
+            "{sql} → {outcome:?}"
+        );
+        assert_eq!(outcome.statements[0].basis, Basis::Unparsed, "{sql}");
+        assert!(outcome.is_mutating());
+    }
+
+    /// An option Oxyn does not know may run the statement: it inherits the
+    /// statement's intent rather than passing for a read.
     #[test]
-    fn explain_without_analyze_stays_a_read() {
+    fn an_unknown_explain_option_inherits_the_statement() {
+        let outcome = pg("EXPLAIN (EXECUTE_IT) DELETE FROM orders");
+        assert_eq!(outcome.intent, StatementIntent::Write, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::UnboundedDelete);
+    }
+
+    #[rstest]
+    #[case("EXPLAIN DELETE FROM orders")]
+    #[case("EXPLAIN (VERBOSE) DELETE FROM orders")]
+    #[case("EXPLAIN (verbose true, costs off) DELETE FROM orders")]
+    #[case("EXPLAIN (SETTINGS, BUFFERS, SUMMARY, MEMORY) UPDATE t SET a = 1")]
+    #[case("EXPLAIN (GENERIC_PLAN) DELETE FROM orders WHERE id = $1")]
+    #[case("EXPLAIN (FORMAT JSON) DELETE FROM orders")]
+    #[case("EXPLAIN (Format yaml, Wal, Timing, Serialize text) DELETE FROM orders")]
+    #[case("EXPLAIN VERBOSE DELETE FROM orders")]
+    fn explain_without_analyze_stays_a_read(#[case] sql: &str) {
+        let outcome = pg(sql);
+        assert_eq!(outcome.intent, StatementIntent::Read, "{sql} → {outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::None, "{sql}");
+        assert_eq!(outcome.statements[0].basis, Basis::Ast, "{sql}");
+    }
+
+    /// The same nesting `statement_facts` does not anticipate must meet the
+    /// net whether or not `EXPLAIN ANALYZE` precedes it. PostgreSQL refuses a
+    /// `DELETE` in `FROM`; it stands here for any form the AST walk misses.
+    #[test]
+    fn the_net_sweeps_an_explain_that_runs_its_statement() {
+        let bare = pg("SELECT * FROM (DELETE FROM orders RETURNING *) AS d");
+        assert_eq!(bare.statements[0].basis, Basis::KeywordSweep, "{bare:?}");
+        for sql in [
+            "EXPLAIN ANALYZE SELECT * FROM (DELETE FROM orders RETURNING *) AS d",
+            "EXPLAIN (ANALYSE) SELECT * FROM (DELETE FROM orders RETURNING *) AS d",
+        ] {
+            let outcome = pg(sql);
+            assert_eq!(
+                outcome.intent,
+                StatementIntent::Unknown,
+                "{sql} → {outcome:?}"
+            );
+            assert_eq!(outcome.statements[0].basis, Basis::KeywordSweep, "{sql}");
+        }
+    }
+
+    /// `COPY (DELETE … RETURNING *) TO STDOUT` deletes: PostgreSQL copies the
+    /// output of a data-modifying statement. The net used to be the only thing
+    /// standing between it and a read; the AST now says what it does.
+    #[rstest]
+    #[case(
+        "COPY (DELETE FROM orders RETURNING *) TO STDOUT",
+        MutationRisk::UnboundedDelete
+    )]
+    #[case(
+        "COPY (UPDATE t SET a = 1 RETURNING *) TO STDOUT",
+        MutationRisk::UnboundedUpdate
+    )]
+    #[case(
+        "COPY (WITH d AS (DELETE FROM orders RETURNING *) SELECT * FROM d) TO STDOUT",
+        MutationRisk::UnboundedDelete
+    )]
+    #[case(
+        "EXPLAIN ANALYZE COPY (DELETE FROM orders RETURNING *) TO STDOUT",
+        MutationRisk::UnboundedDelete
+    )]
+    fn a_copy_of_a_mutation_is_not_a_read(#[case] sql: &str, #[case] risk: MutationRisk) {
+        let outcome = pg(sql);
         assert_eq!(
-            pg("EXPLAIN DELETE FROM orders").intent,
-            StatementIntent::Read
+            outcome.intent,
+            StatementIntent::Write,
+            "{sql} → {outcome:?}"
         );
-        assert_eq!(
-            pg("EXPLAIN (VERBOSE) DELETE FROM orders").intent,
-            StatementIntent::Read
-        );
+        assert_eq!(outcome.risk, risk, "{sql}");
+        assert_eq!(outcome.statements[0].basis, Basis::Ast, "{sql}");
+    }
+
+    /// The server-side destination keeps its own, more serious reason.
+    #[test]
+    fn a_copy_of_a_mutation_to_a_program_keeps_the_program_risk() {
+        let outcome = pg("COPY (DELETE FROM orders RETURNING *) TO PROGRAM 'x'");
+        assert_eq!(outcome.intent, StatementIntent::Write, "{outcome:?}");
+        assert_eq!(outcome.risk, MutationRisk::CopyServerProgram);
     }
 
     /// The statement starts with `WITH` and deletes every row.
