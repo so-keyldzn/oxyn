@@ -501,10 +501,11 @@ impl AiState {
             .cloned()
             .unwrap_or_default();
         for thread in threads {
-            if thread.id != keep && !thread.is_running() {
-                if let Some(session) = thread.release_agent() {
-                    session.signal_process();
-                }
+            if thread.id != keep
+                && !thread.is_running()
+                && let Some(session) = thread.release_agent()
+            {
+                session.signal_process();
             }
         }
     }

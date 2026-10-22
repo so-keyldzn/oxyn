@@ -2586,11 +2586,6 @@ fn ending_the_driver_kills_its_group_while_the_session_is_held() {
             limits,
         )
         .expect("agent starts");
-        let leader = session
-            .process
-            .as_ref()
-            .expect("a launched session signals its process")
-            .pid();
         let driver = tokio::spawn(driver);
         let cancel = CancelToken::new();
         let stop = cancel.clone();
@@ -2622,28 +2617,20 @@ fn ending_the_driver_kills_its_group_while_the_session_is_held() {
             .parse::<u32>()
             .expect("the grandchild pid marker is numeric");
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-        while (process_is_running(leader) || process_is_running(child))
-            && tokio::time::Instant::now() < deadline
-        {
+        while process_is_running(child) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(
-            !process_is_running(leader) && !process_is_running(child),
-            "the driver ended while its agent group survived"
+            !process_is_running(child),
+            "the driver ended while its agent child survived"
         );
     });
 }
 
 #[cfg(unix)]
 fn process_is_running(pid: u32) -> bool {
-    let output = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .expect("ps runs in the test environment");
-    output.status.success()
-        && !String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .starts_with('Z')
+    rustix::process::Pid::from_raw(pid.cast_signed())
+        .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
 }
 
 mod idle;

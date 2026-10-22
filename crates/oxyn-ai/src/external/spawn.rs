@@ -432,12 +432,6 @@ impl Guard {
 }
 
 impl Process {
-    /// The leader of the process group this handle signals.
-    #[must_use]
-    pub(crate) const fn pid(&self) -> u32 {
-        self.pid
-    }
-
     /// The private directory the child runs in, removed with the guard.
     #[must_use]
     pub(crate) fn directory(&self) -> &std::path::Path {
