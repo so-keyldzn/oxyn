@@ -2049,9 +2049,14 @@ confirms or amends the budgets through an ADR.
 > 2.6 ms regardless of the table's size, and 2 GiB going through a buffer
 > of 256 MB for 195 MiB of RSS growth. **Still to produce**: this `SELECT`
 > end to end, and scrolling a populated grid under instrumentation, now
-> in the webview. The editor is CodeMirror 6, highlighted per dialect, with the
-> basic completion of `basicSetup`; a completion fed by the catalog is not
-> wired to it.
+> in the webview. The editor is CodeMirror 6, highlighted per dialect, and
+> completes from the catalog cache —
+> [ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md): the
+> snapshot with its measured bounds, the insertion form composed in Rust, the
+> resolution-path read and the signal, the editor's adapter, and the bounded
+> loads after a pause in typing. **Still to produce**, in the ADR's fourth pull
+> request: a console's own session context, eviction and `stale` names, and the
+> measurement on the webview.
 
 > **[ADR]** ~~This is the last phase where switching to egui remains a rewrite
 > of two crates ([ADR-0001](adr/0001-ui-toolkit.md)). After that, the cost changes

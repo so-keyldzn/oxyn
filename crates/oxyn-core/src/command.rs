@@ -196,6 +196,13 @@ pub enum CatalogRefreshScope {
         /// Raw target relation name.
         relation: String,
     },
+    /// The namespaces an unqualified name resolves in, in priority order.
+    ///
+    /// A metadata read of the server that names no object. A source that
+    /// cannot say leaves the cache on "unknown" rather than on an empty path,
+    /// which would assert that nothing resolves
+    /// ([ADR-0057](../../../docs/adr/0057-editor-completion-reads-the-catalog-cache.md)).
+    ResolutionPath,
 }
 
 /// Longest focus accepted by [`Command::DescribeCatalog`], in bytes.
@@ -886,6 +893,10 @@ mod tests {
                     namespace: None,
                     relation: "users".into(),
                 },
+            },
+            Command::RefreshCatalogScope {
+                connection: config.id,
+                scope: CatalogRefreshScope::ResolutionPath,
             },
         ] {
             assert_eq!(command.target_connection(), Some(config.id));

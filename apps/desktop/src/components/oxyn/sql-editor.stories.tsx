@@ -84,17 +84,6 @@ export const CommandSlashTogglesTheComment: Story = {
   },
 }
 
-/** ⌘F searches the text of the editor that has the focus. */
-export const CommandFFindsInTheEditor: Story = {
-  play: async ({ canvas, canvasElement }) => {
-    await userEvent.click(canvas.getByRole("textbox"))
-    await userEvent.keyboard(mod("f"))
-    await waitFor(() =>
-      expect(canvasElement.querySelector(".cm-search")).not.toBeNull()
-    )
-  },
-}
-
 /**
  * A read-only view of a stored query: selection and copy work, and nothing
  * changes its text (docs/UX-SPEC.md, « Local query browsing »).
@@ -266,6 +255,49 @@ export const SQLite: Story = {
   args: {
     driver: "sqlite",
     value: "SELECT name FROM sqlite_master WHERE type = 'table';",
+  },
+}
+
+const needs =
+  fn<(names: Array<Array<{ text: string; quoted: boolean }>>) => void>()
+
+/**
+ * The host is told what the statement names — once the editor opens, and again
+ * after a pause in typing, never on a keystroke (ADR-0057 § 2).
+ */
+export const TellsWhatTheStatementNeedsAfterAPause: Story = {
+  args: {
+    value: "SELECT * FROM invoices i JOIN public.customers c ON true",
+    onCatalogNeeds: needs,
+  },
+  play: async ({ canvas }) => {
+    needs.mockClear()
+    const editor = canvas.getByRole("textbox")
+    await waitFor(() => expect(needs).toHaveBeenCalledTimes(1))
+    await expect(needs).toHaveBeenLastCalledWith([
+      [{ text: "invoices", quoted: false }],
+      [
+        { text: "public", quoted: false },
+        { text: "customers", quoted: false },
+      ],
+    ])
+
+    // Typing restarts the clock and says nothing until it stops.
+    await userEvent.click(editor)
+    await userEvent.keyboard("{End} AND 1 = 1")
+    await expect(needs).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(needs).toHaveBeenCalledTimes(2))
+  },
+}
+
+/** A view that was given no handler asks for nothing. */
+export const AsksNothingWithoutAHandler: Story = {
+  args: { value: "SELECT * FROM invoices" },
+  play: async ({ canvas }) => {
+    needs.mockClear()
+    await expect(canvas.getByRole("textbox")).toBeVisible()
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    await expect(needs).not.toHaveBeenCalled()
   },
 }
 

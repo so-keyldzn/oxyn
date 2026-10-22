@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="49c92cfc53da" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="44eb38c43777" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2054,9 +2054,14 @@ confirme ou amende les budgets par un ADR.
 > 2,6 ms quelle que soit la taille de la table, et 2 Gio qui traversent un tampon
 > de 256 Mo pour 195 Mio de croissance RSS. **Reste à produire** : ce `SELECT` de
 > bout en bout, et le défilement d'une grille peuplée sous instrument, désormais
-> dans la webview. L'éditeur est CodeMirror 6, coloré par dialecte, avec la
-> complétion de base de `basicSetup` ; une complétion nourrie du catalogue n'y est
-> pas branchée.
+> dans la webview. L'éditeur est CodeMirror 6, coloré par dialecte, et complète
+> depuis le cache du catalogue —
+> l'[ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md) :
+> l'instantané avec ses bornes mesurées, la forme d'insertion composée en Rust, la
+> lecture du chemin de résolution et le signal, l'adaptateur de l'éditeur, et les
+> chargements bornés après une pause de frappe. **Reste à produire**, à la
+> quatrième pull request de l'ADR : le contexte de session propre à une console,
+> l'éviction et les noms `stale`, et la mesure dans la webview.
 
 > **[ADR]** ~~C'est la dernière phase où la bascule vers egui reste une réécriture
 > de deux crates ([ADR-0001](adr/0001-ui-toolkit.md)). Après, le coût change de

@@ -74,6 +74,9 @@ describe("object operations offered from the catalog", () => {
       "a\u202Eb",
       "a\u2067b",
       "a\u0000b",
+      "a\u200bb",
+      "a\u00adb",
+      "a\u3164b",
     ]) {
       expect(hidesText(name)).toBe(true)
       expect(operationOffer("drop", node(name), POSTGRES)).toEqual({

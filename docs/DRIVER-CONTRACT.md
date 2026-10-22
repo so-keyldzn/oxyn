@@ -157,6 +157,43 @@ holds it through `sqlite3_stmt_readonly`, which does not touch the transaction.
 transaction is open, and the `INSERT`s confirmed just before vanish
 without a message.
 
+**A session says where an unqualified name resolves, or says it cannot.**
+`CatalogProvider::resolution_path` returns the namespaces, first match first,
+([ADR-0057](adr/0057-editor-completion-reads-the-catalog-cache.md)) — read on
+the session reserved for the catalog, in its default state, never on a console's
+session, whose context a user may have changed:
+
+* PostgreSQL answers with the server's effective `search_path`
+  (`current_schemas(true)`: the entries that do not exist or cannot be searched
+  are omitted, and the implicitly searched `pg_catalog` is **kept** — the server
+  looks in it before the path unless the path names it, so a relation of
+  `public` called like one of its own is not what an unqualified name reaches).
+  The session's own temporary schema is left out: the catalog's reserved session
+  holds no temporary object, and a console's lives on its own session. Amazon
+  Redshift refuses with `NotSupported`: the query leans on `unnest … WITH
+  ORDINALITY`, and a query the server rejects would fail the same read at every
+  pass;
+* MySQL and MariaDB answer with `DATABASE()`, the database the server says the
+  session selected — not the one the connection form names, which the server may
+  spell another way (`lower_case_table_names`) or replace (`init_connect`, a
+  proxy). `NULL` is an empty path: nothing resolves then, which is an answer; a
+  name that is not text is an error, never an empty path. A console that
+  switched database with `USE` resolves in its own context, which this answer
+  does not see;
+* SQLite answers `temp`, then `main`, then the attached databases in the order
+  they were attached — the order `sqlite3FindTable` searches them in (SQLite
+  3.50.2, `src/build.c`). The ATTACH page says the least recently attached
+  database wins among the attached ones and is silent on `main` and `temp`, so
+  their rank is the source's and not a documented guarantee
+  ([RESEARCH-NOTES](RESEARCH-NOTES.md#editor-completion--check-of-2026-10-21));
+* any other driver keeps the default, `NotSupported`: an empty list would assert
+  that no namespace resolves anything, and a driver that cannot tell cannot
+  assert it.
+
+**Concrete failure:** a completion that supposes `public` suggests a name the
+server then refuses — PostgreSQL reports an error "even if matching table names
+exist in other schemas".
+
 Corollary for a non-SQL driver: a query carries an explicit `QueryLanguage`.
 SQL is one case among others, not the default the others reduce to.
 
