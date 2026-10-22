@@ -159,7 +159,6 @@ mod tests {
 
     use crate::prelude::*;
     use crate::tools::EXECUTE_QUERY;
-    use crate::untrusted;
 
     /// A minimal catalog, carrying a hostile comment.
     fn sample_catalog() -> CatalogCache {
