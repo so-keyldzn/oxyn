@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="c1e5904626ea" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="afa7aa8b42e6" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -74,9 +74,9 @@ Deux conséquences que les drivers ratent le plus souvent :
 
 | Famille | Exemples | Ce que fait l'appelant |
 |---|---|---|
-| Transitoire | coupure réseau, `too many connections`, verrou expiré | peut retenter, avec recul exponentiel |
+| Transitoire | coupure réseau durant une lecture, trop de connexions, expiration de verrou / interblocage / erreur de ressource sur une lecture ou une écriture de données simple après un rollback de l'instruction entière | peut retenter, avec recul exponentiel |
 | Permanente | erreur de syntaxe, table ou colonne absente, droits insuffisants | ne retente **jamais**, affiche |
-| Ambiguë | expiration côté client pendant une écriture | ne retente **jamais**, signale l'incertitude |
+| Ambiguë | expiration côté client pendant une écriture ; erreur de concurrence ou de ressource dans une procédure, une commande non transactionnelle ou une intention inconnue | ne retente **jamais**, signale l'incertitude |
 
 **Panne concrète :** un `INSERT` expire côté client alors que le serveur l'a
 appliqué. Classé « transitoire » et rejoué, il crée un doublon dans les données

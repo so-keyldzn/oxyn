@@ -294,7 +294,7 @@ pub(crate) fn classify(err: &MyError, intent: StatementIntent) -> ErrorClass {
         ErrorClass::Transient
     };
     match err {
-        MyError::Server(server) => classify_server(server.code, &server.state, transport),
+        MyError::Server(server) => classify_server(server.code, &server.state, intent, transport),
         MyError::Io(_) => transport,
         MyError::Driver(driver) => match driver {
             // The protocol lost its footing after the request left: whatever
@@ -312,27 +312,57 @@ pub(crate) fn classify(err: &MyError, intent: StatementIntent) -> ErrorClass {
 }
 
 /// The family of a server error number.
-fn classify_server(code: u16, sqlstate: &str, transport: ErrorClass) -> ErrorClass {
+fn classify_server(
+    code: u16,
+    sqlstate: &str,
+    intent: StatementIntent,
+    transport: ErrorClass,
+) -> ErrorClass {
     match code {
-        // The statement was rolled back and nothing else: replaying is exactly
-        // the right answer. A deadlock rolls the whole transaction back, which
-        // the caller learns from the transaction state, not from here.
-        ER_LOCK_WAIT_TIMEOUT
-        | ER_LOCK_DEADLOCK
-        | ER_CON_COUNT_ERROR
-        | ER_TOO_MANY_USER_CONNECTIONS
-        | ER_USER_LIMIT_REACHED
-        | ER_OUT_OF_RESOURCES
-        | ER_OUTOFMEMORY
-        | ER_OUT_OF_SORTMEMORY
-        | ER_DISK_FULL => ErrorClass::Transient,
+        // A deadlock rolls the whole transaction back. The executor learns
+        // the transaction state from the server separately, not here.
+        ER_LOCK_WAIT_TIMEOUT | ER_LOCK_DEADLOCK => retry_class(intent),
+
+        // A non-transactional table can keep rows before a storage shortage.
+        // The driver cannot identify its engine, so only reads are retryable.
+        ER_OUT_OF_RESOURCES | ER_OUTOFMEMORY | ER_OUT_OF_SORTMEMORY | ER_DISK_FULL => {
+            resource_class(intent)
+        }
+
+        // Connection admission fails before the user's statement runs.
+        ER_CON_COUNT_ERROR | ER_TOO_MANY_USER_CONNECTIONS | ER_USER_LIMIT_REACHED => {
+            ErrorClass::Transient
+        }
         // The server stopped midway: like a cut.
         ER_SERVER_SHUTDOWN | ER_CONNECTION_KILLED => transport,
         _ if sqlstate.starts_with(SQLSTATE_CLASS_CONNECTION) => transport,
-        _ if sqlstate == SQLSTATE_SERIALIZATION_FAILURE => ErrorClass::Transient,
+        _ if sqlstate == SQLSTATE_SERIALIZATION_FAILURE => retry_class(intent),
         // Syntax, missing object, violated constraint, rights, read-only:
         // display it, do not retry.
         _ => ErrorClass::Permanent,
+    }
+}
+
+/// The class for a server failure that is retryable only after a whole-statement
+/// rollback. `CALL` and `DO` classify as the non-plain intents below.
+const fn retry_class(intent: StatementIntent) -> ErrorClass {
+    match intent {
+        StatementIntent::Read | StatementIntent::Write => ErrorClass::Transient,
+        StatementIntent::Unknown | StatementIntent::Ddl | StatementIntent::Grant => {
+            ErrorClass::Ambiguous
+        }
+    }
+}
+
+/// The class for a storage shortage whose partial effects depend on the table
+/// engine, which this protocol does not expose on the error path.
+const fn resource_class(intent: StatementIntent) -> ErrorClass {
+    match intent {
+        StatementIntent::Read => ErrorClass::Transient,
+        StatementIntent::Unknown
+        | StatementIntent::Write
+        | StatementIntent::Ddl
+        | StatementIntent::Grant => ErrorClass::Ambiguous,
     }
 }
 
@@ -415,13 +445,50 @@ mod tests {
     }
 
     #[test]
-    fn concurrency_conflicts_are_transient_and_syntax_is_permanent() {
-        for code in [ER_LOCK_DEADLOCK, ER_LOCK_WAIT_TIMEOUT, ER_CON_COUNT_ERROR] {
+    fn concurrency_and_resource_errors_follow_the_statement_intent() {
+        for code in [ER_LOCK_DEADLOCK, ER_LOCK_WAIT_TIMEOUT] {
+            for intent in [StatementIntent::Read, StatementIntent::Write] {
+                assert_eq!(
+                    classify(&server(code, "HY000", "x"), intent),
+                    ErrorClass::Transient,
+                    "{code}, {intent:?}"
+                );
+            }
+            for intent in [
+                StatementIntent::Unknown,
+                StatementIntent::Ddl,
+                StatementIntent::Grant,
+            ] {
+                assert_eq!(
+                    classify(&server(code, "HY000", "x"), intent),
+                    ErrorClass::Ambiguous,
+                    "{code}, {intent:?}"
+                );
+            }
+        }
+        for code in [
+            ER_OUT_OF_RESOURCES,
+            ER_OUTOFMEMORY,
+            ER_OUT_OF_SORTMEMORY,
+            ER_DISK_FULL,
+        ] {
             assert_eq!(
-                classify(&server(code, "HY000", "x"), StatementIntent::Write),
+                classify(&server(code, "HY000", "x"), StatementIntent::Read),
                 ErrorClass::Transient,
-                "{code}"
+                "{code}, Read"
             );
+            for intent in [
+                StatementIntent::Write,
+                StatementIntent::Unknown,
+                StatementIntent::Ddl,
+                StatementIntent::Grant,
+            ] {
+                assert_eq!(
+                    classify(&server(code, "HY000", "x"), intent),
+                    ErrorClass::Ambiguous,
+                    "{code}, {intent:?}"
+                );
+            }
         }
         assert_eq!(
             classify(&server(1064, "42000", "syntax"), StatementIntent::Read),
@@ -431,6 +498,29 @@ mod tests {
             classify(&server(1146, "42S02", "no table"), StatementIntent::Write),
             ErrorClass::Permanent
         );
+    }
+
+    #[test]
+    fn connection_admission_errors_are_transient_for_every_intent() {
+        for code in [
+            ER_CON_COUNT_ERROR,
+            ER_TOO_MANY_USER_CONNECTIONS,
+            ER_USER_LIMIT_REACHED,
+        ] {
+            for intent in [
+                StatementIntent::Read,
+                StatementIntent::Write,
+                StatementIntent::Unknown,
+                StatementIntent::Ddl,
+                StatementIntent::Grant,
+            ] {
+                assert_eq!(
+                    classify(&server(code, "HY000", "x"), intent),
+                    ErrorClass::Transient,
+                    "{code}, {intent:?}"
+                );
+            }
+        }
     }
 
     #[test]

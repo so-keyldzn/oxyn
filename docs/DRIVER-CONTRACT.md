@@ -70,9 +70,9 @@ Two consequences drivers miss most often:
 
 | Family | Examples | What the caller does |
 |---|---|---|
-| Transient | network drop, `too many connections`, lock timeout | may retry, with exponential backoff |
+| Transient | network drop during a read, too many connections, a lock timeout / deadlock / resource error on a read or a plain data write after a whole-statement rollback | may retry, with exponential backoff |
 | Permanent | syntax error, missing table or column, insufficient privileges | **never** retries, displays |
-| Ambiguous | client-side timeout during a write | **never** retries, reports the uncertainty |
+| Ambiguous | client-side timeout during a write; a concurrency or resource error in a procedure, non-transactional command, or unknown intent | **never** retries, reports the uncertainty |
 
 **Concrete failure:** an `INSERT` times out on the client side while the server
 applied it. Classified as "transient" and replayed, it creates a duplicate in the

@@ -18,6 +18,17 @@ the values of this file and reports the gaps. It changes nothing: deciding on
 a version bump is a human's call. The `/versions` command does the same while
 explaining the gaps.
 
+## PostgreSQL-compatible session reset — check of 2026-10-22
+
+Amazon Redshift documents `RESET ALL` as resetting all runtime parameters,
+including session context variables. Its [`SET SESSION AUTHORIZATION` page](https://docs.aws.amazon.com/redshift/latest/dg/r_SET_SESSION_AUTHORIZATION.html)
+documents `SET ... DEFAULT` but requires a database superuser for the command;
+it does not document `RESET SESSION AUTHORIZATION`. The PostgreSQL driver's
+Redshift flavor therefore sends only the documented unprivileged reset,
+`RESET ALL`, after a writable execution; PostgreSQL keeps its fuller reset
+sequence. Source: [Amazon Redshift RESET](https://docs.aws.amazon.com/redshift/latest/dg/r_RESET.html),
+read on 2026-10-22.
+
 
 ## AI transport confinement — 2026-10-03
 
