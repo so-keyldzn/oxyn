@@ -703,7 +703,9 @@ pub(crate) fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static s
         // `'[0:2]={10,20,30}'::int[]` is legal, and an Arrow list has no bound:
         // shown as `[10, 20, 30]`, it makes `arr[1]` read the wrong element.
         // Refusing names it, as for a second dimension.
-        return Err("array whose lower bound is not 1, not representable as an Arrow list");
+        return Err(
+            "array whose lower bound is not 1, not representable as an Arrow list — cast it to text",
+        );
     }
     let length = usize::try_from(length).map_err(|_| "negative array length")?;
 
@@ -997,6 +999,7 @@ mod tests {
             }
             let error = split_array(&encoded).expect_err("refusal expected");
             assert!(error.contains("lower bound"), "{error}");
+            assert!(error.contains("cast it to text"), "{error}");
         }
     }
 

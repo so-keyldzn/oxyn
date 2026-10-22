@@ -1385,6 +1385,7 @@ async fn an_array_with_a_lower_bound_other_than_one_is_refused_not_shifted() {
         .await
         .to_string();
     assert!(message.contains("lower bound"), "{message}");
+    assert!(message.contains("cast it to text"), "{message}");
     assert_eq!(
         first_text(&*session, "SELECT '[0:2]={10,20,30}'::int4[]::text").await,
         "[0:2]={10,20,30}"
