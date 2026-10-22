@@ -88,19 +88,68 @@ not of a user: it lives only in the `TAURI_SIGNING_PRIVATE_KEY` and
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets of the `release` GitHub
 environment, which only `v*` tags may deploy to — a workflow pushed on a
 branch cannot read them —, and in two offline backups. Within a release run
-it reaches two steps: the check that it is present, and the signing step,
-which runs the pinned `tauri signer sign` alone. **The build never holds
-it**: `tauri build` runs every `build.rs`, proc-macro and Vite plugin of the
-dependency graph, and one compromised dependency version could read its
-environment. It is never in the repository, a log, a chat or the clipboard;
-scripts name the variables, never their values, and do not relay the signing
-CLI's output. Only its public half is committed, in `tauri.conf.json`; until
-it is, the placeholder there fails releases closed — the workflow refuses it
-before building and before writing a manifest. Procedure, rotation and loss:
+one job names that environment, `signature`, and it builds nothing: it starts
+from a fresh checkout of the tag, runs neither `pnpm install`, `cargo build`
+nor `tauri build`, receives the unsigned packages as artifacts, and hands the
+key to two steps only — the check that it is present, and
+`tauri signer sign`, run from the Tauri CLI release binary pinned by
+checksum, never from `node_modules` (`script/livraison` refuses it). Its token
+can only read: the signatures leave as an artifact that a job without the key
+uploads. **The build never holds it, nor shares a job with it**: `tauri build`
+runs every `build.rs`, proc-macro and Vite plugin of the dependency graph, and
+`pnpm install` writes `node_modules`; in the same job, one compromised
+dependency version could read the key, or rewrite the program a later step
+hands it to — scoping the secret to that step would isolate nothing. The
+isolation protects the key, not the packages: a compromised build still
+produces a compromised package, and the signing job signs it. The key is
+never in the repository, a log, a chat or the clipboard; scripts name the
+variables, never their values, and do not relay the signing CLI's output.
+Only its public half is committed, in `tauri.conf.json`; until it is, the
+placeholder there fails releases closed — the workflow refuses it before
+building and before writing a manifest. Procedure, rotation and loss:
 [RELEASE](RELEASE.md#updater-signing-key).
 
 **Concrete failure:** the key pasted into a chat to "set up the secret", and
 anyone who reads that log can sign an update every installed copy accepts.
+
+### The Apple release credentials
+
+The Developer ID Application certificate (`APPLE_CERTIFICATE`, a `.p12`, and
+`APPLE_CERTIFICATE_PASSWORD`) and the notarization API key
+(`APPLE_API_PRIVATE_KEY` and its identifiers) are **repository** Actions
+secrets, read by the macOS leg of the release workflow's build job, `paquets`,
+and by no other job. That job also runs `pnpm install` and `tauri build`:
+Tauri imports the certificate into a temporary keychain and signs and
+notarizes **inside** the bundling, so `script/apple-release build` passes the
+certificate, its password and the path of the mode-0600 API key file in the
+build's environment. Every `build.rs`, proc-macro and Vite plugin of the
+macOS build can read them. **This is an accepted risk**, decided when the
+updater key was moved out of the build (#248):
+
+- taking signing and notarization out of the build means redoing outside
+  Tauri what the bundler does there — signing every nested binary with the
+  hardened runtime and entitlements, notarizing and stapling the `.app`, then
+  rebuilding and signing the DMG around it — in a macOS job that only a real
+  release, with the real certificate, could exercise. A mistake there ships an
+  application Gatekeeper refuses, found at release time;
+- the stakes differ: the Apple credentials can be revoked and replaced from
+  the Apple developer account ([RELEASE](RELEASE.md#apple-setup)), and
+  installed copies of Oxyn do not trust them for updates; the updater key has
+  no revocation — every installed copy trusts it until a release it signed
+  ships its successor ([RELEASE](RELEASE.md#updater-signing-key)).
+
+Being repository secrets, they are also readable by a workflow pushed on any
+branch. They must never move into `release`: the macOS build would then have
+to name that environment, and one line would hand it the updater key. An
+environment of their own, named by the macOS build alone and admitting `v*`
+tags only, would close the branch exposure; configuring it is the
+maintainer's. Reconsider the accepted risk when the Tauri bundler can sign
+and notarize a bundle in a separate invocation from the build, or when a
+macOS signing job can be rehearsed without a release.
+
+**Concrete failure:** a compromised dependency version's `build.rs` reads
+`APPLE_CERTIFICATE` and its password during the macOS build, and signs
+software as Oxyn's developer until the certificate is revoked.
 
 ### A secret does not follow its connection elsewhere
 
