@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="README.md" sha256="c5d4dba1901e" -->
+<!-- oxyn-translation source="README.md" sha256="1ce715f87d78" -->
 
 > Traduction française de [README.md](../../README.md). **La version anglaise fait foi.**
 
@@ -70,6 +70,10 @@ L'application est en Tauri 2, avec un front end dans `apps/desktop`
   libssl-dev libayatana-appindicator3-dev librsvg2-dev` (noms Debian et Ubuntu,
   tirés des prérequis de Tauri consignés dans
   [RESEARCH-NOTES](docs/RESEARCH-NOTES.md)).
+- **macOS uniquement**, les Xcode Command Line Tools (`xcode-select --install`)
+  — ou Xcode — dont l'hôte Tauri a besoin pour compiler ; l'image macOS de la CI
+  les a déjà, seule une machine neuve révèle l'oubli (prérequis de Tauri
+  consignés dans [RESEARCH-NOTES](docs/RESEARCH-NOTES.md)).
 - **`python3`**, pour `make desktop PROFIL=release` et pour la porte de qualité.
 
 ```sh

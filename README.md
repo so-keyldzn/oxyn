@@ -64,6 +64,10 @@ The application is Tauri 2 with a front end in `apps/desktop`
   `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev
   libayatana-appindicator3-dev librsvg2-dev` (Debian and Ubuntu names, from the
   Tauri prerequisites recorded in [RESEARCH-NOTES](docs/RESEARCH-NOTES.md)).
+- **macOS only**, the Xcode Command Line Tools (`xcode-select --install`) — or
+  Xcode — which the Tauri host needs to compile; the macOS CI image already has
+  them, so only a fresh machine shows the omission (Tauri prerequisites recorded
+  in [RESEARCH-NOTES](docs/RESEARCH-NOTES.md)).
 - **`python3`**, for `make desktop PROFIL=release` and for the quality gate.
 
 ```sh
