@@ -156,8 +156,8 @@ fn the_end_of_stderr_is_kept_when_an_agent_floods_it() {
 }
 
 #[cfg(unix)]
-#[test]
-fn dropping_the_guard_kills_the_agent() {
+#[tokio::test]
+async fn dropping_the_guard_kills_the_agent() {
     // An agent left running holds the user's subscription and may still be
     // talking to a provider. Closing the panel must end it.
     let temporary = tempfile::tempdir().expect("a temporary marker directory");
@@ -184,7 +184,7 @@ fn dropping_the_guard_kills_the_agent() {
             std::time::Instant::now() < deadline,
             "the shell did not start its child"
         );
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let child = std::fs::read_to_string(&marker)
         .expect("the child pid marker is readable")
@@ -196,7 +196,7 @@ fn dropping_the_guard_kills_the_agent() {
     // Awaiting the watch reaps the child. Without it the process stays a
     // zombie, which still answers « alive » — and a test that stopped here
     // would pass whether or not the kill worked.
-    let exit = block_on(watch);
+    let exit = watch.await;
     assert_eq!(exit.code, None, "a killed process has no exit code");
     assert!(!alive(pid), "the agent survived the guard");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -204,7 +204,7 @@ fn dropping_the_guard_kills_the_agent() {
     {
         // The shell cannot reap a child after the whole group is killed; macOS
         // briefly reports that zombie until its new parent has reaped it.
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert!(
         rustix::process::test_kill_process(child).is_err(),
