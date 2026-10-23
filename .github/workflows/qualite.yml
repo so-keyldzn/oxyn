@@ -360,6 +360,16 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 12
+      redis:
+        # The tag is the one RESEARCH-NOTES records for ADR-0061.
+        image: redis:8.10.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - name: Check out the repository
@@ -467,6 +477,7 @@ jobs:
           OXYN_PG_TEST_URL: postgres://postgres:oxyn@localhost:5432/postgres?sslmode=disable
           OXYN_MYSQL_TEST_URL: mysql://root:oxyn@localhost:3306/t?sslmode=prefer
           OXYN_PG_PRODUCTION_TEST_URL: postgres://postgres:oxyn@localhost:5433/postgres?sslmode=verify-full
+          OXYN_REDIS_TEST_URL: redis://localhost:6379/0?tls=disable
           # sqlx trusts this disposable CA while verify-full validates the leaf SAN.
           PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/ca.crt
         run: make test-serveurs

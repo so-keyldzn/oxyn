@@ -147,8 +147,11 @@ fn column(batches: &[RecordBatch], name: &str) -> Vec<Option<String>> {
     out
 }
 
-/// The clients `CLIENT LIST` shows running `command`, from another session.
-async fn running(observer: &dyn Session, command: &str) -> usize {
+/// The clients `CLIENT LIST` shows blocked in `command`, from another session.
+///
+/// `cmd=` is the last command a client ran, which stays `blpop` after the
+/// command ended: only the `b` flag says the client is blocked in it now.
+async fn blocked_in(observer: &dyn Session, command: &str) -> usize {
     let batches = run(observer, "CLIENT LIST").await.expect("CLIENT LIST");
     let listing = column(&batches, "value")
         .into_iter()
@@ -157,7 +160,13 @@ async fn running(observer: &dyn Session, command: &str) -> usize {
     listing
         .lines()
         .filter(|line| {
-            line.contains(&format!(" cmd={command} ")) || line.ends_with(&format!(" cmd={command}"))
+            let fields: Vec<&str> = line.split(' ').collect();
+            fields.contains(&format!("cmd={command}").as_str())
+                && fields.iter().any(|field| {
+                    field
+                        .strip_prefix("flags=")
+                        .is_some_and(|f| f.contains('b'))
+                })
         })
         .count()
 }
@@ -434,7 +443,7 @@ async fn a_blocked_command_is_stopped_on_the_server() {
         let mut seen = 0;
         for _ in 0..50 {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            seen = running(&observer, "blpop").await;
+            seen = blocked_in(&observer, "blpop").await;
             if seen > 0 {
                 break;
             }
@@ -450,7 +459,7 @@ async fn a_blocked_command_is_stopped_on_the_server() {
         "UNBLOCKED proves BLPOP served nothing: {error:?}"
     );
     assert_eq!(
-        running(&observer, "blpop").await,
+        blocked_in(&observer, "blpop").await,
         0,
         "no client is blocked any more"
     );
@@ -526,12 +535,14 @@ async fn a_script_that_has_not_written_is_killed_on_the_server() {
 #[tokio::test]
 #[ignore = "needs OXYN_REDIS_TEST_URL"]
 async fn a_hash_too_large_for_memory_streams_in_bounded_batches() {
-    const FIELDS: u64 = 2_000_000;
+    // About 280 MB cross the socket against a 64 MB bound on the growth of the
+    // process: a driver that held the reply would fail it four times over.
+    const FIELDS: u64 = 1_000_000;
     let Some(session) = clean().await else { return };
     run(
         &session,
         &format!(
-            "EVAL \"for i = 1, tonumber(ARGV[1]) do redis.call('HSET', KEYS[1], i, string.rep('x', 200)) end\" 1 big {FIELDS}"
+            "EVAL \"for i = 1, tonumber(ARGV[1]) do redis.call('HSET', KEYS[1], i, string.rep('x', 256)) end\" 1 big {FIELDS}"
         ),
     )
     .await
@@ -555,14 +566,9 @@ async fn a_hash_too_large_for_memory_streams_in_bounded_batches() {
         }
     }
     assert_eq!(total, FIELDS);
-    // About 440 MB crossed the socket; the process never held more than a few
-    // batches of it. The bound is measured where the CI runs the suite.
+    // The bound is measured where the CI runs the suite.
     match before {
-        Some(_) => assert!(
-            peak < 128 << 20,
-            "resident memory grew by {} MB",
-            peak >> 20
-        ),
+        Some(_) => assert!(peak < 64 << 20, "resident memory grew by {} MB", peak >> 20),
         None => {
             eprintln!("resident memory is read from /proc on Linux only: bound not measured here")
         }
