@@ -146,6 +146,10 @@ pub async fn run(
         return;
     };
     if format != FORMAT {
+        // Closed before the kill: KILL QUERY answers once its target ended,
+        // and a statement blocked writing rows nobody reads ends only when
+        // its connection does (observed on 26.3).
+        drop(reply);
         execution.kill().await;
         let _ = opened.send(Err(protocol_error(
             &execution.driver,
@@ -295,7 +299,7 @@ impl Rows {
             .is_err()
         {
             // `execute` was dropped before the schema came back.
-            self.execution.kill().await;
+            self.halt().await;
             return;
         }
         if let Err(error) = self.rows(&mut decoder, &token, &batches).await {
@@ -311,7 +315,7 @@ impl Rows {
                 Ok(None) if self.body.rows_closed() => return Err(self.closed_early()),
                 Ok(None) => self.read(token).await?,
                 Err(error) => {
-                    self.execution.kill().await;
+                    self.halt().await;
                     return Err(map_decode_error(
                         &self.execution.driver,
                         self.execution.intent,
@@ -330,7 +334,7 @@ impl Rows {
                  in the query, for instance `toString({})`",
                 column.name, column.raw_type, column.name
             );
-            self.execution.kill().await;
+            self.halt().await;
             return Err(protocol_error(
                 &self.execution.driver,
                 self.execution.intent,
@@ -367,7 +371,7 @@ impl Rows {
                         if decoder.rows() > 0 {
                             self.emit(decoder, token, batches).await?;
                         }
-                        self.execution.kill().await;
+                        self.halt().await;
                         return Ok(());
                     }
                     // Anything else is read to its end, rows dropped: killing
@@ -403,7 +407,7 @@ impl Rows {
                 Some(read) => read?,
                 // The cursor is gone: nobody reads the rest.
                 None => {
-                    self.execution.kill().await;
+                    self.halt().await;
                     return Ok(());
                 }
             }
@@ -477,14 +481,28 @@ impl Rows {
         Ok(())
     }
 
-    /// Kills the statement, waits briefly for its response to end, and says
-    /// what the stop means.
+    /// Kills the statement while draining its response, both bounded.
+    ///
+    /// Together, not one after the other: on 26.3, `KILL QUERY` answers only
+    /// once its target ended, and a statement blocked writing rows nobody
+    /// reads ends only when its socket drains or closes. Killing first would
+    /// wait out [`KILL_BOUND`] while the server waits on the driver (observed:
+    /// a dropped cursor took ten seconds to stop).
+    async fn halt(&mut self) {
+        let Self {
+            execution,
+            response,
+            ..
+        } = self;
+        let drain = tokio::time::timeout(DRAIN_BOUND, async {
+            while let Ok(Some(_)) = response.chunk().await {}
+        });
+        let _ = tokio::join!(execution.kill(), drain);
+    }
+
+    /// Halts the statement and says what the stop means.
     async fn stop(&mut self) -> OxynError {
-        self.execution.kill().await;
-        let _ = tokio::time::timeout(DRAIN_BOUND, async {
-            while let Ok(Some(_)) = self.response.chunk().await {}
-        })
-        .await;
+        self.halt().await;
         stopped(self.execution.intent)
     }
 

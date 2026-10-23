@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="fe6f49574d4a" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="ae2328ed1a16" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3030,6 +3030,7 @@ n'ajoute aucune dépendance : il utilise `reqwest` 0.13.4 (`rustls`), `arrow`
 | Une valeur `param_v` est lue avec les échappements TSV : `a\b` se lie en `0x61 0x08`, `a\\b` en `a\b`, `a\tb` en tabulation ; une tabulation ou un saut de ligne bruts échouent avec `Code: 457 BAD_QUERY_PARAMETER`. Le paramètre d'URL `database` est pris tel quel (`d\b` reste `d\b`) | le pilote échappe les valeurs de paramètres | observé sur 26.3.59.10 |
 | `readonly = 1` sur une requête refuse les écritures, le DDL, `url()` et la clause `SETTINGS` de l'instruction elle-même (`Cannot modify 'max_threads' setting in readonly mode`, code 164) ; les réglages envoyés avant `readonly` dans l'URL s'appliquent | les lectures en lecture seule ne portent pas de clause `SETTINGS` | observé sur 26.3.59.10 |
 | `KILL QUERY WHERE query_id = {id:String} TEST` sans correspondance répond 200, un corps vide, sans `X-ClickHouse-Format` | le droit de tuer se lit sur le statut | observé sur 26.3.59.10 |
+| `KILL QUERY … ASYNC` sur une lecture dont le client a cessé de lire a répondu au bout de 28 s, à la fermeture du tube de lecture ; la lecture a alors quitté `system.processes` aussitôt. Une lecture dont la connexion se ferme la quitte environ 10 s plus tard sans kill | le pilote vide ou ferme la réponse pendant qu'il tue, jamais après | observé sur 26.3.59.10 (`curl … \| sleep 30`) |
 | Une réponse 200 porte `X-ClickHouse-Exception-Tag` ; une exception levée après le départ de lignes est ajoutée au corps sous la forme `\r\n__exception__\r\n<tag>\r\n<message>\n<length> <tag>\r\n__exception__\r\n` | le décodeur coupe le corps au marqueur du tag | observé sur 26.3.59.10 |
 | `ALTER TABLE t RENAME TO u` échoue (`Expected COLUMN`, code 62) ; `RENAME TABLE db.t TO db.u` fonctionne ; `DROP MATERIALIZED VIEW mv` échoue (code 62), `DROP VIEW mv` la supprime ; `TRUNCATE TABLE` s'exécute sur une table `MergeTree` | le renommage et la suppression du catalogue prennent les formes de ClickHouse ; `TRUNCATE` est déclaré | observé sur 26.3.59.10 |
 | `sleepEachRow` refuse plus de 3 s par bloc (`Code: 160 TOO_SLOW`) ; `max_execution_time` arrête une lecture avec le code 159 | le test de délai lit des blocs d'une ligne | observé sur 26.3.59.10 |

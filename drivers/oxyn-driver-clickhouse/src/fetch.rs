@@ -101,18 +101,24 @@ pub async fn fetch(
         batches.push(decoder.finish().map_err(|error| decode(&error))?);
         Ok(batches)
     };
-    tokio::pin!(work);
-    tokio::select! {
+    let mut work = Box::pin(work);
+    let outcome = tokio::select! {
         biased;
-        outcome = &mut work => outcome,
-        () = cancel.cancelled() => {
-            if can_kill {
-                // The read is abandoned whatever the kill answers.
-                let _ = kill(http, &call.query_id).await;
-            }
-            Err(OxynError::Cancelled)
-        }
+        outcome = &mut work => Some(outcome),
+        () = cancel.cancelled() => None,
+    };
+    if let Some(outcome) = outcome {
+        return outcome;
     }
+    // The response is closed before the kill: KILL QUERY answers once its
+    // target ended, and a read blocked on a socket nobody drains ends only
+    // when the socket closes (observed on 26.3).
+    drop(work);
+    if can_kill {
+        // The read is abandoned whatever the kill answers.
+        let _ = kill(http, &call.query_id).await;
+    }
+    Err(OxynError::Cancelled)
 }
 
 async fn next(response: &mut reqwest::Response, body: &mut Body, driver: &DriverId) -> Result<()> {

@@ -14,8 +14,10 @@ use crate::stream::BATCH_BYTE_BUDGET;
 /// What the long statements carry, for `system.processes` to find them.
 const MARKER: &str = "oxyn_long_marker";
 
-/// How long the server may take to forget a killed statement.
-const SETTLE: Duration = Duration::from_secs(15);
+/// How long the server may take to forget a killed statement. Below the ten
+/// seconds after which the server notices a closed connection on its own, so
+/// that a stop the driver failed to send cannot pass for one it sent.
+const SETTLE: Duration = Duration::from_secs(5);
 
 /// Rows that start at once and would take hours to end.
 fn long_rows() -> ExecRequest {
