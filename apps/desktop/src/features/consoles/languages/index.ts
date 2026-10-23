@@ -2,6 +2,8 @@ import type { Extension } from "@codemirror/state"
 
 import type { QueryLanguageName } from "@/lib/query-language"
 
+import { redisEditorMode } from "./redis/redis-mode"
+
 /**
  * The editor mode of each language that is not SQL — highlighting, and
  * whatever else its CodeMirror extension brings.
@@ -12,7 +14,9 @@ import type { QueryLanguageName } from "@/lib/query-language"
  */
 const EDITOR_MODES: Partial<
   Record<Exclude<QueryLanguageName, "sql">, () => Extension>
-> = {}
+> = {
+  redis: redisEditorMode,
+}
 
 export function editorMode(
   language: Exclude<QueryLanguageName, "sql">

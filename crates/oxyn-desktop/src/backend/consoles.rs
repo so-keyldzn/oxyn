@@ -104,7 +104,7 @@ fn targeted_text(sql: &str, target: RunTarget, language: QueryLanguage) -> Resul
                      request to run, or run the whole console."
                 )),
                 Err(error) => Err(format!(
-                    "{error}. Select the exact SQL to run when statement boundaries \
+                    "{error}. Select the exact text to run when request boundaries \
                      cannot be determined."
                 )),
             }

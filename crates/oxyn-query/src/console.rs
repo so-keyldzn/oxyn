@@ -71,6 +71,7 @@ pub fn current_request(
         QueryLanguage::Sql(dialect) => {
             Ok(current_statement(text, dialect, cursor_byte)?.map(|fragment| fragment.text))
         }
+        QueryLanguage::RedisCommand => crate::redis::current_command(text, cursor_byte),
         language => Err(QueryError::UnsupportedLanguage { language }),
     }
 }
@@ -150,12 +151,20 @@ mod tests {
     }
 
     #[test]
+    fn a_redis_request_is_the_command_under_the_cursor() {
+        assert_eq!(
+            current_request("GET a\nDEL b", QueryLanguage::RedisCommand, 7),
+            Ok(Some("DEL b"))
+        );
+    }
+
+    #[test]
     fn a_language_without_known_boundaries_is_refused_by_name() {
-        let refused = current_request("GET a\nDEL b", QueryLanguage::RedisCommand, 1);
+        let refused = current_request("MATCH (n) RETURN n", QueryLanguage::Cypher, 1);
         assert_eq!(
             refused,
             Err(QueryError::UnsupportedLanguage {
-                language: QueryLanguage::RedisCommand
+                language: QueryLanguage::Cypher
             })
         );
     }

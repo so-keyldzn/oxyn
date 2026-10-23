@@ -277,6 +277,12 @@ impl Session for RedisSession {
         self.capabilities
     }
 
+    /// The intent of [`RedisSession::intent_of`]: from the server's own
+    /// command table, read when the session opened — no I/O, no lock.
+    fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
+        self.intent_of(request)
+    }
+
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.capabilities.require_language(request.language)?;
         let argv =
