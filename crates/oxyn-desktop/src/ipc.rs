@@ -700,6 +700,7 @@ mod tests {
         use oxyn_driver::Driver as _;
 
         let sqlite = oxyn_driver_sqlite::SqliteDriver::new();
+        let duckdb = oxyn_driver_duckdb::DuckDbDriver::new();
         for (metadata, expected) in [
             (oxyn_driver_mysql::mysql_metadata(), vec!["MariaDB"]),
             (
@@ -707,6 +708,7 @@ mod tests {
                 vec!["Redshift", "TimescaleDB", "pgvector"],
             ),
             (sqlite.metadata().clone(), vec![]),
+            (duckdb.metadata().clone(), vec![]),
         ] {
             let choice = DriverChoice::of(&metadata);
             assert_eq!(choice.aliases, expected, "{}", choice.id);
