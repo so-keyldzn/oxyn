@@ -3,7 +3,7 @@
 //! The catalog reports `data_type` as DuckDB writes it (`DECIMAL(18,3)`,
 //! `INTEGER[]`, `STRUCT(a INTEGER)`, `TIMESTAMP WITH TIME ZONE`). This mapping
 //! only labels a column for the tree, completion and the AI's schema: values
-//! are converted by [`crate::convert`] from the engine's own type, never from
+//! are converted by `crate::convert` from the engine's own type, never from
 //! this text. The raw text always travels next to it (`Field::raw_type`).
 
 use oxyn_catalog::model::LogicalType;

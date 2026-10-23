@@ -13,7 +13,7 @@
 //! # What the session changes behind the user's back
 //!
 //! Nothing a statement can see, except what the access policy sets once, at
-//! opening, for every session of the file ([`crate::open`]):
+//! opening, for every session of the file (`crate::open`):
 //! `enable_external_access = false`, the optional `allowed_directories`, and
 //! extension autoloading off. [`Session::set_context`] runs a quoted `USE` and
 //! reports what the engine then says; a `USE` typed in a console is refused,
@@ -294,7 +294,7 @@ impl Session for DuckDbSession {
     }
 
     /// Asks the engine, on the carrier thread, after every task submitted
-    /// before ([`crate::transaction`]).
+    /// before (`crate::transaction`).
     async fn transaction_state(&self, cancel: &CancelToken) -> TransactionState {
         self.worker
             .call(cancel, |connection: &Connection| {

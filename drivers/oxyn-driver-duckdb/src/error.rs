@@ -29,7 +29,7 @@
 //! DuckDB quotes the database file in its opening errors (`Could not set lock
 //! on file "/home/…"`). A path is a connection parameter value, which has no
 //! place in a log, a crash report or an AI prompt
-//! ([I-03](../../../CLAUDE.md#i-03)): [`open`] replaces it before the message
+//! ([I-03](../../../CLAUDE.md#i-03)): `open` replaces it before the message
 //! leaves this crate.
 
 use oxyn_core::{DriverId, ErrorClass, OxynError};
@@ -162,7 +162,7 @@ pub enum DuckDbError {
         message: String,
     },
     /// The statement needs an extension this build does not link, and the
-    /// driver never downloads or loads one on its own ([`crate::open`]).
+    /// driver never downloads or loads one on its own (`crate::open`).
     #[error("{message} (Oxyn does not download or load DuckDB extensions)")]
     MissingExtension {
         /// The extension DuckDB named.

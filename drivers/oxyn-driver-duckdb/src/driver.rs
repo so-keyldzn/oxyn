@@ -7,7 +7,7 @@
 //! read-only switch of the connection opens it read-only **in the engine**.
 //! [`DuckDbDriver::FILE_ACCESS`] is the one directory SQL may read and write
 //! files in (`read_csv`, `read_parquet`, `COPY … TO`, `ATTACH`); empty, SQL
-//! reaches no file but the database ([`crate::open`]).
+//! reaches no file but the database (`crate::open`).
 //!
 //! # Capabilities, per session
 //!

@@ -79,7 +79,7 @@ pub enum DuckType {
 /// Describes a logical type DuckDB reported for a result column.
 ///
 /// Returns [`DuckType::Unknown`] for an identifier `duckdb-rs` does not know,
-/// and for nesting beyond [`MAX_DEPTH`]: the conversion then refuses the
+/// and for nesting beyond `MAX_DEPTH`: the conversion then refuses the
 /// column explicitly rather than guessing.
 #[must_use]
 pub fn describe(handle: &LogicalTypeHandle) -> DuckType {

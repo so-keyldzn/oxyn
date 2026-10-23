@@ -7,7 +7,7 @@
 //! `information_schema` and `pg_catalog` schemas are marked as system.
 //!
 //! Every query is a literal whose names travel as **bound values**
-//! ([I-10](../../../CLAUDE.md#i-10)), read through [`crate::query`]. A list
+//! ([I-10](../../../CLAUDE.md#i-10)), read through `crate::query`. A list
 //! column — the columns of a constraint — is unnested by DuckDB with its
 //! position, so no list is parsed from text here.
 //!
