@@ -64,9 +64,10 @@ impl ServerFacts {
 /// case), `PREPARED_STATEMENTS` (the driver binds no caller value),
 /// `MULTIPLE_STATEMENTS` (the server refuses them over HTTP), `AFFECTED_ROWS`
 /// (a mutation reports none: it runs after its statement returns),
-/// `FOREIGN_KEYS` (ClickHouse has none), `TRUNCATE` and the other flags of
-/// [ADR-0042](../../../docs/adr/0042-revue-sur-place-des-operations-destructrices.md),
-/// which wait for the integration test that proves them.
+/// `FOREIGN_KEYS` (ClickHouse has none), `RESTRICT_DEPENDENTS` (no
+/// `CASCADE`: a materialized view outlives the table it reads).
+/// `TRUNCATE TABLE` is declared: 26.3 runs it on a `MergeTree` table
+/// (RESEARCH-NOTES).
 #[must_use]
 pub const fn base_capabilities() -> Capabilities {
     Capabilities::SQL
@@ -87,6 +88,7 @@ pub const fn base_capabilities() -> Capabilities {
         .union(Capabilities::SESSION_CONTEXT)
         .union(Capabilities::PREVIEW_SORT)
         .union(Capabilities::PREVIEW_FILTER)
+        .union(Capabilities::TRUNCATE)
 }
 
 /// The ceiling a session may reach: an account that may kill.

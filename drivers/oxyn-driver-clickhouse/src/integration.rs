@@ -414,6 +414,17 @@ async fn a_write_reports_its_rows_and_a_bounded_read_says_it_is_truncated() {
     while cursor.next_batch().await.expect("stream").is_some() {}
     assert!(!cursor.stats().truncated, "exactly the bound is whole");
     drop(cursor);
+    // `TRUNCATE` is declared: the server runs it on a MergeTree table.
+    apply(
+        &*session,
+        "TRUNCATE TABLE default.oxyn_rows",
+        StatementIntent::Ddl,
+    )
+    .await;
+    assert_eq!(
+        first(&*session, "SELECT count() FROM default.oxyn_rows").await,
+        "0"
+    );
     apply(
         &*session,
         "DROP TABLE default.oxyn_rows",
