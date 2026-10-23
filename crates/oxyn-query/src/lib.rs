@@ -64,6 +64,7 @@ pub mod dialect;
 pub mod error;
 pub mod format;
 pub mod redact;
+pub mod redis;
 pub mod split;
 
 pub use classify::{
