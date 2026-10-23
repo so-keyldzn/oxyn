@@ -6,7 +6,7 @@
 //! every structure that holds what `AUTH` will send. [`ConnectSpec`] has **no
 //! derived `Debug`**: its own shows the address, the database, the user and
 //! the TLS mode, never the password ([I-03](../../../CLAUDE.md#i-03)). The
-//! password leaves only through [`ConnectSpec::auth_arguments`], whose one
+//! password leaves only through `ConnectSpec::auth_arguments`, whose one
 //! caller writes it on the connection.
 //!
 //! # TLS: verified outside a local database

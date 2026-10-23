@@ -14,7 +14,7 @@
 //! # What is never trusted
 //!
 //! Every length comes from the server ([I-09](../../../CLAUDE.md#i-09)): none
-//! sizes an allocation beyond [`PREALLOCATED`] elements, a line longer than
+//! sizes an allocation beyond `PREALLOCATED` (1,024) elements, a line longer than
 //! [`MAX_LINE`] is refused rather than buffered, a nesting deeper than
 //! [`MAX_DEPTH`] is skipped rather than recursed into, and a reply cut by the
 //! end of the stream is [`WireError::Truncated`], never a short value.
