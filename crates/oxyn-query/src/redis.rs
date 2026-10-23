@@ -167,9 +167,12 @@ fn secrets_of(
             }
         }
         "config" if word(1).as_deref() == Some("set") => {
-            for pair in command.get(2..).unwrap_or_default().chunks(2) {
-                if let [parameter, value] = pair
-                    && SECRET_PARAMETERS.contains(&unquoted(text, parameter).as_str())
+            // Not by pairs: a value left out or a multi-word value typed
+            // without quotes shifts them, and the password would land in a
+            // name's place. Whatever follows a secret's name is redacted.
+            for (i, parameter) in command.iter().enumerate().skip(2) {
+                if SECRET_PARAMETERS.contains(&unquoted(text, parameter).as_str())
+                    && let Some(value) = command.get(i.saturating_add(1))
                 {
                     out.push((value.clone(), "<redacted>"));
                 }
@@ -323,6 +326,15 @@ mod tests {
             (
                 "config set TLS-KEY-FILE-PASS hunter2",
                 "config set TLS-KEY-FILE-PASS <redacted>",
+            ),
+            // Pairs shifted by a missing value or an unquoted value.
+            (
+                "CONFIG SET maxmemory requirepass hunter2",
+                "CONFIG SET maxmemory requirepass <redacted>",
+            ),
+            (
+                "CONFIG SET save 3600 1 requirepass hunter2",
+                "CONFIG SET save 3600 1 requirepass <redacted>",
             ),
             (
                 "MIGRATE h 6379 k 0 5000 AUTH hunter2",
