@@ -15,7 +15,7 @@ use crate::body::{Body, header};
 use crate::decode::RowDecoder;
 use crate::error::{map_decode_error, map_server_error, map_transport_error, protocol_error};
 use crate::http::{Call, FORMAT, Failure, Http};
-use crate::measure::{DecodeError, measure};
+use crate::measure::{DecodeError, Pace, measure};
 use crate::schema::schema_for;
 use crate::stream::{BATCH_BYTE_BUDGET, kill};
 
@@ -66,10 +66,16 @@ pub async fn fetch(
         let mut decoder = RowDecoder::new(columns, schema, zone);
         let mut batches = Vec::new();
         let mut total = 0_usize;
+        let mut pace = Pace::default();
         loop {
-            while let Some(length) =
-                measure(decoder.columns(), body.ready()).map_err(|error| decode(&error))?
-            {
+            while pace.due(body.ready().len(), body.rows_closed()) {
+                let Some(length) =
+                    measure(decoder.columns(), body.ready()).map_err(|error| decode(&error))?
+                else {
+                    pace.incomplete(body.ready().len());
+                    break;
+                };
+                pace.whole();
                 let row = body
                     .ready()
                     .get(..length)

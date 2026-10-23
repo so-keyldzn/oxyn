@@ -42,7 +42,7 @@ use crate::error::{
     QUERY_WAS_CANCELLED, map_decode_error, map_server_error, map_transport_error, protocol_error,
 };
 use crate::http::{Call, FORMAT, Failure, Http, Reply};
-use crate::measure::{DecodeError, measure};
+use crate::measure::{DecodeError, Pace, measure};
 use crate::schema::schema_for;
 
 /// A batch is closed at this many decoded bytes ([I-06](../../../CLAUDE.md#i-06)).
@@ -354,15 +354,21 @@ impl Rows {
     ) -> Result<()> {
         let execution_intent = self.execution.intent;
         let mut produced = 0_usize;
+        let mut pace = Pace::default();
         loop {
             loop {
                 let ready = self.body.ready();
+                if !pace.due(ready.len(), self.body.rows_closed()) {
+                    break;
+                }
                 let Some(length) = measure(decoder.columns(), ready).map_err(|error| {
                     map_decode_error(&self.execution.driver, execution_intent, &error)
                 })?
                 else {
+                    pace.incomplete(ready.len());
                     break;
                 };
+                pace.whole();
                 if self.execution.max_rows.is_some_and(|max| produced >= max) {
                     self.execution.truncated.store(true, Ordering::Release);
                     if execution_intent.is_read_only() {

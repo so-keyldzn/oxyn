@@ -83,6 +83,36 @@ pub fn measure(columns: &[Column], buf: &[u8]) -> Result<Option<usize>, DecodeEr
     Ok(Some(at))
 }
 
+/// When a row found incomplete is worth measuring again.
+///
+/// Measuring walks the row from its start. Walking it again at every chunk
+/// of a 60 MB row is quadratic — about 10^11 steps for a `groupArray` of 60
+/// million bytes, with no cancellation seen meanwhile. Waiting for the buffer
+/// to double makes the walks add up to twice the row.
+#[derive(Debug, Default)]
+pub struct Pace {
+    again_at: usize,
+}
+
+impl Pace {
+    /// Whether `ready` bytes are worth measuring; always at the body's end,
+    /// which decides between a whole row and a truncated one.
+    #[must_use]
+    pub const fn due(&self, ready: usize, ended: bool) -> bool {
+        ended || ready >= self.again_at
+    }
+
+    /// A row was found incomplete in `ready` bytes.
+    pub fn incomplete(&mut self, ready: usize) {
+        self.again_at = ready.saturating_mul(2).min(MAX_ROW_BYTES);
+    }
+
+    /// A row was found whole: the next one is measured at once.
+    pub const fn whole(&mut self) {
+        self.again_at = 0;
+    }
+}
+
 /// The bytes a `NULL` of `ty` takes in its Arrow builder: a slot of the
 /// value's width, an offset for text.
 pub(crate) fn null_slot(ty: &ChType) -> usize {
@@ -343,6 +373,20 @@ mod tests {
         // The same NULLs of a byte-wide type pass.
         let columns = self::columns(&["Array(Nullable(UInt8))"]);
         assert_eq!(measure(&columns, &row), Ok(Some(row.len())));
+    }
+
+    #[test]
+    fn an_incomplete_row_waits_for_the_buffer_to_double() {
+        let mut pace = Pace::default();
+        assert!(pace.due(10, false));
+        pace.incomplete(1000);
+        assert!(!pace.due(1999, false));
+        assert!(pace.due(1999, true), "the body's end always measures");
+        assert!(pace.due(2000, false));
+        pace.incomplete(MAX_ROW_BYTES - 1);
+        assert!(pace.due(MAX_ROW_BYTES, false), "the row bound is still met");
+        pace.whole();
+        assert!(pace.due(0, false));
     }
 
     #[test]
