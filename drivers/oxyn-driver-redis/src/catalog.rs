@@ -53,6 +53,21 @@ pub const TREE_SCAN_CALLS: usize = 50;
 /// The `COUNT` hint of each `SCAN` call.
 pub const SCAN_COUNT: usize = 1000;
 
+/// What one `SCAN` page may hold. A key the page's budget cuts cannot be
+/// addressed, and is left out of the sample.
+pub const SCAN_PAGE_BYTES: usize = 4 << 20;
+
+/// The most bytes of key names the tree keeps for one database: an
+/// application that writes serialized blobs as key names fills it before the
+/// thousand keys, and the sample stops there.
+pub const TREE_KEY_BYTES: usize = 1 << 20;
+
+/// The most databases the tree lists from `databases`: a server configured
+/// with a million draws a hundred thousand empty nodes otherwise. The
+/// non-empty ones and the form's are always listed, and the session context
+/// reaches any other by its name.
+pub const TREE_DATABASES: u32 = 256;
+
 /// The name of database `n`.
 #[must_use]
 pub fn database_name(number: u32) -> String {
@@ -202,7 +217,7 @@ impl CatalogProvider for RedisCatalog {
         let counts = keyspace_counts(&keyspace);
         let mut numbers: Vec<u32> = counts.keys().copied().collect();
         if let Some(total) = configured.and_then(|n| n.parse::<u32>().ok()) {
-            numbers.extend(0..total.min(crate::options::MAX_DATABASE));
+            numbers.extend(0..total.min(TREE_DATABASES));
         }
         numbers.push(home);
         numbers.sort_unstable();
@@ -291,6 +306,7 @@ async fn sample_keys(
     connection: &mut Connection,
 ) -> std::result::Result<Vec<(Vec<u8>, String)>, RedisError> {
     let mut found: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+    let mut kept_bytes = 0_usize;
     let mut cursor = b"0".to_vec();
     for _ in 0..TREE_SCAN_CALLS {
         let reply = connection
@@ -301,7 +317,7 @@ async fn sample_keys(
                     b"COUNT".to_vec(),
                     SCAN_COUNT.to_string().into_bytes(),
                 ],
-                16 << 20,
+                SCAN_PAGE_BYTES,
             )
             .await?;
         let Value::List(_, parts) = reply else {
@@ -310,15 +326,23 @@ async fn sample_keys(
         let (Some(next), Some(Value::List(_, keys))) = (parts.first(), parts.get(1)) else {
             return Err(unexpected("SCAN", "not a cursor and a page"));
         };
-        let page: Vec<Vec<u8>> = keys
-            .iter()
-            .filter_map(|key| match key {
-                Value::Bulk(clipped) if !clipped.is_truncated() => Some(clipped.bytes.clone()),
-                _ => None,
-            })
-            .filter(|key| !found.contains_key(key))
-            .take(TREE_KEYS.saturating_sub(found.len()))
-            .collect();
+        let mut page: Vec<Vec<u8>> = Vec::new();
+        let mut full = false;
+        for key in keys {
+            // A key cut by the page's budget cannot be addressed: left out.
+            let Value::Bulk(clipped) = key else { continue };
+            if clipped.is_truncated() || found.contains_key(&clipped.bytes) {
+                continue;
+            }
+            if found.len().saturating_add(page.len()) >= TREE_KEYS
+                || kept_bytes.saturating_add(clipped.bytes.len()) > TREE_KEY_BYTES
+            {
+                full = true;
+                break;
+            }
+            kept_bytes = kept_bytes.saturating_add(clipped.bytes.len());
+            page.push(clipped.bytes.clone());
+        }
         for key in &page {
             connection.send(&[b"TYPE".to_vec(), key.clone()]).await?;
         }
@@ -340,6 +364,7 @@ async fn sample_keys(
                     odd.get_or_insert_with(|| unexpected("TYPE", "not a simple string"));
                 }
             }
+            connection.replied();
         }
         if let Some(error) = odd {
             return Err(error);
@@ -347,7 +372,7 @@ async fn sample_keys(
         cursor = text(next)
             .map(String::into_bytes)
             .ok_or_else(|| unexpected("SCAN", "no cursor"))?;
-        if cursor == b"0" || found.len() >= TREE_KEYS {
+        if cursor == b"0" || full || found.len() >= TREE_KEYS {
             break;
         }
     }
@@ -442,6 +467,7 @@ async fn key_facts(
         let head = connection.reply_head().await?;
         let mut budget = 1 << 12;
         answers.push(connection.reader().rest_of(head, &mut budget).await?);
+        connection.replied();
     }
     let mut answers = answers.into_iter();
     let length = if length_command.is_some() {

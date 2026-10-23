@@ -200,3 +200,73 @@ async fn a_server_in_cluster_mode_is_refused_at_connect() {
         .expect_err("a cluster is refused");
     assert!(matches!(error, OxynError::NotSupported { .. }), "{error:?}");
 }
+
+/// An executor deadline or a closed tab drops `next_batch` in the middle of a
+/// reply. The console's next command must read its own reply, on a fresh
+/// connection — never the rest of the abandoned one.
+#[tokio::test]
+async fn a_reply_abandoned_mid_read_never_answers_the_next_command() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a free port");
+    let port = listener.local_addr().expect("bound").port();
+    let commands = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&commands);
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let seen = Arc::clone(&seen);
+            tokio::spawn(async move {
+                let mut reader = Reader::new(BufReader::new(stream));
+                loop {
+                    let mut budget = 1 << 20;
+                    let Ok(Value::List(_, words)) = reader.value(&mut budget).await else {
+                        return;
+                    };
+                    let name = match words.first() {
+                        Some(Value::Bulk(word)) => word.bytes.to_ascii_uppercase(),
+                        _ => return,
+                    };
+                    let answer: &[u8] = match name.as_slice() {
+                        b"HELLO" => HELLO,
+                        b"COMMAND" => COMMAND,
+                        b"CLIENT" | b"SELECT" => b":0\r\n",
+                        // The first user command gets two of its three
+                        // elements, then nothing; every later one, its own.
+                        _ if seen.fetch_add(1, Ordering::SeqCst) == 0 => {
+                            b"*3\r\n$5\r\nstale\r\n$5\r\nstale\r\n"
+                        }
+                        _ => b"+FRESH\r\n",
+                    };
+                    if reader.get_mut().get_mut().write_all(answer).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let session = session_on(port).await;
+    let request = |text: &str| {
+        ExecRequest::new(QueryLanguage::RedisCommand, text)
+            .with_limits(ExecLimits::default().writable())
+    };
+    let mut cursor = session
+        .execute(request("GET big"), &CancelToken::new())
+        .await
+        .expect("the reply started");
+    let abandoned =
+        tokio::time::timeout(std::time::Duration::from_millis(200), cursor.next_batch()).await;
+    assert!(abandoned.is_err(), "the third element never comes");
+    drop(cursor);
+
+    let mut next = session
+        .execute(request("GET k"), &CancelToken::new())
+        .await
+        .expect("the next command runs");
+    let batch = next
+        .next_batch()
+        .await
+        .expect("its own reply")
+        .expect("one row");
+    let value = arrow::util::display::array_value_to_string(batch.column(0), 0).expect("text");
+    assert_eq!(value, "FRESH");
+}

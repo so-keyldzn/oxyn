@@ -238,6 +238,7 @@ impl RedisCursor {
         };
         let head = match head {
             Head::Error(text) => {
+                connection.replied();
                 return Err(during_execution(
                     &driver,
                     RedisError::server(&text),
@@ -247,18 +248,33 @@ impl RedisCursor {
                 ));
             }
             Head::BulkError(len) => {
-                let read = connection.reader().bulk(len, 1 << 16).await;
+                // The text of the error is read under the same deadline and
+                // Stop: a server announcing a gigabyte of it then going silent
+                // must not hold the execution.
+                let read = race(&token, deadline, connection.reader().bulk(len, 1 << 16)).await;
                 return Err(match read {
-                    Ok(text) => during_execution(
-                        &driver,
-                        RedisError::server(&text.bytes),
-                        plan.intent,
-                        plan.scripted,
-                        true,
-                    ),
-                    Err(error) => {
+                    Raced::Done(Ok(text)) => {
+                        connection.replied();
+                        during_execution(
+                            &driver,
+                            RedisError::server(&text.bytes),
+                            plan.intent,
+                            plan.scripted,
+                            true,
+                        )
+                    }
+                    Raced::Done(Err(error)) => {
                         lease.discard();
                         during_execution(&driver, error.into(), plan.intent, plan.scripted, true)
+                    }
+                    Raced::Halted(halt) => {
+                        lease.discard();
+                        verdict(
+                            halt,
+                            false,
+                            plan.intent,
+                            "the server was answering an error when it was stopped",
+                        )
                     }
                 });
             }
@@ -371,7 +387,8 @@ impl RedisCursor {
                     .text
                     .unwrap_or_default();
                 let remaining = match reader.head().await? {
-                    Head::Aggregate(_, len) => len,
+                    // A map counts pairs: its elements are twice its length.
+                    Head::Aggregate(kind, len) => kind.elements(len)?,
                     Head::Null => 0,
                     _ => {
                         return Err(RedisError::UnexpectedReply {
@@ -477,6 +494,8 @@ impl Cursor for RedisCursor {
                     // reply the server is still writing.
                     self.stats.mark_truncated();
                     self.lease.discard();
+                } else if let Some(connection) = self.lease.connection() {
+                    connection.replied();
                 }
                 if !self.rows.is_empty() {
                     let batch = self.take_batch();
@@ -565,10 +584,23 @@ async fn stop_before_reply(
             let answer = tokio::time::timeout(STOP_ANSWER, connection.reply_head()).await;
             match answer {
                 Ok(Ok(Head::Error(text))) => {
-                    // The stopped command's own error: it applied nothing.
+                    connection.replied();
                     let error = RedisError::server(&text);
                     tracing::debug!(target: "oxyn::driver::redis", prefix = ?error.prefix(), "command stopped on the server");
-                    verdict(halt, true, plan.intent, "")
+                    // `UNBLOCKED` is the server's own word for a blocked core
+                    // command that served nothing. A module's blocking command
+                    // answers its unblocking with an error of its choosing,
+                    // possibly after work: that proves nothing. A killed
+                    // script had not written, or `SCRIPT KILL` would have
+                    // answered `UNKILLABLE`.
+                    let proven =
+                        plan.running != Running::Blocking || error.prefix() == Some("UNBLOCKED");
+                    verdict(
+                        halt,
+                        proven,
+                        plan.intent,
+                        "the blocked command answered its unblocking with its own error",
+                    )
                 }
                 Ok(Ok(_)) => {
                     lease.discard();

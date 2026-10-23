@@ -16,8 +16,9 @@
 //! cannot apply anything twice. Every other refusal is permanent. Two cases
 //! are ambiguous, never retried ([I-13](../../../CLAUDE.md#i-13)): the
 //! connection lost or the time spent after a command that may write was sent,
-//! and an error raised from inside a script, since Redis does not undo what a
-//! script wrote before it failed.
+//! and **any** error of a script but `NOSCRIPT`: Redis does not undo what a
+//! script wrote before it failed, and the script chooses its error's prefix —
+//! a `TRYAGAIN` it returns after a `DECRBY` is not the server's refusal.
 
 use oxyn_core::{DriverId, ErrorClass, OxynError, StatementIntent};
 
@@ -79,6 +80,17 @@ impl RedisError {
 /// come after writes the script made, which Redis keeps.
 #[must_use]
 pub fn class_of(prefix: &str, scripted: bool) -> ErrorClass {
+    if scripted {
+        // A script chooses its error's prefix — `redis.error_reply("TRYAGAIN
+        // …")` — and an inner `redis.call` raises `WRONGTYPE` after the writes
+        // before it: no prefix proves what the script left behind. Only a
+        // script the server does not have ran nothing.
+        return if prefix == "NOSCRIPT" {
+            ErrorClass::Permanent
+        } else {
+            ErrorClass::Ambiguous
+        };
+    }
     match prefix {
         // Refused before running: nothing was applied.
         "LOADING" | "BUSY" | "OOM" | "MISCONF" | "NOREPLICAS" | "MASTERDOWN" | "TRYAGAIN"
@@ -86,7 +98,6 @@ pub fn class_of(prefix: &str, scripted: bool) -> ErrorClass {
         // Refusals that say nothing ran, whatever the command.
         "NOSCRIPT" | "NOPERM" | "NOAUTH" | "WRONGPASS" | "WRONGTYPE" | "READONLY" | "EXECABORT"
         | "CROSSSLOT" | "MOVED" | "ASK" | "NOPROTO" | "UNBLOCKED" => ErrorClass::Permanent,
-        _ if scripted => ErrorClass::Ambiguous,
         _ => ErrorClass::Permanent,
     }
 }
@@ -167,10 +178,16 @@ mod tests {
     #[case("LOADING", false, ErrorClass::Transient)]
     #[case("BUSY", false, ErrorClass::Transient)]
     #[case("OOM", false, ErrorClass::Transient)]
-    #[case("MISCONF", true, ErrorClass::Transient)]
+    #[case("MISCONF", false, ErrorClass::Transient)]
     #[case("ERR", false, ErrorClass::Permanent)]
     #[case("WRONGTYPE", false, ErrorClass::Permanent)]
-    #[case("NOPERM", true, ErrorClass::Permanent)]
+    #[case("NOPERM", false, ErrorClass::Permanent)]
+    // A script's error, whatever prefix it chose, may follow its writes.
+    #[case("TRYAGAIN", true, ErrorClass::Ambiguous)]
+    #[case("MISCONF", true, ErrorClass::Ambiguous)]
+    #[case("WRONGTYPE", true, ErrorClass::Ambiguous)]
+    #[case("NOPERM", true, ErrorClass::Ambiguous)]
+    #[case("NOSCRIPT", true, ErrorClass::Permanent)]
     #[case("MOVED", false, ErrorClass::Permanent)]
     #[case("UNBLOCKED", false, ErrorClass::Permanent)]
     #[case("ERR", true, ErrorClass::Ambiguous)]

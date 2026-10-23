@@ -169,7 +169,7 @@ pub fn render(bytes: &[u8]) -> String {
                 '\t' => out.push_str("\\t"),
                 '\u{7}' => out.push_str("\\a"),
                 '\u{8}' => out.push_str("\\b"),
-                c if c.is_control() => {
+                c if c.is_control() || is_invisible(c) => {
                     let mut buffer = [0_u8; 4];
                     for byte in c.encode_utf8(&mut buffer).bytes() {
                         push_hex(&mut out, byte);
@@ -188,7 +188,24 @@ pub fn render(bytes: &[u8]) -> String {
 
 /// A character a bare argument may hold.
 fn is_bare(c: char) -> bool {
-    !c.is_control() && !c.is_whitespace() && !matches!(c, '"' | '\'' | '\\')
+    !c.is_control() && !c.is_whitespace() && !is_invisible(c) && !matches!(c, '"' | '\'' | '\\')
+}
+
+/// A format character that draws nothing or reorders what follows: shown as
+/// is, `admin\u{202E}txt.exe` would read as another key in the tree.
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
 }
 
 fn push_hex(out: &mut String, byte: u8) {
@@ -269,6 +286,9 @@ mod tests {
     #[case(b"line\nbreak\x00\xff", r#""line\nbreak\x00\xff""#)]
     #[case(b"back\\slash", r#""back\\slash""#)]
     #[case(b"\x1b[31mred", r#""\x1b[31mred""#)]
+    // A right-to-left override would make the tree show another name.
+    #[case("admin\u{202E}txt".as_bytes(), r#""admin\xe2\x80\xaetxt""#)]
+    #[case("zero\u{200B}width".as_bytes(), r#""zero\xe2\x80\x8bwidth""#)]
     fn a_name_is_written_bare_or_quoted(#[case] bytes: &[u8], #[case] expected: &str) {
         assert_eq!(render(bytes), expected);
     }
@@ -293,6 +313,7 @@ mod tests {
                 .to_vec(),
         );
         cases.push(Vec::new());
+        cases.push("a\u{202E}b\u{FEFF}c\u{00A0}d\u{2028}e".as_bytes().to_vec());
         for case in cases {
             let rendered = render(&case);
             let parsed =

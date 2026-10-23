@@ -111,6 +111,15 @@ impl Shared {
         database: u32,
         cancel: &CancelToken,
     ) -> Result<()> {
+        // A reply left half read — its reader's future dropped by a deadline
+        // or a closed tab — would answer the next command: that connection is
+        // closed, never reused.
+        if slot
+            .as_ref()
+            .is_some_and(|connection| !connection.in_step())
+        {
+            *slot = None;
+        }
         match slot {
             Some(connection) if connection.database() == database => Ok(()),
             Some(connection) => {
@@ -287,9 +296,13 @@ impl Session for RedisSession {
                 String::from_utf8_lossy(argv.first().map_or(&[][..], Vec::as_slice))
             )));
         }
+        let running = running_of(table, &argv);
         let plan = Plan {
-            running: running_of(table, &argv),
-            scripted: found.is_some_and(|found| found.spec.in_category("scripting")),
+            running,
+            // By the server's category, or by name when the account could not
+            // read the table: a script's error may follow its writes.
+            scripted: found.is_some_and(|found| found.spec.in_category("scripting"))
+                || matches!(running, Running::Script | Running::Function),
             intent,
             argv,
             max_rows: request.limits.max_rows,
