@@ -130,10 +130,18 @@ export function AssistantPanel({
   }, [open.connection])
 
   // The conversation's agent decides which destinations stay usable; when it
-  // names none, the default the backend runs (ADR-0055, ADR-0065).
+  // names none, the default the backend runs (ADR-0055, ADR-0065) — for the
+  // destination the question would go to, so the tier's refusals come first
+  // and the chosen destination leads the others.
+  const tierDestinations =
+    available.status === "absent" ? [] : available.destinations
+  const firstDestination = selectedDestination(tierDestinations, chosenKey)
+  const implicitAgent = defaultAgentId(agentOptions.data ?? [], [
+    ...(firstDestination ? [firstDestination] : []),
+    ...tierDestinations,
+  ])
   const runningAgent = agentOptions.data?.find(
-    (agent) =>
-      agent.id === (state.thread.agentId ?? defaultAgentId(agentOptions.data))
+    (agent) => agent.id === (state.thread.agentId ?? implicitAgent)
   )
   const entry: AssistantEntry =
     available.status === "absent"
@@ -344,6 +352,7 @@ export function AssistantPanel({
             ? SQL_ONLY
             : (agentOptions.data ?? SQL_ONLY),
           value: state.thread.agentId,
+          defaultAgent: implicitAgent,
           missingAgent: state.thread.missingAgent,
           loading: agentOptions.isPending,
           unavailable: agentOptions.isError,
