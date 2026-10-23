@@ -90,6 +90,7 @@ To locate the boards and their states before implementation, see
 | [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Local CPU embeddings (Burn, a pinned multilingual model downloaded on opt-in) rank the relations of the AI context, lexical first | accepted |
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | The SQL editor completes from the catalog cache, reads what is missing within bounds, and takes its insertion text from Rust | proposed |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | The updater key signs in a job that builds nothing, with a Tauri CLI release binary pinned by checksum (refines 0051) | proposed |
+| [0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md) | MongoDB driver on the official `mongodb` client: the console runs one database command written in Extended JSON, no JavaScript shell; documents to Arrow through a declared sample and a lossless canonical column; library retries off, `killSessions` per execution (refines 0003) | accepted |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | A session classifies the requests of a non-SQL language: `Session::classify_intent`, consulted only outside SQL, conservative, `None` by default (refines 0003) | accepted |
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | An agent declares the query languages it writes (`languages`, `[sql]` by default); the assistant opens on every language an agent writes, SQL prompts unchanged (refines 0049, 0055) | accepted |
 
