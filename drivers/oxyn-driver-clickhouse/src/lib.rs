@@ -14,7 +14,7 @@
 //! | [`catalog`] | [`ClickhouseCatalog`]: introspection through `system` tables | ARCHITECTURE §6 |
 //! | [`types`] | ClickHouse type names, parsed | I-09 |
 //! | [`schema`] | the ClickHouse → Arrow mapping, and its losses | ADR-0060 |
-//! | [`measure`], [`decode`] | `RowBinary` rows, measured whole then decoded | I-06, I-09 |
+//! | [`measure`](mod@measure), [`decode`] | `RowBinary` rows, measured whole then decoded | I-06, I-09 |
 //! | [`body`] | the response body, and the exception it may carry | ADR-0060 |
 //! | [`error`] | classification: transient, permanent, ambiguous | DRIVER-CONTRACT §4 |
 //! | [`variant`] | what the server and the account allow | ADR-0003 |

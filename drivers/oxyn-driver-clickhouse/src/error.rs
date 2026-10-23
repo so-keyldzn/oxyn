@@ -185,7 +185,7 @@ impl ClickhouseError {
 pub struct ServerError {
     /// `X-ClickHouse-Exception-Code`, or the `Code: N.` the message opens with.
     pub code: Option<u32>,
-    /// The server's text, bounded to [`MAX_MESSAGE_BYTES`].
+    /// The server's text, bounded to `MAX_MESSAGE_BYTES`.
     pub message: String,
     /// Rows the response's summary says were written before the error; `None`
     /// when the response carried no summary.

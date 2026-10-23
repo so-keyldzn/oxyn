@@ -180,7 +180,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 ///
 /// # Errors
 /// [`DecodeError`] for a header no server sends: a count beyond
-/// [`MAX_COLUMNS`], a name or a type that is not UTF-8 or not a type.
+/// `MAX_COLUMNS`, a name or a type that is not UTF-8 or not a type.
 pub fn header(buf: &[u8]) -> Result<Option<(Vec<Column>, usize)>, DecodeError> {
     let limit = buf.len().min(MAX_ROW_BYTES);
     let Some((count, mut at)) = varint(buf, 0, limit, "header")? else {

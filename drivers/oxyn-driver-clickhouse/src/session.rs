@@ -8,7 +8,7 @@
 //! the one the context selector set — and it travels with each request. A
 //! typed `USE`, `SET` or `CREATE TEMPORARY TABLE` would change nothing past
 //! its own request, so it is refused before anything is sent
-//! ([`crate::refuse`]).
+//! (`crate::refuse`).
 //!
 //! # Read-only is the server's
 //!

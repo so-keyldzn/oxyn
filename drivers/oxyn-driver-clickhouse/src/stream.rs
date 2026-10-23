@@ -14,7 +14,7 @@
 //!
 //! A stop sends `KILL QUERY WHERE query_id = …` as a separate request — the
 //! `query_id` is the driver's, unique to this execution, so the kill cannot
-//! land on another statement — and then waits, at most [`DRAIN_BOUND`], for the
+//! land on another statement — and then waits, at most `DRAIN_BOUND`, for the
 //! targeted response to end. What the stop is reported as follows from the
 //! statement's intent, never from the kill's answer alone:
 //!
@@ -221,7 +221,7 @@ impl Execution {
     }
 }
 
-/// Sends `KILL QUERY` for `query_id`, bounded by [`KILL_BOUND`].
+/// Sends `KILL QUERY` for `query_id`, bounded by `KILL_BOUND`.
 ///
 /// Killing a statement that already ended is no error for the server, and a
 /// kill that fails is not the statement's failure: the caller reports the

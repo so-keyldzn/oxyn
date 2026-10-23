@@ -1,6 +1,6 @@
 //! Measured `RowBinary` rows to Arrow arrays.
 //!
-//! [`crate::measure`] has already proven the row whole; this module decodes it
+//! [`crate::measure()`] has already proven the row whole; this module decodes it
 //! into one builder per column, nested like the column's type. What it still
 //! refuses is a value that contradicts its type — a `Bool` that is 2, an enum
 //! value the type does not declare, a text that is not UTF-8 — each a

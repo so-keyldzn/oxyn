@@ -143,7 +143,7 @@ pub struct TypeSyntaxError(&'static str);
 ///
 /// # Errors
 /// [`TypeSyntaxError`] for a text that is not a type name, or nests deeper
-/// than [`MAX_DEPTH`].
+/// than `MAX_DEPTH`.
 pub fn parse(text: &str) -> Result<ChType, TypeSyntaxError> {
     let mut parser = Parser { rest: text.trim() };
     let ty = parser.ty(0)?;
