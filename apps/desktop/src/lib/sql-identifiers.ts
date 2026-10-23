@@ -1,8 +1,15 @@
-export type IdentifierQuote = '"' | "`"
+/**
+ * The characters that delimit a name, as the dialect reads them: `"` for
+ * PostgreSQL and SQLite, a backtick for MySQL, and both for ClickHouse,
+ * which also escapes with a backslash inside them (RESEARCH-NOTES,
+ * ClickHouse lexical rules).
+ */
+export type IdentifierQuote = '"' | "`" | '`"'
 
 /** The same protocol choice governs editor navigation and answer diagrams. */
 export function identifierQuoteForDriver(driver: string): IdentifierQuote {
-  return driver === "mysql" || driver === "clickhouse" ? "`" : '"'
+  if (driver === "clickhouse") return '`"'
+  return driver === "mysql" ? "`" : '"'
 }
 
 /** One part of a dotted name: `public`, or `"Order Lines"` without quotes. */
@@ -68,14 +75,23 @@ function readPart(
   index: number,
   identifierQuote: IdentifierQuote
 ) {
-  if (line[index] === identifierQuote) {
+  const delimiter = line[index]
+  if (delimiter !== undefined && identifierQuote.includes(delimiter)) {
+    // Only ClickHouse escapes with a backslash inside a name.
+    const backslash = identifierQuote.length > 1
     let text = ""
     let position = index + 1
     while (position < line.length) {
-      if (line[position] === identifierQuote) {
+      const next = line[position + 1]
+      if (backslash && line[position] === "\\" && next !== undefined) {
+        text += next
+        position += 2
+        continue
+      }
+      if (line[position] === delimiter) {
         // A doubled delimiter is a quote inside the name.
-        if (line[position + 1] === identifierQuote) {
-          text += identifierQuote
+        if (next === delimiter) {
+          text += delimiter
           position += 2
           continue
         }
