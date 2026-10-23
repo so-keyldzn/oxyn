@@ -74,7 +74,7 @@ pub struct Fragment<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LineCommentEnd {
-    /// `\n` only: SQLite (`tokenize.c`).
+    /// `\n` only: SQLite (`tokenize.c`), ClickHouse (observed on 26.3).
     LineFeed,
     /// `\n` or `\r`: PostgreSQL (`scan.l`, `newline [\n\r]`).
     LineFeedOrCarriageReturn,
@@ -123,7 +123,8 @@ pub struct SplitProfile {
     pub backtick_quotes: bool,
     /// Square brackets quote an identifier (SQL Server, SQLite).
     pub bracket_quotes: bool,
-    /// `$tag$ … $tag$` delimits a literal body (PostgreSQL, Redshift, DuckDB).
+    /// `$tag$ … $tag$` delimits a literal body (PostgreSQL, Redshift, DuckDB,
+    /// ClickHouse).
     pub dollar_quotes: bool,
     /// `#` opens an end-of-line comment (MySQL).
     pub hash_line_comments: bool,
@@ -131,6 +132,10 @@ pub struct SplitProfile {
     pub nested_block_comments: bool,
     /// Where a line comment ends.
     pub line_comment_end: LineCommentEnd,
+    /// `\` escapes the next character inside a backtick identifier
+    /// (ClickHouse 26.3 reads `` `a\`b` `` as `` a`b ``). MySQL does not: its
+    /// `` `a\` `` is a complete identifier.
+    pub backtick_backslash_escapes: bool,
 }
 
 impl SplitProfile {
@@ -157,6 +162,7 @@ impl SplitProfile {
                 } else {
                     LineCommentEnd::Unverified
                 },
+                backtick_backslash_escapes: false,
             },
             SqlDialect::MySql => Self {
                 backslash_escapes: true,
@@ -167,6 +173,7 @@ impl SplitProfile {
                 hash_line_comments: true,
                 nested_block_comments: false,
                 line_comment_end: LineCommentEnd::Unverified,
+                backtick_backslash_escapes: false,
             },
             SqlDialect::Sqlite => Self {
                 backslash_escapes: false,
@@ -177,6 +184,7 @@ impl SplitProfile {
                 hash_line_comments: false,
                 nested_block_comments: false,
                 line_comment_end: LineCommentEnd::LineFeed,
+                backtick_backslash_escapes: false,
             },
             SqlDialect::SqlServer => Self {
                 backslash_escapes: false,
@@ -187,16 +195,21 @@ impl SplitProfile {
                 hash_line_comments: false,
                 nested_block_comments: true,
                 line_comment_end: LineCommentEnd::Unverified,
+                backtick_backslash_escapes: false,
             },
+            // `--` and `#` end at `\n` only: ClickHouse 26.3 runs
+            // `SELECT 1 -- x\r, 2` as one column, and reads `$t$a;b$t$` as
+            // one string (RESEARCH-NOTES, 2026-10-22).
             SqlDialect::ClickHouse => Self {
                 backslash_escapes: true,
                 escape_string_prefix: false,
                 backtick_quotes: true,
                 bracket_quotes: false,
-                dollar_quotes: false,
+                dollar_quotes: true,
                 hash_line_comments: true,
                 nested_block_comments: true,
-                line_comment_end: LineCommentEnd::Unverified,
+                line_comment_end: LineCommentEnd::LineFeed,
+                backtick_backslash_escapes: true,
             },
             SqlDialect::DuckDb => Self {
                 backslash_escapes: false,
@@ -207,6 +220,7 @@ impl SplitProfile {
                 hash_line_comments: false,
                 nested_block_comments: true,
                 line_comment_end: LineCommentEnd::Unverified,
+                backtick_backslash_escapes: false,
             },
             SqlDialect::Snowflake | SqlDialect::BigQuery => Self {
                 backslash_escapes: true,
@@ -217,6 +231,7 @@ impl SplitProfile {
                 hash_line_comments: false,
                 nested_block_comments: false,
                 line_comment_end: LineCommentEnd::Unverified,
+                backtick_backslash_escapes: false,
             },
             // `Ansi`, `Oracle`, and any value added later: the inclusive
             // profile.
@@ -236,6 +251,7 @@ impl SplitProfile {
             hash_line_comments: false,
             nested_block_comments: true,
             line_comment_end: LineCommentEnd::Unverified,
+            backtick_backslash_escapes: false,
         }
     }
 }
@@ -910,7 +926,10 @@ fn lex(b: &[u8], i: usize, c: u8, profile: SplitProfile) -> (Tok, usize) {
             Tok::Quoted,
             skip_quoted(b, i, b'"', profile.backslash_escapes),
         ),
-        b'`' if profile.backtick_quotes => (Tok::Quoted, skip_quoted(b, i, b'`', false)),
+        b'`' if profile.backtick_quotes => (
+            Tok::Quoted,
+            skip_quoted(b, i, b'`', profile.backtick_backslash_escapes),
+        ),
         b'[' if profile.bracket_quotes => (Tok::Quoted, skip_bracket(b, i)),
         // A lone `$` is a `$1` parameter placeholder, or an operator.
         b'$' if profile.dollar_quotes => {
