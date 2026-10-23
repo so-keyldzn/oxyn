@@ -177,13 +177,40 @@ fn a_cursor_between_statements_runs_nothing() {
         targeted_text(
             "SELECT 1;\n\n\nSELECT 2",
             RunTarget::Statement { cursor: 11 },
-            oxyn_core::SqlDialect::Postgres
+            QueryLanguage::Sql(oxyn_core::SqlDialect::Postgres)
         )
         .is_err()
     );
     assert_eq!(byte_offset("é", 1), Some(2));
     assert_eq!(byte_offset("😀", 1), None, "inside a surrogate pair");
     assert_eq!(byte_offset("a", 5), None);
+}
+
+#[test]
+fn a_non_sql_console_runs_what_is_selected_and_never_cuts_it_as_sql() {
+    let text = "GET a; DEL b";
+    // Cut as SQL, the cursor on `GET` would run `GET a` and stop at the `;`.
+    let refused = targeted_text(
+        text,
+        RunTarget::Statement { cursor: 1 },
+        QueryLanguage::RedisCommand,
+    )
+    .expect_err("no boundary is known for Redis commands");
+    assert!(refused.contains("redis"), "{refused}");
+    assert!(refused.contains("Select the request to run"), "{refused}");
+
+    assert_eq!(
+        targeted_text(
+            text,
+            RunTarget::Selection { start: 0, end: 5 },
+            QueryLanguage::RedisCommand
+        ),
+        Ok("GET a".to_owned())
+    );
+    assert_eq!(
+        targeted_text(text, RunTarget::All, QueryLanguage::RedisCommand),
+        Ok(text.to_owned())
+    );
 }
 
 #[test]
