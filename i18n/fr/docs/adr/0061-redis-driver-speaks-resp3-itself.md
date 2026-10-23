@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="b5a0cdfa30c8" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="cc1097f98bb4" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -188,6 +188,12 @@ que fait un arrêt. Vérifié le 2026-10-22
     bien qu'une capture est confirmée en production et refusée à un agent.
     Un message est daté par l'horloge d'Oxyn à son arrivée, une ligne de
     `MONITOR` par celle du serveur.
+14. **L'assistant a un agent à lui sur Redis**,
+    `crates/oxyn-ai/agents/redis.md` (`languages: [redis]`, ADR-0065) :
+    jamais `KEYS`, une clé mesurée avant d'être lue en entier, la portée
+    d'une écriture montrée avant l'écriture, aucune transaction sur laquelle
+    s'appuyer. Ce qu'il envoie est classé par la table de commandes de la
+    session, comme toute requête de console.
 
 ## Conséquences
 

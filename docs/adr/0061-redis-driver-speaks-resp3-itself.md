@@ -172,6 +172,11 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     `MONITOR` is `@dangerous` —, so a capture is confirmed on production and
     refused to an agent there. A message is dated by Oxyn's clock on arrival,
     a `MONITOR` line by the server's.
+14. **The assistant has an agent of its own on Redis**,
+    `crates/oxyn-ai/agents/redis.md` (`languages: [redis]`, ADR-0065): never
+    `KEYS`, a key sized before it is read whole, the scope of a write shown
+    before the write, no transaction to lean on. What it sends is classified
+    by the session's command table, as any console request.
 
 ## Consequences
 

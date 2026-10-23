@@ -231,7 +231,14 @@ fn outside_sql_the_default_is_the_first_agent_of_the_language_shipped_first() {
     };
     let redis = on(QueryLanguage::RedisCommand);
 
-    let without_shipped = AgentCatalog::new(shipped_agents(), users());
+    // The agents Oxyn ships, less the one it ships for Redis.
+    let sql_only = || {
+        shipped_agents()
+            .into_iter()
+            .filter(|agent| !agent.writes(QueryLanguage::RedisCommand))
+            .collect::<Vec<_>>()
+    };
+    let without_shipped = AgentCatalog::new(sql_only(), users());
     let alpha: oxyn_core::AgentId = "0199a3c0-0000-7000-8000-0000000000a3"
         .parse()
         .expect("an id");
@@ -239,7 +246,7 @@ fn outside_sql_the_default_is_the_first_agent_of_the_language_shipped_first() {
 
     // An agent shipped for the language wins over any user file, whatever
     // their names: a user file never takes over new conversations.
-    let mut shipped = shipped_agents();
+    let mut shipped = sql_only();
     let shipped_keys = AgentSpec::new(
         "0199a3c0-0000-7000-8000-0000000000a5"
             .parse()
