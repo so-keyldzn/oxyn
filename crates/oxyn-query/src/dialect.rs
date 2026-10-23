@@ -93,19 +93,6 @@ pub fn dialect_for(driver: &DriverId) -> SqlDialect {
     }
 }
 
-/// The native console language of a driver.
-///
-/// This is deliberately separate from [`dialect_for`]: Elasticsearch has an
-/// ANSI fallback only for callers that need a SQL parser, but its console
-/// speaks Search DSL and must never be presented as SQL.
-#[must_use]
-pub fn language_for(driver: &DriverId) -> QueryLanguage {
-    match driver.as_str() {
-        DriverId::ELASTICSEARCH => QueryLanguage::SearchDsl,
-        _ => QueryLanguage::Sql(dialect_for(driver)),
-    }
-}
-
 /// The SQL dialect of a query language, if there is one.
 ///
 /// Returns `None` for anything that is not SQL. This crate only parses SQL:
@@ -171,14 +158,6 @@ mod tests {
         assert_eq!(dialect_for(&DriverId::postgres()), SqlDialect::Postgres);
         assert_eq!(dialect_for(&DriverId::mysql()), SqlDialect::MySql);
         assert_eq!(dialect_for(&DriverId::sqlite()), SqlDialect::Sqlite);
-    }
-
-    #[test]
-    fn elasticsearch_uses_its_native_console_language() {
-        assert_eq!(
-            language_for(&DriverId::elasticsearch()),
-            QueryLanguage::SearchDsl
-        );
     }
 
     #[test]

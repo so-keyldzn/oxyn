@@ -45,6 +45,16 @@ impl Session for ElasticsearchSession {
         self.capabilities
     }
 
+    fn classify_intent(&self, request: &ExecRequest) -> Option<oxyn_core::StatementIntent> {
+        (request.language == oxyn_core::QueryLanguage::SearchDsl)
+            .then(|| {
+                parse_request(&request.text)
+                    .ok()
+                    .map(|parsed| statement_intent(&parsed))
+            })
+            .flatten()
+    }
+
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.capabilities.require_language(request.language)?;
         if !request.params.is_empty() {

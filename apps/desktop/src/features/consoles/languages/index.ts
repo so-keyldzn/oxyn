@@ -12,7 +12,12 @@ import type { QueryLanguageName } from "@/lib/query-language"
  */
 const EDITOR_MODES: Partial<
   Record<Exclude<QueryLanguageName, "sql">, () => Extension>
-> = {}
+> = {
+  // Search DSL's endpoint line and JSON body need a dedicated mixed parser.
+  // Until it exists, register the language explicitly as plain text rather
+  // than applying SQL highlighting to a request the server would not parse.
+  "search-dsl": () => [],
+}
 
 export function editorMode(
   language: Exclude<QueryLanguageName, "sql">

@@ -71,6 +71,12 @@ pub fn current_request(
         QueryLanguage::Sql(dialect) => {
             Ok(current_statement(text, dialect, cursor_byte)?.map(|fragment| fragment.text))
         }
+        // Search DSL accepts one complete HTTP request. Its driver validates
+        // the request line and JSON body before sending it, so the editor can
+        // select the whole document without attempting to parse its API.
+        QueryLanguage::SearchDsl => {
+            Ok((cursor_byte <= text.len() && !text.trim().is_empty()).then_some(text))
+        }
         language => Err(QueryError::UnsupportedLanguage { language }),
     }
 }
@@ -146,6 +152,15 @@ mod tests {
         assert_eq!(
             current_request(text, QueryLanguage::Sql(SqlDialect::Postgres), 2),
             Ok(Some("SELECT 1"))
+        );
+    }
+
+    #[test]
+    fn a_search_dsl_request_is_the_complete_console_document() {
+        let text = "POST /logs/_search\n{\"query\":{\"match_all\":{}}}";
+        assert_eq!(
+            current_request(text, QueryLanguage::SearchDsl, 4),
+            Ok(Some(text))
         );
     }
 

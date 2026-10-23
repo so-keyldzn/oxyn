@@ -371,85 +371,10 @@ pub fn classify_language(language: QueryLanguage, sql: &str) -> Classification {
     if let Some(dialect) = language.sql_dialect() {
         return classify(sql, dialect);
     }
-    match language {
-        QueryLanguage::SearchDsl => classify_search_dsl(sql),
-        _ => Classification::opaque(
-            sql,
-            format!("language not parsed by oxyn-query: {language}"),
-        ),
-    }
-}
-
-/// Classifies Oxyn's one-request Search DSL console format.
-///
-/// Elasticsearch treats several `POST` routes as reads. Unknown routes stay
-/// unknown, because an approval costs less than a route that a newer server
-/// made mutating slipping through the production gate.
-fn classify_search_dsl(text: &str) -> Classification {
-    let line = text.lines().next().unwrap_or_default();
-    let mut words = line.split_ascii_whitespace();
-    let (Some(method), Some(path)) = (words.next(), words.next()) else {
-        return Classification::opaque(text, "invalid Search DSL request line".to_owned());
-    };
-    if words.next().is_some() || !path.starts_with('/') || path.starts_with("//") {
-        return Classification::opaque(text, "invalid Search DSL request line".to_owned());
-    }
-    let path = path.split('?').next().unwrap_or_default();
-    let method = method.to_ascii_uppercase();
-    let intent = if path.starts_with("/_security/") || path.starts_with("/_snapshot/") {
-        StatementIntent::Grant
-    } else if path.starts_with("/_cluster/settings") || path.contains("/_settings") {
-        StatementIntent::Ddl
-    } else if matches!(method.as_str(), "GET" | "HEAD") {
-        StatementIntent::Read
-    } else if matches!(
-        path,
-        "/_search"
-            | "/_count"
-            | "/_msearch"
-            | "/_mget"
-            | "/_explain"
-            | "/_validate/query"
-            | "/_analyze"
-            | "/_field_caps"
-    ) || path.ends_with("/_search")
-        || path.ends_with("/_count")
-        || path.ends_with("/_msearch")
-        || path.ends_with("/_mget")
-        || path.ends_with("/_explain")
-        || path.ends_with("/_validate/query")
-        || path.ends_with("/_analyze")
-        || path.ends_with("/_field_caps")
-        || path.ends_with("/_simulate")
-    {
-        StatementIntent::Read
-    } else if path.starts_with("/_bulk")
-        || path.contains("/_update")
-        || path.contains("/_delete_by_query")
-        || path.starts_with("/_reindex")
-    {
-        StatementIntent::Write
-    } else if matches!(method.as_str(), "PUT" | "PATCH" | "DELETE") {
-        StatementIntent::Ddl
-    } else {
-        StatementIntent::Unknown
-    };
-    Classification {
-        intent,
-        risk: MutationRisk::None,
-        transaction_control: false,
-        context_change: false,
-        statements: vec![StatementInfo {
-            text: text.trim().to_owned(),
-            span: 0..text.len(),
-            intent,
-            risk: MutationRisk::None,
-            basis: Basis::KeywordSweep,
-            error: None,
-            transaction_control: false,
-            context_change: false,
-        }],
-    }
+    Classification::opaque(
+        sql,
+        format!("language not parsed by oxyn-query: {language}"),
+    )
 }
 
 /// Checks that the whole text parses in the requested dialect.
@@ -2215,26 +2140,6 @@ mod tests {
         assert!(outcome.is_mutating());
         assert_eq!(outcome.statements.len(), 1);
         assert_eq!(outcome.statements[0].basis, Basis::Unparsed);
-    }
-
-    #[test]
-    fn search_dsl_uses_its_http_route_not_the_verb_alone() {
-        assert_eq!(
-            classify_language(QueryLanguage::SearchDsl, "POST /logs/_search\n{} ").intent,
-            StatementIntent::Read
-        );
-        assert_eq!(
-            classify_language(QueryLanguage::SearchDsl, "POST /_bulk\n{}").intent,
-            StatementIntent::Write
-        );
-        assert_eq!(
-            classify_language(QueryLanguage::SearchDsl, "POST /future_route\n{}").intent,
-            StatementIntent::Unknown
-        );
-        assert_eq!(
-            classify_language(QueryLanguage::SearchDsl, "POST /_security/user\n{}").intent,
-            StatementIntent::Grant
-        );
     }
 
     #[test]
