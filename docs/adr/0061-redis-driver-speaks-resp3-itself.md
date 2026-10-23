@@ -80,8 +80,7 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    nothing and is `Unknown`. The driver answers this through
    `Session::classify_intent` (ADR-0064).
 4. **What changes the connection is refused in a console**, by the driver's
-   own list — no flag says it: `SUBSCRIBE` and its family, `MONITOR`, `SYNC`,
-   `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (the session context selects
+   own list — no flag says it: `UNSUBSCRIBE` and its family, `SYNC`, `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (the session context selects
    the database), `MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`, `RESET`, `QUIT`,
    `READONLY`/`READWRITE`/`ASKING`, and `CLIENT TRACKING`, `CACHING`, `REPLY`,
    `SETNAME`, `SETINFO`, `NO-EVICT`, `NO-TOUCH`. Blocking commands are sent;
@@ -152,6 +151,16 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     `ACL SETUSER`, the value of `CONFIG SET` for `requirepass`, `masterauth`,
     `tls-key-file-pass` and `tls-client-key-file-pass`, and `MIGRATE`'s
     `AUTH`/`AUTH2` passwords (`oxyn_query::redis::redact_secrets`).
+13. **Pub/Sub and `MONITOR` are bounded captures.** `SUBSCRIBE`,
+    `PSUBSCRIBE`, `SSUBSCRIBE` and `MONITOR` run on a connection of their
+    own, never the console's; what arrives becomes rows until the row limit,
+    a window that closes one second before the execution's timeout, or Stop.
+    Closing that connection ends the subscription or the monitor on the
+    server, and a stop is `Cancelled`: a capture applies nothing. Their
+    intent stays the server's — neither command is flagged `readonly`, and
+    `MONITOR` is `@dangerous` —, so a capture is confirmed on production and
+    refused to an agent there. A message is dated by Oxyn's clock on arrival,
+    a `MONITOR` line by the server's.
 
 ## Consequences
 
@@ -173,8 +182,10 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
   connection, the server finishes the command. A production `KEYS *` on fifty
   million keys stalls the server whatever Oxyn does — which is why it needs a
   confirmation there.
-* **−** Cluster, Sentinel, `MULTI/EXEC`, Pub/Sub and `MONITOR` are refused in
-  this stage.
+* **−** Cluster, Sentinel and `MULTI/EXEC` are refused in this stage.
+* **−** A capture is a window, not a subscription that lives on: a message
+  published after it closes is not seen. `MONITOR` slows a busy server for
+  as long as the window lasts.
 
 **Exit cost:** moderate. Replacing the hand-written RESP layer with a library
 rewrites `resp.rs`, `connection.rs` and the cursor's reading loop, but not the

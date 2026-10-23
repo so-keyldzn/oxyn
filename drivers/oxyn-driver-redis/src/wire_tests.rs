@@ -23,9 +23,9 @@ use crate::driver::{driver_id, redis_metadata};
 use crate::options::ConnectSpec;
 use crate::resp::{Reader, Value};
 
-const HELLO: &[u8] = b"%5\r\n$6\r\nserver\r\n$5\r\nredis\r\n$7\r\nversion\r\n$5\r\n8.0.0\r\n$2\r\nid\r\n:7\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n";
+pub(crate) const HELLO: &[u8] = b"%5\r\n$6\r\nserver\r\n$5\r\nredis\r\n$7\r\nversion\r\n$5\r\n8.0.0\r\n$2\r\nid\r\n:7\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n";
 
-const COMMAND: &[u8] = b"*2\r\n\
+pub(crate) const COMMAND: &[u8] = b"*2\r\n\
 *10\r\n$3\r\nget\r\n:2\r\n~1\r\n+readonly\r\n:1\r\n:1\r\n:1\r\n~1\r\n+@read\r\n*0\r\n*0\r\n*0\r\n\
 *10\r\n$3\r\nset\r\n:-3\r\n~1\r\n+write\r\n:1\r\n:1\r\n:1\r\n~1\r\n+@write\r\n*0\r\n*0\r\n*0\r\n";
 
@@ -64,7 +64,7 @@ async fn lying_server(reply: &'static [u8]) -> u16 {
     port
 }
 
-async fn session_on(port: u16) -> RedisSession {
+pub(crate) async fn session_on(port: u16) -> RedisSession {
     let config = ConnectionConfig::new("liar", driver_id())
         .with_environment(Environment::Local)
         .with_param("host", "127.0.0.1")

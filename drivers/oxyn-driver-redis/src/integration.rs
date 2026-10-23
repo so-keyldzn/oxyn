@@ -63,7 +63,7 @@ fn target() -> Option<(ConnectionConfig, Credentials)> {
 }
 
 /// Opens a session on database 9, or returns `None` and says so.
-async fn open_session() -> Option<RedisSession> {
+pub(crate) async fn open_session() -> Option<RedisSession> {
     let Some((config, credentials)) = target() else {
         eprintln!("{VARIABLE} is not set: test skipped");
         return None;
@@ -84,7 +84,7 @@ async fn open_session() -> Option<RedisSession> {
 }
 
 /// A fresh session on an emptied database 9.
-async fn clean() -> Option<RedisSession> {
+pub(crate) async fn clean() -> Option<RedisSession> {
     let session = open_session().await?;
     run(&session, "FLUSHDB")
         .await
@@ -102,7 +102,7 @@ fn request(text: &str) -> ExecRequest {
 }
 
 /// Runs a command and collects its batches, or returns the first error.
-async fn run(session: &dyn Session, text: &str) -> Result<Vec<RecordBatch>, OxynError> {
+pub(crate) async fn run(session: &dyn Session, text: &str) -> Result<Vec<RecordBatch>, OxynError> {
     run_request(session, request(text)).await
 }
 
@@ -132,7 +132,7 @@ fn rows(batches: &[RecordBatch]) -> usize {
 }
 
 /// A column of the first batch, as text.
-fn column(batches: &[RecordBatch], name: &str) -> Vec<Option<String>> {
+pub(crate) fn column(batches: &[RecordBatch], name: &str) -> Vec<Option<String>> {
     let mut out = Vec::new();
     for batch in batches {
         let array = batch
@@ -356,8 +356,7 @@ async fn a_server_error_is_classified_by_its_prefix() {
 async fn commands_that_change_the_connection_are_refused_before_sending() {
     let Some(session) = clean().await else { return };
     for text in [
-        "SUBSCRIBE news",
-        "MONITOR",
+        "UNSUBSCRIBE news",
         "SELECT 0",
         "MULTI",
         "HELLO 2",

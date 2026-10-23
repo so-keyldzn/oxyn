@@ -38,6 +38,7 @@
 
 pub mod argv;
 pub mod cancel;
+pub mod capture;
 pub mod catalog;
 pub mod commands;
 pub mod connection;
@@ -59,6 +60,14 @@ mod integration;
 /// The driver against a fake server that sends what Redis never does.
 #[cfg(test)]
 mod wire_tests;
+
+/// Captures against a fake server that keeps the stream open.
+#[cfg(test)]
+mod capture_tests;
+
+/// Captures against a real server. All `#[ignore]`.
+#[cfg(test)]
+mod capture_integration;
 
 pub use catalog::RedisCatalog;
 pub use cursor::RedisCursor;

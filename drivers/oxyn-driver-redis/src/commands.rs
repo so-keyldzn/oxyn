@@ -28,7 +28,10 @@
 //! No flag says that `SUBSCRIBE` turns the connection into a push stream, or
 //! that `SELECT` changes what every later command addresses. [`refusal`] holds
 //! that list: it is about the driver's own connection, not about what a
-//! command does to the data, which stays the server's to say.
+//! command does to the data, which stays the server's to say. `SUBSCRIBE`,
+//! `PSUBSCRIBE`, `SSUBSCRIBE` and `MONITOR` are not on it: they run as
+//! bounded captures on a connection of their own
+//! ([`capture`](crate::capture)).
 
 use std::collections::{HashMap, HashSet};
 
@@ -163,17 +166,9 @@ pub fn refusal(argv: &[Vec<u8>]) -> Option<&'static str> {
     let name = lowercase(argv.first()?)?;
     let sub = argv.get(1).and_then(|word| lowercase(word));
     Some(match (name.as_str(), sub.as_deref()) {
-        (
-            "subscribe" | "psubscribe" | "ssubscribe" | "unsubscribe" | "punsubscribe"
-            | "sunsubscribe",
-            _,
-        ) => {
-            "Pub/Sub turns the connection into an endless stream of messages, which a console \
-             result cannot hold; PUBLISH and PUBSUB CHANNELS work"
-        }
-        ("monitor", _) => {
-            "MONITOR turns the connection into an endless stream of every command the server \
-             runs, which a console result cannot hold"
+        ("unsubscribe" | "punsubscribe" | "sunsubscribe", _) => {
+            "a capture's subscription ends with the capture: stop it, or let its row limit or \
+             timeout end it"
         }
         ("sync" | "psync" | "replconf", _) => {
             "replication commands turn the connection into a replica's stream"
@@ -536,9 +531,8 @@ pub(crate) mod tests {
     }
 
     #[rstest]
-    #[case("SUBSCRIBE news")]
-    #[case("psubscribe n*")]
-    #[case("MONITOR")]
+    #[case("UNSUBSCRIBE news")]
+    #[case("punsubscribe n*")]
     #[case("PSYNC ? -1")]
     #[case("HELLO 2")]
     #[case("AUTH default secret")]

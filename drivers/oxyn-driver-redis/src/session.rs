@@ -36,6 +36,7 @@ use tokio_rustls::rustls::ClientConfig;
 
 use crate::argv;
 use crate::cancel::{Executions, Running, Stopper};
+use crate::capture::{Capture, CaptureCursor};
 use crate::catalog::RedisCatalog;
 use crate::commands::{self, CommandTable};
 use crate::connection::{Connection, Hello, INTERNAL_REPLY_BUDGET};
@@ -295,6 +296,18 @@ impl Session for RedisSession {
                  does not send it",
                 String::from_utf8_lossy(argv.first().map_or(&[][..], Vec::as_slice))
             )));
+        }
+        if let Some(capture) = Capture::of(&argv) {
+            let cursor = CaptureCursor::start(
+                capture,
+                &argv,
+                intent,
+                &request.limits,
+                Arc::clone(&self.shared),
+                cancel.child(),
+            )
+            .await?;
+            return Ok(Box::new(cursor));
         }
         let running = running_of(table, &argv);
         let plan = Plan {

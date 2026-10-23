@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="9df4628d22de" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="dba3e5bc14d1" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -88,8 +88,7 @@ que fait un arrêt. Vérifié le 2026-10-22
    sous-commande connue — ne prouve rien et vaut `Unknown`. Le driver répond
    par `Session::classify_intent` (ADR-0064).
 4. **Ce qui change la connexion est refusé en console**, par la liste du driver
-   lui-même — aucun drapeau ne le dit : `SUBSCRIBE` et sa famille, `MONITOR`,
-   `SYNC`, `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (le contexte de session
+   lui-même — aucun drapeau ne le dit : `UNSUBSCRIBE` et sa famille, `SYNC`, `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (le contexte de session
    choisit la base), `MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`, `RESET`,
    `QUIT`, `READONLY`/`READWRITE`/`ASKING`, et `CLIENT TRACKING`, `CACHING`,
    `REPLY`, `SETNAME`, `SETINFO`, `NO-EVICT`, `NO-TOUCH`. Les commandes
@@ -165,6 +164,17 @@ que fait un arrêt. Vérifié le 2026-10-22
     `CONFIG SET` pour `requirepass`, `masterauth`, `tls-key-file-pass` et
     `tls-client-key-file-pass`, et les mots de passe `AUTH`/`AUTH2` de
     `MIGRATE` (`oxyn_query::redis::redact_secrets`).
+13. **Pub/Sub et `MONITOR` sont des captures bornées.** `SUBSCRIBE`,
+    `PSUBSCRIBE`, `SSUBSCRIBE` et `MONITOR` tournent sur une connexion à eux,
+    jamais celle de la console ; ce qui arrive devient des lignes jusqu'à la
+    limite de lignes, une fenêtre qui se ferme une seconde avant le délai de
+    l'exécution, ou l'arrêt. Fermer cette connexion met fin à l'abonnement ou
+    au monitor sur le serveur, et un arrêt est `Cancelled` : une capture
+    n'applique rien. Leur intention reste celle du serveur — aucune des deux
+    commandes n'est marquée `readonly`, et `MONITOR` est `@dangerous` —, si
+    bien qu'une capture est confirmée en production et refusée à un agent.
+    Un message est daté par l'horloge d'Oxyn à son arrivée, une ligne de
+    `MONITOR` par celle du serveur.
 
 ## Conséquences
 
@@ -187,8 +197,10 @@ que fait un arrêt. Vérifié le 2026-10-22
   la connexion, le serveur finit la commande. Un `KEYS *` de production sur
   cinquante millions de clés bloque le serveur quoi que fasse Oxyn — c'est
   pourquoi il y demande une confirmation.
-* **−** Cluster, Sentinel, `MULTI/EXEC`, Pub/Sub et `MONITOR` sont refusés à
-  cette étape.
+* **−** Cluster, Sentinel et `MULTI/EXEC` sont refusés à cette étape.
+* **−** Une capture est une fenêtre, pas un abonnement qui dure : un message
+  publié après sa fermeture n'est pas vu. `MONITOR` ralentit un serveur chargé
+  tant que la fenêtre dure.
 
 **Coût de sortie :** modéré. Remplacer la couche RESP écrite à la main par une
 bibliothèque réécrit `resp.rs`, `connection.rs` et la boucle de lecture du
