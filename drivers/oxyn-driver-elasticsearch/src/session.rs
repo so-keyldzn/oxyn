@@ -169,3 +169,38 @@ impl Session for ElasticsearchSession {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use oxyn_core::{ConnectionConfig, DriverId, QueryLanguage, StatementIntent};
+    use oxyn_driver::Credentials;
+
+    use super::*;
+
+    fn session() -> ElasticsearchSession {
+        let config = ConnectionConfig::new("test", DriverId::elasticsearch())
+            .with_param("url", "https://example.invalid:9200");
+        let api = Api::from_config(&config, &Credentials::new()).expect("valid API configuration");
+        ElasticsearchSession::new(
+            api,
+            "Elasticsearch".to_owned(),
+            "8.19.0".to_owned(),
+            Capabilities::SEARCH_DSL,
+        )
+    }
+
+    #[test]
+    fn session_proves_only_a_parseable_search_dsl_request() {
+        let session = session();
+        let read = ExecRequest::new(QueryLanguage::SearchDsl, "POST /logs/_search\n{}");
+        let unknown = ExecRequest::new(QueryLanguage::SearchDsl, "POST /future_route\n{}");
+        let invalid = ExecRequest::new(QueryLanguage::SearchDsl, "not a request");
+
+        assert_eq!(session.classify_intent(&read), Some(StatementIntent::Read));
+        assert_eq!(
+            session.classify_intent(&unknown),
+            Some(StatementIntent::Unknown)
+        );
+        assert_eq!(session.classify_intent(&invalid), None);
+    }
+}
