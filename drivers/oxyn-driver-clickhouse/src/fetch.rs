@@ -17,7 +17,7 @@ use crate::error::{map_decode_error, map_server_error, map_transport_error, prot
 use crate::http::{Call, FORMAT, Failure, Http};
 use crate::measure::{DecodeError, Pace, measure};
 use crate::schema::schema_for;
-use crate::stream::{BATCH_BYTE_BUDGET, kill};
+use crate::stream::{BATCH_BYTE_BUDGET, kill, read_exception};
 
 /// The most a driver read may decode.
 pub const MAX_FETCH_BYTES: usize = 64 << 20;
@@ -56,7 +56,11 @@ pub async fn fetch(
                 break parsed;
             }
             if body.rows_closed() {
-                return Err(decode(&DecodeError::Truncated));
+                read_exception(&mut response, &mut body).await;
+                return Err(body.exception().map_or_else(
+                    || decode(&DecodeError::Truncated),
+                    |error| map_server_error(driver, read, error),
+                ));
             }
             next(&mut response, &mut body, driver).await?;
         };
@@ -98,6 +102,7 @@ pub async fn fetch(
             }
             next(&mut response, &mut body, driver).await?;
         }
+        read_exception(&mut response, &mut body).await;
         if let Some(error) = body.exception() {
             return Err(map_server_error(driver, read, error));
         }

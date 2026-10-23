@@ -17,7 +17,7 @@ use oxyn_driver::{
     ConnectionField, Credentials, Driver, DriverFamily, DriverMetadata, FieldKind, Session,
 };
 
-use crate::error::map_transport_error;
+use crate::error::{map_server_error, map_transport_error};
 use crate::fetch::{counts, fetch, texts};
 use crate::http::{Call, Failure, Http};
 use crate::options::{ConnectSpec, HTTPS_PORT, TlsMode};
@@ -29,6 +29,12 @@ const SQL_PROBE: &str = "SELECT version(), timezone(), toUInt64(getSetting('read
 
 /// Whether the account may kill: `TEST` stops nothing, it checks the right.
 const SQL_KILL_PROBE: &str = "KILL QUERY WHERE query_id = {id:String} TEST";
+
+/// Why a server that marks no error in its streamed answers is refused to an
+/// account that cannot ask it to wait for the end of the statement.
+const UNMARKED_EXCEPTIONS: &str = "this server does not mark an error raised after rows were \
+    sent (no X-ClickHouse-Exception-Tag), and the account's read-only level forbids asking it \
+    to answer only once the statement ended: its rows and its errors could not be told apart";
 
 /// The ClickHouse driver.
 #[derive(Debug, Clone)]
@@ -175,12 +181,50 @@ impl Driver for ClickhouseDriver {
             can_kill = probe => can_kill?,
         };
 
+        // Whether an error raised after rows left is marked in the body
+        // (`X-ClickHouse-Exception-Tag`, sent by 26.3). Without the mark, an
+        // error's text read as `UInt8` rows ends like a clean result.
+        let marks_probe = Call {
+            text: "SELECT 1".to_owned(),
+            query_id: uuid::Uuid::new_v4().to_string(),
+            ..Call::default()
+        };
+        let probe = async {
+            match http.send(&marks_probe).await {
+                Ok(mut reply) => {
+                    let marks = reply.exception_tag.is_some();
+                    while let Ok(Some(_)) = reply.response.chunk().await {}
+                    Ok(marks)
+                }
+                Err(Failure::Server(error)) => {
+                    Err(map_server_error(&driver, StatementIntent::Read, error))
+                }
+                Err(Failure::Transport(error)) => Err(map_transport_error(
+                    &driver,
+                    StatementIntent::Read,
+                    true,
+                    &error,
+                )),
+            }
+        };
+        let marks_exceptions = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(oxyn_core::OxynError::Cancelled),
+            marks = probe => marks?,
+        };
+
         let facts = ServerFacts {
             version,
             zone,
             readonly: u8::try_from(readonly.min(2)).unwrap_or(2),
             can_kill,
+            marks_exceptions,
         };
+        if !facts.reads_errors_apart() {
+            return Err(oxyn_core::OxynError::Connection(
+                UNMARKED_EXCEPTIONS.to_owned(),
+            ));
+        }
         tracing::debug!(
             target: "oxyn::driver::clickhouse",
             version = %facts.version,

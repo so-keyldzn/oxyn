@@ -89,9 +89,12 @@ impl ClickhouseCatalog {
         &self,
         sql: &str,
         params: Vec<(&'static str, String)>,
-        settings: Vec<(&'static str, String)>,
+        mut settings: Vec<(&'static str, String)>,
         cancel: &CancelToken,
     ) -> Result<Vec<RecordBatch>> {
+        if self.facts.waits_end_of_query() {
+            settings.push(("wait_end_of_query", "1".to_owned()));
+        }
         let call = Call {
             text: sql.to_owned(),
             query_id: uuid::Uuid::new_v4().to_string(),

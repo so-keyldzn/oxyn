@@ -28,6 +28,9 @@ pub struct ServerFacts {
     pub readonly: u8,
     /// Whether `KILL QUERY … TEST` succeeded for this account.
     pub can_kill: bool,
+    /// Whether a 200 carries `X-ClickHouse-Exception-Tag`, which marks an
+    /// error raised after rows left.
+    pub marks_exceptions: bool,
 }
 
 impl ServerFacts {
@@ -49,6 +52,22 @@ impl ServerFacts {
     #[must_use]
     pub const fn takes_settings(&self) -> bool {
         self.readonly != 1
+    }
+
+    /// Whether every request must ask the server to answer only once the
+    /// statement ended (`wait_end_of_query = 1`): a server that marks no
+    /// error in its body then sends the error's status instead of rows. The
+    /// result is buffered on the server, not in Oxyn.
+    #[must_use]
+    pub const fn waits_end_of_query(&self) -> bool {
+        !self.marks_exceptions
+    }
+
+    /// Whether the driver can tell this server's rows from its errors: the
+    /// server marks them, or the account may ask it to wait.
+    #[must_use]
+    pub const fn reads_errors_apart(&self) -> bool {
+        self.marks_exceptions || self.takes_settings()
     }
 
     /// Whether a request may lower itself to `readonly = 1`.
@@ -111,7 +130,20 @@ mod tests {
             zone: Some("UTC".into()),
             readonly,
             can_kill,
+            marks_exceptions: true,
         }
+    }
+
+    #[test]
+    fn a_server_that_marks_no_error_is_asked_to_wait_or_refused() {
+        let unmarked = |readonly| ServerFacts {
+            marks_exceptions: false,
+            ..facts(readonly, true)
+        };
+        assert!(unmarked(0).waits_end_of_query() && unmarked(0).reads_errors_apart());
+        assert!(unmarked(2).reads_errors_apart());
+        assert!(!unmarked(1).reads_errors_apart(), "no setting can be asked");
+        assert!(!facts(1, true).waits_end_of_query());
     }
 
     #[test]

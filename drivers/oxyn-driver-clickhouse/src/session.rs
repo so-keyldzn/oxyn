@@ -149,6 +149,9 @@ impl ClickhouseSession {
             .iter()
             .map(|(name, value)| (*name, (*value).to_owned()))
             .collect();
+        if self.facts.waits_end_of_query() {
+            settings.push(("wait_end_of_query", "1".to_owned()));
+        }
         if limits.read_only && self.facts.can_bound_reads() {
             settings.push(("readonly", "1".to_owned()));
         } else if intent.is_read_only() && self.facts.can_bound_reads() {

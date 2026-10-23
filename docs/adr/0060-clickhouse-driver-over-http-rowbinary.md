@@ -101,7 +101,11 @@ values become Arrow, and what a "session" is. Checked on 2026-10-23
    wrote is known.
 6. **The exception marker is cut out of the body** with the response's tag,
    holding back the marker's length of every chunk until more arrives, so a
-   marker split across chunks is never decoded as a value.
+   marker split across chunks is never decoded as a value; the message is
+   read to its closing line. A server whose 200 carries no tag — checked at
+   connection, not inferred from a version — is asked `wait_end_of_query = 1`
+   on every request, so an error keeps its own status; an account that may
+   carry no setting is then refused rather than shown an error as rows.
 7. **A stop is `KILL QUERY … ASYNC` on the driver's own `query_id`**, from a
    separate request, with the id bound as a query parameter. The stop is
    reported from the statement's intent and the server's own end: a read is

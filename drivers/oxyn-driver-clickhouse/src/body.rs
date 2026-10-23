@@ -16,9 +16,11 @@
 //! value. With a random tag of 16 letters, a marker that is in fact data is
 //! not a case to design for.
 //!
-//! A server that sends no tag gets no detection: its exception is decoded as
-//! garbage and ends, at worst, as a decoding error or a truncated row — never
-//! as a clean end.
+//! A server that sends no tag gets no detection here: its exception's text
+//! reads as valid `UInt8` rows and can end like a clean result. The session
+//! therefore asks such a server to answer only once the statement ended
+//! (`wait_end_of_query = 1`, an error then has its own status), and refuses
+//! an account that may not ask it ([`crate::variant::ServerFacts`]).
 
 use crate::error::{MAX_MESSAGE_BYTES, ServerError};
 use crate::measure::{DecodeError, MAX_ROW_BYTES, value_error, varint};
@@ -27,6 +29,10 @@ use crate::types;
 
 /// What opens the exception block, before the tag.
 const OPENING: &[u8] = b"\r\n__exception__\r\n";
+
+/// The most an exception block may hold after its marker: the message, which
+/// is cut to `MAX_MESSAGE_BYTES` anyway, and its closing line.
+const MESSAGE_ROOM: usize = MAX_MESSAGE_BYTES * 2;
 
 /// The most columns a result header may announce: ClickHouse's own limits are
 /// far below, and a hostile count must not size an allocation.
@@ -63,9 +69,13 @@ impl Body {
 
     /// Appends a chunk of the body.
     pub fn push(&mut self, chunk: &[u8]) {
-        if self.rows_end.is_some() {
-            // Past the marker: only the message, bounded.
-            let room = (MAX_MESSAGE_BYTES * 2).saturating_sub(self.pending.len());
+        if let Some(rows_end) = self.rows_end {
+            // Past the marker: only the message, bounded — counted from the
+            // marker, not from the rows still buffered before it.
+            let limit = rows_end
+                .saturating_add(self.marker.as_ref().map_or(0, Vec::len))
+                .saturating_add(MESSAGE_ROOM);
+            let room = limit.saturating_sub(self.pending.len());
             self.pending
                 .extend_from_slice(chunk.get(..room.min(chunk.len())).unwrap_or(&[]));
             return;
@@ -151,6 +161,18 @@ impl Body {
     #[must_use]
     pub const fn has_exception(&self) -> bool {
         self.rows_end.is_some()
+    }
+
+    /// Whether the exception's message is all here: its closing line came,
+    /// the body ended, or the bound on its length was reached. Before, the
+    /// message may be cut, or empty when the marker ended a chunk.
+    #[must_use]
+    pub fn message_complete(&self) -> bool {
+        let (Some(rows_end), Some(marker)) = (self.rows_end, &self.marker) else {
+            return true;
+        };
+        let tail = self.pending.get(rows_end + marker.len()..).unwrap_or(&[]);
+        self.ended || tail.ends_with(b"\r\n__exception__\r\n") || tail.len() >= MESSAGE_ROOM
     }
 
     /// Whether the rows have all been seen: the body ended, or an exception
@@ -282,6 +304,24 @@ mod tests {
         assert!(body.exception().is_none());
         body.consume(3);
         assert!(body.is_drained());
+    }
+
+    #[test]
+    fn a_message_after_the_markers_chunk_is_waited_for() {
+        let block = exception_block("Code: 241. DB::Exception: Memory limit exceeded");
+        let marker_len = OPENING.len() + TAG.len() + 2;
+        let (head, rest) = block.split_at(marker_len);
+        // Rows held back beyond the message's room must not starve it.
+        let mut body = Body::new(Some(TAG));
+        body.push(&vec![7; MESSAGE_ROOM + 10]);
+        body.push(head);
+        assert!(body.has_exception());
+        assert!(!body.message_complete(), "only the marker came");
+        body.push(rest);
+        assert!(body.message_complete());
+        let error = body.exception().expect("the exception");
+        assert_eq!(error.code, Some(241));
+        assert!(error.message.contains("Memory limit exceeded"));
     }
 
     #[test]

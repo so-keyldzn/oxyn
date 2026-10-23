@@ -244,6 +244,23 @@ impl Execution {
     }
 }
 
+/// Reads on past an exception's marker until its message is whole, bounded
+/// by `DRAIN_BOUND` and the block's own bound: otherwise the message is
+/// whatever came in the marker's chunk, and a `MEMORY_LIMIT_EXCEEDED` may
+/// arrive with neither text nor code.
+pub(crate) async fn read_exception(response: &mut reqwest::Response, body: &mut Body) {
+    let _ = tokio::time::timeout(DRAIN_BOUND, async {
+        while !body.message_complete() {
+            match response.chunk().await {
+                Ok(Some(bytes)) => body.push(&bytes),
+                // The server leaves the body unterminated after an exception.
+                Ok(None) | Err(_) => body.end(),
+            }
+        }
+    })
+    .await;
+}
+
 /// Sends `KILL QUERY` for `query_id`, bounded by `KILL_BOUND`.
 ///
 /// Killing a statement that already ended is no error for the server, and a
@@ -335,7 +352,10 @@ impl Rows {
         let (columns, end) = loop {
             match header(self.body.ready()) {
                 Ok(Some(parsed)) => break parsed,
-                Ok(None) if self.body.rows_closed() => return Err(self.closed_early()),
+                Ok(None) if self.body.rows_closed() => {
+                    read_exception(&mut self.response, &mut self.body).await;
+                    return Err(self.closed_early());
+                }
                 Ok(None) => self.read(token).await?,
                 Err(error) => {
                     self.halt().await;
@@ -444,6 +464,7 @@ impl Rows {
         if decoder.rows() > 0 {
             self.emit(decoder, token, batches).await?;
         }
+        read_exception(&mut self.response, &mut self.body).await;
         if let Some(error) = self.body.exception() {
             return Err(self.execution.server_error(error));
         }

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="08c69487ffa3" -->
+<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="e285e87d95ae" -->
 
 > Traduction française de [docs/adr/0060-clickhouse-driver-over-http-rowbinary.md](../../../../docs/adr/0060-clickhouse-driver-over-http-rowbinary.md). **La version anglaise fait foi.**
 
@@ -110,7 +110,12 @@ qu'est une « session ». Vérifié le 2026-10-23
 6. **Le marqueur d'exception est découpé du corps** grâce au tag de la réponse,
    en retenant la longueur du marqueur à la fin de chaque morceau jusqu'à
    l'arrivée de la suite, pour qu'un marqueur coupé entre deux morceaux ne soit
-   jamais décodé comme une valeur.
+   jamais décodé comme une valeur ; le message est lu jusqu'à sa ligne de
+   clôture. Un serveur dont le 200 ne porte pas de tag — vérifié à la
+   connexion, pas déduit d'une version — reçoit `wait_end_of_query = 1` sur
+   chaque requête, pour qu'une erreur garde son propre statut ; un compte qui
+   ne peut porter aucun réglage est alors refusé plutôt que de voir une erreur
+   affichée comme des lignes.
 7. **Un arrêt est un `KILL QUERY … ASYNC` sur le `query_id` du pilote**, depuis
    une requête séparée, l'identifiant lié comme paramètre de requête. L'arrêt
    est rapporté d'après l'intention de l'instruction et la fin que le serveur
