@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md" sha256="24eb601553b3" -->
+<!-- oxyn-translation source="docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md" sha256="ca0714c57db6" -->
 
 > Traduction française de [docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md](../../../../docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md). **La version anglaise fait foi.**
 
@@ -205,6 +205,13 @@ calcule en parallèle. Vérifié le 2026-10-23
 * **−** **Accorder un dossier est tout ou rien en son sein** : le SQL peut y
   lire et écrire n'importe quoi, et le dossier se tape — le sélecteur du
   formulaire de connexion choisit des fichiers.
+* **−** **`ATTACH` échappe au registre « un moteur par fichier ».** Une
+  instruction qui attache un fichier du dossier accordé, déjà ouvert comme une
+  autre connexion Oxyn, l'ouvre une seconde fois dans le processus, où le verrou
+  d'enregistrement de DuckDB ne voit pas le premier : deux écrivains peuvent
+  alors le corrompre. Le registre garde ce qu'Oxyn ouvre, pas ce que le SQL
+  attache ; un fichier destiné à être attaché n'est pas aussi ouvert comme
+  connexion.
 
 **Coût de sortie :** modéré. Le binding est derrière les propres types de la
 crate — aucun type `duckdb` ne franchit son API publique —, si bien qu'un autre

@@ -38,8 +38,11 @@
 //! The one opening a connection may grant is a directory
 //! ([`crate::DuckDbDriver::FILE_ACCESS`]): it goes to `allowed_directories`
 //! before external access is turned off, and SQL may then read and write files
-//! under it — and only there. Parquet and JSON are linked into the binary, so
-//! reading them needs no extension download.
+//! under it. Beyond it, DuckDB keeps reaching what it needs itself: the
+//! database and its write-ahead log, the files of an attached database, its
+//! temporary directory (`<database>.tmp`, or `.tmp` in the process's working
+//! directory for `:memory:`; `custom_settings.cpp`, v1.5.6). Parquet and JSON
+//! are linked into the binary, so reading them needs no extension download.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -66,13 +69,46 @@ pub(crate) struct OpenSpec {
 }
 
 impl OpenSpec {
-    /// Hides this connection's database path and granted folder from every
-    /// engine message the calling thread converts ([`error::redact_on_this_thread`]).
+    /// Hides this connection's database path and granted folder, as configured
+    /// and as the system resolves them, from every engine message the calling
+    /// thread converts ([`error::redact_on_this_thread`]).
+    ///
+    /// Blocking: resolving a path reads the file system.
     pub(crate) fn redact_on_this_thread(&self) {
-        error::redact_on_this_thread(
-            path_text(&self.target),
-            self.file_access.as_deref().and_then(Path::to_str),
-        );
+        if let OpenTarget::File(path) = &self.target {
+            redact(path, &resolve(path), error::DATABASE_SHOWN);
+        }
+        if let Some(folder) = &self.file_access {
+            let resolved = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.clone());
+            redact(folder, &resolved, error::FOLDER_SHOWN);
+        }
+    }
+}
+
+/// Hides the database path as the engine spells it — DuckDB expands `~` when
+/// it opens a file — from every engine message the calling thread converts.
+///
+/// # Errors
+/// Those of the catalog query; the session is not opened without it, since
+/// its errors would then name the file.
+pub(crate) fn redact_engine_path(connection: &Connection) -> Result<()> {
+    let databases = crate::query::read(
+        connection,
+        "SELECT path FROM duckdb_databases() WHERE database_name = current_database()",
+        &[],
+    )?;
+    for path in databases.rows().filter_map(|row| row.text(0)) {
+        error::redact_on_this_thread(&path, error::DATABASE_SHOWN);
+    }
+    Ok(())
+}
+
+/// Registers two spellings of one path for redaction.
+fn redact(configured: &Path, resolved: &Path, shown: &'static str) {
+    for spelling in [configured, resolved] {
+        if let Some(text) = spelling.to_str() {
+            error::redact_on_this_thread(text, shown);
+        }
     }
 }
 
@@ -116,8 +152,15 @@ impl std::fmt::Debug for Anchor {
     }
 }
 
-/// The engines open in this process, by file.
-static ENGINES: LazyLock<Mutex<HashMap<EngineKey, Weak<Anchor>>>> =
+/// The engine open on one file, or none yet. Its lock is held while the file
+/// opens, so that two sessions of one file share one engine; another file
+/// does not wait for it.
+type Slot = Arc<Mutex<Weak<Anchor>>>;
+
+/// The engines open in this process, by file. Its lock is held only to find a
+/// slot: opening a file — replaying its write-ahead log, waiting on a stalled
+/// network mount — must not hold back every other DuckDB connection.
+static ENGINES: LazyLock<Mutex<HashMap<EngineKey, Slot>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// What identifies an engine: the file once resolved, or the connection of an
@@ -138,9 +181,15 @@ enum EngineKey {
 /// or policy, and those of [`error::open`].
 pub(crate) fn connect(spec: &OpenSpec) -> Result<(Connection, Arc<Anchor>)> {
     let key = engine_key(&spec.target);
-    let mut engines = ENGINES.lock();
-    engines.retain(|_, anchor| anchor.strong_count() > 0);
-    if let Some(anchor) = engines.get(&key).and_then(Weak::upgrade) {
+    let slot = {
+        let mut engines = ENGINES.lock();
+        // A slot another thread holds is in use, its engine maybe opening; a
+        // free one is locked at once.
+        engines.retain(|_, slot| Arc::strong_count(slot) > 1 || slot.lock().strong_count() > 0);
+        Arc::clone(engines.entry(key).or_default())
+    };
+    let mut held = slot.lock();
+    if let Some(anchor) = held.upgrade() {
         if anchor.spec.read_only != spec.read_only || anchor.spec.file_access != spec.file_access {
             return Err(error::driver(
                 DuckDbError::OpenElsewhere,
@@ -162,7 +211,7 @@ pub(crate) fn connect(spec: &OpenSpec) -> Result<(Connection, Arc<Anchor>)> {
         connection: Mutex::new(anchor_connection),
         spec: spec.clone(),
     });
-    engines.insert(key, Arc::downgrade(&anchor));
+    *held = Arc::downgrade(&anchor);
     Ok((connection, anchor))
 }
 

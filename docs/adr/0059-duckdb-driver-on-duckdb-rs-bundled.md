@@ -178,6 +178,12 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
 * **−** **Granting a folder is all or nothing within it**: SQL may read and
   write anything under it, and the folder is typed — the connection form's
   picker chooses files.
+* **−** **`ATTACH` escapes the one-engine-per-file registry.** A statement that
+  attaches a file of the granted folder already open as another Oxyn
+  connection opens it a second time in the process, where DuckDB's record lock
+  does not see the first: two writers can then corrupt it. The registry
+  guards what Oxyn opens, not what SQL attaches; a file meant to be attached is
+  not also opened as a connection.
 
 **Exit cost:** moderate. The binding is behind the crate's own types — no
 `duckdb` type crosses its public API —, so another binding replaces `open`,

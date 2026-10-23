@@ -10,8 +10,9 @@
 //! The rebuild here is safe code: each buffer is copied into an Arrow 59
 //! buffer, the layout is rebuilt with [`ArrayData::builder`], and
 //! `build()` validates it in full — offsets, lengths, UTF-8, dictionary keys —
-//! so a malformed buffer is a [`Decoded`] error, never a panic nor undefined
-//! behavior.
+//! so a malformed buffer is a [`Decoded`] error, never a panic here. What
+//! comes before is trusted: `duckdb-rs` imports the chunk into Arrow 58
+//! without validating it, from the engine's memory in this same process.
 //!
 //! # What the copy fixes
 //!
@@ -132,22 +133,33 @@ pub(crate) fn convert_chunk(
 
 /// Splits a batch until every piece fits the byte and row bounds.
 ///
-/// Each piece is a compact copy of its rows ([`arrow::compute::take`]), so
-/// the size it reports is the size it holds. Order is preserved.
+/// Each piece is a copy of its rows ([`arrow::compute::take`], view columns
+/// compacted), so the size it reports is the size it holds — except the
+/// values of a dictionary (an `ENUM`), which every piece shares. When halving
+/// a piece copies more than it frees, shared values dominate it: it stops
+/// being split for its bytes, since each split would count them once more and
+/// a one-row piece would weigh the whole dictionary. Order is preserved.
 pub(crate) fn bounded(batch: RecordBatch, limits: BatchLimits) -> Decoded<Vec<RecordBatch>> {
     let mut done = Vec::new();
     let mut pending = vec![batch];
     while let Some(piece) = pending.pop() {
         let rows = piece.num_rows();
-        let oversized =
-            piece.get_array_memory_size() > limits.max_bytes() || rows > limits.max_rows();
-        if rows < 2 || !oversized {
+        let bytes = piece.get_array_memory_size();
+        let over_rows = rows > limits.max_rows();
+        if rows < 2 || !(over_rows || bytes > limits.max_bytes()) {
             done.push(piece);
             continue;
         }
         let half = rows / 2;
         let right = rows_of(&piece, half, rows - half)?;
         let left = rows_of(&piece, 0, half)?;
+        let halves = left
+            .get_array_memory_size()
+            .saturating_add(right.get_array_memory_size());
+        if !over_rows && halves.saturating_mul(2) > bytes.saturating_mul(3) {
+            done.push(piece);
+            continue;
+        }
         pending.push(right);
         pending.push(left);
     }
@@ -162,7 +174,29 @@ fn rows_of(batch: &RecordBatch, start: usize, len: usize) -> Decoded<RecordBatch
         .checked_add(count)
         .ok_or_else(|| "a batch of more than u32::MAX rows".to_owned())?;
     let indices = UInt32Array::from_iter_values(first..end);
-    arrow::compute::take_record_batch(batch, &indices).map_err(|err| err.to_string())
+    let taken =
+        arrow::compute::take_record_batch(batch, &indices).map_err(|err| err.to_string())?;
+    compact_views(&taken)
+}
+
+/// `take` keeps every data buffer of a view column — `Utf8View`, which DuckDB
+/// exports after `SET produce_arrow_string_view = true`; `gc` keeps only the
+/// bytes its rows point to.
+fn compact_views(batch: &RecordBatch) -> Decoded<RecordBatch> {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| {
+            if let Some(text) = column.as_string_view_opt() {
+                Arc::new(text.gc()) as ArrayRef
+            } else if let Some(bytes) = column.as_binary_view_opt() {
+                Arc::new(bytes.gc()) as ArrayRef
+            } else {
+                Arc::clone(column)
+            }
+        })
+        .collect();
+    RecordBatch::try_new(batch.schema(), columns).map_err(|err| err.to_string())
 }
 
 /// The Arrow 59 type a column of DuckDB type `ty`, exported as `source`,
@@ -557,5 +591,51 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![column]).expect("batch");
         let pieces = bounded(batch, BatchLimits::new().with_max_bytes(16)).expect("split");
         assert_eq!(pieces.len(), 1);
+    }
+
+    #[test]
+    fn a_dictionary_over_the_bound_is_not_split_row_by_row() {
+        // An `ENUM` whose values outweigh the bound: every piece would carry
+        // them, and 2,048 one-row pieces would count them 2,048 times.
+        let values = arrow::array::StringArray::from(
+            (0..512).map(|i| format!("{i:0>1000}")).collect::<Vec<_>>(),
+        );
+        let keys = arrow::array::UInt16Array::from_iter_values((0..2048).map(|i| i % 512));
+        let column: ArrayRef = Arc::new(
+            arrow::array::DictionaryArray::try_new(keys, Arc::new(values)).expect("dictionary"),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            column.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![column]).expect("batch");
+        let limits = BatchLimits::new().with_max_bytes(100_000);
+        let pieces = bounded(batch, limits).expect("split");
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(
+            pieces.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            2048
+        );
+    }
+
+    #[test]
+    fn a_view_column_is_split_by_the_bytes_of_its_rows() {
+        let values: Vec<String> = (0..64).map(|i| format!("{i:0>1000}")).collect();
+        let column: ArrayRef = Arc::new(arrow::array::StringViewArray::from_iter_values(
+            values.iter(),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8View, true)]));
+        let batch = RecordBatch::try_new(schema, vec![column]).expect("batch");
+        let pieces = bounded(batch, BatchLimits::new().with_max_bytes(10_000)).expect("split");
+        assert!(pieces.len() > 1);
+        for piece in &pieces {
+            assert!(
+                piece.num_rows() == 1 || piece.get_array_memory_size() <= 10_000,
+                "{} bytes",
+                piece.get_array_memory_size()
+            );
+        }
+        assert_eq!(pieces.iter().map(RecordBatch::num_rows).sum::<usize>(), 64);
     }
 }

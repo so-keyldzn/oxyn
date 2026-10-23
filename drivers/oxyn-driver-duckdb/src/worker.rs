@@ -222,7 +222,7 @@ impl WorkerHandle {
 ///
 /// # Errors
 /// [`OxynError::Io`] if the thread cannot start, those of [`open::connect`],
-/// [`OxynError::Cancelled`] if the token fired before anything started.
+/// [`OxynError::Cancelled`] if the token fires before the database is open.
 pub(crate) async fn spawn(
     spec: OpenSpec,
     cancel: &CancelToken,
@@ -236,7 +236,11 @@ pub(crate) async fn spawn(
         .name("oxyn-duckdb".to_owned())
         .spawn(move || {
             spec.redact_on_this_thread();
-            let (connection, anchor) = match open::connect(&spec) {
+            let opened = open::connect(&spec).and_then(|(connection, anchor)| {
+                open::redact_engine_path(&connection)?;
+                Ok((connection, anchor))
+            });
+            let (connection, anchor) = match opened {
                 Ok(opened) => opened,
                 Err(err) => {
                     let _ = ready.send(Err(err));
@@ -256,7 +260,13 @@ pub(crate) async fn spawn(
                 let _ = reply.send(Ok(()));
             }
         })?;
-    let interrupter = match opened.await {
+    // Opening a file on a stalled mount can take minutes: the token ends the
+    // wait, and the thread, finding nobody to answer, drops what it opened.
+    let opened = match select(opened, pin!(cancel.cancelled())).await {
+        Either::Left((opened, _)) => opened,
+        Either::Right(((), _)) => return Err(OxynError::Cancelled),
+    };
+    let interrupter = match opened {
         Ok(Ok(interrupter)) => interrupter,
         Ok(Err(err)) => return Err(err),
         Err(_) => {

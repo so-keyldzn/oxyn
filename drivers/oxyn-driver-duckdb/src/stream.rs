@@ -391,7 +391,10 @@ fn prepare_last<'c>(
             ErrorClass::Permanent,
         ));
     }
-    if let Some(info) = statements.iter().find(|info| info.context_change) {
+    if let Some(info) = statements
+        .iter()
+        .find(|info| info.context_change || sets_resolution(&info.text))
+    {
         return Err(OxynError::NotSupported {
             capability: format!(
                 "`{}` changes the session's database or schema; choose it with the console's \
@@ -415,6 +418,11 @@ fn prepare_last<'c>(
         let mut statement = connection.prepare(&info.text).map_err(|err| {
             error::after_applied_if(*applied, error::engine(&err, Effect::ReadOnly))
         })?;
+        // Preparing lowers the engine's flag: a Stop that arrived meanwhile
+        // survives only in `tripped`.
+        if interrupter.tripped() {
+            return Err(stopped(effect, *applied));
+        }
         if last && !counts_rows(&info.text) {
             return Ok(Some((statement, effect, wrapper)));
         }
@@ -491,6 +499,42 @@ fn read_only_wrapper<'c>(
 
 /// The first words of a statement, to name it in a refusal without copying a
 /// whole script.
+/// Whether a statement changes where unqualified names resolve without `USE`:
+/// DuckDB's `schema` and `search_path` settings (`src/include/duckdb/main/settings.hpp`,
+/// v1.5.6). Refused like `USE`: the context the console shows would no longer
+/// be the one an unqualified `DROP TABLE t` reaches.
+fn sets_resolution(text: &str) -> bool {
+    let mut words = code_of(text)
+        .split(|c: char| c.is_whitespace() || c == '=' || c == ';')
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase);
+    if !matches!(words.next().as_deref(), Some("set" | "reset")) {
+        return false;
+    }
+    let mut name = words.next();
+    if matches!(name.as_deref(), Some("session" | "local" | "global")) {
+        name = words.next();
+    }
+    matches!(
+        name.as_deref().map(|name| name.trim_matches('"')),
+        Some("schema" | "search_path")
+    )
+}
+
+/// A statement's text without its leading blanks and comments.
+fn code_of(mut text: &str) -> &str {
+    loop {
+        text = text.trim_start();
+        if let Some(rest) = text.strip_prefix("--") {
+            text = rest.split_once('\n').map_or("", |(_, after)| after);
+        } else if let Some(rest) = text.strip_prefix("/*") {
+            text = rest.split_once("*/").map_or("", |(_, after)| after);
+        } else {
+            return text;
+        }
+    }
+}
+
 fn first_words(text: &str) -> String {
     let mut words = text
         .split_whitespace()
@@ -506,6 +550,26 @@ fn first_words(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_resolution_settings_count_as_a_context_change() {
+        for moves in [
+            "SET schema='staging'",
+            "set search_path = 'a,b'",
+            "SET GLOBAL \"schema\" TO 'x'",
+            "-- move\nRESET search_path",
+        ] {
+            assert!(sets_resolution(moves), "{moves}");
+        }
+        for stays in [
+            "SET threads = 4",
+            "SET VARIABLE schema = 1",
+            "SELECT 'SET schema'",
+            "UPDATE t SET schema = 1",
+        ] {
+            assert!(!sets_resolution(stays), "{stays}");
+        }
+    }
 
     #[test]
     fn data_writes_without_returning_are_counted() {

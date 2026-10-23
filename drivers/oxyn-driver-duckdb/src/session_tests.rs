@@ -471,11 +471,18 @@ async fn the_context_is_set_quoted_and_a_typed_use_is_refused() {
         single(&run_ok(session.as_ref(), "SELECT v FROM t").await),
         "5"
     );
-    let refused = run_err(session.as_ref(), unbounded("USE main")).await;
-    assert!(
-        matches!(refused, OxynError::NotSupported { .. }),
-        "{refused:?}"
-    );
+    for moves in [
+        "USE main",
+        "SET schema = 'main'",
+        "SET SESSION search_path TO 'main'",
+        "/* where */ RESET schema",
+    ] {
+        let refused = run_err(session.as_ref(), unbounded(moves)).await;
+        assert!(
+            matches!(refused, OxynError::NotSupported { .. }),
+            "{moves}: {refused:?}"
+        );
+    }
     session
         .set_context(&SessionContext::server_default(), &CancelToken::new())
         .await

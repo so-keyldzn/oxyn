@@ -224,27 +224,35 @@ pub(crate) fn closed() -> OxynError {
     driver(DuckDbError::Closed, ErrorClass::Permanent)
 }
 
+/// What replaces the database path in an engine message.
+pub(crate) const DATABASE_SHOWN: &str = "<database file>";
+/// What replaces the granted folder in an engine message.
+pub(crate) const FOLDER_SHOWN: &str = "<granted folder>";
+
 thread_local! {
-    /// The paths of the connection this carrier thread serves, and what
-    /// replaces each in an engine message. Set once, when the thread starts:
-    /// every engine error of a session is converted on its own thread.
-    static REDACTED: std::cell::OnceCell<Vec<(String, &'static str)>> =
-        const { std::cell::OnceCell::new() };
+    /// The spellings of the paths of the connection this carrier thread
+    /// serves, and what replaces each in an engine message, longest first.
+    /// Filled when the thread starts: every engine error of a session is
+    /// converted on its own thread.
+    static REDACTED: std::cell::RefCell<Vec<(String, &'static str)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Makes every engine message converted on this thread from now on hide the
-/// database path and the granted folder. Called once, on a carrier thread,
-/// before the database opens; a later call is ignored.
-pub(crate) fn redact_on_this_thread(database: Option<&str>, folder: Option<&str>) {
-    let paths = [(database, "<database file>"), (folder, "<granted folder>")]
-        .into_iter()
-        .filter_map(|(path, shown)| {
-            path.filter(|path| !path.is_empty())
-                .map(|path| (path.to_owned(), shown))
-        })
-        .collect();
+/// Makes every engine message converted on this thread from now on hide
+/// `path`, replaced by `shown`. Called on a carrier thread, once per spelling
+/// of a path: as configured, as the system resolves it, as the engine
+/// expands it.
+pub(crate) fn redact_on_this_thread(path: &str, shown: &'static str) {
+    if path.is_empty() {
+        return;
+    }
     REDACTED.with(|redacted| {
-        let _ = redacted.set(paths);
+        let mut redacted = redacted.borrow_mut();
+        if redacted.iter().all(|(known, _)| known != path) {
+            redacted.push((path.to_owned(), shown));
+            // A longer spelling first: one may contain another.
+            redacted.sort_by_key(|(known, _)| std::cmp::Reverse(known.len()));
+        }
     });
 }
 
@@ -257,9 +265,8 @@ fn message_of(error: &duckdb::Error) -> String {
     };
     REDACTED.with(|redacted| {
         redacted
-            .get()
-            .into_iter()
-            .flatten()
+            .borrow()
+            .iter()
             .fold(message, |message, (path, shown)| {
                 message.replace(path.as_str(), shown)
             })
@@ -396,15 +403,20 @@ pub(crate) fn open(error: &duckdb::Error, path: Option<&str>) -> OxynError {
 /// DuckDB's messages for a file that is not one of its databases, or is
 /// damaged (`src/storage/single_file_block_manager.cpp`, v1.5.6).
 fn is_not_a_database(message: &str) -> bool {
-    ["not a valid DuckDB database file", "Corrupt database file"]
-        .iter()
-        .any(|marker| message.contains(marker))
+    [
+        "not a valid DuckDB database file",
+        "Corrupt database file",
+        // A damaged write-ahead log (`src/storage/wal_replay.cpp`, v1.5.6).
+        "Corrupt WAL file",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
 }
 
 /// Replaces every occurrence of the configured path in an engine message.
 pub(crate) fn redact_path(message: &str, path: Option<&str>) -> String {
     match path {
-        Some(path) if !path.is_empty() => message.replace(path, "<database file>"),
+        Some(path) if !path.is_empty() => message.replace(path, DATABASE_SHOWN),
         _ => message.to_owned(),
     }
 }
