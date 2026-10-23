@@ -63,6 +63,7 @@ fn run_on<'a>(
         node,
         parent,
         connection: config,
+        language: SQLITE,
         cancel,
     }
 }

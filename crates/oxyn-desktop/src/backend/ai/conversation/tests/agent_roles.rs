@@ -9,7 +9,7 @@ use super::*;
 /// A provider on the loopback that reads one request whole, hands it over,
 /// and answers `400`: what the provider was sent is the subject, not what it
 /// says back.
-async fn capturing() -> (u16, tokio::sync::oneshot::Receiver<String>) {
+pub(super) async fn capturing() -> (u16, tokio::sync::oneshot::Receiver<String>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a loopback port is free");
@@ -55,7 +55,11 @@ async fn capturing() -> (u16, tokio::sync::oneshot::Receiver<String>) {
 }
 
 /// Declares an OpenAI-compatible provider on `port`.
-fn local_provider(runtime: &tokio::runtime::Runtime, backend: &Backend, port: u16) -> String {
+pub(super) fn local_provider(
+    runtime: &tokio::runtime::Runtime,
+    backend: &Backend,
+    port: u16,
+) -> String {
     runtime
         .block_on(
             backend.save_ai_provider(
@@ -72,7 +76,7 @@ fn local_provider(runtime: &tokio::runtime::Runtime, backend: &Backend, port: u1
         .id
 }
 
-fn question(open: &OpenConnection, provider: &str, agent: Option<String>) -> AskRequest {
+pub(super) fn question(open: &OpenConnection, provider: &str, agent: Option<String>) -> AskRequest {
     AskRequest {
         mentions: Vec::new(),
         connection: open.connection.clone(),
@@ -91,7 +95,7 @@ fn question(open: &OpenConnection, provider: &str, agent: Option<String>) -> Ask
 }
 
 /// Waits, bounded, for the run of the conversation to end.
-fn ended(runtime: &tokio::runtime::Runtime, received: &Arc<Mutex<Vec<String>>>) {
+pub(super) fn ended(runtime: &tokio::runtime::Runtime, received: &Arc<Mutex<Vec<String>>>) {
     for _ in 0..400 {
         let events = received.lock().join("\n");
         if events.contains(r#""kind":"failed""#) || events.contains(r#""kind":"finished""#) {
@@ -310,7 +314,7 @@ fn an_external_agent_is_served_its_roles_tools_only() {
     let actor = Actor::agent(AgentId::new(), AgentSessionId::new());
 
     let served = |role: &oxyn_ai::AgentSpec| {
-        tool_service(&backend.inner, &config, session, role, actor).served()
+        tool_service(&backend.inner, &config, session, SQLITE, role, actor).served()
     };
 
     let mut narrow = sql_agent();

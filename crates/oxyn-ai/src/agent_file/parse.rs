@@ -6,11 +6,11 @@ use serde_saphyr::budget::BudgetBreach;
 use serde_saphyr::{Budget, DuplicateKeyPolicy, MergeKeyPolicy, Options, Spanned};
 
 use super::render::check_variables;
-use super::target::{Recipient, dialect_named};
+use super::target::{Recipient, dialect_named, language_named};
 use super::{AgentFileError, MAX_FILE_BYTES, YamlProblem};
 use crate::context::ContextPolicy;
 use crate::error::AiError;
-use crate::spec::{AgentSpec, DEFAULT_MAX_TURNS};
+use crate::spec::{AgentSpec, DEFAULT_MAX_TURNS, sql_only};
 use crate::tools::ToolRegistry;
 
 /// The line that opens and closes a front matter.
@@ -29,6 +29,10 @@ struct FrontMatter {
     name: Spanned<String>,
     #[serde(default)]
     description: Option<Spanned<String>>,
+    /// `None` when the key is absent, which reads as `[sql]`: an explicit
+    /// empty list is a different statement, which `validate` refuses.
+    #[serde(default)]
+    languages: Option<Vec<Spanned<String>>>,
     #[serde(default)]
     applies_to: Vec<Spanned<String>>,
     #[serde(default)]
@@ -53,8 +57,8 @@ const fn default_max_turns() -> usize {
 /// [`MAX_FILE_BYTES`](super::MAX_FILE_BYTES) (checked before parsing); a front
 /// matter missing, or not the first thing in the file; YAML with an anchor,
 /// an alias, a merge key, a duplicate key, a boolean other than `true` /
-/// `false`, an unknown tag or an unknown key; an unknown dialect or
-/// recipient; a prompt naming a variable outside
+/// `false`, an unknown tag or an unknown key; an unknown language, dialect
+/// or recipient; a prompt naming a variable outside
 /// [`VARIABLES`](super::VARIABLES); a declaration
 /// [`AgentSpec::validate`] refuses against the shipped tool registry.
 ///
@@ -82,6 +86,18 @@ pub fn parse_agent_file(name: &str, text: &str) -> Result<AgentSpec, AgentFileEr
             }
         })?;
 
+    let languages = match &front.languages {
+        None => sql_only(),
+        Some(names) => names
+            .iter()
+            .map(|entry| {
+                language_named(&entry.value).ok_or_else(|| AgentFileError::UnknownLanguage {
+                    file: file(),
+                    line: entry.referenced.line().saturating_add(1),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
     let applies_to = front
         .applies_to
         .iter()
@@ -119,6 +135,7 @@ pub fn parse_agent_file(name: &str, text: &str) -> Result<AgentSpec, AgentFileEr
         .with_context(front.context)
         .with_max_turns(front.max_turns);
     spec.output_schema = front.output_schema;
+    spec.languages = languages;
     spec.applies_to = applies_to;
     spec.recipients = recipients;
 

@@ -35,12 +35,109 @@ fn declared(kind: &'static str, id: &str, recipient: Recipient) -> Declared {
 const ANTHROPIC: Recipient = Recipient::Provider(AiProviderKind::Anthropic);
 const LOCAL: Recipient = Recipient::Provider(AiProviderKind::OpenAiCompatible);
 
+/// The language a SQL connection's console speaks, as a question reads it.
+fn sql_of(connection: &ConnectionConfig) -> QueryLanguage {
+    QueryLanguage::Sql(oxyn_query::dialect_for(&connection.driver))
+}
+
 #[test]
 fn an_unset_environment_is_production_in_the_target() {
-    let target = target_of(&connection(DriverId::POSTGRES), ANTHROPIC);
+    let postgres = connection(DriverId::POSTGRES);
+    let target = target_of(&postgres, sql_of(&postgres), ANTHROPIC);
     assert_eq!(target.environment, Environment::Production);
-    assert_eq!(target.dialect.as_str(), "postgres");
+    assert_eq!(
+        target.dialect().map(|dialect| dialect.as_str()),
+        Some("postgres")
+    );
     assert_eq!(target.driver.as_str(), DriverId::POSTGRES);
+}
+
+#[test]
+fn on_a_redis_connection_the_picker_lists_only_the_agents_that_write_redis() {
+    let catalog = AgentCatalog::new(
+        oxyn_ai::shipped_agents(),
+        vec![
+            user(
+                "keys.md",
+                "id: 0199a3c0-0000-7000-8000-0000000000d3\nname: Keys\nlanguages: [redis]\n",
+            ),
+            user(
+                "docs.md",
+                "id: 0199a3c0-0000-7000-8000-0000000000d4\nname: Documents\nlanguages: [mongo]\n",
+            ),
+        ],
+    );
+    let destinations = [declared("provider", "hosted", ANTHROPIC)];
+    let redis = connection("redis");
+    let listed = options(
+        &catalog,
+        &redis,
+        QueryLanguage::RedisCommand,
+        &[ANTHROPIC],
+        &destinations,
+    );
+    let names: Vec<&str> = listed.iter().map(|option| option.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Keys"],
+        "no SQL agent, no agent of another language"
+    );
+
+    // And the other way round: the Redis agent never reaches a SQL picker.
+    let sqlite = connection(DriverId::SQLITE);
+    let listed = options(
+        &catalog,
+        &sqlite,
+        sql_of(&sqlite),
+        &[ANTHROPIC],
+        &destinations,
+    );
+    assert!(listed.iter().all(|option| option.name != "Keys"));
+}
+
+#[test]
+fn a_question_naming_no_agent_runs_the_one_of_its_language_or_is_refused() {
+    let backend = Backend::open_temporary().expect("temporary backend");
+    backend.inner.ai.agents.set(AgentCatalog::new(
+        oxyn_ai::shipped_agents(),
+        vec![user(
+            "keys.md",
+            "id: 0199a3c0-0000-7000-8000-0000000000d3\nname: Keys\nlanguages: [redis]\n",
+        )],
+    ));
+    let redis = connection("redis");
+    let on_redis = target_of(&redis, QueryLanguage::RedisCommand, ANTHROPIC);
+    let spec = backend
+        .requested_agent(None, &on_redis)
+        .expect("the Redis agent is the default on a Redis session");
+    assert_eq!(spec.name, "Keys");
+
+    let sqlite = connection(DriverId::SQLITE);
+    let spec = backend
+        .requested_agent(None, &target_of(&sqlite, sql_of(&sqlite), ANTHROPIC))
+        .expect("the SQL agent on a SQL session");
+    assert_eq!(spec.id, sql_agent_id());
+
+    let mongo = target_of(&redis, QueryLanguage::MongoQuery, ANTHROPIC);
+    let refused = backend
+        .requested_agent(None, &mongo)
+        .expect_err("no agent writes MongoDB queries");
+    assert!(
+        refused.message.contains("No agent writes mongo"),
+        "{}",
+        refused.message
+    );
+    // A SQL agent asked for by id is found; the question then refuses it on
+    // the language, naming it.
+    let sql = backend
+        .requested_agent(Some(&sql_agent_id().to_string()), &on_redis)
+        .expect("an agent asked for by id is the catalog's");
+    let refused = not_offered(&sql, &on_redis);
+    assert!(
+        refused.message.contains("does not write redis"),
+        "{}",
+        refused.message
+    );
 }
 
 #[test]
@@ -113,7 +210,13 @@ fn the_list_is_filtered_by_dialect_and_recipient_and_names_disabled_destinations
     };
 
     let sqlite = connection(DriverId::SQLITE);
-    let on_sqlite = options(&catalog, &sqlite, &[ANTHROPIC, LOCAL], &destinations);
+    let on_sqlite = options(
+        &catalog,
+        &sqlite,
+        sql_of(&sqlite),
+        &[ANTHROPIC, LOCAL],
+        &destinations,
+    );
     // Byte order within a group, as the catalog sorts.
     assert_eq!(
         names(&on_sqlite),
@@ -144,7 +247,13 @@ fn the_list_is_filtered_by_dialect_and_recipient_and_names_disabled_destinations
     );
 
     let postgres = connection(DriverId::POSTGRES);
-    let hosted_on_postgres = options(&catalog, &postgres, &[ANTHROPIC], &destinations);
+    let hosted_on_postgres = options(
+        &catalog,
+        &postgres,
+        sql_of(&postgres),
+        &[ANTHROPIC],
+        &destinations,
+    );
     assert_eq!(
         names(&hosted_on_postgres),
         ["SQL", "Schema", "Postgres tuner", "broken.md"]
@@ -158,7 +267,8 @@ fn the_list_is_filtered_by_dialect_and_recipient_and_names_disabled_destinations
 #[test]
 fn the_rendered_spec_is_the_one_render_system_prompt_makes() {
     let sql = sql_agent();
-    let target = target_of(&connection(DriverId::SQLITE), LOCAL);
+    let sqlite = connection(DriverId::SQLITE);
+    let target = target_of(&sqlite, sql_of(&sqlite), LOCAL);
     let rendered = rendered(&sql, &target).expect("renders");
     assert_eq!(
         rendered.system_prompt,
