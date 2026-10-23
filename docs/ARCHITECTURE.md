@@ -176,8 +176,10 @@ oxyn/
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embedded
 │   ├── oxyn-driver-postgres/     # also covers Redshift, TimescaleDB, pgvector
-│   └── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
-│                                 #   oxyn-query to split what MySQL cannot prepare
+│   ├── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
+│   │                             #   oxyn-query to split what MySQL cannot prepare
+│   └── oxyn-driver-duckdb/       # embedded analytical engine, bundled (ADR-0059);
+│                                 #   depends on oxyn-query to split a batch
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/
@@ -565,7 +567,9 @@ of phases 0 to 3 needs it. See [ADR-0007](adr/0007-driver-sidecar.md).
 * **Export** — CSV, JSON, Arrow IPC provided by the ecosystem.
 * **Local analytics** — DataFusion will plug directly into it: filter, sort and
   aggregate *client-side*, without rerunning the query.
-* **DuckDB / ClickHouse** — already speak Arrow, zero-copy path.
+* **DuckDB / ClickHouse** — already speak Arrow. DuckDB's binding speaks
+  another Arrow major than the workspace: its driver copies each chunk once
+  ([ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md)).
 * **Process boundary** — Arrow IPC, see §4.4.
 
 **Spill to disk.** `ResultBuffer` keeps batches in memory within a configurable

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="ee92e6305d6e" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="a2380669e1e7" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -182,8 +182,10 @@ oxyn/
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   ├── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
-│   └── oxyn-driver-mysql/        # couvre aussi MariaDB (ADR-0050) ; dépend
-│                                 #   d'oxyn-query pour découper ce que MySQL ne prépare pas
+│   ├── oxyn-driver-mysql/        # couvre aussi MariaDB (ADR-0050) ; dépend
+│   │                             #   d'oxyn-query pour découper ce que MySQL ne prépare pas
+│   └── oxyn-driver-duckdb/       # moteur analytique embarqué, compilé avec Oxyn (ADR-0059) ;
+│                                 #   dépend d'oxyn-query pour découper un lot
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
 └── docs/
@@ -583,7 +585,9 @@ des phases 0 à 3 n'en a besoin. Voir [ADR-0007](adr/0007-driver-sidecar.md).
 * **Export** — CSV, JSON, Arrow IPC fournis par l'écosystème.
 * **Analytique locale** — DataFusion se branchera directement dessus : filtrer, trier et
   agréger *côté client*, sans relancer la requête.
-* **DuckDB / ClickHouse** — parlent déjà Arrow, chemin zéro-copie.
+* **DuckDB / ClickHouse** — parlent déjà Arrow. Le binding de DuckDB parle une
+  autre version majeure d'Arrow que le workspace : son driver copie chaque
+  bloc une fois ([ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md)).
 * **Frontière de processus** — Arrow IPC, cf. §4.4.
 
 **Débordement sur disque.** `ResultBuffer` conserve les batches en mémoire dans un budget
