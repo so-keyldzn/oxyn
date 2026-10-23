@@ -5,10 +5,10 @@
 
 use std::time::{Duration, Instant};
 
-use oxyn_core::{CancelToken, ExecLimits, ExecRequest, OxynError, StatementIntent};
+use oxyn_core::{CancelToken, Capabilities, ExecLimits, ExecRequest, OxynError, StatementIntent};
 use oxyn_driver::{Cursor, Session};
 
-use super::{apply, first, read, session, write};
+use super::{apply, first, read, session, session_as, unbound_read, write};
 use crate::stream::BATCH_BYTE_BUDGET;
 
 /// What the long statements carry, for `system.processes` to find them.
@@ -111,6 +111,93 @@ async fn cancellation_stops_the_statement_in_system_processes() {
     assert_eq!(settle(&*observer, 0).await, 0, "the aggregate still runs");
     session.close().await.expect("close");
     observer.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs OXYN_CLICKHOUSE_TEST_URL"]
+async fn an_account_that_may_not_kill_still_stops_its_reads() {
+    // A test account, created and dropped here; its password guards nothing.
+    const USER: &str = "oxyn_it_nokill";
+    const PASSWORD: &str = "oxyn-it-nokill";
+    let Some(admin) = session().await else {
+        return;
+    };
+    apply(
+        &*admin,
+        &format!(
+            "CREATE USER OR REPLACE {USER} IDENTIFIED WITH plaintext_password BY '{PASSWORD}'"
+        ),
+        StatementIntent::Ddl,
+    )
+    .await;
+    // Table functions only: no right on `system.processes`, so no kill.
+    apply(
+        &*admin,
+        &format!("GRANT CREATE TEMPORARY TABLE ON *.* TO {USER}"),
+        StatementIntent::Ddl,
+    )
+    .await;
+    let session = session_as(USER, PASSWORD).await.expect("the test account");
+    assert!(
+        !session
+            .capabilities()
+            .contains(Capabilities::SERVER_SIDE_CANCEL),
+        "the account may not kill"
+    );
+    assert_eq!(settle(&*admin, 0).await, 0, "a leftover statement runs");
+
+    // Outside production: not bound read-only, yet the closed connection
+    // stops it, the server holding the request at `readonly = 2`.
+    let token = CancelToken::new();
+    let (outcome, seen) = tokio::join!(
+        session.execute(
+            unbound_read(&format!(
+                "SELECT count() AS {MARKER} FROM numbers(100000000000) \
+                 WHERE NOT ignore(sipHash64(number))"
+            ))
+            .with_limits(ExecLimits::default().writable().with_timeout(None)),
+            &token,
+        ),
+        async {
+            let seen = settle(&*admin, 1).await;
+            token.cancel();
+            seen
+        }
+    );
+    assert_eq!(seen, 1, "the aggregate runs");
+    assert!(
+        matches!(outcome, Err(ref error) if error.is_cancelled()),
+        "{:?}",
+        outcome.err()
+    );
+    assert_eq!(
+        settle(&*admin, 0).await,
+        0,
+        "the aggregate outlived its connection"
+    );
+
+    // Rows flowing, then a closed tab.
+    let mut cursor = session
+        .execute(
+            unbound_read(&format!(
+                "SELECT number AS {MARKER}, repeat('x', 100) AS pad FROM numbers(100000000000)"
+            ))
+            .with_limits(
+                ExecLimits::default()
+                    .writable()
+                    .with_max_rows(None)
+                    .with_timeout(None),
+            ),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("execution");
+    cursor.next_batch().await.expect("rows flow");
+    drop(cursor);
+    assert_eq!(settle(&*admin, 0).await, 0, "the read outlived its cursor");
+    session.close().await.expect("close");
+    apply(&*admin, &format!("DROP USER {USER}"), StatementIntent::Ddl).await;
+    admin.close().await.expect("close");
 }
 
 #[tokio::test]

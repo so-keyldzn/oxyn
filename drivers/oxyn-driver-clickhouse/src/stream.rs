@@ -169,6 +169,11 @@ async fn stop_before_reply(
     execution: &Execution,
     send: std::pin::Pin<&mut impl Future<Output = std::result::Result<Reply, Failure>>>,
 ) -> Result<Opening> {
+    if !execution.can_kill {
+        // Nothing but the closed connection can end it, and waiting would
+        // only delay that: a read at `readonly` above 0 then stops.
+        return Err(stopped(execution.intent));
+    }
     execution.kill().await;
     let ended = tokio::time::timeout(DRAIN_BOUND, send).await;
     match ended {
@@ -179,6 +184,14 @@ async fn stop_before_reply(
         }),
         Ok(Err(Failure::Server(error))) if error.code != Some(QUERY_WAS_CANCELLED) => {
             Err(execution.server_error(error))
+        }
+        // Still running: the kill may have come before the server registered
+        // the statement — queued behind `max_concurrent_queries`, or stopped
+        // the instant it was sent. A kill names the query id, so a second one
+        // is harmless.
+        Err(_) => {
+            execution.kill().await;
+            Err(stopped(execution.intent))
         }
         // Killed, cut, still running, or about to stream rows nobody waits
         // for any more.
@@ -501,6 +514,11 @@ impl Rows {
     /// wait out [`KILL_BOUND`] while the server waits on the driver (observed:
     /// a dropped cursor took ten seconds to stop).
     async fn halt(&mut self) {
+        if !self.execution.can_kill {
+            // Reading on would keep it alive: the response closes with the
+            // stream, and a read at `readonly` above 0 then stops.
+            return;
+        }
         let Self {
             execution,
             response,

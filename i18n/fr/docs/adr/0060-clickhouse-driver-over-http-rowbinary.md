@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="1ad213bc624a" -->
+<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="08c69487ffa3" -->
 
 > Traduction française de [docs/adr/0060-clickhouse-driver-over-http-rowbinary.md](../../../../docs/adr/0060-clickhouse-driver-over-http-rowbinary.md). **La version anglaise fait foi.**
 
@@ -118,10 +118,15 @@ qu'est une « session ». Vérifié le 2026-10-23
    `OutcomeUnknown`, puisque rien ne peut être annulé
    ([DRIVER-CONTRACT §4](../DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)).
    `SERVER_SIDE_CANCEL` n'est déclaré que si `KILL … TEST` réussit pour le
-   compte à la connexion ; chaque requête porte aussi
-   `cancel_http_readonly_queries_on_client_close = 1`, si bien qu'une lecture
+   compte à la connexion. Chaque requête porte aussi
+   `cancel_http_readonly_queries_on_client_close = 1`, qui n'agit que sur une
+   requête à `readonly` supérieur à 0 (observé sur 26.3) : une lecture non
+   bornée en lecture seule porte donc `readonly = 2`, qui lui laisse sa
+   propre clause `SETTINGS` et ses fonctions de table, si bien qu'une lecture
    dont le curseur est abandonné s'arrête sur le serveur même pour un compte
-   qui ne peut pas tuer.
+   qui ne peut pas tuer, ou quand un kill est arrivé avant que le serveur
+   n'enregistre l'instruction — un kill qui la trouve encore en cours est
+   renvoyé.
 8. **Les erreurs sont classées d'après le code du serveur, l'intention de
    l'instruction et le résumé `written_rows` de la réponse.** Les conditions
    passagères d'une lecture (mémoire, délai, charge, réseau entre serveurs)

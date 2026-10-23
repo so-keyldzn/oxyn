@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
     CancelToken, Capabilities, DriverId, ExecLimits, ExecRequest, OxynError, PreviewShape, Result,
-    StatementHandle,
+    StatementHandle, StatementIntent,
 };
 use oxyn_driver::{Cursor, Session, SessionContext};
 use tokio::sync::{mpsc, oneshot};
@@ -50,11 +50,20 @@ use crate::variant::ServerFacts;
 /// JSON text, which the decoder reads like a `String`; without it, the column
 /// is refused. `cancel_http_readonly_queries_on_client_close`: a read whose
 /// connection closes is stopped by the server, which is what reaches it when
-/// the account may not kill.
-const SESSION_SETTINGS: [(&str, &str); 2] = [
+/// the account may not kill, or when a kill came before the statement
+/// started. `output_format_binary_encode_types_in_binary_format` and
+/// `send_progress_in_http_headers` are pinned at their defaults: a profile
+/// that changed them would change the header the decoder reads, or send the
+/// 200 before the statement ended.
+const SESSION_SETTINGS: [(&str, &str); 4] = [
     ("output_format_binary_write_json_as_string", "1"),
     ("cancel_http_readonly_queries_on_client_close", "1"),
+    ("output_format_binary_encode_types_in_binary_format", "0"),
+    ("send_progress_in_http_headers", "0"),
 ];
+
+/// How long a ping may take before the server is reported unreachable.
+const PING_BOUND: Duration = Duration::from_secs(10);
 
 /// An open ClickHouse session.
 #[derive(Debug)]
@@ -128,7 +137,11 @@ impl ClickhouseSession {
     }
 
     /// The settings of one request.
-    fn settings(&self, limits: &ExecLimits) -> Vec<(&'static str, String)> {
+    fn settings(
+        &self,
+        limits: &ExecLimits,
+        intent: StatementIntent,
+    ) -> Vec<(&'static str, String)> {
         if !self.facts.takes_settings() {
             return Vec::new();
         }
@@ -138,6 +151,13 @@ impl ClickhouseSession {
             .collect();
         if limits.read_only && self.facts.can_bound_reads() {
             settings.push(("readonly", "1".to_owned()));
+        } else if intent.is_read_only() && self.facts.can_bound_reads() {
+            // `cancel_http_readonly_queries_on_client_close` acts only on a
+            // request at `readonly` above 0 (observed on 26.3): without it, an
+            // aggregate whose connection closed runs to its end. Level 2
+            // keeps the statement's own `SETTINGS`, `url()` and `remote()`,
+            // and refuses a write the classification took for a read.
+            settings.push(("readonly", "2".to_owned()));
         }
         if let Some(timeout) = limits.timeout {
             // The server's own bound, in whole seconds rounded up: it stops
@@ -202,7 +222,7 @@ impl Session for ClickhouseSession {
             text: request.text,
             query_id: query_id.clone(),
             database: self.database(),
-            settings: self.settings(&request.limits),
+            settings: self.settings(&request.limits, request.intent),
             params: Vec::new(),
             bound,
         };
@@ -357,14 +377,20 @@ impl Session for ClickhouseSession {
             query_id: uuid::Uuid::new_v4().to_string(),
             ..Call::default()
         };
-        fetch(
+        // Bounded: a server that accepts the connection and then hangs would
+        // hold the ping, and the session lock with it, for ever. `SELECT 1`
+        // left behind holds nothing on the server.
+        let cancel = CancelToken::new();
+        let probe = fetch(
             &self.http,
             &self.driver,
             &call,
             self.facts.can_kill,
-            &CancelToken::new(),
-        )
-        .await?;
+            &cancel,
+        );
+        tokio::time::timeout(PING_BOUND, probe)
+            .await
+            .map_err(|_| OxynError::Timeout { after: PING_BOUND })??;
         Ok(start.elapsed())
     }
 

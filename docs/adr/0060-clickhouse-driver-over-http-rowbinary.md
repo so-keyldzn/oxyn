@@ -108,9 +108,14 @@ values become Arrow, and what a "session" is. Checked on 2026-10-23
    `Cancelled`; anything else is `OutcomeUnknown`, since nothing can be rolled
    back ([DRIVER-CONTRACT §4](../DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)).
    `SERVER_SIDE_CANCEL` is declared only when `KILL … TEST` succeeds for the
-   account at connection; every request also carries
-   `cancel_http_readonly_queries_on_client_close = 1`, so a read whose cursor
-   is dropped stops on the server even for an account that may not kill.
+   account at connection. Every request also carries
+   `cancel_http_readonly_queries_on_client_close = 1`, which acts only on a
+   request at `readonly` above 0 (observed on 26.3): a read not bounded
+   read-only therefore carries `readonly = 2`, which keeps its own
+   `SETTINGS` and its table functions, so that a read whose cursor is
+   dropped stops on the server even for an account that may not kill, or
+   when a kill came before the server registered the statement — a kill
+   that finds it still running is sent again.
 8. **Errors are classified from the server's code, the statement's intent and
    the response's `written_rows` summary.** A read's passing conditions
    (memory, timeout, load, network between servers) are transient; a write is

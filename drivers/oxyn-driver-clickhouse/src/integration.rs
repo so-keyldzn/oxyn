@@ -69,6 +69,14 @@ pub(super) async fn session() -> Option<Box<dyn Session>> {
     Some(open(&config, &credentials).await)
 }
 
+/// A session on the test server as another account, which a test created.
+pub(super) async fn session_as(user: &str, password: &str) -> Option<Box<dyn Session>> {
+    let (config, _) = target()?;
+    let config = config.with_param("user", user);
+    let credentials = Credentials::new().with_password(SecretString::from(password.to_owned()));
+    Some(open(&config, &credentials).await)
+}
+
 async fn open(config: &ConnectionConfig, credentials: &Credentials) -> Box<dyn Session> {
     ClickhouseDriver::new()
         .connect(config, credentials, &CancelToken::new())
