@@ -10,7 +10,7 @@
 
 Elasticsearch et OpenSearch exposent la même famille REST/JSON, et l'ADR-0003 interdit une crate par produit. Le pilote ne doit pas présenter une réponse de recherche comme une table relationnelle : un mapping est dynamique, un alias peut combiner des mappings incompatibles et un champ peut être absent ou multivalué. Les pages sont bornées avant le décodage JSON : les méthodes pratiques de `reqwest` collectent le corps entier.
 
-Le workspace épingle déjà `reqwest` 0.13.4 avec Rustls sur aws-lc-rs ; la vérification est dans [RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md#elasticsearch-and-opensearch--checked-on-2026-10-22). Elastic documente `search_after` et un point dans le temps comme alternative à `from`/`size`, limité par défaut à 10 000 hits. OpenSearch documente `POST /_tasks/<task_id>/_cancel` et précise qu'une tâche doit être annulable.
+Le workspace épingle déjà `reqwest` 0.13.4 avec Rustls sur aws-lc-rs ; la vérification est dans [RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md#elasticsearch-and-opensearch--checked-on-2026-10-22). Elastic documente `search_after` et un point dans le temps comme alternative à `from`/`size`, limité par défaut à 10 000 hits. OpenSearch documente `POST /_tasks/<task_id>/_cancel` et précise qu'une tâche doit être annulable.
 
 ## Décision
 
