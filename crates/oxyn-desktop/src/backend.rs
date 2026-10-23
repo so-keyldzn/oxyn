@@ -23,6 +23,7 @@ use oxyn_core::{
 };
 use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
+use oxyn_driver_clickhouse::ClickhouseDriver;
 use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
 use oxyn_driver_sqlite::SqliteDriver;
@@ -303,6 +304,9 @@ impl Backend {
         drivers
             .register(Arc::new(MysqlDriver::new()))
             .context("registering the MySQL driver")?;
+        drivers
+            .register(Arc::new(ClickhouseDriver::new()))
+            .context("registering the ClickHouse driver")?;
         tracing::info!(drivers = drivers.len(), "driver registry ready");
         let drivers = Arc::new(drivers);
 

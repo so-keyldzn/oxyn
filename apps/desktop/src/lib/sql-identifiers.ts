@@ -2,7 +2,7 @@ export type IdentifierQuote = '"' | "`"
 
 /** The same protocol choice governs editor navigation and answer diagrams. */
 export function identifierQuoteForDriver(driver: string): IdentifierQuote {
-  return driver === "mysql" ? "`" : '"'
+  return driver === "mysql" || driver === "clickhouse" ? "`" : '"'
 }
 
 /** One part of a dotted name: `public`, or `"Order Lines"` without quotes. */

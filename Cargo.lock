@@ -7500,6 +7500,7 @@ dependencies = [
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-driver-clickhouse",
  "oxyn-driver-mysql",
  "oxyn-driver-postgres",
  "oxyn-driver-sqlite",

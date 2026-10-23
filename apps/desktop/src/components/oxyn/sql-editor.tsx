@@ -19,6 +19,7 @@ import { TEXT_FIELD_DOM_ATTRIBUTES } from "./text-field"
 
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { toast } from "@/components/ui/toast"
+import { ClickHouseSQL } from "@/features/consoles/languages/clickhouse/dialect"
 import { catalogNeeds } from "@/features/consoles/sql-catalog-needs"
 import { sqlCompletionSource } from "@/features/consoles/sql-completion"
 import {
@@ -40,6 +41,8 @@ function dialectFor(driver: string) {
       return SQLDialect.define({ ...MySQL.spec, backslashEscapes: true })
     case "sqlite":
       return SQLite
+    case "clickhouse":
+      return ClickHouseSQL
     default:
       return StandardSQL
   }
