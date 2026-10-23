@@ -102,8 +102,12 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    ERROR` from a second connection, proven by the stopped command's own
    `-UNBLOCKED` (a module's blocking command answers its unblocking with an
    error of its choosing, which proves nothing); an `EVAL`-family or `FCALL`-family script
-   with `SCRIPT KILL` or `FUNCTION KILL`, sent only when `FUNCTION STATS` shows
-   the running script's command line to be the one this session sent. Any
+   with `SCRIPT KILL` or `FUNCTION KILL`, sent only when the running script is
+   this session's: `FUNCTION STATS` shows a function's command line, and
+   answers `BUSY` while an `EVAL` runs — that one is then the `EVAL` this
+   session still waits on, since the server refuses every other command
+   meanwhile. Only the stopped command's `Script killed by user` error proves
+   the kill. Any
    other command, and a script that already wrote, cannot be stopped: the
    driver closes the connection, which frees the reply the server writes, and
    says the command runs on. `SERVER_SIDE_CANCEL` is declared per session when

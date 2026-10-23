@@ -201,6 +201,59 @@ async fn a_server_in_cluster_mode_is_refused_at_connect() {
     assert!(matches!(error, OxynError::NotSupported { .. }), "{error:?}");
 }
 
+/// A cursor read to its end gives the console's connection back at once: the
+/// session's next command does not wait for the caller to drop it.
+#[tokio::test]
+async fn a_drained_cursor_does_not_hold_the_console() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a free port");
+    let port = listener.local_addr().expect("bound").port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut reader = Reader::new(BufReader::new(stream));
+                loop {
+                    let mut budget = 1 << 20;
+                    let Ok(Value::List(_, words)) = reader.value(&mut budget).await else {
+                        return;
+                    };
+                    let answer: &[u8] = match words.first() {
+                        Some(Value::Bulk(word)) if word.bytes.eq_ignore_ascii_case(b"HELLO") => {
+                            HELLO
+                        }
+                        Some(Value::Bulk(word)) if word.bytes.eq_ignore_ascii_case(b"COMMAND") => {
+                            COMMAND
+                        }
+                        _ => b":0\r\n",
+                    };
+                    if reader.get_mut().get_mut().write_all(answer).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let session = session_on(port).await;
+    let request = |text: &str| {
+        ExecRequest::new(QueryLanguage::RedisCommand, text)
+            .with_limits(ExecLimits::default().writable())
+    };
+    let mut first = session
+        .execute(request("GET a"), &CancelToken::new())
+        .await
+        .expect("runs");
+    while first.next_batch().await.expect("a batch").is_some() {}
+    let second = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        session.execute(request("GET b"), &CancelToken::new()),
+    )
+    .await;
+    assert!(
+        matches!(second, Ok(Ok(_))),
+        "the drained cursor still held the console"
+    );
+    drop(first);
+}
+
 /// An executor deadline or a closed tab drops `next_batch` in the middle of a
 /// reply. The console's next command must read its own reply, on a fresh
 /// connection — never the rest of the abandoned one.

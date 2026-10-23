@@ -215,6 +215,9 @@ async fn the_intent_is_the_one_the_server_table_proves() {
     );
     assert_eq!(intent("SET k v"), Some(StatementIntent::Write));
     assert_eq!(intent("DEL k"), Some(StatementIntent::Write));
+    // Flagged `write` and outside `@dangerous` on 8.10.2: a write, confirmed
+    // as one, never a read.
+    assert_eq!(intent("FUNCTION FLUSH"), Some(StatementIntent::Write));
     assert_eq!(intent("ACL SETUSER bob"), Some(StatementIntent::Grant));
     for unknown in [
         "KEYS *",
@@ -225,7 +228,6 @@ async fn the_intent_is_the_one_the_server_table_proves() {
         "DEBUG SLEEP 0",
         "MIGRATE h 1 k 0 1",
         "EVAL \"return 1\" 0",
-        "FUNCTION FLUSH",
         "SCRIPT FLUSH",
         "NOSUCHCOMMAND",
     ] {

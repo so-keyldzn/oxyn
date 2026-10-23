@@ -11,12 +11,16 @@
 //! | an `EVAL` script that has not written yet | `SCRIPT KILL` | an error: the script is gone, nothing was written |
 //! | an `FCALL` function that has not written yet | `FUNCTION KILL` | the same |
 //!
-//! `SCRIPT KILL` stops whatever script runs, not a chosen one. The driver
-//! sends it only when `FUNCTION STATS` — answered even while a script holds
-//! the server — shows the running script's command line to be the one this
-//! session sent; otherwise the running script is someone else's, and is left
-//! alone. A script that already wrote answers `UNKILLABLE`: only
-//! `SHUTDOWN NOSAVE` would stop it, which Oxyn never sends.
+//! `SCRIPT KILL` stops whatever script runs, not a chosen one. For a
+//! function, the driver sends `FUNCTION KILL` only when `FUNCTION STATS` —
+//! answered even while a script holds the server — shows the running
+//! function's command line to be the one this session sent. While an `EVAL`
+//! script runs, `FUNCTION STATS` answers `BUSY` instead and names nothing:
+//! the script is then taken to be this session's, which still waits on its
+//! `EVAL` while the server refuses every other command with `BUSY`. Either
+//! way the stop is proven only by the connection's own reply, the server's
+//! `Script killed by user` error. A script that already wrote answers
+//! `UNKILLABLE`: only `SHUTDOWN NOSAVE` would stop it, which Oxyn never sends.
 //!
 //! Any other command — a `KEYS` over fifty million keys, a large `SUNION` —
 //! cannot be interrupted: the driver closes its connection, which frees the
@@ -144,8 +148,19 @@ impl Stopper {
             Running::Script | Running::Function => {
                 let stats = connection
                     .call(&[b"FUNCTION".to_vec(), b"STATS".to_vec()], 1 << 20)
-                    .await?;
-                if !running_script_is(&stats, argv) {
+                    .await;
+                let ours = match stats {
+                    Ok(stats) => running == Running::Function && running_script_is(&stats, argv),
+                    // `FUNCTION STATS` describes a running function, and
+                    // answers `BUSY` while an `EVAL` script runs: it never
+                    // names that script. The server runs one script at a
+                    // time and refuses every other command with `BUSY`
+                    // meanwhile, so the `EVAL` this session sent and is
+                    // still waiting on is the one running.
+                    Err(error) if error.prefix() == Some("BUSY") => running == Running::Script,
+                    Err(error) => return Err(error),
+                };
+                if !ours {
                     return Ok(Stop::Impossible);
                 }
                 let kill = if running == Running::Script {

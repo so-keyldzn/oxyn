@@ -338,7 +338,7 @@ impl RedisCursor {
             State::Elements { remaining, index } => {
                 let value = reader.value(&mut budget).await?;
                 self.state = State::Elements {
-                    remaining: remaining - 1,
+                    remaining: remaining.saturating_sub(1),
                     index: index.saturating_add(1),
                 };
                 match self.layout {
@@ -469,6 +469,11 @@ impl RedisCursor {
         self.state = State::Done;
         self.stats.total_time = self.started.elapsed();
         self.shared.executions.forget(self.handle);
+        // The reply is read or the connection discarded: the console's
+        // connection goes back now, not when the caller gets round to
+        // dropping the cursor — the session's next command must not wait on
+        // a cursor that has nothing left to read.
+        self.lease = Lease::Own(None);
     }
 }
 
@@ -592,14 +597,21 @@ async fn stop_before_reply(
                     // answers its unblocking with an error of its choosing,
                     // possibly after work: that proves nothing. A killed
                     // script had not written, or `SCRIPT KILL` would have
-                    // answered `UNKILLABLE`.
-                    let proven =
-                        plan.running != Running::Blocking || error.prefix() == Some("UNBLOCKED");
+                    // answered `UNKILLABLE`; any other error is the
+                    // script's own, raised after whatever it did. `BUSY`
+                    // says the command never ran.
+                    let proven = match plan.running {
+                        Running::Blocking => error.prefix() == Some("UNBLOCKED"),
+                        Running::Script | Running::Function => {
+                            error.is_script_kill() || error.prefix() == Some("BUSY")
+                        }
+                        Running::Plain => false,
+                    };
                     verdict(
                         halt,
                         proven,
                         plan.intent,
-                        "the blocked command answered its unblocking with its own error",
+                        "the command answered its stop with an error of its own",
                     )
                 }
                 Ok(Ok(_)) => {

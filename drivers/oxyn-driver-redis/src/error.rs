@@ -72,6 +72,14 @@ impl RedisError {
             Self::Wire(_) | Self::UnexpectedReply { .. } => None,
         }
     }
+
+    /// Whether this is the error a script stopped by `SCRIPT KILL` or
+    /// `FUNCTION KILL` answers: both say `Script killed by user`.
+    #[must_use]
+    pub fn is_script_kill(&self) -> bool {
+        matches!(self, Self::Server { prefix, message }
+            if prefix == "ERR" && message.starts_with("Script killed by user"))
+    }
 }
 
 /// The family of a server error, by its prefix.
@@ -169,6 +177,26 @@ mod tests {
         );
         let bare = RedisError::server(b"ERR");
         assert_eq!(bare.prefix(), Some("ERR"));
+    }
+
+    /// The text observed on `redis:8.10.2` for a killed `EVAL` and a killed
+    /// `FCALL`; a script's own error is not a kill.
+    #[test]
+    fn only_the_servers_kill_error_proves_a_killed_script() {
+        for killed in [
+            &b"ERR Script killed by user with SCRIPT KILL... script: 694a5fe1, on @user_script:1."
+                [..],
+            b"ERR Script killed by user with SCRIPT KILL... script: spin, on @user_function:2.",
+        ] {
+            assert!(RedisError::server(killed).is_script_kill());
+        }
+        for other in [
+            &b"ERR user_script:1: Script attempted to access a non local key"[..],
+            b"BUSY Redis is busy running a script.",
+            b"Script killed by user",
+        ] {
+            assert!(!RedisError::server(other).is_script_kill());
+        }
     }
 
     #[test]
