@@ -10,6 +10,7 @@
 //! the first map did not have goes to `other_fields`, so a field a later
 //! server adds is still there.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -22,26 +23,58 @@ use crate::shape::Slot;
 /// The column of the keys the first map did not have.
 const OTHER: &str = "other_fields";
 
-/// The keys of the first map of an array of maps, which become the columns;
-/// `None` when it is not a map.
-///
-/// A key that repeats, or that takes the name of a column the layout adds,
-/// is suffixed until it is unique: Arrow keeps duplicate names, a grid
-/// cannot tell them apart.
+/// The most columns a record grid names. A real reply has a handful; a map
+/// of a hundred thousand keys is a hostile one, and its keys past this bound
+/// go to `other_fields`.
+pub const MAX_RECORD_COLUMNS: usize = 256;
+
+/// Unique column names, at a constant cost per key: a repeat becomes `a_2`,
+/// `a_3`… Arrow keeps duplicate names; a grid cannot tell them apart.
+struct Names {
+    taken: HashSet<String>,
+    next: HashMap<String, usize>,
+}
+
+impl Names {
+    fn new() -> Self {
+        Self {
+            taken: HashSet::from([OTHER.to_owned(), "truncated".to_owned()]),
+            next: HashMap::new(),
+        }
+    }
+
+    fn unique(&mut self, base: String) -> String {
+        if self.taken.insert(base.clone()) {
+            return base;
+        }
+        let counter = self.next.entry(base.clone()).or_insert(2);
+        // Each turn skips a name another key already holds: the loop runs at
+        // most once per key seen.
+        loop {
+            let name = format!("{base}_{counter}");
+            *counter = counter.saturating_add(1);
+            if self.taken.insert(name.clone()) {
+                return name;
+            }
+        }
+    }
+}
+
+/// The keys of the first map of an array of maps, which become the columns
+/// (at most [`MAX_RECORD_COLUMNS`]); `None` when it is not a map.
 #[must_use]
 pub fn record_keys(first: &Value) -> Option<Vec<String>> {
     let Value::Map(pairs) = first else {
         return None;
     };
-    let mut keys: Vec<String> = Vec::with_capacity(pairs.len());
-    for (key, _) in pairs {
-        let mut name = text_of(key);
-        while keys.contains(&name) || name == OTHER || name == "truncated" {
-            name.push('_');
-        }
-        keys.push(name);
-    }
-    Some(keys)
+    let mut names = Names::new();
+    Some(
+        pairs
+            .iter()
+            .take(MAX_RECORD_COLUMNS)
+            .map(|(key, _)| names.unique(text_of(key)))
+            .collect(),
+    )
 }
 
 /// One `Utf8` column per key, then `other_fields` and `truncated`.
@@ -67,24 +100,23 @@ pub fn record_row(keys: &[String], record: &Value) -> Vec<Slot> {
     let mut other = Vec::new();
     match record {
         Value::Map(pairs) => {
-            // Same suffixing as `record_keys`, so a repeated key finds its
-            // own column.
-            let mut seen: Vec<String> = Vec::with_capacity(pairs.len());
+            let columns: HashMap<&str, usize> = keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| (key.as_str(), index))
+                .collect();
+            // Same naming as `record_keys`, so a repeated key finds its own
+            // column.
+            let mut names = Names::new();
             for (key, value) in pairs {
-                let mut name = text_of(key);
-                while seen.contains(&name) || name == OTHER || name == "truncated" {
-                    name.push('_');
-                }
-                let cell = Some(text_of(value));
-                match keys.iter().position(|column| *column == name) {
-                    Some(index) => {
-                        if let Some(slot) = row.get_mut(index) {
-                            *slot = Slot::Text(cell);
-                        }
-                    }
+                let name = names.unique(text_of(key));
+                match columns
+                    .get(name.as_str())
+                    .and_then(|&index| row.get_mut(index))
+                {
+                    Some(slot) => *slot = Slot::Text(Some(text_of(value))),
                     None => other.push(format!("{name}={}", text_of(value))),
                 }
-                seen.push(name);
             }
         }
         other_shape => other.push(compact(other_shape)),
@@ -104,7 +136,10 @@ fn text_of(value: &Value) -> String {
                 Err(_) => argv::render(&clipped.bytes),
             }
         }
-        Value::Simple(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        Value::Simple(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => argv::render(bytes),
+        },
         other => Cell::of(other).text.unwrap_or_else(|| compact(other)),
     }
 }
@@ -297,14 +332,41 @@ mod tests {
         ]);
         let keys = record_keys(&first).expect("a map");
         assert_eq!(keys.len(), 4);
-        assert_eq!(keys.get(1).map(String::as_str), Some("a_"));
-        assert_eq!(keys.get(2).map(String::as_str), Some("truncated_"));
+        assert_eq!(keys.get(1).map(String::as_str), Some("a_2"));
+        assert_eq!(keys.get(2).map(String::as_str), Some("truncated_2"));
         let row = record_row(&keys, &first);
         assert_eq!(row.get(1), Some(&Slot::Text(Some("2".to_owned()))));
         assert_eq!(row.get(3), Some(&Slot::Text(Some("3".to_owned()))));
         assert_eq!(record_keys(&Value::Integer(1)), None);
         let odd = record_row(&keys, &Value::Integer(7));
         assert_eq!(odd.get(4), Some(&Slot::Text(Some("7".to_owned()))));
+    }
+
+    /// A hostile map of one key repeated: named at a constant cost per key,
+    /// and at most `MAX_RECORD_COLUMNS` columns.
+    #[test]
+    fn a_map_of_one_key_repeated_costs_linear_time_and_bounded_columns() {
+        let pairs: Vec<(Value, Value)> = (0..200_000)
+            .map(|_| (bulk(b""), Value::Integer(1)))
+            .collect();
+        let hostile = Value::Map(pairs);
+        let started = std::time::Instant::now();
+        let keys = record_keys(&hostile).expect("a map");
+        assert_eq!(keys.len(), MAX_RECORD_COLUMNS);
+        let row = record_row(&keys, &hostile);
+        assert_eq!(row.len(), MAX_RECORD_COLUMNS + 2);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        // A key named like a generated one keeps a column of its own.
+        let tricky = map(&[
+            (b"a", Value::Integer(1)),
+            (b"a_2", Value::Integer(2)),
+            (b"a", Value::Integer(3)),
+        ]);
+        assert_eq!(record_keys(&tricky).expect("a map"), ["a", "a_2", "a_3"]);
     }
 
     #[test]

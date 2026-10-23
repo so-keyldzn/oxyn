@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="6bb75267c312" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="b5a0cdfa30c8" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -108,12 +108,17 @@ que fait un arrêt. Vérifié le 2026-10-22
    ERROR` depuis une seconde connexion, prouvé par le `-UNBLOCKED` de la
    commande arrêtée elle-même (une commande bloquante de module répond à son
    déblocage par une erreur de son choix, qui ne prouve rien) ; un script de la famille `EVAL` ou
-   `FCALL` par `SCRIPT KILL` ou `FUNCTION KILL`, envoyés seulement quand le
-   script en cours est celui de cette session : `FUNCTION STATS` montre la
-   ligne de commande d'une fonction, et répond `BUSY` pendant un `EVAL` — c'est
-   alors l'`EVAL` que cette session attend encore, puisque le serveur refuse
-   toute autre commande entre-temps. Seule l'erreur `Script killed by user` de
-   la commande arrêtée prouve l'arrêt. Toute autre commande, et un script qui a
+   `FCALL` par `SCRIPT KILL` ou `FUNCTION KILL`, qui arrêtent le script en
+   cours, quel qu'il soit. Le driver resserre : `FUNCTION STATS` doit montrer
+   la ligne de commande de cette session pour une fonction, et répond `BUSY`
+   pendant un `EVAL` ; puis la connexion arrêtée a 250 ms pour montrer une
+   réponse à elle — la commande de cette session refusée par `BUSY` derrière
+   le script d'un autre client —, et une réponse en attente veut dire que rien
+   n'est tué. Reste une course d'un aller-retour, où le script d'un autre
+   client qui n'a pas écrit est tué ; cette décision l'accepte plutôt que de
+   laisser un script emballé de cette session tenir le serveur. Seule la
+   réponse de la commande arrêtée prouve l'arrêt : `Script killed by user`,
+   ou `BUSY`. Toute autre commande, et un script qui a
    déjà écrit, ne peuvent être arrêtés : le driver ferme la connexion, ce qui
    libère la réponse que le serveur écrit, et dit que la commande continue.
    `SERVER_SIDE_CANCEL` est déclaré par session quand le compte peut envoyer

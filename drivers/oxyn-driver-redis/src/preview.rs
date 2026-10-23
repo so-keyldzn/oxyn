@@ -17,10 +17,13 @@
 //! | top-k (`TopK-TYPE`) | `TOPK.LIST key WITHCOUNT` | the module's | refused |
 //! | another module's type | — | — | refused, naming the type |
 //!
-//! A command the session's `COMMAND` table does not know — `VRANGE` before
-//! Redis 8.4, a module the server did not load — is refused before sending,
-//! naming it. Every command above is one the server flags `readonly` outside
-//! `@dangerous`, so the preview is a proven read.
+//! The composed command is checked against the session's `COMMAND` table
+//! before sending: one the server does not know — `VRANGE` before Redis 8.4,
+//! a module the server did not load — or does not flag `readonly` outside
+//! `@dangerous` is refused, naming it, so the preview is a proven read. An
+//! account that cannot read `COMMAND` has no table to check against: its
+//! preview rests on the commands above, all read-only on Redis 8.10.2
+//! ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md)).
 //!
 //! `COUNT` is a hint: a small hash answers whole, a large one about `limit`
 //! entries, and the row bound holds either way. The key is written by
@@ -42,6 +45,7 @@ use oxyn_core::{
 };
 
 use crate::argv;
+use crate::commands;
 use crate::connection::Connection;
 use crate::error::RedisError;
 use crate::resp::Value;
@@ -191,20 +195,26 @@ pub async fn request(
         )));
     }
     let text = command(&kind, &key, limit, shape.offset)?;
-    // The server must know the command: `VRANGE` came with Redis 8.4, after
-    // vector sets, and a module may be absent or older. Its own table says so,
-    // and sending the command anyway would only earn `unknown command`.
-    let reading = text.split(' ').next().unwrap_or_default();
-    if shared
-        .commands
-        .find(&[reading.as_bytes().to_vec()])
-        .is_none()
-    {
-        return Err(OxynError::NotSupported {
-            capability: format!(
-                "a preview of a `{kind}` key with {reading}, a command this server does not have"
-            ),
-        });
+    // The server must know the command and flag it a read: `VRANGE` came
+    // with Redis 8.4, after vector sets, and a module may be absent, older or
+    // flag its command otherwise. An account that cannot read `COMMAND` has
+    // an empty table: the preview is then sent on the table above alone.
+    let table = &shared.commands;
+    if !table.is_empty() {
+        let line = argv::parse(&text).map_err(|error| {
+            OxynError::Internal(format!("a preview command does not read back: {error}"))
+        })?;
+        if commands::intent(table, &line) != Some(StatementIntent::Read) {
+            let reading = text.split(' ').next().unwrap_or_default();
+            let why = if table.find(&line).is_none() {
+                "a command this server does not have"
+            } else {
+                "a command this server does not flag as a read"
+            };
+            return Err(OxynError::NotSupported {
+                capability: format!("a preview of a `{kind}` key with {reading}, {why}"),
+            });
+        }
     }
     let limits = ExecLimits::default().with_max_rows(usize::try_from(limit).ok());
     Ok(ExecRequest::new(QueryLanguage::RedisCommand, text)

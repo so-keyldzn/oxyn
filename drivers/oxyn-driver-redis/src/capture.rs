@@ -28,14 +28,20 @@
 //! the connection closed with it.
 //!
 //! The one-slot channel is the back-pressure: past it, messages wait in the
-//! server's output buffer for this client, which Redis bounds itself
-//! (`client-output-buffer-limit pubsub`) by closing the connection — the
-//! capture then ends on that error.
+//! server's output buffer for this client. For a subscription Redis bounds
+//! that buffer itself (`client-output-buffer-limit pubsub`) by closing the
+//! connection, and the capture ends on that error with the rows it had.
+//! Oxyn does not rely on the server bounding `MONITOR`'s: the window and the
+//! row limit are its bounds.
 //!
-//! `MONITOR` costs the server: it copies every command to the capture. The
-//! window bounds that cost; Redis itself redacts `AUTH`'s arguments and does
-//! not show `ACL SETUSER` or `CONFIG SET`
-//! ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md)).
+//! `MONITOR` costs the server: it copies every command to the capture, a line
+//! as long as the command — one past the reader's line bound is cut and
+//! marked, not the end of the capture. The window bounds that cost; Redis
+//! itself redacts `AUTH`'s arguments and does not show `ACL SETUSER` or
+//! `CONFIG SET` ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md)).
+//!
+//! A stop, or a connection the server closes, hands over the rows already
+//! captured before its error.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -144,8 +150,9 @@ pub struct CaptureCursor {
     shared: Arc<Shared>,
     handle: StatementHandle,
     token: CancelToken,
-    intent: Option<StatementIntent>,
     schema: SchemaRef,
+    /// The error the capture ended on, returned once its last rows are.
+    failed: Option<OxynError>,
     rows: Rows,
     received: Option<mpsc::Receiver<Received>>,
     reader: Option<JoinHandle<()>>,
@@ -174,7 +181,6 @@ impl CaptureCursor {
     pub async fn start(
         capture: Capture,
         argv: &[Vec<u8>],
-        intent: Option<StatementIntent>,
         limits: &ExecLimits,
         shared: Arc<Shared>,
         token: CancelToken,
@@ -185,22 +191,30 @@ impl CaptureCursor {
         if token.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        connection
-            .send(argv)
-            .await
-            .map_err(|error| during_execution(&shared.driver, error, intent, false, false))?;
+        connection.send(argv).await.map_err(|error| {
+            during_execution(
+                &shared.driver,
+                error,
+                Some(StatementIntent::Read),
+                false,
+                false,
+            )
+        })?;
+        // Everything that can fail comes before the task: past it, only the
+        // cursor's `close` ends the subscription.
+        let schema = capture.schema();
+        let rows = Rows::new(Arc::clone(&schema))?;
         let (sender, received) = mpsc::channel(1);
-        let reader = tokio::spawn(read_messages(connection, sender));
+        let reader = tokio::spawn(read_messages(capture, connection, sender));
         let handle = StatementHandle::new();
         shared.executions.register(handle, token.clone());
-        let schema = capture.schema();
         Ok(Self {
             capture,
-            rows: Rows::new(Arc::clone(&schema))?,
+            rows,
             schema,
             handle,
             token,
-            intent,
+            failed: None,
             received: Some(received),
             reader: Some(reader),
             produced: 0,
@@ -233,6 +247,18 @@ impl CaptureCursor {
         Ok(batch)
     }
 
+    /// Ends the capture on `error`, after handing over the rows already
+    /// captured: they arrived, and a stop or a lost connection does not
+    /// unsee them.
+    fn fail(&mut self, error: OxynError) -> Result<Option<RecordBatch>> {
+        self.close();
+        if self.rows.is_empty() {
+            return Err(error);
+        }
+        self.failed = Some(error);
+        self.take_batch().map(Some)
+    }
+
     /// The last rows, then the end.
     fn end(&mut self) -> Result<Option<RecordBatch>> {
         self.close();
@@ -246,7 +272,7 @@ impl CaptureCursor {
         let row = match (self.capture, value) {
             (_, Value::Error(text)) => return Err(RedisError::server(text)),
             // `MONITOR`'s own `+OK`, before the first line.
-            (Capture::Monitor, Value::Simple(word)) if self.produced == 0 && word == b"OK" => {
+            (Capture::Monitor, Value::Bulk(word)) if self.produced == 0 && word.bytes == b"OK" => {
                 return Ok(());
             }
             (Capture::Monitor, _) => monitor_row(value),
@@ -282,6 +308,9 @@ impl Cursor for CaptureCursor {
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         let flush_at = Instant::now().checked_add(FLUSH_EVERY);
         loop {
+            if let Some(error) = self.failed.take() {
+                return Err(error);
+            }
             if self.rows.is_full() {
                 return self.take_batch().map(Some);
             }
@@ -305,10 +334,7 @@ impl Cursor for CaptureCursor {
             let token = self.token.clone();
             tokio::select! {
                 biased;
-                () = token.cancelled() => {
-                    self.close();
-                    return Err(OxynError::Cancelled);
-                }
+                () = token.cancelled() => return self.fail(OxynError::Cancelled),
                 () = tokio::time::sleep_until(until.into()) => {
                     if !self.rows.is_empty() {
                         return self.take_batch().map(Some);
@@ -324,14 +350,16 @@ impl Cursor for CaptureCursor {
                         }),
                     };
                     if let Err(error) = taken {
-                        self.close();
-                        return Err(during_execution(
+                        // A capture applies nothing: a lost connection is a
+                        // read's, never an outcome to doubt.
+                        let error = during_execution(
                             &self.shared.driver,
                             error,
-                            self.intent,
+                            Some(StatementIntent::Read),
                             false,
                             true,
-                        ));
+                        );
+                        return self.fail(error);
                     }
                 }
             }
@@ -345,10 +373,20 @@ impl Cursor for CaptureCursor {
 
 /// Reads whole messages and hands them over, until the receiver is gone or
 /// the stream fails.
-async fn read_messages(mut connection: Connection, sender: mpsc::Sender<Received>) {
+async fn read_messages(
+    capture: Capture,
+    mut connection: Connection,
+    sender: mpsc::Sender<Received>,
+) {
     loop {
         let mut budget = MAX_VALUE_BYTES;
-        let message = connection.reader().value(&mut budget).await;
+        let reader = connection.reader();
+        let message = match capture {
+            // A `MONITOR` line is as long as the command it shows: one past
+            // the reader's line bound is cut, not the end of the capture.
+            Capture::Monitor => reader.long_line_value(MAX_VALUE_BYTES, &mut budget).await,
+            Capture::Messages => reader.value(&mut budget).await,
+        };
         let failed = message.is_err();
         if sender.send(message).await.is_err() || failed {
             return;

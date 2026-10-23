@@ -522,6 +522,50 @@ async fn a_script_that_has_not_written_is_killed_on_the_server() {
     assert_eq!(running_script, None, "no script runs any more");
 }
 
+/// Another client's script is left alone: this session's `EVAL`, queued
+/// behind it, is answered `BUSY`, and the stop sees that reply before any
+/// kill.
+#[tokio::test]
+#[ignore = "needs OXYN_REDIS_TEST_URL"]
+async fn another_clients_script_survives_this_sessions_stop() {
+    let Some(session) = clean().await else { return };
+    let (Some(other), Some(observer)) = (open_session().await, open_session().await) else {
+        return;
+    };
+    let foreign = async {
+        // About eight seconds of work that writes nothing, then returns.
+        run(
+            &other,
+            "EVAL \"local t = redis.call('TIME') local stop = t[1] + 8 \
+             while tonumber(redis.call('TIME')[1]) < stop do end return 'done'\" 0",
+        )
+        .await
+    };
+    let token = CancelToken::new();
+    let ours = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let executing = async {
+            let mut cursor = session
+                .execute(request("EVAL \"return 1\" 0"), &token)
+                .await?;
+            while cursor.next_batch().await?.is_some() {}
+            Ok::<(), OxynError>(())
+        };
+        let stopping = async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            token.cancel();
+        };
+        futures::future::join(executing, stopping).await.0
+    };
+    let (foreign, ours) = futures::future::join(foreign, ours).await;
+    let error = ours.expect_err("stopped");
+    assert!(error.is_cancelled(), "ours never ran: {error:?}");
+    let foreign = foreign.expect("the other client's script ran to its end");
+    assert_eq!(column(&foreign, "value"), [Some("done".to_owned())]);
+    // Nothing runs any more, and the observer still answers.
+    assert!(run(&observer, "PING").await.is_ok());
+}
+
 /// Checklist: a reply far larger than a batch, read in bounded batches while
 /// the process's resident memory stays bounded.
 #[tokio::test]

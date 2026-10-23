@@ -40,10 +40,11 @@ use async_trait::async_trait;
 use oxyn_core::{CancelToken, ExecStats, OxynError, Result, StatementHandle, StatementIntent};
 use oxyn_driver::Cursor;
 use std::sync::Arc;
+use tokio::io::AsyncBufReadExt as _;
 use tokio::sync::OwnedMutexGuard;
 
 use crate::admin::{client_rows, record_row, slowlog_row};
-use crate::cancel::{Running, Stop};
+use crate::cancel::{REPLY_PEEK, Running, Stop};
 use crate::connection::Connection;
 use crate::error::{RedisError, during_execution};
 use crate::render::Cell;
@@ -376,10 +377,15 @@ impl RedisCursor {
             State::Info(head) => {
                 let value = reader.rest_of(head, &mut budget).await?;
                 let cell = Cell::of(&value);
-                let text = cell.text.unwrap_or_default();
+                // A report that is not UTF-8 — no Redis sends one — is still
+                // shown, its rows marked as not whole.
+                let altered = cell.text.is_none() && cell.bytes.is_some();
+                let text = cell.text.unwrap_or_else(|| {
+                    String::from_utf8_lossy(cell.bytes.as_deref().unwrap_or_default()).into_owned()
+                });
                 let report = text.strip_prefix("txt:").unwrap_or(&text);
                 if self.layout == Layout::Clients {
-                    for row in client_rows(report, cell.truncated) {
+                    for row in client_rows(report, cell.truncated || altered) {
                         self.push(&row)?;
                     }
                 } else {
@@ -653,6 +659,15 @@ async fn stop_before_reply(
                 .await
         }
     };
+    let stop = match stop {
+        // A reply already waiting is this session's command answered —
+        // refused with `BUSY` behind another client's script, or done: the
+        // running script is not this session's, and it is left alone. The
+        // reply is read below as the stop's answer.
+        Ok(Stop::Candidate) if reply_waits(connection).await => Ok(Stop::Sent),
+        Ok(Stop::Candidate) => shared.stopper.kill(running).await,
+        other => other,
+    };
     match stop {
         Ok(Stop::Sent) => {
             let answer = tokio::time::timeout(STOP_ANSWER, connection.reply_head()).await;
@@ -713,7 +728,7 @@ async fn stop_before_reply(
                  NOSAVE, which Oxyn never sends, so it runs on to its end",
             )
         }
-        Ok(Stop::Impossible) | Err(_) => {
+        Ok(Stop::Impossible | Stop::Candidate) | Err(_) => {
             lease.discard();
             verdict(
                 halt,
@@ -730,6 +745,19 @@ async fn stop_before_reply(
 ///
 /// `Cancelled` (or `Timeout`) only when the stop is proven to have applied
 /// nothing, or when the command only reads; `OutcomeUnknown` otherwise.
+/// Whether a reply waits on `connection` within [`REPLY_PEEK`].
+///
+/// Nothing is consumed: `fill_buf` only fills the buffer, so the reply stays
+/// whole for the read that follows, and a peek cut by its timeout loses no
+/// byte.
+async fn reply_waits(connection: &mut Connection) -> bool {
+    let peek = connection.reader().get_mut().fill_buf();
+    matches!(
+        tokio::time::timeout(REPLY_PEEK, peek).await,
+        Ok(Ok(buffer)) if !buffer.is_empty()
+    )
+}
+
 fn verdict(halt: Halt, proven: bool, intent: Option<StatementIntent>, unproven: &str) -> OxynError {
     if proven || intent == Some(StatementIntent::Read) {
         return match halt {

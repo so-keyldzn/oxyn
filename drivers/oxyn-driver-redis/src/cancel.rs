@@ -11,16 +11,26 @@
 //! | an `EVAL` script that has not written yet | `SCRIPT KILL` | an error: the script is gone, nothing was written |
 //! | an `FCALL` function that has not written yet | `FUNCTION KILL` | the same |
 //!
-//! `SCRIPT KILL` stops whatever script runs, not a chosen one. For a
-//! function, the driver sends `FUNCTION KILL` only when `FUNCTION STATS` —
-//! answered even while a script holds the server — shows the running
-//! function's command line to be the one this session sent. While an `EVAL`
-//! script runs, `FUNCTION STATS` answers `BUSY` instead and names nothing:
-//! the script is then taken to be this session's, which still waits on its
-//! `EVAL` while the server refuses every other command with `BUSY`. Either
-//! way the stop is proven only by the connection's own reply, the server's
-//! `Script killed by user` error. A script that already wrote answers
-//! `UNKILLABLE`: only `SHUTDOWN NOSAVE` would stop it, which Oxyn never sends.
+//! `SCRIPT KILL` stops whatever script runs, not a chosen one. The driver
+//! narrows it down in two steps:
+//!
+//! 1. `FUNCTION STATS` — answered even while a script holds the server —
+//!    shows a running function's command line, which must be the one this
+//!    session sent; while an `EVAL` runs it answers `BUSY` and names nothing.
+//! 2. Either way the running script may still be another client's: this
+//!    session's command, queued behind it, is then refused with its own
+//!    `BUSY` once the server answers anyone. The driver gives the stopped
+//!    connection [`REPLY_PEEK`] to show such a reply, without reading it; a
+//!    reply waiting means this session's command is not the one running,
+//!    and nothing is killed.
+//!
+//! What stays is a race of one round trip: another client's script running,
+//! and this session's `BUSY` still in flight past the peek. The kill then
+//! stops a script that had not written — `SCRIPT KILL` refuses any other —
+//! and this session reads its `BUSY`. The stop is proven only by the stopped
+//! connection's own reply: the server's `Script killed by user` error, or
+//! `BUSY`. A script that already wrote answers `UNKILLABLE`: only
+//! `SHUTDOWN NOSAVE` would stop it, which Oxyn never sends.
 //!
 //! Any other command — a `KEYS` over fifty million keys, a large `SUNION` —
 //! cannot be interrupted: the driver closes its connection, which frees the
@@ -42,6 +52,11 @@ use crate::error::RedisError;
 use crate::options::ConnectSpec;
 use crate::resp::Value;
 
+/// How long the stopped connection is watched for a reply of its own before
+/// a script is killed: the stopper was just answered, so the server is
+/// answering waiting clients, this session's queued command among them.
+pub const REPLY_PEEK: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// What a stop request achieved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stop {
@@ -51,6 +66,10 @@ pub enum Stop {
     /// Nothing was sent: the command cannot be stopped — not blocked, not a
     /// script, or a script that is not this session's.
     Impossible,
+    /// Nothing was sent yet: the running script may be this session's. The
+    /// caller checks that its own command has no reply waiting, then calls
+    /// [`Stopper::kill`].
+    Candidate,
     /// The script had already written: Redis refuses to kill it.
     Unkillable,
 }
@@ -153,28 +172,47 @@ impl Stopper {
                     Ok(stats) => running == Running::Function && running_script_is(&stats, argv),
                     // `FUNCTION STATS` describes a running function, and
                     // answers `BUSY` while an `EVAL` script runs: it never
-                    // names that script. The server runs one script at a
-                    // time and refuses every other command with `BUSY`
-                    // meanwhile, so the `EVAL` this session sent and is
-                    // still waiting on is the one running.
+                    // names that script. It may be this session's, or
+                    // another client's while this session's `EVAL` waits
+                    // for its own `BUSY`: the caller looks for that reply
+                    // before any kill.
                     Err(error) if error.prefix() == Some("BUSY") => running == Running::Script,
                     Err(error) => return Err(error),
                 };
-                if !ours {
-                    return Ok(Stop::Impossible);
-                }
-                let kill = if running == Running::Script {
-                    b"SCRIPT".to_vec()
+                Ok(if ours {
+                    Stop::Candidate
                 } else {
-                    b"FUNCTION".to_vec()
-                };
-                match connection.call(&[kill, b"KILL".to_vec()], 1 << 10).await {
-                    Ok(_) => Ok(Stop::Sent),
-                    Err(error) if error.prefix() == Some("UNKILLABLE") => Ok(Stop::Unkillable),
-                    Err(error) if error.prefix() == Some("NOTBUSY") => Ok(Stop::Impossible),
-                    Err(error) => Err(error),
-                }
+                    Stop::Impossible
+                })
             }
+        }
+    }
+
+    /// Sends `SCRIPT KILL` or `FUNCTION KILL`, after [`Stopper::stop`]
+    /// answered [`Stop::Candidate`] and the stopped connection had no reply
+    /// waiting.
+    ///
+    /// # Errors
+    /// A connection or server error while asking: the script was not
+    /// stopped.
+    pub async fn kill(&self, running: Running) -> Result<Stop, RedisError> {
+        let kill = match running {
+            Running::Script => b"SCRIPT".to_vec(),
+            Running::Function => b"FUNCTION".to_vec(),
+            Running::Blocking | Running::Plain => return Ok(Stop::Impossible),
+        };
+        let mut connection =
+            Connection::open_unselected(&self.spec, self.tls.as_ref(), &CancelToken::new())
+                .await
+                .map_err(|error| RedisError::UnexpectedReply {
+                    command: "a stop connection",
+                    detail: error.to_string(),
+                })?;
+        match connection.call(&[kill, b"KILL".to_vec()], 1 << 10).await {
+            Ok(_) => Ok(Stop::Sent),
+            Err(error) if error.prefix() == Some("UNKILLABLE") => Ok(Stop::Unkillable),
+            Err(error) if error.prefix() == Some("NOTBUSY") => Ok(Stop::Impossible),
+            Err(error) => Err(error),
         }
     }
 }

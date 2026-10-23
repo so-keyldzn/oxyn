@@ -301,7 +301,6 @@ impl Session for RedisSession {
             let cursor = CaptureCursor::start(
                 capture,
                 &argv,
-                intent,
                 &request.limits,
                 Arc::clone(&self.shared),
                 cancel.child(),

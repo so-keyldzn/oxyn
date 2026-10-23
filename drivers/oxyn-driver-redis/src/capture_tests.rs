@@ -18,6 +18,12 @@ use crate::wire_tests::{COMMAND, HELLO, session_on};
 /// command, then holds the connection until the client closes it — and sets
 /// `closed` then.
 async fn streaming_server(stream: &'static [u8], closed: Arc<AtomicBool>) -> u16 {
+    server(stream, closed, true).await
+}
+
+/// As [`streaming_server`], but `hold: false` closes the connection right
+/// after `stream`, as Redis does to a subscriber past its output buffer.
+async fn server(stream: &'static [u8], closed: Arc<AtomicBool>, hold: bool) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a free port");
     let port = listener.local_addr().expect("bound").port();
     tokio::spawn(async move {
@@ -51,7 +57,9 @@ async fn streaming_server(stream: &'static [u8], closed: Arc<AtomicBool>) -> u16
                         }
                         _ => b":0\r\n",
                     };
-                    if reader.get_mut().get_mut().write_all(answer).await.is_err() {
+                    if reader.get_mut().get_mut().write_all(answer).await.is_err()
+                        || (streaming && !hold)
+                    {
                         return;
                     }
                 }
@@ -74,18 +82,37 @@ async fn drain(
     request: ExecRequest,
     cancel: &CancelToken,
 ) -> Result<Vec<Option<String>>, OxynError> {
-    let mut cursor = session.execute(request, cancel).await?;
+    let (values, ended) = captured(session, request, cancel).await;
+    ended.map(|()| values)
+}
+
+/// The values a capture handed over, and how it ended.
+async fn captured(
+    session: &crate::RedisSession,
+    request: ExecRequest,
+    cancel: &CancelToken,
+) -> (Vec<Option<String>>, Result<(), OxynError>) {
+    let mut cursor = match session.execute(request, cancel).await {
+        Ok(cursor) => cursor,
+        Err(error) => return (Vec::new(), Err(error)),
+    };
     let mut values = Vec::new();
-    while let Some(batch) = cursor.next_batch().await? {
-        let column = batch
-            .column_by_name("value")
-            .expect("a value column")
-            .as_string::<i32>();
-        values.extend(
-            (0..column.len()).map(|i| column.is_valid(i).then(|| column.value(i).to_owned())),
-        );
+    loop {
+        match cursor.next_batch().await {
+            Ok(Some(batch)) => {
+                let column = batch
+                    .column_by_name("value")
+                    .expect("a value column")
+                    .as_string::<i32>();
+                values.extend(
+                    (0..column.len())
+                        .map(|i| column.is_valid(i).then(|| column.value(i).to_owned())),
+                );
+            }
+            Ok(None) => return (values, Ok(())),
+            Err(error) => return (values, Err(error)),
+        }
     }
-    Ok(values)
 }
 
 async fn closes(flag: &AtomicBool) -> bool {
@@ -146,12 +173,13 @@ async fn a_stopped_capture_is_cancelled_and_closes_its_connection() {
     let closed = Arc::new(AtomicBool::new(false));
     let session = session_on(streaming_server(MESSAGES, Arc::clone(&closed)).await).await;
     let token = CancelToken::new();
+    // Before the first flush: the rows are still the cursor's when it stops.
     let stopping = async {
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
         token.cancel();
     };
-    let (ended, ()) = futures::future::join(
-        drain(
+    let ((values, ended), ()) = futures::future::join(
+        captured(
             &session,
             request("SUBSCRIBE news", ExecLimits::default()),
             &token,
@@ -163,7 +191,27 @@ async fn a_stopped_capture_is_cancelled_and_closes_its_connection() {
         matches!(ended, Err(OxynError::Cancelled)),
         "a capture applies nothing: {ended:?}"
     );
+    assert_eq!(
+        values.len(),
+        3,
+        "the rows captured before the stop are kept"
+    );
     assert!(closes(&closed).await, "the capture's connection is closed");
+}
+
+#[tokio::test]
+async fn a_capture_the_server_closes_keeps_its_rows_and_is_a_transient_error() {
+    let closed = Arc::new(AtomicBool::new(false));
+    let session = session_on(server(MESSAGES, Arc::clone(&closed), false).await).await;
+    let (values, ended) = captured(
+        &session,
+        request("SUBSCRIBE news", ExecLimits::default()),
+        &CancelToken::new(),
+    )
+    .await;
+    assert_eq!(values.len(), 3);
+    let error = ended.expect_err("the connection closed");
+    assert_eq!(error.class(), ErrorClass::Transient, "{error:?}");
 }
 
 #[tokio::test]

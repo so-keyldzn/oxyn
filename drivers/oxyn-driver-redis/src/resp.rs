@@ -272,6 +272,61 @@ impl<R: AsyncBufRead + Unpin + Send> Reader<R> {
         }
     }
 
+    /// Reads one element as [`Reader::value`] does, except that a simple
+    /// string longer than [`MAX_LINE`] is not refused: its first `keep`
+    /// bytes are kept as a cut [`Value::Bulk`], the rest of its line read
+    /// and discarded.
+    ///
+    /// For `MONITOR`, whose simple strings are as long as the command they
+    /// show; nowhere else is a line that long legitimate.
+    ///
+    /// # Errors
+    /// As [`Reader::head`].
+    pub async fn long_line_value(
+        &mut self,
+        keep: usize,
+        budget: &mut usize,
+    ) -> Result<Value, WireError> {
+        if self.inner.fill_buf().await?.first() != Some(&b'+') {
+            return self.value(budget).await;
+        }
+        self.inner.consume(1);
+        let mut bytes = Vec::new();
+        let mut length: u64 = 0;
+        let mut last = None;
+        loop {
+            let available = self.inner.fill_buf().await?;
+            if available.is_empty() {
+                return Err(WireError::Truncated);
+            }
+            let end = available.iter().position(|&b| b == b'\n');
+            let part = end.unwrap_or(available.len());
+            let wanted = keep.saturating_sub(bytes.len()).min(part);
+            if let Some(slice) = available.get(..wanted) {
+                bytes.extend_from_slice(slice);
+            }
+            if let Some(byte) = part.checked_sub(1).and_then(|at| available.get(at)) {
+                last = Some(*byte);
+            }
+            length = length.saturating_add(u64::try_from(part).unwrap_or(u64::MAX));
+            self.inner
+                .consume(part.saturating_add(usize::from(end.is_some())));
+            if end.is_some() {
+                break;
+            }
+        }
+        if last != Some(b'\r') {
+            return Err(WireError::Malformed(
+                "a line feed without a carriage return",
+            ));
+        }
+        let full_len = length.saturating_sub(1);
+        if u64::try_from(bytes.len()).is_ok_and(|kept| kept > full_len) {
+            bytes.pop();
+        }
+        Ok(Value::Bulk(Clipped { bytes, full_len }))
+    }
+
     /// Reads a bulk payload of `len` bytes and its terminator, keeping the
     /// first `keep` of them.
     ///
@@ -722,6 +777,52 @@ mod tests {
                 .expect("valid RESP"),
             Value::Error(b"SYNTAX invalid syntax".to_vec())
         );
+    }
+
+    /// A `MONITOR` line past `MAX_LINE`, read in small chunks: cut at `keep`,
+    /// its length known, and the next element read in step.
+    #[tokio::test]
+    async fn a_long_line_is_cut_not_refused_and_the_stream_stays_in_step() {
+        let mut wire = b"+".to_vec();
+        wire.extend(std::iter::repeat_n(b'x', MAX_LINE * 2));
+        wire.extend_from_slice(b"\r\n+short\r\n:7\r\n");
+        let mut reader = Reader::new(tokio::io::BufReader::with_capacity(7, wire.as_slice()));
+        let mut budget = 1 << 20;
+        let long = reader
+            .long_line_value(100, &mut budget)
+            .await
+            .expect("a long line");
+        let Value::Bulk(clipped) = long else {
+            panic!("a cut line: {long:?}");
+        };
+        assert_eq!(clipped.bytes.len(), 100);
+        assert_eq!(clipped.full_len, u64::try_from(MAX_LINE * 2).expect("fits"));
+        assert!(clipped.is_truncated());
+        let short = reader
+            .long_line_value(100, &mut budget)
+            .await
+            .expect("a short line");
+        assert_eq!(
+            short,
+            Value::Bulk(Clipped {
+                bytes: b"short".to_vec(),
+                full_len: 5
+            })
+        );
+        assert_eq!(
+            reader
+                .long_line_value(100, &mut budget)
+                .await
+                .expect("an integer"),
+            Value::Integer(7)
+        );
+        let mut bare = Reader::new(&b"+no carriage return\n"[..]);
+        assert!(bare.long_line_value(100, &mut budget).await.is_err());
+        let mut cut = Reader::new(&b"+never ends"[..]);
+        assert!(matches!(
+            cut.long_line_value(100, &mut budget).await,
+            Err(WireError::Truncated)
+        ));
     }
 
     #[tokio::test]
