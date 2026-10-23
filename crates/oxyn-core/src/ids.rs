@@ -215,6 +215,8 @@ impl DriverId {
     pub const MYSQL: &'static str = "mysql";
     /// SQLite driver, in-process.
     pub const SQLITE: &'static str = "sqlite";
+    /// DuckDB driver, in-process.
+    pub const DUCKDB: &'static str = "duckdb";
 
     /// Builds a driver identifier after validation.
     ///
@@ -271,6 +273,12 @@ impl DriverId {
     #[must_use]
     pub fn sqlite() -> Self {
         Self::known(Self::SQLITE)
+    }
+
+    /// DuckDB driver identifier.
+    #[must_use]
+    pub fn duckdb() -> Self {
+        Self::known(Self::DUCKDB)
     }
 
     /// Borrowed view of the identifier.

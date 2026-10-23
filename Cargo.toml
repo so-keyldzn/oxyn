@@ -43,6 +43,7 @@ oxyn-embed    = { path = "crates/oxyn-embed" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
+oxyn-driver-duckdb   = { path = "drivers/oxyn-driver-duckdb" }
 
 # --- foundation --------------------------------------------------------------
 anyhow        = "1.0.104"
@@ -124,6 +125,10 @@ mysql_async   = { version = "=0.37.1", default-features = false, features = [
 # named-parameter parser whether a text would be rewritten before it is
 # prepared (ADR-0050). Exact: the guard is only right for this parser.
 mysql_common  = { version = "=0.37.3", default-features = false }
+# DuckDB's crate version follows the embedded engine.  Arrow results stay on
+# Oxyn's Arrow 59 boundary: the driver decodes rows instead of leaking the
+# crate's Arrow 58 types through its public API (ADR-0059).
+duckdb        = { version = "=1.10506.1", default-features = false, features = ["bundled"] }
 
 # --- AI ----------------------------------------------------------------------
 # reqwest 0.13 renamed the `rustls-tls` feature to `rustls`.

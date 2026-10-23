@@ -1,0 +1,28 @@
+[package]
+name = "oxyn-driver-duckdb"
+description = "DuckDB embedded analytical database driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxyn-core.workspace = true
+oxyn-catalog.workspace = true
+oxyn-data.workspace = true
+oxyn-driver.workspace = true
+arrow.workspace = true
+async-trait.workspace = true
+duckdb.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
