@@ -33,7 +33,14 @@ const ENDLESS: &str = "SELECT sum(hash(a.i * b.i)) FROM range(100000000) a(i), r
 /// Starts this test binary on one ignored test, with the file to work on.
 fn child(test: &str, file: &Path) -> Child {
     let exe = std::env::current_exe().expect("the test binary");
-    Command::new(exe)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test fixture: a second process is what a file lock is held against; \
+                  its environment is cleared"
+    )]
+    let mut command = Command::new(exe);
+    command
+        .env_clear()
         .args([
             "--exact",
             test,
@@ -188,11 +195,12 @@ async fn a_file_held_by_another_process_is_refused_as_permanent() {
     let file = dir.path().join("held.duckdb");
     let mut holder = child("cancel_tests::lock_holder", &file);
     let stdout = holder.stdout.take().expect("child stdout");
-    let mut ready = String::new();
-    BufReader::new(stdout)
-        .read_line(&mut ready)
-        .expect("the holder reports");
-    assert!(ready.contains("HOLDING"), "{ready}");
+    // The test harness prints its own lines before the child's marker.
+    let holding = BufReader::new(stdout)
+        .lines()
+        .map_while(std::result::Result::ok)
+        .any(|line| line.contains("HOLDING"));
+    assert!(holding, "the holder opened the file");
 
     let refused = match DuckDbDriver::new()
         .connect(
@@ -220,7 +228,14 @@ async fn a_file_held_by_another_process_is_refused_as_permanent() {
 
 /// The process's resident memory, from the operating system.
 fn resident_bytes() -> u64 {
-    let output = Command::new("ps")
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test fixture: the operating system's account of this process's memory; \
+                  its environment is cleared"
+    )]
+    let mut command = Command::new("/bin/ps");
+    let output = command
+        .env_clear()
         .args(["-o", "rss=", "-p", &std::process::id().to_string()])
         .output()
         .expect("ps runs");
@@ -260,11 +275,17 @@ async fn streaming_three_gigabytes_stays_within_a_memory_bound() {
         streamed += u64::try_from(batch.get_array_memory_size()).expect("fits");
         assert!(batch.get_array_memory_size() <= 4 * 1024 * 1024 || batch.num_rows() == 1);
         batches += 1;
-        if batches % 64 == 0 {
+        if batches.is_multiple_of(64) {
             peak = peak.max(resident_bytes());
         }
     }
     peak = peak.max(resident_bytes());
+    // Printed so that a run with `--nocapture` gives the figures a review cites.
+    println!(
+        "streamed {} MB in {batches} batches; resident memory grew by {} MB",
+        streamed / 1_048_576,
+        peak.saturating_sub(baseline) / 1_048_576
+    );
     assert!(
         streamed > 3 * 1000 * 1000 * 1000,
         "{streamed} bytes streamed"

@@ -32,7 +32,7 @@
 //! ([I-03](../../../CLAUDE.md#i-03)): [`open`] replaces it before the message
 //! leaves this crate.
 
-use oxyn_core::{DriverId, ErrorClass, MissingModule, OxynError};
+use oxyn_core::{DriverId, ErrorClass, OxynError};
 
 /// The exception type DuckDB named in its message.
 ///
@@ -161,6 +161,15 @@ pub enum DuckDbError {
         /// DuckDB's message.
         message: String,
     },
+    /// The statement needs an extension this build does not link, and the
+    /// driver never downloads or loads one on its own ([`crate::open`]).
+    #[error("{message} (Oxyn does not download or load DuckDB extensions)")]
+    MissingExtension {
+        /// The extension DuckDB named.
+        extension: String,
+        /// DuckDB's message.
+        message: String,
+    },
     /// Another process holds the database file.
     #[error(
         "the database file is locked by another process; DuckDB lets a single process \
@@ -251,31 +260,23 @@ pub(crate) fn engine(error: &duckdb::Error, effect: Effect) -> OxynError {
     // tuple deletion", "conflict on update" (src/transaction, v1.5.6).
     let conflict =
         kind == EngineKind::Transaction && message.to_ascii_lowercase().contains("conflict");
-    let class = class_of(kind, effect, conflict);
-    if let Some(module) = extension_named(&message) {
-        return OxynError::driver(
-            DriverId::duckdb(),
-            class,
-            MissingExtensionError {
-                missing: MissingModule { module },
-                message,
-            },
+    if let Some(extension) = extension_named(&message) {
+        // Not `oxyn_core::MissingModule`: the interface reads that one as an
+        // SQLite virtual-table module, and says so.
+        return driver(
+            DuckDbError::MissingExtension { extension, message },
+            ErrorClass::Permanent,
         );
     }
-    driver(DuckDbError::Engine { kind, message }, class)
+    driver(
+        DuckDbError::Engine { kind, message },
+        class_of(kind, effect, conflict),
+    )
 }
 
 /// Whether an engine error is the interruption Oxyn asked for.
 pub(crate) fn is_interrupt(error: &duckdb::Error) -> bool {
     EngineKind::of(&message_of(error)) == EngineKind::Interrupt
-}
-
-/// A missing extension, carried so the interface can name it.
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
-struct MissingExtensionError {
-    missing: MissingModule,
-    message: String,
 }
 
 /// The extension a message says the statement needs.
@@ -474,9 +475,21 @@ mod tests {
                     .to_owned(),
             ),
         );
-        let converted = engine(&error, Effect::ReadOnly);
-        assert_eq!(converted.missing_module(), Some("parquet"));
+        let converted = engine(&error, Effect::Mutating);
         assert_eq!(converted.class(), ErrorClass::Permanent);
+        // Not the SQLite module the interface explains as a virtual table.
+        assert_eq!(converted.missing_module(), None);
+        let OxynError::Driver { source, .. } = &converted else {
+            panic!("a driver error: {converted:?}");
+        };
+        assert!(matches!(
+            source.downcast_ref::<DuckDbError>(),
+            Some(DuckDbError::MissingExtension { extension, .. }) if extension == "parquet"
+        ));
+        assert!(
+            converted.to_string().contains("read_parquet"),
+            "{converted}"
+        );
     }
 
     #[test]

@@ -122,12 +122,6 @@ impl Interrupter {
     pub(crate) fn tripped(&self) -> bool {
         self.tripped.load(Ordering::SeqCst)
     }
-
-    /// The current task, for tests waiting for the thread to pick it up.
-    #[cfg(test)]
-    pub(crate) fn running(&self) -> Option<WorkId> {
-        self.turn.lock().running
-    }
 }
 
 impl std::fmt::Debug for Interrupter {

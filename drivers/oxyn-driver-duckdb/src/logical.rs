@@ -37,8 +37,8 @@ pub enum DuckType {
     /// `TIME_NS`, `INTERVAL`, `UUID`, `BLOB`, `GEOMETRY`, `"NULL"`: their
     /// Arrow carrier is faithful. The name is DuckDB's.
     Plain(&'static str),
-    /// `VARCHAR`, with its alias when it has one (`JSON`).
-    Varchar(Option<String>),
+    /// `VARCHAR`, `JSON` included: the alias is not read.
+    Varchar,
     /// `HUGEINT`: a signed 128-bit integer.
     HugeInt,
     /// `UHUGEINT`: an unsigned 128-bit integer.
@@ -125,10 +125,9 @@ fn describe_at(handle: &LogicalTypeHandle, depth: usize) -> DuckType {
         LogicalTypeId::Blob => DuckType::Plain("BLOB"),
         LogicalTypeId::Geometry => DuckType::Plain("GEOMETRY"),
         LogicalTypeId::SqlNull => DuckType::Plain("\"NULL\""),
-        // Not `get_alias`: it unwraps the alias as UTF-8, and a type name in a
-        // hostile file need not be. The JSON alias is read from the Arrow
-        // field instead ([`crate::convert`]).
-        LogicalTypeId::Varchar => DuckType::Varchar(None),
+        // An alias (`JSON`, a `CREATE TYPE`) is not read: `get_alias` unwraps
+        // it as UTF-8, and a type name in a hostile file need not be.
+        LogicalTypeId::Varchar => DuckType::Varchar,
         LogicalTypeId::Hugeint => DuckType::HugeInt,
         LogicalTypeId::UHugeint => DuckType::UHugeInt,
         LogicalTypeId::Decimal => DuckType::Decimal {
@@ -162,7 +161,7 @@ impl DuckType {
         match self {
             Self::Boolean => "BOOLEAN".to_owned(),
             Self::Plain(name) | Self::Timestamp(name) => (*name).to_owned(),
-            Self::Varchar(alias) => alias.clone().unwrap_or_else(|| "VARCHAR".to_owned()),
+            Self::Varchar => "VARCHAR".to_owned(),
             Self::HugeInt => "HUGEINT".to_owned(),
             Self::UHugeInt => "UHUGEINT".to_owned(),
             Self::Decimal { width, scale } => format!("DECIMAL({width},{scale})"),
@@ -195,7 +194,7 @@ impl DuckType {
                 members.iter().map(|(_, child)| child.clone()).collect()
             }
             // The dictionary of an enum holds its labels.
-            Self::Enum => vec![Self::Varchar(None)],
+            Self::Enum => vec![Self::Varchar],
             _ => Vec::new(),
         }
     }
@@ -239,7 +238,7 @@ mod tests {
             ("id".to_owned(), DuckType::HugeInt),
             (
                 "tags".to_owned(),
-                DuckType::List(Box::new(DuckType::Varchar(None))),
+                DuckType::List(Box::new(DuckType::Varchar)),
             ),
             (
                 "odd \"name\"".to_owned(),
@@ -261,7 +260,6 @@ mod tests {
             .name(),
             "DECIMAL(38,10)"
         );
-        assert_eq!(DuckType::Varchar(Some("JSON".to_owned())).name(), "JSON");
     }
 
     #[test]

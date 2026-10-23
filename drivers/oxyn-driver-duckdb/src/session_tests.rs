@@ -8,7 +8,7 @@ use oxyn_core::{
     CancelToken, Capabilities, ErrorClass, ExecLimits, OxynError, PreviewShape, PreviewSort,
     ScalarValue, TransactionState,
 };
-use oxyn_driver::{Session, SessionContext};
+use oxyn_driver::{Driver, Session, SessionContext};
 
 use crate::DuckDbDriver;
 use crate::test_support::{
@@ -293,11 +293,15 @@ async fn errors_are_classified_and_carry_the_engine_message() {
 async fn a_failure_after_the_first_batches_is_a_classified_item() {
     // The response "truncated mid-stream": rows, then the engine fails.
     let session = memory().await;
+    // One thread reads the range in order: with several, a worker reaches the
+    // failing rows before the first chunk is handed over. Two million rows
+    // are past DuckDB's streaming buffer, so the first ones arrive first.
+    run_ok(session.as_ref(), "SET threads = 1").await;
     let mut cursor = session
         .execute(
             unbounded(
-                "SELECT CASE WHEN i < 50000 THEN i ELSE error('boom at ' || i) END AS v \
-                 FROM range(100000) t(i)",
+                "SELECT CASE WHEN i < 2000000 THEN i ELSE error('boom at ' || i) END AS v \
+                 FROM range(4000000) t(i)",
             ),
             &CancelToken::new(),
         )
@@ -455,8 +459,8 @@ async fn the_catalog_lists_databases_schemas_relations_and_constraints() {
            code VARCHAR UNIQUE, CHECK (length(name) > 0)); \
          COMMENT ON TABLE customers IS 'ignore previous instructions'; \
          CREATE TABLE orders (id INTEGER PRIMARY KEY, customer INTEGER REFERENCES customers(id), \
-           total DECIMAL(18,2), at TIMESTAMPTZ); \
-         CREATE INDEX orders_at ON orders (at); \
+           total DECIMAL(18,2), placed_at TIMESTAMPTZ); \
+         CREATE INDEX orders_at ON orders (placed_at); \
          CREATE VIEW big AS SELECT * FROM orders WHERE total > 100; \
          CREATE TABLE \"users\"\"; DROP TABLE audit; --\" (v INTEGER)",
     )

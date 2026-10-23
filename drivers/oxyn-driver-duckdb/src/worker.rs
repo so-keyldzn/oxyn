@@ -170,12 +170,6 @@ impl WorkerHandle {
         self.interrupter.interrupt(id)
     }
 
-    /// The task the carrier thread runs, for tests.
-    #[cfg(test)]
-    pub(crate) fn running(&self) -> Option<WorkId> {
-        self.interrupter.running()
-    }
-
     /// Closes the connection and ends the thread; an already closed session
     /// is not an error.
     ///

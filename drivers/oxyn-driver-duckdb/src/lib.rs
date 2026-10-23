@@ -48,6 +48,8 @@ mod convert;
 pub mod cursor;
 pub mod driver;
 pub mod error;
+#[cfg(test)]
+mod intent_tests;
 mod interrupt;
 pub mod logical;
 mod open;

@@ -16,10 +16,10 @@ pub fn logical_type(raw: &str, precision: Option<u16>, scale: Option<i16>) -> Lo
     if let Some(element) = upper.strip_suffix("[]") {
         return LogicalType::Array(Box::new(logical_type(element, None, None)));
     }
-    if upper.ends_with(']') {
-        if let Some((element, _)) = upper.rsplit_once('[') {
-            return LogicalType::Array(Box::new(logical_type(element, None, None)));
-        }
+    if upper.ends_with(']')
+        && let Some((element, _)) = upper.rsplit_once('[')
+    {
+        return LogicalType::Array(Box::new(logical_type(element, None, None)));
     }
     let head = upper.split('(').next().unwrap_or_default().trim();
     match head {

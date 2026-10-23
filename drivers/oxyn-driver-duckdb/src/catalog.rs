@@ -38,7 +38,11 @@ use crate::worker::WorkerHandle;
 const SQL_DATABASES: &str = "SELECT database_name, comment FROM duckdb_databases() \
      WHERE database_name <> 'system' ORDER BY database_name";
 /// The schemas of a database.
-const SQL_SCHEMAS: &str = "SELECT schema_name, comment, internal FROM duckdb_schemas() \
+///
+/// Not `internal`: DuckDB sets it on `main` too, which is the user's schema.
+/// The two schemas DuckDB fills with its own catalog views are named.
+const SQL_SCHEMAS: &str = "SELECT schema_name, comment, \
+     schema_name IN ('information_schema', 'pg_catalog') FROM duckdb_schemas() \
      WHERE database_name = $1 ORDER BY schema_name";
 /// The tables and views of a schema.
 const SQL_RELATIONS: &str = "SELECT table_name, 'table', comment FROM duckdb_tables() \

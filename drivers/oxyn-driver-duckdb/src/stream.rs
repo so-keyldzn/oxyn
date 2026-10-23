@@ -320,7 +320,7 @@ fn stopped(effect: Effect, applied: bool) -> OxynError {
 }
 
 /// What a classified statement could do.
-fn effect_of(info: &StatementInfo) -> Effect {
+pub(crate) fn effect_of(info: &StatementInfo) -> Effect {
     if info.intent == StatementIntent::Read && !info.transaction_control {
         Effect::ReadOnly
     } else {

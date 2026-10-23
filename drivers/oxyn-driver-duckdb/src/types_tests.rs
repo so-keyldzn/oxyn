@@ -169,7 +169,10 @@ fn cases() -> Vec<Case> {
             sql: "'{\"a\": 1}'::JSON",
             arrow: DataType::Utf8,
             shown: "{\"a\": 1}",
-            duckdb: "JSON",
+            // The document travels intact, under DuckDB's default carrier,
+            // which drops the alias; `duckdb-rs`'s alias accessor panics on a
+            // non-UTF-8 name, so the driver does not ask (`crate::logical`).
+            duckdb: "VARCHAR",
         },
         Case {
             sql: "'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::UUID",
@@ -459,7 +462,8 @@ async fn generated_values_read_as_duckdb_writes_them() {
          h, h::VARCHAR, u, u::VARCHAR, d, d::VARCHAR, ub, ub::VARCHAR, b, b::VARCHAR, \
          l, l::VARCHAR, dt, dt::VARCHAR \
        FROM (SELECT \
-         (hash(i)::HUGEINT * hash(i + 7)::HUGEINT * CASE WHEN i % 2 = 0 THEN 1 ELSE -1 END) AS h, \
+         ((hash(i) >> 1)::HUGEINT * (hash(i + 7) >> 2)::HUGEINT \
+           * CASE WHEN i % 2 = 0 THEN 1 ELSE -1 END) AS h, \
          (hash(i)::UHUGEINT * hash(i + 3)::UHUGEINT) AS u, \
          ((hash(i) % 100000000000)::DECIMAL(38,0) / 1000)::DECIMAL(30,3) AS d, \
          hash(i * 31) AS ub, \
