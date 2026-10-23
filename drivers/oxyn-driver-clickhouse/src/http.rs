@@ -115,7 +115,7 @@ impl Http {
                 query.append_pair(name, value);
             }
             for (name, value) in &call.params {
-                query.append_pair(&format!("param_{name}"), value);
+                query.append_pair(&format!("param_{name}"), &escape_param(value));
             }
         }
         let response = self
@@ -177,6 +177,29 @@ pub enum Failure {
     Server(ServerError),
 }
 
+/// A query parameter's value, escaped the way the server unescapes it.
+///
+/// ClickHouse 26.3 reads a `param_*` value with the escapes of its TSV
+/// format: `a\b` arrives as `a` and a backspace, and a raw tab or line feed
+/// is refused (observed, RESEARCH-NOTES). A table named `x\` would then be
+/// looked up as another name — or as a name an attacker chose. Every
+/// backslash and control character the format escapes is written as its
+/// escape, so the value the server binds is the one the driver holds.
+fn escape_param(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str(r"\\"),
+            '\t' => escaped.push_str(r"\t"),
+            '\n' => escaped.push_str(r"\n"),
+            '\r' => escaped.push_str(r"\r"),
+            '\0' => escaped.push_str(r"\0"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 /// `written_rows` from an `X-ClickHouse-Summary` JSON object, whose values the
 /// server quotes as strings.
 fn written_rows(summary: &str) -> Option<u64> {
@@ -204,6 +227,13 @@ async fn read_bounded(mut response: Response, limit: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_parameter_value_reaches_the_server_as_the_driver_holds_it() {
+        assert_eq!(escape_param(r"x\`; DROP"), r"x\\`; DROP");
+        assert_eq!(escape_param("a\tb\nc\rd\0e"), r"a\tb\nc\rd\0e");
+        assert_eq!(escape_param("plain é 'q'"), "plain é 'q'");
+    }
 
     #[test]
     fn the_summary_gives_the_written_rows() {

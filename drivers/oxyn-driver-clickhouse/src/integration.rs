@@ -225,7 +225,10 @@ async fn server_errors_carry_their_code_and_their_class() {
     // The server's own deadline on a read: passing.
     let slow = run(
         &*session,
-        unbound_read("SELECT sleepEachRow(0.5) FROM numbers(10) SETTINGS max_execution_time = 1"),
+        unbound_read(
+            "SELECT sleepEachRow(0.1) FROM numbers(100) \
+             SETTINGS max_block_size = 1, max_execution_time = 1",
+        ),
     )
     .await
     .expect_err("timeout");
@@ -245,7 +248,10 @@ async fn an_exception_after_the_first_rows_ends_the_stream_classified() {
     let sql = "SELECT throwIf(number = 50000, 'oxyn mid-stream failure') AS x \
                FROM numbers(100000) SETTINGS max_block_size = 1000";
     let mut cursor = session
-        .execute(unbound_read(sql), &CancelToken::new())
+        .execute(
+            unbound_read(sql).with_limits(ExecLimits::default().writable().with_max_rows(None)),
+            &CancelToken::new(),
+        )
         .await
         .expect("the header arrives before the failure");
     let mut rows = 0;
