@@ -37,7 +37,24 @@ pub(crate) const TEMPORARY_REFUSED: &str = "a temporary table: it lives in an HT
     which this driver does not keep, so it would be gone before the next statement; create a \
     table with the `Memory` engine instead";
 
-/// Refuses what the session cannot carry from one statement to the next.
+/// Why a statement that changes how its answer is framed is refused.
+pub(crate) const FRAMING_REFUSED: &str = "a setting that changes how the server frames its \
+    answer (`output_format_binary_*`, `send_progress_in_http_headers`, \
+    `http_headers_progress_interval_ms`): the driver pins them to read the answer, so remove \
+    it from the statement's `SETTINGS` clause";
+
+/// The settings a statement's own `SETTINGS` clause may not change: the
+/// decoder reads the header and the rows they shape, and a 200 sent with
+/// the progress headers comes before the statement ends.
+fn frames_the_answer(word: &str) -> bool {
+    let word = word.to_ascii_lowercase();
+    word.starts_with("output_format_binary_")
+        || word == "send_progress_in_http_headers"
+        || word == "http_headers_progress_interval_ms"
+}
+
+/// Refuses what the session cannot carry from one statement to the next,
+/// and what would change the framing the decoder reads.
 ///
 /// # Errors
 /// [`OxynError::NotSupported`] with one of the fixed texts above.
@@ -47,6 +64,9 @@ pub fn refuse_session_state(text: &str) -> Result<()> {
     }
     for fragment in oxyn_query::split(text, DIALECT) {
         let words = oxyn_query::words(fragment.text, DIALECT);
+        if words.iter().any(|word| frames_the_answer(word.text)) {
+            return Err(refusal(FRAMING_REFUSED));
+        }
         let mut leading = words.iter().filter(|word| !word.call).map(|word| word.text);
         match (leading.next(), leading.next()) {
             (Some(first), _) if first.eq_ignore_ascii_case("set") => {
@@ -87,6 +107,18 @@ mod tests {
     #[case("SELECT 1; SET x = 1", SET_REFUSED)]
     #[case("CREATE TEMPORARY TABLE t (a UInt8)", TEMPORARY_REFUSED)]
     #[case("create temporary table if not exists t (a UInt8)", TEMPORARY_REFUSED)]
+    #[case(
+        "SELECT j FROM t SETTINGS output_format_binary_write_json_as_string = 0",
+        FRAMING_REFUSED
+    )]
+    #[case(
+        "INSERT INTO t SELECT * FROM s SETTINGS SEND_PROGRESS_IN_HTTP_HEADERS = 1",
+        FRAMING_REFUSED
+    )]
+    #[case(
+        "SELECT 1 SETTINGS max_threads = 2, http_headers_progress_interval_ms = 10",
+        FRAMING_REFUSED
+    )]
     fn session_state_is_refused_before_anything_is_sent(
         #[case] text: &str,
         #[case] expected: &str,
@@ -109,6 +141,8 @@ mod tests {
     #[case("SELECT * FROM t -- USE x")]
     #[case("CREATE TABLE t (a UInt8) ENGINE = Memory")]
     #[case("SELECT * FROM used")]
+    #[case("SELECT 'send_progress_in_http_headers' AS name")]
+    #[case("SELECT * FROM system.settings -- output_format_binary_x")]
     fn what_only_mentions_them_goes_through(#[case] text: &str) {
         refuse_session_state(text).expect(text);
     }
