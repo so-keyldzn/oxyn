@@ -46,8 +46,15 @@ const SQL_COLUMNS: &str = "SELECT name, type, default_kind, default_expression, 
     WHERE database = {database:String} AND table = {table:String} ORDER BY position";
 const SQL_SKIPPING_INDICES: &str = "SELECT name, expr, type FROM system.data_skipping_indices \
     WHERE database = {database:String} AND table = {table:String} ORDER BY name";
-const SQL_DEFINITION: &str = "SELECT create_table_query FROM system.tables \
+const SQL_DEFINITION: &str = "SELECT create_table_query, \
+    toUInt64(getSetting('format_display_secrets_in_show_and_select')) FROM system.tables \
     WHERE database = {database:String} AND name = {table:String}";
+
+/// Why a definition is withheld from an account whose profile lifts the
+/// server's mask on secrets and that may not lower it per request.
+const SECRETS_SHOWN: &str = "the definition is withheld: this account's profile sets \
+    format_display_secrets_in_show_and_select, so it could show a dictionary's password or a \
+    table engine's key, and its read-only level forbids the driver to turn it off";
 
 /// The databases ClickHouse itself keeps.
 const SYSTEM_DATABASES: [&str; 3] = ["system", "INFORMATION_SCHEMA", "information_schema"];
@@ -457,6 +464,16 @@ impl CatalogProvider for ClickhouseCatalog {
                 cancel,
             )
             .await?;
+        // The setting as the request ran it: 0 when the driver could set it.
+        if counts(&batches, 1)?
+            .into_iter()
+            .flatten()
+            .any(|shown| shown != 0)
+        {
+            return Err(OxynError::NotSupported {
+                capability: SECRETS_SHOWN.to_owned(),
+            });
+        }
         let sql = texts(&batches, 0)?
             .into_iter()
             .flatten()

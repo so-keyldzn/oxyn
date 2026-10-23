@@ -7,7 +7,7 @@ use oxyn_catalog::model::RelationKind;
 use oxyn_core::{CancelToken, ErrorClass, OxynError, PreviewShape, PreviewSort, StatementIntent};
 use oxyn_driver::{Session, SessionContext};
 
-use super::{apply, first, read, run, session};
+use super::{apply, first, read, run, session, session_as};
 
 const DATABASE: &str = "oxyn_it";
 /// A table name that would drop `audit` if it were ever concatenated.
@@ -206,6 +206,43 @@ async fn introspection_walks_databases_relations_keys_and_definitions() {
         "the source password left the server: {}",
         dictionary.sql
     );
+
+    // An account held read-only whose profile lifts the mask: the driver
+    // cannot turn it off, so it withholds the definition.
+    const USER: &str = "oxyn_it_secrets";
+    const PASSWORD: &str = "oxyn-it-secrets";
+    apply(
+        &*session,
+        &format!(
+            "CREATE USER OR REPLACE {USER} IDENTIFIED WITH plaintext_password BY '{PASSWORD}' \
+             SETTINGS readonly = 1, format_display_secrets_in_show_and_select = 1"
+        ),
+        StatementIntent::Ddl,
+    )
+    .await;
+    apply(
+        &*session,
+        &format!("GRANT SELECT ON oxyn_it.* TO {USER}"),
+        StatementIntent::Ddl,
+    )
+    .await;
+    let shown = session_as(USER, PASSWORD).await.expect("the test account");
+    let withheld = shown
+        .catalog()
+        .relation_definition(&table("urls"), &cancel)
+        .await
+        .expect_err("withheld");
+    assert!(
+        matches!(withheld, OxynError::NotSupported { .. }),
+        "{withheld:?}"
+    );
+    shown.close().await.expect("close");
+    apply(
+        &*session,
+        &format!("DROP USER {USER}"),
+        StatementIntent::Ddl,
+    )
+    .await;
 
     let hostile = catalog
         .describe_relation(&table(HOSTILE_TABLE), &cancel)
