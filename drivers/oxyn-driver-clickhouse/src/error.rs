@@ -242,8 +242,10 @@ pub fn classify(error: &ServerError, intent: StatementIntent) -> ErrorClass {
         };
     };
     let wrote_nothing = error.written_rows == Some(0);
-    if code == TOO_MANY_SIMULTANEOUS_QUERIES && wrote_nothing {
-        // Refused when the statement was registered, before it ran.
+    if code == TOO_MANY_SIMULTANEOUS_QUERIES && wrote_nothing && intent != StatementIntent::Ddl {
+        // Refused when the statement was registered, before it ran. Not for
+        // a DDL: `ON CLUSTER`, another host may raise it after some applied
+        // the statement, and a replay would apply it twice.
         return ErrorClass::Transient;
     }
     if intent.is_read_only() {
@@ -387,6 +389,11 @@ mod tests {
         TOO_MANY_SIMULTANEOUS_QUERIES,
         StatementIntent::Write,
         ErrorClass::Transient
+    )]
+    #[case(
+        TOO_MANY_SIMULTANEOUS_QUERIES,
+        StatementIntent::Ddl,
+        ErrorClass::Ambiguous
     )]
     #[case(395, StatementIntent::Read, ErrorClass::Permanent)]
     #[case(395, StatementIntent::Write, ErrorClass::Ambiguous)]

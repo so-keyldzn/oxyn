@@ -47,8 +47,11 @@ const SQL_COLUMNS: &str = "SELECT name, type, default_kind, default_expression, 
 const SQL_SKIPPING_INDICES: &str = "SELECT name, expr, type FROM system.data_skipping_indices \
     WHERE database = {database:String} AND table = {table:String} ORDER BY name";
 const SQL_DEFINITION: &str = "SELECT create_table_query, \
-    toUInt64(getSetting('format_display_secrets_in_show_and_select')) FROM system.tables \
+    toUInt64(getSetting({setting:String})) FROM system.tables \
     WHERE database = {database:String} AND name = {table:String}";
+
+/// The setting that lifts the server's mask on secrets in a definition.
+const SECRETS_SETTING: &str = "format_display_secrets_in_show_and_select";
 
 /// Why a definition is withheld from an account whose profile lifts the
 /// server's mask on secrets and that may not lower it per request.
@@ -449,20 +452,17 @@ impl CatalogProvider for ClickhouseCatalog {
         // A definition reaches the screen and the AI context: the passwords
         // and keys of a dictionary source or an S3 table stay `[HIDDEN]`
         // even where the account's profile shows them (I-03). A request of
-        // an account at `readonly = 1` carries no setting: its profile
-        // decides, masked unless the server's configuration allows otherwise.
+        // an account at `readonly = 1` carries no setting: the setting is
+        // read back, and the definition withheld when it would show them.
         let settings = if self.facts.takes_settings() {
-            vec![("format_display_secrets_in_show_and_select", "0".to_owned())]
+            vec![(SECRETS_SETTING, "0".to_owned())]
         } else {
             Vec::new()
         };
+        let mut params = relation_params(database, table);
+        params.push(("setting", SECRETS_SETTING.to_owned()));
         let batches = self
-            .read_with(
-                SQL_DEFINITION,
-                relation_params(database, table),
-                settings,
-                cancel,
-            )
+            .read_with(SQL_DEFINITION, params, settings, cancel)
             .await?;
         // The setting as the request ran it: 0 when the driver could set it.
         if counts(&batches, 1)?
