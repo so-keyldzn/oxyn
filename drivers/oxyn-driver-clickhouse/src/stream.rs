@@ -39,7 +39,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::body::{Body, header};
 use crate::decode::RowDecoder;
 use crate::error::{
-    QUERY_WAS_CANCELLED, map_decode_error, map_server_error, map_transport_error, protocol_error,
+    QUERY_WAS_CANCELLED, ServerError, map_decode_error, map_server_error, map_transport_error,
+    protocol_error,
 };
 use crate::http::{Call, FORMAT, Failure, Http, Reply};
 use crate::measure::{DecodeError, Pace, measure};
@@ -177,7 +178,7 @@ async fn stop_before_reply(
             written_rows: reply.written_rows,
         }),
         Ok(Err(Failure::Server(error))) if error.code != Some(QUERY_WAS_CANCELLED) => {
-            Err(map_server_error(&execution.driver, execution.intent, error))
+            Err(execution.server_error(error))
         }
         // Killed, cut, still running, or about to stream rows nobody waits
         // for any more.
@@ -200,9 +201,7 @@ fn failure_error(execution: &Execution, failure: &Failure) -> OxynError {
         Failure::Transport(error) => {
             map_transport_error(&execution.driver, execution.intent, true, error)
         }
-        Failure::Server(error) => {
-            map_server_error(&execution.driver, execution.intent, error.clone())
-        }
+        Failure::Server(error) => execution.server_error(error.clone()),
     }
 }
 
@@ -218,6 +217,17 @@ impl Execution {
             // the kill answers.
             let _ = kill(&self.http, &self.call.query_id).await;
         }
+    }
+
+    /// The server's refusal of this execution, its message withheld when
+    /// the statement carried bound values.
+    fn server_error(&self, error: ServerError) -> OxynError {
+        let error = if self.call.bound.is_empty() {
+            error
+        } else {
+            error.withheld()
+        };
+        map_server_error(&self.driver, self.intent, error)
     }
 }
 
@@ -422,11 +432,7 @@ impl Rows {
             self.emit(decoder, token, batches).await?;
         }
         if let Some(error) = self.body.exception() {
-            return Err(map_server_error(
-                &self.execution.driver,
-                execution_intent,
-                error,
-            ));
+            return Err(self.execution.server_error(error));
         }
         if self.body.is_drained() {
             Ok(())
@@ -515,7 +521,7 @@ impl Rows {
     /// The body ended before the header did.
     fn closed_early(&self) -> OxynError {
         match self.body.exception() {
-            Some(error) => map_server_error(&self.execution.driver, self.execution.intent, error),
+            Some(error) => self.execution.server_error(error),
             None => map_decode_error(
                 &self.execution.driver,
                 self.execution.intent,

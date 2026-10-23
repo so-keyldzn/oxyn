@@ -20,6 +20,7 @@ use std::fmt;
 
 use oxyn_core::{ConnectionConfig, Environment, OxynError, Result};
 use oxyn_driver::{Credentials, DriverMetadata};
+use reqwest::header::HeaderValue;
 use secrecy::{ExposeSecret as _, SecretString};
 use url::Url;
 
@@ -148,6 +149,21 @@ impl ConnectSpec {
         }
         if user.is_empty() {
             return Err(OxynError::Config("parameter `user` is required".to_owned()));
+        }
+        // Both travel as headers. One a header cannot carry would be left
+        // out of the request, and the server would answer as `default`.
+        if HeaderValue::from_str(&user).is_err() {
+            return Err(OxynError::Config(
+                "parameter `user` holds a character an HTTP header cannot carry".to_owned(),
+            ));
+        }
+        if credentials
+            .password()
+            .is_some_and(|password| HeaderValue::from_str(password.expose_secret()).is_err())
+        {
+            return Err(OxynError::Config(
+                "the password holds a character an HTTP header cannot carry".to_owned(),
+            ));
         }
         if tls != TlsMode::VerifyFull && config.environment != Environment::Local {
             return Err(OxynError::Config(format!(
@@ -320,5 +336,23 @@ mod tests {
                 "{host}"
             );
         }
+    }
+
+    #[test]
+    fn credentials_a_header_cannot_carry_are_refused_without_echo() {
+        let user = ConnectSpec::from_config(
+            &clickhouse_metadata(),
+            &config(&[("host", "h"), ("user", "app\u{1}")], Environment::Local),
+            &credentials(),
+        )
+        .expect_err("a control character in the user");
+        assert!(matches!(user, OxynError::Config(_)), "{user:?}");
+        let password = ConnectSpec::from_config(
+            &clickhouse_metadata(),
+            &config(&[("host", "h"), ("user", "app")], Environment::Local),
+            &Credentials::new().with_password(SecretString::from("hunter2\nsecret")),
+        )
+        .expect_err("a line feed in the password");
+        assert!(!password.to_string().contains("hunter2"), "{password}");
     }
 }

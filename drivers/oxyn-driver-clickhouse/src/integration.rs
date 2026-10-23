@@ -473,5 +473,18 @@ async fn bound_values_reach_their_placeholders_unchanged() {
     .await
     .expect_err("two values for one placeholder");
     assert!(matches!(mismatch, OxynError::Config(_)), "{mismatch:?}");
+
+    // A secret pasted in the wrong row: the server quotes it, Oxyn does not.
+    let quoted = run(
+        &*session,
+        read("SELECT {id:UInt64}")
+            .with_params(vec![ScalarValue::Text("pasted-token-4711".to_owned())]),
+    )
+    .await
+    .expect_err("not a number");
+    assert!(
+        !quoted.to_string().contains("pasted-token-4711"),
+        "the value left in the message: {quoted}"
+    );
     session.close().await.expect("close");
 }

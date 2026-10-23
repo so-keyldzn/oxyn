@@ -192,7 +192,25 @@ pub struct ServerError {
     pub written_rows: Option<u64>,
 }
 
+/// What replaces the server's message when the statement carried bound
+/// values: ClickHouse quotes a value it could not parse (`Value … cannot be
+/// parsed as UInt64 for query parameter 'id'`), and the message ends up on
+/// screen, in the history and in the journal ([I-03](../../../CLAUDE.md#i-03)).
+/// Explicit, so that nobody looks for a defect in their SQL.
+const WITHHELD_MESSAGE: &str = "the server message is withheld because the statement carried \
+                                bound values, which ClickHouse can quote verbatim";
+
 impl ServerError {
+    /// The same error with its message withheld, its code kept.
+    #[must_use]
+    pub fn withheld(self) -> Self {
+        let message = match self.code {
+            Some(code) => format!("{WITHHELD_MESSAGE} (code {code})"),
+            None => WITHHELD_MESSAGE.to_owned(),
+        };
+        Self { message, ..self }
+    }
+
     /// Reads a server message, taking its code from it when no header gave
     /// one: `Code: 395. DB::Exception: …`.
     #[must_use]
@@ -445,5 +463,20 @@ mod tests {
             .downcast_ref::<ClickhouseError>()
             .expect("the driver's own error type");
         assert_eq!(error.code(), Some(UNKNOWN_TABLE));
+    }
+
+    #[test]
+    fn a_withheld_message_keeps_the_code_and_drops_the_value() {
+        let error = ServerError::from_text(
+            Some(457),
+            b"Code: 457. DB::Exception: Value hunter2 cannot be parsed as UInt64 \
+              for query parameter 'id'",
+            Some(0),
+        )
+        .withheld();
+        assert!(!error.message.contains("hunter2"), "{}", error.message);
+        assert!(error.message.ends_with("(code 457)"), "{}", error.message);
+        assert_eq!(error.code, Some(457));
+        assert_eq!(error.written_rows, Some(0));
     }
 }
