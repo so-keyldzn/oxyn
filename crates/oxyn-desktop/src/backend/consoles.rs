@@ -63,12 +63,16 @@ fn byte_offset(text: &str, utf16: usize) -> Option<usize> {
     (units == utf16).then_some(text.len())
 }
 
+/// Why a console cannot run on a session: see
+/// [`oxyn_query::console_language`].
+pub(crate) const NO_CONSOLE_LANGUAGE: &str = "This session declares no single query language \
+     a console can write: Oxyn cannot tell which one to send.";
+
 /// The exact text a run submits, or the sentence saying why nothing is.
-fn targeted_text(
-    sql: &str,
-    target: RunTarget,
-    dialect: oxyn_core::SqlDialect,
-) -> Result<String, String> {
+///
+/// A selection or the whole text goes as one request in any language: the
+/// driver reads it, and refuses what it cannot run as one.
+fn targeted_text(sql: &str, target: RunTarget, language: QueryLanguage) -> Result<String, String> {
     match target {
         RunTarget::All => Ok(sql.to_owned()),
         RunTarget::Selection { start, end } => {
@@ -83,11 +87,21 @@ fn targeted_text(
             let Some(cursor) = byte_offset(sql, cursor) else {
                 return Err("The cursor no longer matches the text.".into());
             };
-            match oxyn_query::current_statement(sql, dialect, cursor) {
-                Ok(Some(fragment)) => Ok(fragment.text.to_owned()),
-                Ok(None) => Err("No SQL statement at the cursor. Place the cursor in a \
+            match oxyn_query::current_request(sql, language, cursor) {
+                Ok(Some(text)) => Ok(text.to_owned()),
+                Ok(None) if language.sql_dialect().is_some() => {
+                    Err("No SQL statement at the cursor. Place the cursor in a \
                      statement or select SQL explicitly."
-                    .into()),
+                        .into())
+                }
+                Ok(None) => Err(format!(
+                    "No {language} request at the cursor. Place the cursor in a \
+                     request or select the text to run."
+                )),
+                Err(oxyn_query::QueryError::UnsupportedLanguage { language }) => Err(format!(
+                    "Oxyn cannot tell where a {language} request ends. Select the \
+                     request to run, or run the whole console."
+                )),
                 Err(error) => Err(format!(
                     "{error}. Select the exact SQL to run when statement boundaries \
                      cannot be determined."
@@ -302,31 +316,8 @@ impl Backend {
         run: ConsoleRun,
     ) -> Result<CommandOutcome, IpcError> {
         let config = self.read_config(connection).await?;
-        let language = oxyn_query::language_for(&config.driver);
-        let text = match language.sql_dialect() {
-            Some(dialect) => {
-                targeted_text(&run.sql, run.target, dialect).map_err(IpcError::invalid)?
-            }
-            None if matches!(&run.target, RunTarget::All) => run.sql.clone(),
-            None => {
-                return Err(IpcError::invalid(
-                    "This console runs one complete non-SQL request.",
-                ));
-            }
-        };
-        let text = if run.explain {
-            let Some(dialect) = language.sql_dialect() else {
-                return Err(IpcError::invalid(
-                    "Explain is available only for SQL consoles.",
-                ));
-            };
-            capabilities::explain_sql(&text, dialect).map_err(IpcError::invalid)?
-        } else {
-            text
-        };
-        if text.trim().is_empty() {
-            return Err(IpcError::invalid("Write a query before running it."));
-        }
+        // Read before the text is cut: what the cursor targets depends on the
+        // language, and the language on what this session declares.
         let session_capabilities = self
             .inner
             .executor
@@ -334,17 +325,30 @@ impl Backend {
             .get(session)
             .ok_or_else(|| IpcError::invalid("This console's session is no longer open"))?
             .capabilities();
+        let language = oxyn_query::console_language(&config.driver, session_capabilities)
+            .ok_or_else(|| IpcError::invalid(NO_CONSOLE_LANGUAGE))?;
+        let text = targeted_text(&run.sql, run.target, language).map_err(IpcError::invalid)?;
+        let text = match (run.explain, language.sql_dialect()) {
+            (true, Some(dialect)) => {
+                capabilities::explain_sql(&text, dialect).map_err(IpcError::invalid)?
+            }
+            (true, None) => {
+                return Err(IpcError::invalid(format!(
+                    "Explain is only offered for SQL; this console speaks {language}."
+                )));
+            }
+            (false, _) => text,
+        };
+        if text.trim().is_empty() {
+            return Err(IpcError::invalid("Write a query before running it."));
+        }
+        // The SQL checks read SQL: another language is the driver's to refuse.
         if let Some(dialect) = language.sql_dialect()
             && let Some(message) = capabilities::missing_for(&text, dialect, session_capabilities)
         {
             return Err(IpcError::invalid(message));
         }
         let params = bind(&run.parameters).map_err(|error| IpcError::invalid(error.to_string()))?;
-        if language.sql_dialect().is_none() && !params.is_empty() {
-            return Err(IpcError::invalid(
-                "Search DSL requests do not accept bound parameters.",
-            ));
-        }
         let mut request = ExecRequest::new(language, text).with_params(params);
         request.limits.read_only = config.read_only;
         // Listed as `Unknown` at the exit until it answers (ADR-0043). Held

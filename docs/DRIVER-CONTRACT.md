@@ -197,6 +197,33 @@ exist in other schemas".
 Corollary for a non-SQL driver: a query carries an explicit `QueryLanguage`.
 SQL is one case among others, not the default the others reduce to.
 
+**A non-SQL session classifies only what it can prove**
+([ADR-0064](adr/0064-a-session-classifies-non-sql-requests.md)). `oxyn-query`
+reads SQL alone; any other language comes out `Unknown`, which counts as
+mutating. `oxyn-exec` therefore asks `Session::classify_intent`, and **only**
+for a request whose language has no SQL dialect — a SQL request never reaches
+it:
+
+* `Some(Read)` for a request **proven** read-only, every command in it known to
+  the session and known not to write; `None` whenever unsure, which keeps
+  `Unknown`. A wrong `Read` bypasses the production guard: no named
+  confirmation for a human, no refusal for an agent, a preview that runs it;
+* no I/O and no lock that can block: the answer comes from what the session
+  learned when connecting, such as the server's own command table;
+* a request answered `Read` on production, or on a connection marked read-only,
+  reaches `execute` with `limits.read_only` set: the session holds that bound or
+  refuses the execution;
+* the answer carries no risk, no transaction control and no context change. A
+  language that has such statements refuses them in its console, or carries a
+  context change through `set_context`.
+
+The default answers `None`: a session that does not override it behaves as if
+the method did not exist.
+
+**Concrete failure:** a driver that answers `Read` for every command it does
+not recognize runs a `FLUSHALL` on a production cache with no confirmation, and
+lets an agent run it too.
+
 ### 6. It escapes every identifier it composes
 
 The SQL **the user writes** is sent as is: it is a professional tool,

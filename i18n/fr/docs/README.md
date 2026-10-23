@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="8459b75ad4e2" -->
+<!-- oxyn-translation source="docs/README.md" sha256="e7093b59c15c" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -95,6 +95,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | L'éditeur SQL complète depuis le cache du catalogue, lit ce qui manque dans des bornes, et tire son texte d'insertion de Rust | proposé |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
 | [0062](adr/0062-elasticsearch-opensearch-rest-json.md) | Elasticsearch et OpenSearch utilisent un pilote REST/JSON unique et borné | proposé |
+| [0064](adr/0064-a-session-classifies-non-sql-requests.md) | Une session classe les requêtes d'un langage non SQL : `Session::classify_intent`, consultée seulement hors SQL, prudente, `None` par défaut (précise 0003) | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

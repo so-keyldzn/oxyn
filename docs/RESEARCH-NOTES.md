@@ -660,6 +660,44 @@ Fixed by `cargo update -p rustls`: **0.23.43 → 0.23.45**, a patch update
 within the same semantic range. No manifest changed, only `Cargo.lock`.
 Checked on 2026-09-14: `cargo deny check advisories` reports nothing any more.
 
+## `ctutils` and `tokio` — security advisories of 2026-10-23
+
+`cargo deny` (the last step of `make rust`) failed on every branch once two
+advisories were issued on 2026-10-23 for crates that `Cargo.lock` already held.
+Both were read on 2026-10-23 at [rustsec.org](https://rustsec.org/), and the
+versions on crates.io the same day.
+
+- [RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385), type
+  vulnerability, category `crypto-failure`, on `ctutils 0.4.2`, reached through
+  `digest 0.11.3` by `hmac 0.13.0`, `md-5 0.11.0` and `sha2 0.11.0`. The
+  mask-generation functions of `ctutils::Choice` are `const fn`, so they cannot
+  reuse the `asm!`-backed constant-time code of the `cmov` crate: before 0.4.4
+  the generated code could contain a branch on commonly used platforms, and its
+  `u128` comparisons produced branches on 32-bit targets. Patched `>=0.4.4`.
+- [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386), type
+  `unsound`, categories `memory-corruption` and `use-after-free`, on
+  `tokio 1.53.1`. The safe constructors `AsyncFd::new`, `with_interest`,
+  `try_new` and `try_with_interest` accept any `T: AsRawFd`, so safe code can
+  build an `AsyncFd` from a closed or reused file descriptor, and dropping it
+  can free an allocation that the epoll or kqueue registration still points to.
+  Patched `>=1.51.6, <1.52.0` and `>=1.53.3`; from those releases the four
+  constructors are deprecated in favour of the unsafe `register` and
+  `register_with_interest`.
+
+**Real scope in Oxyn.** Neither crate is a direct dependency, and no Oxyn source
+file calls `AsyncFd` (`git grep AsyncFd -- '*.rs'` finds nothing on 2026-10-23).
+Transitive callers of the `tokio` constructors were not audited: the update is
+taken because it is free, not because a call was found.
+
+Fixed in `Cargo.lock` only, four lines: `ctutils` **0.4.2 → 0.4.5** (0.4.4 is
+the first patched release, 0.4.5 the latest published on 2026-10-23) and `tokio`
+**1.53.1 → 1.53.3** (published 2026-10-13, the smallest move that `^1.53.1` in
+`Cargo.toml` allows, so no pinned manifest version moves). The checksums are the
+ones cargo computed from the registry. Checked on 2026-10-23:
+`cargo metadata --locked` needs no other change and
+`cargo deny --all-features check` reports `advisories ok, bans ok, licenses ok,
+sources ok`.
+
 ## `glib` 0.18 — advisory RUSTSEC-2024-0429, checked on 2026-10-20
 
 `cargo deny` reports **RUSTSEC-2024-0429** (`informational = "unsound"`) on

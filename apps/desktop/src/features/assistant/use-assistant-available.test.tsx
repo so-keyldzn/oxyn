@@ -9,6 +9,7 @@ import {
   UNREADABLE,
   assistantEntry,
   defaultDestination,
+  noAgentFor,
 } from "./availability"
 import { useAssistantAvailable } from "./use-assistant-available"
 import type { DeclaredProvider, ExternalAgent } from "@/lib/ipc/ai"
@@ -150,6 +151,20 @@ describe("assistantEntry", () => {
     expect(
       assistantEntry({ ...base, capabilities: [], tier: "metadata" })
     ).toMatchObject({ status: "disabled", reason: NO_SQL })
+  })
+
+  it("names the language no agent writes yet", () => {
+    const entry = assistantEntry({
+      ...base,
+      capabilities: ["REDIS_COMMAND"],
+      tier: "metadata",
+    })
+    expect(entry).toMatchObject({
+      status: "disabled",
+      reason: noAgentFor("redis"),
+    })
+    if (entry.status !== "disabled") return
+    expect(entry.reason).toContain("Redis commands")
   })
 
   it("prefers a provider to an agent", () => {
