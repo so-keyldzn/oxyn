@@ -193,8 +193,7 @@ async fn stop_before_reply(
             execution.kill().await;
             Err(stopped(execution.intent))
         }
-        // Killed, cut, still running, or about to stream rows nobody waits
-        // for any more.
+        // Killed, cut, or about to stream rows nobody waits for any more.
         _ => Err(stopped(execution.intent)),
     }
 }
