@@ -2123,6 +2123,20 @@ Oxyn is a good SQL client without a single line of AI.
   it is the surface where editing will sit. Neither editing nor DML shown before
   sending exist.
 
+**Order decided on 2026-10-22 — the maintainer's daily databases first.** The
+next drivers follow what the maintainer uses every day, not the order of the
+phases: DuckDB and ClickHouse (above) and, from phase 3 bis, Redis,
+Elasticsearch and MongoDB are written in parallel, one branch each. Redis is
+the canary for the non-relational model: a change that one of the three needs
+in the traits of `oxyn-driver` or in the enumerations of `oxyn-core` is
+proposed through it and recorded in an ADR that clarifies
+[ADR-0003](adr/0003-driver-capabilities.md), so that the three do not each
+invent their own. ADR numbers are reserved so that they do not collide: 0059
+DuckDB, 0060 ClickHouse, 0061 Redis, 0062 Elasticsearch, 0063 MongoDB. SQL
+Server stays in the [VISION](VISION.md) and in no phase yet; Oracle, Couchbase
+and the cloud SDKs stay in phase 4, behind the sidecar
+([ADR-0007](adr/0007-driver-sidecar.md)).
+
 ## Phase 3 — The AI workspace
 
 - `oxyn-ai`: local and remote providers, single gateway;

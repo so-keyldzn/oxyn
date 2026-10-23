@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="ae2328ed1a16" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="57df60cd56fb" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -671,6 +671,47 @@ Corrigé par `cargo update -p rustls` : **0.23.43 → 0.23.45**, mise à jour de
 correctif dans la même plage sémantique. Aucun manifeste modifié, seul
 `Cargo.lock`. Vérifié le 2026-09-14 : `cargo deny check advisories` ne signale
 plus rien.
+
+## `ctutils` et `tokio` — avis de sécurité du 2026-10-23
+
+`cargo deny` (dernière étape de `make rust`) échouait sur toutes les branches
+dès que deux avis ont été émis le 2026-10-23 pour des crates que `Cargo.lock`
+contenait déjà. Les deux ont été lus le 2026-10-23 sur
+[rustsec.org](https://rustsec.org/), et les versions sur crates.io le même jour.
+
+- [RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385), type
+  vulnérabilité, catégorie `crypto-failure`, sur `ctutils 0.4.2`, atteint par
+  `digest 0.11.3` via `hmac 0.13.0`, `md-5 0.11.0` et `sha2 0.11.0`. Les
+  fonctions de génération de masque de `ctutils::Choice` sont des `const fn` : elles
+  ne peuvent pas réutiliser le code à temps constant, appuyé sur `asm!`, de la
+  crate `cmov`. Avant la 0.4.4, le code généré pouvait contenir un branchement
+  sur des plateformes courantes, et ses comparaisons `u128` produisaient des
+  branchements sur les cibles 32 bits. Corrigé en `>=0.4.4`.
+- [RUSTSEC-2026-0386](https://rustsec.org/advisories/RUSTSEC-2026-0386), type
+  `unsound`, catégories `memory-corruption` et `use-after-free`, sur
+  `tokio 1.53.1`. Les constructeurs sûrs `AsyncFd::new`, `with_interest`,
+  `try_new` et `try_with_interest` acceptent tout `T: AsRawFd` : du code sûr
+  peut donc construire un `AsyncFd` à partir d'un descripteur de fichier fermé
+  ou réutilisé, et le détruire peut libérer une allocation que
+  l'enregistrement epoll ou kqueue désigne encore. Corrigé en
+  `>=1.51.6, <1.52.0` et `>=1.53.3` ; à partir de ces versions, les quatre
+  constructeurs sont dépréciés au profit des `register` et
+  `register_with_interest`, qui sont `unsafe`.
+
+**Portée réelle dans Oxyn.** Aucune des deux crates n'est une dépendance directe
+et aucun fichier source d'Oxyn n'appelle `AsyncFd` (`git grep AsyncFd -- '*.rs'`
+ne trouve rien le 2026-10-23). Les appelants transitifs des constructeurs de
+`tokio` n'ont pas été audités : la mise à jour est prise parce qu'elle ne coûte
+rien, non parce qu'un appel a été trouvé.
+
+Corrigé dans `Cargo.lock` seul, quatre lignes : `ctutils` **0.4.2 → 0.4.5** (la
+0.4.4 est la première version corrigée, la 0.4.5 la dernière publiée le
+2026-10-23) et `tokio` **1.53.1 → 1.53.3** (publiée le 2026-10-13, le plus petit
+saut que permet `^1.53.1` dans `Cargo.toml` : aucune version épinglée du
+manifeste ne bouge). Les empreintes sont celles que cargo a calculées depuis le
+registre. Vérifié le 2026-10-23 : `cargo metadata --locked` n'exige aucun autre
+changement et `cargo deny --all-features check` indique `advisories ok, bans ok,
+licenses ok, sources ok`.
 
 ## `glib` 0.18 — avis RUSTSEC-2024-0429, vérifié le 2026-10-20
 
