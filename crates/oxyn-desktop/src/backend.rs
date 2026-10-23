@@ -25,6 +25,7 @@ use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
 use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
+use oxyn_driver_redis::RedisDriver;
 use oxyn_driver_sqlite::SqliteDriver;
 use oxyn_exec::{DispatchReport, ExecEvent, Executor, Outcome, PendingCommand};
 use oxyn_secrets::{KeyringSecretStore, SecretStore};
@@ -303,6 +304,9 @@ impl Backend {
         drivers
             .register(Arc::new(MysqlDriver::new()))
             .context("registering the MySQL driver")?;
+        drivers
+            .register(Arc::new(RedisDriver::new()))
+            .context("registering the Redis driver")?;
         tracing::info!(drivers = drivers.len(), "driver registry ready");
         let drivers = Arc::new(drivers);
 

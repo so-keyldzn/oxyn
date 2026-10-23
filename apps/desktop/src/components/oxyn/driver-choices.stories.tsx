@@ -6,6 +6,7 @@ import {
   catalogueDrivers,
   mysqlDriver,
   postgresDriver,
+  redisDriver,
   sqliteDriver,
 } from "./fixtures"
 
@@ -165,5 +166,17 @@ export const PostgreSQLAliases: Story = {
     await expect(canvas.getAllByRole("option")).toHaveLength(1)
     await userEvent.click(canvas.getByRole("option", { name: /PostgreSQL/ }))
     await expect(args.onChoose).toHaveBeenLastCalledWith(postgresDriver)
+  },
+}
+
+/** Valkey speaks RESP: it is reached through the Redis driver (ADR-0061). */
+export const ValkeyLeadsToRedis: Story = {
+  args: { drivers: catalogueDrivers, prominent: true },
+  play: async ({ canvas, args }) => {
+    await userEvent.type(canvas.getByRole("combobox"), "valkey")
+    await expect(canvas.getAllByRole("option")).toHaveLength(1)
+    await expect(canvas.getByText("Valkey")).toBeVisible()
+    await userEvent.click(canvas.getByRole("option", { name: /Redis/ }))
+    await expect(args.onChoose).toHaveBeenLastCalledWith(redisDriver)
   },
 }

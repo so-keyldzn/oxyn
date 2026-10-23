@@ -707,6 +707,7 @@ mod tests {
                 vec!["Redshift", "TimescaleDB", "pgvector"],
             ),
             (sqlite.metadata().clone(), vec![]),
+            (oxyn_driver_redis::redis_metadata(), vec!["Valkey"]),
         ] {
             let choice = DriverChoice::of(&metadata);
             assert_eq!(choice.aliases, expected, "{}", choice.id);

@@ -7502,6 +7502,7 @@ dependencies = [
  "oxyn-driver",
  "oxyn-driver-mysql",
  "oxyn-driver-postgres",
+ "oxyn-driver-redis",
  "oxyn-driver-sqlite",
  "oxyn-embed",
  "oxyn-exec",
