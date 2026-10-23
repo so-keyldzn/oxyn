@@ -40,7 +40,7 @@ use futures::future::BoxFuture;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, ExecRequest, ExecStats, OxynError,
-    PreviewShape, Result, StatementHandle, TransactionState,
+    PreviewShape, Result, StatementHandle, StatementIntent, TransactionState,
 };
 use oxyn_data::BatchSource;
 
@@ -226,6 +226,43 @@ pub trait Session: Send + Sync {
     /// Returns a value and not a reference: an implementation keeps its
     /// context behind a lock, because `set_context` takes `&self`.
     fn context(&self) -> Option<SessionContext> {
+        None
+    }
+
+    /// The intent of a request written in a language that is not SQL, when
+    /// this session can prove it.
+    ///
+    /// `oxyn-exec` consults it **only** for a request whose language has no
+    /// SQL dialect ([`oxyn_core::QueryLanguage::sql_dialect`] is `None`): `oxyn-query`
+    /// stays the sole authority on SQL, and a SQL request never reaches this
+    /// method. Without an answer, the request stays
+    /// [`StatementIntent::Unknown`], which counts as mutating
+    /// ([ADR-0064](../../../docs/adr/0064-a-session-classifies-non-sql-requests.md)).
+    ///
+    /// **Conservative.** Answer `Some(StatementIntent::Read)` only for a
+    /// request **proven** read-only: every command it holds is known to this
+    /// session and known not to write. A wrong `Read` bypasses the production
+    /// guard — a human is no longer asked to confirm under the connection's
+    /// name, an agent is no longer refused, a preview runs it
+    /// ([I-02](../../../CLAUDE.md#i-02), [I-07](../../../CLAUDE.md#i-07)).
+    /// When unsure, `None`. A request answered `Read` on production, or on a
+    /// connection marked read-only, reaches [`execute`](Self::execute) with
+    /// `limits.read_only` set: the session honors that bound or refuses.
+    ///
+    /// **No I/O, no lock that can block.** It runs on the dispatch path, before
+    /// the policy decision: it answers from what the session learned when
+    /// connecting — the server's own command table, for example. A lock it
+    /// cannot take at once is a reason to answer `None`, never to wait.
+    ///
+    /// The answer carries no risk, no transaction control and no context
+    /// change: the executor sets all three to none. A language that has such
+    /// statements refuses them in its console, or carries a context change
+    /// through [`set_context`](Self::set_context).
+    ///
+    /// The default answers `None`, which is the behavior every session had
+    /// before this method existed.
+    fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
+        let _ = request;
         None
     }
 
