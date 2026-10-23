@@ -2429,6 +2429,19 @@ and the row inserted before them is there after `COMMIT`, on all three
 servers. `mysql_async` forgets the last OK packet on an error packet
 (`handle_err`, `src/conn/mod.rs:313`): the driver asks again with `COM_PING`.
 
+## MongoDB client library and server — checked on 2026-10-23
+
+For [ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md).
+
+| Fact | Consequence | Source |
+|---|---|---|
+| Pinned: `mongodb` `=3.9.1` (2026-09-10, Apache-2.0, `rust-version` 1.88) and `bson` `3.1.0` (2025-11-20, MIT, `rust-version` 1.81), the latest stable releases | the workspace pins the client exactly; `bson` is the release `mongodb` resolves to | crates.io API |
+| `mongodb` 3.9.1 features: `default` = `compat-3-0-0` (which pulls `bson-2`) + `rustls-tls` (rustls on `ring`) + `dns-resolver`; `rustls-tls-aws-lc` puts rustls and `tokio-rustls` on `aws_lc_rs`; `bson-3` selects `bson` 3; `dns-resolver` pulls `hickory-resolver` 0.26 for `mongodb+srv://`; compression, `aws-auth`, `gssapi-auth`, OIDC and `in-use-encryption` are separate features | `default-features = false` with `compat-3-3-0`, `bson-3`, `rustls-tls-aws-lc`, `dns-resolver`: the workspace's TLS provider, no unused authentication backend | `mongodb` 3.9.1 `Cargo.toml` |
+| The rustls features trust `webpki-roots` (the Mozilla bundle compiled in), not the system store | a server signed by a private authority needs the form's CA file | `mongodb` 3.9.1 `Cargo.toml` (`dep:webpki-roots`) |
+| `DRIVER_MIN_WIRE_VERSION = 9`, `DRIVER_MAX_WIRE_VERSION = 29`; the README states "MongoDB 4.4+" | servers older than 4.4 are refused by the library at the handshake | `src/sdam/description/server.rs`; `README.md` at 3.9.1 |
+| `mongocrypt-sys` 0.1.6 (`links = "mongocrypt"`) appears in `Cargo.lock` as an optional dependency of `in-use-encryption`, which is not enabled | nothing is built or linked; no `links` conflict in the workspace | `Cargo.lock`; `mongocrypt-sys` `Cargo.toml` |
+| Docker Official Image `mongo:8.0.34` (updated 2026-10-17); the newest tag of the 8.x line is `8.3.13` | the integration tests and the CI service run `mongo:8.0.34` | [Docker Hub tags](https://hub.docker.com/_/mongo/tags?name=8.) |
+
 
 ## COPY destinations and classification — checked 2026-10-03
 

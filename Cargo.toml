@@ -43,6 +43,7 @@ oxyn-embed    = { path = "crates/oxyn-embed" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
+oxyn-driver-mongodb  = { path = "drivers/oxyn-driver-mongodb" }
 
 # --- foundation --------------------------------------------------------------
 anyhow        = "1.0.104"
@@ -124,6 +125,19 @@ mysql_async   = { version = "=0.37.1", default-features = false, features = [
 # named-parameter parser whether a text would be rewritten before it is
 # prepared (ADR-0050). Exact: the guard is only right for this parser.
 mysql_common  = { version = "=0.37.3", default-features = false }
+# MongoDB (ADR-0063). `rustls-tls-aws-lc` is rustls on aws-lc-rs, the
+# provider above; `dns-resolver` resolves `mongodb+srv://` seed lists;
+# `bson-3` and `compat-3-3-0` are the two features the crate refuses to
+# compile without. No compression, no AWS/Kerberos/OIDC authentication, no
+# client-side encryption: none is tested. Exact version: the driver relies
+# on the raw batch cursor and on run_command never being retried
+# (RESEARCH-NOTES, 2026-10-22).
+mongodb       = { version = "=3.9.1", default-features = false, features = [
+    "compat-3-3-0", "bson-3", "rustls-tls-aws-lc", "dns-resolver",
+] }
+# The release `mongodb` resolves to, named so that the driver can read raw
+# documents and build commands with the same types.
+bson          = "3.1.0"
 
 # --- AI ----------------------------------------------------------------------
 # reqwest 0.13 renamed the `rustls-tls` feature to `rustls`.

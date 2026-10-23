@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="02b89f0ce966" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="4a02e53c0d63" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2451,6 +2451,19 @@ du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
 sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
 paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
 par `COM_PING`.
+
+## Bibliothèque cliente et serveur MongoDB — vérifié le 2026-10-23
+
+Pour l'[ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md).
+
+| Fait | Conséquence | Source |
+|---|---|---|
+| Épinglés : `mongodb` `=3.9.1` (2026-09-10, Apache-2.0, `rust-version` 1.88) et `bson` `3.1.0` (2025-11-20, MIT, `rust-version` 1.81), les dernières versions stables | le workspace épingle le client exactement ; `bson` est la version que `mongodb` résout | API crates.io |
+| Features de `mongodb` 3.9.1 : `default` = `compat-3-0-0` (qui tire `bson-2`) + `rustls-tls` (rustls sur `ring`) + `dns-resolver` ; `rustls-tls-aws-lc` met rustls et `tokio-rustls` sur `aws_lc_rs` ; `bson-3` choisit `bson` 3 ; `dns-resolver` tire `hickory-resolver` 0.26 pour `mongodb+srv://` ; compression, `aws-auth`, `gssapi-auth`, OIDC et `in-use-encryption` sont des features séparées | `default-features = false` avec `compat-3-3-0`, `bson-3`, `rustls-tls-aws-lc`, `dns-resolver` : le fournisseur TLS du workspace, aucun backend d'authentification inutilisé | `Cargo.toml` de `mongodb` 3.9.1 |
+| Les features rustls font confiance à `webpki-roots` (le bundle Mozilla compilé), pas au magasin du système | un serveur signé par une autorité privée demande le fichier CA du formulaire | `Cargo.toml` de `mongodb` 3.9.1 (`dep:webpki-roots`) |
+| `DRIVER_MIN_WIRE_VERSION = 9`, `DRIVER_MAX_WIRE_VERSION = 29` ; le README annonce « MongoDB 4.4+ » | la bibliothèque refuse à la poignée de main un serveur antérieur à 4.4 | `src/sdam/description/server.rs` ; `README.md` en 3.9.1 |
+| `mongocrypt-sys` 0.1.6 (`links = "mongocrypt"`) figure dans `Cargo.lock` comme dépendance optionnelle d'`in-use-encryption`, non activée | rien n'est compilé ni lié ; aucun conflit `links` dans le workspace | `Cargo.lock` ; `Cargo.toml` de `mongocrypt-sys` |
+| Image officielle Docker `mongo:8.0.34` (mise à jour le 2026-10-17) ; le tag le plus récent de la ligne 8.x est `8.3.13` | les tests d'intégration et le service de CI tournent sur `mongo:8.0.34` | [tags Docker Hub](https://hub.docker.com/_/mongo/tags?name=8.) |
 
 
 ## Destinations de COPY et classification — vérifié le 2026-10-03
