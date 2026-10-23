@@ -42,6 +42,7 @@ enum SecretClause {
 pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> String {
     let dialect = match language {
         QueryLanguage::Sql(dialect) => dialect,
+        QueryLanguage::RedisCommand => return crate::redis::redact_secrets(statement),
         _ => return statement.to_owned(),
     };
     let mut replacements = Vec::new();

@@ -118,8 +118,9 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    `EVAL`/`FCALL` name when the table is unreadable) but `NOSCRIPT` is
    ambiguous, whatever its prefix: Redis keeps what a failing script wrote,
    and the script chooses the prefix — a `TRYAGAIN` it returns after a
-   `DECRBY` is not the server's refusal. A connection lost after a command
-   that may write was sent is `OutcomeUnknown`.
+   `DECRBY` is not the server's refusal. `IOERR` is ambiguous: `MIGRATE`'s
+   transfer failed and the key may be on both instances. A connection lost
+   after a command that may write was sent is `OutcomeUnknown`.
 10. **Replies as Arrow.** The reply's first byte decides the columns: a
     scalar is one typed row (`Int64`, `Float64`, `Boolean`; a big number is
     `Utf8` marked `oxyn:redis_type`); an array, set or push is one row per
@@ -141,6 +142,12 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     bytes, invisible format characters escaped. The catalog and each preview
     use their own connections, so browsing never moves the console's
     database.
+12. **Credentials typed in a console are redacted** before the history, the
+    journal or a conversation keeps the text, as ADR-0053 does for SQL: the
+    password of `AUTH` and `HELLO … AUTH`, the `>`/`<`/`#`/`!` rules of
+    `ACL SETUSER`, the value of `CONFIG SET` for `requirepass`, `masterauth`,
+    `tls-key-file-pass` and `tls-client-key-file-pass`, and `MIGRATE`'s
+    `AUTH`/`AUTH2` passwords (`oxyn_query::redis::redact_secrets`).
 
 ## Consequences
 

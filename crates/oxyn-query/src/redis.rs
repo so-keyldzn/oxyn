@@ -87,6 +87,162 @@ fn commands(text: &str, cursor_byte: usize) -> Result<Vec<(usize, usize)>, Query
     Ok(spans)
 }
 
+/// The configuration parameters whose value is a credential, as `redis.conf`
+/// of Redis 8.10.2 names them ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md)).
+const SECRET_PARAMETERS: [&str; 4] = [
+    "requirepass",
+    "masterauth",
+    "tls-key-file-pass",
+    "tls-client-key-file-pass",
+];
+
+/// Replaces the credentials a Redis command line carries with `<redacted>`,
+/// before it reaches the history, the audit journal or a conversation record
+/// ([ADR-0053](../../../docs/adr/0053-redact-sql-passwords-before-persistence.md)).
+///
+/// Recognized: the password of `AUTH` and of `HELLO … AUTH user password`;
+/// the `>password`, `<password`, `#hash` and `!hash` rules of
+/// `ACL SETUSER`, whose first character is kept; the value of
+/// `CONFIG SET requirepass | masterauth | tls-key-file-pass |
+/// tls-client-key-file-pass`; the passwords of `MIGRATE … AUTH` and
+/// `AUTH2`. Every other byte is kept. Like the SQL redaction, this is not a
+/// secret detector: a password inside a script's body or a value is outside
+/// the grammar it reads.
+#[must_use]
+pub fn redact_secrets(text: &str) -> String {
+    let mut replacements: Vec<(std::ops::Range<usize>, &'static str)> = Vec::new();
+    for command in arguments(text) {
+        secrets_of(text, &command, &mut replacements);
+    }
+    if replacements.is_empty() {
+        return text.to_owned();
+    }
+    replacements.sort_unstable_by_key(|(span, _)| span.start);
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (span, marker) in replacements {
+        if span.start < copied {
+            continue;
+        }
+        out.push_str(text.get(copied..span.start).unwrap_or_default());
+        out.push_str(marker);
+        copied = span.end;
+    }
+    out.push_str(text.get(copied..).unwrap_or_default());
+    out
+}
+
+/// The spans of the secrets of one command, and what replaces each.
+fn secrets_of(
+    text: &str,
+    command: &[std::ops::Range<usize>],
+    out: &mut Vec<(std::ops::Range<usize>, &'static str)>,
+) {
+    let word = |index: usize| command.get(index).map(|span| unquoted(text, span));
+    let Some(name) = word(0) else { return };
+    match name.as_str() {
+        "auth" => {
+            if let Some(last) = command.get(1..).and_then(<[_]>::last) {
+                out.push((last.clone(), "<redacted>"));
+            }
+        }
+        "hello" => {
+            if let Some(at) = (1..command.len()).find(|&i| word(i).as_deref() == Some("auth"))
+                && let Some(password) = command.get(at.saturating_add(2))
+            {
+                out.push((password.clone(), "<redacted>"));
+            }
+        }
+        "acl" if word(1).as_deref() == Some("setuser") => {
+            for span in command.iter().skip(3) {
+                let rule = text.get(span.clone()).unwrap_or_default();
+                let marker = match rule.trim_start_matches(['"', '\'']).chars().next() {
+                    Some('>') => "><redacted>",
+                    Some('<') => "<<redacted>",
+                    Some('#') => "#<redacted>",
+                    Some('!') => "!<redacted>",
+                    _ => continue,
+                };
+                out.push((span.clone(), marker));
+            }
+        }
+        "config" if word(1).as_deref() == Some("set") => {
+            for pair in command.get(2..).unwrap_or_default().chunks(2) {
+                if let [parameter, value] = pair
+                    && SECRET_PARAMETERS.contains(&unquoted(text, parameter).as_str())
+                {
+                    out.push((value.clone(), "<redacted>"));
+                }
+            }
+        }
+        "migrate" => {
+            for (i, _) in command.iter().enumerate() {
+                let offset = match word(i).as_deref() {
+                    Some("auth") => 1,
+                    Some("auth2") => 2,
+                    _ => continue,
+                };
+                if let Some(password) = command.get(i.saturating_add(offset)) {
+                    out.push((password.clone(), "<redacted>"));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A word of the command, lowercase and without its quotes, to recognize a
+/// keyword: escapes are left as they are, since no keyword holds one.
+fn unquoted(text: &str, span: &std::ops::Range<usize>) -> String {
+    text.get(span.clone())
+        .unwrap_or_default()
+        .replace(['"', '\''], "")
+        .to_ascii_lowercase()
+}
+
+/// Every command of `text` as the spans of its arguments, quotes included. A
+/// quote left open runs to the end of the text, as the driver would refuse it.
+fn arguments(text: &str) -> Vec<Vec<std::ops::Range<usize>>> {
+    let bytes = text.as_bytes();
+    let mut commands = Vec::new();
+    let mut current: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut token: Option<usize> = None;
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while let Some(&byte) = bytes.get(i) {
+        match (quote, byte) {
+            (Some(b'"'), b'\\') => i = i.saturating_add(1),
+            (Some(b'\''), b'\\') if bytes.get(i.saturating_add(1)) == Some(&b'\'') => {
+                i = i.saturating_add(1);
+            }
+            (Some(open), close) if close == open => quote = None,
+            (Some(_), _) => {}
+            (None, b' ' | b'\t' | b'\r' | b'\n') => {
+                if let Some(start) = token.take() {
+                    current.push(start..i);
+                }
+                if byte == b'\n' && !current.is_empty() {
+                    commands.push(std::mem::take(&mut current));
+                }
+            }
+            (None, other) => {
+                token.get_or_insert(i);
+                if matches!(other, b'"' | b'\'') {
+                    quote = Some(other);
+                }
+            }
+        }
+        i = i.saturating_add(1);
+    }
+    if let Some(start) = token {
+        current.push(start..bytes.len());
+    }
+    if !current.is_empty() {
+        commands.push(current);
+    }
+    commands
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,5 +301,61 @@ mod tests {
     #[test]
     fn carriage_returns_stay_out_of_the_command() {
         assert_eq!(current_command("GET a\r\nDEL b", 1), Ok(Some("GET a")));
+    }
+
+    #[test]
+    fn every_credential_the_grammar_carries_is_redacted() {
+        for (line, expected) in [
+            ("AUTH hunter2", "AUTH <redacted>"),
+            ("auth app hunter2", "auth app <redacted>"),
+            (
+                "HELLO 3 AUTH app hunter2 SETNAME x",
+                "HELLO 3 AUTH app <redacted> SETNAME x",
+            ),
+            (
+                "ACL SETUSER alan on >hunter2 +@read <old \"#c3ab8f\" !d1e2",
+                "ACL SETUSER alan on ><redacted> +@read <<redacted> #<redacted> !<redacted>",
+            ),
+            (
+                "CONFIG SET maxmemory 1gb requirepass hunter2 masterauth 'two words'",
+                "CONFIG SET maxmemory 1gb requirepass <redacted> masterauth <redacted>",
+            ),
+            (
+                "config set TLS-KEY-FILE-PASS hunter2",
+                "config set TLS-KEY-FILE-PASS <redacted>",
+            ),
+            (
+                "MIGRATE h 6379 k 0 5000 AUTH hunter2",
+                "MIGRATE h 6379 k 0 5000 AUTH <redacted>",
+            ),
+            (
+                "MIGRATE h 6379 \"\" 0 5000 AUTH2 app hunter2 KEYS a b",
+                "MIGRATE h 6379 \"\" 0 5000 AUTH2 app <redacted> KEYS a b",
+            ),
+        ] {
+            assert_eq!(redact_secrets(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn a_command_without_credentials_is_kept_byte_for_byte() {
+        for line in [
+            "SET password hunter2",
+            "GET \"a > b\"",
+            "ACL WHOAMI",
+            "CONFIG SET maxmemory 1gb",
+            "EVAL \"return 1\" 0",
+            "",
+        ] {
+            assert_eq!(redact_secrets(line), line);
+        }
+    }
+
+    #[test]
+    fn each_line_of_a_console_is_redacted_as_its_own_command() {
+        assert_eq!(
+            redact_secrets("GET a\nAUTH hunter2\nCONFIG SET requirepass \"x\ny\""),
+            "GET a\nAUTH <redacted>\nCONFIG SET requirepass <redacted>"
+        );
     }
 }

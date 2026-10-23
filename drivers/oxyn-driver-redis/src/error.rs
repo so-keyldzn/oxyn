@@ -98,6 +98,9 @@ pub fn class_of(prefix: &str, scripted: bool) -> ErrorClass {
         // Refusals that say nothing ran, whatever the command.
         "NOSCRIPT" | "NOPERM" | "NOAUTH" | "WRONGPASS" | "WRONGTYPE" | "READONLY" | "EXECABORT"
         | "CROSSSLOT" | "MOVED" | "ASK" | "NOPROTO" | "UNBLOCKED" => ErrorClass::Permanent,
+        // `MIGRATE`'s transfer failed or timed out: "the key may be on both
+        // the instances", or only on the source.
+        "IOERR" => ErrorClass::Ambiguous,
         _ => ErrorClass::Permanent,
     }
 }
@@ -188,6 +191,7 @@ mod tests {
     #[case("WRONGTYPE", true, ErrorClass::Ambiguous)]
     #[case("NOPERM", true, ErrorClass::Ambiguous)]
     #[case("NOSCRIPT", true, ErrorClass::Permanent)]
+    #[case("IOERR", false, ErrorClass::Ambiguous)]
     #[case("MOVED", false, ErrorClass::Permanent)]
     #[case("UNBLOCKED", false, ErrorClass::Permanent)]
     #[case("ERR", true, ErrorClass::Ambiguous)]

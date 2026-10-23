@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="733d1c6b1576" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="82a31989cdf5" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -127,8 +127,10 @@ que fait un arrêt. Vérifié le 2026-10-22
    (`@scripting`, ou un nom `EVAL`/`FCALL` quand la table est illisible) sauf
    `NOSCRIPT` est ambiguë, quel que soit son préfixe : Redis garde ce qu'un
    script en échec a écrit, et le script choisit le préfixe — un `TRYAGAIN`
-   qu'il rend après un `DECRBY` n'est pas le refus du serveur. Une connexion
-   perdue après l'envoi d'une commande qui peut écrire vaut `OutcomeUnknown`.
+   qu'il rend après un `DECRBY` n'est pas le refus du serveur. `IOERR` est
+   ambigu : le transfert de `MIGRATE` a échoué et la clé est peut-être sur les
+   deux instances. Une connexion perdue après l'envoi d'une commande qui peut
+   écrire vaut `OutcomeUnknown`.
 10. **Les réponses en Arrow.** Le premier octet de la réponse décide des
     colonnes : un scalaire est une ligne typée (`Int64`, `Float64`, `Boolean` ;
     un grand nombre est `Utf8` marqué `oxyn:redis_type`) ; un tableau, un
@@ -153,6 +155,13 @@ que fait un arrêt. Vérifié le 2026-10-22
     format invisibles échappés. Le catalogue et chaque aperçu ont leurs propres
     connexions, si bien que parcourir l'arbre ne déplace jamais la base de la
     console.
+12. **Les identifiants tapés dans une console sont caviardés** avant que
+    l'historique, le journal ou une conversation ne garde le texte, comme
+    l'ADR-0053 le fait pour le SQL : le mot de passe d'`AUTH` et de
+    `HELLO … AUTH`, les règles `>`/`<`/`#`/`!` d'`ACL SETUSER`, la valeur de
+    `CONFIG SET` pour `requirepass`, `masterauth`, `tls-key-file-pass` et
+    `tls-client-key-file-pass`, et les mots de passe `AUTH`/`AUTH2` de
+    `MIGRATE` (`oxyn_query::redis::redact_secrets`).
 
 ## Conséquences
 
