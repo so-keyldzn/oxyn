@@ -124,6 +124,14 @@ impl Driver for ElasticsearchDriver {
             }
             _ => "Elasticsearch",
         };
+        if !supported_version(product, version) {
+            return Err(oxyn_core::OxynError::NotSupported {
+                capability: format!(
+                    "{product} {version}: this driver supports Elasticsearch 8.19 and 9.x, \
+                     or OpenSearch 2.10 and 3.x"
+                ),
+            });
+        }
         let capabilities = self.capabilities() & !Capabilities::SERVER_SIDE_CANCEL;
         Ok(Box::new(ElasticsearchSession::new(
             api,
@@ -131,6 +139,18 @@ impl Driver for ElasticsearchDriver {
             version.to_owned(),
             capabilities,
         )))
+    }
+}
+
+fn supported_version(product: &str, version: &str) -> bool {
+    let mut numbers = version.split('.').map(str::parse::<u16>);
+    let (Some(Ok(major)), Some(Ok(minor))) = (numbers.next(), numbers.next()) else {
+        return false;
+    };
+    match product {
+        "Elasticsearch" => major > 8 || (major == 8 && minor >= 19),
+        "OpenSearch" => major > 2 || (major == 2 && minor >= 10),
+        _ => false,
     }
 }
 
@@ -153,5 +173,16 @@ mod tests {
         let mut registry = DriverRegistry::new();
         registry.register(Arc::new(driver)).expect("registration");
         assert!(registry.contains(&DriverId::elasticsearch()));
+    }
+
+    #[test]
+    fn support_floors_are_explicit_and_not_guessed_from_a_url() {
+        assert!(supported_version("Elasticsearch", "8.19.0"));
+        assert!(supported_version("Elasticsearch", "9.5.5"));
+        assert!(!supported_version("Elasticsearch", "8.18.0"));
+        assert!(supported_version("OpenSearch", "2.10.0"));
+        assert!(supported_version("OpenSearch", "3.0.0"));
+        assert!(!supported_version("OpenSearch", "2.9.0"));
+        assert!(!supported_version("OpenSearch", "version unknown"));
     }
 }

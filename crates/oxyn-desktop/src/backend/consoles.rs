@@ -307,7 +307,7 @@ impl Backend {
             Some(dialect) => {
                 targeted_text(&run.sql, run.target, dialect).map_err(IpcError::invalid)?
             }
-            None if matches!(run.target, RunTarget::All) => run.sql.clone(),
+            None if matches!(&run.target, RunTarget::All) => run.sql.clone(),
             None => {
                 return Err(IpcError::invalid(
                     "This console runs one complete non-SQL request.",
