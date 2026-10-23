@@ -30,7 +30,7 @@ export function useAsidePanels(open: OpenConnection | null): Array<AsideItem> {
   // The hook runs for every render, open connection or not: the assistant's
   // availability depends on the connection's tier (I-04).
   const assistant = useAssistantAvailable(
-    open ?? { privacyTier: "metadata", capabilities: [] }
+    open ?? { connection: "", privacyTier: "metadata", capabilities: [] }
   )
 
   return React.useMemo(() => {

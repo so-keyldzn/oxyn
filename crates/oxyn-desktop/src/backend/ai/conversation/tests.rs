@@ -8,6 +8,9 @@ use super::*;
 use crate::ipc::{ConnectResponse, ConnectionDraft, OpenConnection};
 use oxyn_ai::sql_agent;
 
+/// What the SQLite session of these tests speaks.
+pub(super) const SQLITE: QueryLanguage = QueryLanguage::Sql(SqlDialect::Sqlite);
+
 /// Who reads the prompt in a test that does not choose: a local model.
 pub(super) const LOCAL: oxyn_ai::Recipient =
     oxyn_ai::Recipient::Provider(oxyn_core::AiProviderKind::OpenAiCompatible);
@@ -1803,6 +1806,7 @@ mod approved_samples {
             parent: None,
             // As the panel captured it when the question left: still Sampled.
             connection: &config,
+            language: SQLITE,
             cancel: &cancel,
         };
         let Err(refused) = fixture.present(
@@ -1844,6 +1848,7 @@ mod approved_samples {
             node,
             parent: None,
             connection: &config,
+            language: SQLITE,
             cancel: &cancel,
         };
 
@@ -1888,6 +1893,7 @@ mod approved_samples {
             node,
             parent,
             connection: &config,
+            language: SQLITE,
             cancel: &cancel,
         };
 
@@ -2148,6 +2154,7 @@ mod approved_samples {
             node,
             parent: None,
             connection: &config,
+            language: SQLITE,
             cancel: &cancel,
         };
 
@@ -2358,6 +2365,7 @@ mod approved_samples {
             node,
             parent: None,
             connection: &config,
+            language: SQLITE,
             cancel: &cancel,
         };
         let Err(failed) = fixture.present(
@@ -2632,6 +2640,7 @@ mod approved_samples {
             node: next,
             parent: Some(0),
             connection: &config,
+            language: SQLITE,
             cancel: &CancelToken::new(),
         };
         let (dialogue, _) = run
@@ -2805,6 +2814,7 @@ mod approved_samples {
                 node,
                 parent,
                 connection: &config,
+                language: SQLITE,
                 cancel: &cancel,
             };
             fixture
@@ -3119,6 +3129,9 @@ mod approvals;
 
 /// What the history panel reads besides the open connection's threads.
 mod history;
+
+/// The assistant on a session whose language is not SQL (ADR-0065).
+mod non_sql;
 
 /// I-03: a provider's streamed error reaches the webview without the key.
 mod provider_errors;

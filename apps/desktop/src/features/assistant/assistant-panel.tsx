@@ -50,7 +50,7 @@ import {
   orphanThreadsQuery,
   prunedHistoryQuery,
 } from "./queries"
-import { SQL_AGENT_ID, SQL_ONLY, restrictedToAgent } from "./agent-options"
+import { SQL_ONLY, defaultAgentId, restrictedToAgent } from "./agent-options"
 import { preloadSemanticModel } from "./semantic-ranking"
 import { useReloadAgents } from "./reload-agents"
 import { ToolRows } from "./tool-rows"
@@ -129,10 +129,11 @@ export function AssistantPanel({
     preloadSemanticModel()
   }, [open.connection])
 
-  // The conversation's agent decides which destinations stay usable; the
-  // SQL agent when it names none, as the backend reads it (ADR-0055).
+  // The conversation's agent decides which destinations stay usable; when it
+  // names none, the default the backend runs (ADR-0055, ADR-0065).
   const runningAgent = agentOptions.data?.find(
-    (agent) => agent.id === (state.thread.agentId ?? SQL_AGENT_ID)
+    (agent) =>
+      agent.id === (state.thread.agentId ?? defaultAgentId(agentOptions.data))
   )
   const entry: AssistantEntry =
     available.status === "absent"

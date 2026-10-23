@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="b1fe2c3935b5" -->
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="011df2e831fb" -->
 
 > Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
 
@@ -1211,7 +1211,14 @@ servir non plus, faute de savoir où il envoie
 ([AI-PROVIDERS](AI-PROVIDERS.md#un-agent-externe--la-portée-nest-pas-inconnue-elle-est-inconnaissable)).
 Faire disparaître l'entrée se lirait comme un défaut, et ADR-0006 demande
 qu'une fonctionnalité indisponible s'explique. Il en va de même sur une session
-qui ne parle pas SQL : l'assistant n'écrit que du SQL, et l'entrée le dit.
+dont aucun agent n'écrit le langage : l'entrée nomme le langage (« No agent
+writes Redis commands yet, and the assistant only writes what an agent
+knows. »), et s'ouvre dès qu'un agent — livré ou écrit par l'utilisateur — est
+écrit pour lui ([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)).
+Pendant que les agents d'une telle session sont listés, l'entrée reste
+désactivée et dit qu'elle en cherche un ; une session SQL n'attend jamais
+cette liste. Une session qui ne déclare aucun langage de requête unique garde
+aussi l'entrée désactivée, avec la raison que donne la console.
 
 ### Qui répond se choisit dans le panneau
 
@@ -1266,9 +1273,15 @@ profite pas à l'envoi.
 L'en-tête du panneau porte un second sélecteur, l'**agent** — SQL, Schema,
 et les agents que l'utilisateur a ajoutés
 ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée). Il ne
-liste que les agents proposés pour le dialecte de la connexion et la
-destination choisie (`ai_list_agents`) ; une nouvelle conversation commence
-avec l'agent SQL.
+liste que les agents proposés pour le langage de la connexion — et, pour SQL,
+son dialecte — et la destination choisie (`ai_list_agents`). Une nouvelle
+conversation commence avec l'agent SQL sur une connexion SQL. Sur une
+connexion qui parle un autre langage — commandes Redis, requêtes MongoDB,
+Query DSL d'Elasticsearch —, l'agent SQL n'est pas listé, et une nouvelle
+conversation commence avec l'agent qu'Oxyn livre pour ce langage, ou, s'il
+n'en livre aucun, le premier agent que l'utilisateur a écrit pour lui, par nom
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)) ; le sélecteur
+montre cet agent sélectionné.
 
 * **Choisir un autre agent ouvre une nouvelle conversation.** La
   conversation en cours reste dans la liste « Conversations », inchangée,

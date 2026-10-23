@@ -1,9 +1,9 @@
 //! Agent files: what ships is valid, every combination renders, and every
 //! hostile file is refused with its line.
 
-use oxyn_core::{AgentId, AiProviderKind, DriverId, Environment, SqlDialect};
+use oxyn_core::{AgentId, AiProviderKind, DriverId, Environment, QueryLanguage, SqlDialect};
 
-use super::files::{AGENTS, DIALECT_FRAGMENTS, RECIPIENT_FRAGMENTS};
+use super::files::{AGENTS, DIALECT_FRAGMENTS, LANGUAGE_FRAGMENTS, RECIPIENT_FRAGMENTS};
 use super::render::check_variables;
 use super::*;
 use crate::external::presets::PRESETS;
@@ -27,8 +27,12 @@ fn recipient(name: &str) -> Recipient {
 }
 
 fn target(dialect: SqlDialect, recipient: Recipient) -> PromptTarget {
+    speaking(QueryLanguage::Sql(dialect), recipient)
+}
+
+fn speaking(language: QueryLanguage, recipient: Recipient) -> PromptTarget {
     PromptTarget {
-        dialect,
+        language,
         driver: DriverId::new(DriverId::POSTGRES).expect("a valid driver name"),
         environment: Environment::Staging,
         recipient,
@@ -64,7 +68,10 @@ fn shipped_agents_are_valid() {
 
 #[test]
 fn every_fragment_is_a_valid_text_without_front_matter() {
-    let fragments = DIALECT_FRAGMENTS.iter().chain(RECIPIENT_FRAGMENTS.iter());
+    let fragments = DIALECT_FRAGMENTS
+        .iter()
+        .chain(LANGUAGE_FRAGMENTS.iter())
+        .chain(RECIPIENT_FRAGMENTS.iter());
     for (_, file, text) in fragments {
         assert!(text.len() <= MAX_FILE_BYTES, "{file}");
         assert!(
@@ -142,7 +149,8 @@ fn the_prompt_is_role_then_dialect_then_recipient_and_nothing_else() {
         .replace("{{driver}}", "postgres");
     let recipient = include_str!("../../prompts/recipients/anthropic.md")
         .trim()
-        .replace("{{environment}}", "staging");
+        .replace("{{environment}}", "staging")
+        .replace("{{language}}", "sql");
     assert_eq!(
         prompt,
         format!("{}\n\n{dialect}\n\n{recipient}", agent.system_prompt.trim())
@@ -179,12 +187,18 @@ fn every_variable_is_filled_from_the_target() {
     let agent = AgentSpec::new(
         AgentId::new(),
         "Vars",
-        "{{dialect}} {{driver}} {{environment}} {{recipient}}",
-    );
+        "{{dialect}} {{driver}} {{environment}} {{language}} {{recipient}}",
+    )
+    .with_languages([QueryLanguage::SQL, QueryLanguage::RedisCommand]);
     let target = target(SqlDialect::MySql, recipient("claude-code"));
     let prompt = render_system_prompt(&agent, &target).expect("renders");
-    assert!(prompt.starts_with("mysql postgres staging claude-code\n\n"));
-    assert_eq!(VARIABLES.len(), 4);
+    assert!(prompt.starts_with("mysql postgres staging sql claude-code\n\n"));
+    assert_eq!(VARIABLES.len(), 5);
+
+    // Outside SQL, `{{dialect}}` names the language rather than going empty.
+    let redis = speaking(QueryLanguage::RedisCommand, recipient("codex"));
+    let prompt = render_system_prompt(&agent, &redis).expect("renders");
+    assert!(prompt.starts_with("redis postgres staging redis codex\n\n"));
 }
 
 #[test]
@@ -555,4 +569,153 @@ fn a_context_over_its_ceiling_is_refused_in_a_file() {
     )
     .expect_err("over the ceiling");
     assert!(err.to_string().contains("max_sample_rows"), "{err}");
+}
+
+/// The minimal agent of a language that is not SQL: a fixture, not product
+/// knowledge — each driver ships its own (ADR-0065).
+const REDIS_FIXTURE: &str = "---\nid: 0199a3c0-0000-7000-8000-0000000000fd\nname: Keys\n\
+     languages: [redis]\ntools: [execute_query, describe_schema]\n---\nYou help with keys.\n";
+
+#[test]
+fn an_agent_written_for_a_language_is_offered_only_where_it_is_spoken() {
+    let keys = parse_agent_file("keys.md", REDIS_FIXTURE).expect("a valid file");
+    assert_eq!(keys.languages, [QueryLanguage::RedisCommand]);
+    let reader = recipient("anthropic");
+
+    assert!(keys.offered_for(&speaking(QueryLanguage::RedisCommand, reader)));
+    for other in [
+        QueryLanguage::Sql(SqlDialect::Postgres),
+        QueryLanguage::MongoQuery,
+        QueryLanguage::SearchDsl,
+    ] {
+        assert!(!keys.offered_for(&speaking(other, reader)), "{other}");
+    }
+    // And a SQL agent, shipped or not, is never offered on a Redis session.
+    for shipped in shipped_agents() {
+        assert!(!shipped.offered_for(&speaking(QueryLanguage::RedisCommand, reader)));
+    }
+}
+
+#[test]
+fn a_file_without_languages_writes_sql_and_names_every_language_oxyn_knows() {
+    let sql = parse_agent_file("plain.md", &file_with("", "Prompt.")).expect("valid");
+    assert_eq!(sql.languages, [QueryLanguage::SQL]);
+    assert!(sql.writes(QueryLanguage::Sql(SqlDialect::DuckDb)));
+
+    let all = parse_agent_file(
+        "all.md",
+        &file_with(
+            "languages: [sql, cypher, gremlin, mongo, redis, search-dsl, cql, partiql, influxql, flux]\n",
+            "Prompt.",
+        ),
+    )
+    .expect("every name of `QueryLanguage::as_str` is accepted");
+    assert_eq!(all.languages, LANGUAGES);
+}
+
+#[test]
+fn a_language_list_that_cannot_be_offered_is_refused() {
+    assert_eq!(
+        refusal(&file_with("languages:\n  - redis\n  - Redis\n", "Prompt.")),
+        AgentFileError::UnknownLanguage {
+            file: "test.md".to_owned(),
+            line: 6,
+        }
+    );
+    let empty = refusal(&file_with("languages: []\n", "Prompt."));
+    assert!(
+        matches!(&empty, AgentFileError::Declaration { reason, .. } if reason.contains("`languages` is empty")),
+        "{empty:?}"
+    );
+    let dialects_without_sql = refusal(&file_with(
+        "languages: [mongo]\napplies_to: [postgres]\n",
+        "Prompt.",
+    ));
+    assert!(
+        matches!(&dialects_without_sql, AgentFileError::Declaration { reason, .. } if reason.contains("`applies_to`")),
+        "{dialects_without_sql:?}"
+    );
+}
+
+#[test]
+fn outside_sql_the_prompt_is_role_then_language_then_recipient() {
+    let keys = parse_agent_file("keys.md", REDIS_FIXTURE).expect("a valid file");
+    let target = speaking(QueryLanguage::RedisCommand, recipient("anthropic"));
+    let prompt = render_system_prompt(&keys, &target).expect("renders");
+    let language = include_str!("../../prompts/languages/generic.md")
+        .trim()
+        .replace("{{language}}", "redis")
+        .replace("{{driver}}", "postgres");
+    let reader = include_str!("../../prompts/recipients/anthropic.md")
+        .trim()
+        .replace("{{environment}}", "staging")
+        .replace("{{language}}", "redis");
+    assert_eq!(
+        prompt,
+        format!("You help with keys.\n\n{language}\n\n{reader}")
+    );
+    assert!(prompt.contains("fenced code block tagged `redis`"));
+    assert!(!prompt.contains("The dialect"), "no SQL fragment: {prompt}");
+}
+
+#[test]
+fn every_language_and_recipient_renders() {
+    let mut agent = parse_agent_file("keys.md", REDIS_FIXTURE).expect("a valid file");
+    agent.languages = LANGUAGES.to_vec();
+    for language in LANGUAGES {
+        for name in RECIPIENTS {
+            let prompt = render_system_prompt(&agent, &speaking(language, recipient(name)))
+                .unwrap_or_else(|err| panic!("{language} × {name}: {err}"));
+            assert!(!prompt.contains("{{"), "{language} × {name}");
+            assert!(
+                prompt.contains(&format!("tagged `{}`", language.as_str())),
+                "{language} × {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_language_tables_name_what_exists() {
+    for (index, language) in LANGUAGES.iter().enumerate() {
+        assert!(
+            !LANGUAGES
+                .iter()
+                .take(index)
+                .any(|seen| seen.as_str() == language.as_str()),
+            "{language} listed twice"
+        );
+    }
+    for (name, file, _) in LANGUAGE_FRAGMENTS {
+        assert!(
+            name == "generic"
+                || LANGUAGES
+                    .iter()
+                    .any(|language| language.as_str() == name && language.sql_dialect().is_none()),
+            "{file} is written for no language other than SQL"
+        );
+        assert!(file.ends_with(&format!("/{name}.md")));
+    }
+}
+
+#[test]
+fn languages_serialize_only_when_they_are_not_the_default() {
+    let sql = AgentSpec::new(AgentId::new(), "Sql", "Prompt.");
+    let json = serde_json::to_value(&sql).expect("serializes");
+    assert!(
+        json.get("languages").is_none(),
+        "an agent written for SQL serializes as before the field: {json}"
+    );
+    let keys = parse_agent_file("keys.md", REDIS_FIXTURE).expect("a valid file");
+    let json = serde_json::to_value(&keys).expect("serializes");
+    assert_eq!(json["languages"], serde_json::json!(["redis"]));
+    let back: AgentSpec = serde_json::from_value(json).expect("reads back");
+    assert_eq!(back, keys);
+    let old: AgentSpec = serde_json::from_value(serde_json::json!({
+        "id": "0199a3c0-0000-7000-8000-0000000000fc",
+        "name": "Old",
+        "system_prompt": "Prompt."
+    }))
+    .expect("a declaration written before the field");
+    assert_eq!(old.languages, [QueryLanguage::SQL]);
 }
