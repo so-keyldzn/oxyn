@@ -144,9 +144,17 @@ async fn a_stopped_aggregate_stops_in_the_engine_and_releases_the_file() {
 #[tokio::test]
 async fn dropping_a_running_cursor_interrupts_the_engine() {
     let session = crate::test_support::memory().await;
+    // A scan of 10^11 rows that streams a row in a thousand: the first chunk
+    // comes at once — opening waits for it —, then the engine works fetch by
+    // fetch, chunk by chunk, where it reads its interrupt flag. A window over
+    // an ordered range was tried first; its sort finalizes in one task the
+    // flag does not reach, and on CI the drop waited for it.
     let mut cursor = session
         .execute(
-            unbounded("SELECT i, sum(hash(i)) OVER (ORDER BY i) FROM range(500000000) t(i)"),
+            unbounded(
+                "SELECT a.i FROM range(100000000) a(i), range(1000) b(i) \
+                 WHERE hash(a.i * b.i) % 1000 = 0",
+            ),
             &CancelToken::new(),
         )
         .await
