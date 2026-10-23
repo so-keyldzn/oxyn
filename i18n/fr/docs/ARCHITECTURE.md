@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="a2380669e1e7" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="6446dbf55a73" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -1040,6 +1040,9 @@ avant exécution et classé `Read`, `Write`, `Ddl`, `Grant` ou `Unknown` — `Un
 traité comme `Ddl`. Un lot multi-statements prend l'intent le plus élevé de ses statements.
 Les pièges sont testés explicitement : `EXPLAIN ANALYZE DELETE` n'est pas une lecture,
 `WITH ... DELETE` non plus, un `WHERE 1=1` compte comme absence de clause `WHERE`.
+Un langage qui n'est pas du SQL est `Unknown` pour `oxyn-query` ; le driver de la
+session visée peut prouver un intent plus étroit par `Session::classify_intent`,
+consulté pour ce seul cas ([ADR-0064](adr/0064-a-session-classifies-non-sql-requests.md)).
 
 **L'intent porté par une `Command` n'est pas digne de confiance.** `oxyn-exec` reclassifie
 systématiquement le texte avant de soumettre au Policy gate — un agent ne peut pas

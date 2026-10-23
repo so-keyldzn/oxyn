@@ -19,7 +19,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use oxyn_core::{
     Actor, CancelToken, Command, CommandId, ConnectionConfig, ConnectionId, DefaultPolicy,
-    DriverId, ExecRequest, OxynError, PolicyGate, QueryLanguage, SessionId,
+    DriverId, ExecRequest, OxynError, PolicyGate, SessionId,
 };
 use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
@@ -831,7 +831,8 @@ impl Backend {
         })
     }
 
-    /// Runs the SQL the user wrote, as written.
+    /// Runs the text the user wrote, as written, in the language the session
+    /// speaks ([`oxyn_query::console_language`]).
     pub async fn execute(
         &self,
         id: CommandId,
@@ -840,8 +841,16 @@ impl Backend {
         sql: String,
     ) -> Result<CommandOutcome, IpcError> {
         let config = self.read_config(connection).await?;
-        let dialect = oxyn_query::dialect_for(&config.driver);
-        let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), sql);
+        let capabilities = self
+            .inner
+            .executor
+            .sessions()
+            .get(session)
+            .ok_or_else(|| IpcError::invalid("This session is no longer open"))?
+            .capabilities();
+        let language = oxyn_query::console_language(&config.driver, capabilities)
+            .ok_or_else(|| IpcError::invalid(consoles::NO_CONSOLE_LANGUAGE))?;
+        let mut request = ExecRequest::new(language, sql);
         request.limits.read_only = config.read_only;
         self.run(
             id,

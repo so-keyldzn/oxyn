@@ -10,7 +10,9 @@
 //! 1. **Reclassify.** The intent carried by the command comes from the caller,
 //!    and an agent is a caller. `oxyn-query` reads the text again; it is the
 //!    result of that reading that is submitted, logged and executed — never
-//!    what the caller declared (ARCHITECTURE §8, I-07).
+//!    what the caller declared (ARCHITECTURE §8, I-07). A language that is not
+//!    SQL, which `oxyn-query` cannot read, takes the intent the target
+//!    session's driver can prove, and stays `Unknown` otherwise (ADR-0064).
 //! 2. **Submit to the `PolicyGate`**, with the environment of the target
 //!    connection and not the one the caller announces.
 //! 3. **On `RequireApproval`, execute nothing.** The command is set aside
@@ -457,7 +459,7 @@ impl Executor {
         cancel: &CancelToken,
     ) -> Result<Outcome> {
         // 1. What the text does, not what the caller says about it.
-        let command = reclassified(command);
+        let command = reclassified(command, &self.sessions);
         let connection = command.target_connection();
 
         // 2. The environment of the target connection, not the announced one.
@@ -875,7 +877,7 @@ impl Executor {
                     });
                 }
                 let request = slot.preview_request(&path, *limit, shape, cancel).await?;
-                let mut request = oxyn_query::reclassify(&request).qualify(request);
+                let mut request = reclassified_request(request, Some(&slot));
                 if request.is_mutating() {
                     // Two distinct refusals, because they call for two different
                     // actions. `Unknown` means "this text could not be
@@ -2693,21 +2695,55 @@ struct Drained {
 /// agent is a caller: they are **replaced**, never cross-checked. The other
 /// commands go through unchanged — their intent is a property of their
 /// variant, not a declaration.
-fn reclassified(command: Command) -> Command {
+///
+/// The target session is only asked about a language that is not SQL, and
+/// only if it belongs to the command's connection: a session of another
+/// connection is refused at execution anyway, and its driver has no say over
+/// this one's requests.
+fn reclassified(command: Command, sessions: &SessionRegistry) -> Command {
     match command {
         Command::Execute {
             connection,
             session,
             request,
         } => {
-            let classification = oxyn_query::reclassify(&request);
+            let slot = sessions
+                .get(session)
+                .filter(|slot| slot.connection() == connection);
             Command::Execute {
                 connection,
                 session,
-                request: Box::new(classification.qualify(*request)),
+                request: Box::new(reclassified_request(*request, slot.as_deref())),
             }
         }
         other => other,
+    }
+}
+
+/// Reclassifies a request: `oxyn-query` reads SQL, and is the only reader of
+/// it; for any other language, the session's driver may prove an intent
+/// (ADR-0064).
+///
+/// Without that proof the request keeps `oxyn-query`'s `Unknown`, counted as
+/// mutating. A proven intent comes without risk, transaction control or
+/// context change: [`Session::classify_intent`](oxyn_driver::Session::classify_intent)
+/// cannot express them, and a driver whose language has such statements
+/// refuses them in its console or carries them through its own context.
+fn reclassified_request(request: ExecRequest, slot: Option<&SessionSlot>) -> ExecRequest {
+    let request = oxyn_query::reclassify(&request).qualify(request);
+    if request.language.sql_dialect().is_some() {
+        return request;
+    }
+    match slot.and_then(|slot| slot.classify_intent(&request)) {
+        Some(intent) => {
+            let mut request = request
+                .with_intent(intent)
+                .with_risk(oxyn_core::MutationRisk::None);
+            request.transaction_control = false;
+            request.context_change = false;
+            request
+        }
+        None => request,
     }
 }
 
@@ -4083,6 +4119,10 @@ mod row_limit_tests;
 #[cfg(test)]
 #[path = "production_read_tests.rs"]
 mod production_read_tests;
+
+#[cfg(test)]
+#[path = "classify_intent_tests.rs"]
+mod classify_intent_tests;
 
 #[cfg(test)]
 #[path = "agent_transaction_tests.rs"]

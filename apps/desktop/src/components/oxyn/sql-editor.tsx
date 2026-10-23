@@ -19,6 +19,7 @@ import { TEXT_FIELD_DOM_ATTRIBUTES } from "./text-field"
 
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { toast } from "@/components/ui/toast"
+import { editorMode } from "@/features/consoles/languages"
 import { catalogNeeds } from "@/features/consoles/sql-catalog-needs"
 import { sqlCompletionSource } from "@/features/consoles/sql-completion"
 import {
@@ -30,6 +31,7 @@ import { setZoneHandle } from "@/lib/actions/context"
 import type { ActionSources } from "@/lib/actions/context"
 import { writeClipboard } from "@/lib/clipboard"
 import type { CompletionCatalog } from "@/lib/ipc/completion"
+import type { QueryLanguageName } from "@/lib/query-language"
 import type { NamePart } from "@/lib/sql-identifiers"
 
 function dialectFor(driver: string) {
@@ -215,10 +217,17 @@ export function SqlEditor({
   completion = null,
   onCatalogNeeds,
   autoFocus = false,
+  language = "sql",
 }: {
   value: string
   onChange: (value: string) => void
   driver: string
+  /**
+   * What the text is written in. SQL brings its grammar and the catalog's
+   * completion; any other language its registered mode
+   * (`features/consoles/languages`), or plain text.
+   */
+  language?: QueryLanguageName
   running?: boolean
   readOnly?: boolean
   onCancel?: () => void
@@ -266,8 +275,10 @@ export function SqlEditor({
   const zone = React.useRef<HTMLDivElement>(null)
   const [view, setView] = React.useState<EditorView | null>(null)
   React.useEffect(() => {
-    if (view) showCompletionNote(view, partialNote(completion))
-  }, [view, completion])
+    // The note is a field of the SQL mode only.
+    if (view && language === "sql")
+      showCompletionNote(view, partialNote(completion))
+  }, [view, completion, language])
   React.useEffect(() => {
     const element = zone.current
     if (!element || !view) return
@@ -321,19 +332,24 @@ export function SqlEditor({
   }
 
   const extensions = React.useMemo(() => {
-    const language = sql({
-      dialect: dialectFor(driver),
-      upperCaseKeywords: true,
-    })
+    const sqlMode = () => {
+      const grammar = sql({
+        dialect: dialectFor(driver),
+        upperCaseKeywords: true,
+      })
+      return [
+        grammar,
+        // The library keeps the keywords and the aliases; the names come from
+        // here, because it cannot insert the form Rust composed (see the source).
+        grammar.language.data.of({
+          autocomplete: sqlCompletionSource(() => snapshot.current),
+        }),
+        completionNote,
+        catalogNeeds(() => handlers.current.onCatalogNeeds),
+      ]
+    }
     return [
-      language,
-      // The library keeps the keywords and the aliases; the names come from
-      // here, because it cannot insert the form Rust composed (see the source).
-      language.language.data.of({
-        autocomplete: sqlCompletionSource(() => snapshot.current),
-      }),
-      completionNote,
-      catalogNeeds(() => handlers.current.onCatalogNeeds),
+      ...(language === "sql" ? sqlMode() : [editorMode(language) ?? []]),
       sqlEditorSearch,
       theme,
       highlight,
@@ -346,7 +362,7 @@ export function SqlEditor({
       // tabindexes as focusable, and flags the editor as a scroll region the
       // keyboard cannot reach as soon as a statement is taller than the panel.
       EditorView.contentAttributes.of({
-        "aria-label": "SQL editor",
+        "aria-label": language === "sql" ? "SQL editor" : "Query editor",
         tabindex: "0",
         // No correction nor typographic quotes in SQL (ADR-0041 § 8).
         ...TEXT_FIELD_DOM_ATTRIBUTES,
@@ -386,7 +402,7 @@ export function SqlEditor({
         ])
       ),
     ]
-  }, [driver])
+  }, [driver, language])
 
   const sources =
     target && view ? menuSources(view, target, readOnly, menu) : {}
