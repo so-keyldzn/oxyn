@@ -51,3 +51,10 @@ test-group = 'serveur-partage'
 [[profile.default.overrides]]
 filter = 'package(oxyn-desktop) & test(/server_cancel::/)'
 test-group = 'serveur-partage'
+
+# The DuckDB driver's tests stop an aggregate in the engine and stream three
+# gigabytes under a memory bound (ADR-0059): slow by construction on a shared
+# CI runner, and they need no server.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-duckdb)'
+slow-timeout = { period = "300s", terminate-after = 1 }

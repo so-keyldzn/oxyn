@@ -732,6 +732,10 @@ fn condition_for(array: &dyn arrow::array::Array, row: usize) -> Option<Conditio
 mod missing_module_tests;
 
 #[cfg(test)]
+#[path = "duckdb_tests.rs"]
+mod duckdb_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
