@@ -176,8 +176,9 @@ oxyn/
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embedded
 │   ├── oxyn-driver-postgres/     # also covers Redshift, TimescaleDB, pgvector
-│   └── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
+│   ├── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
 │                                 #   oxyn-query to split what MySQL cannot prepare
+│   └── oxyn-driver-elasticsearch/ # also covers OpenSearch (ADR-0062)
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/

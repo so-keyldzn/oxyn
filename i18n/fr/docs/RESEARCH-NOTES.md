@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="02b89f0ce966" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="b7182a34f048" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3011,3 +3011,14 @@ n'a pas été relu, la ligne de Node que prend la CI (22) ne change pas.
 | `vite` `8.3.3` a été publié le 2026-10-06T04:10:19Z, `8.3.4` le 2026-10-08T12:07:04Z et `8.3.5`, dist-tag `latest`, le 2026-10-21T06:38:54Z. `8.3.3` est la plus petite version corrigée de la ligne, d'où l'épinglage ; une montée ultérieure passe par le flux de mise à jour habituel | `npm view vite time dist-tags --json` | 2026-10-21 |
 | Avec `vite` `8.3.3`, le lockfile déplace aussi `rolldown` et ses bindings de `1.2.8` à `1.2.14` et `@oxc-project/types` de `0.149.0` à `0.154.0` : ce sont des dépendances propres de vite, pas des épinglages de l'application | `pnpm install --lockfile-only` dans `apps/desktop`, diff de `pnpm-lock.yaml` | 2026-10-21 |
 | Sur ce changement, `pnpm audit --prod` répond « No known vulnerabilities found », `make front-controles` passe (Prettier, ESLint, `tsc --noEmit`, licences, audit) et `pnpm build` se termine avec le prérendu SPA de `/` | commandes lancées dans `apps/desktop` | 2026-10-21 |
+
+## Elasticsearch et OpenSearch — vérifié le 2026-10-22
+
+Pour [ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md).
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Le workspace réutilise `reqwest` **0.13.4**, déjà épinglé avec `json`, `stream`, `rustls`, `http2`, `charset` et `system-proxy` ; `Cargo.lock` ne résout qu'une version de reqwest. Le pilote appelle `no_proxy()` et désactive les redirections, afin qu'un endpoint de base ne puisse pas envoyer l'en-tête d'autorisation à travers un proxy système ou vers une redirection. | `Cargo.toml`, `Cargo.lock`, [reqwest 0.13.4 ClientBuilder](https://docs.rs/reqwest/0.13.4/reqwest/struct.ClientBuilder.html) | 2026-10-22 |
+| Elasticsearch documente que la pagination profonde `from`/`size` est limitée par `index.max_result_window` (10 000 par défaut), et recommande `search_after` ; un point dans le temps stabilise l'ordre de recherches répétées et fournit `_shard_doc` comme briseur d'égalité. | [Pagination Elasticsearch](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/paginate-search-results) | 2026-10-22 |
+| La compatibilité REST Elasticsearch ne couvre qu'un majeur : 9.x peut honorer requêtes et réponses 8.x avec `compatible-with=8`. La documentation Docker d'Elastic nomme **9.5.5** comme tag d'image exact courant. | [Compatibilité API Elasticsearch](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/compatibility), [Installation Docker](https://www.elastic.co/docs/deploy-manage/deploy/self-managed/install-elasticsearch-docker-basic) | 2026-10-22 |
+| OpenSearch expose `POST /_tasks/_cancel` et `POST /_tasks/{task_id}/_cancel` ; toute tâche n'est pas annulable, et la réponse porte `cancellable` et `cancelled`. Le tag officiel **3.0.0** existe pour amd64 et arm64. | [Annuler des tâches OpenSearch](https://docs.opensearch.org/latest/api-reference/tasks/cancel-tasks/), [Tag Docker OpenSearch 3.0.0](https://hub.docker.com/r/opensearchproject/opensearch/tags?name=3.0.0&ordering=last_updated&page=1) | 2026-10-22 |

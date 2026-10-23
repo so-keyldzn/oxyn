@@ -7500,6 +7500,7 @@ dependencies = [
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-driver-elasticsearch",
  "oxyn-driver-mysql",
  "oxyn-driver-postgres",
  "oxyn-driver-sqlite",
@@ -7545,6 +7546,26 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "tracing",
+ "url",
+]
+
+[[package]]
+name = "oxyn-driver-elasticsearch"
+version = "0.0.12"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "futures",
+ "oxyn-catalog",
+ "oxyn-core",
+ "oxyn-data",
+ "oxyn-driver",
+ "reqwest",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
  "url",
 ]
 

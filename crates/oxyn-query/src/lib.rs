@@ -70,7 +70,7 @@ pub use classify::{
     Basis, Classification, StatementInfo, changes_context, classify, classify_language,
     only_controls_transactions, reclassify, runnable_text, validate,
 };
-pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
+pub use dialect::{dialect_for, dialect_for_language, language_for, parser_dialect};
 pub use error::QueryError;
 pub use format::{FormatReport, format, format_report};
 pub use redact::{REDACTED_LITERAL, redact_password_literals};

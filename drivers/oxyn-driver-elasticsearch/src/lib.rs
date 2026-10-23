@@ -1,0 +1,17 @@
+//! Elasticsearch and OpenSearch through their shared JSON-over-HTTP protocol.
+//!
+//! One crate covers both products: the server identifies its distribution at
+//! connection time, and every product-specific difference is a session
+//! capability (ADR-0003).
+
+mod api;
+mod catalog;
+mod cursor;
+mod error;
+mod request;
+mod session;
+
+pub mod driver;
+
+pub use driver::{ElasticsearchDriver, elasticsearch_metadata};
+pub use request::{SearchRequest, parse_request, statement_intent};

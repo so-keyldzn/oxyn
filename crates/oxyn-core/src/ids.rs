@@ -215,6 +215,8 @@ impl DriverId {
     pub const MYSQL: &'static str = "mysql";
     /// SQLite driver, in-process.
     pub const SQLITE: &'static str = "sqlite";
+    /// Elasticsearch driver (and OpenSearch).
+    pub const ELASTICSEARCH: &'static str = "elasticsearch";
 
     /// Builds a driver identifier after validation.
     ///
@@ -271,6 +273,12 @@ impl DriverId {
     #[must_use]
     pub fn sqlite() -> Self {
         Self::known(Self::SQLITE)
+    }
+
+    /// Elasticsearch driver identifier (and OpenSearch).
+    #[must_use]
+    pub fn elasticsearch() -> Self {
+        Self::known(Self::ELASTICSEARCH)
     }
 
     /// Borrowed view of the identifier.
@@ -400,6 +408,10 @@ mod tests {
         assert_eq!(DriverId::postgres().as_str(), "postgres");
         assert_eq!(DriverId::sqlite().to_string(), "sqlite");
         assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valid"));
+        assert_eq!(
+            DriverId::elasticsearch(),
+            DriverId::new("elasticsearch").expect("valid")
+        );
     }
 
     #[test]

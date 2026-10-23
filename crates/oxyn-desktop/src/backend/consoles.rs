@@ -12,8 +12,7 @@ mod capabilities;
 use std::sync::Arc;
 
 use oxyn_core::{
-    Actor, CancelToken, Command, CommandId, ConnectionId, ExecRequest, OxynError, QueryLanguage,
-    SessionId,
+    Actor, CancelToken, Command, CommandId, ConnectionId, ExecRequest, OxynError, SessionId,
 };
 use oxyn_exec::Outcome;
 
@@ -303,9 +302,24 @@ impl Backend {
         run: ConsoleRun,
     ) -> Result<CommandOutcome, IpcError> {
         let config = self.read_config(connection).await?;
-        let dialect = oxyn_query::dialect_for(&config.driver);
-        let text = targeted_text(&run.sql, run.target, dialect).map_err(IpcError::invalid)?;
+        let language = oxyn_query::language_for(&config.driver);
+        let text = match language.sql_dialect() {
+            Some(dialect) => {
+                targeted_text(&run.sql, run.target, dialect).map_err(IpcError::invalid)?
+            }
+            None if matches!(run.target, RunTarget::All) => run.sql.clone(),
+            None => {
+                return Err(IpcError::invalid(
+                    "This console runs one complete non-SQL request.",
+                ));
+            }
+        };
         let text = if run.explain {
+            let Some(dialect) = language.sql_dialect() else {
+                return Err(IpcError::invalid(
+                    "Explain is available only for SQL consoles.",
+                ));
+            };
             capabilities::explain_sql(&text, dialect).map_err(IpcError::invalid)?
         } else {
             text
@@ -320,11 +334,18 @@ impl Backend {
             .get(session)
             .ok_or_else(|| IpcError::invalid("This console's session is no longer open"))?
             .capabilities();
-        if let Some(message) = capabilities::missing_for(&text, dialect, session_capabilities) {
+        if let Some(dialect) = language.sql_dialect()
+            && let Some(message) = capabilities::missing_for(&text, dialect, session_capabilities)
+        {
             return Err(IpcError::invalid(message));
         }
         let params = bind(&run.parameters).map_err(|error| IpcError::invalid(error.to_string()))?;
-        let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), text).with_params(params);
+        if language.sql_dialect().is_none() && !params.is_empty() {
+            return Err(IpcError::invalid(
+                "Search DSL requests do not accept bound parameters.",
+            ));
+        }
+        let mut request = ExecRequest::new(language, text).with_params(params);
         request.limits.read_only = config.read_only;
         // Listed as `Unknown` at the exit until it answers (ADR-0043). Held
         // for approval, it is counted again by `decide`.

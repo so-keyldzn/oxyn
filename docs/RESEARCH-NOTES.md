@@ -2964,3 +2964,14 @@ re-read, the Node line the CI takes (22) is unchanged.
 | `vite` `8.3.3` was published on 2026-10-06T04:10:19Z, `8.3.4` on 2026-10-08T12:07:04Z and `8.3.5`, the `latest` dist-tag, on 2026-10-21T06:38:54Z. `8.3.3` is the smallest patched version of the line, hence the pin; a later bump goes through the usual update flow | `npm view vite time dist-tags --json` | 2026-10-21 |
 | With `vite` `8.3.3` the lockfile also moves `rolldown` and its bindings from `1.2.8` to `1.2.14` and `@oxc-project/types` from `0.149.0` to `0.154.0`: they are vite's own dependencies, not pins of the application | `pnpm install --lockfile-only` in `apps/desktop`, diff of `pnpm-lock.yaml` | 2026-10-21 |
 | On this change `pnpm audit --prod` reports "No known vulnerabilities found", `make front-controles` passes (Prettier, ESLint, `tsc --noEmit`, licenses, audit) and `pnpm build` completes with the SPA prerender of `/` | commands run in `apps/desktop` | 2026-10-21 |
+
+## Elasticsearch and OpenSearch — checked on 2026-10-22
+
+For [ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md).
+
+| Fact | Source | Checked on |
+|---|---|---|
+| The workspace reuses `reqwest` **0.13.4**, already pinned with `json`, `stream`, `rustls`, `http2`, `charset` and `system-proxy`; `Cargo.lock` contains one resolved reqwest version. The driver calls `no_proxy()` and disables redirects, so a configured database endpoint cannot send an authorization header through a system proxy or a redirect target. | `Cargo.toml`, `Cargo.lock`, [reqwest 0.13.4 ClientBuilder](https://docs.rs/reqwest/0.13.4/reqwest/struct.ClientBuilder.html) | 2026-10-22 |
+| Elasticsearch documents that deep `from`/`size` pagination is limited by `index.max_result_window` (10,000 by default), and recommends `search_after`; a point in time keeps order stable across its repeated searches and provides `_shard_doc` as a tie breaker. | [Elasticsearch pagination](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/paginate-search-results) | 2026-10-22 |
+| Elasticsearch REST compatibility is only across one major version: 9.x can honor 8.x requests and responses with `compatible-with=8`. Elastic's Docker documentation names **9.5.5** as the current exact image tag. | [Elasticsearch API compatibility](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/compatibility), [Docker installation](https://www.elastic.co/docs/deploy-manage/deploy/self-managed/install-elasticsearch-docker-basic) | 2026-10-22 |
+| OpenSearch exposes `POST /_tasks/_cancel` and `POST /_tasks/{task_id}/_cancel`; not every task is cancellable, and the response reports `cancellable` and `cancelled`. The official image tag **3.0.0** exists for both amd64 and arm64. | [OpenSearch cancel tasks](https://docs.opensearch.org/latest/api-reference/tasks/cancel-tasks/), [OpenSearch Docker tag 3.0.0](https://hub.docker.com/r/opensearchproject/opensearch/tags?name=3.0.0&ordering=last_updated&page=1) | 2026-10-22 |

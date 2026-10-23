@@ -43,6 +43,7 @@ oxyn-embed    = { path = "crates/oxyn-embed" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
+oxyn-driver-elasticsearch = { path = "drivers/oxyn-driver-elasticsearch" }
 
 # --- foundation --------------------------------------------------------------
 anyhow        = "1.0.104"

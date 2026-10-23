@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="44eb38c43777" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="6b7bb15a22af" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2268,6 +2268,10 @@ Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
 - `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-elasticsearch` — la connexion REST/JSON, la classification de
+  politique Search DSL et la découverte du mapping sont en cours (ADR-0062) ;
+  pagination PIT, annulation prouvée par le serveur, suites sur serveur réel et
+  vérification OpenSearch restent nécessaires avant la porte de sortie.
 
 **Pourquoi ici, avant les plugins.** C'est ici que le modèle de capacités
 ([ADR-0003](adr/0003-driver-capabilities.md)) et `QueryLanguage` sont mis à
