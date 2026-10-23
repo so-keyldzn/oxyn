@@ -18,6 +18,7 @@ use reqwest::{Client, Response, StatusCode};
 
 use crate::error::{MAX_MESSAGE_BYTES, ServerError};
 use crate::options::{ConnectSpec, TlsMode};
+use crate::params::Bound;
 
 /// The output format of every statement: names and types announced first,
 /// then rows ([`crate::types`]).
@@ -37,8 +38,11 @@ pub struct Call {
     pub database: Option<String>,
     /// Server settings for this request only.
     pub settings: Vec<(&'static str, String)>,
-    /// Query parameters, bound by the server to `{name:Type}` placeholders.
+    /// The driver's own query parameters, bound by the server to
+    /// `{name:Type}` placeholders.
     pub params: Vec<(&'static str, String)>,
+    /// The values the user bound, by placeholder name; `None` is `NULL`.
+    pub bound: Vec<Bound>,
 }
 
 /// What the response's headers say, before its body is read.
@@ -116,6 +120,14 @@ impl Http {
             }
             for (name, value) in &call.params {
                 query.append_pair(&format!("param_{name}"), &escape_param(value));
+            }
+            for (name, value) in &call.bound {
+                // `\N` is the server's NULL; any other text is escaped, so a
+                // value spelled `\N` stays that text.
+                let value = value
+                    .as_deref()
+                    .map_or_else(|| r"\N".to_owned(), escape_param);
+                query.append_pair(&format!("param_{name}"), &value);
             }
         }
         let response = self

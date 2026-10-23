@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="f07c7a300d9a" -->
+<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="1ad213bc624a" -->
 
 > Traduction française de [docs/adr/0060-clickhouse-driver-over-http-rowbinary.md](../../../../docs/adr/0060-clickhouse-driver-over-http-rowbinary.md). **La version anglaise fait foi.**
 
@@ -142,9 +142,17 @@ qu'est une « session ». Vérifié le 2026-10-23
     Aucune colonne n'est marquée clé primaire dans le catalogue ; la clé
     primaire est listée comme un index non unique, et l'instruction `CREATE` de
     la table est sa définition.
-11. **Les valeurs liées sont refusées** avec `NotSupported` pour l'instant :
-    ClickHouse lie des marqueurs `{name:Type}` côté serveur, et le panneau de
-    paramètres de l'éditeur ne les compose pas encore pour ce dialecte.
+11. **Les valeurs liées partent au serveur comme paramètres de requête.** La
+    n-ième valeur du panneau de paramètres de l'éditeur lie le n-ième marqueur
+    `{name:Type}` distinct de l'instruction, dans l'ordre de première
+    apparition — chaînes, commentaires et heredocs ignorés ; un nombre
+    différent est refusé avant la requête. Le texte atteint le serveur
+    inchangé, les valeurs comme `param_<name>` avec leurs échappements
+    tabulés, `\N` pour un `NULL` : le serveur les type, le pilote ne les écrit
+    jamais dans le texte ([I-10](../../CLAUDE.md#i-10)). Un booléen se lie en
+    `1`/`0`, un instant en secondes depuis l'epoch avec ses nanosecondes ; les
+    octets, les intervalles, les tableaux et les instants antérieurs à 1970
+    sont refusés en nommant leur rang.
 
 ## Conséquences
 

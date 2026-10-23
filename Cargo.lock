@@ -7556,6 +7556,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytes",
+ "chrono",
  "futures",
  "oxyn-catalog",
  "oxyn-core",

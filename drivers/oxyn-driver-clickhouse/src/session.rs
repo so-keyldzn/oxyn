@@ -39,6 +39,7 @@ use crate::catalog::ClickhouseCatalog;
 use crate::cursor::ClickhouseCursor;
 use crate::fetch::fetch;
 use crate::http::{Call, Http};
+use crate::params;
 use crate::refuse::refuse_session_state;
 use crate::stream::{self, DRAIN_BOUND, Execution, KILL_BOUND};
 use crate::variant::ServerFacts;
@@ -54,11 +55,6 @@ const SESSION_SETTINGS: [(&str, &str); 2] = [
     ("output_format_binary_write_json_as_string", "1"),
     ("cancel_http_readonly_queries_on_client_close", "1"),
 ];
-
-/// Why bound parameters are refused.
-const PARAMETERS_REFUSED: &str = "bound parameters: ClickHouse binds `{name:Type}` \
-    placeholders, which Oxyn does not compose for this driver yet; write the values in the \
-    statement";
 
 /// An open ClickHouse session.
 #[derive(Debug)]
@@ -174,20 +170,22 @@ impl Session for ClickhouseSession {
     /// for a statement without result set, once it completed.
     ///
     /// # Errors
-    /// [`OxynError::NotSupported`] for another language, bound parameters, or
-    /// a typed `USE`, `SET` or `CREATE TEMPORARY TABLE`;
+    /// [`OxynError::NotSupported`] for another language, a bound value
+    /// ClickHouse cannot receive as text, or a typed `USE`, `SET` or
+    /// `CREATE TEMPORARY TABLE`; [`OxynError::Config`] when the bound values
+    /// do not match the statement's `{name:Type}` placeholders;
     /// [`OxynError::Cancelled`]; the server's refusal, classified.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.capabilities.require_language(request.language)?;
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        if !request.params.is_empty() {
-            return Err(OxynError::NotSupported {
-                capability: PARAMETERS_REFUSED.to_owned(),
-            });
-        }
         refuse_session_state(&request.text)?;
+        let bound = if request.params.is_empty() {
+            Vec::new()
+        } else {
+            params::bind(&request.text, &request.params)?
+        };
         if request.limits.read_only && !self.capabilities.contains(Capabilities::READ_ONLY_SESSION)
         {
             return Err(OxynError::NotSupported {
@@ -206,6 +204,7 @@ impl Session for ClickhouseSession {
             database: self.database(),
             settings: self.settings(&request.limits),
             params: Vec::new(),
+            bound,
         };
         let execution = Execution {
             http: Arc::clone(&self.http),

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="d4262f95f335" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="54f2a6f8c23c" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2109,7 +2109,7 @@ Oxyn est un bon client SQL sans une ligne d'IA.
   `KILL QUERY` prouvé dans `system.processes`, catalogue des bases, tables,
   vues et vues matérialisées avec leurs clés, index de saut et instructions
   `CREATE`, aperçu trié et filtré sans pages, console, `EXPLAIN`, sélecteur de
-  contexte. **À écrire** : les valeurs liées (`{name:Type}`), les
+  contexte, valeurs liées sur les marqueurs `{name:Type}`. **À écrire** : les
   dictionnaires et les objets propres au serveur (parts, mutations,
   utilisateurs et rôles) dans l'arbre, la complétion depuis `system.functions`
   et `system.keywords`, et les types `Variant`, `Dynamic` et

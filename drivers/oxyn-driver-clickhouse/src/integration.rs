@@ -28,7 +28,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::display::array_value_to_string;
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, Environment, ErrorClass, ExecLimits,
-    ExecRequest, OxynError, StatementIntent,
+    ExecRequest, OxynError, ScalarValue, StatementIntent,
 };
 use oxyn_driver::{Credentials, Driver, Session};
 use secrecy::SecretString;
@@ -431,5 +431,47 @@ async fn a_write_reports_its_rows_and_a_bounded_read_says_it_is_truncated() {
         StatementIntent::Ddl,
     )
     .await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs OXYN_CLICKHOUSE_TEST_URL"]
+async fn bound_values_reach_their_placeholders_unchanged() {
+    let Some(session) = session().await else {
+        return;
+    };
+    let hostile = "a\\b\tc'; DROP TABLE audit; -- \\N";
+    let instant = chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).expect("valid");
+    let request = read(
+        "SELECT {s:String} = {s:String} AS same, hex({s:String}) AS raw, \
+                {n:Nullable(UInt8)} IS NULL AS null, {i:Int64} + 1 AS next, \
+                toUnixTimestamp64Nano({t:DateTime64(9, 'UTC')}) AS nanos",
+    )
+    .with_params(vec![
+        ScalarValue::Text(hostile.to_owned()),
+        ScalarValue::Null,
+        ScalarValue::Int64(41),
+        ScalarValue::Timestamp(instant),
+    ]);
+    let batches = run(&*session, request).await.expect("bound");
+    let batch = batches.first().expect("one batch");
+    let cell = |name: &str| {
+        array_value_to_string(batch.column_by_name(name).expect("column"), 0).expect("text")
+    };
+    // ClickHouse comparisons return `UInt8`.
+    assert_eq!(cell("same"), "1");
+    let expected_hex: String = hostile.bytes().map(|byte| format!("{byte:02X}")).collect();
+    assert_eq!(cell("raw"), expected_hex, "the server binds the exact text");
+    assert_eq!(cell("null"), "1");
+    assert_eq!(cell("next"), "42");
+    assert_eq!(cell("nanos"), "1700000000123456789");
+
+    let mismatch = run(
+        &*session,
+        read("SELECT {a:UInt8}").with_params(vec![ScalarValue::Int64(1), ScalarValue::Int64(2)]),
+    )
+    .await
+    .expect_err("two values for one placeholder");
+    assert!(matches!(mismatch, OxynError::Config(_)), "{mismatch:?}");
     session.close().await.expect("close");
 }

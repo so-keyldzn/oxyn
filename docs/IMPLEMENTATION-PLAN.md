@@ -2104,8 +2104,8 @@ Oxyn is a good SQL client without a single line of AI.
   in bytes, `KILL QUERY` proven in `system.processes`, catalog of databases,
   tables, views and materialized views with keys, skipping indexes and
   `CREATE` statements, sorted and filtered preview without pages, console,
-  `EXPLAIN`, context selector. **To be written**: bound values
-  (`{name:Type}`), dictionaries and the server's own objects (parts,
+  `EXPLAIN`, context selector, bound values on `{name:Type}` placeholders.
+  **To be written**: dictionaries and the server's own objects (parts,
   mutations, users and roles) in the tree, completion from `system.functions`
   and `system.keywords`, and the types `Variant`, `Dynamic` and
   `AggregateFunction` in a console;

@@ -130,9 +130,16 @@ values become Arrow, and what a "session" is. Checked on 2026-10-23
     No column is marked a primary key in the catalog; the primary key is
     listed as a non-unique index, and the table's own `CREATE` statement is
     its definition.
-11. **Bound values are refused** with `NotSupported` for now: ClickHouse binds
-    `{name:Type}` placeholders server-side, and the editor's parameter panel
-    does not compose them for this dialect yet.
+11. **Bound values go to the server as query parameters.** The n-th value of
+    the editor's parameter panel binds the n-th distinct `{name:Type}`
+    placeholder of the statement, in order of first appearance — quotes,
+    comments and heredocs skipped; a count that differs is refused before
+    the request. The text reaches the server unchanged, the values as
+    `param_<name>` with their tab-separated escapes, `\N` for a `NULL`: the
+    server types them, the driver never writes them into the text
+    ([I-10](../../CLAUDE.md#i-10)). A boolean binds as `1`/`0`, an instant as
+    seconds since the epoch with its nanoseconds; bytes, intervals, arrays and
+    instants before 1970 are refused naming their rank.
 
 ## Consequences
 

@@ -66,6 +66,7 @@ pub mod variant;
 mod fetch;
 mod http;
 mod options;
+mod params;
 mod preview;
 mod refuse;
 
