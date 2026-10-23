@@ -387,9 +387,11 @@ impl CatalogProvider for MongoCatalog {
                 plan.sample_size()
             ));
         }
-        if listed.kind == RelationKind::Collection {
-            // Metadata, not a scan: `count` without a filter. A failure costs
-            // the estimate, not the description.
+        if keyed {
+            // Metadata, not a scan: `count` without a filter. Only on a plain
+            // collection: a time-series collection is a view over its
+            // buckets, where the count would unpack them. A failure costs the
+            // estimate, not the description.
             if let Ok(reply) = self.command(database, doc! { "count": name }, cancel).await
                 && let Some(rows) = count_of(reply.get("n"))
             {

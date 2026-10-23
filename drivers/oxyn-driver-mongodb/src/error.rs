@@ -35,6 +35,8 @@ const INTERRUPTED_AT_SHUTDOWN: i32 = 11600;
 const INTERRUPTED_REPL_STATE: i32 = 11602;
 /// `CursorKilled`: a cursor killed while a `getMore` read it.
 pub(crate) const CURSOR_KILLED: i32 = 237;
+/// `CursorNotFound`.
+const CURSOR_NOT_FOUND: i32 = 43;
 /// `MaxTimeMSExpired`: the user's own `maxTimeMS` bound.
 const MAX_TIME_MS_EXPIRED: i32 = 50;
 /// `AuthenticationFailed`.
@@ -128,9 +130,13 @@ pub(crate) fn server_code(error: &MongoLibError) -> Option<i32> {
 }
 
 /// Did the server report the operation interrupted, the way `killSessions`
-/// and `killCursors` make it?
-pub(crate) fn is_interruption(error: &MongoLibError) -> bool {
-    matches!(server_code(error), Some(INTERRUPTED | CURSOR_KILLED))
+/// and `killCursors` make it? A `getMore` on a cursor `killSessions` closed
+/// between two batches finds no cursor at all: `CursorNotFound`.
+fn is_interruption(error: &MongoLibError) -> bool {
+    matches!(
+        server_code(error),
+        Some(INTERRUPTED | CURSOR_KILLED | CURSOR_NOT_FOUND)
+    )
 }
 
 /// Is the failure a cut of the transport, after which the request's fate is
