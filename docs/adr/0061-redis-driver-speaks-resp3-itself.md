@@ -64,6 +64,9 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    lengths from the server never size an allocation beyond 1,024 elements; a
    line is bounded at 1 MiB; nesting deeper than 32 levels is skipped
    iteratively and marked; streamed RESP3 types are refused as malformed.
+   A connection counts the replies it sent for and has not read to their
+   end; one that is not in step — its reader dropped by a deadline or a
+   closed tab — is closed and never written on again.
 2. **Handshake and declared state:** `HELLO 3 [AUTH user password] SETNAME
    oxyn`, then `SELECT n` when the form names a database other than 0. A server
    without `HELLO` (Redis before 6) is refused. A server whose `HELLO` says
@@ -83,8 +86,12 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    `READONLY`/`READWRITE`/`ASKING`, and `CLIENT TRACKING`, `CACHING`, `REPLY`,
    `SETNAME`, `SETINFO`, `NO-EVICT`, `NO-TOUCH`. Blocking commands are sent;
    the execution's timeout and the Stop bound them.
-5. **A console text is one command**, read as `redis-cli`'s `sdssplitargs`
-   reads it; a second line outside quotes and a typed NUL are refused. Keys are
+5. **An execution is one command**, read as `redis-cli`'s `sdssplitargs`
+   reads it; a second line outside quotes and a typed NUL are refused. A
+   console holds one command per line, and Run without a selection sends the
+   line under the cursor, a line break inside quotes kept in its argument
+   (`oxyn_query::redis::current_command`); a quote left open makes the
+   boundary unknown, and a selection is asked for. Keys are
    shown, previewed and composed through the inverse rendering, which parses
    back to the exact bytes.
 6. **A read-only execution sends only what the server flags `readonly`**
@@ -92,7 +99,9 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    not declare `READ_ONLY_SESSION`; `EVAL_RO` and `FCALL_RO` qualify, and the
    server refuses a write inside them.
 7. **Stopping:** a `blocking` command is stopped with `CLIENT UNBLOCK <id>
-   ERROR` from a second connection; an `EVAL`-family or `FCALL`-family script
+   ERROR` from a second connection, proven by the stopped command's own
+   `-UNBLOCKED` (a module's blocking command answers its unblocking with an
+   error of its choosing, which proves nothing); an `EVAL`-family or `FCALL`-family script
    with `SCRIPT KILL` or `FUNCTION KILL`, sent only when `FUNCTION STATS` shows
    the running script's command line to be the one this session sent. Any
    other command, and a script that already wrote, cannot be stopped: the
@@ -105,10 +114,12 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    it ends on `OutcomeUnknown`, naming what may have happened.
 9. **Error classes from the prefix:** `LOADING`, `BUSY`, `OOM`, `MISCONF`,
    `NOREPLICAS`, `MASTERDOWN`, `TRYAGAIN`, `CLUSTERDOWN` are transient; every
-   other prefix is permanent, except an error from a script's command
-   (`@scripting`), which is ambiguous — Redis keeps what a failing script
-   wrote. A connection lost after a command that may write was sent is
-   `OutcomeUnknown`.
+   other prefix is permanent. Any error of a script (`@scripting`, or an
+   `EVAL`/`FCALL` name when the table is unreadable) but `NOSCRIPT` is
+   ambiguous, whatever its prefix: Redis keeps what a failing script wrote,
+   and the script chooses the prefix — a `TRYAGAIN` it returns after a
+   `DECRBY` is not the server's refusal. A connection lost after a command
+   that may write was sent is `OutcomeUnknown`.
 10. **Replies as Arrow.** The reply's first byte decides the columns: a
     scalar is one typed row (`Int64`, `Float64`, `Boolean`; a big number is
     `Utf8` marked `oxyn:redis_type`); an array, set or push is one row per
@@ -122,10 +133,14 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     the connection; the session reopens it with the same declared state.
 11. **The catalog:** databases are catalogs named `db0`, `db1`… (from
     `CONFIG GET databases`, or `INFO keyspace` when the account may not read
-    the configuration); a database lists at most 1,000 keys found by at most
-    50 `SCAN … COUNT 1000` calls, each with its type, as `KeyPattern`
-    relations; `KEYS` is never sent. The catalog and each preview use their
-    own connections, so browsing never moves the console's database.
+    the configuration), at most 256 of them besides the non-empty ones and
+    the form's; a database lists at most 1,000 keys and 1 MiB of key names,
+    found by at most 50 `SCAN … COUNT 1000` calls of at most 4 MiB each, each
+    key with its type, as `KeyPattern` relations; `KEYS` is never sent. A key
+    name is written in the quoted form the console reads back to the same
+    bytes, invisible format characters escaped. The catalog and each preview
+    use their own connections, so browsing never moves the console's
+    database.
 
 ## Consequences
 

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="cafbbe156812" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="733d1c6b1576" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -71,7 +71,10 @@ que fait un arrêt. Vérifié le 2026-10-22
    par élément ; aucune longueur venue du serveur ne dimensionne une allocation
    au-delà de 1 024 éléments ; une ligne est bornée à 1 Mio ; une imbrication
    de plus de 32 niveaux est sautée itérativement et marquée ; les types RESP3
-   en flux sont refusés comme malformés.
+   en flux sont refusés comme malformés. Une connexion compte les réponses
+   qu'elle a demandées et pas lues jusqu'au bout ; celle qui n'est plus en
+   phase — son lecteur abandonné par un délai ou un onglet fermé — est fermée
+   et on n'y écrit plus jamais.
 2. **Poignée de main et état déclaré :** `HELLO 3 [AUTH user password] SETNAME
    oxyn`, puis `SELECT n` quand le formulaire nomme une base autre que 0. Un
    serveur sans `HELLO` (Redis avant 6) est refusé. Un serveur dont le `HELLO`
@@ -91,16 +94,21 @@ que fait un arrêt. Vérifié le 2026-10-22
    `QUIT`, `READONLY`/`READWRITE`/`ASKING`, et `CLIENT TRACKING`, `CACHING`,
    `REPLY`, `SETNAME`, `SETINFO`, `NO-EVICT`, `NO-TOUCH`. Les commandes
    bloquantes sont envoyées ; le délai de l'exécution et l'arrêt les bornent.
-5. **Un texte de console est une commande**, lue comme `sdssplitargs` de
+5. **Une exécution est une commande**, lue comme `sdssplitargs` de
    `redis-cli` la lit ; une seconde ligne hors guillemets et un NUL tapé sont
-   refusés. Les clés sont affichées, prévisualisées et composées par le rendu
+   refusés. Une console porte une commande par ligne, et Run sans sélection
+   envoie la ligne sous le curseur, un saut de ligne entre guillemets gardé
+   dans son argument (`oxyn_query::redis::current_command`) ; un guillemet
+   resté ouvert rend la limite inconnue, et une sélection est demandée. Les clés sont affichées, prévisualisées et composées par le rendu
    inverse, qui se relit vers les mêmes octets exactement.
 6. **Une exécution en lecture seule n'envoie que ce que le serveur marque
    `readonly`** hors `@dangerous`. Redis n'a pas de session en lecture seule,
    donc la session ne déclare pas `READ_ONLY_SESSION` ; `EVAL_RO` et
    `FCALL_RO` qualifient, et le serveur refuse une écriture en leur sein.
 7. **Arrêter :** une commande `blocking` est arrêtée par `CLIENT UNBLOCK <id>
-   ERROR` depuis une seconde connexion ; un script de la famille `EVAL` ou
+   ERROR` depuis une seconde connexion, prouvé par le `-UNBLOCKED` de la
+   commande arrêtée elle-même (une commande bloquante de module répond à son
+   déblocage par une erreur de son choix, qui ne prouve rien) ; un script de la famille `EVAL` ou
    `FCALL` par `SCRIPT KILL` ou `FUNCTION KILL`, envoyés seulement quand
    `FUNCTION STATS` montre que la ligne de commande du script en cours est
    celle que cette session a envoyée. Toute autre commande, et un script qui a
@@ -115,10 +123,12 @@ que fait un arrêt. Vérifié le 2026-10-22
    passer.
 9. **Classes d'erreur d'après le préfixe :** `LOADING`, `BUSY`, `OOM`,
    `MISCONF`, `NOREPLICAS`, `MASTERDOWN`, `TRYAGAIN`, `CLUSTERDOWN` sont
-   transitoires ; tout autre préfixe est permanent, sauf une erreur venue de la
-   commande d'un script (`@scripting`), qui est ambiguë — Redis garde ce qu'un
-   script en échec a écrit. Une connexion perdue après l'envoi d'une commande
-   qui peut écrire vaut `OutcomeUnknown`.
+   transitoires ; tout autre préfixe est permanent. Toute erreur d'un script
+   (`@scripting`, ou un nom `EVAL`/`FCALL` quand la table est illisible) sauf
+   `NOSCRIPT` est ambiguë, quel que soit son préfixe : Redis garde ce qu'un
+   script en échec a écrit, et le script choisit le préfixe — un `TRYAGAIN`
+   qu'il rend après un `DECRBY` n'est pas le refus du serveur. Une connexion
+   perdue après l'envoi d'une commande qui peut écrire vaut `OutcomeUnknown`.
 10. **Les réponses en Arrow.** Le premier octet de la réponse décide des
     colonnes : un scalaire est une ligne typée (`Int64`, `Float64`, `Boolean` ;
     un grand nombre est `Utf8` marqué `oxyn:redis_type`) ; un tableau, un
@@ -134,11 +144,15 @@ que fait un arrêt. Vérifié le 2026-10-22
     même état déclaré.
 11. **Le catalogue :** les bases sont des catalogues nommés `db0`, `db1`… (d'après
     `CONFIG GET databases`, ou `INFO keyspace` quand le compte ne peut pas lire
-    la configuration) ; une base liste au plus 1 000 clés trouvées par au plus
-    50 appels `SCAN … COUNT 1000`, chacune avec son type, comme relations
-    `KeyPattern` ; `KEYS` n'est jamais envoyé. Le catalogue et chaque aperçu
-    ont leurs propres connexions, si bien que parcourir l'arbre ne déplace
-    jamais la base de la console.
+    la configuration), au plus 256 en plus des non vides et de celle du
+    formulaire ; une base liste au plus 1 000 clés et 1 Mio de noms de clés,
+    trouvées par au plus 50 appels `SCAN … COUNT 1000` d'au plus 4 Mio
+    chacun, chaque clé avec son type, comme relations `KeyPattern` ; `KEYS`
+    n'est jamais envoyé. Un nom de clé est écrit sous la forme entre
+    guillemets que la console relit vers les mêmes octets, caractères de
+    format invisibles échappés. Le catalogue et chaque aperçu ont leurs propres
+    connexions, si bien que parcourir l'arbre ne déplace jamais la base de la
+    console.
 
 ## Conséquences
 
