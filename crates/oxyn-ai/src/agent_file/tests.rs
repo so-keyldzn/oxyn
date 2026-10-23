@@ -92,7 +92,15 @@ fn the_fragment_tables_name_what_exists() {
         assert!(file.ends_with(&format!("/{name}.md")));
     }
     // The dialects Oxyn has or plans a driver for carry their own fragment.
-    for dialect in ["ansi", "postgres", "redshift", "mysql", "sqlite", "duckdb"] {
+    for dialect in [
+        "ansi",
+        "postgres",
+        "redshift",
+        "mysql",
+        "sqlite",
+        "duckdb",
+        "clickhouse",
+    ] {
         assert!(
             DIALECT_FRAGMENTS
                 .iter()
