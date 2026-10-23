@@ -7549,6 +7549,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxyn-driver-clickhouse"
+version = "0.0.12"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "bytes",
+ "futures",
+ "oxyn-catalog",
+ "oxyn-core",
+ "oxyn-data",
+ "oxyn-driver",
+ "oxyn-query",
+ "reqwest",
+ "rstest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "oxyn-driver-mysql"
 version = "0.0.12"
 dependencies = [
