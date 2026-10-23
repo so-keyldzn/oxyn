@@ -43,6 +43,7 @@ oxyn-embed    = { path = "crates/oxyn-embed" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
+oxyn-driver-redis    = { path = "drivers/oxyn-driver-redis" }
 
 # --- foundation --------------------------------------------------------------
 anyhow        = "1.0.104"
@@ -124,6 +125,12 @@ mysql_async   = { version = "=0.37.1", default-features = false, features = [
 # named-parameter parser whether a text would be rewritten before it is
 # prepared (ADR-0050). Exact: the guard is only right for this parser.
 mysql_common  = { version = "=0.37.3", default-features = false }
+# Redis and Valkey (ADR-0061) speak RESP over a stream the driver opens itself:
+# no Redis client library reads a reply element by element. TLS is rustls on
+# aws-lc-rs, the provider above, with the Mozilla roots `webpki-roots` carries.
+# Both releases are those the lockfile already resolves for `sqlx`.
+tokio-rustls  = { version = "0.26.5", default-features = false, features = ["aws_lc_rs", "tls12"] }
+webpki-roots  = "1.0.10"
 
 # --- AI ----------------------------------------------------------------------
 # reqwest 0.13 renamed the `rustls-tls` feature to `rustls`.

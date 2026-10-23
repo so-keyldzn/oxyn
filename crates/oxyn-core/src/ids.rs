@@ -215,6 +215,8 @@ impl DriverId {
     pub const MYSQL: &'static str = "mysql";
     /// SQLite driver, in-process.
     pub const SQLITE: &'static str = "sqlite";
+    /// Redis driver (and Valkey: one protocol, RESP).
+    pub const REDIS: &'static str = "redis";
 
     /// Builds a driver identifier after validation.
     ///
@@ -271,6 +273,12 @@ impl DriverId {
     #[must_use]
     pub fn sqlite() -> Self {
         Self::known(Self::SQLITE)
+    }
+
+    /// Redis driver identifier.
+    #[must_use]
+    pub fn redis() -> Self {
+        Self::known(Self::REDIS)
     }
 
     /// Borrowed view of the identifier.

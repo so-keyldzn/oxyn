@@ -7592,6 +7592,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxyn-driver-redis"
+version = "0.0.12"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "futures",
+ "oxyn-catalog",
+ "oxyn-core",
+ "oxyn-data",
+ "oxyn-driver",
+ "parking_lot",
+ "rstest",
+ "secrecy",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "webpki-roots 1.0.10",
+]
+
+[[package]]
 name = "oxyn-driver-sqlite"
 version = "0.0.12"
 dependencies = [
