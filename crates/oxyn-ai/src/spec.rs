@@ -28,9 +28,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use oxyn_core::{AgentId, SqlDialect};
+use oxyn_core::{AgentId, QueryLanguage, SqlDialect};
 
-use crate::agent_file::{PromptTarget, Recipient};
+use crate::agent_file::{PromptTarget, Recipient, same_language};
 use crate::context::ContextPolicy;
 use crate::error::AiError;
 use crate::tools::ToolRegistry;
@@ -131,11 +131,28 @@ pub struct AgentSpec {
     #[serde(default = "default_max_turns")]
     pub max_turns: usize,
 
-    /// The dialects this agent is written for; empty means every one.
+    /// The query languages this agent writes; `[sql]` when a declaration
+    /// says nothing, so that every agent written before the field behaves
+    /// as it did (ADR-0065).
+    ///
+    /// Narrows where the agent is offered, as
+    /// [`applies_to`](Self::applies_to) does, and grants nothing: the tools,
+    /// the `PolicyGate` and the tier are the same whatever the language.
+    /// Written as [`QueryLanguage::as_str`] names; the dialect of a `Sql`
+    /// entry is never read. Never empty once [`validate`](Self::validate)d.
+    #[serde(
+        default = "sql_only",
+        with = "crate::agent_file::language_names",
+        skip_serializing_if = "is_sql_only"
+    )]
+    pub languages: Vec<QueryLanguage>,
+
+    /// The SQL dialects this agent is written for; empty means every one.
     ///
     /// Narrows where the agent is **offered** ([`offered_for`](Self::offered_for));
     /// it grants nothing (ADR-0049 § 2). Written as [`SqlDialect::as_str`]
-    /// names, as in a file.
+    /// names, as in a file. Only read on a SQL connection: a list here
+    /// requires `sql` among [`languages`](Self::languages).
     #[serde(default, with = "crate::agent_file::dialect_names")]
     pub applies_to: Vec<SqlDialect>,
 
@@ -149,6 +166,18 @@ const fn default_max_turns() -> usize {
     DEFAULT_MAX_TURNS
 }
 
+/// Default value of [`AgentSpec::languages`]: what every agent wrote before
+/// the field existed.
+pub(crate) fn sql_only() -> Vec<QueryLanguage> {
+    vec![QueryLanguage::SQL]
+}
+
+/// Is `languages` the default? Then it is not written out, and a declaration
+/// serializes as it did before the field (ADR-0065).
+fn is_sql_only(languages: &[QueryLanguage]) -> bool {
+    matches!(languages, [only] if same_language(*only, QueryLanguage::SQL))
+}
+
 impl std::fmt::Debug for AgentSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentSpec")
@@ -156,6 +185,7 @@ impl std::fmt::Debug for AgentSpec {
             .field("prompt_chars", &self.system_prompt.chars().count())
             .field("tools", &self.allowed_tools.len())
             .field("max_turns", &self.max_turns)
+            .field("languages", &self.languages.len())
             .field("applies_to", &self.applies_to.len())
             .field("recipients", &self.recipients.len())
             .finish_non_exhaustive()
@@ -177,18 +207,38 @@ impl AgentSpec {
             context: ContextPolicy::default(),
             output_schema: None,
             max_turns: DEFAULT_MAX_TURNS,
+            languages: sql_only(),
             applies_to: Vec::new(),
             recipients: Vec::new(),
         }
     }
 
-    /// Is this agent offered for `target`? Only if each of
-    /// [`applies_to`](Self::applies_to) and [`recipients`](Self::recipients)
-    /// is empty or names the target's value.
+    /// Is this agent offered for `target`? Only if
+    /// [`languages`](Self::languages) names the target's language, and each
+    /// of [`applies_to`](Self::applies_to) — read on a SQL target only — and
+    /// [`recipients`](Self::recipients) is empty or names the target's value.
     #[must_use]
     pub fn offered_for(&self, target: &PromptTarget) -> bool {
-        (self.applies_to.is_empty() || self.applies_to.contains(&target.dialect))
+        self.writes(target.language)
+            && target.dialect().is_none_or(|dialect| {
+                self.applies_to.is_empty() || self.applies_to.contains(&dialect)
+            })
             && (self.recipients.is_empty() || self.recipients.contains(&target.recipient))
+    }
+
+    /// Does this agent write `language`, whatever its SQL dialect?
+    #[must_use]
+    pub fn writes(&self, language: QueryLanguage) -> bool {
+        self.languages
+            .iter()
+            .any(|written| same_language(*written, language))
+    }
+
+    /// Sets the query languages this agent writes.
+    #[must_use]
+    pub fn with_languages(mut self, languages: impl IntoIterator<Item = QueryLanguage>) -> Self {
+        self.languages = languages.into_iter().collect();
+        self
     }
 
     /// Sets the description shown to the user.
@@ -252,8 +302,9 @@ impl AgentSpec {
     /// [`AiError::InvalidSpec`] for an empty name or prompt, a number of turns
     /// that is zero or beyond [`MAX_TURNS_CEILING`], a context policy beyond
     /// one of its ceilings ([`MAX_CONTEXT_TOKENS_CEILING`] and the others), a
-    /// tool declared twice — named by its position, never by its text —, or
-    /// an output schema that is not a JSON object.
+    /// tool declared twice — named by its position, never by its text —, an
+    /// output schema that is not a JSON object, an empty `languages`, or
+    /// `applies_to` dialects on an agent that does not write SQL.
     /// [`AiError::UnknownTool`] for a tool the registry does not know.
     pub fn validate(&self, registry: &ToolRegistry) -> Result<(), AiError> {
         if self.name.trim().is_empty() {
@@ -271,6 +322,16 @@ impl AgentSpec {
             return Err(AiError::InvalidSpec(format!(
                 "`max_turns` exceeds the ceiling of {MAX_TURNS_CEILING}"
             )));
+        }
+        if self.languages.is_empty() {
+            return Err(AiError::InvalidSpec(
+                "`languages` is empty: the agent would be offered on no connection".to_owned(),
+            ));
+        }
+        if !self.applies_to.is_empty() && !self.writes(QueryLanguage::SQL) {
+            return Err(AiError::InvalidSpec(
+                "`applies_to` names SQL dialects, and `languages` does not list `sql`".to_owned(),
+            ));
         }
         if let Some(schema) = &self.output_schema
             && !schema.is_object()

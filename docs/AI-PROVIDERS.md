@@ -197,12 +197,14 @@ provider, the Oxyn-written block of the opening text for an external
 agent — is **composed**, not stored whole
 ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), accepted,
 amended on 2026-10-06): the agent's role, then the fragment of the
-connection's dialect (`ansi` when the dialect has none), then the fragment
-of the **recipient**, in that fixed order, filled with four closed
-variables — `{{dialect}}`, `{{driver}}`, `{{environment}}`,
-`{{recipient}}`. The same question, on the same connection, therefore goes
-out with a different system prompt to Anthropic's API, to a small model
-behind `openai_compatible`, and to Claude Code.
+connection's language — its dialect's for SQL (`ansi` when the dialect has
+none), `generic` for a language that is not SQL and has no fragment of its
+own ([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)) —, then
+the fragment of the **recipient**, in that fixed order, filled with five
+closed variables — `{{dialect}}`, `{{driver}}`, `{{environment}}`,
+`{{language}}`, `{{recipient}}`. The same question, on the same connection,
+therefore goes out with a different system prompt to Anthropic's API, to a
+small model behind `openai_compatible`, and to Claude Code.
 
 What this changes at the boundary, and what it does not:
 
@@ -228,6 +230,16 @@ What this changes at the boundary, and what it does not:
   or recipient fragment, so what Oxyn tells every model about its tools and
   about `EXPLAIN ANALYZE` executing the statement
   ([I-07](../CLAUDE.md#i-07)) stays Oxyn's text.
+* **The language is a value Oxyn holds.** `{{language}}` is the name of the
+  language the connection's session speaks (`sql`, `redis`, `mongo`,
+  `search-dsl`…), read from what the session declares — never from the
+  server's banner or the database. An agent declares the languages it writes
+  (`languages`, `[sql]` when absent) and is offered only where one of them is
+  spoken; on a connection that does not speak SQL the context, the
+  mentions, the approved samples and the `erd` blocks go through the same
+  `ContextBuilder`, under the same tier, with the catalog kinds the driver
+  reports — keys, collections, indices. A prompt for a SQL connection is the
+  one it was before ADR-0065, to the byte.
 
 ## What the AI sees of the schema, and when it is read
 
@@ -337,6 +349,13 @@ visible approval request rather than an execution.
 Without exception, including for what "only reads": a `SELECT` on a
 view can trigger a function, and an `EXPLAIN ANALYZE` **actually executes**
 the query it analyzes — including a `DELETE`.
+
+Whatever the language. An agent's request on a connection that does not
+speak SQL is sent in the session's language and classified by the session
+([ADR-0064](adr/0064-a-session-classifies-non-sql-requests.md)): a command
+the driver cannot prove read-only counts as a write — refused on
+`production`, held for approval elsewhere
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)).
 
 **Concrete failure:** the assistant proposes "here is the query to clean up the
 duplicates" and an "auto-execute" mode runs it. The deduplication

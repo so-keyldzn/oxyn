@@ -377,7 +377,7 @@ fn a_user_file_cannot_take_a_shipped_agent_id() {
 
     let catalog = AgentCatalog::new(shipped_agents(), read_user_agents(dir.path()));
     let target = PromptTarget {
-        dialect: SqlDialect::Postgres,
+        language: oxyn_core::QueryLanguage::Sql(SqlDialect::Postgres),
         driver: DriverId::new(DriverId::POSTGRES).expect("a valid driver name"),
         environment: Environment::Production,
         recipient: Recipient::Provider(AiProviderKind::Anthropic),

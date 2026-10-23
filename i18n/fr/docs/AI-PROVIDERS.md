@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="b0b4f977ca2d" -->
+<!-- oxyn-translation source="docs/AI-PROVIDERS.md" sha256="ef9168a4dfc6" -->
 
 > Traduction française de [docs/AI-PROVIDERS.md](../../../docs/AI-PROVIDERS.md). **La version anglaise fait foi.**
 
@@ -202,10 +202,13 @@ Ce qu'Oxyn écrit à un modèle en plus du contexte — le prompt système pour 
 provider, le bloc écrit par Oxyn dans le texte d'ouverture pour un agent
 externe — est **composé**, pas stocké d'un bloc
 ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), acceptée,
-amendée le 2026-10-06) : le rôle de l'agent, puis le fragment du dialecte de
-la connexion (`ansi` quand le dialecte n'en a pas), puis le fragment du
-**destinataire**, dans cet ordre fixe, rempli par quatre variables fermées —
-`{{dialect}}`, `{{driver}}`, `{{environment}}`, `{{recipient}}`. La même
+amendée le 2026-10-06) : le rôle de l'agent, puis le fragment du langage de
+la connexion — celui de son dialecte pour SQL (`ansi` quand le dialecte n'en
+a pas), `generic` pour un langage qui n'est pas SQL et n'a pas de fragment à
+lui ([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)) —, puis le
+fragment du **destinataire**, dans cet ordre fixe, rempli par cinq variables
+fermées — `{{dialect}}`, `{{driver}}`, `{{environment}}`, `{{language}}`,
+`{{recipient}}`. La même
 question, sur la même connexion, part donc avec un prompt système différent
 vers l'API d'Anthropic, vers un petit modèle derrière `openai_compatible`,
 et vers Claude Code.
@@ -235,6 +238,16 @@ Ce que cela change à la frontière, et ce que cela ne change pas :
   remplacer aucun fragment de dialecte ou de destinataire, si bien que ce
   qu'Oxyn dit à tout modèle de ses outils et du fait qu'`EXPLAIN ANALYZE`
   exécute l'instruction ([I-07](../CLAUDE.md#i-07)) reste le texte d'Oxyn.
+* **Le langage est une valeur qu'Oxyn tient.** `{{language}}` est le nom du
+  langage que parle la session de la connexion (`sql`, `redis`, `mongo`,
+  `search-dsl`…), lu dans ce que la session déclare — jamais dans la
+  bannière du serveur ni dans la base. Un agent déclare les langages qu'il
+  écrit (`languages`, `[sql]` en son absence) et n'est proposé que là où l'un
+  d'eux est parlé ; sur une connexion qui ne parle pas SQL, le contexte, les
+  mentions, les échantillons approuvés et les blocs `erd` passent par le même
+  `ContextBuilder`, sous le même niveau, avec les genres d'objets que le
+  driver déclare — clés, collections, index. Un prompt pour une connexion SQL
+  est celui d'avant l'ADR-0065, à l'octet près.
 
 ## Ce que l'IA voit du schéma, et quand c'est lu
 
@@ -349,6 +362,13 @@ demande d'approbation visible plutôt qu'une exécution.
 Sans exception, y compris pour ce qui « ne fait que lire » : un `SELECT` sur une
 vue peut déclencher une fonction, et un `EXPLAIN ANALYZE` **exécute réellement**
 la requête qu'il analyse — y compris un `DELETE`.
+
+Quel que soit le langage. La requête d'un agent sur une connexion qui ne parle
+pas SQL part dans le langage de la session et c'est la session qui la classe
+([ADR-0064](adr/0064-a-session-classifies-non-sql-requests.md)) : une commande
+dont le driver ne peut pas prouver qu'elle ne fait que lire compte comme une
+écriture — refusée sur `production`, retenue pour approbation ailleurs
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)).
 
 **Panne concrète :** l'assistant propose « voici la requête pour nettoyer les
 doublons » et un mode « exécution automatique » la lance. La condition de

@@ -1,8 +1,9 @@
-//! What a prompt is written for: the connection's dialect, and who reads it.
+//! What a prompt is written for: the connection's language and dialect, and
+//! who reads it.
 
 use std::str::FromStr;
 
-use oxyn_core::{AiProviderKind, DriverId, Environment, SqlDialect};
+use oxyn_core::{AiProviderKind, DriverId, Environment, QueryLanguage, SqlDialect};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::external::presets::{CLAUDE_CODE, CODEX};
@@ -35,6 +36,42 @@ pub(crate) fn dialect_named(name: &str) -> Option<SqlDialect> {
     DIALECTS
         .into_iter()
         .find(|dialect| dialect.as_str() == name)
+}
+
+/// Every query language, in the order of [`QueryLanguage`]'s declaration,
+/// SQL standing for all its dialects.
+///
+/// As [`DIALECTS`]: `QueryLanguage` is `#[non_exhaustive]` and lives in
+/// `oxyn-core`, so this list is how a name read from a file finds its
+/// language (ADR-0065). The dialect of the `Sql` entry is never read: which
+/// dialects an agent is written for is [`AgentSpec::applies_to`]'s to say.
+///
+/// [`AgentSpec::applies_to`]: crate::spec::AgentSpec::applies_to
+pub const LANGUAGES: [QueryLanguage; 10] = [
+    QueryLanguage::SQL,
+    QueryLanguage::Cypher,
+    QueryLanguage::Gremlin,
+    QueryLanguage::MongoQuery,
+    QueryLanguage::RedisCommand,
+    QueryLanguage::SearchDsl,
+    QueryLanguage::Cql,
+    QueryLanguage::PartiQl,
+    QueryLanguage::InfluxQl,
+    QueryLanguage::Flux,
+];
+
+/// The language whose [`QueryLanguage::as_str`] is `name`: `sql`, `redis`,
+/// `mongo`, `search-dsl`…
+pub(crate) fn language_named(name: &str) -> Option<QueryLanguage> {
+    LANGUAGES
+        .into_iter()
+        .find(|language| language.as_str() == name)
+}
+
+/// Do `a` and `b` name the same language, whatever SQL dialect either
+/// carries?
+pub(crate) fn same_language(a: QueryLanguage, b: QueryLanguage) -> bool {
+    a.as_str() == b.as_str()
 }
 
 /// An external agent, as far as its prompt is concerned.
@@ -162,19 +199,60 @@ pub(crate) mod dialect_names {
     }
 }
 
+/// The serde form of a list of languages: their [`QueryLanguage::as_str`]
+/// names, the ones a file carries. `sql` reads as [`QueryLanguage::SQL`].
+pub(crate) mod language_names {
+    use oxyn_core::QueryLanguage;
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(crate) fn serialize<S: Serializer>(
+        languages: &[QueryLanguage],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(languages.len()))?;
+        for language in languages {
+            seq.serialize_element(language.as_str())?;
+        }
+        seq.end()
+    }
+
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<QueryLanguage>, D::Error> {
+        Vec::<String>::deserialize(deserializer)?
+            .iter()
+            .map(|name| {
+                super::language_named(name)
+                    .ok_or_else(|| serde::de::Error::custom("unknown language"))
+            })
+            .collect()
+    }
+}
+
 /// Everything a prompt's variables can be filled from.
 ///
-/// Four values Oxyn holds, from closed sets. None of them is written by the
+/// Values Oxyn holds, from closed sets. None of them is written by the
 /// database or its server: database content reaches the model through
 /// `ContextBuilder` only (I-04, ADR-0049 § 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptTarget {
-    /// The connection's dialect: `{{dialect}}`, and the fragment chosen.
-    pub dialect: SqlDialect,
+    /// The language the connection's session speaks, with its dialect for
+    /// SQL: `{{language}}`, `{{dialect}}`, and the fragment chosen
+    /// (ADR-0065).
+    pub language: QueryLanguage,
     /// The connection's driver: `{{driver}}`.
     pub driver: DriverId,
     /// The connection's marking: `{{environment}}`.
     pub environment: Environment,
     /// Who reads the prompt: `{{recipient}}`, and the fragment chosen.
     pub recipient: Recipient,
+}
+
+impl PromptTarget {
+    /// The SQL dialect the connection speaks; `None` outside SQL.
+    #[must_use]
+    pub const fn dialect(&self) -> Option<SqlDialect> {
+        self.language.sql_dialect()
+    }
 }

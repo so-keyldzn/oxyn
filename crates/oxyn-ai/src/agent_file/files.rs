@@ -4,7 +4,7 @@
 //! test parses each one (`shipped_agents_are_valid`), and a broken shipped file
 //! therefore never reaches a user.
 
-use oxyn_core::SqlDialect;
+use oxyn_core::{QueryLanguage, SqlDialect};
 
 use super::parse::parse_agent_file;
 use super::target::Recipient;
@@ -64,6 +64,23 @@ const ANSI: (&str, &str, &str) = (
     "ansi",
     "prompts/dialects/ansi.md",
     include_str!("../../prompts/dialects/ansi.md"),
+);
+
+/// The fragments of the query languages that are not SQL,
+/// `(language, file, text)`, keyed by [`QueryLanguage::as_str`].
+///
+/// A driver whose language needs notes every agent of it shares adds one
+/// entry here, next to its agent in [`AGENTS`]; every other language gets
+/// [`GENERIC`] (ADR-0065). SQL never reads this table: its fragment is its
+/// dialect's.
+pub(super) const LANGUAGE_FRAGMENTS: [(&str, &str, &str); 1] = [GENERIC];
+
+/// The fragment of a language Oxyn has no notes for: what holds for any
+/// language Oxyn does not parse, and nothing about a product.
+const GENERIC: (&str, &str, &str) = (
+    "generic",
+    "prompts/languages/generic.md",
+    include_str!("../../prompts/languages/generic.md"),
 );
 
 /// The recipient fragments, `(recipient, file, text)`: one per provider
@@ -136,6 +153,16 @@ pub(super) fn dialect_fragment(dialect: SqlDialect) -> (&'static str, &'static s
         .into_iter()
         .find(|(name, _, _)| *name == dialect.as_str())
         .unwrap_or(ANSI);
+    (file, text)
+}
+
+/// The fragment of `language`, a language that is not SQL, `(file, text)`;
+/// `generic.md` when none is written.
+pub(super) fn language_fragment(language: QueryLanguage) -> (&'static str, &'static str) {
+    let (_, file, text) = LANGUAGE_FRAGMENTS
+        .into_iter()
+        .find(|(name, _, _)| *name == language.as_str())
+        .unwrap_or(GENERIC);
     (file, text)
 }
 

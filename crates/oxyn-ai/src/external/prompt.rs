@@ -355,13 +355,13 @@ impl AgentPrompt {
 pub(crate) fn sql_instructions() -> AgentInstructions<'static> {
     use std::sync::LazyLock;
 
-    use oxyn_core::{DriverId, Environment, SqlDialect};
+    use oxyn_core::{DriverId, Environment, QueryLanguage, SqlDialect};
 
     use crate::agent_file::{ExternalAgentKind, Recipient};
 
     static SPEC: LazyLock<AgentSpec> = LazyLock::new(crate::builtin::sql_agent);
     static TARGET: LazyLock<PromptTarget> = LazyLock::new(|| PromptTarget {
-        dialect: SqlDialect::Sqlite,
+        language: QueryLanguage::Sql(SqlDialect::Sqlite),
         driver: DriverId::new(DriverId::SQLITE).expect("a valid driver name"),
         environment: Environment::Production,
         recipient: Recipient::External(ExternalAgentKind::ClaudeCode),

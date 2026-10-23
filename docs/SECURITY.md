@@ -330,9 +330,11 @@ What enters Oxyn and is untrusted, in order of underestimation:
    it: the file is refused above 64 KiB, outside UTF-8, with a YAML that uses
    anchors, aliases, merge keys, duplicate keys, unsupported tags or an
    unknown field, with a tool the registry does not have, or with a
-   placeholder outside the four closed variables; its `id` cannot take a
-   shipped agent's audit identity; it supplies a **role** only and never
-   replaces the dialect or recipient fragments Oxyn ships; an error names the
+   placeholder outside the five closed variables, or with an unknown name in
+   `languages` ([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md));
+   its `id` cannot take a shipped agent's audit identity; it supplies a
+   **role** only and never replaces the dialect, language or recipient
+   fragments Oxyn ships; an error names the
    file and the line, never its content ([I-03](../CLAUDE.md#i-03)). Reading
    the directory is bounded too: only the `*.md` files directly in it, at
    most 64 of them in name order (the rest listed as one error), regular

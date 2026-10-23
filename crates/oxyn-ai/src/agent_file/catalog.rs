@@ -208,6 +208,28 @@ impl AgentCatalog {
         shipped
     }
 
+    /// The agent a new conversation on `target` runs when it names none.
+    ///
+    /// The SQL agent when it is offered for `target` — every SQL connection
+    /// ([ADR-0055](../../../../docs/adr/0055-sql-agent-is-the-default-of-a-new-conversation.md)).
+    /// Otherwise, on a connection that speaks another language, the first
+    /// valid agent [`offered`](Self::offered) lists: a shipped agent before a
+    /// user's, so that a user file never displaces the agent Oxyn ships for
+    /// that language
+    /// ([ADR-0065](../../../../docs/adr/0065-agents-for-non-sql-query-languages.md)).
+    /// `None` when no agent is offered for `target`.
+    #[must_use]
+    pub fn default_for(&self, target: &PromptTarget) -> Option<AgentId> {
+        let sql = crate::builtin::sql_agent().id;
+        if self.get(&sql).is_some_and(|spec| spec.offered_for(target)) {
+            return Some(sql);
+        }
+        self.offered(target)
+            .into_iter()
+            .find(|entry| entry.error.is_none())
+            .and_then(|entry| entry.id)
+    }
+
     /// The valid agent with this `id`, shipped or user; `None` for an unknown
     /// id and for a file in error.
     #[must_use]

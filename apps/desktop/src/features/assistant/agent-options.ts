@@ -16,6 +16,21 @@ export const SQL_ONLY: ReadonlyArray<AgentOption> = [
 ]
 
 /**
+ * The agent a blank thread runs, as the backend chooses it
+ * (`AgentCatalog::default_for`): the SQL agent when it is offered — every SQL
+ * session (ADR-0055) —, otherwise the first agent offered for the session's
+ * language that is not in error, a shipped one before a user's (ADR-0065).
+ * The SQL agent while nothing is listed, as before the list arrives.
+ */
+export function defaultAgentId(agents: ReadonlyArray<AgentOption>): string {
+  if (agents.length === 0 || agents.some((agent) => agent.id === SQL_AGENT_ID))
+    return SQL_AGENT_ID
+  const valid = agents.filter((agent) => agent.error === null)
+  const first = valid.find((agent) => agent.origin === "shipped") ?? valid.at(0)
+  return first?.id ?? SQL_AGENT_ID
+}
+
+/**
  * The destinations as "Who answers" offers them to a conversation running
  * `agent`: those it is not written for stay listed, disabled, with their
  * reason (ADR-0049 § 6, UX-SPEC). A destination the tier already refuses
