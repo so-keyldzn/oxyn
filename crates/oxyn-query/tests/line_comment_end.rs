@@ -149,7 +149,7 @@ fn sqlite_keeps_its_own_line_comment_end() {
 
 /// ClickHouse ends `--` and `#` at `\n` only: on 26.3, `SELECT 1 -- x\r, 2`
 /// and `SELECT 1 # x\r, 2` return one column, `SELECT 1 -- x\n, 2` two
-/// (docs/RESEARCH-NOTES.md, ClickHouse lexer, 2026-10-22).
+/// (docs/RESEARCH-NOTES.md, ClickHouse, 2026-10-23).
 #[test]
 fn clickhouse_ends_its_line_comments_at_a_line_feed_only() {
     for (sql, expected) in [

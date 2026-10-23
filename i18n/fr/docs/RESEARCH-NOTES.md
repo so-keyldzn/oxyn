@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="02b89f0ce966" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="fe6f49574d4a" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3011,3 +3011,26 @@ n'a pas été relu, la ligne de Node que prend la CI (22) ne change pas.
 | `vite` `8.3.3` a été publié le 2026-10-06T04:10:19Z, `8.3.4` le 2026-10-08T12:07:04Z et `8.3.5`, dist-tag `latest`, le 2026-10-21T06:38:54Z. `8.3.3` est la plus petite version corrigée de la ligne, d'où l'épinglage ; une montée ultérieure passe par le flux de mise à jour habituel | `npm view vite time dist-tags --json` | 2026-10-21 |
 | Avec `vite` `8.3.3`, le lockfile déplace aussi `rolldown` et ses bindings de `1.2.8` à `1.2.14` et `@oxc-project/types` de `0.149.0` à `0.154.0` : ce sont des dépendances propres de vite, pas des épinglages de l'application | `pnpm install --lockfile-only` dans `apps/desktop`, diff de `pnpm-lock.yaml` | 2026-10-21 |
 | Sur ce changement, `pnpm audit --prod` répond « No known vulnerabilities found », `make front-controles` passe (Prettier, ESLint, `tsc --noEmit`, licences, audit) et `pnpm build` se termine avec le prérendu SPA de `/` | commandes lancées dans `apps/desktop` | 2026-10-21 |
+
+## Protocole ClickHouse et bibliothèques clientes — vérifié le 2026-10-23
+
+Pour l'[ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md). Le pilote
+n'ajoute aucune dépendance : il utilise `reqwest` 0.13.4 (`rustls`), `arrow`
+59.3.0, `uuid`, `url` et `secrecy` du workspace.
+
+| Fait | Conséquence | Source |
+|---|---|---|
+| Étiquettes Docker Hub de `clickhouse/clickhouse-server` mises à jour les 2026-10-22/23 : `26.9.25.15` (et `latest`), `26.3.59.10`, `25.8.33.6` ; les lignes `.3` et `.8` sont les lignes longues encore corrigées | le pilote et le service de CI tournent sur `26.3.59.10` | [API des étiquettes Docker Hub](https://hub.docker.com/v2/repositories/clickhouse/clickhouse-server/tags) |
+| `clickhouse` 0.15.3 (officielle, HTTP, mise à jour le 2026-10-13) : lignes décodées par `serde` dans des types connus à la compilation, « `Dynamic` data type is not supported for now », TLS désactivé par défaut derrière les fonctionnalités `native-tls` / `rustls-tls*`, fonctionnalité par défaut `lz4` | aucun résultat non typé pour du SQL arbitraire | API crates.io ; [docs.rs](https://docs.rs/clickhouse/0.15.3/clickhouse/) |
+| `clickhouse-arrow` 0.2.1 (protocole natif, mise à jour le 2025-12-14) dépend d'`arrow ^57` et de `webpki-roots ^1` ; `klickhouse` 0.16.0 (natif, 2026-10-12) a son propre modèle de valeurs ; `clickhouse-rs` 0.1.21 date du 2023-09-10 | aucune ne s'accorde avec l'Arrow 59 et le vérificateur de la plateforme du workspace | API crates.io, `/dependencies` |
+| Sortie `FORMAT Arrow`/`ArrowStream` : `DateTime` → `UINT32`, `Date32` → `UINT16`, `Enum8`/`Enum16` → `INT8`/`INT16`, `Int128`/`UInt128`/`Int256`/`UInt256` et `IPv6` → `FIXED_SIZE_BINARY`, `IPv4` → `UINT32` ; les types sans équivalent Arrow (`JSON`, `Dynamic`, `AggregateFunction`) suivent `output_format_arrow_unsupported_types`, défaut `binary` | fuseau, libellés et entiers larges seraient à réécrire après décodage | [format Arrow](https://clickhouse.com/docs/interfaces/formats/Arrow) |
+| `SELECT 1 -- x\r, 2` et `SELECT 1 # x\r, 2` renvoient une colonne, `SELECT 1 -- x\n, 2` deux ; `SELECT $t$a;b$t$, $$c;d$$` renvoie `a;b` et `c;d` ; `SELECT /* a /* b */ c */ 1` renvoie `1` | les commentaires de ligne finissent au seul `\n` ; les heredocs sont des chaînes ; les commentaires de bloc s'imbriquent | observé sur 26.3.59.10 |
+| `` SELECT 1 AS `a\`b` `` nomme la colonne `` a`b `` ; `` `c``d` `` la nomme `` c`d `` | une barre oblique inverse échappe dans un identifiant entre accents graves, le doublement aussi | observé sur 26.3.59.10 |
+| `SELECT 1; SELECT 2` en HTTP : `Code: 62 … Syntax error (Multi-statements are not allowed)` | une instruction par requête, prouvé par le serveur | observé sur 26.3.59.10 |
+| Une valeur `param_v` est lue avec les échappements TSV : `a\b` se lie en `0x61 0x08`, `a\\b` en `a\b`, `a\tb` en tabulation ; une tabulation ou un saut de ligne bruts échouent avec `Code: 457 BAD_QUERY_PARAMETER`. Le paramètre d'URL `database` est pris tel quel (`d\b` reste `d\b`) | le pilote échappe les valeurs de paramètres | observé sur 26.3.59.10 |
+| `readonly = 1` sur une requête refuse les écritures, le DDL, `url()` et la clause `SETTINGS` de l'instruction elle-même (`Cannot modify 'max_threads' setting in readonly mode`, code 164) ; les réglages envoyés avant `readonly` dans l'URL s'appliquent | les lectures en lecture seule ne portent pas de clause `SETTINGS` | observé sur 26.3.59.10 |
+| `KILL QUERY WHERE query_id = {id:String} TEST` sans correspondance répond 200, un corps vide, sans `X-ClickHouse-Format` | le droit de tuer se lit sur le statut | observé sur 26.3.59.10 |
+| Une réponse 200 porte `X-ClickHouse-Exception-Tag` ; une exception levée après le départ de lignes est ajoutée au corps sous la forme `\r\n__exception__\r\n<tag>\r\n<message>\n<length> <tag>\r\n__exception__\r\n` | le décodeur coupe le corps au marqueur du tag | observé sur 26.3.59.10 |
+| `ALTER TABLE t RENAME TO u` échoue (`Expected COLUMN`, code 62) ; `RENAME TABLE db.t TO db.u` fonctionne ; `DROP MATERIALIZED VIEW mv` échoue (code 62), `DROP VIEW mv` la supprime ; `TRUNCATE TABLE` s'exécute sur une table `MergeTree` | le renommage et la suppression du catalogue prennent les formes de ClickHouse ; `TRUNCATE` est déclaré | observé sur 26.3.59.10 |
+| `sleepEachRow` refuse plus de 3 s par bloc (`Code: 160 TOO_SLOW`) ; `max_execution_time` arrête une lecture avec le code 159 | le test de délai lit des blocs d'une ligne | observé sur 26.3.59.10 |
+| `errorCodeToName` renvoie, pour chacun des 54 codes que la classification nomme, le nom que le pilote lui donne (8 `THERE_IS_NO_COLUMN` … 394 `QUERY_WAS_CANCELLED`, 497 `ACCESS_DENIED`, 516 `AUTHENTICATION_FAILED`, 999 `KEEPER_EXCEPTION`) | les codes de la classification sont ceux du serveur | une requête sur toute la liste, sur 26.3.59.10 |

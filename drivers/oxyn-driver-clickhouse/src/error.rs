@@ -13,7 +13,7 @@
 //! replayed ([I-13](../../../CLAUDE.md#i-13)).
 //!
 //! The codes are ClickHouse's `ErrorCodes`, read on a 26.3 server with
-//! `errorCodeToName` on 2026-10-22
+//! `errorCodeToName` on 2026-10-23
 //! ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md)). The class is data the
 //! driver attaches: the caller never reads the message.
 //!

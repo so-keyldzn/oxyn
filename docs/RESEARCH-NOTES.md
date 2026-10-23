@@ -2964,3 +2964,26 @@ re-read, the Node line the CI takes (22) is unchanged.
 | `vite` `8.3.3` was published on 2026-10-06T04:10:19Z, `8.3.4` on 2026-10-08T12:07:04Z and `8.3.5`, the `latest` dist-tag, on 2026-10-21T06:38:54Z. `8.3.3` is the smallest patched version of the line, hence the pin; a later bump goes through the usual update flow | `npm view vite time dist-tags --json` | 2026-10-21 |
 | With `vite` `8.3.3` the lockfile also moves `rolldown` and its bindings from `1.2.8` to `1.2.14` and `@oxc-project/types` from `0.149.0` to `0.154.0`: they are vite's own dependencies, not pins of the application | `pnpm install --lockfile-only` in `apps/desktop`, diff of `pnpm-lock.yaml` | 2026-10-21 |
 | On this change `pnpm audit --prod` reports "No known vulnerabilities found", `make front-controles` passes (Prettier, ESLint, `tsc --noEmit`, licenses, audit) and `pnpm build` completes with the SPA prerender of `/` | commands run in `apps/desktop` | 2026-10-21 |
+
+## ClickHouse protocol and client libraries — checked on 2026-10-23
+
+For [ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md). The driver
+adds no dependency: it uses the workspace's `reqwest` 0.13.4 (`rustls`),
+`arrow` 59.3.0, `uuid`, `url` and `secrecy`.
+
+| Fact | Consequence | Source |
+|---|---|---|
+| Docker Hub `clickhouse/clickhouse-server` tags updated on 2026-10-22/23: `26.9.25.15` (and `latest`), `26.3.59.10`, `25.8.33.6`; the `.3` and `.8` lines are the long-term ones still patched | the driver and the CI service run `26.3.59.10` | [Docker Hub tags API](https://hub.docker.com/v2/repositories/clickhouse/clickhouse-server/tags) |
+| `clickhouse` 0.15.3 (official, HTTP, updated 2026-10-13): rows decoded through `serde` into types known at compile time, "`Dynamic` data type is not supported for now", TLS off by default behind `native-tls` / `rustls-tls*` features, default feature `lz4` | no untyped result for arbitrary SQL | crates.io API; [docs.rs](https://docs.rs/clickhouse/0.15.3/clickhouse/) |
+| `clickhouse-arrow` 0.2.1 (native protocol, updated 2025-12-14) depends on `arrow ^57` and `webpki-roots ^1`; `klickhouse` 0.16.0 (native, 2026-10-12) has its own value model; `clickhouse-rs` 0.1.21 was last updated 2023-09-10 | none fits the workspace's Arrow 59 and platform verifier | crates.io API, `/dependencies` |
+| `FORMAT Arrow`/`ArrowStream` output: `DateTime` → `UINT32`, `Date32` → `UINT16`, `Enum8`/`Enum16` → `INT8`/`INT16`, `Int128`/`UInt128`/`Int256`/`UInt256` and `IPv6` → `FIXED_SIZE_BINARY`, `IPv4` → `UINT32`; types with no Arrow equivalent (`JSON`, `Dynamic`, `AggregateFunction`) follow `output_format_arrow_unsupported_types`, default `binary` | zone, labels and wide integers would need rewriting after decoding | [Arrow format](https://clickhouse.com/docs/interfaces/formats/Arrow) |
+| `SELECT 1 -- x\r, 2` and `SELECT 1 # x\r, 2` return one column, `SELECT 1 -- x\n, 2` two; `SELECT $t$a;b$t$, $$c;d$$` returns `a;b` and `c;d`; `SELECT /* a /* b */ c */ 1` returns `1` | line comments end at `\n` only; heredocs are strings; block comments nest | observed on 26.3.59.10 |
+| `` SELECT 1 AS `a\`b` `` names the column `` a`b ``; `` `c``d` `` names it `` c`d `` | a backslash escapes inside a backtick identifier, doubling too | observed on 26.3.59.10 |
+| `SELECT 1; SELECT 2` over HTTP: `Code: 62 … Syntax error (Multi-statements are not allowed)` | one statement per request, proven by the server | observed on 26.3.59.10 |
+| A `param_v` value is read with TSV escapes: `a\b` binds as `0x61 0x08`, `a\\b` as `a\b`, `a\tb` as a tab; a raw tab or line feed fails with `Code: 457 BAD_QUERY_PARAMETER`. The `database` URL parameter is taken as is (`d\b` stays `d\b`) | parameter values are escaped by the driver | observed on 26.3.59.10 |
+| `readonly = 1` on a request refuses writes, DDL, `url()` and a statement's own `SETTINGS` clause (`Cannot modify 'max_threads' setting in readonly mode`, code 164); settings sent before `readonly` in the URL are applied | read-only reads carry no `SETTINGS` clause | observed on 26.3.59.10 |
+| `KILL QUERY WHERE query_id = {id:String} TEST` matching nothing answers 200, an empty body, no `X-ClickHouse-Format` | the kill right is read from the status | observed on 26.3.59.10 |
+| A 200 response carries `X-ClickHouse-Exception-Tag`; an exception raised after rows left is appended to the body as `\r\n__exception__\r\n<tag>\r\n<message>\n<length> <tag>\r\n__exception__\r\n` | the decoder cuts the body at the tag's marker | observed on 26.3.59.10 |
+| `ALTER TABLE t RENAME TO u` fails (`Expected COLUMN`, code 62); `RENAME TABLE db.t TO db.u` works; `DROP MATERIALIZED VIEW mv` fails (code 62), `DROP VIEW mv` drops it; `TRUNCATE TABLE` runs on a `MergeTree` table | the catalog's rename and drop use ClickHouse's forms; `TRUNCATE` is declared | observed on 26.3.59.10 |
+| `sleepEachRow` refuses more than 3 s per block (`Code: 160 TOO_SLOW`); `max_execution_time` stops a read with code 159 | the timeout test reads one-row blocks | observed on 26.3.59.10 |
+| `errorCodeToName` returns, for each of the 54 codes the classification names, the name the driver gives it (8 `THERE_IS_NO_COLUMN` … 394 `QUERY_WAS_CANCELLED`, 497 `ACCESS_DENIED`, 516 `AUTHENTICATION_FAILED`, 999 `KEEPER_EXCEPTION`) | the classification's codes are the server's | one query over the whole list, on 26.3.59.10 |

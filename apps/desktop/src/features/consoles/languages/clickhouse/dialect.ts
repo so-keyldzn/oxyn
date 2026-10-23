@@ -2,7 +2,7 @@ import { SQLDialect } from "@codemirror/lang-sql"
 
 /**
  * ClickHouse's lexical rules, as its 26.3 server reads them
- * (docs/RESEARCH-NOTES.md, ClickHouse lexer): `\` escapes inside strings and
+ * (docs/RESEARCH-NOTES.md, ClickHouse, 2026-10-23): `\` escapes inside strings and
  * backtick names, `#` opens a line comment like `--`, `$tag$…$tag$` is a
  * string, and both backticks and double quotes quote a name.
  *

@@ -6,7 +6,7 @@
 //! exception raised later is written **into the body**, after the last rows:
 //! `\r\n__exception__\r\n<tag>\r\n<message>\n<length> <tag>\r\n__exception__\r\n`,
 //! where `<tag>` is the random text the response announced in
-//! `X-ClickHouse-Exception-Tag` (observed on ClickHouse 26.3, 2026-10-22,
+//! `X-ClickHouse-Exception-Tag` (observed on ClickHouse 26.3, 2026-10-23,
 //! RESEARCH-NOTES). `RowBinary` carries no framing of its own, so without this
 //! marker the message would be decoded as rows.
 //!

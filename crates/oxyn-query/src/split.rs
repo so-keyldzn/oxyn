@@ -199,7 +199,7 @@ impl SplitProfile {
             },
             // `--` and `#` end at `\n` only: ClickHouse 26.3 runs
             // `SELECT 1 -- x\r, 2` as one column, and reads `$t$a;b$t$` as
-            // one string (RESEARCH-NOTES, 2026-10-22).
+            // one string (RESEARCH-NOTES, ClickHouse, 2026-10-23).
             SqlDialect::ClickHouse => Self {
                 backslash_escapes: true,
                 escape_string_prefix: false,
