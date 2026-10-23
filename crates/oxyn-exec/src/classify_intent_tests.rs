@@ -131,11 +131,12 @@ fn bench(fake: Fake) -> Bench {
     }
 }
 
+fn agent() -> Actor {
+    Actor::agent(AgentId::new(), AgentSessionId::new())
+}
+
 fn actors() -> [Actor; 2] {
-    [
-        Actor::Human,
-        Actor::agent(AgentId::new(), AgentSessionId::new()),
-    ]
+    [Actor::Human, agent()]
 }
 
 /// What a console sends: the bound lifted, the intent the caller's own.
@@ -253,7 +254,7 @@ async fn an_unproven_request_stays_unknown_and_keeps_the_production_guard() {
     let agent = bench
         .executor
         .dispatch(
-            actors()[1].clone(),
+            agent(),
             execution(&bench, QueryLanguage::RedisCommand, "GET user:1"),
             &CancelToken::new(),
         )
@@ -298,7 +299,7 @@ async fn a_proven_write_stays_a_write_for_the_guard() {
     let agent = bench
         .executor
         .dispatch(
-            actors()[1].clone(),
+            agent(),
             execution(&bench, QueryLanguage::RedisCommand, "SET user:1 x"),
             &CancelToken::new(),
         )
