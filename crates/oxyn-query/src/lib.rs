@@ -13,6 +13,7 @@
 //! | Module | Subject |
 //! |---|---|
 //! | [`dialect`](mod@dialect) | `SqlDialect` ↔ `sqlparser` grammar mapping, dialect of a driver |
+//! | [`console`](mod@console) | the language a console speaks to a session, the request under its cursor |
 //! | [`split`](mod@split) | splitting a batch into statements, reading bare words |
 //! | [`classify`](mod@classify) | intent and risk of a text — the critical point |
 //! | [`format`](mod@format) | reformatting by rendering the AST |
@@ -60,6 +61,7 @@
 //! ```
 
 pub mod classify;
+pub mod console;
 pub mod dialect;
 pub mod error;
 pub mod format;
@@ -70,6 +72,7 @@ pub use classify::{
     Basis, Classification, StatementInfo, changes_context, classify, classify_language,
     only_controls_transactions, reclassify, runnable_text, validate,
 };
+pub use console::{console_language, current_request};
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;
 pub use format::{FormatReport, format, format_report};

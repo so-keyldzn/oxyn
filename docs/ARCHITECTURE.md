@@ -1013,6 +1013,9 @@ before execution and classified `Read`, `Write`, `Ddl`, `Grant` or `Unknown` —
 treated as `Ddl`. A multi-statement batch takes the highest intent of its statements.
 The traps are tested explicitly: `EXPLAIN ANALYZE DELETE` is not a read,
 nor is `WITH ... DELETE`, and a `WHERE 1=1` counts as the absence of a `WHERE` clause.
+A language that is not SQL is `Unknown` to `oxyn-query`; the target session's
+driver may prove a narrower intent through `Session::classify_intent`, consulted
+for that case only ([ADR-0064](adr/0064-a-session-classifies-non-sql-requests.md)).
 
 **The intent carried by a `Command` is not trustworthy.** `oxyn-exec` systematically
 reclassifies the text before submitting it to the Policy gate — an agent cannot
