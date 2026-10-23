@@ -61,6 +61,20 @@ fn statements_that_reach_files_the_network_or_settings_never_read() {
 }
 
 #[test]
+fn attaching_a_database_is_ddl_so_the_tree_refreshes() {
+    // The desktop backend invalidates the catalog after a `Ddl` intent: an
+    // attached database appears in the tree, a detached one leaves it.
+    for sql in [
+        "ATTACH 'other.duckdb' AS other",
+        "DETACH other",
+        "CREATE SCHEMA s",
+        "CREATE VIEW v AS SELECT 1",
+    ] {
+        assert_eq!(effect(sql).1, StatementIntent::Ddl, "{sql}");
+    }
+}
+
+#[test]
 fn transaction_control_is_mutating_though_its_intent_reads() {
     // `oxyn-query` gives `BEGIN` and `COMMIT` the intent of a read and marks
     // them as transaction control; the driver's effect counts the mark, so a

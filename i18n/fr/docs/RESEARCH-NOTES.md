@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="c86685208566" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="633db7f422b2" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1551,6 +1551,7 @@ comme nom de table ou de colonne non cité, et penche vers la citation.
 | SQLite | [SQLite keywords](https://www.sqlite.org/lang_keywords.html) | 147 mots-clés, tous gardés. La page ne nomme aucune version. |
 | MySQL | [`sql/lex.h`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/lex.h) et [`sql/sql_yacc.yy`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/sql_yacc.yy) au tag `mysql-8.4.0` | 731 mots déclarés par `SYM` et `SYM_HK` (ni les 36 noms de fonction `SYM_FN`, ni les indices d'optimiseur `SYM_H`). 462 jetons apparaissent dans les règles `ident_keyword`, `ident_keywords_*` et `label_keyword`, que l'analyseur prend pour des identifiants. Les 264 mots dont le jeton n'apparaît dans aucune sont gardés. |
 | MariaDB | [`sql/lex.h`](https://github.com/MariaDB/server/blob/11.8/sql/lex.h) et [`sql/sql_yacc.yy`](https://github.com/MariaDB/server/blob/11.8/sql/sql_yacc.yy), branche `11.8` au commit `c20c21d7a1cd` | 690 mots dans `symbols[]`. 443 jetons appartiennent à la fermeture de `keyword_ident` (`keyword_data_type`, `keyword_cast_type`, `keyword_set_special_case`, `keyword_sp_block_section`, `keyword_sp_head`, `keyword_sp_var_and_label`, `keyword_sp_var_not_label`, leurs parties `keyword_func_*`, `keyword_sysvar_type`, `keyword_verb_clause`, plus `FUNCTION_SYM`, `WINDOW_SYM`, `EXCEPTION_ORACLE_SYM`, `IGNORED_SYM`). Les 247 mots hors de cette fermeture sont gardés. |
+| DuckDB | `third_party/libpg_query/include/parser/kwlist.hpp` de DuckDB `v1.5.6`, tel qu'embarqué par `libduckdb-sys` 1.10506.1, lu le 2026-10-23 | 490 mots-clés : 330 `UNRESERVED_KEYWORD`, 49 `COL_NAME_KEYWORD`, 35 `TYPE_FUNC_NAME_KEYWORD`, 75 `RESERVED_KEYWORD`. Les 110 des deux derniers sont gardés, la règle de PostgreSQL ; `at`, `qualify`, `pivot`, `summarize` en font partie. |
 
 Les pages des manuels MySQL et MariaDB qui listent les mots réservés ne sont pas
 la source : `dev.mysql.com` répond 403 à une requête scriptée, et la copie
