@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="02b89f0ce966" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="6a40e0472800" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2451,6 +2451,32 @@ du `COM_PING` suivant, et la ligne insérée avant eux est là après `COMMIT`,
 sur les trois serveurs. `mysql_async` oublie le dernier paquet OK sur un
 paquet d'erreur (`handle_err`, `src/conn/mod.rs:313`) : le driver redemande
 par `COM_PING`.
+
+## Protocole Redis et client — vérifié le 2026-10-22
+
+Pour l'[ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md).
+
+| Fait | Conséquence | Source |
+|---|---|---|
+| `redis:8.10.2` (Docker Hub, mis à jour le 2026-10-22, condensé `sha256:97ec8815…`) ; les étiquettes du même jour portent aussi 8.8.3, 8.6.7, 8.4.7, 8.2.10, 7.4.11, 7.2.16 | les tests et la CI tournent sur `redis:8.10.2` | API Docker Hub `repositories/library/redis/tags` |
+| `valkey/valkey:9.1.2` (Docker Hub, 2026-09-21, condensé `sha256:418652cf…`) | la suite tourne aussi contre Valkey | API Docker Hub `repositories/valkey/valkey/tags` |
+| Types RESP3 : `+ - : $ * _ # , ( ! = % \| ~ >` ; `$-1` et `*-1` sont les nuls de RESP2 ; les doubles comprennent `inf`, `-inf`, `nan` ; une chaîne verbatim, c'est trois octets de format et deux-points ; « Redis doesn't emit streamed strings », ni d'agrégats en flux ; une chaîne bulk est limitée à 512 Mo par défaut (`proto-max-bulk-len`) ; le préfixe d'erreur « is a convention used by Redis rather than part of the RESP error type » | le lecteur refuse les types en flux et classe les erreurs par préfixe | [protocol-spec](https://redis.io/docs/latest/develop/reference/protocol-spec/) |
+| `HELLO 3` répond une map avec `server`, `version`, `proto`, `id`, `mode` (`standalone`, `sentinel`, `cluster`), `role`, `modules` ; un `HELLO` inconnu répond `-ERR unknown command`, une version refusée `-NOPROTO` | un aller-retour identifie le serveur et donne l'identifiant de connexion | même source, § Client handshake |
+| `COMMAND` rend par commande : nom, arité, drapeaux, première et dernière clé, pas, catégories ACL (6.0), conseils, spécifications de clés, sous-commandes (7.0) ; les drapeaux comprennent `readonly` (« the command doesn't modify data »), `write` (« may modify data »), `blocking`, `admin`, `pubsub`, `noscript`, `no_multi` | l'intention se lit dans `readonly`, `write` et les catégories | [COMMAND](https://redis.io/docs/latest/commands/command/), [COMMAND INFO](https://redis.io/docs/latest/commands/command-info/) |
+| Redis 8.10.2 répond 447 à `COMMAND COUNT` ; `KEYS` est `readonly` + `@dangerous`, `FLUSHALL` `write` + `@dangerous`, `EVAL` ni `readonly` ni `write` (`@scripting`), `EVAL_RO` `readonly`, `PING` seulement `fast`, `INFO` `@dangerous`, `BLPOP` `write` + `blocking`, `XREAD` `readonly` + `blocking`, `SUBSCRIBE` `pubsub`, `MULTI`/`WATCH`/`AUTH`/`HELLO` `allow_busy`, aucune sous-commande d'`ACL` n'est `readonly` | la table de classement de l'ADR-0061 | `redis-cli COMMAND INFO …` contre `redis:8.10.2`, 2026-10-22 |
+| `CLIENT UNBLOCK <id> ERROR` débloque un client bloqué par `BRPOP`, `XREAD`, `WAIT`…, qui lit alors `-UNBLOCKED` ; il est `@admin @dangerous` et répond `1` ou `0` | l'arrêt d'une commande bloquée, et sa sonde | [CLIENT UNBLOCK](https://redis.io/docs/latest/commands/client-unblock/) |
+| `scriptKill` : `-NOTBUSY` quand aucun script ne tourne ; `-UNKILLABLE` quand le script a déjà écrit (`SCRIPT_WRITE_DIRTY`) ou vient d'un maître ; `SCRIPT KILL` refuse une fonction et `FUNCTION KILL` un script | un script tué n'a rien écrit ; un script qui a écrit ne s'arrête pas | `src/script.c`, Redis 8.10.2 |
+| Préfixes d'erreur écrits par Redis 8.10.2 : `ERR`, `WRONGTYPE`, `NOAUTH`, `WRONGPASS`, `NOPERM`, `NOPROTO`, `NOSCRIPT`, `NOGROUP`, `BUSYGROUP`, `BUSYKEY`, `EXECABORT`, `LOADING`, `BUSY`, `OOM`, `MISCONF`, `MASTERDOWN`, `NOREPLICAS`, `READONLY`, `TRYAGAIN`, `CLUSTERDOWN`, `CROSSSLOT`, `MOVED`, `ASK`, `UNBLOCKED`, `UNKILLABLE`, `NOTBUSY`, `DENIED`, `IOERR` | la table des classes d'`error.rs` | `src/server.c`, `networking.c`, `cluster.c`, `script.c`, `t_stream.c`, `acl.c`, `blocked.c`, Redis 8.10.2 |
+| `sdssplitargs` (`src/sds.c`, Redis 8.10.2) : les blancs séparent ; entre guillemets doubles `\xHH`, `\n`, `\r`, `\t`, `\b`, `\a` et `\<c>` ; entre apostrophes seulement `\'` ; un guillemet fermant doit être suivi d'un blanc ou de la fin ; `sdscatrepr` échappe `\\`, `"`, `\n`, `\r`, `\t`, `\a`, `\b` et écrit les autres octets non imprimables `\xHH` | la console lit une ligne comme `redis-cli` | source |
+| `redis` (redis-rs) 1.7.1, BSD-3-Clause, `rust-version` 1.88, publié le 2026-09-25 : `send_packed_command` rend `RedisResult<Value>`, `Value::Array(Vec<Value>)` ; l'ouverture envoie `CLIENT SETINFO LIB-NAME`/`LIB-VER` sauf si on l'en dispense | pas une dépendance : une réponse est matérialisée avant que l'appelant n'en voie rien | API crates.io ; `src/aio/multiplexed_connection.rs`, `src/types.rs`, `src/connection.rs` en 1.7.1 |
+| `redis` 1.8.0, publié le 2026-10-23, rend toujours une `Value` dont les variantes `Array`, `Map`, `Set` et `Push` contiennent tous les éléments | le rejet de l'ADR-0061 tient sur la dernière publication | docs.rs `redis/1.8.0/redis/enum.Value.html`, vérifié le 2026-10-23 |
+| `tokio-rustls` 0.26.6 est la dernière publication (2026-09-28) ; le lockfile résout déjà 0.26.5 (MIT OR Apache-2.0, `rust-version` 1.71) pour `sqlx` ; fonctionnalités `aws_lc_rs`, `tls12` | le driver prend la publication déjà dans l'arbre, sur le fournisseur du workspace | API crates.io |
+| `webpki-roots` 1.0.10, CDLA-Permissive-2.0, déjà accepté par `deny.toml` | les racines publiques de `verify-full` | API crates.io |
+
+| Crate | Version | Dernière | Source | Vérifié le |
+|---|---|---|---|---|
+| `tokio-rustls` | `0.26.5` | `0.26.6` (2026-09-28) | [crates.io](https://crates.io/crates/tokio-rustls) | 2026-10-22 |
+| `webpki-roots` | `1.0.10` | `1.0.11` (2026-10-23) | [crates.io](https://crates.io/crates/webpki-roots) | 2026-10-23 |
 
 
 ## Destinations de COPY et classification — vérifié le 2026-10-03

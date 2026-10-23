@@ -2429,6 +2429,32 @@ and the row inserted before them is there after `COMMIT`, on all three
 servers. `mysql_async` forgets the last OK packet on an error packet
 (`handle_err`, `src/conn/mod.rs:313`): the driver asks again with `COM_PING`.
 
+## Redis protocol and client — checked on 2026-10-22
+
+For [ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md).
+
+| Fact | Consequence | Source |
+|---|---|---|
+| `redis:8.10.2` (Docker Hub, updated 2026-10-22, digest `sha256:97ec8815…`); the same day's tags also carry 8.8.3, 8.6.7, 8.4.7, 8.2.10, 7.4.11, 7.2.16 | tests and CI run `redis:8.10.2` | Docker Hub API `repositories/library/redis/tags` |
+| `valkey/valkey:9.1.2` (Docker Hub, 2026-09-21, digest `sha256:418652cf…`) | the suite also runs against Valkey | Docker Hub API `repositories/valkey/valkey/tags` |
+| RESP3 types: `+ - : $ * _ # , ( ! = % \| ~ >`; `$-1` and `*-1` are RESP2 nulls; doubles include `inf`, `-inf`, `nan`; a verbatim string is three format bytes and a colon; "Redis doesn't emit streamed strings" nor streamed aggregates; a bulk string is limited to 512 MB by default (`proto-max-bulk-len`); the error prefix "is a convention used by Redis rather than part of the RESP error type" | the reader refuses streamed types, and classifies errors by prefix | [protocol-spec](https://redis.io/docs/latest/develop/reference/protocol-spec/) |
+| `HELLO 3` answers a map with `server`, `version`, `proto`, `id`, `mode` (`standalone`, `sentinel`, `cluster`), `role`, `modules`; an unknown `HELLO` answers `-ERR unknown command`, a refused version `-NOPROTO` | one round trip identifies the server and gives the connection id | same, § Client handshake |
+| `COMMAND` returns per command: name, arity, flags, first/last key, step, ACL categories (6.0), tips, key specifications, subcommands (7.0); flags include `readonly` ("the command doesn't modify data"), `write` ("may modify data"), `blocking`, `admin`, `pubsub`, `noscript`, `no_multi` | the intent is read from `readonly`, `write` and the categories | [COMMAND](https://redis.io/docs/latest/commands/command/), [COMMAND INFO](https://redis.io/docs/latest/commands/command-info/) |
+| Redis 8.10.2 answers 447 for `COMMAND COUNT`; `KEYS` is `readonly` + `@dangerous`, `FLUSHALL` `write` + `@dangerous`, `EVAL` neither `readonly` nor `write` (`@scripting`), `EVAL_RO` `readonly`, `PING` only `fast`, `INFO` `@dangerous`, `BLPOP` `write` + `blocking`, `XREAD` `readonly` + `blocking`, `SUBSCRIBE` `pubsub`, `MULTI`/`WATCH`/`AUTH`/`HELLO` `allow_busy`, every `ACL` subcommand without `readonly` | the classification table of ADR-0061 | `redis-cli COMMAND INFO …` against `redis:8.10.2`, 2026-10-22 |
+| `CLIENT UNBLOCK <id> ERROR` unblocks a client blocked by `BRPOP`, `XREAD`, `WAIT`…, which then reads `-UNBLOCKED`; it is `@admin @dangerous` and answers `1` or `0` | the stop of a blocked command, and its probe | [CLIENT UNBLOCK](https://redis.io/docs/latest/commands/client-unblock/) |
+| `scriptKill`: `-NOTBUSY` when no script runs; `-UNKILLABLE` when the script already wrote (`SCRIPT_WRITE_DIRTY`) or came from a master; `SCRIPT KILL` refuses a function and `FUNCTION KILL` a script | a killed script wrote nothing; a script that wrote cannot be stopped | `src/script.c`, Redis 8.10.2 |
+| Error prefixes written by Redis 8.10.2: `ERR`, `WRONGTYPE`, `NOAUTH`, `WRONGPASS`, `NOPERM`, `NOPROTO`, `NOSCRIPT`, `NOGROUP`, `BUSYGROUP`, `BUSYKEY`, `EXECABORT`, `LOADING`, `BUSY`, `OOM`, `MISCONF`, `MASTERDOWN`, `NOREPLICAS`, `READONLY`, `TRYAGAIN`, `CLUSTERDOWN`, `CROSSSLOT`, `MOVED`, `ASK`, `UNBLOCKED`, `UNKILLABLE`, `NOTBUSY`, `DENIED`, `IOERR` | the class table of `error.rs` | `src/server.c`, `networking.c`, `cluster.c`, `script.c`, `t_stream.c`, `acl.c`, `blocked.c`, Redis 8.10.2 |
+| `sdssplitargs` (`src/sds.c`, Redis 8.10.2): blanks separate; in double quotes `\xHH`, `\n`, `\r`, `\t`, `\b`, `\a` and `\<c>`; in single quotes only `\'`; a closing quote must be followed by a blank or the end; `sdscatrepr` escapes `\\`, `"`, `\n`, `\r`, `\t`, `\a`, `\b` and writes other non-printable bytes `\xHH` | the console reads a line as `redis-cli` does | source |
+| `redis` (redis-rs) 1.7.1, BSD-3-Clause, `rust-version` 1.88, published 2026-09-25: `send_packed_command` returns `RedisResult<Value>`, `Value::Array(Vec<Value>)`; connection setup sends `CLIENT SETINFO LIB-NAME`/`LIB-VER` unless skipped | not a dependency: a reply is materialized before the caller sees it | crates.io API; `src/aio/multiplexed_connection.rs`, `src/types.rs`, `src/connection.rs` at 1.7.1 |
+| `redis` 1.8.0, published 2026-10-23, still returns a `Value` whose `Array`, `Map`, `Set` and `Push` variants hold every element | the rejection of ADR-0061 holds on the latest release | docs.rs `redis/1.8.0/redis/enum.Value.html`, checked 2026-10-23 |
+| `tokio-rustls` 0.26.6 is the latest release (2026-09-28); the lockfile already resolves 0.26.5 (MIT OR Apache-2.0, `rust-version` 1.71) for `sqlx`; features `aws_lc_rs`, `tls12` | the driver takes the release in the tree, on the workspace's provider | crates.io API |
+| `webpki-roots` 1.0.10, CDLA-Permissive-2.0, already accepted by `deny.toml` | the public roots of `verify-full` | crates.io API |
+
+| Crate | Version | Latest | Source | Checked on |
+|---|---|---|---|---|
+| `tokio-rustls` | `0.26.5` | `0.26.6` (2026-09-28) | [crates.io](https://crates.io/crates/tokio-rustls) | 2026-10-22 |
+| `webpki-roots` | `1.0.10` | `1.0.11` (2026-10-23) | [crates.io](https://crates.io/crates/webpki-roots) | 2026-10-23 |
+
 
 ## COPY destinations and classification — checked 2026-10-03
 

@@ -90,6 +90,7 @@ To locate the boards and their states before implementation, see
 | [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Local CPU embeddings (Burn, a pinned multilingual model downloaded on opt-in) rank the relations of the AI context, lexical first | accepted |
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | The SQL editor completes from the catalog cache, reads what is missing within bounds, and takes its insertion text from Rust | proposed |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | The updater key signs in a job that builds nothing, with a Tauri CLI release binary pinned by checksum (refines 0051) | proposed |
+| [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | The Redis driver speaks RESP3 itself, classifies commands from the server's own table, and stops only what Redis can stop | proposed |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

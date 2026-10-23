@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="44eb38c43777" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="420cb9ece142" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2268,6 +2268,15 @@ Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
 - `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-redis`, étape 1 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) :
+  Redis et Valkey en RESP3 lu par le driver lui-même ; commandes classées
+  d'après la table `COMMAND` du serveur ; réponses diffusées en Arrow, en lots
+  bornés en octets ; commandes bloquées et scripts qui n'ont pas écrit arrêtés
+  sur le serveur ; bases et échantillon borné de clés dans l'arbre ; un aperçu
+  en lecture seule par type de clé. Restent : Cluster et Sentinel,
+  `MULTI`/`EXEC`, Pub/Sub et `MONITOR` en captures bornées, certificats
+  clients, types de modules, le vocabulaire des commandes dans l'éditeur, et
+  le fichier d'agent Redis.
 
 **Pourquoi ici, avant les plugins.** C'est ici que le modèle de capacités
 ([ADR-0003](adr/0003-driver-capabilities.md)) et `QueryLanguage` sont mis à

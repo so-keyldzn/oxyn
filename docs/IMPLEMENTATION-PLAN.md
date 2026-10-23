@@ -2248,6 +2248,14 @@ Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbere
 - `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch speaks the Elasticsearch protocol, it has no driver of its own
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-redis`, stage 1 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)):
+  Redis and Valkey over RESP3 read by the driver itself; commands classified
+  from the server's `COMMAND` table; replies streamed as Arrow in byte-bounded
+  batches; blocked commands and scripts that have not written stopped on the
+  server; databases and a bounded key sample in the tree; a read-only preview
+  per key type. To come: Cluster and Sentinel, `MULTI`/`EXEC`, Pub/Sub and
+  `MONITOR` as bounded captures, client certificates, module types, the
+  command vocabulary in the editor, and the Redis agent file.
 
 **Why here, before plugins.** This is where the capability model
 ([ADR-0003](adr/0003-driver-capabilities.md)) and `QueryLanguage` are put to

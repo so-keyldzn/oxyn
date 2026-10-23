@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="8e09813832ce" -->
+<!-- oxyn-translation source="docs/README.md" sha256="e1f6194f24e2" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -94,6 +94,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Des embeddings locaux sur CPU (Burn, un modèle multilingue épinglé téléchargé sur activation) classent les relations du contexte IA, le lexical d'abord | accepté |
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | L'éditeur SQL complète depuis le cache du catalogue, lit ce qui manque dans des bornes, et tire son texte d'insertion de Rust | proposé |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
+| [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | Le driver Redis parle RESP3 lui-même, classe les commandes d'après la table du serveur, et n'arrête que ce que Redis sait arrêter | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
