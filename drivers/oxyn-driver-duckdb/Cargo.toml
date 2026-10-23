@@ -16,13 +16,18 @@ oxyn-core.workspace = true
 oxyn-catalog.workspace = true
 oxyn-data.workspace = true
 oxyn-driver.workspace = true
+# Splitting a batch into statements, so that an interruption can be checked
+# before each one starts (ADR-0059).
+oxyn-query.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 duckdb.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
-tokio.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 
 [dev-dependencies]
-rstest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
