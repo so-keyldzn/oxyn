@@ -1,17 +1,113 @@
-//! The server's administration replies as grids: `SLOWLOG GET` and
-//! `CLIENT LIST`.
+//! The server's descriptive replies as grids: `SLOWLOG GET`, `CLIENT LIST`,
+//! and the arrays of maps — `XINFO GROUPS`, `XINFO CONSUMERS`, `ACL LOG`,
+//! `MODULE LIST`, `FUNCTION LIST`.
 //!
-//! Both read as text in `redis-cli`. A grid sorts and filters them — the
-//! slowest command, the idle clients of one user — without the user
-//! splitting text by hand. Nothing is dropped on the way: a slow log entry
-//! that is not the expected array keeps its whole text as the command, and
-//! every client row keeps its whole line, so a field a later server adds is
-//! still there.
+//! They read as text in `redis-cli`. A grid sorts and filters them — the
+//! slowest command, the idle clients of one user, the consumer group that
+//! lags — without the user splitting text by hand. Nothing is dropped on the
+//! way: a slow log entry that is not the expected array keeps its whole text
+//! as the command, every client row keeps its whole line, and a map's key
+//! the first map did not have goes to `other_fields`, so a field a later
+//! server adds is still there.
+
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use crate::argv;
 use crate::render::{Cell, compact};
 use crate::resp::Value;
 use crate::shape::Slot;
+
+/// The column of the keys the first map did not have.
+const OTHER: &str = "other_fields";
+
+/// The keys of the first map of an array of maps, which become the columns;
+/// `None` when it is not a map.
+///
+/// A key that repeats, or that takes the name of a column the layout adds,
+/// is suffixed until it is unique: Arrow keeps duplicate names, a grid
+/// cannot tell them apart.
+#[must_use]
+pub fn record_keys(first: &Value) -> Option<Vec<String>> {
+    let Value::Map(pairs) = first else {
+        return None;
+    };
+    let mut keys: Vec<String> = Vec::with_capacity(pairs.len());
+    for (key, _) in pairs {
+        let mut name = text_of(key);
+        while keys.contains(&name) || name == OTHER || name == "truncated" {
+            name.push('_');
+        }
+        keys.push(name);
+    }
+    Some(keys)
+}
+
+/// One `Utf8` column per key, then `other_fields` and `truncated`.
+#[must_use]
+pub fn records_schema(keys: &[String]) -> SchemaRef {
+    let mut fields: Vec<Field> = keys
+        .iter()
+        .map(|key| Field::new(key.as_str(), DataType::Utf8, true))
+        .collect();
+    fields.push(Field::new(OTHER, DataType::Utf8, true));
+    fields.push(Field::new("truncated", DataType::Boolean, false));
+    Arc::new(Schema::new(fields))
+}
+
+/// One map as a row of the columns `keys` names.
+///
+/// A value is its text, a nested aggregate its compact text. A key absent
+/// from `keys` joins `other_fields` as `key=value`; an element that is not a
+/// map is kept whole there.
+#[must_use]
+pub fn record_row(keys: &[String], record: &Value) -> Vec<Slot> {
+    let mut row: Vec<Slot> = keys.iter().map(|_| Slot::Text(None)).collect();
+    let mut other = Vec::new();
+    match record {
+        Value::Map(pairs) => {
+            // Same suffixing as `record_keys`, so a repeated key finds its
+            // own column.
+            let mut seen: Vec<String> = Vec::with_capacity(pairs.len());
+            for (key, value) in pairs {
+                let mut name = text_of(key);
+                while seen.contains(&name) || name == OTHER || name == "truncated" {
+                    name.push('_');
+                }
+                let cell = Some(text_of(value));
+                match keys.iter().position(|column| *column == name) {
+                    Some(index) => {
+                        if let Some(slot) = row.get_mut(index) {
+                            *slot = Slot::Text(cell);
+                        }
+                    }
+                    None => other.push(format!("{name}={}", text_of(value))),
+                }
+                seen.push(name);
+            }
+        }
+        other_shape => other.push(compact(other_shape)),
+    }
+    row.push(Slot::Text((!other.is_empty()).then(|| other.join(" "))));
+    row.push(Slot::Boolean(Some(record.is_truncated())));
+    row
+}
+
+/// A key or a value as one cell's text: a string as it is when UTF-8, in
+/// the console's quoted form when not; anything else compact.
+fn text_of(value: &Value) -> String {
+    match value {
+        Value::Bulk(clipped) | Value::Verbatim { text: clipped, .. } => {
+            match std::str::from_utf8(&clipped.bytes) {
+                Ok(text) => text.to_owned(),
+                Err(_) => argv::render(&clipped.bytes),
+            }
+        }
+        Value::Simple(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        other => Cell::of(other).text.unwrap_or_else(|| compact(other)),
+    }
+}
 
 /// A slow log entry, `[id, unix time, microseconds, [arguments], client,
 /// client name]`.
@@ -147,6 +243,68 @@ mod tests {
             assert_eq!(row.len(), 7);
             assert_eq!(row.last(), Some(&Slot::Boolean(Some(true))));
         }
+    }
+
+    fn map(pairs: &[(&[u8], Value)]) -> Value {
+        Value::Map(
+            pairs
+                .iter()
+                .map(|(key, value)| (bulk(key), value.clone()))
+                .collect(),
+        )
+    }
+
+    /// `XINFO GROUPS` as `redis:8.10.2` answers it, keys included.
+    #[test]
+    fn an_array_of_maps_takes_its_columns_from_the_first() {
+        let first = map(&[
+            (b"name", bulk(b"g1")),
+            (b"consumers", Value::Integer(2)),
+            (b"pending", Value::Integer(5)),
+            (b"last-delivered-id", bulk(b"1-0")),
+            (b"lag", Value::Null),
+        ]);
+        let keys = record_keys(&first).expect("a map");
+        assert_eq!(
+            keys,
+            ["name", "consumers", "pending", "last-delivered-id", "lag"]
+        );
+        assert_eq!(records_schema(&keys).fields().len(), 7);
+        let row = record_row(&keys, &first);
+        assert_eq!(row.get(1), Some(&Slot::Text(Some("2".to_owned()))));
+        assert_eq!(row.get(4), Some(&Slot::Text(Some("null".to_owned()))));
+        assert_eq!(row.get(5), Some(&Slot::Text(None)));
+        let later = map(&[
+            (b"pending", Value::Integer(1)),
+            (b"entries-read", Value::Integer(9)),
+        ]);
+        let row = record_row(&keys, &later);
+        assert_eq!(row.first(), Some(&Slot::Text(None)));
+        assert_eq!(row.get(2), Some(&Slot::Text(Some("1".to_owned()))));
+        assert_eq!(
+            row.get(5),
+            Some(&Slot::Text(Some("entries-read=9".to_owned())))
+        );
+    }
+
+    #[test]
+    fn repeated_or_reserved_keys_get_their_own_columns() {
+        let first = map(&[
+            (b"a", Value::Integer(1)),
+            (b"a", Value::Integer(2)),
+            (b"truncated", Value::Boolean(true)),
+            (b"\xff", Value::Integer(3)),
+        ]);
+        let keys = record_keys(&first).expect("a map");
+        assert_eq!(keys.len(), 4);
+        assert_eq!(keys.get(1).map(String::as_str), Some("a_"));
+        assert_eq!(keys.get(2).map(String::as_str), Some("truncated_"));
+        let row = record_row(&keys, &first);
+        assert_eq!(row.get(1), Some(&Slot::Text(Some("2".to_owned()))));
+        assert_eq!(row.get(3), Some(&Slot::Text(Some("3".to_owned()))));
+        assert_eq!(record_keys(&Value::Integer(1)), None);
+        let odd = record_row(&keys, &Value::Integer(7));
+        assert_eq!(odd.get(4), Some(&Slot::Text(Some("7".to_owned()))));
     }
 
     #[test]

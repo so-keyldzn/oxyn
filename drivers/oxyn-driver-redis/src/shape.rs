@@ -74,6 +74,9 @@ pub enum Layout {
     Slowlog,
     /// `CLIENT LIST` and `CLIENT INFO`, one row per client.
     Clients,
+    /// An array of maps — `XINFO GROUPS`, `ACL LOG`… —, one row per map and
+    /// one column per key of the first.
+    Records,
 }
 
 /// The type of a scalar reply.
@@ -154,6 +157,9 @@ impl Layout {
                 "xrange" | "xrevrange" => Self::StreamEntries,
                 "ts.range" | "ts.revrange" => Self::Samples,
                 "slowlog" if sub("get") => Self::Slowlog,
+                "xinfo" if sub("groups") || sub("consumers") => Self::Records,
+                "acl" if sub("log") => Self::Records,
+                "module" | "function" if sub("list") => Self::Records,
                 _ => Self::Elements,
             },
             Head::Aggregate(..) => Self::Elements,
@@ -284,6 +290,8 @@ impl Layout {
                 text("line"),
                 truncated,
             ],
+            // Its columns are the first map's keys, known once it is read.
+            Self::Records => return crate::admin::records_schema(&[]),
         };
         Arc::new(Schema::new(fields))
     }

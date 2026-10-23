@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="7da2c082ffde" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="6bb75267c312" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -147,7 +147,11 @@ que fait un arrêt. Vérifié le 2026-10-22
     `SLOWLOG GET` (une ligne par entrée, sa durée en microsecondes) et
     `CLIENT LIST`/`CLIENT INFO` (une ligne par client : ses champs usuels en
     colonnes, et sa ligne entière, pour qu'un champ ajouté par un serveur plus
-    récent ne se perde pas). Une réponse
+    récent ne se perde pas). Un tableau de maps — `XINFO GROUPS`,
+    `XINFO CONSUMERS`, `ACL LOG`, `MODULE LIST`, `FUNCTION LIST` — donne une
+    ligne par map, ses colonnes étant les clés de la première, lue avant le
+    premier lot ; une clé que la première n'avait pas va dans `other_fields`.
+    Une réponse
     abandonnée avant sa fin coûte la connexion ; la session la rouvre avec le
     même état déclaré.
 11. **Le catalogue :** les bases sont des catalogues nommés `db0`, `db1`… (d'après

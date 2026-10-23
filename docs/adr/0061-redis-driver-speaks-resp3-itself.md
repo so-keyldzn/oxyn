@@ -136,7 +136,11 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     `XRANGE`/`XREVRANGE`, `TS.RANGE`, `INFO`, `SLOWLOG GET` (one row per
     entry, its duration in microseconds) and `CLIENT LIST`/`CLIENT INFO`
     (one row per client: its usual fields as columns, and its whole line, so
-    that a field a later server adds is not lost). A reply abandoned before its end costs
+    that a field a later server adds is not lost). An array of maps —
+    `XINFO GROUPS`, `XINFO CONSUMERS`, `ACL LOG`, `MODULE LIST`,
+    `FUNCTION LIST` — is one row per map, its columns the first map's keys,
+    read before the first batch; a key the first map lacked goes to
+    `other_fields`. A reply abandoned before its end costs
     the connection; the session reopens it with the same declared state.
 11. **The catalog:** databases are catalogs named `db0`, `db1`… (from
     `CONFIG GET databases`, or `INFO keyspace` when the account may not read

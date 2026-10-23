@@ -42,7 +42,7 @@ use oxyn_driver::Cursor;
 use std::sync::Arc;
 use tokio::sync::OwnedMutexGuard;
 
-use crate::admin::{client_rows, slowlog_row};
+use crate::admin::{client_rows, record_row, slowlog_row};
 use crate::cancel::{Running, Stop};
 use crate::connection::Connection;
 use crate::error::{RedisError, during_execution};
@@ -171,6 +171,11 @@ pub struct RedisCursor {
     produced: usize,
     stats: ExecStats,
     started: Instant,
+    /// An element already read, the next one's row: the first map of a
+    /// `Records` reply, read to name the columns.
+    pending: Option<Value>,
+    /// The columns of a `Records` reply.
+    keys: Vec<String>,
 }
 
 impl std::fmt::Debug for RedisCursor {
@@ -281,7 +286,43 @@ impl RedisCursor {
             }
             head => head,
         };
-        let layout = Layout::choose(&plan.argv, &head);
+        let mut layout = Layout::choose(&plan.argv, &head);
+        let mut pending = None;
+        let mut keys = Vec::new();
+        if let (Layout::Records, Head::Aggregate(_, 1..)) = (layout, &head) {
+            // The columns are the first map's keys: it is read now, under
+            // the same deadline and Stop, and becomes the first row.
+            let mut budget = MAX_VALUE_BYTES;
+            match race(&token, deadline, connection.reader().value(&mut budget)).await {
+                Raced::Done(Ok(first)) => {
+                    match crate::admin::record_keys(&first) {
+                        Some(found) => keys = found,
+                        None => layout = Layout::Elements,
+                    }
+                    pending = Some(first);
+                }
+                Raced::Done(Err(error)) => {
+                    lease.discard();
+                    return Err(during_execution(
+                        &driver,
+                        error.into(),
+                        plan.intent,
+                        plan.scripted,
+                        true,
+                    ));
+                }
+                Raced::Halted(halt) => {
+                    lease.discard();
+                    return Err(verdict(
+                        halt,
+                        false,
+                        plan.intent,
+                        "the command had already run on the server: its reply was being read \
+                         when it was stopped",
+                    ));
+                }
+            }
+        }
         let state = match (layout, head) {
             (Layout::Info | Layout::Clients, head) => State::Info(head),
             (Layout::Scalar(_), head) => State::Scalar(head),
@@ -293,7 +334,11 @@ impl RedisCursor {
             },
             (_, head) => State::Scalar(head),
         };
-        let schema = layout.schema();
+        let schema = if layout == Layout::Records {
+            crate::admin::records_schema(&keys)
+        } else {
+            layout.schema()
+        };
         let handle = StatementHandle::new();
         shared.executions.register(handle, token.clone());
         Ok(Self {
@@ -310,6 +355,8 @@ impl RedisCursor {
             produced: 0,
             stats: ExecStats::default(),
             started,
+            pending,
+            keys,
         })
     }
 
@@ -343,7 +390,10 @@ impl RedisCursor {
             }
             State::Elements { remaining: 0, .. } | State::Pairs { remaining: 0 } => {}
             State::Elements { remaining, index } => {
-                let value = reader.value(&mut budget).await?;
+                let value = match self.pending.take() {
+                    Some(value) => value,
+                    None => reader.value(&mut budget).await?,
+                };
                 self.state = State::Elements {
                     remaining: remaining.saturating_sub(1),
                     index: index.saturating_add(1),
@@ -359,6 +409,10 @@ impl RedisCursor {
                     }
                     Layout::Slowlog => {
                         let row = slowlog_row(&value, value.is_truncated());
+                        self.push(&row)?;
+                    }
+                    Layout::Records => {
+                        let row = record_row(&self.keys, &value);
                         self.push(&row)?;
                     }
                     Layout::StreamEntries => {

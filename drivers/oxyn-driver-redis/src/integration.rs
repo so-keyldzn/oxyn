@@ -855,6 +855,35 @@ async fn the_session_context_moves_the_console_and_nothing_else() {
     );
 }
 
+/// A stream's consumer groups and their consumers read as grids, one column
+/// per field the server names.
+#[tokio::test]
+#[ignore = "needs OXYN_REDIS_TEST_URL"]
+async fn consumer_groups_read_as_grids() {
+    let Some(session) = clean().await else { return };
+    for command in [
+        "XADD orders * item a",
+        "XADD orders * item b",
+        "XGROUP CREATE orders billing 0",
+        "XREADGROUP GROUP billing alice COUNT 1 STREAMS orders >",
+    ] {
+        run(&session, command).await.expect(command);
+    }
+    let groups = run(&session, "XINFO GROUPS orders")
+        .await
+        .expect("XINFO GROUPS");
+    assert_eq!(column(&groups, "name"), [Some("billing".to_owned())]);
+    assert_eq!(column(&groups, "consumers"), [Some("1".to_owned())]);
+    assert_eq!(column(&groups, "pending"), [Some("1".to_owned())]);
+    let consumers = run(&session, "XINFO CONSUMERS orders billing")
+        .await
+        .expect("XINFO CONSUMERS");
+    assert_eq!(column(&consumers, "name"), [Some("alice".to_owned())]);
+    assert_eq!(column(&consumers, "pending"), [Some("1".to_owned())]);
+    let none = run(&session, "XINFO GROUPS orders-without-groups").await;
+    assert!(none.is_err(), "no such key is the server's error");
+}
+
 /// The slow log and the client list read as grids on the real server.
 #[tokio::test]
 #[ignore = "needs OXYN_REDIS_TEST_URL"]
