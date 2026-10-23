@@ -11,6 +11,9 @@ mod error;
 mod request;
 mod session;
 
+#[cfg(test)]
+mod integration;
+
 pub mod driver;
 
 pub use driver::{ElasticsearchDriver, elasticsearch_metadata};
