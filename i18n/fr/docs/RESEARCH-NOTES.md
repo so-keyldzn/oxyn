@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="6a40e0472800" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="36171de1a018" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -2470,6 +2470,7 @@ Pour l'[ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md).
 | `sdssplitargs` (`src/sds.c`, Redis 8.10.2) : les blancs séparent ; entre guillemets doubles `\xHH`, `\n`, `\r`, `\t`, `\b`, `\a` et `\<c>` ; entre apostrophes seulement `\'` ; un guillemet fermant doit être suivi d'un blanc ou de la fin ; `sdscatrepr` échappe `\\`, `"`, `\n`, `\r`, `\t`, `\a`, `\b` et écrit les autres octets non imprimables `\xHH` | la console lit une ligne comme `redis-cli` | source |
 | `redis` (redis-rs) 1.7.1, BSD-3-Clause, `rust-version` 1.88, publié le 2026-09-25 : `send_packed_command` rend `RedisResult<Value>`, `Value::Array(Vec<Value>)` ; l'ouverture envoie `CLIENT SETINFO LIB-NAME`/`LIB-VER` sauf si on l'en dispense | pas une dépendance : une réponse est matérialisée avant que l'appelant n'en voie rien | API crates.io ; `src/aio/multiplexed_connection.rs`, `src/types.rs`, `src/connection.rs` en 1.7.1 |
 | `redis` 1.8.0, publié le 2026-10-23, rend toujours une `Value` dont les variantes `Array`, `Map`, `Set` et `Push` contiennent tous les éléments | le rejet de l'ADR-0061 tient sur la dernière publication | docs.rs `redis/1.8.0/redis/enum.Value.html`, vérifié le 2026-10-23 |
+| `TYPE` rend `string`, `list`, `set`, `zset`, `hash`, `stream` et `vectorset`, ou `none` ; les vector sets arrivent avec Redis 8.0 (`VADD key (FP32 \| VALUES num) vector element`, `VCARD`) ; `VRANGE key start end [count]` (depuis 8.4.0, `READONLY`) rend les éléments dans l'ordre des octets, `-`/`+` pour bornes, `[`/`(` pour un début inclusif/exclusif | un vector set se prévisualise par `VRANGE key - + limit` quand le serveur connaît la commande, sa longueur est `VCARD` | [TYPE](https://redis.io/docs/latest/commands/type/), [VADD](https://redis.io/docs/latest/commands/vadd/), [VRANGE](https://redis.io/docs/latest/commands/vrange/), vérifié le 2026-10-23 |
 | `tokio-rustls` 0.26.6 est la dernière publication (2026-09-28) ; le lockfile résout déjà 0.26.5 (MIT OR Apache-2.0, `rust-version` 1.71) pour `sqlx` ; fonctionnalités `aws_lc_rs`, `tls12` | le driver prend la publication déjà dans l'arbre, sur le fournisseur du workspace | API crates.io |
 | `webpki-roots` 1.0.10, CDLA-Permissive-2.0, déjà accepté par `deny.toml` | les racines publiques de `verify-full` | API crates.io |
 

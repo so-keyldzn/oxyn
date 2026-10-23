@@ -730,6 +730,9 @@ async fn every_native_type_previews_read_only() {
         "SADD set m",
         "ZADD z 1 one 2 two",
         "XADD st 1-1 f v",
+        // Vector sets are a core type since Redis 8; `VRANGE` since 8.4.
+        "VADD vs VALUES 2 0.1 0.2 alpha",
+        "VADD vs VALUES 2 0.3 0.4 beta",
     ] {
         run(&session, setup).await.expect(setup);
     }
@@ -740,6 +743,7 @@ async fn every_native_type_previews_read_only() {
         ("set", 1),
         ("z", 2),
         ("st", 1),
+        ("vs", 2),
     ] {
         let path = CatalogPath::for_relation(Some(DB), None, key).expect("path");
         let preview = session

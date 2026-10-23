@@ -450,6 +450,7 @@ async fn key_facts(
         "set" => Some(b"SCARD"),
         "zset" => Some(b"ZCARD"),
         "stream" => Some(b"XLEN"),
+        "vectorset" => Some(b"VCARD"),
         _ => None,
     };
     let mut asked = Vec::new();
@@ -526,8 +527,8 @@ pub fn fields_of(kind: &str) -> Vec<Field> {
             bytes("value_bytes", 5),
             truncated(6),
         ],
-        "list" => vec![
-            Field::new("index", 1, LogicalType::INT64, "list index").not_null(),
+        "list" | "vectorset" => vec![
+            Field::new("index", 1, LogicalType::INT64, "position").not_null(),
             Field::new("type", 2, LogicalType::Text, "RESP type").not_null(),
             text("value", 3),
             bytes("value_bytes", 4),
@@ -645,7 +646,15 @@ mod tests {
 
     #[test]
     fn every_native_type_has_preview_columns_and_a_module_type_none() {
-        for kind in ["string", "hash", "list", "set", "zset", "stream"] {
+        for kind in [
+            "string",
+            "hash",
+            "list",
+            "set",
+            "zset",
+            "stream",
+            "vectorset",
+        ] {
             assert!(!fields_of(kind).is_empty(), "{kind}");
         }
         assert!(fields_of("ReJSON-RL").is_empty());

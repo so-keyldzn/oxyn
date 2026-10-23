@@ -10,6 +10,7 @@
 //! | set | `SSCAN key 0 COUNT limit` | the server's | refused |
 //! | sorted set | `ZRANGE key offset offset+limit-1 WITHSCORES` | score, then member | accepted |
 //! | stream | `XRANGE key - + COUNT limit` | entry ID | refused: the next page starts after an ID |
+//! | vector set | `VRANGE key - + limit` (Redis 8.4 and later) | element bytes | refused: the next page starts after an element |
 //! | a module's type | — | — | refused, naming the type: its own commands read it |
 //!
 //! `COUNT` is a hint: a small hash answers whole, a large one about `limit`
@@ -73,6 +74,12 @@ pub fn command(kind: &str, key: &[u8], limit: u32, offset: u64) -> Result<String
         "stream" => {
             paged("stream")?;
             format!("XRANGE {key} - + COUNT {limit}")
+        }
+        // Elements in byte order; the next page starts after an element, not
+        // at an offset.
+        "vectorset" => {
+            paged("vector set")?;
+            format!("VRANGE {key} - + {limit}")
         }
         other => {
             return Err(OxynError::NotSupported {
@@ -143,6 +150,15 @@ pub async fn request(
             "key {name} does not exist in db{database}"
         )));
     }
+    // `VRANGE` came with Redis 8.4, after vector sets: an older server holds
+    // the key and has no command to read it in pages.
+    if kind == "vectorset" && shared.commands.find(&[b"VRANGE".to_vec()]).is_none() {
+        return Err(OxynError::NotSupported {
+            capability: "a preview of a vector set on a server without VRANGE (Redis 8.4 or \
+                         later reads one in pages)"
+                .to_owned(),
+        });
+    }
     let text = command(&kind, &key, limit, shape.offset)?;
     let limits = ExecLimits::default().with_max_rows(usize::try_from(limit).ok());
     Ok(ExecRequest::new(QueryLanguage::RedisCommand, text)
@@ -181,6 +197,7 @@ mod tests {
     #[case("set", 0, "SSCAN \"a b\" 0 COUNT 200")]
     #[case("zset", 200, "ZRANGE \"a b\" 200 399 WITHSCORES")]
     #[case("stream", 0, "XRANGE \"a b\" - + COUNT 200")]
+    #[case("vectorset", 0, "VRANGE \"a b\" - + 200")]
     fn each_type_previews_with_its_own_command(
         #[case] kind: &str,
         #[case] offset: u64,
@@ -197,6 +214,7 @@ mod tests {
     #[case("hash")]
     #[case("set")]
     #[case("stream")]
+    #[case("vectorset")]
     fn a_page_without_a_total_order_is_refused(#[case] kind: &str) {
         assert!(matches!(
             command(kind, b"k", 200, 200),
