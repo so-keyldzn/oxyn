@@ -224,12 +224,46 @@ pub(crate) fn closed() -> OxynError {
     driver(DuckDbError::Closed, ErrorClass::Permanent)
 }
 
-/// DuckDB's message for an error, or the rendering of a `duckdb-rs` error.
+thread_local! {
+    /// The paths of the connection this carrier thread serves, and what
+    /// replaces each in an engine message. Set once, when the thread starts:
+    /// every engine error of a session is converted on its own thread.
+    static REDACTED: std::cell::OnceCell<Vec<(String, &'static str)>> =
+        const { std::cell::OnceCell::new() };
+}
+
+/// Makes every engine message converted on this thread from now on hide the
+/// database path and the granted folder. Called once, on a carrier thread,
+/// before the database opens; a later call is ignored.
+pub(crate) fn redact_on_this_thread(database: Option<&str>, folder: Option<&str>) {
+    let paths = [(database, "<database file>"), (folder, "<granted folder>")]
+        .into_iter()
+        .filter_map(|(path, shown)| {
+            path.filter(|path| !path.is_empty())
+                .map(|path| (path.to_owned(), shown))
+        })
+        .collect();
+    REDACTED.with(|redacted| {
+        let _ = redacted.set(paths);
+    });
+}
+
+/// DuckDB's message for an error, or the rendering of a `duckdb-rs` error,
+/// without the paths of the connection ([I-03](../../../CLAUDE.md#i-03)).
 fn message_of(error: &duckdb::Error) -> String {
-    match error {
+    let message = match error {
         duckdb::Error::DuckDBFailure(_, Some(message)) => message.clone(),
         other => other.to_string(),
-    }
+    };
+    REDACTED.with(|redacted| {
+        redacted
+            .get()
+            .into_iter()
+            .flatten()
+            .fold(message, |message, (path, shown)| {
+                message.replace(path.as_str(), shown)
+            })
+    })
 }
 
 /// The family of an engine failure, given what the statement could do.

@@ -26,7 +26,7 @@
 //! | `RESTRICT_DEPENDENTS` | DuckDB does not track a view's dependency on its tables: a view does not stop a `DROP TABLE` |
 //! | `BULK_LOAD` | `COPY … FROM` exists, but nothing in Oxyn drives it yet |
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use duckdb::Connection;
@@ -158,24 +158,16 @@ fn metadata() -> DriverMetadata {
         )
 }
 
-/// The file access directory, when one is set; it must exist.
-fn file_access(config: &ConnectionConfig) -> Result<Option<PathBuf>> {
-    let Some(value) = config
+/// The file access directory, when one is set. That it exists is checked on
+/// the carrier thread ([`crate::open`]): a `stat` on a stale network mount
+/// can block for long, and never on the runtime (I-05).
+fn file_access(config: &ConnectionConfig) -> Option<PathBuf> {
+    config
         .params
         .get(DuckDbDriver::FILE_ACCESS)
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
-    let directory = Path::new(value);
-    if !directory.is_dir() {
-        return Err(OxynError::Config(format!(
-            "driver `duckdb`: parameter `{}` must name an existing folder",
-            DuckDbDriver::FILE_ACCESS
-        )));
-    }
-    Ok(Some(directory.to_path_buf()))
+        .map(PathBuf::from)
 }
 
 #[async_trait]
@@ -228,7 +220,7 @@ impl Driver for DuckDbDriver {
         let spec = OpenSpec {
             target,
             read_only: config.read_only,
-            file_access: file_access(config)?,
+            file_access: file_access(config),
         };
         let (worker, thread) = worker::spawn(spec, cancel).await?;
         let (origin, version) = worker

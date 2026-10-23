@@ -222,6 +222,41 @@ async fn sql_reaches_no_file_and_cannot_lift_the_policy() {
 }
 
 #[tokio::test]
+async fn an_engine_error_names_neither_the_database_nor_the_folder() {
+    // A path is a connection parameter: it has no place in an error, which
+    // reaches the journal and may reach a prompt (I-03).
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let data = dir.path().join("client-acme");
+    std::fs::create_dir(&data).expect("folder");
+    let database = dir.path().join("acme.duckdb");
+    let database_text = database.to_str().expect("UTF-8");
+    let folder_text = data.to_str().expect("UTF-8");
+    let session =
+        open(&config(database_text).with_param(DuckDbDriver::FILE_ACCESS, folder_text)).await;
+    for sql in [
+        format!("SELECT * FROM read_csv('{folder_text}/missing.csv')"),
+        format!("ATTACH '{database_text}' AS again"),
+    ] {
+        let message = run_err(session.as_ref(), unbounded(&sql)).await.to_string();
+        assert!(!message.contains(folder_text), "{sql}: {message}");
+        assert!(!message.contains(database_text), "{sql}: {message}");
+    }
+    let missing = run_err(
+        session.as_ref(),
+        unbounded(&format!(
+            "SELECT * FROM read_csv('{folder_text}/missing.csv')"
+        )),
+    )
+    .await
+    .to_string();
+    assert!(
+        missing.contains("<granted folder>/missing.csv"),
+        "{missing}"
+    );
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
 async fn a_granted_folder_is_readable_and_only_it() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let data = dir.path().join("data");

@@ -86,12 +86,42 @@ impl WorkerHandle {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
+        let (answer, id) = self.submit_job(job)?;
+        self.await_reply(answer, cancel, id).await
+    }
+
+    /// Runs a short task that may write, such as a `COMMIT`: when the token
+    /// fires, the task is interrupted and the engine's verdict awaited, since
+    /// the token proves nothing about what the task applied
+    /// ([`Self::await_verdict`]).
+    ///
+    /// # Errors
+    /// The task's, [`OxynError::Cancelled`] for a task that never started, or
+    /// a closed-session error.
+    pub(crate) async fn call_write<T, F>(&self, cancel: &CancelToken, job: F) -> Result<T>
+    where
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        if cancel.is_cancelled() {
+            return Err(OxynError::Cancelled);
+        }
+        let (answer, id) = self.submit_job(job)?;
+        self.await_verdict(answer, cancel, id).await
+    }
+
+    /// Queues a short task; its reply arrives on the returned receiver.
+    fn submit_job<T, F>(&self, job: F) -> Result<(oneshot::Receiver<Result<T>>, WorkId)>
+    where
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
         let (reply, answer) = oneshot::channel();
         let wrapped: Job = Box::new(move |connection| {
             let _ = reply.send(job(connection));
         });
         let id = self.submit(|id| WorkerCommand::Job(id, wrapped))?;
-        self.await_reply(answer, cancel, id).await
+        Ok((answer, id))
     }
 
     /// Starts a streamed execution and returns its task's identity.
@@ -205,6 +235,7 @@ pub(crate) async fn spawn(
     let thread = std::thread::Builder::new()
         .name("oxyn-duckdb".to_owned())
         .spawn(move || {
+            spec.redact_on_this_thread();
             let (connection, anchor) = match open::connect(&spec) {
                 Ok(opened) => opened,
                 Err(err) => {

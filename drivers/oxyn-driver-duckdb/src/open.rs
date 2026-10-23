@@ -65,6 +65,17 @@ pub(crate) struct OpenSpec {
     pub file_access: Option<PathBuf>,
 }
 
+impl OpenSpec {
+    /// Hides this connection's database path and granted folder from every
+    /// engine message the calling thread converts ([`error::redact_on_this_thread`]).
+    pub(crate) fn redact_on_this_thread(&self) {
+        error::redact_on_this_thread(
+            path_text(&self.target),
+            self.file_access.as_deref().and_then(Path::to_str),
+        );
+    }
+}
+
 impl std::fmt::Debug for OpenSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpenSpec")
@@ -195,6 +206,18 @@ fn resolve(path: &Path) -> PathBuf {
 
 /// Opens a new engine and applies the access policy.
 fn open(spec: &OpenSpec) -> Result<Connection> {
+    // Before the engine exists: a wrong folder must not leave a new, empty
+    // database file behind.
+    if spec
+        .file_access
+        .as_deref()
+        .is_some_and(|directory| !directory.is_dir())
+    {
+        return Err(OxynError::Config(format!(
+            "driver `duckdb`: parameter `{}` must name an existing folder",
+            crate::DuckDbDriver::FILE_ACCESS
+        )));
+    }
     let path = path_text(&spec.target);
     let refused = |err: duckdb::Error| error::open(&err, path);
     let mode = if spec.read_only {
@@ -212,10 +235,7 @@ fn open(spec: &OpenSpec) -> Result<Connection> {
         OpenTarget::File(file) => Connection::open_with_flags(file, config),
     }
     .map_err(refused)?;
-    restrict(&connection, spec.file_access.as_deref()).map_err(|err| match err {
-        OxynError::Driver { .. } => err,
-        other => OxynError::Connection(other.to_string()),
-    })?;
+    restrict(&connection, spec.file_access.as_deref())?;
     Ok(connection)
 }
 

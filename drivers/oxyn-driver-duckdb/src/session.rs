@@ -92,13 +92,17 @@ impl DuckDbSession {
         effect: Effect,
     ) -> Result<()> {
         self.capabilities.require(Capabilities::TRANSACTIONS)?;
-        self.worker
-            .call(cancel, move |connection: &Connection| {
-                connection
-                    .execute_batch(sql)
-                    .map_err(|err| error::engine(&err, effect))
-            })
-            .await
+        let job = move |connection: &Connection| {
+            connection
+                .execute_batch(sql)
+                .map_err(|err| error::engine(&err, effect))
+        };
+        match effect {
+            Effect::ReadOnly => self.worker.call(cancel, job).await,
+            // A `COMMIT` the token caught may have committed: the engine's
+            // verdict is awaited, never assumed (I-13).
+            Effect::Mutating => self.worker.call_write(cancel, job).await,
+        }
     }
 }
 

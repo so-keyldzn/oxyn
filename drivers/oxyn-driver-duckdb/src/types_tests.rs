@@ -399,6 +399,22 @@ async fn a_type_without_a_faithful_form_is_refused_with_its_name() {
 }
 
 #[tokio::test]
+async fn a_variant_is_refused_before_any_row_and_the_session_goes_on() {
+    // `duckdb-rs` refuses to execute a statement whose result holds a VARIANT,
+    // at any depth: the refusal is permanent, and the session stays usable.
+    let session = memory().await;
+    let refused = run_err(session.as_ref(), unbounded("SELECT [42::VARIANT] AS v")).await;
+    assert_eq!(
+        refused.class(),
+        oxyn_core::ErrorClass::Permanent,
+        "{refused}"
+    );
+    assert!(refused.to_string().contains("Variant"), "{refused}");
+    assert_eq!(single(&run_ok(session.as_ref(), "SELECT 1").await), "1");
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
 async fn a_bignum_travels_as_duckdb_bytes_with_its_type_name() {
     let session = memory().await;
     let batches = run_ok(
