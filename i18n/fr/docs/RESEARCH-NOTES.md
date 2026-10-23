@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="57df60cd56fb" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="a1bd624e900c" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3074,5 +3074,7 @@ n'ajoute aucune dépendance : il utilise `reqwest` 0.13.4 (`rustls`), `arrow`
 | `KILL QUERY … ASYNC` sur une lecture dont le client a cessé de lire a répondu au bout de 28 s, à la fermeture du tube de lecture ; la lecture a alors quitté `system.processes` aussitôt. Une lecture dont la connexion se ferme la quitte environ 10 s plus tard sans kill | le pilote vide ou ferme la réponse pendant qu'il tue, jamais après | observé sur 26.3.59.10 (`curl … \| sleep 30`) |
 | Une réponse 200 porte `X-ClickHouse-Exception-Tag` ; une exception levée après le départ de lignes est ajoutée au corps sous la forme `\r\n__exception__\r\n<tag>\r\n<message>\n<length> <tag>\r\n__exception__\r\n` | le décodeur coupe le corps au marqueur du tag | observé sur 26.3.59.10 |
 | `ALTER TABLE t RENAME TO u` échoue (`Expected COLUMN`, code 62) ; `RENAME TABLE db.t TO db.u` fonctionne ; `DROP MATERIALIZED VIEW mv` échoue (code 62), `DROP VIEW mv` la supprime ; `TRUNCATE TABLE` s'exécute sur une table `MergeTree` | le renommage et la suppression du catalogue prennent les formes de ClickHouse ; `TRUNCATE` est déclaré | observé sur 26.3.59.10 |
+| Un dictionnaire est une ligne de `system.tables` de moteur `Dictionary`, lisible par `SELECT` ; `RENAME TABLE` le renomme, `DROP TABLE` le refuse (code 520, `use DROP DICTIONARY`), `TRUNCATE` le refuse (code 62) | les dictionnaires sont listés avec les tables ; le serveur refuse les formes de table qui ne s'y appliquent pas | observé sur 26.3.59.10 |
+| `create_table_query` montre le `PASSWORD` de la source d'un dictionnaire et la clé secrète d'un moteur `S3` sous la forme `'[HIDDEN]'` ; `format_display_secrets_in_show_and_select` vaut `false` par défaut et n'agit que si la configuration du serveur le permet | la lecture de définition du pilote le fixe à `0` dès que le compte peut porter des réglages | observé sur 26.3.59.10 |
 | `sleepEachRow` refuse plus de 3 s par bloc (`Code: 160 TOO_SLOW`) ; `max_execution_time` arrête une lecture avec le code 159 | le test de délai lit des blocs d'une ligne | observé sur 26.3.59.10 |
 | `errorCodeToName` renvoie, pour chacun des 54 codes que la classification nomme, le nom que le pilote lui donne (8 `THERE_IS_NO_COLUMN` … 394 `QUERY_WAS_CANCELLED`, 497 `ACCESS_DENIED`, 516 `AUTHENTICATION_FAILED`, 999 `KEEPER_EXCEPTION`) | les codes de la classification sont ceux du serveur | une requête sur toute la liste, sur 26.3.59.10 |

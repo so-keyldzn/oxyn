@@ -82,10 +82,21 @@ impl ClickhouseCatalog {
         params: Vec<(&'static str, String)>,
         cancel: &CancelToken,
     ) -> Result<Vec<RecordBatch>> {
+        self.read_with(sql, params, Vec::new(), cancel).await
+    }
+
+    async fn read_with(
+        &self,
+        sql: &str,
+        params: Vec<(&'static str, String)>,
+        settings: Vec<(&'static str, String)>,
+        cancel: &CancelToken,
+    ) -> Result<Vec<RecordBatch>> {
         let call = Call {
             text: sql.to_owned(),
             query_id: uuid::Uuid::new_v4().to_string(),
             database: self.http.spec().database().map(str::to_owned),
+            settings,
             params,
             ..Call::default()
         };
@@ -425,8 +436,23 @@ impl CatalogProvider for ClickhouseCatalog {
     ) -> Result<RelationDefinition> {
         self.capabilities.require(Capabilities::OBJECT_DEFINITION)?;
         let (database, table) = relation_of(relation)?;
+        // A definition reaches the screen and the AI context: the passwords
+        // and keys of a dictionary source or an S3 table stay `[HIDDEN]`
+        // even where the account's profile shows them (I-03). A request of
+        // an account at `readonly = 1` carries no setting: its profile
+        // decides, masked unless the server's configuration allows otherwise.
+        let settings = if self.facts.takes_settings() {
+            vec![("format_display_secrets_in_show_and_select", "0".to_owned())]
+        } else {
+            Vec::new()
+        };
         let batches = self
-            .read(SQL_DEFINITION, relation_params(database, table), cancel)
+            .read_with(
+                SQL_DEFINITION,
+                relation_params(database, table),
+                settings,
+                cancel,
+            )
             .await?;
         let sql = texts(&batches, 0)?
             .into_iter()
