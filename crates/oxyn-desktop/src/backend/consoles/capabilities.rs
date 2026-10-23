@@ -94,7 +94,10 @@ pub fn explain_sql(text: &str, dialect: SqlDialect) -> Result<String, &'static s
     let prefix = match dialect {
         // MySQL's plain EXPLAIN plans without running, `DELETE` included; only
         // `EXPLAIN ANALYZE` executes, and it is never added.
-        SqlDialect::Postgres | SqlDialect::Redshift | SqlDialect::MySql => "EXPLAIN ",
+        // DuckDB's plain EXPLAIN plans too; its `EXPLAIN ANALYZE` runs.
+        SqlDialect::Postgres | SqlDialect::Redshift | SqlDialect::MySql | SqlDialect::DuckDb => {
+            "EXPLAIN "
+        }
         SqlDialect::Sqlite => "EXPLAIN QUERY PLAN ",
         _ => return Err("Explain is unavailable for this SQL dialect."),
     };
@@ -148,5 +151,14 @@ mod tests {
         );
         assert!(explain_sql("SELECT 1; DELETE FROM t", SqlDialect::MySql).is_err());
         assert!(explain_sql("explain SELECT 1", SqlDialect::MySql).is_err());
+    }
+
+    #[test]
+    fn duckdb_explains_without_running() {
+        assert_eq!(
+            explain_sql("SELECT * FROM \"t\"", SqlDialect::DuckDb).as_deref(),
+            Ok("EXPLAIN SELECT * FROM \"t\"")
+        );
+        assert!(explain_sql("EXPLAIN ANALYZE SELECT 1", SqlDialect::DuckDb).is_err());
     }
 }

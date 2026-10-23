@@ -3,6 +3,7 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { ConnectionForm } from "./connection-form"
 import {
+  duckdbDriver,
   mysqlDriver,
   postgresDriver,
   savedConnections,
@@ -110,6 +111,44 @@ export const SQLite: Story = {
       )
     )
     await expect(args.onBrowse).toHaveBeenCalled()
+  },
+}
+
+/**
+ * DuckDB: a file and, optionally, the one folder SQL may reach (ADR-0059).
+ * DuckDB authenticates nobody: no secret field, nothing for the keychain.
+ */
+export const DuckDB: Story = {
+  args: {
+    driver: duckdbDriver,
+    onBrowse: fn(async () => "/Users/me/data/analytics.duckdb"),
+  },
+  play: async ({ canvas, args }) => {
+    await expect(
+      canvas.getByLabelText(/^Folder SQL may read and write/)
+    ).toHaveAccessibleDescription(
+      /nowhere else.*Network access and extension downloads stay off/
+    )
+    await expect(canvas.queryByLabelText(/password/i)).toBeNull()
+
+    await userEvent.type(canvas.getByLabelText(/^Name/), "analytics")
+    const [databaseFile] = canvas.getAllByRole("button", { name: /Browse/ })
+    await userEvent.click(databaseFile!)
+    await waitFor(() =>
+      expect(canvas.getByLabelText(/^Database file/)).toHaveValue(
+        "/Users/me/data/analytics.duckdb"
+      )
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: expect.objectContaining({
+            path: "/Users/me/data/analytics.duckdb",
+          }),
+        })
+      )
+    )
   },
 }
 

@@ -52,6 +52,20 @@ export const UnknownDriver: Story = {
   },
 }
 
+/**
+ * The svgl registry has no DuckDB mark (searched on 2026-10-23): DuckDB gets
+ * the generic icon, never a mark drawn by hand.
+ */
+export const DuckDbWithoutAMark: Story = {
+  args: { driver: "duckdb" },
+  play: async ({ canvasElement }) => {
+    const svg = logo(canvasElement)
+    await expect(svg).toHaveAttribute("aria-hidden", "true")
+    await expect(svg.querySelector("clipPath")).toBeNull()
+    await expect(svg).toBeVisible()
+  },
+}
+
 /** Both marks stay legible on the dark theme. */
 export const Dark: Story = {
   args: { driver: "sqlite" },
