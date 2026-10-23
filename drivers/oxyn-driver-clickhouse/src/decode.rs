@@ -24,7 +24,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef, Fields, SchemaRef, i256};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 
-use crate::measure::{BAD_MARKER, DecodeError, decimal_width, value_error, varint};
+use crate::measure::{BAD_MARKER, DecodeError, decimal_width, null_slot, value_error, varint};
 use crate::schema::{Column, data_type, field, tick_factor};
 use crate::types::ChType;
 
@@ -218,41 +218,45 @@ enum Builder {
     },
 }
 
+/// The builder of one type. Every builder starts empty: Arrow's default
+/// reserves 1024 values, and a header the server chose — a `FixedString`
+/// of a gigabyte, a tuple of a million elements — would size that
+/// reservation before a single row is measured (I-06).
 fn builder_for(ty: &ChType, zone: Option<&str>) -> Builder {
     match ty {
         ChType::Nullable(inner) => builder_for(inner, zone),
-        ChType::Bool => Builder::Bool(BooleanBuilder::new()),
-        ChType::Int(8) => Builder::I8(Int8Builder::new()),
-        ChType::Int(16) => Builder::I16(Int16Builder::new()),
-        ChType::Int(32) => Builder::I32(Int32Builder::new()),
-        ChType::Int(64) | ChType::Interval => Builder::I64(Int64Builder::new()),
-        ChType::UInt(8) => Builder::U8(UInt8Builder::new()),
-        ChType::UInt(16) => Builder::U16(UInt16Builder::new()),
-        ChType::UInt(32) => Builder::U32(UInt32Builder::new()),
-        ChType::UInt(64) => Builder::U64(UInt64Builder::new()),
+        ChType::Bool => Builder::Bool(BooleanBuilder::with_capacity(0)),
+        ChType::Int(8) => Builder::I8(Int8Builder::with_capacity(0)),
+        ChType::Int(16) => Builder::I16(Int16Builder::with_capacity(0)),
+        ChType::Int(32) => Builder::I32(Int32Builder::with_capacity(0)),
+        ChType::Int(64) | ChType::Interval => Builder::I64(Int64Builder::with_capacity(0)),
+        ChType::UInt(8) => Builder::U8(UInt8Builder::with_capacity(0)),
+        ChType::UInt(16) => Builder::U16(UInt16Builder::with_capacity(0)),
+        ChType::UInt(32) => Builder::U32(UInt32Builder::with_capacity(0)),
+        ChType::UInt(64) => Builder::U64(UInt64Builder::with_capacity(0)),
         ChType::Int(128) | ChType::UInt(128) => {
-            Builder::D256(Decimal256Builder::new().with_data_type(data_type(ty, zone)))
+            Builder::D256(Decimal256Builder::with_capacity(0).with_data_type(data_type(ty, zone)))
         }
-        ChType::Float32 | ChType::BFloat16 => Builder::F32(Float32Builder::new()),
-        ChType::Float64 => Builder::F64(Float64Builder::new()),
+        ChType::Float32 | ChType::BFloat16 => Builder::F32(Float32Builder::with_capacity(0)),
+        ChType::Float64 => Builder::F64(Float64Builder::with_capacity(0)),
         ChType::Decimal { precision, .. } if *precision <= 38 => {
-            Builder::D128(Decimal128Builder::new().with_data_type(data_type(ty, zone)))
+            Builder::D128(Decimal128Builder::with_capacity(0).with_data_type(data_type(ty, zone)))
         }
         ChType::Decimal { .. } => {
-            Builder::D256(Decimal256Builder::new().with_data_type(data_type(ty, zone)))
+            Builder::D256(Decimal256Builder::with_capacity(0).with_data_type(data_type(ty, zone)))
         }
         ChType::FixedString(width) => match i32::try_from(*width) {
-            Ok(width) => Builder::Fixed(FixedSizeBinaryBuilder::new(width)),
+            Ok(width) => Builder::Fixed(FixedSizeBinaryBuilder::with_capacity(0, width)),
             Err(_) => Builder::Null(NullBuilder::new()),
         },
-        ChType::Date | ChType::Date32 => Builder::Date32(Date32Builder::new()),
+        ChType::Date | ChType::Date32 => Builder::Date32(Date32Builder::with_capacity(0)),
         ChType::DateTime(_) | ChType::Time => Builder::Ticks {
-            values: Int64Builder::new(),
+            values: Int64Builder::with_capacity(0),
             factor: 1,
             target: data_type(ty, zone),
         },
         ChType::DateTime64 { precision, .. } | ChType::Time64(precision) => Builder::Ticks {
-            values: Int64Builder::new(),
+            values: Int64Builder::with_capacity(0),
             factor: tick_factor(*precision),
             target: data_type(ty, zone),
         },
@@ -289,7 +293,7 @@ fn builder_for(ty: &ChType, zone: Option<&str>) -> Builder {
         | ChType::Uuid
         | ChType::Ipv4
         | ChType::Ipv6
-        | ChType::Enum { .. } => Builder::Text(StringBuilder::new()),
+        | ChType::Enum { .. } => Builder::Text(StringBuilder::with_capacity(0, 0)),
     }
 }
 
@@ -306,7 +310,7 @@ fn append(
 ) -> Result<usize, DecodeError> {
     if let ChType::Nullable(inner) = ty {
         return match reader.byte()? {
-            1 => append_null(builder, column).map(|()| 1),
+            1 => append_null(builder, column).map(|()| null_slot(inner)),
             0 => append(inner, reader, builder, column),
             _ => Err(value_error(column, BAD_MARKER)),
         };

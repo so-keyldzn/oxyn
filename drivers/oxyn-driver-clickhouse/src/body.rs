@@ -180,7 +180,8 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 ///
 /// # Errors
 /// [`DecodeError`] for a header no server sends: a count beyond
-/// `MAX_COLUMNS`, a name or a type that is not UTF-8 or not a type.
+/// `MAX_COLUMNS`, more than `types::MAX_NODES` types in all, a name or a
+/// type that is not UTF-8 or not a type.
 pub fn header(buf: &[u8]) -> Result<Option<(Vec<Column>, usize)>, DecodeError> {
     let limit = buf.len().min(MAX_ROW_BYTES);
     let Some((count, mut at)) = varint(buf, 0, limit, "header")? else {
@@ -209,9 +210,17 @@ pub fn header(buf: &[u8]) -> Result<Option<(Vec<Column>, usize)>, DecodeError> {
     let half = texts.len() / 2;
     let types = texts.split_off(half);
     let mut columns = Vec::with_capacity(half);
+    let mut nodes = 0_usize;
     for (name, raw_type) in texts.into_iter().zip(types) {
         let ty = types::parse(&raw_type)
             .map_err(|_| value_error("header", "a column type the driver cannot read"))?;
+        nodes = nodes.saturating_add(ty.nodes());
+        if nodes > types::MAX_NODES {
+            return Err(value_error(
+                "header",
+                "more nested types than a result can have",
+            ));
+        }
         columns.push(Column { name, raw_type, ty });
     }
     Ok(Some((columns, at)))
@@ -321,5 +330,23 @@ mod tests {
             header(&[1, 1, b'a', 3, b'(', b'(', b'(']).is_err(),
             "not a type"
         );
+        // Two columns of 60,000 parts each: each column is a type, together
+        // they would build more builders than any result needs.
+        let wide = format!("Tuple({})", vec!["UInt8"; 59_999].join(","));
+        let mut buf = vec![2];
+        for name in ["a", "b"] {
+            buf.push(1);
+            buf.extend_from_slice(name.as_bytes());
+        }
+        for _ in 0..2 {
+            let mut length = wide.len();
+            while length >= 0x80 {
+                buf.push(u8::try_from(length & 0x7f).expect("seven bits") | 0x80);
+                length >>= 7;
+            }
+            buf.push(u8::try_from(length).expect("seven bits"));
+            buf.extend_from_slice(wide.as_bytes());
+        }
+        assert!(header(&buf).is_err(), "too many types in all");
     }
 }

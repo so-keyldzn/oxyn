@@ -66,23 +66,69 @@ pub(crate) fn value_error(column: &str, reason: &'static str) -> DecodeError {
 pub fn measure(columns: &[Column], buf: &[u8]) -> Result<Option<usize>, DecodeError> {
     let limit = buf.len().min(MAX_ROW_BYTES);
     let mut at = 0_usize;
+    // A NULL is one byte on the wire and a whole slot once decoded: a
+    // million NULL `FixedString(1000)` arrive in a megabyte and take a
+    // gigabyte. The row is bounded by what it takes once decoded too.
+    let mut slots = 0_usize;
     for column in columns {
-        match skip(&column.ty, buf, at, limit, &column.name)? {
+        match skip(&column.ty, buf, at, limit, &column.name, &mut slots)? {
             Some(end) => at = end,
             None if buf.len() >= MAX_ROW_BYTES => return Err(DecodeError::RowTooLarge),
             None => return Ok(None),
+        }
+        if at.saturating_add(slots) > MAX_ROW_BYTES {
+            return Err(DecodeError::RowTooLarge);
         }
     }
     Ok(Some(at))
 }
 
-/// The end of one value starting at `at`, within `limit`.
+/// The bytes a `NULL` of `ty` takes in its Arrow builder: a slot of the
+/// value's width, an offset for text.
+pub(crate) fn null_slot(ty: &ChType) -> usize {
+    match ty {
+        ChType::Int(bits) | ChType::UInt(bits) if *bits <= 64 => usize::from(*bits / 8),
+        ChType::Int(128) | ChType::UInt(128) => 32,
+        ChType::Float64
+        | ChType::DateTime(_)
+        | ChType::DateTime64 { .. }
+        | ChType::Time
+        | ChType::Time64(_)
+        | ChType::Interval => 8,
+        ChType::Decimal { precision, .. } if *precision <= 38 => 16,
+        ChType::Decimal { .. } => 32,
+        ChType::FixedString(width) => *width,
+        ChType::Int(_)
+        | ChType::UInt(_)
+        | ChType::Float32
+        | ChType::BFloat16
+        | ChType::Date
+        | ChType::Date32
+        | ChType::String
+        | ChType::Json
+        | ChType::Uuid
+        | ChType::Ipv4
+        | ChType::Ipv6
+        | ChType::Enum { .. } => 4,
+        ChType::Bool
+        | ChType::Nothing
+        | ChType::Nullable(_)
+        | ChType::Array(_)
+        | ChType::Tuple(_)
+        | ChType::Map(..)
+        | ChType::Unsupported(_) => 1,
+    }
+}
+
+/// The end of one value starting at `at`, within `limit`; adds to `slots`
+/// what its NULLs take beyond their marker once decoded.
 fn skip(
     ty: &ChType,
     buf: &[u8],
     at: usize,
     limit: usize,
     column: &str,
+    slots: &mut usize,
 ) -> Result<Option<usize>, DecodeError> {
     let fixed = |width: usize| Ok(at.checked_add(width).filter(|end| *end <= limit));
     match ty {
@@ -128,17 +174,20 @@ fn skip(
                 return Ok(None);
             };
             match marker {
-                1 => Ok(Some(at + 1)),
-                0 => skip(inner, buf, at + 1, limit, column),
+                1 => {
+                    *slots = slots.saturating_add(null_slot(inner).saturating_sub(1));
+                    Ok(Some(at + 1))
+                }
+                0 => skip(inner, buf, at + 1, limit, column, slots),
                 _ => Err(value_error(column, BAD_MARKER)),
             }
         }
-        ChType::Array(inner) => repeated(&[&**inner], buf, at, limit, column),
-        ChType::Map(key, value) => repeated(&[&**key, &**value], buf, at, limit, column),
+        ChType::Array(inner) => repeated(&[&**inner], buf, at, limit, column, slots),
+        ChType::Map(key, value) => repeated(&[&**key, &**value], buf, at, limit, column, slots),
         ChType::Tuple(elements) => {
             let mut end = at;
             for (_, ty) in elements {
-                match skip(ty, buf, end, limit, column)? {
+                match skip(ty, buf, end, limit, column, slots)? {
                     Some(next) => end = next,
                     None => return Ok(None),
                 }
@@ -161,13 +210,14 @@ fn repeated(
     at: usize,
     limit: usize,
     column: &str,
+    slots: &mut usize,
 ) -> Result<Option<usize>, DecodeError> {
     let Some((count, mut end)) = varint(buf, at, limit, column)? else {
         return Ok(None);
     };
     for _ in 0..count {
         for ty in types {
-            match skip(ty, buf, end, limit, column)? {
+            match skip(ty, buf, end, limit, column, slots)? {
                 Some(next) => end = next,
                 None => return Ok(None),
             }
@@ -280,6 +330,19 @@ mod tests {
     fn a_fixed_string_wider_than_a_row_is_refused_before_buffering() {
         let columns = columns(&["FixedString(100000000)"]);
         assert_eq!(measure(&columns, &[0; 8]), Err(DecodeError::RowTooLarge));
+    }
+
+    #[test]
+    fn nulls_count_what_they_take_once_decoded() {
+        // A hundred NULL `FixedString(1 MiB)`: a hundred bytes and a marker
+        // count on the wire, a hundred mebibytes in the builder.
+        let columns = columns(&["Array(Nullable(FixedString(1048576)))"]);
+        let mut row = vec![100];
+        row.extend([1; 100]);
+        assert_eq!(measure(&columns, &row), Err(DecodeError::RowTooLarge));
+        // The same NULLs of a byte-wide type pass.
+        let columns = self::columns(&["Array(Nullable(UInt8))"]);
+        assert_eq!(measure(&columns, &row), Ok(Some(row.len())));
     }
 
     #[test]

@@ -19,6 +19,12 @@
 /// types is far below this, so a real type never meets it.
 const MAX_DEPTH: usize = 64;
 
+/// How many types, nested ones included, a result header may announce in
+/// all. Each becomes an Arrow builder: a header of 64 MiB spelling
+/// `Tuple(UInt8, UInt8, …)` would otherwise build ten million of them
+/// before the first row.
+pub const MAX_NODES: usize = 100_000;
+
 /// Types whose arguments are not read: the driver decodes `JSON` as text and
 /// none of the others, so their arguments decide nothing here.
 const OPAQUE_ARGUMENTS: [&str; 5] = ["JSON", "Object", "Dynamic", "Variant", "AggregateFunction"];
@@ -110,6 +116,19 @@ impl ChType {
         }
     }
 
+    /// The types this one is made of, itself included.
+    #[must_use]
+    pub fn nodes(&self) -> usize {
+        1_usize.saturating_add(match self {
+            Self::Nullable(inner) | Self::Array(inner) => inner.nodes(),
+            Self::Map(key, value) => key.nodes().saturating_add(value.nodes()),
+            Self::Tuple(elements) => elements
+                .iter()
+                .fold(0, |sum, (_, ty)| sum.saturating_add(ty.nodes())),
+            _ => 0,
+        })
+    }
+
     /// Whether a `JSON` sits anywhere in the type: it is decodable only when
     /// the server sends it as text.
     #[must_use]
@@ -145,7 +164,10 @@ pub struct TypeSyntaxError(&'static str);
 /// [`TypeSyntaxError`] for a text that is not a type name, or nests deeper
 /// than `MAX_DEPTH`.
 pub fn parse(text: &str) -> Result<ChType, TypeSyntaxError> {
-    let mut parser = Parser { rest: text.trim() };
+    let mut parser = Parser {
+        rest: text.trim(),
+        nodes: 0,
+    };
     let ty = parser.ty(0)?;
     if parser.rest.trim().is_empty() {
         Ok(ty)
@@ -156,6 +178,7 @@ pub fn parse(text: &str) -> Result<ChType, TypeSyntaxError> {
 
 struct Parser<'a> {
     rest: &'a str,
+    nodes: usize,
 }
 
 /// One argument of a type: a nested type, a number, a quoted string, or an
@@ -253,6 +276,10 @@ impl Parser<'_> {
     fn ty(&mut self, depth: usize) -> Result<ChType, TypeSyntaxError> {
         if depth > MAX_DEPTH {
             return Err(TypeSyntaxError("a type nested beyond 64 levels"));
+        }
+        self.nodes += 1;
+        if self.nodes > MAX_NODES {
+            return Err(TypeSyntaxError("a type of more than 100,000 parts"));
         }
         let name = self
             .word()
@@ -659,5 +686,13 @@ mod tests {
     fn a_type_nested_without_end_is_refused_not_a_stack_overflow() {
         let deep = format!("{}UInt8{}", "Array(".repeat(10_000), ")".repeat(10_000));
         assert!(parse(&deep).is_err());
+    }
+
+    #[test]
+    fn a_type_too_wide_to_build_is_refused_and_parts_are_counted() {
+        let wide = format!("Tuple({})", vec!["UInt8"; MAX_NODES].join(", "));
+        assert!(parse(&wide).is_err());
+        let parsed = parse("Map(String, Array(Nullable(UInt8)))").expect("well formed");
+        assert_eq!(parsed.nodes(), 5);
     }
 }
