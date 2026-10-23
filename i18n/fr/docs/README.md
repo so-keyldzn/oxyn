@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="e1f6194f24e2" -->
+<!-- oxyn-translation source="docs/README.md" sha256="7a840c4e9dfa" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -95,6 +95,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | L'éditeur SQL complète depuis le cache du catalogue, lit ce qui manque dans des bornes, et tire son texte d'insertion de Rust | proposé |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
 | [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | Le driver Redis parle RESP3 lui-même, classe les commandes d'après la table du serveur, et n'arrête que ce que Redis sait arrêter | proposé |
+| [0064](adr/0064-a-session-classifies-non-sql-requests.md) | Une session classe les requêtes d'un langage non SQL : `Session::classify_intent`, consultée seulement hors SQL, prudente, `None` par défaut (précise 0003) | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

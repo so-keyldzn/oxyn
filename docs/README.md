@@ -91,6 +91,7 @@ To locate the boards and their states before implementation, see
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | The SQL editor completes from the catalog cache, reads what is missing within bounds, and takes its insertion text from Rust | proposed |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | The updater key signs in a job that builds nothing, with a Tauri CLI release binary pinned by checksum (refines 0051) | proposed |
 | [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | The Redis driver speaks RESP3 itself, classifies commands from the server's own table, and stops only what Redis can stop | proposed |
+| [0064](adr/0064-a-session-classifies-non-sql-requests.md) | A session classifies the requests of a non-SQL language: `Session::classify_intent`, consulted only outside SQL, conservative, `None` by default (refines 0003) | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

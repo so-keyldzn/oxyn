@@ -258,6 +258,34 @@ export const SQLite: Story = {
   },
 }
 
+/**
+ * A console on a session that speaks another language: plain text when no
+ * mode is registered for it, named for what it is, and nothing read as SQL —
+ * no keyword is suggested, no catalog name asked for.
+ */
+export const AnotherLanguageIsPlainText: Story = {
+  args: {
+    driver: "redis",
+    language: "redis",
+    value: "GET session:42",
+    onCatalogNeeds: fn(),
+  },
+  play: async ({ canvas, args }) => {
+    const editor = canvas.getByRole("textbox", { name: "Query editor" })
+    await expect(
+      canvas.queryByRole("textbox", { name: "SQL editor" })
+    ).toBeNull()
+    await userEvent.click(editor)
+    await userEvent.keyboard("{End} sel")
+    await waitFor(() =>
+      expect(args.onChange).toHaveBeenLastCalledWith("GET session:42 sel")
+    )
+    await expect(canvas.queryByRole("listbox")).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 450))
+    await expect(args.onCatalogNeeds).not.toHaveBeenCalled()
+  },
+}
+
 const needs =
   fn<(names: Array<Array<{ text: string; quoted: boolean }>>) => void>()
 

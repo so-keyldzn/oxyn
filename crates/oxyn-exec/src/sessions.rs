@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, ConnectionId, ExecRequest, OxynError, Result,
-    SessionId, StatementHandle, TransactionState,
+    SessionId, StatementHandle, StatementIntent, TransactionState,
 };
 use oxyn_driver::{Credentials, Cursor, Session};
 use parking_lot::RwLock;
@@ -161,6 +161,21 @@ impl SessionSlot {
         // `tokio::sync::RwLock::try_read` returns a `Result`: failure means
         // "a writer holds the lock", that is, a closing in progress.
         self.session.try_read().is_ok_and(|g| g.is_some())
+    }
+
+    /// What the driver proves about a request outside SQL: see
+    /// [`Session::classify_intent`].
+    ///
+    /// Never waits: it is called before the policy decision. A session closing,
+    /// closed, or whose lock a closing holds answers `None`, and the request
+    /// then stays `Unknown`, counted as mutating.
+    #[must_use]
+    pub(crate) fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
+        if self.closing.is_cancelled() {
+            return None;
+        }
+        let guard = self.session.try_read().ok()?;
+        guard.as_deref()?.classify_intent(request)
     }
 
     /// Executes a request on this session.

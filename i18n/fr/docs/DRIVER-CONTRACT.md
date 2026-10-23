@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="678f706eab7b" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="f3a3491c0b4c" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -204,6 +204,35 @@ names exist in other schemas ».
 Corollaire pour un driver non-SQL : une requête porte un `QueryLanguage`
 explicite. Le SQL est un cas parmi d'autres, pas le défaut auquel les autres se
 ramènent.
+
+**Une session non-SQL ne classe que ce qu'elle peut prouver**
+([ADR-0064](adr/0064-a-session-classifies-non-sql-requests.md)). `oxyn-query`
+ne lit que le SQL ; tout autre langage en ressort `Unknown`, qui compte comme
+mutant. `oxyn-exec` interroge donc `Session::classify_intent`, et **seulement**
+pour une requête dont le langage n'a pas de dialecte SQL — une requête SQL n'y
+arrive jamais :
+
+* `Some(Read)` pour une requête **prouvée** en lecture seule, chacune de ses
+  commandes connue de la session et connue pour ne pas écrire ; `None` dès qu'il
+  y a un doute, ce qui garde `Unknown`. Un `Read` à tort contourne la garde de
+  production : pas de confirmation nominative pour un humain, pas de refus pour
+  un agent, un aperçu qui l'exécute ;
+* aucune E/S et aucun verrou qui puisse bloquer : la réponse vient de ce que la
+  session a appris à la connexion, comme la table de commandes du serveur
+  lui-même ;
+* une requête classée `Read` sur une connexion de production, ou marquée en
+  lecture seule, arrive à `execute` avec `limits.read_only` positionné : la
+  session tient cette borne ou refuse l'exécution ;
+* la réponse ne porte ni risque, ni contrôle de transaction, ni changement de
+  contexte. Un langage qui a de telles instructions les refuse dans sa console,
+  ou fait passer un changement de contexte par `set_context`.
+
+Le défaut répond `None` : une session qui ne le redéfinit pas se comporte comme
+si la méthode n'existait pas.
+
+**Échec concret :** un driver qui répond `Read` pour toute commande qu'il ne
+reconnaît pas exécute un `FLUSHALL` sur un cache de production sans
+confirmation, et laisse un agent l'exécuter aussi.
 
 ### 6. Il échappe tout identifiant qu'il compose
 

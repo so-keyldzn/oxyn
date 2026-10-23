@@ -60,6 +60,7 @@ import { catalogVersion, transactionStates } from "@/lib/ipc/events"
 import { results } from "@/lib/ipc/results"
 import type { CatalogNode, OpenConnection, ResultColumn } from "@/lib/ipc/types"
 import type { HandedResult } from "@/lib/ipc/windows"
+import { queryLanguageOf } from "@/lib/query-language"
 import type { ResultState } from "@/components/oxyn/result-panel"
 
 /** What the workspace may ask of a console it does not render itself. */
@@ -189,7 +190,10 @@ export function ConsolePanel({
   const rowsGeneration = React.useRef(0)
   const view = React.useRef<EditorView | null>(null)
 
-  const canRun = capabilities.includes("SQL") && !doc.closing
+  // The backend reads the same language from the same capabilities
+  // (`oxyn_query::console_language`).
+  const language = queryLanguageOf(capabilities)
+  const canRun = language !== null && !doc.closing
   // The last state the session reported — never one guessed from a `BEGIN`
   // being submitted (ADR-0039 §5).
   const declaresTransactions = capabilities.includes("TRANSACTIONS")
@@ -745,6 +749,7 @@ export function ConsolePanel({
             value={doc.text}
             onChange={(text) => doc.change({ text })}
             driver={open.driver}
+            language={language ?? "sql"}
             running={execution.running}
             readOnly={doc.closing}
             onCancel={execution.cancel}
