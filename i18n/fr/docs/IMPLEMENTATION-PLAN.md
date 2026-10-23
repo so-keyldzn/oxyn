@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="420cb9ece142" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="33f6e8bb5fce" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2116,6 +2116,20 @@ Oxyn est un bon client SQL sans une ligne d'IA.
   [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)) :
   c'est la surface où l'édition se posera. Ni l'édition ni le DML montré avant
   envoi n'existent.
+
+**Ordre décidé le 2026-10-22 — d'abord les bases que le mainteneur utilise
+chaque jour.** Les prochains drivers suivent ce que le mainteneur utilise au
+quotidien, pas l'ordre des phases : DuckDB et ClickHouse (ci-dessus) puis, de la
+phase 3 bis, Redis, Elasticsearch et MongoDB s'écrivent en parallèle, une
+branche chacun. Redis est le canari du modèle non relationnel : un changement
+dont l'un des trois aurait besoin dans les traits d'`oxyn-driver` ou dans les
+énumérations d'`oxyn-core` passe par lui et s'écrit dans un ADR qui précise
+l'[ADR-0003](adr/0003-driver-capabilities.md), pour que les trois n'inventent
+pas chacun le leur. Les numéros d'ADR sont réservés pour qu'ils n'entrent pas en
+collision : 0059 DuckDB, 0060 ClickHouse, 0061 Redis, 0062 Elasticsearch, 0063
+MongoDB. SQL Server reste dans la [VISION](VISION.md) et dans aucune phase ;
+Oracle, Couchbase et les SDK cloud restent en phase 4, derrière le sidecar
+([ADR-0007](adr/0007-driver-sidecar.md)).
 
 ## Phase 3 — Le workspace IA
 
