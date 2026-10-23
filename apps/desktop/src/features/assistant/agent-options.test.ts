@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { restrictedToAgent } from "./agent-options"
+import {
+  SQL_AGENT_ID,
+  SQL_ONLY,
+  defaultAgentId,
+  restrictedToAgent,
+} from "./agent-options"
 import type { DestinationOption } from "./availability"
 import type { AgentOption } from "@/lib/ipc/ai"
 
@@ -70,5 +75,38 @@ describe("restrictedToAgent", () => {
   it("changes nothing without a known agent", () => {
     const options = [destination("provider", "hosted")]
     expect(restrictedToAgent(options, undefined)).toEqual(options)
+  })
+})
+
+describe("defaultAgentId", () => {
+  const keys = (
+    name: string,
+    origin: AgentOption["origin"],
+    error: string | null = null
+  ): AgentOption => ({
+    id: `id-${name}`,
+    name,
+    description: "",
+    origin,
+    error,
+    disabledDestinations: [],
+  })
+
+  it("is the SQL agent wherever it is offered, whatever is listed first", () => {
+    expect(defaultAgentId([localOnly, ...SQL_ONLY])).toBe(SQL_AGENT_ID)
+    expect(defaultAgentId([])).toBe(SQL_AGENT_ID)
+  })
+
+  it("is the shipped agent of the language before any user file", () => {
+    expect(
+      defaultAgentId([
+        keys("broken.md", "user", "broken.md, line 1: …"),
+        keys("Alpha", "user"),
+        keys("Redis", "shipped"),
+      ])
+    ).toBe("id-Redis")
+    expect(defaultAgentId([keys("Alpha", "user"), keys("Zeta", "user")])).toBe(
+      "id-Alpha"
+    )
   })
 })

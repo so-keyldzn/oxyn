@@ -18,7 +18,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { SQL_AGENT_ID } from "@/features/assistant/agent-options"
+import {
+  SQL_AGENT_ID,
+  defaultAgentId,
+} from "@/features/assistant/agent-options"
 import type { AgentOption, MissingAgent } from "@/lib/ipc/ai"
 
 export interface AssistantAgentPickerProps {
@@ -55,8 +58,12 @@ export function AssistantAgentPicker({
 }: AssistantAgentPickerProps) {
   const hintId = React.useId()
   // SQL is selected in a blank thread, whatever `ordered` lists first
-  // (ADR-0055): the display order never decides the default.
-  const selectedId = missingAgent ? SQL_AGENT_ID : (value ?? SQL_AGENT_ID)
+  // (ADR-0055): the display order never decides the default. A session
+  // that speaks another language selects the agent the backend runs there
+  // (ADR-0065).
+  const selectedId = missingAgent
+    ? SQL_AGENT_ID
+    : (value ?? defaultAgentId(agents))
   const selected = agents.find((agent) => agent.id === selectedId)
   const ordered = [...agents].sort(
     (a, b) =>

@@ -38,6 +38,7 @@ fn run<'a>(
         node,
         parent,
         connection: config,
+        language: SQLITE,
         cancel,
         mentions,
     }

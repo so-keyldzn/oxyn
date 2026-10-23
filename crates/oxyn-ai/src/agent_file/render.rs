@@ -1,18 +1,20 @@
 //! Composing a system prompt, and the closed variables.
 
-use super::files::{dialect_fragment, recipient_fragment};
+use super::files::{dialect_fragment, language_fragment, recipient_fragment};
 use super::{AgentFileError, PromptTarget, VARIABLES};
 use crate::spec::AgentSpec;
 
-/// The system prompt of `spec` for `target`: the role, then the dialect's
-/// fragment, then the recipient's, with the variables filled.
+/// The system prompt of `spec` for `target`: the role, then the fragment of
+/// the connection's language — its dialect's, for SQL —, then the
+/// recipient's, with the variables filled.
 ///
 /// The **only** way a system prompt is produced. The order is fixed, and
 /// nothing is joined in besides these three texts: the database's structure
 /// and samples reach the model through `ContextBuilder`, which applies the
 /// connection's tier (I-04).
 ///
-/// A dialect without a fragment of its own gets `ansi.md`.
+/// A dialect without a fragment of its own gets `ansi.md`; a language other
+/// than SQL without one gets `generic.md` (ADR-0065).
 ///
 /// # Errors
 /// [`AgentFileError::UnknownVariable`] when one of the three texts names a
@@ -23,14 +25,17 @@ pub fn render_system_prompt(
     spec: &AgentSpec,
     target: &PromptTarget,
 ) -> Result<String, AgentFileError> {
-    let (dialect_file, dialect) = dialect_fragment(target.dialect);
+    let (language_file, language) = match target.dialect() {
+        Some(dialect) => dialect_fragment(dialect),
+        None => language_fragment(target.language),
+    };
     let (recipient_file, recipient) =
         recipient_fragment(target.recipient).ok_or(AgentFileError::NoRecipientFragment {
             recipient: target.recipient.as_str(),
         })?;
     let parts = [
         (spec.name.as_str(), spec.system_prompt.trim()),
-        (dialect_file, dialect.trim()),
+        (language_file, language.trim()),
         (recipient_file, recipient.trim()),
     ];
     let mut prompt = String::new();
@@ -59,11 +64,20 @@ pub(super) fn check_variables(
 }
 
 /// The value of a variable for this target, `None` outside [`VARIABLES`].
+///
+/// Outside SQL, `{{dialect}}` is the language's name: a variable is never
+/// filled with an empty string, and a sentence written around it still has
+/// a subject (ADR-0065).
 fn value<'a>(target: &'a PromptTarget, name: &str) -> Option<&'a str> {
     match name {
-        "dialect" => Some(target.dialect.as_str()),
+        "dialect" => Some(
+            target
+                .dialect()
+                .map_or(target.language.as_str(), |dialect| dialect.as_str()),
+        ),
         "driver" => Some(target.driver.as_str()),
         "environment" => Some(target.environment.as_str()),
+        "language" => Some(target.language.as_str()),
         "recipient" => Some(target.recipient.as_str()),
         _ => None,
     }

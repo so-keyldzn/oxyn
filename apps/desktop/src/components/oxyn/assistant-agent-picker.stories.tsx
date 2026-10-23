@@ -71,6 +71,41 @@ export const Default: Story = {
   },
 }
 
+// A session that speaks Redis commands lists only the agents written for
+// them, and a blank thread selects the one the backend runs: the shipped
+// agent of the language before a user's, never the SQL agent (ADR-0065).
+export const OnARedisSession: Story = {
+  args: {
+    agents: [
+      {
+        ...user,
+        id: "user-keys",
+        name: "Alpha keys",
+        description: "A user agent for keys.",
+      },
+      {
+        ...schema,
+        id: "shipped-redis",
+        name: "Redis",
+        description: "Writes Redis commands.",
+      },
+    ],
+    value: null,
+  },
+  play: async ({ args }) => {
+    await expect(body().getByRole("combobox")).toHaveTextContent("Redis")
+    const list = await openPopup()
+    const options = list.getAllByRole("option")
+    await expect(options).toHaveLength(2)
+    await expect(options[0]).toHaveTextContent(/^Redis/)
+    await expect(options[0]).toHaveAttribute("aria-selected", "true")
+    await expect(list.queryByRole("option", { name: /^SQL/ })).toBeNull()
+    await userEvent.click(list.getByRole("option", { name: /^Redis/ }))
+    await expect(args.onSelect).not.toHaveBeenCalled()
+    await closePopup()
+  },
+}
+
 export const WithUserAgent: Story = {
   args: { agents: [...shipped, user], value: user.id },
   play: async () => {

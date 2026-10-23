@@ -266,7 +266,15 @@ impl Backend {
     ) -> Result<Self> {
         let policy = Arc::new(DefaultPolicy::new());
         let gate: Arc<dyn PolicyGate> = policy.clone();
-        Self::assemble_parts(store, secrets, confirmations, memory_budget, policy, gate)
+        Self::assemble_parts(
+            store,
+            secrets,
+            confirmations,
+            memory_budget,
+            policy,
+            gate,
+            shipped_drivers()?,
+        )
     }
 
     #[cfg(test)]
@@ -282,6 +290,32 @@ impl Backend {
             oxyn_data::DEFAULT_MEMORY_BUDGET,
             Arc::new(DefaultPolicy::new()),
             gate,
+            shipped_drivers()?,
+        )
+    }
+
+    /// A temporary workspace that also knows `driver`: the tests of a
+    /// language no shipped driver speaks yet.
+    ///
+    /// # Errors
+    /// If the in-memory state cannot be created, or `driver` takes the
+    /// identifier of a shipped one.
+    #[cfg(test)]
+    pub(crate) fn open_temporary_with_driver(driver: Arc<dyn oxyn_driver::Driver>) -> Result<Self> {
+        let mut drivers = shipped_drivers()?;
+        drivers
+            .register(driver)
+            .context("registering the test driver")?;
+        let policy = Arc::new(DefaultPolicy::new());
+        let gate: Arc<dyn PolicyGate> = policy.clone();
+        Self::assemble_parts(
+            Arc::new(Store::open_in_memory().context("opening temporary workspace state")?),
+            Arc::new(oxyn_secrets::MemorySecretStore::new()),
+            confirm::Confirmations::confirming(),
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
+            policy,
+            gate,
+            drivers,
         )
     }
 
@@ -292,17 +326,8 @@ impl Backend {
         memory_budget: usize,
         policy: Arc<DefaultPolicy>,
         gate: Arc<dyn PolicyGate>,
+        drivers: DriverRegistry,
     ) -> Result<Self> {
-        let mut drivers = DriverRegistry::new();
-        drivers
-            .register(Arc::new(SqliteDriver::new()))
-            .context("registering the SQLite driver")?;
-        drivers
-            .register(Arc::new(PostgresDriver::new()))
-            .context("registering the PostgreSQL driver")?;
-        drivers
-            .register(Arc::new(MysqlDriver::new()))
-            .context("registering the MySQL driver")?;
         tracing::info!(drivers = drivers.len(), "driver registry ready");
         let drivers = Arc::new(drivers);
 
@@ -1000,6 +1025,21 @@ impl Backend {
 }
 
 /// The configuration a draft describes, secrets aside, under a fresh id.
+/// The drivers Oxyn ships.
+fn shipped_drivers() -> Result<DriverRegistry> {
+    let mut drivers = DriverRegistry::new();
+    drivers
+        .register(Arc::new(SqliteDriver::new()))
+        .context("registering the SQLite driver")?;
+    drivers
+        .register(Arc::new(PostgresDriver::new()))
+        .context("registering the PostgreSQL driver")?;
+    drivers
+        .register(Arc::new(MysqlDriver::new()))
+        .context("registering the MySQL driver")?;
+    Ok(drivers)
+}
+
 fn config_from(draft: &ConnectionDraft) -> Result<ConnectionConfig, IpcError> {
     let driver = DriverId::new(&draft.driver)
         .map_err(|error| IpcError::invalid(format!("unknown driver: {error}")))?;
