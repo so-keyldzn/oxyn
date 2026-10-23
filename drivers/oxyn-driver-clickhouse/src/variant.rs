@@ -60,9 +60,12 @@ impl ServerFacts {
 
 /// What every session can do, before the account is known.
 ///
+/// `PREPARED_STATEMENTS` is declared for what it promises the caller: the
+/// server binds the values to the statement's `{name:Type}` placeholders,
+/// never the text. Nothing is prepared ahead: each run sends its statement.
+///
 /// Not declared, and why: `TRANSACTIONS` (no transaction in the general
-/// case), `PREPARED_STATEMENTS` (the driver binds no caller value),
-/// `MULTIPLE_STATEMENTS` (the server refuses them over HTTP), `AFFECTED_ROWS`
+/// case), `MULTIPLE_STATEMENTS` (the server refuses them over HTTP), `AFFECTED_ROWS`
 /// (a mutation reports none: it runs after its statement returns),
 /// `FOREIGN_KEYS` (ClickHouse has none), `RESTRICT_DEPENDENTS` (no
 /// `CASCADE`: a materialized view outlives the table it reads).
@@ -89,6 +92,7 @@ pub const fn base_capabilities() -> Capabilities {
         .union(Capabilities::PREVIEW_SORT)
         .union(Capabilities::PREVIEW_FILTER)
         .union(Capabilities::TRUNCATE)
+        .union(Capabilities::PREPARED_STATEMENTS)
 }
 
 /// The ceiling a session may reach: an account that may kill.
@@ -139,7 +143,6 @@ mod tests {
         for flag in [
             Capabilities::TRANSACTIONS,
             Capabilities::MULTIPLE_STATEMENTS,
-            Capabilities::PREPARED_STATEMENTS,
             Capabilities::AFFECTED_ROWS,
             Capabilities::FOREIGN_KEYS,
             Capabilities::TRANSACTIONAL_DDL,
@@ -147,6 +150,8 @@ mod tests {
             assert!(!driver_capabilities().contains(flag), "{flag:?}");
         }
         assert!(driver_capabilities().supports_language(LANGUAGE));
+        // The server binds the console's values.
+        assert!(driver_capabilities().contains(Capabilities::PREPARED_STATEMENTS));
     }
 
     #[test]
