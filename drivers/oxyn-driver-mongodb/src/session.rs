@@ -226,6 +226,13 @@ impl Session for MongoSession {
             });
         }
         let classification = oxyn_query::classify_mongo(&request.text);
+        if classification.transaction_control {
+            return Err(OxynError::NotSupported {
+                capability: "transactions: each execution runs in its own logical session, so \
+                             there is no transaction for this command to end"
+                    .to_owned(),
+            });
+        }
         let intent = classification.intent;
         if request.limits.read_only && !classification.is_read_only() {
             return Err(OxynError::PolicyDenied {
@@ -239,6 +246,21 @@ impl Session for MongoSession {
             return Err(OxynError::Cancelled);
         }
         self.run(command, intent, cancel).await
+    }
+
+    /// The reading of [`oxyn_query::classify_mongo`], the one `execute`
+    /// enforces: a command whose name the documented table holds, a read
+    /// only without a write stage nor server-side JavaScript anywhere.
+    /// `None` for anything it cannot prove — an unknown name, a text that is
+    /// not one command, a transaction verb this session refuses
+    /// ([ADR-0064](../../../docs/adr/0064-a-session-classifies-non-sql-requests.md)).
+    fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
+        if request.language != LANGUAGE {
+            return None;
+        }
+        let classification = oxyn_query::classify_mongo(&request.text);
+        (classification.intent != StatementIntent::Unknown && !classification.transaction_control)
+            .then_some(classification.intent)
     }
 
     async fn preview_request(

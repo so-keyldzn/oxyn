@@ -365,15 +365,11 @@ pub fn runnable_text(sql: &str, dialect: SqlDialect) -> Cow<'_, str> {
 ///
 /// A language that is not SQL is not analyzed: the result is `Unknown`, hence
 /// mutating. Assuming that a Redis command or a Cypher query "looks like a
-/// read" would be exactly the mistake I-02 forbids. MongoDB is the exception:
-/// its console text is one database command whose name is data, read by
-/// [`classify_mongo`](crate::mongo::classify_mongo) against a table built from
-/// the server's documentation.
+/// read" would be exactly the mistake I-02 forbids.
 #[must_use]
 pub fn classify_language(language: QueryLanguage, sql: &str) -> Classification {
     match language.sql_dialect() {
         Some(dialect) => classify(sql, dialect),
-        None if language == QueryLanguage::MongoQuery => crate::mongo::classify_mongo(sql),
         None => Classification::opaque(
             sql,
             format!("language not parsed by oxyn-query: {language}"),

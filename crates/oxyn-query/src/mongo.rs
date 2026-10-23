@@ -32,6 +32,15 @@
 //! command sent are one reading of the text. Duplicate keys are refused at
 //! every depth: two readers keeping a different one of two `"find"` keys is
 //! exactly how a classified read would become a sent write.
+//!
+//! **The executor asks the session, not this module.** [`classify_language`]
+//! keeps `Unknown` for MongoDB like for every language that is not SQL; the
+//! MongoDB session answers `Session::classify_intent` with this reading
+//! ([ADR-0064](../../../docs/adr/0064-a-session-classifies-non-sql-requests.md)),
+//! so the guard of production has one reader of a MongoDB command, the
+//! driver's.
+//!
+//! [`classify_language`]: crate::classify::classify_language
 
 use std::collections::HashSet;
 use std::fmt;
@@ -313,7 +322,6 @@ const READS: &[&str] = &[
     "dbHash",
     "buildInfo",
     "hello",
-    "isMaster",
     "ping",
     "serverStatus",
     "connectionStatus",
@@ -586,6 +594,10 @@ fn is_one(value: Option<&JsonValue>) -> bool {
         _ => false,
     }
 }
+
+mod request;
+
+pub use request::command_at;
 
 #[cfg(test)]
 mod tests;

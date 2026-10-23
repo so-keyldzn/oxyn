@@ -71,6 +71,7 @@ pub fn current_request(
         QueryLanguage::Sql(dialect) => {
             Ok(current_statement(text, dialect, cursor_byte)?.map(|fragment| fragment.text))
         }
+        QueryLanguage::MongoQuery => Ok(crate::mongo::command_at(text, cursor_byte)),
         language => Err(QueryError::UnsupportedLanguage { language }),
     }
 }
@@ -146,6 +147,15 @@ mod tests {
         assert_eq!(
             current_request(text, QueryLanguage::Sql(SqlDialect::Postgres), 2),
             Ok(Some("SELECT 1"))
+        );
+    }
+
+    #[test]
+    fn a_mongodb_request_is_the_command_under_the_cursor() {
+        let text = "{\"find\": \"users\"}\n{\"drop\": \"users\"}";
+        assert_eq!(
+            current_request(text, QueryLanguage::MongoQuery, 2),
+            Ok(Some("{\"find\": \"users\"}"))
         );
     }
 
