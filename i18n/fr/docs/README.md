@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="7a840c4e9dfa" -->
+<!-- oxyn-translation source="docs/README.md" sha256="56607923dca1" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -96,6 +96,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
 | [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | Le driver Redis parle RESP3 lui-même, classe les commandes d'après la table du serveur, et n'arrête que ce que Redis sait arrêter | proposé |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | Une session classe les requêtes d'un langage non SQL : `Session::classify_intent`, consultée seulement hors SQL, prudente, `None` par défaut (précise 0003) | accepté |
+| [0065](adr/0065-agents-for-non-sql-query-languages.md) | Un agent déclare les langages de requête qu'il écrit (`languages`, `[sql]` par défaut) ; l'assistant s'ouvre sur tout langage qu'un agent écrit, prompts SQL inchangés (précise 0049, 0055) | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

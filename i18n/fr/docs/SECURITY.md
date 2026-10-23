@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="f2152ce207a0" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="23cd450e4947" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -358,10 +358,12 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    l'utilisateur. Ce qui le borne : le fichier est refusé au-delà de 64 Kio,
    hors UTF-8, avec un YAML qui utilise ancres, alias, clés de fusion, clés en
    double, étiquettes non prises en charge ou un champ inconnu, avec un outil
-   que le registre n'a pas, ou avec un marqueur hors des quatre variables
-   fermées ; son `id` ne peut pas prendre l'identité d'audit d'un agent livré ;
-   il ne fournit qu'un **rôle** et ne remplace jamais les fragments de
-   dialecte ou de destinataire livrés par Oxyn ; une erreur nomme le fichier
+   que le registre n'a pas, avec un marqueur hors des cinq variables
+   fermées, ou avec un nom inconnu dans `languages`
+   ([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)) ; son `id` ne
+   peut pas prendre l'identité d'audit d'un agent livré ; il ne fournit qu'un
+   **rôle** et ne remplace jamais les fragments de dialecte, de langage ou de
+   destinataire livrés par Oxyn ; une erreur nomme le fichier
    et la ligne, jamais son contenu ([I-03](../CLAUDE.md#i-03)). La lecture du
    répertoire est bornée elle aussi : seuls les fichiers `*.md` directement
    dedans, 64 au plus dans l'ordre des noms (le reste listé comme une seule

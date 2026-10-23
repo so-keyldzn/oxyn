@@ -1,15 +1,16 @@
 //! The catalog: what is offered where, and a user file never displaces a
 //! shipped agent.
 
-use oxyn_core::{AiProviderKind, DriverId, Environment, SqlDialect};
+use oxyn_core::{AiProviderKind, DriverId, Environment, QueryLanguage, SqlDialect};
 
 use super::*;
 use crate::agent_file::{ExternalAgentKind, Recipient, parse_agent_file};
 use crate::builtin::{schema_agent, sql_agent};
+use crate::spec::AgentSpec;
 
 fn target(dialect: SqlDialect, recipient: Recipient) -> PromptTarget {
     PromptTarget {
-        dialect,
+        language: QueryLanguage::Sql(dialect),
         driver: DriverId::new(DriverId::POSTGRES).expect("a valid driver name"),
         environment: Environment::Production,
         recipient,
@@ -188,6 +189,74 @@ fn get_ignores_unknown_ids() {
     let catalog = AgentCatalog::shipped_only();
     assert!(catalog.get(&oxyn_core::AgentId::new()).is_none());
     assert_eq!(catalog.get(&schema_agent().id), Some(&schema_agent()));
+}
+
+const KEYS_ALPHA: &str = "id: 0199a3c0-0000-7000-8000-0000000000a3\nname: Alpha keys\n\
+                          languages: [redis]\n";
+const KEYS_ZETA: &str = "id: 0199a3c0-0000-7000-8000-0000000000a4\nname: Zeta keys\n\
+                         languages: [redis]\n";
+
+fn on(language: QueryLanguage) -> PromptTarget {
+    PromptTarget {
+        language,
+        ..anthropic_on(SqlDialect::Postgres)
+    }
+}
+
+#[test]
+fn a_new_conversation_runs_the_sql_agent_wherever_sql_is_spoken() {
+    let catalog = AgentCatalog::new(
+        shipped_agents(),
+        vec![
+            user_file("alpha.md", KEYS_ALPHA),
+            user_file("pg.md", PG_ONLY),
+        ],
+    );
+    for dialect in [SqlDialect::Postgres, SqlDialect::Sqlite] {
+        assert_eq!(
+            catalog.default_for(&anthropic_on(dialect)),
+            Some(sql_agent().id)
+        );
+    }
+}
+
+#[test]
+fn outside_sql_the_default_is_the_first_agent_of_the_language_shipped_first() {
+    let users = || {
+        vec![
+            user_file("zeta.md", KEYS_ZETA),
+            user_file("broken.md", "id: [\n"),
+            user_file("alpha.md", KEYS_ALPHA),
+        ]
+    };
+    let redis = on(QueryLanguage::RedisCommand);
+
+    let without_shipped = AgentCatalog::new(shipped_agents(), users());
+    let alpha: oxyn_core::AgentId = "0199a3c0-0000-7000-8000-0000000000a3"
+        .parse()
+        .expect("an id");
+    assert_eq!(without_shipped.default_for(&redis), Some(alpha));
+
+    // An agent shipped for the language wins over any user file, whatever
+    // their names: a user file never takes over new conversations.
+    let mut shipped = shipped_agents();
+    let shipped_keys = AgentSpec::new(
+        "0199a3c0-0000-7000-8000-0000000000a5"
+            .parse()
+            .expect("an id"),
+        "Redis",
+        "You help with keys.",
+    )
+    .with_languages([QueryLanguage::RedisCommand]);
+    shipped.push(shipped_keys.clone());
+    let with_shipped = AgentCatalog::new(shipped, users());
+    assert_eq!(with_shipped.default_for(&redis), Some(shipped_keys.id));
+
+    assert_eq!(
+        with_shipped.default_for(&on(QueryLanguage::MongoQuery)),
+        None,
+        "no agent writes MongoDB queries: no default, and no SQL agent either"
+    );
 }
 
 /// What a `{:?}` added to a log one day would print: names, ids and counts,

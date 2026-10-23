@@ -1153,8 +1153,15 @@ resolved on the machine, and an external agent cannot serve it either, since
 it cannot be known where it sends
 ([AI-PROVIDERS](AI-PROVIDERS.md#an-external-agent-the-reach-is-not-unknown-it-is-unknowable)).
 Making the entry disappear would read as a defect, and ADR-0006 requires that
-an unavailable feature explain itself. The same goes for a session that does
-not speak SQL: the assistant only writes SQL, and the entry says so.
+an unavailable feature explain itself. The same goes for a session whose
+language no agent writes: the entry names the language ("No agent writes
+Redis commands yet, and the assistant only writes what an agent knows."),
+and opens as soon as an agent — shipped or the user's — is written for it
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)). While the
+agents of such a session are being listed, the entry stays disabled and
+says it is looking for one; a SQL session never waits for that list. A
+session that declares no single query language keeps the entry disabled
+too, with the reason the console gives.
 
 ### Who answers is chosen in the panel
 
@@ -1205,9 +1212,15 @@ shows it as "unresolved", not as "local": doubt does not benefit sending.
 The panel header carries a second selector, the **agent** — SQL, Schema,
 and the agents the user added
 ([ADR-0049](adr/0049-agents-declared-as-markdown-files.md), accepted). It
-lists only the agents offered for the connection's dialect and the chosen
-destination (`ai_list_agents`); a new conversation starts with the SQL
-agent.
+lists only the agents offered for the connection's language — and, for SQL,
+its dialect — and the chosen destination (`ai_list_agents`). A new
+conversation starts with the SQL agent on a SQL connection. On a connection
+that speaks another language — Redis commands, MongoDB queries, the
+Elasticsearch Query DSL — the SQL agent is not listed, and a new
+conversation starts with the agent Oxyn ships for that language, or, when
+it ships none, the first agent the user wrote for it, by name
+([ADR-0065](adr/0065-agents-for-non-sql-query-languages.md)); the selector
+shows that agent selected.
 
 * **Choosing another agent opens a new conversation.** The current one
   stays in the "Conversations" list, unchanged, with its agent: an agent's

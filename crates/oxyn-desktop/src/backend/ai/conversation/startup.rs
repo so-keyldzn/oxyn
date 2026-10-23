@@ -22,11 +22,11 @@
 
 use std::sync::Arc;
 
-use oxyn_core::{CancelToken, Capabilities, ConnectionId, SessionId};
+use oxyn_core::{CancelToken, ConnectionId, SessionId};
 
 use super::super::agents;
 use super::super::threads::Waiting;
-use super::{Failure, NO_SQL, Resolved, launch_agent, start_bounded, version_of};
+use super::{Failure, Resolved, launch_agent, start_bounded, version_of};
 use crate::backend::Backend;
 use crate::ipc::IpcError;
 use crate::ipc::ai::{AgentSettingsView, AgentStart, AgentStartRequest, DestinationChoice};
@@ -35,8 +35,9 @@ impl Backend {
     /// Starts the external agent the next question to `request.agent` would
     /// use, and answers with what it declared.
     ///
-    /// Refused as a question is, before anything starts: a session without
-    /// SQL, an agent no longer declared, a `Local` connection. A conversation
+    /// Refused as a question is, before anything starts: a session without a
+    /// single query language or without an agent for it, an agent no longer
+    /// declared, a `Local` connection. A conversation
     /// whose own agent would answer next is answered from it, launching
     /// nothing. Otherwise the connection's waiting agent is used, or one is
     /// launched and kept for the first question.
@@ -58,16 +59,7 @@ impl Backend {
         // Read now, as a question reads it: a tier changed since the panel
         // opened governs this launch (I-04).
         let config = self.read_config(connection).await?;
-        let capabilities = self
-            .inner
-            .executor
-            .sessions()
-            .get(session)
-            .ok_or_else(|| IpcError::invalid("This session is no longer open"))?
-            .capabilities();
-        if !capabilities.contains(Capabilities::SQL) {
-            return Err(IpcError::invalid(NO_SQL));
-        }
+        let language = self.session_language(&config, session)?;
         let tier = config.privacy_tier;
         let agent = match self
             .resolve_destination(
@@ -98,13 +90,13 @@ impl Backend {
             .thread
             .as_deref()
             .and_then(|thread| self.inner.ai.find(connection, thread).ok());
+        let target = agents::target_of(&config, language, agents::agent_recipient(&agent));
         let role = match &shown {
             Some(thread) => self.thread_agent(thread)?,
-            None => self.requested_agent(request.agent_id.as_deref())?,
+            None => self.requested_agent(request.agent_id.as_deref(), &target)?,
         };
-        let reader = agents::agent_recipient(&agent);
-        if !role.offered_for(&agents::target_of(&config, reader)) {
-            return Err(agents::not_offered(&role, reader));
+        if !role.offered_for(&target) {
+            return Err(agents::not_offered(&role, &target));
         }
 
         // The conversation shown keeps its own agent for the question after
@@ -119,38 +111,44 @@ impl Backend {
             });
         }
 
-        let (started, stop) =
+        let (started, stop) = {
+            let launching = self.inner.ai.launch_lock(connection);
+            let _launching = launching.lock().await;
+            match self
+                .inner
+                .ai
+                .waiting_agent(connection, &agent, tier, session, role.id)
             {
-                let launching = self.inner.ai.launch_lock(connection);
-                let _launching = launching.lock().await;
-                match self
-                    .inner
-                    .ai
-                    .waiting_agent(connection, &agent, tier, session, role.id)
-                {
-                    Some(found) => found,
-                    None => {
-                        let link =
-                            match launch_agent(&self.inner, &config, session, &agent, tier, &role)
-                                .await
-                            {
-                                Ok(link) => link,
-                                Err(failure) => return Ok(failure.into_start()),
-                            };
-                        let started = Arc::clone(&link.session);
-                        let stop = CancelToken::new();
-                        self.inner.ai.wait(
-                            connection,
-                            Waiting {
-                                link,
-                                session,
-                                stop: stop.clone(),
-                            },
-                        );
-                        (started, stop)
-                    }
+                Some(found) => found,
+                None => {
+                    let link = match launch_agent(
+                        &self.inner,
+                        &config,
+                        session,
+                        language,
+                        &agent,
+                        tier,
+                        &role,
+                    )
+                    .await
+                    {
+                        Ok(link) => link,
+                        Err(failure) => return Ok(failure.into_start()),
+                    };
+                    let started = Arc::clone(&link.session);
+                    let stop = CancelToken::new();
+                    self.inner.ai.wait(
+                        connection,
+                        Waiting {
+                            link,
+                            session,
+                            stop: stop.clone(),
+                        },
+                    );
+                    (started, stop)
                 }
-            };
+            }
+        };
 
         let outcome = tokio::select! {
             outcome = start_bounded(&agent, &started) => outcome,
