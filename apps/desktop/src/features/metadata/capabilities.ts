@@ -1,5 +1,6 @@
 import type { ObjectTab } from "@/components/oxyn/object-view-frame"
 import type { OpenConnection } from "@/lib/ipc/types"
+import { queryLanguageOf } from "@/lib/query-language"
 
 /**
  * Why a tab cannot load for this session, or `null` when it can.
@@ -47,7 +48,8 @@ export function previewUnavailable(
   holdsRecords: boolean
 ): string | null {
   if (!holdsRecords) return "This object holds no rows to preview."
-  if (!open.capabilities.includes("SQL"))
+  // Any language the session speaks: the driver composes the preview in it.
+  if (queryLanguageOf(open.capabilities) === null)
     return "This session cannot read rows with a query."
   return null
 }

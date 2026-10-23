@@ -55,4 +55,11 @@ describe("the tab an object opens on", () => {
     expect(previewUnavailable(open(["SQL"]), false)).toMatch(/no rows/)
     expect(previewUnavailable(open([]), true)).toMatch(/cannot read rows/)
   })
+
+  it("previews through any language the session speaks", () => {
+    expect(previewUnavailable(open(["REDIS_COMMAND"]), true)).toBeNull()
+    expect(previewUnavailable(open(["CYPHER", "GREMLIN"]), true)).toMatch(
+      /cannot read rows/
+    )
+  })
 })

@@ -14,6 +14,8 @@ import type {
   ReasoningEffort,
 } from "@/lib/ipc/ai"
 import type { PrivacyTier } from "@/lib/ipc/types"
+import { QUERY_LANGUAGE_LABELS, queryLanguageOf } from "@/lib/query-language"
+import type { QueryLanguageName } from "@/lib/query-language"
 
 export interface DestinationOption {
   /** `provider:<id>` or `agent:<id>`: unique across both kinds. */
@@ -46,6 +48,17 @@ export type AssistantEntry =
 
 export const NO_SQL =
   "This session does not support SQL, and the assistant only writes SQL."
+
+/**
+ * The languages an agent writes (ADR-0055: the agents are declared files).
+ * A language joins this set in the same change that ships its agent.
+ */
+const ASSISTED_LANGUAGES: ReadonlySet<QueryLanguageName> = new Set(["sql"])
+
+/** Why the assistant is closed on a session that speaks `language`. */
+export function noAgentFor(language: QueryLanguageName): string {
+  return `No agent writes ${QUERY_LANGUAGE_LABELS[language]} yet, and the assistant only writes what an agent knows.`
+}
 
 export const UNREADABLE =
   "The declared providers could not be read from local state."
@@ -115,8 +128,12 @@ export function assistantEntry({
   }
   const destinations = destinationOptions(providers ?? [], agents ?? [], tier)
   if (destinations.length === 0) return { status: "absent" }
-  if (!capabilities.includes("SQL")) {
+  const language = queryLanguageOf(capabilities)
+  if (language === null) {
     return { status: "disabled", reason: NO_SQL, destinations }
+  }
+  if (!ASSISTED_LANGUAGES.has(language)) {
+    return { status: "disabled", reason: noAgentFor(language), destinations }
   }
   if (!destinations.some((destination) => destination.usable)) {
     return { status: "disabled", reason: NO_USABLE_DESTINATION, destinations }
