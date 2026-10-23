@@ -36,6 +36,7 @@
 //!   cargo test -p oxyn-driver-redis -- --ignored --test-threads=1
 //! ```
 
+pub mod admin;
 pub mod argv;
 pub mod cancel;
 pub mod capture;

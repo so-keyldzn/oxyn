@@ -153,20 +153,11 @@ pub(crate) fn column(batches: &[RecordBatch], name: &str) -> Vec<Option<String>>
 /// command ended: only the `b` flag says the client is blocked in it now.
 async fn blocked_in(observer: &dyn Session, command: &str) -> usize {
     let batches = run(observer, "CLIENT LIST").await.expect("CLIENT LIST");
-    let listing = column(&batches, "value")
+    column(&batches, "cmd")
         .into_iter()
-        .flatten()
-        .collect::<String>();
-    listing
-        .lines()
-        .filter(|line| {
-            let fields: Vec<&str> = line.split(' ').collect();
-            fields.contains(&format!("cmd={command}").as_str())
-                && fields.iter().any(|field| {
-                    field
-                        .strip_prefix("flags=")
-                        .is_some_and(|f| f.contains('b'))
-                })
+        .zip(column(&batches, "flags"))
+        .filter(|(cmd, flags)| {
+            cmd.as_deref() == Some(command) && flags.as_deref().is_some_and(|f| f.contains('b'))
         })
         .count()
 }
@@ -862,4 +853,46 @@ async fn the_session_context_moves_the_console_and_nothing_else() {
         session.context(),
         Some(SessionContext::new(Some("db8".to_owned()), None))
     );
+}
+
+/// The slow log and the client list read as grids on the real server.
+#[tokio::test]
+#[ignore = "needs OXYN_REDIS_TEST_URL"]
+async fn the_slow_log_and_the_client_list_are_grids() {
+    let Some(session) = clean().await else { return };
+    let clients = run(&session, "CLIENT LIST").await.expect("CLIENT LIST");
+    let names = column(&clients, "name");
+    assert!(
+        names.iter().flatten().any(|name| name == "oxyn"),
+        "the console's connection names itself: {names:?}"
+    );
+    assert!(column(&clients, "id").iter().all(Option::is_some));
+    let threshold = column(
+        &run(&session, "CONFIG GET slowlog-log-slower-than")
+            .await
+            .expect("CONFIG GET"),
+        "value",
+    );
+    let threshold = threshold.first().cloned().flatten().expect("a threshold");
+    run(&session, "CONFIG SET slowlog-log-slower-than 0")
+        .await
+        .expect("log everything");
+    run(&session, "ECHO oxyn-it-slow").await.expect("ECHO");
+    let logged = run(&session, "SLOWLOG GET 10").await;
+    run(
+        &session,
+        &format!("CONFIG SET slowlog-log-slower-than {threshold}"),
+    )
+    .await
+    .expect("threshold restored");
+    let logged = logged.expect("SLOWLOG GET");
+    let commands = column(&logged, "command");
+    assert!(
+        commands
+            .iter()
+            .flatten()
+            .any(|command| command == "ECHO oxyn-it-slow"),
+        "{commands:?}"
+    );
+    assert!(column(&logged, "duration_us").iter().all(Option::is_some));
 }

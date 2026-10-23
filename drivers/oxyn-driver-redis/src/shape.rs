@@ -70,6 +70,10 @@ pub enum Layout {
     Samples,
     /// `INFO`'s report, one row per line.
     Info,
+    /// `SLOWLOG GET`'s entries, one row each.
+    Slowlog,
+    /// `CLIENT LIST` and `CLIENT INFO`, one row per client.
+    Clients,
 }
 
 /// The type of a scalar reply.
@@ -129,6 +133,10 @@ impl Layout {
                 .skip(1)
                 .any(|word| word.eq_ignore_ascii_case(option.as_bytes()))
         };
+        let sub = |name: &str| {
+            argv.get(1)
+                .is_some_and(|word| word.eq_ignore_ascii_case(name.as_bytes()))
+        };
         match head {
             Head::Aggregate(Aggregate::Map, _) => Self::Pairs,
             // A page is `[cursor, elements]`: two elements, or not a page.
@@ -145,10 +153,16 @@ impl Layout {
                 }
                 "xrange" | "xrevrange" => Self::StreamEntries,
                 "ts.range" | "ts.revrange" => Self::Samples,
+                "slowlog" if sub("get") => Self::Slowlog,
                 _ => Self::Elements,
             },
             Head::Aggregate(..) => Self::Elements,
             Head::Bulk(_) | Head::Verbatim(_) if command == "info" => Self::Info,
+            Head::Bulk(_) | Head::Verbatim(_)
+                if command == "client" && (sub("list") || sub("info")) =>
+            {
+                Self::Clients
+            }
             Head::Simple(_)
             | Head::Bulk(_)
             | Head::Verbatim(_)
@@ -242,6 +256,33 @@ impl Layout {
                     "timestamp_ms".to_owned(),
                 )])),
                 Field::new("value", DataType::Float64, true),
+            ],
+            Self::Slowlog => vec![
+                Field::new("id", DataType::Int64, true),
+                Field::new("time", DataType::Int64, true).with_metadata(HashMap::from([(
+                    META_REDIS_TYPE.to_owned(),
+                    "unix_time_s".to_owned(),
+                )])),
+                Field::new("duration_us", DataType::Int64, true),
+                text("command"),
+                text("client"),
+                text("client_name"),
+                truncated,
+            ],
+            // The fields every client line carries; the line itself keeps
+            // the others, whatever the server version adds.
+            Self::Clients => vec![
+                Field::new("id", DataType::Int64, true),
+                text("addr"),
+                text("name"),
+                text("user"),
+                Field::new("db", DataType::Int64, true),
+                text("cmd"),
+                text("flags"),
+                Field::new("age_s", DataType::Int64, true),
+                Field::new("idle_s", DataType::Int64, true),
+                text("line"),
+                truncated,
             ],
         };
         Arc::new(Schema::new(fields))
@@ -510,6 +551,15 @@ mod tests {
         Layout::StreamEntries
     )]
     #[case("INFO", Head::Verbatim(10), Layout::Info)]
+    #[case(
+        "SLOWLOG GET 10",
+        Head::Aggregate(Aggregate::Array, 2),
+        Layout::Slowlog
+    )]
+    #[case("SLOWLOG LEN", Head::Integer(2), Layout::Scalar(ScalarKind::Integer))]
+    #[case("client list", Head::Verbatim(90), Layout::Clients)]
+    #[case("CLIENT INFO", Head::Bulk(90), Layout::Clients)]
+    #[case("CLIENT GETNAME", Head::Bulk(4), Layout::Scalar(ScalarKind::Text))]
     // A command that is not the shape's own falls back to the generic one.
     #[case("SCAN 0", Head::Null, Layout::Scalar(ScalarKind::Null))]
     fn the_layout_follows_the_reply_then_the_command(

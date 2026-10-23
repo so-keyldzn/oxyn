@@ -133,7 +133,10 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     guessed. A nested aggregate is one cell in a compact JSON-like text. A
     batch closes at 1 MiB, a value is cut at 16 MiB and its row says so. The
     command chooses a richer shape for the `SCAN` family, `ZRANGE … WITHSCORES`,
-    `XRANGE`/`XREVRANGE` and `INFO`. A reply abandoned before its end costs
+    `XRANGE`/`XREVRANGE`, `TS.RANGE`, `INFO`, `SLOWLOG GET` (one row per
+    entry, its duration in microseconds) and `CLIENT LIST`/`CLIENT INFO`
+    (one row per client: its usual fields as columns, and its whole line, so
+    that a field a later server adds is not lost). A reply abandoned before its end costs
     the connection; the session reopens it with the same declared state.
 11. **The catalog:** databases are catalogs named `db0`, `db1`… (from
     `CONFIG GET databases`, or `INFO keyspace` when the account may not read

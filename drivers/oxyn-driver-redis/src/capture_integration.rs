@@ -36,18 +36,10 @@ async fn subscribers(observer: &dyn Session, channel: &str) -> Option<String> {
 /// The clients `CLIENT LIST` shows as monitors (`flags=O`).
 async fn monitors(observer: &dyn Session) -> usize {
     let listing = run(observer, "CLIENT LIST").await.expect("CLIENT LIST");
-    column(&listing, "value")
+    column(&listing, "flags")
         .into_iter()
         .flatten()
-        .collect::<String>()
-        .lines()
-        .filter(|line| {
-            line.split(' ').any(|field| {
-                field
-                    .strip_prefix("flags=")
-                    .is_some_and(|f| f.contains('O'))
-            })
-        })
+        .filter(|flags| flags.contains('O'))
         .count()
 }
 

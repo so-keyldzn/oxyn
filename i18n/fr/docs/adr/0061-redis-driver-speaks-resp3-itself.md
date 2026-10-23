@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="dba3e5bc14d1" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="7da2c082ffde" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -143,7 +143,11 @@ que fait un arrêt. Vérifié le 2026-10-22
     agrégat imbriqué est une cellule, dans un texte compact proche du JSON. Un
     lot se ferme à 1 Mio, une valeur est coupée à 16 Mio et sa ligne le dit. La
     commande choisit une forme plus riche pour la famille `SCAN`,
-    `ZRANGE … WITHSCORES`, `XRANGE`/`XREVRANGE` et `INFO`. Une réponse
+    `ZRANGE … WITHSCORES`, `XRANGE`/`XREVRANGE`, `TS.RANGE`, `INFO`,
+    `SLOWLOG GET` (une ligne par entrée, sa durée en microsecondes) et
+    `CLIENT LIST`/`CLIENT INFO` (une ligne par client : ses champs usuels en
+    colonnes, et sa ligne entière, pour qu'un champ ajouté par un serveur plus
+    récent ne se perde pas). Une réponse
     abandonnée avant sa fin coûte la connexion ; la session la rouvre avec le
     même état déclaré.
 11. **Le catalogue :** les bases sont des catalogues nommés `db0`, `db1`… (d'après

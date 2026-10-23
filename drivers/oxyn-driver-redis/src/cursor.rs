@@ -42,6 +42,7 @@ use oxyn_driver::Cursor;
 use std::sync::Arc;
 use tokio::sync::OwnedMutexGuard;
 
+use crate::admin::{client_rows, slowlog_row};
 use crate::cancel::{Running, Stop};
 use crate::connection::Connection;
 use crate::error::{RedisError, during_execution};
@@ -282,7 +283,7 @@ impl RedisCursor {
         };
         let layout = Layout::choose(&plan.argv, &head);
         let state = match (layout, head) {
-            (Layout::Info, head) => State::Info(head),
+            (Layout::Info | Layout::Clients, head) => State::Info(head),
             (Layout::Scalar(_), head) => State::Scalar(head),
             (Layout::Scan(form), _) => State::ScanCursor(form),
             (Layout::Pairs, Head::Aggregate(_, len)) => State::Pairs { remaining: len },
@@ -330,8 +331,14 @@ impl RedisCursor {
                 let cell = Cell::of(&value);
                 let text = cell.text.unwrap_or_default();
                 let report = text.strip_prefix("txt:").unwrap_or(&text);
-                for row in info_rows(report) {
-                    self.push(&row)?;
+                if self.layout == Layout::Clients {
+                    for row in client_rows(report, cell.truncated) {
+                        self.push(&row)?;
+                    }
+                } else {
+                    for row in info_rows(report) {
+                        self.push(&row)?;
+                    }
                 }
             }
             State::Elements { remaining: 0, .. } | State::Pairs { remaining: 0 } => {}
@@ -348,6 +355,10 @@ impl RedisCursor {
                     }
                     Layout::Samples => {
                         let row = sample_row(&value);
+                        self.push(&row)?;
+                    }
+                    Layout::Slowlog => {
+                        let row = slowlog_row(&value, value.is_truncated());
                         self.push(&row)?;
                     }
                     Layout::StreamEntries => {
