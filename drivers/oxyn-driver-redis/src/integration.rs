@@ -787,6 +787,52 @@ async fn every_native_type_previews_read_only() {
     );
 }
 
+/// A module's type previews through its module's own read when the server
+/// loaded it — `redis:8.10.2` loads JSON, time series and Bloom — and is
+/// refused naming the command when it did not, as on Valkey.
+#[tokio::test]
+#[ignore = "needs OXYN_REDIS_TEST_URL"]
+async fn a_module_type_previews_through_its_module_or_is_refused_by_name() {
+    let Some(session) = clean().await else { return };
+    let modules = session.hello().modules.clone();
+    for (module, setup, key, read) in [
+        (
+            "ReJSON",
+            r#"JSON.SET doc $ '{"a":[1,2]}'"#,
+            "doc",
+            "JSON.GET",
+        ),
+        ("timeseries", "TS.ADD temps 1000 1.5", "temps", "TS.RANGE"),
+        ("bf", "BF.ADD seen x", "seen", "BF.INFO"),
+    ] {
+        let path = CatalogPath::for_relation(Some(DB), None, key).expect("path");
+        if !modules.iter().any(|loaded| loaded == module) {
+            assert!(
+                run(&session, setup).await.is_err(),
+                "{module} is not loaded"
+            );
+            continue;
+        }
+        run(&session, setup).await.expect(setup);
+        let preview = session
+            .preview_request(&path, 100, &PreviewShape::unordered(), &CancelToken::new())
+            .await
+            .expect("a module preview");
+        assert!(preview.text.starts_with(read), "{}", preview.text);
+        assert_eq!(
+            session.intent_of(&preview),
+            Some(StatementIntent::Read),
+            "the server flags {read} readonly"
+        );
+        let batches = run_request(&session, preview).await.expect("runs");
+        assert!(rows(&batches) >= 1, "{key}");
+        if module == "timeseries" {
+            assert_eq!(column(&batches, "timestamp"), [Some("1000".to_owned())]);
+            assert_eq!(column(&batches, "value"), [Some("1.5".to_owned())]);
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs OXYN_REDIS_TEST_URL"]
 async fn the_session_context_moves_the_console_and_nothing_else() {

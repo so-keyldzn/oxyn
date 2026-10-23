@@ -513,11 +513,24 @@ pub fn fields_of(kind: &str) -> Vec<Field> {
     let truncated =
         |position| Field::new("truncated", position, LogicalType::Boolean, "oxyn").not_null();
     match kind {
-        "string" => vec![
+        "string" | "ReJSON-RL" => vec![
             text("value", 1),
             bytes("value_bytes", 2),
             Field::new("type", 3, LogicalType::Text, "RESP type"),
             truncated(4),
+        ],
+        "TSDB-TYPE" => vec![
+            Field::new("timestamp", 1, LogicalType::INT64, "sample timestamp"),
+            Field::new("value", 2, LogicalType::FLOAT64, "double"),
+        ],
+        // The `*.INFO` of a probabilistic structure: a map of its parameters.
+        "MBbloom--" | "MBbloomCF" | "CMSk-TYPE" | "TDIS-TYPE" => vec![
+            text("key", 1),
+            bytes("key_bytes", 2),
+            Field::new("type", 3, LogicalType::Text, "RESP type").not_null(),
+            text("value", 4),
+            bytes("value_bytes", 5),
+            truncated(6),
         ],
         "hash" => vec![
             Field::new("cursor", 1, LogicalType::Text, "SCAN cursor").not_null(),
@@ -527,7 +540,7 @@ pub fn fields_of(kind: &str) -> Vec<Field> {
             bytes("value_bytes", 5),
             truncated(6),
         ],
-        "list" | "vectorset" => vec![
+        "list" | "vectorset" | "TopK-TYPE" => vec![
             Field::new("index", 1, LogicalType::INT64, "position").not_null(),
             Field::new("type", 2, LogicalType::Text, "RESP type").not_null(),
             text("value", 3),
@@ -654,9 +667,13 @@ mod tests {
             "zset",
             "stream",
             "vectorset",
+            "ReJSON-RL",
+            "TSDB-TYPE",
+            "MBbloom--",
+            "TopK-TYPE",
         ] {
             assert!(!fields_of(kind).is_empty(), "{kind}");
         }
-        assert!(fields_of("ReJSON-RL").is_empty());
+        assert!(fields_of("MyModule-T").is_empty());
     }
 }

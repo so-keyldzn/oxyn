@@ -66,6 +66,8 @@ pub enum Layout {
     Scored,
     /// Stream entries, one row per field.
     StreamEntries,
+    /// Time series samples, `[timestamp, value]` each.
+    Samples,
     /// `INFO`'s report, one row per line.
     Info,
 }
@@ -142,6 +144,7 @@ impl Layout {
                     Self::Scored
                 }
                 "xrange" | "xrevrange" => Self::StreamEntries,
+                "ts.range" | "ts.revrange" => Self::Samples,
                 _ => Self::Elements,
             },
             Head::Aggregate(..) => Self::Elements,
@@ -229,6 +232,17 @@ impl Layout {
                 truncated,
             ],
             Self::Info => vec![text("section"), text("name"), text("value")],
+            // RedisTimeSeries keeps an integer the application chose — by
+            // convention milliseconds since the epoch, in no time zone. It
+            // stays that integer, tagged, never a timestamp Oxyn would have
+            // to place in a zone (DRIVER-CONTRACT §7).
+            Self::Samples => vec![
+                Field::new("timestamp", DataType::Int64, true).with_metadata(HashMap::from([(
+                    META_REDIS_TYPE.to_owned(),
+                    "timestamp_ms".to_owned(),
+                )])),
+                Field::new("value", DataType::Float64, true),
+            ],
         };
         Arc::new(Schema::new(fields))
     }

@@ -11,7 +11,16 @@
 //! | sorted set | `ZRANGE key offset offset+limit-1 WITHSCORES` | score, then member | accepted |
 //! | stream | `XRANGE key - + COUNT limit` | entry ID | refused: the next page starts after an ID |
 //! | vector set | `VRANGE key - + limit` (Redis 8.4 and later) | element bytes | refused: the next page starts after an element |
-//! | a module's type | — | — | refused, naming the type: its own commands read it |
+//! | JSON (`ReJSON-RL`) | `JSON.GET key` — one document, cut at 16 MiB | — | refused: one row |
+//! | time series (`TSDB-TYPE`) | `TS.RANGE key - + COUNT limit` | timestamp | refused: the next page starts after a timestamp |
+//! | Bloom, cuckoo, count-min, t-digest | `BF.INFO`, `CF.INFO`, `CMS.INFO`, `TDIGEST.INFO` — the structure, not its members, which it does not keep | — | refused |
+//! | top-k (`TopK-TYPE`) | `TOPK.LIST key WITHCOUNT` | the module's | refused |
+//! | another module's type | — | — | refused, naming the type |
+//!
+//! A command the session's `COMMAND` table does not know — `VRANGE` before
+//! Redis 8.4, a module the server did not load — is refused before sending,
+//! naming it. Every command above is one the server flags `readonly` outside
+//! `@dangerous`, so the preview is a proven read.
 //!
 //! `COUNT` is a hint: a small hash answers whole, a large one about `limit`
 //! entries, and the row bound holds either way. The key is written by
@@ -81,10 +90,41 @@ pub fn command(kind: &str, key: &[u8], limit: u32, offset: u64) -> Result<String
             paged("vector set")?;
             format!("VRANGE {key} - + {limit}")
         }
+        // The module types, by the name `TYPE` reports and read by their
+        // module's own read command (observed on Redis 8.10.2).
+        "ReJSON-RL" => {
+            paged("JSON document")?;
+            format!("JSON.GET {key}")
+        }
+        "TSDB-TYPE" => {
+            paged("time series")?;
+            format!("TS.RANGE {key} - + COUNT {limit}")
+        }
+        "MBbloom--" => {
+            paged("Bloom filter")?;
+            format!("BF.INFO {key}")
+        }
+        "MBbloomCF" => {
+            paged("cuckoo filter")?;
+            format!("CF.INFO {key}")
+        }
+        "CMSk-TYPE" => {
+            paged("count-min sketch")?;
+            format!("CMS.INFO {key}")
+        }
+        "TopK-TYPE" => {
+            paged("top-k")?;
+            format!("TOPK.LIST {key} WITHCOUNT")
+        }
+        "TDIS-TYPE" => {
+            paged("t-digest")?;
+            format!("TDIGEST.INFO {key}")
+        }
         other => {
             return Err(OxynError::NotSupported {
                 capability: format!(
-                    "a preview of a `{other}` key: it belongs to a module, whose own commands read it"
+                    "a preview of a `{other}` key: its module's own commands read it, and Oxyn \
+                     does not know which"
                 ),
             });
         }
@@ -150,16 +190,22 @@ pub async fn request(
             "key {name} does not exist in db{database}"
         )));
     }
-    // `VRANGE` came with Redis 8.4, after vector sets: an older server holds
-    // the key and has no command to read it in pages.
-    if kind == "vectorset" && shared.commands.find(&[b"VRANGE".to_vec()]).is_none() {
+    let text = command(&kind, &key, limit, shape.offset)?;
+    // The server must know the command: `VRANGE` came with Redis 8.4, after
+    // vector sets, and a module may be absent or older. Its own table says so,
+    // and sending the command anyway would only earn `unknown command`.
+    let reading = text.split(' ').next().unwrap_or_default();
+    if shared
+        .commands
+        .find(&[reading.as_bytes().to_vec()])
+        .is_none()
+    {
         return Err(OxynError::NotSupported {
-            capability: "a preview of a vector set on a server without VRANGE (Redis 8.4 or \
-                         later reads one in pages)"
-                .to_owned(),
+            capability: format!(
+                "a preview of a `{kind}` key with {reading}, a command this server does not have"
+            ),
         });
     }
-    let text = command(&kind, &key, limit, shape.offset)?;
     let limits = ExecLimits::default().with_max_rows(usize::try_from(limit).ok());
     Ok(ExecRequest::new(QueryLanguage::RedisCommand, text)
         .with_params(vec![ScalarValue::Int64(i64::from(database))])
@@ -222,10 +268,23 @@ mod tests {
         ));
     }
 
+    #[rstest]
+    #[case("ReJSON-RL", "JSON.GET k")]
+    #[case("TSDB-TYPE", "TS.RANGE k - + COUNT 50")]
+    #[case("MBbloom--", "BF.INFO k")]
+    #[case("MBbloomCF", "CF.INFO k")]
+    #[case("CMSk-TYPE", "CMS.INFO k")]
+    #[case("TopK-TYPE", "TOPK.LIST k WITHCOUNT")]
+    #[case("TDIS-TYPE", "TDIGEST.INFO k")]
+    fn a_module_type_previews_with_its_modules_read(#[case] kind: &str, #[case] expected: &str) {
+        assert_eq!(command(kind, b"k", 50, 0).expect("composed"), expected);
+        assert!(command(kind, b"k", 50, 50).is_err(), "{kind} has no offset");
+    }
+
     #[test]
-    fn a_module_type_is_refused_by_name() {
-        let error = command("ReJSON-RL", b"k", 200, 0).expect_err("no generic preview");
-        assert!(error.to_string().contains("ReJSON-RL"), "{error}");
+    fn an_unknown_module_type_is_refused_by_name() {
+        let error = command("MyModule-T", b"k", 200, 0).expect_err("no generic preview");
+        assert!(error.to_string().contains("MyModule-T"), "{error}");
     }
 
     #[test]

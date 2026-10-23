@@ -346,6 +346,10 @@ impl RedisCursor {
                         let row = scored_row(&value);
                         self.push(&row)?;
                     }
+                    Layout::Samples => {
+                        let row = sample_row(&value);
+                        self.push(&row)?;
+                    }
                     Layout::StreamEntries => {
                         for row in entry_rows(&value) {
                             self.push(&row)?;
@@ -745,6 +749,20 @@ fn scored_row(value: &Value) -> Vec<Slot> {
     ]
 }
 
+/// A `[timestamp, value]` sample as a row; a part of another shape is null,
+/// never guessed.
+fn sample_row(value: &Value) -> Vec<Slot> {
+    let (timestamp, sample) = match value {
+        Value::List(_, parts) => match parts.as_slice() {
+            [Value::Integer(at), sample] => (Some(*at), score_of(sample)),
+            [_, sample] => (None, score_of(sample)),
+            _ => (None, None),
+        },
+        _ => (None, None),
+    };
+    vec![Slot::Integer(timestamp), Slot::Float(sample)]
+}
+
 /// A score: a RESP3 double, or the text `ZSCAN` and RESP2 send.
 fn score_of(value: &Value) -> Option<f64> {
     match value {
@@ -881,6 +899,29 @@ mod tests {
             assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
             assert!(!error.is_retryable());
         }
+    }
+
+    #[test]
+    fn a_time_series_sample_keeps_its_integer_timestamp() {
+        let row = sample_row(&Value::List(
+            Aggregate::Array,
+            vec![Value::Integer(1_000), Value::Double(1.5)],
+        ));
+        assert_eq!(row, [Slot::Integer(Some(1_000)), Slot::Float(Some(1.5))]);
+        // RESP2 sends the value as text; a part of another shape stays null.
+        let text = sample_row(&Value::List(
+            Aggregate::Array,
+            vec![Value::Integer(i64::MAX), bulk("-inf")],
+        ));
+        assert_eq!(
+            text,
+            [
+                Slot::Integer(Some(i64::MAX)),
+                Slot::Float(Some(f64::NEG_INFINITY))
+            ]
+        );
+        let odd = sample_row(&Value::List(Aggregate::Array, vec![bulk("x")]));
+        assert_eq!(odd, [Slot::Integer(None), Slot::Float(None)]);
     }
 
     #[test]
