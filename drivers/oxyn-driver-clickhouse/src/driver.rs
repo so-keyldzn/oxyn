@@ -12,13 +12,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use oxyn_core::{CancelToken, Capabilities, ConnectionConfig, DriverId, Result};
+use oxyn_core::{CancelToken, Capabilities, ConnectionConfig, DriverId, Result, StatementIntent};
 use oxyn_driver::{
     ConnectionField, Credentials, Driver, DriverFamily, DriverMetadata, FieldKind, Session,
 };
 
+use crate::error::map_transport_error;
 use crate::fetch::{counts, fetch, texts};
-use crate::http::{Call, Http};
+use crate::http::{Call, Failure, Http};
 use crate::options::{ConnectSpec, HTTPS_PORT, TlsMode};
 use crate::session::ClickhouseSession;
 use crate::variant::{ServerFacts, driver_capabilities};
@@ -150,10 +151,28 @@ impl Driver for ClickhouseDriver {
             params: vec![("id", uuid::Uuid::new_v4().to_string())],
             ..Call::default()
         };
-        let can_kill = match fetch(&http, &driver, &kill_probe, false, cancel).await {
-            Ok(_) => true,
-            Err(oxyn_core::OxynError::Cancelled) => return Err(oxyn_core::OxynError::Cancelled),
-            Err(_) => false,
+        // `KILL … TEST` that matches nothing answers 200 with an empty body
+        // and no result format (26.3): the status alone says the right is
+        // there, so the probe is not read like a result set.
+        let probe = async {
+            match http.send(&kill_probe).await {
+                Ok(mut reply) => {
+                    while let Ok(Some(_)) = reply.response.chunk().await {}
+                    Ok(true)
+                }
+                Err(Failure::Server(_)) => Ok(false),
+                Err(Failure::Transport(error)) => Err(map_transport_error(
+                    &driver,
+                    StatementIntent::Read,
+                    true,
+                    &error,
+                )),
+            }
+        };
+        let can_kill = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(oxyn_core::OxynError::Cancelled),
+            can_kill = probe => can_kill?,
         };
 
         let facts = ServerFacts {

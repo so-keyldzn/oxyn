@@ -21,6 +21,7 @@
 //! driver says so rather than pretend.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -198,6 +199,7 @@ impl Session for ClickhouseSession {
         let handle = StatementHandle::new();
         let query_id = uuid::Uuid::new_v4().to_string();
         let token = cancel.child();
+        let truncated = Arc::new(AtomicBool::new(false));
         let call = Call {
             text: request.text,
             query_id: query_id.clone(),
@@ -212,6 +214,8 @@ impl Session for ClickhouseSession {
             intent: request.intent,
             can_kill: self.facts.can_kill,
             json_as_text: self.facts.takes_settings(),
+            max_rows: request.limits.max_rows,
+            truncated: Arc::clone(&truncated),
         };
         self.running
             .lock()
@@ -249,6 +253,7 @@ impl Session for ClickhouseSession {
             opening.schema,
             batches_rx,
             opening.written_rows,
+            truncated,
             started,
         )))
     }

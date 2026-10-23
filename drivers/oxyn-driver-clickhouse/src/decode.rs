@@ -486,8 +486,8 @@ fn write_text(
 /// long division on four 64-bit limbs, into a stack buffer.
 fn write_unsigned_256(builder: &mut StringBuilder, raw: [u8; 32]) -> Result<usize, DecodeError> {
     let mut limbs = [0_u64; 4];
-    for (limb, chunk) in limbs.iter_mut().zip(raw.chunks_exact(8)) {
-        *limb = u64::from_le_bytes(chunk.try_into().map_err(|_| DecodeError::Truncated)?);
+    for (limb, chunk) in limbs.iter_mut().zip(raw.as_chunks::<8>().0) {
+        *limb = u64::from_le_bytes(*chunk);
     }
     // 2^256 has 78 decimal digits.
     let mut digits = [0_u8; 78];

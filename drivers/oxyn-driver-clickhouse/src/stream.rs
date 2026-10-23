@@ -27,6 +27,7 @@
 //!   its end, and is reported as such: a write that landed is not cancelled.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -92,6 +93,11 @@ pub struct Execution {
     /// Whether the request asked for `JSON` as text: an account that takes no
     /// setting gets it in a binary form the decoder does not read.
     pub json_as_text: bool,
+    /// The rows the caller takes ([`oxyn_core::ExecLimits::max_rows`]).
+    pub max_rows: Option<usize>,
+    /// Set when rows came past [`Self::max_rows`]: the cursor then says the
+    /// result is not whole.
+    pub truncated: Arc<AtomicBool>,
 }
 
 /// Runs an execution to its end.
@@ -343,6 +349,7 @@ impl Rows {
         batches: &mpsc::Sender<Result<RecordBatch>>,
     ) -> Result<()> {
         let execution_intent = self.execution.intent;
+        let mut produced = 0_usize;
         loop {
             loop {
                 let ready = self.body.ready();
@@ -352,6 +359,23 @@ impl Rows {
                 else {
                     break;
                 };
+                if self.execution.max_rows.is_some_and(|max| produced >= max) {
+                    self.execution.truncated.store(true, Ordering::Release);
+                    if execution_intent.is_read_only() {
+                        // A read past its bound is stopped: nobody takes the
+                        // rest, and the server would compute it for nothing.
+                        if decoder.rows() > 0 {
+                            self.emit(decoder, token, batches).await?;
+                        }
+                        self.execution.kill().await;
+                        return Ok(());
+                    }
+                    // Anything else is read to its end, rows dropped: killing
+                    // it would leave what it wrote unknown.
+                    self.body.consume(length);
+                    continue;
+                }
+                produced = produced.saturating_add(1);
                 let row = ready.get(..length).ok_or_else(|| {
                     map_decode_error(
                         &self.execution.driver,

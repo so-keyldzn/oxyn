@@ -5,6 +5,8 @@
 //! Dropping the cursor closes the channel, which the task reads as "nobody
 //! wants the rest" and answers with a kill.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use arrow::datatypes::SchemaRef;
@@ -22,6 +24,8 @@ pub struct ClickhouseCursor {
     batches: mpsc::Receiver<Result<RecordBatch>>,
     stats: ExecStats,
     started: Instant,
+    /// Set by the task when rows came past the row bound.
+    truncated: Arc<AtomicBool>,
 }
 
 impl ClickhouseCursor {
@@ -30,6 +34,7 @@ impl ClickhouseCursor {
         schema: SchemaRef,
         batches: mpsc::Receiver<Result<RecordBatch>>,
         written_rows: Option<u64>,
+        truncated: Arc<AtomicBool>,
         started: Instant,
     ) -> Self {
         let mut stats = ExecStats::default();
@@ -44,6 +49,7 @@ impl ClickhouseCursor {
             batches,
             stats,
             started,
+            truncated,
         }
     }
 }
@@ -75,7 +81,13 @@ impl Cursor for ClickhouseCursor {
                 Ok(Some(batch))
             }
             Some(Err(error)) => Err(error),
-            None => Ok(None),
+            None => {
+                // The task set the flag before it closed the channel.
+                if self.truncated.load(Ordering::Acquire) {
+                    self.stats.mark_truncated();
+                }
+                Ok(None)
+            }
         }
     }
 
