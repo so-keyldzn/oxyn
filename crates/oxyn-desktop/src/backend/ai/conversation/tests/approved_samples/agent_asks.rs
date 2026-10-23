@@ -647,6 +647,7 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
         node: next,
         parent: Some(node),
         connection: &config,
+        language: SQLITE,
         cancel: &cancel,
     };
     let (dialogue, _) = run
@@ -799,6 +800,7 @@ fn an_approved_sample_reaches_an_external_agent_once_then_the_agent_starts_over(
         node: first,
         parent: None,
         connection: &config,
+        language: SQLITE,
         cancel: &cancel,
     };
     let grant = fixture.backend.inner.ai.samples.take(&request.id);
@@ -865,6 +867,7 @@ fn an_approved_sample_reaches_an_external_agent_once_then_the_agent_starts_over(
         node: second,
         parent: Some(first),
         connection: &config,
+        language: SQLITE,
         cancel: &cancel,
     };
     fixture

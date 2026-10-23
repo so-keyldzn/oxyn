@@ -32,9 +32,9 @@ use oxyn_ai::{
 };
 use oxyn_core::ai::MAX_PROVIDER_MODEL_BYTES;
 use oxyn_core::{
-    Actor, AgentId, AgentSessionId, AiProviderConfig, CancelToken, Capabilities, Command,
-    CommandId, ConnectionConfig, ConnectionId, Environment, ErrorClass, ExternalAgentConfig,
-    OxynError, PrivacyTier, Provenance, QueryLanguage, SessionId,
+    Actor, AgentId, AgentSessionId, AiProviderConfig, CancelToken, Command, CommandId,
+    ConnectionConfig, ConnectionId, Environment, ErrorClass, ExternalAgentConfig, OxynError,
+    PrivacyTier, Provenance, QueryLanguage, SessionId,
 };
 use oxyn_exec::{DispatchReport, Executor, ExecutorSink};
 use oxyn_llm::Reach;
@@ -66,10 +66,6 @@ use sampling::Sampling;
 /// Product bound: a question is typed or pasted by a person, and a pasted dump
 /// of several megabytes would go to a provider under the user's key.
 const MAX_QUESTION_BYTES: usize = 32 * 1024;
-
-/// Said when the session cannot run SQL: the built-in agent only writes SQL
-/// ([ADR-0003](../../../../../docs/adr/0003-driver-capabilities.md)).
-const NO_SQL: &str = "This session does not support SQL, and the assistant only writes SQL.";
 
 /// Copies what a run observes into its node.
 ///
@@ -953,16 +949,9 @@ impl Backend {
         // Read now, not when the panel opened: a tier changed since then must
         // govern this question (I-04).
         let config = self.read_config(connection).await?;
-        let capabilities = self
-            .inner
-            .executor
-            .sessions()
-            .get(session)
-            .ok_or_else(|| IpcError::invalid("This session is no longer open"))?
-            .capabilities();
-        if !capabilities.contains(Capabilities::SQL) {
-            return Err(IpcError::invalid(NO_SQL));
-        }
+        // The language the agent writes, what its requests run in, and what
+        // the executor classifies them by (ADR-0065).
+        let language = self.session_language(&config, session)?;
 
         let resolved = match self
             .resolve_destination(&request.destination, config.privacy_tier)
@@ -979,20 +968,22 @@ impl Backend {
         };
         // Before any dialog: a destination the conversation's agent is not
         // written for refuses the question, and does not switch the agent
-        // (ADR-0049 § 6).
-        let (new_agent, role) = self.conversation_agent(
-            connection,
-            request.thread.as_deref(),
-            request.agent_id.as_deref(),
-        )?;
+        // (ADR-0049 § 6); nor does a language it does not write (ADR-0065).
         let reader = match &resolved {
             Resolved::Provider {
                 config: provider, ..
             } => agents::provider_recipient(provider),
             Resolved::Agent(declared) => agents::agent_recipient(declared),
         };
-        if !role.offered_for(&agents::target_of(&config, reader)) {
-            return Err(agents::not_offered(&role, reader));
+        let target = agents::target_of(&config, language, reader);
+        let (new_agent, role) = self.conversation_agent(
+            connection,
+            request.thread.as_deref(),
+            request.agent_id.as_deref(),
+            &target,
+        )?;
+        if !role.offered_for(&target) {
+            return Err(agents::not_offered(&role, &target));
         }
         let confirmed_recipient = if let (Some(approval), Some(grant), Some(slot)) =
             (&request.sample, &grant, sample_slot)
@@ -1123,6 +1114,7 @@ impl Backend {
                 node,
                 parent: request.parent,
                 connection: &config,
+                language,
                 cancel: &cancel,
                 mentions: &named,
                 role: &role,
@@ -1772,6 +1764,10 @@ struct Run<'a> {
     node: u32,
     parent: Option<u32>,
     connection: &'a ConnectionConfig,
+    /// What the question's session speaks, read when it was asked: the
+    /// language of the prompt, of the context and of every request the
+    /// agent sends (ADR-0065).
+    language: QueryLanguage,
     cancel: &'a CancelToken,
     /// What the user named with `@`, for whichever destination answers.
     mentions: &'a super::mentions::Named,
@@ -1783,7 +1779,7 @@ struct Run<'a> {
 impl Run<'_> {
     /// The target of this question's prompt, for `recipient`.
     fn target(&self, recipient: oxyn_ai::Recipient) -> oxyn_ai::PromptTarget {
-        agents::target_of(self.connection, recipient)
+        agents::target_of(self.connection, self.language, recipient)
     }
 
     fn emit(&self, event: AiEvent) {
@@ -2070,7 +2066,7 @@ impl Run<'_> {
             self.thread.withhold_memory(self.node);
         }
         let connection = self.connection;
-        let dialect = oxyn_query::dialect_for(&connection.driver);
+        let language = self.language;
         // A sampled question starts from a fresh context: the sample can only
         // enter through the `ContextBuilder`, and a remembered session skips it.
         let remembered = if sampled {
@@ -2102,7 +2098,7 @@ impl Run<'_> {
                         let cache = catalog.read();
                         ContextBuilder::new(&cache, tier)
                             .with_policy(agent.context.clone())
-                            .with_language(QueryLanguage::Sql(dialect))
+                            .with_language(language)
                             .with_mentions(mentions.clone())
                             .mentioned_only()
                             .build()
@@ -2166,7 +2162,7 @@ impl Run<'_> {
                     // the structure than the SQL agent (ADR-0049 § 7).
                     ContextBuilder::new(&cache, tier)
                         .with_policy(agent.context.clone())
-                        .with_language(QueryLanguage::Sql(dialect))
+                        .with_language(language)
                         .focused_on(question.to_owned())
                         // The scores the catalog fill loaded with: the gate
                         // selects what was described (ADR-0056).
@@ -2175,7 +2171,7 @@ impl Run<'_> {
                         .with_samples(sample.into_iter().collect())
                         .build()
                 };
-                let scope = ToolScope::new(connection.id, session, QueryLanguage::Sql(dialect));
+                let scope = ToolScope::new(connection.id, session, language);
                 let mut dialogue = AgentSession::new(agent, &context, scope);
                 dialogue.ask(question);
                 (dialogue, Some(context))
@@ -2467,7 +2463,7 @@ impl Run<'_> {
         // that follows an answer already has the structure, as a remembered
         // provider session does: only the mentioned objects are rendered, by the
         // same gate, and precede the question.
-        let language = QueryLanguage::Sql(oxyn_query::dialect_for(&self.connection.driver));
+        let language = self.language;
         let mentions = self.mentions.mentions.clone();
         // Before the prompt is rendered, what it needs is read — by Oxyn,
         // through the bus: the whole selection for a session that starts, the
@@ -2554,6 +2550,7 @@ impl Run<'_> {
                                 self.inner,
                                 self.connection,
                                 session,
+                                self.language,
                                 agent,
                                 tier,
                                 self.role,
@@ -2897,11 +2894,13 @@ fn version_of(ready: &AgentReady) -> Option<String> {
 /// the same either way.
 ///
 /// `role` is the conversation's agent: its `tools` are the MCP tools this
-/// session is served, as they are a provider's (ADR-0049 § 7, ADR-0030).
+/// session is served, as they are a provider's (ADR-0049 § 7, ADR-0030), in
+/// the `language` the session speaks (ADR-0065).
 async fn launch_agent(
     inner: &Inner,
     connection: &ConnectionConfig,
     session: SessionId,
+    language: QueryLanguage,
     agent: &ExternalAgentConfig,
     tier: PrivacyTier,
     role: &oxyn_ai::AgentSpec,
@@ -2939,6 +2938,7 @@ async fn launch_agent(
         inner,
         connection,
         session,
+        language,
         role,
         Actor::agent(identity, conversation),
     ));
@@ -2986,23 +2986,20 @@ async fn launch_agent(
 }
 
 /// Oxyn's tools as an external agent of `role` reaches them: the role's
-/// `tools` and no other, scoped to `session`, under the tier read at each
-/// call, acting as `actor`.
+/// `tools` and no other, scoped to `session` and the `language` it speaks,
+/// under the tier read at each call, acting as `actor`.
 fn tool_service(
     inner: &Inner,
     connection: &ConnectionConfig,
     session: SessionId,
+    language: QueryLanguage,
     role: &oxyn_ai::AgentSpec,
     actor: Actor,
 ) -> ToolService {
     ToolService::new(
         ToolRegistry::builtin(),
         role.allowed_tools.clone(),
-        ToolScope::new(
-            connection.id,
-            session,
-            QueryLanguage::Sql(oxyn_query::dialect_for(&connection.driver)),
-        ),
+        ToolScope::new(connection.id, session, language),
         Arc::new(StoredTier {
             executor: Arc::clone(&inner.executor),
             connection: connection.id,

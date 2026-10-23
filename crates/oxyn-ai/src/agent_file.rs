@@ -1,6 +1,8 @@
 //! Agents declared as Markdown files, and the one way a system prompt is made.
 //!
-//! Authority: [ADR-0049](../../../docs/adr/0049-agents-declared-as-markdown-files.md).
+//! Authority: [ADR-0049](../../../docs/adr/0049-agents-declared-as-markdown-files.md),
+//! and [ADR-0065](../../../docs/adr/0065-agents-for-non-sql-query-languages.md)
+//! for the languages that are not SQL.
 //!
 //! # Three files make one prompt
 //!
@@ -10,16 +12,17 @@
 //! | File | Axis | Front matter |
 //! |---|---|---|
 //! | `agents/<role>.md` | what the agent does | the [`AgentSpec`] fields |
-//! | `prompts/dialects/<dialect>.md` | the SQL the connection speaks | none |
+//! | `prompts/dialects/<dialect>.md`, or `prompts/languages/<language>.md` outside SQL | the language the connection speaks | none |
 //! | `prompts/recipients/<recipient>.md` | who reads the prompt, with which tools | none |
 //!
 //! [`render_system_prompt`] joins them in that order and fills the closed
 //! variables. Nothing else is concatenated in: the database's structure and
 //! samples reach the model through `ContextBuilder`, under the connection's
 //! tier, and never as a variable ([I-04](../../../CLAUDE.md#i-04)). A dialect
-//! without a fragment of its own gets `ansi.md`; a recipient without one is an
-//! error, since a prompt that does not say how its reader calls tools leaves
-//! the reader to guess.
+//! without a fragment of its own gets `ansi.md`, a language other than SQL
+//! without one gets `generic.md`; a recipient without one is an error, since
+//! a prompt that does not say how its reader calls tools leaves the reader to
+//! guess.
 //!
 //! # A file is input
 //!
@@ -50,8 +53,8 @@ pub use files::shipped_agents;
 pub(crate) use files::{SCHEMA_AGENT, SQL_AGENT, shipped_agent};
 pub use parse::parse_agent_file;
 pub use render::render_system_prompt;
-pub(crate) use target::dialect_names;
-pub use target::{DIALECTS, ExternalAgentKind, PromptTarget, Recipient};
+pub use target::{DIALECTS, ExternalAgentKind, LANGUAGES, PromptTarget, Recipient};
+pub(crate) use target::{dialect_names, language_names, same_language};
 pub use user_dir::{MAX_DIRECTORY_ENTRIES, MAX_USER_AGENT_FILES, read_user_agents};
 
 #[cfg(doc)]
@@ -68,7 +71,8 @@ pub const MAX_FILE_BYTES: usize = 64 * 1024;
 ///
 /// Closed, and extended only by an ADR (ADR-0049 § 3): each is a value Oxyn
 /// holds, never database content, a server response or a secret.
-pub const VARIABLES: [&str; 4] = ["dialect", "driver", "environment", "recipient"];
+/// `language` was added by ADR-0065.
+pub const VARIABLES: [&str; 5] = ["dialect", "driver", "environment", "language", "recipient"];
 
 /// Why a file was refused.
 ///
@@ -123,6 +127,15 @@ pub enum AgentFileError {
         line: u64,
     },
 
+    /// `languages` names a query language Oxyn does not know.
+    #[error("{file}, line {line}: unknown query language in `languages`")]
+    UnknownLanguage {
+        /// The file.
+        file: String,
+        /// The line of the name.
+        line: u64,
+    },
+
     /// `recipients` names a recipient Oxyn does not know.
     #[error("{file}, line {line}: unknown recipient in `recipients`")]
     UnknownRecipient {
@@ -135,7 +148,7 @@ pub enum AgentFileError {
     /// A `{{` does not open one of the [`VARIABLES`].
     #[error(
         "{file}, line {line}: unknown variable; a prompt may only name {{{{dialect}}}}, \
-         {{{{driver}}}}, {{{{environment}}}} and {{{{recipient}}}}"
+         {{{{driver}}}}, {{{{environment}}}}, {{{{language}}}} and {{{{recipient}}}}"
     )]
     UnknownVariable {
         /// The file, or the agent's name for a declaration built in code.
