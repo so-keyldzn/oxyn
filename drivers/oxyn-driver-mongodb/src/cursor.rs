@@ -2,7 +2,7 @@
 //!
 //! A server batch — `firstBatch`, then each `getMore` — holds at most 16 MiB
 //! of documents (MongoDB manual, cursor batches, consulted on 2026-10-22). The
-//! [`Feed`] keeps **one** such batch, as owned documents, and the cursor turns
+//! `Feed` keeps **one** such batch, as owned documents, and the cursor turns
 //! it into Arrow batches of at most [`BATCH_BYTE_BUDGET`] bytes: the client
 //! never holds more than a server batch plus an Arrow batch, whatever the size
 //! of the result ([I-06](../../../CLAUDE.md#i-06)). Nothing calls `to_vec` on
