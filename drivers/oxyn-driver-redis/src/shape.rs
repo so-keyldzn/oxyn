@@ -131,10 +131,12 @@ impl Layout {
             .first()
             .map(|word| String::from_utf8_lossy(word).to_ascii_lowercase())
             .unwrap_or_default();
-        let has = |option: &str| {
-            argv.iter()
-                .skip(1)
-                .any(|word| word.eq_ignore_ascii_case(option.as_bytes()))
+        // An option is read where options are: after the required arguments,
+        // an option's own values skipped. A hash named `novalues` or a
+        // `MATCH withscores` pattern is not the option.
+        let has = |option: &str| match command.as_str() {
+            "hscan" => has_option(argv, 3, &[("match", 1), ("count", 1)], option),
+            _ => has_option(argv, 4, &[("limit", 2)], option),
         };
         let sub = |name: &str| {
             argv.get(1)
@@ -477,6 +479,23 @@ impl Rows {
     }
 }
 
+/// Whether `option` is among the options of `argv`, read from index `from`
+/// on, each option of `valued` skipping the number of values it takes.
+fn has_option(argv: &[Vec<u8>], from: usize, valued: &[(&str, usize)], option: &str) -> bool {
+    let mut i = from;
+    while let Some(word) = argv.get(i) {
+        if word.eq_ignore_ascii_case(option.as_bytes()) {
+            return true;
+        }
+        let skipped = valued
+            .iter()
+            .find(|(name, _)| word.eq_ignore_ascii_case(name.as_bytes()))
+            .map_or(0, |(_, values)| *values);
+        i = i.saturating_add(1).saturating_add(skipped);
+    }
+    false
+}
+
 /// `INFO`'s report as `(section, name, value)` rows.
 ///
 /// `# Server` opens a section, `name:value` is a row, blank lines separate.
@@ -552,6 +571,32 @@ mod tests {
         "ZRANGE z 0 -1",
         Head::Aggregate(Aggregate::Array, 2),
         Layout::Elements
+    )]
+    // An option word in a key, a bound or an option's value is not the option.
+    #[case(
+        "HSCAN novalues 0 COUNT 10",
+        Head::Aggregate(Aggregate::Array, 2),
+        Layout::Scan(ScanForm::HashFields)
+    )]
+    #[case(
+        "HSCAN h 0 MATCH novalues",
+        Head::Aggregate(Aggregate::Array, 2),
+        Layout::Scan(ScanForm::HashFields)
+    )]
+    #[case(
+        "HSCAN h 0 MATCH x* COUNT 10 NOVALUES",
+        Head::Aggregate(Aggregate::Array, 2),
+        Layout::Scan(ScanForm::HashFieldNames)
+    )]
+    #[case(
+        "ZRANGE withscores 0 -1",
+        Head::Aggregate(Aggregate::Array, 2),
+        Layout::Elements
+    )]
+    #[case(
+        "ZRANGE z 0 10 BYSCORE LIMIT 0 5 WITHSCORES",
+        Head::Aggregate(Aggregate::Array, 2),
+        Layout::Scored
     )]
     #[case(
         "XRANGE s - +",
