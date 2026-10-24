@@ -18,7 +18,11 @@ pub(crate) const SCHEMA_AGENT: (&str, &str) =
     ("agents/schema.md", include_str!("../../agents/schema.md"));
 
 /// The shipped agents, in the order the picker offers them.
-pub(super) const AGENTS: [(&str, &str); 2] = [SQL_AGENT, SCHEMA_AGENT];
+pub(super) const AGENTS: [(&str, &str); 3] = [
+    SQL_AGENT,
+    SCHEMA_AGENT,
+    ("agents/mongodb.md", include_str!("../../agents/mongodb.md")),
+];
 
 /// The dialect fragments, `(dialect, file, text)`.
 ///
@@ -68,7 +72,14 @@ const ANSI: (&str, &str, &str) = (
 /// entry here, next to its agent in [`AGENTS`]; every other language gets
 /// [`GENERIC`] (ADR-0065). SQL never reads this table: its fragment is its
 /// dialect's.
-pub(super) const LANGUAGE_FRAGMENTS: [(&str, &str, &str); 1] = [GENERIC];
+pub(super) const LANGUAGE_FRAGMENTS: [(&str, &str, &str); 2] = [
+    GENERIC,
+    (
+        "mongo",
+        "prompts/languages/mongo.md",
+        include_str!("../../prompts/languages/mongo.md"),
+    ),
+];
 
 /// The fragment of a language Oxyn has no notes for: what holds for any
 /// language Oxyn does not parse, and nothing about a product.

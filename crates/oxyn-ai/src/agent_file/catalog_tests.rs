@@ -253,9 +253,9 @@ fn outside_sql_the_default_is_the_first_agent_of_the_language_shipped_first() {
     assert_eq!(with_shipped.default_for(&redis), Some(shipped_keys.id));
 
     assert_eq!(
-        with_shipped.default_for(&on(QueryLanguage::MongoQuery)),
+        with_shipped.default_for(&on(QueryLanguage::Cypher)),
         None,
-        "no agent writes MongoDB queries: no default, and no SQL agent either"
+        "no agent writes Cypher: no default, and no SQL agent either"
     );
 }
 
