@@ -9,7 +9,9 @@ leaves to CI.
 
 **It does not replace `make qualite`**, which remains the gate: the crates
 that depend on a modified crate, the Rust documentation, `cargo deny`, the
-unaffected stories and the front-end build do not run here.
+unaffected stories and the front-end build do not run here. CI on a pull
+request checks the dependent crates too, and only them (ADR-0067); here, they
+are left out to keep the loop short.
 
 Stops at the first failure, with the exit code of the failing command.
 
@@ -40,7 +42,7 @@ ESLINT_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 NAME_PATTERN = re.compile(r'^name\s*=\s*"([^"]+)"', re.MULTILINE)
 
 LEFT_TO_CI = [
-    "the crates that depend on the modified crates",
+    "the crates that depend on the modified crates (CI checks them on the PR, ADR-0067)",
     "cargo doc, cargo deny, and the nextest profile (.config/nextest.toml)",
     "the stories Vitest does not relate to the modified files",
     "the front-end build and the npm licenses",
