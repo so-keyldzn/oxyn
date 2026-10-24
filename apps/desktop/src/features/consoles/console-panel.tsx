@@ -30,6 +30,7 @@ import type {
 import { registerDraftFlush } from "@/features/consoles/draft-registry"
 import { identifierQuoteForDriver } from "@/lib/sql-identifiers"
 import { loadedObject, nameAt } from "@/features/consoles/object-under-cursor"
+import { mongoNameAt } from "@/features/consoles/languages/mongo/name-at"
 import { useConsoleDocument } from "@/features/consoles/use-console-document"
 import type { ConsoleSeed } from "@/features/consoles/use-console-document"
 import { releaseResult } from "@/features/metadata/inspection"
@@ -638,7 +639,10 @@ export function ConsolePanel({
   const editorMenu: SqlEditorMenu = {
     onRun: (runTarget) => void run(runTarget),
     objectAt: (text, offset) => {
-      const parts = nameAt(text, offset, identifierQuoteForDriver(open.driver))
+      const parts =
+        language === "mongo"
+          ? mongoNameAt(text, offset)
+          : nameAt(text, offset, identifierQuoteForDriver(open.driver))
       const tree = queryClient.getQueryData<Array<CatalogNode>>([
         "catalog",
         open.connection,
