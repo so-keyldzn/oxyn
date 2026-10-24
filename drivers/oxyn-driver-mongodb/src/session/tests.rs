@@ -53,8 +53,16 @@ async fn the_destructive_forms_carry_their_risk_beside_a_proven_write() {
             StatementIntent::Write,
             MutationRisk::UnboundedDelete,
         ),
-        (r#"{"drop": "u"}"#, StatementIntent::Ddl, MutationRisk::DropObject),
-        (r#"{"dropDatabase": 1}"#, StatementIntent::Ddl, MutationRisk::DropObject),
+        (
+            r#"{"drop": "u"}"#,
+            StatementIntent::Ddl,
+            MutationRisk::DropObject,
+        ),
+        (
+            r#"{"dropDatabase": 1}"#,
+            StatementIntent::Ddl,
+            MutationRisk::DropObject,
+        ),
         (
             r#"{"dropIndexes": "u", "index": "*"}"#,
             StatementIntent::Ddl,
@@ -102,7 +110,10 @@ async fn what_proves_no_write_answers_no_risk() {
     // does not know, server-side JavaScript in a delete of everything: the
     // intent is a read or nothing, and the risk follows it.
     for (text, intent) in [
-        (r#"{"find": "u", "filter": {}}"#, Some(StatementIntent::Read)),
+        (
+            r#"{"find": "u", "filter": {}}"#,
+            Some(StatementIntent::Read),
+        ),
         (r#"{"commitTransaction": 1}"#, None),
         (r#"{"shutdown": 1}"#, None),
         (
