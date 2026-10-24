@@ -17,6 +17,7 @@ const meta = {
   args: {
     running: false,
     canRun: true,
+    canExplain: true,
     readOnly: false,
     target: "statement",
     onRun: fn(),
@@ -201,6 +202,61 @@ export const ReadOnlyWithoutSql: Story = {
     await expect(canvas.getByLabelText("Query name")).toHaveAttribute(
       "aria-invalid",
       "true"
+    )
+  },
+}
+
+/** SQL binds values: the control says how many, and toggles its panel. */
+export const BoundValues: Story = {
+  args: { parameterCount: 2 },
+  play: async ({ canvas, args }) => {
+    const parameters = canvas.getByRole("button", { name: /Parameters/ })
+    await expect(parameters).toHaveTextContent(/· 2$/)
+    await expect(parameters).toHaveAttribute("aria-pressed", "false")
+    await userEvent.click(parameters)
+    await expect(args.onToggleParameters).toHaveBeenCalled()
+  },
+}
+
+/**
+ * A language that binds no value — a MongoDB command carries its own: no
+ * Parameters control, not even a dimmed one.
+ */
+export const LanguageWithoutBoundValues: Story = {
+  args: { parameterCount: null, title: "orders.mongo" },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByRole("button", { name: /^Run$/ })).toBeEnabled()
+    await expect(
+      canvas.queryByRole("button", { name: /Parameters/ })
+    ).toBeNull()
+  },
+}
+
+/**
+ * A session without `EXPLAIN`: Explain stays at its place, greyed, and says
+ * why — on hover and to a screen reader. Run is untouched.
+ */
+export const ExplainNotDeclared: Story = {
+  args: { canExplain: false },
+  play: async ({ canvas }) => {
+    const explain = canvas.getByRole("button", { name: "Explain" })
+    await expect(explain).toBeDisabled()
+    await expect(explain).toHaveAccessibleDescription(
+      "This connection does not describe a statement's plan"
+    )
+    await expect(canvas.getByRole("button", { name: /^Run$/ })).toBeEnabled()
+    const trigger = explain.parentElement
+    if (!trigger) return
+    await userEvent.hover(trigger)
+    const tooltip = await screen.findByText(
+      "This connection does not describe a statement's plan",
+      { selector: "[data-slot=tooltip-content]" },
+      { timeout: 3000 }
+    )
+    await waitFor(() => expect(tooltip).toBeVisible())
+    await userEvent.unhover(trigger)
+    await waitFor(() =>
+      expect(document.querySelector("[data-slot=tooltip-content]")).toBeNull()
     )
   },
 }

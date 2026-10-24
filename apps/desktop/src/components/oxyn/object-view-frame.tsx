@@ -40,6 +40,14 @@ export const OBJECT_TABS: ReadonlyArray<{ value: ObjectTab; label: string }> = [
   { value: "definition", label: "DDL" },
 ]
 
+/**
+ * A catalog kind written for reading: `key_pattern` is the wire name,
+ * `key pattern` what the header says.
+ */
+export function objectKindLabel(kind: string) {
+  return kind.replaceAll("_", " ")
+}
+
 /** Below 1200 px these leave the tab bar for `More` (docs/UX-SPEC.md). */
 const MORE_TABS: ReadonlySet<ObjectTab> = new Set<ObjectTab>([
   "indexes",
@@ -68,8 +76,9 @@ export function initialObjectTab(
  * and keeps its own direction (`dir="auto"`): a Hebrew table name does not
  * flip the tab bar.
  *
- * Below 1200 px (`compact`) only Data and Structure stay tabs; the other four
- * are reached through `More`, whose button names the one shown. Changing the
+ * Below 1200 px (`compact`) only Data and Structure stay tabs; the others the
+ * session can fill are reached through `More`, whose button names the one
+ * shown. Changing the
  * width reads nothing: every panel stays what it was.
  */
 export function ObjectViewFrame({
@@ -85,8 +94,10 @@ export function ObjectViewFrame({
   gridFocusRequest = 0,
   definitionLayout,
   compact = false,
+  absentTabs,
 }: {
   name: string
+  /** The catalog kind, as the backend names it. */
   kind: string
   tab: ObjectTab
   onTabChange: (tab: ObjectTab) => void
@@ -115,12 +126,16 @@ export function ObjectViewFrame({
     onWidthChange: (width: number) => void
   }
   compact?: boolean
+  /** Tabs the session cannot fill: not drawn, in either layout. */
+  absentTabs?: ReadonlySet<ObjectTab>
 }) {
   const reasonId = React.useId()
   const beside = definitionLayout?.beside ?? false
-  const tabs = beside
-    ? OBJECT_TABS.filter((candidate) => candidate.value !== "definition")
-    : OBJECT_TABS
+  const tabs = OBJECT_TABS.filter(
+    (candidate) =>
+      !(absentTabs?.has(candidate.value) ?? false) &&
+      !(beside && candidate.value === "definition")
+  )
   const inTabBar = tabs.filter(
     (candidate) => !compact || !MORE_TABS.has(candidate.value)
   )
@@ -167,7 +182,9 @@ export function ObjectViewFrame({
           >
             {name}
           </h2>
-          <span className="shrink-0 text-xs text-muted-foreground">{kind}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {objectKindLabel(kind)}
+          </span>
         </div>
         <TabsList
           variant="line"

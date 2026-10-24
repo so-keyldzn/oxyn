@@ -189,9 +189,18 @@ impl Backend {
         let sql = match (spec.format, connection) {
             (CopyRowsFormat::Insert | CopyRowsFormat::InList, Some(connection)) => {
                 // Reads the store: off the runtime worker.
-                let dialect = self
-                    .on_blocking_pool(move |backend| backend.dialect_of(connection))
+                let language = self
+                    .on_blocking_pool(move |backend| {
+                        Ok(backend.language_of(&backend.config(connection)?.driver))
+                    })
                     .await?;
+                // A connection whose consoles speak another language would
+                // receive a statement it refuses.
+                let Some(dialect) = language.sql_dialect() else {
+                    return Err(IpcError::invalid(
+                        "This connection does not speak SQL: copy the rows as text, CSV or JSON",
+                    ));
+                };
                 let relation = match (spec.format, address) {
                     (CopyRowsFormat::Insert, Some(address)) => {
                         let path = address.to_path()?;

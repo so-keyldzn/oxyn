@@ -54,7 +54,13 @@ const SOURCES: ActionSources = {
     actions: workspace,
   },
   console: {
-    state: { canRun: true, running: false, cancelling: false, writing: false },
+    state: {
+      canRun: true,
+      canExplain: true,
+      running: false,
+      cancelling: false,
+      writing: false,
+    },
     actions: console_,
   },
   navigation: { state: {}, actions: { back: nothing } },
@@ -268,6 +274,7 @@ describe("zones", () => {
       console: {
         state: {
           canRun: true,
+          canExplain: true,
           running: true,
           cancelling: false,
           writing: false,

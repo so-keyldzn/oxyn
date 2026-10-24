@@ -74,6 +74,73 @@ export const NoSchemaLoaded: Story = {
   },
 }
 
+/** A document store's namespaces are databases: the picker says so. */
+export const DocumentDatabases: Story = {
+  args: {
+    level: "database",
+    connectionName: "orders cluster",
+    choices: [
+      { catalog: null, namespace: null },
+      { catalog: null, namespace: "shop" },
+      { catalog: null, namespace: "audit" },
+    ],
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.queryByLabelText("Session schema")).toBeNull()
+    const select = canvas.getByLabelText("Session database")
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "does not claim to know the database."
+    )
+    await userEvent.selectOptions(select, "shop")
+    await expect(args.onChoose).toHaveBeenCalledWith({
+      catalog: null,
+      namespace: "shop",
+    })
+  },
+}
+
+/**
+ * A Redis session: its databases hold no schema, so they are the places —
+ * named as the tree names them, and no « Load schemas » to chase.
+ */
+export const DatabasesOfAKeyValueStore: Story = {
+  args: {
+    connectionName: "cache",
+    choices: [
+      { catalog: null, namespace: null },
+      { catalog: "db0", namespace: null },
+      { catalog: "db3", namespace: null },
+    ],
+    state: { status: "declared", place: { catalog: "db0", namespace: null } },
+  },
+  play: async ({ canvas, args }) => {
+    const select = canvas.getByLabelText("Session schema")
+    await expect(select).toHaveDisplayValue("db0")
+    await expect(
+      canvas.queryByRole("button", { name: "Load schemas" })
+    ).not.toBeInTheDocument()
+    await userEvent.selectOptions(select, "db3")
+    await expect(args.onChoose).toHaveBeenCalledWith({
+      catalog: "db3",
+      namespace: null,
+    })
+  },
+}
+
+/** No database read yet: loading them is offered in the same words. */
+export const NoDatabaseLoaded: Story = {
+  args: { level: "database", choices: [{ catalog: null, namespace: null }] },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "The catalog lists no database for this connection yet."
+    )
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Load databases" })
+    )
+    await expect(args.onLoadSchemas).toHaveBeenCalled()
+  },
+}
+
 export const Failed: Story = {
   args: {
     state: {

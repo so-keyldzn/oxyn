@@ -38,6 +38,8 @@ pub(crate) const HOSTILE_NAME: &str =
     "This name holds control characters: write the statement in a console.";
 pub(crate) const NO_DDL: &str = "This connection does not accept schema changes.";
 pub(crate) const NO_TRUNCATE: &str = "This database has no TRUNCATE statement.";
+pub(crate) const NO_SQL: &str =
+    "This connection does not speak SQL: run the operation from a console in its language.";
 
 /// The review sessions kept open while their command waits for a decision,
 /// by the id of that command.
@@ -72,10 +74,13 @@ pub(crate) fn unavailable(
         ),
         OperationKind::Truncate | OperationKind::Rename => kind == RelationKind::Table,
     };
-    // The statement is SQL: a session that speaks another language would get
-    // `DROP VIEW` for an Elasticsearch alias.
-    if !applies || !capabilities.contains(Capabilities::SQL) {
+    if !applies {
         return Some("This operation does not apply to this kind of object.");
+    }
+    // The statement is composed in SQL: a session speaking another language
+    // would refuse it, or worse, read it as something else.
+    if !capabilities.contains(Capabilities::SQL) {
+        return Some(NO_SQL);
     }
     if !capabilities.contains(Capabilities::DDL) {
         return Some(NO_DDL);

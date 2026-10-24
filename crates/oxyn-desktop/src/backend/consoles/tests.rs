@@ -189,14 +189,22 @@ fn a_cursor_between_statements_runs_nothing() {
 #[test]
 fn a_non_sql_console_runs_what_is_selected_and_never_cuts_it_as_sql() {
     let text = "GET a; DEL b";
-    // Cut as SQL, the cursor on `GET` would run `GET a` and stop at the `;`.
+    // Cut as SQL, the cursor on `GET` would run `GET a` and stop at the `;`:
+    // a Redis command is its line, the `;` one of its arguments.
+    assert_eq!(
+        targeted_text(
+            text,
+            RunTarget::Statement { cursor: 1 },
+            QueryLanguage::RedisCommand,
+        ),
+        Ok(text.to_owned())
+    );
     let refused = targeted_text(
-        text,
+        "MATCH (n) RETURN n",
         RunTarget::Statement { cursor: 1 },
-        QueryLanguage::RedisCommand,
+        QueryLanguage::Cypher,
     )
-    .expect_err("no boundary is known for Redis commands");
-    assert!(refused.contains("redis"), "{refused}");
+    .expect_err("no boundary is known for Cypher");
     assert!(refused.contains("Select the request to run"), "{refused}");
 
     assert_eq!(

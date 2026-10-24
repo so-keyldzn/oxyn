@@ -45,6 +45,8 @@ oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
 oxyn-driver-elasticsearch = { path = "drivers/oxyn-driver-elasticsearch" }
 oxyn-driver-clickhouse = { path = "drivers/oxyn-driver-clickhouse" }
+oxyn-driver-mongodb  = { path = "drivers/oxyn-driver-mongodb" }
+oxyn-driver-redis    = { path = "drivers/oxyn-driver-redis" }
 
 # --- foundation --------------------------------------------------------------
 anyhow        = "1.0.104"
@@ -126,6 +128,25 @@ mysql_async   = { version = "=0.37.1", default-features = false, features = [
 # named-parameter parser whether a text would be rewritten before it is
 # prepared (ADR-0050). Exact: the guard is only right for this parser.
 mysql_common  = { version = "=0.37.3", default-features = false }
+# MongoDB (ADR-0063). `rustls-tls-aws-lc` is rustls on aws-lc-rs, the
+# provider above; `dns-resolver` resolves `mongodb+srv://` seed lists;
+# `bson-3` and `compat-3-3-0` are the two features the crate refuses to
+# compile without. No compression, no AWS/Kerberos/OIDC authentication, no
+# client-side encryption: none is tested. Exact version: the driver relies
+# on the raw batch cursor and on run_command never being retried
+# (RESEARCH-NOTES, 2026-10-22).
+mongodb       = { version = "=3.9.1", default-features = false, features = [
+    "compat-3-3-0", "bson-3", "rustls-tls-aws-lc", "dns-resolver",
+] }
+# The release `mongodb` resolves to, named so that the driver can read raw
+# documents and build commands with the same types.
+bson          = "3.1.0"
+# Redis and Valkey (ADR-0061) speak RESP over a stream the driver opens itself:
+# no Redis client library reads a reply element by element. TLS is rustls on
+# aws-lc-rs, the provider above, with the Mozilla roots `webpki-roots` carries.
+# Both releases are those the lockfile already resolves for `sqlx`.
+tokio-rustls  = { version = "0.26.5", default-features = false, features = ["aws_lc_rs", "tls12"] }
+webpki-roots  = "1.0.10"
 
 # --- AI ----------------------------------------------------------------------
 # reqwest 0.13 renamed the `rustls-tls` feature to `rustls`.

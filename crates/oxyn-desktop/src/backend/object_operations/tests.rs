@@ -12,7 +12,7 @@ use oxyn_core::{
 };
 use oxyn_exec::Outcome;
 
-use super::{HOSTILE_NAME, NO_DDL, NO_TRUNCATE, check_statement, compose, unavailable};
+use super::{HOSTILE_NAME, NO_DDL, NO_SQL, NO_TRUNCATE, check_statement, compose, unavailable};
 use crate::backend::Backend;
 use crate::backend::confirm::{Answer, ScriptedConfirm, Timing};
 use crate::ipc::object_operations::{
@@ -323,6 +323,19 @@ fn availability_follows_declared_capabilities_never_the_product() {
     let elasticsearch = Capabilities::SEARCH_DSL | Capabilities::DDL;
     for kind in [RelationKind::View, RelationKind::Index, RelationKind::Table] {
         assert!(unavailable(OperationKind::Drop, kind, elasticsearch).is_some());
+    }
+}
+
+#[test]
+fn a_session_without_sql_is_offered_no_composed_statement() {
+    // A MongoDB view declares DDL; a `DROP VIEW` sent to its session would
+    // be refused as a language it does not speak.
+    let mongodb = Capabilities::MONGO_QUERY | Capabilities::DDL | Capabilities::VIEWS;
+    for kind in [RelationKind::View, RelationKind::Table] {
+        assert_eq!(
+            unavailable(OperationKind::Drop, kind, mongodb),
+            Some(NO_SQL)
+        );
     }
 }
 

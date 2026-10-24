@@ -17,6 +17,14 @@ pub(crate) const SQL_AGENT: (&str, &str) = ("agents/sql.md", include_str!("../..
 pub(crate) const SCHEMA_AGENT: (&str, &str) =
     ("agents/schema.md", include_str!("../../agents/schema.md"));
 
+/// The Redis agent's file, `(file, text)`: the assistant on a Redis or Valkey
+/// connection (ADR-0061, ADR-0065).
+const REDIS_AGENT: (&str, &str) = ("agents/redis.md", include_str!("../../agents/redis.md"));
+
+/// The MongoDB agent's file, `(file, text)`: the assistant on a MongoDB
+/// connection (ADR-0063, ADR-0065).
+const MONGODB_AGENT: (&str, &str) = ("agents/mongodb.md", include_str!("../../agents/mongodb.md"));
+
 /// The Elasticsearch agent's file, `(file, text)`: the assistant on an
 /// Elasticsearch or OpenSearch connection (ADR-0062, ADR-0065).
 const ELASTICSEARCH_AGENT: (&str, &str) = (
@@ -25,7 +33,13 @@ const ELASTICSEARCH_AGENT: (&str, &str) = (
 );
 
 /// The shipped agents, in the order the picker offers them.
-pub(super) const AGENTS: [(&str, &str); 3] = [SQL_AGENT, SCHEMA_AGENT, ELASTICSEARCH_AGENT];
+pub(super) const AGENTS: [(&str, &str); 5] = [
+    SQL_AGENT,
+    SCHEMA_AGENT,
+    REDIS_AGENT,
+    MONGODB_AGENT,
+    ELASTICSEARCH_AGENT,
+];
 
 /// The dialect fragments, `(dialect, file, text)`.
 ///
@@ -80,8 +94,13 @@ const ANSI: (&str, &str, &str) = (
 /// entry here, next to its agent in [`AGENTS`]; every other language gets
 /// [`GENERIC`] (ADR-0065). SQL never reads this table: its fragment is its
 /// dialect's.
-pub(super) const LANGUAGE_FRAGMENTS: [(&str, &str, &str); 2] = [
+pub(super) const LANGUAGE_FRAGMENTS: [(&str, &str, &str); 3] = [
     GENERIC,
+    (
+        "mongo",
+        "prompts/languages/mongo.md",
+        include_str!("../../prompts/languages/mongo.md"),
+    ),
     (
         "search-dsl",
         "prompts/languages/search-dsl.md",

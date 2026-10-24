@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="506790f12153" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="7e1b60da1f48" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2290,7 +2290,7 @@ proposée).** Dans cet ordre, chacun avec sa porte de sortie :
 Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
 « 3 bis » pour ne déplacer ni l'ancre ni les renvois de la phase 4.
 
-- `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
+- `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
   ([ADR-0003](adr/0003-driver-capabilities.md)).
 - `oxyn-driver-elasticsearch` (ADR-0062) — connexion, classification de
@@ -2301,6 +2301,28 @@ Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
   corps, opérations d'index natives par le parcours de revue, un comptage avant
   une requête par requête, et des vues de cluster (`_cat`, ILM/ISM, snapshots,
   tâches).
+- `oxyn-driver-mongodb` — **étape 1 écrite**
+  ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)) :
+  connexion par champs avec TLS et SCRAM, une commande de base par requête de
+  console en Extended JSON, classée par la session (ADR-0064), un échantillon
+  déclaré avec une colonne `$document` sans perte, annulation par
+  `killSessions` prouvée dans `$currentOp`, arbre du catalogue, définitions
+  reconstruites, aperçu borné, Explain par le planificateur, l'agent MongoDB
+  (ADR-0065). **À écrire** : transactions en console sur replica set, filtre
+  d'aperçu en JSON (`PREVIEW_FILTER`), analyse de schéma et aperçu d'étape
+  d'agrégation, change streams en captures bornées, GridFS, vues des
+  utilisateurs et rôles, état du replica set, du sharding et du profileur,
+  import et export JSON/BSON — la matrice de parité de la pull request en
+  tient l'ordre.
+- `oxyn-driver-redis`, étape 1 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) :
+  Redis et Valkey en RESP3 lu par le driver lui-même ; commandes classées
+  d'après la table `COMMAND` du serveur ; réponses diffusées en Arrow, en lots
+  bornés en octets ; commandes bloquées et scripts qui n'ont pas écrit arrêtés
+  sur le serveur ; bases et échantillon borné de clés dans l'arbre ; un aperçu
+  en lecture seule par type de clé. Restent : Cluster et Sentinel,
+  `MULTI`/`EXEC`, Pub/Sub et `MONITOR` en captures bornées, certificats
+  clients, types de modules, le vocabulaire des commandes dans l'éditeur, et
+  le fichier d'agent Redis.
 
 **Pourquoi ici, avant les plugins.** C'est ici que le modèle de capacités
 ([ADR-0003](adr/0003-driver-capabilities.md)) et `QueryLanguage` sont mis à

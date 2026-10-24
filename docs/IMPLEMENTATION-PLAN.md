@@ -2270,7 +2270,7 @@ proposed).** In this order, each with its exit gate:
 Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbered
 "3 bis" so as to move neither the anchor nor the references of phase 4.
 
-- `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
+- `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch speaks the Elasticsearch protocol, it has no driver of its own
   ([ADR-0003](adr/0003-driver-capabilities.md)).
 - `oxyn-driver-elasticsearch` (ADR-0062) — connection, policy classification
@@ -2280,6 +2280,27 @@ Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbere
   endpoint and body completion, native index operations through the review
   flow, a count before a by-query request, and cluster views (`_cat`, ILM/ISM,
   snapshots, tasks).
+- `oxyn-driver-mongodb` — **stage 1 written**
+  ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)):
+  connection by fields with TLS and SCRAM, one database command per console
+  request in Extended JSON, classified through the session (ADR-0064), a
+  declared sample with a lossless `$document` column, `killSessions`
+  cancellation proven in `$currentOp`, catalog tree, reconstructed
+  definitions, a bounded preview, Explain by the query planner, the MongoDB
+  agent (ADR-0065). **To be written**: console transactions on replica sets,
+  a JSON preview filter (`PREVIEW_FILTER`), schema analysis and the
+  aggregation stage preview, change streams as bounded captures, GridFS,
+  users and roles views, replica set, sharding and profiler status, import
+  and export of JSON/BSON — the parity matrix of the pull request keeps the
+  order.
+- `oxyn-driver-redis`, stage 1 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)):
+  Redis and Valkey over RESP3 read by the driver itself; commands classified
+  from the server's `COMMAND` table; replies streamed as Arrow in byte-bounded
+  batches; blocked commands and scripts that have not written stopped on the
+  server; databases and a bounded key sample in the tree; a read-only preview
+  per key type. To come: Cluster and Sentinel, `MULTI`/`EXEC`, Pub/Sub and
+  `MONITOR` as bounded captures, client certificates, module types, the
+  command vocabulary in the editor, and the Redis agent file.
 
 **Why here, before plugins.** This is where the capability model
 ([ADR-0003](adr/0003-driver-capabilities.md)) and `QueryLanguage` are put to

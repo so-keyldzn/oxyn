@@ -51,6 +51,43 @@ export const Empty: Story = {
   args: { text: "" },
 }
 
+/**
+ * A MongoDB session: its command opens in a console, handed over as text the
+ * same way as SQL; a shell script and a SQL block stay code.
+ */
+export const MongoCommand: Story = {
+  args: {
+    consoleLanguage: "mongo",
+    text: [
+      "Count the open orders:",
+      "",
+      "```json",
+      '{ "count": "orders", "query": { "status": "open" } }',
+      "```",
+      "",
+      "In the shell, that would be:",
+      "",
+      "```javascript",
+      'db.orders.countDocuments({ status: "open" })',
+      "```",
+      "",
+      "```sql",
+      "SELECT count(*) FROM orders;",
+      "```",
+    ].join("\n"),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const open = canvas.getAllByRole("button", { name: "Open in console" })
+    await expect(open).toHaveLength(1)
+    await expect(canvas.getByLabelText("Proposed command")).toBeVisible()
+    await userEvent.click(open[0] as HTMLElement)
+    await expect(args.onOpenSql).toHaveBeenCalledWith(
+      '{ "count": "orders", "query": { "status": "open" } }'
+    )
+  },
+}
+
 export const OpeningUnavailable: Story = {
   args: {
     openSqlDisabledReason:

@@ -4,7 +4,7 @@ import { identifierQuoteForDriver } from "@/lib/sql-identifiers"
 import {
   ERD_MAX_NAMES,
   isErdBlock,
-  isSqlBlock,
+  isConsoleBlock,
   parseErdNames,
   parseInline,
   parseMarkdown,
@@ -64,10 +64,54 @@ describe("the assistant markdown model", () => {
         "SELECT still_streaming",
       ].join("\n")
     )
-    expect(blocks.filter(isSqlBlock).map((block) => block.text)).toEqual([
-      "SELECT count(*) FROM clients;",
-      "SELECT 1;",
+    expect(
+      blocks
+        .filter((block) => isConsoleBlock(block, "sql"))
+        .map((block) => block.text)
+    ).toEqual(["SELECT count(*) FROM clients;", "SELECT 1;"])
+  })
+
+  it("offers a mongo session its command fences, and no sql", () => {
+    const blocks = parseMarkdown(
+      [
+        "```json",
+        '{ "find": "orders" }',
+        "```",
+        "```MongoDB",
+        '{ "count": "orders" }',
+        "```",
+        "```mongo",
+        '{ "listIndexes": "orders" }',
+        "```",
+        "```javascript",
+        "db.orders.find()",
+        "```",
+        "```sql",
+        "SELECT 1;",
+        "```",
+        "```",
+        '{ "ping": 1 }',
+        "```",
+      ].join("\n")
+    )
+    expect(
+      blocks
+        .filter((block) => isConsoleBlock(block, "mongo"))
+        .map((block) => block.text)
+    ).toEqual([
+      '{ "find": "orders" }',
+      '{ "count": "orders" }',
+      '{ "listIndexes": "orders" }',
     ])
+  })
+
+  it("offers nothing to a session without a console language", () => {
+    const blocks = parseMarkdown("```sql\nSELECT 1;\n```\n```json\n{}\n```")
+    expect(blocks.filter((block) => isConsoleBlock(block, null))).toEqual([])
+    // A language with no fence table opens nothing either.
+    expect(blocks.filter((block) => isConsoleBlock(block, "cypher"))).toEqual(
+      []
+    )
   })
 
   it("parses lists, headings and pipe tables", () => {

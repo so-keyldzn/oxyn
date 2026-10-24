@@ -47,6 +47,21 @@ filter = 'package(oxyn-driver-clickhouse)'
 test-group = 'serveur-partage'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
+# The MongoDB integration tests each work in a database of their own, but two
+# of them prove cancellation in the server's `$currentOp` and one streams a
+# gigabyte: they run one at a time, with the timeout of the other drivers.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-mongodb)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+# The Redis integration tests flush and fill database 9 of one server, and
+# two of them prove a server-side stop and a streamed hash of a million fields.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-redis)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # Production reads exercised through the bus create a schema and a role of the
 # same name on the same test server.
 [[profile.default.overrides]]

@@ -41,6 +41,8 @@ export interface GridMenuSource {
   origin: GridOrigin
   /** The rows come from one known relation: `INSERT` can name it. */
   relation: boolean
+  /** The session speaks SQL (`SQL`): `INSERT` and `IN list` exist. */
+  sql: boolean
   ai: GridAiLevel
   /**
    * Copies text the user asked for, and says whether it worked. Called in
@@ -187,6 +189,7 @@ export function gridMenuSource(
     selectedRows: selection?.count ?? 0,
     oneColumn: selection ? selection.columns.length === 1 : true,
     relation: menu.relation,
+    sql: menu.sql,
     loadedRows: rowCount,
     shownColumns: shown.length,
     ai: menu.ai,

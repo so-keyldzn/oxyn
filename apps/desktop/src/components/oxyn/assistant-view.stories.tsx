@@ -269,6 +269,42 @@ export const Answered: Story = {
   },
 }
 
+const mongoQuestion = "How many open orders?"
+const mongoCommand = '{ "count": "orders", "query": { "status": "open" } }'
+
+const mongoThread = threadOfEvents([
+  {
+    question: mongoQuestion,
+    events: [
+      { kind: "question", text: mongoQuestion, mentions: [] },
+      started,
+      {
+        kind: "textDelta",
+        text: `This command counts them:\n\n\`\`\`json\n${mongoCommand}\n\`\`\`\n`,
+      },
+      answered,
+    ],
+  },
+])
+
+/**
+ * On a MongoDB connection, a command in the console's language opens like a
+ * query: as text, signed by the provenance of the answer (ADR-0023).
+ */
+export const MongoCommandOpensWithItsProvenance: Story = {
+  args: { state: assistantState(mongoThread), consoleLanguage: "mongo" },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Open in console" })
+    )
+    await expect(args.onOpenInConsole).toHaveBeenCalledWith(
+      mongoCommand,
+      expect.objectContaining({ model: remoteProvider.model })
+    )
+  },
+}
+
 const mentionedQuestion = "How many @clients per @clients.country?"
 
 /**

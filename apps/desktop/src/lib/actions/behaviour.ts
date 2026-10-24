@@ -20,7 +20,7 @@ export interface ActionBehaviour {
  * the same cases as their buttons »).
  */
 export function consoleAvailability(
-  action: "run" | "cancel" | "save",
+  action: "run" | "explain" | "cancel" | "save",
   state: ConsoleState
 ): Availability {
   switch (action) {
@@ -29,6 +29,13 @@ export function consoleAvailability(
       if (!state.canRun)
         return { reason: "This console cannot run SQL right now" }
       return true
+    case "explain":
+      // The lasting reason first: no wait makes this session explain.
+      if (!state.canExplain)
+        return {
+          reason: "This connection does not describe a statement's plan",
+        }
+      return consoleAvailability("run", state)
     case "cancel":
       if (!state.running) return { reason: "Nothing is running" }
       if (state.cancelling) return { reason: "Cancellation is under way" }

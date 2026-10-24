@@ -6,8 +6,10 @@ import {
   catalogueDrivers,
   clickhouseDriver,
   elasticsearchDriver,
+  mongodbDriver,
   mysqlDriver,
   postgresDriver,
+  redisDriver,
   sqliteDriver,
 } from "./fixtures"
 
@@ -22,7 +24,7 @@ const meta = {
     ),
   ],
   args: {
-    drivers: [postgresDriver, mysqlDriver, sqliteDriver],
+    drivers: [postgresDriver, sqliteDriver, mysqlDriver, mongodbDriver],
     onChoose: fn(),
     onRetry: fn(),
   },
@@ -174,6 +176,30 @@ export const MySQL: Story = {
   },
 }
 
+/** The document family, reached on its port, wearing the leaf. */
+export const MongoDB: Story = {
+  play: async ({ canvas, args }) => {
+    const choice = canvas.getByRole("button", { name: /MongoDB/ })
+    await expect(
+      choice.querySelector('svg[viewBox="0 0 120 258"]')
+    ).toHaveAttribute("aria-hidden", "true")
+    await expect(choice).toHaveTextContent("document · port 27017")
+    await userEvent.click(choice)
+    await expect(args.onChoose).toHaveBeenCalledWith(mongodbDriver)
+  },
+}
+
+/** In the full catalogue, the name finds the one driver, and Enter opens it. */
+export const MongoDBSearch: Story = {
+  args: { drivers: catalogueDrivers, prominent: true },
+  play: async ({ canvas, args }) => {
+    await userEvent.type(canvas.getByRole("combobox"), "mongo")
+    await expect(canvas.getAllByRole("option")).toHaveLength(1)
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onChoose).toHaveBeenLastCalledWith(mongodbDriver)
+  },
+}
+
 /** Products sharing a protocol must lead to that protocol's connection form. */
 export const ProductAliases: Story = {
   args: { drivers: catalogueDrivers, prominent: true },
@@ -194,5 +220,17 @@ export const PostgreSQLAliases: Story = {
     await expect(canvas.getAllByRole("option")).toHaveLength(1)
     await userEvent.click(canvas.getByRole("option", { name: /PostgreSQL/ }))
     await expect(args.onChoose).toHaveBeenLastCalledWith(postgresDriver)
+  },
+}
+
+/** Valkey speaks RESP: it is reached through the Redis driver (ADR-0061). */
+export const ValkeyLeadsToRedis: Story = {
+  args: { drivers: catalogueDrivers, prominent: true },
+  play: async ({ canvas, args }) => {
+    await userEvent.type(canvas.getByRole("combobox"), "valkey")
+    await expect(canvas.getAllByRole("option")).toHaveLength(1)
+    await expect(canvas.getByText("Valkey")).toBeVisible()
+    await userEvent.click(canvas.getByRole("option", { name: /Redis/ }))
+    await expect(args.onChoose).toHaveBeenLastCalledWith(redisDriver)
   },
 }

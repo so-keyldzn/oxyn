@@ -180,6 +180,10 @@ oxyn/
 │   │                             #   oxyn-query to split what MySQL cannot prepare
 │   ├── oxyn-driver-clickhouse/   # HTTP interface, RowBinary decoded to Arrow,
 │   │                             #   no server session (ADR-0060)
+│   ├── oxyn-driver-redis/        # RESP3, read by the driver itself: Redis and Valkey (ADR-0061);
+│   │                             #   depends on oxyn-query for the redis-cli grammar its redaction shares
+│   ├── oxyn-driver-mongodb/      # database commands in Extended JSON, documents to Arrow
+│   │                             #   (ADR-0063); depends on oxyn-query to read a command
 │   └── oxyn-driver-elasticsearch/ # REST/JSON, also covers OpenSearch (ADR-0062)
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
@@ -624,7 +628,7 @@ Server → Catalog/Database → Namespace/Schema → Relation → Field
 | PostgreSQL | database | schema | table / view / matview |
 | MySQL | — | database | table / view |
 | MongoDB | — | database | collection |
-| Redis | db index (0-15) | logical prefix | key pattern |
+| Redis | database, `db0` to `dbN` | — | key — a bounded `SCAN` sample ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) |
 | Elasticsearch | — | — | index / data stream |
 | Neo4j | database | — | node label / relationship type |
 | BigQuery | project | dataset | table |
