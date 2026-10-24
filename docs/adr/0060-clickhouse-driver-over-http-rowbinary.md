@@ -92,7 +92,8 @@ values become Arrow, and what a "session" is. Checked on 2026-10-23
    `String` that is not UTF-8 fails the result naming the column and pointing
    to `hex()`.
 5. **Batches close at 1 MiB of decoded bytes** (or 8,192 rows, so narrow rows
-   reach the grid early), a row larger than 64 MiB is refused, and the task
+   reach the grid early), a row larger than 64 MiB — on the wire, or once
+   decoded, counted before anything is appended — is refused, and the task
    that reads the body hands batches to the cursor through a one-slot
    channel: the network is read only as fast as the caller drains
    ([I-06](../../CLAUDE.md#i-06)). `ExecLimits::max_rows` is the driver's to
@@ -119,14 +120,22 @@ values become Arrow, and what a "session" is. Checked on 2026-10-23
    `SETTINGS` and its table functions, so that a read whose cursor is
    dropped stops on the server even for an account that may not kill, or
    when a kill came before the server registered the statement — a kill
-   that finds it still running is sent again.
+   that finds it still running is sent again. A statement's own `SETTINGS`
+   clause applies after the request's, so one that assigns a setting the
+   driver pins — the framing ones, `wait_end_of_query`,
+   `cancel_http_readonly_queries_on_client_close`, `readonly` — is refused
+   before it is sent.
 8. **Errors are classified from the server's code, the statement's intent and
    the response's `written_rows` summary.** A read's passing conditions
    (memory, timeout, load, network between servers) are transient; a write is
    permanent only when the server refused it before running anything (syntax,
    unknown object, privilege) **and** said it wrote nothing; every other
    failure of a write is ambiguous and never replayed
-   ([I-13](../../CLAUDE.md#i-13)). The driver retries nothing.
+   ([I-13](../../CLAUDE.md#i-13)). The driver retries nothing. The server's
+   message is shown as it came unless the statement gave the server a secret
+   to quote — a bound value, or a password literal the history's redaction
+   recognizes ([ADR-0053](0053-redact-sql-passwords-before-persistence.md)):
+   it is then withheld, its code kept ([I-03](../../CLAUDE.md#i-03)).
 9. **A read-only execution carries `readonly = 1`**, the strongest bound the
    server enforces. The price is accepted and stated: a read bounded
    read-only — every read of a production connection — cannot carry its own

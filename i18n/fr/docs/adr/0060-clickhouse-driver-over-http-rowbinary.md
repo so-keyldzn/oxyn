@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="e285e87d95ae" -->
+<!-- oxyn-translation source="docs/adr/0060-clickhouse-driver-over-http-rowbinary.md" sha256="e497286e0964" -->
 
 > Traduction française de [docs/adr/0060-clickhouse-driver-over-http-rowbinary.md](../../../../docs/adr/0060-clickhouse-driver-over-http-rowbinary.md). **La version anglaise fait foi.**
 
@@ -101,7 +101,8 @@ qu'est une « session ». Vérifié le 2026-10-23
    échouer le résultat en nommant la colonne et en indiquant `hex()`.
 5. **Les lots se ferment à 1 Mio d'octets décodés** (ou 8 192 lignes, pour que
    les lignes étroites atteignent la grille tôt), une ligne de plus de 64 Mio
-   est refusée, et la tâche qui lit le corps passe les lots au curseur par un
+   — sur le réseau, ou une fois décodée, comptée avant que rien ne soit
+   ajouté — est refusée, et la tâche qui lit le corps passe les lots au curseur par un
    canal à une place : le réseau n'est lu qu'au rythme où l'appelant vide
    ([I-06](../../../../CLAUDE.md#i-06)). `ExecLimits::max_rows` est au pilote de
    tenir : une lecture qui le dépasse est arrêtée sur le serveur et marquée
@@ -131,7 +132,11 @@ qu'est une « session ». Vérifié le 2026-10-23
    dont le curseur est abandonné s'arrête sur le serveur même pour un compte
    qui ne peut pas tuer, ou quand un kill est arrivé avant que le serveur
    n'enregistre l'instruction — un kill qui la trouve encore en cours est
-   renvoyé.
+   renvoyé. La clause `SETTINGS` propre à une instruction s'applique après
+   ceux de la requête : une instruction qui y affecte un réglage que le pilote
+   fixe — ceux du cadrage, `wait_end_of_query`,
+   `cancel_http_readonly_queries_on_client_close`, `readonly` — est donc
+   refusée avant d'être envoyée.
 8. **Les erreurs sont classées d'après le code du serveur, l'intention de
    l'instruction et le résumé `written_rows` de la réponse.** Les conditions
    passagères d'une lecture (mémoire, délai, charge, réseau entre serveurs)
@@ -139,6 +144,11 @@ qu'est une « session ». Vérifié le 2026-10-23
    refusée avant de rien exécuter (syntaxe, objet inconnu, privilège) **et** a
    dit n'avoir rien écrit ; tout autre échec d'une écriture est ambigu et
    jamais rejoué ([I-13](../../../../CLAUDE.md#i-13)). Le pilote ne retente rien.
+   Le message du serveur est montré tel qu'il est venu, sauf si l'instruction
+   a donné au serveur un secret à citer — une valeur liée, ou un littéral de
+   mot de passe que reconnaît la rédaction de l'historique
+   ([ADR-0053](0053-redact-sql-passwords-before-persistence.md)) : il est
+   alors retenu, son code conservé ([I-03](../../../../CLAUDE.md#i-03)).
 9. **Une exécution en lecture seule porte `readonly = 1`**, la borne la plus
    forte que le serveur fasse respecter. Le prix est accepté et dit : une
    lecture bornée en lecture seule — toute lecture d'une connexion de
