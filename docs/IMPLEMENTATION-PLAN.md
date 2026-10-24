@@ -601,8 +601,8 @@ Batches, in order:
      would have made it pop up in the workspace opened afterwards;
    - the recognized extensions (`.sqlite`, `.sqlite3` for `sqlite`;
      `.duckdb` for `duckdb`) are a table in `file_drop.rs`: drivers
-     do not declare the files they read. No DuckDB driver is
-     registered, so a `.duckdb` is refused with its reason. Bounds: 4 MiB
+     do not declare the files they read. An extension whose driver is not
+     registered is refused with its reason. Bounds: 4 MiB
      per `.sql`, 16 files per drop; a symbolic link is refused;
    - each window receives the drops made on it, and only those (batch 7);
    - no automatic scrolling when a tab or a column is dragged
@@ -2096,8 +2096,14 @@ with ADR-0050 on 2026-09-30.
 from the former §11 of ARCHITECTURE, which put it before AI: at this stage,
 Oxyn is a good SQL client without a single line of AI.
 
-- `oxyn-driver-duckdb` — **to be written**, through
-  [`/driver`](../.claude/commands/driver.md);
+- `oxyn-driver-duckdb` — **exists, first stage**
+  ([ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md)): files and
+  `:memory:`, read-only connections held by the engine, external access off
+  unless a folder is granted, the catalog tree, the Data preview, consoles with
+  streamed results, Explain, session context, transactions, bound values, and
+  the engine's interruption. Still to come: the catalog of macros, sequences
+  and types, a DuckDB-aware Explain rendering, a folder picker for the granted
+  folder, `icu` and the other extensions;
 - `oxyn-driver-clickhouse` — **exists**, stage 1
   ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)): HTTP
   interface, `RowBinaryWithNamesAndTypes` decoded to Arrow batches bounded

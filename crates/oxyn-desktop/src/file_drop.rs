@@ -277,6 +277,25 @@ mod tests {
         }
     }
 
+    fn duckdb_driver() -> DriverChoice {
+        DriverChoice {
+            id: DriverId::duckdb().as_str().to_owned(),
+            display_name: "DuckDB".to_owned(),
+            family: "analytical".to_owned(),
+            default_port: None,
+            aliases: Vec::new(),
+            fields: vec![FormField {
+                key: "path".to_owned(),
+                label: "Database file".to_owned(),
+                kind: FormFieldKind::Path,
+                required: true,
+                secret: false,
+                default: None,
+                help: None,
+            }],
+        }
+    }
+
     fn write(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> PathBuf {
         let path = dir.path().join(name);
         std::fs::write(&path, bytes).expect("the temporary directory is writable");
@@ -415,6 +434,25 @@ mod tests {
             classify(&sqlite, &[]),
             DroppedFile::Refused { .. }
         ));
+    }
+
+    #[test]
+    fn a_duckdb_file_is_offered_to_the_duckdb_driver() {
+        let dir = tempfile::tempdir().expect("the temporary directory is writable");
+        let path = write(&dir, "analytics.duckdb", b"");
+        match classify(&path, &[duckdb_driver()]) {
+            DroppedFile::Database {
+                driver,
+                field,
+                path: offered,
+                ..
+            } => {
+                assert_eq!(driver, "duckdb");
+                assert_eq!(field, "path");
+                assert_eq!(offered, path.display().to_string());
+            }
+            _ => panic!("a DuckDB file is offered as a connection"),
+        }
     }
 
     #[test]

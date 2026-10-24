@@ -530,6 +530,35 @@ export const sqliteDriver: DriverChoice = {
   ],
 }
 
+// The form `drivers/oxyn-driver-duckdb/src/driver.rs` declares.
+export const duckdbDriver: DriverChoice = {
+  id: "duckdb",
+  aliases: [],
+  displayName: "DuckDB",
+  family: "analytical",
+  defaultPort: null,
+  fields: [
+    {
+      key: "path",
+      label: "Database file",
+      kind: { type: "path" },
+      required: true,
+      secret: false,
+      default: null,
+      help: "Path to the DuckDB file, created if it does not exist. `:memory:` opens an in-memory database, shared by the sessions of this connection and lost when the last one closes. A file is held by one process: close it in other tools first, or open it read-only there and here.",
+    },
+    {
+      key: "file_access",
+      label: "Folder SQL may read and write",
+      kind: { type: "path" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Lets read_csv, read_parquet, read_json, COPY … TO and ATTACH reach files in this folder, and nowhere else. Empty: SQL reaches no file but the database. Network access and extension downloads stay off either way.",
+    },
+  ],
+}
+
 export const savedConnections: Array<SavedConnection> = [
   {
     id: "018f0000-0000-7000-8000-000000000001",
@@ -870,7 +899,7 @@ export const catalogueDrivers: Array<DriverChoice> = [
     ] as const
   ).map(([id, displayName, family, defaultPort]): DriverChoice =>
     id === "duckdb"
-      ? { ...sqliteDriver, id, displayName, family, aliases: [] }
+      ? duckdbDriver
       : { ...postgresDriver, id, displayName, family, defaultPort, aliases: [] }
   ),
   redisDriver,

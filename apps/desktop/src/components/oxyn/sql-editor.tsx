@@ -43,6 +43,10 @@ function dialectFor(driver: string) {
       return SQLDialect.define({ ...MySQL.spec, backslashEscapes: true })
     case "sqlite":
       return SQLite
+    // DuckDB's lexical rules are PostgreSQL's: double-quoted identifiers,
+    // `$$` and `E''` strings, nested block comments.
+    case "duckdb":
+      return PostgreSQL
     case "clickhouse":
       return ClickHouseSQL
     default:

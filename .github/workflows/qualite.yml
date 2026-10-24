@@ -217,7 +217,12 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    # The bundled DuckDB engine (ADR-0059) is C++ that a cold Cargo cache
+    # compiles three times — clippy, nextest, doc tests: about 74 minutes of
+    # `make rust` on macOS, 68 on Ubuntu, against 30 warm (measured
+    # 2026-10-24). The repository's cache quota evicts a pull request's cache
+    # between runs, so cold is the common case.
+    timeout-minutes: 110
     env:
       # Line numbers are enough for a panic trace; the rest of the debug info
       # weighs down linking and the cache without serving anything on a runner.

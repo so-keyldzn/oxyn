@@ -217,6 +217,8 @@ impl DriverId {
     pub const SQLITE: &'static str = "sqlite";
     /// Elasticsearch driver (and OpenSearch).
     pub const ELASTICSEARCH: &'static str = "elasticsearch";
+    /// DuckDB driver, in-process.
+    pub const DUCKDB: &'static str = "duckdb";
     /// ClickHouse driver, over its HTTP interface.
     pub const CLICKHOUSE: &'static str = "clickhouse";
     /// Redis driver (and Valkey: one protocol, RESP).
@@ -285,6 +287,12 @@ impl DriverId {
     #[must_use]
     pub fn elasticsearch() -> Self {
         Self::known(Self::ELASTICSEARCH)
+    }
+
+    /// DuckDB driver identifier.
+    #[must_use]
+    pub fn duckdb() -> Self {
+        Self::known(Self::DUCKDB)
     }
 
     /// ClickHouse driver identifier.

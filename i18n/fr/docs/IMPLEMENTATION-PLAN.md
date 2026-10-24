@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="7e1b60da1f48" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="cb898081832b" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -606,8 +606,8 @@ Lots, dans l'ordre :
      l'aurait fait surgir dans le workspace ouvert ensuite ;
    - les extensions reconnues (`.sqlite`, `.sqlite3` pour `sqlite` ;
      `.duckdb` pour `duckdb`) sont une table de `file_drop.rs` : les drivers
-     ne déclarent pas les fichiers qu'ils lisent. Aucun driver DuckDB n'est
-     enregistré, un `.duckdb` est donc refusé avec sa raison. Bornes : 4 Mio
+     ne déclarent pas les fichiers qu'ils lisent. Une extension dont le driver
+     n'est pas enregistré est refusée avec sa raison. Bornes : 4 Mio
      par `.sql`, 16 fichiers par dépôt ; un lien symbolique est refusé ;
    - chaque fenêtre reçoit les dépôts faits sur elle, et eux seuls (lot 7) ;
    - pas de défilement automatique quand un onglet ou une colonne est glissé
@@ -2101,8 +2101,14 @@ fin avec ADR-0050 le 2026-09-30.
 depuis l'ancien §11 d'ARCHITECTURE, qui le plaçait avant l'IA : à ce stade,
 Oxyn est un bon client SQL sans une ligne d'IA.
 
-- `oxyn-driver-duckdb` — **à écrire**, par
-  [`/driver`](../claude/commands/driver.md) ;
+- `oxyn-driver-duckdb` — **existe, première étape**
+  ([ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md)) : fichiers et
+  `:memory:`, connexions en lecture seule tenues par le moteur, accès externe
+  coupé sauf dossier accordé, arbre du catalogue, aperçu Data, consoles aux
+  résultats en flux, Explain, contexte de session, transactions, valeurs liées,
+  et interruption par le moteur. Reste à venir : le catalogue des macros,
+  séquences et types, un rendu d'Explain propre à DuckDB, un sélecteur de
+  dossier pour le dossier accordé, `icu` et les autres extensions ;
 - `oxyn-driver-clickhouse` — **existe**, étape 1
   ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)) : interface
   HTTP, `RowBinaryWithNamesAndTypes` décodé en lots Arrow bornés en octets,
