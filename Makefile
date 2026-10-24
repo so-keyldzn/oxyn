@@ -167,7 +167,7 @@ endif
 # step. `script/zones-ci` reads it to skip the `serveurs` job on a pull request
 # that reaches none of them; with OXYN_PACKAGES set, only the selected ones are
 # built and run.
-SERVER_PACKAGES := oxyn-driver-postgres oxyn-driver-mysql oxyn-driver-clickhouse oxyn-driver-redis oxyn-exec oxyn-desktop
+SERVER_PACKAGES := oxyn-driver-postgres oxyn-driver-mysql oxyn-driver-clickhouse oxyn-driver-redis oxyn-driver-mongodb oxyn-exec oxyn-desktop
 SERVER_SELECTED := $(filter $(SERVER_PACKAGES),$(OXYN_PACKAGES))
 SERVER_SELECTION := $(if $(strip $(OXYN_PACKAGES)), $(addprefix -p ,$(SERVER_SELECTED)))
 test-serveurs: front-build
@@ -180,11 +180,11 @@ else
 endif
 else ifeq ($(if $(strip $(OXYN_PACKAGES)),$(SERVER_SELECTED),all),)
 	@echo "server suites NOT run: OXYN_PACKAGES reaches none of $(SERVER_PACKAGES)."
-else ifeq ($(origin CI)$(OXYN_PG_TEST_URL)$(OXYN_MYSQL_TEST_URL)$(OXYN_PG_PRODUCTION_TEST_URL)$(OXYN_CLICKHOUSE_TEST_URL)$(OXYN_REDIS_TEST_URL),undefined)
+else ifeq ($(origin CI)$(OXYN_PG_TEST_URL)$(OXYN_MYSQL_TEST_URL)$(OXYN_PG_PRODUCTION_TEST_URL)$(OXYN_CLICKHOUSE_TEST_URL)$(OXYN_REDIS_TEST_URL)$(OXYN_MONGODB_TEST_URL),undefined)
 	@echo "server suites NOT run outside CI: no server test URLs are set."
 else
 	@output="$$( $(CARGO) nextest run$(SERVER_SELECTION) --run-ignored only --nocapture \
-		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | package(oxyn-driver-clickhouse) | package(oxyn-driver-redis) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
+		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | package(oxyn-driver-clickhouse) | package(oxyn-driver-redis) | package(oxyn-driver-mongodb) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
 	printf '%s\n' "$$output"; \
 	if printf '%s\n' "$$output" | grep -Fq 'not set: test skipped'; then \
 		echo "A server test URL is missing; refusing a silently skipped suite."; \

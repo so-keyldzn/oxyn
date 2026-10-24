@@ -213,6 +213,140 @@ export const clickhouseDriver: DriverChoice = {
   ],
 }
 
+/** As `mongodb_metadata()` of `drivers/oxyn-driver-mongodb/src/driver.rs`. */
+export const mongodbDriver: DriverChoice = {
+  id: "mongodb",
+  aliases: [],
+  displayName: "MongoDB",
+  family: "document",
+  defaultPort: 27017,
+  fields: [
+    {
+      key: "host",
+      label: "Hosts",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: "localhost",
+      help: "host or host:port; several, comma-separated, for a replica set seed list",
+    },
+    {
+      key: "port",
+      label: "Port",
+      kind: { type: "number" },
+      required: false,
+      secret: false,
+      default: "27017",
+      help: "For the hosts written without a port.",
+    },
+    {
+      key: "srv",
+      label: "DNS seed list (mongodb+srv)",
+      kind: { type: "bool" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "The host is a DNS name whose SRV records list the servers.",
+    },
+    {
+      key: "database",
+      label: "Database",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Where a console command goes when it names no database.",
+    },
+    {
+      key: "user",
+      label: "User",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: null,
+    },
+    {
+      key: "password",
+      label: "Password",
+      kind: { type: "password" },
+      required: false,
+      secret: true,
+      default: null,
+      help: "Stored in the system keyring.",
+    },
+    {
+      key: "authSource",
+      label: "Authentication database",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Defaults to the database above, then admin.",
+    },
+    {
+      key: "authMechanism",
+      label: "Authentication mechanism",
+      kind: {
+        type: "choice",
+        options: ["default", "SCRAM-SHA-256", "SCRAM-SHA-1"],
+      },
+      required: false,
+      secret: false,
+      default: "default",
+      help: null,
+    },
+    {
+      key: "replicaSet",
+      label: "Replica set",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: null,
+    },
+    {
+      key: "directConnection",
+      label: "Direct connection",
+      kind: { type: "bool" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Talk to this one server, without discovering the replica set.",
+    },
+    {
+      key: "tls",
+      label: "TLS mode",
+      kind: {
+        type: "choice",
+        options: ["verify-full", "require", "disable"],
+      },
+      required: false,
+      secret: false,
+      default: "verify-full",
+      help: null,
+    },
+    {
+      key: "tlsCAFile",
+      label: "CA file",
+      kind: { type: "path" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "PEM certificates of the authority that signed the server's.",
+    },
+    {
+      key: "tlsCertificateKeyFile",
+      label: "Client certificate",
+      kind: { type: "path" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "PEM file holding the client certificate and its unencrypted key.",
+    },
+  ],
+}
+
 /** As `oxyn_driver_redis::redis_metadata` describes the form. */
 export const redisDriver: DriverChoice = {
   id: "redis",
@@ -358,6 +492,14 @@ export const savedConnections: Array<SavedConnection> = [
     name: "inventory",
     driver: "mysql",
     environment: "development",
+    readOnly: false,
+    privacyTier: "metadata",
+  },
+  {
+    id: "018f0000-0000-7000-8000-000000000005",
+    name: "events",
+    driver: "mongodb",
+    environment: "staging",
     readOnly: false,
     privacyTier: "metadata",
   },
@@ -579,6 +721,7 @@ export const invoicesDetail: RelationDetail = {
       default: "nextval('invoices_id_seq')",
       comment: null,
       primaryKey: true,
+      inferred: false,
     },
     {
       name: "customer_id",
@@ -589,6 +732,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: "References customers.id",
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "amount",
@@ -599,6 +743,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "issued_at",
@@ -609,6 +754,7 @@ export const invoicesDetail: RelationDetail = {
       default: "now()",
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "paid_at",
@@ -619,6 +765,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
   ],
 }
@@ -631,6 +778,7 @@ export const invoicesDetail: RelationDetail = {
 export const catalogueDrivers: Array<DriverChoice> = [
   postgresDriver,
   mysqlDriver,
+  mongodbDriver,
   ...(
     [
       ["sqlserver", "SQL Server", "relational", 1433],
@@ -639,7 +787,6 @@ export const catalogueDrivers: Array<DriverChoice> = [
       ["clickhouse", "ClickHouse", "analytical", 8123],
       ["snowflake", "Snowflake", "analytical", null],
       ["bigquery", "BigQuery", "analytical", null],
-      ["mongodb", "MongoDB", "document", 27017],
       ["cassandra", "Cassandra", "wide-column", 9042],
       ["dynamodb", "DynamoDB", "key-value", null],
       ["couchbase", "Couchbase", "document", 8091],

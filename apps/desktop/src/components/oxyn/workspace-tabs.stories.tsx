@@ -225,6 +225,32 @@ export const HostileName: Story = {
   },
 }
 
+/** A collection is not drawn as a table: its tab takes the catalog's icon. */
+export const CollectionTab: Story = {
+  args: {
+    tabs: [
+      {
+        kind: "object",
+        key: "object:orders",
+        title: "orders",
+        objectKind: "collection",
+      },
+      {
+        kind: "object",
+        key: "object:invoices",
+        title: "invoices",
+        objectKind: "table",
+      },
+    ],
+  },
+  play: async ({ canvas }) => {
+    const icon = (name: RegExp) =>
+      canvas.getByRole("tab", { name }).querySelector("svg")?.innerHTML
+    await expect(icon(/orders/)).toBeTruthy()
+    await expect(icon(/orders/)).not.toBe(icon(/invoices/))
+  },
+}
+
 const nothing = () => undefined
 const storyWorkspace: WorkspaceActions = {
   openConsole: nothing,

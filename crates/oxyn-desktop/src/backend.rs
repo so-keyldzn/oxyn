@@ -24,6 +24,7 @@ use oxyn_core::{
 use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
 use oxyn_driver_clickhouse::ClickhouseDriver;
+use oxyn_driver_mongodb::MongoDriver;
 use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
 use oxyn_driver_redis::RedisDriver;
@@ -1024,6 +1025,17 @@ impl Backend {
     ) -> Result<oxyn_core::SqlDialect, IpcError> {
         Ok(oxyn_query::dialect_for(&self.config(connection)?.driver))
     }
+
+    /// The language this connection's consoles speak, from what its driver
+    /// declares at best; SQL in the driver's dialect for a driver that names
+    /// none. A session narrows its capabilities, never to another language.
+    pub(crate) fn language_of(&self, driver: &DriverId) -> oxyn_core::QueryLanguage {
+        self.inner
+            .drivers
+            .get(driver)
+            .and_then(|known| oxyn_query::console_language(driver, known.capabilities()))
+            .unwrap_or_else(|| oxyn_core::QueryLanguage::Sql(oxyn_query::dialect_for(driver)))
+    }
 }
 
 /// The configuration a draft describes, secrets aside, under a fresh id.
@@ -1045,6 +1057,9 @@ fn shipped_drivers() -> Result<DriverRegistry> {
     drivers
         .register(Arc::new(RedisDriver::new()))
         .context("registering the Redis driver")?;
+    drivers
+        .register(Arc::new(MongoDriver::new()))
+        .context("registering the MongoDB driver")?;
     Ok(drivers)
 }
 

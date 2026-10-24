@@ -11,6 +11,7 @@ function menuOf(overrides: Partial<GridMenu> = {}): GridMenu {
   return {
     origin: "query",
     relation: false,
+    sql: true,
     ai: { kind: "withheld", label: "Metadata" },
     copyText: fn(),
     copyRows: fn(),
@@ -158,6 +159,7 @@ export const PreviewCell: Story = {
     menu: menuOf({
       origin: "preview",
       relation: true,
+      sql: true,
       ai: { kind: "none" },
       // As `object-view` wires it: the source declares both, and only the
       // order has a handler — the WHERE field is focused by `Filter…`.
@@ -200,6 +202,7 @@ export const PreviewHeaderFilter: Story = {
     menu: menuOf({
       origin: "preview",
       relation: true,
+      sql: true,
       filterable: true,
       sortable: true,
       sort: fn(),

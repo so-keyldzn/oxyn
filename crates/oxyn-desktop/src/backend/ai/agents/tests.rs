@@ -123,15 +123,24 @@ fn a_question_naming_no_agent_runs_the_one_of_its_language_or_is_refused() {
         .expect("the SQL agent on a SQL session");
     assert_eq!(spec.id, sql_agent_id());
 
-    let mongo = target_of(&redis, QueryLanguage::MongoQuery, ANTHROPIC);
+    let cypher = target_of(&redis, QueryLanguage::Cypher, ANTHROPIC);
     let refused = backend
-        .requested_agent(None, &mongo)
-        .expect_err("no agent writes MongoDB queries");
+        .requested_agent(None, &cypher)
+        .expect_err("no agent writes Cypher");
     assert!(
-        refused.message.contains("No agent writes mongo"),
+        refused.message.contains("No agent writes cypher"),
         "{}",
         refused.message
     );
+    // MongoDB has the agent its driver ships.
+    let mongodb = connection(DriverId::MONGODB);
+    let spec = backend
+        .requested_agent(
+            None,
+            &target_of(&mongodb, QueryLanguage::MongoQuery, ANTHROPIC),
+        )
+        .expect("the shipped MongoDB agent is the default on a MongoDB session");
+    assert_eq!(spec.languages, [QueryLanguage::MongoQuery]);
     // A SQL agent asked for by id is found; the question then refuses it on
     // the language, naming it.
     let sql = backend

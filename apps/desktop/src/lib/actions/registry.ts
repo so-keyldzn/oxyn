@@ -113,7 +113,7 @@ function inWorkspace(
 }
 
 function inConsole(
-  action: "run" | "cancel" | "save",
+  action: "run" | "explain" | "cancel" | "save",
   run: (console: NonNullable<ActionContext["sources"]["console"]>) => void
 ): ActionBehaviour {
   return {
@@ -448,7 +448,9 @@ export const behaviours: Record<string, ActionBehaviour> = {
   ),
   "console.run": inConsole("run", (console) => console.actions.run()),
   "console.runAll": inConsole("run", (console) => console.actions.runAll()),
-  "console.explain": inConsole("run", (console) => console.actions.explain()),
+  "console.explain": inConsole("explain", (console) =>
+    console.actions.explain()
+  ),
   "console.cancel": inConsole("cancel", (console) => console.actions.cancel()),
   "item.moveLeft": onItem(["tabs", "grid"], (item) =>
     item.move?.bind(null, -1)

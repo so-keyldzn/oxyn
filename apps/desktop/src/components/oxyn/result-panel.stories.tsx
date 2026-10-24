@@ -165,6 +165,7 @@ export const HideFromTheHeaderMenu: Story = {
     gridMenu: {
       origin: "query",
       relation: false,
+      sql: true,
       ai: { kind: "none" },
       copyText: fn(),
       copyRows: fn(),

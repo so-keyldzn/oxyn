@@ -106,8 +106,10 @@ export interface OverlayActions {
 }
 
 export interface ConsoleState {
-  /** The session declares `SQL` and the console is not closing. */
+  /** The session declares a console language and the console is not closing. */
   canRun: boolean
+  /** The session declares `EXPLAIN`: it can describe a statement's plan. */
+  canExplain: boolean
   running: boolean
   cancelling: boolean
   /** A named save or a close is being written. */

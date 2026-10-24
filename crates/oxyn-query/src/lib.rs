@@ -17,6 +17,7 @@
 //! | [`split`](mod@split) | splitting a batch into statements, reading bare words |
 //! | [`classify`](mod@classify) | intent and risk of a text — the critical point |
 //! | [`format`](mod@format) | reformatting by rendering the AST |
+//! | [`mongo`](mod@mongo) | one MongoDB database command, read in order and classified by name |
 //! | [`error`](mod@error) | the failures the crate knows how to name |
 //!
 //! # The three rules
@@ -65,6 +66,7 @@ pub mod console;
 pub mod dialect;
 pub mod error;
 pub mod format;
+pub mod mongo;
 pub mod redact;
 pub mod redis;
 pub mod split;
@@ -73,10 +75,11 @@ pub use classify::{
     Basis, Classification, StatementInfo, changes_context, classify, classify_language,
     only_controls_transactions, reclassify, runnable_text, validate,
 };
-pub use console::{console_language, current_request};
+pub use console::{console_language, current_request, explain_request};
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;
 pub use format::{FormatReport, format, format_report};
+pub use mongo::{JsonValue, MongoCommand, MongoParseError, classify_mongo};
 pub use redact::{REDACTED_LITERAL, redact_any_language, redact_password_literals};
 pub use split::{
     Fragment, LineCommentEnd, SplitProfile, Token, TokenKind, Word, contains_comment,

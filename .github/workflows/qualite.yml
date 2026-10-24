@@ -413,6 +413,22 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 24
+      mongodb:
+        # The tag is recorded in RESEARCH-NOTES (ADR-0063). The health check
+        # authenticates through the container's own address: the image's
+        # first-start initialization runs a mongod bound to 127.0.0.1 only,
+        # which a localhost ping would take for the final server.
+        image: mongo:8.0.34
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: oxyn
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --host $(hostname -i) -u root -p oxyn --eval 'db.adminCommand({ping: 1}).ok'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 12
 
     steps:
       - name: Check out the repository
@@ -522,6 +538,7 @@ jobs:
           OXYN_PG_PRODUCTION_TEST_URL: postgres://postgres:oxyn@localhost:5433/postgres?sslmode=verify-full
           OXYN_CLICKHOUSE_TEST_URL: http://oxyn:oxyn@127.0.0.1:8123
           OXYN_REDIS_TEST_URL: redis://localhost:6379/0?tls=disable
+          OXYN_MONGODB_TEST_URL: mongodb://root:oxyn@localhost:27017/?tls=disable
           # sqlx trusts this disposable CA while verify-full validates the leaf SAN.
           PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/ca.crt
           # Only the selected server suites are built and run (ADR-0067).

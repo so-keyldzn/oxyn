@@ -53,8 +53,18 @@ commands get the same treatment with `<redacted>`: the password of `AUTH` and
 `CONFIG SET` and `MIGRATE`'s `AUTH`/`AUTH2`, recognized on the arguments as
 the server decodes them, escapes included. A record that does not carry its
 language — a tool call, an audit entry written back, a saved query mentioned
-to an agent — is redacted by both grammars
+to an agent — is redacted by every grammar
 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)).
+
+A MongoDB command carries its credentials in three places: the `pwd` of
+`createUser` and `updateUser`, the `payload` of `saslStart` and
+`saslContinue`, and a connection string with its password inside a string.
+Each is replaced with `<redacted>`, every other byte kept, recognized on the
+command as the server decodes it — escaped keys and command names, and a
+command quoted inside a string, included. The records that know their
+language — the query history, the audit entry built from the command — read
+it as MongoDB; those that do not read it with every grammar, MongoDB included
+([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
 
 **Concrete failure:** a workspace file containing a production password,
 committed by the user to their team's repository, because the

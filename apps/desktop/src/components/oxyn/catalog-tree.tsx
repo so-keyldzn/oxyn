@@ -7,6 +7,7 @@ import {
   ArrowRight01Icon,
   DatabaseIcon,
   EyeIcon,
+  Files01Icon,
   FolderLibraryIcon,
   FunctionIcon,
   Key01Icon,
@@ -84,6 +85,8 @@ export interface ObjectOperations {
 export interface CopyAs {
   /** The session reads object definitions (`OBJECT_DEFINITION`). */
   definition: boolean
+  /** The session speaks SQL (`SQL`): `SELECT *` and `INSERT template` exist. */
+  sql: boolean
   onCopy: (node: CatalogNode, form: CopyAsForm) => void
 }
 
@@ -139,6 +142,8 @@ function iconFor(kind: string) {
     case "function":
     case "procedure":
       return FunctionIcon
+    case "collection":
+      return Files01Icon
     case "key_pattern":
       return Key01Icon
     default:
@@ -615,6 +620,8 @@ export function CatalogTree({
           schemaContext:
             onNewConsole !== undefined && node.kind === "namespace",
           definition: copyAs?.definition ?? false,
+          // A tree given no copies greys every form alike, as before.
+          sql: copyAs?.sql ?? true,
           expanded: expanded.size > 0,
           pin: pinOffer(pin, node),
         },

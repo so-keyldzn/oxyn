@@ -1,12 +1,13 @@
 //! The assistant on a session that does not speak SQL
 //! ([ADR-0065](../../../../../../../docs/adr/0065-agents-for-non-sql-query-languages.md)).
 //!
-//! No shipped driver speaks another language yet: a fake one stands for
-//! Redis, declaring `REDIS_COMMAND` and nothing else, and proving `GET` and
-//! `SCAN` read-only as a real driver proves it from its command table
-//! (ADR-0064). What these tests hold is the boundary — the agent offered,
-//! the prompt and the context written for the language, every request the
-//! agent sends classified by the session and gated —, never Redis itself.
+//! A fake driver stands for each language, declaring its capability and
+//! nothing else, and proving a request read-only as the real driver does
+//! (ADR-0064): Redis from a two-command table, MongoDB with the very reading
+//! the MongoDB session gives the executor. What these tests hold is the
+//! boundary — the agent offered, the prompt and the context written for the
+//! language, every request the agent sends classified by the session and
+//! gated —, never the server itself.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -20,33 +21,83 @@ use oxyn_driver::{Credentials, Driver, DriverFamily, DriverMetadata, Session};
 use super::agent_roles::{capturing, ended, local_provider, question};
 use super::*;
 
+mod mongodb;
+
 /// What the fake session was sent: each text, with whether it was bounded
 /// to a read-only execution.
 #[derive(Default)]
 struct Seen(Mutex<Vec<(String, bool)>>);
 
-struct KeyDriver {
+/// The language a fake driver speaks, and how its session classifies a
+/// request: `None` is a request it cannot prove anything about.
+#[derive(Clone, Copy)]
+struct Speech {
+    driver: &'static str,
+    label: &'static str,
+    family: DriverFamily,
+    capabilities: Capabilities,
+    kind: RelationKind,
+    language: QueryLanguage,
+    classify: fn(&str) -> Option<StatementIntent>,
+}
+
+/// Redis: `GET` and `SCAN` are proven reads, every other command is not.
+const KEYS: Speech = Speech {
+    driver: "fakekeys",
+    label: "Fake keys",
+    family: DriverFamily::KeyValue,
+    capabilities: Capabilities::REDIS_COMMAND,
+    kind: RelationKind::KeyPattern,
+    language: QueryLanguage::RedisCommand,
+    classify: |text| {
+        let command = text.split_whitespace().next()?;
+        ["GET", "SCAN"]
+            .iter()
+            .any(|read| command.eq_ignore_ascii_case(read))
+            .then_some(StatementIntent::Read)
+    },
+};
+
+/// MongoDB: what the MongoDB session's `classify_intent` answers, word for
+/// word — `oxyn_query::classify_mongo`, with an unknown command and a
+/// transaction verb left unproven
+/// (`drivers/oxyn-driver-mongodb/src/session.rs`).
+const DOCUMENTS: Speech = Speech {
+    driver: "fakedocs",
+    label: "Fake documents",
+    family: DriverFamily::Document,
+    capabilities: Capabilities::MONGO_QUERY,
+    kind: RelationKind::Collection,
+    language: QueryLanguage::MongoQuery,
+    classify: |text| {
+        let classification = oxyn_query::classify_mongo(text);
+        (classification.intent != StatementIntent::Unknown && !classification.transaction_control)
+            .then_some(classification.intent)
+    },
+};
+
+struct FakeDriver {
     metadata: DriverMetadata,
+    speech: Speech,
     seen: Arc<Seen>,
 }
 
-const KEY_DRIVER: &str = "fakekeys";
-
-impl KeyDriver {
-    fn new(seen: Arc<Seen>) -> Self {
+impl FakeDriver {
+    fn new(speech: Speech, seen: Arc<Seen>) -> Self {
         Self {
             metadata: DriverMetadata::new(
-                DriverId::new(KEY_DRIVER).expect("a valid driver name"),
-                "Fake keys",
-                DriverFamily::KeyValue,
+                DriverId::new(speech.driver).expect("a valid driver name"),
+                speech.label,
+                speech.family,
             ),
+            speech,
             seen,
         }
     }
 }
 
 #[async_trait]
-impl Driver for KeyDriver {
+impl Driver for FakeDriver {
     fn id(&self) -> DriverId {
         self.metadata.id.clone()
     }
@@ -56,7 +107,7 @@ impl Driver for KeyDriver {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities::REDIS_COMMAND
+        self.speech.capabilities
     }
 
     async fn connect(
@@ -65,16 +116,22 @@ impl Driver for KeyDriver {
         _credentials: &Credentials,
         _cancel: &CancelToken,
     ) -> oxyn_core::Result<Box<dyn Session>> {
-        Ok(Box::new(KeySession(Arc::clone(&self.seen))))
+        Ok(Box::new(FakeSession {
+            catalog: FakeCatalog(self.speech),
+            seen: Arc::clone(&self.seen),
+        }))
     }
 }
 
-struct KeySession(Arc<Seen>);
+struct FakeSession {
+    catalog: FakeCatalog,
+    seen: Arc<Seen>,
+}
 
 #[async_trait]
-impl Session for KeySession {
+impl Session for FakeSession {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::REDIS_COMMAND
+        self.catalog.0.capabilities
     }
 
     async fn execute(
@@ -82,7 +139,7 @@ impl Session for KeySession {
         request: ExecRequest,
         _cancel: &CancelToken,
     ) -> oxyn_core::Result<Box<dyn oxyn_driver::Cursor>> {
-        self.0
+        self.seen
             .0
             .lock()
             .push((request.text.clone(), request.limits.read_only));
@@ -91,11 +148,7 @@ impl Session for KeySession {
     }
 
     fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
-        let command = request.text.split_whitespace().next()?;
-        ["GET", "SCAN"]
-            .iter()
-            .any(|read| command.eq_ignore_ascii_case(read))
-            .then_some(StatementIntent::Read)
+        (self.catalog.0.classify)(&request.text)
     }
 
     async fn cancel(&self, _statement: StatementHandle) -> oxyn_core::Result<()> {
@@ -103,7 +156,7 @@ impl Session for KeySession {
     }
 
     fn catalog(&self) -> &dyn CatalogProvider {
-        &KeyCatalog
+        &self.catalog
     }
 
     async fn ping(&self) -> oxyn_core::Result<Duration> {
@@ -115,16 +168,12 @@ impl Session for KeySession {
     }
 }
 
-struct KeyCatalog;
+struct FakeCatalog(Speech);
 
 #[async_trait]
-impl CatalogProvider for KeyCatalog {
+impl CatalogProvider for FakeCatalog {
     async fn server_info(&self, _cancel: &CancelToken) -> oxyn_core::Result<ServerInfo> {
-        Ok(ServerInfo::new(
-            "Fake keys",
-            "1.0",
-            Capabilities::REDIS_COMMAND,
-        ))
+        Ok(ServerInfo::new(self.0.label, "1.0", self.0.capabilities))
     }
 
     async fn list_relations(
@@ -142,7 +191,7 @@ impl CatalogProvider for KeyCatalog {
     ) -> oxyn_core::Result<Relation> {
         Ok(Relation::new(
             relation.relation().unwrap_or(""),
-            RelationKind::KeyPattern,
+            self.0.kind,
         ))
     }
 }
@@ -161,21 +210,28 @@ fn keys_agent() -> UserAgentFile {
     }
 }
 
-/// A backend that knows the fake driver, and the agents `users` declares
-/// besides the shipped ones — the shipped Redis agent left out, so that the
-/// mechanism is tested on the fixture agent alone.
+/// A backend that knows the fake Redis driver, and the agents `users`
+/// declares besides the shipped ones — the shipped Redis agent left out, so
+/// that the mechanism is tested on the fixture agent alone.
 fn backend_with(users: Vec<UserAgentFile>) -> (Backend, Arc<Seen>) {
     let shipped = oxyn_ai::shipped_agents()
         .into_iter()
         .filter(|agent| !agent.writes(QueryLanguage::RedisCommand))
         .collect();
-    backend_with_catalog(AgentCatalog::new(shipped, users))
+    backend_with_catalog(KEYS, AgentCatalog::new(shipped, users))
 }
 
-fn backend_with_catalog(catalog: AgentCatalog) -> (Backend, Arc<Seen>) {
+/// A backend that knows a fake driver speaking `speech`, every shipped
+/// agent, and the agents `users` declares besides them.
+fn backend_speaking(speech: Speech, users: Vec<UserAgentFile>) -> (Backend, Arc<Seen>) {
+    backend_with_catalog(speech, AgentCatalog::new(oxyn_ai::shipped_agents(), users))
+}
+
+fn backend_with_catalog(speech: Speech, catalog: AgentCatalog) -> (Backend, Arc<Seen>) {
     let seen = Arc::new(Seen::default());
-    let backend = Backend::open_temporary_with_driver(Arc::new(KeyDriver::new(Arc::clone(&seen))))
-        .expect("temporary backend");
+    let backend =
+        Backend::open_temporary_with_driver(Arc::new(FakeDriver::new(speech, Arc::clone(&seen))))
+            .expect("temporary backend");
     backend.inner.ai.agents.set(catalog);
     (backend, seen)
 }
@@ -187,8 +243,7 @@ fn a_question_on_a_redis_session_runs_the_shipped_redis_agent() {
     let runtime = runtime();
     let _guard = runtime.enter();
     let (port, request) = runtime.block_on(capturing());
-    let (backend, _) =
-        backend_with_catalog(AgentCatalog::new(oxyn_ai::shipped_agents(), Vec::new()));
+    let (backend, _) = backend_speaking(KEYS, Vec::new());
     let open = open_keys(&runtime, &backend, Environment::Local);
     let provider = local_provider(&runtime, &backend, port);
     let (channel, received) = recording();
@@ -212,9 +267,18 @@ fn open_keys(
     backend: &Backend,
     environment: Environment,
 ) -> OpenConnection {
+    open_speaking(runtime, backend, KEYS, environment)
+}
+
+fn open_speaking(
+    runtime: &tokio::runtime::Runtime,
+    backend: &Backend,
+    speech: Speech,
+    environment: Environment,
+) -> OpenConnection {
     let draft = ConnectionDraft {
-        driver: KEY_DRIVER.into(),
-        name: "keys regression".into(),
+        driver: speech.driver.into(),
+        name: format!("{} regression", speech.label),
         environment,
         privacy_tier: oxyn_core::PrivacyTier::Metadata,
         read_only: false,
@@ -323,16 +387,28 @@ fn the_picker_of_a_redis_connection_offers_only_the_agents_of_its_language() {
     assert_eq!(names, ["Keys"]);
 }
 
-/// What `execute_query` makes of `statement` for an agent on `open`, in the
-/// language the session speaks — the scope a conversation builds.
+/// What `execute_query` makes of `statement` for an agent on `open`, a Redis
+/// session.
 fn agent_request(backend: &Backend, open: &OpenConnection, statement: &str) -> Command {
+    agent_request_in(KEYS, backend, open, statement)
+}
+
+/// What `execute_query` makes of `statement` for an agent on `open`, in the
+/// language the session speaks — the scope a conversation builds —, which
+/// must be `speech`'s.
+fn agent_request_in(
+    speech: Speech,
+    backend: &Backend,
+    open: &OpenConnection,
+    statement: &str,
+) -> Command {
     let connection: ConnectionId = open.connection.parse().expect("connection id");
     let session: SessionId = open.session.parse().expect("session id");
     let config = backend.config(connection).expect("a connection");
     let language = backend
         .session_language(&config, session)
         .expect("the session speaks one language");
-    assert_eq!(language, QueryLanguage::RedisCommand);
+    assert_eq!(language, speech.language);
     let registry = ToolRegistry::builtin();
     let allowed: Vec<String> = registry.names().into_iter().map(str::to_owned).collect();
     registry

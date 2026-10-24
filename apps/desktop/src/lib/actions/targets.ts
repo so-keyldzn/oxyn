@@ -40,6 +40,11 @@ export interface GridMenuState {
   oneColumn: boolean
   /** The rows come from one known relation (`INSERT`). */
   relation: boolean
+  /**
+   * The rows' session declares `SQL`: `INSERT` and `IN list` are SQL, and
+   * are absent where the source speaks another language.
+   */
+  sql: boolean
   /** Rows the result holds now, for `Copy values` (I-06). */
   loadedRows: number
   /** Columns shown: the last one is never hidden. */
@@ -174,6 +179,11 @@ export interface CatalogMenuState {
   schemaContext: boolean
   /** The relation's definition can be read (`Copy as ▸ DDL`). */
   definition: boolean
+  /**
+   * The session declares `SQL`: `Copy as ▸ SELECT *` and `INSERT template`
+   * are SQL, and are absent where the source speaks another language.
+   */
+  sql: boolean
   /** Some level of the tree is expanded. */
   expanded: boolean
   /** `Pin to question` on this node (`pinOffer`). */

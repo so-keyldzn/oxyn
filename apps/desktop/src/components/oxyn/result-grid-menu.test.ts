@@ -24,6 +24,7 @@ function hostOf(
     menu: {
       origin: "query",
       relation: false,
+      sql: true,
       ai: { kind: "none" },
       copyText: vi.fn(),
       copyRows: vi.fn(),

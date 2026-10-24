@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="e27ab07806cb" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="28c37e93f5b3" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2290,9 +2290,22 @@ proposée).** Dans cet ordre, chacun avec sa porte de sortie :
 Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
 « 3 bis » pour ne déplacer ni l'ancre ni les renvois de la phase 4.
 
-- `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
+- `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-mongodb` — **étape 1 écrite**
+  ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)) :
+  connexion par champs avec TLS et SCRAM, une commande de base par requête de
+  console en Extended JSON, classée par la session (ADR-0064), un échantillon
+  déclaré avec une colonne `$document` sans perte, annulation par
+  `killSessions` prouvée dans `$currentOp`, arbre du catalogue, définitions
+  reconstruites, aperçu borné, Explain par le planificateur, l'agent MongoDB
+  (ADR-0065). **À écrire** : transactions en console sur replica set, filtre
+  d'aperçu en JSON (`PREVIEW_FILTER`), analyse de schéma et aperçu d'étape
+  d'agrégation, change streams en captures bornées, GridFS, vues des
+  utilisateurs et rôles, état du replica set, du sharding et du profileur,
+  import et export JSON/BSON — la matrice de parité de la pull request en
+  tient l'ordre.
 - `oxyn-driver-redis`, étape 1 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) :
   Redis et Valkey en RESP3 lu par le driver lui-même ; commandes classées
   d'après la table `COMMAND` du serveur ; réponses diffusées en Arrow, en lots

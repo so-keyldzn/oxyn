@@ -30,6 +30,7 @@ import type {
 import { registerDraftFlush } from "@/features/consoles/draft-registry"
 import { identifierQuoteForDriver } from "@/lib/sql-identifiers"
 import { loadedObject, nameAt } from "@/features/consoles/object-under-cursor"
+import { mongoNameAt } from "@/features/consoles/languages/mongo/name-at"
 import { useConsoleDocument } from "@/features/consoles/use-console-document"
 import type { ConsoleSeed } from "@/features/consoles/use-console-document"
 import { releaseResult } from "@/features/metadata/inspection"
@@ -194,6 +195,11 @@ export function ConsolePanel({
   // (`oxyn_query::console_language`).
   const language = queryLanguageOf(capabilities)
   const canRun = language !== null && !doc.closing
+  const canExplain = capabilities.includes("EXPLAIN")
+  // Only SQL binds values: another language's command carries its own, and
+  // its driver refuses bound parameters. Without a session, the console is
+  // read as SQL, like its editor.
+  const bindsValues = (language ?? "sql") === "sql"
   // The last state the session reported — never one guessed from a `BEGIN`
   // being submitted (ADR-0039 §5).
   const declaresTransactions = capabilities.includes("TRANSACTIONS")
@@ -221,6 +227,7 @@ export function ConsolePanel({
   const run = async (runTarget: RunTarget, explain = false) => {
     // A double click submits once: the parameter check awaits before start.
     if (!canRun || execution.running || submitting.current) return
+    if (explain && !canExplain) return
     submitting.current = true
     try {
       await submit(runTarget, explain)
@@ -634,7 +641,10 @@ export function ConsolePanel({
   const editorMenu: SqlEditorMenu = {
     onRun: (runTarget) => void run(runTarget),
     objectAt: (text, offset) => {
-      const parts = nameAt(text, offset, identifierQuoteForDriver(open.driver))
+      const parts =
+        language === "mongo"
+          ? mongoNameAt(text, offset)
+          : nameAt(text, offset, identifierQuoteForDriver(open.driver))
       const tree = queryClient.getQueryData<Array<CatalogNode>>([
         "catalog",
         open.connection,
@@ -651,6 +661,7 @@ export function ConsolePanel({
     active
       ? {
           canRun,
+          canExplain,
           running: execution.running,
           cancelling: execution.cancelling,
           writing: doc.saveState.status === "saving" || doc.closing,
@@ -674,17 +685,14 @@ export function ConsolePanel({
             cancelling={execution.cancelling}
             elapsedMs={elapsedMs}
             canRun={canRun}
+            canExplain={canExplain}
             readOnly={session?.readOnly ?? false}
             target={target}
             onRun={() => void run(targetNow())}
             onRunAll={() => void run({ kind: "all" })}
-            onExplain={
-              capabilities.includes("EXPLAIN")
-                ? () => void run(targetNow(), true)
-                : undefined
-            }
+            onExplain={() => void run(targetNow(), true)}
             onCancel={execution.cancel}
-            parameterCount={rows.length}
+            parameterCount={bindsValues ? rows.length : null}
             parametersOpen={parametersOpen}
             onToggleParameters={() => setParametersOpen((value) => !value)}
             title={doc.title}
@@ -702,6 +710,9 @@ export function ConsolePanel({
               withContext ? (
                 <SessionContextPicker
                   connectionName={open.name}
+                  level={
+                    capabilities.includes("DOCUMENT") ? "database" : "schema"
+                  }
                   choices={choices.data ?? [{ catalog: null, namespace: null }]}
                   state={context}
                   onChoose={chooseContext}
@@ -738,7 +749,7 @@ export function ConsolePanel({
         notice={notice}
         draftNotice={doc.draftNotice}
         parameters={
-          parametersOpen ? (
+          parametersOpen && bindsValues ? (
             <ParameterEditor
               rows={rows}
               onChange={(next) => {

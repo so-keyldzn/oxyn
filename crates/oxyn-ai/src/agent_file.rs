@@ -37,6 +37,8 @@ mod catalog;
 #[cfg(test)]
 mod catalog_tests;
 mod files;
+#[cfg(test)]
+mod mongo_tests;
 mod parse;
 mod render;
 mod target;

@@ -46,6 +46,21 @@ export const summaries: Array<ConnectionSummary> = [
   },
 ]
 
+/**
+ * Apart from `summaries`, whose length the folding stories count: a fifth
+ * driver there would change every `manyConnections` filter they assert.
+ */
+export const mongodbSummary: ConnectionSummary = {
+  id: "018f0000-0000-7000-8000-000000000005",
+  name: "events",
+  driver: "mongodb",
+  driverName: "MongoDB",
+  location: "mongo.internal:27017 / events",
+  environment: "staging",
+  readOnly: false,
+  privacyTier: "metadata",
+}
+
 /** Two connections with one name: only the location tells them apart. */
 export const homonyms: Array<ConnectionSummary> = [
   { ...summaries[0]!, id: "018f0000-0000-7000-8000-00000000000a" },

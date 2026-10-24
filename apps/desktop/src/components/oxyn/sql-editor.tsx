@@ -348,7 +348,9 @@ export function SqlEditor({
       ]
     }
     return [
-      ...(language === "sql" ? sqlMode() : [editorMode(language) ?? []]),
+      ...(language === "sql"
+        ? sqlMode()
+        : [editorMode(language, { catalog: () => snapshot.current }) ?? []]),
       sqlEditorSearch,
       theme,
       highlight,

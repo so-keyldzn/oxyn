@@ -41,6 +41,13 @@ describe("the file a console's language gives it", () => {
     expect(consoleFile("redis")).toEqual({ extension: "redis", starter: "" })
   })
 
+  it("starts a MongoDB console with a command that reads nothing", () => {
+    expect(consoleFile("mongo")).toEqual({
+      extension: "json",
+      starter: '{"ping": 1}',
+    })
+  })
+
   it("gives any other language plain text, never SQL", () => {
     expect(consoleFile("cypher")).toEqual({ extension: "txt", starter: "" })
     expect(consoleFile(null)).toEqual({ extension: "txt", starter: "" })

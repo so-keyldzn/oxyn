@@ -12,7 +12,7 @@ use crate::tools::{ERD_HINT, ToolRegistry};
 
 /// Every recipient, by name: `AiProviderKind` is `#[non_exhaustive]`, so the
 /// list is written out, and checked against the fragments below.
-const RECIPIENTS: [&str; 7] = [
+pub(super) const RECIPIENTS: [&str; 7] = [
     "anthropic",
     "openai",
     "gemini",
@@ -22,7 +22,7 @@ const RECIPIENTS: [&str; 7] = [
     "external",
 ];
 
-fn recipient(name: &str) -> Recipient {
+pub(super) fn recipient(name: &str) -> Recipient {
     Recipient::named(name).expect("a recipient of the list")
 }
 
@@ -121,9 +121,17 @@ fn the_fragment_tables_name_what_exists() {
     }
 }
 
+/// The shipped agents that write SQL: an agent of another language is never
+/// offered on a SQL target, so it is never rendered for a dialect.
+fn shipped_sql_agents() -> impl Iterator<Item = AgentSpec> {
+    shipped_agents()
+        .into_iter()
+        .filter(|agent| agent.writes(QueryLanguage::SQL))
+}
+
 #[test]
 fn every_role_dialect_and_recipient_renders() {
-    for agent in shipped_agents() {
+    for agent in shipped_sql_agents() {
         for dialect in DIALECTS {
             for name in RECIPIENTS {
                 let target = target(dialect, recipient(name));
@@ -422,10 +430,7 @@ fn offered_for_honors_applies_to_and_recipients() {
     assert!(!agent.offered_for(&target(SqlDialect::Postgres, recipient("codex"))));
 
     // Empty lists offer a SQL agent on every dialect and recipient.
-    for shipped in shipped_agents()
-        .into_iter()
-        .filter(|agent| agent.writes(QueryLanguage::SQL))
-    {
+    for shipped in shipped_sql_agents() {
         for dialect in DIALECTS {
             for name in RECIPIENTS {
                 assert!(shipped.offered_for(&target(dialect, recipient(name))));
@@ -605,10 +610,11 @@ fn an_agent_written_for_a_language_is_offered_only_where_it_is_spoken() {
     ] {
         assert!(!keys.offered_for(&speaking(other, reader)), "{other}");
     }
-    // And a SQL agent, shipped or not, is never offered on a Redis session.
+    // And no shipped agent of another language, SQL or MongoDB, is offered on
+    // a Redis session.
     for shipped in shipped_agents()
         .into_iter()
-        .filter(|agent| agent.writes(QueryLanguage::SQL))
+        .filter(|agent| !agent.writes(QueryLanguage::RedisCommand))
     {
         assert!(!shipped.offered_for(&speaking(QueryLanguage::RedisCommand, reader)));
     }

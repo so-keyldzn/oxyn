@@ -1,8 +1,18 @@
 import type { Extension } from "@codemirror/state"
 
+import { mongoMode } from "./mongo"
+import { redisEditorMode } from "./redis/redis-mode"
+import type { CompletionCatalog } from "@/lib/ipc/completion"
 import type { QueryLanguageName } from "@/lib/query-language"
 
-import { redisEditorMode } from "./redis/redis-mode"
+/** What the editor lends a mode. */
+export interface EditorModeContext {
+  /**
+   * The latest snapshot of the catalog cache (ADR-0057), read on each
+   * completion request; null while it is not read.
+   */
+  catalog: () => CompletionCatalog | null
+}
 
 /**
  * The editor mode of each language that is not SQL — highlighting, and
@@ -13,15 +23,20 @@ import { redisEditorMode } from "./redis/redis-mode"
  * does not depend on its mode, only how it reads.
  */
 const EDITOR_MODES: Partial<
-  Record<Exclude<QueryLanguageName, "sql">, () => Extension>
+  Record<
+    Exclude<QueryLanguageName, "sql">,
+    (context: EditorModeContext) => Extension
+  >
 > = {
+  mongo: mongoMode,
   redis: redisEditorMode,
 }
 
 export function editorMode(
-  language: Exclude<QueryLanguageName, "sql">
+  language: Exclude<QueryLanguageName, "sql">,
+  context: EditorModeContext
 ): Extension | null {
-  return EDITOR_MODES[language]?.() ?? null
+  return EDITOR_MODES[language]?.(context) ?? null
 }
 
 /** What a console of a language is called and starts with. */
@@ -41,6 +56,8 @@ const CONSOLE_FILES: Partial<Record<QueryLanguageName, ConsoleFile>> = {
   sql: { extension: "sql", starter: "SELECT 1;" },
   // Redis commands have no comment syntax: any starter would be a command.
   redis: { extension: "redis", starter: "" },
+  // A console holds Extended JSON commands; `ping` reads nothing.
+  mongo: { extension: "json", starter: '{"ping": 1}' },
 }
 
 const PLAIN_TEXT: ConsoleFile = { extension: "txt", starter: "" }

@@ -5,6 +5,7 @@ import { DriverChoices } from "./driver-choices"
 import {
   catalogueDrivers,
   clickhouseDriver,
+  mongodbDriver,
   mysqlDriver,
   postgresDriver,
   redisDriver,
@@ -22,7 +23,7 @@ const meta = {
     ),
   ],
   args: {
-    drivers: [postgresDriver, mysqlDriver, sqliteDriver],
+    drivers: [postgresDriver, sqliteDriver, mysqlDriver, mongodbDriver],
     onChoose: fn(),
     onRetry: fn(),
   },
@@ -157,6 +158,30 @@ export const MySQL: Story = {
     await expect(choice).toHaveTextContent("port 3306")
     await userEvent.click(choice)
     await expect(args.onChoose).toHaveBeenCalledWith(mysqlDriver)
+  },
+}
+
+/** The document family, reached on its port, wearing the leaf. */
+export const MongoDB: Story = {
+  play: async ({ canvas, args }) => {
+    const choice = canvas.getByRole("button", { name: /MongoDB/ })
+    await expect(
+      choice.querySelector('svg[viewBox="0 0 120 258"]')
+    ).toHaveAttribute("aria-hidden", "true")
+    await expect(choice).toHaveTextContent("document · port 27017")
+    await userEvent.click(choice)
+    await expect(args.onChoose).toHaveBeenCalledWith(mongodbDriver)
+  },
+}
+
+/** In the full catalogue, the name finds the one driver, and Enter opens it. */
+export const MongoDBSearch: Story = {
+  args: { drivers: catalogueDrivers, prominent: true },
+  play: async ({ canvas, args }) => {
+    await userEvent.type(canvas.getByRole("combobox"), "mongo")
+    await expect(canvas.getAllByRole("option")).toHaveLength(1)
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onChoose).toHaveBeenLastCalledWith(mongodbDriver)
   },
 }
 

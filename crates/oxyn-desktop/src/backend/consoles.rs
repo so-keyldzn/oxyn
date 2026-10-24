@@ -342,11 +342,9 @@ impl Backend {
             (true, Some(dialect)) => {
                 capabilities::explain_sql(&text, dialect).map_err(IpcError::invalid)?
             }
-            (true, None) => {
-                return Err(IpcError::invalid(format!(
-                    "Explain is only offered for SQL; this console speaks {language}."
-                )));
-            }
+            // A language without a plan request keeps the refusal, named.
+            (true, None) => oxyn_query::explain_request(&text, language)
+                .map_err(|error| IpcError::invalid(error.to_string()))?,
             (false, _) => text,
         };
         if text.trim().is_empty() {

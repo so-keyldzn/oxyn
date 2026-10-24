@@ -28,6 +28,7 @@ oxyn-driver-clickhouse.workspace = true
 oxyn-driver-mysql.workspace = true
 oxyn-driver-postgres.workspace = true
 oxyn-driver-sqlite.workspace = true
+oxyn-driver-mongodb.workspace = true
 oxyn-driver-redis.workspace = true
 # The only crate that depends on it (ADR-0056): oxyn-ai receives scores.
 oxyn-embed.workspace = true
