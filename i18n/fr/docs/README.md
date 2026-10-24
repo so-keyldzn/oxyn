@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="d9d3fa173fee" -->
+<!-- oxyn-translation source="docs/README.md" sha256="e3422f3884b9" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -94,6 +94,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Des embeddings locaux sur CPU (Burn, un modèle multilingue épinglé téléchargé sur activation) classent les relations du contexte IA, le lexical d'abord | accepté |
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | L'éditeur SQL complète depuis le cache du catalogue, lit ce qui manque dans des bornes, et tire son texte d'insertion de Rust | proposé |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
+| [0060](adr/0060-clickhouse-driver-over-http-rowbinary.md) | Le pilote ClickHouse parle l'interface HTTP, lit lui-même `RowBinaryWithNamesAndTypes` et ne garde aucune session serveur | proposé |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | Une session classe les requêtes d'un langage non SQL : `Session::classify_intent`, consultée seulement hors SQL, prudente, `None` par défaut (précise 0003) | accepté |
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | Un agent déclare les langages de requête qu'il écrit (`languages`, `[sql]` par défaut) ; l'assistant s'ouvre sur tout langage qu'un agent écrit, prompts SQL inchangés (précise 0049, 0055) | accepté |
 | [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | Une session dit le risque d'une requête non SQL qu'elle a classée comme écriture : `Session::classify_risk`, consultée seulement après un `classify_intent` mutant, ne peut que relever le risque, `None` par défaut (précise 0064) | accepté |

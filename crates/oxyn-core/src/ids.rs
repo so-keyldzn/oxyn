@@ -215,6 +215,8 @@ impl DriverId {
     pub const MYSQL: &'static str = "mysql";
     /// SQLite driver, in-process.
     pub const SQLITE: &'static str = "sqlite";
+    /// ClickHouse driver, over its HTTP interface.
+    pub const CLICKHOUSE: &'static str = "clickhouse";
 
     /// Builds a driver identifier after validation.
     ///
@@ -271,6 +273,12 @@ impl DriverId {
     #[must_use]
     pub fn sqlite() -> Self {
         Self::known(Self::SQLITE)
+    }
+
+    /// ClickHouse driver identifier.
+    #[must_use]
+    pub fn clickhouse() -> Self {
+        Self::known(Self::CLICKHOUSE)
     }
 
     /// Borrowed view of the identifier.
@@ -400,6 +408,10 @@ mod tests {
         assert_eq!(DriverId::postgres().as_str(), "postgres");
         assert_eq!(DriverId::sqlite().to_string(), "sqlite");
         assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valid"));
+        assert_eq!(
+            DriverId::clickhouse(),
+            DriverId::new("clickhouse").expect("valid")
+        );
     }
 
     #[test]

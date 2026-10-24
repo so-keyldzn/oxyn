@@ -360,6 +360,10 @@ mod tests {
                 oxyn_driver_postgres::variant::base_capabilities(),
             ),
             ("mysql", oxyn_driver_mysql::variant::base_capabilities()),
+            (
+                "clickhouse",
+                oxyn_driver_clickhouse::variant::base_capabilities(),
+            ),
         ] {
             assert!(
                 capabilities.contains(

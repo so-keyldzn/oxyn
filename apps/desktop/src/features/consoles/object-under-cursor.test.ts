@@ -120,6 +120,36 @@ describe.each(["PostgreSQL", "SQLite"])("%s identifier quoting", () => {
   })
 })
 
+describe("ClickHouse names under the cursor", () => {
+  it("reads both delimiters, mixed in one qualified name", () => {
+    const sql = 'SELECT * FROM "analytics".`events`'
+    expect(nameAt(sql, sql.indexOf("events"), '`"')).toEqual([
+      { text: "analytics", quoted: true },
+      { text: "events", quoted: true },
+    ])
+    expect(nameAt('"analytics"."events"', 14, '`"')).toEqual([
+      { text: "analytics", quoted: true },
+      { text: "events", quoted: true },
+    ])
+  })
+
+  it("unescapes a backslash inside a name", () => {
+    // db.`x\`y`
+    const sql = "SELECT * FROM db.`x\\`y`"
+    expect(nameAt(sql, sql.indexOf("y"), '`"')).toEqual([
+      { text: "db", quoted: false },
+      { text: "x`y", quoted: true },
+    ])
+  })
+
+  it.each(["WHERE status = 'orders'", String.raw`WHERE status = 'a\'orders'`])(
+    "opens no object inside the string %s",
+    (sql) => {
+      expect(nameAt(sql, sql.indexOf("orders") + 2, '`"')).toBeNull()
+    }
+  )
+})
+
 describe("the loaded object a name resolves to", () => {
   it("resolves a qualified name, without case when unquoted", () => {
     expect(
