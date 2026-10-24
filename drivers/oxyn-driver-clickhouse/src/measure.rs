@@ -8,17 +8,18 @@
 //!
 //! Everything here reads server bytes: no indexing, no `unwrap`, no unchecked
 //! arithmetic ([I-09](../../../CLAUDE.md#i-09)). A row larger than
-//! [`MAX_ROW_BYTES`] is refused before it is buffered further
-//! ([I-06](../../../CLAUDE.md#i-06)).
+//! [`MAX_ROW_BYTES`] — on the wire, or once decoded — is refused before it is
+//! buffered further or decoded at all ([I-06](../../../CLAUDE.md#i-06)).
 
 use crate::schema::Column;
 use crate::types::ChType;
 
-/// The largest row the driver buffers before refusing it.
+/// The largest row the driver buffers, or decodes, before refusing it.
 ///
 /// A row must be whole before it is decoded, so this is the most the driver
-/// holds for one row besides the batch being built. 64 MiB lets a large text
-/// through and stops a single `String` the size of the machine's memory.
+/// holds for one row besides the batch being built — in the response buffer,
+/// and again in the builders. 64 MiB lets a large text through and stops a
+/// single `String` the size of the machine's memory.
 pub const MAX_ROW_BYTES: usize = 64 << 20;
 
 /// Why a value could not be decoded.
@@ -32,9 +33,10 @@ pub enum DecodeError {
         /// What was wrong, in fixed words: the value is never repeated.
         reason: &'static str,
     },
-    /// A row larger than [`MAX_ROW_BYTES`].
+    /// A row larger than [`MAX_ROW_BYTES`], received or decoded.
     #[error(
-        "a row exceeds {} MiB: read large values in parts (`substring`, `arraySlice`)",
+        "a row exceeds {} MiB, received or decoded: read large values in parts (`substring`, \
+         `arraySlice`)",
         MAX_ROW_BYTES >> 20
     )]
     RowTooLarge,
@@ -64,23 +66,31 @@ pub(crate) fn value_error(column: &str, reason: &'static str) -> DecodeError {
 /// [`MAX_ROW_BYTES`], [`DecodeError::Value`] for a marker or length no valid
 /// row carries.
 pub fn measure(columns: &[Column], buf: &[u8]) -> Result<Option<usize>, DecodeError> {
+    Ok(walk(columns, buf)?.map(|(end, _)| end))
+}
+
+/// Where a row ends and what it takes once decoded, at most
+/// [`MAX_ROW_BYTES`] of each.
+///
+/// The decoded size is what the decoder will add to its builders, and an
+/// upper bound of what it answers for the row: a value is often wider in
+/// Arrow than on the wire. A NULL `FixedString(1000)` is one byte and a
+/// thousand; an empty `String` one byte and a four-byte offset; an `Enum8`
+/// one byte and its label. Bounding the wire alone lets 64 MiB of empty
+/// strings in an `Array(String)` become hundreds of mebibytes of offsets
+/// before the batch budget is ever looked at ([I-06](../../../CLAUDE.md#i-06)).
+pub(crate) fn walk(columns: &[Column], buf: &[u8]) -> Result<Option<(usize, usize)>, DecodeError> {
     let limit = buf.len().min(MAX_ROW_BYTES);
     let mut at = 0_usize;
-    // A NULL is one byte on the wire and a whole slot once decoded: a
-    // million NULL `FixedString(1000)` arrive in a megabyte and take a
-    // gigabyte. The row is bounded by what it takes once decoded too.
-    let mut slots = 0_usize;
+    let mut decoded = 0_usize;
     for column in columns {
-        match skip(&column.ty, buf, at, limit, &column.name, &mut slots)? {
+        match skip(&column.ty, buf, at, limit, &column.name, &mut decoded)? {
             Some(end) => at = end,
             None if buf.len() >= MAX_ROW_BYTES => return Err(DecodeError::RowTooLarge),
             None => return Ok(None),
         }
-        if at.saturating_add(slots) > MAX_ROW_BYTES {
-            return Err(DecodeError::RowTooLarge);
-        }
     }
-    Ok(Some(at))
+    Ok(Some((at, decoded)))
 }
 
 /// When a row found incomplete is worth measuring again.
@@ -150,31 +160,86 @@ pub(crate) fn null_slot(ty: &ChType) -> usize {
     }
 }
 
-/// The end of one value starting at `at`, within `limit`; adds to `slots`
-/// what its NULLs take beyond their marker once decoded.
+/// The end of one value starting at `at`, within `limit`; adds to `decoded`
+/// what the value takes in its builder.
+///
+/// Refuses the row the moment `decoded` passes [`MAX_ROW_BYTES`], before the
+/// decoder appends any of it.
 fn skip(
     ty: &ChType,
     buf: &[u8],
     at: usize,
     limit: usize,
     column: &str,
-    slots: &mut usize,
+    decoded: &mut usize,
 ) -> Result<Option<usize>, DecodeError> {
-    let fixed = |width: usize| Ok(at.checked_add(width).filter(|end| *end <= limit));
+    let end = skip_value(ty, buf, at, limit, column, decoded)?;
+    if *decoded > MAX_ROW_BYTES {
+        return Err(DecodeError::RowTooLarge);
+    }
+    Ok(end)
+}
+
+fn skip_value(
+    ty: &ChType,
+    buf: &[u8],
+    at: usize,
+    limit: usize,
+    column: &str,
+    decoded: &mut usize,
+) -> Result<Option<usize>, DecodeError> {
+    let mut fixed = |wire: usize, width: usize| {
+        *decoded = decoded.saturating_add(width);
+        Ok(at.checked_add(wire).filter(|end| *end <= limit))
+    };
     match ty {
-        ChType::Bool | ChType::Enum { bits: 8, .. } => fixed(1),
-        ChType::Enum { .. } | ChType::BFloat16 | ChType::Date => fixed(2),
-        ChType::Int(bits) | ChType::UInt(bits) => fixed(usize::from(*bits / 8)),
-        ChType::Float32 | ChType::Date32 | ChType::DateTime(_) | ChType::Time | ChType::Ipv4 => {
-            fixed(4)
+        ChType::Bool => fixed(1, 1),
+        // Formatted into a `Utf8` column: the longest text, and its offset.
+        // `-` and 77 digits for `Int256`, 78 digits for `UInt256`.
+        ChType::Int(256) | ChType::UInt(256) => fixed(32, 78 + 4),
+        ChType::Uuid => fixed(16, 36 + 4),
+        ChType::Ipv4 => fixed(4, 15 + 4),
+        ChType::Ipv6 => fixed(16, 39 + 4),
+        ChType::Enum { bits, labels } => {
+            let wire = if *bits == 8 { 1 } else { 2 };
+            let Some(raw) = at
+                .checked_add(wire)
+                .filter(|end| *end <= limit)
+                .and_then(|end| buf.get(at..end))
+            else {
+                return Ok(None);
+            };
+            let value = match raw {
+                [byte] => i16::from(i8::from_le_bytes([*byte])),
+                [low, high] => i16::from_le_bytes([*low, *high]),
+                _ => return Ok(None),
+            };
+            // A value the type does not declare is refused by the decoder;
+            // until then it counts as its offset.
+            let label = labels
+                .iter()
+                .find(|(_, declared)| *declared == value)
+                .map_or(0, |(label, _)| label.len());
+            fixed(wire, label.saturating_add(4))
         }
+        ChType::BFloat16 | ChType::Date => fixed(2, 4),
+        ChType::Int(bits) | ChType::UInt(bits) if *bits <= 64 => {
+            let width = usize::from(*bits / 8);
+            fixed(width, width)
+        }
+        // 128 bits travel as a 256-bit decimal.
+        ChType::Int(_) | ChType::UInt(_) => fixed(16, 32),
+        ChType::Float32 | ChType::Date32 => fixed(4, 4),
+        ChType::DateTime(_) | ChType::Time => fixed(4, 8),
         ChType::Float64 | ChType::DateTime64 { .. } | ChType::Time64(_) | ChType::Interval => {
-            fixed(8)
+            fixed(8, 8)
         }
-        ChType::Uuid | ChType::Ipv6 => fixed(16),
-        ChType::Decimal { precision, .. } => fixed(decimal_width(*precision)),
+        ChType::Decimal { precision, .. } => {
+            let width = if *precision <= 38 { 16 } else { 32 };
+            fixed(decimal_width(*precision), width)
+        }
         ChType::FixedString(width) if *width > MAX_ROW_BYTES => Err(DecodeError::RowTooLarge),
-        ChType::FixedString(width) => fixed(*width),
+        ChType::FixedString(width) => fixed(*width, *width),
         // `Nullable(Nothing)` is the type of a bare `NULL`, always a marker
         // of 1; a bare `Nothing` only appears in an empty array. Counting one
         // byte for it bounds a hostile count of them by the bytes received.
@@ -183,6 +248,7 @@ fn skip(
                 return Ok(None);
             };
             if marker == 1 {
+                *decoded = decoded.saturating_add(1);
                 Ok(Some(at + 1))
             } else {
                 Err(value_error(column, BAD_MARKER))
@@ -194,6 +260,7 @@ fn skip(
             };
             match usize::try_from(length) {
                 Ok(length) if length <= MAX_ROW_BYTES => {
+                    *decoded = decoded.saturating_add(length.saturating_add(4));
                     Ok(start.checked_add(length).filter(|end| *end <= limit))
                 }
                 _ => Err(DecodeError::RowTooLarge),
@@ -204,20 +271,23 @@ fn skip(
                 return Ok(None);
             };
             match marker {
+                // A NULL is one byte on the wire and a whole slot once
+                // decoded: a million NULL `FixedString(1000)` arrive in a
+                // megabyte and take a gigabyte.
                 1 => {
-                    *slots = slots.saturating_add(null_slot(inner).saturating_sub(1));
+                    *decoded = decoded.saturating_add(null_slot(inner));
                     Ok(Some(at + 1))
                 }
-                0 => skip(inner, buf, at + 1, limit, column, slots),
+                0 => skip(inner, buf, at + 1, limit, column, decoded),
                 _ => Err(value_error(column, BAD_MARKER)),
             }
         }
-        ChType::Array(inner) => repeated(&[&**inner], buf, at, limit, column, slots),
-        ChType::Map(key, value) => repeated(&[&**key, &**value], buf, at, limit, column, slots),
+        ChType::Array(inner) => repeated(&[&**inner], buf, at, limit, column, decoded),
+        ChType::Map(key, value) => repeated(&[&**key, &**value], buf, at, limit, column, decoded),
         ChType::Tuple(elements) => {
             let mut end = at;
             for (_, ty) in elements {
-                match skip(ty, buf, end, limit, column, slots)? {
+                match skip(ty, buf, end, limit, column, decoded)? {
                     Some(next) => end = next,
                     None => return Ok(None),
                 }
@@ -230,24 +300,27 @@ fn skip(
     }
 }
 
-/// A count, then that many groups of `types`: an array or a map.
+/// A count, then that many groups of `types`: an array or a map, and its
+/// four-byte offset.
 ///
 /// Every value takes at least one byte, so the loop runs at most once per
-/// byte received: a hostile count of 2^63 ends at the buffer's end.
+/// byte received: a hostile count of 2^63 ends at the buffer's end — or
+/// sooner, at the first item that takes the decoded row past its bound.
 fn repeated(
     types: &[&ChType],
     buf: &[u8],
     at: usize,
     limit: usize,
     column: &str,
-    slots: &mut usize,
+    decoded: &mut usize,
 ) -> Result<Option<usize>, DecodeError> {
     let Some((count, mut end)) = varint(buf, at, limit, column)? else {
         return Ok(None);
     };
+    *decoded = decoded.saturating_add(4);
     for _ in 0..count {
         for ty in types {
-            match skip(ty, buf, end, limit, column, slots)? {
+            match skip(ty, buf, end, limit, column, decoded)? {
                 Some(next) => end = next,
                 None => return Ok(None),
             }
@@ -373,6 +446,54 @@ mod tests {
         // The same NULLs of a byte-wide type pass.
         let columns = self::columns(&["Array(Nullable(UInt8))"]);
         assert_eq!(measure(&columns, &row), Ok(Some(row.len())));
+    }
+
+    /// `count` items of one wire byte each, behind their LEB128 count.
+    fn one_byte_items(count: usize, byte: u8) -> Vec<u8> {
+        let mut row = Vec::with_capacity(count + 10);
+        let mut rest = count;
+        while rest >= 0x80 {
+            row.push(u8::try_from(rest & 0x7f).expect("seven bits") | 0x80);
+            rest >>= 7;
+        }
+        row.push(u8::try_from(rest).expect("below 0x80"));
+        row.resize(row.len() + count, byte);
+        row
+    }
+
+    #[test]
+    fn offsets_count_what_they_take_once_decoded() {
+        // Seventeen million empty strings: 17 MB on the wire, under the row
+        // bound, and 68 MB of Arrow offsets — refused before any is appended.
+        let items = 17 << 20;
+        let row = one_byte_items(items, 0);
+        assert!(row.len() < MAX_ROW_BYTES);
+        let columns = columns(&["Array(String)"]);
+        assert_eq!(measure(&columns, &row), Err(DecodeError::RowTooLarge));
+        // The same for empty arrays, whose offsets are as wide.
+        let columns = self::columns(&["Array(Array(UInt8))"]);
+        assert_eq!(measure(&columns, &row), Err(DecodeError::RowTooLarge));
+        // Bytes take as many bytes decoded: the same count passes.
+        let columns = self::columns(&["Array(UInt8)"]);
+        assert_eq!(measure(&columns, &row), Ok(Some(row.len())));
+    }
+
+    #[test]
+    fn an_enum_counts_its_label() {
+        // A one-byte value decoded to a label of a mebibyte: sixty-four of
+        // them make a row of 64 MiB once decoded.
+        let label = "x".repeat(1 << 20);
+        let ty = format!("Array(Enum8('{label}' = 1))");
+        let columns = columns(&[ty.as_str()]);
+        assert_eq!(
+            measure(&columns, &one_byte_items(64, 1)),
+            Err(DecodeError::RowTooLarge)
+        );
+        let row = one_byte_items(8, 1);
+        assert_eq!(
+            walk(&columns, &row),
+            Ok(Some((row.len(), 4 + 8 * ((1 << 20) + 4))))
+        );
     }
 
     #[test]

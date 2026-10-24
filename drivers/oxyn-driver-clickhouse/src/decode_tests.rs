@@ -8,7 +8,7 @@ use arrow::array::{
 use arrow::datatypes::{Date32Type, Decimal128Type, DurationSecondType, Float32Type, i256};
 
 use super::*;
-use crate::measure::measure;
+use crate::measure::{measure, walk};
 use crate::schema::schema_for;
 use crate::types::parse;
 
@@ -26,13 +26,20 @@ fn decoder(types: &[&str], zone: Option<&str>) -> RowDecoder {
     RowDecoder::new(columns, schema, zone)
 }
 
-/// Decodes each row after proving it whole, the cursor's order.
+/// Decodes each row after proving it whole, the cursor's order — and checks
+/// that what the measure bounded is no less than what the row then took.
 fn decode(types: &[&str], rows: &[&[u8]]) -> Result<RecordBatch, DecodeError> {
     let mut decoder = decoder(types, Some("UTC"));
     for row in rows {
-        let length = measure(decoder.columns(), row)?.ok_or(DecodeError::Truncated)?;
+        let (length, bound) = walk(decoder.columns(), row)?.ok_or(DecodeError::Truncated)?;
         assert_eq!(length, row.len(), "the row is measured to its end");
+        let before = decoder.bytes();
         decoder.append(row)?;
+        let taken = decoder.bytes() - before;
+        assert!(
+            taken <= bound,
+            "the row took {taken} bytes, measured at most {bound}"
+        );
     }
     decoder.finish()
 }
