@@ -35,9 +35,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mongodb::options::{
-    AuthMechanism, ClientOptions, Credential, ServerAddress, Tls, TlsOptions,
-};
+use mongodb::options::{AuthMechanism, ClientOptions, Credential, ServerAddress, Tls, TlsOptions};
 use oxyn_core::{ConnectionConfig, Environment, OxynError, Result};
 use oxyn_driver::{Credentials, DriverMetadata};
 use secrecy::ExposeSecret as _;
@@ -270,8 +268,10 @@ impl ConnectSpec {
                 "`directConnection` takes exactly one host".to_owned(),
             ));
         }
-        for (path, name) in [(&ca_file, "tlsCAFile"), (&certificate_key_file, "tlsCertificateKeyFile")]
-        {
+        for (path, name) in [
+            (&ca_file, "tlsCAFile"),
+            (&certificate_key_file, "tlsCertificateKeyFile"),
+        ] {
             if path.as_ref().is_some_and(|path| !path.is_absolute()) {
                 return Err(OxynError::Config(format!(
                     "parameter `{name}` must be an absolute path"
@@ -334,7 +334,9 @@ impl ConnectSpec {
     /// Resolves the DNS seed list for `srv` — network I/O, on the caller's
     /// runtime, never on the interface thread ([I-05](../../../CLAUDE.md#i-05)).
     /// The only legitimate caller opens a client.
-    pub(crate) async fn client_options(&self) -> std::result::Result<ClientOptions, mongodb::error::Error> {
+    pub(crate) async fn client_options(
+        &self,
+    ) -> std::result::Result<ClientOptions, mongodb::error::Error> {
         let overview = &self.overview;
         let mut options = match &overview.seeds {
             Seeds::Srv(name) => {
@@ -376,7 +378,8 @@ impl ConnectSpec {
                 let mut tls = TlsOptions::default();
                 tls.allow_invalid_certificates = Some(mode == TlsMode::Require);
                 tls.ca_file_path.clone_from(&overview.ca_file);
-                tls.cert_key_file_path.clone_from(&overview.certificate_key_file);
+                tls.cert_key_file_path
+                    .clone_from(&overview.certificate_key_file);
                 Tls::Enabled(tls)
             }
         });
@@ -479,7 +482,8 @@ fn check_dns_name(name: &str) -> Result<()> {
         Ok(())
     } else {
         Err(OxynError::Config(
-            "a DNS seed list (`srv`) needs a DNS name: letters, digits, hyphens and dots".to_owned(),
+            "a DNS seed list (`srv`) needs a DNS name: letters, digits, hyphens and dots"
+                .to_owned(),
         ))
     }
 }

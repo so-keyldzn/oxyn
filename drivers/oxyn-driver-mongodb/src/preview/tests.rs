@@ -12,9 +12,18 @@ fn collection(fields: &[&str]) -> Relation {
         .iter()
         .enumerate()
         .map(|(position, name)| {
-            let field = Field::new(*name, u32::try_from(position).unwrap_or(0), LogicalType::Text, "string")
-                .with_inferred();
-            if *name == "_id" { field.primary_key() } else { field }
+            let field = Field::new(
+                *name,
+                u32::try_from(position).unwrap_or(0),
+                LogicalType::Text,
+                "string",
+            )
+            .with_inferred();
+            if *name == "_id" {
+                field.primary_key()
+            } else {
+                field
+            }
         })
         .collect();
     Relation::new("orders", RelationKind::Collection).with_fields(fields)
@@ -23,7 +32,10 @@ fn collection(fields: &[&str]) -> Relation {
 #[test]
 fn a_plain_preview_is_a_bounded_find_with_no_order() {
     let request = request(&path("orders"), 200, &PreviewShape::unordered(), None).expect("plain");
-    assert_eq!(request.text, r#"{"find":"orders","$db":"shop","limit":200}"#);
+    assert_eq!(
+        request.text,
+        r#"{"find":"orders","$db":"shop","limit":200}"#
+    );
     assert_eq!(request.language, QueryLanguage::MongoQuery);
     assert!(request.limits.read_only);
     assert_eq!(request.limits.max_rows, Some(200));
@@ -41,8 +53,13 @@ fn a_sort_is_completed_by_id_and_pages_follow_it() {
         offset: 400,
         ..PreviewShape::unordered()
     };
-    let request = request(&path("orders"), 200, &shape, Some(&collection(&["_id", "total"])))
-        .expect("sorted page");
+    let request = request(
+        &path("orders"),
+        200,
+        &shape,
+        Some(&collection(&["_id", "total"])),
+    )
+    .expect("sorted page");
     assert_eq!(
         request.text,
         r#"{"find":"orders","$db":"shop","sort":{"total":-1,"_id":1},"skip":400,"limit":200}"#
@@ -51,8 +68,9 @@ fn a_sort_is_completed_by_id_and_pages_follow_it() {
 
 #[test]
 fn a_view_has_no_total_order_to_page_by() {
-    let view = Relation::new("v", RelationKind::View)
-        .with_fields(vec![Field::new("_id", 0, LogicalType::Text, "string").with_inferred()]);
+    let view = Relation::new("v", RelationKind::View).with_fields(vec![
+        Field::new("_id", 0, LogicalType::Text, "string").with_inferred(),
+    ]);
     let shape = PreviewShape {
         offset: 200,
         ..PreviewShape::unordered()
@@ -71,10 +89,13 @@ fn a_name_find_would_read_as_a_path_or_an_operator_is_refused() {
             sort: vec![PreviewSort::ascending(name)],
             ..PreviewShape::unordered()
         };
-        assert!(matches!(
-            request(&path("orders"), 10, &shape, Some(&relation)),
-            Err(OxynError::NotSupported { .. })
-        ), "{name}");
+        assert!(
+            matches!(
+                request(&path("orders"), 10, &shape, Some(&relation)),
+                Err(OxynError::NotSupported { .. })
+            ),
+            "{name}"
+        );
     }
 }
 
@@ -96,8 +117,13 @@ fn a_projection_reads_only_what_was_asked() {
         columns: Some(vec!["total".to_owned()]),
         ..PreviewShape::unordered()
     };
-    let request = request(&path("orders"), 10, &shape, Some(&collection(&["_id", "total"])))
-        .expect("projection");
+    let request = request(
+        &path("orders"),
+        10,
+        &shape,
+        Some(&collection(&["_id", "total"])),
+    )
+    .expect("projection");
     assert_eq!(
         request.text,
         r#"{"find":"orders","$db":"shop","projection":{"total":1,"_id":0},"limit":10}"#

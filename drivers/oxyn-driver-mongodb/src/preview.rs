@@ -83,10 +83,12 @@ pub(crate) fn request(
     }
     command.insert("limit", i64::from(limit));
 
-    let raw = RawDocumentBuf::try_from(&command)
-        .map_err(|error| OxynError::Internal(format!("a preview command cannot be encoded: {error}")))?;
-    let text = ejson::document(&raw, Mode::Relaxed)
-        .map_err(|error| OxynError::Internal(format!("a preview command cannot be written: {error}")))?;
+    let raw = RawDocumentBuf::try_from(&command).map_err(|error| {
+        OxynError::Internal(format!("a preview command cannot be encoded: {error}"))
+    })?;
+    let text = ejson::document(&raw, Mode::Relaxed).map_err(|error| {
+        OxynError::Internal(format!("a preview command cannot be written: {error}"))
+    })?;
     Ok(ExecRequest::new(LANGUAGE, text)
         .with_intent(StatementIntent::Read)
         .with_limits(ExecLimits::default().with_max_rows(max_rows)))
@@ -125,10 +127,11 @@ fn sort(shape: &PreviewShape, relation: Option<&Relation>) -> Result<Option<Docu
     });
     if !keyed {
         return Err(OxynError::NotSupported {
-            capability: "preview order: this relation has no unique `_id` (a view or a time-series \
+            capability:
+                "preview order: this relation has no unique `_id` (a view or a time-series \
                          collection), and a sort or a page without a total order repeats \
                          documents and skips others without saying so"
-                .to_owned(),
+                    .to_owned(),
         });
     }
     let mut sort = Document::new();

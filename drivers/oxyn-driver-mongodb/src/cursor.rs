@@ -53,9 +53,10 @@ pub const SAMPLE_BYTES: usize = 8 << 20;
 /// Where the documents come from.
 enum Source {
     /// A server cursor, iterated in the logical session that opened it.
+    /// Boxed: one per execution, and the session is large.
     Server {
-        cursor: SessionRawBatchCursor,
-        session: ClientSession,
+        cursor: Box<SessionRawBatchCursor>,
+        session: Box<ClientSession>,
     },
     /// A reply that is the whole result, already in `pending`, or a cursor
     /// the server has no more batches for.
@@ -107,7 +108,10 @@ impl Feed {
     ) -> Self {
         Self {
             pending: VecDeque::new(),
-            source: Source::Server { cursor, session },
+            source: Source::Server {
+                cursor: Box::new(cursor),
+                session: Box::new(session),
+            },
             driver,
             intent,
             running,
