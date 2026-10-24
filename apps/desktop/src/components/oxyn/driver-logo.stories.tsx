@@ -1,7 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect } from "storybook/test"
 
+import { cn } from "@/lib/utils"
+
 import { DriverLogo } from "./driver-logo"
+import { catalogueDrivers } from "./fixtures"
 
 const meta = {
   title: "Oxyn/DriverLogo",
@@ -96,6 +99,75 @@ export const MySQLDark: Story = {
     await expect(svg).toHaveAttribute("aria-hidden", "true")
     for (const path of svg.querySelectorAll("path"))
       await expect(getComputedStyle(path).fill).toBe("rgb(255, 255, 255)")
+  },
+}
+
+const markSets = [
+  { theme: "light", size: "size-4" },
+  { theme: "light", size: "size-5" },
+  { theme: "dark", size: "size-4" },
+  { theme: "dark", size: "size-5" },
+] as const
+
+function drawn(set: Element, driver: string) {
+  const svg = set.querySelector(`[data-driver="${driver}"] svg`)
+  if (svg === null) throw new Error(`no logo drawn for ${driver}`)
+  return svg
+}
+
+/**
+ * Every type of the catalogue, at the sizes the interface draws them, on both
+ * themes. A driver added to the catalogue without a mark fails here; Oracle
+ * alone keeps the generic icon, on purpose. Each set holds every mark once:
+ * two marks sharing an `id` would let one's `url(#…)` resolve to the other's
+ * gradient or clip, drawing the wrong shape.
+ */
+export const EveryCatalogueDriver: Story = {
+  globals: { theme: "light" },
+  render: () => (
+    <div className="flex flex-col gap-3 p-3">
+      <div hidden data-generic>
+        <DriverLogo driver="a-driver-without-a-mark" className="size-4" />
+      </div>
+      {markSets.map(({ theme, size }) => (
+        <ul
+          key={`${theme}-${size}`}
+          aria-label={`${theme} theme, ${size}`}
+          data-mark-set
+          className={cn(
+            theme === "dark" && "dark",
+            "grid grid-cols-6 gap-2 rounded-md bg-background p-3 text-xs text-foreground"
+          )}
+        >
+          {catalogueDrivers.map(({ id, displayName }) => (
+            <li key={id} data-driver={id} className="flex items-center gap-1.5">
+              <DriverLogo driver={id} className={size} />
+              {displayName}
+            </li>
+          ))}
+        </ul>
+      ))}
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const generic = canvasElement.querySelector("[data-generic] svg")
+    if (generic === null) throw new Error("no generic icon drawn")
+    const sets = canvasElement.querySelectorAll("[data-mark-set]")
+    await expect(sets).toHaveLength(markSets.length)
+    for (const set of sets) {
+      for (const { id } of catalogueDrivers) {
+        const svg = drawn(set, id)
+        await expect(svg).toHaveAttribute("aria-hidden", "true")
+        await expect(svg).toBeVisible()
+        if (id === "oracle") await expect(svg.innerHTML).toBe(generic.innerHTML)
+        else
+          await expect(svg.innerHTML, `${id} wears a mark`).not.toBe(
+            generic.innerHTML
+          )
+      }
+      const ids = Array.from(set.querySelectorAll("[id]"), (e) => e.id)
+      await expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([])
+    }
   },
 }
 
