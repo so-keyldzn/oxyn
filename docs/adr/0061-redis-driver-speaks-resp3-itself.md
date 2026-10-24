@@ -1,4 +1,4 @@
-# ADR-0061 — The Redis driver speaks RESP3 itself, classifies commands from the server's own table, and stops only what Redis can stop
+# ADR-0061 — The Redis driver speaks RESP3 itself, proves a read by its own list and the server's table, and stops only what Redis can stop
 
 **Status:** proposed · **Date:** 2026-10-22
 
@@ -33,7 +33,11 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
   and `@dangerous`; `FLUSHALL` is `write` and `@dangerous`; `EVAL` carries
   neither `readonly` nor `write`; `EVAL_RO` is `readonly`; `PING` carries only
   `fast`; `INFO` is `@dangerous`; `BLPOP` is `write` and `blocking`; `XREAD` is
-  `readonly` and `blocking`; every `ACL` subcommand lacks `readonly`.
+  `readonly` and `blocking`; every `ACL` subcommand lacks `readonly`. The
+  flag is the server's word, not a proof: on Redis 8.10.2 the search module
+  flags `FT.CURSOR DEL` and the `_FT.DEBUG` subcommands that force a garbage
+  collection or change a limit `readonly` (2026-10-24), and a fork, a proxy
+  or a hostile endpoint answers whatever table it wants.
 * **Stopping.** `CLIENT UNBLOCK <id> ERROR` (`@admin`, `@dangerous`) unblocks a
   client blocked by a blocking command; it then reads `-UNBLOCKED`.
   `SCRIPT KILL` and `FUNCTION KILL` stop the running script — whichever it is —
@@ -72,15 +76,23 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    without `HELLO` (Redis before 6) is refused. A server whose `HELLO` says
    `cluster` or `sentinel` is refused with a message naming the mode: a cluster
    would answer `MOVED`, which the driver never follows silently.
-3. **The intent comes from the server's `COMMAND` table, read once per
-   session**: a subcommand of `ACL` without `readonly` is `Grant`; `readonly`,
-   not `write`, outside `@dangerous` is `Read`; `write` outside `@dangerous` is
-   `Write`; anything else — `@dangerous`, no flag, a script, a name the server
-   does not know, a container named without a known subcommand — proves
-   nothing and is `Unknown`. The driver answers this through
-   `Session::classify_intent` (ADR-0064). One exception to `@dangerous`: a
-   `write` whose reach the driver knows (point 15) is a `Write`, so that its
-   risk is consulted.
+3. **A read is proven by the driver's own list and the server's `COMMAND`
+   table together; the table only ever raises.** The driver compiles in the
+   commands proven read-only (`reads.rs`, 157 of them, dated in
+   RESEARCH-NOTES): those Redis 8.10.2 and Valkey 9.1.2 both flag `readonly`
+   outside `@dangerous`, and the read commands of the modules Redis loads.
+   In order: any `ACL` command is `Grant`; a write whose reach the driver
+   knows (point 15) is a `Write`, whatever the table says or omits; `EVAL`,
+   `EVALSHA` and `FCALL` are `Unknown` even when the table flags them
+   `write`, a script's body being unread; a command in `@dangerous` per the
+   table is `Unknown`; one the table flags `write` is `Write`; one on the
+   list **and** flagged `readonly` by the table is `Read`; anything else — no
+   flag, `readonly` but off the list, a name the server does not know, a
+   container named without a known subcommand — proves nothing and is
+   `Unknown`. A table that flags `SET`, `CONFIG SET` or `FLUSHALL` `readonly`
+   therefore proves no read, and one that leaves `FLUSHALL` out does not lower
+   it. The driver answers this through `Session::classify_intent`
+   (ADR-0064); the table is read once per session.
 4. **What changes the connection is refused in a console**, by the driver's
    own list — no flag says it: `UNSUBSCRIBE` and its family, `SYNC`, `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (the session context selects
    the database), `MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`, `RESET`, `QUIT`,
@@ -94,11 +106,15 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    (`oxyn_query::redis::current_command`); a quote left open makes the
    boundary unknown, and a selection is asked for. Keys are
    shown, previewed and composed through the inverse rendering, which parses
-   back to the exact bytes.
-6. **A read-only execution sends only what the server flags `readonly`**
-   outside `@dangerous`. Redis has no read-only session, so the session does
-   not declare `READ_ONLY_SESSION`; `EVAL_RO` and `FCALL_RO` qualify, and the
-   server refuses a write inside them.
+   back to the exact bytes. The grammar lives in `oxyn_query::redis::argv`:
+   the driver builds the argv it sends with it, and the redaction of point 12
+   reads a console text with the same token function, so that what is kept
+   and what runs cannot be read two ways.
+6. **A read-only execution sends only a proven read** (point 3), and checks
+   the driver's list again from the argv alone, on top of the intent: a table
+   that lies cannot open it by itself. Redis has no read-only session, so the
+   session does not declare `READ_ONLY_SESSION`; `EVAL_RO`, `EVALSHA_RO` and
+   `FCALL_RO` qualify, and the server refuses a write inside them.
 7. **Stopping:** a `blocking` command is stopped with `CLIENT UNBLOCK <id>
    ERROR` from a second connection, proven by the stopped command's own
    `-UNBLOCKED` (a module's blocking command answers its unblocking with an
@@ -129,7 +145,11 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    and the script chooses the prefix — a `TRYAGAIN` it returns after a
    `DECRBY` is not the server's refusal. `IOERR` is ambiguous: `MIGRATE`'s
    transfer failed and the key may be on both instances. A connection lost
-   after a command that may write was sent is `OutcomeUnknown`.
+   after a command that may write was sent is `OutcomeUnknown`, and so is a
+   failure **while sending** it: `write_all` does not say how many bytes left
+   before it failed, and a TLS stream accepts the plaintext before its socket
+   write fails, so no I/O result proves that no byte reached the server. Only
+   a read stays transient.
 10. **Replies as Arrow.** The reply's first byte decides the columns: a
     scalar is one typed row (`Int64`, `Float64`, `Boolean`; a big number is
     `Utf8` marked `oxyn:redis_type`); an array, set or push is one row per
@@ -162,8 +182,21 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     journal or a conversation keeps the text, as ADR-0053 does for SQL: the
     password of `AUTH` and `HELLO … AUTH`, the `>`/`<`/`#`/`!` rules of
     `ACL SETUSER`, the value of `CONFIG SET` for `requirepass`, `masterauth`,
-    `tls-key-file-pass` and `tls-client-key-file-pass`, and `MIGRATE`'s
-    `AUTH`/`AUTH2` passwords (`oxyn_query::redis::redact_secrets`).
+    `masteruser`, `tls-key-file-pass` and `tls-client-key-file-pass`, and
+    `MIGRATE`'s `AUTH`/`AUTH2` passwords
+    (`oxyn_query::redis::redact_secrets`). The decision is taken on the
+    **decoded argv**, read by the execution's own grammar (point 5), and the
+    replacement covers the argument as written: `"A\x55TH" hunter2` is `AUTH`,
+    `"\x3ehunter2"` a `>` rule. What the driver refuses — an open or glued
+    quote, a NUL — is still read, keeping the most bytes in one argument.
+    A sink that knows the language redacts by it — the history, the journal
+    entry built from an `Execute`. One that does not — a tool-call record and
+    its re-encoding, an audit entry written back, a saved query mentioned to
+    an agent — applies every grammar (`oxyn_query::redact_any_language`):
+    forcing SQL there kept `CONFIG SET requirepass` whole, in the workspace
+    and in the next prompt. The cost is a SQL line starting with a Redis
+    credential keyword losing an argument in the kept copy, never in what
+    runs.
 13. **Pub/Sub and `MONITOR` are bounded captures.** `SUBSCRIBE`,
     `PSUBSCRIBE`, `SSUBSCRIBE` and `MONITOR` run on a connection of their
     own, never the console's; what arrives becomes rows until the row limit,
@@ -178,17 +211,18 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     `crates/oxyn-ai/agents/redis.md` (`languages: [redis]`, ADR-0065): never
     `KEYS`, a key sized before it is read whole, the scope of a write shown
     before the write, no transaction to lean on. What it sends is classified
-    by the session's command table, as any console request.
+    by the session as point 3 says, as any console request.
 15. **A write that reaches everything in its target carries a risk**
     (`Session::classify_risk`, ADR-0066), from the driver's own list — no
     flag says it: `FLUSHALL` and `FLUSHDB` are `Truncate`, `SWAPDB`
     `UnboundedUpdate`, and `FUNCTION FLUSH`, `FUNCTION DELETE`,
     `FUNCTION RESTORE … FLUSH`, `XGROUP DESTROY`, `ACL DELUSER`,
     `FT.DROPINDEX` and `FT.DROP` are `DropObject`. A risk is answered only for
-    a request the table proves mutating, never for a read. `FLUSHALL`,
-    `FLUSHDB`, `SWAPDB` and `FT.DROPINDEX` are `write` and `@dangerous`: left
-    `Unknown`, a human's `FLUSHALL` on staging would run at one click, so a
-    dangerous `write` on this list is a `Write`, and its risk asks for an
+    a request proven mutating, never for a read. `FLUSHALL`, `FLUSHDB`,
+    `SWAPDB` and `FT.DROPINDEX` are `write` and `@dangerous`: left `Unknown`,
+    a human's `FLUSHALL` on staging would run at one click, so a command on
+    this list is a `Write` before the table is read — a table that flags it
+    otherwise or leaves it out changes nothing —, and its risk asks for an
     approval on every environment. A key named explicitly is bounded, however
     large: `DEL`, `UNLINK` and `MIGRATE` carry no risk. A script carries none
     either — `EVAL` proves no intent, stays `Unknown` and is never asked for
@@ -200,8 +234,9 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
 
 * **+** A `HGETALL`, `LRANGE 0 -1` or `SMEMBERS` of any size reaches the grid
   in bounded batches; a 512 MB value costs 16 MB.
-* **+** Redis 7, Redis 8 and Valkey, with or without modules, classify their
-  own commands; a module command is `Unknown` until its module flags it.
+* **+** Redis 7, Redis 8 and Valkey, with or without modules, flag their own
+  writes; a server whose table lies cannot make a write pass for a read, on
+  the gate or on a read-only execution.
 * **+** Nothing is sent that the user did not type or the form did not
   declare: no `CLIENT SETINFO`, no automatic reconnection inside a command, no
   retry.
@@ -210,8 +245,12 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
 * **−** `PING`, `INFO`, `KEYS`, `CONFIG GET` and every script are `Unknown`:
   confirmed on production, refused to an agent there. The server's flags say
   nothing safer, and guessing would be the mistake I-02 forbids.
+* **−** A read the list does not hold — a command of the next release, of a
+  module it does not name — is `Unknown` until the list is updated:
+  confirmed on production, refused to an agent there, refused on a read-only
+  execution. The list is dated, and re-observed with each server version.
 * **−** No read-only session: a read-only execution rests on the driver
-  refusing what the server does not flag `readonly`.
+  refusing what it cannot prove a read.
 * **−** A slow non-blocking command cannot be stopped: Stop closes the
   connection, the server finishes the command. A production `KEYS *` on fifty
   million keys stalls the server whatever Oxyn does — which is why it needs a
@@ -237,7 +276,10 @@ since slot routing would change the connection model.
 | Alternative | Reason for rejection |
 |---|---|
 | `redis` 1.7.1 | parses a whole reply into a `Value` tree before returning it: a large collection is materialized in full (I-06). It also sends `CLIENT SETINFO` and reconnects on its own unless configured not to |
-| Classifying commands from a list written in the driver | wrong for every module command and for the next Redis or Valkey release; the server describes its own commands |
+| Classifying writes from a list written in the driver | wrong for every module command and for the next Redis or Valkey release; the server describes its own writes, and a write it flags is a write |
+| Trusting the server's `readonly` flag alone | the flag is the server's word: a hostile or odd table makes `SET` or `CONFIG SET` a read on the gate and on the read-only guard, and Redis 8.10.2's own search module flags `FT.CURSOR DEL` `readonly` |
+| Proving "nothing was sent" from a failed write | `write_all` hides the count, and TLS accepts plaintext before the socket fails: a retried write could apply twice (I-13) |
+| A second, lighter tokenizer for the redaction | it disagreed with the execution on escapes: `"\x3ehunter2"` ran as a password rule and was kept as written |
 | Treating `@dangerous` reads (`KEYS`) as reads | a read the server itself files as dangerous stalls a production instance; a confirmation is the least |
 | Following `SCAN` cursors automatically in the console | sends commands the user did not type; the page's cursor is shown on every row instead |
 | `SCRIPT KILL` on every Stop of a script | it stops whatever script runs, possibly another application's |

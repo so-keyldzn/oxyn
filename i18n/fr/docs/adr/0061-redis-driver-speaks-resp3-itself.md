@@ -1,8 +1,8 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="a6f09196c662" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="aea4cf623623" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
-# ADR-0061 — Le driver Redis parle RESP3 lui-même, classe les commandes d'après la table du serveur, et n'arrête que ce que Redis sait arrêter
+# ADR-0061 — Le driver Redis parle RESP3 lui-même, prouve une lecture par sa propre liste et la table du serveur, et n'arrête que ce que Redis sait arrêter
 
 **Statut :** proposé · **Date :** 2026-10-22
 
@@ -40,7 +40,11 @@ que fait un arrêt. Vérifié le 2026-10-22
   `@dangerous` ; `EVAL` n'a ni `readonly` ni `write` ; `EVAL_RO` est
   `readonly` ; `PING` n'a que `fast` ; `INFO` est `@dangerous` ; `BLPOP` est
   `write` et `blocking` ; `XREAD` est `readonly` et `blocking` ; aucune
-  sous-commande d'`ACL` n'a `readonly`.
+  sous-commande d'`ACL` n'a `readonly`. Le drapeau est la parole du serveur,
+  pas une preuve : sur Redis 8.10.2, le module de recherche marque `readonly`
+  `FT.CURSOR DEL` et les sous-commandes de `_FT.DEBUG` qui forcent un
+  ramasse-miettes ou changent une limite (2026-10-24), et un fork, un proxy
+  ou un point d'accès hostile répond la table qu'il veut.
 * **Arrêter.** `CLIENT UNBLOCK <id> ERROR` (`@admin`, `@dangerous`) débloque un
   client bloqué par une commande bloquante ; il lit alors `-UNBLOCKED`.
   `SCRIPT KILL` et `FUNCTION KILL` arrêtent le script en cours — quel qu'il
@@ -80,15 +84,24 @@ que fait un arrêt. Vérifié le 2026-10-22
    serveur sans `HELLO` (Redis avant 6) est refusé. Un serveur dont le `HELLO`
    dit `cluster` ou `sentinel` est refusé avec un message qui nomme le mode : un
    cluster répondrait `MOVED`, que le driver ne suit jamais en silence.
-3. **L'intention vient de la table `COMMAND` du serveur, lue une fois par
-   session** : une sous-commande d'`ACL` sans `readonly` est `Grant` ;
-   `readonly`, sans `write`, hors `@dangerous` est `Read` ; `write` hors
-   `@dangerous` est `Write` ; tout le reste — `@dangerous`, aucun drapeau, un
-   script, un nom que le serveur ne connaît pas, un conteneur nommé sans
-   sous-commande connue — ne prouve rien et vaut `Unknown`. Le driver répond
-   par `Session::classify_intent` (ADR-0064). Une exception à `@dangerous` :
-   un `write` dont le driver connaît la portée (point 15) est un `Write`, afin
-   que son risque soit consulté.
+3. **Une lecture est prouvée par la liste du driver et la table `COMMAND` du
+   serveur ensemble ; la table ne fait jamais que durcir.** Le driver compile
+   les commandes prouvées en lecture seule (`reads.rs`, 157, datées dans
+   RESEARCH-NOTES) : celles que Redis 8.10.2 et Valkey 9.1.2 marquent toutes
+   deux `readonly` hors `@dangerous`, et les commandes de lecture des modules
+   que Redis charge. Dans l'ordre : toute commande `ACL` est `Grant` ; une
+   écriture dont le driver connaît la portée (point 15) est un `Write`, quoi
+   que la table dise ou omette ; `EVAL`, `EVALSHA` et `FCALL` valent
+   `Unknown` même quand la table les marque `write`, le corps d'un script
+   n'étant pas lu ; une commande `@dangerous` selon la table vaut `Unknown` ;
+   une que la table marque `write` est `Write` ; une qui est sur la liste
+   **et** que la table marque `readonly` est `Read` ; tout le reste — aucun
+   drapeau, `readonly` mais hors liste, un nom que le serveur ne connaît pas,
+   un conteneur nommé sans sous-commande connue — ne prouve rien et vaut
+   `Unknown`. Une table qui marque `SET`, `CONFIG SET` ou `FLUSHALL`
+   `readonly` ne prouve donc aucune lecture, et une qui omet `FLUSHALL` ne
+   l'abaisse pas. Le driver répond par `Session::classify_intent`
+   (ADR-0064) ; la table est lue une fois par session.
 4. **Ce qui change la connexion est refusé en console**, par la liste du driver
    lui-même — aucun drapeau ne le dit : `UNSUBSCRIBE` et sa famille, `SYNC`, `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (le contexte de session
    choisit la base), `MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`, `RESET`,
@@ -101,11 +114,17 @@ que fait un arrêt. Vérifié le 2026-10-22
    envoie la ligne sous le curseur, un saut de ligne entre guillemets gardé
    dans son argument (`oxyn_query::redis::current_command`) ; un guillemet
    resté ouvert rend la limite inconnue, et une sélection est demandée. Les clés sont affichées, prévisualisées et composées par le rendu
-   inverse, qui se relit vers les mêmes octets exactement.
-6. **Une exécution en lecture seule n'envoie que ce que le serveur marque
-   `readonly`** hors `@dangerous`. Redis n'a pas de session en lecture seule,
-   donc la session ne déclare pas `READ_ONLY_SESSION` ; `EVAL_RO` et
-   `FCALL_RO` qualifient, et le serveur refuse une écriture en leur sein.
+   inverse, qui se relit vers les mêmes octets exactement. La grammaire vit
+   dans `oxyn_query::redis::argv` : le driver construit avec elle l'argv
+   qu'il envoie, et le caviardage du point 12 lit un texte de console avec la
+   même fonction de lecture d'argument, si bien que ce qui est gardé et ce
+   qui s'exécute ne peuvent pas se lire de deux façons.
+6. **Une exécution en lecture seule n'envoie qu'une lecture prouvée**
+   (point 3), et revérifie la liste du driver à partir de l'argv seul, en
+   plus de l'intention : une table qui ment ne peut pas l'ouvrir à elle
+   seule. Redis n'a pas de session en lecture seule, donc la session ne
+   déclare pas `READ_ONLY_SESSION` ; `EVAL_RO`, `EVALSHA_RO` et `FCALL_RO`
+   qualifient, et le serveur refuse une écriture en leur sein.
 7. **Arrêter :** une commande `blocking` est arrêtée par `CLIENT UNBLOCK <id>
    ERROR` depuis une seconde connexion, prouvé par le `-UNBLOCKED` de la
    commande arrêtée elle-même (une commande bloquante de module répond à son
@@ -139,7 +158,11 @@ que fait un arrêt. Vérifié le 2026-10-22
    qu'il rend après un `DECRBY` n'est pas le refus du serveur. `IOERR` est
    ambigu : le transfert de `MIGRATE` a échoué et la clé est peut-être sur les
    deux instances. Une connexion perdue après l'envoi d'une commande qui peut
-   écrire vaut `OutcomeUnknown`.
+   écrire vaut `OutcomeUnknown`, et un échec **pendant** son envoi aussi :
+   `write_all` ne dit pas combien d'octets sont partis avant l'échec, et un
+   flux TLS accepte le texte clair avant que l'écriture sur la socket
+   n'échoue, si bien qu'aucun résultat d'I/O ne prouve qu'aucun octet n'a
+   atteint le serveur. Seule une lecture reste transitoire.
 10. **Les réponses en Arrow.** Le premier octet de la réponse décide des
     colonnes : un scalaire est une ligne typée (`Int64`, `Float64`, `Boolean` ;
     un grand nombre est `Utf8` marqué `oxyn:redis_type`) ; un tableau, un
@@ -176,9 +199,23 @@ que fait un arrêt. Vérifié le 2026-10-22
     l'historique, le journal ou une conversation ne garde le texte, comme
     l'ADR-0053 le fait pour le SQL : le mot de passe d'`AUTH` et de
     `HELLO … AUTH`, les règles `>`/`<`/`#`/`!` d'`ACL SETUSER`, la valeur de
-    `CONFIG SET` pour `requirepass`, `masterauth`, `tls-key-file-pass` et
-    `tls-client-key-file-pass`, et les mots de passe `AUTH`/`AUTH2` de
-    `MIGRATE` (`oxyn_query::redis::redact_secrets`).
+    `CONFIG SET` pour `requirepass`, `masterauth`, `masteruser`,
+    `tls-key-file-pass` et `tls-client-key-file-pass`, et les mots de passe
+    `AUTH`/`AUTH2` de `MIGRATE` (`oxyn_query::redis::redact_secrets`). La
+    décision se prend sur l'**argv décodé**, lu par la grammaire même de
+    l'exécution (point 5), et le remplacement couvre l'argument tel qu'il est
+    écrit : `"A\x55TH" hunter2` est `AUTH`, `"\x3ehunter2"` une règle `>`. Ce
+    que le driver refuse — un guillemet ouvert ou collé, un NUL — est tout de
+    même lu, en gardant le plus d'octets dans un seul argument. Un
+    réceptacle qui connaît le langage caviarde selon lui — l'historique,
+    l'entrée de journal construite à partir d'un `Execute`. Celui qui ne le
+    connaît pas — un enregistrement d'appel d'outil et son réencodage, une
+    entrée d'audit réécrite, une requête sauvegardée mentionnée à un agent —
+    applique toutes les grammaires (`oxyn_query::redact_any_language`) :
+    imposer le SQL y gardait `CONFIG SET requirepass` entier, dans le
+    workspace et dans l'invite suivante. Le prix est qu'une ligne SQL
+    commençant par un mot-clé d'identifiant Redis perd un argument dans la
+    copie gardée, jamais dans ce qui s'exécute.
 13. **Pub/Sub et `MONITOR` sont des captures bornées.** `SUBSCRIBE`,
     `PSUBSCRIBE`, `SSUBSCRIBE` et `MONITOR` tournent sur une connexion à eux,
     jamais celle de la console ; ce qui arrive devient des lignes jusqu'à la
@@ -194,20 +231,21 @@ que fait un arrêt. Vérifié le 2026-10-22
     `crates/oxyn-ai/agents/redis.md` (`languages: [redis]`, ADR-0065) :
     jamais `KEYS`, une clé mesurée avant d'être lue en entier, la portée
     d'une écriture montrée avant l'écriture, aucune transaction sur laquelle
-    s'appuyer. Ce qu'il envoie est classé par la table de commandes de la
-    session, comme toute requête de console.
+    s'appuyer. Ce qu'il envoie est classé par la session comme le dit le
+    point 3, comme toute requête de console.
 15. **Une écriture qui atteint tout ce que contient sa cible porte un
     risque** (`Session::classify_risk`, ADR-0066), d'après la liste du
     driver — aucun drapeau ne le dit : `FLUSHALL` et `FLUSHDB` sont
     `Truncate`, `SWAPDB` `UnboundedUpdate`, et `FUNCTION FLUSH`,
     `FUNCTION DELETE`, `FUNCTION RESTORE … FLUSH`, `XGROUP DESTROY`,
     `ACL DELUSER`, `FT.DROPINDEX` et `FT.DROP` sont `DropObject`. Un risque
-    n'est répondu que pour une requête que la table prouve mutante, jamais
-    pour une lecture. `FLUSHALL`, `FLUSHDB`, `SWAPDB` et `FT.DROPINDEX` sont
-    `write` et `@dangerous` : laissé `Unknown`, un `FLUSHALL` d'un humain sur
-    staging partirait en un clic ; une écriture `@dangerous` de cette liste est
-    donc un `Write`, et son risque demande une approbation sur tous les
-    environnements. Une clé nommée explicitement est bornée, si grande
+    n'est répondu que pour une requête prouvée mutante, jamais pour une
+    lecture. `FLUSHALL`, `FLUSHDB`, `SWAPDB` et `FT.DROPINDEX` sont `write` et
+    `@dangerous` : laissé `Unknown`, un `FLUSHALL` d'un humain sur staging
+    partirait en un clic ; une commande de cette liste est donc un `Write`
+    avant que la table ne soit lue — une table qui la marque autrement ou
+    l'omet n'y change rien —, et son risque demande une approbation sur tous
+    les environnements. Une clé nommée explicitement est bornée, si grande
     soit-elle : `DEL`, `UNLINK` et `MIGRATE` ne portent aucun risque. Un
     script n'en porte pas non plus — `EVAL` ne prouve aucune intention, reste
     `Unknown` et son risque n'est jamais demandé, si bien qu'un
@@ -219,9 +257,10 @@ que fait un arrêt. Vérifié le 2026-10-22
 
 * **+** Un `HGETALL`, `LRANGE 0 -1` ou `SMEMBERS` de toute taille atteint la
   grille en lots bornés ; une valeur de 512 Mo coûte 16 Mo.
-* **+** Redis 7, Redis 8 et Valkey, avec ou sans modules, classent leurs propres
-  commandes ; une commande de module vaut `Unknown` tant que son module ne la
-  marque pas.
+* **+** Redis 7, Redis 8 et Valkey, avec ou sans modules, marquent leurs
+  propres écritures ; un serveur dont la table ment ne peut pas faire passer
+  une écriture pour une lecture, ni au portail ni dans une exécution en
+  lecture seule.
 * **+** Rien n'est envoyé que l'utilisateur n'ait tapé ou que le formulaire n'ait
   déclaré : pas de `CLIENT SETINFO`, pas de reconnexion automatique au milieu
   d'une commande, pas de nouvel essai.
@@ -230,8 +269,14 @@ que fait un arrêt. Vérifié le 2026-10-22
 * **−** `PING`, `INFO`, `KEYS`, `CONFIG GET` et tout script valent `Unknown` :
   confirmés en production, refusés là à un agent. Les drapeaux du serveur ne
   disent rien de plus sûr, et deviner serait la faute qu'interdit I-02.
+* **−** Une lecture que la liste ne contient pas — une commande de la
+  prochaine version, d'un module qu'elle ne nomme pas — vaut `Unknown` tant
+  que la liste n'est pas mise à jour : confirmée en production, refusée là à
+  un agent, refusée dans une exécution en lecture seule. La liste est datée,
+  et réobservée à chaque version de serveur.
 * **−** Pas de session en lecture seule : une exécution en lecture seule repose
-  sur le refus, par le driver, de ce que le serveur ne marque pas `readonly`.
+  sur le refus, par le driver, de ce qu'il ne peut pas prouver être une
+  lecture.
 * **−** Une commande lente non bloquante ne peut pas être arrêtée : Stop ferme
   la connexion, le serveur finit la commande. Un `KEYS *` de production sur
   cinquante millions de clés bloque le serveur quoi que fasse Oxyn — c'est
@@ -259,7 +304,10 @@ modèle de connexion.
 | Alternative | Raison du rejet |
 |---|---|
 | `redis` 1.7.1 | analyse une réponse entière en arbre `Value` avant de la rendre : une grande collection est matérialisée en entier (I-06). Il envoie aussi `CLIENT SETINFO` et se reconnecte de lui-même sauf configuration contraire |
-| Classer les commandes d'après une liste écrite dans le driver | faux pour toute commande de module et pour la prochaine version de Redis ou Valkey ; le serveur décrit ses propres commandes |
+| Classer les écritures d'après une liste écrite dans le driver | faux pour toute commande de module et pour la prochaine version de Redis ou Valkey ; le serveur décrit ses propres écritures, et une écriture qu'il marque est une écriture |
+| Se fier au seul drapeau `readonly` du serveur | le drapeau est la parole du serveur : une table hostile ou étrange fait de `SET` ou `CONFIG SET` une lecture au portail et pour le garde de lecture seule, et le module de recherche de Redis 8.10.2 lui-même marque `FT.CURSOR DEL` `readonly` |
+| Prouver « rien n'est parti » à partir d'une écriture en échec | `write_all` cache le compte, et TLS accepte le texte clair avant que la socket n'échoue : une écriture rejouée pourrait s'appliquer deux fois (I-13) |
+| Un second lecteur, plus léger, pour le caviardage | il divergeait de l'exécution sur les échappements : `"\x3ehunter2"` s'exécutait comme règle de mot de passe et était gardé tel quel |
 | Traiter les lectures `@dangerous` (`KEYS`) comme des lectures | une lecture que le serveur lui-même range parmi les dangereuses bloque une instance de production ; une confirmation est le minimum |
 | Suivre automatiquement les curseurs de `SCAN` dans la console | envoie des commandes que l'utilisateur n'a pas tapées ; le curseur de la page est montré sur chaque ligne à la place |
 | `SCRIPT KILL` à chaque arrêt d'un script | il arrête le script qui tourne, quel qu'il soit, peut-être celui d'une autre application |

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="b56b3541caeb" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="b0e5b6742ad1" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -186,7 +186,8 @@ oxyn/
 │   │                             #   d'oxyn-query pour découper ce que MySQL ne prépare pas
 │   ├── oxyn-driver-clickhouse/   # interface HTTP, RowBinary décodé en Arrow,
 │   │                             #   aucune session serveur (ADR-0060)
-│   └── oxyn-driver-redis/        # RESP3, lu par le driver lui-même : Redis et Valkey (ADR-0061)
+│   └── oxyn-driver-redis/        # RESP3, lu par le driver lui-même : Redis et Valkey (ADR-0061) ;
+│                                 #   dépend d'oxyn-query pour la grammaire redis-cli que partage son caviardage
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
 └── docs/

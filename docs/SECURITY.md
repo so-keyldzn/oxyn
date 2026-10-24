@@ -50,7 +50,10 @@ credential and protect or replace affected workspace files
 ([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)). Redis
 commands get the same treatment with `<redacted>`: the password of `AUTH` and
 `HELLO … AUTH`, the password rules of `ACL SETUSER`, the credential values of
-`CONFIG SET` and `MIGRATE`'s `AUTH`/`AUTH2`
+`CONFIG SET` and `MIGRATE`'s `AUTH`/`AUTH2`, recognized on the arguments as
+the server decodes them, escapes included. A record that does not carry its
+language — a tool call, an audit entry written back, a saved query mentioned
+to an agent — is redacted by both grammars
 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)).
 
 **Concrete failure:** a workspace file containing a production password,

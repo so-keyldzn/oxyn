@@ -180,7 +180,8 @@ oxyn/
 │   │                             #   oxyn-query to split what MySQL cannot prepare
 │   ├── oxyn-driver-clickhouse/   # HTTP interface, RowBinary decoded to Arrow,
 │   │                             #   no server session (ADR-0060)
-│   └── oxyn-driver-redis/        # RESP3, read by the driver itself: Redis and Valkey (ADR-0061)
+│   └── oxyn-driver-redis/        # RESP3, read by the driver itself: Redis and Valkey (ADR-0061);
+│                                 #   depends on oxyn-query for the redis-cli grammar its redaction shares
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/
