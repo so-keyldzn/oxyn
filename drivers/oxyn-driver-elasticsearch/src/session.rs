@@ -224,13 +224,15 @@ impl Session for ElasticsearchSession {
         let asked = Asked {
             path: &parsed.path,
             body: parsed.body.as_ref(),
+            head: parsed.method == "HEAD",
+            read: !intent.is_mutating(),
         };
         let stream = if asked.streams() {
             Stream::First
         } else {
             Stream::No
         };
-        let decoded = match decode(&reply, parsed.method == "HEAD", stream) {
+        let decoded = match decode(&reply, &asked, stream) {
             Ok(decoded) => decoded,
             Err(error) => {
                 self.registry.remove(handle);
@@ -325,15 +327,21 @@ impl Session for ElasticsearchSession {
 ///
 /// `_bulk` answers 200 with `"errors": true` when items failed;
 /// `_update_by_query`, `_delete_by_query` and `_reindex` answer 200 with a
-/// non-empty `failures`. Neither is a success: the items before and around
-/// the failures were applied, and the message says how many failed and the
-/// first reason, in the server's terms.
+/// non-empty `failures`, or with `timed_out: true` when their `timeout` ran
+/// out midway. None is a success: the items before and around the failures
+/// were applied, and the message says how many failed and the first reason,
+/// in the server's terms.
 fn partial_failure(reply: &Reply) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct Summary {
         errors: Option<bool>,
         items: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
         failures: Option<Vec<serde_json::Value>>,
+        timed_out: Option<bool>,
+        /// The scroll batches of a by-query operation or a reindex: what
+        /// tells their answer from another write's.
+        batches: Option<u64>,
+        total: Option<u64>,
     }
     let summary: Summary = serde_json::from_slice(&reply.bytes).ok()?;
     let reason = |error: &serde_json::Value| {
@@ -357,16 +365,26 @@ fn partial_failure(reply: &Reply) -> Option<String> {
             items.len()
         ));
     }
-    let failures = summary.failures.filter(|failures| !failures.is_empty())?;
-    let first = failures
-        .first()
-        .and_then(|failure| failure.get("cause").and_then(reason))
-        .unwrap_or_default();
-    Some(format!(
-        "{} documents failed and the operation stopped; the documents processed before \
-         stay changed; first failure: {first}",
-        failures.len()
-    ))
+    if let Some(failures) = summary.failures.filter(|failures| !failures.is_empty()) {
+        let first = failures
+            .first()
+            .and_then(|failure| failure.get("cause").and_then(reason))
+            .unwrap_or_default();
+        return Some(format!(
+            "{} documents failed and the operation stopped; the documents processed before \
+             stay changed; first failure: {first}",
+            failures.len()
+        ));
+    }
+    (summary.timed_out == Some(true) && summary.batches.is_some()).then(|| {
+        let matched = summary
+            .total
+            .map_or_else(String::new, |total| format!(" of the {total} it matched"));
+        format!(
+            "the operation timed out on the cluster (`timed_out: true`) before it ended: the \
+             documents it processed stay changed, the others{matched} were not"
+        )
+    })
 }
 
 /// The request a Search DSL text holds; `None` for another language or a text

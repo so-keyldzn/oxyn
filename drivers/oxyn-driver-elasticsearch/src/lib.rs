@@ -9,6 +9,7 @@ mod catalog;
 mod cells;
 mod classify;
 mod columnar;
+mod complete;
 mod cursor;
 mod decode;
 mod error;

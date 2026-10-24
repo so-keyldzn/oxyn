@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex, PoisonError};
+
 use oxyn_core::{ConnectionConfig, DriverId, Environment, ErrorClass, ExecLimits, StatementIntent};
 use oxyn_driver::Credentials;
 
@@ -124,6 +126,145 @@ async fn a_bulk_answered_200_with_failed_items_is_not_a_success() {
         ErrorClass::Permanent,
         "never replayed as transient"
     );
+}
+
+#[tokio::test]
+async fn a_by_query_operation_that_timed_out_is_not_a_success() {
+    let port = canned(answer(
+        r#"{"took":30001,"timed_out":true,"total":1000,"updated":400,"deleted":0,"batches":1,"version_conflicts":0,"noops":0,"failures":[]}"#,
+    ))
+    .await;
+    let session = session_to(port);
+    let mut write = request("POST /logs/_update_by_query\n{\"query\":{\"term\":{\"a\":1}}}");
+    write.limits.read_only = false;
+    let failed = session
+        .execute(write, &CancelToken::new())
+        .await
+        .err()
+        .expect("a partial outcome");
+    let text = failed.to_string();
+    assert!(text.contains("timed_out"), "{text}");
+    assert!(text.contains("of the 1000 it matched"), "{text}");
+}
+
+#[tokio::test]
+async fn a_read_answered_partial_is_refused_by_the_session() {
+    let port = canned(answer(
+        r#"{"took":1,"timed_out":false,"_shards":{"total":2,"successful":1,"skipped":0,"failed":1,"failures":[{"shard":0,"index":"b","reason":{"type":"script_exception","reason":"runtime error"}}]},"hits":{"hits":[]}}"#,
+    ))
+    .await;
+    let session = session_to(port);
+    let refused = session
+        .execute(request("POST /a,b/_search\n{}"), &CancelToken::new())
+        .await
+        .err()
+        .expect("a partial read");
+    let text = refused.to_string();
+    assert!(text.contains("1 of the 2 shards"), "{text}");
+    assert!(text.contains("script_exception"), "{text}");
+    assert!(session.registry.all().is_empty(), "the handle is released");
+}
+
+/// A loopback server that answers its connections with `pages` in order,
+/// then `{}`, and keeps every request body it read.
+async fn scripted(pages: Vec<&'static str>) -> (u16, Arc<Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback port is free");
+    let port = listener.local_addr().expect("an address").port();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&bodies);
+    tokio::spawn(async move {
+        let mut pages = pages.into_iter();
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut read = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let body = loop {
+                match socket.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break String::new(),
+                    Ok(n) => read.extend_from_slice(buffer.get(..n).unwrap_or_default()),
+                }
+                let text = String::from_utf8_lossy(&read).into_owned();
+                let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                    continue;
+                };
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())?
+                    })
+                    .unwrap_or(0);
+                if body.len() >= length {
+                    break body.to_owned();
+                }
+            };
+            kept.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(body);
+            let _ = socket
+                .write_all(&answer(pages.next().unwrap_or("{}")))
+                .await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (port, bodies)
+}
+
+#[tokio::test]
+async fn an_sql_cursor_asks_its_later_pages_columnar_again() {
+    let (port, bodies) = scripted(vec![
+        r#"{"columns":[{"name":"a","type":"long"}],"values":[[1,2]],"cursor":"c1"}"#,
+        r#"{"values":[[3]]}"#,
+    ])
+    .await;
+    let session = session_to(port);
+    let mut cursor = session
+        .execute(
+            request("POST /_sql?format=json\n{\"query\":\"SELECT a FROM t\",\"fetch_size\":2,\"columnar\":true}"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("a cursor");
+    let mut values = Vec::new();
+    while let Some(batch) = cursor.next_batch().await.expect("a batch") {
+        let column = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .expect("int64");
+        values.extend(column.values().iter().copied());
+    }
+    assert_eq!(values, [1, 2, 3]);
+    let bodies = bodies
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let later: serde_json::Value =
+        serde_json::from_str(bodies.get(1).expect("a second request")).expect("JSON");
+    assert_eq!(later, serde_json::json!({"cursor": "c1", "columnar": true}));
+}
+
+#[tokio::test]
+async fn a_point_in_time_page_that_timed_out_stops_the_stream_with_an_error() {
+    let (port, _) = scripted(vec![
+        r#"{"pit_id":"p2","timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"_index":"a","_id":"1","_score":null,"_source":{"x":1},"sort":[1]}]}}"#,
+        r#"{"pit_id":"p3","timed_out":true,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[]}}"#,
+    ])
+    .await;
+    let session = session_to(port);
+    let mut cursor = session
+        .execute(
+            request("POST /_search\n{\"size\":1,\"pit\":{\"id\":\"p1\",\"keep_alive\":\"1m\"},\"sort\":[{\"_shard_doc\":\"asc\"}]}"),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("a cursor");
+    assert!(cursor.next_batch().await.expect("the first page").is_some());
+    let stopped = cursor.next_batch().await.expect_err("the partial page");
+    assert!(stopped.to_string().contains("timed_out"), "{stopped}");
 }
 
 #[tokio::test]

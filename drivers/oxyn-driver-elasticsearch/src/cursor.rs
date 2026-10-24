@@ -8,7 +8,13 @@
 //!   body with `search_after` set to the last hit's `sort` and the point in
 //!   time the server renewed — the documented deep-pagination protocol;
 //! * a search with `?scroll=`: `POST /_search/scroll` with its id;
-//! * `_sql` with a `fetch_size`: the `cursor` of the answer.
+//! * `_sql` with a `fetch_size`: the `cursor` of the answer, sent with
+//!   `"columnar": true` again when the first page was asked so — the server
+//!   does not remember the orientation.
+//!
+//! Every page is decoded like the first: bounded, and refused when it says
+//! it is incomplete — a short page of a point in time that timed out would
+//! otherwise read as the last one.
 //!
 //! A page is fetched only when the previous one has been consumed: memory
 //! holds one page at most ([I-06](../../../CLAUDE.md#i-06)). A scroll and an
@@ -22,15 +28,13 @@ use std::time::{Duration, Instant};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use indexmap::IndexMap;
 use oxyn_core::{CancelToken, ExecStats, OxynError, Result, StatementHandle, StatementIntent};
 use oxyn_driver::Cursor;
 use reqwest::Method;
 use serde_json::Value;
-use serde_json::value::RawValue;
 
-use crate::columnar::{self, Columns, Tabular};
-use crate::decode::{Decoded, Stream, decode};
+use crate::columnar::{Columns, Shape, Tabular};
+use crate::decode::{Decoded, Stream, decode, next_tabular};
 use crate::hits::HitLayout;
 use crate::http::{Body, Call, Http};
 use crate::session::Registry;
@@ -51,17 +55,45 @@ pub(crate) enum Next {
     Sql {
         cursor: String,
         columns: Columns,
-        tabular: Tabular,
+        shape: Shape,
     },
 }
 
-/// What a request asked for that decides whether its answer continues.
+/// What a request asked for that decides how its answer reads and whether
+/// it continues.
 pub(crate) struct Asked<'a> {
     pub(crate) path: &'a str,
     pub(crate) body: Option<&'a Value>,
+    /// A `HEAD`: the answer is its status.
+    pub(crate) head: bool,
+    /// A read, whose answer is refused when it says it is incomplete. A
+    /// write's partial outcome is the session's to report: its items applied.
+    pub(crate) read: bool,
 }
 
 impl Asked<'_> {
+    /// The tabular shape the endpoint answers in, oriented as the body asks.
+    pub(crate) fn shape(&self) -> Option<Shape> {
+        let tabular = Tabular::of_path(self.path)?;
+        let columnar = self
+            .body
+            .and_then(|body| body.get("columnar"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        Some(Shape::new(tabular, columnar))
+    }
+
+    /// Whether a text answer starts with a header line: a `_cat` request
+    /// asked `v` (`v`, `v=true`; the server refuses any value but `false`).
+    pub(crate) fn cat_header(&self) -> bool {
+        let (path, query) = self.path.split_once('?').unwrap_or((self.path, ""));
+        path.starts_with("/_cat/")
+            && query.split('&').any(|pair| {
+                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                key == "v" && value != "false"
+            })
+    }
+
     /// A request whose answer the cursor will continue: its first page gets
     /// the `_other` column a later page may need.
     pub(crate) fn streams(&self) -> bool {
@@ -82,14 +114,13 @@ impl Asked<'_> {
 
     /// The page after `decoded`, if the server's protocol has one.
     pub(crate) fn next(&self, decoded: &Decoded) -> Option<Next> {
-        if let (Some(cursor), Some((columns, tabular))) =
-            (&decoded.page.sql_cursor, &decoded.tabular)
-            && *tabular != Tabular::Esql
+        if let (Some(cursor), Some((columns, shape))) = (&decoded.page.sql_cursor, &decoded.tabular)
+            && shape.tabular != Tabular::Esql
         {
             return Some(Next::Sql {
                 cursor: cursor.clone(),
                 columns: columns.clone(),
-                tabular: *tabular,
+                shape: *shape,
             });
         }
         let layout = decoded.layout.clone()?;
@@ -173,11 +204,14 @@ impl EsCursor {
                 "/_search/scroll".to_owned(),
                 serde_json::json!({"scroll": keep_alive, "scroll_id": scroll_id}).to_string(),
             ),
-            Next::Sql {
-                cursor, tabular, ..
-            } => (
-                sql_path(*tabular).to_owned(),
-                serde_json::json!({"cursor": cursor}).to_string(),
+            Next::Sql { cursor, shape, .. } => (
+                sql_path(shape.tabular).to_owned(),
+                if shape.columnar {
+                    serde_json::json!({"cursor": cursor, "columnar": true})
+                } else {
+                    serde_json::json!({"cursor": cursor})
+                }
+                .to_string(),
             ),
         };
         let call = Call {
@@ -198,22 +232,25 @@ impl EsCursor {
             reply = self.http.send(call) => reply?,
         };
         let decoded = match &next {
-            Next::Pit { layout, .. } | Next::Scroll { layout, .. } => {
-                decode(&reply, false, Stream::Next(layout))?
-            }
-            Next::Sql {
-                columns, tabular, ..
-            } => {
-                let object: IndexMap<String, Box<RawValue>> = serde_json::from_slice(&reply.bytes)
-                    .map_err(|_| OxynError::Query("an SQL page is not valid JSON".to_owned()))?;
-                columnar::next_page(columns, &object, *tabular)?
-            }
+            Next::Pit { layout, .. } | Next::Scroll { layout, .. } => decode(
+                &reply,
+                &Asked {
+                    path: &path,
+                    body: None,
+                    head: false,
+                    read: true,
+                },
+                Stream::Next(layout),
+            )?,
+            Next::Sql { columns, shape, .. } => next_tabular(&reply, columns, *shape)?,
         };
         self.next = match next {
             // The layout travels in `decoded`, which kept the first page's.
             Next::Pit { path, body, .. } => Asked {
                 path: &path,
                 body: Some(&body),
+                head: false,
+                read: true,
             }
             .next(&decoded),
             Next::Scroll {
@@ -228,13 +265,13 @@ impl EsCursor {
                     keep_alive,
                     layout,
                 }),
-            Next::Sql {
-                columns, tabular, ..
-            } => decoded.page.sql_cursor.clone().map(|cursor| Next::Sql {
-                cursor,
-                columns,
-                tabular,
-            }),
+            Next::Sql { columns, shape, .. } => {
+                decoded.page.sql_cursor.clone().map(|cursor| Next::Sql {
+                    cursor,
+                    columns,
+                    shape,
+                })
+            }
         };
         if let Some(took) = decoded.took {
             self.stats.server_time = Some(self.stats.server_time.unwrap_or_default() + took);
@@ -252,11 +289,9 @@ impl EsCursor {
                 "/_search/scroll".to_owned(),
                 serde_json::json!({"scroll_id": [scroll_id]}),
             ),
-            Next::Sql {
-                cursor, tabular, ..
-            } => (
+            Next::Sql { cursor, shape, .. } => (
                 Method::POST,
-                format!("{}/close", sql_path(tabular)),
+                format!("{}/close", sql_path(shape.tabular)),
                 serde_json::json!({"cursor": cursor}),
             ),
         };

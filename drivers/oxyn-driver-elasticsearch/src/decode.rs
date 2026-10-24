@@ -9,9 +9,16 @@
 //! | a search with no hit and aggregations | the aggregations, flattened (`crate::aggs`) |
 //! | ES\|QL, `_sql`, OpenSearch SQL | their columns, typed (`crate::columnar`) |
 //! | an array of objects (`_cat?format=json`) | one per object |
-//! | `text/plain` (`_cat?v`) | one per line, split on the header's columns |
+//! | `text/plain` of `_cat?v` | one per line, split on the header's columns |
+//! | any other `text/plain` (`_cat` without `v`) | one per line, every line |
+//! | a running asynchronous search | one, its status: `id`, `is_running` |
 //! | any other object (`_cluster/health`) | one, a column per key |
 //! | `HEAD` | its status, and whether the target exists |
+//!
+//! The request decides the reading, never the answer's look: the endpoint
+//! names the tabular API, the body its orientation, `v` whether a `_cat`
+//! text starts with a header. A read whose answer says it is incomplete is
+//! refused (`crate::complete`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,10 +32,11 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 
 use crate::cells::{TextRows, cell_text, text_schema};
-use crate::columnar::{Columns, Tabular};
+use crate::columnar::{Columns, Shape};
+use crate::cursor::Asked;
 use crate::hits::{Hit, HitLayout, sources};
 use crate::http::Reply;
-use crate::{aggs, columnar};
+use crate::{aggs, columnar, complete};
 
 /// A decoded answer.
 pub(crate) struct Decoded {
@@ -40,8 +48,9 @@ pub(crate) struct Decoded {
     pub(crate) page: PageState,
     /// The layout of the hits, which a stream's later pages keep.
     pub(crate) layout: Option<HitLayout>,
-    /// The columns of a tabular answer, which `_sql`'s later pages keep.
-    pub(crate) tabular: Option<(Columns, Tabular)>,
+    /// The columns and shape of a tabular answer, which `_sql`'s later pages
+    /// keep.
+    pub(crate) tabular: Option<(Columns, Shape)>,
 }
 
 /// What the answer says about the pages after it.
@@ -85,13 +94,13 @@ pub(crate) enum Stream<'a> {
     Next(&'a HitLayout),
 }
 
-/// Decodes an answer.
-pub(crate) fn decode(reply: &Reply, head: bool, stream: Stream<'_>) -> Result<Decoded> {
-    if head {
+/// Decodes the answer to `asked`.
+pub(crate) fn decode(reply: &Reply, asked: &Asked<'_>, stream: Stream<'_>) -> Result<Decoded> {
+    if asked.head {
         return status_row(reply.status);
     }
     if !reply.json {
-        return lines(&reply.bytes);
+        return lines(&reply.bytes, asked.cat_header());
     }
     let trimmed = reply.bytes.trim_ascii_start();
     if trimmed.is_empty() {
@@ -100,9 +109,21 @@ pub(crate) fn decode(reply: &Reply, head: bool, stream: Stream<'_>) -> Result<De
     if trimmed.first() == Some(&b'[') {
         return array_rows(&reply.bytes);
     }
-    let object: IndexMap<String, Box<RawValue>> = serde_json::from_slice(&reply.bytes)
-        .map_err(|_| OxynError::Query("the server's answer is not valid JSON".to_owned()))?;
-    if let Some(decoded) = columnar::decode(&object)? {
+    let object = object(&reply.bytes)?;
+    if asked.read
+        && let Some(why) = complete::incomplete(&object)
+    {
+        return Err(OxynError::Query(why));
+    }
+    // A running asynchronous query is a status: what it holds so far is
+    // partial, and its row shows `is_running` and the `id` to fetch it by.
+    let running = object
+        .get("is_running")
+        .is_some_and(|running| running.get() == "true");
+    if !running
+        && let Some(shape) = asked.shape()
+        && let Some(decoded) = columnar::decode(&object, shape)?
+    {
         return Ok(decoded);
     }
     if object.contains_key("hits") {
@@ -112,6 +133,21 @@ pub(crate) fn decode(reply: &Reply, head: bool, stream: Stream<'_>) -> Result<De
         return hits(search, stream);
     }
     object_row(&object)
+}
+
+/// Decodes a later page of an SQL cursor, in its first page's columns and
+/// shape, refused like a first page when it says it is incomplete.
+pub(crate) fn next_tabular(reply: &Reply, columns: &Columns, shape: Shape) -> Result<Decoded> {
+    let object = object(&reply.bytes)?;
+    if let Some(why) = complete::incomplete(&object) {
+        return Err(OxynError::Query(why));
+    }
+    columnar::next_page(columns, &object, shape)
+}
+
+fn object(bytes: &[u8]) -> Result<IndexMap<String, Box<RawValue>>> {
+    serde_json::from_slice(bytes)
+        .map_err(|_| OxynError::Query("the server's answer is not valid JSON".to_owned()))
 }
 
 fn hits(search: Search, stream: Stream<'_>) -> Result<Decoded> {
@@ -205,7 +241,9 @@ fn object_row(object: &IndexMap<String, Box<RawValue>>) -> Result<Decoded> {
 /// as many words as the header: the table is then that. When a line does not
 /// split into exactly as many words — a value with a space — it would be cut
 /// in the wrong place, so the whole answer is one `line` column instead.
-fn lines(bytes: &[u8]) -> Result<Decoded> {
+/// Without `v` there is no header to read: a first line that splits like the
+/// others is a row all the same, so every line is a `line`.
+fn lines(bytes: &[u8], header_asked: bool) -> Result<Decoded> {
     let text = String::from_utf8_lossy(bytes);
     let lines: Vec<&str> = text
         .lines()
@@ -215,8 +253,8 @@ fn lines(bytes: &[u8]) -> Result<Decoded> {
         .first()
         .map(|line| line.split_whitespace().collect())
         .unwrap_or_default();
-    let tabular = header.len() > 1
-        && lines.len() > 1
+    let tabular = header_asked
+        && !header.is_empty()
         && lines
             .iter()
             .all(|line| line.split_whitespace().count() == header.len());
