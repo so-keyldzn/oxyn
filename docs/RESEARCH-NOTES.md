@@ -1577,6 +1577,7 @@ unquoted table or column name, and errs toward quoting.
 | SQLite | [SQLite keywords](https://www.sqlite.org/lang_keywords.html) | 147 keywords, all kept. The page names no version. |
 | MySQL | [`sql/lex.h`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/lex.h) and [`sql/sql_yacc.yy`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/sql_yacc.yy) at tag `mysql-8.4.0` | 731 words declared by `SYM` and `SYM_HK` (not the 36 `SYM_FN` function names, nor the `SYM_H` optimizer hints). 462 tokens appear in the rules `ident_keyword`, `ident_keywords_*` and `label_keyword`, which the parser takes as identifiers. The 264 words whose token appears in none are kept. |
 | MariaDB | [`sql/lex.h`](https://github.com/MariaDB/server/blob/11.8/sql/lex.h) and [`sql/sql_yacc.yy`](https://github.com/MariaDB/server/blob/11.8/sql/sql_yacc.yy), branch `11.8` at commit `c20c21d7a1cd` | 690 words in `symbols[]`. 443 tokens belong to the closure of `keyword_ident` (`keyword_data_type`, `keyword_cast_type`, `keyword_set_special_case`, `keyword_sp_block_section`, `keyword_sp_head`, `keyword_sp_var_and_label`, `keyword_sp_var_not_label`, their `keyword_func_*` parts, `keyword_sysvar_type`, `keyword_verb_clause`, plus `FUNCTION_SYM`, `WINDOW_SYM`, `EXCEPTION_ORACLE_SYM`, `IGNORED_SYM`). The 247 words outside it are kept. |
+| DuckDB | `third_party/libpg_query/include/parser/kwlist.hpp` of DuckDB `v1.5.6`, as bundled by `libduckdb-sys` 1.10506.1, read on 2026-10-23 | 490 keywords: 330 `UNRESERVED_KEYWORD`, 49 `COL_NAME_KEYWORD`, 35 `TYPE_FUNC_NAME_KEYWORD`, 75 `RESERVED_KEYWORD`. The 110 of the last two are kept, PostgreSQL's rule; `at`, `qualify`, `pivot`, `summarize` are among them. |
 
 The pages of the MySQL and MariaDB manuals that list reserved words are not the
 source: `dev.mysql.com` answers a scripted request with a 403, and the archived
@@ -3067,6 +3068,40 @@ re-read, the Node line the CI takes (22) is unchanged.
 | `vite` `8.3.3` was published on 2026-10-06T04:10:19Z, `8.3.4` on 2026-10-08T12:07:04Z and `8.3.5`, the `latest` dist-tag, on 2026-10-21T06:38:54Z. `8.3.3` is the smallest patched version of the line, hence the pin; a later bump goes through the usual update flow | `npm view vite time dist-tags --json` | 2026-10-21 |
 | With `vite` `8.3.3` the lockfile also moves `rolldown` and its bindings from `1.2.8` to `1.2.14` and `@oxc-project/types` from `0.149.0` to `0.154.0`: they are vite's own dependencies, not pins of the application | `pnpm install --lockfile-only` in `apps/desktop`, diff of `pnpm-lock.yaml` | 2026-10-21 |
 | On this change `pnpm audit --prod` reports "No known vulnerabilities found", `make front-controles` passes (Prettier, ESLint, `tsc --noEmit`, licenses, audit) and `pnpm build` completes with the SPA prerender of `/` | commands run in `apps/desktop` | 2026-10-21 |
+
+## DuckDB engine and client library — checked on 2026-10-23
+
+What [ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md) rests on. This
+section supersedes the `duckdb` row of the candidate table above, which was
+read on 2026-09-05.
+
+| Fact | Source | Checked on |
+|---|---|---|
+| Pinned: `duckdb` `=1.10506.1` (MIT, published 2026-10-16, `rust-version` 1.88) and the `libduckdb-sys` `1.10506.1` it requires exactly; default features off, `bundled`, `parquet` and `json` on | crates.io API, `duckdb/1.10506.1` and its dependencies | 2026-10-23 |
+| The bundled engine is DuckDB `v1.5.6`, source id `069cc9f9b5` | `DUCKDB_VERSION` and `DUCKDB_SOURCE_ID` in `src/function/table/version/pragma_version.cpp` of the bundled sources | 2026-10-23 |
+| Latest `duckdb`: `1.20000.0`, published 2026-10-22, MIT, `rust-version` 1.88, depending on `arrow` `^60`. `1.10506.1`, `1.10506.0`, `1.10505.0` and `1.10504.0` depend on `arrow` `^58`: no release depends on the workspace's Arrow 59 | crates.io API, dependencies of each version | 2026-10-23 |
+| The resolved Arrow of `duckdb` is `58.4.0`, next to the workspace's `59.3.0`; `deny.toml` sets `multiple-versions = "allow"`, so no skip entry is needed | `Cargo.lock`, `deny.toml` `[bans]` | 2026-10-23 |
+| `libduckdb-sys` declares `links = "duckdb"`; `libsqlite3-sys` `0.35.0` declares `links = "sqlite3"`: no `links` conflict with [ADR-0010](adr/0010-contraintes-natives-sqlite.md) | the two `Cargo.toml` files in the registry sources | 2026-10-23 |
+| `duckdb` 1.10506.1 features: `bundled` compiles the engine with `cc`; `parquet` and `json` require `bundled` only; `icu`, `tpch`, `tpcds` and `autocomplete` require `bundled-cmake`, hence CMake on every build machine | `Cargo.toml` `[features]` of `duckdb` and `libduckdb-sys` 1.10506.1 | 2026-10-23 |
+| Panic sites of the entry points the driver calls: `RawStatement::column_logical_type` panics when DuckDB returns no type for an index (`raw_statement.rs`); `RawStatement::schema` expects an executed statement; `LogicalTypeHandle::child` and `child_name` panic out of range or on a type without children; `LogicalTypeHandle::get_alias` unwraps the alias as UTF-8 (`core/logical_type.rs`); `ArrowBatch`'s iterator panics on a fetch error (`arrow_batch.rs`) | source of `duckdb` 1.10506.1 | 2026-10-23 |
+| `SET enable_external_access = true` on a running database throws "Cannot enable external access while database is running"; `allowed_directories` throws once external access is off; loading an extension throws "Loading external extensions is disabled through configuration" while it is off, whatever `autoload_known_extensions` says | `custom_settings.cpp` (`EnableExternalAccessSetting::OnSet`, `AllowedDirectoriesSetting::SetGlobal`), `extension_load.cpp` (`TryInitialLoad`) of v1.5.6 | 2026-10-23 |
+| By default (`arrow_lossless_conversion` off) DuckDB exports `HUGEINT` and `UHUGEINT` as `Decimal128(38, 0)`, `TIMESTAMP WITH TIME ZONE` as `Timestamp(µs, <session zone>)`, `TIME WITH TIME ZONE` as `Time64(µs)` without the offset, `BIT` as binary, `UUID` as text, and `JSON` as plain text without its alias | `SetArrowFormat`, `src/common/arrow/arrow_converter.cpp` of v1.5.6 | 2026-10-23 |
+| `svgl` has no DuckDB mark: a search for `duck` returns DuckDuckGo only | `https://api.svgl.app?search=duck` | 2026-10-23 |
+
+**Build cost, measured on 2026-10-23** on the maintainer's machine (Apple
+silicon, ten cores shared with three other Rust builds — the wall times are an
+upper bound, the CPU times are the comparable figure):
+
+| Build | Wall | CPU (user) | Archive `libduckdb.a` | `out/` of the build script |
+|---|---|---|---|---|
+| `cargo check -p oxyn-driver-duckdb --all-targets`, clean engine, dev profile with debug info | 14 min 16 s | 1,224 s | 1.80 GB | 5.2 GB |
+| `cargo test -p oxyn-driver-duckdb --no-run`, clean engine, `debug = false` for `libduckdb-sys` | 35 min 52 s | 1,922 s | 73 MB | 186 MB |
+
+The second line rebuilt the test profile's whole dependency graph as well, not
+only the engine. The size of the shipped binary was **not** measured: no
+release build was run. The archive of the second line, object code at
+`opt-level` 2 without debug info, is an upper bound of what the engine adds
+before the linker drops what is not called.
 
 ## ClickHouse protocol and client libraries — checked on 2026-10-23
 

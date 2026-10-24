@@ -43,6 +43,7 @@ oxyn-embed    = { path = "crates/oxyn-embed" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
+oxyn-driver-duckdb   = { path = "drivers/oxyn-driver-duckdb" }
 oxyn-driver-clickhouse = { path = "drivers/oxyn-driver-clickhouse" }
 oxyn-driver-mongodb  = { path = "drivers/oxyn-driver-mongodb" }
 oxyn-driver-redis    = { path = "drivers/oxyn-driver-redis" }
@@ -127,6 +128,12 @@ mysql_async   = { version = "=0.37.1", default-features = false, features = [
 # named-parameter parser whether a text would be rewritten before it is
 # prepared (ADR-0050). Exact: the guard is only right for this parser.
 mysql_common  = { version = "=0.37.3", default-features = false }
+# The crate's version encodes the embedded engine's (1.10506.1 = DuckDB
+# v1.5.6). `bundled` compiles the engine from C++; `parquet` and `json` link
+# those two extensions statically, so reading Parquet and JSON never fetches
+# code from the network. The crate's Arrow 58 never crosses the driver's
+# boundary: it rebuilds each chunk as Arrow 59 (ADR-0059).
+duckdb        = { version = "=1.10506.1", default-features = false, features = ["bundled", "parquet", "json"] }
 # MongoDB (ADR-0063). `rustls-tls-aws-lc` is rustls on aws-lc-rs, the
 # provider above; `dns-resolver` resolves `mongodb+srv://` seed lists;
 # `bson-3` and `compat-3-3-0` are the two features the crate refuses to
@@ -262,6 +269,12 @@ opt-level = 2              # dependencies always optimized
 # dependencies and already get level 2.
 [profile.dev.package.oxyn-embed]
 opt-level = 2
+
+# The bundled DuckDB engine is C++ that nobody debugs from Oxyn: with debug
+# info its archive alone weighs 1.8 GB per target directory (measured
+# 2026-10-23), which every CI cache and worktree carries (ADR-0059).
+[profile.dev.package.libduckdb-sys]
+debug = false
 
 [profile.release]
 lto           = "thin"

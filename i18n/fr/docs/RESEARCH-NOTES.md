@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="e908fe88039d" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="672559473683" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -1594,6 +1594,7 @@ comme nom de table ou de colonne non cité, et penche vers la citation.
 | SQLite | [SQLite keywords](https://www.sqlite.org/lang_keywords.html) | 147 mots-clés, tous gardés. La page ne nomme aucune version. |
 | MySQL | [`sql/lex.h`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/lex.h) et [`sql/sql_yacc.yy`](https://github.com/mysql/mysql-server/blob/mysql-8.4.0/sql/sql_yacc.yy) au tag `mysql-8.4.0` | 731 mots déclarés par `SYM` et `SYM_HK` (ni les 36 noms de fonction `SYM_FN`, ni les indices d'optimiseur `SYM_H`). 462 jetons apparaissent dans les règles `ident_keyword`, `ident_keywords_*` et `label_keyword`, que l'analyseur prend pour des identifiants. Les 264 mots dont le jeton n'apparaît dans aucune sont gardés. |
 | MariaDB | [`sql/lex.h`](https://github.com/MariaDB/server/blob/11.8/sql/lex.h) et [`sql/sql_yacc.yy`](https://github.com/MariaDB/server/blob/11.8/sql/sql_yacc.yy), branche `11.8` au commit `c20c21d7a1cd` | 690 mots dans `symbols[]`. 443 jetons appartiennent à la fermeture de `keyword_ident` (`keyword_data_type`, `keyword_cast_type`, `keyword_set_special_case`, `keyword_sp_block_section`, `keyword_sp_head`, `keyword_sp_var_and_label`, `keyword_sp_var_not_label`, leurs parties `keyword_func_*`, `keyword_sysvar_type`, `keyword_verb_clause`, plus `FUNCTION_SYM`, `WINDOW_SYM`, `EXCEPTION_ORACLE_SYM`, `IGNORED_SYM`). Les 247 mots hors de cette fermeture sont gardés. |
+| DuckDB | `third_party/libpg_query/include/parser/kwlist.hpp` de DuckDB `v1.5.6`, tel qu'embarqué par `libduckdb-sys` 1.10506.1, lu le 2026-10-23 | 490 mots-clés : 330 `UNRESERVED_KEYWORD`, 49 `COL_NAME_KEYWORD`, 35 `TYPE_FUNC_NAME_KEYWORD`, 75 `RESERVED_KEYWORD`. Les 110 des deux derniers sont gardés, la règle de PostgreSQL ; `at`, `qualify`, `pivot`, `summarize` en font partie. |
 
 Les pages des manuels MySQL et MariaDB qui listent les mots réservés ne sont pas
 la source : `dev.mysql.com` répond 403 à une requête scriptée, et la copie
@@ -3117,6 +3118,41 @@ n'a pas été relu, la ligne de Node que prend la CI (22) ne change pas.
 | `vite` `8.3.3` a été publié le 2026-10-06T04:10:19Z, `8.3.4` le 2026-10-08T12:07:04Z et `8.3.5`, dist-tag `latest`, le 2026-10-21T06:38:54Z. `8.3.3` est la plus petite version corrigée de la ligne, d'où l'épinglage ; une montée ultérieure passe par le flux de mise à jour habituel | `npm view vite time dist-tags --json` | 2026-10-21 |
 | Avec `vite` `8.3.3`, le lockfile déplace aussi `rolldown` et ses bindings de `1.2.8` à `1.2.14` et `@oxc-project/types` de `0.149.0` à `0.154.0` : ce sont des dépendances propres de vite, pas des épinglages de l'application | `pnpm install --lockfile-only` dans `apps/desktop`, diff de `pnpm-lock.yaml` | 2026-10-21 |
 | Sur ce changement, `pnpm audit --prod` répond « No known vulnerabilities found », `make front-controles` passe (Prettier, ESLint, `tsc --noEmit`, licences, audit) et `pnpm build` se termine avec le prérendu SPA de `/` | commandes lancées dans `apps/desktop` | 2026-10-21 |
+
+## Moteur DuckDB et bibliothèque cliente — vérifié le 2026-10-23
+
+Ce sur quoi repose l'[ADR-0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md).
+Cette section remplace la ligne `duckdb` du tableau des crates candidates
+ci-dessus, lue le 2026-09-05.
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Épinglé : `duckdb` `=1.10506.1` (MIT, publié le 2026-10-16, `rust-version` 1.88) et le `libduckdb-sys` `1.10506.1` qu'il exige exactement ; fonctionnalités par défaut coupées, `bundled`, `parquet` et `json` activées | API crates.io, `duckdb/1.10506.1` et ses dépendances | 2026-10-23 |
+| Le moteur embarqué est DuckDB `v1.5.6`, identifiant de source `069cc9f9b5` | `DUCKDB_VERSION` et `DUCKDB_SOURCE_ID` dans `src/function/table/version/pragma_version.cpp` des sources embarquées | 2026-10-23 |
+| Dernier `duckdb` : `1.20000.0`, publié le 2026-10-22, MIT, `rust-version` 1.88, qui dépend d'`arrow` `^60`. `1.10506.1`, `1.10506.0`, `1.10505.0` et `1.10504.0` dépendent d'`arrow` `^58` : aucune version ne dépend de l'Arrow 59 du workspace | API crates.io, dépendances de chaque version | 2026-10-23 |
+| L'Arrow résolu de `duckdb` est `58.4.0`, à côté du `59.3.0` du workspace ; `deny.toml` fixe `multiple-versions = "allow"`, aucune exception n'est donc nécessaire | `Cargo.lock`, `[bans]` de `deny.toml` | 2026-10-23 |
+| `libduckdb-sys` déclare `links = "duckdb"` ; `libsqlite3-sys` `0.35.0` déclare `links = "sqlite3"` : aucun conflit de `links` avec l'[ADR-0010](adr/0010-contraintes-natives-sqlite.md) | les deux `Cargo.toml` des sources du registre | 2026-10-23 |
+| Fonctionnalités de `duckdb` 1.10506.1 : `bundled` compile le moteur avec `cc` ; `parquet` et `json` n'exigent que `bundled` ; `icu`, `tpch`, `tpcds` et `autocomplete` exigent `bundled-cmake`, donc CMake sur chaque machine de compilation | `[features]` des `Cargo.toml` de `duckdb` et `libduckdb-sys` 1.10506.1 | 2026-10-23 |
+| Points de panique des entrées que le driver appelle : `RawStatement::column_logical_type` panique quand DuckDB ne rend aucun type pour un indice (`raw_statement.rs`) ; `RawStatement::schema` suppose une instruction exécutée ; `LogicalTypeHandle::child` et `child_name` paniquent hors limites ou sur un type sans enfants ; `LogicalTypeHandle::get_alias` déballe l'alias en UTF-8 (`core/logical_type.rs`) ; l'itérateur d'`ArrowBatch` panique sur une erreur de lecture (`arrow_batch.rs`) | sources de `duckdb` 1.10506.1 | 2026-10-23 |
+| `SET enable_external_access = true` sur une base en marche lève « Cannot enable external access while database is running » ; `allowed_directories` lève une erreur une fois l'accès externe coupé ; charger une extension lève « Loading external extensions is disabled through configuration » tant qu'il l'est, quoi que dise `autoload_known_extensions` | `custom_settings.cpp` (`EnableExternalAccessSetting::OnSet`, `AllowedDirectoriesSetting::SetGlobal`), `extension_load.cpp` (`TryInitialLoad`) de v1.5.6 | 2026-10-23 |
+| Par défaut (`arrow_lossless_conversion` coupé), DuckDB exporte `HUGEINT` et `UHUGEINT` en `Decimal128(38, 0)`, `TIMESTAMP WITH TIME ZONE` en `Timestamp(µs, <fuseau de la session>)`, `TIME WITH TIME ZONE` en `Time64(µs)` sans le décalage, `BIT` en binaire, `UUID` en texte, et `JSON` en texte simple sans son alias | `SetArrowFormat`, `src/common/arrow/arrow_converter.cpp` de v1.5.6 | 2026-10-23 |
+| `svgl` n'a pas de logo DuckDB : une recherche sur `duck` ne rend que DuckDuckGo | `https://api.svgl.app?search=duck` | 2026-10-23 |
+
+**Coût de compilation, mesuré le 2026-10-23** sur la machine du mainteneur
+(Apple silicon, dix cœurs partagés avec trois autres compilations Rust — les
+durées murales sont un majorant, les temps CPU sont le chiffre comparable) :
+
+| Compilation | Mur | CPU (user) | Archive `libduckdb.a` | `out/` du script de build |
+|---|---|---|---|---|
+| `cargo check -p oxyn-driver-duckdb --all-targets`, moteur à neuf, profil dev avec informations de débogage | 14 min 16 s | 1 224 s | 1,80 Go | 5,2 Go |
+| `cargo test -p oxyn-driver-duckdb --no-run`, moteur à neuf, `debug = false` pour `libduckdb-sys` | 35 min 52 s | 1 922 s | 73 Mo | 186 Mo |
+
+La seconde ligne a aussi recompilé tout le graphe de dépendances du profil de
+test, pas seulement le moteur. La taille du binaire livré n'a **pas** été
+mesurée : aucune compilation release n'a été lancée. L'archive de la seconde
+ligne, du code objet en `opt-level` 2 sans informations de débogage, majore ce
+que le moteur ajoute avant que l'éditeur de liens n'écarte ce qui n'est pas
+appelé.
 
 ## Protocole ClickHouse et bibliothèques clientes — vérifié le 2026-10-23
 

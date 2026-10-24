@@ -17,6 +17,7 @@
 //! | `SQLITE` | [SQLite keywords](https://www.sqlite.org/lang_keywords.html) | all 147: SQLite lets some of them through as identifiers, but not by a documented rule |
 //! | `MYSQL` | `sql/lex.h` and `sql/sql_yacc.yy` at tag `mysql-8.4.0` | the `SYM` and `SYM_HK` words whose token appears in none of the `ident_keyword*` and `label_keyword` rules |
 //! | `MARIADB` | `sql/lex.h` and `sql/sql_yacc.yy` at branch `11.8`, commit `c20c21d7a1cd` | the `symbols[]` words whose token is outside the closure of `keyword_ident` |
+//! | `DUCKDB` | `third_party/libpg_query/include/parser/kwlist.hpp` of DuckDB `v1.5.6`, as bundled by `libduckdb-sys` 1.10506.1 (checked on 2026-10-23) | the `RESERVED_KEYWORD` and `TYPE_FUNC_NAME_KEYWORD` entries, PostgreSQL's rule on DuckDB's grammar |
 //!
 //! The MySQL and MariaDB pages that list reserved words answer a scripted
 //! request with a 403, so both lists come from the grammar that decides what is
@@ -726,6 +727,25 @@ const MARIADB: &[&str] = &[
     "zerofill",
 ];
 
+/// DuckDB 1.5.6: reserved, and reserved-but-usable-as-function-or-type.
+#[rustfmt::skip]
+const DUCKDB: &[&str] = &[
+    "all", "analyse", "analyze", "and", "anti", "any", "array", "as",
+    "asc", "asof", "asymmetric", "at", "authorization", "binary", "both", "by",
+    "case", "cast", "check", "collate", "collation", "column", "columns", "concurrently",
+    "constraint", "create", "cross", "default", "deferrable", "desc", "describe", "distinct",
+    "do", "else", "end", "except", "false", "fetch", "for", "foreign",
+    "freeze", "from", "full", "generated", "glob", "group", "having", "ilike",
+    "in", "initially", "inner", "intersect", "into", "is", "isnull", "join",
+    "lambda", "lateral", "leading", "left", "like", "limit", "map", "natural",
+    "not", "notnull", "null", "offset", "on", "only", "or", "order",
+    "outer", "overlaps", "pivot", "pivot_longer", "pivot_wider", "placing", "positional", "primary",
+    "qualify", "references", "returning", "right", "select", "semi", "show", "similar",
+    "some", "struct", "summarize", "symmetric", "table", "tablesample", "then", "to",
+    "trailing", "true", "try_cast", "union", "unique", "unpack", "unpivot", "using",
+    "variadic", "verbose", "when", "where", "window", "with",
+];
+
 /// Does a lowercase name need quotes in this dialect?
 ///
 /// `None` for a dialect whose reserved words are not recorded here: the caller
@@ -739,6 +759,7 @@ pub(crate) fn needs_quoting(dialect: SqlDialect, lowercase: &str) -> Option<bool
         SqlDialect::Postgres => Some(found(POSTGRES)),
         SqlDialect::Sqlite => Some(found(SQLITE)),
         SqlDialect::MySql => Some(found(MYSQL) || found(MARIADB)),
+        SqlDialect::DuckDb => Some(found(DUCKDB)),
         _ => None,
     }
 }
@@ -747,11 +768,12 @@ pub(crate) fn needs_quoting(dialect: SqlDialect, lowercase: &str) -> Option<bool
 mod tests {
     use super::*;
 
-    const LISTS: [(&str, &[&str]); 4] = [
+    const LISTS: [(&str, &[&str]); 5] = [
         ("POSTGRES", POSTGRES),
         ("SQLITE", SQLITE),
         ("MYSQL", MYSQL),
         ("MARIADB", MARIADB),
+        ("DUCKDB", DUCKDB),
     ];
 
     #[test]
@@ -781,6 +803,27 @@ mod tests {
         assert_eq!(SQLITE.len(), 147);
         assert_eq!(MYSQL.len(), 264);
         assert_eq!(MARIADB.len(), 247);
+        assert_eq!(DUCKDB.len(), 110);
+    }
+
+    #[test]
+    fn duckdb_reserves_its_own_words_beyond_postgres() {
+        // `at` stopped a test table's column at parse time; `qualify`, `pivot`
+        // and `summarize` are DuckDB's own clauses.
+        for word in ["at", "qualify", "pivot", "summarize", "select"] {
+            assert_eq!(
+                needs_quoting(SqlDialect::DuckDb, word),
+                Some(true),
+                "{word}"
+            );
+        }
+        for word in ["users", "name", "status", "type"] {
+            assert_eq!(
+                needs_quoting(SqlDialect::DuckDb, word),
+                Some(false),
+                "{word}"
+            );
+        }
     }
 
     #[test]

@@ -378,6 +378,35 @@ export const ReadOnlyTakesNoName: Story = {
   },
 }
 
+const duckdbEditor = fn<(view: EditorView) => void>()
+
+/**
+ * DuckDB lexes like PostgreSQL: `$$` strings, double-quoted identifiers, and
+ * a backslash that escapes nothing outside an `E''` string.
+ */
+export const DuckDB: Story = {
+  args: {
+    driver: "duckdb",
+    value:
+      'SELECT $$it\'s$$ AS note, \'C:\\\' AS dir, "quantity" FROM "inventory";',
+    onEditor: duckdbEditor,
+  },
+  play: async ({ args }) => {
+    await waitFor(() => expect(args.onEditor).toHaveBeenCalled())
+    const view = duckdbEditor.mock.calls[0]?.[0]
+    if (!view) throw new Error("the SQL editor is mounted")
+    const tree = syntaxTree(view.state)
+    const dollar = tree.resolveInner(args.value.indexOf("it's") + 1)
+    await expect(dollar.name).toBe("String")
+    await expect(args.value.slice(dollar.from, dollar.to)).toBe("$$it's$$")
+    const path = tree.resolveInner(args.value.indexOf("C:") + 1)
+    await expect(args.value.slice(path.from, path.to)).toBe("'C:\\'")
+    await expect(
+      tree.resolveInner(args.value.indexOf("quantity") + 1).name
+    ).toBe("QuotedIdentifier")
+  },
+}
+
 const mysqlEditor = fn<(view: EditorView) => void>()
 
 /** MySQL's default escaping must not turn the following SQL into a string. */

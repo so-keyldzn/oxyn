@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="423b5f052e57" -->
+<!-- oxyn-translation source="docs/README.md" sha256="80c4461f1970" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -94,6 +94,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0056](adr/0056-local-cpu-embeddings-for-context-selection.md) | Des embeddings locaux sur CPU (Burn, un modèle multilingue épinglé téléchargé sur activation) classent les relations du contexte IA, le lexical d'abord | accepté |
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | L'éditeur SQL complète depuis le cache du catalogue, lit ce qui manque dans des bornes, et tire son texte d'insertion de Rust | proposé |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
+| [0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md) | Le driver DuckDB embarque le moteur par `duckdb-rs`, reconstruit son Arrow 58 en Arrow 59 et ouvre chaque fichier avec l'accès externe coupé | proposé |
 | [0060](adr/0060-clickhouse-driver-over-http-rowbinary.md) | Le pilote ClickHouse parle l'interface HTTP, lit lui-même `RowBinaryWithNamesAndTypes` et ne garde aucune session serveur | proposé |
 | [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | Le driver Redis parle RESP3 lui-même, prouve une lecture par sa propre liste et la table du serveur, et n'arrête que ce que Redis sait arrêter | proposé |
 | [0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md) | Driver MongoDB sur le client officiel `mongodb` : la console exécute une commande de base écrite en Extended JSON, pas de shell JavaScript ; documents vers Arrow par un échantillon déclaré et une colonne canonique sans perte ; nouvelles tentatives de la bibliothèque coupées, `killSessions` par exécution (précise 0003) | accepté |

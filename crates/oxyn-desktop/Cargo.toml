@@ -25,6 +25,7 @@ oxyn-catalog.workspace = true
 oxyn-data.workspace = true
 oxyn-driver.workspace = true
 oxyn-driver-clickhouse.workspace = true
+oxyn-driver-duckdb.workspace = true
 oxyn-driver-mysql.workspace = true
 oxyn-driver-postgres.workspace = true
 oxyn-driver-sqlite.workspace = true
