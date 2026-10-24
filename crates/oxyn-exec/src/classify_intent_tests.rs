@@ -14,28 +14,35 @@ use super::*;
 use async_trait::async_trait;
 use oxyn_catalog::CatalogProvider;
 use oxyn_core::{
-    AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ExecLimits, PreviewShape,
-    QueryLanguage, SqlDialect, StatementHandle, StatementIntent,
+    AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ExecLimits, MutationRisk,
+    PreviewShape, QueryLanguage, SqlDialect, StatementHandle, StatementIntent,
 };
 use oxyn_driver::Session;
 
-/// What the fake session was asked, and what reached it.
-struct Fake {
+/// What the fake session was asked, and what reached it. The risk tests of
+/// ADR-0066 share it.
+pub(super) struct Fake {
     /// What `classify_intent` answers.
     answer: Option<StatementIntent>,
     /// How many times `classify_intent` was called.
-    consulted: AtomicUsize,
+    pub(super) consulted: AtomicUsize,
+    /// What `classify_risk` answers.
+    pub(super) risk: Option<MutationRisk>,
+    /// How many times `classify_risk` was called.
+    pub(super) risk_consulted: AtomicUsize,
     /// The language of the request `preview_request` composes.
     preview_language: QueryLanguage,
-    executed: Mutex<Vec<ExecRequest>>,
+    pub(super) executed: Mutex<Vec<ExecRequest>>,
     catalog: catalog_tests::Probe,
 }
 
 impl Fake {
-    fn answering(answer: Option<StatementIntent>) -> Self {
+    pub(super) fn answering(answer: Option<StatementIntent>) -> Self {
         Self {
             answer,
             consulted: AtomicUsize::new(0),
+            risk: None,
+            risk_consulted: AtomicUsize::new(0),
             preview_language: QueryLanguage::RedisCommand,
             executed: Mutex::new(Vec::new()),
             catalog: catalog_tests::Probe::default(),
@@ -48,7 +55,7 @@ struct FakeSession(Arc<Fake>);
 #[async_trait]
 impl Session for FakeSession {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::REDIS_COMMAND | Capabilities::SQL
+        Capabilities::REDIS_COMMAND | Capabilities::MONGO_QUERY | Capabilities::SQL
     }
     async fn execute(&self, request: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.0.executed.lock().push(request);
@@ -73,6 +80,10 @@ impl Session for FakeSession {
         self.0.consulted.fetch_add(1, Ordering::SeqCst);
         self.0.answer
     }
+    fn classify_risk(&self, _: &ExecRequest) -> Option<MutationRisk> {
+        self.0.risk_consulted.fetch_add(1, Ordering::SeqCst);
+        self.0.risk
+    }
     async fn cancel(&self, _: StatementHandle) -> Result<()> {
         Ok(())
     }
@@ -87,11 +98,11 @@ impl Session for FakeSession {
     }
 }
 
-struct Bench {
-    executor: Executor,
-    connection: ConnectionId,
-    session: SessionId,
-    fake: Arc<Fake>,
+pub(super) struct Bench {
+    pub(super) executor: Executor,
+    pub(super) connection: ConnectionId,
+    pub(super) session: SessionId,
+    pub(super) fake: Arc<Fake>,
 }
 
 fn redis() -> DriverId {
@@ -100,8 +111,12 @@ fn redis() -> DriverId {
 
 /// A production connection with one open session on it.
 fn bench(fake: Fake) -> Bench {
-    let connection =
-        ConnectionConfig::new("cache", redis()).with_environment(Environment::Production);
+    bench_on(fake, Environment::Production)
+}
+
+/// A connection named `cache` in `environment`, with one open session on it.
+pub(super) fn bench_on(fake: Fake, environment: Environment) -> Bench {
+    let connection = ConnectionConfig::new("cache", redis()).with_environment(environment);
     let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
     let workspace = store
         .workspaces()
@@ -131,16 +146,16 @@ fn bench(fake: Fake) -> Bench {
     }
 }
 
-fn agent() -> Actor {
+pub(super) fn agent() -> Actor {
     Actor::agent(AgentId::new(), AgentSessionId::new())
 }
 
-fn actors() -> [Actor; 2] {
+pub(super) fn actors() -> [Actor; 2] {
     [Actor::Human, agent()]
 }
 
 /// What a console sends: the bound lifted, the intent the caller's own.
-fn execution(bench: &Bench, language: QueryLanguage, text: &str) -> Command {
+pub(super) fn execution(bench: &Bench, language: QueryLanguage, text: &str) -> Command {
     Command::Execute {
         connection: bench.connection,
         session: bench.session,
