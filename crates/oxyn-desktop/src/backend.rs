@@ -26,6 +26,7 @@ use oxyn_driver::DriverRegistry;
 use oxyn_driver_clickhouse::ClickhouseDriver;
 use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
+use oxyn_driver_redis::RedisDriver;
 use oxyn_driver_sqlite::SqliteDriver;
 use oxyn_exec::{DispatchReport, ExecEvent, Executor, Outcome, PendingCommand};
 use oxyn_secrets::{KeyringSecretStore, SecretStore};
@@ -1041,6 +1042,9 @@ fn shipped_drivers() -> Result<DriverRegistry> {
     drivers
         .register(Arc::new(ClickhouseDriver::new()))
         .context("registering the ClickHouse driver")?;
+    drivers
+        .register(Arc::new(RedisDriver::new()))
+        .context("registering the Redis driver")?;
     Ok(drivers)
 }
 

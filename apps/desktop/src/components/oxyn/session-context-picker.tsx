@@ -19,8 +19,9 @@ export type SessionContextState =
       current: SessionPlace | null
     }
 
+/** A schema, or a database of a store whose databases hold no schema. */
 function label(place: SessionPlace | null) {
-  return place?.namespace ?? SERVER_DEFAULT
+  return place?.namespace ?? place?.catalog ?? SERVER_DEFAULT
 }
 
 function key(place: SessionPlace | null) {
@@ -68,7 +69,9 @@ export function SessionContextPicker({
     : [...choices, ...(current ? [current] : [])]
   const place = `${connectionName} / ${label(current)}`
   const noSchema =
-    choices.filter((choice) => choice.namespace !== null).length === 0
+    choices.filter(
+      (choice) => choice.namespace !== null || choice.catalog !== null
+    ).length === 0
 
   return (
     <div className="flex min-w-0 flex-col gap-1">

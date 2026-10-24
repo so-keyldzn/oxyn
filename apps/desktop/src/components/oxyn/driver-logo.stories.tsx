@@ -85,6 +85,30 @@ export const MySQL: Story = {
   },
 }
 
+export const RedisMark: Story = {
+  args: { driver: "redis" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const marks = canvasElement.querySelectorAll('svg[viewBox="0 0 256 220"]')
+    await expect(marks).toHaveLength(1)
+    const svg = logo(canvasElement)
+    await expect(svg).toBeVisible()
+    await expect(svg).toHaveAttribute("aria-hidden", "true")
+  },
+}
+
+/** svgl's Redis mark is red on both themes: no token override is needed. */
+export const RedisMarkDark: Story = {
+  args: { driver: "redis" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    await expect(
+      canvasElement.querySelectorAll('svg[viewBox="0 0 256 220"]')
+    ).toHaveLength(1)
+    await expect(logo(canvasElement)).toBeVisible()
+  },
+}
+
 export const MySQLDark: Story = {
   args: { driver: "mysql" },
   globals: { theme: "dark" },

@@ -178,8 +178,10 @@ oxyn/
 │   ├── oxyn-driver-postgres/     # also covers Redshift, TimescaleDB, pgvector
 │   ├── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
 │   │                             #   oxyn-query to split what MySQL cannot prepare
-│   └── oxyn-driver-clickhouse/   # HTTP interface, RowBinary decoded to Arrow,
-│                                 #   no server session (ADR-0060)
+│   ├── oxyn-driver-clickhouse/   # HTTP interface, RowBinary decoded to Arrow,
+│   │                             #   no server session (ADR-0060)
+│   └── oxyn-driver-redis/        # RESP3, read by the driver itself: Redis and Valkey (ADR-0061);
+│                                 #   depends on oxyn-query for the redis-cli grammar its redaction shares
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/
@@ -623,7 +625,7 @@ Server → Catalog/Database → Namespace/Schema → Relation → Field
 | PostgreSQL | database | schema | table / view / matview |
 | MySQL | — | database | table / view |
 | MongoDB | — | database | collection |
-| Redis | db index (0-15) | logical prefix | key pattern |
+| Redis | database, `db0` to `dbN` | — | key — a bounded `SCAN` sample ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) |
 | Elasticsearch | — | — | index / data stream |
 | Neo4j | database | — | node label / relationship type |
 | BigQuery | project | dataset | table |

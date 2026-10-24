@@ -18,6 +18,7 @@ import {
   consoleTextRequests,
   takeConsoleTextRequests,
 } from "@/features/consoles/open-in-console"
+import { consoleFile } from "@/features/consoles/languages"
 import type { ConsoleSeed } from "@/features/consoles/use-console-document"
 import {
   session as sessionStore,
@@ -35,6 +36,8 @@ import { forgetSession, recordTransactionState } from "@/lib/ipc/events"
 import { library } from "@/lib/ipc/library"
 import type { DocumentView, HistoryDetail } from "@/lib/ipc/library"
 import type { OpenConnection } from "@/lib/ipc/types"
+import { queryLanguageOf } from "@/lib/query-language"
+import type { QueryLanguageName } from "@/lib/query-language"
 
 export interface ConsoleEntry {
   key: string
@@ -85,6 +88,29 @@ export function consoleSeed(
     parameters: input.parameters ?? [],
     needsValues: input.needsValues ?? false,
     context: input.context ?? null,
+  }
+}
+
+/**
+ * The first console of a new workspace: the draft the previous one offered
+ * when it is written in this connection's language, else its starter.
+ */
+export function firstConsoleText(
+  draft: {
+    text: string
+    from: string | null
+    language: QueryLanguageName | null
+  },
+  language: QueryLanguageName | null
+): { text: string; notice: string | null } {
+  if (draft.language !== language)
+    return { text: consoleFile(language).starter, notice: null }
+  return {
+    text: draft.text,
+    notice:
+      draft.from === null
+        ? null
+        : `Copied from ${draft.from}, which keeps its console. Nothing was executed.`,
   }
 }
 
@@ -151,6 +177,9 @@ export function useConsoles({
     status: "idle",
   })
   const handles = React.useRef(new Map<string, ConsoleHandle>())
+  // The connection's language, as every console of the workspace writes it.
+  const language = queryLanguageOf(open.capabilities)
+  const file = consoleFile(language)
   const counter = React.useRef(0)
   const openingRef = React.useRef<string | null>(null)
   const entriesRef = React.useRef(entries)
@@ -190,7 +219,11 @@ export function useConsoles({
       session,
       origin,
       notice: input.notice ?? null,
-      seed: consoleSeed(input, document, consoleTitle(counter.current)),
+      seed: consoleSeed(
+        input,
+        document,
+        consoleTitle(counter.current, file.extension)
+      ),
       initialResult,
     }
     setEntries((all) => [...all, entry])
@@ -484,7 +517,7 @@ export function useConsoles({
       return null
     }
     return openConsole({
-      title: "History copy.sql",
+      title: `History copy.${file.extension}`,
       text: entry.statement,
       fromAgent: entry.fromAgent,
       // Names both ends: where the text ran, and where it would run now.
@@ -494,7 +527,9 @@ export function useConsoles({
 
   const openDocumentCopy = (document: DocumentView, origin: string) =>
     openConsole({
-      title: document.savedTitle ?? (document.title || "Query copy.sql"),
+      title:
+        document.savedTitle ??
+        (document.title || `Query copy.${file.extension}`),
       text: document.savedText ?? document.text,
       fromAgent: document.fromAgent,
       notice: `Copy from Saved query · ${origin}. Review for ${open.name} before running; nothing was executed.`,
@@ -534,14 +569,14 @@ export function useConsoles({
         setReady(true)
         return
       }
-      const { sqlDraft, sqlDraftFrom } = sessionStore.state
-      await add(open.console, {
-        text: sqlDraft,
-        notice:
-          sqlDraftFrom === null
-            ? null
-            : `Copied from ${sqlDraftFrom}, which keeps its console. Nothing was executed.`,
-      })
+      const { sqlDraft, sqlDraftFrom, sqlDraftLanguage } = sessionStore.state
+      await add(
+        open.console,
+        firstConsoleText(
+          { text: sqlDraft, from: sqlDraftFrom, language: sqlDraftLanguage },
+          language
+        )
+      )
       setReady(true)
     })()
     // Once per workspace: the screen is keyed by the connection's session.

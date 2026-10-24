@@ -17,8 +17,12 @@ pub(crate) const SQL_AGENT: (&str, &str) = ("agents/sql.md", include_str!("../..
 pub(crate) const SCHEMA_AGENT: (&str, &str) =
     ("agents/schema.md", include_str!("../../agents/schema.md"));
 
+/// The Redis agent's file, `(file, text)`: the assistant on a Redis or Valkey
+/// connection (ADR-0061, ADR-0065).
+const REDIS_AGENT: (&str, &str) = ("agents/redis.md", include_str!("../../agents/redis.md"));
+
 /// The shipped agents, in the order the picker offers them.
-pub(super) const AGENTS: [(&str, &str); 2] = [SQL_AGENT, SCHEMA_AGENT];
+pub(super) const AGENTS: [(&str, &str); 3] = [SQL_AGENT, SCHEMA_AGENT, REDIS_AGENT];
 
 /// The dialect fragments, `(dialect, file, text)`.
 ///

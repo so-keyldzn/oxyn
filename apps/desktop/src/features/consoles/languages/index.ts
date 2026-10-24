@@ -2,6 +2,8 @@ import type { Extension } from "@codemirror/state"
 
 import type { QueryLanguageName } from "@/lib/query-language"
 
+import { redisEditorMode } from "./redis/redis-mode"
+
 /**
  * The editor mode of each language that is not SQL — highlighting, and
  * whatever else its CodeMirror extension brings.
@@ -12,10 +14,38 @@ import type { QueryLanguageName } from "@/lib/query-language"
  */
 const EDITOR_MODES: Partial<
   Record<Exclude<QueryLanguageName, "sql">, () => Extension>
-> = {}
+> = {
+  redis: redisEditorMode,
+}
 
 export function editorMode(
   language: Exclude<QueryLanguageName, "sql">
 ): Extension | null {
   return EDITOR_MODES[language]?.() ?? null
+}
+
+/** What a console of a language is called and starts with. */
+export interface ConsoleFile {
+  /** The end of its title: `console_1.<extension>`, `History copy.<extension>`. */
+  extension: string
+  /** The text a new console opens with — never run, and valid in the language. */
+  starter: string
+}
+
+/**
+ * A language's console file, joining this table by one line like its mode.
+ * A language absent from it gets plain text and an empty console: a SQL
+ * starter there would be a first command the server refuses.
+ */
+const CONSOLE_FILES: Partial<Record<QueryLanguageName, ConsoleFile>> = {
+  sql: { extension: "sql", starter: "SELECT 1;" },
+  // Redis commands have no comment syntax: any starter would be a command.
+  redis: { extension: "redis", starter: "" },
+}
+
+const PLAIN_TEXT: ConsoleFile = { extension: "txt", starter: "" }
+
+/** `null`: a session that declares no language, or several besides SQL. */
+export function consoleFile(language: QueryLanguageName | null): ConsoleFile {
+  return (language === null ? undefined : CONSOLE_FILES[language]) ?? PLAIN_TEXT
 }

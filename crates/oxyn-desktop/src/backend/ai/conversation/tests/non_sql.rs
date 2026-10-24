@@ -162,17 +162,49 @@ fn keys_agent() -> UserAgentFile {
 }
 
 /// A backend that knows the fake driver, and the agents `users` declares
-/// besides the shipped ones.
+/// besides the shipped ones — the shipped Redis agent left out, so that the
+/// mechanism is tested on the fixture agent alone.
 fn backend_with(users: Vec<UserAgentFile>) -> (Backend, Arc<Seen>) {
+    let shipped = oxyn_ai::shipped_agents()
+        .into_iter()
+        .filter(|agent| !agent.writes(QueryLanguage::RedisCommand))
+        .collect();
+    backend_with_catalog(AgentCatalog::new(shipped, users))
+}
+
+fn backend_with_catalog(catalog: AgentCatalog) -> (Backend, Arc<Seen>) {
     let seen = Arc::new(Seen::default());
     let backend = Backend::open_temporary_with_driver(Arc::new(KeyDriver::new(Arc::clone(&seen))))
         .expect("temporary backend");
-    backend
-        .inner
-        .ai
-        .agents
-        .set(AgentCatalog::new(oxyn_ai::shipped_agents(), users));
+    backend.inner.ai.agents.set(catalog);
     (backend, seen)
+}
+
+/// The agent Oxyn ships for Redis is the one a question on a Redis session
+/// runs when it names none.
+#[test]
+fn a_question_on_a_redis_session_runs_the_shipped_redis_agent() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let (port, request) = runtime.block_on(capturing());
+    let (backend, _) =
+        backend_with_catalog(AgentCatalog::new(oxyn_ai::shipped_agents(), Vec::new()));
+    let open = open_keys(&runtime, &backend, Environment::Local);
+    let provider = local_provider(&runtime, &backend, port);
+    let (channel, received) = recording();
+    runtime
+        .block_on(backend.ai_ask(question(&open, &provider, None), channel))
+        .map_err(|error| error.message)
+        .expect("the question starts");
+    let sent = runtime.block_on(request).expect("the provider was called");
+    ended(&runtime, &received);
+    assert!(
+        sent.contains("the Redis or Valkey server they have open"),
+        "the Redis agent's role: {sent}"
+    );
+    assert!(sent.contains("Never `KEYS`"), "{sent}");
+    assert!(sent.contains("The language: `redis`"), "{sent}");
+    assert!(!sent.contains("{{"), "every variable is filled: {sent}");
 }
 
 fn open_keys(

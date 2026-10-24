@@ -74,6 +74,34 @@ export const NoSchemaLoaded: Story = {
   },
 }
 
+/**
+ * A Redis session: its databases hold no schema, so they are the places —
+ * named as the tree names them, and no « Load schemas » to chase.
+ */
+export const DatabasesOfAKeyValueStore: Story = {
+  args: {
+    connectionName: "cache",
+    choices: [
+      { catalog: null, namespace: null },
+      { catalog: "db0", namespace: null },
+      { catalog: "db3", namespace: null },
+    ],
+    state: { status: "declared", place: { catalog: "db0", namespace: null } },
+  },
+  play: async ({ canvas, args }) => {
+    const select = canvas.getByLabelText("Session schema")
+    await expect(select).toHaveDisplayValue("db0")
+    await expect(
+      canvas.queryByRole("button", { name: "Load schemas" })
+    ).not.toBeInTheDocument()
+    await userEvent.selectOptions(select, "db3")
+    await expect(args.onChoose).toHaveBeenCalledWith({
+      catalog: "db3",
+      namespace: null,
+    })
+  },
+}
+
 export const Failed: Story = {
   args: {
     state: {

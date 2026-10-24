@@ -290,7 +290,7 @@ export function ConsolePanel({
     const current = place(context)
     setContext({
       status: "changing",
-      target: next.namespace ?? "Server default",
+      target: next.namespace ?? next.catalog ?? "Server default",
       current,
     })
     consoles.setContext(id, open.connection, session.session, next).then(
@@ -308,8 +308,10 @@ export function ConsolePanel({
           )
           return
         }
+        // A database of a store without schemas — Redis's `db3` — is a
+        // place as much as a schema is.
         setContext(
-          outcome.place?.namespace
+          outcome.place?.namespace || outcome.place?.catalog
             ? { status: "declared", place: outcome.place }
             : { status: "serverDefault" }
         )
@@ -676,7 +678,11 @@ export function ConsolePanel({
             target={target}
             onRun={() => void run(targetNow())}
             onRunAll={() => void run({ kind: "all" })}
-            onExplain={() => void run(targetNow(), true)}
+            onExplain={
+              capabilities.includes("EXPLAIN")
+                ? () => void run(targetNow(), true)
+                : undefined
+            }
             onCancel={execution.cancel}
             parameterCount={rows.length}
             parametersOpen={parametersOpen}

@@ -21,11 +21,18 @@ import type {
   OpenConnection,
 } from "@/lib/ipc/types"
 
-const CATALOG_CAPABILITIES = ["SCHEMAS", "TABLES", "VIEWS", "ROUTINES"]
+const CATALOG_CAPABILITIES = [
+  "SCHEMAS",
+  "TABLES",
+  "VIEWS",
+  "ROUTINES",
+  "KEY_VALUE",
+]
 
 /**
  * Whether the source has a catalog to draw and search: the interface is
- * conditional on capabilities (ADR-0003), and a key-value store has none.
+ * conditional on capabilities (ADR-0003). A key-value store draws its
+ * databases and a bounded sample of its keys (ADR-0061).
  */
 export function hasCatalog(open: OpenConnection) {
   return CATALOG_CAPABILITIES.some((name) => hasCapability(open, name))

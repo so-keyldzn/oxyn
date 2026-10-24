@@ -217,6 +217,8 @@ impl DriverId {
     pub const SQLITE: &'static str = "sqlite";
     /// ClickHouse driver, over its HTTP interface.
     pub const CLICKHOUSE: &'static str = "clickhouse";
+    /// Redis driver (and Valkey: one protocol, RESP).
+    pub const REDIS: &'static str = "redis";
 
     /// Builds a driver identifier after validation.
     ///
@@ -279,6 +281,12 @@ impl DriverId {
     #[must_use]
     pub fn clickhouse() -> Self {
         Self::known(Self::CLICKHOUSE)
+    }
+
+    /// Redis driver identifier.
+    #[must_use]
+    pub fn redis() -> Self {
+        Self::known(Self::REDIS)
     }
 
     /// Borrowed view of the identifier.

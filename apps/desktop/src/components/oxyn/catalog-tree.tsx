@@ -9,6 +9,7 @@ import {
   EyeIcon,
   FolderLibraryIcon,
   FunctionIcon,
+  Key01Icon,
   Search01Icon,
   TableIcon,
   ViewOffIcon,
@@ -138,6 +139,8 @@ function iconFor(kind: string) {
     case "function":
     case "procedure":
       return FunctionIcon
+    case "key_pattern":
+      return Key01Icon
     default:
       return TableIcon
   }
