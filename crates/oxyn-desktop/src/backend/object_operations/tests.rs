@@ -318,6 +318,12 @@ fn availability_follows_declared_capabilities_never_the_product() {
     assert!(unavailable(OperationKind::Truncate, RelationKind::View, postgres).is_some());
     assert!(unavailable(OperationKind::Rename, RelationKind::View, postgres).is_some());
     assert!(unavailable(OperationKind::Drop, RelationKind::Function, postgres).is_some());
+    // An Elasticsearch alias is a view of the catalog, and its session
+    // accepts changes, but not in SQL: no `DROP VIEW` is composed for it.
+    let elasticsearch = Capabilities::SEARCH_DSL | Capabilities::DDL;
+    for kind in [RelationKind::View, RelationKind::Index, RelationKind::Table] {
+        assert!(unavailable(OperationKind::Drop, kind, elasticsearch).is_some());
+    }
 }
 
 #[test]

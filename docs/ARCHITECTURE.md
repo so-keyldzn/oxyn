@@ -184,8 +184,9 @@ oxyn/
 │   │                             #   no server session (ADR-0060)
 │   ├── oxyn-driver-redis/        # RESP3, read by the driver itself: Redis and Valkey (ADR-0061);
 │   │                             #   depends on oxyn-query for the redis-cli grammar its redaction shares
-│   └── oxyn-driver-mongodb/      # database commands in Extended JSON, documents to Arrow
-│                                 #   (ADR-0063); depends on oxyn-query to read a command
+│   ├── oxyn-driver-mongodb/      # database commands in Extended JSON, documents to Arrow
+│   │                             #   (ADR-0063); depends on oxyn-query to read a command
+│   └── oxyn-driver-elasticsearch/ # REST/JSON, also covers OpenSearch (ADR-0062)
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/

@@ -610,8 +610,8 @@ fn an_agent_written_for_a_language_is_offered_only_where_it_is_spoken() {
     ] {
         assert!(!keys.offered_for(&speaking(other, reader)), "{other}");
     }
-    // And no shipped agent of another language, SQL or MongoDB, is offered on
-    // a Redis session.
+    // And no shipped agent of another language, SQL, MongoDB or the search
+    // DSL, is offered on a Redis session.
     for shipped in shipped_agents()
         .into_iter()
         .filter(|agent| !agent.writes(QueryLanguage::RedisCommand))

@@ -8015,6 +8015,7 @@ dependencies = [
  "oxyn-driver",
  "oxyn-driver-clickhouse",
  "oxyn-driver-duckdb",
+ "oxyn-driver-elasticsearch",
  "oxyn-driver-mongodb",
  "oxyn-driver-mysql",
  "oxyn-driver-postgres",
@@ -8109,6 +8110,26 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+]
+
+[[package]]
+name = "oxyn-driver-elasticsearch"
+version = "0.0.13"
+dependencies = [
+ "arrow 59.3.0",
+ "async-trait",
+ "chrono",
+ "indexmap 2.14.2",
+ "oxyn-catalog",
+ "oxyn-core",
+ "oxyn-driver",
+ "reqwest",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
 ]
 
 [[package]]

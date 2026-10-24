@@ -433,6 +433,74 @@ export const redisDriver: DriverChoice = {
   ],
 }
 
+/** As `oxyn_driver_elasticsearch::elasticsearch_metadata` declares it. */
+export const elasticsearchDriver: DriverChoice = {
+  id: "elasticsearch",
+  aliases: ["OpenSearch"],
+  displayName: "Elasticsearch",
+  family: "search",
+  defaultPort: null,
+  fields: [
+    {
+      key: "url",
+      label: "URL",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: "https://localhost:9200",
+      help: "One node or load balancer of the cluster, with a path prefix if a proxy serves it under one. `http://` is accepted only on a Local connection.",
+    },
+    {
+      key: "sslmode",
+      label: "TLS mode",
+      kind: { type: "choice", options: ["verify-full", "require"] },
+      required: false,
+      secret: false,
+      default: "verify-full",
+      help: "verify-full checks the certificate and host name. require encrypts without checking them, on a Local connection only.",
+    },
+    {
+      key: "authentication",
+      label: "Authentication",
+      kind: {
+        type: "choice",
+        options: ["none", "basic", "api-key", "bearer"],
+      },
+      required: false,
+      secret: false,
+      default: "none",
+      help: null,
+    },
+    {
+      key: "username",
+      label: "Username",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Used with basic authentication.",
+    },
+    {
+      key: "password",
+      label: "Password",
+      kind: { type: "password" },
+      required: false,
+      secret: true,
+      default: null,
+      help: "Used with basic authentication. Stored in the system keyring.",
+    },
+    {
+      key: "token",
+      label: "API key or bearer token",
+      kind: { type: "password" },
+      required: false,
+      secret: true,
+      default: null,
+      help: "The encoded API key, or the bearer token. Stored in the system keyring.",
+    },
+  ],
+}
+
 export const sqliteDriver: DriverChoice = {
   id: "sqlite",
   aliases: [],

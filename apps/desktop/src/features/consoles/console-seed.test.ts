@@ -48,6 +48,13 @@ describe("the file a console's language gives it", () => {
     })
   })
 
+  it("starts a search console with the cluster's banner", () => {
+    expect(consoleFile("search-dsl")).toEqual({
+      extension: "http",
+      starter: "GET /",
+    })
+  })
+
   it("gives any other language plain text, never SQL", () => {
     expect(consoleFile("cypher")).toEqual({ extension: "txt", starter: "" })
     expect(consoleFile(null)).toEqual({ extension: "txt", starter: "" })

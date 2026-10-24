@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="2aaa80348d02" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="cb898081832b" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2299,6 +2299,14 @@ Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
 - `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-elasticsearch` (ADR-0062) — connexion, classification de
+  politique et risque, catalogue par le mapping, résultats typés et en flux,
+  arrêt prouvé par le serveur et requête sous le curseur sont en place ; sa
+  suite sur serveur réel tourne en CI sur Elasticsearch 9.5.5 et avant une
+  livraison sur OpenSearch 3.9.0. Restent : complétion des endpoints et des
+  corps, opérations d'index natives par le parcours de revue, un comptage avant
+  une requête par requête, et des vues de cluster (`_cat`, ILM/ISM, snapshots,
+  tâches).
 - `oxyn-driver-mongodb` — **étape 1 écrite**
   ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)) :
   connexion par champs avec TLS et SCRAM, une commande de base par requête de

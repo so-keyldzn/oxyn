@@ -702,6 +702,7 @@ mod redact;
 mod request;
 
 pub use explain::explain;
+pub(crate) use redact::{Credentials, redact_credentials, redact_uri_passwords};
 pub use redact::{REDACTED_VALUE, redact_secrets};
 pub use request::command_at;
 

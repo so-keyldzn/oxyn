@@ -71,6 +71,7 @@ pub fn current_request(
         QueryLanguage::Sql(dialect) => {
             Ok(current_statement(text, dialect, cursor_byte)?.map(|fragment| fragment.text))
         }
+        QueryLanguage::SearchDsl => Ok(crate::search_dsl::current_request(text, cursor_byte)),
         QueryLanguage::RedisCommand => crate::redis::current_command(text, cursor_byte),
         QueryLanguage::MongoQuery => Ok(crate::mongo::command_at(text, cursor_byte)),
         language => Err(QueryError::UnsupportedLanguage { language }),
@@ -170,6 +171,15 @@ mod tests {
         assert_eq!(
             current_request(text, QueryLanguage::Sql(SqlDialect::Postgres), 2),
             Ok(Some("SELECT 1"))
+        );
+    }
+
+    #[test]
+    fn a_search_dsl_console_runs_the_request_under_the_cursor() {
+        let text = "GET /_cluster/health\n\nPOST /logs/_search\n{\"query\":{\"match_all\":{}}}";
+        assert_eq!(
+            current_request(text, QueryLanguage::SearchDsl, text.len() - 3),
+            Ok(Some("POST /logs/_search\n{\"query\":{\"match_all\":{}}}"))
         );
     }
 
