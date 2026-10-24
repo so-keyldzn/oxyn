@@ -80,13 +80,13 @@ describe("object operations offered from the catalog", () => {
     // composed for a cluster that cannot read it.
     const ELASTICSEARCH = ["SEARCH_DSL", "DDL", "DML"]
     for (const kind of ["table", "view"])
-      expect(
-        operationOffer("drop", node("logs", kind), ELASTICSEARCH)
-      ).toEqual({
-        state: "greyed",
-        reason:
-          "This connection does not speak SQL: run the operation from a console in its language.",
-      })
+      expect(operationOffer("drop", node("logs", kind), ELASTICSEARCH)).toEqual(
+        {
+          state: "greyed",
+          reason:
+            "This connection does not speak SQL: run the operation from a console in its language.",
+        }
+      )
   })
 
   it("greys a name holding control characters, in any segment", () => {
