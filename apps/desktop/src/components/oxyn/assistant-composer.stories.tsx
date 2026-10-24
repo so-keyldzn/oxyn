@@ -9,8 +9,11 @@ import {
   within,
 } from "storybook/test"
 
+import { AssistantAgentPicker } from "./assistant-agent-picker"
 import { AssistantComposer } from "./assistant-composer"
 import { measureChips } from "./assistant-mention-measure"
+import { AssistantReasoningEffort } from "./assistant-reasoning-effort"
+import { SQL_ONLY } from "@/features/assistant/agent-options"
 import type {
   MentionChoice,
   MentionResults,
@@ -284,7 +287,8 @@ export const NarrowWindow: Story = {
   ],
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    // The hint and the send button share one row: neither may be pushed out.
+    // The chips and the send button share one row: the button is never
+    // pushed out.
     await expect(
       canvas.getByRole("button", { name: "Send question" })
     ).toBeVisible()
@@ -292,6 +296,57 @@ export const NarrowWindow: Story = {
       canvasElement.clientWidth
     )
   },
+}
+
+/**
+ * The bottom bar's chips, flat and borderless, before the send button; the
+ * shortcuts under the field. A chip is a control of its own: it opens its
+ * list from the keyboard, and Enter there sends nothing.
+ */
+export const WithChips: Story = {
+  args: {
+    controls: (
+      <>
+        <AssistantAgentPicker
+          chip
+          agents={SQL_ONLY}
+          value={null}
+          onSelect={fn()}
+        />
+        <AssistantReasoningEffort
+          chip
+          efforts={["low", "medium", "high"]}
+          value={null}
+          onChange={fn()}
+        />
+      </>
+    ),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const role = canvas.getByRole("combobox", { name: "Agent role" })
+    role.focus()
+    await userEvent.keyboard("{Enter}")
+    // Awaited: the list fades in.
+    const roles = await within(document.body).findByRole("listbox", {
+      name: "Agent role",
+    })
+    await waitFor(() => expect(roles).toBeVisible())
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
+    )
+    await expect(args.onSubmit).not.toHaveBeenCalled()
+    await expect(
+      canvas.getByRole("combobox", { name: "Reasoning effort: Default" })
+    ).toHaveTextContent("Default")
+    await expect(canvas.getByText("↵ send · ⇧↵ new line")).toBeVisible()
+  },
+}
+
+export const WithChipsLight: Story = {
+  args: WithChips.args,
+  globals: { theme: "light" },
 }
 
 /** `@` alone: the list opens and says what it searches. */

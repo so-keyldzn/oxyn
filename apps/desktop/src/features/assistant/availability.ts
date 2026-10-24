@@ -34,6 +34,11 @@ export interface DestinationOption {
    * so cannot keep from acting on the machine by itself (ADR-0032).
    */
   unconfined?: boolean
+  /**
+   * What `ProviderLogo` draws for it: the provider family, or the agent's
+   * preset. Absent, the generic icon of its kind.
+   */
+  brand?: string
 }
 
 export type AssistantEntry =
@@ -112,6 +117,7 @@ export function destinationOptions(
         reach: provider.reach,
         usable,
         reason: usable ? null : REMOTE_REFUSED,
+        brand: provider.kind,
       }
     }),
     ...agents.map((agent) => ({
@@ -124,6 +130,8 @@ export function destinationOptions(
       usable: remoteAllowed,
       reason: remoteAllowed ? null : AGENT_REFUSED,
       unconfined: !agent.confined,
+      // An agent declared by hand has no preset, and no mark of its own.
+      ...(agent.preset ? { brand: agent.preset } : {}),
     })),
   ]
 }

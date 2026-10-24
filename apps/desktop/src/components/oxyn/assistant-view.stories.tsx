@@ -1181,17 +1181,20 @@ export const AgentSettingsAboveTheField: Story = {
     const canvas = within(canvasElement)
     const model = canvas.getByRole("combobox", { name: "Model: Sonnet" })
     await expect(model).toBeEnabled()
-    // Above the field, outside its group: a disabled selector inside it would
-    // dim the whole field.
+    // A chip of the composer's bottom bar, under the field it governs.
     const field = canvas.getByRole("textbox", {
       name: "Question for the assistant",
     })
     await expect(
-      model.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
+      canvasElement
+        .querySelector('[data-slot="assistant-composer-controls"]')
+        ?.contains(model)
+    ).toBe(true)
     await expect(
-      field.closest('[data-slot="input-group"]')?.contains(model)
-    ).toBe(false)
+      field.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    // No model chip of a provider's beside an agent's own.
+    await expect(canvas.queryByRole("combobox", { name: "Model" })).toBeNull()
     await expect(canvasElement.innerText).not.toContain("opt-model-9c1e")
   },
 }
@@ -1479,6 +1482,257 @@ export const AnsweredWithRows: Story = {
     ).toBeVisible()
     await expect(within(call).getByText("Acme SA")).toBeVisible()
   },
+}
+
+/**
+ * The composer carries what governs the next question, as chips: the agent
+ * role, who answers with its model, the reasoning effort — each a named
+ * control reached from the keyboard, the send button at the end of the row.
+ */
+export const ComposerChips: Story = {
+  args: {
+    efforts: ["low", "medium", "high"],
+    effort: null,
+    onSelectEffort: fn(),
+    agentPicker: { agents: SQL_ONLY, value: null, onSelect: fn() },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const bar = canvasElement.querySelector(
+      '[data-slot="assistant-composer-controls"]'
+    )
+    const field = canvas.getByRole("textbox", {
+      name: "Question for the assistant",
+    })
+    for (const name of [
+      "Agent role",
+      "Who answers",
+      "Model",
+      "Reasoning effort: Default",
+    ]) {
+      const chip = canvas.getByRole("combobox", { name })
+      await expect(bar?.contains(chip)).toBe(true)
+    }
+    await expect(
+      canvas.getByRole("combobox", { name: "Agent role" })
+    ).toHaveTextContent("SQL")
+    // From the field, Tab walks the chips in reading order, then sends.
+    await userEvent.click(field)
+    await userEvent.tab()
+    await expect(
+      canvas.getByRole("combobox", { name: "Agent role" })
+    ).toHaveFocus()
+    // Who answers is still said in the header line, not only in a chip.
+    await expect(
+      canvasElement.querySelector("[data-slot=assistant-who-answers]")
+    ).toHaveTextContent("Work account · claude-sonnet-5")
+    await expect(
+      canvasElement.querySelector("[data-slot=assistant-composer-hint]")
+    ).toHaveTextContent("↵ send · ⇧↵ new line")
+  },
+}
+
+/**
+ * While an answer runs the chips are inert, and the field around them keeps
+ * its colour: it still takes a question, which is queued.
+ */
+export const ChipsInertWhileAnswering: Story = {
+  args: {
+    ...Running.args,
+    efforts: ["low", "medium", "high"],
+    effort: "high",
+    onSelectEffort: fn(),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByRole("combobox", { name: "Who answers" })
+    ).toBeDisabled()
+    const field = canvas.getByRole("textbox", {
+      name: "Question for the assistant",
+    })
+    const group = field.closest<HTMLElement>('[data-slot="input-group"]')
+    await expect(group ? getComputedStyle(group).opacity : null).toBe("1")
+  },
+}
+
+/** The narrow panel: chips keep their icons, cut their labels, never wrap. */
+export const ComposerChipsNarrow: Story = {
+  args: {
+    ...ComposerChips.args,
+    state: assistantState(answeredThread),
+  },
+  decorators: NarrowWindow.decorators,
+  play: async ({ canvasElement }) => {
+    const bar = canvasElement.querySelector<HTMLElement>(
+      '[data-slot="assistant-composer-controls"]'
+    )
+    const send = within(canvasElement).getByRole("button", {
+      name: "Send question",
+    })
+    await expect(send).toBeVisible()
+    // One row: every chip on the send button's line.
+    const row = send.getBoundingClientRect()
+    for (const chip of Array.from(bar?.querySelectorAll("button") ?? [])) {
+      const box = chip.getBoundingClientRect()
+      await expect(box.top).toBeGreaterThanOrEqual(row.top - 4)
+      await expect(box.bottom).toBeLessThanOrEqual(row.bottom + 4)
+    }
+    await expect(canvasElement.scrollWidth).toBeLessThanOrEqual(
+      canvasElement.clientWidth
+    )
+  },
+}
+
+const stepsThread = (
+  steps: Array<AiEvent>,
+  options: { running?: boolean; refused?: boolean } = {}
+) =>
+  assistantState(
+    threadOfEvents(
+      [
+        {
+          question: "Which tables reference invoices?",
+          events: [
+            {
+              kind: "question",
+              text: "Which tables reference invoices?",
+              mentions: [],
+            },
+            agentStarted,
+            ...steps,
+            ...(options.refused
+              ? [
+                  {
+                    kind: "permissionRefused",
+                    action: "read",
+                    reason:
+                      "Oxyn does not grant agents access to the file system. Ask about the connected database instead.",
+                  } satisfies AiEvent,
+                ]
+              : []),
+            ...(options.running
+              ? []
+              : [
+                  {
+                    kind: "textDelta",
+                    text: "`payments` and `credit_notes` do.",
+                  } satisfies AiEvent,
+                  answered,
+                ]),
+          ],
+        },
+      ],
+      { running: options.running ?? false }
+    )
+  )
+
+const step = (
+  id: string,
+  tool: string | null,
+  status: "pending" | "running" | "completed" | "failed"
+): AiEvent => ({ kind: "agentTool", id, tool, status })
+
+/**
+ * Consecutive steps of an external agent fold under one line that counts
+ * them and says what failed, in words; opening it lists each step.
+ */
+export const AgentStepsFolded: Story = {
+  args: {
+    selected: destinations[1] ?? null,
+    model: null,
+    state: stepsThread([
+      step("t1", "think", "completed"),
+      step("t2", "search", "completed"),
+      step("t3", "read", "failed"),
+      step("t4", null, "completed"),
+    ]),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const summary = canvas.getByRole("button", { name: /4 agent steps/ })
+    await expect(summary).toHaveTextContent("4 agent steps · 1 failed")
+    await expect(summary).toHaveAttribute("aria-expanded", "false")
+    await userEvent.click(summary)
+    await expect(summary).toHaveAttribute("aria-expanded", "true")
+    const rows = canvasElement.querySelectorAll(
+      "[data-slot=assistant-agent-tool]"
+    )
+    await expect(rows).toHaveLength(4)
+    // A kind the agent did not give is « tool », never an error.
+    await expect(rows[3]).toHaveTextContent("Agent step · tool · done")
+    await expect(rows[2]).toHaveTextContent("Agent step · read · failed")
+  },
+}
+
+/** While a step runs, the folded line names it: the agent is not stuck. */
+export const AgentStepsRunning: Story = {
+  args: {
+    selected: destinations[1] ?? null,
+    model: null,
+    state: stepsThread(
+      [step("t1", "think", "completed"), step("t2", "search", "running")],
+      { running: true }
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    await expect(
+      within(canvasElement).getByRole("button", { name: /2 agent steps/ })
+    ).toHaveTextContent("2 agent steps · search working")
+  },
+}
+
+/**
+ * What Oxyn refused stays a line of its own between the steps, never inside
+ * a group that could be closed.
+ */
+export const RefusalBetweenSteps: Story = {
+  args: {
+    selected: destinations[1] ?? null,
+    model: null,
+    state: stepsThread(
+      [step("t1", "think", "completed"), step("t2", "read", "failed")],
+      { refused: true }
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const refusal = canvas.getByText(/Oxyn\s+refused/)
+    await expect(refusal).toBeVisible()
+    await expect(
+      refusal.closest("[data-slot=assistant-agent-steps]")
+    ).toBeNull()
+    await expect(canvas.queryByRole("button", { name: /Allow/ })).toBeNull()
+  },
+}
+
+/** Each turn says who answered it, with the mark of its brand. */
+export const EveryTurnSaysWhoAnswered: Story = {
+  args: { state: assistantState(answeredThread) },
+  play: async ({ canvasElement }) => {
+    const identity = canvasElement.querySelector(
+      "[data-slot=assistant-turn-identity]"
+    )
+    await expect(identity).toHaveTextContent("Work account · claude-sonnet-5")
+    await expect(identity?.querySelector("svg")).not.toBeNull()
+    // The quiet ending, the usage and the actions share one row.
+    const row = canvasElement.querySelector("[data-slot=assistant-turn-meta]")
+    await expect(row).toHaveTextContent("Answered in 2 turns.")
+    await expect(
+      within(row as HTMLElement).getByRole("button", {
+        name: "Regenerate answer",
+      })
+    ).toBeVisible()
+  },
+}
+
+export const AnsweredLight: Story = {
+  args: {
+    ...ComposerChips.args,
+    state: assistantState(answeredThread),
+    modelCost: { inputPerMillion: 3, outputPerMillion: 15, currency: "USD" },
+  },
+  globals: { theme: "light" },
 }
 
 /** The session's quoting must reach even an ERD nested in a quoted answer. */

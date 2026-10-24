@@ -1,7 +1,11 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { MoreHorizontalIcon } from "@hugeicons/core-free-icons"
+import { ArrowDown01Icon, MoreHorizontalIcon } from "@hugeicons/core-free-icons"
 
+import {
+  CHIP_CHEVRON,
+  COMPOSER_CHIP,
+} from "@/components/oxyn/assistant-composer-chip"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -35,6 +39,7 @@ import type {
   AgentChoice,
   AgentSettingOption as AgentOption,
 } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 /**
  * What the user asked to change, in the agent's own ids.
@@ -134,11 +139,13 @@ function ChoiceSelect({
   disabled,
   pending,
   describedBy,
+  chip,
   onChoose,
 }: ControlProps & {
   name: string
   choices: ReadonlyArray<AgentChoice>
   current: string | null
+  chip: boolean
   onChoose: (choice: string) => void
 }) {
   const label = labelOf(choices, current)
@@ -163,7 +170,7 @@ function ChoiceSelect({
         aria-describedby={describedBy}
         aria-busy={pending || undefined}
         title={`${name}: ${label}`}
-        className="max-w-40 min-w-0"
+        className={cn("max-w-40 min-w-0", chip && COMPOSER_CHIP)}
       >
         {pending ? <Spinner /> : null}
         <SelectValue className="min-w-0">
@@ -173,6 +180,14 @@ function ChoiceSelect({
             </span>
           )}
         </SelectValue>
+        {chip ? (
+          <HugeiconsIcon
+            icon={ArrowDown01Icon}
+            strokeWidth={2}
+            className={CHIP_CHEVRON}
+            aria-hidden
+          />
+        ) : null}
       </SelectTrigger>
       {/* As wide as its choices, not as the trigger: the trigger is cut at
           10 rem, and a list that narrow would cut every choice with it. */}
@@ -257,8 +272,14 @@ function OptionSwitch({
 export function AssistantAgentSettings({
   settings,
   disabledReason = null,
+  chip = false,
   onChange,
 }: {
+  /**
+   * Drawn as chips of the composer's bottom bar, narrowing with the composer
+   * rather than with its own box.
+   */
+  chip?: boolean
   /**
    * The whole state as last received; replaced, never merged. Before any
    * question, what the agent declared when the panel started it.
@@ -331,6 +352,7 @@ export function AssistantAgentSettings({
         {option.value.type === "select" ? (
           <ChoiceSelect
             {...common}
+            chip={chip}
             name={option.name}
             choices={option.value.choices}
             current={option.value.current}
@@ -366,6 +388,7 @@ export function AssistantAgentSettings({
         disabled={locked}
         pending={pending?.kind === "mode"}
         describedBy={describedBy}
+        chip={chip}
         name="Mode"
         choices={settings.modes}
         current={settings.currentMode}
@@ -382,32 +405,50 @@ export function AssistantAgentSettings({
           modes={withModes ? settings : null}
           disabled={locked}
           describedBy={describedBy}
+          chip={chip}
           onSend={send}
         />
       </WithReason>
     ) : null
 
+  // Wide: reasoning and mode inline. Narrow: only the model stays. As chips,
+  // « narrow » is the composer's width, the container they sit in.
+  const wide = chip
+    ? "hidden min-w-0 items-center gap-0.5 @sm/composer:inline-flex"
+    : "hidden min-w-0 flex-wrap items-center gap-1 @sm:inline-flex"
+  const wideOnly = chip
+    ? "hidden @sm/composer:inline-flex"
+    : "hidden @sm:inline-flex"
+  const narrowOnly = chip
+    ? "inline-flex @sm/composer:hidden"
+    : "inline-flex @sm:hidden"
+
   return (
     // A container, so the narrow layout follows the panel's width, not the
     // window's: the same panel is a 240 px column or the whole screen.
-    <div data-slot="assistant-agent-settings" className="@container min-w-0">
+    <div
+      data-slot="assistant-agent-settings"
+      className={cn("min-w-0", chip ? "flex flex-col" : "@container")}
+    >
       <div
         role="group"
         aria-label="Agent settings"
         aria-describedby={describedBy}
-        className="flex min-w-0 flex-wrap items-center gap-1"
+        className={cn(
+          "flex min-w-0 items-center",
+          chip ? "gap-0.5" : "flex-wrap gap-1"
+        )}
       >
         {models.map(control)}
-        {/* Wide: reasoning and mode inline. Narrow: only the model stays. */}
-        <span className="hidden min-w-0 flex-wrap items-center gap-1 @sm:inline-flex">
+        <span className={wide}>
           {secondary.map(control)}
           {modesControl}
         </span>
         {/* `modelConfig` and `other` stay behind « More » at every width:
             thirty-two selectors inline would push the question field off the
             panel. */}
-        <span className="hidden @sm:inline-flex">{more(extra, false)}</span>
-        <span className="inline-flex @sm:hidden">
+        <span className={wideOnly}>{more(extra, false)}</span>
+        <span className={narrowOnly}>
           {more([...secondary, ...extra], hasModes)}
         </span>
       </div>
@@ -434,12 +475,14 @@ function MoreMenu({
   modes,
   disabled,
   describedBy,
+  chip,
   onSend,
 }: {
   options: ReadonlyArray<AgentOption>
   modes: AgentSettings | null
   disabled: boolean
   describedBy: string | undefined
+  chip: boolean
   onSend: (name: string, change: AgentSettingIntent) => void
 }) {
   const selects = options.filter(
@@ -452,9 +495,10 @@ function MoreMenu({
         aria-describedby={describedBy}
         render={
           <Button
-            size="icon-sm"
+            size={chip ? "icon-xs" : "icon-sm"}
             variant="ghost"
             aria-label="More agent settings"
+            className={cn(chip && "text-muted-foreground")}
           />
         }
       >

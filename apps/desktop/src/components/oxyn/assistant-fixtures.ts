@@ -72,6 +72,7 @@ export const destinations: Array<DestinationOption> = [
     reach: "remote",
     usable: true,
     reason: null,
+    brand: remoteProvider.kind,
   },
   {
     key: `agent:${externalAgent.id}`,
@@ -82,6 +83,7 @@ export const destinations: Array<DestinationOption> = [
     reach: "unresolved",
     usable: true,
     reason: null,
+    brand: "claude-code",
   },
 ]
 

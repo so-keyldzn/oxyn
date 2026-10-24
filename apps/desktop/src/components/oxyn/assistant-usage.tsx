@@ -104,7 +104,7 @@ export function AssistantUsage({
   return (
     <p
       data-slot="assistant-usage"
-      className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground tabular-nums"
+      className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground tabular-nums"
     >
       <span className="sr-only">Usage: </span>
       {parts.map((part, index) => (

@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, within } from "storybook/test"
+import { expect, userEvent, within } from "storybook/test"
 
 import {
+  AssistantAgentSteps,
   AssistantAgentTool,
   AssistantCatalogRead,
   AssistantMemoryReset,
@@ -47,9 +48,70 @@ export const AgentToolFinished: Story = {
 export const AgentToolWithoutAKind: Story = {
   args: { tool: null, status: "failed" },
   play: async ({ canvasElement }) => {
+    const row = canvasElement.querySelector("[data-slot=assistant-agent-tool]")
+    await expect(row).toHaveTextContent("Agent step · tool · failed")
+    await expect(row).toBeVisible()
+  },
+}
+
+/** Several steps fold under one line; a failure is counted on it, in words. */
+export const StepsFolded: Story = {
+  render: () => (
+    <AssistantAgentSteps
+      steps={[
+        { key: "a", tool: "think", status: "completed" },
+        { key: "b", tool: "read", status: "failed" },
+        { key: "c", tool: "search", status: "completed" },
+      ]}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const summary = canvas.getByRole("button", { name: /3 agent steps/ })
+    await expect(summary).toHaveTextContent("3 agent steps · 1 failed")
     await expect(
-      within(canvasElement).getByText("Agent step · tool · failed")
-    ).toBeVisible()
+      canvasElement.querySelectorAll("[data-slot=assistant-agent-tool]")
+    ).toHaveLength(0)
+  },
+}
+
+export const StepsExpanded: Story = {
+  render: StepsFolded.render,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(canvas.getByRole("button", { name: /3 agent steps/ }))
+    await expect(
+      canvasElement.querySelectorAll("[data-slot=assistant-agent-tool]")
+    ).toHaveLength(3)
+  },
+}
+
+/** The step in progress is named on the folded line. */
+export const StepsRunning: Story = {
+  render: () => (
+    <AssistantAgentSteps
+      steps={[
+        { key: "a", tool: "think", status: "completed" },
+        { key: "b", tool: "read", status: "running" },
+      ]}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    await expect(
+      within(canvasElement).getByRole("button", { name: /2 agent steps/ })
+    ).toHaveTextContent("2 agent steps · read working")
+  },
+}
+
+/** One step alone is drawn as itself: nothing to fold. */
+export const OneStepAlone: Story = {
+  render: () => (
+    <AssistantAgentSteps
+      steps={[{ key: "a", tool: "think", status: "completed" }]}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).queryByRole("button")).toBeNull()
   },
 }
 
