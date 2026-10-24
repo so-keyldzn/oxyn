@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CLAUDE.md" sha256="77ff84909c49" -->
+<!-- oxyn-translation source="CLAUDE.md" sha256="2b8bdba4d89a" -->
 
 > Traduction française de [CLAUDE.md](../../CLAUDE.md). **La version anglaise fait foi.**
 
@@ -224,10 +224,12 @@ monde**, humain compris, passe par `make qualite` — appelée par la CI
 ([.github/workflows/qualite.yml](../../.github/workflows/qualite.yml)) en jobs
 parallèles, qui n'ajoute aucun contrôle de son côté et dont `make socle` vérifie
 qu'elle n'en oublie aucun. Sur une pull request, elle saute les jobs dont la
-zone — Rust, front — n'est pas touchée, et le job agrégat `qualite` est le check
-requis ; sur `main`, tout tourne, sauf si le commit ne touche que de la
+zone — Rust, front — n'est pas touchée, et dans Rust ne vérifie que les paquets
+que la PR modifie et ceux qui en dépendent ; le job agrégat `qualite` est le
+check requis. Sur `main`, tout tourne, sauf si le commit ne touche que de la
 documentation
-([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md)) :
+([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md),
+[ADR-0067](docs/adr/0067-ci-tests-the-packages-a-pull-request-changes.md)) :
 
 | Ce qui refuse | L'invariant tenu |
 |---|---|

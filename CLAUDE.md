@@ -214,9 +214,11 @@ included, goes through `make qualite` — called by CI
 ([.github/workflows/qualite.yml](.github/workflows/qualite.yml)) in parallel
 jobs, which adds no check of its own and which `make socle` verifies misses
 none. On a pull request, it skips the jobs whose area — Rust, front end — is not
-touched, and the aggregate `qualite` job is the required check; on `main`,
+touched, and within Rust checks only the packages the PR changes and those that
+depend on them; the aggregate `qualite` job is the required check. On `main`,
 everything runs, unless the commit only touches documentation
-([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md)):
+([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md),
+[ADR-0067](docs/adr/0067-ci-tests-the-packages-a-pull-request-changes.md)):
 
 | What refuses | The invariant held |
 |---|---|

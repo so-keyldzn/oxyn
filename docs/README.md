@@ -95,6 +95,7 @@ To locate the boards and their states before implementation, see
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | A session classifies the requests of a non-SQL language: `Session::classify_intent`, consulted only outside SQL, conservative, `None` by default (refines 0003) | accepted |
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | An agent declares the query languages it writes (`languages`, `[sql]` by default); the assistant opens on every language an agent writes, SQL prompts unchanged (refines 0049, 0055) | accepted |
 | [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | A session tells the risk of a non-SQL request it classified as a write: `Session::classify_risk`, consulted only after a mutating `classify_intent`, can only raise the risk, `None` by default (refines 0064) | accepted |
+| [0067](adr/0067-ci-tests-the-packages-a-pull-request-changes.md) | On a pull request, CI checks only the Rust packages it changes and those that depend on them (`OXYN_PACKAGES`); anything it cannot attribute to one package checks the whole workspace, and `main` always does (refines 0045) | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

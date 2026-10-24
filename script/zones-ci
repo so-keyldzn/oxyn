@@ -1,28 +1,39 @@
 #!/usr/bin/env python3
-"""Says which areas of the repository a pull request touches: `rust`,
-`front`, `docs`.
+"""Says which areas of the repository a pull request touches — `rust`,
+`front`, `docs` — and, when it touches Rust, which workspace packages.
 
-CI uses it to skip, on a PR, the jobs whose area is not touched (ADR-0045).
-The classification leans one way only: a file this script cannot classify
-triggers **everything**. An omission then costs runner minutes, never a check.
+CI uses it to skip, on a PR, the jobs whose area is not touched (ADR-0045), and
+to check only the Rust packages the PR changes and those that depend on them
+(ADR-0067). The classification leans one way only: a file this script cannot
+classify, or cannot attribute to one package, triggers **everything**. An
+omission then costs runner minutes, never a check.
 
-Outside the `pull_request` event — push to `main`, manual run —, every area is
-returned without looking at anything: that is the safety net. A push to `main`
-that only touches documentation does not reach this script: the `paths` filter
-of `qualite.yml` does not start the workflow at all.
+Outside the `pull_request` event — push to `main`, manual run —, every area and
+every package are returned without looking at anything: that is the safety net.
+A push to `main` that only touches documentation does not reach this script:
+the `paths` filter of `qualite.yml` does not start the workflow at all.
 
     script/zones-ci HEAD^1          compares HEAD with this commit
     GITHUB_EVENT_NAME=push script/zones-ci HEAD^1   every area
 
-Writes `rust=true|false` and `front=true|false` to `$GITHUB_OUTPUT` when the
-variable exists, and prints the details in every case.
+It reads the checkout it is run from, as `git diff` does — the Cargo graph and
+the Makefile included —, so that it can be replayed on an older merge commit.
+
+Writes `rust=true|false`, `front=true|false`, `serveurs=true|false` and
+`rust_packages=<names separated by spaces>` to `$GITHUB_OUTPUT` when the
+variable exists, and prints the details in every case. An empty
+`rust_packages` means the whole workspace: a lost or misread value falls back
+to checking everything.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import sys
+from pathlib import Path, PurePosixPath
 
 ZONES = ("rust", "front", "docs")
 
@@ -45,6 +56,21 @@ CROSS_CUTTING = (
     "script/",
 )
 
+# The directories the workspace members live in (`members` of the root
+# `Cargo.toml`). A file there that belongs to no package — a deleted crate, a
+# shared fixture — cannot be attributed, and checks everything.
+PACKAGE_ROOTS = ("crates/", "drivers/")
+
+# The package that compiles the front end in: `tauri::generate_context!` reads
+# `apps/desktop/dist`, and `menu.rs` includes `apps/desktop/src/lib/actions/`.
+# It is the only crate allowed to depend on Tauri (I-08).
+FRONT_EMBEDDER = "oxyn-desktop"
+
+# `make test-serveurs` declares the packages its server suites exercise; the
+# `serveurs` job is skipped when the PR reaches none of them. Read from the
+# Makefile rather than copied: one list, in the target that uses it.
+SERVER_PACKAGES_PATTERN = re.compile(r"^SERVER_PACKAGES\s*:=\s*(.+?)\s*$", re.MULTILINE)
+
 
 def _matches(path_str: str, pattern: str) -> bool:
     return path_str.startswith(pattern) if pattern.endswith("/") else path_str == pattern
@@ -55,7 +81,7 @@ def zones_of(path_str: str) -> set[str]:
         return {"front"}
     # Before the `.md` rule: the agent prompts are Markdown compiled into
     # `oxyn-ai` through `include_str!`.
-    if path_str.startswith(("crates/", "drivers/")):
+    if path_str.startswith(PACKAGE_ROOTS):
         return {"rust"}
     # Before the cross-cutting rule: a Markdown file of `.claude/`, `.agents/`
     # or `.github/` is read, never built or executed. `controles` still checks
@@ -76,15 +102,122 @@ def touched_zones(event: str, file_list: list[str]) -> set[str]:
     return touched
 
 
+class Workspace:
+    """The workspace packages and their internal dependency edges.
+
+    Built from `cargo metadata --no-deps`: it lists every dependency each
+    member DECLARES — every kind (normal, dev, build), every platform, optional
+    ones included — without resolving the registry. For the edges between
+    members, that is a superset of the resolved graph, and it needs neither the
+    network nor a download.
+    """
+
+    def __init__(self, metadata: dict) -> None:
+        root = PurePosixPath(Path(metadata["workspace_root"]).as_posix())
+        members = set(metadata["workspace_members"])
+        packages = [p for p in metadata["packages"] if p["id"] in members]
+        self.names = {p["name"] for p in packages}
+        self.directories: dict[str, str] = {}
+        self.dependents: dict[str, set[str]] = {name: set() for name in self.names}
+        for package in packages:
+            folder = PurePosixPath(Path(package["manifest_path"]).as_posix()).parent
+            self.directories[folder.relative_to(root).as_posix()] = package["name"]
+            for dependency in package["dependencies"]:
+                if dependency.get("path") and dependency["name"] in self.names:
+                    self.dependents[dependency["name"]].add(package["name"])
+
+    def owner(self, path_str: str) -> str | None:
+        """The package whose directory holds the file — the deepest one."""
+        candidates = [
+            folder for folder in self.directories
+            if folder.startswith(PACKAGE_ROOTS) and path_str.startswith(folder + "/")
+        ]
+        return self.directories[max(candidates, key=len)] if candidates else None
+
+    def with_dependents(self, seeds: set[str]) -> set[str]:
+        reached: set[str] = set()
+        stack = list(seeds)
+        while stack:
+            name = stack.pop()
+            if name not in reached:
+                reached.add(name)
+                stack += self.dependents.get(name, ())
+        return reached
+
+
+def affected_packages(file_list: list[str], workspace: Workspace | None) -> tuple[set[str] | None, str]:
+    """The packages to check, or `None` for all of them, and why.
+
+    Documentation is ignored: no crate builds `docs/` or a Markdown file
+    outside its own directory. Everything else must land in one package.
+    """
+    if workspace is None:
+        return None, "the workspace graph is unavailable"
+    seeds: set[str] = set()
+    for path_str in file_list:
+        zones = zones_of(path_str)
+        if zones == {"docs"}:
+            continue
+        if zones == {"front"}:
+            seed = FRONT_EMBEDDER
+        elif zones == {"rust"}:
+            seed = workspace.owner(path_str)
+            if seed is None:
+                return None, f"{path_str} belongs to no workspace package"
+        else:
+            return None, f"{path_str} is cross-cutting or unclassified"
+        if seed not in workspace.names:
+            return None, f"{path_str}: package {seed} is not in the workspace"
+        seeds.add(seed)
+    # An empty selection would read as "everything" downstream: say so here.
+    if not seeds:
+        return None, "no package changed"
+    affected = workspace.with_dependents(seeds)
+    if affected == workspace.names:
+        return None, "the changed packages reach the whole workspace"
+    return affected, f"changed: {', '.join(sorted(seeds))}"
+
+
+def load_workspace() -> Workspace | None:
+    try:
+        output = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        return Workspace(json.loads(output))
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError) as err:
+        print(f"cargo metadata failed, every package is checked: {err}", file=sys.stderr)
+        return None
+
+
+def server_packages(makefile: str) -> set[str] | None:
+    m = SERVER_PACKAGES_PATTERN.search(makefile)
+    return set(m.group(1).split()) if m else None
+
+
+def needs_servers(rust: bool, packages: set[str] | None, servers: set[str] | None) -> bool:
+    if not rust:
+        return False
+    if packages is None or servers is None:
+        return True
+    return bool(packages & servers)
+
+
+def modified_files(base: str) -> list[str]:
+    # `--no-renames`: a file moved out of a package must count against the
+    # package it left, not only the one it reaches.
+    return subprocess.run(
+        ["git", "diff", "--name-only", "--no-renames", base, "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+
+
 def main(arguments: list[str]) -> int:
     if len(arguments) != 1:
         print("usage: script/zones-ci <base commit>", file=sys.stderr)
         return 2
     event = os.environ.get("GITHUB_EVENT_NAME", "pull_request")
-    file_list = subprocess.run(
-        ["git", "diff", "--name-only", arguments[0], "HEAD"],
-        check=True, capture_output=True, text=True,
-    ).stdout.splitlines()
+    file_list = modified_files(arguments[0])
     touched = touched_zones(event, file_list)
 
     print(f"Event: {event}, {len(file_list)} file(s) modified.")
@@ -93,11 +226,27 @@ def main(arguments: list[str]) -> int:
     for zone in ZONES:
         print(f"{zone:6} {'touched' if zone in touched else 'not touched'}")
 
+    packages: set[str] | None = None
+    if event != "pull_request":
+        print(f"Rust packages: all (event {event})")
+    elif "rust" not in touched:
+        print("Rust packages: none, `make rust` does not run")
+    else:
+        packages, reason = affected_packages(file_list, load_workspace())
+        print(f"Rust packages: {' '.join(sorted(packages)) if packages else 'all'} ({reason})")
+    listed = " ".join(sorted(packages)) if packages is not None else ""
+
+    makefile = Path("Makefile").read_text(encoding="utf-8")
+    servers = needs_servers("rust" in touched, packages, server_packages(makefile))
+    print(f"Server suites: {'run' if servers else 'skipped'}")
+
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as f:
             for zone in ("rust", "front"):
                 f.write(f"{zone}={'true' if zone in touched else 'false'}\n")
+            f.write(f"serveurs={'true' if servers else 'false'}\n")
+            f.write(f"rust_packages={listed}\n")
     return 0
 
 
