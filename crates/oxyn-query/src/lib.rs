@@ -77,7 +77,7 @@ pub use console::{console_language, current_request};
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;
 pub use format::{FormatReport, format, format_report};
-pub use redact::{REDACTED_LITERAL, redact_password_literals};
+pub use redact::{REDACTED_LITERAL, redact_any_language, redact_password_literals};
 pub use split::{
     Fragment, LineCommentEnd, SplitProfile, Token, TokenKind, Word, contains_comment,
     current_statement, split, tokens, words,

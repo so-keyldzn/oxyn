@@ -235,8 +235,9 @@ pub(super) fn render_saved_query(title: &str, text: &str) -> String {
         json_title(title)
     );
     // Redact before clipping: truncation can remove the quote that tells the
-    // lexer where a credential ends. Saved-query mentions carry no dialect.
-    let redacted = oxyn_query::redact_password_literals(text, oxyn_core::QueryLanguage::SQL);
+    // lexer where a credential ends. Saved-query mentions carry no language,
+    // and a saved Redis console is one: every grammar applies.
+    let redacted = oxyn_query::redact_any_language(text);
     let clipped = untrusted::sanitize_clamped(&redacted, MAX_SAVED_QUERY_CHARS);
     for line in clipped.lines() {
         out.push_str("    ");
