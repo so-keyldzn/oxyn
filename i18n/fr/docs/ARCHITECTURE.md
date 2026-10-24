@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="149958dd5bcc" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="140c003bf378" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -182,8 +182,10 @@ oxyn/
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   ├── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
-│   └── oxyn-driver-mysql/        # couvre aussi MariaDB (ADR-0050) ; dépend
-│                                 #   d'oxyn-query pour découper ce que MySQL ne prépare pas
+│   ├── oxyn-driver-mysql/        # couvre aussi MariaDB (ADR-0050) ; dépend
+│   │                             #   d'oxyn-query pour découper ce que MySQL ne prépare pas
+│   └── oxyn-driver-mongodb/      # commandes de base en Extended JSON, documents vers Arrow
+│                                 #   (ADR-0063) ; dépend d'oxyn-query pour lire une commande
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
 └── docs/

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="3f2fe7b7fa08" -->
+<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="f96ccd05a80e" -->
 
 > Traduction française de [docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md](../../../../docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md). **La version anglaise fait foi.**
 
@@ -203,7 +203,12 @@ console ne tient pas ; `commitTransaction` et `abortTransaction` sont refusés.
 ### Catalogue et aperçu
 
 Les bases sont des espaces de noms ; collections, vues et collections de
-séries temporelles sont des relations. Le nombre de lignes est `count` sans
+séries temporelles sont des relations : une session déclare `SCHEMAS` et
+`TABLES`. La vue de définition (`OBJECT_DEFINITION`) montre la commande
+`create` reconstruite à partir des options de `listCollections` et un
+`createIndexes` portant les index secondaires, chacun une commande de console,
+marqués reconstruits : MongoDB ne stocke aucune commande de création. Le
+nombre de lignes est `count` sans
 filtre — des métadonnées, jamais un parcours — sur les collections ordinaires
 seulement. Les champs sont inférés d'un échantillon de 1 000 documents et
 marqués inférés ; `_id` est la clé primaire d'une collection ordinaire. Un
@@ -214,6 +219,17 @@ refusée sur une vue ou une collection de séries temporelles, qui n'ont pas de
 clé unique. Un champ dont le nom contient un point ou commence par `$` ne peut
 être ni trié ni projeté par `find` : refusé, jamais approché. `PREVIEW_FILTER`
 n'est pas déclaré : le filtre d'aperçu est du SQL.
+
+### Explain : le planificateur seulement
+
+L'Explain de la console envoie `{"explain": <la commande tapée>, "verbosity":
+"queryPlanner"}`, son `$db` remonté dans l'enveloppe
+(`oxyn_query::explain_request`, le point d'extension par langage à côté de
+`current_request`). `queryPlanner` choisit un plan sans l'exécuter ;
+`executionStats` et `allPlansExecution` exécutent le plan retenu, si bien que
+la session déclare `EXPLAIN` et jamais `EXPLAIN_ANALYZE`. La commande
+enveloppée se classe comme la commande qu'elle explique : l'explain d'une
+écriture est une écriture.
 
 ## Conséquences
 

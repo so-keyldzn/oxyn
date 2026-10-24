@@ -187,7 +187,11 @@ hold; `commitTransaction` and `abortTransaction` are refused.
 ### Catalog and preview
 
 Databases are namespaces, collections, views and time-series collections are
-relations. The row count is `count` without a filter — metadata, never a scan
+relations: a session declares `SCHEMAS` and `TABLES`. The definition view
+(`OBJECT_DEFINITION`) shows the `create` command rebuilt from the
+`listCollections` options and one `createIndexes` with the secondary indexes,
+each a console command, marked reconstructed: MongoDB stores no creation
+command. The row count is `count` without a filter — metadata, never a scan
 — on plain collections only. Fields are inferred from a sample of 1,000
 documents and marked inferred; `_id` is the primary key of a plain collection.
 A preview is a `find` command, written as BSON, with no imposed order
@@ -197,6 +201,16 @@ a view or a time-series collection, which have no unique key. A field whose
 name holds a dot or starts with `$` cannot be sorted or projected by `find`:
 refused, never approximated. `PREVIEW_FILTER` is not declared: the preview
 filter is SQL.
+
+### Explain: the planner only
+
+The console's Explain sends `{"explain": <the typed command>, "verbosity":
+"queryPlanner"}`, its `$db` moved to the wrapper
+(`oxyn_query::explain_request`, the per-language extension point beside
+`current_request`). `queryPlanner` selects a plan without executing it;
+`executionStats` and `allPlansExecution` run the winning plan, so the session
+declares `EXPLAIN` and never `EXPLAIN_ANALYZE`. The wrapped command is
+classified like the command it explains: the explain of a write is a write.
 
 ## Consequences
 

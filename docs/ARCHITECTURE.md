@@ -176,8 +176,10 @@ oxyn/
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embedded
 │   ├── oxyn-driver-postgres/     # also covers Redshift, TimescaleDB, pgvector
-│   └── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
-│                                 #   oxyn-query to split what MySQL cannot prepare
+│   ├── oxyn-driver-mysql/        # also covers MariaDB (ADR-0050); depends on
+│   │                             #   oxyn-query to split what MySQL cannot prepare
+│   └── oxyn-driver-mongodb/      # database commands in Extended JSON, documents to Arrow
+│                                 #   (ADR-0063); depends on oxyn-query to read a command
 ├── assets/
 │   └── brand/                    # symbol, iconset, Oxyn.icns
 └── docs/
