@@ -22,8 +22,10 @@ oxyn-driver.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 # `raw_value` keeps every value's JSON text, so a number reaches the grid as
-# the server wrote it instead of through an `f64`.
-serde_json = { workspace = true, features = ["raw_value"] }
+# the server wrote it instead of through an `f64`. `preserve_order` keeps an
+# object's keys in the server's order: without it, the columns of a metric
+# would follow whichever crate of the build happened to enable it.
+serde_json = { workspace = true, features = ["raw_value", "preserve_order"] }
 thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true

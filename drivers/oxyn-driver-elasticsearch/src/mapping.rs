@@ -251,18 +251,18 @@ mod tests {
     fn multi_fields_nested_objects_and_runtime_fields_are_listed() {
         let listed = names_and_types(serde_json::json!({"logs": {"mappings": {
             "properties": {
-                "message": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
                 "actor": {"properties": {"id": {"type": "unsigned_long"}}},
-                "tags": {"type": "nested", "properties": {"name": {"type": "keyword"}}},
-                "price": {"type": "scaled_float", "scaling_factor": 100},
+                "at": {"type": "date", "format": "epoch_millis"},
                 "embedding": {"type": "dense_vector", "dims": 3},
-                "at": {"type": "date", "format": "epoch_millis"}
+                "message": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                "price": {"type": "scaled_float", "scaling_factor": 100},
+                "tags": {"type": "nested", "properties": {"name": {"type": "keyword"}}}
             },
             "runtime": {"day": {"type": "keyword"}}
         }}}));
         let names: Vec<&str> = listed.iter().map(|(name, _, _)| name.as_str()).collect();
-        // The server sends properties sorted by name, as `serde_json` keeps
-        // them; runtime fields come last.
+        // The server sends properties sorted by name, and they are listed in
+        // its order; runtime fields come last.
         assert_eq!(
             names,
             [

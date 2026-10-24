@@ -276,16 +276,17 @@ mod tests {
                  "load": {"count": 4, "min": 1.0, "max": 3.0, "avg": 2.0, "sum": 8.0}}
             ]}
         }));
-        // A metric's values come by name, as `serde_json` keeps an object.
+        // A metric's values come in the server's order, whatever else the
+        // build links.
         assert_eq!(
             names,
             [
                 "per_day",
                 "per_day.doc_count",
-                "load.avg",
                 "load.count",
-                "load.max",
                 "load.min",
+                "load.max",
+                "load.avg",
                 "load.sum"
             ]
         );
