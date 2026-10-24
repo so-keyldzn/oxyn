@@ -7630,6 +7630,7 @@ dependencies = [
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-query",
  "parking_lot",
  "rstest",
  "secrecy",

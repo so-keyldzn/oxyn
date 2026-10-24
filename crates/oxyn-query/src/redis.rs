@@ -16,6 +16,8 @@
 //! and refuses a second line outside quotes, so a wrong cut here could only
 //! cost a refusal, never a different command.
 
+pub mod argv;
+
 use crate::QueryError;
 
 /// The text of the Redis command under `cursor_byte`, or `None` on a line
@@ -89,9 +91,12 @@ fn commands(text: &str, cursor_byte: usize) -> Result<Vec<(usize, usize)>, Query
 
 /// The configuration parameters whose value is a credential, as `redis.conf`
 /// of Redis 8.10.2 names them ([RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md)).
-const SECRET_PARAMETERS: [&str; 4] = [
+/// `masteruser` is the account `masterauth` authenticates: half of the
+/// credential, kept out with the other half.
+const SECRET_PARAMETERS: [&str; 5] = [
     "requirepass",
     "masterauth",
+    "masteruser",
     "tls-key-file-pass",
     "tls-client-key-file-pass",
 ];
@@ -103,16 +108,21 @@ const SECRET_PARAMETERS: [&str; 4] = [
 /// Recognized: the password of `AUTH` and of `HELLO … AUTH user password`;
 /// the `>password`, `<password`, `#hash` and `!hash` rules of
 /// `ACL SETUSER`, whose first character is kept; the value of
-/// `CONFIG SET requirepass | masterauth | tls-key-file-pass |
+/// `CONFIG SET requirepass | masterauth | masteruser | tls-key-file-pass |
 /// tls-client-key-file-pass`; the passwords of `MIGRATE … AUTH` and
 /// `AUTH2`. Every other byte is kept. Like the SQL redaction, this is not a
 /// secret detector: a password inside a script's body or a value is outside
 /// the grammar it reads.
+///
+/// The decision is taken on the decoded argv — the bytes the server
+/// receives, read by the driver's own decoder ([`argv::commands`]) —, and the
+/// replacement on the text as written: `"A\x55TH" hunter2` is `AUTH`, and
+/// `"\x3ehunter2"` is a `>` rule.
 #[must_use]
 pub fn redact_secrets(text: &str) -> String {
     let mut replacements: Vec<(std::ops::Range<usize>, &'static str)> = Vec::new();
-    for command in arguments(text) {
-        secrets_of(text, &command, &mut replacements);
+    for command in argv::commands(text) {
+        secrets_of(&command, &mut replacements);
     }
     if replacements.is_empty() {
         return text.to_owned();
@@ -133,37 +143,32 @@ pub fn redact_secrets(text: &str) -> String {
 }
 
 /// The spans of the secrets of one command, and what replaces each.
-fn secrets_of(
-    text: &str,
-    command: &[std::ops::Range<usize>],
-    out: &mut Vec<(std::ops::Range<usize>, &'static str)>,
-) {
-    let word = |index: usize| command.get(index).map(|span| unquoted(text, span));
+fn secrets_of(command: &[argv::Argument], out: &mut Vec<(std::ops::Range<usize>, &'static str)>) {
+    let word = |index: usize| command.get(index).map(keyword);
     let Some(name) = word(0) else { return };
     match name.as_str() {
         "auth" => {
             if let Some(last) = command.get(1..).and_then(<[_]>::last) {
-                out.push((last.clone(), "<redacted>"));
+                out.push((last.span.clone(), "<redacted>"));
             }
         }
         "hello" => {
             if let Some(at) = (1..command.len()).find(|&i| word(i).as_deref() == Some("auth"))
                 && let Some(password) = command.get(at.saturating_add(2))
             {
-                out.push((password.clone(), "<redacted>"));
+                out.push((password.span.clone(), "<redacted>"));
             }
         }
         "acl" if word(1).as_deref() == Some("setuser") => {
-            for span in command.iter().skip(3) {
-                let rule = text.get(span.clone()).unwrap_or_default();
-                let marker = match rule.trim_start_matches(['"', '\'']).chars().next() {
-                    Some('>') => "><redacted>",
-                    Some('<') => "<<redacted>",
-                    Some('#') => "#<redacted>",
-                    Some('!') => "!<redacted>",
+            for rule in command.iter().skip(3) {
+                let marker = match rule.bytes.first() {
+                    Some(b'>') => "><redacted>",
+                    Some(b'<') => "<<redacted>",
+                    Some(b'#') => "#<redacted>",
+                    Some(b'!') => "!<redacted>",
                     _ => continue,
                 };
-                out.push((span.clone(), marker));
+                out.push((rule.span.clone(), marker));
             }
         }
         "config" if word(1).as_deref() == Some("set") => {
@@ -171,10 +176,10 @@ fn secrets_of(
             // without quotes shifts them, and the password would land in a
             // name's place. Whatever follows a secret's name is redacted.
             for (i, parameter) in command.iter().enumerate().skip(2) {
-                if SECRET_PARAMETERS.contains(&unquoted(text, parameter).as_str())
+                if SECRET_PARAMETERS.contains(&keyword(parameter).as_str())
                     && let Some(value) = command.get(i.saturating_add(1))
                 {
-                    out.push((value.clone(), "<redacted>"));
+                    out.push((value.span.clone(), "<redacted>"));
                 }
             }
         }
@@ -186,7 +191,7 @@ fn secrets_of(
                     _ => continue,
                 };
                 if let Some(password) = command.get(i.saturating_add(offset)) {
-                    out.push((password.clone(), "<redacted>"));
+                    out.push((password.span.clone(), "<redacted>"));
                 }
             }
         }
@@ -194,56 +199,9 @@ fn secrets_of(
     }
 }
 
-/// A word of the command, lowercase and without its quotes, to recognize a
-/// keyword: escapes are left as they are, since no keyword holds one.
-fn unquoted(text: &str, span: &std::ops::Range<usize>) -> String {
-    text.get(span.clone())
-        .unwrap_or_default()
-        .replace(['"', '\''], "")
-        .to_ascii_lowercase()
-}
-
-/// Every command of `text` as the spans of its arguments, quotes included. A
-/// quote left open runs to the end of the text, as the driver would refuse it.
-fn arguments(text: &str) -> Vec<Vec<std::ops::Range<usize>>> {
-    let bytes = text.as_bytes();
-    let mut commands = Vec::new();
-    let mut current: Vec<std::ops::Range<usize>> = Vec::new();
-    let mut token: Option<usize> = None;
-    let mut quote: Option<u8> = None;
-    let mut i = 0;
-    while let Some(&byte) = bytes.get(i) {
-        match (quote, byte) {
-            (Some(b'"'), b'\\') => i = i.saturating_add(1),
-            (Some(b'\''), b'\\') if bytes.get(i.saturating_add(1)) == Some(&b'\'') => {
-                i = i.saturating_add(1);
-            }
-            (Some(open), close) if close == open => quote = None,
-            (Some(_), _) => {}
-            (None, b' ' | b'\t' | b'\r' | b'\n') => {
-                if let Some(start) = token.take() {
-                    current.push(start..i);
-                }
-                if byte == b'\n' && !current.is_empty() {
-                    commands.push(std::mem::take(&mut current));
-                }
-            }
-            (None, other) => {
-                token.get_or_insert(i);
-                if matches!(other, b'"' | b'\'') {
-                    quote = Some(other);
-                }
-            }
-        }
-        i = i.saturating_add(1);
-    }
-    if let Some(start) = token {
-        current.push(start..bytes.len());
-    }
-    if !current.is_empty() {
-        commands.push(current);
-    }
-    commands
+/// An argument as the server compares a keyword: decoded, ASCII-lowercase.
+fn keyword(argument: &argv::Argument) -> String {
+    String::from_utf8_lossy(&argument.bytes).to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -346,6 +304,62 @@ mod tests {
             ),
         ] {
             assert_eq!(redact_secrets(line), expected, "{line}");
+        }
+    }
+
+    /// What the server receives decides, not the text as written: every line
+    /// below runs as a credential command once decoded.
+    #[test]
+    fn a_credential_is_recognized_on_the_decoded_argv() {
+        for (line, expected) in [
+            // Escaped command names and keywords.
+            ("\"A\\x55TH\" hunter2", "\"A\\x55TH\" <redacted>"),
+            ("\"\\x61uth\" app 'hunter2'", "\"\\x61uth\" app <redacted>"),
+            ("aUtH \"hunter 2\"", "aUtH <redacted>"),
+            (
+                "\"\\x41CL\" \"set\\x75ser\" u on \"\\x3ehunter2\"",
+                "\"\\x41CL\" \"set\\x75ser\" u on ><redacted>",
+            ),
+            (
+                "ACL SETUSER u \"\\x3ehunter2\" '<old' \"\\x23c3ab8f\"",
+                "ACL SETUSER u ><redacted> <<redacted> #<redacted>",
+            ),
+            (
+                "hello 3 \"\\x41UTH\" app \"hun\\x74er2\"",
+                "hello 3 \"\\x41UTH\" app <redacted>",
+            ),
+            (
+                "CONFIG \"S\\x45T\" \"requirep\\x61ss\" hunter2 MasterAuth \"x\" masteruser bob",
+                "CONFIG \"S\\x45T\" \"requirep\\x61ss\" <redacted> MasterAuth <redacted> \
+                 masteruser <redacted>",
+            ),
+            (
+                "MIGRATE h 6379 k 0 5000 \"\\x61uth2\" app hunter2",
+                "MIGRATE h 6379 k 0 5000 \"\\x61uth2\" app <redacted>",
+            ),
+            (
+                "migrate h 6379 k 0 5000 Auth 'hunter2'",
+                "migrate h 6379 k 0 5000 Auth <redacted>",
+            ),
+            // A quote glued to the next character is refused by the driver,
+            // but kept in the history: the argument runs on.
+            ("AUTH \"hun\"ter2", "AUTH <redacted>"),
+            ("AUTH \"hunter2", "AUTH <redacted>"),
+        ] {
+            assert_eq!(redact_secrets(line), expected, "{line}");
+        }
+    }
+
+    #[test]
+    fn an_escape_the_server_does_not_decode_stays_what_it_is() {
+        // `sdssplitargs` has no octal escape: `"\076"` is `076`, not `>`,
+        // and outside quotes a backslash is a byte — neither is a rule.
+        for line in [
+            "ACL SETUSER u on \"\\076hunter2\"",
+            "ACL SETUSER u on \\x3ehunter2",
+            "A\\x55TH hunter2",
+        ] {
+            assert_eq!(redact_secrets(line), line, "{line}");
         }
     }
 

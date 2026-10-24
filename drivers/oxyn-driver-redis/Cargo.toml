@@ -16,6 +16,7 @@ oxyn-core.workspace = true
 oxyn-catalog.workspace = true
 oxyn-data.workspace = true
 oxyn-driver.workspace = true
+oxyn-query.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
 futures.workspace = true
