@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { MongodbIconLight } from "@/components/ui/svgs/mongodbIconLight"
 import { MysqlIconLight } from "@/components/ui/svgs/mysqlIconLight"
 import { Postgresql } from "@/components/ui/svgs/postgresql"
+import { Redis } from "@/components/ui/svgs/redis"
 import { Sqlite } from "@/components/ui/svgs/sqlite"
 
 type Logo = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement
@@ -66,6 +67,7 @@ const logos: Partial<Record<string, Logo>> = {
   mysql: MysqlMark,
   mongodb: MongodbMark,
   sqlite: SqliteMark,
+  redis: Redis,
 }
 
 /**

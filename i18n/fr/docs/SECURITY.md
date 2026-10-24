@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="5c6d81c6556b" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="cc1f6d32688a" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -54,7 +54,15 @@ l'éditeur ou le texte libre des conversations. Les lignes déjà présentes dan
 seul. Un utilisateur ayant exécuté un tel SQL avant cette protection doit
 renouveler le mot de passe et protéger ou remplacer les fichiers de workspace
 concernés
-([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
+([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)). Les
+commandes Redis reçoivent le même traitement avec `<redacted>` : le mot de
+passe d'`AUTH` et de `HELLO … AUTH`, les règles de mot de passe
+d'`ACL SETUSER`, les valeurs d'identifiants de `CONFIG SET` et les `AUTH`/`AUTH2`
+de `MIGRATE`, reconnus sur les arguments tels que le serveur les décode,
+échappements compris. Un enregistrement qui ne porte pas son langage — un
+appel d'outil, une entrée d'audit réécrite, une requête sauvegardée
+mentionnée à un agent — est caviardé par les deux grammaires
+([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)).
 
 Une commande MongoDB porte son mot de passe dans le `pwd` de `createUser` et
 d'`updateUser`. La valeur de toute clé `pwd`, à toute profondeur et quelle que

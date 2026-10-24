@@ -63,7 +63,7 @@ use chrono::{DateTime, Utc};
 use oxyn_core::ai::{ReasoningBlock, Role, StopReason};
 use oxyn_core::{
     AgentId, AgentSessionId, ConnectionId, ConversationId, ErrorClass, PrivacyTier, ProviderId,
-    QueryLanguage, WorkspaceId,
+    WorkspaceId,
 };
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -421,10 +421,14 @@ impl ToolCallRecord {
     }
 
     /// Adds the statement the command carried.
+    ///
+    /// The call does not say which language it was in — SQL or a Redis
+    /// command —, so the statement is redacted by every grammar
+    /// ([`oxyn_query::redact_any_language`]).
     #[must_use]
     pub fn with_statement(mut self, statement: impl Into<String>) -> Self {
         let original = statement.into();
-        let redacted = oxyn_query::redact_password_literals(&original, QueryLanguage::SQL);
+        let redacted = oxyn_query::redact_any_language(&original);
         if original != redacted {
             self.summary = self.summary.replace(&original, &redacted);
         }
@@ -1116,9 +1120,10 @@ fn encode_tool_calls(calls: &[ToolCallRecord]) -> Result<Option<String>> {
     let payload: Vec<ToolCallPayload> = calls
         .iter()
         .map(|call| {
-            let statement = call.statement.as_deref().map(|statement| {
-                oxyn_query::redact_password_literals(statement, QueryLanguage::SQL)
-            });
+            let statement = call
+                .statement
+                .as_deref()
+                .map(oxyn_query::redact_any_language);
             // A rendering can wrap the SQL in quotes, hiding its tokens from
             // the scanner. Replace the known statement before scanning prose.
             let summary = match (call.statement.as_deref(), statement.as_deref()) {
@@ -1130,7 +1135,7 @@ fn encode_tool_calls(calls: &[ToolCallRecord]) -> Result<Option<String>> {
             ToolCallPayload {
                 call_id: call.call_id.clone(),
                 tool: call.tool.clone(),
-                summary: oxyn_query::redact_password_literals(&summary, QueryLanguage::SQL),
+                summary: oxyn_query::redact_any_language(&summary),
                 statement,
                 status: call.status.as_str().to_owned(),
                 error_class: call.error_class.map(|class| class.as_str().to_owned()),

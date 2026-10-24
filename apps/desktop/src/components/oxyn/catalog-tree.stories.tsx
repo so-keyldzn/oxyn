@@ -4,7 +4,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { CatalogTree, addressKey } from "./catalog-tree"
 import { Button } from "@/components/ui/button"
-import { catalog } from "./fixtures"
+import { catalog, redisCatalog } from "./fixtures"
 import { centerOf, pressAndMove, release } from "./pointer-drag-fixtures"
 import { missingModuleTable, virtualCatalog } from "./virtual-table-fixtures"
 import {
@@ -50,6 +50,20 @@ export const Browse: Story = {
     await expect(args.onExpand).toHaveBeenCalledWith(catalog[1]?.address)
 
     await userEvent.click(canvas.getByText("invoices"))
+    await expect(args.onSelect).toHaveBeenCalled()
+  },
+}
+
+/** Redis: databases hold keys directly, a quoted key shown as written. */
+export const RedisDatabasesAndKeys: Story = {
+  args: { nodes: redisCatalog },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("db0"))
+    await expect(canvas.getByText("session:42")).toBeVisible()
+    await expect(canvas.getByText('"line\\nbreak \\xff"')).toBeVisible()
+    await userEvent.click(canvas.getByText("db1"))
+    await expect(args.onExpand).toHaveBeenCalledWith(redisCatalog[1]?.address)
+    await userEvent.click(canvas.getByText("session:42"))
     await expect(args.onSelect).toHaveBeenCalled()
   },
 }

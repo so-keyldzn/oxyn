@@ -150,8 +150,8 @@ mod tests {
     #[test]
     fn the_seven_remaining_agents_are_named_not_written() {
         // The list of VISION § "Multi-agent architecture" counts nine agents,
-        // all roles over SQL. The agent a driver ships for its own language
-        // (ADR-0065) is not one of them.
+        // by role; an agent a driver ships for its own language (ADR-0065)
+        // is not one of them.
         let roles = shipped_agents()
             .iter()
             .filter(|agent| agent.writes(oxyn_core::QueryLanguage::SQL))

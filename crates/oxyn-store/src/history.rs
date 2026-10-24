@@ -663,6 +663,58 @@ mod tests {
         assert_eq!(journal.statement.as_deref(), Some(sql));
     }
 
+    /// The same for a Redis credential command: the history knows its
+    /// language, the journal entry written back does not and applies every
+    /// grammar.
+    #[test]
+    fn direct_records_cannot_persist_redis_credentials() {
+        let store = Store::open_in_memory().expect("in-memory store");
+        for text in [
+            "CONFIG SET requirepass witness-secret",
+            "\"A\\x55TH\" app witness-secret",
+            "ACL SETUSER app on \"\\x3ewitness-secret\"",
+        ] {
+            let command = Command::Execute {
+                connection: ConnectionId::new(),
+                session: SessionId::new(),
+                request: Box::new(ExecRequest::new(QueryLanguage::RedisCommand, text)),
+            };
+            let history = HistoryRecord::new(&Actor::Human, QueryLanguage::RedisCommand, text);
+            let built =
+                crate::JournalRecord::new(&Actor::Human, &command, &oxyn_core::Decision::Allow);
+            assert!(
+                built
+                    .statement
+                    .as_deref()
+                    .is_some_and(|statement| !statement.contains("witness-secret")),
+                "{text}"
+            );
+            let mut direct = built.clone();
+            direct.statement = Some(text.into());
+            store.history().record(&history).expect("history insert");
+            store.journal().append(&built).expect("journal append");
+            store.journal().append(&direct).expect("journal append");
+        }
+        store
+            .with_connection(|conn| {
+                for table in ["query_history", "audit_journal"] {
+                    let mut select = conn.prepare(&format!("SELECT statement FROM {table}"))?;
+                    let statements = select
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    assert!(!statements.is_empty(), "{table}");
+                    for statement in statements {
+                        assert!(
+                            !statement.contains("witness-secret"),
+                            "{table}: {statement}"
+                        );
+                    }
+                }
+                Ok(())
+            })
+            .expect("raw SQL reads");
+    }
+
     fn read_record(text: &str) -> HistoryRecord {
         HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, text)
             .with_intent(StatementIntent::Read)

@@ -711,6 +711,7 @@ mod tests {
                 vec!["Redshift", "TimescaleDB", "pgvector"],
             ),
             (sqlite.metadata().clone(), vec![]),
+            (oxyn_driver_redis::redis_metadata(), vec!["Valkey"]),
             (oxyn_driver_mongodb::mongodb_metadata(), vec![]),
         ] {
             let choice = DriverChoice::of(&metadata);

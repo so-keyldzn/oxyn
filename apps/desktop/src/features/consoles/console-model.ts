@@ -16,9 +16,12 @@ export interface ConsoleTabInfo {
   unsaved: boolean
 }
 
-/** The naming: `console_1.sql`, a counter that never goes back. */
-export function consoleTitle(counter: number) {
-  return `console_${counter}.sql`
+/**
+ * The naming: `console_1.sql`, a counter that never goes back, ending with
+ * the extension of the console's language.
+ */
+export function consoleTitle(counter: number, extension: string) {
+  return `console_${counter}.${extension}`
 }
 
 export function tabTitle(info: Pick<ConsoleTabInfo, "title" | "fromAgent">) {

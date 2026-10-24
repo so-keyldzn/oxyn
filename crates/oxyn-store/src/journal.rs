@@ -44,9 +44,9 @@
 use chrono::{DateTime, Utc};
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, Command, CommandId, ConnectionId, Decision, ErrorClass,
-    MutationRisk, OxynError, QueryLanguage, StatementIntent,
+    MutationRisk, OxynError, StatementIntent,
 };
-use oxyn_query::redact_password_literals;
+use oxyn_query::{redact_any_language, redact_password_literals};
 use rusqlite::{Row, params};
 use std::time::Duration;
 
@@ -280,12 +280,11 @@ impl JournalRecord {
             agent_session,
             connection: command.target_connection(),
             command_kind: command.name().to_owned(),
-            statement: command.statement_text().map(|statement| {
-                let language = match command {
-                    Command::Execute { request, .. } => request.language,
-                    _ => QueryLanguage::SQL,
-                };
-                redact_password_literals(statement, language)
+            statement: command.statement_text().map(|statement| match command {
+                Command::Execute { request, .. } => {
+                    redact_password_literals(statement, request.language)
+                }
+                _ => redact_any_language(statement),
             }),
             intent: command.intent(),
             risk: command.mutation_risk(),
@@ -375,10 +374,9 @@ impl<'a> Journal<'a> {
     /// [`crate::StoreError::Json`] if the risk is not serializable.
     pub fn append(&self, record: &JournalRecord) -> Result<i64> {
         let risk = tag_to_json(&record.risk)?;
-        let statement = record
-            .statement
-            .as_deref()
-            .map(|sql| redact_password_literals(sql, QueryLanguage::SQL));
+        // The record carries no language: a Redis command redacted as SQL
+        // would keep its password, so every grammar applies.
+        let statement = record.statement.as_deref().map(redact_any_language);
 
         self.store.with_connection(|conn| {
             conn.execute(

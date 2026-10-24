@@ -217,6 +217,8 @@ impl DriverId {
     pub const SQLITE: &'static str = "sqlite";
     /// ClickHouse driver, over its HTTP interface.
     pub const CLICKHOUSE: &'static str = "clickhouse";
+    /// Redis driver (and Valkey: one protocol, RESP).
+    pub const REDIS: &'static str = "redis";
     /// MongoDB driver (ADR-0063).
     pub const MONGODB: &'static str = "mongodb";
 
@@ -281,6 +283,12 @@ impl DriverId {
     #[must_use]
     pub fn clickhouse() -> Self {
         Self::known(Self::CLICKHOUSE)
+    }
+
+    /// Redis driver identifier.
+    #[must_use]
+    pub fn redis() -> Self {
+        Self::known(Self::REDIS)
     }
 
     /// MongoDB driver identifier.

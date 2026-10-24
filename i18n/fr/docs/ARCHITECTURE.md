@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="30b4dd414b9f" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="46066e36b575" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -186,6 +186,8 @@ oxyn/
 │   │                             #   d'oxyn-query pour découper ce que MySQL ne prépare pas
 │   ├── oxyn-driver-clickhouse/   # interface HTTP, RowBinary décodé en Arrow,
 │   │                             #   aucune session serveur (ADR-0060)
+│   ├── oxyn-driver-redis/        # RESP3, lu par le driver lui-même : Redis et Valkey (ADR-0061) ;
+│   │                             #   dépend d'oxyn-query pour la grammaire redis-cli que partage son caviardage
 │   └── oxyn-driver-mongodb/      # commandes de base en Extended JSON, documents vers Arrow
 │                                 #   (ADR-0063) ; dépend d'oxyn-query pour lire une commande
 ├── assets/
@@ -643,7 +645,7 @@ Server → Catalog/Database → Namespace/Schema → Relation → Field
 | PostgreSQL | database | schema | table / view / matview |
 | MySQL | — | database | table / view |
 | MongoDB | — | database | collection |
-| Redis | db index (0-15) | préfixe logique | motif de clés |
+| Redis | base, `db0` à `dbN` | — | clé — un échantillon borné de `SCAN` ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)) |
 | Elasticsearch | — | — | index / data stream |
 | Neo4j | database | — | node label / relationship type |
 | BigQuery | project | dataset | table |

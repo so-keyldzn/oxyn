@@ -38,6 +38,27 @@ export function unsupportedReason(
   }
 }
 
+/**
+ * The object tabs a session cannot fill, which are not drawn (UX-SPEC
+ * § Common workspace structure): a key-value session would otherwise show
+ * three tabs that each say "not supported". DDL stays, its own panel saying
+ * why it has no definition.
+ */
+export function absentObjectTabs(open: OpenConnection): ReadonlySet<ObjectTab> {
+  const absent = new Set<ObjectTab>(
+    (["indexes", "constraints"] as const).filter(
+      (tab) => unsupportedReason(open, tab) !== null
+    )
+  )
+  // Relations has two directions: either one is enough to draw it.
+  if (
+    unsupportedReason(open, "relations") &&
+    unsupportedReason(open, "incoming")
+  )
+    absent.add("relations")
+  return absent
+}
+
 export function canPreview(open: OpenConnection, holdsRecords: boolean) {
   return previewUnavailable(open, holdsRecords) === null
 }

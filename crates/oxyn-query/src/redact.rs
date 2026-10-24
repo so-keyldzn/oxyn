@@ -45,6 +45,7 @@ enum SecretClause {
 pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> String {
     let dialect = match language {
         QueryLanguage::Sql(dialect) => dialect,
+        QueryLanguage::RedisCommand => return crate::redis::redact_secrets(statement),
         QueryLanguage::MongoQuery => return crate::mongo::redact_secrets(statement),
         _ => return statement.to_owned(),
     };
@@ -79,6 +80,20 @@ pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> Str
         redacted.push_str(suffix);
     }
     redacted
+}
+
+/// Redacts a text whose language the sink does not know, with every grammar
+/// [`redact_password_literals`] reads: SQL in its ANSI union, then Redis.
+///
+/// For the records that carry no language — a tool call and its rendering, an
+/// audit entry written back, a saved query mentioned to an agent. Forcing SQL
+/// there kept `CONFIG SET requirepass hunter2` whole
+/// ([I-03](../../../CLAUDE.md#i-03)). The cost is the other way round: a SQL
+/// line that starts with a Redis credential keyword — `auth FROM users` —
+/// loses an argument in the kept copy, never in what runs.
+#[must_use]
+pub fn redact_any_language(text: &str) -> String {
+    crate::redis::redact_secrets(&redact_password_literals(text, QueryLanguage::SQL))
 }
 
 fn collect_literals(statement: &str, dialect: SqlDialect, replacements: &mut Vec<Range<usize>>) {
@@ -231,7 +246,7 @@ mod tests {
     use oxyn_core::{QueryLanguage, SqlDialect};
     use rstest::rstest;
 
-    use super::{REDACTED_LITERAL, redact_password_literals};
+    use super::{REDACTED_LITERAL, redact_any_language, redact_password_literals};
 
     #[rstest]
     #[case(SqlDialect::Postgres, "ALTER ROLE app PASSWORD 'witness-secret'")]
@@ -320,6 +335,16 @@ mod tests {
             redact_password_literals(sql, QueryLanguage::Sql(SqlDialect::Postgres)),
             sql
         );
+    }
+
+    #[rstest]
+    #[case("ALTER ROLE app PASSWORD 'witness-secret'")]
+    #[case("CONFIG SET requirepass witness-secret")]
+    #[case("ACL SETUSER app on \"\\x3ewitness-secret\"")]
+    #[case("HELLO 3 AUTH app witness-secret")]
+    fn a_text_of_unknown_language_is_redacted_by_every_grammar(#[case] text: &str) {
+        let redacted = redact_any_language(text);
+        assert!(!redacted.contains("witness-secret"), "{redacted}");
     }
 
     #[test]

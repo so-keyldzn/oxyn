@@ -7775,6 +7775,7 @@ dependencies = [
  "oxyn-driver-mongodb",
  "oxyn-driver-mysql",
  "oxyn-driver-postgres",
+ "oxyn-driver-redis",
  "oxyn-driver-sqlite",
  "oxyn-embed",
  "oxyn-exec",
@@ -7912,6 +7913,28 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "oxyn-driver-redis"
+version = "0.0.13"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "futures",
+ "oxyn-catalog",
+ "oxyn-core",
+ "oxyn-data",
+ "oxyn-driver",
+ "oxyn-query",
+ "parking_lot",
+ "rstest",
+ "secrecy",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]

@@ -10,6 +10,7 @@ import {
   Files01Icon,
   FolderLibraryIcon,
   FunctionIcon,
+  Key01Icon,
   Search01Icon,
   TableIcon,
   ViewOffIcon,
@@ -143,6 +144,8 @@ function iconFor(kind: string) {
       return FunctionIcon
     case "collection":
       return Files01Icon
+    case "key_pattern":
+      return Key01Icon
     default:
       return TableIcon
   }

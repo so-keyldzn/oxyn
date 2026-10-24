@@ -1440,6 +1440,53 @@ fn direct_tool_call_fields_cannot_bypass_password_redaction() {
     assert!(sweep_conversations(&store, "witness-secret").is_empty());
 }
 
+/// A tool call does not say its language: a Redis credential command is
+/// redacted by `with_statement`, and again by the encoding when the fields
+/// were set directly.
+#[test]
+fn redis_credentials_in_a_tool_call_are_redacted_before_serialization() {
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    for command in [
+        "CONFIG SET requirepass witness-secret",
+        "ACL SETUSER app on \"\\x3ewitness-secret\" +@read",
+        "HELLO 3 AUTH app witness-secret",
+        "MIGRATE h 6379 k 0 5000 AUTH2 app witness-secret",
+    ] {
+        let built = ToolCallRecord::new(
+            "call",
+            "execute",
+            format!("Executed: {command}"),
+            ToolCallStatus::Completed,
+        )
+        .with_statement(command);
+        assert!(
+            built
+                .statement
+                .as_deref()
+                .is_some_and(|statement| !statement.contains("witness-secret")),
+            "{command}"
+        );
+        assert!(!built.summary.contains("witness-secret"), "{command}");
+        let mut direct = ToolCallRecord::new(
+            "call",
+            "execute",
+            format!("Executed: {command}"),
+            ToolCallStatus::Completed,
+        );
+        direct.statement = Some(command.into());
+        store
+            .conversations()
+            .append(
+                id,
+                &TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "Done.")
+                    .with_tool_calls(vec![built, direct]),
+            )
+            .expect("persist the calls");
+    }
+    assert!(sweep_conversations(&store, "witness-secret").is_empty());
+}
+
 /// A thread role coming from `oxyn-llm` converts without loss.
 #[test]
 fn thread_roles_cover_the_protocol_roles() {
