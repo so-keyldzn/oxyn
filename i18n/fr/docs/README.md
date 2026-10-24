@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="db5e5b830133" -->
+<!-- oxyn-translation source="docs/README.md" sha256="bccfd0078ac6" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -98,6 +98,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | Le driver Redis parle RESP3 lui-même, classe les commandes d'après la table du serveur, et n'arrête que ce que Redis sait arrêter | proposé |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | Une session classe les requêtes d'un langage non SQL : `Session::classify_intent`, consultée seulement hors SQL, prudente, `None` par défaut (précise 0003) | accepté |
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | Un agent déclare les langages de requête qu'il écrit (`languages`, `[sql]` par défaut) ; l'assistant s'ouvre sur tout langage qu'un agent écrit, prompts SQL inchangés (précise 0049, 0055) | accepté |
+| [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | Une session dit le risque d'une requête non SQL qu'elle a classée comme écriture : `Session::classify_risk`, consultée seulement après un `classify_intent` mutant, ne peut que relever le risque, `None` par défaut (précise 0064) | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

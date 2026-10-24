@@ -39,8 +39,8 @@ use async_trait::async_trait;
 use futures::future::BoxFuture;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
-    CancelToken, Capabilities, ConnectionConfig, DriverId, ExecRequest, ExecStats, OxynError,
-    PreviewShape, Result, StatementHandle, StatementIntent, TransactionState,
+    CancelToken, Capabilities, ConnectionConfig, DriverId, ExecRequest, ExecStats, MutationRisk,
+    OxynError, PreviewShape, Result, StatementHandle, StatementIntent, TransactionState,
 };
 use oxyn_data::BatchSource;
 
@@ -254,14 +254,46 @@ pub trait Session: Send + Sync {
     /// connecting — the server's own command table, for example. A lock it
     /// cannot take at once is a reason to answer `None`, never to wait.
     ///
-    /// The answer carries no risk, no transaction control and no context
-    /// change: the executor sets all three to none. A language that has such
-    /// statements refuses them in its console, or carries a context change
-    /// through [`set_context`](Self::set_context).
+    /// The answer carries no transaction control and no context change: the
+    /// executor sets both to none. A language that has such statements refuses
+    /// them in its console, or carries a context change through
+    /// [`set_context`](Self::set_context). The risk of a mutating answer comes
+    /// from [`classify_risk`](Self::classify_risk), and is none without it.
     ///
     /// The default answers `None`, which is the behavior every session had
     /// before this method existed.
     fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
+        let _ = request;
+        None
+    }
+
+    /// How destructive a request written in a language that is not SQL is,
+    /// when this session can tell: a delete with an empty filter, a drop, a
+    /// flush of every key.
+    ///
+    /// `oxyn-exec` consults it under the conditions of
+    /// [`classify_intent`](Self::classify_intent) — never for SQL, whose risk
+    /// `oxyn-query` alone reads — and **only** when that method answered
+    /// `Write`, `Ddl` or `Grant`: a proven read carries no risk, and a request
+    /// left `Unknown` already counts as mutating
+    /// ([ADR-0066](../../../docs/adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md)).
+    /// The answer can only raise the risk: `None`, or `Some(MutationRisk::None)`,
+    /// leaves the request with no risk, as before this method existed.
+    ///
+    /// **Conservative in the other direction.** A risk makes the gate ask a
+    /// human for an approval whatever the environment, as SQL's
+    /// `DELETE FROM users` does on staging. Answer the risk whenever the
+    /// request may touch every document, key or index of its target, not only
+    /// when that is proven. A risk missed, or answered lower than the request
+    /// deserves, bypasses an approval and is never noticed: the collection-wide
+    /// delete runs without the approval its SQL equivalent asks for.
+    ///
+    /// **No I/O, no lock that can block**, for the reasons
+    /// [`classify_intent`](Self::classify_intent) gives: it runs on the dispatch
+    /// path, before the policy decision.
+    ///
+    /// The default answers `None`.
+    fn classify_risk(&self, request: &ExecRequest) -> Option<MutationRisk> {
         let _ = request;
         None
     }
