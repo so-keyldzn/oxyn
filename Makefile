@@ -8,8 +8,9 @@
 # `front-controles`, `front-tests`, `front-build`, `rust`, `test-serveurs` — so
 # that Rust does not wait behind the stories. It adds nothing: `make socle`
 # refuses a workflow that would forget a target reached by `qualite`. On a pull
-# request, it skips the jobs whose area is not touched; on `main`, everything
-# runs (ADR-0045).
+# request, it skips the jobs whose area is not touched, and narrows the Rust
+# targets to the changed packages and their dependents through OXYN_PACKAGES;
+# on `main`, everything runs (ADR-0045, ADR-0067).
 #
 # `make verif-rapide` is for day-to-day work: it only checks what changed since
 # `origin/main`. It is not conclusive, `qualite` is.
@@ -20,6 +21,18 @@
 
 CARGO := cargo
 PROFIL ?= debug
+
+# The workspace packages that `lint`, `test`, `doc` and `test-serveurs` check,
+# separated by spaces; empty, the whole workspace. On a pull request, CI sets it
+# to the packages the PR changes and those that depend on them
+# (`script/zones-ci`, ADR-0067). `format`, `deny` and `package-contracts` stay
+# whole: they are cheap, or do not reason crate by crate.
+OXYN_PACKAGES ?=
+SELECTION := $(if $(strip $(OXYN_PACKAGES)),$(addprefix -p ,$(OXYN_PACKAGES)),--workspace)
+# `cargo test --doc` refuses a selection that holds no library — `oxyn-desktop`
+# alone, a binary: when no selected package has a `src/lib.rs`, the
+# documentation tests are skipped, and the target says so.
+DOC_TEST_LIBRARIES := $(if $(strip $(OXYN_PACKAGES)),$(foreach p,$(OXYN_PACKAGES),$(wildcard crates/$(p)/src/lib.rs drivers/$(p)/src/lib.rs)),workspace)
 
 # nextest applies the profile of .config/nextest.toml: serialized execution of
 # the tests that share a server, and termination of a hanging test. It is not
@@ -126,7 +139,7 @@ format:
 	$(CARGO) fmt --all -- --check
 
 lint:
-	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
+	$(CARGO) clippy $(SELECTION) --all-targets --all-features -- -D warnings
 
 # nextest does not run documentation tests: `cargo test --doc` is therefore run
 # in addition, otherwise the `//!` examples would stop being compiled without
@@ -134,10 +147,14 @@ lint:
 test:
 ifeq ($(NEXTEST),)
 	@echo "cargo-nextest missing: the profile of .config/nextest.toml does not apply."
-	$(CARGO) test --workspace --all-features
+	$(CARGO) test $(SELECTION) --all-features
 else
-	$(CARGO) nextest run --workspace --all-features
-	$(CARGO) test --doc --workspace --all-features
+	$(CARGO) nextest run $(SELECTION) --all-features
+ifeq ($(DOC_TEST_LIBRARIES),)
+	@echo "No library among OXYN_PACKAGES: documentation tests NOT run."
+else
+	$(CARGO) test --doc $(SELECTION) --all-features
+endif
 endif
 
 # The ignored suites exercise actual server behavior that unit tests cannot
@@ -145,6 +162,14 @@ endif
 # provides both and rejects an unset URL rather than silently skipping a suite.
 # A local gate without any server URL states explicitly that those suites did
 # not run, so the ordinary edit-check-commit loop remains usable.
+#
+# SERVER_PACKAGES names the packages the filter below reaches: keep the two in
+# step. `script/zones-ci` reads it to skip the `serveurs` job on a pull request
+# that reaches none of them; with OXYN_PACKAGES set, only the selected ones are
+# built and run.
+SERVER_PACKAGES := oxyn-driver-postgres oxyn-driver-mysql oxyn-driver-clickhouse oxyn-driver-mongodb oxyn-exec oxyn-desktop
+SERVER_SELECTED := $(filter $(SERVER_PACKAGES),$(OXYN_PACKAGES))
+SERVER_SELECTION := $(if $(strip $(OXYN_PACKAGES)), $(addprefix -p ,$(SERVER_SELECTED)))
 test-serveurs: front-build
 ifeq ($(NEXTEST),)
 ifeq ($(origin CI),undefined)
@@ -153,10 +178,12 @@ else
 	@echo "cargo-nextest is required for server tests; the shared-server profile must apply."
 	@exit 1
 endif
+else ifeq ($(if $(strip $(OXYN_PACKAGES)),$(SERVER_SELECTED),all),)
+	@echo "server suites NOT run: OXYN_PACKAGES reaches none of $(SERVER_PACKAGES)."
 else ifeq ($(origin CI)$(OXYN_PG_TEST_URL)$(OXYN_MYSQL_TEST_URL)$(OXYN_PG_PRODUCTION_TEST_URL)$(OXYN_CLICKHOUSE_TEST_URL)$(OXYN_MONGODB_TEST_URL),undefined)
 	@echo "server suites NOT run outside CI: no server test URLs are set."
 else
-	@output="$$( $(CARGO) nextest run --run-ignored only --nocapture \
+	@output="$$( $(CARGO) nextest run$(SERVER_SELECTION) --run-ignored only --nocapture \
 		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | package(oxyn-driver-clickhouse) | package(oxyn-driver-mongodb) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
 	printf '%s\n' "$$output"; \
 	if printf '%s\n' "$$output" | grep -Fq 'not set: test skipped'; then \
@@ -167,7 +194,7 @@ else
 endif
 
 doc:
-	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps --all-features
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc $(SELECTION) --no-deps --all-features
 
 # The Apache driver contract is consumed outside this workspace. Package each
 # crate so a missing dependency version fails before a release reaches crates.io.
@@ -228,6 +255,7 @@ socle: hooks
 	@python3 script/test_livraison_workflow.py
 	@python3 script/test_apple_release.py
 	@python3 script/test_verifier_todo.py
+	@python3 script/test_zones_ci.py
 	@python3 .claude/verifier_socle.py
 
 hooks:

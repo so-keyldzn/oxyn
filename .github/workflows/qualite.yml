@@ -14,8 +14,13 @@
 # forgot a target reached by `qualite` fails the gate.
 #
 # On a pull request, the `zones` job says which areas the PR touches, and the
-# jobs of untouched areas are skipped. On `main` and on demand, everything
-# runs: that is the safety net (ADR-0045), except for a push to `main` that
+# jobs of untouched areas are skipped (ADR-0045). When Rust is touched, it also
+# says which workspace packages the PR changes, with every package that depends
+# on them: `rust` and `serveurs` pass that list to the same `make` targets as
+# `OXYN_PACKAGES`, and `serveurs` is skipped when no server suite is among them
+# (ADR-0067). An empty list means the whole workspace, which is what any file
+# the script cannot attribute to one package gives. On `main` and on demand,
+# everything runs: that is the safety net, except for a push to `main` that
 # only touches documentation, which starts nothing. The `qualite` job aggregates the
 # others; ruleset 24429281 requires this check and a PR for `main`.
 # Administrators may bypass it, direct pushes included; nobody else can.
@@ -75,10 +80,12 @@ env:
 jobs:
   zones:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       rust: ${{ steps.zones.outputs.rust }}
       front: ${{ steps.zones.outputs.front }}
+      serveurs: ${{ steps.zones.outputs.serveurs }}
+      rust_packages: ${{ steps.zones.outputs.rust_packages }}
     steps:
       - name: Check out the repository
         # actions/checkout v7.0.1. On a PR, HEAD is the merge commit: its first
@@ -87,7 +94,13 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Sort the modified files by area
+      - name: Install the pinned toolchain
+        # `script/zones-ci` reads the package graph with `cargo metadata
+        # --no-deps`, which downloads and builds nothing. Should it fail, the
+        # script checks every package.
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Sort the modified files by area and package
         id: zones
         run: script/zones-ci HEAD^1
 
@@ -337,6 +350,10 @@ jobs:
 
       - name: make rust
         if: needs.zones.outputs.rust == 'true'
+        env:
+          # Empty outside a pull request, or when the PR reaches beyond
+          # packages: the whole workspace (ADR-0067).
+          OXYN_PACKAGES: ${{ needs.zones.outputs.rust_packages }}
         run: make rust
 
   serveurs:
@@ -344,7 +361,7 @@ jobs:
     # covered on both operating systems by `rust`, while this job proves the
     # server behavior that an ignored test cannot exercise elsewhere.
     needs: zones
-    if: needs.zones.outputs.rust == 'true'
+    if: needs.zones.outputs.rust == 'true' && needs.zones.outputs.serveurs == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     services:
@@ -513,6 +530,8 @@ jobs:
           OXYN_MONGODB_TEST_URL: mongodb://root:oxyn@localhost:27017/?tls=disable
           # sqlx trusts this disposable CA while verify-full validates the leaf SAN.
           PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/ca.crt
+          # Only the selected server suites are built and run (ADR-0067).
+          OXYN_PACKAGES: ${{ needs.zones.outputs.rust_packages }}
         run: make test-serveurs
 
       - name: Remove the TLS test server
