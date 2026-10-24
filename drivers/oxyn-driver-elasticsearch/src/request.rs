@@ -70,6 +70,12 @@ pub fn parse_request(text: &str) -> Result<SearchRequest, String> {
     if path.contains("://") || path.starts_with("//") || path.contains('#') {
         return Err("the request path must be an API path on this server, not a URL".into());
     }
+    if !crate::classify::path_is_literal(path) {
+        return Err(
+            "the request path holds a `.` or `..` segment or a `\\`: write the path it resolves to"
+                .into(),
+        );
+    }
     let path = if path.starts_with('/') {
         path.to_owned()
     } else {

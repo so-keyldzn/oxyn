@@ -29,6 +29,9 @@ impl Route {
     /// would let an encoded endpoint pass as an index name. A segment that does
     /// not decode to UTF-8 makes the route unreadable: `None`, never a guess.
     fn parse(path: &str) -> Option<Self> {
+        if !path_is_literal(path) {
+            return None;
+        }
         let (path, query) = match path.split_once('?') {
             Some((path, query)) => (path, Some(query.to_owned())),
             None => (path, None),
@@ -36,7 +39,8 @@ impl Route {
         let mut api = Vec::new();
         for raw in path.split('/').filter(|segment| !segment.is_empty()) {
             let segment = percent_decode(raw)?;
-            if !api.is_empty() || segment.starts_with('_') {
+            // `_all` names every index: a target, not an API.
+            if !api.is_empty() || (segment.starts_with('_') && segment != "_all") {
                 api.push(segment);
             }
         }
@@ -352,6 +356,22 @@ fn clauses(value: Option<&Value>) -> Box<dyn Iterator<Item = &Value> + '_> {
         Some(Value::Array(items)) => Box::new(items.iter()),
         Some(item) => Box::new(std::iter::once(item)),
     }
+}
+
+/// Whether a path reaches the server as written, segment for segment.
+///
+/// A URL resolves `.` and `..` segments, `%2e` spellings included, and reads
+/// `\` as `/`: `/logs/_search/../_delete_by_query` would reach
+/// `_delete_by_query` while the classifier read `_search`. Such a path is
+/// refused rather than resolved, so what is classified is what is sent. An
+/// encoded `%2F` stays inside its segment, which is how a document id holding
+/// a `/` is written.
+pub(crate) fn path_is_literal(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    !path.contains('\\')
+        && path
+            .split('/')
+            .all(|raw| percent_decode(raw).is_none_or(|segment| segment != "." && segment != ".."))
 }
 
 fn percent_decode(segment: &str) -> Option<String> {

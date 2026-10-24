@@ -106,6 +106,61 @@ fn an_encoded_endpoint_is_classified_as_the_server_decodes_it() {
     );
 }
 
+/// A URL would resolve each of these to `/logs/_delete_by_query` while the
+/// endpoint read is `_search`: the console refuses them, and so does the
+/// classifier and the HTTP layer if a path reaches them another way.
+#[rstest]
+#[case::dot_dot("POST /logs/_search/../_delete_by_query")]
+#[case::encoded_dot_dot("POST /logs/_search/%2e%2E/_delete_by_query")]
+#[case::half_encoded("POST /logs/_search/.%2e/_delete_by_query")]
+#[case::backslash("POST /logs/_search/x\\..\\..\\logs\\_delete_by_query")]
+#[case::dot("POST /logs/./_delete_by_query")]
+#[case::past_a_proxy_prefix("GET /../_cat/indices")]
+fn a_path_the_url_would_resolve_is_refused(#[case] text: &str) {
+    assert!(parse_request(text).is_err(), "{text}");
+    let path = text
+        .split_once(' ')
+        .map(|(_, path)| path)
+        .expect("a request line");
+    assert!(!super::path_is_literal(path), "{path}");
+    let request = crate::request::SearchRequest {
+        method: "POST".to_owned(),
+        path: path.to_owned(),
+        body: None,
+        text: None,
+        ndjson: false,
+    };
+    assert_eq!(statement_intent(&request), StatementIntent::Unknown);
+}
+
+#[test]
+fn an_encoded_slash_stays_inside_a_document_id() {
+    assert_eq!(intent_of("GET /logs/_doc/a%2Fb"), StatementIntent::Read);
+    assert_eq!(
+        intent_of("PUT /logs/_doc/a%2F..%2Fb\n{}"),
+        StatementIntent::Write
+    );
+}
+
+#[test]
+fn all_is_a_target_not_an_endpoint() {
+    assert_eq!(
+        intent_of("POST /_all/_delete_by_query"),
+        StatementIntent::Write
+    );
+    assert_eq!(
+        risk_of("POST /_all/_delete_by_query"),
+        MutationRisk::UnboundedDelete
+    );
+    assert_eq!(
+        risk_of("POST /_all/_update_by_query"),
+        MutationRisk::UnboundedUpdate
+    );
+    assert_eq!(risk_of("POST /_all/_close"), MutationRisk::DropObject);
+    assert_eq!(risk_of("DELETE /_all"), MutationRisk::DropObject);
+    assert_eq!(intent_of("GET /_all/_mapping"), StatementIntent::Read);
+}
+
 #[rstest]
 #[case::delete_index("DELETE /logs", MutationRisk::DropObject)]
 #[case::delete_pattern("DELETE /logs-*", MutationRisk::DropObject)]

@@ -225,8 +225,15 @@ impl Http {
     /// URL stays and a first segment like `remote:logs` (cross-cluster
     /// search) is not read as a URL scheme. A path that would still leave
     /// the origin is refused: the credentials go only where they were
-    /// configured.
+    /// configured. So is a path the join would resolve: what the policy gate
+    /// classified must be what is sent, and `..` would also climb out of a
+    /// proxy prefix.
     fn url(&self, path: &str) -> Result<Url> {
+        if !crate::classify::path_is_literal(path) {
+            return Err(OxynError::Config(
+                "the API path holds a `.` or `..` segment or a `\\`".to_owned(),
+            ));
+        }
         let relative = format!("./{}", path.trim_start_matches('/'));
         let url = self
             .base
@@ -257,6 +264,13 @@ async fn read_bounded(
                 "the cluster answered success, but its answer exceeds 16 MiB and was not read: \
                  per-item results are unknown; check the data before running it again"
                     .to_owned(),
+            )
+        } else if intent.is_mutating() {
+            // The refusal went unread: a 503 and a 400 look alike from here,
+            // and the first may follow a partial apply.
+            transport_error(
+                intent,
+                "the cluster refused the request with an answer over 16 MiB, which was not read",
             )
         } else {
             OxynError::Query(
@@ -348,6 +362,9 @@ pub(crate) mod tests {
         );
         let cross_cluster = http.url("/remote:logs/_search").expect("a relative path");
         assert_eq!(cross_cluster.path(), "/remote:logs/_search");
+        for resolved in ["/logs/_search/../_delete_by_query", "/%2e%2e/_cat", "/a\\b"] {
+            assert!(http.url(resolved).is_err(), "{resolved}");
+        }
     }
 
     #[tokio::test]

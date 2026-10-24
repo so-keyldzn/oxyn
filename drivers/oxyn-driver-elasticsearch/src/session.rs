@@ -152,8 +152,8 @@ impl ElasticsearchSession {
                     .to_owned()
             }
             Stopped::NotRunning => {
-                "the request was stopped, and the cluster lists no task for it: it had either \
-                 finished or not started"
+                "the request was stopped, and the cluster listed no task for it: it had \
+                 finished, or had not reached the cluster yet and may still apply"
                     .to_owned()
             }
             Stopped::Unproven(why) => format!(
