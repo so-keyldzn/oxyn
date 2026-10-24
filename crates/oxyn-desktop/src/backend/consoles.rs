@@ -279,7 +279,9 @@ impl Backend {
     ///
     /// The first is always the server default. Schemas come from the default
     /// catalog: offering another database's would offer a move PostgreSQL
-    /// refuses. No query is sent; an unloaded catalog yields the default alone.
+    /// refuses. A store whose databases hold no schema — Redis's `db0`,
+    /// `db1`… — moves between the databases themselves, which are then the
+    /// places. No query is sent; an unloaded catalog yields the default alone.
     pub fn session_context_choices(
         &self,
         connection: ConnectionId,
@@ -293,14 +295,21 @@ impl Backend {
             .catalogs()
             .find(|catalog| catalog.is_default)
             .map(|catalog| catalog.name().to_owned());
-        choices.extend(
-            cache
-                .namespaces(catalog.as_deref())
-                .map(|namespace| SessionPlace {
-                    catalog: catalog.clone(),
-                    namespace: Some(namespace.name().to_owned()),
-                }),
-        );
+        let schemas: Vec<SessionPlace> = cache
+            .namespaces(catalog.as_deref())
+            .map(|namespace| SessionPlace {
+                catalog: catalog.clone(),
+                namespace: Some(namespace.name().to_owned()),
+            })
+            .collect();
+        if schemas.is_empty() {
+            choices.extend(cache.catalogs().map(|catalog| SessionPlace {
+                catalog: Some(catalog.name().to_owned()),
+                namespace: None,
+            }));
+        } else {
+            choices.extend(schemas);
+        }
         Ok(choices)
     }
 

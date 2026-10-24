@@ -119,7 +119,8 @@ export function ConsoleToolbar({
   target: "selection" | "statement"
   onRun: () => void
   onRunAll: () => void
-  onExplain: () => void
+  /** Absent when the session does not declare `EXPLAIN`: no button suggests it. */
+  onExplain?: () => void
   onCancel: () => void
   parameterCount: number
   parametersOpen: boolean
@@ -231,19 +232,21 @@ export function ConsoleToolbar({
             <Kbd className="ml-1">{actionShortcut("console.cancel")}</Kbd>
           )}
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onExplain}
-          disabled={!idle}
-        >
-          <HugeiconsIcon
-            icon={SearchList01Icon}
-            strokeWidth={2}
-            data-icon="inline-start"
-          />
-          Explain
-        </Button>
+        {onExplain ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onExplain}
+            disabled={!idle}
+          >
+            <HugeiconsIcon
+              icon={SearchList01Icon}
+              strokeWidth={2}
+              data-icon="inline-start"
+            />
+            Explain
+          </Button>
+        ) : null}
         <span className="text-xs text-muted-foreground tabular-nums">
           {cancelling
             ? "Cancellation requested — waiting for the server"

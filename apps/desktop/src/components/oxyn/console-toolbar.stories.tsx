@@ -123,6 +123,18 @@ export const Saving: Story = {
   },
 }
 
+/**
+ * A session without `EXPLAIN` — Redis, MongoDB — is offered no Explain: the
+ * button would only earn a refusal.
+ */
+export const NoExplainWithoutTheCapability: Story = {
+  args: { onExplain: undefined },
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByRole("button", { name: "Explain" })).toBeNull()
+    await expect(canvas.getByRole("button", { name: "Run" })).toBeEnabled()
+  },
+}
+
 /** Nothing to cancel once idle: the action is not offered. */
 export const NoCancelWhenIdle: Story = {
   args: { onCancelWrite: fn() },
