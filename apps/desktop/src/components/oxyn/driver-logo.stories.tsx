@@ -98,3 +98,83 @@ export const MySQLDark: Story = {
       await expect(getComputedStyle(path).fill).toBe("rgb(255, 255, 255)")
   },
 }
+
+async function wornMark(canvasElement: HTMLElement, viewBox: string) {
+  const svg = logo(canvasElement)
+  await expect(svg).toHaveAttribute("aria-hidden", "true")
+  await expect(svg).toHaveAttribute("viewBox", viewBox)
+  await expect(svg).toBeVisible()
+  return svg
+}
+
+/** ClickHouse's own square: yellow ground, legible on either theme. */
+export const ClickHouse: Story = {
+  args: { driver: "clickhouse" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    await wornMark(canvasElement, "0 0 616 616")
+  },
+}
+
+export const ClickHouseDark: Story = {
+  args: { driver: "clickhouse" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    await wornMark(canvasElement, "0 0 616 616")
+  },
+}
+
+/** DuckDB's disc, framed out of the lockup the vendor drew for a light page. */
+export const DuckDb: Story = {
+  args: { driver: "duckdb" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const svg = await wornMark(canvasElement, "0 0 334.4 334.4")
+    await expect(
+      svg.querySelector('svg[viewBox="0 0 769.5 591.9"]')
+    ).toBeVisible()
+    await expect(
+      svg.querySelector('svg[viewBox="0 0 802.9 609.4"]')
+    ).not.toBeVisible()
+  },
+}
+
+/** …and out of the yellow lockup the vendor drew for a dark page. */
+export const DuckDbDark: Story = {
+  args: { driver: "duckdb" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    const svg = await wornMark(canvasElement, "0 0 334.4 334.4")
+    await expect(
+      svg.querySelector('svg[viewBox="0 0 802.9 609.4"]')
+    ).toBeVisible()
+    await expect(
+      svg.querySelector('svg[viewBox="0 0 769.5 591.9"]')
+    ).not.toBeVisible()
+  },
+}
+
+/** Elasticsearch's middle bar takes the text color, as in Elastic's own UI. */
+export const Elasticsearch: Story = {
+  args: { driver: "elasticsearch" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const svg = await wornMark(canvasElement, "0 0 32 32")
+    const bar = svg.querySelector(".euiIcon__fillNegative")
+    if (bar === null) throw new Error("no middle bar")
+    await expect(getComputedStyle(bar).fill).not.toBe("none")
+  },
+}
+
+export const ElasticsearchDark: Story = {
+  args: { driver: "elasticsearch" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    const svg = await wornMark(canvasElement, "0 0 32 32")
+    const bar = svg.querySelector(".euiIcon__fillNegative")
+    if (bar === null) throw new Error("no middle bar")
+    // Left to the SVG default, the bar would be black on a dark surface.
+    await expect(getComputedStyle(bar).fill).not.toBe("rgb(0, 0, 0)")
+    await expect(getComputedStyle(bar).fill).not.toBe("none")
+  },
+}

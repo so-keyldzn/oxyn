@@ -4,6 +4,10 @@ import { DatabaseIcon } from "@hugeicons/core-free-icons"
 
 import { cn } from "@/lib/utils"
 
+import { Clickhouse } from "@/components/ui/svgs/clickhouse"
+import { Duckdb } from "@/components/ui/svgs/duckdb"
+import { DuckdbDarkMode } from "@/components/ui/svgs/duckdbDarkMode"
+import { Elasticsearch } from "@/components/ui/svgs/elasticsearch"
 import { MysqlIconLight } from "@/components/ui/svgs/mysqlIconLight"
 import { Postgresql } from "@/components/ui/svgs/postgresql"
 import { Sqlite } from "@/components/ui/svgs/sqlite"
@@ -43,14 +47,64 @@ function MysqlMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
 }
 
 /**
- * The official marks, from the svgl registry (`shadcn add @svgl/<name>`),
- * keyed by driver id. A driver per protocol (ADR-0003): Redshift reaches
- * Oxyn through `postgres` and wears its mark.
+ * DuckDB publishes its mark only as stacked lockups, one per background:
+ * a black disc for light surfaces, a yellow one for dark. This frames the
+ * disc of each — the wordmark falls outside the square — and lets the theme
+ * pick the variant the vendor drew for it, rather than recoloring either.
+ */
+function DuckdbMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 334.4 334.4" className={className} {...props}>
+      <Duckdb
+        x={-217.6}
+        y={-10}
+        width={769.5}
+        height={591.9}
+        className="dark:hidden"
+      />
+      <DuckdbDarkMode
+        x={-234.2}
+        y={-12.5}
+        width={802.9}
+        height={609.4}
+        className="hidden dark:inline"
+      />
+    </svg>
+  )
+}
+
+/**
+ * EUI leaves the middle bar unfilled and paints it with the text color. The
+ * selector avoids the class's `__`: Tailwind reads `_` as a space in a variant.
+ */
+function ElasticsearchMark({
+  className,
+  ...props
+}: React.SVGProps<SVGSVGElement>) {
+  return (
+    <Elasticsearch
+      {...props}
+      className={cn(className, "[&_[class$=fillNegative]]:fill-foreground")}
+    />
+  )
+}
+
+/**
+ * The official marks, keyed by driver id. Most come from the svgl registry
+ * (`shadcn add @svgl/<name>`); svgl has none for ClickHouse, DuckDB or
+ * Elasticsearch, so theirs are the vendors' own files, paths unmodified, with
+ * their source in each header. A driver per protocol (ADR-0003): Redshift
+ * reaches Oxyn through `postgres` and wears its mark — but OpenSearch, which
+ * the `elasticsearch` driver also reaches, has a different mark of its own:
+ * keyed by driver id, an OpenSearch connection wears Elasticsearch's.
  */
 const logos: Partial<Record<string, Logo>> = {
   postgres: Postgresql,
   mysql: MysqlMark,
   sqlite: SqliteMark,
+  clickhouse: Clickhouse,
+  duckdb: DuckdbMark,
+  elasticsearch: ElasticsearchMark,
 }
 
 /**
