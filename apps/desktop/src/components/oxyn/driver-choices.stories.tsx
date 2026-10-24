@@ -5,6 +5,7 @@ import { DriverChoices } from "./driver-choices"
 import {
   catalogueDrivers,
   clickhouseDriver,
+  elasticsearchDriver,
   mysqlDriver,
   postgresDriver,
   sqliteDriver,
@@ -56,6 +57,20 @@ export const ClickHouse: Story = {
     await expect(canvas.getByText(/port 8443/)).toBeVisible()
     await userEvent.click(canvas.getByRole("button", { name: /ClickHouse/ }))
     await expect(args.onChoose).toHaveBeenCalledWith(clickhouseDriver)
+  },
+}
+
+/**
+ * One driver for Elasticsearch and OpenSearch (ADR-0003): the tile names the
+ * second product, and is found by it. svgl has neither mark (checked
+ * 2026-10-24): the tile wears the generic database icon.
+ */
+export const Elasticsearch: Story = {
+  args: { drivers: [postgresDriver, elasticsearchDriver] },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByText(/OpenSearch/)).toBeVisible()
+    await userEvent.click(canvas.getByRole("button", { name: /Elasticsearch/ }))
+    await expect(args.onChoose).toHaveBeenCalledWith(elasticsearchDriver)
   },
 }
 

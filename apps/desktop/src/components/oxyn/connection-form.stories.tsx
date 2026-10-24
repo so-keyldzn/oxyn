@@ -4,6 +4,7 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 import { ConnectionForm } from "./connection-form"
 import {
   clickhouseDriver,
+  elasticsearchDriver,
   mysqlDriver,
   postgresDriver,
   savedConnections,
@@ -488,6 +489,47 @@ export const ClickHouse: Story = {
     await expect(args.onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({
         values: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    )
+  },
+}
+
+/**
+ * Elasticsearch and OpenSearch are reached by URL; the API key travels as a
+ * typed secret, never among the saved values (I-03), and the certificate is
+ * verified by default.
+ */
+export const Elasticsearch: Story = {
+  args: { driver: elasticsearchDriver },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByLabelText(/^URL/)).toHaveValue(
+      "https://localhost:9200"
+    )
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await userEvent.type(canvas.getByLabelText(/^Name/), "logs")
+    await userEvent.type(
+      canvas.getByLabelText(/^API key or bearer token/),
+      "story-api-key"
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: "production",
+          values: expect.objectContaining({
+            url: "https://localhost:9200",
+            sslmode: "verify-full",
+          }),
+          secrets: expect.objectContaining({ token: "story-api-key" }),
+        })
+      )
+    )
+    await expect(args.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.not.objectContaining({ token: expect.anything() }),
       })
     )
   },
