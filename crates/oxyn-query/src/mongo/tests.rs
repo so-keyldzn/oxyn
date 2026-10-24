@@ -124,6 +124,45 @@ fn the_first_key_is_the_name_even_when_later_keys_sort_first() {
     assert_eq!(command.name(), "insert");
 }
 
+/// A `find` whose `$in` holds `count` values: five values around them.
+fn wide_in(count: usize) -> String {
+    let values = vec!["0"; count].join(",");
+    format!(r#"{{"find": "u", "filter": {{"_id": {{"$in": [{values}]}}}}}}"#)
+}
+
+#[test]
+fn a_command_of_too_many_values_is_refused_before_its_tree_is_built() {
+    MongoCommand::parse(&wide_in(MAX_COMMAND_VALUES - 5)).expect("at the bound");
+    let error = MongoCommand::parse(&wide_in(MAX_COMMAND_VALUES - 4)).expect_err("past it");
+    assert!(
+        matches!(error, MongoParseError::TooLarge { .. }),
+        "{error:?}"
+    );
+    // The classifier reads the same tree: past the bound, nothing is proven.
+    assert_eq!(
+        classify_mongo(&wide_in(MAX_COMMAND_VALUES)).intent,
+        StatementIntent::Unknown
+    );
+}
+
+#[test]
+fn a_text_larger_than_the_bound_is_refused_unread() {
+    let padding = " ".repeat(MAX_COMMAND_TEXT_BYTES);
+    let error = MongoCommand::parse(&format!(r#"{{"ping": 1}}{padding}"#)).expect_err("too long");
+    assert!(
+        matches!(error, MongoParseError::TooLarge { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn the_value_bound_holds_the_tree_under_its_documented_size() {
+    // The figures `MAX_COMMAND_VALUES` documents.
+    assert_eq!(size_of::<JsonValue>(), 32);
+    assert_eq!(size_of::<(String, JsonValue)>(), 56);
+    const { assert!(MAX_COMMAND_VALUES * 2 * 56 <= 56 << 20) };
+}
+
 #[test]
 fn an_integer_beyond_64_bits_is_refused_not_rounded() {
     let error = MongoCommand::parse(r#"{"find": "u", "filter": {"n": 18446744073709551616}}"#)

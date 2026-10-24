@@ -42,11 +42,12 @@
 //!
 //! [`classify_language`]: crate::classify::classify_language
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::fmt;
 
 use oxyn_core::{MutationRisk, StatementIntent};
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
 use crate::classify::{Basis, Classification, StatementInfo};
 
@@ -110,16 +111,55 @@ impl JsonValue {
     }
 }
 
-impl<'de> Deserialize<'de> for JsonValue {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(ValueVisitor)
+/// Bytes of console text beyond which a command is refused before it is
+/// read. The server takes a command of at most 16 MiB of BSON (16,793,600
+/// bytes with its envelope, RESEARCH-NOTES); twice that leaves room for the
+/// Extended JSON wrappers and the indentation a text spends on the same
+/// command.
+pub const MAX_COMMAND_TEXT_BYTES: usize = 32 << 20;
+
+/// Values — objects, arrays, scalars — a command holds at most. A value costs
+/// at most 112 bytes of tree — an object entry of 56 bytes, in a vector grown
+/// to twice its length — so the tree stays under 56 MiB beside the strings,
+/// which the text bound holds; the BSON built next is smaller. A hostile
+/// saved command of ten million `$in` values is refused here, not allocated
+/// twice before the server refuses it.
+pub const MAX_COMMAND_VALUES: usize = 1 << 19;
+
+/// What the reading of one command may still allocate.
+struct Budget {
+    values: Cell<usize>,
+    exceeded: Cell<bool>,
+}
+
+impl Budget {
+    fn spend<E: de::Error>(&self) -> Result<(), E> {
+        let left = self.values.get();
+        if left == 0 {
+            self.exceeded.set(true);
+            return Err(E::custom("the command holds too many values"));
+        }
+        self.values.set(left.saturating_sub(1));
+        Ok(())
     }
 }
 
-/// Builds a [`JsonValue`], keeping key order and refusing a repeated key.
-struct ValueVisitor;
+/// Reads one [`JsonValue`] against the budget. Depth is `serde_json`'s
+/// bound: 128 nested arrays or objects (`serde_json` 1.0.151, `de.rs`).
+#[derive(Clone, Copy)]
+struct ValueSeed<'b>(&'b Budget);
 
-impl<'de> Visitor<'de> for ValueVisitor {
+impl<'de> DeserializeSeed<'de> for ValueSeed<'_> {
+    type Value = JsonValue;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<JsonValue, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+/// Builds a [`JsonValue`], keeping key order, refusing a repeated key, and
+/// spending one unit of the budget per value before allocating it.
+impl<'de> Visitor<'de> for ValueSeed<'_> {
     type Value = JsonValue;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -127,42 +167,51 @@ impl<'de> Visitor<'de> for ValueVisitor {
     }
 
     fn visit_bool<E: de::Error>(self, value: bool) -> Result<JsonValue, E> {
+        self.0.spend()?;
         Ok(JsonValue::Bool(value))
     }
 
     fn visit_i64<E: de::Error>(self, value: i64) -> Result<JsonValue, E> {
+        self.0.spend()?;
         Ok(JsonValue::Int(value))
     }
 
     fn visit_u64<E: de::Error>(self, value: u64) -> Result<JsonValue, E> {
+        self.0.spend()?;
         Ok(JsonValue::UInt(value))
     }
 
     fn visit_f64<E: de::Error>(self, value: f64) -> Result<JsonValue, E> {
+        self.0.spend()?;
         Ok(JsonValue::Float(value))
     }
 
     fn visit_str<E: de::Error>(self, value: &str) -> Result<JsonValue, E> {
+        self.0.spend()?;
         Ok(JsonValue::String(value.to_owned()))
     }
 
     fn visit_string<E: de::Error>(self, value: String) -> Result<JsonValue, E> {
+        self.0.spend()?;
         Ok(JsonValue::String(value))
     }
 
     fn visit_unit<E: de::Error>(self) -> Result<JsonValue, E> {
+        self.0.spend()?;
         Ok(JsonValue::Null)
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<JsonValue, A::Error> {
-        let mut items = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-        while let Some(item) = seq.next_element()? {
+        self.0.spend()?;
+        let mut items = Vec::new();
+        while let Some(item) = seq.next_element_seed(self)? {
             items.push(item);
         }
         Ok(JsonValue::Array(items))
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<JsonValue, A::Error> {
+        self.0.spend()?;
         let mut entries: Vec<(String, JsonValue)> = Vec::new();
         let mut seen = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
@@ -172,11 +221,37 @@ impl<'de> Visitor<'de> for ValueVisitor {
                      and readers disagree on which one counts"
                 )));
             }
-            let value = map.next_value()?;
+            let value = map.next_value_seed(self)?;
             entries.push((key, value));
         }
         Ok(JsonValue::Object(entries))
     }
+}
+
+/// Reads exactly one JSON value from `text`, within the bounds.
+fn read_bounded(text: &str) -> Result<JsonValue, MongoParseError> {
+    if text.len() > MAX_COMMAND_TEXT_BYTES {
+        return Err(MongoParseError::TooLarge {
+            bound: "32 MiB of text",
+        });
+    }
+    let budget = Budget {
+        values: Cell::new(MAX_COMMAND_VALUES),
+        exceeded: Cell::new(false),
+    };
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    ValueSeed(&budget)
+        .deserialize(&mut deserializer)
+        .and_then(|value| deserializer.end().map(|()| value))
+        .map_err(|error| {
+            if budget.exceeded.get() {
+                MongoParseError::TooLarge {
+                    bound: "524,288 values",
+                }
+            } else {
+                MongoParseError::Json(error.to_string())
+            }
+        })
 }
 
 /// Why a console text is not one database command.
@@ -207,6 +282,16 @@ pub enum MongoParseError {
     /// Explain was asked for a command that is already an `explain`.
     #[error("this command is already an explain; run it as it is")]
     NotExplainable,
+    /// The text is larger than any command the server takes, or holds more
+    /// values than Oxyn reads: refused before its tree is built.
+    #[error(
+        "the command exceeds {bound}, beyond which Oxyn refuses it before reading it; the \
+         server takes at most 16 MiB of BSON per command"
+    )]
+    TooLarge {
+        /// The bound reached.
+        bound: &'static str,
+    },
 }
 
 /// One database command, read from the console text.
@@ -229,8 +314,7 @@ impl MongoCommand {
     /// [`MongoParseError::IntegerOutOfRange`] for an integer literal beyond
     /// the 64-bit range.
     pub fn parse(text: &str) -> Result<Self, MongoParseError> {
-        let document: JsonValue =
-            serde_json::from_str(text).map_err(|error| MongoParseError::Json(error.to_string()))?;
+        let document = read_bounded(text)?;
         if let Some(literal) = oversized_integer(text) {
             return Err(MongoParseError::IntegerOutOfRange { literal });
         }
