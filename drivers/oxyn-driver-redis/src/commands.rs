@@ -6,26 +6,29 @@
 //! its flags and its ACL categories. The session reads it once when it opens
 //! and keeps it: a Redis 7.2, a Valkey 9 and a server with the JSON module do
 //! not know the same commands, and a list written here from memory would be
-//! wrong about one of them ([I-12](../../../CLAUDE.md#i-12)). [`intent`] reads
-//! three facts of that table, and answers only what they prove:
+//! wrong about one of them ([I-12](../../../CLAUDE.md#i-12)). But a table is
+//! what a server answers, and it can lie: [`intent`] uses it to **raise**,
+//! never to lower. A read is proven by the driver's own list
+//! ([`reads`](crate::reads)) and the table together:
 //!
-//! | The server says | Intent |
+//! | The command | Intent |
 //! |---|---|
-//! | a subcommand of `ACL` without the `readonly` flag | `Grant` |
-//! | `readonly`, not `write`, not in `@dangerous` | `Read` |
-//! | `write`, not in `@dangerous` | `Write` |
-//! | `write` in `@dangerous`, with a [`risk`] the driver knows | `Write`, with that risk |
-//! | anything else — `@dangerous`, no flag, a script, an unknown name | nothing proven, hence `Unknown` |
+//! | `ACL …` | `Grant` |
+//! | a write whose [`risk`] the driver knows: `FLUSHALL`, `SWAPDB`… | `Write`, with that risk |
+//! | `EVAL`, `EVALSHA`, `FCALL`, or in `@dangerous` per the table | nothing proven, hence `Unknown` |
+//! | flagged `write` by the table | `Write` |
+//! | on [`READS`](crate::reads::READS) **and** flagged `readonly` by the table | `Read` |
+//! | anything else — no flag, `readonly` but off the list, an unknown name | nothing proven, hence `Unknown` |
 //!
 //! `@dangerous` withholds `Read` and `Write` on purpose: `KEYS` is flagged
 //! `readonly` and stalls a server of fifty million keys, `MIGRATE` is flagged
 //! `write` and moves keys to another server. `FLUSHALL` is flagged `write` and
 //! `@dangerous` too, but the driver knows its reach — every key of every
 //! database —, so it is a `Write` that carries `Truncate`, and the risk asks
-//! for an approval on every environment (ADR-0066). `EVAL` and `FCALL` carry neither
-//! `readonly` nor `write`: a script writes what it wants, so it stays
-//! `Unknown`. `EVAL_RO` and `FCALL_RO` are `readonly`, and the server refuses a
-//! write inside them — the only scripts that read as `Read`.
+//! for an approval on every environment (ADR-0066). A script writes what it
+//! wants, so `EVAL` stays `Unknown` whatever the table says. `EVAL_RO` and
+//! `FCALL_RO` are on the list, and the server refuses a write inside them —
+//! the only scripts that read as `Read`.
 //!
 //! # What changes the connection is the driver's list
 //!
@@ -145,23 +148,37 @@ impl CommandTable {
 
 /// The intent the server's description proves, or `None` when it proves
 /// nothing — which the caller reads as `Unknown`, hence mutating.
+///
+/// The table only ever raises: `Read` needs the driver's own
+/// [`READS`](crate::reads::READS) **and** the server's `readonly` flag, so a
+/// table that flags `SET` or `CONFIG SET` `readonly` proves nothing. A write
+/// whose reach the driver knows ([`risk`]) is a write whatever the table
+/// says, and a script that may write — `EVAL`, `EVALSHA`, `FCALL` — stays
+/// `Unknown` even when the table flags it `write`: its body is not read.
 #[must_use]
 pub fn intent(table: &CommandTable, argv: &[Vec<u8>]) -> Option<StatementIntent> {
-    let found = table.find(argv)?;
-    let spec = found.spec;
-    if found.command == "acl" && !spec.has_flag("readonly") {
+    // The driver's own lists come before the table, so that a table leaving
+    // `ACL` or `FLUSHALL` out cannot lower them to `Unknown`.
+    if lowercase(argv.first()?)? == "acl" {
         return Some(StatementIntent::Grant);
     }
-    if spec.in_category("dangerous") {
-        // A dangerous write whose reach the driver knows is proven: its risk
-        // then asks for an approval everywhere, where `Unknown` would let a
-        // human's `FLUSHALL` run on staging at one click (ADR-0066).
-        return (spec.has_flag("write") && risk(argv).is_some()).then_some(StatementIntent::Write);
+    if risk(argv).is_some() {
+        // Its risk then asks for an approval everywhere, where `Unknown`
+        // would let a human's `FLUSHALL` run on staging at one click
+        // (ADR-0066).
+        return Some(StatementIntent::Write);
+    }
+    let found = table.find(argv)?;
+    let spec = found.spec;
+    if matches!(found.command, "eval" | "evalsha" | "fcall") || spec.in_category("dangerous") {
+        return None;
     }
     match (spec.has_flag("readonly"), spec.has_flag("write")) {
-        (true, false) => Some(StatementIntent::Read),
         (_, true) => Some(StatementIntent::Write),
-        (false, false) => None,
+        (true, false) if crate::reads::is_read(found.command, found.subcommand) => {
+            Some(StatementIntent::Read)
+        }
+        _ => None,
     }
 }
 
@@ -681,6 +698,85 @@ pub(crate) mod tests {
             intent(&redis_8_10(), &argv("MIGRATE h 6379 k 0 5000")),
             None
         );
+    }
+
+    /// A table that flags writes, scripts and administration `readonly`,
+    /// outside `@dangerous`, and `EVAL` `write`.
+    fn lying() -> CommandTable {
+        let read = |name: &str| entry(name, &["readonly"], &["@read"], vec![]);
+        CommandTable::from_reply(&Value::List(
+            Aggregate::Array,
+            vec![
+                read("get"),
+                read("set"),
+                read("del"),
+                entry("eval", &["write"], &["@write"], vec![]),
+                read("evalsha"),
+                read("fcall"),
+                read("flushall"),
+                read("debug"),
+                read("shutdown"),
+                read("ft.cursor"),
+                entry(
+                    "config",
+                    &[],
+                    &[],
+                    vec![read("config|set"), read("config|get")],
+                ),
+                entry("acl", &[], &[], vec![read("acl|setuser")]),
+            ],
+        ))
+    }
+
+    #[rstest]
+    #[case("SET k v", None)]
+    #[case("DEL k", None)]
+    #[case("CONFIG SET requirepass x", None)]
+    #[case("CONFIG GET requirepass", None)]
+    #[case("EVAL \"redis.call('del','k')\" 0", None)]
+    #[case("EVALSHA abc 0", None)]
+    #[case("FCALL f 0", None)]
+    #[case("DEBUG SLEEP 0", None)]
+    #[case("SHUTDOWN NOSAVE", None)]
+    #[case("FT.CURSOR DEL idx 1", None)]
+    // Raised by the driver's own lists, whatever the table says.
+    #[case("FLUSHALL", Some(StatementIntent::Write))]
+    #[case("ACL SETUSER bob on", Some(StatementIntent::Grant))]
+    // A read on the list, flagged `readonly`: the only `Read`.
+    #[case("GET k", Some(StatementIntent::Read))]
+    fn a_table_that_lies_cannot_make_a_read(
+        #[case] line: &str,
+        #[case] expected: Option<StatementIntent>,
+    ) {
+        assert_eq!(intent(&lying(), &argv(line)), expected, "{line}");
+    }
+
+    #[test]
+    fn a_table_that_leaves_a_command_out_cannot_lower_it() {
+        assert_eq!(
+            intent(&CommandTable::default(), &argv("FLUSHDB")),
+            Some(StatementIntent::Write)
+        );
+        assert_eq!(
+            intent(&CommandTable::default(), &argv("ACL SETUSER bob on")),
+            Some(StatementIntent::Grant)
+        );
+    }
+
+    #[test]
+    fn a_read_off_the_list_or_withdrawn_by_the_table_is_not_proven() {
+        // On the list, but the table does not flag it `readonly`.
+        let silent = CommandTable::from_reply(&Value::List(
+            Aggregate::Array,
+            vec![entry("get", &[], &[], vec![])],
+        ));
+        assert_eq!(intent(&silent, &argv("GET k")), None);
+        // On the list, but the table puts it in `@dangerous`.
+        let dangerous = CommandTable::from_reply(&Value::List(
+            Aggregate::Array,
+            vec![entry("get", &["readonly"], &["@dangerous"], vec![])],
+        ));
+        assert_eq!(intent(&dangerous, &argv("GET k")), None);
     }
 
     #[test]

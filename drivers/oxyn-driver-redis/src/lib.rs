@@ -48,6 +48,7 @@ pub mod driver;
 pub mod error;
 pub mod options;
 pub mod preview;
+pub mod reads;
 pub mod render;
 pub mod resp;
 pub mod session;

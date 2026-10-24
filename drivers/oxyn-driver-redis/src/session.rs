@@ -218,8 +218,9 @@ impl RedisSession {
         })
     }
 
-    /// The intent the server's command table proves for a request, or `None`
-    /// when it proves nothing — `Unknown`, hence mutating.
+    /// The intent [`commands::intent`] proves for a request — the driver's
+    /// own lists, raised by the server's command table, never lowered by
+    /// it —, or `None` when nothing is proven: `Unknown`, hence mutating.
     ///
     /// No I/O: the table was read when the session opened.
     #[must_use]
@@ -292,8 +293,8 @@ impl Session for RedisSession {
         self.capabilities
     }
 
-    /// The intent of [`RedisSession::intent_of`]: from the server's own
-    /// command table, read when the session opened — no I/O, no lock.
+    /// The intent of [`RedisSession::intent_of`]: the driver's lists and the
+    /// command table read when the session opened — no I/O, no lock.
     fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
         self.intent_of(request)
     }
@@ -316,10 +317,15 @@ impl Session for RedisSession {
         let table = &self.shared.commands;
         let intent = commands::intent(table, &argv);
         let found = table.find(&argv);
-        if request.limits.read_only && intent != Some(StatementIntent::Read) {
+        // The driver's own list is checked again here, apart from the table:
+        // a read-only execution on production is the last guard, and a table
+        // that lies must not open it alone.
+        if request.limits.read_only
+            && !(intent == Some(StatementIntent::Read) && crate::reads::names_a_read(&argv))
+        {
             return Err(OxynError::Query(format!(
-                "this execution is read-only, and the server does not mark `{}` as a read \
-                 (`readonly` flag, outside @dangerous): Redis has no read-only session, so Oxyn \
+                "this execution is read-only, and `{}` is not a read Oxyn knows and the server \
+                 flags `readonly`, outside @dangerous: Redis has no read-only session, so Oxyn \
                  does not send it",
                 String::from_utf8_lossy(argv.first().map_or(&[][..], Vec::as_slice))
             )));

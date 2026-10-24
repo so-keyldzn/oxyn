@@ -32,10 +32,16 @@ pub(crate) const COMMAND: &[u8] = b"*2\r\n\
 /// Starts a server that answers the handshake and then `reply` to the first
 /// other command, before closing. Returns its port.
 async fn lying_server(reply: &'static [u8]) -> u16 {
+    serving(Arc::from(COMMAND), reply).await
+}
+
+/// The same server, answering `table` to `COMMAND`.
+async fn serving(table: Arc<[u8]>, reply: &'static [u8]) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a free port");
     let port = listener.local_addr().expect("bound").port();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
+            let table = Arc::clone(&table);
             tokio::spawn(async move {
                 let mut reader = Reader::new(BufReader::new(stream));
                 loop {
@@ -49,7 +55,7 @@ async fn lying_server(reply: &'static [u8]) -> u16 {
                     };
                     let (answer, last): (&[u8], bool) = match name.as_slice() {
                         b"HELLO" => (HELLO, false),
-                        b"COMMAND" => (COMMAND, false),
+                        b"COMMAND" => (&table, false),
                         b"CLIENT" | b"SELECT" => (b":0\r\n", false),
                         _ => (reply, true),
                     };
@@ -97,6 +103,77 @@ async fn the_fake_handshake_classifies_like_redis() {
     assert_eq!(intent("GET k"), Some(oxyn_core::StatementIntent::Read));
     assert_eq!(intent("SET k v"), Some(oxyn_core::StatementIntent::Write));
     assert_eq!(intent("DEL k"), None);
+}
+
+/// One `COMMAND` entry, RESP3: flags and categories as sets.
+fn entry(name: &str, flags: &[&str], categories: &[&str], subcommands: &[String]) -> String {
+    let set = |items: &[&str]| {
+        let mut out = format!("~{}\r\n", items.len());
+        for item in items {
+            out.push_str(&format!("+{item}\r\n"));
+        }
+        out
+    };
+    format!(
+        "*10\r\n${}\r\n{name}\r\n:-1\r\n{}:0\r\n:0\r\n:0\r\n{}*0\r\n*0\r\n*{}\r\n{}",
+        name.len(),
+        set(flags),
+        set(categories),
+        subcommands.len(),
+        subcommands.concat()
+    )
+}
+
+/// A server whose table flags writes, scripts and administration
+/// `readonly`, outside `@dangerous`: the `PolicyGate` and the read-only
+/// guard must both still refuse to take them for reads, and nothing is sent.
+#[tokio::test]
+async fn a_command_table_that_lies_opens_no_read_only_execution() {
+    let read = |name: &str| entry(name, &["readonly"], &["@read"], &[]);
+    let entries = [
+        read("get"),
+        read("set"),
+        read("eval"),
+        read("flushall"),
+        read("debug"),
+        read("shutdown"),
+        entry(
+            "config",
+            &[],
+            &[],
+            &[read("config|set"), read("config|get")],
+        ),
+    ];
+    let table = format!("*{}\r\n{}", entries.len(), entries.concat());
+    // Whatever reaches this server past the handshake succeeds: an error
+    // below can only be the driver's refusal.
+    let port = serving(Arc::from(table.into_bytes()), b"+OK\r\n").await;
+    let session = session_on(port).await;
+    for text in [
+        "SET k v",
+        "CONFIG SET requirepass x",
+        "EVAL \"redis.call('del','k')\" 0",
+        "FLUSHALL",
+        "DEBUG SLEEP 0",
+        "SHUTDOWN NOSAVE",
+    ] {
+        let request = ExecRequest::new(QueryLanguage::RedisCommand, text);
+        assert_ne!(
+            session.intent_of(&request),
+            Some(oxyn_core::StatementIntent::Read),
+            "{text}"
+        );
+        let read_only = request.with_limits(ExecLimits::default());
+        let error = match session.execute(read_only, &CancelToken::new()).await {
+            Ok(_) => panic!("`{text}` was sent on a read-only execution"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, OxynError::Query(_)), "{text}: {error:?}");
+    }
+    assert_eq!(
+        session.intent_of(&ExecRequest::new(QueryLanguage::RedisCommand, "GET k")),
+        Some(oxyn_core::StatementIntent::Read)
+    );
 }
 
 #[tokio::test]
