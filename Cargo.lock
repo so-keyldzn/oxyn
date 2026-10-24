@@ -7671,7 +7671,7 @@ checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
 
 [[package]]
 name = "oxyn-ai"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "agent-client-protocol",
  "async-process",
@@ -7701,7 +7701,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-catalog"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "async-trait",
  "chrono",
@@ -7719,7 +7719,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-core"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "bitflags 2.13.1",
  "chrono",
@@ -7739,7 +7739,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-data"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "arrow",
  "criterion",
@@ -7757,7 +7757,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-desktop"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -7805,7 +7805,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7823,7 +7823,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver-clickhouse"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7873,7 +7873,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver-mysql"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7896,7 +7896,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver-postgres"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7916,7 +7916,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-driver-sqlite"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7937,7 +7937,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-embed"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "burn",
  "burn-flex",
@@ -7959,7 +7959,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-exec"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7984,7 +7984,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-llm"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "async-trait",
  "bytes",
@@ -8000,7 +8000,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-plugin"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "oxyn-core",
  "oxyn-driver",
@@ -8013,7 +8013,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-query"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "criterion",
  "oxyn-core",
@@ -8027,7 +8027,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-secrets"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "keyring",
  "oxyn-core",
@@ -8041,7 +8041,7 @@ dependencies = [
 
 [[package]]
 name = "oxyn-store"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "chrono",
  "directories",
