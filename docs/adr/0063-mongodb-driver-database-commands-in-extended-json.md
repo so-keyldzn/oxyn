@@ -180,12 +180,19 @@ transport cut during a write is `OutcomeUnknown`. The library's own messages,
 which quote hosts, are replaced by the driver's.
 
 A command holding a `pwd` key at any depth — the password of `createUser` and
-`updateUser` — gets errors without the server's text, and is persisted with
-that value replaced by `"<redacted>"`: `oxyn_query::redact_password_literals`
-reads the MongoDB language with a lexical scan of the JSON text, which keeps
-every other byte, decodes an escaped key, skips string contents, and redacts
-an unterminated value through the end
-([ADR-0053](0053-redact-sql-passwords-before-persistence.md)).
+`updateUser` — gets errors without the server's text. Its credentials are
+persisted redacted through the mechanism every language shares
+([ADR-0053](0053-redact-sql-passwords-before-persistence.md),
+[ADR-0061](0061-redis-driver-speaks-resp3-itself.md)):
+`oxyn_query::redact_password_literals` has a `MongoQuery` arm beside the Redis
+one, and `oxyn_query::redact_any_language`, which every sink without a
+language applies, reads MongoDB after SQL and Redis. Replaced are the value of
+every `pwd` key, the `payload` of `saslStart` and `saslContinue`, and the
+password of a connection string inside a string value. The decision is taken
+on the decoded command, as the server reads it: keys, the command name and
+strings are decoded as JSON decodes them, a string whose content is itself a
+command is read again, and the replacement keeps every other byte of the text
+as written. A value that does not end is redacted through the end.
 
 ### Session state, read-only, transactions
 

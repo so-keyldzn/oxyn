@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="aa34580dc6e8" -->
+<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="7d8287a06107" -->
 
 > Traduction française de [docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md](../../../../docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md). **La version anglaise fait foi.**
 
@@ -197,12 +197,20 @@ bibliothèque, qui citent des hôtes, sont remplacés par ceux du driver.
 
 Une commande qui porte une clé `pwd` à n'importe quelle profondeur — le mot de
 passe de `createUser` et d'`updateUser` — reçoit ses erreurs sans le texte du
-serveur, et est persistée avec cette valeur remplacée par `"<redacted>"` :
-`oxyn_query::redact_password_literals` lit le langage MongoDB par un balayage
-lexical du texte JSON, qui garde tous les autres octets, décode une clé
-échappée, saute le contenu des chaînes et masque une valeur non terminée
-jusqu'à la fin
-([ADR-0053](0053-redact-sql-passwords-before-persistence.md)).
+serveur. Ses identifiants sont persistés caviardés par le mécanisme que
+partagent tous les langages
+([ADR-0053](0053-redact-sql-passwords-before-persistence.md),
+[ADR-0061](0061-redis-driver-speaks-resp3-itself.md)) :
+`oxyn_query::redact_password_literals` a un bras `MongoQuery` à côté de celui
+de Redis, et `oxyn_query::redact_any_language`, qu'applique chaque destination
+sans langage, lit MongoDB après SQL et Redis. Sont remplacés la valeur de
+toute clé `pwd`, le `payload` de `saslStart` et `saslContinue`, et le mot de
+passe d'une chaîne de connexion dans une valeur de type chaîne. La décision se
+prend sur la commande décodée, telle que le serveur la lit : les clés, le nom
+de la commande et les chaînes sont décodés comme JSON les décode, une chaîne
+dont le contenu est lui-même une commande est relue, et le remplacement garde
+tous les autres octets du texte tel qu'écrit. Une valeur non terminée est
+caviardée jusqu'à la fin.
 
 ### État de session, lecture seule, transactions
 

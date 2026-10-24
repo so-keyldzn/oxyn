@@ -422,8 +422,8 @@ impl ToolCallRecord {
 
     /// Adds the statement the command carried.
     ///
-    /// The call does not say which language it was in — SQL or a Redis
-    /// command —, so the statement is redacted by every grammar
+    /// The call does not say which language it was in — SQL, a Redis or a
+    /// MongoDB command —, so the statement is redacted by every grammar
     /// ([`oxyn_query::redact_any_language`]).
     #[must_use]
     pub fn with_statement(mut self, statement: impl Into<String>) -> Self {

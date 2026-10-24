@@ -1068,16 +1068,23 @@ mod tests {
         );
     }
 
-    /// A MongoDB command's `pwd` is redacted where the record knows its
-    /// language: the history row, and the journal entry built from the
-    /// command. What the driver receives is left whole.
+    /// A MongoDB command's credentials are redacted on the decoded command
+    /// in every record: the history row and the journal entry built from the
+    /// command, which know its language, and a journal entry written back,
+    /// which does not. What the driver receives is left whole.
     #[test]
-    fn mongo_records_cannot_persist_a_user_password() {
+    fn mongo_records_cannot_persist_a_credential() {
         let store = Store::open_in_memory().expect("in-memory store");
+        // The scheme apart, so that no line here reads as a connection string.
+        let scheme = "mongodb";
         for text in [
-            r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#,
-            r#"{"updateUser": "app", "pwd": "witness-secret"}"#,
+            r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#.to_owned(),
+            r#"{"updateUser": "app", "pwd": "witness-secret"}"#.to_owned(),
+            r#"{"createUser":"app","pwd":"witness-secret"}"#.to_owned(),
+            r#"{"saslStart": 1, "mechanism": "PLAIN", "payload": "witness-secret"}"#.to_owned(),
+            format!(r#"{{"addShard": "{scheme}://admin:witness-secret@h1/"}}"#),
         ] {
+            let text = text.as_str();
             let request = ExecRequest::new(QueryLanguage::MongoQuery, text);
             let command = Command::Execute {
                 connection: ConnectionId::new(),
@@ -1097,7 +1104,10 @@ mod tests {
                     text,
                 ))
                 .expect("history insert");
+            let mut direct = journal.clone();
+            direct.statement = Some(text.into());
             store.journal().append(&journal).expect("journal append");
+            store.journal().append(&direct).expect("journal append");
             assert_eq!(command.statement_text(), Some(text));
         }
         store

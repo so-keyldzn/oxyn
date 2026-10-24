@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="cc1f6d32688a" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="7d4bf8a364b1" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -61,15 +61,19 @@ d'`ACL SETUSER`, les valeurs d'identifiants de `CONFIG SET` et les `AUTH`/`AUTH2
 de `MIGRATE`, reconnus sur les arguments tels que le serveur les décode,
 échappements compris. Un enregistrement qui ne porte pas son langage — un
 appel d'outil, une entrée d'audit réécrite, une requête sauvegardée
-mentionnée à un agent — est caviardé par les deux grammaires
+mentionnée à un agent — est caviardé par toutes les grammaires
 ([ADR-0061](adr/0061-redis-driver-speaks-resp3-itself.md)).
 
-Une commande MongoDB porte son mot de passe dans le `pwd` de `createUser` et
-d'`updateUser`. La valeur de toute clé `pwd`, à toute profondeur et quelle que
-soit l'écriture échappée de son nom, est remplacée par `"<redacted>"`, tous les
-autres octets conservés, partout où un enregistrement sait qu'il contient une
-commande MongoDB : l'historique des requêtes, et l'entrée du journal d'audit
-construite à partir de la commande
+Une commande MongoDB porte ses identifiants à trois endroits : le `pwd` de
+`createUser` et d'`updateUser`, le `payload` de `saslStart` et de
+`saslContinue`, et une chaîne de connexion avec son mot de passe dans une
+chaîne. Chacun est remplacé par `<redacted>`, tous les autres octets
+conservés, reconnu sur la commande telle que le serveur la décode — clés et
+noms de commande échappés, et commande citée dans une chaîne, compris. Les
+enregistrements qui connaissent leur langage — l'historique des requêtes,
+l'entrée du journal d'audit construite à partir de la commande — la lisent
+comme du MongoDB ; ceux qui ne le connaissent pas la lisent avec toutes les
+grammaires, MongoDB compris
 ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
 
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
