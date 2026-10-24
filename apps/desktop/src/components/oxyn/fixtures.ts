@@ -213,6 +213,226 @@ export const clickhouseDriver: DriverChoice = {
   ],
 }
 
+/** As `mongodb_metadata()` of `drivers/oxyn-driver-mongodb/src/driver.rs`. */
+export const mongodbDriver: DriverChoice = {
+  id: "mongodb",
+  aliases: [],
+  displayName: "MongoDB",
+  family: "document",
+  defaultPort: 27017,
+  fields: [
+    {
+      key: "host",
+      label: "Hosts",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: "localhost",
+      help: "host or host:port; several, comma-separated, for a replica set seed list",
+    },
+    {
+      key: "port",
+      label: "Port",
+      kind: { type: "number" },
+      required: false,
+      secret: false,
+      default: "27017",
+      help: "For the hosts written without a port.",
+    },
+    {
+      key: "srv",
+      label: "DNS seed list (mongodb+srv)",
+      kind: { type: "bool" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "The host is a DNS name whose SRV records list the servers.",
+    },
+    {
+      key: "database",
+      label: "Database",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Where a console command goes when it names no database.",
+    },
+    {
+      key: "user",
+      label: "User",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: null,
+    },
+    {
+      key: "password",
+      label: "Password",
+      kind: { type: "password" },
+      required: false,
+      secret: true,
+      default: null,
+      help: "Stored in the system keyring.",
+    },
+    {
+      key: "authSource",
+      label: "Authentication database",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Defaults to the database above, then admin.",
+    },
+    {
+      key: "authMechanism",
+      label: "Authentication mechanism",
+      kind: {
+        type: "choice",
+        options: ["default", "SCRAM-SHA-256", "SCRAM-SHA-1"],
+      },
+      required: false,
+      secret: false,
+      default: "default",
+      help: null,
+    },
+    {
+      key: "replicaSet",
+      label: "Replica set",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: null,
+    },
+    {
+      key: "directConnection",
+      label: "Direct connection",
+      kind: { type: "bool" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Talk to this one server, without discovering the replica set.",
+    },
+    {
+      key: "tls",
+      label: "TLS mode",
+      kind: {
+        type: "choice",
+        options: ["verify-full", "require", "disable"],
+      },
+      required: false,
+      secret: false,
+      default: "verify-full",
+      help: null,
+    },
+    {
+      key: "tlsCAFile",
+      label: "CA file",
+      kind: { type: "path" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "PEM certificates of the authority that signed the server's.",
+    },
+    {
+      key: "tlsCertificateKeyFile",
+      label: "Client certificate",
+      kind: { type: "path" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "PEM file holding the client certificate and its unencrypted key.",
+    },
+  ],
+}
+
+/** As `oxyn_driver_redis::redis_metadata` describes the form. */
+export const redisDriver: DriverChoice = {
+  id: "redis",
+  aliases: ["Valkey"],
+  displayName: "Redis",
+  family: "key-value",
+  defaultPort: 6379,
+  fields: [
+    {
+      key: "host",
+      label: "Host",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: "localhost",
+      help: null,
+    },
+    {
+      key: "port",
+      label: "Port",
+      kind: { type: "number" },
+      required: false,
+      secret: false,
+      default: "6379",
+      help: null,
+    },
+    {
+      key: "database",
+      label: "Database number",
+      kind: { type: "number" },
+      required: false,
+      secret: false,
+      default: "0",
+      help: "The database SELECT opens on; the tree lists the others.",
+    },
+    {
+      key: "user",
+      label: "User",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "An ACL user. Empty: Redis's `default` user.",
+    },
+    {
+      key: "password",
+      label: "Password",
+      kind: { type: "password" },
+      required: false,
+      secret: true,
+      default: null,
+      help: "Stored in the system keyring.",
+    },
+    {
+      key: "tls",
+      label: "TLS mode",
+      kind: {
+        type: "choice",
+        options: ["verify-full", "require", "disable"],
+      },
+      required: false,
+      secret: false,
+      default: "verify-full",
+      help: null,
+    },
+    {
+      key: "ca_file",
+      label: "CA certificate",
+      kind: { type: "path" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "A PEM file of the authority that signed the server's certificate. Empty: the public roots.",
+    },
+    {
+      key: "socket",
+      label: "Unix socket",
+      kind: { type: "path" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Instead of a host: a socket on this machine. TLS does not apply.",
+    },
+  ],
+}
+
 export const sqliteDriver: DriverChoice = {
   id: "sqlite",
   aliases: [],
@@ -304,6 +524,14 @@ export const savedConnections: Array<SavedConnection> = [
     readOnly: false,
     privacyTier: "metadata",
   },
+  {
+    id: "018f0000-0000-7000-8000-000000000005",
+    name: "events",
+    driver: "mongodb",
+    environment: "staging",
+    readOnly: false,
+    privacyTier: "metadata",
+  },
 ]
 
 const relation = (
@@ -364,6 +592,59 @@ export const catalog: Array<CatalogNode> = [
     holdsRecords: false,
     system: true,
     comment: null,
+    loaded: false,
+    stale: false,
+    children: [],
+    virtualTable: null,
+    shadowOf: null,
+  },
+]
+
+const redisKey = (name: string, type: string): CatalogNode => ({
+  address: { catalog: "db0", namespace: null, relation: name },
+  name,
+  kind: "key_pattern",
+  holdsRecords: true,
+  system: false,
+  comment: type,
+  loaded: true,
+  stale: false,
+  children: [],
+  virtualTable: null,
+  shadowOf: null,
+})
+
+/**
+ * A Redis server as `oxyn-driver-redis` lists it: numbered databases, then a
+ * bounded sample of keys, a key that is not plain text written back in the
+ * quoted form a console reads (ADR-0061).
+ */
+export const redisCatalog: Array<CatalogNode> = [
+  {
+    address: { catalog: "db0", namespace: null, relation: null },
+    name: "db0",
+    kind: "catalog",
+    holdsRecords: false,
+    system: false,
+    comment: "3 keys",
+    loaded: true,
+    stale: false,
+    children: [
+      redisKey("session:42", "hash"),
+      redisKey("queue:emails", "list"),
+      redisKey('"line\\nbreak \\xff"', "string"),
+    ],
+    virtualTable: null,
+    shadowOf: null,
+  },
+  {
+    address: { catalog: "db1", namespace: null, relation: null },
+    name: "db1",
+    kind: "catalog",
+    holdsRecords: false,
+    system: false,
+    comment:
+      "50000000 keys; the tree lists a sample of 1000, SCAN … MATCH finds the others",
     loaded: false,
     stale: false,
     children: [],
@@ -469,6 +750,7 @@ export const invoicesDetail: RelationDetail = {
       default: "nextval('invoices_id_seq')",
       comment: null,
       primaryKey: true,
+      inferred: false,
     },
     {
       name: "customer_id",
@@ -479,6 +761,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: "References customers.id",
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "amount",
@@ -489,6 +772,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "issued_at",
@@ -499,6 +783,7 @@ export const invoicesDetail: RelationDetail = {
       default: "now()",
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "paid_at",
@@ -509,6 +794,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
   ],
 }
@@ -521,6 +807,7 @@ export const invoicesDetail: RelationDetail = {
 export const catalogueDrivers: Array<DriverChoice> = [
   postgresDriver,
   mysqlDriver,
+  mongodbDriver,
   ...(
     [
       ["sqlserver", "SQL Server", "relational", 1433],
@@ -529,8 +816,6 @@ export const catalogueDrivers: Array<DriverChoice> = [
       ["clickhouse", "ClickHouse", "analytical", 8123],
       ["snowflake", "Snowflake", "analytical", null],
       ["bigquery", "BigQuery", "analytical", null],
-      ["mongodb", "MongoDB", "document", 27017],
-      ["redis", "Redis", "key-value", 6379],
       ["cassandra", "Cassandra", "wide-column", 9042],
       ["dynamodb", "DynamoDB", "key-value", null],
       ["couchbase", "Couchbase", "document", 8091],
@@ -549,5 +834,6 @@ export const catalogueDrivers: Array<DriverChoice> = [
       ? duckdbDriver
       : { ...postgresDriver, id, displayName, family, defaultPort, aliases: [] }
   ),
+  redisDriver,
   sqliteDriver,
 ]

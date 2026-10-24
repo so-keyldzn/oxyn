@@ -177,6 +177,11 @@ export function LibraryEntryView({
               value={text}
               onChange={ignore}
               driver={driver}
+              language={
+                state.status === "history"
+                  ? state.entry.language
+                  : state.document.language
+              }
               readOnly
             />
           </div>

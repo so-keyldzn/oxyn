@@ -88,6 +88,7 @@ export function ConsoleToolbar({
   cancelling = false,
   elapsedMs = null,
   canRun,
+  canExplain,
   readOnly,
   target,
   onRun,
@@ -113,15 +114,22 @@ export function ConsoleToolbar({
   cancelling?: boolean
   /** Time since the run started, while it runs. */
   elapsedMs?: number | null
-  /** The session declares `SQL`, and the console is not closing. */
+  /** The session declares a console language, and the console is not closing. */
   canRun: boolean
+  /** The session declares `EXPLAIN`; otherwise Explain is greyed, with why. */
+  canExplain: boolean
   readOnly: boolean
   target: "selection" | "statement"
   onRun: () => void
   onRunAll: () => void
   onExplain: () => void
   onCancel: () => void
-  parameterCount: number
+  /**
+   * The console's bound values, or `null` when its language binds none: a
+   * MongoDB command carries its values, and no dimmed control suggests
+   * otherwise (docs/UX-SPEC.md, « Bound values of a console »).
+   */
+  parameterCount: number | null
   parametersOpen: boolean
   onToggleParameters: () => void
   title: string
@@ -150,8 +158,12 @@ export function ConsoleToolbar({
   const writing = save.status === "saving" || closing
   // The registry's conditions, the same for these buttons as for the menu
   // bar and the keyboard (UX-SPEC, « Menu bar »).
-  const state = { canRun, running, cancelling, writing }
+  const state = { canRun, canExplain, running, cancelling, writing }
   const idle = consoleAvailability("run", state) === true
+  const explainable = consoleAvailability("explain", state)
+  const explainReason =
+    typeof explainable === "object" ? explainable.reason : null
+  const explainReasonId = React.useId()
   const stoppable = consoleAvailability("cancel", state) === true
   const savable = consoleAvailability("save", state) === true
   const notice =
@@ -231,19 +243,47 @@ export function ConsoleToolbar({
             <Kbd className="ml-1">{actionShortcut("console.cancel")}</Kbd>
           )}
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onExplain}
-          disabled={!idle}
-        >
-          <HugeiconsIcon
-            icon={SearchList01Icon}
-            strokeWidth={2}
-            data-icon="inline-start"
-          />
-          Explain
-        </Button>
+        {canExplain ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onExplain}
+            disabled={explainable !== true}
+          >
+            <HugeiconsIcon
+              icon={SearchList01Icon}
+              strokeWidth={2}
+              data-icon="inline-start"
+            />
+            Explain
+          </Button>
+        ) : (
+          // Greyed with its reason, read on hover and by a screen reader, as
+          // the menu bar's entry says it (UX-SPEC, « Menu bar »).
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled
+                aria-describedby={explainReasonId}
+              >
+                <HugeiconsIcon
+                  icon={SearchList01Icon}
+                  strokeWidth={2}
+                  data-icon="inline-start"
+                />
+                Explain
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-72">
+              {explainReason}
+            </TooltipContent>
+            <span id={explainReasonId} hidden>
+              {explainReason}
+            </span>
+          </Tooltip>
+        )}
         <span className="text-xs text-muted-foreground tabular-nums">
           {cancelling
             ? "Cancellation requested — waiting for the server"
@@ -251,20 +291,22 @@ export function ConsoleToolbar({
               ? `Running${elapsedMs === null ? "" : ` · ${formatElapsed(elapsedMs)}`} — Esc cancels`
               : `${actionShortcut("console.run")} executes: ${target === "selection" ? "selection" : "current statement"}`}
         </span>
-        <Button
-          size="sm"
-          variant={parametersOpen ? "secondary" : "ghost"}
-          aria-pressed={parametersOpen}
-          onClick={onToggleParameters}
-        >
-          <HugeiconsIcon
-            icon={LeftToRightListBulletIcon}
-            strokeWidth={2}
-            data-icon="inline-start"
-          />
-          Parameters
-          <span className="tabular-nums">· {parameterCount}</span>
-        </Button>
+        {parameterCount === null ? null : (
+          <Button
+            size="sm"
+            variant={parametersOpen ? "secondary" : "ghost"}
+            aria-pressed={parametersOpen}
+            onClick={onToggleParameters}
+          >
+            <HugeiconsIcon
+              icon={LeftToRightListBulletIcon}
+              strokeWidth={2}
+              data-icon="inline-start"
+            />
+            Parameters
+            <span className="tabular-nums">· {parameterCount}</span>
+          </Button>
+        )}
         {readOnly ? <ReadOnlyBadge /> : null}
         <div className="ml-auto flex min-w-0 items-center gap-2">
           {transaction ? <TransactionBadge state={transaction} /> : null}

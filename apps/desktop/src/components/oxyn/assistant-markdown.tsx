@@ -14,6 +14,7 @@ import type {
 } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantMermaid } from "@/components/oxyn/assistant-mermaid"
 import { Separator } from "@/components/ui/separator"
+import type { QueryLanguageName } from "@/lib/query-language"
 import type { IdentifierQuote } from "@/lib/sql-identifiers"
 import { cn } from "@/lib/utils"
 
@@ -104,10 +105,12 @@ function Blocks({
   onCopy,
   renderErd,
   identifierQuote = '"',
+  consoleLanguage,
 }: {
   blocks: Array<Block>
   onOpenSql?: (sql: string) => void
   openSqlDisabledReason?: string | null
+  consoleLanguage?: QueryLanguageName | null
   onCopy?: (text: string) => Promise<boolean> | boolean
   renderErd?: (request: ErdRequest) => React.ReactNode
   identifierQuote?: IdentifierQuote
@@ -157,6 +160,7 @@ function Blocks({
                 block={block}
                 onOpenSql={onOpenSql}
                 openSqlDisabledReason={openSqlDisabledReason}
+                consoleLanguage={consoleLanguage}
                 onCopy={onCopy}
               />
             )
@@ -242,13 +246,15 @@ function Blocks({
  *
  * No `dangerouslySetInnerHTML`, no `<a href>`, no `<img>`: a model's output is
  * hostile input (docs/SECURITY.md), and the renderer offers it no element that
- * loads, navigates or runs. A closed SQL block carries « Open in console »,
- * which hands its text to the caller and runs nothing (I-07).
+ * loads, navigates or runs. A closed block in the console's language carries
+ * « Open in console », which hands its text to the caller and runs nothing
+ * (I-07).
  */
 export function AssistantMarkdown({
   text,
   onOpenSql,
   openSqlDisabledReason,
+  consoleLanguage,
   onCopy,
   renderErd,
   identifierQuote = '"',
@@ -258,6 +264,11 @@ export function AssistantMarkdown({
   onOpenSql?: (sql: string) => void
   /** Why opening is unavailable, shown on the disabled button. */
   openSqlDisabledReason?: string | null
+  /**
+   * The language of the session's consoles: only a block in it opens in one.
+   * SQL when not given; `null` when the session declares no language.
+   */
+  consoleLanguage?: QueryLanguageName | null
   /** Offers to copy each code block; resolves to whether it worked. */
   onCopy?: (text: string) => Promise<boolean> | boolean
   /**
@@ -281,6 +292,7 @@ export function AssistantMarkdown({
         blocks={blocks}
         onOpenSql={onOpenSql}
         openSqlDisabledReason={openSqlDisabledReason}
+        consoleLanguage={consoleLanguage}
         onCopy={onCopy}
         renderErd={renderErd}
         identifierQuote={identifierQuote}

@@ -4,8 +4,10 @@ import { DatabaseIcon } from "@hugeicons/core-free-icons"
 
 import { cn } from "@/lib/utils"
 
+import { MongodbIconLight } from "@/components/ui/svgs/mongodbIconLight"
 import { MysqlIconLight } from "@/components/ui/svgs/mysqlIconLight"
 import { Postgresql } from "@/components/ui/svgs/postgresql"
+import { Redis } from "@/components/ui/svgs/redis"
 import { Sqlite } from "@/components/ui/svgs/sqlite"
 
 type Logo = (props: React.SVGProps<SVGSVGElement>) => React.ReactElement
@@ -43,6 +45,19 @@ function MysqlMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
 }
 
 /**
+ * The leaf as svgl draws it on a light surface; the token takes svgl's dark
+ * variant's green on a dark one.
+ */
+function MongodbMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return (
+    <MongodbIconLight
+      {...props}
+      className={cn(className, "[&_path]:fill-(--driver-mongodb)")}
+    />
+  )
+}
+
+/**
  * The official marks, from the svgl registry (`shadcn add @svgl/<name>`),
  * keyed by driver id. A driver per protocol (ADR-0003): Redshift reaches
  * Oxyn through `postgres` and wears its mark.
@@ -50,7 +65,9 @@ function MysqlMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
 const logos: Partial<Record<string, Logo>> = {
   postgres: Postgresql,
   mysql: MysqlMark,
+  mongodb: MongodbMark,
   sqlite: SqliteMark,
+  redis: Redis,
 }
 
 /**

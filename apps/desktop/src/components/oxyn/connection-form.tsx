@@ -607,7 +607,9 @@ function DriverField({
             value={value}
             onChange={(event) => onChange(event.target.value)}
             onBlur={onBlur}
-            placeholder="/path/to/database.sqlite"
+            // Any driver's file — a database, a certificate, a key: the
+            // label and the help say which.
+            placeholder="/path/to/file"
             aria-required={required || undefined}
             aria-describedby={describedBy}
             dir="auto"

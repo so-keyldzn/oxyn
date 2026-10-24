@@ -92,6 +92,7 @@ export const CopiedAsInsert: Story = {
   args: {
     copyAs: {
       definition: true,
+      sql: true,
       onCopy: (_node, _form) =>
         void copyToClipboard(
           new Promise((resolve) => window.setTimeout(resolve, 50, INSERT)),
@@ -113,6 +114,7 @@ export const CopyFailureStaysACopy: Story = {
   args: {
     copyAs: {
       definition: true,
+      sql: true,
       onCopy: (_node, _form) =>
         void copyToClipboard(
           Promise.reject(

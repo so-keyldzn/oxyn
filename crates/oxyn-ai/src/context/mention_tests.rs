@@ -262,6 +262,13 @@ fn saved_query_passwords_never_reach_ai_context() {
     for sql in [
         "ALTER ROLE app PASSWORD 'witness-secret'",
         "CREATE USER u IDENTIFIED BY 'witness-secret'",
+        // A saved Redis console carries no dialect either.
+        "CONFIG SET requirepass witness-secret",
+        "ACL SETUSER app on \"\\x3ewitness-secret\"",
+        // A saved MongoDB console neither, its key escaped or not.
+        r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#,
+        r#"{"updateUser":"app","\u0070wd":"witness-secret"}"#,
+        r#"{"saslContinue": 1, "conversationId": 1, "payload": "witness-secret"}"#,
     ] {
         let context = ContextBuilder::new(&cache, PrivacyTier::Metadata)
             .with_mentions(vec![Mention::saved_query("Rotation", sql)])

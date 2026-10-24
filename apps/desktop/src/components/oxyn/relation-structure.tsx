@@ -17,6 +17,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
@@ -36,6 +37,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type { RelationDetail, RelationField } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 import { ActionMenuContent } from "./action-menu-items"
@@ -61,6 +67,39 @@ function columnOffer(offer: OperationOffer, column: string): OperationOffer {
 
 /** A structure row: one line of text, so the virtual list can size it. */
 const ROW_HEIGHT = 32
+
+const INFERRED_FIELD =
+  "Inferred from a sample of documents, not declared by the server"
+
+/**
+ * A field the driver deduced from a sample: a document further on may lack it
+ * or hold another type, and the reader must not take it for a declared column
+ * (DRIVER-CONTRACT §3). The explanation is the badge's description, so a
+ * screen reader hears it without opening the tooltip.
+ */
+function InferredBadge() {
+  const descriptionId = React.useId()
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Badge
+            variant="outline"
+            tabIndex={0}
+            aria-describedby={descriptionId}
+            className="h-4 shrink-0 px-1 text-[length:var(--reading-caption)] font-normal text-muted-foreground"
+          />
+        }
+      >
+        inferred
+      </TooltipTrigger>
+      <TooltipContent className="max-w-72">{INFERRED_FIELD}</TooltipContent>
+      <span id={descriptionId} hidden>
+        {INFERRED_FIELD}
+      </span>
+    </Tooltip>
+  )
+}
 
 const columns: Array<ColumnDef<RelationField>> = [
   {
@@ -88,6 +127,7 @@ const columns: Array<ColumnDef<RelationField>> = [
         <span dir="auto" className="truncate" title={row.original.name}>
           {row.original.name}
         </span>
+        {row.original.inferred ? <InferredBadge /> : null}
       </span>
     ),
   },

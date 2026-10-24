@@ -219,6 +219,10 @@ impl DriverId {
     pub const DUCKDB: &'static str = "duckdb";
     /// ClickHouse driver, over its HTTP interface.
     pub const CLICKHOUSE: &'static str = "clickhouse";
+    /// Redis driver (and Valkey: one protocol, RESP).
+    pub const REDIS: &'static str = "redis";
+    /// MongoDB driver (ADR-0063).
+    pub const MONGODB: &'static str = "mongodb";
 
     /// Builds a driver identifier after validation.
     ///
@@ -287,6 +291,18 @@ impl DriverId {
     #[must_use]
     pub fn clickhouse() -> Self {
         Self::known(Self::CLICKHOUSE)
+    }
+
+    /// Redis driver identifier.
+    #[must_use]
+    pub fn redis() -> Self {
+        Self::known(Self::REDIS)
+    }
+
+    /// MongoDB driver identifier.
+    #[must_use]
+    pub fn mongodb() -> Self {
+        Self::known(Self::MONGODB)
     }
 
     /// Borrowed view of the identifier.
@@ -419,6 +435,10 @@ mod tests {
         assert_eq!(
             DriverId::clickhouse(),
             DriverId::new("clickhouse").expect("valid")
+        );
+        assert_eq!(
+            DriverId::mongodb(),
+            DriverId::new("mongodb").expect("valid")
         );
     }
 

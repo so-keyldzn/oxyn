@@ -51,7 +51,13 @@ function sources(running: boolean): ActionSources {
       actions: workspace,
     },
     console: {
-      state: { canRun: true, running, cancelling: false, writing: false },
+      state: {
+        canRun: true,
+        canExplain: true,
+        running,
+        cancelling: false,
+        writing: false,
+      },
       actions: consoleActions,
     },
     appearance: {

@@ -21,6 +21,7 @@ type ToolbarProps = React.ComponentProps<typeof ConsoleToolbar>
 const toolbarDefaults: ToolbarProps = {
   running: false,
   canRun: true,
+  canExplain: true,
   readOnly: false,
   target: "statement",
   onRun: fn(),

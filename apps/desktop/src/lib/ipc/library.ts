@@ -6,6 +6,18 @@ import { z } from "zod"
 
 import { call, Nothing } from "./client"
 import { ResultColumn } from "./types"
+import { QUERY_LANGUAGE_LABELS } from "@/lib/query-language"
+import type { QueryLanguageName } from "@/lib/query-language"
+
+/**
+ * `QueryLanguage::as_str`, a closed set with no name for "unknown": checked
+ * strictly, never defaulted to SQL.
+ */
+const QueryLanguageField = z.custom<QueryLanguageName>(
+  (value) =>
+    typeof value === "string" && Object.hasOwn(QUERY_LANGUAGE_LABELS, value),
+  { message: "an unknown query language" }
+)
 
 export const DocumentChange = z.object({
   document: z.string(),
@@ -45,6 +57,8 @@ export const DocumentView = z.object({
   isOpen: z.boolean(),
   connection: z.string().nullable(),
   fromAgent: z.boolean(),
+  /** The editor mode the text is shown in. */
+  language: QueryLanguageField,
 })
 export type DocumentView = z.infer<typeof DocumentView>
 
@@ -138,6 +152,8 @@ export const HistoryDetail = z.object({
   needsInspection: z.boolean(),
   /** Submitted by an agent: the console it is copied into says so. */
   fromAgent: z.boolean(),
+  /** The editor mode the statement is shown in. */
+  language: QueryLanguageField,
 })
 export type HistoryDetail = z.infer<typeof HistoryDetail>
 

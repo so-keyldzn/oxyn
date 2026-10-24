@@ -64,6 +64,9 @@ const ALIASES: Record<string, Grammar> = {
   json: "json",
   jsonc: "json",
   json5: "json",
+  // A MongoDB console command is Extended JSON (ADR-0063).
+  mongo: "json",
+  mongodb: "json",
   js: "javascript",
   javascript: "javascript",
   mjs: "javascript",

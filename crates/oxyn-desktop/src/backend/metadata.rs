@@ -13,7 +13,8 @@
 use oxyn_catalog::model::Relation;
 use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope, SearchOptions, quote_identifier};
 use oxyn_core::{
-    Capabilities, CatalogRefreshScope, Command, CommandId, ConnectionId, SessionId, SqlDialect,
+    Capabilities, CatalogRefreshScope, Command, CommandId, ConnectionId, QueryLanguage, SessionId,
+    SqlDialect,
 };
 
 use super::Backend;
@@ -224,10 +225,16 @@ impl Backend {
         if path.relation().is_none() {
             return Err(IpcError::invalid("The object view needs a relation"));
         }
-        let dialect = self.dialect_of(connection)?;
+        let config = self.config(connection)?;
+        let dialect = oxyn_query::dialect_for(&config.driver);
+        let language = self.language_of(&config.driver);
         let cache = self.catalog_cache(connection)?;
         let cache = cache.read();
-        Ok(facets(&cache, &path, dialect))
+        let mut facets = facets(&cache, &path, dialect);
+        if let Some(name) = console_name(&path, language) {
+            facets.qualified_name = name;
+        }
+        Ok(facets)
     }
 
     /// Relations among what is already loaded whose name, columns or comment
@@ -317,7 +324,17 @@ impl Backend {
         if path.relation().is_none() {
             return Err(IpcError::invalid("Only a table or a view is copied as SQL"));
         }
-        let dialect = self.dialect_of(connection)?;
+        let config = self.config(connection)?;
+        let language = self.language_of(&config.driver);
+        if language.sql_dialect().is_none() {
+            return match (form, console_name(&path, language)) {
+                (ObjectSqlForm::QuotedName, Some(name)) => Ok(name),
+                _ => Err(IpcError::invalid(
+                    "This connection does not speak SQL: only its name is copied",
+                )),
+            };
+        }
+        let dialect = oxyn_query::dialect_for(&config.driver);
         let columns = match form {
             ObjectSqlForm::InsertTemplate => {
                 let cache = self.catalog_cache(connection)?;
@@ -481,6 +498,19 @@ pub(crate) fn qualified_name(path: &CatalogPath, dialect: SqlDialect) -> String 
     sql_path
         .unwrap_or_else(|_| path.clone())
         .qualify_sql(dialect)
+}
+
+/// The name of a relation as a console of a language that is not SQL writes
+/// it, or `None` for SQL and for a language without a known form.
+///
+/// A MongoDB command names its collection as a JSON string, the database
+/// being the console's context or the command's `$db`: the string is written
+/// by `serde_json`, escaped, never pasted ([I-10](../../../../CLAUDE.md#i-10)).
+fn console_name(path: &CatalogPath, language: QueryLanguage) -> Option<String> {
+    match language {
+        QueryLanguage::MongoQuery => serde_json::to_string(path.relation()?).ok(),
+        _ => None,
+    }
 }
 
 /// The « Copy as » text of a relation, quoted by the dialect
@@ -1287,6 +1317,18 @@ mod tests {
             _,
         >(vec![Some(vec![Some(1), Some(2)])]));
         assert!(condition_for(list.as_ref(), 0).is_none());
+    }
+
+    #[test]
+    fn a_mongodb_collection_is_named_as_a_json_string_never_quoted_as_sql() {
+        let hostile = "o\"rders\"}, {\"dropDatabase\": 1";
+        let path = CatalogPath::for_relation(None, Some("shop"), hostile).expect("a valid path");
+        let name = console_name(&path, QueryLanguage::MongoQuery).expect("a MongoDB name");
+        assert_eq!(
+            serde_json::from_str::<String>(&name).expect("one JSON string"),
+            hostile
+        );
+        assert_eq!(console_name(&path, QueryLanguage::SQL), None);
     }
 
     #[test]

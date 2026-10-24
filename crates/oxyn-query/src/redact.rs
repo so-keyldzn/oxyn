@@ -38,10 +38,16 @@ enum SecretClause {
 /// ANSI (an unspecified dialect) conservatively combines PostgreSQL and MySQL
 /// lexical interpretations. This is not a general secret detector: credentials
 /// embedded in comments or dynamic SQL are outside the recognized grammar.
+///
+/// A Redis command and a MongoDB command each have their own grammar, read on
+/// the decoded command ([`crate::redis::redact_secrets`],
+/// [`crate::mongo::redact_secrets`]).
 #[must_use]
 pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> String {
     let dialect = match language {
         QueryLanguage::Sql(dialect) => dialect,
+        QueryLanguage::RedisCommand => return crate::redis::redact_secrets(statement),
+        QueryLanguage::MongoQuery => return crate::mongo::redact_secrets(statement),
         _ => return statement.to_owned(),
     };
     let mut replacements = Vec::new();
@@ -75,6 +81,24 @@ pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> Str
         redacted.push_str(suffix);
     }
     redacted
+}
+
+/// Redacts a text whose language the sink does not know, with every grammar
+/// [`redact_password_literals`] reads: SQL in its ANSI union, then Redis, then
+/// MongoDB.
+///
+/// For the records that carry no language — a tool call and its rendering, an
+/// audit entry written back, a saved query mentioned to an agent. Forcing SQL
+/// there kept `CONFIG SET requirepass hunter2` whole
+/// ([I-03](../../../CLAUDE.md#i-03)). The cost is the other way round: a SQL
+/// line that starts with a Redis credential keyword — `auth FROM users` —
+/// loses an argument in the kept copy, and a SQL string holding a `pwd` key
+/// or a connection string with its password loses that value, never in what
+/// runs.
+#[must_use]
+pub fn redact_any_language(text: &str) -> String {
+    let sql = redact_password_literals(text, QueryLanguage::SQL);
+    crate::mongo::redact_secrets(&crate::redis::redact_secrets(&sql))
 }
 
 fn collect_literals(statement: &str, dialect: SqlDialect, replacements: &mut Vec<Range<usize>>) {
@@ -227,7 +251,7 @@ mod tests {
     use oxyn_core::{QueryLanguage, SqlDialect};
     use rstest::rstest;
 
-    use super::{REDACTED_LITERAL, redact_password_literals};
+    use super::{REDACTED_LITERAL, redact_any_language, redact_password_literals};
 
     #[rstest]
     #[case(SqlDialect::Postgres, "ALTER ROLE app PASSWORD 'witness-secret'")]
@@ -316,6 +340,31 @@ mod tests {
             redact_password_literals(sql, QueryLanguage::Sql(SqlDialect::Postgres)),
             sql
         );
+    }
+
+    #[rstest]
+    #[case("ALTER ROLE app PASSWORD 'witness-secret'")]
+    #[case("CONFIG SET requirepass witness-secret")]
+    #[case("ACL SETUSER app on \"\\x3ewitness-secret\"")]
+    #[case("HELLO 3 AUTH app witness-secret")]
+    #[case(r#"{"createUser": "app", "pwd": "witness-secret"}"#)]
+    #[case(r#"{"createUser":"app","pwd":"witness-secret"}"#)]
+    #[case(r#"{"saslStart": 1, "mechanism": "PLAIN", "payload": "witness-secret"}"#)]
+    #[case(r#"Executed: "{\"updateUser\": \"app\", \"pwd\": \"witness-secret\"}""#)]
+    fn a_text_of_unknown_language_is_redacted_by_every_grammar(#[case] text: &str) {
+        let redacted = redact_any_language(text);
+        assert!(!redacted.contains("witness-secret"), "{redacted}");
+    }
+
+    #[test]
+    fn a_mongodb_command_is_redacted_by_its_own_grammar() {
+        let text = r#"{"createUser":"app","pwd":"witness-secret","roles":[]}"#;
+        assert_eq!(
+            redact_password_literals(text, QueryLanguage::MongoQuery),
+            r#"{"createUser":"app","pwd":"<redacted>","roles":[]}"#
+        );
+        // The same text read as SQL holds no password clause.
+        assert_eq!(redact_password_literals(text, QueryLanguage::SQL), text);
     }
 
     #[test]

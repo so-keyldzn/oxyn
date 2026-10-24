@@ -118,6 +118,10 @@ function copyRows(format: CopyRowsFormat): ActionBehaviour {
         return {
           reason: `At most ${COPY_LIMIT} rows are copied at once: export the result`,
         }
+      // SQL a source without the capability does not speak: absent, as
+      // UX-SPEC fixes for an undeclared capability.
+      if ((format === "insert" || format === "inList") && !state.sql)
+        return "absent"
       if (format === "insert" && !state.relation)
         return { reason: "These rows do not come from one known table" }
       if (format === "inList" && !state.oneColumn)
@@ -190,6 +194,10 @@ function copyAs(form: CopyAsForm): ActionBehaviour {
     "Copy it from the workspace's catalog",
     (state) => {
       if (!state.relation) return "absent"
+      // The backend writes the quoted name in the console's own language and
+      // the definition as the session reads it; the two statements are SQL.
+      if ((form === "selectAll" || form === "insertTemplate") && !state.sql)
+        return "absent"
       if (form === "ddl" && !state.definition)
         return { reason: "This session does not provide object definitions" }
       return true

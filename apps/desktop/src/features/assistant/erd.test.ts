@@ -69,6 +69,7 @@ function facets(
             default: null,
             comment: null,
             primaryKey: true,
+            inferred: false,
           },
           ...foreignKeys.flatMap((row, index) =>
             row.fields.map((field) => ({
@@ -80,6 +81,7 @@ function facets(
               default: null,
               comment: null,
               primaryKey: false,
+              inferred: false,
             }))
           ),
         ],

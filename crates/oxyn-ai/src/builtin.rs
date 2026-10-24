@@ -149,8 +149,14 @@ mod tests {
 
     #[test]
     fn the_seven_remaining_agents_are_named_not_written() {
-        // The list of VISION § "Multi-agent architecture" counts nine agents.
-        assert_eq!(REMAINING_AGENTS.len() + shipped_agents().len(), 9);
+        // The list of VISION § "Multi-agent architecture" counts nine agents,
+        // by role; an agent a driver ships for its own language (ADR-0065)
+        // is not one of them.
+        let roles = shipped_agents()
+            .iter()
+            .filter(|agent| agent.writes(oxyn_core::QueryLanguage::SQL))
+            .count();
+        assert_eq!(REMAINING_AGENTS.len() + roles, 9);
         for name in REMAINING_AGENTS {
             assert!(
                 !shipped_agents().iter().any(|agent| agent.name == name),

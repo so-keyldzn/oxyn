@@ -528,6 +528,9 @@ pub struct RelationField {
     pub default: Option<String>,
     pub comment: Option<String>,
     pub primary_key: bool,
+    /// Deduced from a sample of documents, not declared by the server: the
+    /// interface says so (DRIVER-CONTRACT §3).
+    pub inferred: bool,
 }
 
 impl From<&Field> for RelationField {
@@ -541,6 +544,7 @@ impl From<&Field> for RelationField {
             default: field.default.clone(),
             comment: field.comment.clone(),
             primary_key: field.is_primary_key,
+            inferred: field.inferred,
         }
     }
 }
@@ -709,6 +713,8 @@ mod tests {
             ),
             (sqlite.metadata().clone(), vec![]),
             (duckdb.metadata().clone(), vec![]),
+            (oxyn_driver_redis::redis_metadata(), vec!["Valkey"]),
+            (oxyn_driver_mongodb::mongodb_metadata(), vec![]),
         ] {
             let choice = DriverChoice::of(&metadata);
             assert_eq!(choice.aliases, expected, "{}", choice.id);

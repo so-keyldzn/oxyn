@@ -99,6 +99,59 @@ export const MySQL: Story = {
   },
 }
 
+/** The leaf in svgl's light-surface slate, one path, no wordmark. */
+export const MongoDB: Story = {
+  args: { driver: "mongodb" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const svg = logo(canvasElement)
+    await expect(svg).toHaveAttribute("viewBox", "0 0 120 258")
+    await expect(svg).toBeVisible()
+    await expect(svg).toHaveAttribute("aria-hidden", "true")
+    const paths = svg.querySelectorAll("path")
+    await expect(paths).toHaveLength(1)
+    for (const path of paths)
+      await expect(getComputedStyle(path).fill).toBe("rgb(0, 30, 43)")
+  },
+}
+
+/** On a dark surface the slate would vanish: the leaf takes svgl's green. */
+export const MongoDBDark: Story = {
+  args: { driver: "mongodb" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    const svg = logo(canvasElement)
+    await expect(svg).toBeVisible()
+    await expect(svg).toHaveAttribute("aria-hidden", "true")
+    for (const path of svg.querySelectorAll("path"))
+      await expect(getComputedStyle(path).fill).toBe("rgb(0, 237, 100)")
+  },
+}
+
+export const RedisMark: Story = {
+  args: { driver: "redis" },
+  globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    const marks = canvasElement.querySelectorAll('svg[viewBox="0 0 256 220"]')
+    await expect(marks).toHaveLength(1)
+    const svg = logo(canvasElement)
+    await expect(svg).toBeVisible()
+    await expect(svg).toHaveAttribute("aria-hidden", "true")
+  },
+}
+
+/** svgl's Redis mark is red on both themes: no token override is needed. */
+export const RedisMarkDark: Story = {
+  args: { driver: "redis" },
+  globals: { theme: "dark" },
+  play: async ({ canvasElement }) => {
+    await expect(
+      canvasElement.querySelectorAll('svg[viewBox="0 0 256 220"]')
+    ).toHaveLength(1)
+    await expect(logo(canvasElement)).toBeVisible()
+  },
+}
+
 export const MySQLDark: Story = {
   args: { driver: "mysql" },
   globals: { theme: "dark" },
