@@ -10,6 +10,10 @@
 //! comment lines after a request belong to it, as in Kibana, and the cursor
 //! before the first request names none.
 
+mod redact;
+
+pub(crate) use redact::redact_secrets;
+
 /// The methods that open a request, as the driver accepts them.
 const METHODS: [&str; 6] = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
 

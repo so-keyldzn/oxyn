@@ -1487,6 +1487,46 @@ fn redis_credentials_in_a_tool_call_are_redacted_before_serialization() {
     assert!(sweep_conversations(&store, "witness-secret").is_empty());
 }
 
+/// The same for a search DSL request, quoted by its rendering: the decoded
+/// body decides.
+#[test]
+fn search_dsl_credentials_in_a_tool_call_are_redacted_before_serialization() {
+    let (store, workspace, connection) = fixture();
+    let id = thread(&store, workspace, connection);
+    for command in [
+        "PUT /_security/user/app\n{\"password\": \"witness-secret\", \"roles\": []}",
+        "POST /_security/api_key/grant\n{\"grant_type\": \"access_token\", \"access_token\": \"witness-secret\"}",
+        "PUT /_inference/text_embedding/e\n{\"service\": \"openai\", \"service_settings\": {\"api_key\": \"witness-secret\"}}",
+    ] {
+        let summary = format!("Executed: {command:?}");
+        let built = ToolCallRecord::new(
+            "call",
+            "execute",
+            summary.clone(),
+            ToolCallStatus::Completed,
+        )
+        .with_statement(command);
+        assert!(
+            built
+                .statement
+                .as_deref()
+                .is_some_and(|statement| !statement.contains("witness-secret")),
+            "{command}"
+        );
+        let mut direct = ToolCallRecord::new("call", "execute", summary, ToolCallStatus::Completed);
+        direct.statement = Some(command.into());
+        store
+            .conversations()
+            .append(
+                id,
+                &TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "Done.")
+                    .with_tool_calls(vec![built, direct]),
+            )
+            .expect("persist the calls");
+    }
+    assert!(sweep_conversations(&store, "witness-secret").is_empty());
+}
+
 /// The same for a MongoDB command, escaped or quoted by its rendering: the
 /// decoded command decides.
 #[test]

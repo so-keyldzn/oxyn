@@ -55,6 +55,36 @@ const REDACTED_PASSWORD: &str = "<redacted>";
 /// grows with each level for a text nobody writes.
 const MAX_NESTING: usize = 4;
 
+/// The keys of a JSON text whose value is a credential, for one grammar.
+///
+/// The reading is the same for every JSON request language — MongoDB's
+/// commands, the search DSL's bodies —, only what a credential is differs.
+pub(crate) struct Credentials {
+    /// What a text must hold, written plainly, for one of these keys to be in
+    /// it: a text holding none of them, no scheme and no escape is not read.
+    pub(crate) markers: &'static [&'static str],
+    /// Whether the value of `key`, read at `depth` (1: a top-level document)
+    /// in a document whose decoded first key is `command`, is a credential.
+    pub(crate) key: fn(key: &str, depth: usize, command: Option<&str>) -> bool,
+    /// Whether a string value under `key` is a credential by what it holds.
+    pub(crate) string: fn(key: &str, decoded: &str) -> bool,
+    /// Whether only a string value is redacted under [`Self::key`]: an object
+    /// under the same key is then a definition, not a secret.
+    pub(crate) strings_only: bool,
+}
+
+const MONGO: Credentials = Credentials {
+    markers: &[CREDENTIAL_FIELD, SASL_PAYLOAD],
+    key: |key, depth, command| {
+        key == CREDENTIAL_FIELD
+            || (depth == 1
+                && key == SASL_PAYLOAD
+                && command.is_some_and(|name| SASL_COMMANDS.contains(&name)))
+    },
+    string: |_, _| false,
+    strings_only: false,
+};
+
 /// Replaces the credentials of the MongoDB commands in `text`, preserving every
 /// other byte: the value of every `pwd` key and of the `payload` of
 /// `saslStart`/`saslContinue` with [`REDACTED_VALUE`], and the password of a
@@ -64,15 +94,22 @@ const MAX_NESTING: usize = 4;
 /// not a key — unless that string's decoded content is itself a command.
 #[must_use]
 pub fn redact_secrets(text: &str) -> String {
-    redact_nested(text, MAX_NESTING).into_owned()
+    redact_credentials(text, &MONGO)
 }
 
-fn redact_nested(text: &str, nesting: usize) -> Cow<'_, str> {
-    if !may_hold_secret(text) {
+/// Replaces the values `rules` names in `text`, and the password of every
+/// connection string inside a string, preserving every other byte — the
+/// reading [`redact_secrets`] describes, for another grammar's keys.
+pub(crate) fn redact_credentials(text: &str, rules: &Credentials) -> String {
+    redact_nested(text, rules, MAX_NESTING).into_owned()
+}
+
+fn redact_nested<'t>(text: &'t str, rules: &Credentials, nesting: usize) -> Cow<'t, str> {
+    if !may_hold_secret(text, rules) {
         return Cow::Borrowed(text);
     }
     let mut replacements = Vec::new();
-    scan(text, nesting, &mut replacements);
+    scan(text, rules, nesting, &mut replacements);
     if replacements.is_empty() {
         return Cow::Borrowed(text);
     }
@@ -92,9 +129,11 @@ fn redact_nested(text: &str, nesting: usize) -> Cow<'_, str> {
 
 /// Whether `text` can hold anything [`scan`] replaces: a key or a scheme
 /// written plainly, or an escape that may spell one.
-fn may_hold_secret(text: &str) -> bool {
-    [CREDENTIAL_FIELD, SASL_PAYLOAD, "://", "\\"]
+fn may_hold_secret(text: &str, rules: &Credentials) -> bool {
+    rules
+        .markers
         .iter()
+        .chain(&["://", "\\"])
         .any(|needle| text.contains(needle))
 }
 
@@ -110,7 +149,12 @@ enum Frame<'a> {
 
 /// Collects, in text order, the spans of `text` to replace and what replaces
 /// each.
-fn scan<'a>(text: &'a str, nesting: usize, out: &mut Vec<(Range<usize>, String)>) {
+fn scan<'a>(
+    text: &'a str,
+    rules: &Credentials,
+    nesting: usize,
+    out: &mut Vec<(Range<usize>, String)>,
+) {
     let bytes = text.as_bytes();
     let mut stack: Vec<Frame<'a>> = Vec::new();
     // The decoded first key of the top-level document being read.
@@ -150,16 +194,18 @@ fn scan<'a>(text: &'a str, nesting: usize, out: &mut Vec<(Range<usize>, String)>
                     continue;
                 };
                 *expecting_key = false;
-                let secret = key.as_deref().is_some_and(|key| {
-                    key == CREDENTIAL_FIELD
-                        || (depth == 1
-                            && key == SASL_PAYLOAD
-                            && command
-                                .as_deref()
-                                .is_some_and(|name| SASL_COMMANDS.contains(&name)))
-                });
+                let Some(key) = key.as_deref() else {
+                    continue;
+                };
+                let start = skip_whitespace(bytes, index);
+                let string = matches!(bytes.get(start), Some(b'"' | b'\''));
+                let secret = ((rules.key)(key, depth, command.as_deref())
+                    && (string || !rules.strings_only))
+                    || (string && {
+                        let literal = text.get(start..skip_quoted(bytes, start));
+                        (rules.string)(key, &decode(literal.unwrap_or_default()))
+                    });
                 if secret {
-                    let start = skip_whitespace(bytes, index);
                     let end = skip_value(bytes, start);
                     out.push((start..end, REDACTED_VALUE.to_owned()));
                     index = end;
@@ -178,7 +224,7 @@ fn scan<'a>(text: &'a str, nesting: usize, out: &mut Vec<(Range<usize>, String)>
                         command = Some(decoded.clone());
                     }
                     *key = Some(decoded);
-                } else if let Some(replacement) = redact_string(literal, nesting) {
+                } else if let Some(replacement) = redact_string(literal, rules, nesting) {
                     out.push((index..end, replacement));
                 }
                 index = end;
@@ -206,13 +252,13 @@ fn scan<'a>(text: &'a str, nesting: usize, out: &mut Vec<(Range<usize>, String)>
 /// What replaces the string `literal` — quotes included —, or `None` when it
 /// holds no credential once decoded. The replacement is written as a JSON
 /// string.
-fn redact_string(literal: &str, nesting: usize) -> Option<String> {
-    if !may_hold_secret(literal) {
+fn redact_string(literal: &str, rules: &Credentials, nesting: usize) -> Option<String> {
+    if !may_hold_secret(literal, rules) {
         return None;
     }
     let decoded = decode(literal);
     let inner = match nesting.checked_sub(1) {
-        Some(below) => redact_nested(&decoded, below),
+        Some(below) => redact_nested(&decoded, rules, below),
         None => Cow::Borrowed(decoded.as_ref()),
     };
     let redacted = redact_uri_passwords(&inner);
@@ -227,7 +273,7 @@ fn redact_string(literal: &str, nesting: usize) -> Option<String> {
 /// The connection string runs to the next blank, and its user information to
 /// its last `@`: a password written with a raw `@` or `/` is still covered,
 /// at the cost of a host redacted with it when a query option holds an `@`.
-fn redact_uri_passwords(text: &str) -> Cow<'_, str> {
+pub(crate) fn redact_uri_passwords(text: &str) -> Cow<'_, str> {
     let mut redacted = String::new();
     let mut copied = 0;
     let mut search = 0;

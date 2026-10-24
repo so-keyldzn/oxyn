@@ -269,6 +269,9 @@ fn saved_query_passwords_never_reach_ai_context() {
         r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#,
         r#"{"updateUser":"app","\u0070wd":"witness-secret"}"#,
         r#"{"saslContinue": 1, "conversationId": 1, "payload": "witness-secret"}"#,
+        // A saved search console neither.
+        "PUT /_plugins/_security/api/account\n{\"current_password\": \"witness-secret\"}",
+        "POST /_security/oauth2/token\n{\"grant_type\": \"refresh_token\", \"refresh_token\": \"witness-secret\"}",
     ] {
         let context = ContextBuilder::new(&cache, PrivacyTier::Metadata)
             .with_mentions(vec![Mention::saved_query("Rotation", sql)])

@@ -1074,18 +1074,50 @@ mod tests {
     /// which does not. What the driver receives is left whole.
     #[test]
     fn mongo_records_cannot_persist_a_credential() {
-        let store = Store::open_in_memory().expect("in-memory store");
         // The scheme apart, so that no line here reads as a connection string.
         let scheme = "mongodb";
-        for text in [
-            r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#.to_owned(),
-            r#"{"updateUser": "app", "pwd": "witness-secret"}"#.to_owned(),
-            r#"{"createUser":"app","pwd":"witness-secret"}"#.to_owned(),
-            r#"{"saslStart": 1, "mechanism": "PLAIN", "payload": "witness-secret"}"#.to_owned(),
-            format!(r#"{{"addShard": "{scheme}://admin:witness-secret@h1/"}}"#),
-        ] {
+        records_cannot_persist_a_credential(
+            QueryLanguage::MongoQuery,
+            &[
+                r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#.to_owned(),
+                r#"{"updateUser": "app", "pwd": "witness-secret"}"#.to_owned(),
+                r#"{"createUser":"app","pwd":"witness-secret"}"#.to_owned(),
+                r#"{"saslStart": 1, "mechanism": "PLAIN", "payload": "witness-secret"}"#.to_owned(),
+                format!(r#"{{"addShard": "{scheme}://admin:witness-secret@h1/"}}"#),
+            ],
+        );
+    }
+
+    /// The same for a search DSL request: the decoded body decides, and a
+    /// pasted shell line keeps no header nor user password.
+    #[test]
+    fn search_dsl_records_cannot_persist_a_credential() {
+        let scheme = "https";
+        records_cannot_persist_a_credential(
+            QueryLanguage::SearchDsl,
+            &[
+                "PUT /_security/user/app\n{\"password\": \"witness-secret\"}".to_owned(),
+                "POST /_reindex\n{\"source\": {\"remote\": {\"headers\": \
+                 {\"Authorization\": \"ApiKey witness-secret\"}}}}"
+                    .to_owned(),
+                "POST /_nodes/reload_secure_settings\n\
+                 {\"secure_settings_password\": \"witness-secret\"}"
+                    .to_owned(),
+                format!("curl -u elastic:witness-secret {scheme}://h:9200/_search"),
+                format!("GET {scheme}://elastic:witness-secret@h:9200/_search"),
+            ],
+        );
+    }
+
+    /// Every record of `texts` in `language` — the history row and the
+    /// journal entry built from the command, which know its language, and a
+    /// journal entry written back, which does not — keeps no credential; what
+    /// the driver receives is left whole.
+    fn records_cannot_persist_a_credential(language: QueryLanguage, texts: &[String]) {
+        let store = Store::open_in_memory().expect("in-memory store");
+        for text in texts {
             let text = text.as_str();
-            let request = ExecRequest::new(QueryLanguage::MongoQuery, text);
+            let request = ExecRequest::new(language, text);
             let command = Command::Execute {
                 connection: ConnectionId::new(),
                 session: SessionId::new(),
@@ -1098,11 +1130,7 @@ mod tests {
             store.history().record(&history).expect("history insert");
             store
                 .history()
-                .record(&HistoryRecord::new(
-                    &Actor::Human,
-                    QueryLanguage::MongoQuery,
-                    text,
-                ))
+                .record(&HistoryRecord::new(&Actor::Human, language, text))
                 .expect("history insert");
             let mut direct = journal.clone();
             direct.statement = Some(text.into());
