@@ -3,6 +3,7 @@ import { createStore } from "@tanstack/react-store"
 import type { DocumentEntry } from "@/lib/ipc/library"
 import type { OpenConnection } from "@/lib/ipc/types"
 import type { ConsoleHandoff } from "@/lib/ipc/windows"
+import type { QueryLanguageName } from "@/lib/query-language"
 
 /** A console moved here from another window, with its session. */
 export type MovedConsole = Extract<ConsoleHandoff, { type: "console" }>
@@ -30,6 +31,12 @@ export interface SessionState {
   sqlDraft: string
   /** The connection the draft was copied from, named when the copy lands. */
   sqlDraftFrom: string | null
+  /**
+   * The draft's language. A connection that writes another one starts from
+   * its own starter: Redis commands pasted into a PostgreSQL console are a
+   * syntax error waiting for ⌘↵.
+   */
+  sqlDraftLanguage: QueryLanguageName | null
   /**
    * Working copies chosen on the recovery screen, waiting for the shown
    * workspace, which reopens them as **offline** consoles: nothing connects
@@ -65,6 +72,7 @@ export const session = createStore<SessionState>({
   workspaces: [],
   sqlDraft: "SELECT 1;",
   sqlDraftFrom: null,
+  sqlDraftLanguage: "sql",
   restored: [],
   launchCopies: null,
   moved: null,
@@ -207,8 +215,17 @@ export function connectionReleased(connection: string) {
   rememberForReload(session.state.workspaces)
 }
 
-export function setSqlDraft(sqlDraft: string, sqlDraftFrom: string | null) {
-  session.setState((state) => ({ ...state, sqlDraft, sqlDraftFrom }))
+export function setSqlDraft(
+  sqlDraft: string,
+  sqlDraftFrom: string | null,
+  sqlDraftLanguage: QueryLanguageName | null
+) {
+  session.setState((state) => ({
+    ...state,
+    sqlDraft,
+    sqlDraftFrom,
+    sqlDraftLanguage,
+  }))
 }
 
 /**
