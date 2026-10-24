@@ -139,7 +139,12 @@ A new conversation that names no agent runs `AgentCatalog::default_for`:
   never displaces the agent Oxyn ships for a language;
 * none: the question is refused, naming the language no agent writes.
 
-The panel selects the same agent in a blank thread (`defaultAgentId`).
+The panel selects the same agent in a blank thread (`defaultAgentId`). The
+list it holds is the union over every declared destination, whereas
+`default_for` chooses for the one recipient the question goes to: the panel
+therefore chooses among the agents written for a destination the connection's
+tier leaves usable, the destination it would send to first deciding. An agent
+offered only where the tier refuses is skipped, another agent being available.
 
 ### 7. The context keeps its single gateway
 
