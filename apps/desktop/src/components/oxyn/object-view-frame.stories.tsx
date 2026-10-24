@@ -91,9 +91,11 @@ function Harness({
   wide = false,
   onExport,
   onInspectRow,
+  absentTabs,
 }: {
   /** The layout of 1200 px and more: the definition sits beside the tabs. */
   wide?: boolean
+  absentTabs?: ReadonlySet<ObjectTab>
   name?: string
   kind?: string
   initial?: ObjectTab
@@ -154,6 +156,7 @@ function Harness({
       tab={tab}
       onTabChange={setTab}
       compact={compact}
+      absentTabs={absentTabs}
       dataUnavailable={dataUnavailable}
       onEscape={running ? onCancel : undefined}
       gridFocusRequest={gridFocusRequest}
@@ -651,6 +654,61 @@ export const Compact: Story = {
     await waitFor(() =>
       expect(canvas.getByRole("button", { name: "More" })).toBeVisible()
     )
+  },
+}
+
+/** What a key-value session cannot fill: no index, constraint or key. */
+const KEY_VALUE_ABSENT: ReadonlySet<ObjectTab> = new Set<ObjectTab>([
+  "indexes",
+  "constraints",
+  "relations",
+])
+
+/**
+ * A key pattern of a key-value store: only the tabs its session can fill,
+ * and its kind written for reading, not as the wire name.
+ */
+export const KeyPatternOfAKeyValueStore: Story = {
+  args: {
+    name: "session:*",
+    kind: "key_pattern",
+    absentTabs: KEY_VALUE_ABSENT,
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getAllByRole("tab").map((tab) => tab.textContent)
+    ).toEqual(["Data", "Structure", "DDL"])
+    await expect(canvas.getByText("key pattern")).toBeVisible()
+    await expect(canvas.queryByText("key_pattern")).toBeNull()
+  },
+}
+
+/** Narrow, the same session: `More` offers DDL alone. */
+export const KeyPatternCompact: Story = {
+  args: {
+    name: "session:*",
+    kind: "key_pattern",
+    absentTabs: KEY_VALUE_ABSENT,
+    compact: true,
+  },
+  decorators: [
+    (Story) => (
+      <div className="h-[560px] w-[900px] border">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvas }) => {
+    const body = within(document.body)
+    await userEvent.click(canvas.getByRole("button", { name: "More" }))
+    await waitFor(() =>
+      expect(
+        body.getAllByRole("menuitemradio").map((item) => item.textContent)
+      ).toEqual(["DDL"])
+    )
+    // Closed before axe runs: an open menu leaves its focus guards behind.
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(body.queryByRole("menu")).toBeNull())
   },
 }
 

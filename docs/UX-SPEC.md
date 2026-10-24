@@ -313,6 +313,13 @@ It combines a side explorer, connection context, object and console tabs,
 object sub-tabs, work area and status bar. A side inspector can complete this
 area. An 88 px page header is not added to this structure.
 
+An object shows only the sub-tabs its session can fill: `Indexes` needs
+`INDEXES`, `Constraints` needs `CONSTRAINTS`, `Relations` needs
+`FOREIGN_KEYS` or `INCOMING_FOREIGN_KEYS`. A key-value or document session therefore shows `Data`,
+`Structure` and `DDL`, not three tabs that each say "not supported". The kind
+beside the object's name is written for reading (`key pattern`, not
+`key_pattern`).
+
 The sidebar stays **inset with collapse to an icon rail** on every screen, as
 in the Figma page `01 · Sidebar`. Open at 280 px or collapsed at 64 px, it keeps
 the same component, the same global navigation and a content adapted to the
