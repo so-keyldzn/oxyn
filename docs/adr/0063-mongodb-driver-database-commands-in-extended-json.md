@@ -232,6 +232,13 @@ classified like the command it explains: the explain of a write is a write.
   read-write account is client-side.
 * **−** A new server command is `Unknown` until the table learns it: a
   confirmation on production for a read the table does not know yet.
+* **−** `classify_mongo` flags a delete or an update of every document and a
+  `drop` (`MutationRisk`), but `Session::classify_intent` carries an intent
+  only (ADR-0064): on a connection that is not production, a person's
+  `{"delete": "users", "deletes": [{"q": {}, "limit": 0}]}` runs without the
+  approval a SQL `DELETE FROM users` gets. Agents are unaffected — every
+  write of theirs needs approval. Closing it needs the risk carried through
+  the trait, a change ADR-0064 deferred; until then the gap is stated here.
 
 **Exit cost:** medium. The console syntax is user-facing: saved queries and
 history hold commands in this form. A shell syntax added later would be a
