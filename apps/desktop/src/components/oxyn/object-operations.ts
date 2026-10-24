@@ -19,6 +19,8 @@ export const HOSTILE_NAME =
   "This name holds control characters: write the statement in a console."
 const NO_DDL = "This connection does not accept schema changes."
 const NO_TRUNCATE = "This database has no TRUNCATE statement."
+const NO_SQL =
+  "This connection does not speak SQL: run the operation from a console in its language."
 const NOT_KNOWN =
   "No session here to run it: do it from the object in the workspace's catalog."
 
@@ -48,6 +50,9 @@ export function operationOffer(
   // No session to read them from: the entry stays, greyed, as on a sibling
   // whose session is known.
   if (capabilities === null) return { state: "greyed", reason: NOT_KNOWN }
+  // The statement is composed in SQL: offering it to a session that speaks
+  // another language would send it a text it refuses.
+  if (!capabilities.includes("SQL")) return { state: "greyed", reason: NO_SQL }
   if (!capabilities.includes("DDL")) return { state: "greyed", reason: NO_DDL }
   if (operation === "truncate" && !capabilities.includes("TRUNCATE"))
     return { state: "greyed", reason: NO_TRUNCATE }

@@ -12,7 +12,7 @@ use oxyn_core::{
 };
 use oxyn_exec::Outcome;
 
-use super::{HOSTILE_NAME, NO_DDL, NO_TRUNCATE, check_statement, compose, unavailable};
+use super::{HOSTILE_NAME, NO_DDL, NO_SQL, NO_TRUNCATE, check_statement, compose, unavailable};
 use crate::backend::Backend;
 use crate::backend::confirm::{Answer, ScriptedConfirm, Timing};
 use crate::ipc::object_operations::{
@@ -225,12 +225,13 @@ fn a_rename_needs_a_new_name_that_differs() {
 
 #[test]
 fn availability_follows_declared_capabilities_never_the_product() {
-    let postgres = Capabilities::DDL
+    let postgres = Capabilities::SQL
+        | Capabilities::DDL
         | Capabilities::TRUNCATE
         | Capabilities::TRANSACTIONAL_DDL
         | Capabilities::RESTRICT_DEPENDENTS;
-    let sqlite = Capabilities::DDL | Capabilities::TRANSACTIONAL_DDL;
-    let read_only = Capabilities::TRANSACTIONAL_DDL;
+    let sqlite = Capabilities::SQL | Capabilities::DDL | Capabilities::TRANSACTIONAL_DDL;
+    let read_only = Capabilities::SQL | Capabilities::TRANSACTIONAL_DDL;
     for operation in [
         OperationKind::Drop,
         OperationKind::Truncate,
@@ -261,6 +262,19 @@ fn availability_follows_declared_capabilities_never_the_product() {
     assert!(unavailable(OperationKind::Truncate, RelationKind::View, postgres).is_some());
     assert!(unavailable(OperationKind::Rename, RelationKind::View, postgres).is_some());
     assert!(unavailable(OperationKind::Drop, RelationKind::Function, postgres).is_some());
+}
+
+#[test]
+fn a_session_without_sql_is_offered_no_composed_statement() {
+    // A MongoDB view declares DDL; a `DROP VIEW` sent to its session would
+    // be refused as a language it does not speak.
+    let mongodb = Capabilities::MONGO_QUERY | Capabilities::DDL | Capabilities::VIEWS;
+    for kind in [RelationKind::View, RelationKind::Table] {
+        assert_eq!(
+            unavailable(OperationKind::Drop, kind, mongodb),
+            Some(NO_SQL)
+        );
+    }
 }
 
 #[test]

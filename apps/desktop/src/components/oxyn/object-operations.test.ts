@@ -42,6 +42,16 @@ describe("object operations offered from the catalog", () => {
       })
   })
 
+  it("greys a composed SQL statement on a session that speaks another language", () => {
+    // A MongoDB view declares DDL, and its session refuses SQL.
+    const mongodb = ["MONGO_QUERY", "DDL", "VIEWS"]
+    expect(operationOffer("drop", node("v", "view"), mongodb)).toEqual({
+      state: "greyed",
+      reason:
+        "This connection does not speak SQL: run the operation from a console in its language.",
+    })
+  })
+
   it("offers each operation only on the kinds it applies to", () => {
     expect(operationOffer("drop", node("v", "view"), POSTGRES).state).toBe(
       "offered"
