@@ -273,7 +273,7 @@ async fn read_bounded(mut response: Response, limit: usize) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -296,7 +296,7 @@ mod tests {
 
     /// A server that answers every request with `response`, and counts the
     /// connections it accepted.
-    async fn canned(
+    pub(crate) async fn canned(
         response: &'static str,
     ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -317,7 +317,7 @@ mod tests {
         (port, accepted)
     }
 
-    fn http_to(port: u16) -> Http {
+    pub(crate) fn http_to(port: u16) -> Http {
         let mut config =
             oxyn_core::ConnectionConfig::new("canned", oxyn_core::DriverId::clickhouse())
                 .with_environment(oxyn_core::Environment::Local);

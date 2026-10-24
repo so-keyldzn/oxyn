@@ -200,13 +200,43 @@ pub struct ServerError {
 const WITHHELD_MESSAGE: &str = "the server message is withheld because the statement carried \
                                 bound values, which ClickHouse can quote verbatim";
 
+/// What replaces it when the statement's text carries a password: a syntax
+/// error quotes the text around the position it failed at, and a hostile
+/// server may quote all of it.
+const WITHHELD_CREDENTIAL: &str = "the server message is withheld because the statement carries \
+                                   a password, which ClickHouse can quote verbatim";
+
 impl ServerError {
     /// The same error with its message withheld, its code kept.
     #[must_use]
     pub fn withheld(self) -> Self {
+        self.replaced(WITHHELD_MESSAGE)
+    }
+
+    /// The error as it may be shown for a statement of `text`, sent with
+    /// bound values or not.
+    ///
+    /// The server's text is kept only when the statement gave it nothing
+    /// secret to quote: no bound value, and no password literal the
+    /// history's own redaction recognizes
+    /// ([ADR-0053](../../../docs/adr/0053-redact-sql-passwords-before-persistence.md)).
+    /// The check is on what was sent, not on what came back: a server
+    /// may quote a secret in any form, cut, or not at all.
+    #[must_use]
+    pub fn for_statement(self, text: &str, bound: bool) -> Self {
+        if bound {
+            self.withheld()
+        } else if oxyn_query::redact_password_literals(text, crate::LANGUAGE) != text {
+            self.replaced(WITHHELD_CREDENTIAL)
+        } else {
+            self
+        }
+    }
+
+    fn replaced(self, withheld: &str) -> Self {
         let message = match self.code {
-            Some(code) => format!("{WITHHELD_MESSAGE} (code {code})"),
-            None => WITHHELD_MESSAGE.to_owned(),
+            Some(code) => format!("{withheld} (code {code})"),
+            None => withheld.to_owned(),
         };
         Self { message, ..self }
     }
@@ -485,5 +515,25 @@ mod tests {
         assert!(error.message.ends_with("(code 457)"), "{}", error.message);
         assert_eq!(error.code, Some(457));
         assert_eq!(error.written_rows, Some(0));
+    }
+
+    #[test]
+    fn a_message_is_withheld_when_the_statement_carries_a_password() {
+        // A hostile server quoting the literal, or only a cut of it.
+        for quoted in ["'s3cr3t-literal'", "s3cr3t-lit"] {
+            let text = format!("Code: 62. DB::Exception: Syntax error near {quoted}");
+            let error = ServerError::from_text(Some(62), text.as_bytes(), Some(0))
+                .for_statement("CREATE USER u IDENTIFIED BY 's3cr3t-literal' x", false);
+            assert!(!error.message.contains("s3cr3t"), "{}", error.message);
+            assert!(error.message.ends_with("(code 62)"), "{}", error.message);
+        }
+        // No bound value and nothing secret: the server's words are kept.
+        let error = ServerError::from_text(Some(60), b"Code: 60. Unknown table t", Some(0))
+            .for_statement("SELECT * FROM t WHERE note = 'IDENTIFIED BY'", false);
+        assert_eq!(error.message, "Code: 60. Unknown table t");
+        // A bound value withholds, whatever the text.
+        let error = ServerError::from_text(Some(457), b"Value x", Some(0))
+            .for_statement("SELECT {id:UInt64}", true);
+        assert!(error.message.contains("bound values"), "{}", error.message);
     }
 }

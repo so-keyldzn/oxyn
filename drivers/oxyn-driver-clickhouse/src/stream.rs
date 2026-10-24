@@ -232,13 +232,9 @@ impl Execution {
     }
 
     /// The server's refusal of this execution, its message withheld when
-    /// the statement carried bound values.
+    /// the statement gave the server a secret to quote.
     fn server_error(&self, error: ServerError) -> OxynError {
-        let error = if self.call.bound.is_empty() {
-            error
-        } else {
-            error.withheld()
-        };
+        let error = error.for_statement(&self.call.text, !self.call.bound.is_empty());
         map_server_error(&self.driver, self.intent, error)
     }
 }
@@ -568,3 +564,7 @@ impl Rows {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "stream_tests.rs"]
+mod tests;
