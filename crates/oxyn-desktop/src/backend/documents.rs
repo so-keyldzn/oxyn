@@ -354,7 +354,12 @@ impl Backend {
         change: DocumentChange,
         cancel: CancelToken,
     ) -> Result<DocumentWrite, IpcError> {
-        let language = QueryLanguage::SQL;
+        let language = match connection {
+            Some(connection) => QueryLanguage::Sql(oxyn_query::dialect_for(
+                &self.read_config(connection).await?.driver,
+            )),
+            None => QueryLanguage::SQL,
+        };
         let update = QueryDocumentUpdate {
             document,
             revision: change.revision,

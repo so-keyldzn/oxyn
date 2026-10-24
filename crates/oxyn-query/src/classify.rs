@@ -368,13 +368,13 @@ pub fn runnable_text(sql: &str, dialect: SqlDialect) -> Cow<'_, str> {
 /// read" would be exactly the mistake I-02 forbids.
 #[must_use]
 pub fn classify_language(language: QueryLanguage, sql: &str) -> Classification {
-    if let Some(dialect) = language.sql_dialect() {
-        return classify(sql, dialect);
+    match language.sql_dialect() {
+        Some(dialect) => classify(sql, dialect),
+        None => Classification::opaque(
+            sql,
+            format!("language not parsed by oxyn-query: {language}"),
+        ),
     }
-    Classification::opaque(
-        sql,
-        format!("language not parsed by oxyn-query: {language}"),
-    )
 }
 
 /// Checks that the whole text parses in the requested dialect.
