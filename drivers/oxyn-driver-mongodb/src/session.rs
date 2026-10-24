@@ -49,13 +49,26 @@ use crate::catalog::MongoCatalog;
 use crate::command::{self, BsonCommand};
 use crate::cursor::{Feed, MongoCursor};
 use crate::decode::Plan;
-use crate::error::{map_error, map_statement_error, stopped};
+use crate::error::{map_error, map_statement_error, stopped, write_concern_failure};
 use crate::preview;
 
 /// The commands whose reply is a cursor: their results stream through
 /// `getMore`. Every other command's reply is one document, the whole result.
-pub(crate) const CURSOR_COMMANDS: &[&str] =
-    &["find", "aggregate", "listCollections", "listIndexes"];
+///
+/// `bulkWrite` (MongoDB 8.0+) answers its per-operation results as a cursor
+/// of its own: read as one document, `firstBatch` would be all the user saw
+/// of them. Its top-level fields — the counts, `nErrors`, the write concern
+/// error — are the first row ([`BULK_WRITE`]).
+pub(crate) const CURSOR_COMMANDS: &[&str] = &[
+    "find",
+    "aggregate",
+    "listCollections",
+    "listIndexes",
+    BULK_WRITE,
+];
+
+/// The cursor command whose first reply carries a summary beside its batch.
+const BULK_WRITE: &str = "bulkWrite";
 
 /// The database a session targets when neither the context nor the form
 /// names one.
@@ -156,32 +169,22 @@ impl MongoSession {
                 })
                 .await
                 .map_err(fail)?;
-                Feed::server(cursor, leased, driver.clone(), intent, withheld)
+                let summarized = command.name == BULK_WRITE;
+                Feed::server(cursor, leased, driver.clone(), intent, withheld, summarized)
             } else {
                 let reply: Document = cancel::race(&self.shared.stopper, &running, cancel, async {
                     db.run_raw_command(raw).session(session).await
                 })
                 .await
                 .map_err(fail)?;
-                if !intent.is_read_only()
-                    && let Ok(concern) = reply.get_document("writeConcernError")
-                {
-                    // `ok: 1` with a write concern error: applied on the
-                    // primary, not confirmed where the concern asked. A
-                    // failover may roll it back; a replay may apply it twice.
-                    return Err(OxynError::OutcomeUnknown(format!(
-                        "the write was applied but its write concern was not satisfied ({}): \
-                         it may be rolled back by a failover",
-                        concern
-                            .get_str("codeName")
-                            .ok()
-                            .filter(|_| !withheld)
-                            .unwrap_or("writeConcernError")
-                    )));
-                }
                 let reply = RawDocumentBuf::try_from(&reply).map_err(|error| {
                     OxynError::Internal(format!("the server's reply cannot be re-encoded: {error}"))
                 })?;
+                if !intent.is_read_only()
+                    && let Some(failure) = write_concern_failure(&reply, withheld)
+                {
+                    return Err(failure);
+                }
                 Feed::reply(reply, driver.clone(), intent, Arc::clone(&running))
             };
             self.race_oxyn(&running, intent, cancel, feed.fill_sample())

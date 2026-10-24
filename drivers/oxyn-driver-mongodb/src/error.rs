@@ -416,6 +416,26 @@ fn transport(
     }
 }
 
+/// The verdict of a write whose reply says `ok: 1` with a
+/// `writeConcernError`: applied on the primary, not confirmed where the
+/// concern asked. A failover may roll it back; a replay may apply it twice.
+/// `None` when the reply holds none.
+pub(crate) fn write_concern_failure(
+    reply: &bson::RawDocument,
+    withheld: bool,
+) -> Option<OxynError> {
+    let concern = reply.get_document("writeConcernError").ok()?;
+    Some(OxynError::OutcomeUnknown(format!(
+        "the write was applied but its write concern was not satisfied ({}): it may be rolled \
+         back by a failover",
+        concern
+            .get_str("codeName")
+            .ok()
+            .filter(|_| !withheld)
+            .unwrap_or("writeConcernError")
+    )))
+}
+
 /// The verdict of a command the user stopped.
 pub(crate) fn stopped(intent: StatementIntent) -> OxynError {
     if intent.is_read_only() {

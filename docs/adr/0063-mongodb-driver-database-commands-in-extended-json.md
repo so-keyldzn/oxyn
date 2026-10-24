@@ -149,6 +149,17 @@ most 1 MiB or 8,192 rows; nothing collects a cursor. `maxTimeMS` and
 100 MB stage memory limit come back as their errors (`BSONObjectTooLarge`,
 `QueryExceededMemoryLimitNoDiskUseAllowed`) with their remedy appended.
 
+`bulkWrite` (MongoDB 8.0+) answers its per-operation results as a cursor on
+`admin.$cmd.bulkWrite`: past `cursor.batchSize`, `firstBatch` is only their
+start. It is read as a cursor like `find` — every `getMore` in the
+execution's logical session, so a stop kills that cursor and no other — and
+the reply's fields outside `cursor` (the `n…` counts, `nErrors`) are the
+**first row**, ahead of the results: a row bound that stops the results, which
+the result buffer marks truncated, never hides how many operations failed. A
+`writeConcernError` in that reply makes the outcome unknown, as for any other
+write. A batch that cannot be read ends the stream with an error after the
+rows before it, never silently.
+
 ### Cancellation: one logical session per execution, `killSessions`
 
 Every execution starts a logical session of its own, causal consistency off.

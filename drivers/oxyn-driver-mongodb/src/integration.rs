@@ -1016,6 +1016,52 @@ async fn the_context_chooses_the_database_and_no_transaction_is_pretended() {
     session.close().await.expect("close");
 }
 
+#[tokio::test]
+#[ignore = "needs a MongoDB server: see the module documentation"]
+async fn a_bulk_write_streams_every_result_past_its_first_batch() {
+    // Fifty inserts then a duplicate of the first, unordered, results in
+    // batches of four: the duplicate's error comes back in the twelfth
+    // `getMore`, never in `firstBatch`. The first row is the summary.
+    let Some(session) = session().await else {
+        return;
+    };
+    let database = database(&*session, "bulk_write").await;
+    let ops: Vec<String> = (0..50)
+        .chain([0])
+        .map(|id| format!(r#"{{"insert": 0, "document": {{"_id": {id}}}}}"#))
+        .collect();
+    let rows = run(
+        &*session,
+        format!(
+            r#"{{"bulkWrite": 1, "$db": "admin", "ordered": false, "cursor": {{"batchSize": 4}},
+                "nsInfo": [{{"ns": "{database}.c"}}], "ops": [{}]}}"#,
+            ops.join(",")
+        ),
+    )
+    .await
+    .expect("the bulk write");
+    let rows: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| serde_json::from_str(row).expect("canonical Extended JSON"))
+        .collect();
+    assert_eq!(rows.len(), 52, "the summary and 51 results");
+    let summary = rows.first().expect("a summary");
+    assert_eq!(summary["nInserted"]["$numberInt"], "50", "{summary}");
+    assert_eq!(summary["nErrors"]["$numberInt"], "1", "{summary}");
+    assert!(summary.get("cursor").is_none(), "{summary}");
+    let indexes: Vec<String> = rows
+        .iter()
+        .skip(1)
+        .map(|row| row["idx"]["$numberInt"].as_str().unwrap_or("?").to_owned())
+        .collect();
+    let expected: Vec<String> = (0..51).map(|idx| idx.to_string()).collect();
+    assert_eq!(indexes, expected);
+    let last = rows.last().expect("the duplicate's result");
+    assert_eq!(last["code"]["$numberInt"], "11000", "{last}");
+    drop_database(&*session, &database).await;
+    session.close().await.expect("close");
+}
+
 /// A name as a JSON string literal, for a command text a test composes.
 ///
 /// Not `serde_json::json!` for whole commands: its map sorts keys unless a

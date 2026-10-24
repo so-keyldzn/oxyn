@@ -13,6 +13,10 @@
 //! since the schema is known before the first batch, and they are the first
 //! rows streamed.
 //!
+//! A `bulkWrite` streams its per-operation results the same way, each
+//! `getMore` under the execution's logical session; its first row is the
+//! reply's summary.
+//!
 //! [`Session::execute`]: oxyn_driver::Session::execute
 
 use std::collections::VecDeque;
@@ -22,8 +26,8 @@ use std::time::Instant;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use bson::RawDocumentBuf;
 use bson::raw::RawBsonRef;
+use bson::{RawDocument, RawDocumentBuf};
 use futures::StreamExt as _;
 use mongodb::raw_batch_cursor::SessionRawBatchCursor;
 use oxyn_core::{
@@ -33,7 +37,7 @@ use oxyn_driver::Cursor;
 
 use crate::cancel::{Leased, Registry, Running};
 use crate::decode::{Assembler, Plan};
-use crate::error::{MongoError, map_statement_error};
+use crate::error::{MongoError, map_statement_error, write_concern_failure};
 
 /// Bytes beyond which a batch is closed: the PostgreSQL and MySQL drivers'
 /// budget.
@@ -72,6 +76,9 @@ pub(crate) struct Feed {
     running: Arc<Running>,
     /// The command carried a password: no server text in its errors.
     withheld: bool,
+    /// The next server batch is a `bulkWrite`'s first reply, whose top-level
+    /// fields become the first row.
+    summarized: bool,
 }
 
 impl std::fmt::Debug for Feed {
@@ -98,16 +105,19 @@ impl Feed {
             intent,
             running,
             withheld: false,
+            summarized: false,
         }
     }
 
-    /// The batches of a server cursor.
+    /// The batches of a server cursor; when `summarized`, the first reply's
+    /// fields outside `cursor` first, as one row.
     pub(crate) fn server(
         cursor: SessionRawBatchCursor,
         session: Leased,
         driver: DriverId,
         intent: StatementIntent,
         withheld: bool,
+        summarized: bool,
     ) -> Self {
         let running = Arc::clone(session.running());
         Self {
@@ -120,6 +130,7 @@ impl Feed {
             intent,
             running,
             withheld,
+            summarized,
         }
     }
 
@@ -209,23 +220,17 @@ impl Feed {
                 Err(self.fail(&error))
             }
             Some(Ok(batch)) => {
-                let documents = batch.doc_slices().map_err(|error| self.fail(&error))?;
-                for item in documents {
-                    match item {
-                        Ok(RawBsonRef::Document(document)) => {
-                            self.pending.push_back(document.to_owned());
-                        }
-                        Ok(_) => {
-                            return Err(self
-                                .protocol("a cursor batch holds a value that is not a document"));
-                        }
-                        Err(error) => {
-                            return Err(
-                                self.protocol(format!("a cursor batch cannot be read: {error}"))
-                            );
-                        }
-                    }
+                let reply = batch.as_raw_document();
+                let summarized = std::mem::take(&mut self.summarized);
+                if summarized
+                    && !self.intent.is_read_only()
+                    && let Some(failure) = write_concern_failure(reply, self.withheld)
+                {
+                    self.source = Source::Done;
+                    return Err(failure);
                 }
+                take_batch(&mut self.pending, reply, summarized)
+                    .map_err(|message| self.protocol(message))?;
                 Ok(true)
             }
         }
@@ -239,6 +244,46 @@ impl Feed {
         };
         OxynError::driver(self.driver.clone(), class, MongoError::protocol(message))
     }
+}
+
+/// Appends the documents of one cursor reply — `firstBatch` or `nextBatch` —
+/// to `pending`; when `summarized`, the reply's fields outside `cursor` first,
+/// as one document. A `bulkWrite`'s counts and `nErrors` are there, so a row
+/// bound that stops the per-operation results never hides how many failed.
+///
+/// # Errors
+/// What cannot be read, worded for [`MongoError::protocol`].
+fn take_batch(
+    pending: &mut VecDeque<RawDocumentBuf>,
+    reply: &RawDocument,
+    summarized: bool,
+) -> std::result::Result<(), String> {
+    let cursor = reply
+        .get_document("cursor")
+        .map_err(|_| "a cursor reply holds no cursor document".to_owned())?;
+    let documents = cursor
+        .get_array("firstBatch")
+        .or_else(|_| cursor.get_array("nextBatch"))
+        .map_err(|_| "a cursor reply holds no batch".to_owned())?;
+    if summarized {
+        let mut summary = RawDocumentBuf::new();
+        for element in reply {
+            let (key, value) =
+                element.map_err(|error| format!("a cursor reply cannot be read: {error}"))?;
+            if key.as_str() != "cursor" {
+                summary.append(key, value);
+            }
+        }
+        pending.push_back(summary);
+    }
+    for item in documents {
+        match item {
+            Ok(RawBsonRef::Document(document)) => pending.push_back(document.to_owned()),
+            Ok(_) => return Err("a cursor batch holds a value that is not a document".to_owned()),
+            Err(error) => return Err(format!("a cursor batch cannot be read: {error}")),
+        }
+    }
+    Ok(())
 }
 
 /// The batches of one execution.
@@ -380,3 +425,6 @@ impl Cursor for MongoCursor {
         self.stats
     }
 }
+
+#[cfg(test)]
+mod tests;

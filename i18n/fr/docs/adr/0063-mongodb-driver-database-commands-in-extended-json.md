@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="44e7885daa8d" -->
+<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="7c97df4c87a6" -->
 
 > Traduction française de [docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md](../../../../docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md). **La version anglaise fait foi.**
 
@@ -161,6 +161,18 @@ Le client tient un lot serveur (au plus 16 Mio) et un lot Arrow d'au plus
 limite mémoire de 100 Mo par étape du serveur reviennent comme leurs erreurs
 (`BSONObjectTooLarge`, `QueryExceededMemoryLimitNoDiskUseAllowed`), remède
 ajouté.
+
+`bulkWrite` (MongoDB 8.0+) rend ses résultats par opération comme un curseur
+sur `admin.$cmd.bulkWrite` : au-delà de `cursor.batchSize`, `firstBatch` n'en
+est que le début. Il est lu comme un curseur, à la manière de `find` — chaque
+`getMore` dans la session logique de l'exécution, si bien qu'un arrêt tue ce
+curseur et aucun autre — et les champs de la réponse hors de `cursor` (les
+compteurs `n…`, `nErrors`) forment la **première ligne**, avant les
+résultats : une borne de lignes qui arrête les résultats, que le tampon de
+résultat marque tronqués, ne cache jamais combien d'opérations ont échoué. Un
+`writeConcernError` dans cette réponse rend l'issue inconnue, comme pour toute
+autre écriture. Un lot illisible termine le flux par une erreur après les
+lignes qui le précèdent, jamais en silence.
 
 ### Annulation : une session logique par exécution, `killSessions`
 
