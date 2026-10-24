@@ -27,6 +27,11 @@ import type { AgentOption, MissingAgent } from "@/lib/ipc/ai"
 export interface AssistantAgentPickerProps {
   agents: ReadonlyArray<AgentOption>
   value: string | null
+  /**
+   * The agent a blank thread runs, when the panel knows it for the
+   * destination the question would go to; else `defaultAgentId(agents)`.
+   */
+  defaultAgent?: string
   missingAgent?: MissingAgent | null
   loading?: boolean
   unavailable?: boolean
@@ -47,6 +52,7 @@ export interface AssistantAgentPickerProps {
 export function AssistantAgentPicker({
   agents,
   value,
+  defaultAgent,
   missingAgent = null,
   loading = false,
   unavailable = false,
@@ -63,7 +69,7 @@ export function AssistantAgentPicker({
   // (ADR-0065).
   const selectedId = missingAgent
     ? SQL_AGENT_ID
-    : (value ?? defaultAgentId(agents))
+    : (value ?? defaultAgent ?? defaultAgentId(agents))
   const selected = agents.find((agent) => agent.id === selectedId)
   const ordered = [...agents].sort(
     (a, b) =>

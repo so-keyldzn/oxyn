@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0065-agents-for-non-sql-query-languages.md" sha256="6a972eeab6a8" -->
+<!-- oxyn-translation source="docs/adr/0065-agents-for-non-sql-query-languages.md" sha256="a5d0fdde2583" -->
 
 > Traduction française de [docs/adr/0065-agents-for-non-sql-query-languages.md](../../../../docs/adr/0065-agents-for-non-sql-query-languages.md). **La version anglaise fait foi.**
 
@@ -155,7 +155,13 @@ Une nouvelle conversation qui ne nomme aucun agent lance
 * aucun : la question est refusée, en nommant le langage qu'aucun agent
   n'écrit.
 
-Le panneau sélectionne le même agent dans un fil vierge (`defaultAgentId`).
+Le panneau sélectionne le même agent dans un fil vierge (`defaultAgentId`). La
+liste qu'il détient est l'union sur toutes les destinations déclarées, alors que
+`default_for` choisit pour l'unique destinataire où va la question : le panneau
+choisit donc parmi les agents écrits pour une destination que le palier de la
+connexion laisse utilisable, celle où il enverrait en premier faisant foi. Un
+agent offert seulement là où le palier refuse est écarté, un autre agent étant
+disponible.
 
 ### 7. Le contexte garde son point de passage unique
 
