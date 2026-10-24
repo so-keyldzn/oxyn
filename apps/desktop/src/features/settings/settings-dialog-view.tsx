@@ -1,4 +1,11 @@
 import * as React from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  PaletteIcon,
+  PlugSocketIcon,
+  TextFontIcon,
+} from "@hugeicons/core-free-icons"
+import type { IconSvgElement } from "@hugeicons/react"
 
 import {
   AppearanceSettings,
@@ -30,7 +37,25 @@ const TRIGGER = "text-muted-foreground"
 export interface SettingsSection {
   id: string
   label: string
+  /** Required: one section without an icon would shift its label out of line. */
+  icon: IconSvgElement
   content: React.ReactNode
+}
+
+/** A tab's label, the section's icon ahead of it. */
+function SectionLabel({
+  icon,
+  children,
+}: {
+  icon: IconSvgElement
+  children: React.ReactNode
+}) {
+  return (
+    <>
+      <HugeiconsIcon icon={icon} strokeWidth={2} data-icon="inline-start" />
+      {children}
+    </>
+  )
 }
 
 export interface SettingsDialogViewProps {
@@ -126,17 +151,17 @@ export function SettingsDialogView({
             className="w-44 shrink-0 items-stretch max-sm:w-full max-sm:flex-row max-sm:overflow-x-auto"
           >
             <TabsTrigger className={TRIGGER} value="appearance">
-              Appearance
+              <SectionLabel icon={PaletteIcon}>Appearance</SectionLabel>
             </TabsTrigger>
             <TabsTrigger className={TRIGGER} value="formats">
-              Formats
+              <SectionLabel icon={TextFontIcon}>Formats</SectionLabel>
             </TabsTrigger>
             <TabsTrigger className={TRIGGER} value="connections">
-              Connections
+              <SectionLabel icon={PlugSocketIcon}>Connections</SectionLabel>
             </TabsTrigger>
             {sections.map((extra) => (
               <TabsTrigger key={extra.id} className={TRIGGER} value={extra.id}>
-                {extra.label}
+                <SectionLabel icon={extra.icon}>{extra.label}</SectionLabel>
               </TabsTrigger>
             ))}
           </TabsList>

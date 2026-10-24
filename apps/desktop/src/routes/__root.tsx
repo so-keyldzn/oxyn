@@ -1,4 +1,5 @@
 import * as React from "react"
+import { Sorting05Icon, SparklesIcon } from "@hugeicons/core-free-icons"
 import { QueryClientProvider } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import {
@@ -58,11 +59,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 // Declared once: providers and external agents are workspace-wide, not per
 // connection (ADR-0023).
 const AI_SECTIONS = [
-  { id: "ai", label: "AI providers", content: <ProviderSettings /> },
+  {
+    id: "ai",
+    label: "AI providers",
+    icon: SparklesIcon,
+    content: <ProviderSettings />,
+  },
   // A workspace preference whose model is the computer's (ADR-0056).
   {
     id: "semantic-ranking",
     label: "Semantic ranking",
+    icon: Sorting05Icon,
     content: <SemanticRankingSection />,
   },
 ]
