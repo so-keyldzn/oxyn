@@ -30,10 +30,13 @@ function AnthropicMark({ className, ...props }: React.SVGProps<SVGSVGElement>) {
 /**
  * The official marks, from the svgl registry (`shadcn add @svgl/<name>`),
  * keyed by agent preset id or provider family. Claude Code is Claude; Codex
- * signs in with a ChatGPT account and wears OpenAI's mark.
+ * signs in with a ChatGPT account and wears OpenAI's mark. `claude` is the
+ * mark of the Claude models: the chat shows it next to a model id, where the
+ * `anthropic` family's own mark belongs to the provider list.
  */
 const logos: Partial<Record<string, Logo>> = {
   "claude-code": ClaudeAiIcon,
+  claude: ClaudeAiIcon,
   codex: OpenaiMark,
   anthropic: AnthropicMark,
   openai: OpenaiMark,

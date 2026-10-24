@@ -16,7 +16,7 @@ const meta = {
       reach: "remote",
       agentVersion: null,
     },
-    brand: "anthropic",
+    brand: "claude",
   },
   decorators: [
     (Story) => (

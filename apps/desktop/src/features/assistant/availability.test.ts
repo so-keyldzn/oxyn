@@ -37,6 +37,26 @@ const enabled = (
   destinations: destinationOptions(providers, agents, "metadata"),
 })
 
+describe("the mark a destination wears in the chat", () => {
+  it("is Claude's for an Anthropic provider, whose models the chat names", () => {
+    const anthropic: DeclaredProvider = {
+      ...provider("work", "remote"),
+      kind: "anthropic",
+    }
+    const [option] = destinationOptions([anthropic], [], "metadata")
+    expect(option?.brand).toBe("claude")
+  })
+
+  it("is the provider family's own for the others", () => {
+    const [option] = destinationOptions(
+      [provider("gateway", "remote")],
+      [],
+      "metadata"
+    )
+    expect(option?.brand).toBe("openai_compatible")
+  })
+})
+
 describe("where the tier label says the answer comes from", () => {
   it("is the default provider's measured reach", () => {
     expect(answeringReach(enabled([provider("cloud", "remote")]), null)).toBe(

@@ -51,6 +51,9 @@ function story(
 
 export const ClaudeCode = story("claude-code", "light")
 export const ClaudeCodeDark = story("claude-code", "dark")
+/** The Claude models' mark, as the chat shows it next to a model id. */
+export const Claude = story("claude", "light")
+export const ClaudeDark = story("claude", "dark")
 export const Codex = story("codex", "light", followsTheTheme)
 export const CodexDark = story("codex", "dark", followsTheTheme)
 export const Anthropic = story("anthropic", "light", followsTheTheme)

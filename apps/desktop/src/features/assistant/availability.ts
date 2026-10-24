@@ -117,7 +117,9 @@ export function destinationOptions(
         reach: provider.reach,
         usable,
         reason: usable ? null : REMOTE_REFUSED,
-        brand: provider.kind,
+        // The chat names a model: Anthropic's models wear Claude's mark, the
+        // provider list keeps the family's own.
+        brand: provider.kind === "anthropic" ? "claude" : provider.kind,
       }
     }),
     ...agents.map((agent) => ({
