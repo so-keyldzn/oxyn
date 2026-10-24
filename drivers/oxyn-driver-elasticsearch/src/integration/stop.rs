@@ -206,11 +206,22 @@ async fn a_point_in_time_stream_that_would_not_fit_stays_under_a_memory_bound() 
         bytes > 2 * usize::try_from(GROWTH_KIB).expect("small") * 1024,
         "the volume must exceed the bound: {bytes} bytes"
     );
-    assert!(
-        peak.saturating_sub(before) < GROWTH_KIB,
-        "the process grew by {} KiB while streaming {bytes} bytes",
-        peak.saturating_sub(before)
-    );
+    // macOS 26 keeps freed large allocations resident: a loop that frees
+    // every 5 MB buffer it allocates grows its footprint by 5 MB a turn
+    // (checked on 2026-10-24). The resident size proves the bound only where
+    // the allocator returns memory, which the CI's Linux job does.
+    if cfg!(target_os = "linux") {
+        assert!(
+            peak.saturating_sub(before) < GROWTH_KIB,
+            "the process grew by {} KiB while streaming {bytes} bytes",
+            peak.saturating_sub(before)
+        );
+    } else {
+        eprintln!(
+            "the memory bound is asserted on Linux only: the process grew by {} KiB here",
+            peak.saturating_sub(before)
+        );
+    }
     assert!(!cursor.stats().truncated);
     drop(cursor);
     let _ = session

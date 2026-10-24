@@ -53,8 +53,8 @@ reconstructed as the request that recreates it: `PUT /<index>` with the
 server-assigned settings removed, the `_aliases` actions of an alias, the index
 template plus `PUT /_data_stream/<name>` of a data stream.
 
-The console runs the Kibana-style request under the cursor: an upper-case HTTP
-method and an API path on its first line, then an optional JSON body, or
+The console runs the Kibana-style request under the cursor: an HTTP method, in
+any case, and an API path on its first line, then an optional JSON body, or
 NDJSON for `_bulk` and `_msearch`. It never follows an absolute URL, a
 scheme-relative path or a fragment supplied in the console, and refuses bound
 values. Answers are decoded by shape. A search becomes one row per hit:
@@ -63,7 +63,9 @@ hit key (`fields`, `highlight`, `sort`, `inner_hits`); a nested object or an
 array stays one cell, its JSON text, since flattening an array of objects would
 pair values the document does not pair. Hit cells are UTF-8 text: a JSON string
 unquoted, any other value its exact JSON text, which keeps `unsigned_long` and
-every number out of `f64`. Aggregations become one row per innermost bucket.
+every number out of `f64`. Aggregations become one row per innermost bucket;
+a key or a count repeats on every row below it, while an object — a sibling
+bucket aggregation, `top_hits` — is a cell of the first row of its level only.
 ES|QL, `_sql` and OpenSearch SQL declare their columns, so their cells are typed
 (`boolean`, integers, `unsigned_long` as `UInt64`, floats, `date` with its
 offset as an instant); one value that does not conform turns its whole column
@@ -71,7 +73,11 @@ into text, and the server type stays in the field metadata. A `_cat` answer in
 text is read as its table; any other object is one row.
 
 Every answer is read in chunks and capped at 16 MiB before decoding; batches
-are cut at 4 MiB. A search that pages continues with the server's own protocol,
+are cut at 4 MiB, a null cell counted for its offset. The decoded table of one
+answer is refused past 64 MiB and 4,096 columns: the wire cap does not bound
+it, since aggregation keys repeat and distinct `_source` keys make a sparse
+grid. A page of hits gives its first 1,024 `_source` keys a column each, and
+the others to `_other`. A search that pages continues with the server's own protocol,
 never with deep `from`/`size`: `search_after` within the point in time the
 request opened (`/_pit` and `id` on Elasticsearch, `/_search/point_in_time`
 and `pit_id` on OpenSearch), `/_search/scroll` for a `?scroll=` request, the
@@ -91,8 +97,12 @@ lie both ways: `POST /logs/_search` reads, `GET /_refresh` changes the index.
 The endpoint is the first path segment starting with `_` (index, alias and data
 stream names cannot), after percent-decoding, since the server routes
 `%5Fdelete_by_query` to `_delete_by_query`; OpenSearch's `_plugins/_x` and
-`_opendistro/_x` prefixes name the API after them. The tables live in
-`classify.rs`:
+`_opendistro/_x` prefixes name the API after them, and `_all` is a target, not
+an API. What is classified must be what is sent: a URL resolves `.` and `..`
+segments, `%2e` spellings included, and reads `\` as `/`, so
+`/logs/_search/../_delete_by_query` would reach `_delete_by_query`. Such a
+path is refused by the console, classified `Unknown`, and refused again before
+it is sent. The tables live in `classify.rs`:
 
 * reads whatever their verb: searches, `_count`, `_msearch`, `_mget`,
   `_explain`, `_validate`, `_analyze`, `_field_caps`, term vectors, `_sql` and
@@ -139,7 +149,11 @@ classified as a grant for the policy gate. `EXPLAIN` is SQL; a search's
 `profile` and `_explain` are requests the console sends, so `EXPLAIN` is not
 advertised either. `INDEXES` is not advertised: an index here is the relation
 itself, not a structure on a table. The SQL-composed catalog operations —
-drop, truncate, rename — are not offered on a session without `SQL`.
+drop, truncate, rename — are not offered on a session without `SQL`. Every
+session advertises `FULL_TEXT_SEARCH`, which is what both products are.
+`VECTOR_SEARCH` is advertised on Elasticsearch, whose floor searches
+`dense_vector` by approximate kNN, and on OpenSearch only when
+`GET /_cat/plugins` lists `opensearch-knn`.
 
 Each in-flight request has an `X-Opaque-Id`. A stop lists the tasks carrying
 it (`GET /_tasks?group_by=parents`), cancels each through
@@ -148,9 +162,10 @@ ends `Cancelled` either way; the stop is only reported as proven when the list
 emptied. A write stopped after it was sent is `OutcomeUnknown`: bulk and
 by-query APIs can have already applied part of their work. The session
 advertises `SERVER_SIDE_CANCEL` only when the account could list tasks at
-connection. HTTP 408, 429, 502, 503 and 504 are transient only for a read; a
-timeout, transport loss or any of those while mutating is ambiguous, and an
-oversized answer to a write that succeeded is `OutcomeUnknown`. A 200 `_bulk`
+connection. HTTP 408, 429, 502, 503 and 504 are transient for a read. For a
+write, 408, 429 and every 5xx are ambiguous, as are a timeout, a transport
+loss and a refusal too large to read; an oversized answer to a write that
+succeeded is `OutcomeUnknown`. A 200 `_bulk`
 answer with item failures, or a by-query answer with `failures`, is an error
 naming how many items failed, not a success.
 

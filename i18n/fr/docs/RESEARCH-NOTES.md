@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="76b0112ed3f1" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="2e9afba0ac36" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3068,6 +3068,10 @@ Pour [ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md).
 | Un point dans le temps s'ouvre par `POST /<index>/_pit` et son identifiant se lit dans `id` sur Elasticsearch, par `POST /<index>/_search/point_in_time` et `pit_id` sur OpenSearch, qui n'a pas de route `_pit` ; les deux continuent avec `search_after` et `pit.id` dans le corps. | test d'intégration `a_point_in_time_stream_that_would_not_fit_stays_under_a_memory_bound` contre les deux images ci-dessus | 2026-10-24 |
 | Le pilote lit les hits par la fonctionnalité `raw_value` de `serde_json` (`RawValue`), si bien qu'un nombre garde son texte exact : un `unsigned_long` au-delà de 2^53 ne passe pas par `f64`. La fonctionnalité n'ajoute aucune dépendance. | [Fonctionnalités de serde_json](https://docs.rs/crate/serde_json/latest/features), `Cargo.lock` | 2026-10-24 |
 | Le registre shadcn `@svgl` (670 entrées) n'a aucune marque Elasticsearch, Elastic ou OpenSearch : la tuile de connexion porte l'icône générique de base de données. | [api.svgl.app](https://api.svgl.app), l'index que sert le registre | 2026-10-24 |
+| Un nom d'index « ne peut pas commencer par `-`, `_` ou `+` » et « ne peut pas être `.` ou `..` » ; il ne peut contenir ni `\` ni `/`. Le classifieur repose sur la première règle : le premier segment du chemin qui commence par `_` est l'API. `_all` est la seule cible qui commence par `_`. | [API de création d'index d'Elasticsearch](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-indices-create) | 2026-10-24 |
+| Une recherche renvoie **10** hits quand elle ne nomme pas de `size` : une page de point dans le temps plus courte que sa `size`, ou que 10, est la dernière. | [API de recherche d'Elasticsearch](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-search) | 2026-10-24 |
+| Elasticsearch cherche les champs `dense_vector` par kNN approché depuis la **8.0**, le plancher du pilote : toute session Elasticsearch déclare `VECTOR_SEARCH`. OpenSearch le fait par son plugin `opensearch-knn`, livré dans la distribution complète et absent de la minimale ; le pilote lit `GET /_cat/plugins`, qui le liste sur l'image 3.9.0. | [Recherche kNN d'Elasticsearch 8.0](https://www.elastic.co/guide/en/elasticsearch/reference/8.0/knn-search.html), [Plugins d'OpenSearch](https://docs.opensearch.org/latest/install-and-configure/plugins/), `GET /_cat/plugins` sur `opensearchproject/opensearch:3.9.0` | 2026-10-24 |
+| Sur macOS 26 (Darwin 25), un processus qui alloue et libère soixante fois un tampon de 5 Mo garde 61 régions `MALLOC_LARGE`, environ 290 Mo sales, selon `footprint` : les grandes allocations libérées restent résidentes. Le test de flux n'affirme donc sa borne de mémoire résidente que sous Linux, où la CI le lance. | un programme d'essai hors du dépôt, `/usr/bin/footprint -p` | 2026-10-24 |
 ## Protocole ClickHouse et bibliothèques clientes — vérifié le 2026-10-23
 
 Pour l'[ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md). Le pilote
