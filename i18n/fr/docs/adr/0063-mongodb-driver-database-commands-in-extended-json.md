@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="770de7159c3f" -->
+<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="44e7885daa8d" -->
 
 > Traduction française de [docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md](../../../../docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md). **La version anglaise fait foi.**
 
@@ -253,15 +253,13 @@ enveloppée se classe comme la commande qu'elle explique : l'explain d'une
 * **−** Une nouvelle commande du serveur est `Unknown` jusqu'à ce que la table
   l'apprenne : une confirmation sur la production pour une lecture que la
   table ne connaît pas encore.
-* **−** `classify_mongo` signale une suppression ou une mise à jour de tous les
-  documents et un `drop` (`MutationRisk`), mais `Session::classify_intent` ne
-  porte qu'une intention (ADR-0064) : sur une connexion qui n'est pas de
-  production, le `{"delete": "users", "deletes": [{"q": {}, "limit": 0}]}`
-  d'une personne s'exécute sans l'approbation qu'obtient un `DELETE FROM
-  users` en SQL. Les agents ne sont pas concernés — chacune de leurs écritures
-  demande une approbation. Le combler demande de porter le risque à travers le
-  trait, un changement que l'ADR-0064 a différé ; d'ici là, l'écart est dit
-  ici.
+* **−** Le risque d'une commande repose sur la lecture du pilote
+  ([ADR-0066](0066-a-session-classifies-the-risk-of-non-sql-requests.md)) :
+  `Session::classify_risk` répond le `MutationRisk` que `classify_mongo` lit —
+  une suppression ou une mise à jour au filtre vide qui n'est pas bornée à un
+  document, un `drop`, `dropDatabase`, `dropIndexes`, `dropSearchIndex`. Un
+  filtre qui sélectionne tout sans être vide (`{"_id": {"$exists": true}}`)
+  n'est pas reconnu : il passe pour une écriture ordinaire.
 
 **Coût de sortie :** moyen. La syntaxe de la console est visible de
 l'utilisateur : les requêtes enregistrées et l'historique gardent des commandes

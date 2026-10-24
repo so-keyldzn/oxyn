@@ -213,6 +213,11 @@ fn an_integer_beyond_64_bits_is_refused_not_rounded() {
 )]
 #[case::drop(r#"{"drop": "u"}"#, MutationRisk::DropObject)]
 #[case::drop_database(r#"{"dropDatabase": 1}"#, MutationRisk::DropObject)]
+#[case::drop_indexes(r#"{"dropIndexes": "u", "index": "*"}"#, MutationRisk::DropObject)]
+#[case::drop_search_index(
+    r#"{"dropSearchIndex": "u", "name": "default"}"#,
+    MutationRisk::DropObject
+)]
 fn unbounded_writes_carry_their_risk(#[case] text: &str, #[case] risk: MutationRisk) {
     assert_eq!(classify_mongo(text).risk, risk, "{text}");
 }

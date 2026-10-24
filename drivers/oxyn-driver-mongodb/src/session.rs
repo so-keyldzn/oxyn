@@ -38,8 +38,8 @@ use bson::{Document, RawDocumentBuf, doc};
 use mongodb::Client;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
-    CancelToken, Capabilities, DriverId, ExecRequest, OxynError, PreviewShape, QueryLanguage,
-    Result, StatementHandle, StatementIntent,
+    CancelToken, Capabilities, DriverId, ExecRequest, MutationRisk, OxynError, PreviewShape,
+    QueryLanguage, Result, StatementHandle, StatementIntent,
 };
 use oxyn_driver::{Cursor, Session, SessionContext};
 use parking_lot::Mutex;
@@ -291,6 +291,23 @@ impl Session for MongoSession {
             .then_some(classification.intent)
     }
 
+    /// The risk [`oxyn_query::classify_mongo`] reads beside that intent: a
+    /// `delete` or an `update` whose filter is empty and whose effect is not
+    /// bounded to one document, a `bulkWrite` holding one, a `drop`,
+    /// `dropDatabase`, `dropIndexes` or `dropSearchIndex`. `None` wherever
+    /// [`classify_intent`](Session::classify_intent) proves nothing
+    /// ([ADR-0066](../../../docs/adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md)).
+    fn classify_risk(&self, request: &ExecRequest) -> Option<MutationRisk> {
+        if request.language != LANGUAGE {
+            return None;
+        }
+        let classification = oxyn_query::classify_mongo(&request.text);
+        (classification.intent != StatementIntent::Unknown
+            && !classification.transaction_control
+            && classification.risk.is_some())
+        .then_some(classification.risk)
+    }
+
     async fn preview_request(
         &self,
         path: &CatalogPath,
@@ -372,3 +389,6 @@ impl Session for MongoSession {
 
 /// The language this driver speaks.
 pub const LANGUAGE: QueryLanguage = QueryLanguage::MongoQuery;
+
+#[cfg(test)]
+mod tests;

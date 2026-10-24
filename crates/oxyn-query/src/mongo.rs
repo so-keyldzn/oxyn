@@ -597,7 +597,11 @@ fn read_command(document: &JsonValue) -> Reading {
     } else if WRITES.contains(&name) {
         Reading::known(StatementIntent::Write, write_risk(name, document))
     } else if DDL.contains(&name) {
-        let risk = if matches!(name, "drop" | "dropDatabase") {
+        // An index dropped is an object dropped, as SQL's `DROP INDEX`.
+        let risk = if matches!(
+            name,
+            "drop" | "dropDatabase" | "dropIndexes" | "dropSearchIndex"
+        ) {
             MutationRisk::DropObject
         } else {
             MutationRisk::None
@@ -623,9 +627,8 @@ fn read_command(document: &JsonValue) -> Reading {
 /// The risk of a write command: a filter that selects every document of the
 /// collection, with an effect not bounded to one document.
 ///
-/// Part of the [`Classification`] this crate returns; the executor does not
-/// receive it yet, since `Session::classify_intent` carries an intent only
-/// (ADR-0064) — the gap is stated in ADR-0063.
+/// Part of the [`Classification`] this crate returns; the executor receives
+/// it through the MongoDB session's `Session::classify_risk` (ADR-0066).
 fn write_risk(name: &str, document: &JsonValue) -> MutationRisk {
     let statements = |key: &str| match document.get(key) {
         Some(JsonValue::Array(items)) => items.as_slice(),
