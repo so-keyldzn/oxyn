@@ -77,6 +77,8 @@ pub struct DocumentView {
     pub is_open: bool,
     pub connection: Option<String>,
     pub from_agent: bool,
+    /// `QueryLanguage::as_str`: the editor mode the text is shown in.
+    pub language: &'static str,
 }
 
 impl From<oxyn_store::Document> for DocumentView {
@@ -93,6 +95,7 @@ impl From<oxyn_store::Document> for DocumentView {
             is_open: document.is_open,
             connection: document.connection.map(|id| id.to_string()),
             from_agent: document.provenance.is_some(),
+            language: document.language.as_str(),
         }
     }
 }
@@ -278,6 +281,8 @@ pub struct HistoryDetail {
     pub needs_inspection: bool,
     /// Submitted by an agent: the console it is copied into says so.
     pub from_agent: bool,
+    /// `QueryLanguage::as_str`: the editor mode the statement is shown in.
+    pub language: &'static str,
 }
 
 impl From<oxyn_store::HistoryEntry> for HistoryDetail {
@@ -291,6 +296,7 @@ impl From<oxyn_store::HistoryEntry> for HistoryDetail {
             error: entry.record.error,
             needs_inspection,
             from_agent: entry.record.actor_kind == ActorKind::Agent,
+            language: entry.record.language.as_str(),
         }
     }
 }

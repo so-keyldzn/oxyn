@@ -26,6 +26,7 @@ const entry: HistoryDetail = {
   error: null,
   needsInspection: false,
   fromAgent: false,
+  language: "sql",
 }
 
 const meta = {
@@ -100,6 +101,31 @@ export const NeedsInspection: Story = {
   },
 }
 
+/**
+ * A MongoDB command is shown in the language it was run in, not read as SQL:
+ * the editor is the query editor of its mode.
+ */
+export const MongoDBCommand: Story = {
+  args: {
+    driver: "mongodb",
+    state: {
+      status: "history",
+      entry: {
+        ...entry,
+        statement: '{"find": "invoices", "filter": {"paid_at": null}}',
+        language: "mongo",
+      },
+    },
+  },
+  play: async () => {
+    const editor = await screen.findByRole("textbox", { name: "Query editor" })
+    await expect(editor).toHaveTextContent('{"find": "invoices"')
+    await expect(
+      screen.queryByRole("textbox", { name: "SQL editor" })
+    ).toBeNull()
+  },
+}
+
 /** An agent's statement says so, here as in the console it is copied into. */
 export const FromAgent: Story = {
   args: { state: { status: "history", entry: { ...entry, fromAgent: true } } },
@@ -125,6 +151,7 @@ export const SavedWithWorkingCopy: Story = {
         isOpen: false,
         connection: null,
         fromAgent: false,
+        language: "sql",
       },
       entry: {
         id: "doc-1",
