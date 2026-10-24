@@ -26,11 +26,12 @@ export function nameAt(
   let index = 0
   while (index < line.length) {
     const quote = line[index]
-    // A MySQL double-quoted string must not resolve to a loaded table.
-    if (quote === "'" || (quote === '"' && identifierQuote === "`")) {
+    // A MySQL double-quoted string must not resolve to a loaded table;
+    // ClickHouse reads `"…"` as a name.
+    if (quote === "'" || (quote === '"' && !identifierQuote.includes('"'))) {
       index += 1
       while (index < line.length) {
-        if (line[index] === "\\" && identifierQuote === "`") index += 2
+        if (line[index] === "\\" && identifierQuote.includes("`")) index += 2
         else if (line[index] === quote) {
           index += 1
           if (line[index] !== quote) break

@@ -4,6 +4,7 @@ import { expect, fn, userEvent, within } from "storybook/test"
 import { DriverChoices } from "./driver-choices"
 import {
   catalogueDrivers,
+  clickhouseDriver,
   mysqlDriver,
   postgresDriver,
   redisDriver,
@@ -45,6 +46,19 @@ export const Compact: Story = {
 }
 
 export const Prominent: Story = { args: { prominent: true } }
+
+/**
+ * svgl has no ClickHouse mark (checked 2026-10-23): the tile wears the
+ * generic database icon, and its port is the HTTPS one the form defaults to.
+ */
+export const ClickHouse: Story = {
+  args: { drivers: [postgresDriver, clickhouseDriver] },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByText(/port 8443/)).toBeVisible()
+    await userEvent.click(canvas.getByRole("button", { name: /ClickHouse/ }))
+    await expect(args.onChoose).toHaveBeenCalledWith(clickhouseDriver)
+  },
+}
 
 /** A driver without a known mark still gets an icon, never an empty box. */
 export const UnknownDriver: Story = {

@@ -381,6 +381,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 12
+      clickhouse:
+        # The tag of ADR-0060, checked on Docker Hub (RESEARCH-NOTES).
+        image: clickhouse/clickhouse-server:26.3.59.10
+        env:
+          CLICKHOUSE_USER: oxyn
+          CLICKHOUSE_PASSWORD: oxyn
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 8123:8123
+        options: >-
+          --ulimit nofile=262144:262144
+          --health-cmd "clickhouse-client --user oxyn --password oxyn --query 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
 
     steps:
       - name: Check out the repository
@@ -488,6 +503,7 @@ jobs:
           OXYN_PG_TEST_URL: postgres://postgres:oxyn@localhost:5432/postgres?sslmode=disable
           OXYN_MYSQL_TEST_URL: mysql://root:oxyn@localhost:3306/t?sslmode=prefer
           OXYN_PG_PRODUCTION_TEST_URL: postgres://postgres:oxyn@localhost:5433/postgres?sslmode=verify-full
+          OXYN_CLICKHOUSE_TEST_URL: http://oxyn:oxyn@127.0.0.1:8123
           OXYN_REDIS_TEST_URL: redis://localhost:6379/0?tls=disable
           # sqlx trusts this disposable CA while verify-full validates the leaf SAN.
           PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/ca.crt

@@ -147,6 +147,33 @@ fn sqlite_keeps_its_own_line_comment_end() {
     }
 }
 
+/// ClickHouse ends `--` and `#` at `\n` only: on 26.3, `SELECT 1 -- x\r, 2`
+/// and `SELECT 1 # x\r, 2` return one column, `SELECT 1 -- x\n, 2` two
+/// (docs/RESEARCH-NOTES.md, ClickHouse, 2026-10-23).
+#[test]
+fn clickhouse_ends_its_line_comments_at_a_line_feed_only() {
+    for (sql, expected) in [
+        (
+            "SELECT 1; -- x\rDROP TABLE audit",
+            (1, StatementIntent::Read, MutationRisk::None),
+        ),
+        (
+            "SELECT 1; # x\rDROP TABLE audit",
+            (1, StatementIntent::Read, MutationRisk::None),
+        ),
+        (
+            "SELECT 1; -- x\r/*\nDROP TABLE audit -- */",
+            (2, StatementIntent::Ddl, MutationRisk::DropObject),
+        ),
+        (
+            "SELECT 1 # x\nDROP TABLE audit",
+            (1, StatementIntent::Unknown, MutationRisk::None),
+        ),
+    ] {
+        assert_eq!(read(sql, SqlDialect::ClickHouse), expected, "{sql:?}");
+    }
+}
+
 /// A dialect whose lexer nobody checked cannot be read either way: a comment
 /// holding a lone `\r` hides a statement from one reading or the other. The
 /// text must count as mutating under both.

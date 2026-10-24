@@ -96,6 +96,9 @@ pub fn explain_sql(text: &str, dialect: SqlDialect) -> Result<String, &'static s
         // `EXPLAIN ANALYZE` executes, and it is never added.
         SqlDialect::Postgres | SqlDialect::Redshift | SqlDialect::MySql => "EXPLAIN ",
         SqlDialect::Sqlite => "EXPLAIN QUERY PLAN ",
+        // ClickHouse's plain EXPLAIN is `EXPLAIN PLAN`: it plans, and runs
+        // nothing but the scalar subqueries the analyzer folds, which read.
+        SqlDialect::ClickHouse => "EXPLAIN ",
         _ => return Err("Explain is unavailable for this SQL dialect."),
     };
     Ok(format!("{prefix}{}", statement.text))
@@ -148,5 +151,14 @@ mod tests {
         );
         assert!(explain_sql("SELECT 1; DELETE FROM t", SqlDialect::MySql).is_err());
         assert!(explain_sql("explain SELECT 1", SqlDialect::MySql).is_err());
+    }
+
+    #[test]
+    fn clickhouse_is_explained_as_a_plan() {
+        assert_eq!(
+            explain_sql(r"SELECT * FROM `a\`; b`", SqlDialect::ClickHouse).as_deref(),
+            Ok(r"EXPLAIN SELECT * FROM `a\`; b`")
+        );
+        assert!(explain_sql("SELECT 1; INSERT INTO t VALUES (1)", SqlDialect::ClickHouse).is_err());
     }
 }

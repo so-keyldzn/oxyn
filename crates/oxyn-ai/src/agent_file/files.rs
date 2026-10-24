@@ -28,7 +28,7 @@ pub(super) const AGENTS: [(&str, &str); 3] = [SQL_AGENT, SCHEMA_AGENT, REDIS_AGE
 ///
 /// Written for the dialects Oxyn has or plans a driver for; every other one
 /// falls back to [`ANSI`].
-pub(super) const DIALECT_FRAGMENTS: [(&str, &str, &str); 6] = [
+pub(super) const DIALECT_FRAGMENTS: [(&str, &str, &str); 7] = [
     ANSI,
     (
         "postgres",
@@ -54,6 +54,11 @@ pub(super) const DIALECT_FRAGMENTS: [(&str, &str, &str); 6] = [
         "duckdb",
         "prompts/dialects/duckdb.md",
         include_str!("../../prompts/dialects/duckdb.md"),
+    ),
+    (
+        "clickhouse",
+        "prompts/dialects/clickhouse.md",
+        include_str!("../../prompts/dialects/clickhouse.md"),
     ),
 ];
 

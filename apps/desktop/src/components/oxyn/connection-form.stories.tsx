@@ -3,6 +3,7 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { ConnectionForm } from "./connection-form"
 import {
+  clickhouseDriver,
   mysqlDriver,
   postgresDriver,
   savedConnections,
@@ -437,6 +438,47 @@ export const MySQL: Story = {
           values: expect.objectContaining({
             host: "localhost",
             port: "3306",
+            sslmode: "verify-full",
+          }),
+          secrets: { password: "story-password" },
+        })
+      )
+    )
+    await expect(args.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    )
+  },
+}
+
+/**
+ * ClickHouse over its HTTP interface: the port follows the TLS mode when left
+ * empty, so the form says which one it will be rather than guessing.
+ */
+export const ClickHouse: Story = {
+  args: { driver: clickhouseDriver },
+  play: async ({ canvas, args }) => {
+    const port = canvas.getByLabelText(/^Port/)
+    await expect(port).toHaveValue("")
+    await expect(port).toHaveAccessibleDescription(
+      "HTTP interface port. Empty: 8443 with TLS, 8123 without."
+    )
+    await expect(canvas.getByLabelText(/^User/)).toHaveValue("default")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await userEvent.type(canvas.getByLabelText(/^Name/), "events")
+    await userEvent.type(canvas.getByLabelText(/^Password/), "story-password")
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: "production",
+          values: expect.objectContaining({
+            host: "localhost",
+            user: "default",
             sslmode: "verify-full",
           }),
           secrets: { password: "story-password" },
