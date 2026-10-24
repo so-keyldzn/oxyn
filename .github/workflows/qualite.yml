@@ -259,6 +259,17 @@ jobs:
       - name: Install the front-end dependencies
         run: pnpm -C apps/desktop install --frozen-lockfile
 
+      - name: Create the Cargo bin directory
+        if: needs.zones.outputs.rust == 'true'
+        # Some `macos-latest` runners ship rustup without `~/.cargo/bin`, and
+        # the three tools below are extracted there: the runs 39981789035 and
+        # 40000784069 failed at the next step with `tar: could not chdir to
+        # '/Users/runner/.cargo/bin'`, before any build. Creating it and putting
+        # it on the `PATH` costs nothing where it already exists.
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+
       - name: Install cargo-nextest
         if: needs.zones.outputs.rust == 'true'
         # The profile of `.config/nextest.toml` — serialized execution of the
