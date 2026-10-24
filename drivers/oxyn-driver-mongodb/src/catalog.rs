@@ -26,7 +26,7 @@ use oxyn_catalog::model::{
 use oxyn_catalog::{CatalogPath, CatalogProvider, RelationDefinition};
 use oxyn_core::{CancelToken, OxynError, Result, StatementIntent};
 
-use crate::cancel::{self, Running};
+use crate::cancel::{self, Leased};
 use crate::cursor::{SAMPLE_BYTES, SAMPLE_DOCUMENTS};
 use crate::decode::Plan;
 use crate::ejson::{self, Mode};
@@ -71,6 +71,20 @@ impl MongoCatalog {
         Self { shared, version }
     }
 
+    /// A logical session of its own for one introspection command.
+    async fn lease(&self) -> Result<Leased> {
+        let session = self
+            .shared
+            .client
+            .start_session()
+            .causal_consistency(false)
+            .await
+            .map_err(|error| {
+                map_error(&self.shared.driver, StatementIntent::Read, &error, false)
+            })?;
+        Ok(Leased::new(session, &self.shared.quarantine))
+    }
+
     /// Runs one command in a logical session of its own, stoppable.
     async fn command(
         &self,
@@ -79,17 +93,12 @@ impl MongoCatalog {
         cancel: &CancelToken,
     ) -> Result<Document> {
         let driver = &self.shared.driver;
-        let mut session = self
-            .shared
-            .client
-            .start_session()
-            .causal_consistency(false)
-            .await
-            .map_err(|error| map_error(driver, StatementIntent::Read, &error, false))?;
-        let running = Running::new(session.id().clone());
+        let mut leased = self.lease().await?;
+        let running = Arc::clone(leased.running());
+        let session = leased.session()?;
         let db = self.shared.client.database(database);
         cancel::race(&self.shared.stopper, &running, cancel, async {
-            db.run_command(command).session(&mut session).await
+            db.run_command(command).session(session).await
         })
         .await
         .map_err(|error| map_error(driver, StatementIntent::Read, &error, running.was_killed()))
@@ -106,20 +115,15 @@ impl MongoCatalog {
         cancel: &CancelToken,
     ) -> Result<Vec<RawDocumentBuf>> {
         let driver = &self.shared.driver;
-        let mut session = self
-            .shared
-            .client
-            .start_session()
-            .causal_consistency(false)
-            .await
-            .map_err(|error| map_error(driver, StatementIntent::Read, &error, false))?;
-        let running = Running::new(session.id().clone());
+        let mut leased = self.lease().await?;
+        let running = Arc::clone(leased.running());
+        let session = leased.session()?;
         let fail = |error: mongodb::error::Error| {
             map_error(driver, StatementIntent::Read, &error, running.was_killed())
         };
         let db = self.shared.client.database(database);
         let mut cursor = cancel::race(&self.shared.stopper, &running, cancel, async {
-            db.run_cursor_command(command).session(&mut session).await
+            db.run_cursor_command(command).session(&mut *session).await
         })
         .await
         .map_err(fail)?;
@@ -146,7 +150,7 @@ impl MongoCatalog {
                 &self.shared.stopper,
                 &running,
                 cancel,
-                cursor.advance(&mut session),
+                cursor.advance(&mut *session),
             )
             .await
             .map_err(fail)?;

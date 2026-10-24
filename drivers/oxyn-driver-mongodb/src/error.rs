@@ -23,6 +23,21 @@
 //! topology — host names, ports, replica set members. The messages here are
 //! the driver's, built from the kind of failure; the server's `errmsg` is kept
 //! for command errors only, where it names what the user's command did.
+//!
+//! # No secret the server was given
+//!
+//! The server's words are shown, code included
+//! ([UX-SPEC](../../../docs/UX-SPEC.md#errors-are-addressed-to-a-professional)),
+//! except where they could quote a secret Oxyn sent it. The connection's
+//! password never reaches the server: the session authenticates by SCRAM
+//! only, which proves the password without sending it (`options.rs`). A
+//! failed authentication still reads as a fixed message, the server's text
+//! dropped. What remains is a password the command itself carries — the
+//! `pwd` of `createUser` or `updateUser`: a hostile or compromised server may
+//! quote it in any error, cut or whole. For such a command, the error keeps
+//! only its numeric code and the labels Oxyn reads
+//! ([`map_statement_error`]), like the ClickHouse driver withholds the message
+//! of a statement that carries a password.
 
 use mongodb::error::{Error as MongoLibError, ErrorKind};
 use oxyn_core::{DriverId, ErrorClass, OxynError, StatementIntent};
@@ -243,7 +258,37 @@ pub(crate) fn map_error(
     error: &MongoLibError,
     cancelled: bool,
 ) -> OxynError {
-    let mut labels: Vec<String> = error.labels().iter().cloned().collect();
+    map_statement_error(driver, intent, error, cancelled, false)
+}
+
+/// What replaces the server's message when the command carried a password.
+const WITHHELD_CREDENTIAL: &str = "the server message is withheld because the command carries a \
+                                   password (`pwd`), which a server can quote verbatim";
+
+/// [`map_error`] for a console command: when it `carries_credential`, no text
+/// the server chose — message, code name, unknown label — reaches the error,
+/// its `Display` or its `Debug`.
+pub(crate) fn map_statement_error(
+    driver: &DriverId,
+    intent: StatementIntent,
+    error: &MongoLibError,
+    cancelled: bool,
+    carries_credential: bool,
+) -> OxynError {
+    let mut labels: Vec<String> = error
+        .labels()
+        .iter()
+        .filter(|label| {
+            !carries_credential
+                || [
+                    TRANSIENT_TRANSACTION,
+                    UNKNOWN_COMMIT_RESULT,
+                    RETRYABLE_WRITE,
+                ]
+                .contains(&label.as_str())
+        })
+        .cloned()
+        .collect();
     labels.sort_unstable();
     // `Custom` is the session's own marker of a stop the server did not answer
     // within its grace period.
@@ -259,14 +304,20 @@ pub(crate) fn map_error(
             "the server refused the credentials or the authentication mechanism".to_owned(),
         ),
         ErrorKind::Command(command) if command.code == AUTHENTICATION_FAILED => {
-            OxynError::Authentication(command.message.clone())
+            OxynError::Authentication(format!(
+                "the server refused the credentials (code {AUTHENTICATION_FAILED})"
+            ))
         }
         ErrorKind::Command(command) => {
             let class = class_of_code(command.code, intent, &labels);
-            let mut message = format!(
-                "{} ({}): {}",
-                command.code_name, command.code, command.message
-            );
+            let mut message = if carries_credential {
+                format!("{WITHHELD_CREDENTIAL} (code {})", command.code)
+            } else {
+                format!(
+                    "{} ({}): {}",
+                    command.code_name, command.code, command.message
+                )
+            };
             if let Some(remedy) = remedy(command.code) {
                 message.push_str(" — ");
                 message.push_str(remedy);
@@ -274,7 +325,7 @@ pub(crate) fn map_error(
             let source = MongoError {
                 message,
                 code: Some(command.code),
-                code_name: Some(command.code_name.clone()),
+                code_name: (!carries_credential).then(|| command.code_name.clone()),
                 labels,
             };
             if class == ErrorClass::Permanent {

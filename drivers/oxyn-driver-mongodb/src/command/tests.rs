@@ -21,6 +21,23 @@ fn the_command_keeps_its_order_and_its_name() {
 }
 
 #[test]
+fn a_password_is_found_at_any_depth() {
+    for text in [
+        r#"{"createUser": "u", "pwd": "p", "roles": []}"#,
+        r#"{"updateUser": "u", "$db": "admin", "pwd": "p"}"#,
+        r#"{"applyOps": [[{"o": {"pwd": "p"}}]]}"#,
+    ] {
+        assert!(parse(text).expect("valid").carries_credential, "{text}");
+    }
+    for text in [
+        r#"{"find": "users", "filter": {"password_hash": "x"}}"#,
+        r#"{"usersInfo": 1, "showCredentials": false}"#,
+    ] {
+        assert!(!parse(text).expect("valid").carries_credential, "{text}");
+    }
+}
+
+#[test]
 fn json_numbers_follow_the_relaxed_rule() {
     let parsed =
         document(r#"{"insert": "t", "a": 1, "b": 3000000000, "c": 1.0, "d": -2, "e": 1e3}"#);

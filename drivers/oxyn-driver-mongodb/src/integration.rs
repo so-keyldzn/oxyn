@@ -328,6 +328,59 @@ async fn a_stopped_write_is_never_announced_cancelled() {
     session.close().await.expect("close");
 }
 
+#[tokio::test]
+#[ignore = "needs a MongoDB server: see the module documentation"]
+async fn a_stop_racing_the_end_of_a_statement_never_reaches_the_next_one() {
+    // The library pools logical sessions: the id statement A gives back is
+    // the one statement B would start under. A's stop is held back 50 ms, as
+    // a slow server would; A ends meanwhile and B starts at once on the same
+    // Oxyn session. B runs a few hundred milliseconds: a `killSessions` aimed
+    // at A's id, had B taken it, would land in B. B completes.
+    let Some(session) = session().await else {
+        return;
+    };
+    crate::cancel::KILL_DELAY_MS.store(50, std::sync::atomic::Ordering::Relaxed);
+    let database = database(&*session, "stop_race").await;
+    seed(&*session, &database).await;
+    let second = format!(
+        r#"{{"aggregate": "seed", "$db": "{database}", "maxTimeMS": 120000, "pipeline": [
+            {{"$lookup": {{"from": "seed", "pipeline": [], "as": "a"}}}}, {{"$unwind": "$a"}},
+            {{"$count": "n"}}], "cursor": {{}}}}"#
+    );
+    for round in 0..10 {
+        // Five thousand documents: the sample reads a thousand, so A still
+        // holds its logical session when it is stopped.
+        let first = session
+            .execute(
+                command(format!(
+                    r#"{{"aggregate": "seed", "$db": "{database}", "pipeline": [
+                        {{"$project": {{"r": {{"$range": [0, 5]}}}}}}, {{"$unwind": "$r"}}],
+                        "cursor": {{"batchSize": 2}}}}"#
+                )),
+                &CancelToken::new(),
+            )
+            .await
+            .expect("the first statement opens");
+        let stopping = session.cancel(first.handle());
+        let following = async {
+            drop(first);
+            // The library checks a session back in from a task of its own:
+            // the next statement starts a moment later, as a user's would.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            run(&*session, second.clone()).await
+        };
+        let (stopped, followed) = futures::future::join(stopping, following).await;
+        stopped.expect("the stop is answered");
+        let rows = followed
+            .unwrap_or_else(|error| panic!("round {round}: the next statement was hit: {error}"));
+        assert_eq!(rows.len(), 1, "round {round}");
+        assert!(rows[0].contains("1000000"), "round {round}: {rows:?}");
+    }
+    crate::cancel::KILL_DELAY_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    drop_database(&*session, &database).await;
+    session.close().await.expect("close");
+}
+
 /// The peak resident memory of this process, from Linux's `/proc`. `None`
 /// elsewhere: the bound is then not checked, and the test says so.
 fn peak_resident_bytes() -> Option<u64> {

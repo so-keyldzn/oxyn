@@ -25,16 +25,15 @@ use async_trait::async_trait;
 use bson::RawDocumentBuf;
 use bson::raw::RawBsonRef;
 use futures::StreamExt as _;
-use mongodb::ClientSession;
 use mongodb::raw_batch_cursor::SessionRawBatchCursor;
 use oxyn_core::{
     DriverId, ErrorClass, ExecStats, OxynError, Result, StatementHandle, StatementIntent,
 };
 use oxyn_driver::Cursor;
 
-use crate::cancel::{Registry, Running};
+use crate::cancel::{Leased, Registry, Running};
 use crate::decode::{Assembler, Plan};
-use crate::error::{MongoError, map_error};
+use crate::error::{MongoError, map_statement_error};
 
 /// Bytes beyond which a batch is closed: the PostgreSQL and MySQL drivers'
 /// budget.
@@ -52,11 +51,12 @@ pub const SAMPLE_BYTES: usize = 8 << 20;
 
 /// Where the documents come from.
 enum Source {
-    /// A server cursor, iterated in the logical session that opened it.
-    /// Boxed: one per execution, and the session is large.
+    /// A server cursor, iterated in the logical session that opened it, and
+    /// given back when the variant is dropped: after the cursor, declared
+    /// first. Boxed: one per execution, and the session is large.
     Server {
         cursor: Box<SessionRawBatchCursor>,
-        session: Box<ClientSession>,
+        session: Box<Leased>,
     },
     /// A reply that is the whole result, already in `pending`, or a cursor
     /// the server has no more batches for.
@@ -70,6 +70,8 @@ pub(crate) struct Feed {
     driver: DriverId,
     intent: StatementIntent,
     running: Arc<Running>,
+    /// The command carried a password: no server text in its errors.
+    withheld: bool,
 }
 
 impl std::fmt::Debug for Feed {
@@ -95,17 +97,19 @@ impl Feed {
             driver,
             intent,
             running,
+            withheld: false,
         }
     }
 
     /// The batches of a server cursor.
     pub(crate) fn server(
         cursor: SessionRawBatchCursor,
-        session: ClientSession,
+        session: Leased,
         driver: DriverId,
         intent: StatementIntent,
-        running: Arc<Running>,
+        withheld: bool,
     ) -> Self {
+        let running = Arc::clone(session.running());
         Self {
             pending: VecDeque::new(),
             source: Source::Server {
@@ -115,7 +119,18 @@ impl Feed {
             driver,
             intent,
             running,
+            withheld,
         }
+    }
+
+    fn fail(&self, error: &mongodb::error::Error) -> OxynError {
+        map_statement_error(
+            &self.driver,
+            self.intent,
+            error,
+            self.running.was_killed(),
+            self.withheld,
+        )
     }
 
     /// Reads server batches until the sample bounds are reached or the
@@ -182,6 +197,7 @@ impl Feed {
         let Source::Server { cursor, session } = &mut self.source else {
             return Ok(false);
         };
+        let session = session.session()?;
         let next = cursor.stream(session).next().await;
         match next {
             None => {
@@ -190,17 +206,10 @@ impl Feed {
             }
             Some(Err(error)) => {
                 self.source = Source::Done;
-                Err(map_error(
-                    &self.driver,
-                    self.intent,
-                    &error,
-                    self.running.was_killed(),
-                ))
+                Err(self.fail(&error))
             }
             Some(Ok(batch)) => {
-                let documents = batch.doc_slices().map_err(|error| {
-                    map_error(&self.driver, self.intent, &error, self.running.was_killed())
-                })?;
+                let documents = batch.doc_slices().map_err(|error| self.fail(&error))?;
                 for item in documents {
                     match item {
                         Ok(RawBsonRef::Document(document)) => {

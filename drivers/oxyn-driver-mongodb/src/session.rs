@@ -44,12 +44,12 @@ use oxyn_core::{
 use oxyn_driver::{Cursor, Session, SessionContext};
 use parking_lot::Mutex;
 
-use crate::cancel::{self, Registry, Running};
+use crate::cancel::{self, Leased, Quarantine, Registry, Running};
 use crate::catalog::MongoCatalog;
 use crate::command::{self, BsonCommand};
 use crate::cursor::{Feed, MongoCursor};
 use crate::decode::Plan;
-use crate::error::{map_error, stopped};
+use crate::error::{map_error, map_statement_error, stopped};
 use crate::preview;
 
 /// The commands whose reply is a cursor: their results stream through
@@ -67,6 +67,8 @@ pub(crate) struct Shared {
     /// A second client of one connection, used only to send `killSessions`:
     /// a stop must not wait for a connection of the pool it is stopping.
     pub(crate) stopper: Client,
+    /// The logical sessions a stop without answer may still reach.
+    pub(crate) quarantine: Arc<Quarantine>,
     pub(crate) driver: DriverId,
     pub(crate) default_database: Option<String>,
     pub(crate) capabilities: Capabilities,
@@ -127,40 +129,40 @@ impl MongoSession {
         let raw = RawDocumentBuf::try_from(&command.document).map_err(|error| {
             OxynError::Query(format!("the command cannot be encoded as BSON: {error}"))
         })?;
-        let mut session = self
+        let session = self
             .shared
             .client
             .start_session()
             .causal_consistency(false)
             .await
             .map_err(|error| map_error(driver, intent, &error, false))?;
-        let running = Arc::new(Running::new(session.id().clone()));
+        let mut leased = Leased::new(session, &self.shared.quarantine);
+        let running = Arc::clone(leased.running());
         let handle = StatementHandle::new();
         self.registry.insert(handle, Arc::clone(&running));
+        let withheld = command.carries_credential;
+        let fail = |error: mongodb::error::Error| {
+            map_statement_error(driver, intent, &error, running.was_killed(), withheld)
+        };
         let outcome = async {
             let db = self.shared.client.database(&database);
+            let session = leased.session()?;
             let mut feed = if CURSOR_COMMANDS.contains(&command.name.as_str()) {
                 let cursor = cancel::race(&self.shared.stopper, &running, cancel, async {
                     db.run_raw_cursor_command(raw)
-                        .session(&mut session)
+                        .session(session)
                         .batch()
                         .await
                 })
                 .await
-                .map_err(|error| map_error(driver, intent, &error, running.was_killed()))?;
-                Feed::server(
-                    cursor,
-                    session,
-                    driver.clone(),
-                    intent,
-                    Arc::clone(&running),
-                )
+                .map_err(fail)?;
+                Feed::server(cursor, leased, driver.clone(), intent, withheld)
             } else {
                 let reply: Document = cancel::race(&self.shared.stopper, &running, cancel, async {
-                    db.run_raw_command(raw).session(&mut session).await
+                    db.run_raw_command(raw).session(session).await
                 })
                 .await
-                .map_err(|error| map_error(driver, intent, &error, running.was_killed()))?;
+                .map_err(fail)?;
                 if !intent.is_read_only()
                     && let Ok(concern) = reply.get_document("writeConcernError")
                 {
@@ -170,7 +172,11 @@ impl MongoSession {
                     return Err(OxynError::OutcomeUnknown(format!(
                         "the write was applied but its write concern was not satisfied ({}): \
                          it may be rolled back by a failover",
-                        concern.get_str("codeName").unwrap_or("writeConcernError")
+                        concern
+                            .get_str("codeName")
+                            .ok()
+                            .filter(|_| !withheld)
+                            .unwrap_or("writeConcernError")
                     )));
                 }
                 let reply = RawDocumentBuf::try_from(&reply).map_err(|error| {

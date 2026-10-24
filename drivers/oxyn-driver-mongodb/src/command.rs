@@ -62,6 +62,9 @@ const MAX_DEPTH: usize = 200;
 pub(crate) struct BsonCommand {
     /// The first key.
     pub(crate) name: String,
+    /// The command holds a password the server could quote back in an error
+    /// message ([`crate::error`]).
+    pub(crate) carries_credential: bool,
     /// The command, keys in the order typed, without its `$db`.
     pub(crate) document: Document,
     /// The database a typed `$db` names.
@@ -115,9 +118,31 @@ pub(crate) fn parse(text: &str) -> Result<BsonCommand> {
     };
     Ok(BsonCommand {
         name: command.name().to_owned(),
+        carries_credential: carries_credential(&document),
         document,
         database,
     })
+}
+
+/// The field user-management commands carry a password in: `createUser` and
+/// `updateUser` take it as `pwd` (MongoDB manual, consulted on 2026-10-24).
+const CREDENTIAL_FIELD: &str = "pwd";
+
+/// Does a `pwd` field appear anywhere in the command? Looked for at every
+/// depth, like the classifier's keys: what was sent decides, not what the
+/// command's name suggests.
+fn carries_credential(document: &Document) -> bool {
+    document
+        .iter()
+        .any(|(key, value)| key == CREDENTIAL_FIELD || value_carries_credential(value))
+}
+
+fn value_carries_credential(value: &Bson) -> bool {
+    match value {
+        Bson::Document(inner) => carries_credential(inner),
+        Bson::Array(items) => items.iter().any(value_carries_credential),
+        _ => false,
+    }
 }
 
 /// What makes a command's cursor endless: a tailable `find`, or a change

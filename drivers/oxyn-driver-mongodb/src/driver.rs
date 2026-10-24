@@ -303,6 +303,7 @@ impl Driver for MongoDriver {
         let shared = Arc::new(Shared {
             client,
             stopper,
+            quarantine: Arc::default(),
             driver,
             default_database: spec.database().map(str::to_owned),
             capabilities,
