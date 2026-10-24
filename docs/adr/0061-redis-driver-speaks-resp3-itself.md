@@ -78,7 +78,9 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
    `Write`; anything else — `@dangerous`, no flag, a script, a name the server
    does not know, a container named without a known subcommand — proves
    nothing and is `Unknown`. The driver answers this through
-   `Session::classify_intent` (ADR-0064).
+   `Session::classify_intent` (ADR-0064). One exception to `@dangerous`: a
+   `write` whose reach the driver knows (point 15) is a `Write`, so that its
+   risk is consulted.
 4. **What changes the connection is refused in a console**, by the driver's
    own list — no flag says it: `UNSUBSCRIBE` and its family, `SYNC`, `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (the session context selects
    the database), `MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`, `RESET`, `QUIT`,
@@ -177,6 +179,22 @@ Checked on 2026-10-22 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#redis-protocol-and-
     `KEYS`, a key sized before it is read whole, the scope of a write shown
     before the write, no transaction to lean on. What it sends is classified
     by the session's command table, as any console request.
+15. **A write that reaches everything in its target carries a risk**
+    (`Session::classify_risk`, ADR-0066), from the driver's own list — no
+    flag says it: `FLUSHALL` and `FLUSHDB` are `Truncate`, `SWAPDB`
+    `UnboundedUpdate`, and `FUNCTION FLUSH`, `FUNCTION DELETE`,
+    `FUNCTION RESTORE … FLUSH`, `XGROUP DESTROY`, `ACL DELUSER`,
+    `FT.DROPINDEX` and `FT.DROP` are `DropObject`. A risk is answered only for
+    a request the table proves mutating, never for a read. `FLUSHALL`,
+    `FLUSHDB`, `SWAPDB` and `FT.DROPINDEX` are `write` and `@dangerous`: left
+    `Unknown`, a human's `FLUSHALL` on staging would run at one click, so a
+    dangerous `write` on this list is a `Write`, and its risk asks for an
+    approval on every environment. A key named explicitly is bounded, however
+    large: `DEL`, `UNLINK` and `MIGRATE` carry no risk. A script carries none
+    either — `EVAL` proves no intent, stays `Unknown` and is never asked for
+    its risk, so a `redis.call('flushall')` inside it is confirmed as a plain
+    write on production and runs on staging; this decision accepts it, a
+    script's body being code the driver does not read.
 
 ## Consequences
 

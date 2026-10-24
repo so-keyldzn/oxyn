@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
-    CancelToken, Capabilities, DriverId, ExecRequest, OxynError, PreviewShape, Result, ScalarValue,
-    StatementHandle, StatementIntent,
+    CancelToken, Capabilities, DriverId, ExecRequest, MutationRisk, OxynError, PreviewShape,
+    Result, ScalarValue, StatementHandle, StatementIntent,
 };
 use oxyn_driver::{Cursor, Session, SessionContext};
 use parking_lot::Mutex;
@@ -231,6 +231,21 @@ impl RedisSession {
         commands::intent(&self.shared.commands, &argv)
     }
 
+    /// What a request [`intent_of`](Self::intent_of) proves mutating may reach
+    /// beyond the keys it names: [`commands::risk`]. `None` for anything else,
+    /// a read included — a risk on a read would make it a write.
+    ///
+    /// No I/O, like the intent.
+    #[must_use]
+    pub fn risk_of(&self, request: &ExecRequest) -> Option<MutationRisk> {
+        match self.intent_of(request)? {
+            StatementIntent::Write | StatementIntent::Ddl | StatementIntent::Grant => {
+                commands::risk(&argv::parse(&request.text).ok()?)
+            }
+            _ => None,
+        }
+    }
+
     /// What the server said when the session opened.
     #[must_use]
     pub fn hello(&self) -> &Hello {
@@ -281,6 +296,12 @@ impl Session for RedisSession {
     /// command table, read when the session opened — no I/O, no lock.
     fn classify_intent(&self, request: &ExecRequest) -> Option<StatementIntent> {
         self.intent_of(request)
+    }
+
+    /// The risk of [`RedisSession::risk_of`]: `FLUSHALL`, `FLUSHDB`,
+    /// `SWAPDB`, a dropped library, consumer group, user or search index.
+    fn classify_risk(&self, request: &ExecRequest) -> Option<MutationRisk> {
+        self.risk_of(request)
     }
 
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {

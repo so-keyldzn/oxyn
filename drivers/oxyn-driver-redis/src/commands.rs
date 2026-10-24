@@ -14,11 +14,15 @@
 //! | a subcommand of `ACL` without the `readonly` flag | `Grant` |
 //! | `readonly`, not `write`, not in `@dangerous` | `Read` |
 //! | `write`, not in `@dangerous` | `Write` |
+//! | `write` in `@dangerous`, with a [`risk`] the driver knows | `Write`, with that risk |
 //! | anything else — `@dangerous`, no flag, a script, an unknown name | nothing proven, hence `Unknown` |
 //!
 //! `@dangerous` withholds `Read` and `Write` on purpose: `KEYS` is flagged
-//! `readonly` and stalls a server of fifty million keys, `FLUSHALL` is flagged
-//! `write` and empties every database. `EVAL` and `FCALL` carry neither
+//! `readonly` and stalls a server of fifty million keys, `MIGRATE` is flagged
+//! `write` and moves keys to another server. `FLUSHALL` is flagged `write` and
+//! `@dangerous` too, but the driver knows its reach — every key of every
+//! database —, so it is a `Write` that carries `Truncate`, and the risk asks
+//! for an approval on every environment (ADR-0066). `EVAL` and `FCALL` carry neither
 //! `readonly` nor `write`: a script writes what it wants, so it stays
 //! `Unknown`. `EVAL_RO` and `FCALL_RO` are `readonly`, and the server refuses a
 //! write inside them — the only scripts that read as `Read`.
@@ -35,7 +39,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use oxyn_core::StatementIntent;
+use oxyn_core::{MutationRisk, StatementIntent};
 
 use crate::resp::Value;
 
@@ -149,12 +153,50 @@ pub fn intent(table: &CommandTable, argv: &[Vec<u8>]) -> Option<StatementIntent>
         return Some(StatementIntent::Grant);
     }
     if spec.in_category("dangerous") {
-        return None;
+        // A dangerous write whose reach the driver knows is proven: its risk
+        // then asks for an approval everywhere, where `Unknown` would let a
+        // human's `FLUSHALL` run on staging at one click (ADR-0066).
+        return (spec.has_flag("write") && risk(argv).is_some()).then_some(StatementIntent::Write);
     }
     match (spec.has_flag("readonly"), spec.has_flag("write")) {
         (true, false) => Some(StatementIntent::Read),
         (_, true) => Some(StatementIntent::Write),
         (false, false) => None,
+    }
+}
+
+/// What a command may reach beyond the keys it names, when that is everything
+/// in its target: a database, a library, a consumer group, an index.
+///
+/// The forms are the driver's list, like [`refusal`]: no flag says that
+/// `FLUSHDB` empties a database while `DEL` removes the keys it is given. The
+/// list leans towards answering (ADR-0066): a missed form runs without an
+/// approval, an extra one only asks for one. A key named explicitly is bounded
+/// and has no risk, however large its value.
+#[must_use]
+pub fn risk(argv: &[Vec<u8>]) -> Option<MutationRisk> {
+    let name = lowercase(argv.first()?)?;
+    let sub = argv.get(1).and_then(|word| lowercase(word));
+    match (name.as_str(), sub.as_deref()) {
+        // Every key of the database, or of every database.
+        ("flushall" | "flushdb", _) => Some(MutationRisk::Truncate),
+        // Every key of both databases changes database at once.
+        ("swapdb", _) => Some(MutationRisk::UnboundedUpdate),
+        ("function", Some("flush" | "delete"))
+        | ("xgroup", Some("destroy"))
+        | ("acl", Some("deluser"))
+        // `DD` deletes the indexed documents with the index.
+        | ("ft.dropindex" | "ft.drop", _) => Some(MutationRisk::DropObject),
+        // `FUNCTION RESTORE payload FLUSH` replaces every library.
+        ("function", Some("restore"))
+            if argv
+                .iter()
+                .skip(3)
+                .any(|word| word.eq_ignore_ascii_case(b"flush")) =>
+        {
+            Some(MutationRisk::DropObject)
+        }
+        _ => None,
     }
 }
 
@@ -446,6 +488,12 @@ pub(crate) mod tests {
                             vec![],
                         ),
                         entry(
+                            "acl|deluser",
+                            &["admin", "noscript", "loading", "stale"],
+                            &["@admin", "@slow", "@dangerous"],
+                            vec![],
+                        ),
+                        entry(
                             "acl|whoami",
                             &["noscript", "loading", "stale"],
                             &["@slow"],
@@ -463,6 +511,70 @@ pub(crate) mod tests {
                         &["@keyspace", "@read", "@slow"],
                         vec![],
                     )],
+                ),
+                // Observed on 2026-10-24, same server and same values on
+                // Valkey 9.1.2 except the search module it lacks.
+                entry(
+                    "swapdb",
+                    &["write", "fast"],
+                    &["@keyspace", "@write", "@fast", "@dangerous"],
+                    vec![],
+                ),
+                entry(
+                    "function",
+                    &[],
+                    &["@slow"],
+                    vec![
+                        entry(
+                            "function|flush",
+                            &["write", "noscript"],
+                            &["@write", "@slow", "@scripting"],
+                            vec![],
+                        ),
+                        entry(
+                            "function|delete",
+                            &["write", "noscript"],
+                            &["@write", "@slow", "@scripting"],
+                            vec![],
+                        ),
+                        entry(
+                            "function|restore",
+                            &["write", "denyoom", "noscript"],
+                            &["@write", "@slow", "@scripting"],
+                            vec![],
+                        ),
+                    ],
+                ),
+                entry(
+                    "xgroup",
+                    &[],
+                    &["@slow"],
+                    vec![
+                        entry(
+                            "xgroup|destroy",
+                            &["write"],
+                            &["@write", "@stream", "@slow"],
+                            vec![],
+                        ),
+                        entry(
+                            "xgroup|delconsumer",
+                            &["write"],
+                            &["@write", "@stream", "@slow"],
+                            vec![],
+                        ),
+                    ],
+                ),
+                entry(
+                    "ft.dropindex",
+                    &["write", "module"],
+                    &["@write", "@slow", "@dangerous", "@search"],
+                    vec![],
+                ),
+                entry(
+                    "json.del",
+                    &["write", "module"],
+                    &["@write", "@json"],
+                    vec![],
                 ),
             ],
         ))
@@ -485,10 +597,13 @@ pub(crate) mod tests {
     #[case("BLPOP k 0", Some(StatementIntent::Write))]
     #[case("ACL SETUSER bob on", Some(StatementIntent::Grant))]
     #[case("ACL WHOAMI", Some(StatementIntent::Grant))]
+    // Dangerous writes whose reach the driver knows: proven, with their risk.
+    #[case("FLUSHALL", Some(StatementIntent::Write))]
+    #[case("FLUSHDB", Some(StatementIntent::Write))]
+    #[case("SWAPDB 0 1", Some(StatementIntent::Write))]
+    #[case("FT.DROPINDEX idx DD", Some(StatementIntent::Write))]
     // Nothing proven: these must never read as reads.
     #[case("KEYS *", None)]
-    #[case("FLUSHALL", None)]
-    #[case("FLUSHDB", None)]
     #[case("MIGRATE h 6379 k 0 5000", None)]
     #[case("SHUTDOWN NOSAVE", None)]
     #[case("CONFIG SET maxmemory 1", None)]
@@ -505,6 +620,67 @@ pub(crate) mod tests {
         #[case] expected: Option<StatementIntent>,
     ) {
         assert_eq!(intent(&redis_8_10(), &argv(line)), expected, "{line}");
+    }
+
+    #[rstest]
+    #[case("FLUSHALL", MutationRisk::Truncate)]
+    #[case("flushall async", MutationRisk::Truncate)]
+    #[case("FLUSHDB SYNC", MutationRisk::Truncate)]
+    #[case("SWAPDB 0 1", MutationRisk::UnboundedUpdate)]
+    #[case("FUNCTION FLUSH", MutationRisk::DropObject)]
+    #[case("FUNCTION DELETE mylib", MutationRisk::DropObject)]
+    #[case("FUNCTION RESTORE payload FLUSH", MutationRisk::DropObject)]
+    #[case("function restore payload flush", MutationRisk::DropObject)]
+    #[case("XGROUP DESTROY orders workers", MutationRisk::DropObject)]
+    #[case("ACL DELUSER bob", MutationRisk::DropObject)]
+    #[case("FT.DROPINDEX idx DD", MutationRisk::DropObject)]
+    fn a_write_that_reaches_everything_in_its_target_has_a_risk(
+        #[case] line: &str,
+        #[case] expected: MutationRisk,
+    ) {
+        assert_eq!(risk(&argv(line)), Some(expected), "{line}");
+        // The risk rides on an intent the gate counts as mutating, so the
+        // executor consults it (ADR-0066).
+        assert!(
+            matches!(
+                intent(&redis_8_10(), &argv(line)),
+                Some(StatementIntent::Write | StatementIntent::Grant)
+            ),
+            "{line}"
+        );
+    }
+
+    #[rstest]
+    #[case("DEL k")]
+    #[case("UNLINK a b c")]
+    #[case("SET k v")]
+    #[case("JSON.DEL k $")]
+    #[case("XGROUP DELCONSUMER orders workers w1")]
+    #[case("FUNCTION RESTORE payload APPEND")]
+    #[case("FUNCTION RESTORE payload")]
+    #[case("GET k")]
+    #[case("KEYS *")]
+    #[case("SCAN 0 MATCH *")]
+    #[case("FUNCTION")]
+    #[case("")]
+    fn a_bounded_write_or_a_read_has_none(#[case] line: &str) {
+        let words = if line.is_empty() {
+            Vec::new()
+        } else {
+            argv(line)
+        };
+        assert_eq!(risk(&words), None, "{line}");
+    }
+
+    #[test]
+    fn a_dangerous_write_without_a_known_reach_stays_unknown() {
+        // `MIGRATE` is `write` and `@dangerous`, but moves only the keys it
+        // names: no risk, so nothing proven either.
+        assert_eq!(risk(&argv("MIGRATE h 6379 k 0 5000")), None);
+        assert_eq!(
+            intent(&redis_8_10(), &argv("MIGRATE h 6379 k 0 5000")),
+            None
+        );
     }
 
     #[test]

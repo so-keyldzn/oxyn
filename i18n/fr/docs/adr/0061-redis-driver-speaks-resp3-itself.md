@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="cc1097f98bb4" -->
+<!-- oxyn-translation source="docs/adr/0061-redis-driver-speaks-resp3-itself.md" sha256="a6f09196c662" -->
 
 > Traduction française de [docs/adr/0061-redis-driver-speaks-resp3-itself.md](../../../../docs/adr/0061-redis-driver-speaks-resp3-itself.md). **La version anglaise fait foi.**
 
@@ -86,7 +86,9 @@ que fait un arrêt. Vérifié le 2026-10-22
    `@dangerous` est `Write` ; tout le reste — `@dangerous`, aucun drapeau, un
    script, un nom que le serveur ne connaît pas, un conteneur nommé sans
    sous-commande connue — ne prouve rien et vaut `Unknown`. Le driver répond
-   par `Session::classify_intent` (ADR-0064).
+   par `Session::classify_intent` (ADR-0064). Une exception à `@dangerous` :
+   un `write` dont le driver connaît la portée (point 15) est un `Write`, afin
+   que son risque soit consulté.
 4. **Ce qui change la connexion est refusé en console**, par la liste du driver
    lui-même — aucun drapeau ne le dit : `UNSUBSCRIBE` et sa famille, `SYNC`, `PSYNC`, `REPLCONF`, `HELLO`, `AUTH`, `SELECT` (le contexte de session
    choisit la base), `MULTI`/`EXEC`/`DISCARD`/`WATCH`/`UNWATCH`, `RESET`,
@@ -194,6 +196,24 @@ que fait un arrêt. Vérifié le 2026-10-22
     d'une écriture montrée avant l'écriture, aucune transaction sur laquelle
     s'appuyer. Ce qu'il envoie est classé par la table de commandes de la
     session, comme toute requête de console.
+15. **Une écriture qui atteint tout ce que contient sa cible porte un
+    risque** (`Session::classify_risk`, ADR-0066), d'après la liste du
+    driver — aucun drapeau ne le dit : `FLUSHALL` et `FLUSHDB` sont
+    `Truncate`, `SWAPDB` `UnboundedUpdate`, et `FUNCTION FLUSH`,
+    `FUNCTION DELETE`, `FUNCTION RESTORE … FLUSH`, `XGROUP DESTROY`,
+    `ACL DELUSER`, `FT.DROPINDEX` et `FT.DROP` sont `DropObject`. Un risque
+    n'est répondu que pour une requête que la table prouve mutante, jamais
+    pour une lecture. `FLUSHALL`, `FLUSHDB`, `SWAPDB` et `FT.DROPINDEX` sont
+    `write` et `@dangerous` : laissé `Unknown`, un `FLUSHALL` d'un humain sur
+    staging partirait en un clic ; une écriture `@dangerous` de cette liste est
+    donc un `Write`, et son risque demande une approbation sur tous les
+    environnements. Une clé nommée explicitement est bornée, si grande
+    soit-elle : `DEL`, `UNLINK` et `MIGRATE` ne portent aucun risque. Un
+    script n'en porte pas non plus — `EVAL` ne prouve aucune intention, reste
+    `Unknown` et son risque n'est jamais demandé, si bien qu'un
+    `redis.call('flushall')` à l'intérieur est confirmé comme une simple
+    écriture en production et part sur staging ; cette décision l'accepte, le
+    corps d'un script étant du code que le driver ne lit pas.
 
 ## Conséquences
 

@@ -36,7 +36,7 @@ use arrow::record_batch::RecordBatch;
 use oxyn_catalog::CatalogPath;
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, Environment, ErrorClass, ExecLimits, ExecRequest,
-    OxynError, PreviewShape, QueryLanguage, StatementIntent,
+    MutationRisk, OxynError, PreviewShape, QueryLanguage, StatementIntent,
 };
 use oxyn_driver::{Credentials, ParsedDsn, Session, SessionContext};
 
@@ -210,10 +210,12 @@ async fn the_intent_is_the_one_the_server_table_proves() {
     // as one, never a read.
     assert_eq!(intent("FUNCTION FLUSH"), Some(StatementIntent::Write));
     assert_eq!(intent("ACL SETUSER bob"), Some(StatementIntent::Grant));
+    // `write` and `@dangerous`, with a reach the driver knows: a write that
+    // carries its risk (ADR-0066).
+    assert_eq!(intent("FLUSHALL"), Some(StatementIntent::Write));
+    assert_eq!(intent("FLUSHDB"), Some(StatementIntent::Write));
     for unknown in [
         "KEYS *",
-        "FLUSHALL",
-        "FLUSHDB",
         "CONFIG SET maxmemory 1",
         "SHUTDOWN",
         "DEBUG SLEEP 0",
@@ -229,6 +231,50 @@ async fn the_intent_is_the_one_the_server_table_proves() {
         None,
         "only Redis commands"
     );
+}
+
+#[tokio::test]
+#[ignore = "needs OXYN_REDIS_TEST_URL"]
+async fn the_risk_is_answered_only_for_a_proven_write_that_reaches_everything() {
+    let Some(session) = clean().await else { return };
+    let request = |text: &str| ExecRequest::new(QueryLanguage::RedisCommand, text);
+    for (text, risk) in [
+        ("FLUSHALL", MutationRisk::Truncate),
+        ("FLUSHDB ASYNC", MutationRisk::Truncate),
+        ("SWAPDB 0 1", MutationRisk::UnboundedUpdate),
+        ("FUNCTION FLUSH", MutationRisk::DropObject),
+        ("FUNCTION DELETE lib", MutationRisk::DropObject),
+        ("XGROUP DESTROY s g", MutationRisk::DropObject),
+        ("ACL DELUSER bob", MutationRisk::DropObject),
+    ] {
+        assert_eq!(session.risk_of(&request(text)), Some(risk), "{text}");
+        // The risk always rides on an intent the gate counts as mutating.
+        assert!(
+            session
+                .intent_of(&request(text))
+                .is_some_and(|intent| intent != StatementIntent::Read),
+            "{text}"
+        );
+    }
+    // Valkey has no search module: the command is unknown there, hence
+    // `Unknown` with no risk, which still counts as mutating.
+    if session.intent_of(&request("FT.DROPINDEX idx")).is_some() {
+        assert_eq!(
+            session.risk_of(&request("FT.DROPINDEX idx DD")),
+            Some(MutationRisk::DropObject)
+        );
+    }
+    for bounded in [
+        "DEL k",
+        "UNLINK a b c",
+        "SET k v",
+        "XGROUP DELCONSUMER s g c",
+        "GET k",
+        "KEYS *",
+        "EVAL \"return redis.call('flushall')\" 0",
+    ] {
+        assert_eq!(session.risk_of(&request(bounded)), None, "{bounded}");
+    }
 }
 
 #[tokio::test]
