@@ -204,6 +204,9 @@ pub enum MongoParseError {
         /// The literal as typed.
         literal: String,
     },
+    /// Explain was asked for a command that is already an `explain`.
+    #[error("this command is already an explain; run it as it is")]
+    NotExplainable,
 }
 
 /// One database command, read from the console text.
@@ -595,8 +598,10 @@ fn is_one(value: Option<&JsonValue>) -> bool {
     }
 }
 
+mod explain;
 mod request;
 
+pub use explain::explain;
 pub use request::command_at;
 
 #[cfg(test)]

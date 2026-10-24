@@ -47,6 +47,16 @@ pub enum QueryError {
         /// The refused language.
         language: QueryLanguage,
     },
+
+    /// The text does not read as a request of a language that is not SQL,
+    /// which a module of this crate reads (a MongoDB command, for example).
+    #[error("this {language} request cannot be read: {message}")]
+    Request {
+        /// The language the text was read in.
+        language: QueryLanguage,
+        /// The language module's reason.
+        message: String,
+    },
 }
 
 impl From<QueryError> for OxynError {

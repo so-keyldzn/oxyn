@@ -45,6 +45,9 @@ pub const fn base_capabilities() -> Capabilities {
         .union(Capabilities::SCHEMAS)
         .union(Capabilities::TABLES)
         .union(Capabilities::OBJECT_DEFINITION)
+        // The `queryPlanner` verbosity only: `EXPLAIN_ANALYZE` would be
+        // `executionStats`, which runs the plan.
+        .union(Capabilities::EXPLAIN)
         .union(Capabilities::DOCUMENT)
         .union(Capabilities::SCHEMALESS)
         .union(Capabilities::INFERRED_SCHEMA)

@@ -76,6 +76,28 @@ pub fn current_request(
     }
 }
 
+/// The request that asks for the plan of `text`, in a language that is not
+/// SQL, without running it.
+///
+/// SQL has its own path (the dialect's `EXPLAIN`). A language whose plan a
+/// module of this crate can ask for gets **one** arm, pointing at that module;
+/// every other language keeps the refusal.
+///
+/// # Errors
+/// The language module's reading error, or
+/// [`QueryError::UnsupportedLanguage`] for a language without an arm.
+pub fn explain_request(text: &str, language: QueryLanguage) -> Result<String, QueryError> {
+    match language {
+        QueryLanguage::MongoQuery => {
+            crate::mongo::explain(text).map_err(|error| QueryError::Request {
+                language,
+                message: error.to_string(),
+            })
+        }
+        language => Err(QueryError::UnsupportedLanguage { language }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +178,24 @@ mod tests {
         assert_eq!(
             current_request(text, QueryLanguage::MongoQuery, 2),
             Ok(Some("{\"find\": \"users\"}"))
+        );
+    }
+
+    #[test]
+    fn a_mongodb_command_is_explained_by_the_planner_only() {
+        let explained = explain_request(r#"{"find": "users"}"#, QueryLanguage::MongoQuery)
+            .expect("explainable");
+        assert!(explained.starts_with(r#"{"explain": {"find": "users"}"#));
+        assert!(explained.contains(r#""verbosity": "queryPlanner""#));
+        assert!(matches!(
+            explain_request("db.users.find()", QueryLanguage::MongoQuery),
+            Err(QueryError::Request { .. })
+        ));
+        assert_eq!(
+            explain_request("GET a", QueryLanguage::RedisCommand),
+            Err(QueryError::UnsupportedLanguage {
+                language: QueryLanguage::RedisCommand
+            })
         );
     }
 

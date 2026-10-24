@@ -34,7 +34,7 @@ fn the_ceiling_declares_nothing_the_driver_does_not_do() {
         Capabilities::TRANSACTIONS,
         Capabilities::MULTIPLE_STATEMENTS,
         Capabilities::PREVIEW_FILTER,
-        Capabilities::EXPLAIN,
+        Capabilities::EXPLAIN_ANALYZE,
         Capabilities::TRUNCATE,
     ] {
         assert!(!ceiling.contains(absent), "{absent:?}");

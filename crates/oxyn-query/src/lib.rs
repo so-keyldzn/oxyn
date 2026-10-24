@@ -74,7 +74,7 @@ pub use classify::{
     Basis, Classification, StatementInfo, changes_context, classify, classify_language,
     only_controls_transactions, reclassify, runnable_text, validate,
 };
-pub use console::{console_language, current_request};
+pub use console::{console_language, current_request, explain_request};
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;
 pub use format::{FormatReport, format, format_report};

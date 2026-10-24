@@ -803,6 +803,55 @@ async fn a_read_only_account_is_declared_read_only_and_the_server_refuses_its_wr
 
 #[tokio::test]
 #[ignore = "needs a MongoDB server: see the module documentation"]
+async fn explain_returns_the_plan_and_never_runs_the_command() {
+    // The console's Explain wraps the command with the `queryPlanner`
+    // verbosity: the plan of a delete of every document comes back, and
+    // every document is still there.
+    let Some(session) = session().await else {
+        return;
+    };
+    assert!(session.capabilities().contains(Capabilities::EXPLAIN));
+    let database = database(&*session, "explain").await;
+    insert(
+        &*session,
+        &database,
+        "c",
+        r#"[{"_id": 1}, {"_id": 2}, {"_id": 3}]"#,
+    )
+    .await;
+    let explained = oxyn_query::explain_request(
+        &format!(
+            r#"{{"delete": "c", "$db": "{database}", "deletes": [{{"q": {{}}, "limit": 0}}]}}"#
+        ),
+        LANGUAGE,
+    )
+    .expect("explainable");
+    let plan = run(&*session, explained).await.expect("the plan");
+    assert!(
+        plan.iter().any(|reply| reply.contains("queryPlanner")),
+        "{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|reply| reply.contains("executionStats")),
+        "{plan:?}"
+    );
+    let left = run(
+        &*session,
+        format!(r#"{{"count": "c", "$db": "{database}"}}"#),
+    )
+    .await
+    .expect("count");
+    assert!(
+        left.iter()
+            .any(|reply| reply.contains(r#""n":{"$numberInt":"3"}"#)),
+        "{left:?}"
+    );
+    drop_database(&*session, &database).await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MongoDB server: see the module documentation"]
 async fn the_context_chooses_the_database_and_no_transaction_is_pretended() {
     let Some(session) = session().await else {
         return;
