@@ -48,6 +48,9 @@ export function operationOffer(
   // No session to read them from: the entry stays, greyed, as on a sibling
   // whose session is known.
   if (capabilities === null) return { state: "greyed", reason: NOT_KNOWN }
+  // The statement is SQL: an Elasticsearch alias is a view of the catalog,
+  // and `DROP VIEW` means nothing to its cluster.
+  if (!capabilities.includes("SQL")) return { state: "absent" }
   if (!capabilities.includes("DDL")) return { state: "greyed", reason: NO_DDL }
   if (operation === "truncate" && !capabilities.includes("TRUNCATE"))
     return { state: "greyed", reason: NO_TRUNCATE }

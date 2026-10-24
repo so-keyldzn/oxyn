@@ -281,12 +281,13 @@ fn a_rename_needs_a_new_name_that_differs() {
 
 #[test]
 fn availability_follows_declared_capabilities_never_the_product() {
-    let postgres = Capabilities::DDL
+    let postgres = Capabilities::SQL
+        | Capabilities::DDL
         | Capabilities::TRUNCATE
         | Capabilities::TRANSACTIONAL_DDL
         | Capabilities::RESTRICT_DEPENDENTS;
-    let sqlite = Capabilities::DDL | Capabilities::TRANSACTIONAL_DDL;
-    let read_only = Capabilities::TRANSACTIONAL_DDL;
+    let sqlite = Capabilities::SQL | Capabilities::DDL | Capabilities::TRANSACTIONAL_DDL;
+    let read_only = Capabilities::SQL | Capabilities::TRANSACTIONAL_DDL;
     for operation in [
         OperationKind::Drop,
         OperationKind::Truncate,
@@ -317,6 +318,12 @@ fn availability_follows_declared_capabilities_never_the_product() {
     assert!(unavailable(OperationKind::Truncate, RelationKind::View, postgres).is_some());
     assert!(unavailable(OperationKind::Rename, RelationKind::View, postgres).is_some());
     assert!(unavailable(OperationKind::Drop, RelationKind::Function, postgres).is_some());
+    // An Elasticsearch alias is a view of the catalog, and its session
+    // accepts changes, but not in SQL: no `DROP VIEW` is composed for it.
+    let elasticsearch = Capabilities::SEARCH_DSL | Capabilities::DDL;
+    for kind in [RelationKind::View, RelationKind::Index, RelationKind::Table] {
+        assert!(unavailable(OperationKind::Drop, kind, elasticsearch).is_some());
+    }
 }
 
 #[test]

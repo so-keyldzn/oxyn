@@ -72,7 +72,9 @@ pub(crate) fn unavailable(
         ),
         OperationKind::Truncate | OperationKind::Rename => kind == RelationKind::Table,
     };
-    if !applies {
+    // The statement is SQL: a session that speaks another language would get
+    // `DROP VIEW` for an Elasticsearch alias.
+    if !applies || !capabilities.contains(Capabilities::SQL) {
         return Some("This operation does not apply to this kind of object.");
     }
     if !capabilities.contains(Capabilities::DDL) {

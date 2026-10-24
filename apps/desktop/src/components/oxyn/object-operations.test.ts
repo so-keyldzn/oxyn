@@ -65,6 +65,17 @@ describe("object operations offered from the catalog", () => {
     expect(operationOffer("drop", schema, POSTGRES).state).toBe("absent")
   })
 
+  it("offers no SQL statement to a session that speaks another language", () => {
+    // An Elasticsearch alias is a view of the catalog: `DROP VIEW` would be
+    // composed for a cluster that cannot read it.
+    const ELASTICSEARCH = ["SEARCH_DSL", "DDL", "DML"]
+    for (const kind of ["table", "view"])
+      for (const operation of ["drop", "truncate", "rename"] as const)
+        expect(
+          operationOffer(operation, node("logs", kind), ELASTICSEARCH)
+        ).toEqual({ state: "absent" })
+  })
+
   it("greys a name holding control characters, in any segment", () => {
     for (const name of [
       "a\nb",
