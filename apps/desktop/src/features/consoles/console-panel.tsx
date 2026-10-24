@@ -194,6 +194,11 @@ export function ConsolePanel({
   // (`oxyn_query::console_language`).
   const language = queryLanguageOf(capabilities)
   const canRun = language !== null && !doc.closing
+  const canExplain = capabilities.includes("EXPLAIN")
+  // Only SQL binds values: another language's command carries its own, and
+  // its driver refuses bound parameters. Without a session, the console is
+  // read as SQL, like its editor.
+  const bindsValues = (language ?? "sql") === "sql"
   // The last state the session reported — never one guessed from a `BEGIN`
   // being submitted (ADR-0039 §5).
   const declaresTransactions = capabilities.includes("TRANSACTIONS")
@@ -221,6 +226,7 @@ export function ConsolePanel({
   const run = async (runTarget: RunTarget, explain = false) => {
     // A double click submits once: the parameter check awaits before start.
     if (!canRun || execution.running || submitting.current) return
+    if (explain && !canExplain) return
     submitting.current = true
     try {
       await submit(runTarget, explain)
@@ -649,6 +655,7 @@ export function ConsolePanel({
     active
       ? {
           canRun,
+          canExplain,
           running: execution.running,
           cancelling: execution.cancelling,
           writing: doc.saveState.status === "saving" || doc.closing,
@@ -672,13 +679,14 @@ export function ConsolePanel({
             cancelling={execution.cancelling}
             elapsedMs={elapsedMs}
             canRun={canRun}
+            canExplain={canExplain}
             readOnly={session?.readOnly ?? false}
             target={target}
             onRun={() => void run(targetNow())}
             onRunAll={() => void run({ kind: "all" })}
             onExplain={() => void run(targetNow(), true)}
             onCancel={execution.cancel}
-            parameterCount={rows.length}
+            parameterCount={bindsValues ? rows.length : null}
             parametersOpen={parametersOpen}
             onToggleParameters={() => setParametersOpen((value) => !value)}
             title={doc.title}
@@ -696,6 +704,9 @@ export function ConsolePanel({
               withContext ? (
                 <SessionContextPicker
                   connectionName={open.name}
+                  level={
+                    capabilities.includes("DOCUMENT") ? "database" : "schema"
+                  }
                   choices={choices.data ?? [{ catalog: null, namespace: null }]}
                   state={context}
                   onChoose={chooseContext}
@@ -732,7 +743,7 @@ export function ConsolePanel({
         notice={notice}
         draftNotice={doc.draftNotice}
         parameters={
-          parametersOpen ? (
+          parametersOpen && bindsValues ? (
             <ParameterEditor
               rows={rows}
               onChange={(next) => {

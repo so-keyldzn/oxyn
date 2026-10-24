@@ -6,6 +6,7 @@ import {
   Cancel01Icon,
   CodeIcon,
   DashboardSquare01Icon,
+  Files01Icon,
   Layers01Icon,
   TableIcon,
   ViewIcon,
@@ -61,6 +62,8 @@ function iconOf(tab: WorkspaceTabItem): IconSvgElement {
   if (tab.kind === "console") return CodeIcon
   if (tab.kind === "result") return DashboardSquare01Icon
   if (tab.objectKind.includes("view")) return ViewIcon
+  // The catalog tree's icon for the same kind: a document collection.
+  if (tab.objectKind === "collection") return Files01Icon
   return tab.objectKind === "table" ? TableIcon : Layers01Icon
 }
 

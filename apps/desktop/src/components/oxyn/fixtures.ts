@@ -514,6 +514,7 @@ export const invoicesDetail: RelationDetail = {
       default: "nextval('invoices_id_seq')",
       comment: null,
       primaryKey: true,
+      inferred: false,
     },
     {
       name: "customer_id",
@@ -524,6 +525,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: "References customers.id",
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "amount",
@@ -534,6 +536,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "issued_at",
@@ -544,6 +547,7 @@ export const invoicesDetail: RelationDetail = {
       default: "now()",
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "paid_at",
@@ -554,6 +558,7 @@ export const invoicesDetail: RelationDetail = {
       default: null,
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
   ],
 }

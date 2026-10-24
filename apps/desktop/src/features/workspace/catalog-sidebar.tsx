@@ -274,6 +274,7 @@ export function CatalogSidebar({
         }}
         copyAs={{
           definition: hasCapability(open, "OBJECT_DEFINITION"),
+          sql: hasCapability(open, "SQL"),
           onCopy: copies.copyAs,
         }}
         onNewConsole={

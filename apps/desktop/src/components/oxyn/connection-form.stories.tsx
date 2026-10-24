@@ -513,6 +513,21 @@ export const MongoDB: Story = {
   },
 }
 
+/**
+ * MongoDB's files are certificates: their fields name no database file, the
+ * label and the help say what each one holds.
+ */
+export const MongoDBCertificateFiles: Story = {
+  args: { driver: mongodbDriver },
+  play: async ({ canvas }) => {
+    for (const label of [/^CA file/, /^Client certificate/]) {
+      const field = canvas.getByLabelText(label)
+      await expect(field).toHaveAttribute("placeholder", "/path/to/file")
+      await expect(field).toHaveAccessibleDescription(/PEM/)
+    }
+  },
+}
+
 /** A saved MongoDB connection: its stored password is never pre-filled. */
 export const MongoDBEditing: Story = {
   args: {

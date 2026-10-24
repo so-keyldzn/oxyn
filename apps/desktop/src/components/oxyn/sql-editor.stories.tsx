@@ -107,7 +107,13 @@ function InConsole({ children }: { children: React.ReactNode }) {
   const nothing = () => undefined
   useActionSource(
     "console",
-    { canRun: true, running: false, cancelling: false, writing: false },
+    {
+      canRun: true,
+      canExplain: true,
+      running: false,
+      cancelling: false,
+      writing: false,
+    },
     {
       run: nothing,
       runAll: nothing,

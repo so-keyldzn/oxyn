@@ -9,6 +9,7 @@ import { centerOf, pressAndMove, release } from "./pointer-drag-fixtures"
 import { missingModuleTable, virtualCatalog } from "./virtual-table-fixtures"
 import {
   HOSTILE,
+  documentCatalog,
   hostileAddress,
   hugeCatalog,
   invoicesAddress,
@@ -500,7 +501,7 @@ export const PinForAnExternalAgent: Story = {
 export const CopyAs: Story = {
   args: {
     onCopyName: fn(),
-    copyAs: { definition: false, onCopy: fn() },
+    copyAs: { definition: false, sql: true, onCopy: fn() },
   },
   play: async ({ canvas, args }) => {
     const menu = await openInvoicesMenu(canvas)
@@ -520,6 +521,44 @@ export const CopyAs: Story = {
 }
 
 /**
+ * A document store: databases hold collections, each with its own icon, and
+ * `Copy as ▸` keeps what is not SQL — the name as its console writes it, and
+ * the definition the session reads. `SELECT *` and `INSERT template` are
+ * absent: the session declares no `SQL`.
+ */
+export const DocumentCollections: Story = {
+  args: {
+    nodes: documentCatalog,
+    onCopyName: fn(),
+    copyAs: { definition: true, sql: false, onCopy: fn() },
+  },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("shop"))
+    await expect(canvas.getByText("orders")).toBeVisible()
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("orders"),
+    })
+    const menu = within(document.body)
+    await userEvent.click(
+      await menu.findByRole("menuitem", { name: /Copy as/ })
+    )
+    await menu.findByRole("menuitem", { name: "Quoted name" })
+    await expect(menu.getByRole("menuitem", { name: /^DDL/ })).toBeEnabled()
+    await expect(menu.queryByRole("menuitem", { name: "SELECT *" })).toBeNull()
+    await expect(
+      menu.queryByRole("menuitem", { name: "INSERT template" })
+    ).toBeNull()
+    await userEvent.click(menu.getByRole("menuitem", { name: "Quoted name" }))
+    await expect(args.copyAs?.onCopy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "orders", kind: "collection" }),
+      "quotedName"
+    )
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
+/**
  * Two relations of the same kind offer the same menu: what an entry depends
  * on is the tree's handlers and the node's kind, never which sibling was
  * right-clicked or whether its level was read.
@@ -529,7 +568,7 @@ export const SiblingTablesShareTheirMenu: Story = {
     onOpen: fn(),
     onCopyName: fn(),
     onRefresh: fn(),
-    copyAs: { definition: true, onCopy: fn() },
+    copyAs: { definition: true, sql: true, onCopy: fn() },
     operations: {
       capabilities: ["SQL", "DDL", "TRUNCATE"],
       onOperation: fn(),

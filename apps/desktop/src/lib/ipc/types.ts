@@ -331,6 +331,7 @@ export const RelationField = z.object({
   default: z.string().nullable(),
   comment: z.string().nullable(),
   primaryKey: z.boolean(),
+  inferred: z.boolean(),
 })
 export type RelationField = z.infer<typeof RelationField>
 

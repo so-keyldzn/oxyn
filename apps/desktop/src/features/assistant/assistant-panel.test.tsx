@@ -146,6 +146,7 @@ const request: SampleRequest = {
       default: null,
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
   ],
 }

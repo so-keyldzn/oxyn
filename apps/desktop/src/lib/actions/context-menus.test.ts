@@ -71,6 +71,7 @@ describe("context menus", () => {
       console: {
         state: {
           canRun: true,
+          canExplain: true,
           running: false,
           cancelling: false,
           writing: false,
@@ -182,6 +183,7 @@ describe("context menus", () => {
           selectedRows: 1,
           oneColumn: true,
           relation: false,
+          sql: true,
           loadedRows: 10,
           shownColumns: 3,
           ai: { kind: "none" },
@@ -206,6 +208,69 @@ describe("context menus", () => {
     })
     // No AI destination: Send to assistant does not exist.
     expect(reason("grid.sendToAssistant")).toBeUndefined()
+  })
+
+  it("offer no SQL copy of rows from a session that does not speak SQL", () => {
+    const sources: ActionSources = {
+      grid: {
+        state: {
+          target: "cell",
+          origin: "preview",
+          filterable: false,
+          sortable: true,
+          selectedRows: 2,
+          oneColumn: true,
+          relation: true,
+          sql: false,
+          loadedRows: 10,
+          shownColumns: 3,
+          ai: { kind: "none" },
+        },
+        actions: { copyRows: nothing, copyValue: nothing },
+      },
+    }
+    const ids = menuRows("gridCell", contextWith(sources))
+      .flat()
+      .flatMap((row) => (row.kind === "entry" ? [row.entry] : row.entries))
+      .map((entry) => entry.id)
+    expect(ids).not.toContain("grid.copyRows.insert")
+    expect(ids).not.toContain("grid.copyRows.inList")
+    // The formats that are not SQL stay.
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "grid.copyValue",
+        "grid.copyRows.tsv",
+        "grid.copyRows.json",
+      ])
+    )
+  })
+
+  it("offer only the name and the definition of a relation without SQL", () => {
+    const sources: ActionSources = {
+      catalogNode: {
+        state: {
+          relation: true,
+          holdsRecords: true,
+          schemaContext: false,
+          definition: true,
+          sql: false,
+          expanded: false,
+          pin: "absent",
+        },
+        actions: { copyAs: nothing, copyQualifiedName: nothing },
+      },
+    }
+    const states = new Map(
+      menuRows("catalog", contextWith(sources))
+        .flat()
+        .flatMap((row) => (row.kind === "entry" ? [row.entry] : row.entries))
+        .map((entry) => [entry.id, entry.state])
+    )
+    expect(states.has("catalog.copyAs.selectAll")).toBe(false)
+    expect(states.has("catalog.copyAs.insertTemplate")).toBe(false)
+    expect(states.get("catalog.copyAs.quotedName")).toBe(true)
+    expect(states.get("catalog.copyAs.ddl")).toBe(true)
+    expect(states.get("catalog.copyQualifiedName")).toBe(true)
   })
 
   it("never lose an entry because its surface left the handler out", () => {
@@ -237,6 +302,7 @@ describe("context menus", () => {
               holdsRecords: true,
               schemaContext: false,
               definition: true,
+              sql: true,
               expanded: true,
               pin: true,
             },
@@ -287,6 +353,7 @@ describe("context menus", () => {
               selectedRows: 2,
               oneColumn: true,
               relation: true,
+              sql: true,
               loadedRows: 10,
               shownColumns: 3,
               ai: { kind: "sampled" },
@@ -304,6 +371,7 @@ describe("context menus", () => {
               selectedRows: 0,
               oneColumn: true,
               relation: true,
+              sql: true,
               loadedRows: 10,
               shownColumns: 3,
               ai: { kind: "none" },

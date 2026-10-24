@@ -206,6 +206,29 @@ const catalogNamespace = (
   ...overrides,
 })
 
+/**
+ * A document store's catalog: its databases are the namespaces, its
+ * collections and views the relations.
+ */
+export const documentCatalog: Array<CatalogNode> = [
+  catalogNamespace(
+    "shop",
+    [
+      catalogRelation("shop", "orders", "collection"),
+      catalogRelation("shop", "customers", "collection"),
+      catalogRelation("shop", "open_orders", "view"),
+    ].map((node) => ({
+      ...node,
+      address: { ...node.address, catalog: null },
+    })),
+    { address: { catalog: null, namespace: "shop", relation: null } }
+  ),
+  catalogNamespace("audit", [], {
+    address: { catalog: null, namespace: "audit", relation: null },
+    loaded: false,
+  }),
+]
+
 /** One schema of 5 000 relations: the tree renders the visible rows only. */
 export const hugeCatalog: Array<CatalogNode> = [
   catalogNamespace(
@@ -256,6 +279,33 @@ export const wideDetail: RelationDetail = {
     default: null,
     comment: index % 100 === 0 ? `Calibrated batch ${index / 100}` : null,
     primaryKey: index === 0,
+    inferred: false,
+  })),
+}
+
+/**
+ * A document collection: the server declares no field, the driver read them
+ * from a sample, and says so on each one.
+ */
+export const collectionDetail: RelationDetail = {
+  name: "orders",
+  kind: "collection",
+  comment: "fields inferred from 100 documents",
+  estimatedRows: 48_210,
+  sizeBytes: null,
+  fields: [
+    { name: "_id", rawType: "objectId", logicalType: "string" },
+    { name: "customer", rawType: "string", logicalType: "string" },
+    { name: "total", rawType: "decimal", logicalType: "decimal" },
+    { name: "lines", rawType: "array", logicalType: "json" },
+  ].map((field, position) => ({
+    ...field,
+    position,
+    nullable: position !== 0,
+    default: null,
+    comment: null,
+    primaryKey: position === 0,
+    inferred: true,
   })),
 }
 
@@ -275,6 +325,7 @@ export const unusualDetail: RelationDetail = {
       default: "'--'::text",
       comment: null,
       primaryKey: false,
+      inferred: false,
     },
     {
       name: "اسم_العميل",
@@ -285,6 +336,7 @@ export const unusualDetail: RelationDetail = {
       default: null,
       comment: "الاسم الكامل",
       primaryKey: false,
+      inferred: false,
     },
   ],
 }
