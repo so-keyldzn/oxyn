@@ -7771,6 +7771,7 @@ dependencies = [
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-driver-mongodb",
  "oxyn-driver-mysql",
  "oxyn-driver-postgres",
  "oxyn-driver-sqlite",
