@@ -32,7 +32,9 @@
 //! ([I-03](../../../CLAUDE.md#i-03)): `open` replaces it before the message
 //! leaves this crate.
 
-use oxyn_core::{DriverId, ErrorClass, OxynError};
+use std::fmt::Write as _;
+
+use oxyn_core::{DriverId, ErrorClass, OxynError, ScalarValue};
 
 /// The exception type DuckDB named in its message.
 ///
@@ -209,6 +211,37 @@ pub enum DuckDbError {
          belong to; run the statement alone"
     )]
     ParametersWithBatch,
+    /// An `ATTACH` of a file open as another Oxyn connection.
+    #[error(
+        "this file is open as an Oxyn connection: attaching it would put a second DuckDB \
+         engine on it in this process, which DuckDB's file lock does not see; query that \
+         connection instead"
+    )]
+    OpenAsConnection,
+    /// Opening a file another connection's engine has attached.
+    #[error(
+        "this file is attached by another open DuckDB connection: opening it would put a \
+         second engine on it in this process, which DuckDB's file lock does not see; DETACH \
+         it there first"
+    )]
+    AttachedElsewhere,
+    /// An `ATTACH` whose file Oxyn cannot read from the statement.
+    #[error(
+        "write the file of an ATTACH as a plain string literal ('…'): Oxyn reads it to keep \
+         one engine per file"
+    )]
+    AttachTargetUnread,
+    /// A catalog listing past what Oxyn keeps of a connection's metadata.
+    #[error(
+        "this DuckDB file lists more than {rows} objects or {bytes} bytes of metadata in one \
+         place, past what Oxyn keeps of a connection's catalog; query it from a console"
+    )]
+    MetadataTooLarge {
+        /// The row ceiling.
+        rows: usize,
+        /// The byte ceiling.
+        bytes: usize,
+    },
     /// The carrier thread that owns the connection is gone.
     #[error("the DuckDB session is closed")]
     Closed,
@@ -256,13 +289,90 @@ pub(crate) fn redact_on_this_thread(path: &str, shown: &'static str) {
     });
 }
 
+/// What replaces a bound value in an engine message.
+const BOUND_SHOWN: &str = "<bound value>";
+
+/// A bound value shorter than this is left in messages: replacing `1` or
+/// `ab` would garble the message around it, and so short a value guards
+/// nothing.
+const SHORTEST_HIDDEN: usize = 4;
+
+thread_local! {
+    /// The bound values of the execution running on this thread, as DuckDB
+    /// prints them, longest first.
+    static BOUND: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Hides the bound values of an execution from the engine messages the
+/// calling thread converts, until the guard drops.
+///
+/// A unique-key violation prints the duplicate key — `Duplicate key "token:
+/// s3cr3t"` — and a conversion error the text it could not read: a token or
+/// a password bound as a value would reach the error shown and the journal
+/// ([I-03](../../../CLAUDE.md#i-03)). Text, decimals, UUIDs, JSON and bytes
+/// are hidden; numbers, dates and booleans are left, as they read.
+pub(crate) fn hide_bound_values(values: &[ScalarValue]) -> BoundValuesHidden {
+    let mut shown: Vec<String> = values
+        .iter()
+        .flat_map(printed_forms)
+        .filter(|text| text.chars().count() >= SHORTEST_HIDDEN)
+        .collect();
+    shown.sort_by_key(|text| std::cmp::Reverse(text.len()));
+    shown.dedup();
+    BOUND.with(|bound| *bound.borrow_mut() = shown);
+    BoundValuesHidden(())
+}
+
+/// Clears the bound values of an execution when it ends.
+pub(crate) struct BoundValuesHidden(());
+
+impl Drop for BoundValuesHidden {
+    fn drop(&mut self) {
+        BOUND.with(|bound| bound.borrow_mut().clear());
+    }
+}
+
+/// How DuckDB may print a value in a message.
+fn printed_forms(value: &ScalarValue) -> Vec<String> {
+    match value {
+        ScalarValue::Text(text) | ScalarValue::Decimal(text) => vec![text.clone()],
+        ScalarValue::Uuid(uuid) => vec![uuid.hyphenated().to_string()],
+        ScalarValue::Json(document) => vec![document.to_string()],
+        ScalarValue::Bytes(bytes) => {
+            // DuckDB prints a BLOB with `\xHH` for every byte outside
+            // printable ASCII and for `\`, `'` and `"` (`Blob::ToString`,
+            // `src/common/types/blob.cpp`, v1.5.6).
+            let mut escaped = String::with_capacity(bytes.len());
+            for &byte in bytes {
+                if (0x20..=0x7e).contains(&byte) && !matches!(byte, b'\\' | b'\'' | b'"') {
+                    escaped.push(char::from(byte));
+                } else {
+                    let _ = write!(escaped, "\\x{byte:02X}");
+                }
+            }
+            let mut forms = vec![escaped];
+            if let Ok(text) = std::str::from_utf8(bytes) {
+                forms.push(text.to_owned());
+            }
+            forms
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// DuckDB's message for an error, or the rendering of a `duckdb-rs` error,
-/// without the paths of the connection ([I-03](../../../CLAUDE.md#i-03)).
+/// without the paths of the connection nor the bound values of the
+/// execution ([I-03](../../../CLAUDE.md#i-03)).
 fn message_of(error: &duckdb::Error) -> String {
     let message = match error {
         duckdb::Error::DuckDBFailure(_, Some(message)) => message.clone(),
         other => other.to_string(),
     };
+    let message = BOUND.with(|bound| {
+        bound.borrow().iter().fold(message, |message, value| {
+            message.replace(value.as_str(), BOUND_SHOWN)
+        })
+    });
     REDACTED.with(|redacted| {
         redacted
             .borrow()

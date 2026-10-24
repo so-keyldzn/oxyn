@@ -90,11 +90,33 @@ impl Row<'_> {
     }
 }
 
-/// Runs one of the driver's read queries, values bound, and reads it whole.
+/// The most rows one of the driver's queries reads: the catalog cache keeps
+/// 50,000 metadata objects per connection (PERFORMANCE.md, memory budgets),
+/// and a listing past it would be evicted as soon as read.
+pub(crate) const MAX_ROWS: usize = 50_000;
+
+/// The most bytes one of the driver's queries reads, definitions included.
+pub(crate) const MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Runs one of the driver's read queries, values bound, and reads it whole —
+/// up to [`MAX_ROWS`] and [`MAX_BYTES`]: a file of a million tables must fail
+/// to expand, not exhaust the application's memory ([I-06](../../../CLAUDE.md#i-06)).
 ///
 /// # Errors
-/// The engine's, classified as a read, or a conversion error.
+/// The engine's, classified as a read, a conversion error, or
+/// [`DuckDbError::MetadataTooLarge`] past the ceilings.
 pub(crate) fn read(connection: &Connection, sql: &str, params: &[Value]) -> Result<Table> {
+    read_within(connection, sql, params, MAX_ROWS, MAX_BYTES)
+}
+
+/// [`read`], with explicit ceilings.
+fn read_within(
+    connection: &Connection,
+    sql: &str,
+    params: &[Value],
+    max_rows: usize,
+    max_bytes: usize,
+) -> Result<Table> {
     let engine = |err: duckdb::Error| error::engine(&err, Effect::ReadOnly);
     let mut statement = connection.prepare(sql).map_err(engine)?;
     if statement.parameter_count() != params.len() {
@@ -119,10 +141,60 @@ pub(crate) fn read(connection: &Connection, sql: &str, params: &[Value]) -> Resu
         |message: String| error::driver(DuckDbError::Decode(message), ErrorClass::Permanent);
     let schema = convert::target_schema(&source, &types).map_err(decode)?;
     let mut table = Table::default();
+    let (mut rows, mut bytes) = (0_usize, 0_usize);
     while let Some(chunk) = statement.step().map_err(engine)? {
-        table
-            .batches
-            .push(convert::convert_chunk(&chunk, &schema, &types).map_err(decode)?);
+        let batch = convert::convert_chunk(&chunk, &schema, &types).map_err(decode)?;
+        rows = rows.saturating_add(batch.num_rows());
+        bytes = bytes.saturating_add(batch.get_array_memory_size());
+        if rows > max_rows || bytes > max_bytes {
+            // Dropping the statement ends the query; nothing read is kept.
+            return Err(error::driver(
+                DuckDbError::MetadataTooLarge {
+                    rows: max_rows,
+                    bytes: max_bytes,
+                },
+                ErrorClass::Permanent,
+            ));
+        }
+        table.batches.push(batch);
     }
     Ok(table)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_listing_past_the_ceiling_fails_instead_of_growing() {
+        let connection = Connection::open_in_memory().expect("an in-memory engine");
+        let within = read_within(
+            &connection,
+            "SELECT i FROM range(100) t(i)",
+            &[],
+            100,
+            MAX_BYTES,
+        )
+        .expect("exactly the ceiling");
+        assert_eq!(within.len(), 100);
+        let past = read_within(
+            &connection,
+            "SELECT i FROM range(101) t(i)",
+            &[],
+            100,
+            MAX_BYTES,
+        )
+        .expect_err("one row past the ceiling");
+        assert_eq!(past.class(), ErrorClass::Permanent);
+        assert!(past.to_string().contains("more than 100 objects"), "{past}");
+        let heavy = read_within(
+            &connection,
+            "SELECT repeat('x', 4096) FROM range(64)",
+            &[],
+            MAX_ROWS,
+            64 * 1024,
+        )
+        .expect_err("bytes past the ceiling");
+        assert_eq!(heavy.class(), ErrorClass::Permanent);
+    }
 }

@@ -131,6 +131,77 @@ pub(crate) fn convert_chunk(
     RecordBatch::try_new(Arc::clone(schema), converted).map_err(|err| err.to_string())
 }
 
+/// The row ranges a DuckDB chunk is copied, converted and sent in, in order.
+///
+/// Measured on DuckDB's own Arrow before any copy: a chunk of 2,048
+/// one-megabyte BLOBs must not be copied whole — two gigabytes — to be split
+/// afterwards. Each range, sliced, weighs at most the byte bound, holds at
+/// most the row bound, or is one row. As in [`bounded`], a range whose halves
+/// copy more than they free — the values of a dictionary, shared by every
+/// slice — stops being split for its bytes.
+pub(crate) fn row_ranges(
+    chunk: &a58::array::StructArray,
+    limits: BatchLimits,
+) -> Vec<(usize, usize)> {
+    use a58::array::Array as _;
+    let mut done = Vec::new();
+    let mut pending = vec![(0, chunk.len())];
+    while let Some((start, len)) = pending.pop() {
+        let bytes = slice_bytes(chunk, start, len);
+        let over_rows = len > limits.max_rows();
+        if len < 2 || !(over_rows || bytes > limits.max_bytes()) {
+            done.push((start, len));
+            continue;
+        }
+        let half = len / 2;
+        let halves = slice_bytes(chunk, start, half).saturating_add(slice_bytes(
+            chunk,
+            start + half,
+            len - half,
+        ));
+        if !over_rows && halves.saturating_mul(2) > bytes.saturating_mul(3) {
+            done.push((start, len));
+            continue;
+        }
+        pending.push((start + half, len - half));
+        pending.push((start, half));
+    }
+    done
+}
+
+/// The bytes rows `start..start + len` of a chunk point to; unmeasurable
+/// counts as over any bound, so the range is split down to rows.
+fn slice_bytes(chunk: &a58::array::StructArray, start: usize, len: usize) -> usize {
+    use a58::array::Array as _;
+    chunk
+        .slice(start, len)
+        .to_data()
+        .get_slice_memory_size()
+        .unwrap_or(usize::MAX)
+}
+
+/// A compact copy, still in DuckDB's Arrow, of rows `start..start + len`:
+/// [`convert_chunk`] copies whole buffers, so a slice would copy the chunk.
+pub(crate) fn rows_of_chunk(
+    chunk: &a58::array::StructArray,
+    start: usize,
+    len: usize,
+) -> Decoded<a58::array::StructArray> {
+    use a58::array::Array as _;
+    let first = u32::try_from(start).map_err(|err| err.to_string())?;
+    let count = u32::try_from(len).map_err(|err| err.to_string())?;
+    let end = first
+        .checked_add(count)
+        .ok_or_else(|| "a chunk of more than u32::MAX rows".to_owned())?;
+    let indices = a58::array::UInt32Array::from_iter_values(first..end);
+    let taken = a58::compute::take(chunk, &indices, None).map_err(|err| err.to_string())?;
+    taken
+        .as_any()
+        .downcast_ref::<a58::array::StructArray>()
+        .cloned()
+        .ok_or_else(|| "a copy of DuckDB's chunk lost its struct layout".to_owned())
+}
+
 /// Splits a batch until every piece fits the byte and row bounds.
 ///
 /// Each piece is a copy of its rows ([`arrow::compute::take`], view columns
@@ -591,6 +662,38 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![column]).expect("batch");
         let pieces = bounded(batch, BatchLimits::new().with_max_bytes(16)).expect("split");
         assert_eq!(pieces.len(), 1);
+    }
+
+    #[test]
+    fn a_chunk_of_large_values_is_cut_before_it_is_copied() {
+        use a58::array::Array as _;
+        // 64 values of 100 kB, as DuckDB hands them: 6.4 MB in one chunk.
+        let values =
+            a58::array::BinaryArray::from_iter_values((0..64_u8).map(|i| vec![i; 100_000]));
+        let field = Arc::new(a58::datatypes::Field::new(
+            "v",
+            a58::datatypes::DataType::Binary,
+            true,
+        ));
+        let chunk =
+            a58::array::StructArray::from(vec![(field, Arc::new(values) as a58::array::ArrayRef)]);
+        let limits = BatchLimits::new().with_max_bytes(1_000_000);
+        let ranges = row_ranges(&chunk, limits);
+        assert!(ranges.len() >= 7, "{ranges:?}");
+        let mut next = 0;
+        for &(start, len) in &ranges {
+            assert_eq!(start, next, "ranges keep the order and miss no row");
+            next += len;
+            // The copy holds the range's rows, not the chunk's buffers.
+            let copied = rows_of_chunk(&chunk, start, len).expect("copy");
+            assert_eq!(copied.len(), len);
+            assert!(
+                copied.get_array_memory_size() <= 1_100_000,
+                "{} bytes for {len} rows",
+                copied.get_array_memory_size()
+            );
+        }
+        assert_eq!(next, 64);
     }
 
     #[test]

@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use duckdb::InterruptHandle;
+use oxyn_core::CancelToken;
 use parking_lot::Mutex;
 
 /// The identity of a task handed to the carrier thread.
@@ -54,6 +55,9 @@ pub(crate) struct Interrupter {
     /// starts. Survives the engine lowering its own flag.
     tripped: AtomicBool,
     next: AtomicU64,
+    /// Fired when the session closes: what runs is stopped, what waits is
+    /// dropped, and a stream blocked on a cursor nobody reads gives up.
+    closing: CancelToken,
 }
 
 impl Interrupter {
@@ -63,7 +67,26 @@ impl Interrupter {
             turn: Mutex::new(Turn::default()),
             tripped: AtomicBool::new(false),
             next: AtomicU64::new(0),
+            closing: CancelToken::new(),
         }
+    }
+
+    /// The session closes: interrupts the running task, whatever it is, and
+    /// makes the thread drop every task still queued. Without it, a stream
+    /// waiting on a cursor kept but never read holds the carrier thread — and
+    /// the file — while `Close` waits behind it.
+    pub(crate) fn close(&self) {
+        let turn = self.turn.lock();
+        self.closing.cancel();
+        if turn.running.is_some() {
+            self.tripped.store(true, Ordering::SeqCst);
+            self.engine.interrupt();
+        }
+    }
+
+    /// Fired once the session closes.
+    pub(crate) const fn closing(&self) -> &CancelToken {
+        &self.closing
     }
 
     /// Reserves a task's identity **before** it enters the queue: an
@@ -84,7 +107,7 @@ impl Interrupter {
     /// waited, and must be dropped unexecuted.
     pub(crate) fn begin(&self, id: WorkId) -> bool {
         let mut turn = self.turn.lock();
-        if turn.queued.remove(&id).unwrap_or(false) {
+        if turn.queued.remove(&id).unwrap_or(false) || self.closing.is_cancelled() {
             return false;
         }
         turn.running = Some(id);

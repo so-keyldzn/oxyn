@@ -207,6 +207,7 @@ impl WorkerHandle {
     /// None today: DuckDB's disconnect does not fail. Kept as a `Result` for
     /// the trait's `close`.
     pub(crate) async fn close(&self) -> Result<()> {
+        self.interrupter.close();
         let (reply, answer) = oneshot::channel();
         if self.commands.send(WorkerCommand::Close(reply)).is_err() {
             return Ok(());

@@ -176,7 +176,7 @@ fn file_access(config: &ConnectionConfig) -> Option<PathBuf> {
 /// registry would then key one file twice and open two engines on it
 /// (`crate::open`); expanding `~` here would mean reading the environment,
 /// which a driver does not.
-fn rewritten_by_the_engine(path: &str) -> bool {
+pub(crate) fn rewritten_by_the_engine(path: &str) -> bool {
     path.starts_with('~')
         || path
             .get(..5)

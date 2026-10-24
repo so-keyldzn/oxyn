@@ -41,6 +41,7 @@
 //! accessors, under the conditions ADR-0059 lists; never the row interface,
 //! whose value decoding ends in `unreachable!`.
 
+mod attach;
 #[cfg(test)]
 mod cancel_tests;
 pub mod catalog;

@@ -163,6 +163,49 @@ type Slot = Arc<Mutex<Weak<Anchor>>>;
 static ENGINES: LazyLock<Mutex<HashMap<EngineKey, Slot>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Every engine alive in this process, to ask which files each has attached.
+/// Reached without any slot's lock: a thread opening a file holds its slot,
+/// and only ever takes an anchor's connection lock after it, never a slot.
+static ANCHORS: LazyLock<Mutex<Vec<Weak<Anchor>>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Whether the file at `path` is open as an Oxyn connection in this process:
+/// an `ATTACH` of it would put a second engine on it ([`crate::attach`]).
+pub(crate) fn is_open(path: &Path) -> bool {
+    let key = EngineKey::File(resolve(path));
+    let engines = ENGINES.lock();
+    engines
+        .get(&key)
+        .is_some_and(|slot| Arc::strong_count(slot) > 1 || slot.lock().strong_count() > 0)
+}
+
+/// Whether another engine of this process has the file `resolved` attached:
+/// opening it here would put a second engine on it.
+///
+/// # Errors
+/// Those of the catalog query on another engine.
+fn attached_elsewhere(resolved: &Path) -> Result<bool> {
+    let anchors: Vec<Arc<Anchor>> = {
+        let mut anchors = ANCHORS.lock();
+        anchors.retain(|anchor| anchor.strong_count() > 0);
+        anchors.iter().filter_map(Weak::upgrade).collect()
+    };
+    for anchor in anchors {
+        let databases = crate::query::read(
+            &anchor.connection.lock(),
+            "SELECT path FROM duckdb_databases() WHERE path IS NOT NULL",
+            &[],
+        )?;
+        if databases
+            .rows()
+            .filter_map(|row| row.text(0))
+            .any(|path| resolve(Path::new(&path)) == resolved)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// What identifies an engine: the file once resolved, or the connection of an
 /// in-memory database.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -186,7 +229,7 @@ pub(crate) fn connect(spec: &OpenSpec) -> Result<(Connection, Arc<Anchor>)> {
         // A slot another thread holds is in use, its engine maybe opening; a
         // free one is locked at once.
         engines.retain(|_, slot| Arc::strong_count(slot) > 1 || slot.lock().strong_count() > 0);
-        Arc::clone(engines.entry(key).or_default())
+        Arc::clone(engines.entry(key.clone()).or_default())
     };
     let mut held = slot.lock();
     if let Some(anchor) = held.upgrade() {
@@ -203,6 +246,14 @@ pub(crate) fn connect(spec: &OpenSpec) -> Result<(Connection, Arc<Anchor>)> {
             .map_err(|err| error::open(&err, path_text(&spec.target)))?;
         return Ok((connection, anchor));
     }
+    if let EngineKey::File(resolved) = &key
+        && attached_elsewhere(resolved)?
+    {
+        return Err(error::driver(
+            DuckDbError::AttachedElsewhere,
+            ErrorClass::Permanent,
+        ));
+    }
     let connection = open(spec)?;
     let anchor_connection = connection
         .try_clone()
@@ -212,6 +263,7 @@ pub(crate) fn connect(spec: &OpenSpec) -> Result<(Connection, Arc<Anchor>)> {
         spec: spec.clone(),
     });
     *held = Arc::downgrade(&anchor);
+    ANCHORS.lock().push(Arc::downgrade(&anchor));
     Ok((connection, anchor))
 }
 
@@ -284,8 +336,72 @@ fn open(spec: &OpenSpec) -> Result<Connection> {
         OpenTarget::File(file) => Connection::open_with_flags(file, config),
     }
     .map_err(refused)?;
+    bound_resources(&connection)?;
     restrict(&connection, spec.file_access.as_deref())?;
     Ok(connection)
+}
+
+/// Leaves the application room beside the engine.
+///
+/// DuckDB takes by default 80 % of the memory it sees and every core
+/// (`DBConfig::SetDefaultMaxMemory`, v1.5.6): one aggregate typed in a console
+/// would starve the window it was typed in. The engine gets half of its own
+/// default — 40 % of the memory — and every core but one. Both are settings
+/// of the engine, shared by the sessions of the file; a statement may raise
+/// them, as the user's choice.
+fn bound_resources(connection: &Connection) -> Result<()> {
+    let policy = |err: duckdb::Error| error::engine(&err, error::Effect::Mutating);
+    let default = crate::query::read(connection, "SELECT current_setting('memory_limit')", &[])?
+        .rows()
+        .next()
+        .and_then(|row| row.text(0));
+    if let Some(mebibytes) = default
+        .as_deref()
+        .and_then(formatted_bytes)
+        .map(|bytes| bytes / 2 / (1024 * 1024))
+        .filter(|&mebibytes| mebibytes > 0)
+    {
+        connection
+            .execute_batch(&format!("SET memory_limit = '{mebibytes}MiB'"))
+            .map_err(policy)?;
+    }
+    connection
+        .execute_batch(&format!("SET threads = {}", engine_threads()))
+        .map_err(policy)
+}
+
+/// Every core but one, and at least one.
+pub(crate) fn engine_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| cores.get().saturating_sub(1).max(1))
+}
+
+/// Reads a size as DuckDB prints it — `12.7 GiB`, `953.6 MiB`, `512 bytes`
+/// (`StringUtil::BytesToHumanReadableString`, v1.5.6); `None` for anything
+/// else, and the engine's own default then stands.
+pub(crate) fn formatted_bytes(text: &str) -> Option<u64> {
+    let (number, unit) = text.trim().split_once(' ')?;
+    let unit_bytes: u64 = match unit {
+        "byte" | "bytes" => 1,
+        "KiB" => 1 << 10,
+        "MiB" => 1 << 20,
+        "GiB" => 1 << 30,
+        "TiB" => 1 << 40,
+        "PiB" => 1 << 50,
+        "kB" => 1_000,
+        "MB" => 1_000_000,
+        "GB" => 1_000_000_000,
+        "TB" => 1_000_000_000_000,
+        "PB" => 1_000_000_000_000_000,
+        _ => return None,
+    };
+    let (whole, tenths) = number.split_once('.').unwrap_or((number, "0"));
+    let whole: u64 = whole.parse().ok()?;
+    let tenths: u64 = tenths.parse().ok().filter(|&tenths| tenths < 10)?;
+    whole
+        .checked_mul(10)?
+        .checked_add(tenths)?
+        .checked_mul(unit_bytes)
+        .map(|bytes| bytes / 10)
 }
 
 /// Grants the one directory, then turns external access off for good.
@@ -321,6 +437,17 @@ mod tests {
         };
         let rendered = format!("{spec:?}");
         assert!(!rendered.contains("someone"), "{rendered}");
+    }
+
+    #[test]
+    fn sizes_read_as_duckdb_prints_them() {
+        assert_eq!(formatted_bytes("12.7 GiB"), Some(127 * (1 << 30) / 10));
+        assert_eq!(formatted_bytes("953.6 MiB"), Some(9536 * (1 << 20) / 10));
+        assert_eq!(formatted_bytes("512 bytes"), Some(512));
+        assert_eq!(formatted_bytes("1.5 GB"), Some(1_500_000_000));
+        for unreadable in ["", "12.7", "12.7 GiBs", "x GiB", "1.75 GiB", "-1.0 GiB"] {
+            assert_eq!(formatted_bytes(unreadable), None, "{unreadable}");
+        }
     }
 
     #[test]

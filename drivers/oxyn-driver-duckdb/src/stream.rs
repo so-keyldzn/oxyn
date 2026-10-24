@@ -38,11 +38,13 @@
 //!   their transaction, and the execution is refused instead
 //!   ([DRIVER-CONTRACT §5](../../../docs/DRIVER-CONTRACT.md)).
 
+use std::pin::pin;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use duckdb::{Connection, Statement};
+use futures::future::{Either, select};
 use oxyn_core::{
     ErrorClass, ExecRequest, OxynError, Result, SqlDialect, StatementIntent, TransactionState,
 };
@@ -104,6 +106,9 @@ pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interru
         start,
         batches,
     } = job;
+    // Until the stream ends: every engine error converted on this thread
+    // meanwhile is this execution's.
+    let _hidden = error::hide_bound_values(&request.params);
     let mut applied = false;
     let mut affected = 0_u64;
     let begun = prepare_last(
@@ -211,57 +216,105 @@ fn stream_rows(
     context: &Failure<'_>,
 ) {
     let mut remaining = request.limits.max_rows;
+    let send = |item| deliver(batches, item, context.interrupter);
     loop {
         let chunk = match statement.step() {
             Ok(Some(chunk)) => chunk,
             Ok(None) => {
-                let _ = batches.blocking_send(Ok(Pulled::Done { truncated: false }));
+                let _ = send(Ok(Pulled::Done { truncated: false }));
                 return;
             }
             Err(err) => {
                 let failure =
                     engine_failure(&err, context.effect, context.applied, context.interrupter);
-                let _ = batches.blocking_send(Err(failure));
+                let _ = send(Err(failure));
                 return;
             }
         };
-        let pieces = convert::convert_chunk(&chunk, schema, types)
-            .and_then(|batch| convert::bounded(batch, limits));
-        let pieces = match pieces {
-            Ok(pieces) => pieces,
-            Err(message) => {
-                let _ = batches.blocking_send(Err(error::after_applied_if(
-                    context.applied,
-                    decode(message),
-                )));
-                return;
-            }
-        };
-        let mut pieces = pieces.into_iter();
-        while let Some(piece) = pieces.next() {
-            let (piece, cut) = match remaining {
-                None => (piece, false),
-                Some(left) if piece.num_rows() <= left => {
-                    remaining = Some(left - piece.num_rows());
-                    (piece, false)
+        // One range at a time: copied, converted, sent, dropped, before the
+        // next is copied — never the whole chunk at once (I-06).
+        let mut ranges = convert::row_ranges(&chunk, limits).into_iter();
+        while let Some((start, len)) = ranges.next() {
+            let pieces = match range_pieces(&chunk, start, len, schema, types, limits) {
+                Ok(pieces) => pieces,
+                Err(message) => {
+                    let _ = send(Err(error::after_applied_if(
+                        context.applied,
+                        decode(message),
+                    )));
+                    return;
                 }
-                Some(left) => (piece.slice(0, left), true),
             };
-            if piece.num_rows() > 0 && batches.blocking_send(Ok(Pulled::Batch(piece))).is_err() {
-                // The cursor is gone: dropping the statement ends the query.
-                return;
-            }
-            if cut || remaining == Some(0) {
-                // The chunk's unsent pieces are rows past the limit too: the
-                // engine is asked only when none is left.
-                let truncated = cut
-                    || pieces.any(|rest| rest.num_rows() > 0)
-                    || more_rows(statement, context.effect);
-                let _ = batches.blocking_send(Ok(Pulled::Done { truncated }));
-                return;
+            let mut pieces = pieces.into_iter();
+            while let Some(piece) = pieces.next() {
+                let (piece, cut) = match remaining {
+                    None => (piece, false),
+                    Some(left) if piece.num_rows() <= left => {
+                        remaining = Some(left - piece.num_rows());
+                        (piece, false)
+                    }
+                    Some(left) => (piece.slice(0, left), true),
+                };
+                if piece.num_rows() > 0 && !send(Ok(Pulled::Batch(piece))) {
+                    // The cursor is gone, or the session closes: dropping
+                    // the statement ends the query.
+                    return;
+                }
+                if cut || remaining == Some(0) {
+                    // The chunk's unsent rows are rows past the limit too:
+                    // the engine is asked only when none is left.
+                    let truncated = cut
+                        || pieces.any(|rest| rest.num_rows() > 0)
+                        || ranges.any(|(_, rows)| rows > 0)
+                        || more_rows(statement, context.effect);
+                    let _ = send(Ok(Pulled::Done { truncated }));
+                    return;
+                }
             }
         }
     }
+}
+
+/// Rows `start..start + len` of a chunk, copied, converted and bounded.
+fn range_pieces(
+    chunk: &duckdb::arrow::array::StructArray,
+    start: usize,
+    len: usize,
+    schema: &SchemaRef,
+    types: &[DuckType],
+    limits: BatchLimits,
+) -> convert::Decoded<Vec<RecordBatch>> {
+    use duckdb::arrow::array::Array as _;
+    let batch = if start == 0 && len == chunk.len() {
+        convert::convert_chunk(chunk, schema, types)?
+    } else {
+        convert::convert_chunk(&convert::rows_of_chunk(chunk, start, len)?, schema, types)?
+    };
+    convert::bounded(batch, limits)
+}
+
+/// Hands an item to the cursor, waiting while its one slot is taken — unless
+/// the session closes. Whether the cursor received it.
+///
+/// On the carrier thread, never on the runtime: `blocking_send` blocks the
+/// same way, without the second way out. A cursor kept but never read would
+/// otherwise hold this thread, and the file, past `close`.
+fn deliver(
+    batches: &mpsc::Sender<Result<Pulled>>,
+    item: Result<Pulled>,
+    interrupter: &Interrupter,
+) -> bool {
+    futures::executor::block_on(async {
+        match select(
+            pin!(batches.send(item)),
+            pin!(interrupter.closing().cancelled()),
+        )
+        .await
+        {
+            Either::Left((sent, _)) => sent.is_ok(),
+            Either::Right(((), _)) => false,
+        }
+    })
 }
 
 /// Whether rows remain past the row limit.
@@ -407,6 +460,10 @@ fn prepare_last<'c>(
                 first_words(&info.text)
             ),
         });
+    }
+    // Before anything runs: a batch refused here applies nothing.
+    for info in &statements {
+        crate::attach::check(&info.text)?;
     }
     let wrapper = if request.limits.read_only {
         Some(read_only_wrapper(connection, &statements)?)
@@ -555,7 +612,7 @@ fn leading_words(text: &str, count: usize) -> Vec<String> {
 
 /// A statement's text without its leading blanks and comments; block
 /// comments nest, as DuckDB's parser reads them.
-fn code_of(mut text: &str) -> &str {
+pub(crate) fn code_of(mut text: &str) -> &str {
     loop {
         text = text.trim_start();
         if let Some(rest) = text.strip_prefix("--") {

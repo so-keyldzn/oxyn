@@ -170,6 +170,59 @@ async fn dropping_a_running_cursor_interrupts_the_engine() {
 }
 
 #[tokio::test]
+async fn closing_with_a_cursor_kept_but_never_read_releases_the_file() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let file = dir.path().join("kept.duckdb");
+    let session = open(&config(file.to_str().expect("UTF-8"))).await;
+    // Endless rows: the stream fills the cursor's one slot, then waits.
+    let cursor = session
+        .execute(
+            unbounded("SELECT a.i FROM range(100000000) a(i), range(1000) b(i)"),
+            &CancelToken::new(),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    tokio::time::timeout(Duration::from_secs(10), session.close())
+        .await
+        .expect("close does not wait for a cursor nobody reads")
+        .expect("close");
+    assert!(
+        another_process_can_write(&file),
+        "closing released the file while the cursor is still held"
+    );
+    drop(cursor);
+}
+
+#[tokio::test]
+async fn large_values_stream_in_bounded_batches() {
+    // 64 values of one megabyte, one engine chunk: 64 MB the conversion must
+    // not copy at once.
+    let session = open_with(
+        &config(DuckDbDriver::MEMORY),
+        BatchLimits::new().with_max_bytes(4 * 1024 * 1024),
+    )
+    .await;
+    let batches = run_ok(
+        session.as_ref(),
+        "SELECT repeat('x', 1048576)::BLOB AS b FROM range(64)",
+    )
+    .await;
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        64
+    );
+    for batch in &batches {
+        assert!(
+            batch.num_rows() == 1 || batch.get_array_memory_size() <= 5 * 1024 * 1024,
+            "{} rows in {} bytes",
+            batch.num_rows(),
+            batch.get_array_memory_size()
+        );
+    }
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
 async fn a_stopped_write_is_not_announced_cancelled() {
     let session = crate::test_support::memory().await;
     run_ok(session.as_ref(), "CREATE TABLE t (v BIGINT)").await;

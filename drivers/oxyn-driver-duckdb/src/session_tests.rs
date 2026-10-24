@@ -247,6 +247,127 @@ async fn sql_reaches_no_file_and_cannot_lift_the_policy() {
 }
 
 #[tokio::test]
+async fn one_file_never_gets_a_second_engine_through_attach() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let folder = dir.path().join("shared");
+    std::fs::create_dir(&folder).expect("folder");
+    let text = |path: &std::path::Path| path.to_str().expect("UTF-8").to_owned();
+    let (held, attached, own) = (
+        folder.join("held.duckdb"),
+        folder.join("attached.duckdb"),
+        dir.path().join("own.duckdb"),
+    );
+    let holder = open(&config(&text(&held))).await;
+    run_ok(holder.as_ref(), "CREATE TABLE t (v INTEGER)").await;
+    let attacher =
+        open(&config(&text(&own)).with_param(DuckDbDriver::FILE_ACCESS, text(&folder))).await;
+
+    // A file open as a connection cannot be attached elsewhere.
+    let refused = run_err(
+        attacher.as_ref(),
+        unbounded(&format!("ATTACH '{}' AS again", text(&held))),
+    )
+    .await;
+    assert!(
+        refused.to_string().contains("open as an Oxyn connection"),
+        "{refused}"
+    );
+    assert_eq!(refused.class(), ErrorClass::Permanent);
+
+    // A file attached by one engine cannot be opened as a connection.
+    run_ok(
+        attacher.as_ref(),
+        &format!("ATTACH '{}' AS side", text(&attached)),
+    )
+    .await;
+    let second = DuckDbDriver::new()
+        .connect(
+            &config(&text(&attached)),
+            &oxyn_driver::Credentials::new(),
+            &CancelToken::new(),
+        )
+        .await
+        .err()
+        .expect("a file attached elsewhere is refused");
+    assert!(
+        second.to_string().contains("attached by another"),
+        "{second}"
+    );
+
+    // Detached, it opens.
+    run_ok(attacher.as_ref(), "DETACH side").await;
+    let reopened = open(&config(&text(&attached))).await;
+    reopened.close().await.expect("close");
+    attacher.close().await.expect("close");
+    holder.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn the_engine_leaves_the_application_memory_and_a_core() {
+    use crate::open::{engine_threads, formatted_bytes};
+    let raw = duckdb::Connection::open_in_memory().expect("an engine with its defaults");
+    let default: String = raw
+        .query_row("SELECT current_setting('memory_limit')", [], |row| {
+            row.get(0)
+        })
+        .expect("the default limit");
+    let default = formatted_bytes(&default).expect("a size DuckDB printed");
+    let session = memory().await;
+    let ours = single(&run_ok(session.as_ref(), "SELECT current_setting('memory_limit')").await);
+    let ours = formatted_bytes(&ours).expect("a size DuckDB printed");
+    // Half, within DuckDB's one-decimal display.
+    let half = default / 2;
+    assert!(
+        ours.abs_diff(half) <= half / 50,
+        "{ours} bytes against a default of {default}"
+    );
+    let threads = single(&run_ok(session.as_ref(), "SELECT current_setting('threads')").await);
+    assert_eq!(threads, engine_threads().to_string());
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn a_bound_secret_never_reaches_an_engine_error() {
+    let session = memory().await;
+    run_ok(
+        session.as_ref(),
+        "CREATE TABLE tokens (token VARCHAR PRIMARY KEY, secret BLOB UNIQUE, n INTEGER)",
+    )
+    .await;
+    let insert = |token: &str, secret: &[u8]| {
+        unbounded("INSERT INTO tokens VALUES ($1, $2, 1)").with_params(vec![
+            ScalarValue::Text(token.to_owned()),
+            ScalarValue::Bytes(secret.to_vec()),
+        ])
+    };
+    run(
+        session.as_ref(),
+        insert("s3cr3t-token-42", b"k\x00ey-\xff-1"),
+    )
+    .await
+    .expect("first insert");
+    for (request, hidden) in [
+        // DuckDB prints the duplicate key.
+        (insert("s3cr3t-token-42", b"other"), "s3cr3t"),
+        (insert("another-token", b"k\x00ey-\xff-1"), "ey-"),
+        // A conversion error prints the text it could not read.
+        (
+            unbounded("UPDATE tokens SET n = $1::INTEGER")
+                .with_params(vec![ScalarValue::Text("hunter2-password".to_owned())]),
+            "hunter2",
+        ),
+    ] {
+        let message = run_err(session.as_ref(), request).await.to_string();
+        assert!(!message.contains(hidden), "{message}");
+        assert!(message.contains("<bound value>"), "{message}");
+    }
+    // Outside an execution with bound values, nothing is hidden.
+    let plain = run_err(session.as_ref(), unbounded("SELECT 'abcdef'::INTEGER")).await;
+    assert!(plain.to_string().contains("abcdef"), "{plain}");
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
 async fn a_path_duckdb_would_respell_is_refused_before_opening() {
     for respelled in [
         "~/oxyn-never-created.duckdb",
