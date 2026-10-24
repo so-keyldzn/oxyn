@@ -160,7 +160,9 @@ export function CatalogPanel({
       <SidebarContent>
         {/* Folded to the rail, the catalog is one icon away, not gone. */}
         <SidebarGroup className="hidden group-data-[collapsible=icon]:flex">
-          <SidebarMenu>
+          {/* Centered like the connection tile above: a menu item hugs the
+              left edge of a rail wider than its button. */}
+          <SidebarMenu className="items-center">
             <SidebarMenuItem>
               <SidebarMenuButton
                 tooltip="Catalog"
@@ -285,7 +287,7 @@ export function CatalogPanel({
       </SidebarContent>
 
       <SidebarFooter>
-        <SidebarMenu>
+        <SidebarMenu className="group-data-[collapsible=icon]:items-center">
           <SidebarMenuItem>
             <SidebarMenuButton tooltip="Switch connection" onClick={onLeave}>
               <HugeiconsIcon icon={Logout03Icon} strokeWidth={2} />

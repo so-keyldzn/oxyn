@@ -44,7 +44,7 @@ export function LibrarySidebar({
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader data-tauri-drag-region className="pt-8">
-        <SidebarMenu>
+        <SidebarMenu className="group-data-[collapsible=icon]:items-center">
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" tooltip="Library">
               <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -73,7 +73,7 @@ export function LibrarySidebar({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <SidebarMenu>
+        <SidebarMenu className="group-data-[collapsible=icon]:items-center">
           <SidebarMenuItem>
             <SidebarMenuButton tooltip="Switch connection" onClick={onLeave}>
               <HugeiconsIcon icon={Logout03Icon} strokeWidth={2} />
