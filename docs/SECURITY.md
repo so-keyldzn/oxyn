@@ -49,6 +49,13 @@ append-only. A user who ran such SQL before this protection must rotate the
 credential and protect or replace affected workspace files
 ([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
 
+A MongoDB command carries its password as the `pwd` of `createUser` and
+`updateUser`. The value of every `pwd` key, at any depth and however its name
+is escaped, is replaced with `"<redacted>"`, every other byte kept, wherever a
+record knows it holds a MongoDB command: the query history, and the audit entry
+built from the command
+([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
+
 **Concrete failure:** a workspace file containing a production password,
 committed by the user to their team's repository, because the
 file looked like mere configuration.

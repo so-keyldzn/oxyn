@@ -698,9 +698,11 @@ fn is_one(value: Option<&JsonValue>) -> bool {
 }
 
 mod explain;
+mod redact;
 mod request;
 
 pub use explain::explain;
+pub use redact::{REDACTED_VALUE, redact_secrets};
 pub use request::command_at;
 
 #[cfg(test)]

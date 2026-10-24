@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="7c97df4c87a6" -->
+<!-- oxyn-translation source="docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md" sha256="aa34580dc6e8" -->
 
 > Traduction française de [docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md](../../../../docs/adr/0063-mongodb-driver-database-commands-in-extended-json.md). **La version anglaise fait foi.**
 
@@ -194,6 +194,15 @@ transitoires pour une lecture et **ambigus** pour tout le reste ;
 `UnknownTransactionCommitResult` est toujours ambigu ; une coupure de transport
 pendant une écriture est `OutcomeUnknown`. Les messages propres à la
 bibliothèque, qui citent des hôtes, sont remplacés par ceux du driver.
+
+Une commande qui porte une clé `pwd` à n'importe quelle profondeur — le mot de
+passe de `createUser` et d'`updateUser` — reçoit ses erreurs sans le texte du
+serveur, et est persistée avec cette valeur remplacée par `"<redacted>"` :
+`oxyn_query::redact_password_literals` lit le langage MongoDB par un balayage
+lexical du texte JSON, qui garde tous les autres octets, décode une clé
+échappée, saute le contenu des chaînes et masque une valeur non terminée
+jusqu'à la fin
+([ADR-0053](0053-redact-sql-passwords-before-persistence.md)).
 
 ### État de session, lecture seule, transactions
 

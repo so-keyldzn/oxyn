@@ -1015,6 +1015,59 @@ mod tests {
             Some("base disparue")
         );
     }
+
+    /// A MongoDB command's `pwd` is redacted where the record knows its
+    /// language: the history row, and the journal entry built from the
+    /// command. What the driver receives is left whole.
+    #[test]
+    fn mongo_records_cannot_persist_a_user_password() {
+        let store = Store::open_in_memory().expect("in-memory store");
+        for text in [
+            r#"{"createUser": "app", "pwd": "witness-secret", "roles": []}"#,
+            r#"{"updateUser": "app", "pwd": "witness-secret"}"#,
+        ] {
+            let request = ExecRequest::new(QueryLanguage::MongoQuery, text);
+            let command = Command::Execute {
+                connection: ConnectionId::new(),
+                session: SessionId::new(),
+                request: Box::new(request),
+            };
+            let history =
+                HistoryRecord::from_command(&Actor::Human, &command).expect("an execution");
+            let journal =
+                crate::JournalRecord::new(&Actor::Human, &command, &oxyn_core::Decision::Allow);
+            store.history().record(&history).expect("history insert");
+            store
+                .history()
+                .record(&HistoryRecord::new(
+                    &Actor::Human,
+                    QueryLanguage::MongoQuery,
+                    text,
+                ))
+                .expect("history insert");
+            store.journal().append(&journal).expect("journal append");
+            assert_eq!(command.statement_text(), Some(text));
+        }
+        store
+            .with_connection(|conn| {
+                for table in ["query_history", "audit_journal"] {
+                    let mut select = conn.prepare(&format!("SELECT statement FROM {table}"))?;
+                    let statements = select
+                        .query_map([], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    assert!(!statements.is_empty(), "{table}");
+                    for statement in statements {
+                        assert!(
+                            !statement.contains("witness-secret"),
+                            "{table}: {statement}"
+                        );
+                        assert!(statement.contains("<redacted>"), "{table}: {statement}");
+                    }
+                }
+                Ok(())
+            })
+            .expect("raw SQL reads");
+    }
 }
 
 #[cfg(test)]

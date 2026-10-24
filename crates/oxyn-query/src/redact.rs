@@ -38,10 +38,14 @@ enum SecretClause {
 /// ANSI (an unspecified dialect) conservatively combines PostgreSQL and MySQL
 /// lexical interpretations. This is not a general secret detector: credentials
 /// embedded in comments or dynamic SQL are outside the recognized grammar.
+///
+/// A MongoDB command has its own grammar: the value of every `pwd` key is
+/// replaced ([`crate::mongo::redact_secrets`]).
 #[must_use]
 pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> String {
     let dialect = match language {
         QueryLanguage::Sql(dialect) => dialect,
+        QueryLanguage::MongoQuery => return crate::mongo::redact_secrets(statement),
         _ => return statement.to_owned(),
     };
     let mut replacements = Vec::new();

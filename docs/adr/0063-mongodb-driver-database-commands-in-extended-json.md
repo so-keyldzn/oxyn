@@ -179,6 +179,14 @@ for anything else; `UnknownTransactionCommitResult` is always ambiguous; a
 transport cut during a write is `OutcomeUnknown`. The library's own messages,
 which quote hosts, are replaced by the driver's.
 
+A command holding a `pwd` key at any depth — the password of `createUser` and
+`updateUser` — gets errors without the server's text, and is persisted with
+that value replaced by `"<redacted>"`: `oxyn_query::redact_password_literals`
+reads the MongoDB language with a lexical scan of the JSON text, which keeps
+every other byte, decodes an escaped key, skips string contents, and redacts
+an unterminated value through the end
+([ADR-0053](0053-redact-sql-passwords-before-persistence.md)).
+
 ### Session state, read-only, transactions
 
 The target database is the session context (`set_context`), client-side

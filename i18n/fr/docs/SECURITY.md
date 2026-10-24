@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="65b7e2f38b46" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="5c6d81c6556b" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -55,6 +55,14 @@ seul. Un utilisateur ayant exécuté un tel SQL avant cette protection doit
 renouveler le mot de passe et protéger ou remplacer les fichiers de workspace
 concernés
 ([ADR-0053](adr/0053-redact-sql-passwords-before-persistence.md)).
+
+Une commande MongoDB porte son mot de passe dans le `pwd` de `createUser` et
+d'`updateUser`. La valeur de toute clé `pwd`, à toute profondeur et quelle que
+soit l'écriture échappée de son nom, est remplacée par `"<redacted>"`, tous les
+autres octets conservés, partout où un enregistrement sait qu'il contient une
+commande MongoDB : l'historique des requêtes, et l'entrée du journal d'audit
+construite à partir de la commande
+([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
 
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le
