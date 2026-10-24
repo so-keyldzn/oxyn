@@ -131,7 +131,8 @@ Replayed on the merge commits of `main` on 2026-10-24 (`git log
   request still runs the `serveurs` job, with at least its cancellation suite:
   the gain there is in the suites skipped, not in the job.
 * **−** the `zones` job installs the toolchain on every pull request, documentation
-  ones included: about half a minute on a job that used to take a few seconds.
+  ones included: 10 s on the first run of 2026-10-24 (run 40065032744), on a
+  job that used to take a few seconds.
 
 **Exit cost:** low. Removing the `rust_packages` and `serveurs` outputs, the
 two `OXYN_PACKAGES` environment entries of the workflow and the variable in the

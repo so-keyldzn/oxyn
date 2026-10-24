@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0067-ci-tests-the-packages-a-pull-request-changes.md" sha256="e2773ba442ad" -->
+<!-- oxyn-translation source="docs/adr/0067-ci-tests-the-packages-a-pull-request-changes.md" sha256="71ab15d9875b" -->
 
 > Traduction française de [docs/adr/0067-ci-tests-the-packages-a-pull-request-changes.md](../../../../docs/adr/0067-ci-tests-the-packages-a-pull-request-changes.md). **La version anglaise fait foi.**
 
@@ -142,8 +142,8 @@ Rejoué sur les commits de fusion de `main` le 2026-10-24 (`git log
   request Rust lance encore le job `serveurs`, avec au moins sa suite
   d'annulation : le gain y porte sur les suites sautées, pas sur le job.
 * **−** le job `zones` installe la chaîne d'outils sur chaque pull request,
-  documentation comprise : environ une demi-minute sur un job qui prenait
-  quelques secondes.
+  documentation comprise : 10 s sur la première exécution du 2026-10-24
+  (run 40065032744), sur un job qui prenait quelques secondes.
 
 **Coût de sortie :** faible. Retirer les sorties `rust_packages` et
 `serveurs`, les deux entrées d'environnement `OXYN_PACKAGES` du workflow et la
