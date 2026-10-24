@@ -33,7 +33,17 @@ pub struct SearchRequest {
 /// # Errors
 /// A message naming what is malformed, never quoting the request.
 pub fn parse_request(text: &str) -> Result<SearchRequest, String> {
-    let text = text.trim_start();
+    // Whole-line comments, as Kibana's console takes them, are the user's
+    // notes: they are not part of what is sent.
+    let uncommented = text
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !line.starts_with('#') && !line.starts_with("//")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = uncommented.trim_start();
     let (head, body) = match text.split_once('\n') {
         Some((head, body)) => (head.trim_end_matches('\r'), body.trim()),
         None => (text.trim_end(), ""),
@@ -133,6 +143,22 @@ mod tests {
         assert_eq!(request.text.as_deref(), Some(body), "sent byte for byte");
         assert!(request.body.is_some());
         assert!(!request.ndjson);
+    }
+
+    #[test]
+    fn whole_line_comments_are_not_sent() {
+        let request = parse_request(
+            "# the errors of today\nPOST /logs/_search\n{\n  // only 500s\n  \"query\": {\"term\": {\"status\": 500}}\n}",
+        )
+        .expect("valid request");
+        assert_eq!(request.path, "/logs/_search");
+        assert!(
+            request
+                .text
+                .as_deref()
+                .is_some_and(|text| !text.contains("only 500s"))
+        );
+        assert!(request.body.is_some());
     }
 
     #[test]

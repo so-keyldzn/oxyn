@@ -66,6 +66,7 @@ pub mod dialect;
 pub mod error;
 pub mod format;
 pub mod redact;
+mod search_dsl;
 pub mod split;
 
 pub use classify::{

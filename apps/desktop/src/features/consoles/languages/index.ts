@@ -2,6 +2,8 @@ import type { Extension } from "@codemirror/state"
 
 import type { QueryLanguageName } from "@/lib/query-language"
 
+import { searchDslEditorMode } from "./search-dsl/search-dsl-mode"
+
 /**
  * The editor mode of each language that is not SQL — highlighting, and
  * whatever else its CodeMirror extension brings.
@@ -13,10 +15,7 @@ import type { QueryLanguageName } from "@/lib/query-language"
 const EDITOR_MODES: Partial<
   Record<Exclude<QueryLanguageName, "sql">, () => Extension>
 > = {
-  // Search DSL's endpoint line and JSON body need a dedicated mixed parser.
-  // Until it exists, register the language explicitly as plain text rather
-  // than applying SQL highlighting to a request the server would not parse.
-  "search-dsl": () => [],
+  "search-dsl": searchDslEditorMode,
 }
 
 export function editorMode(

@@ -71,12 +71,7 @@ pub fn current_request(
         QueryLanguage::Sql(dialect) => {
             Ok(current_statement(text, dialect, cursor_byte)?.map(|fragment| fragment.text))
         }
-        // Search DSL accepts one complete HTTP request. Its driver validates
-        // the request line and JSON body before sending it, so the editor can
-        // select the whole document without attempting to parse its API.
-        QueryLanguage::SearchDsl => {
-            Ok((cursor_byte <= text.len() && !text.trim().is_empty()).then_some(text))
-        }
+        QueryLanguage::SearchDsl => Ok(crate::search_dsl::current_request(text, cursor_byte)),
         language => Err(QueryError::UnsupportedLanguage { language }),
     }
 }
@@ -156,11 +151,11 @@ mod tests {
     }
 
     #[test]
-    fn a_search_dsl_request_is_the_complete_console_document() {
-        let text = "POST /logs/_search\n{\"query\":{\"match_all\":{}}}";
+    fn a_search_dsl_console_runs_the_request_under_the_cursor() {
+        let text = "GET /_cluster/health\n\nPOST /logs/_search\n{\"query\":{\"match_all\":{}}}";
         assert_eq!(
-            current_request(text, QueryLanguage::SearchDsl, 4),
-            Ok(Some(text))
+            current_request(text, QueryLanguage::SearchDsl, text.len() - 3),
+            Ok(Some("POST /logs/_search\n{\"query\":{\"match_all\":{}}}"))
         );
     }
 
