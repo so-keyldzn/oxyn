@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md" sha256="ca0714c57db6" -->
+<!-- oxyn-translation source="docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md" sha256="031bbb58ad75" -->
 
 > Traduction française de [docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md](../../../../docs/adr/0059-duckdb-driver-on-duckdb-rs-bundled.md). **La version anglaise fait foi.**
 
@@ -74,8 +74,9 @@ calcule en parallèle. Vérifié le 2026-10-23
    de `step` est reconstruit en Arrow 59 en code sûr : chaque tampon est copié,
    la disposition est reconstruite par `ArrayData::builder` et validée par
    `build()` — décalages, longueurs, UTF-8 —, si bien qu'un tampon malformé est
-   une erreur de décodage permanente, jamais un comportement indéfini ni une
-   panique. Le type logique DuckDB de la colonne, lu une fois par colonne et
+   une erreur de décodage permanente, jamais une panique ici ; l'import Arrow 58
+   du binding lui-même, avant, fait confiance à la mémoire du moteur dans le
+   même processus. Le type logique DuckDB de la colonne, lu une fois par colonne et
    possédé (`DuckType`), décide à chaque niveau d'imbrication : `HUGEINT` et
    `UHUGEINT` deviennent `Decimal256(39, 0)` — les bits d'un `UHUGEINT` relus
    comme non signés — ; `TIMESTAMP WITH TIME ZONE` est étiqueté `UTC`, l'instant
@@ -88,9 +89,14 @@ calcule en parallèle. Vérifié le 2026-10-23
    `INTERVAL` en mois-jours-nanosecondes, `ENUM` en dictionnaire, listes,
    tableaux, maps, structs et unions avec leurs enfants convertis de même — et
    la métadonnée de champ `oxyn.duckdb.type` porte le nom DuckDB du type.
-   Chaque bloc converti est ensuite découpé jusqu'à ce que chaque morceau tienne
-   dans la borne en octets ; une ligne seule plus grande que la borne voyage
-   seule.
+   Un bloc — 2 048 lignes, quel que soit leur poids — est découpé en plages de
+   lignes mesurées sur l'Arrow de DuckDB avant toute copie ; chaque plage est
+   copiée, convertie et envoyée avant que la suivante soit copiée, si bien que
+   2 048 BLOB d'un mégaoctet n'existent jamais deux fois à la fois. Chaque
+   morceau tient dans la borne en octets ; une ligne seule plus grande que la
+   borne voyage seule, et les valeurs d'un dictionnaire, partagées par chaque
+   morceau, arrêtent le découpage plutôt que d'être comptées une fois par
+   ligne.
 
 3. **Aucune panique n'est atteignable depuis les données du moteur.** Du
    binding, le driver appelle `Connection::open_with_flags`,
@@ -105,8 +111,12 @@ calcule en parallèle. Vérifié le 2026-10-23
    jamais l'interface par lignes, jamais les itérateurs Arrow. Une imbrication
    au-delà de 64 niveaux est refusée. Les requêtes de catalogue du driver
    passent par la même conversion et lisent les cellules par les accesseurs
-   vérifiés d'Arrow. Une nouvelle version de `duckdb` est réauditée contre
-   cette liste.
+   vérifiés d'Arrow ; chacune lit au plus 50 000 lignes — le budget du cache de
+   catalogue par connexion ([PERFORMANCE](../PERFORMANCE.md)) — et 64 Mio, et un
+   fichier qui en liste davantage au même endroit échoue à se déplier, de façon
+   permanente, au lieu de remplir la mémoire de l'application
+   ([I-06](../../CLAUDE.md#i-06)). Une nouvelle version de `duckdb` est
+   réauditée contre cette liste.
 
 4. **Un moteur par fichier dans le processus, un thread porteur par session.**
    La première session d'un fichier ouvre le moteur ; les autres y prennent une
@@ -114,7 +124,13 @@ calcule en parallèle. Vérifié le 2026-10-23
    dans un processus. Une connexion d'ancrage inactive garde le moteur tant
    qu'une session vit ; la dernière session à se fermer libère le fichier. Un
    fichier déjà ouvert dans Oxyn sous un autre mode d'accès ou un autre dossier
-   est refusé, pas ouvert deux fois. `:memory:` est une base privée par
+   est refusé, pas ouvert deux fois. Un chemin que DuckDB réécrirait lui-même —
+   un `~` en tête, une URL `file:` — est refusé, puisque deux écritures d'un
+   même fichier seraient deux clés. `ATTACH` est tenu à la même règle dans les
+   deux sens : un `ATTACH` d'un fichier ouvert comme connexion est refusé avant
+   que DuckDB ne le prépare — son fichier est lu dans un littéral de chaîne
+   simple, et toute autre forme est refusée —, et une connexion sur un fichier
+   qu'un autre moteur a attaché est refusée à l'ouverture. `:memory:` est une base privée par
    connexion configurée, partagée par ses sessions. Chaque session possède un
    thread qui possède sa connexion, parce qu'une instruction en flux l'emprunte
    d'un `await` à l'autre ; le thread calcule au plus un lot d'avance sur le
@@ -130,7 +146,11 @@ calcule en parallèle. Vérifié le 2026-10-23
    aucune. Une instruction qui exige une extension que cette compilation ne lie
    pas échoue avec le message de DuckDB, classé permanent ; Oxyn ne propose pas
    d'en télécharger une. La politique est celle de la connexion, pas de
-   l'instruction : un `SET` tapé ne peut pas la lever.
+   l'instruction : un `SET` tapé ne peut pas la lever. Le moteur laisse aussi
+   de la place à l'application : `memory_limit` est fixé à la moitié du défaut
+   de DuckDB — 40 % de la mémoire qu'il voit au lieu de 80 % — et `threads` à
+   tous les cœurs sauf un. Ces deux-là, une instruction peut les relever, au
+   choix de l'utilisateur.
 
 6. **La lecture seule est celle du moteur.** Une connexion en lecture seule
    ouvre le moteur en `AccessMode::ReadOnly` et déclare `READ_ONLY_SESSION` sans
@@ -161,7 +181,9 @@ calcule en parallèle. Vérifié le 2026-10-23
    comme SQLite : il n'y a pas de serveur, et l'interface lit ce drapeau comme
    « le bouton Annuler atteint un serveur ». La preuve de l'arrêt est celle du
    moteur : la même session répond aussitôt, et une fois fermée, un autre
-   processus peut verrouiller le fichier.
+   processus peut verrouiller le fichier. Fermer une session interrompt ce qui
+   tourne et abandonne ce qui attend ; un flux bloqué sur un curseur gardé mais
+   jamais lu renonce, si bien que `close` libère toujours le fichier.
 
 9. **Les erreurs sont classées d'après les noms d'exception de DuckDB.** L'API C
    ne rend que le message mis en forme, dont les premiers mots sont le type
@@ -170,7 +192,10 @@ calcule en parallèle. Vérifié le 2026-10-23
    conflit de transaction transitoire pour une lecture et ambigu pour une
    écriture ; erreurs d'E/S, de mémoire et fatales ambiguës pour une écriture ;
    fichier tenu par un autre processus permanent, avec ce qu'il faut faire.
-   Aucun chemin n'apparaît dans une erreur ([I-03](../../CLAUDE.md#i-03)).
+   Aucun chemin n'apparaît dans une erreur, sous aucune de ses écritures, ni
+   aucune valeur liée de type texte, décimal, UUID, JSON ou octets d'au moins
+   quatre caractères : DuckDB imprime une clé en double et le texte qu'une
+   conversion n'a pas pu lire ([I-03](../../CLAUDE.md#i-03)).
 
 ## Conséquences
 
@@ -184,8 +209,16 @@ calcule en parallèle. Vérifié le 2026-10-23
   fuseau inventé.
 * **−** **La compilation est plus lourde.** Le moteur représente environ
   1 200 s de CPU à neuf, et ajoute l'exigence d'une chaîne C++ que chaque
-  plateforme remplissait déjà pour SQLite. La CI la met en cache ; un cache
-  froid la paie dans chaque job Rust.
+  plateforme remplissait déjà pour SQLite. Un cache Cargo froid le compile
+  trois fois dans le `make rust` de la CI — clippy, nextest, puis les tests de
+  documentation, qui recompilent 14 crates du graphe hôte du script de build
+  (`tar`, `xattr`, `filetime`, puis `libduckdb-sys`) parce qu'une passe sur les
+  seules bibliothèques unifie leurs fonctionnalités autrement ; aucun
+  changement d'une ligne de la cible `test` ne l'évite. Mesuré le 2026-10-24 :
+  un `make rust` froid prend environ 74 minutes sur macOS et 68 sur Ubuntu, un
+  chaud environ 30. Le quota de cache du dépôt évince le cache d'une pull
+  request entre deux runs, d'où un délai de 110 minutes pour le job Rust ;
+  après la fusion, le premier run froid sur `main` amorce le cache.
 * **−** **Deux versions d'Arrow sont compilées**, et chaque bloc est copié une
   fois de plus qu'avec un binding sur Arrow 59. La copie est linéaire dans le
   lot, sous la borne en octets ; elle n'a pas été mesurée à part du test de
@@ -205,13 +238,12 @@ calcule en parallèle. Vérifié le 2026-10-23
 * **−** **Accorder un dossier est tout ou rien en son sein** : le SQL peut y
   lire et écrire n'importe quoi, et le dossier se tape — le sélecteur du
   formulaire de connexion choisit des fichiers.
-* **−** **`ATTACH` échappe au registre « un moteur par fichier ».** Une
-  instruction qui attache un fichier du dossier accordé, déjà ouvert comme une
-  autre connexion Oxyn, l'ouvre une seconde fois dans le processus, où le verrou
-  d'enregistrement de DuckDB ne voit pas le premier : deux écrivains peuvent
-  alors le corrompre. Le registre garde ce qu'Oxyn ouvre, pas ce que le SQL
-  attache ; un fichier destiné à être attaché n'est pas aussi ouvert comme
-  connexion.
+* **−** **Un `ATTACH` nomme son fichier par un littéral de chaîne simple**, ou
+  il est refusé : la garde de la décision 4 le lit avant DuckDB, et un fichier
+  qu'elle ne voit pas est un fichier qu'elle ne garde pas. Un fichier attaché
+  par une connexion et voulu comme une autre est détaché d'abord.
+* **−** **Un fichier qui liste plus de 50 000 objets au même endroit ne se
+  déplie pas dans l'arbre** ; une console l'interroge toujours.
 
 **Coût de sortie :** modéré. Le binding est derrière les propres types de la
 crate — aucun type `duckdb` ne franchit son API publique —, si bien qu'un autre

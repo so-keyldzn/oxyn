@@ -64,7 +64,8 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
    rebuilt as Arrow 59 in safe code: every buffer is copied, the layout is
    rebuilt with `ArrayData::builder` and validated by `build()` — offsets,
    lengths, UTF-8 —, so a malformed buffer is a permanent decode error, never
-   undefined behavior nor a panic. The column's DuckDB logical type, read once
+   a panic here; the binding's own Arrow 58 import, before it, trusts the
+   engine's memory in the same process. The column's DuckDB logical type, read once
    per column and owned (`DuckType`), decides at every nesting level:
    `HUGEINT` and `UHUGEINT` become `Decimal256(39, 0)` — the bits of a
    `UHUGEINT` read back as unsigned —; `TIMESTAMP WITH TIME ZONE` is tagged
@@ -76,9 +77,13 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
    `DECIMAL(w, s)` with its width, `TIMESTAMP` without a zone, `INTERVAL` as
    month-day-nano, `ENUM` as a dictionary, lists, arrays, maps, structs and
    unions with their children converted the same way — and the field metadata
-   `oxyn.duckdb.type` carries DuckDB's name of the type. Each converted chunk is
-   then split until every piece fits the byte bound; a single row larger than
-   the bound travels alone.
+   `oxyn.duckdb.type` carries DuckDB's name of the type. A chunk — 2,048 rows,
+   whatever they weigh — is cut into row ranges measured on DuckDB's own Arrow
+   before anything is copied; each range is copied, converted and sent before
+   the next is copied, so 2,048 one-megabyte BLOBs never exist twice at once.
+   Every piece fits the byte bound; a single row larger than the bound travels
+   alone, and the values of a dictionary, shared by every piece, stop the
+   split rather than be counted once per row.
 
 3. **No panic is reachable from engine data.** Of the binding, the driver calls
    `Connection::open_with_flags`, `open_in_memory_with_flags`, `try_clone`,
@@ -91,14 +96,24 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
    `decimal_scale`. Never `get_alias`, never the row interface, never the
    Arrow iterators. Nesting deeper than 64 levels is refused. The driver's own
    catalog queries go through the same conversion and read cells with Arrow's
-   checked accessors. A new `duckdb` version is re-audited against this list.
+   checked accessors; each reads at most 50,000 rows — the catalog cache's
+   budget per connection ([PERFORMANCE](../PERFORMANCE.md)) — and 64 MiB, and a
+   file listing more in one place fails to expand, permanently, instead of
+   filling the application's memory ([I-06](../../CLAUDE.md#i-06)). A new
+   `duckdb` version is re-audited against this list.
 
 4. **One engine per file in the process, one carrier thread per session.**
    The first session of a file opens the engine; the others take a connection
    to it with `try_clone`, which is how DuckDB shares a database inside a
    process. An idle anchor connection keeps the engine while a session lives;
    the last session to close releases the file. A file already open in Oxyn
-   under another access mode or folder is refused, not opened twice. `:memory:`
+   under another access mode or folder is refused, not opened twice. A path
+   DuckDB would respell itself — a leading `~`, a `file:` URL — is refused,
+   since two spellings of one file would be two keys. `ATTACH` is held to the
+   same rule both ways: an `ATTACH` of a file open as a connection is refused
+   before DuckDB prepares it — its file is read from a plain string literal,
+   and any other form is refused —, and a connection on a file another engine
+   has attached is refused when it opens. `:memory:`
    is one private database per configured connection, shared by its sessions.
    Each session owns a thread that owns its connection, because a streamed
    statement borrows it across awaits; the thread computes at most one batch
@@ -113,7 +128,10 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
    extension. Parquet and JSON need none. A statement that needs an extension
    this build does not link fails with DuckDB's message, classified permanent;
    Oxyn does not offer to download one. The policy is the connection's, not the
-   statement's: a typed `SET` cannot lift it.
+   statement's: a typed `SET` cannot lift it. The engine also leaves the
+   application room: `memory_limit` is set to half of DuckDB's own default —
+   40 % of the memory it sees instead of 80 % — and `threads` to every core but
+   one. Those two a statement may raise, as the user's choice.
 
 6. **Read-only is the engine's.** A read-only connection opens the engine in
    `AccessMode::ReadOnly` and declares `READ_ONLY_SESSION` without `DDL`,
@@ -142,7 +160,9 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
    `SERVER_SIDE_CANCEL`, like SQLite: there is no server, and the interface
    reads that flag as "the Cancel button reaches a server". The proof of the
    stop is the engine's: the same session answers at once, and once closed
-   another process can lock the file.
+   another process can lock the file. Closing a session interrupts what runs
+   and drops what waits; a stream blocked on a cursor kept but never read gives
+   up, so `close` always releases the file.
 
 9. **Errors are classified from DuckDB's exception names.** The C API hands
    back only the rendered message, whose first words are the exception type
@@ -150,7 +170,10 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
    carries the class as data: refusals permanent; a transaction conflict
    transient for a read and ambiguous for a write; I/O, memory and fatal errors
    ambiguous for a write; a file held by another process permanent, with what
-   to do. No path appears in an error ([I-03](../../CLAUDE.md#i-03)).
+   to do. No path appears in an error, in any of its spellings, and no bound
+   text, decimal, UUID, JSON or byte value of four characters or more: DuckDB
+   prints a duplicate key and the text a cast could not read
+   ([I-03](../../CLAUDE.md#i-03)).
 
 ## Consequences
 
@@ -162,7 +185,15 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
   their width, nested types, zone-less timestamps without an invented zone.
 * **−** **The build is heavier.** The engine is about 1,200 s of CPU from
   clean, and adds a C++ toolchain requirement every platform already met for
-  SQLite. CI caches it; a cold cache pays it in each Rust job.
+  SQLite. A cold Cargo cache compiles it three times in CI's `make rust` —
+  clippy, nextest, then the doc tests, which rebuild 14 crates of the build
+  script's host graph (`tar`, `xattr`, `filetime`, then `libduckdb-sys`)
+  because a library-only pass unifies their features differently; no one-line
+  change of the `test` target avoids it. Measured on 2026-10-24: a cold
+  `make rust` takes about 74 minutes on macOS and 68 on Ubuntu, a warm one
+  about 30. The repository's cache quota evicts a pull request's cache between
+  runs, so the Rust job's timeout is 110 minutes; after the merge, the first
+  cold run on `main` seeds the cache.
 * **−** **Two Arrow versions are compiled**, and every chunk is copied once
   more than with a binding on Arrow 59. The copy is linear in the batch, under
   the byte bound; it was not measured apart from the end-to-end streaming test
@@ -178,12 +209,12 @@ types and unions, and it computes in parallel. Checked on 2026-10-23
 * **−** **Granting a folder is all or nothing within it**: SQL may read and
   write anything under it, and the folder is typed — the connection form's
   picker chooses files.
-* **−** **`ATTACH` escapes the one-engine-per-file registry.** A statement that
-  attaches a file of the granted folder already open as another Oxyn
-  connection opens it a second time in the process, where DuckDB's record lock
-  does not see the first: two writers can then corrupt it. The registry
-  guards what Oxyn opens, not what SQL attaches; a file meant to be attached is
-  not also opened as a connection.
+* **−** **An `ATTACH` names its file as a plain string literal**, or is
+  refused: the guard of decision 4 reads it before DuckDB does, and a file it
+  cannot see is a file it cannot guard. A file attached by one connection and
+  wanted as another is detached first.
+* **−** **A file listing more than 50,000 objects in one place does not
+  expand in the tree**; a console still queries it.
 
 **Exit cost:** moderate. The binding is behind the crate's own types — no
 `duckdb` type crosses its public API —, so another binding replaces `open`,
