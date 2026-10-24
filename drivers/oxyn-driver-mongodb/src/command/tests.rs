@@ -137,6 +137,22 @@ fn hostile_collection_names_are_values_not_text() {
 }
 
 #[test]
+fn a_cursor_that_never_ends_is_refused_before_it_is_sent() {
+    for text in [
+        r#"{"find": "log", "tailable": true}"#,
+        r#"{"find": "log", "tailable": true, "awaitData": true}"#,
+        r#"{"aggregate": "orders", "pipeline": [{"$changeStream": {}}], "cursor": {}}"#,
+        r#"{"aggregate": 1, "pipeline": [{"$changeStream": {"allChangesForCluster": true}}], "cursor": {}}"#,
+    ] {
+        assert!(
+            matches!(parse(text), Err(OxynError::NotSupported { .. })),
+            "{text}"
+        );
+    }
+    assert!(parse(r#"{"find": "log", "tailable": false}"#).is_ok());
+}
+
+#[test]
 fn a_key_with_a_nul_is_refused() {
     assert!(parse("{\"insert\": \"t\", \"documents\": [{\"a\\u0000b\": 1}]}").is_err());
 }

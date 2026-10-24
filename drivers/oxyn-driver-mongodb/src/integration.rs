@@ -707,6 +707,21 @@ async fn server_errors_are_classified_as_data() {
     .await
     .expect_err("over the memory limit");
     assert!(error.to_string().contains("allowDiskUse"), "{error}");
+    // A write stopped by its own `maxTimeMS` may have merged part of its
+    // output: ambiguous, never a plain refusal the user would replay.
+    let error = run(
+        &*session,
+        format!(
+            r#"{{"aggregate": "u", "$db": "{database}", "maxTimeMS": 1, "pipeline": [
+                {{"$project": {{"a": {{"$range": [0, 1500]}}, "b": {{"$range": [0, 1500]}}}}}},
+                {{"$unwind": "$a"}}, {{"$unwind": "$b"}}, {{"$project": {{"_id": 0, "a": 1, "b": 1}}}},
+                {{"$merge": {{"into": "merged"}}}}], "cursor": {{}}}}"#
+        ),
+    )
+    .await
+    .expect_err("over its own time bound");
+    assert_eq!(error.class(), ErrorClass::Ambiguous, "{error}");
+    assert!(!error.is_retryable());
     drop_database(&*session, &database).await;
     session.close().await.expect("close");
 }

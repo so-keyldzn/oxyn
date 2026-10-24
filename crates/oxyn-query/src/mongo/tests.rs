@@ -98,6 +98,26 @@ fn a_repeated_key_is_refused_at_any_depth() {
 }
 
 #[test]
+fn reading_credential_hashes_is_not_a_plain_read() {
+    for text in [
+        r#"{"usersInfo": 1, "showCredentials": true}"#,
+        r#"{"usersInfo": "app", "showCredentials": 1}"#,
+    ] {
+        assert_eq!(
+            classify_mongo(text).intent,
+            StatementIntent::Unknown,
+            "{text}"
+        );
+    }
+    for text in [
+        r#"{"usersInfo": 1}"#,
+        r#"{"usersInfo": 1, "showCredentials": false}"#,
+    ] {
+        assert_eq!(classify_mongo(text).intent, StatementIntent::Read, "{text}");
+    }
+}
+
+#[test]
 fn the_first_key_is_the_name_even_when_later_keys_sort_first() {
     let command = MongoCommand::parse(r#"{"insert": "u", "documents": [], "comment": "x"}"#)
         .expect("one command");

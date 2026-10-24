@@ -133,6 +133,11 @@ impl Feed {
             if !self.load_next().await? {
                 return Ok(());
             }
+            // An empty batch from an open cursor is a server waiting for
+            // data: the sample is what has arrived, not what may come.
+            if self.pending.len() == before {
+                return Ok(());
+            }
             bytes = self
                 .pending
                 .iter()

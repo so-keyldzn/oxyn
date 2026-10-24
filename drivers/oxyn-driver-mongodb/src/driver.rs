@@ -256,9 +256,16 @@ impl Driver for MongoDriver {
         let driver = self.id();
         let read =
             |error: mongodb::error::Error| map_error(&driver, StatementIntent::Read, &error, false);
-        let client = before(cancel, async {
+        let (client, stopper) = before(cancel, async {
             let options = spec.client_options().await.map_err(read)?;
-            Client::with_options(options).map_err(read)
+            // The stopper's single connection is opened on its first use: a
+            // session that never stops a command never pays for it.
+            let mut stopping = options.clone();
+            stopping.max_pool_size = Some(1);
+            Ok((
+                Client::with_options(options).map_err(read)?,
+                Client::with_options(stopping).map_err(read)?,
+            ))
         })
         .await?;
         let admin = client.database("admin");
@@ -270,7 +277,7 @@ impl Driver for MongoDriver {
         })
         .await?;
         let version = build.get_str("version").unwrap_or("unknown").to_owned();
-        let can_kill = before(cancel, async { Ok(cancel::probe(&client).await) }).await?;
+        let can_kill = before(cancel, async { Ok(cancel::probe(&stopper).await) }).await?;
         let status = before(cancel, async {
             admin
                 .run_command(doc! { "connectionStatus": 1, "showPrivileges": true })
@@ -295,6 +302,7 @@ impl Driver for MongoDriver {
         );
         let shared = Arc::new(Shared {
             client,
+            stopper,
             driver,
             default_database: spec.database().map(str::to_owned),
             capabilities,

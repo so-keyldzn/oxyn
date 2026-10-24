@@ -82,13 +82,16 @@ impl Registry {
 /// # Errors
 /// The library's error when the server refuses the command or cannot be
 /// reached.
-pub(crate) async fn kill(client: &Client, running: &Running) -> mongodb::error::Result<()> {
+pub(crate) async fn kill(stopper: &Client, running: &Running) -> mongodb::error::Result<()> {
     running.killed.store(true, Ordering::Release);
-    client
-        .database("admin")
-        .run_command(doc! { "killSessions": [ Bson::Document(running.lsid.clone()) ] })
-        .await
-        .map(drop)
+    // Bounded: a server that does not answer the stop leaves it unconfirmed,
+    // never a cancellation that waits forever.
+    let admin = stopper.database("admin");
+    let send = admin.run_command(doc! { "killSessions": [ Bson::Document(running.lsid.clone()) ] });
+    match tokio::time::timeout(KILL_GRACE, send).await {
+        Ok(outcome) => outcome.map(drop),
+        Err(_) => Err(mongodb::error::Error::custom(Unconfirmed)),
+    }
 }
 
 /// How long a stopped command is awaited after `killSessions`: past it, the
@@ -106,7 +109,7 @@ pub(crate) struct Unconfirmed;
 /// proves the stop, not the return of this function
 /// ([DRIVER-CONTRACT §2](../../../docs/DRIVER-CONTRACT.md)).
 pub(crate) async fn race<T>(
-    client: &Client,
+    stopper: &Client,
     running: &Running,
     cancel: &CancelToken,
     call: impl Future<Output = mongodb::error::Result<T>>,
@@ -115,7 +118,7 @@ pub(crate) async fn race<T>(
     tokio::select! {
         outcome = &mut call => outcome,
         () = cancel.cancelled() => {
-            if let Err(error) = kill(client, running).await {
+            if let Err(error) = kill(stopper, running).await {
                 tracing::debug!(
                     target: "oxyn::driver::mongodb",
                     code = ?crate::error::server_code(&error),
@@ -135,9 +138,9 @@ pub(crate) async fn race<T>(
 /// Sends `killSessions` for a session id nobody holds — a fresh UUID: the
 /// server answers it like any other, and kills nothing ("If the user has no
 /// session that match, the killSessions has no effect").
-pub(crate) async fn probe(client: &Client) -> bool {
+pub(crate) async fn probe(stopper: &Client) -> bool {
     let nobody = doc! { "id": bson::Uuid::new() };
-    client
+    stopper
         .database("admin")
         .run_command(doc! { "killSessions": [ nobody ] })
         .await

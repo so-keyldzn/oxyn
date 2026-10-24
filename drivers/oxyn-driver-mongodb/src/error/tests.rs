@@ -60,10 +60,42 @@ fn what_the_command_itself_got_wrong_is_permanent() {
         MEMORY_LIMIT_NO_DISK_USE,
     ] {
         assert_eq!(
+            class_of_code(code, READ, &[]),
+            ErrorClass::Permanent,
+            "a read that failed applied nothing: {code}"
+        );
+    }
+    for code in [9, 13, 26, 59, 72, 73, 168] {
+        assert_eq!(
             class_of_code(code, WRITE, &[]),
             ErrorClass::Permanent,
-            "{code}"
+            "refused before running: {code}"
         );
+    }
+}
+
+#[test]
+fn a_write_that_failed_while_running_is_ambiguous() {
+    // A multi-document update stopped by its own `maxTimeMS` or a `killOp`,
+    // a `$merge` that met a duplicate key or a type error halfway: part of
+    // it may be applied, whatever the cause.
+    for code in [
+        MAX_TIME_MS_EXPIRED,
+        INTERRUPTED,
+        46841, // ClientMarkedKilled
+        11000,
+        2,
+        14,
+        MEMORY_LIMIT_NO_DISK_USE,
+        BSON_OBJECT_TOO_LARGE,
+    ] {
+        for intent in [WRITE, StatementIntent::Ddl, StatementIntent::Unknown] {
+            assert_eq!(
+                class_of_code(code, intent, &[]),
+                ErrorClass::Ambiguous,
+                "{code} {intent}"
+            );
+        }
     }
 }
 

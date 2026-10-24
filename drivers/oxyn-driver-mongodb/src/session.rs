@@ -64,6 +64,9 @@ pub const DEFAULT_DATABASE: &str = "admin";
 /// What the session shares with its catalog.
 pub(crate) struct Shared {
     pub(crate) client: Client,
+    /// A second client of one connection, used only to send `killSessions`:
+    /// a stop must not wait for a connection of the pool it is stopping.
+    pub(crate) stopper: Client,
     pub(crate) driver: DriverId,
     pub(crate) default_database: Option<String>,
     pub(crate) capabilities: Capabilities,
@@ -137,7 +140,7 @@ impl MongoSession {
         let outcome = async {
             let db = self.shared.client.database(&database);
             let mut feed = if CURSOR_COMMANDS.contains(&command.name.as_str()) {
-                let cursor = cancel::race(&self.shared.client, &running, cancel, async {
+                let cursor = cancel::race(&self.shared.stopper, &running, cancel, async {
                     db.run_raw_cursor_command(raw)
                         .session(&mut session)
                         .batch()
@@ -153,11 +156,23 @@ impl MongoSession {
                     Arc::clone(&running),
                 )
             } else {
-                let reply: Document = cancel::race(&self.shared.client, &running, cancel, async {
+                let reply: Document = cancel::race(&self.shared.stopper, &running, cancel, async {
                     db.run_raw_command(raw).session(&mut session).await
                 })
                 .await
                 .map_err(|error| map_error(driver, intent, &error, running.was_killed()))?;
+                if !intent.is_read_only()
+                    && let Ok(concern) = reply.get_document("writeConcernError")
+                {
+                    // `ok: 1` with a write concern error: applied on the
+                    // primary, not confirmed where the concern asked. A
+                    // failover may roll it back; a replay may apply it twice.
+                    return Err(OxynError::OutcomeUnknown(format!(
+                        "the write was applied but its write concern was not satisfied ({}): \
+                         it may be rolled back by a failover",
+                        concern.get_str("codeName").unwrap_or("writeConcernError")
+                    )));
+                }
                 let reply = RawDocumentBuf::try_from(&reply).map_err(|error| {
                     OxynError::Internal(format!("the server's reply cannot be re-encoded: {error}"))
                 })?;
@@ -165,8 +180,15 @@ impl MongoSession {
             };
             self.race_oxyn(&running, intent, cancel, feed.fill_sample())
                 .await?;
+            // The command already ran: after a write, a reply that cannot be
+            // read leaves its outcome unknown.
             let plan = Plan::infer(feed.sample()).map_err(|error| {
-                OxynError::driver(driver.clone(), oxyn_core::ErrorClass::Permanent, error)
+                let class = if intent.is_read_only() {
+                    oxyn_core::ErrorClass::Permanent
+                } else {
+                    oxyn_core::ErrorClass::Ambiguous
+                };
+                OxynError::driver(driver.clone(), class, error)
             })?;
             Ok(MongoCursor::new(
                 handle,
@@ -200,7 +222,7 @@ impl MongoSession {
         tokio::select! {
             outcome = &mut call => outcome,
             () = cancel.cancelled() => {
-                let _ = cancel::kill(&self.shared.client, running).await;
+                let _ = cancel::kill(&self.shared.stopper, running).await;
                 match tokio::time::timeout(cancel::KILL_GRACE, call).await {
                     Ok(Ok(value)) => Ok(value),
                     Ok(Err(_)) | Err(_) => Err(stopped(intent)),
@@ -307,7 +329,7 @@ impl Session for MongoSession {
         let Some(running) = self.registry.get(statement) else {
             return Ok(());
         };
-        cancel::kill(&self.shared.client, &running)
+        cancel::kill(&self.shared.stopper, &running)
             .await
             .map_err(|error| map_error(&self.shared.driver, StatementIntent::Read, &error, false))
     }
@@ -337,6 +359,7 @@ impl Session for MongoSession {
     /// the server reclaims what it held when the connections close.
     async fn close(self: Box<Self>) -> Result<()> {
         self.shared.client.clone().shutdown().immediate(true).await;
+        self.shared.stopper.clone().shutdown().immediate(true).await;
         Ok(())
     }
 }

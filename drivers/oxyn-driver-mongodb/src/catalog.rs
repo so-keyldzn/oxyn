@@ -40,6 +40,14 @@ mod definition;
 /// the rest.
 const MAX_ENTRIES: usize = 100_000;
 
+/// Bytes of `listCollections` entries beyond which a listing is refused: an
+/// entry carries its validator and view pipeline, and a count bound alone
+/// would let a few thousand large schemas take a gigabyte (I-06).
+const MAX_LISTING_BYTES: usize = 64 << 20;
+
+/// The server-side bound, in milliseconds, on sampling a view's documents.
+const VIEW_SAMPLE_MS: i64 = 10_000;
+
 /// The databases MongoDB itself uses.
 const SYSTEM_DATABASES: &[&str] = &["admin", "config", "local"];
 
@@ -80,7 +88,7 @@ impl MongoCatalog {
             .map_err(|error| map_error(driver, StatementIntent::Read, &error, false))?;
         let running = Running::new(session.id().clone());
         let db = self.shared.client.database(database);
-        cancel::race(&self.shared.client, &running, cancel, async {
+        cancel::race(&self.shared.stopper, &running, cancel, async {
             db.run_command(command).session(&mut session).await
         })
         .await
@@ -110,7 +118,7 @@ impl MongoCatalog {
             map_error(driver, StatementIntent::Read, &error, running.was_killed())
         };
         let db = self.shared.client.database(database);
-        let mut cursor = cancel::race(&self.shared.client, &running, cancel, async {
+        let mut cursor = cancel::race(&self.shared.stopper, &running, cancel, async {
             db.run_cursor_command(command).session(&mut session).await
         })
         .await
@@ -118,6 +126,13 @@ impl MongoCatalog {
         let mut documents = Vec::new();
         let mut bytes = 0_usize;
         loop {
+            if strict && bytes >= MAX_LISTING_BYTES {
+                return Err(OxynError::CatalogUnavailable(format!(
+                    "the listing exceeds {} MiB of entries (validators, view pipelines): it is \
+                     refused rather than shown partial",
+                    MAX_LISTING_BYTES >> 20
+                )));
+            }
             if documents.len() >= limit || (!strict && bytes >= SAMPLE_BYTES) {
                 if strict {
                     return Err(OxynError::CatalogUnavailable(format!(
@@ -128,7 +143,7 @@ impl MongoCatalog {
                 return Ok(documents);
             }
             let advanced = cancel::race(
-                &self.shared.client,
+                &self.shared.stopper,
                 &running,
                 cancel,
                 cursor.advance(&mut session),
@@ -146,7 +161,10 @@ impl MongoCatalog {
 
     /// The `listCollections` entry of one relation.
     async fn listed(&self, database: &str, name: &str, cancel: &CancelToken) -> Result<Listed> {
-        Ok(listing(&self.entry(database, name, cancel).await?))
+        Ok(listing(
+            &self.entry(database, name, cancel).await?,
+            Detail::Full,
+        ))
     }
 
     /// The raw `listCollections` entry of one relation.
@@ -174,8 +192,17 @@ impl MongoCatalog {
     }
 }
 
+/// How much of an entry a comment carries.
+#[derive(Clone, Copy)]
+enum Detail {
+    /// One relation described: its validator whole.
+    Full,
+    /// A whole database listed: that it has a validator.
+    Listing,
+}
+
 /// Reads one `listCollections` entry.
-fn listing(entry: &RawDocument) -> Listed {
+fn listing(entry: &RawDocument, detail: Detail) -> Listed {
     let server_type = entry.get_str("type").unwrap_or("collection").to_owned();
     let options = entry.get_document("options").ok();
     let mut notes: Vec<String> = Vec::new();
@@ -204,9 +231,12 @@ fn listing(entry: &RawDocument) -> Listed {
         notes.push("capped".to_owned());
     }
     if let Some(validator) = options.and_then(|o| o.get_document("validator").ok()) {
-        match ejson::document(validator, Mode::Relaxed) {
-            Ok(text) => notes.push(format!("validator: {text}")),
-            Err(_) => notes.push("validator (unreadable)".to_owned()),
+        // A tree listing names the validator only: copying every schema of a
+        // database into its comments would hold them twice.
+        match (detail, ejson::document(validator, Mode::Relaxed)) {
+            (Detail::Full, Ok(text)) => notes.push(format!("validator: {text}")),
+            (Detail::Full, Err(_)) => notes.push("validator (unreadable)".to_owned()),
+            (Detail::Listing, _) => notes.push("validator".to_owned()),
         }
     }
     Listed {
@@ -327,7 +357,7 @@ impl CatalogProvider for MongoCatalog {
             let Ok(name) = entry.get_str("name") else {
                 continue;
             };
-            let listed = listing(entry);
+            let listed = listing(entry, Detail::Listing);
             let Ok(reference) = RelationRef::new(namespace.clone(), name, listed.kind) else {
                 tracing::debug!(target: "oxyn::driver::mongodb", "a collection name cannot be shown");
                 continue;
@@ -352,15 +382,27 @@ impl CatalogProvider for MongoCatalog {
             ));
         };
         let listed = self.listed(database, name, cancel).await?;
+        let mut sample_command =
+            doc! { "find": name, "limit": i64::try_from(SAMPLE_DOCUMENTS).unwrap_or(i64::MAX) };
+        if listed.kind == RelationKind::View {
+            // A view's pipeline runs to produce its first documents, and a
+            // `$group` reads its whole source: a click in the tree is bounded
+            // on the server.
+            sample_command.insert("maxTimeMS", VIEW_SAMPLE_MS);
+        }
         let sample = self
-            .documents(
-                database,
-                doc! { "find": name, "limit": i64::try_from(SAMPLE_DOCUMENTS).unwrap_or(i64::MAX) },
-                SAMPLE_DOCUMENTS,
-                false,
-                cancel,
-            )
-            .await?;
+            .documents(database, sample_command, SAMPLE_DOCUMENTS, false, cancel)
+            .await
+            .map_err(|error| match error {
+                OxynError::Query(message) if listed.kind == RelationKind::View => {
+                    OxynError::CatalogUnavailable(format!(
+                        "the view's fields could not be sampled within {} s ({message}); run a \
+                         bounded aggregate on it from a console",
+                        VIEW_SAMPLE_MS / 1000
+                    ))
+                }
+                other => other,
+            })?;
         let plan = Plan::infer(sample.iter().map(AsRef::as_ref)).map_err(|error| {
             OxynError::CatalogUnavailable(format!("the sampled documents cannot be read: {error}"))
         })?;
@@ -486,7 +528,7 @@ impl CatalogProvider for MongoCatalog {
             ));
         };
         let entry = self.entry(database, name, cancel).await?;
-        let indexes = if listing(&entry).kind == RelationKind::View {
+        let indexes = if listing(&entry, Detail::Listing).kind == RelationKind::View {
             Vec::new()
         } else {
             self.documents(

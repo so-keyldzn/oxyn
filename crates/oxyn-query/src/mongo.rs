@@ -496,6 +496,14 @@ fn read_command(document: &JsonValue) -> Reading {
         ));
     }
     let name = name.as_str();
+    if name == "usersInfo" && !is_false(document.get("showCredentials")) {
+        // It only reads, but what it reads is credential material — the
+        // SCRAM hashes — which would reach the grid, the history and an
+        // export: approved like a write, never run on an agent's word.
+        return Reading::unknown(
+            "`usersInfo` with `showCredentials` returns credential hashes".to_owned(),
+        );
+    }
     let reading = if name == "explain" {
         // The plan of a write is computed without applying it, but the
         // reading of what is explained is the floor, as for `EXPLAIN ANALYZE`.
@@ -530,6 +538,10 @@ fn read_command(document: &JsonValue) -> Reading {
 
 /// The risk of a write command: a filter that selects every document of the
 /// collection, with an effect not bounded to one document.
+///
+/// Part of the [`Classification`] this crate returns; the executor does not
+/// receive it yet, since `Session::classify_intent` carries an intent only
+/// (ADR-0064) — the gap is stated in ADR-0063.
 fn write_risk(name: &str, document: &JsonValue) -> MutationRisk {
     let statements = |key: &str| match document.get(key) {
         Some(JsonValue::Array(items)) => items.as_slice(),

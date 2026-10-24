@@ -96,6 +96,14 @@ pub(crate) fn parse(text: &str) -> Result<BsonCommand> {
         ));
     }
     let mut document = to_document(entries, 0).map_err(OxynError::Query)?;
+    if let Some(what) = endless(&document) {
+        return Err(OxynError::NotSupported {
+            capability: format!(
+                "{what}: its cursor never ends, so the console would wait for a result that \
+                 never completes; bounded captures are not offered yet"
+            ),
+        });
+    }
     let database = match document.remove("$db") {
         None => None,
         Some(Bson::String(name)) => Some(check_database_name(&name)?.to_owned()),
@@ -110,6 +118,27 @@ pub(crate) fn parse(text: &str) -> Result<BsonCommand> {
         document,
         database,
     })
+}
+
+/// What makes a command's cursor endless: a tailable `find`, or a change
+/// stream stage. The server answers each `getMore` with whatever arrived,
+/// possibly nothing, forever.
+fn endless(document: &Document) -> Option<&'static str> {
+    if document.get_bool("tailable").unwrap_or(false)
+        || document.get_bool("awaitData").unwrap_or(false)
+    {
+        return Some("a tailable cursor");
+    }
+    let streams = document.get_array("pipeline").is_ok_and(|stages| {
+        stages.iter().any(|stage| {
+            stage.as_document().is_some_and(|stage| {
+                stage
+                    .keys()
+                    .any(|key| key == "$changeStream" || key == "$changeStreamSplitLargeEvent")
+            })
+        })
+    });
+    streams.then_some("a change stream")
 }
 
 /// A database name the server can hold: not empty, under 64 bytes, without

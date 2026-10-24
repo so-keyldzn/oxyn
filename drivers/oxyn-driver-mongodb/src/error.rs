@@ -172,18 +172,48 @@ fn class_of_code(code: i32, intent: StatementIntent, labels: &[String]) -> Error
             | EXCEEDED_TIME_LIMIT
     ) || has(TRANSIENT_TRANSACTION)
         || has(RETRYABLE_WRITE);
-    if !transient_for_reads {
-        return ErrorClass::Permanent;
-    }
     if intent.is_read_only() {
-        ErrorClass::Transient
+        return if transient_for_reads {
+            ErrorClass::Transient
+        } else {
+            ErrorClass::Permanent
+        };
+    }
+    // A command that may write and failed for any reason but a refusal the
+    // server makes before touching a document may have applied part of its
+    // work: a multi-document update stopped by its own `maxTimeMS` or a
+    // `killOp`, a `$merge` that hit a duplicate key halfway. The verdict
+    // follows the statement, not the cause (DRIVER-CONTRACT §4): replaying
+    // it would apply that part twice.
+    if PRE_EXECUTION.contains(&code) {
+        ErrorClass::Permanent
     } else {
-        // A write stopped by a step-down, a shutdown or a lock may have
-        // applied part of its documents: replaying it without the transaction
-        // number a retryable write carries is not idempotent.
         ErrorClass::Ambiguous
     }
 }
+
+/// The refusals the server makes while reading a command, before it runs:
+/// nothing was applied. A code that can also be raised while documents are
+/// written — `BadValue` and `TypeMismatch` from an expression, `DuplicateKey`
+/// from a `$merge`, `BSONObjectTooLarge` from a stage — is not in the list.
+const PRE_EXECUTION: &[i32] = &[
+    9,   // FailedToParse
+    13,  // Unauthorized
+    20,  // IllegalOperation
+    22,  // InvalidBSON
+    26,  // NamespaceNotFound
+    48,  // NamespaceExists
+    59,  // CommandNotFound
+    72,  // InvalidOptions
+    73,  // InvalidNamespace
+    85,  // IndexOptionsConflict
+    86,  // IndexKeySpecsConflict
+    166, // CommandNotSupportedOnView
+    167, // OptionNotSupportedOnView
+    168, // InvalidPipelineOperator
+    182, // InvalidViewDefinition
+    323, // APIStrictError
+];
 
 /// A user-facing hint for the server limits that have a known remedy.
 fn remedy(code: i32) -> Option<&'static str> {
@@ -262,7 +292,12 @@ pub(crate) fn map_error(
         ErrorKind::InvalidTlsConfig { .. } => OxynError::Config(
             "the TLS configuration is unusable: check the CA and certificate files".to_owned(),
         ),
-        ErrorKind::InvalidArgument { message, .. } => OxynError::Query(message.clone()),
+        // The library's text can quote a DNS seed list's TXT options: not
+        // shown, like every topology message.
+        ErrorKind::InvalidArgument { .. } => OxynError::Query(
+            "the MongoDB client refused an option of the command or of the connection as invalid"
+                .to_owned(),
+        ),
         ErrorKind::Io(io) => transport(driver, intent, &format!("{:?}", io.kind()), labels),
         ErrorKind::ConnectionPoolCleared { .. } => {
             transport(driver, intent, "connection pool cleared", labels)
