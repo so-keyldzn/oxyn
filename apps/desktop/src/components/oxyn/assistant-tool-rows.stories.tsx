@@ -1,9 +1,14 @@
+import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent } from "storybook/test"
+import { expect, fn, userEvent, waitFor } from "storybook/test"
+import type { Mock } from "storybook/test"
 
 import { AssistantToolRows } from "./assistant-tool-rows"
+import type { ToolRowsState } from "./assistant-tool-rows"
 import { invoiceColumns, syntheticPages } from "./fixtures"
 import type { FetchPage } from "./result-grid"
+import { Button } from "@/components/ui/button"
+import { BackendError } from "@/lib/ipc/client"
 import type { Cell } from "@/lib/ipc/types"
 
 const open = {
@@ -36,18 +41,19 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 /**
- * More rows than the chat reaches: the first hundred, and the whole result one
- * click away, in a tab — never by running the query again.
+ * More rows than one chat page: the first hundred, the next ones a page away,
+ * and the whole result one click away, in a tab — never by running the query
+ * again.
  */
 export const Populated: Story = {
   play: async ({ args, canvas }) => {
     const grid = await canvas.findByRole("grid", {
-      name: "Rows the query returned",
+      name: "Rows the query returned, 1–100 of 1,200",
     })
     await expect(grid).toBeVisible()
     // The chat grid is bounded: 100 rows and a header, however large the result.
     await expect(grid).toHaveAttribute("aria-rowcount", "101")
-    await expect(canvas.getByText(/First 100 rows of 1,200/)).toBeVisible()
+    await expect(canvas.getByText("Rows 1–100 of 1,200")).toBeVisible()
     await expect(
       canvas.getByText(/shown to you only; the model got the count/)
     ).toBeVisible()
@@ -254,5 +260,364 @@ export const FailedForGood: Story = {
   },
   play: async ({ canvas }) => {
     await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull()
+  },
+}
+
+const BIG = 250_000
+
+/** Every read a paged story makes, kept to check none leaves the rows held. */
+const bigPages = fn(syntheticPages(BIG, 0))
+const shortPages = fn(syntheticPages(250, 0))
+
+/** No read ever asked for a row the retained result does not hold. */
+async function readInside(spy: Mock<FetchPage>, rows: number) {
+  await expect(spy).toHaveBeenCalled()
+  for (const [offset, limit] of spy.mock.calls) {
+    await expect(offset).toBeGreaterThanOrEqual(0)
+    await expect(offset + limit).toBeLessThanOrEqual(rows)
+  }
+}
+
+/** A pager button stays in the tab order at a bound, inert, and says why. */
+async function inert(button: HTMLElement, reason: string) {
+  await expect(button).toHaveAttribute("aria-disabled", "true")
+  await expect(button).toHaveAccessibleDescription(reason)
+}
+
+async function live(button: HTMLElement) {
+  await expect(button.getAttribute("aria-disabled")).not.toBe("true")
+}
+
+const paged = { state: { ...open, rows: BIG }, fetchPage: bigPages }
+
+/** The first of 2,500 pages: nothing before it, said rather than hidden. */
+export const FirstPage: Story = {
+  args: paged,
+  play: async ({ canvas }) => {
+    await expect(
+      await canvas.findByRole("grid", {
+        name: "Rows the query returned, 1–100 of 250,000",
+      })
+    ).toHaveAttribute("aria-rowcount", "101")
+    await expect(canvas.getByText("Rows 1–100 of 250,000")).toBeVisible()
+    await inert(
+      canvas.getByRole("button", { name: "Previous page" }),
+      "This is the first page"
+    )
+    await live(canvas.getByRole("button", { name: "Next page" }))
+    await readInside(bigPages, BIG)
+  },
+}
+
+/**
+ * Next reads rows 101–200 from the buffer, Previous comes back: the range is
+ * announced once, focus stays on the button, and the gutter numbers the
+ * result's rows.
+ */
+export const PagesForwardAndBack: Story = {
+  args: paged,
+  play: async ({ args, canvas }) => {
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    const next = canvas.getByRole("button", { name: "Next page" })
+    await userEvent.click(next)
+    await expect(canvas.getByText("Rows 101–200 of 250,000")).toBeVisible()
+    await expect(
+      canvas.getByText("Showing rows 101–200 of 250,000")
+    ).toBeInTheDocument()
+    await expect(
+      await canvas.findByRole("rowheader", { name: "Row 101" })
+    ).toBeVisible()
+    await expect(
+      canvas.getByRole("grid", {
+        name: "Rows the query returned, 101–200 of 250,000",
+      })
+    ).toBeVisible()
+    await expect(next).toHaveFocus()
+    await expect(bigPages.mock.calls.map(([offset]) => offset)).toContain(100)
+
+    const previous = canvas.getByRole("button", { name: "Previous page" })
+    await userEvent.click(previous)
+    await expect(canvas.getByText("Rows 1–100 of 250,000")).toBeVisible()
+    await expect(
+      canvas.getByText("Showing rows 1–100 of 250,000")
+    ).toBeInTheDocument()
+    await expect(previous).toHaveFocus()
+    await inert(previous, "This is the first page")
+
+    // Paging opens nothing: the whole result is still one click away.
+    await userEvent.click(canvas.getByRole("button", { name: /Open all rows/ }))
+    await expect(args.onOpenAll).toHaveBeenCalledOnce()
+    await readInside(bigPages, BIG)
+  },
+}
+
+/** Between the bounds, both ways are open. */
+export const MiddlePage: Story = {
+  args: paged,
+  play: async ({ canvas }) => {
+    const next = canvas.getByRole("button", { name: "Next page" })
+    await userEvent.click(next)
+    await userEvent.click(next)
+    await expect(canvas.getByText("Rows 201–300 of 250,000")).toBeVisible()
+    await expect(
+      await canvas.findByRole("rowheader", { name: "Row 201" })
+    ).toBeVisible()
+    await live(canvas.getByRole("button", { name: "Previous page" }))
+    await live(next)
+    await readInside(bigPages, BIG)
+  },
+}
+
+/** The last page holds what is left — 50 rows — and nothing after it. */
+export const LastShortPage: Story = {
+  args: { state: { ...open, rows: 250 }, fetchPage: shortPages },
+  play: async ({ canvas }) => {
+    const next = canvas.getByRole("button", { name: "Next page" })
+    await userEvent.click(next)
+    await userEvent.click(next)
+    await expect(canvas.getByText("Rows 201–250 of 250")).toBeVisible()
+    await expect(
+      canvas.getByRole("grid", {
+        name: "Rows the query returned, 201–250 of 250",
+      })
+    ).toHaveAttribute("aria-rowcount", "51")
+    await inert(next, "This is the last page")
+    await expect(next).toHaveFocus()
+    await userEvent.click(next)
+    await expect(canvas.getByText("Rows 201–250 of 250")).toBeVisible()
+    await readInside(shortPages, 250)
+  },
+}
+
+/** A result that fits one page has no pager: the footer counts its rows. */
+export const SinglePage: Story = {
+  args: { state: { ...open, rows: 100 }, fetchPage: syntheticPages(100, 0) },
+  play: async ({ canvas }) => {
+    await expect(
+      await canvas.findByRole("grid", { name: "Rows the query returned" })
+    ).toHaveAttribute("aria-rowcount", "101")
+    await expect(canvas.getByText(/^100 rows$/)).toBeVisible()
+    await expect(
+      canvas.queryByRole("button", { name: "Previous page" })
+    ).toBeNull()
+    await expect(canvas.queryByRole("button", { name: "Next page" })).toBeNull()
+  },
+}
+
+/** Another tool call under the same view: a new result starts on its first page. */
+function AnotherCall(args: React.ComponentProps<typeof AssistantToolRows>) {
+  const [call, setCall] = React.useState(0)
+  const state: ToolRowsState = {
+    ...open,
+    result: `agent-call-${call}`,
+    rows: call === 0 ? BIG : 300,
+  }
+  return (
+    <div className="flex flex-col">
+      <Button
+        size="xs"
+        variant="outline"
+        className="m-2 self-start"
+        onClick={() => setCall((current) => current + 1)}
+      >
+        Next tool call
+      </Button>
+      <AssistantToolRows {...args} state={state} />
+    </div>
+  )
+}
+
+export const ResultChanges: Story = {
+  args: paged,
+  render: (args) => <AnotherCall {...args} />,
+  play: async ({ canvas }) => {
+    const next = canvas.getByRole("button", { name: "Next page" })
+    await userEvent.click(next)
+    await userEvent.click(next)
+    await expect(canvas.getByText("Rows 201–300 of 250,000")).toBeVisible()
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Next tool call" })
+    )
+    await expect(canvas.getByText("Rows 1–100 of 300")).toBeVisible()
+    await inert(
+      canvas.getByRole("button", { name: "Previous page" }),
+      "This is the first page"
+    )
+    await expect(
+      await canvas.findByRole("rowheader", { name: "Row 1" })
+    ).toBeVisible()
+  },
+}
+
+/** Retention released the buffer between two pages: said, nothing rerun. */
+const releasedAfterFirst = fn<FetchPage>((offset, limit) =>
+  offset < 100
+    ? syntheticPages(BIG, 0)(offset, limit)
+    : Promise.resolve({ type: "expired" })
+)
+
+export const ExpiredWhilePaging: Story = {
+  args: { ...paged, fetchPage: releasedAfterFirst },
+  play: async ({ canvas }) => {
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    const next = canvas.getByRole("button", { name: "Next page" })
+    await userEvent.click(next)
+    await expect(
+      await canvas.findByText(/Result no longer available: Oxyn released/)
+    ).toBeVisible()
+    await expect(canvas.getByText(/Nothing is rerun/)).toBeVisible()
+    await expect(canvas.queryByRole("grid")).toBeNull()
+    await inert(next, "Result no longer available")
+    await inert(
+      canvas.getByRole("button", { name: "Previous page" }),
+      "Result no longer available"
+    )
+    await expect(next).toHaveFocus()
+    await expect(
+      canvas.queryByRole("button", { name: /Open all rows/ })
+    ).toBeNull()
+    await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull()
+    await readInside(releasedAfterFirst, BIG)
+  },
+}
+
+/** The second page fails until the play lets it through. */
+const healed = { now: false }
+const flakySecondPage = fn<FetchPage>((offset, limit) =>
+  offset < 100 || healed.now
+    ? syntheticPages(BIG, 0)(offset, limit)
+    : Promise.reject(
+        new BackendError({
+          message: "reading the result: spill file busy (os error 35)",
+          retryable: true,
+          missingModule: null,
+        })
+      )
+)
+
+/** A page read failed: the backend's words, and « Try again » since it allows it. */
+export const PageReadFails: Story = {
+  args: { ...paged, fetchPage: flakySecondPage },
+  play: async ({ canvas }) => {
+    healed.now = false
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await expect(
+      await canvas.findByText(
+        "reading the result: spill file busy (os error 35)"
+      )
+    ).toBeVisible()
+    await expect(
+      canvas.getByText("The rows could not be read. Nothing was rerun.")
+    ).toBeVisible()
+    healed.now = true
+    await userEvent.click(canvas.getByRole("button", { name: "Try again" }))
+    await expect(
+      await canvas.findByRole("rowheader", { name: "Row 101" })
+    ).toBeVisible()
+    await expect(canvas.getByText("Rows 101–200 of 250,000")).toBeVisible()
+    await readInside(flakySecondPage, BIG)
+  },
+}
+
+const brokenSecondPage = fn<FetchPage>((offset, limit) =>
+  offset < 100
+    ? syntheticPages(BIG, 0)(offset, limit)
+    : Promise.reject(
+        new BackendError({
+          message: "A batch of this result is missing",
+          retryable: false,
+          missingModule: null,
+        })
+      )
+)
+
+/** Not retryable: the message alone, no button that would fail again. */
+export const PageReadFailsForGood: Story = {
+  args: { ...paged, fetchPage: brokenSecondPage },
+  play: async ({ canvas }) => {
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await expect(
+      await canvas.findByText("A batch of this result is missing")
+    ).toBeVisible()
+    await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull()
+    // Going back is still a read of the buffer, and it still works.
+    await userEvent.click(canvas.getByRole("button", { name: "Previous page" }))
+    await expect(
+      await canvas.findByRole("rowheader", { name: "Row 1" })
+    ).toBeVisible()
+  },
+}
+
+const slowSecondPage = fn<FetchPage>((offset, limit) =>
+  offset < 100
+    ? syntheticPages(BIG, 0)(offset, limit)
+    : new Promise(() => undefined)
+)
+
+/** The next page is on its way: the grid says it is busy, cells wait drawn. */
+export const LoadingPage: Story = {
+  args: { ...paged, fetchPage: slowSecondPage },
+  play: async ({ canvas, canvasElement }) => {
+    await canvas.findByRole("rowheader", { name: "Row 1" })
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await expect(canvas.getByText("Rows 101–200 of 250,000")).toBeVisible()
+    await waitFor(() =>
+      expect(canvasElement.querySelector('[aria-busy="true"]')).not.toBeNull()
+    )
+    await expect(
+      canvas.getByRole("grid", {
+        name: "Rows the query returned, 101–200 of 250,000",
+      })
+    ).toBeVisible()
+    await readInside(slowSecondPage, BIG)
+  },
+}
+
+/** The panel at its narrowest: the footer wraps, the pager stays whole. */
+export const Narrow: Story = {
+  args: paged,
+  decorators: [
+    (Story) => (
+      <div className="w-[280px]">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Rows 1–100 of 250,000")).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: "Next page" })
+    ).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: "Previous page" })
+    ).toBeVisible()
+  },
+}
+
+export const PagedLight: Story = {
+  ...PagesForwardAndBack,
+  globals: { theme: "light" },
+}
+
+const manyStatuses = Array.from({ length: 250 }, (_, index): Array<Cell> => [
+  `batch ${index + 1}`,
+  String(10 + (index % 17)),
+  null,
+])
+
+/** The chart draws the page shown, and says which rows it drew. */
+export const ChartedPage: Story = {
+  args: {
+    state: { ...open, columns: byStatus.columns, rows: manyStatuses.length },
+    fetchPage: pagesOf(manyStatuses),
+  },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: "Next page" }))
+    await userEvent.click(canvas.getByRole("button", { name: "Chart" }))
+    await expect(
+      await canvas.findByText("Drawn from the page shown: rows 101–200 of 250.")
+    ).toBeVisible()
   },
 }

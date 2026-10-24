@@ -249,6 +249,11 @@ interface ResultGridProps {
   onInspect?: (position: GridPosition) => void
   /** The context menus of a cell and of a header; absent, none opens. */
   menu?: GridMenu
+  /**
+   * Rows of the result before this grid's first one, for a grid that shows a
+   * page of it: the gutter numbers the result's rows, not the page's.
+   */
+  firstRow?: number
   "aria-label"?: string
 }
 
@@ -323,6 +328,7 @@ export const ResultGrid = React.memo(function ResultGrid({
   onActiveChange,
   onInspect,
   menu,
+  firstRow = 0,
   "aria-label": ariaLabel = "Result rows",
 }: ResultGridProps) {
   const baseId = React.useId()
@@ -844,7 +850,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                 <div
                   role="rowheader"
                   aria-colindex={1}
-                  aria-label={`Row ${item.index + 1}${matched ? ", matches the search" : ""}`}
+                  aria-label={`Row ${firstRow + item.index + 1}${matched ? ", matches the search" : ""}`}
                   onMouseDown={(event) => {
                     if (shown.length === 0) return
                     event.preventDefault()
@@ -865,7 +871,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                   )}
                   style={{ width: GUTTER_WIDTH }}
                 >
-                  {item.index + 1}
+                  {firstRow + item.index + 1}
                 </div>
                 {visibleColumns.map((virtual) => {
                   const column = shown[virtual.index] ?? virtual.index
