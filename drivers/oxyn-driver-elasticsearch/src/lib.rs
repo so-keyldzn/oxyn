@@ -6,6 +6,7 @@
 
 mod api;
 mod catalog;
+mod classify;
 mod cursor;
 mod error;
 mod request;
@@ -17,4 +18,3 @@ mod integration;
 pub mod driver;
 
 pub use driver::{ElasticsearchDriver, elasticsearch_metadata};
-pub use request::{SearchRequest, parse_request, statement_intent};

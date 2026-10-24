@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0062-elasticsearch-opensearch-rest-json.md" sha256="81b135072187" -->
+<!-- oxyn-translation source="docs/adr/0062-elasticsearch-opensearch-rest-json.md" sha256="e49c278bb6fa" -->
 
 > Traduction française de [docs/adr/0062-elasticsearch-opensearch-rest-json.md](../../../../docs/adr/0062-elasticsearch-opensearch-rest-json.md). **La version anglaise fait foi.**
 
@@ -24,7 +24,20 @@ La console accepte exactement une requête de type Kibana : méthode HTTP en maj
 
 Chaque page est lue par morceaux et plafonnée à un MiB avant décodage. Un aperçu d'index ouvre un point dans le temps, utilise `search_after` avec `_shard_doc`, et ferme ce point à la fin ou à l'annulation ; il n'utilise ni pagination profonde `from`/`size` ni scroll. Une source désactivée, un champ absent ou des valeurs incompatibles donnent une erreur explicite.
 
-`POST` ne suffit pas à classifier : `_search`, `_count`, `_msearch`, `_mget`, `_explain`, `_validate/query`, `_analyze`, `_field_caps` et simulation de pipeline sont des lectures. Bulk, mise à jour, suppression par requête et réindexation sont des écritures ; paramètres d'index et cycle de vie sont DDL ; sécurité et snapshots sont des privilèges ; tout le reste est `Unknown` donc mutant. Elasticsearch n'offre pas de session globalement lecture seule : Oxyn refuse une requête mutante sous cette borne et ne déclare pas `READ_ONLY_SESSION`.
+Une requête est classée par son **endpoint**, puis par son verbe, car les verbes mentent dans les deux sens : `POST /logs/_search` lit, `GET /_refresh` modifie l'index. L'endpoint est le premier segment du chemin qui commence par `_` (un nom d'index, d'alias ou de flux de données ne le peut pas), après décodage des pourcentages, puisque le serveur route `%5Fdelete_by_query` vers `_delete_by_query` ; les préfixes `_plugins/_x` et `_opendistro/_x` d'OpenSearch nomment l'API qui les suit. Les tables sont dans `classify.rs` :
+
+* lectures quel que soit le verbe : recherches, `_count`, `_msearch`, `_mget`, `_explain`, `_validate`, `_analyze`, `_field_caps`, vecteurs de termes, `_sql` et `_query` d'ES|QL (deux langages en lecture seule), ouverture et fermeture de point dans le temps et de scroll, toute `_simulate` de modèles et de pipelines, `_cluster/allocation/explain`, `_has_privileges`, `_authenticate` ; un `GET` ou `HEAD` sur une API connue de supervision ou de structure (`_cat`, `_cluster`, `_nodes`, `_tasks`, `_mapping`, `_settings`, modèles, flux de données, ILM, ISM, pipelines, scripts, snapshots, sécurité) ;
+* écritures : documents, `_bulk`, `_update`, opérations par requête, `_reindex`, `_tasks/…/_cancel`, exécution d'une politique enrich ;
+* DDL : création et suppression d'index, tout appel non lecture sur une API de structure, et les opérations d'index quel que soit leur verbe (`_open`, `_close`, `_refresh`, `_forcemerge`, `_rollover`, `_shrink`…), restauration de snapshot comprise ;
+* privilèges : tout appel non lecture sur `_security` ou `_plugins/_security` ;
+* le SQL d'OpenSearch n'est une lecture que si son instruction commence par `SELECT`, `SHOW` ou `DESCRIBE` : il peut supprimer quand `plugins.sql.delete.enabled` est activé. PPL reste `Unknown` tant que sa surface en lecture seule n'est pas vérifiée ;
+* tout le reste — un endpoint absent des tables, un verbe qu'un endpoint connu ne prend pas, un chemin qui ne se décode pas — est `Unknown`, donc mutant, **`GET` compris**.
+
+Un script dans un corps de recherche est du code, mais les scripts de recherche s'exécutent isolés sur les doc values et ne peuvent modifier aucun document : la recherche reste une lecture. Un script dans `_update_by_query` ou `_update` est de toute façon une écriture.
+
+Le risque (`Session::classify_risk`, ADR-0066) est donné après une écriture, un DDL ou un privilège prouvés, de façon prudente : `DropObject` pour un `DELETE` d'index ou de motif, et pour tout `DELETE` sur une API de structure (flux de données, modèle, pipeline, politique de cycle de vie, script, snapshot, alias) ; `UnboundedDelete` / `UnboundedUpdate` pour une requête par requête dont la requête peut tout couvrir (absente, `match_all`, un `bool` dont les clauses requises couvrent tout et qui n'exclut rien, `q=*`, une forme illisible) ; `DropObject` pour `_close`, la variante existante la plus proche — un index fermé refuse toute lecture et écriture jusqu'à sa réouverture. Aucune variante de `MutationRisk` n'est ajoutée ; le texte de raison partagé est formulé pour SQL (« DROP: the object and its data are removed »), exact pour un index supprimé, approché pour un index fermé.
+
+Le serveur n'a pas de mode lecture seule à l'échelle de la session : Oxyn refuse une requête classée mutante sous cette borne et ne déclare pas `READ_ONLY_SESSION`.
 
 Chaque requête en cours a un `X-Opaque-Id`. Le pilote retrouve cette tâche par l'API Tasks et n'annule que celles que le serveur déclare annulables ; une lecture n'est `Cancelled` qu'après preuve. Une écriture arrêtée après envoi est `OutcomeUnknown`. HTTP 429 et 503 ne sont transitoires que pour une lecture ; timeout, perte de transport ou 5xx pendant une mutation sont ambigus. Une réponse bulk 200 contenant des échecs reste une erreur.
 

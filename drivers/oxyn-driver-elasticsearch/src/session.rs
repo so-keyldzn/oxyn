@@ -5,15 +5,17 @@ use std::time::Instant;
 use async_trait::async_trait;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
-    CancelToken, Capabilities, ExecRequest, OxynError, PreviewShape, Result, StatementHandle,
+    CancelToken, Capabilities, ExecRequest, MutationRisk, OxynError, PreviewShape, Result,
+    StatementHandle,
 };
 use oxyn_driver::{Cursor, Session};
 use serde_json::json;
 
 use crate::api::{Api, encode_segment};
 use crate::catalog::ElasticsearchCatalog;
+use crate::classify::{mutation_risk, statement_intent};
 use crate::cursor::JsonCursor;
-use crate::request::{parse_request, statement_intent};
+use crate::request::parse_request;
 
 /// An open HTTP session. Elasticsearch and OpenSearch have no transaction or
 /// server-enforced read-only session mode, so neither capability is declared.
@@ -46,13 +48,11 @@ impl Session for ElasticsearchSession {
     }
 
     fn classify_intent(&self, request: &ExecRequest) -> Option<oxyn_core::StatementIntent> {
-        (request.language == oxyn_core::QueryLanguage::SearchDsl)
-            .then(|| {
-                parse_request(&request.text)
-                    .ok()
-                    .map(|parsed| statement_intent(&parsed))
-            })
-            .flatten()
+        search_request(request).map(|parsed| statement_intent(&parsed))
+    }
+
+    fn classify_risk(&self, request: &ExecRequest) -> Option<MutationRisk> {
+        search_request(request).map(|parsed| mutation_risk(&parsed))
     }
 
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
@@ -170,6 +170,14 @@ impl Session for ElasticsearchSession {
     }
 }
 
+/// The request a Search DSL text holds; `None` for another language or a text
+/// that does not parse, which `oxyn-exec` then keeps `Unknown`.
+fn search_request(request: &ExecRequest) -> Option<crate::request::SearchRequest> {
+    (request.language == oxyn_core::QueryLanguage::SearchDsl)
+        .then(|| parse_request(&request.text).ok())
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use oxyn_core::{ConnectionConfig, DriverId, QueryLanguage, StatementIntent};
@@ -202,5 +210,23 @@ mod tests {
             Some(StatementIntent::Unknown)
         );
         assert_eq!(session.classify_intent(&invalid), None);
+    }
+
+    #[test]
+    fn session_answers_the_risk_of_what_it_classifies() {
+        let session = session();
+        let drop = ExecRequest::new(QueryLanguage::SearchDsl, "DELETE /logs");
+        let everything = ExecRequest::new(
+            QueryLanguage::SearchDsl,
+            "POST /logs/_delete_by_query\n{\"query\":{\"match_all\":{}}}",
+        );
+        let sql = ExecRequest::new(QueryLanguage::SQL, "DELETE /logs");
+
+        assert_eq!(session.classify_risk(&drop), Some(MutationRisk::DropObject));
+        assert_eq!(
+            session.classify_risk(&everything),
+            Some(MutationRisk::UnboundedDelete)
+        );
+        assert_eq!(session.classify_risk(&sql), None);
     }
 }

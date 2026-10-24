@@ -58,15 +58,54 @@ and closes the point in time on completion or cancellation; it never uses deep
 `from`/`size` or scroll. A disabled `_source`, a field unseen in the mapping,
 or incompatible values is an explicit response error, not a dropped cell.
 
-`POST` is not classified by its verb alone: `_search`, `_count`, `_msearch`,
-`_mget`, `_explain`, `_validate/query`, `_analyze`, `_field_caps` and pipeline
-simulation are reads. Bulk, update, delete-by-query and reindex are writes;
-index settings and lifecycle mutations are DDL; security and snapshots are
-grants; everything else is `Unknown`, hence mutating. A Search DSL script is
-accepted only on an endpoint classified as read; a write-capable or unknown
-route remains behind the policy gate. The server has no session-wide read-only
-mode: Oxyn rejects a classified mutating request under a read-only bound and
-does not advertise `READ_ONLY_SESSION`.
+A request is classified by its **endpoint**, then its verb, because the verbs
+lie both ways: `POST /logs/_search` reads, `GET /_refresh` changes the index.
+The endpoint is the first path segment starting with `_` (index, alias and data
+stream names cannot), after percent-decoding, since the server routes
+`%5Fdelete_by_query` to `_delete_by_query`; OpenSearch's `_plugins/_x` and
+`_opendistro/_x` prefixes name the API after them. The tables live in
+`classify.rs`:
+
+* reads whatever their verb: searches, `_count`, `_msearch`, `_mget`,
+  `_explain`, `_validate`, `_analyze`, `_field_caps`, term vectors, `_sql` and
+  ES|QL `_query` (both read-only languages), point-in-time and scroll
+  open/close, every `_simulate` of templates and pipelines,
+  `_cluster/allocation/explain`, `_has_privileges`, `_authenticate`; a `GET` or
+  `HEAD` on a known monitoring or structure API (`_cat`, `_cluster`, `_nodes`,
+  `_tasks`, `_mapping`, `_settings`, templates, data streams, ILM, ISM,
+  pipelines, scripts, snapshots, security);
+* writes: documents, `_bulk`, `_update`, by-query operations, `_reindex`,
+  `_tasks/…/_cancel`, enrich policy execution;
+* DDL: index creation and deletion, every non-read call on a structure API, and
+  index operations whatever their verb (`_open`, `_close`, `_refresh`,
+  `_forcemerge`, `_rollover`, `_shrink`…), snapshot restore included;
+* grants: every non-read call on `_security` or `_plugins/_security`;
+* OpenSearch SQL is a read only when its statement starts with `SELECT`,
+  `SHOW` or `DESCRIBE`: it can delete when `plugins.sql.delete.enabled` is set.
+  PPL stays `Unknown` until its read-only surface is verified;
+* anything else — an endpoint absent from the tables, a verb a known endpoint
+  does not take, a path that does not decode — is `Unknown`, hence mutating,
+  **including a `GET`**.
+
+A script in a search body is code, but search scripts run sandboxed on doc
+values and cannot change a document: it leaves a search a read. A script in
+`_update_by_query` or `_update` is a write anyway.
+
+The risk (`Session::classify_risk`, ADR-0066) is answered after a proven write,
+DDL or grant, conservatively: `DropObject` for `DELETE` of an index or a
+pattern, and for every `DELETE` on a structure API (data stream, template,
+pipeline, lifecycle policy, script, snapshot, alias); `UnboundedDelete` /
+`UnboundedUpdate` for a by-query request whose query may match everything
+(absent, `match_all`, a `bool` whose required clauses all match everything and
+that excludes nothing, `q=*`, an unreadable shape); `DropObject` for `_close`,
+the closest existing variant — a closed index refuses every read and write
+until reopened. No `MutationRisk` variant is added; the shared reason text is
+SQL-worded ("DROP: the object and its data are removed"), which is accurate for
+a dropped index and approximate for a closed one.
+
+The server has no session-wide read-only mode: Oxyn rejects a classified
+mutating request under a read-only bound and does not advertise
+`READ_ONLY_SESSION`.
 
 Each in-flight request has an `X-Opaque-Id`. The driver finds that task through
 the Tasks API and cancels only a task the server calls cancellable; a cancelled
