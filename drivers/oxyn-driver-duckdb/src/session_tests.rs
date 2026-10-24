@@ -10,10 +10,10 @@ use oxyn_core::{
 };
 use oxyn_driver::{Driver, Session, SessionContext};
 
-use crate::DuckDbDriver;
 use crate::test_support::{
-    config, memory, open, open_file, rows, run, run_err, run_ok, single, unbounded,
+    config, memory, open, open_file, open_with, rows, run, run_err, run_ok, single, unbounded,
 };
+use crate::{BatchLimits, DuckDbDriver};
 
 async fn state(session: &dyn Session) -> TransactionState {
     session.transaction_state(&CancelToken::new()).await
@@ -84,6 +84,31 @@ async fn bound_values_are_bound_and_counted() {
     )
     .await;
     assert_eq!(batch.class(), ErrorClass::Permanent);
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn a_limit_on_a_piece_boundary_still_says_truncated() {
+    // One engine chunk of 128 rows, split into pieces of 32: the limit falls
+    // where the first piece ends, and the engine has nothing after the chunk.
+    let session = open_with(
+        &config(DuckDbDriver::MEMORY),
+        BatchLimits::new().with_max_rows(32),
+    )
+    .await;
+    let request = unbounded("SELECT i FROM range(128) t(i)")
+        .with_limits(ExecLimits::unbounded().with_max_rows(32));
+    let mut cursor = session
+        .execute(request, &CancelToken::new())
+        .await
+        .unwrap_or_else(|err| panic!("{err}"));
+    let mut total = 0;
+    while let Some(batch) = cursor.next_batch().await.expect("batch") {
+        total += batch.num_rows();
+    }
+    assert_eq!(total, 32);
+    assert!(cursor.stats().truncated, "96 rows were never sent");
+    drop(cursor);
     session.close().await.expect("close");
 }
 
@@ -219,6 +244,26 @@ async fn sql_reaches_no_file_and_cannot_lift_the_policy() {
     }
     assert!(!dir.path().join("out.csv").exists());
     session.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn a_path_duckdb_would_respell_is_refused_before_opening() {
+    for respelled in [
+        "~/oxyn-never-created.duckdb",
+        "file:///tmp/oxyn-never-created.duckdb",
+    ] {
+        let refused = DuckDbDriver::new()
+            .connect(
+                &config(respelled),
+                &oxyn_driver::Credentials::new(),
+                &CancelToken::new(),
+            )
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("`{respelled}` was opened"));
+        assert!(matches!(refused, OxynError::Config(_)), "{refused:?}");
+        assert!(!refused.to_string().contains("never-created"), "{refused}");
+    }
 }
 
 #[tokio::test]
@@ -476,6 +521,7 @@ async fn the_context_is_set_quoted_and_a_typed_use_is_refused() {
         "SET schema = 'main'",
         "SET SESSION search_path TO 'main'",
         "/* where */ RESET schema",
+        "SET /* where */ schema = 'main'",
     ] {
         let refused = run_err(session.as_ref(), unbounded(moves)).await;
         assert!(

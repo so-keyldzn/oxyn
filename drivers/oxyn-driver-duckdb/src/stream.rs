@@ -237,7 +237,8 @@ fn stream_rows(
                 return;
             }
         };
-        for piece in pieces {
+        let mut pieces = pieces.into_iter();
+        while let Some(piece) = pieces.next() {
             let (piece, cut) = match remaining {
                 None => (piece, false),
                 Some(left) if piece.num_rows() <= left => {
@@ -251,7 +252,11 @@ fn stream_rows(
                 return;
             }
             if cut || remaining == Some(0) {
-                let truncated = cut || more_rows(statement, context.effect);
+                // The chunk's unsent pieces are rows past the limit too: the
+                // engine is asked only when none is left.
+                let truncated = cut
+                    || pieces.any(|rest| rest.num_rows() > 0)
+                    || more_rows(statement, context.effect);
                 let _ = batches.blocking_send(Ok(Pulled::Done { truncated }));
                 return;
             }
@@ -497,17 +502,12 @@ fn read_only_wrapper<'c>(
     Ok(ReadOnlyTransaction(connection))
 }
 
-/// The first words of a statement, to name it in a refusal without copying a
-/// whole script.
 /// Whether a statement changes where unqualified names resolve without `USE`:
 /// DuckDB's `schema` and `search_path` settings (`src/include/duckdb/main/settings.hpp`,
 /// v1.5.6). Refused like `USE`: the context the console shows would no longer
 /// be the one an unqualified `DROP TABLE t` reaches.
 fn sets_resolution(text: &str) -> bool {
-    let mut words = code_of(text)
-        .split(|c: char| c.is_whitespace() || c == '=' || c == ';')
-        .filter(|word| !word.is_empty())
-        .map(str::to_ascii_lowercase);
+    let mut words = leading_words(text, 3).into_iter();
     if !matches!(words.next().as_deref(), Some("set" | "reset")) {
         return false;
     }
@@ -521,20 +521,77 @@ fn sets_resolution(text: &str) -> bool {
     )
 }
 
-/// A statement's text without its leading blanks and comments.
+/// The first `count` words of a statement, lowercased: comments skipped
+/// wherever they stand — `SET /* x */ schema` names `schema` —, `=` and `;`
+/// read as blanks.
+fn leading_words(text: &str, count: usize) -> Vec<String> {
+    let mut words = Vec::with_capacity(count);
+    let mut rest = text;
+    while words.len() < count {
+        rest = code_of(rest);
+        let Some(first) = rest.chars().next() else {
+            break;
+        };
+        if first == '=' || first == ';' {
+            rest = &rest[first.len_utf8()..];
+            continue;
+        }
+        let end = rest
+            .char_indices()
+            .find(|&(at, c)| {
+                c.is_whitespace()
+                    || c == '='
+                    || c == ';'
+                    || rest[at..].starts_with("--")
+                    || rest[at..].starts_with("/*")
+            })
+            .map_or(rest.len(), |(at, _)| at);
+        let (word, after) = rest.split_at(end);
+        words.push(word.to_ascii_lowercase());
+        rest = after;
+    }
+    words
+}
+
+/// A statement's text without its leading blanks and comments; block
+/// comments nest, as DuckDB's parser reads them.
 fn code_of(mut text: &str) -> &str {
     loop {
         text = text.trim_start();
         if let Some(rest) = text.strip_prefix("--") {
             text = rest.split_once('\n').map_or("", |(_, after)| after);
         } else if let Some(rest) = text.strip_prefix("/*") {
-            text = rest.split_once("*/").map_or("", |(_, after)| after);
+            text = after_block_comment(rest);
         } else {
             return text;
         }
     }
 }
 
+/// What follows a block comment whose opening was just read.
+fn after_block_comment(mut text: &str) -> &str {
+    let mut depth = 1_usize;
+    while depth > 0 {
+        let opening = text.find("/*");
+        let Some(closing) = text.find("*/") else {
+            return "";
+        };
+        match opening {
+            Some(at) if at < closing => {
+                depth += 1;
+                text = &text[at + 2..];
+            }
+            _ => {
+                depth -= 1;
+                text = &text[closing + 2..];
+            }
+        }
+    }
+    text
+}
+
+/// The first words of a statement, to name it in a refusal without copying a
+/// whole script.
 fn first_words(text: &str) -> String {
     let mut words = text
         .split_whitespace()
@@ -558,6 +615,10 @@ mod tests {
             "set search_path = 'a,b'",
             "SET GLOBAL \"schema\" TO 'x'",
             "-- move\nRESET search_path",
+            "SET /* x */ schema = 'staging'",
+            "SET--x\nsearch_path='a'",
+            "SET /* a /* nested */ b */ SESSION schema TO 'x'",
+            "RESET/**/schema",
         ] {
             assert!(sets_resolution(moves), "{moves}");
         }
@@ -566,6 +627,8 @@ mod tests {
             "SET VARIABLE schema = 1",
             "SELECT 'SET schema'",
             "UPDATE t SET schema = 1",
+            "SET /* schema */ threads = 4",
+            "/* unterminated SET schema",
         ] {
             assert!(!sets_resolution(stays), "{stays}");
         }

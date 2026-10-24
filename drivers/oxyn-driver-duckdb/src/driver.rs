@@ -170,6 +170,19 @@ fn file_access(config: &ConnectionConfig) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Whether DuckDB would open `path` under another spelling: it replaces a
+/// leading `~` with the home directory and strips a `file:` URL prefix
+/// (`FileSystem::ExpandPath`, `src/common/file_system.cpp`, v1.5.6). The
+/// registry would then key one file twice and open two engines on it
+/// (`crate::open`); expanding `~` here would mean reading the environment,
+/// which a driver does not.
+fn rewritten_by_the_engine(path: &str) -> bool {
+    path.starts_with('~')
+        || path
+            .get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+}
+
 #[async_trait]
 impl Driver for DuckDbDriver {
     fn id(&self) -> DriverId {
@@ -212,6 +225,13 @@ impl Driver for DuckDbDriver {
                     Self::PATH
                 ))
             })?;
+        if rewritten_by_the_engine(path) {
+            return Err(OxynError::Config(format!(
+                "driver `duckdb`: parameter `{}` starts with `~` or `file:`, which DuckDB \
+                 rewrites itself; write the full path of the file",
+                Self::PATH
+            )));
+        }
         let target = if path == Self::MEMORY {
             OpenTarget::Memory(config.id)
         } else {
@@ -264,6 +284,27 @@ mod tests {
         let writable = DuckDbDriver::session_capabilities(false);
         assert!(!writable.contains(Capabilities::READ_ONLY_SESSION));
         assert!(writable.contains(Capabilities::DML));
+    }
+
+    #[test]
+    fn a_path_the_engine_would_respell_is_recognized() {
+        for respelled in [
+            "~/sales.duckdb",
+            "~",
+            "file:///tmp/a.duckdb",
+            "FILE:/tmp/a.duckdb",
+        ] {
+            assert!(rewritten_by_the_engine(respelled), "{respelled}");
+        }
+        for plain in [
+            "/tmp/a.duckdb",
+            "a~b.duckdb",
+            "files/a.duckdb",
+            ":memory:",
+            "é",
+        ] {
+            assert!(!rewritten_by_the_engine(plain), "{plain}");
+        }
     }
 
     #[test]
