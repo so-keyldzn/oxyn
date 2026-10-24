@@ -29,3 +29,4 @@
 - [pieges-context-menu-et-stories](pieges-context-menu-et-stories.md) — Tooling traps of Base UI ContextMenu (select-none, refusing to open) and Storybook (vi missing, animated dialog, pointer coords)
 - [Base UI Switch and toBeDisabled](switch-base-ui-pas-tobedisabled.md) — a disabled Switch is a span: assert `aria-disabled="true"`
 - [story-menu-ouvert-axe](story-menu-ouvert-axe.md) — A story that ends with a Base UI menu still open or closing fails on axe (aria-hidden-focus of the focus guards)
+- [svgl adds four files](svgl-ajoute-quatre-fichiers.md) — `shadcn add @svgl/x` writes 4 marks: keep the light icon + a token; find the name via api.svgl.app

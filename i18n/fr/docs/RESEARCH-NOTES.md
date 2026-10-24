@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="fcc71ff313cc" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="11d45debc80c" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -209,6 +209,7 @@ ou de `rfd`** :
 | `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` exigeait `vitest ^3 \|\| ^4` ; `10.6.2` accepte aussi `^5` (lu le 2026-10-21), le passage à Vitest 5 n'est pas encore fait |
 | `playwright` | `1.63.0` | idem | Chromium seul, pour les stories |
 | `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | idem | — |
+| `@codemirror/lang-json` | `6.0.2` | idem | relevé le 2026-10-23 (publié le 2025-06-19, MIT) ; la grammaire de la console MongoDB, dont la commande est un document Extended JSON ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)). Amène `@lezer/json` 1.0.3 (publié le 2024-12-29, MIT) |
 | `zod` | `4.6.5` | idem | relevé le 2026-09-16 ; valide les réponses IPC ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Était déclaré depuis ADR-0029 et importé nulle part |
 | `lexical` · `@lexical/react` | `0.51.0` | idem | relevé le 2026-09-24 (`npm view`, dist-tag `latest`, publié le 2026-09-23) ; le champ de question de l'assistant et ses mentions `@`. `@lexical/react` déclare `yjs` en pair : il ne sert qu'au plugin de collaboration, non importé |
 
@@ -2514,6 +2515,7 @@ Pour l'[ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)
 | `find` et `aggregate` ont par défaut un premier lot de 101 documents ; « Subsequent getMore operations have no default limit, only the 16 MiB message size » | le client tient au plus un lot serveur de 16 Mio plus un lot Arrow | [Cursors](https://www.mongodb.com/docs/manual/core/cursors/) |
 | « The maximum BSON document size is 16 mebibytes » ; le refus du serveur dit « Size must be between 0 and 16793600(16MB) » sur 8.0.34. Depuis 6.0, `allowDiskUseByDefault` décide si une étape qui demande plus de 100 mégaoctets déborde sur disque ; `{ allowDiskUse: false }` la fait échouer | `BSONObjectTooLarge` et les codes de limite mémoire portent leur remède dans l'erreur | [MongoDB Limits and Thresholds](https://www.mongodb.com/docs/manual/reference/limits/) |
 | Le rôle intégré `read` accorde `changeStream collStats dbHash dbStats find killCursors listCollections listIndexes listSearchIndexes planCacheRead` ; `readAnyDatabase` ajoute `listDatabases` — `connectionStatus` avec `showPrivileges`, mesuré sur 8.0.34 | une session dont chaque action de privilège est parmi celles-ci se déclare en lecture seule | mesure sur `mongo:8.0.34` |
+| Les pages des commandes listent les champs de `find`, `aggregate`, `count`, `distinct`, `insert`, `update` (et d'une instruction de `updates`), `delete` (et d'une instruction de `deletes`), `findAndModify`, `listCollections`, `createIndexes` (et d'une spécification d'index) et `explain`, dont la `verbosity` vaut `queryPlanner`, `executionStats` ou `allPlansExecution` (par défaut) — les deux dernières exécutent le plan retenu ; les index des opérateurs listent 30 prédicats de requête, 22 opérateurs et modificateurs de mise à jour, les étapes de pipeline de `db.collection.aggregate()` et 25 accumulateurs de `$group` | la console complète un sous-ensemble choisi, avec une indication d'une ligne (`apps/desktop/src/features/consoles/languages/mongo/vocabulary.ts`) ; `$where`, `$function` et `$accumulator` ne sont pas proposés | [Database Commands](https://www.mongodb.com/docs/manual/reference/command/), [Query Predicates](https://www.mongodb.com/docs/manual/reference/operator/query/), [Update Operators](https://www.mongodb.com/docs/manual/reference/operator/update/), [Aggregation Stages](https://www.mongodb.com/docs/manual/reference/operator/aggregation-pipeline/), [`$group`](https://www.mongodb.com/docs/manual/reference/operator/aggregation/group/) |
 
 
 ## Destinations de COPY et classification — vérifié le 2026-10-03
@@ -3014,6 +3016,7 @@ ne figure donc sous une exemption.
 | Paquet | Épinglée | Dernière publiée | Registre | Vérifié le |
 |---|---|---|---|---|
 | `@codemirror/autocomplete` | `6.20.3` | `6.20.4` (2026-10-19) | [npm registry](https://registry.npmjs.org/@codemirror%2Fautocomplete) | 2026-10-22 |
+| `@codemirror/lang-json` | `6.0.2` | idem | [npm registry](https://registry.npmjs.org/@codemirror%2Flang-json) | 2026-10-23 |
 | `@codemirror/language` | `6.12.4` | `6.13.1` (2026-10-07) | [registre npm](https://registry.npmjs.org/@codemirror%2Flanguage) | 2026-10-20 |
 | `@codemirror/search` | `6.7.2` | idem | [npm registry](https://registry.npmjs.org/@codemirror%2Fsearch) | 2026-10-22 |
 | `@codemirror/state` | `6.7.4` | `6.7.6` (2026-09-22) | [registre npm](https://registry.npmjs.org/@codemirror%2Fstate) | 2026-10-20 |

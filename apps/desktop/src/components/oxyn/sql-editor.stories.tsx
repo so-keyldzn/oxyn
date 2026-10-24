@@ -7,6 +7,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 import { SqlEditor } from "./sql-editor"
 import type { EditorTarget } from "./sql-editor"
 import { nameAt } from "@/features/consoles/object-under-cursor"
+import type { CompletionCatalog } from "@/lib/ipc/completion"
 import { useActionSource, zoneHandleAt } from "@/lib/actions/context"
 import { modKey } from "@/lib/actions/platform"
 
@@ -399,5 +400,78 @@ export const MySQL: Story = {
     await expect(tree.resolveInner(args.value.indexOf("AS") + 1).name).toBe(
       "Keyword"
     )
+  },
+}
+
+const mongoEditor = fn<(view: EditorView) => void>()
+
+/** What the cache of a MongoDB connection holds: one described collection. */
+const shop: CompletionCatalog = {
+  namespaces: [
+    {
+      name: "shop",
+      insert: "shop",
+      system: false,
+      stale: false,
+      listed: true,
+      relations: [
+        {
+          name: "orders",
+          insert: "orders",
+          qualified: "shop.orders",
+          kind: "collection",
+          stale: false,
+          virtualTable: false,
+          shadow: false,
+          fields: {
+            state: "loaded",
+            items: [{ name: "total", insert: "total", dataType: "double" }],
+          },
+        },
+      ],
+    },
+  ],
+  resolution: { state: "known", namespaces: ["shop"], stale: false },
+  folding: "lower",
+  truncated: null,
+}
+
+/**
+ * A MongoDB console: the command is JSON, its keys read as structure, and a
+ * quote opens the operators that fit where it is typed — here a field of the
+ * filter. Nothing is asked of the host: the catalog needs are SQL's.
+ */
+export const MongoDB: Story = {
+  args: {
+    driver: "mongodb",
+    language: "mongo",
+    value: '{"find": "orders", "filter": {"total": {}}}',
+    completion: shop,
+    onEditor: mongoEditor,
+    onCatalogNeeds: fn(),
+  },
+  play: async ({ canvas, args }) => {
+    await waitFor(() => expect(args.onEditor).toHaveBeenCalled())
+    const view = mongoEditor.mock.calls.at(-1)?.[0]
+    if (!view) throw new Error("the editor is mounted")
+    await expect(
+      canvas.getByRole("textbox", { name: "Query editor" })
+    ).toBeVisible()
+    await expect(syntaxTree(view.state).resolveInner(2).name).toBe(
+      "PropertyName"
+    )
+
+    view.focus()
+    view.dispatch({ selection: { anchor: args.value.indexOf("{}}") + 1 } })
+    await userEvent.keyboard('"$gt')
+    const list = await canvas.findByRole("listbox")
+    await userEvent.click(within(list).getByRole("option", { name: /\$gte/ }))
+    await waitFor(() =>
+      expect(args.onChange).toHaveBeenLastCalledWith(
+        '{"find": "orders", "filter": {"total": {"$gte"}}}'
+      )
+    )
+    await waitFor(() => expect(canvas.queryByRole("listbox")).toBeNull())
+    await expect(args.onCatalogNeeds).not.toHaveBeenCalled()
   },
 }

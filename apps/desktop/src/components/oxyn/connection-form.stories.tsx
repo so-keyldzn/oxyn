@@ -3,6 +3,7 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { ConnectionForm } from "./connection-form"
 import {
+  mongodbDriver,
   mysqlDriver,
   postgresDriver,
   savedConnections,
@@ -447,6 +448,104 @@ export const MySQL: Story = {
       expect.objectContaining({
         values: expect.not.objectContaining({ password: expect.anything() }),
       })
+    )
+  },
+}
+
+/**
+ * MongoDB: a seed list of hosts, nothing else required, TLS verifying the
+ * peer by default. The password is typed into a masked field, travels as a
+ * secret and is never written anywhere on the page.
+ */
+export const MongoDB: Story = {
+  args: { driver: mongodbDriver },
+  play: async ({ canvas, canvasElement, args }) => {
+    await expect(canvas.getByLabelText(/^Hosts/)).toHaveValue("localhost")
+    await expect(canvas.getByLabelText(/^Hosts/)).toHaveAccessibleDescription(
+      /comma-separated, for a replica set seed list/
+    )
+    await expect(canvas.getByLabelText(/^Port/)).toHaveValue("27017")
+    await expect(canvas.getByLabelText(/^TLS mode/)).toHaveValue("verify-full")
+    await expect(
+      canvas.getByLabelText(/^Authentication mechanism/)
+    ).toHaveValue("default")
+    await expect(
+      canvas.getByRole("switch", { name: /DNS seed list/ })
+    ).not.toBeChecked()
+    await expect(
+      canvas.getByRole("switch", { name: /Direct connection/ })
+    ).not.toBeChecked()
+    // Only the name is missing: the database, the user and the files are
+    // optional.
+    await expect(canvas.getByText(/Required: Name$/)).toBeVisible()
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+
+    await userEvent.type(canvas.getByLabelText(/^Name/), "events")
+    await userEvent.type(canvas.getByLabelText(/^User/), "reporting")
+    const password = canvas.getByLabelText(/^Password/)
+    await expect(password).toHaveAttribute("type", "password")
+    await userEvent.type(password, "story-mongo-password")
+    await expect(canvasElement.textContent).not.toContain(
+      "story-mongo-password"
+    )
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: "production",
+          values: expect.objectContaining({
+            host: "localhost",
+            port: "27017",
+            tls: "verify-full",
+            user: "reporting",
+          }),
+          secrets: { password: "story-mongo-password" },
+        })
+      )
+    )
+    await expect(args.onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    )
+  },
+}
+
+/** A saved MongoDB connection: its stored password is never pre-filled. */
+export const MongoDBEditing: Story = {
+  args: {
+    driver: mongodbDriver,
+    existing: {
+      ...savedConnections[4]!,
+      // As the form saves them: a switch left off is saved "false".
+      values: {
+        host: "rs0-a.internal:27017,rs0-b.internal:27017",
+        port: "27017",
+        srv: "false",
+        database: "events",
+        user: "reporting",
+        authSource: "admin",
+        authMechanism: "default",
+        replicaSet: "rs0",
+        directConnection: "false",
+        tls: "verify-full",
+      },
+      hasStoredSecrets: true,
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByLabelText(/^Hosts/)).toHaveValue(
+      "rs0-a.internal:27017,rs0-b.internal:27017"
+    )
+    await expect(canvas.getByLabelText(/^Replica set/)).toHaveValue("rs0")
+    const password = canvas.getByLabelText(/^Password/)
+    await expect(password).toHaveValue("")
+    await expect(password).toHaveAttribute("type", "password")
+    await expect(password).toHaveAttribute(
+      "placeholder",
+      "Stored in the keyring"
     )
   },
 }

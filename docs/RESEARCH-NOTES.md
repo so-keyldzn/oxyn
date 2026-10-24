@@ -202,6 +202,7 @@ plugin or of `rfd`**:
 | `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` required `vitest ^3 \|\| ^4`; `10.6.2` also accepts `^5` (read on 2026-10-21), the move to Vitest 5 is not made yet |
 | `playwright` | `1.63.0` | same | Chromium only, for the stories |
 | `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | same | — |
+| `@codemirror/lang-json` | `6.0.2` | same | read on 2026-10-23 (published on 2025-06-19, MIT); the grammar of the MongoDB console, whose command is one Extended JSON document ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)). Brings `@lezer/json` 1.0.3 (published on 2024-12-29, MIT) |
 | `zod` | `4.6.5` | same | read on 2026-09-16; validates IPC responses ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Had been declared since ADR-0029 and imported nowhere |
 | `lexical` · `@lexical/react` | `0.51.0` | same | read on 2026-09-24 (`npm view`, dist-tag `latest`, published on 2026-09-23); the assistant's question field and its `@` mentions. `@lexical/react` declares `yjs` as a peer: it only serves the collaboration plugin, not imported |
 
@@ -2488,6 +2489,7 @@ For [ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md).
 | `find` and `aggregate` default to a first batch of 101 documents; "Subsequent getMore operations have no default limit, only the 16 MiB message size" | the client holds at most one server batch of 16 MiB plus one Arrow batch | [Cursors](https://www.mongodb.com/docs/manual/core/cursors/) |
 | "The maximum BSON document size is 16 mebibytes"; the server's refusal reads "Size must be between 0 and 16793600(16MB)" on 8.0.34. Since 6.0, `allowDiskUseByDefault` decides whether a stage needing more than 100 megabytes spills; `{ allowDiskUse: false }` makes it fail | `BSONObjectTooLarge` and the memory-limit codes carry their remedy in the error | [MongoDB Limits and Thresholds](https://www.mongodb.com/docs/manual/reference/limits/) |
 | The built-in `read` role grants `changeStream collStats dbHash dbStats find killCursors listCollections listIndexes listSearchIndexes planCacheRead`; `readAnyDatabase` adds `listDatabases` — `connectionStatus` with `showPrivileges`, measured on 8.0.34 | a session whose every privilege action is among these declares itself read-only | measurement on `mongo:8.0.34` |
+| The command pages list the fields of `find`, `aggregate`, `count`, `distinct`, `insert`, `update` (and of an `updates` statement), `delete` (and of a `deletes` statement), `findAndModify`, `listCollections`, `createIndexes` (and of an index specification) and `explain`, whose `verbosity` is `queryPlanner`, `executionStats` or `allPlansExecution` (the default) — the last two run the winning plan; the operator indexes list 30 query predicates, 22 update operators and modifiers, the pipeline stages of `db.collection.aggregate()` and 25 `$group` accumulators | the console completes a chosen subset with a one-line hint (`apps/desktop/src/features/consoles/languages/mongo/vocabulary.ts`); `$where`, `$function` and `$accumulator` are not offered | [Database Commands](https://www.mongodb.com/docs/manual/reference/command/), [Query Predicates](https://www.mongodb.com/docs/manual/reference/operator/query/), [Update Operators](https://www.mongodb.com/docs/manual/reference/operator/update/), [Aggregation Stages](https://www.mongodb.com/docs/manual/reference/operator/aggregation-pipeline/), [`$group`](https://www.mongodb.com/docs/manual/reference/operator/aggregation/group/) |
 
 
 ## COPY destinations and classification — checked 2026-10-03
@@ -2964,6 +2966,7 @@ exemption.
 | Package | Pinned | Latest published | Registry | Checked on |
 |---|---|---|---|---|
 | `@codemirror/autocomplete` | `6.20.3` | `6.20.4` (2026-10-19) | [npm registry](https://registry.npmjs.org/@codemirror%2Fautocomplete) | 2026-10-22 |
+| `@codemirror/lang-json` | `6.0.2` | same | [npm registry](https://registry.npmjs.org/@codemirror%2Flang-json) | 2026-10-23 |
 | `@codemirror/language` | `6.12.4` | `6.13.1` (2026-10-07) | [npm registry](https://registry.npmjs.org/@codemirror%2Flanguage) | 2026-10-20 |
 | `@codemirror/search` | `6.7.2` | same | [npm registry](https://registry.npmjs.org/@codemirror%2Fsearch) | 2026-10-22 |
 | `@codemirror/state` | `6.7.4` | `6.7.6` (2026-09-22) | [npm registry](https://registry.npmjs.org/@codemirror%2Fstate) | 2026-10-20 |
