@@ -409,8 +409,15 @@ fn offered_for_honors_applies_to_and_recipients() {
     assert!(!agent.offered_for(&target(SqlDialect::Sqlite, recipient("anthropic"))));
     assert!(!agent.offered_for(&target(SqlDialect::Postgres, recipient("codex"))));
 
-    // Empty lists offer the agent everywhere.
+    // Empty lists offer a SQL agent on every SQL dialect and recipient.
     for shipped in shipped_agents() {
+        if !shipped
+            .languages
+            .iter()
+            .any(|language| language.sql_dialect().is_some())
+        {
+            continue;
+        }
         for dialect in DIALECTS {
             for name in RECIPIENTS {
                 assert!(shipped.offered_for(&target(dialect, recipient(name))));

@@ -17,8 +17,14 @@ pub(crate) const SQL_AGENT: (&str, &str) = ("agents/sql.md", include_str!("../..
 pub(crate) const SCHEMA_AGENT: (&str, &str) =
     ("agents/schema.md", include_str!("../../agents/schema.md"));
 
+/// The Elasticsearch and OpenSearch agent's file.
+pub(crate) const ELASTICSEARCH_AGENT: (&str, &str) = (
+    "agents/elasticsearch.md",
+    include_str!("../../agents/elasticsearch.md"),
+);
+
 /// The shipped agents, in the order the picker offers them.
-pub(super) const AGENTS: [(&str, &str); 2] = [SQL_AGENT, SCHEMA_AGENT];
+pub(super) const AGENTS: [(&str, &str); 3] = [SQL_AGENT, SCHEMA_AGENT, ELASTICSEARCH_AGENT];
 
 /// The dialect fragments, `(dialect, file, text)`.
 ///
@@ -68,7 +74,14 @@ const ANSI: (&str, &str, &str) = (
 /// entry here, next to its agent in [`AGENTS`]; every other language gets
 /// [`GENERIC`] (ADR-0065). SQL never reads this table: its fragment is its
 /// dialect's.
-pub(super) const LANGUAGE_FRAGMENTS: [(&str, &str, &str); 1] = [GENERIC];
+pub(super) const LANGUAGE_FRAGMENTS: [(&str, &str, &str); 2] = [
+    GENERIC,
+    (
+        "search-dsl",
+        "prompts/languages/search-dsl.md",
+        include_str!("../../prompts/languages/search-dsl.md"),
+    ),
+];
 
 /// The fragment of a language Oxyn has no notes for: what holds for any
 /// language Oxyn does not parse, and nothing about a product.
