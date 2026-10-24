@@ -17,8 +17,9 @@ pub(crate) const SQL_AGENT: (&str, &str) = ("agents/sql.md", include_str!("../..
 pub(crate) const SCHEMA_AGENT: (&str, &str) =
     ("agents/schema.md", include_str!("../../agents/schema.md"));
 
-/// The Elasticsearch and OpenSearch agent's file.
-pub(crate) const ELASTICSEARCH_AGENT: (&str, &str) = (
+/// The Elasticsearch agent's file, `(file, text)`: the assistant on an
+/// Elasticsearch or OpenSearch connection (ADR-0062, ADR-0065).
+const ELASTICSEARCH_AGENT: (&str, &str) = (
     "agents/elasticsearch.md",
     include_str!("../../agents/elasticsearch.md"),
 );

@@ -3139,6 +3139,9 @@ mod provider_errors;
 /// An external agent's abandoned query stops on a real PostgreSQL server.
 mod server_cancel;
 
+/// The assistant on an Elasticsearch connection, through the shipped driver.
+mod search_dsl;
+
 #[test]
 fn a_protected_path_is_searched_only_at_spawn() {
     let mut declared = agent("oxyn-only-on-protected-path");

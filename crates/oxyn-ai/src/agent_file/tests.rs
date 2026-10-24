@@ -56,10 +56,14 @@ fn shipped_agents_are_valid() {
         agent
             .validate(&registry)
             .unwrap_or_else(|err| panic!("{file}: {err}"));
-        assert!(
-            agent.system_prompt.contains(ERD_HINT),
-            "{file}: the `erd` sentence drifted from the one tools state"
-        );
+        // Oxyn draws an `erd` from tables: an agent of a language without
+        // them has no diagram to offer.
+        if agent.writes(QueryLanguage::SQL) {
+            assert!(
+                agent.system_prompt.contains(ERD_HINT),
+                "{file}: the `erd` sentence drifted from the one tools state"
+            );
+        }
     }
     let agents = shipped_agents();
     assert_eq!(agents.len(), AGENTS.len());
@@ -417,15 +421,11 @@ fn offered_for_honors_applies_to_and_recipients() {
     assert!(!agent.offered_for(&target(SqlDialect::Sqlite, recipient("anthropic"))));
     assert!(!agent.offered_for(&target(SqlDialect::Postgres, recipient("codex"))));
 
-    // Empty lists offer a SQL agent on every SQL dialect and recipient.
-    for shipped in shipped_agents() {
-        if !shipped
-            .languages
-            .iter()
-            .any(|language| language.sql_dialect().is_some())
-        {
-            continue;
-        }
+    // Empty lists offer a SQL agent on every dialect and recipient.
+    for shipped in shipped_agents()
+        .into_iter()
+        .filter(|agent| agent.writes(QueryLanguage::SQL))
+    {
         for dialect in DIALECTS {
             for name in RECIPIENTS {
                 assert!(shipped.offered_for(&target(dialect, recipient(name))));
@@ -606,7 +606,10 @@ fn an_agent_written_for_a_language_is_offered_only_where_it_is_spoken() {
         assert!(!keys.offered_for(&speaking(other, reader)), "{other}");
     }
     // And a SQL agent, shipped or not, is never offered on a Redis session.
-    for shipped in shipped_agents() {
+    for shipped in shipped_agents()
+        .into_iter()
+        .filter(|agent| agent.writes(QueryLanguage::SQL))
+    {
         assert!(!shipped.offered_for(&speaking(QueryLanguage::RedisCommand, reader)));
     }
 }

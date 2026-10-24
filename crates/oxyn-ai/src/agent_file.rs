@@ -50,7 +50,7 @@ use std::fmt;
 
 pub use catalog::{AgentCatalog, AgentOrigin, CatalogEntry, CatalogError, UserAgentFile};
 pub use files::shipped_agents;
-pub(crate) use files::{ELASTICSEARCH_AGENT, SCHEMA_AGENT, SQL_AGENT, shipped_agent};
+pub(crate) use files::{SCHEMA_AGENT, SQL_AGENT, shipped_agent};
 pub use parse::parse_agent_file;
 pub use render::render_system_prompt;
 pub use target::{DIALECTS, ExternalAgentKind, LANGUAGES, PromptTarget, Recipient};

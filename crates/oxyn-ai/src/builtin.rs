@@ -6,10 +6,9 @@
 //! configuration, and an agent provided by a user or a plugin is exactly the
 //! same kind of object as these.
 //!
-//! # Why three, and not the full product roster
+//! # Why two, and not nine
 //!
-//! Phase 2 ships SQL and Schema (IMPLEMENTATION-PLAN); Elasticsearch ships its
-//! own language agent with its driver. The role agents still remaining are
+//! Phase 2 ships SQL and Schema (IMPLEMENTATION-PLAN). The other seven are
 //! named in [`REMAINING_AGENTS`] and nothing more: nine prompts written in
 //! advance would be nine prompts to rewrite, and a hollow prompt looks like a
 //! feature when it is not one.
@@ -31,10 +30,10 @@
 //! They are in English: it is code text (CLAUDE.md), and it is the language in
 //! which models follow an instruction best.
 
-use crate::agent_file::{ELASTICSEARCH_AGENT, SCHEMA_AGENT, SQL_AGENT, shipped_agent};
+use crate::agent_file::{SCHEMA_AGENT, SQL_AGENT, shipped_agent};
 use crate::spec::AgentSpec;
 
-/// The seven role agents of the vision that remain to be written.
+/// The seven agents of the vision that remain to be written.
 ///
 /// They are named here so that the list lives in one place, and because
 /// several of them need `Command`s that do not exist yet: reading the local
@@ -53,12 +52,6 @@ pub const REMAINING_AGENTS: [&str; 7] = [
     "Analytics",
     "Visualization",
 ];
-
-/// The Elasticsearch and OpenSearch agent (`agents/elasticsearch.md`).
-#[must_use]
-pub fn elasticsearch_agent() -> AgentSpec {
-    shipped_agent(ELASTICSEARCH_AGENT)
-}
 
 /// The SQL agent: write, fix and explain queries (`agents/sql.md`).
 ///
@@ -155,9 +148,15 @@ mod tests {
     }
 
     #[test]
-    fn the_remaining_agents_are_named_not_written() {
-        // The list of VISION § "Multi-agent architecture" counts nine agents.
-        assert_eq!(REMAINING_AGENTS.len() + shipped_agents().len(), 10);
+    fn the_seven_remaining_agents_are_named_not_written() {
+        // The list of VISION § "Multi-agent architecture" counts nine agents,
+        // by role; an agent a driver ships for its own language (ADR-0065)
+        // is not one of them.
+        let roles = shipped_agents()
+            .iter()
+            .filter(|agent| agent.writes(oxyn_core::QueryLanguage::SQL))
+            .count();
+        assert_eq!(REMAINING_AGENTS.len() + roles, 9);
         for name in REMAINING_AGENTS {
             assert!(
                 !shipped_agents().iter().any(|agent| agent.name == name),
