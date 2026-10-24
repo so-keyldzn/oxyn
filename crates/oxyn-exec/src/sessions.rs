@@ -29,8 +29,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use oxyn_core::{
-    CancelToken, Capabilities, ConnectionConfig, ConnectionId, ExecRequest, OxynError, Result,
-    SessionId, StatementHandle, StatementIntent, TransactionState,
+    CancelToken, Capabilities, ConnectionConfig, ConnectionId, ExecRequest, MutationRisk,
+    OxynError, Result, SessionId, StatementHandle, StatementIntent, TransactionState,
 };
 use oxyn_driver::{Credentials, Cursor, Session};
 use parking_lot::RwLock;
@@ -176,6 +176,22 @@ impl SessionSlot {
         }
         let guard = self.session.try_read().ok()?;
         guard.as_deref()?.classify_intent(request)
+    }
+
+    /// What the driver tells of a non-SQL request's risk: see
+    /// [`Session::classify_risk`].
+    ///
+    /// Never waits, like [`classify_intent`](Self::classify_intent): a session
+    /// closing, closed, or whose lock a closing holds answers `None`. The
+    /// request then keeps the risk it had, while its intent was proven by the
+    /// same session an instant earlier.
+    #[must_use]
+    pub(crate) fn classify_risk(&self, request: &ExecRequest) -> Option<MutationRisk> {
+        if self.closing.is_cancelled() {
+            return None;
+        }
+        let guard = self.session.try_read().ok()?;
+        guard.as_deref()?.classify_risk(request)
     }
 
     /// Executes a request on this session.
