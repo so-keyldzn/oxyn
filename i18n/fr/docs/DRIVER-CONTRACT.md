@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="f3a3491c0b4c" -->
+<!-- oxyn-translation source="docs/DRIVER-CONTRACT.md" sha256="9ee07d080f90" -->
 
 > Traduction française de [docs/DRIVER-CONTRACT.md](../../../docs/DRIVER-CONTRACT.md). **La version anglaise fait foi.**
 
@@ -223,9 +223,9 @@ arrive jamais :
 * une requête classée `Read` sur une connexion de production, ou marquée en
   lecture seule, arrive à `execute` avec `limits.read_only` positionné : la
   session tient cette borne ou refuse l'exécution ;
-* la réponse ne porte ni risque, ni contrôle de transaction, ni changement de
-  contexte. Un langage qui a de telles instructions les refuse dans sa console,
-  ou fait passer un changement de contexte par `set_context`.
+* la réponse ne porte ni contrôle de transaction, ni changement de contexte. Un
+  langage qui a de telles instructions les refuse dans sa console, ou fait
+  passer un changement de contexte par `set_context`.
 
 Le défaut répond `None` : une session qui ne le redéfinit pas se comporte comme
 si la méthode n'existait pas.
@@ -233,6 +233,31 @@ si la méthode n'existait pas.
 **Échec concret :** un driver qui répond `Read` pour toute commande qu'il ne
 reconnaît pas exécute un `FLUSHALL` sur un cache de production sans
 confirmation, et laisse un agent l'exécuter aussi.
+
+**Il dit le risque d'une écriture qu'il a classée**
+([ADR-0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md)).
+Pour une requête à laquelle `classify_intent` a répondu `Write`, `Ddl` ou
+`Grant` — jamais pour du SQL, jamais pour une lecture, jamais pour une requête
+non prouvée —, `oxyn-exec` interroge `Session::classify_risk`, et le
+`MutationRisk` qu'elle répond est celui que voit le gate. Un risque fait
+demander par le gate une approbation à un humain quel que soit
+l'environnement, exactement comme le `DELETE FROM users` du SQL sur staging :
+
+* prudente **dans l'autre sens** : répondre le risque dès que la requête peut
+  toucher tous les documents, clés ou index de sa cible — un filtre de
+  suppression vide, un drop, `FLUSHALL`, `FLUSHDB`, `_delete_by_query` avec
+  `match_all`, `DELETE /index` —, pas seulement quand c'est prouvé. Un risque
+  manqué, ou répondu plus bas que ce que la requête mérite, contourne une
+  approbation et rien ne le remarque ;
+* les mêmes règles que `classify_intent` : synchrone, aucune E/S, aucun verrou
+  qui puisse bloquer ;
+* la réponse ne peut que relever le risque : `None` laisse la requête sans
+  risque, le comportement d'une session qui ne redéfinit pas la méthode.
+
+**Échec concret :** un driver MongoDB qui classe
+`{"delete":"users","deletes":[{"q":{},"limit":0}]}` comme une écriture mais pas
+comme une suppression non bornée vide une collection de staging en un clic, là
+où `DELETE FROM users` demandait une approbation.
 
 ### 6. Il échappe tout identifiant qu'il compose
 

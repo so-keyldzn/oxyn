@@ -2725,20 +2725,36 @@ fn reclassified(command: Command, sessions: &SessionRegistry) -> Command {
 /// (ADR-0064).
 ///
 /// Without that proof the request keeps `oxyn-query`'s `Unknown`, counted as
-/// mutating. A proven intent comes without risk, transaction control or
-/// context change: [`Session::classify_intent`](oxyn_driver::Session::classify_intent)
+/// mutating. A proven intent comes without transaction control or context
+/// change: [`Session::classify_intent`](oxyn_driver::Session::classify_intent)
 /// cannot express them, and a driver whose language has such statements
 /// refuses them in its console or carries them through its own context.
+///
+/// A proven write, DDL or grant takes the risk
+/// [`Session::classify_risk`](oxyn_driver::Session::classify_risk) answers,
+/// and none without an answer (ADR-0066). A read is never given one: the
+/// session could only invent it, and a proven read stays a read for the gate.
 fn reclassified_request(request: ExecRequest, slot: Option<&SessionSlot>) -> ExecRequest {
     let request = oxyn_query::reclassify(&request).qualify(request);
     if request.language.sql_dialect().is_some() {
         return request;
     }
-    match slot.and_then(|slot| slot.classify_intent(&request)) {
+    let Some(slot) = slot else {
+        return request;
+    };
+    match slot.classify_intent(&request) {
         Some(intent) => {
-            let mut request = request
-                .with_intent(intent)
-                .with_risk(oxyn_core::MutationRisk::None);
+            // The proven intent replaces `Unknown`, whose risk is none: the
+            // session's answer can only raise it.
+            let risk = match intent {
+                oxyn_core::StatementIntent::Write
+                | oxyn_core::StatementIntent::Ddl
+                | oxyn_core::StatementIntent::Grant => slot
+                    .classify_risk(&request)
+                    .unwrap_or(oxyn_core::MutationRisk::None),
+                _ => oxyn_core::MutationRisk::None,
+            };
+            let mut request = request.with_intent(intent).with_risk(risk);
             request.transaction_control = false;
             request.context_change = false;
             request
@@ -4123,6 +4139,10 @@ mod production_read_tests;
 #[cfg(test)]
 #[path = "classify_intent_tests.rs"]
 mod classify_intent_tests;
+
+#[cfg(test)]
+#[path = "classify_risk_tests.rs"]
+mod classify_risk_tests;
 
 #[cfg(test)]
 #[path = "agent_transaction_tests.rs"]

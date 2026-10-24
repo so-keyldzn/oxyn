@@ -213,9 +213,9 @@ it:
 * a request answered `Read` on production, or on a connection marked read-only,
   reaches `execute` with `limits.read_only` set: the session holds that bound or
   refuses the execution;
-* the answer carries no risk, no transaction control and no context change. A
-  language that has such statements refuses them in its console, or carries a
-  context change through `set_context`.
+* the answer carries no transaction control and no context change. A language
+  that has such statements refuses them in its console, or carries a context
+  change through `set_context`.
 
 The default answers `None`: a session that does not override it behaves as if
 the method did not exist.
@@ -223,6 +223,29 @@ the method did not exist.
 **Concrete failure:** a driver that answers `Read` for every command it does
 not recognize runs a `FLUSHALL` on a production cache with no confirmation, and
 lets an agent run it too.
+
+**It tells the risk of a write it classified**
+([ADR-0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md)).
+For a request `classify_intent` answered `Write`, `Ddl` or `Grant` — never for
+SQL, never for a read, never for an unproven request — `oxyn-exec` asks
+`Session::classify_risk`, and the `MutationRisk` it answers is the one the gate
+sees. A risk makes the gate ask a human for an approval whatever the
+environment, exactly as SQL's `DELETE FROM users` does on staging:
+
+* conservative **in the other direction**: answer the risk whenever the request
+  may touch every document, key or index of its target — an empty delete
+  filter, a drop, `FLUSHALL`, `FLUSHDB`, `_delete_by_query` with `match_all`,
+  `DELETE /index` — not only when that is proven. A risk missed, or answered
+  lower than the request deserves, bypasses an approval and nothing notices;
+* the same rules as `classify_intent`: synchronous, no I/O, no lock that can
+  block;
+* the answer can only raise the risk: `None` leaves the request with none, the
+  behavior of a session that does not override the method.
+
+**Concrete failure:** a MongoDB driver that classifies
+`{"delete":"users","deletes":[{"q":{},"limit":0}]}` as a write but not as an
+unbounded delete empties a staging collection on one click, where
+`DELETE FROM users` asked for an approval.
 
 ### 6. It escapes every identifier it composes
 
