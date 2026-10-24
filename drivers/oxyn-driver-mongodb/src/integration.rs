@@ -555,6 +555,40 @@ async fn the_catalog_lists_databases_collections_views_and_indexes() {
             .expect("a view")
             .is_empty()
     );
+    // The definition is the commands that make the collection again: run on
+    // an empty database, they recreate its options and its indexes.
+    let definition = catalog
+        .relation_definition(&orders, &token)
+        .await
+        .expect("definition");
+    run(
+        &*session,
+        format!(r#"{{"drop": "orders", "$db": "{database}"}}"#),
+    )
+    .await
+    .expect("drop");
+    let second = definition
+        .sql
+        .find("\n\n")
+        .expect("create, then createIndexes");
+    for command in [definition.sql.get(..second), definition.sql.get(second..)] {
+        run(
+            &*session,
+            command.expect("a boundary on a character").trim(),
+        )
+        .await
+        .expect("the definition runs");
+    }
+    let rebuilt = catalog
+        .list_indexes(&orders, &token)
+        .await
+        .expect("indexes");
+    assert!(rebuilt.iter().any(|i| i.name == "who_total" && i.unique));
+    let view_definition = catalog
+        .relation_definition(&view, &token)
+        .await
+        .expect("a view's definition");
+    assert!(view_definition.sql.contains("\"viewOn\": \"orders\""));
     drop_database(&*session, &database).await;
     session.close().await.expect("close");
 }

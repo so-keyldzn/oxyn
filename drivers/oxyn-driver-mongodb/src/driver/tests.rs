@@ -19,7 +19,11 @@ fn the_driver_registers_and_declares_itself_consistently() {
             .capabilities()
             .supports_language(QueryLanguage::MongoQuery)
     );
-    assert!(!registered.capabilities().supports_language(QueryLanguage::SQL));
+    assert!(
+        !registered
+            .capabilities()
+            .supports_language(QueryLanguage::SQL)
+    );
 }
 
 #[test]
@@ -32,8 +36,6 @@ fn the_ceiling_declares_nothing_the_driver_does_not_do() {
         Capabilities::PREVIEW_FILTER,
         Capabilities::EXPLAIN,
         Capabilities::TRUNCATE,
-        Capabilities::TABLES,
-        Capabilities::SCHEMAS,
     ] {
         assert!(!ceiling.contains(absent), "{absent:?}");
     }
@@ -41,10 +43,20 @@ fn the_ceiling_declares_nothing_the_driver_does_not_do() {
 }
 
 #[test]
+fn databases_and_collections_are_the_two_catalog_levels() {
+    // The root refresh lists namespaces only under `SCHEMAS`; otherwise it
+    // asks for the relations of an empty path, which a MongoDB catalog
+    // refuses: the tree would never load.
+    assert!(base_capabilities().contains(Capabilities::SCHEMAS | Capabilities::TABLES));
+}
+
+#[test]
 fn a_read_only_account_keeps_the_flag_and_drops_the_writes() {
     let session = read_only(base_capabilities() | Capabilities::SERVER_SIDE_CANCEL);
     assert!(session.contains(Capabilities::READ_ONLY_SESSION));
-    assert!(!session.intersects(Capabilities::DML | Capabilities::DDL | Capabilities::GRANT_REVOKE));
+    assert!(
+        !session.intersects(Capabilities::DML | Capabilities::DDL | Capabilities::GRANT_REVOKE)
+    );
     assert!(session.contains(Capabilities::SERVER_SIDE_CANCEL));
 }
 
@@ -66,11 +78,26 @@ fn status(users: usize, actions: &[&[&str]]) -> Document {
 
 #[test]
 fn read_only_is_claimed_only_from_privileges_that_all_read() {
-    assert!(reads_only(&status(1, &[&["find", "listCollections"], &["listDatabases"]])));
-    assert!(!reads_only(&status(1, &[&["find", "insert"]])), "a write action");
-    assert!(!reads_only(&status(1, &[&["find", "someFutureAction"]])), "an unknown action");
-    assert!(!reads_only(&status(0, &[])), "no access control: everything is allowed");
-    assert!(!reads_only(&status(1, &[])), "no privilege listed: no claim");
+    assert!(reads_only(&status(
+        1,
+        &[&["find", "listCollections"], &["listDatabases"]]
+    )));
+    assert!(
+        !reads_only(&status(1, &[&["find", "insert"]])),
+        "a write action"
+    );
+    assert!(
+        !reads_only(&status(1, &[&["find", "someFutureAction"]])),
+        "an unknown action"
+    );
+    assert!(
+        !reads_only(&status(0, &[])),
+        "no access control: everything is allowed"
+    );
+    assert!(
+        !reads_only(&status(1, &[])),
+        "no privilege listed: no claim"
+    );
     assert!(!reads_only(&doc! { "ok": 1 }));
 }
 
@@ -107,7 +134,11 @@ fn the_form_is_the_contract_the_interface_builds_on() {
         .secret_fields()
         .map(|field| field.key.as_str())
         .collect();
-    assert_eq!(secrets, ["password"], "the password is the only secret, without default");
+    assert_eq!(
+        secrets,
+        ["password"],
+        "the password is the only secret, without default"
+    );
     assert_eq!(
         metadata.field("tls").and_then(|f| f.default.as_deref()),
         Some("verify-full")

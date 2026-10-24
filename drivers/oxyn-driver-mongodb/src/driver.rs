@@ -35,9 +35,16 @@ use crate::session::{MongoSession, Shared};
 
 /// What every MongoDB session declares, before the account's privileges and
 /// the server's support for `killSessions` are known.
+///
+/// `SCHEMAS` and `TABLES` are the catalog's two levels, in MongoDB's words
+/// databases and collections: without `SCHEMAS`, the tree would ask for the
+/// relations of an empty path, which names no database.
 #[must_use]
 pub const fn base_capabilities() -> Capabilities {
     Capabilities::MONGO_QUERY
+        .union(Capabilities::SCHEMAS)
+        .union(Capabilities::TABLES)
+        .union(Capabilities::OBJECT_DEFINITION)
         .union(Capabilities::DOCUMENT)
         .union(Capabilities::SCHEMALESS)
         .union(Capabilities::INFERRED_SCHEMA)
@@ -158,13 +165,22 @@ pub fn mongodb_metadata() -> DriverMetadata {
             ConnectionField::new(
                 "tls",
                 "TLS mode",
-                FieldKind::Choice(TlsMode::ALL.iter().map(|mode| mode.name().to_owned()).collect()),
+                FieldKind::Choice(
+                    TlsMode::ALL
+                        .iter()
+                        .map(|mode| mode.name().to_owned())
+                        .collect(),
+                ),
             )
             .with_default(TlsMode::VerifyFull.name()),
             ConnectionField::new("tlsCAFile", "CA file", FieldKind::Path)
                 .with_help("PEM certificates of the authority that signed the server's."),
-            ConnectionField::new("tlsCertificateKeyFile", "Client certificate", FieldKind::Path)
-                .with_help("PEM file holding the client certificate and its unencrypted key."),
+            ConnectionField::new(
+                "tlsCertificateKeyFile",
+                "Client certificate",
+                FieldKind::Path,
+            )
+            .with_help("PEM file holding the client certificate and its unencrypted key."),
         ])
 }
 
@@ -235,7 +251,8 @@ impl Driver for MongoDriver {
     ) -> Result<Box<dyn Session>> {
         let spec = ConnectSpec::from_config(&self.metadata, config, credentials)?;
         let driver = self.id();
-        let read = |error: mongodb::error::Error| map_error(&driver, StatementIntent::Read, &error, false);
+        let read =
+            |error: mongodb::error::Error| map_error(&driver, StatementIntent::Read, &error, false);
         let client = before(cancel, async {
             let options = spec.client_options().await.map_err(read)?;
             Client::with_options(options).map_err(read)
@@ -243,7 +260,10 @@ impl Driver for MongoDriver {
         .await?;
         let admin = client.database("admin");
         let build = before(cancel, async {
-            admin.run_command(doc! { "buildInfo": 1 }).await.map_err(read)
+            admin
+                .run_command(doc! { "buildInfo": 1 })
+                .await
+                .map_err(read)
         })
         .await?;
         let version = build.get_str("version").unwrap_or("unknown").to_owned();

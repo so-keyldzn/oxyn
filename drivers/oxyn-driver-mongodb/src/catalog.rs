@@ -23,7 +23,7 @@ use bson::{Bson, Document, RawDocumentBuf, doc};
 use oxyn_catalog::model::{
     Field, Index, LogicalType, NamespaceRef, Relation, RelationKind, RelationRef, ServerInfo,
 };
-use oxyn_catalog::{CatalogPath, CatalogProvider};
+use oxyn_catalog::{CatalogPath, CatalogProvider, RelationDefinition};
 use oxyn_core::{CancelToken, OxynError, Result, StatementIntent};
 
 use crate::cancel::{self, Running};
@@ -32,6 +32,8 @@ use crate::decode::Plan;
 use crate::ejson::{self, Mode};
 use crate::error::map_error;
 use crate::session::Shared;
+
+mod definition;
 
 /// Collections or databases beyond which a listing is refused rather than
 /// returned partial: a tree that silently stops at an arbitrary entry hides
@@ -144,6 +146,16 @@ impl MongoCatalog {
 
     /// The `listCollections` entry of one relation.
     async fn listed(&self, database: &str, name: &str, cancel: &CancelToken) -> Result<Listed> {
+        Ok(listing(&self.entry(database, name, cancel).await?))
+    }
+
+    /// The raw `listCollections` entry of one relation.
+    async fn entry(
+        &self,
+        database: &str,
+        name: &str,
+        cancel: &CancelToken,
+    ) -> Result<RawDocumentBuf> {
         let entries = self
             .documents(
                 database,
@@ -153,13 +165,12 @@ impl MongoCatalog {
                 cancel,
             )
             .await?;
-        let entry = entries.first().ok_or_else(|| {
+        entries.into_iter().next().ok_or_else(|| {
             OxynError::Query(format!(
                 "the database has no collection or view named {:?}",
                 name.escape_debug().to_string()
             ))
-        })?;
-        Ok(listing(entry))
+        })
     }
 }
 
@@ -450,5 +461,34 @@ impl CatalogProvider for MongoCatalog {
             indexes.push(index);
         }
         Ok(indexes)
+    }
+
+    /// The `create` and `createIndexes` commands that would make the
+    /// relation again, reconstructed from the catalog's replies.
+    async fn relation_definition(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<RelationDefinition> {
+        let database = database_of(relation)?;
+        let Some(name) = relation.relation() else {
+            return Err(OxynError::CatalogUnavailable(
+                "a MongoDB relation path names a collection".to_owned(),
+            ));
+        };
+        let entry = self.entry(database, name, cancel).await?;
+        let indexes = if listing(&entry).kind == RelationKind::View {
+            Vec::new()
+        } else {
+            self.documents(
+                database,
+                doc! { "listIndexes": name },
+                MAX_ENTRIES,
+                false,
+                cancel,
+            )
+            .await?
+        };
+        definition::reconstruct(database, name, &entry, &indexes)
     }
 }
