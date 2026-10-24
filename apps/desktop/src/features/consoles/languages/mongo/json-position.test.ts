@@ -102,6 +102,18 @@ describe("readJson", () => {
     expect(at("{}|").slot).toBeNull()
   })
 
+  it("reads the root of the command around the cursor, not of its neighbours", () => {
+    const first = '{"find": "users", "$db": "shop"}'
+    const second = '{"update": "orders", "$db": "warehouse"}'
+    const before = at(`{"find": "us|ers", "$db": "shop"}\n${second}`)
+    expect(before.rootKeys).toEqual(["find", "$db"])
+    expect(before.rootStrings.get("$db")).toBe("shop")
+    const after = at(`${first}\n{"update": "ord|ers", "$db": "warehouse"}`)
+    expect(after.rootKeys).toEqual(["update", "$db"])
+    expect(after.rootStrings.get("$db")).toBe("warehouse")
+    expect(after.rootStrings.has("find")).toBe(false)
+  })
+
   it("survives a closing bracket that matches nothing", () => {
     const { slot } = at('{"find": "users"]], "|"}')
     expect(slot).toMatchObject({ role: "key", route: [] })

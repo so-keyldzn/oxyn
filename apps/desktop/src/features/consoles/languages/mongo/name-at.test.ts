@@ -16,6 +16,20 @@ describe("mongoNameAt", () => {
     ])
   })
 
+  it("takes the database of the command under the cursor", () => {
+    expect(
+      at(
+        '{"find": "us|ers", "$db": "shop"}\n{"update": "orders", "$db": "warehouse"}'
+      )
+    ).toEqual([
+      { text: "shop", quoted: true },
+      { text: "users", quoted: true },
+    ])
+    expect(at('{"find": "users", "$db": "shop"}\n{"find": "ord|ers"}')).toEqual(
+      [{ text: "orders", quoted: true }]
+    )
+  })
+
   it("reads a nested name, such as a $lookup's source", () => {
     expect(
       at(

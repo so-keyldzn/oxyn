@@ -120,8 +120,12 @@ function stringEnd(text: string, start: number) {
  */
 export function readJson(text: string, pos: number): Reading {
   const stack: Array<Frame> = []
+  // A console holds several commands: the root metadata is the one of the
+  // command around the cursor — reset at each command that opens before it,
+  // frozen once the command holding it is closed.
   const rootKeys: Array<string> = []
   const rootStrings = new Map<string, string>()
+  let rootFrozen = false
   // `undefined` until the cursor is passed, `null` where nothing completes.
   let found: Found | null | undefined
 
@@ -163,14 +167,19 @@ export function readJson(text: string, pos: number): Reading {
   const keyRead = (frame: ObjectFrame, key: string) => {
     frame.key = key
     frame.keys.push(key)
-    if (stack.length === 1) rootKeys.push(key)
+    if (stack.length === 1 && !rootFrozen) rootKeys.push(key)
     frame.expect = "colon"
   }
   // A value was read in the current container: a comma comes next.
   const valueRead = (value: string | null) => {
     const frame = top()
     if (frame === undefined) return
-    if (frame.kind === "object" && stack.length === 1 && frame.key !== null)
+    if (
+      frame.kind === "object" &&
+      stack.length === 1 &&
+      frame.key !== null &&
+      !rootFrozen
+    )
       if (value !== null) rootStrings.set(frame.key, value)
     frame.expect = "comma"
   }
@@ -196,6 +205,10 @@ export function readJson(text: string, pos: number): Reading {
       else valueRead(closed ? decode(literal) : null)
       at = end
     } else if (char === "{") {
+      if (stack.length === 0 && found === undefined) {
+        rootKeys.length = 0
+        rootStrings.clear()
+      }
       stack.push({ kind: "object", expect: "key", key: null, keys: [] })
       at++
     } else if (char === "[") {
@@ -205,6 +218,7 @@ export function readJson(text: string, pos: number): Reading {
       if (frame && (frame.kind === "object") === (char === "}")) {
         stack.pop()
         valueRead(null)
+        if (stack.length === 0 && found !== undefined) rootFrozen = true
       }
       at++
     } else if (char === ":") {
