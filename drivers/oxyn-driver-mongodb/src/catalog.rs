@@ -104,6 +104,25 @@ impl MongoCatalog {
         .map_err(|error| map_error(driver, StatementIntent::Read, &error, running.was_killed()))
     }
 
+    /// Every `listIndexes` entry of a collection, or a refusal: the index
+    /// list and the `createIndexes` reconstructed from it claim to be whole,
+    /// so a reply past the listing bounds is never cut to fit them.
+    async fn index_entries(
+        &self,
+        database: &str,
+        collection: &str,
+        cancel: &CancelToken,
+    ) -> Result<Vec<RawDocumentBuf>> {
+        self.documents(
+            database,
+            doc! { "listIndexes": collection },
+            MAX_ENTRIES.saturating_add(1),
+            true,
+            cancel,
+        )
+        .await
+    }
+
     /// Runs a cursor command and reads at most `limit` documents and
     /// [`SAMPLE_BYTES`] bytes, or refuses past [`MAX_ENTRIES`] when `strict`.
     async fn documents(
@@ -132,8 +151,8 @@ impl MongoCatalog {
         loop {
             if strict && bytes >= MAX_LISTING_BYTES {
                 return Err(OxynError::CatalogUnavailable(format!(
-                    "the listing exceeds {} MiB of entries (validators, view pipelines): it is \
-                     refused rather than shown partial",
+                    "the listing exceeds {} MiB of entries (validators, view pipelines, index \
+                     options and partial filters): it is refused rather than shown partial",
                     MAX_LISTING_BYTES >> 20
                 )));
             }
@@ -474,15 +493,7 @@ impl CatalogProvider for MongoCatalog {
             // A view has no index of its own: an empty list is the truth.
             return Ok(Vec::new());
         }
-        let entries = self
-            .documents(
-                database,
-                doc! { "listIndexes": name },
-                MAX_ENTRIES,
-                false,
-                cancel,
-            )
-            .await?;
+        let entries = self.index_entries(database, name, cancel).await?;
         let mut indexes = Vec::with_capacity(entries.len());
         for entry in &entries {
             let Ok(index_name) = entry.get_str("name") else {
@@ -535,14 +546,7 @@ impl CatalogProvider for MongoCatalog {
         let indexes = if listing(&entry, Detail::Listing).kind == RelationKind::View {
             Vec::new()
         } else {
-            self.documents(
-                database,
-                doc! { "listIndexes": name },
-                MAX_ENTRIES,
-                false,
-                cancel,
-            )
-            .await?
+            self.index_entries(database, name, cancel).await?
         };
         definition::reconstruct(database, name, &entry, &indexes)
     }

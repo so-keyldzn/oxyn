@@ -648,6 +648,57 @@ async fn the_catalog_lists_databases_collections_views_and_indexes() {
 
 #[tokio::test]
 #[ignore = "needs a MongoDB server: see the module documentation"]
+async fn indexes_past_the_sample_bound_are_all_listed_or_refused() {
+    // Five partial filters of 2.5 MiB: 12.5 MiB of index options, past the
+    // 8 MiB a sample reads, within the 16 MiB the server keeps for a
+    // collection. The list loses none; the definition is refused whole.
+    let Some(session) = session().await else {
+        return;
+    };
+    let database = database(&*session, "wide_indexes").await;
+    let wide = "x".repeat(5 << 19);
+    let specs: Vec<String> = (0..5)
+        .map(|i| {
+            format!(
+                r#"{{"key": {{"f{i}": 1}}, "name": "wide_{i}",
+                    "partialFilterExpression": {{"f{i}": {{"$eq": "{wide}"}}}}}}"#
+            )
+        })
+        .collect();
+    run(
+        &*session,
+        format!(
+            r#"{{"createIndexes": "c", "$db": "{database}", "indexes": [{}]}}"#,
+            specs.join(",")
+        ),
+    )
+    .await
+    .expect("the indexes");
+    let catalog = session.catalog();
+    let token = CancelToken::new();
+    let path = CatalogPath::for_relation(None, Some(&database), "c").expect("path");
+    let indexes = catalog.list_indexes(&path, &token).await.expect("indexes");
+    let names: Vec<&str> = indexes.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["_id_", "wide_0", "wide_1", "wide_2", "wide_3", "wide_4"]
+    );
+    // Such options make a text past the 1 MiB a definition may hold:
+    // refused as a whole, never the commands of the indexes that fitted.
+    let refused = catalog
+        .relation_definition(&path, &token)
+        .await
+        .expect_err("past the definition bound");
+    assert!(
+        matches!(refused, OxynError::CatalogUnavailable(_)),
+        "{refused:?}"
+    );
+    drop_database(&*session, &database).await;
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "needs a MongoDB server: see the module documentation"]
 async fn a_preview_is_bounded_ordered_by_id_when_sorted_and_read_only() {
     let Some(session) = session().await else {
         return;
