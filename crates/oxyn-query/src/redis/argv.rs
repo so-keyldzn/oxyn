@@ -22,7 +22,7 @@
 //!
 //! The driver builds the argv it sends with [`parse`]; the redaction of
 //! credentials reads a console text with [`commands`]. Both go through the
-//! same [`token`] function, so a password is recognized on the bytes the
+//! same private function that reads one argument, so a password is recognized on the bytes the
 //! server receives: `"\x3ehunter2"` is the rule `>hunter2` for `ACL SETUSER`,
 //! and `"A\x55TH"` is `AUTH`. Two decoders would disagree on exactly the
 //! escape nobody tested, and the secret would be kept
