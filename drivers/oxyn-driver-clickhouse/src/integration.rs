@@ -230,6 +230,23 @@ async fn server_errors_carry_their_code_and_their_class() {
     assert_eq!(code(&insert), Some(60), "{insert:?}");
     assert_eq!(insert.class(), ErrorClass::Permanent);
 
+    // A syntax error quotes the text it failed in, password included: the
+    // message is withheld, its code kept.
+    let quoted = run(
+        &*session,
+        write(
+            "CREATE USER oxyn_it_never IDENTIFIED BY 'oxyn-it-quoted-literal' oops",
+            StatementIntent::Ddl,
+        ),
+    )
+    .await
+    .expect_err("syntax");
+    assert_eq!(code(&quoted), Some(62), "{quoted:?}");
+    assert!(
+        !format!("{quoted} {quoted:?}").contains("oxyn-it-quoted-literal"),
+        "{quoted}"
+    );
+
     // The server's own deadline on a read: passing.
     let slow = run(
         &*session,
@@ -353,6 +370,32 @@ async fn session_state_is_refused_before_it_reaches_the_server() {
             "{sql}: {error:?}"
         );
     }
+    // A setting the driver pins, undone by the statement's own clause, is
+    // refused before anything is sent: `wait_end_of_query = 0` would let a
+    // server that marks no exception send a late error as rows.
+    for sql in [
+        "SELECT throwIf(number = 50000, 'oxyn_pinned_marker') FROM numbers(100000) \
+         SETTINGS max_block_size = 1000, wait_end_of_query = 0",
+        "SELECT 'oxyn_pinned_marker' SETTINGS `send_progress_in_http_headers` = 1",
+        "SELECT 'oxyn_pinned_marker' SETTINGS cancel_http_readonly_queries_on_client_close = 0",
+    ] {
+        let error = run(&*session, unbound_read(sql)).await.expect_err(sql);
+        assert!(
+            matches!(error, OxynError::NotSupported { .. }),
+            "{sql}: {error:?}"
+        );
+    }
+    apply(&*session, "SYSTEM FLUSH LOGS", StatementIntent::Unknown).await;
+    assert_eq!(
+        first(
+            &*session,
+            "SELECT count() FROM system.query_log \
+             WHERE position(query, concat('oxyn_pinned', '_marker')) > 0"
+        )
+        .await,
+        "0",
+        "a refused statement reached the server"
+    );
     // A setting for one statement is the statement's own clause.
     let batches = run(
         &*session,

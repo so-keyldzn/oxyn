@@ -195,6 +195,31 @@ async fn an_account_that_may_not_kill_still_stops_its_reads() {
     cursor.next_batch().await.expect("rows flow");
     drop(cursor);
     assert_eq!(settle(&*admin, 0).await, 0, "the read outlived its cursor");
+
+    // The statement's own clause cannot undo what stops it: such a read,
+    // once its cursor dropped, would run on with nothing left to kill it.
+    for setting in [
+        "cancel_http_readonly_queries_on_client_close = 0",
+        "readonly = 0",
+    ] {
+        let sql = format!(
+            "SELECT count() AS {MARKER} FROM numbers(100000000000) \
+             WHERE NOT ignore(sipHash64(number)) SETTINGS {setting}"
+        );
+        let refused = session
+            .execute(
+                unbound_read(&sql).with_limits(ExecLimits::default().writable().with_timeout(None)),
+                &CancelToken::new(),
+            )
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{setting}: sent"));
+        assert!(
+            matches!(refused, OxynError::NotSupported { .. }),
+            "{setting}: {refused:?}"
+        );
+        assert_eq!(running(&*admin).await, 0, "{setting}: the read runs");
+    }
     session.close().await.expect("close");
     apply(&*admin, &format!("DROP USER {USER}"), StatementIntent::Ddl).await;
     admin.close().await.expect("close");
