@@ -107,7 +107,22 @@ const BASE: Capabilities = Capabilities::SEARCH_DSL
     .union(Capabilities::PREVIEW_SORT)
     .union(Capabilities::PREVIEW_FILTER)
     .union(Capabilities::DDL)
-    .union(Capabilities::DML);
+    .union(Capabilities::DML)
+    .union(Capabilities::FULL_TEXT_SEARCH);
+
+/// The installed plugins, one row per node and plugin.
+const PLUGINS: &str = "/_cat/plugins?format=json&h=component";
+
+/// Whether OpenSearch's k-NN plugin is installed. Elasticsearch searches
+/// `dense_vector` fields by approximate kNN from 8.0, its floor; OpenSearch
+/// only through this plugin, which its minimal distribution leaves out. An
+/// account that may not list plugins gets no vector search declared.
+fn lists_knn(plugins: &Value) -> bool {
+    plugins.as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|row| row.get("component").and_then(Value::as_str) == Some("opensearch-knn"))
+    })
+}
 
 #[async_trait]
 impl Driver for ElasticsearchDriver {
@@ -122,7 +137,7 @@ impl Driver for ElasticsearchDriver {
     /// The most a session can declare; a session declares server-side cancel
     /// only when its account can read the cluster's tasks.
     fn capabilities(&self) -> Capabilities {
-        BASE | Capabilities::SERVER_SIDE_CANCEL
+        BASE | Capabilities::SERVER_SIDE_CANCEL | Capabilities::VECTOR_SEARCH
     }
 
     async fn connect(
@@ -149,11 +164,17 @@ impl Driver for ElasticsearchDriver {
             () = cancel.cancelled() => return Err(OxynError::Cancelled),
             tasks = tasks_of(&http, "") => tasks.is_some(),
         };
-        let capabilities = if can_list_tasks {
-            BASE | Capabilities::SERVER_SIDE_CANCEL
-        } else {
-            BASE
-        };
+        let vector_search = product.name != "OpenSearch"
+            || tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err(OxynError::Cancelled),
+                plugins = http.send(Call::read(Method::GET, PLUGINS)) => plugins
+                    .and_then(|reply| reply.value())
+                    .is_ok_and(|plugins| lists_knn(&plugins)),
+            };
+        let mut capabilities = BASE;
+        capabilities.set(Capabilities::SERVER_SIDE_CANCEL, can_list_tasks);
+        capabilities.set(Capabilities::VECTOR_SEARCH, vector_search);
         let catalog = ElasticsearchCatalog::new(Arc::clone(&http), product, capabilities);
         Ok(Box::new(ElasticsearchSession::new(
             http,
@@ -261,5 +282,22 @@ mod tests {
         assert!(supported("OpenSearch", "3.0.0"));
         assert!(!supported("OpenSearch", "1.3.0"));
         assert!(!supported("OpenSearch", "version unknown"));
+    }
+
+    #[test]
+    fn vector_search_is_read_from_the_installed_plugins() {
+        let knn = serde_json::json!([
+            {"component": "opensearch-security"},
+            {"component": "opensearch-knn"},
+        ]);
+        assert!(lists_knn(&knn));
+        let minimal = serde_json::json!([{"component": "opensearch-security"}]);
+        assert!(!lists_knn(&minimal));
+        for hostile in [
+            serde_json::json!({"component": "opensearch-knn"}),
+            serde_json::json!([{"component": 1}, "opensearch-knn", null]),
+        ] {
+            assert!(!lists_knn(&hostile), "{hostile}");
+        }
     }
 }

@@ -142,6 +142,16 @@ async fn the_product_and_its_version_come_from_the_cluster() {
             .contains(oxyn_core::Capabilities::SERVER_SIDE_CANCEL),
         "a security-disabled cluster lets the account list tasks"
     );
+    // Both default images ship approximate kNN: Elasticsearch in its core,
+    // OpenSearch through the k-NN plugin its full distribution bundles.
+    assert!(
+        session.capabilities().contains(
+            oxyn_core::Capabilities::FULL_TEXT_SEARCH | oxyn_core::Capabilities::VECTOR_SEARCH
+        ),
+        "{} {}",
+        info.product,
+        info.version
+    );
     session.ping().await.expect("a ping");
 }
 
