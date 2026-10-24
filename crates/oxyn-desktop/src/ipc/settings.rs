@@ -268,9 +268,11 @@ impl ConnectionSummary {
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
         };
+        // A seed list (`a:27018,b`) carries its own ports: appending the
+        // default one to its last host would name a server nobody set.
         let server = declared("host").map(|host| match declared("port") {
-            Some(port) => format!("{host}:{port}"),
-            None => host.to_owned(),
+            Some(port) if !host.contains(',') => format!("{host}:{port}"),
+            _ => host.to_owned(),
         });
         let file = declared("path").map(|path| {
             path.rsplit(['/', '\\'])
@@ -458,6 +460,17 @@ mod tests {
                 .as_deref(),
             Some("scratch.sqlite"),
             "a file name, never the directories above it"
+        );
+
+        let seeds = ConnectionConfig::new("orders", DriverId::mongodb())
+            .with_param("host", "a.internal:27018,b.internal")
+            .with_param("port", "27017");
+        assert_eq!(
+            ConnectionSummary::of(&seeds, Some(&oxyn_driver_mongodb::mongodb_metadata()))
+                .location
+                .as_deref(),
+            Some("a.internal:27018,b.internal"),
+            "a seed list keeps its own ports"
         );
     }
 

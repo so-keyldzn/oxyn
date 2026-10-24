@@ -1023,6 +1023,17 @@ impl Backend {
     ) -> Result<oxyn_core::SqlDialect, IpcError> {
         Ok(oxyn_query::dialect_for(&self.config(connection)?.driver))
     }
+
+    /// The language this connection's consoles speak, from what its driver
+    /// declares at best; SQL in the driver's dialect for a driver that names
+    /// none. A session narrows its capabilities, never to another language.
+    pub(crate) fn language_of(&self, driver: &DriverId) -> oxyn_core::QueryLanguage {
+        self.inner
+            .drivers
+            .get(driver)
+            .and_then(|known| oxyn_query::console_language(driver, known.capabilities()))
+            .unwrap_or_else(|| oxyn_core::QueryLanguage::Sql(oxyn_query::dialect_for(driver)))
+    }
 }
 
 /// The configuration a draft describes, secrets aside, under a fresh id.

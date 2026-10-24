@@ -463,6 +463,15 @@ impl CatalogProvider for MongoCatalog {
         Ok(indexes)
     }
 
+    /// The database a command without `$db` runs in, in the session's
+    /// default state: the form's database, else `admin`. Client-side, like
+    /// the context: no server round trip says more.
+    async fn resolution_path(&self, _cancel: &CancelToken) -> Result<Vec<String>> {
+        Ok(vec![self.shared.default_database.clone().unwrap_or_else(
+            || crate::session::DEFAULT_DATABASE.to_owned(),
+        )])
+    }
+
     /// The `create` and `createIndexes` commands that would make the
     /// relation again, reconstructed from the catalog's replies.
     async fn relation_definition(

@@ -357,14 +357,7 @@ impl Backend {
         // The language a console of this connection speaks: a MongoDB
         // command saved as SQL would reopen under the wrong editor and agent.
         let language = match connection {
-            Some(connection) => {
-                let driver = self.read_config(connection).await?.driver;
-                self.inner
-                    .drivers
-                    .get(&driver)
-                    .and_then(|known| oxyn_query::console_language(&driver, known.capabilities()))
-                    .unwrap_or_else(|| QueryLanguage::Sql(oxyn_query::dialect_for(&driver)))
-            }
+            Some(connection) => self.language_of(&self.read_config(connection).await?.driver),
             None => QueryLanguage::SQL,
         };
         let update = QueryDocumentUpdate {
