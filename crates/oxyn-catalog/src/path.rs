@@ -133,6 +133,11 @@ pub enum QuoteStyle {
     ///
     /// [I-10]: ../../../CLAUDE.md
     Bare,
+    /// Backticks read with backslash escapes (ClickHouse): `` `name` ``, an
+    /// inner backtick or backslash preceded by a backslash. ClickHouse
+    /// processes `\` inside a quoted identifier, so doubling the quote alone
+    /// would let a name ending in `\` escape its closing quote.
+    BacktickBackslash,
 }
 
 impl QuoteStyle {
@@ -146,6 +151,7 @@ impl QuoteStyle {
         match dialect {
             SqlDialect::MySql | SqlDialect::BigQuery => Self::Backtick,
             SqlDialect::SqlServer => Self::Bracket,
+            SqlDialect::ClickHouse => Self::BacktickBackslash,
             // `SqlDialect` is `#[non_exhaustive]`: the wildcard arm is imposed
             // by the language, and it is better here than listing the ANSI
             // dialects, which would silently go stale.
@@ -165,6 +171,18 @@ pub fn quote_identifier(name: &str, style: QuoteStyle) -> String {
         QuoteStyle::Backtick => ('`', '`'),
         QuoteStyle::Bracket => ('[', ']'),
         QuoteStyle::Bare => return name.to_owned(),
+        QuoteStyle::BacktickBackslash => {
+            let mut quoted = String::with_capacity(name.len() + 2);
+            quoted.push('`');
+            for c in name.chars() {
+                if c == '`' || c == '\\' {
+                    quoted.push('\\');
+                }
+                quoted.push(c);
+            }
+            quoted.push('`');
+            return quoted;
+        }
     };
     let mut sortie = String::with_capacity(name.len() + 2);
     sortie.push(opening);
@@ -813,6 +831,24 @@ mod tests {
 
         let tsql = item_path.qualify(QuoteStyle::Bracket);
         assert_eq!(tsql, r#"[public].[users"; DROP TABLE audit; --]"#);
+    }
+
+    #[test]
+    fn clickhouse_escapes_the_backslash_that_would_free_its_closing_quote() {
+        // ClickHouse reads `\` inside a quoted identifier: a name ending in a
+        // backslash must not escape the quote that closes it.
+        assert_eq!(
+            QuoteStyle::for_dialect(SqlDialect::ClickHouse),
+            QuoteStyle::BacktickBackslash
+        );
+        assert_eq!(
+            quote_identifier(r"a\` UNION SELECT 1 --", QuoteStyle::BacktickBackslash),
+            r"`a\\\` UNION SELECT 1 --`"
+        );
+        assert_eq!(
+            quote_identifier(r"x\", QuoteStyle::BacktickBackslash),
+            r"`x\\`"
+        );
     }
 
     #[test]

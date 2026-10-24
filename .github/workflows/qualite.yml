@@ -259,6 +259,17 @@ jobs:
       - name: Install the front-end dependencies
         run: pnpm -C apps/desktop install --frozen-lockfile
 
+      - name: Create the Cargo bin directory
+        if: needs.zones.outputs.rust == 'true'
+        # Some `macos-latest` runners ship rustup without `~/.cargo/bin`, and
+        # the three tools below are extracted there: the runs 39981789035 and
+        # 40000784069 failed at the next step with `tar: could not chdir to
+        # '/Users/runner/.cargo/bin'`, before any build. Creating it and putting
+        # it on the `PATH` costs nothing where it already exists.
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+
       - name: Install cargo-nextest
         if: needs.zones.outputs.rust == 'true'
         # The profile of `.config/nextest.toml` — serialized execution of the
@@ -360,6 +371,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 12
+      clickhouse:
+        # The tag of ADR-0060, checked on Docker Hub (RESEARCH-NOTES).
+        image: clickhouse/clickhouse-server:26.3.59.10
+        env:
+          CLICKHOUSE_USER: oxyn
+          CLICKHOUSE_PASSWORD: oxyn
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 8123:8123
+        options: >-
+          --ulimit nofile=262144:262144
+          --health-cmd "clickhouse-client --user oxyn --password oxyn --query 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
       mongodb:
         # The tag is recorded in RESEARCH-NOTES (ADR-0063). The health check
         # authenticates through the container's own address: the image's
@@ -483,6 +509,7 @@ jobs:
           OXYN_PG_TEST_URL: postgres://postgres:oxyn@localhost:5432/postgres?sslmode=disable
           OXYN_MYSQL_TEST_URL: mysql://root:oxyn@localhost:3306/t?sslmode=prefer
           OXYN_PG_PRODUCTION_TEST_URL: postgres://postgres:oxyn@localhost:5433/postgres?sslmode=verify-full
+          OXYN_CLICKHOUSE_TEST_URL: http://oxyn:oxyn@127.0.0.1:8123
           OXYN_MONGODB_TEST_URL: mongodb://root:oxyn@localhost:27017/?tls=disable
           # sqlx trusts this disposable CA while verify-full validates the leaf SAN.
           PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/ca.crt

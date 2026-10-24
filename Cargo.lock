@@ -7771,6 +7771,7 @@ dependencies = [
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-driver-clickhouse",
  "oxyn-driver-mongodb",
  "oxyn-driver-mysql",
  "oxyn-driver-postgres",
@@ -7818,6 +7819,32 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "oxyn-driver-clickhouse"
+version = "0.0.12"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "oxyn-catalog",
+ "oxyn-core",
+ "oxyn-data",
+ "oxyn-driver",
+ "oxyn-query",
+ "reqwest",
+ "rstest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]

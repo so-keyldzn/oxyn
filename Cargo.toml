@@ -43,6 +43,7 @@ oxyn-embed    = { path = "crates/oxyn-embed" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 oxyn-driver-mysql    = { path = "drivers/oxyn-driver-mysql" }
+oxyn-driver-clickhouse = { path = "drivers/oxyn-driver-clickhouse" }
 oxyn-driver-mongodb  = { path = "drivers/oxyn-driver-mongodb" }
 
 # --- foundation --------------------------------------------------------------

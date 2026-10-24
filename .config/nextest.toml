@@ -40,6 +40,13 @@ filter = 'package(oxyn-driver-mysql)'
 test-group = 'serveur-partage'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
+# The ClickHouse integration tests count the statements `system.processes`
+# shows, and create and drop the same databases: one at a time.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-clickhouse)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # The MongoDB integration tests each work in a database of their own, but two
 # of them prove cancellation in the server's `$currentOp` and one streams a
 # gigabyte: they run one at a time, with the timeout of the other drivers.

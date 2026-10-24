@@ -145,6 +145,74 @@ export const mysqlDriver: DriverChoice = {
   ],
 }
 
+/** As `oxyn_driver_clickhouse::clickhouse_metadata` declares it. */
+export const clickhouseDriver: DriverChoice = {
+  id: "clickhouse",
+  aliases: [],
+  displayName: "ClickHouse",
+  family: "analytical",
+  defaultPort: 8443,
+  fields: [
+    {
+      key: "host",
+      label: "Host",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: "localhost",
+      help: null,
+    },
+    {
+      key: "port",
+      label: "Port",
+      kind: { type: "number" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "HTTP interface port. Empty: 8443 with TLS, 8123 without.",
+    },
+    {
+      key: "database",
+      label: "Database",
+      kind: { type: "text" },
+      required: false,
+      secret: false,
+      default: null,
+      help: "Empty: the account's default database.",
+    },
+    {
+      key: "user",
+      label: "User",
+      kind: { type: "text" },
+      required: true,
+      secret: false,
+      default: "default",
+      help: null,
+    },
+    {
+      key: "password",
+      label: "Password",
+      kind: { type: "password" },
+      required: false,
+      secret: true,
+      default: null,
+      help: "Stored in the system keyring.",
+    },
+    {
+      key: "sslmode",
+      label: "TLS mode",
+      kind: {
+        type: "choice",
+        options: ["verify-full", "require", "disable"],
+      },
+      required: false,
+      secret: false,
+      default: "verify-full",
+      help: null,
+    },
+  ],
+}
+
 /** As `mongodb_metadata()` of `drivers/oxyn-driver-mongodb/src/driver.rs`. */
 export const mongodbDriver: DriverChoice = {
   id: "mongodb",

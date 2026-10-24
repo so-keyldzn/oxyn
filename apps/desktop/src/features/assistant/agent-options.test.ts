@@ -109,4 +109,53 @@ describe("defaultAgentId", () => {
       "id-Alpha"
     )
   })
+
+  describe("on a language that is not SQL, with the tier's usable destinations", () => {
+    const remote = destination("provider", "remote")
+    const local = destination("provider", "local")
+    // Alpha is written for the remote provider only, Beta for the local one:
+    // the union of what is offered lists both, one destination each.
+    const alpha: AgentOption = {
+      ...keys("Alpha", "user"),
+      disabledDestinations: [{ kind: "provider", id: "local" }],
+    }
+    const beta: AgentOption = {
+      ...keys("Beta", "user"),
+      disabledDestinations: [{ kind: "provider", id: "remote" }],
+    }
+
+    it("skips an agent the only usable destination is refused to", () => {
+      // A Local tier: the remote provider is already refused.
+      const tierRefused = { ...remote, usable: false, reason: "Local-only." }
+      expect(defaultAgentId([alpha, beta], [tierRefused, local])).toBe(
+        "id-Beta"
+      )
+      expect(restrictedToAgent([tierRefused, local], alpha)).toSatisfy(
+        (options: Array<DestinationOption>) =>
+          options.every((option) => !option.usable)
+      )
+    })
+
+    it("agrees with the backend for the destination the user picked", () => {
+      expect(defaultAgentId([alpha, beta], [remote, local])).toBe("id-Alpha")
+      expect(defaultAgentId([alpha, beta], [local, remote])).toBe("id-Beta")
+    })
+
+    it("falls back to another usable destination when none fits the first", () => {
+      expect(defaultAgentId([alpha], [local, remote])).toBe("id-Alpha")
+    })
+
+    it("keeps the shipped agent before a user's among those that fit", () => {
+      const shipped = keys("Redis", "shipped")
+      expect(defaultAgentId([shipped, alpha, beta], [local])).toBe("id-Redis")
+    })
+
+    it("keeps the first valid agent when no destination is usable", () => {
+      expect(defaultAgentId([alpha, beta], [])).toBe("id-Alpha")
+    })
+
+    it("leaves SQL alone", () => {
+      expect(defaultAgentId([alpha, ...SQL_ONLY], [local])).toBe(SQL_AGENT_ID)
+    })
+  })
 })

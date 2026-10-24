@@ -126,6 +126,62 @@ fn each_operation_composes_one_statement_without_if_exists_or_comment() {
     );
 }
 
+/// ClickHouse 26.3 refuses `DROP MATERIALIZED VIEW` and `ALTER TABLE … RENAME
+/// TO` (RESEARCH-NOTES): its own forms are composed, the rename keeping the
+/// table in its database, and each passes the review's own check.
+#[test]
+fn clickhouse_gets_its_own_drop_and_rename_forms() {
+    let ch = SqlDialect::ClickHouse;
+    let path = table("events", "hits");
+    let cases = [
+        (
+            RelationKind::MaterializedView,
+            drop(false),
+            OperationKind::Drop,
+            "DROP VIEW `events`.`hits`",
+        ),
+        (
+            RelationKind::Table,
+            rename(None, "visits"),
+            OperationKind::Rename,
+            "RENAME TABLE `events`.`hits` TO `events`.`visits`",
+        ),
+        (
+            RelationKind::Table,
+            rename(Some("a"), "b"),
+            OperationKind::Rename,
+            "ALTER TABLE `events`.`hits` RENAME COLUMN `a` TO `b`",
+        ),
+        (
+            RelationKind::Table,
+            ObjectOperation::Truncate { cascade: false },
+            OperationKind::Truncate,
+            "TRUNCATE TABLE `events`.`hits`",
+        ),
+    ];
+    for (kind, operation, announced, expected) in cases {
+        let sql = compose(&path, kind, &operation, ch, false).expect("composed");
+        assert_eq!(sql, expected);
+        check_statement(&sql, ch, announced).unwrap_or_else(|error| panic!("{sql}: {error}"));
+    }
+
+    // A name ending in a backslash cannot free its closing quote, and stays
+    // one statement for the splitter the review relies on.
+    let hostile = compose(
+        &table("events", r"x\` ; DROP TABLE audit; --"),
+        RelationKind::Table,
+        &rename(None, "y"),
+        ch,
+        false,
+    )
+    .expect("composed");
+    assert_eq!(
+        hostile,
+        r"RENAME TABLE `events`.`x\\\` ; DROP TABLE audit; --` TO `events`.`y`"
+    );
+    assert_eq!(oxyn_query::split(&hostile, ch).len(), 1);
+}
+
 #[test]
 fn cascade_is_composed_only_where_the_engine_restricts_dependents() {
     let path = table("public", "orders");

@@ -120,6 +120,13 @@ pub(crate) fn compose(
         ObjectOperation::Drop { cascade: with } => {
             let object = match kind {
                 RelationKind::Table => "TABLE",
+                // ClickHouse 26.3 drops a materialized view with `DROP VIEW`
+                // and refuses `DROP MATERIALIZED VIEW` as a syntax error.
+                RelationKind::View | RelationKind::MaterializedView
+                    if dialect == SqlDialect::ClickHouse =>
+                {
+                    "VIEW"
+                }
                 RelationKind::View => "VIEW",
                 RelationKind::MaterializedView => "MATERIALIZED VIEW",
                 _ => return Err("Only tables and views are dropped from here.".to_owned()),
@@ -152,6 +159,18 @@ pub(crate) fn compose(
                     "ALTER TABLE {relation} RENAME COLUMN {} TO {new_name}",
                     quote_identifier(column, style)
                 ),
+                // ClickHouse has no `ALTER TABLE … RENAME TO`, and its
+                // `RENAME TABLE` puts an unqualified new name in the current
+                // database: the table's own database is named.
+                None if dialect == SqlDialect::ClickHouse => {
+                    let target = match path.namespace() {
+                        Some(database) => {
+                            format!("{}.{new_name}", quote_identifier(database, style))
+                        }
+                        None => new_name,
+                    };
+                    format!("RENAME TABLE {relation} TO {target}")
+                }
                 None => format!("ALTER TABLE {relation} RENAME TO {new_name}"),
             })
         }

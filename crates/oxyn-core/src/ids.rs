@@ -215,6 +215,8 @@ impl DriverId {
     pub const MYSQL: &'static str = "mysql";
     /// SQLite driver, in-process.
     pub const SQLITE: &'static str = "sqlite";
+    /// ClickHouse driver, over its HTTP interface.
+    pub const CLICKHOUSE: &'static str = "clickhouse";
     /// MongoDB driver (ADR-0063).
     pub const MONGODB: &'static str = "mongodb";
 
@@ -273,6 +275,12 @@ impl DriverId {
     #[must_use]
     pub fn sqlite() -> Self {
         Self::known(Self::SQLITE)
+    }
+
+    /// ClickHouse driver identifier.
+    #[must_use]
+    pub fn clickhouse() -> Self {
+        Self::known(Self::CLICKHOUSE)
     }
 
     /// MongoDB driver identifier.
@@ -408,6 +416,10 @@ mod tests {
         assert_eq!(DriverId::postgres().as_str(), "postgres");
         assert_eq!(DriverId::sqlite().to_string(), "sqlite");
         assert_eq!(DriverId::mysql(), DriverId::new("mysql").expect("valid"));
+        assert_eq!(
+            DriverId::clickhouse(),
+            DriverId::new("clickhouse").expect("valid")
+        );
         assert_eq!(
             DriverId::mongodb(),
             DriverId::new("mongodb").expect("valid")
