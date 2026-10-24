@@ -92,6 +92,7 @@ To locate the boards and their states before implementation, see
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | The updater key signs in a job that builds nothing, with a Tauri CLI release binary pinned by checksum (refines 0051) | proposed |
 | [0062](adr/0062-elasticsearch-opensearch-rest-json.md) | Elasticsearch and OpenSearch use one bounded REST/JSON driver | proposed |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | A session classifies the requests of a non-SQL language: `Session::classify_intent`, consulted only outside SQL, conservative, `None` by default (refines 0003) | accepted |
+| [0065](adr/0065-agents-for-non-sql-query-languages.md) | An agent declares the query languages it writes (`languages`, `[sql]` by default); the assistant opens on every language an agent writes, SQL prompts unchanged (refines 0049, 0055) | accepted |
 
 ADRs stay `proposed` until the first code commit that implements them.
 

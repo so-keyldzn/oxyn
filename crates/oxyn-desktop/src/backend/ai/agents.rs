@@ -13,7 +13,10 @@ use oxyn_ai::{
     AgentCatalog, AgentOrigin, AgentSpec, CatalogEntry, ExternalAgentKind, PromptTarget, Recipient,
     render_system_prompt, sql_agent,
 };
-use oxyn_core::{AgentId, AiProviderConfig, ConnectionConfig, ConnectionId, ExternalAgentConfig};
+use oxyn_core::{
+    AgentId, AiProviderConfig, ConnectionConfig, ConnectionId, ExternalAgentConfig, QueryLanguage,
+    SessionId,
+};
 use parking_lot::RwLock;
 
 use super::threads::Thread;
@@ -95,17 +98,36 @@ pub(crate) fn agent_recipient(agent: &ExternalAgentConfig) -> Recipient {
     )
 }
 
-/// The target of a prompt on `connection`, for `recipient`.
+/// The target of a prompt on `connection`, whose session speaks `language`,
+/// for `recipient`.
 ///
 /// The environment is the connection's marking as read from its file, where
 /// an absent one already reads as production (I-02).
-pub(crate) fn target_of(connection: &ConnectionConfig, recipient: Recipient) -> PromptTarget {
+pub(crate) fn target_of(
+    connection: &ConnectionConfig,
+    language: QueryLanguage,
+    recipient: Recipient,
+) -> PromptTarget {
     PromptTarget {
-        dialect: oxyn_query::dialect_for(&connection.driver),
+        language,
         driver: connection.driver.clone(),
         environment: connection.environment,
         recipient,
     }
+}
+
+/// Why the assistant is refused on a session: it declares no single query
+/// language, so no agent can be told which one to write
+/// ([`oxyn_query::console_language`]).
+pub(crate) const NO_LANGUAGE: &str = "This session declares no single query language, and the \
+     assistant writes in the language the session speaks: Oxyn cannot tell which one to use.";
+
+/// Why the assistant is refused on a session no agent is written for.
+pub(crate) fn no_agent_for(language: QueryLanguage) -> IpcError {
+    IpcError::invalid(format!(
+        "No agent writes {language} for this connection and this destination, and the \
+         assistant only writes what an agent knows."
+    ))
 }
 
 /// `spec`, its prompt rendered for `target`: what a provider session is
@@ -121,9 +143,18 @@ pub(crate) fn rendered(spec: &AgentSpec, target: &PromptTarget) -> Result<AgentS
     Ok(rendered)
 }
 
-/// Why a question is refused when its conversation's agent is not written for
-/// the destination chosen: the destination does not switch the agent (§ 6).
-pub(crate) fn not_offered(spec: &AgentSpec, recipient: Recipient) -> IpcError {
+/// Why a question is refused when its conversation's agent is not offered for
+/// `target`: neither the destination nor the session switches the agent
+/// (§ 6).
+pub(crate) fn not_offered(spec: &AgentSpec, target: &PromptTarget) -> IpcError {
+    if !spec.writes(target.language) {
+        return IpcError::invalid(format!(
+            "The {} agent of this conversation does not write {}, the language this session \
+             speaks. Start a new conversation with an agent that does.",
+            spec.name, target.language
+        ));
+    }
+    let recipient = target.recipient;
     IpcError::invalid(format!(
         "The {} agent of this conversation is not written for {}. Choose another destination, \
          or start a new conversation with another agent.",
@@ -139,19 +170,51 @@ struct Declared {
 }
 
 impl Backend {
+    /// The language an agent writes on `session`: the one its console
+    /// speaks ([`oxyn_query::console_language`]), read from what the session
+    /// declares now.
+    ///
+    /// # Errors
+    /// A session no longer open, or one that declares no single language.
+    pub(crate) fn session_language(
+        &self,
+        config: &ConnectionConfig,
+        session: SessionId,
+    ) -> Result<QueryLanguage, IpcError> {
+        let capabilities = self
+            .inner
+            .executor
+            .sessions()
+            .get(session)
+            .ok_or_else(|| IpcError::invalid("This session is no longer open"))?
+            .capabilities();
+        oxyn_query::console_language(&config.driver, capabilities)
+            .ok_or_else(|| IpcError::invalid(NO_LANGUAGE))
+    }
+
+    /// The language the picker lists agents for, before any session is
+    /// named: from the capabilities the driver declares at best. A session
+    /// narrows them, never to another language; a question reads the
+    /// session's own ([`Self::session_language`]) and checks again.
+    fn driver_language(&self, config: &ConnectionConfig) -> Option<QueryLanguage> {
+        let driver = self.inner.drivers.get(&config.driver)?;
+        oxyn_query::console_language(&config.driver, driver.capabilities())
+    }
+
     /// The agent a question runs: the conversation's own when `thread` names
-    /// one, else `requested` — the SQL agent when absent —, which a new
-    /// conversation then records. Answers the new conversation's agent, and
-    /// the spec to render.
+    /// one, else `requested` — the catalog's default for `target` when
+    /// absent —, which a new conversation then records. Answers the new
+    /// conversation's agent, and the spec to render.
     ///
     /// # Errors
     /// An unknown conversation, an agent that is not one of the catalog's
-    /// valid agents.
+    /// valid agents, no agent offered for `target`.
     pub(crate) fn conversation_agent(
         &self,
         connection: ConnectionId,
         thread: Option<&str>,
         requested: Option<&str>,
+        target: &PromptTarget,
     ) -> Result<(Option<AgentId>, AgentSpec), IpcError> {
         match thread {
             Some(thread) => {
@@ -159,7 +222,7 @@ impl Backend {
                 Ok((None, self.thread_agent(&thread)?))
             }
             None => {
-                let spec = self.requested_agent(requested)?;
+                let spec = self.requested_agent(requested, target)?;
                 Ok((Some(spec.id), spec))
             }
         }
@@ -184,22 +247,28 @@ impl Backend {
             })
     }
 
-    /// The agent a new conversation asked for; the SQL agent when `None`.
+    /// The agent a new conversation asked for; when `None`, the catalog's
+    /// default for `target` — the SQL agent on a SQL connection (ADR-0055),
+    /// the first agent of the connection's language otherwise (ADR-0065).
     ///
     /// # Errors
     /// Not an id, or not one of the catalog's valid agents — a user file in
-    /// error is listed and never run.
-    pub(crate) fn requested_agent(&self, requested: Option<&str>) -> Result<AgentSpec, IpcError> {
+    /// error is listed and never run —, or no agent offered for `target`.
+    pub(crate) fn requested_agent(
+        &self,
+        requested: Option<&str>,
+        target: &PromptTarget,
+    ) -> Result<AgentSpec, IpcError> {
+        let catalog = self.inner.ai.agents.catalog();
         let id = match requested {
             Some(id) => id
                 .parse::<AgentId>()
                 .map_err(|_| IpcError::invalid("This agent does not exist"))?,
-            None => sql_agent_id(),
+            None => catalog
+                .default_for(target)
+                .ok_or_else(|| no_agent_for(target.language))?,
         };
-        self.inner
-            .ai
-            .agents
-            .catalog()
+        catalog
             .get(&id)
             .cloned()
             .ok_or_else(|| IpcError::invalid("This agent no longer exists"))
@@ -241,8 +310,13 @@ impl Backend {
             }
             None => declared.iter().map(|declared| declared.recipient).collect(),
         };
+        // A driver that declares no single language has no agent to offer:
+        // a question there is refused for the same reason.
+        let Some(language) = self.driver_language(&config) else {
+            return Ok(Vec::new());
+        };
         let catalog = self.inner.ai.agents.catalog();
-        Ok(options(&catalog, &config, &chosen, &declared))
+        Ok(options(&catalog, &config, language, &chosen, &declared))
     }
 
     /// Every declared destination, providers first.
@@ -270,17 +344,18 @@ impl Backend {
 }
 
 /// The picker's lines: the catalog's entries offered for at least one of
-/// `recipients`, in the catalog's order, each with the declared destinations
-/// it is not offered for.
+/// `recipients` on a connection speaking `language`, in the catalog's order,
+/// each with the declared destinations it is not offered for.
 fn options(
     catalog: &AgentCatalog,
     connection: &ConnectionConfig,
+    language: QueryLanguage,
     recipients: &[Recipient],
     declared: &[Declared],
 ) -> Vec<AgentRoleOption> {
     let mut entries: Vec<CatalogEntry> = Vec::new();
     for recipient in recipients {
-        for entry in catalog.offered(&target_of(connection, *recipient)) {
+        for entry in catalog.offered(&target_of(connection, language, *recipient)) {
             if !entries.contains(&entry) {
                 entries.push(entry);
             }
@@ -309,7 +384,11 @@ fn options(
                         declared
                             .iter()
                             .filter(|declared| {
-                                !spec.offered_for(&target_of(connection, declared.recipient))
+                                !spec.offered_for(&target_of(
+                                    connection,
+                                    language,
+                                    declared.recipient,
+                                ))
                             })
                             .map(|declared| declared.reference.clone())
                             .collect()

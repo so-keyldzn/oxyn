@@ -12,7 +12,8 @@ mod capabilities;
 use std::sync::Arc;
 
 use oxyn_core::{
-    Actor, CancelToken, Command, CommandId, ConnectionId, ExecRequest, OxynError, SessionId,
+    Actor, CancelToken, Command, CommandId, ConnectionId, ExecRequest, OxynError, QueryLanguage,
+    SessionId,
 };
 use oxyn_exec::Outcome;
 

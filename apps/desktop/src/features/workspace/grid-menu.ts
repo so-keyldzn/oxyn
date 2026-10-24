@@ -69,7 +69,10 @@ export function useGridMenu({
   sort?: GridMenuSource["sort"]
   filter?: GridMenuSource["filter"]
 }): GridMenuSource | undefined {
-  const assistant = useAssistantAvailable(open ?? NO_CONNECTION).status
+  const assistant = useAssistantAvailable({
+    ...(open ?? NO_CONNECTION),
+    connection,
+  }).status
   const tier = open?.privacyTier ?? null
   return React.useMemo(() => {
     if (result === null) return undefined

@@ -7,6 +7,7 @@
 // the moment of the question (I-04).
 
 import type {
+  AgentOption,
   DeclaredProvider,
   DestinationChoice,
   ExternalAgent,
@@ -46,18 +47,37 @@ export type AssistantEntry =
     }
   | { status: "enabled"; destinations: Array<DestinationOption> }
 
-export const NO_SQL =
-  "This session does not support SQL, and the assistant only writes SQL."
-
-/**
- * The languages an agent writes (ADR-0055: the agents are declared files).
- * A language joins this set in the same change that ships its agent.
- */
-const ASSISTED_LANGUAGES: ReadonlySet<QueryLanguageName> = new Set(["sql"])
+/** The backend's refusal for the same session (`agents::NO_LANGUAGE`). */
+export const NO_LANGUAGE =
+  "This session declares no single query language, and the assistant writes in the language the session speaks: Oxyn cannot tell which one to use."
 
 /** Why the assistant is closed on a session that speaks `language`. */
 export function noAgentFor(language: QueryLanguageName): string {
   return `No agent writes ${QUERY_LANGUAGE_LABELS[language]} yet, and the assistant only writes what an agent knows.`
+}
+
+/** While the agents of a language other than SQL are being listed. */
+export function readingAgentsFor(language: QueryLanguageName): string {
+  return `Looking for an agent that writes ${QUERY_LANGUAGE_LABELS[language]}…`
+}
+
+/**
+ * Whether an agent writes the session's language (ADR-0065): data, not a
+ * list in the code — an agent file shipped or written by the user opens the
+ * assistant on its language.
+ *
+ * SQL needs no list: the shipped SQL agent is offered on every SQL session,
+ * and the entry does not wait for the picker's list to draw. Elsewhere, an
+ * agent offered for the connection that is not in error (`ai_list_agents`
+ * lists only the agents of the connection's language, and broken files).
+ */
+function agentFor(
+  language: QueryLanguageName,
+  offered: ReadonlyArray<AgentOption> | undefined
+): "yes" | "no" | "unknown" {
+  if (language === "sql") return "yes"
+  if (offered === undefined) return "unknown"
+  return offered.some((agent) => agent.error === null) ? "yes" : "no"
 }
 
 export const UNREADABLE =
@@ -114,6 +134,7 @@ export function assistantEntry({
   unreadable,
   tier,
   capabilities,
+  roles,
 }: {
   /** `undefined` until read: drawn like « none », rather than flickering in. */
   providers: ReadonlyArray<DeclaredProvider> | undefined
@@ -122,6 +143,11 @@ export function assistantEntry({
   unreadable: boolean
   tier: PrivacyTier
   capabilities: ReadonlyArray<string>
+  /**
+   * The agent roles offered for this connection (`ai_list_agents`);
+   * `undefined` until read, or when the session speaks SQL.
+   */
+  roles?: ReadonlyArray<AgentOption>
 }): AssistantEntry {
   if (unreadable) {
     return { status: "disabled", reason: UNREADABLE, destinations: [] }
@@ -130,10 +156,13 @@ export function assistantEntry({
   if (destinations.length === 0) return { status: "absent" }
   const language = queryLanguageOf(capabilities)
   if (language === null) {
-    return { status: "disabled", reason: NO_SQL, destinations }
+    return { status: "disabled", reason: NO_LANGUAGE, destinations }
   }
-  if (!ASSISTED_LANGUAGES.has(language)) {
-    return { status: "disabled", reason: noAgentFor(language), destinations }
+  const written = agentFor(language, roles)
+  if (written !== "yes") {
+    const reason =
+      written === "unknown" ? readingAgentsFor(language) : noAgentFor(language)
+    return { status: "disabled", reason, destinations }
   }
   if (!destinations.some((destination) => destination.usable)) {
     return { status: "disabled", reason: NO_USABLE_DESTINATION, destinations }
