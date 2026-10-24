@@ -23,6 +23,7 @@ use oxyn_core::{
 };
 use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
+use oxyn_driver_clickhouse::ClickhouseDriver;
 use oxyn_driver_duckdb::DuckDbDriver;
 use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
@@ -1041,6 +1042,9 @@ fn shipped_drivers() -> Result<DriverRegistry> {
     drivers
         .register(Arc::new(DuckDbDriver::new()))
         .context("registering the DuckDB driver")?;
+    drivers
+        .register(Arc::new(ClickhouseDriver::new()))
+        .context("registering the ClickHouse driver")?;
     Ok(drivers)
 }
 

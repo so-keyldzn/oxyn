@@ -91,6 +91,7 @@ To locate the boards and their states before implementation, see
 | [0057](adr/0057-editor-completion-reads-the-catalog-cache.md) | The SQL editor completes from the catalog cache, reads what is missing within bounds, and takes its insertion text from Rust | proposed |
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | The updater key signs in a job that builds nothing, with a Tauri CLI release binary pinned by checksum (refines 0051) | proposed |
 | [0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md) | The DuckDB driver embeds the engine through `duckdb-rs`, rebuilds its Arrow 58 as Arrow 59, and opens every file with external access off | proposed |
+| [0060](adr/0060-clickhouse-driver-over-http-rowbinary.md) | The ClickHouse driver speaks the HTTP interface, reads `RowBinaryWithNamesAndTypes` itself, and keeps no server session | proposed |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | A session classifies the requests of a non-SQL language: `Session::classify_intent`, consulted only outside SQL, conservative, `None` by default (refines 0003) | accepted |
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | An agent declares the query languages it writes (`languages`, `[sql]` by default); the assistant opens on every language an agent writes, SQL prompts unchanged (refines 0049, 0055) | accepted |
 

@@ -153,11 +153,11 @@ else
 	@echo "cargo-nextest is required for server tests; the shared-server profile must apply."
 	@exit 1
 endif
-else ifeq ($(origin CI)$(OXYN_PG_TEST_URL)$(OXYN_MYSQL_TEST_URL)$(OXYN_PG_PRODUCTION_TEST_URL),undefined)
+else ifeq ($(origin CI)$(OXYN_PG_TEST_URL)$(OXYN_MYSQL_TEST_URL)$(OXYN_PG_PRODUCTION_TEST_URL)$(OXYN_CLICKHOUSE_TEST_URL),undefined)
 	@echo "server suites NOT run outside CI: no server test URLs are set."
 else
 	@output="$$( $(CARGO) nextest run --run-ignored only --nocapture \
-		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
+		-E 'package(oxyn-driver-postgres) | package(oxyn-driver-mysql) | package(oxyn-driver-clickhouse) | (package(oxyn-exec) & test(/production_read_tests::server::/)) | (package(oxyn-desktop) & test(/server_cancel::/))' 2>&1 )"; status=$$?; \
 	printf '%s\n' "$$output"; \
 	if printf '%s\n' "$$output" | grep -Fq 'not set: test skipped'; then \
 		echo "A server test URL is missing; refusing a silently skipped suite."; \

@@ -20,6 +20,7 @@ import { TEXT_FIELD_DOM_ATTRIBUTES } from "./text-field"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { toast } from "@/components/ui/toast"
 import { editorMode } from "@/features/consoles/languages"
+import { ClickHouseSQL } from "@/features/consoles/languages/clickhouse/dialect"
 import { catalogNeeds } from "@/features/consoles/sql-catalog-needs"
 import { sqlCompletionSource } from "@/features/consoles/sql-completion"
 import {
@@ -46,6 +47,8 @@ function dialectFor(driver: string) {
     // `$$` and `E''` strings, nested block comments.
     case "duckdb":
       return PostgreSQL
+    case "clickhouse":
+      return ClickHouseSQL
     default:
       return StandardSQL
   }

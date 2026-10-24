@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="7d56934216d0" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="d99f10703ca6" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -2109,8 +2109,17 @@ Oxyn est un bon client SQL sans une ligne d'IA.
   et interruption par le moteur. Reste à venir : le catalogue des macros,
   séquences et types, un rendu d'Explain propre à DuckDB, un sélecteur de
   dossier pour le dossier accordé, `icu` et les autres extensions ;
-- `oxyn-driver-clickhouse` — **à écrire**, par
-  [`/driver`](../claude/commands/driver.md) ;
+- `oxyn-driver-clickhouse` — **existe**, étape 1
+  ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)) : interface
+  HTTP, `RowBinaryWithNamesAndTypes` décodé en lots Arrow bornés en octets,
+  `KILL QUERY` prouvé dans `system.processes`, catalogue des bases, tables,
+  vues et vues matérialisées avec leurs clés, index de saut et instructions
+  `CREATE`, aperçu trié et filtré sans pages, console, `EXPLAIN`, sélecteur de
+  contexte, valeurs liées sur les marqueurs `{name:Type}`. **À écrire** : les
+  dictionnaires et les objets propres au serveur (parts, mutations,
+  utilisateurs et rôles) dans l'arbre, la complétion depuis `system.functions`
+  et `system.keywords`, et les types `Variant`, `Dynamic` et
+  `AggregateFunction` dans une console ;
 - l'export d'un résultat — **existe** : CSV, JSON et Arrow IPC, écrits en flux
   depuis le `ResultBuffer` (`crates/oxyn-data/src/export.rs`), offerts par
   `ExportMenu` sous la console, l'aperçu Data et le résultat retenu ;

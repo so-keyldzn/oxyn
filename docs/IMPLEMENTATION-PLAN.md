@@ -2104,8 +2104,17 @@ Oxyn is a good SQL client without a single line of AI.
   the engine's interruption. Still to come: the catalog of macros, sequences
   and types, a DuckDB-aware Explain rendering, a folder picker for the granted
   folder, `icu` and the other extensions;
-- `oxyn-driver-clickhouse` — **to be written**, through
-  [`/driver`](../.claude/commands/driver.md);
+- `oxyn-driver-clickhouse` — **exists**, stage 1
+  ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)): HTTP
+  interface, `RowBinaryWithNamesAndTypes` decoded to Arrow batches bounded
+  in bytes, `KILL QUERY` proven in `system.processes`, catalog of databases,
+  tables, views and materialized views with keys, skipping indexes and
+  `CREATE` statements, sorted and filtered preview without pages, console,
+  `EXPLAIN`, context selector, bound values on `{name:Type}` placeholders.
+  **To be written**: dictionaries and the server's own objects (parts,
+  mutations, users and roles) in the tree, completion from `system.functions`
+  and `system.keywords`, and the types `Variant`, `Dynamic` and
+  `AggregateFunction` in a console;
 - exporting a result — **exists**: CSV, JSON and Arrow IPC, streamed
   from the `ResultBuffer` (`crates/oxyn-data/src/export.rs`), offered by
   `ExportMenu` under the console, the Data preview and the retained result;

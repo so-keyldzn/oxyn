@@ -99,6 +99,9 @@ pub fn explain_sql(text: &str, dialect: SqlDialect) -> Result<String, &'static s
             "EXPLAIN "
         }
         SqlDialect::Sqlite => "EXPLAIN QUERY PLAN ",
+        // ClickHouse's plain EXPLAIN is `EXPLAIN PLAN`: it plans, and runs
+        // nothing but the scalar subqueries the analyzer folds, which read.
+        SqlDialect::ClickHouse => "EXPLAIN ",
         _ => return Err("Explain is unavailable for this SQL dialect."),
     };
     Ok(format!("{prefix}{}", statement.text))
@@ -160,5 +163,14 @@ mod tests {
             Ok("EXPLAIN SELECT * FROM \"t\"")
         );
         assert!(explain_sql("EXPLAIN ANALYZE SELECT 1", SqlDialect::DuckDb).is_err());
+    }
+
+    #[test]
+    fn clickhouse_is_explained_as_a_plan() {
+        assert_eq!(
+            explain_sql(r"SELECT * FROM `a\`; b`", SqlDialect::ClickHouse).as_deref(),
+            Ok(r"EXPLAIN SELECT * FROM `a\`; b`")
+        );
+        assert!(explain_sql("SELECT 1; INSERT INTO t VALUES (1)", SqlDialect::ClickHouse).is_err());
     }
 }
