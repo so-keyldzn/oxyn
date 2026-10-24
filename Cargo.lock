@@ -7582,10 +7582,10 @@ version = "0.0.12"
 dependencies = [
  "arrow",
  "async-trait",
- "futures",
+ "chrono",
+ "indexmap 2.14.2",
  "oxyn-catalog",
  "oxyn-core",
- "oxyn-data",
  "oxyn-driver",
  "reqwest",
  "rstest",

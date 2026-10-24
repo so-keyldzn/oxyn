@@ -14,14 +14,16 @@ workspace = true
 [dependencies]
 arrow.workspace = true
 async-trait.workspace = true
-futures.workspace = true
+chrono.workspace = true
+indexmap.workspace = true
 oxyn-catalog.workspace = true
 oxyn-core.workspace = true
-oxyn-data.workspace = true
 oxyn-driver.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# `raw_value` keeps every value's JSON text, so a number reaches the grid as
+# the server wrote it instead of through an `f64`.
+serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true

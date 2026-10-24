@@ -1,13 +1,25 @@
 //! Driver metadata and the connection entry point.
+//!
+//! The product is never guessed from the URL: `GET /` says it. OpenSearch
+//! answers `version.distribution: "opensearch"`; Elasticsearch has no
+//! distribution and its `tagline`. What a session can do is then read from
+//! the cluster, not assumed from the product (ADR-0003).
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use oxyn_core::{CancelToken, Capabilities, ConnectionConfig, DriverId, Result, StatementIntent};
+use oxyn_core::{CancelToken, Capabilities, ConnectionConfig, DriverId, OxynError, Result};
 use oxyn_driver::{
     ConnectionField, Credentials, Driver, DriverFamily, DriverMetadata, FieldKind, Session,
 };
+use reqwest::Method;
+use serde_json::Value;
 
-use crate::api::Api;
+use crate::catalog::{ElasticsearchCatalog, Product};
+use crate::http::{Call, Http};
+use crate::options::{AuthMethod, ConnectSpec, TlsMode};
 use crate::session::ElasticsearchSession;
+use crate::stop::tasks_of;
 
 /// The Elasticsearch REST driver, also serving OpenSearch.
 #[derive(Debug, Clone)]
@@ -44,26 +56,58 @@ pub fn elasticsearch_metadata() -> DriverMetadata {
         ConnectionField::new("url", "URL", FieldKind::Text)
             .required()
             .with_default("https://localhost:9200")
-            .with_help("One Elasticsearch or OpenSearch HTTP endpoint."),
+            .with_help(
+                "One node or load balancer of the cluster, with a path prefix if a proxy \
+                 serves it under one. `http://` is accepted only on a Local connection.",
+            ),
+        ConnectionField::new(
+            "sslmode",
+            "TLS mode",
+            FieldKind::Choice(
+                TlsMode::ALL
+                    .iter()
+                    .map(|mode| mode.name().to_owned())
+                    .collect(),
+            ),
+        )
+        .with_default(TlsMode::VerifyFull.name())
+        .with_help(
+            "verify-full checks the certificate and host name. require encrypts without \
+             checking them, on a Local connection only.",
+        ),
         ConnectionField::new(
             "authentication",
             "Authentication",
-            FieldKind::Choice(vec![
-                "none".into(),
-                "basic".into(),
-                "api-key".into(),
-                "bearer".into(),
-            ]),
+            FieldKind::Choice(
+                AuthMethod::ALL
+                    .iter()
+                    .map(|method| method.name().to_owned())
+                    .collect(),
+            ),
         )
-        .with_default("none"),
+        .with_default(AuthMethod::None.name()),
         ConnectionField::new("username", "Username", FieldKind::Text)
-            .with_help("Used only with basic authentication."),
+            .with_help("Used with basic authentication."),
         ConnectionField::new("password", "Password", FieldKind::Password)
-            .with_help("Stored in the system keyring for basic authentication."),
+            .with_help("Used with basic authentication. Stored in the system keyring."),
         ConnectionField::new("token", "API key or bearer token", FieldKind::Password)
-            .with_help("Stored in the system keyring for API-key or bearer authentication."),
+            .with_help("The encoded API key, or the bearer token. Stored in the system keyring."),
     ])
 }
+
+/// What every session of this driver can do, whatever the cluster.
+const BASE: Capabilities = Capabilities::SEARCH_DSL
+    .union(Capabilities::DOCUMENT)
+    .union(Capabilities::SCHEMALESS)
+    .union(Capabilities::TABLES)
+    .union(Capabilities::VIEWS)
+    .union(Capabilities::STREAMING)
+    .union(Capabilities::ROW_COUNT_ESTIMATE)
+    .union(Capabilities::OBJECT_DEFINITION)
+    .union(Capabilities::PREVIEW_SORT)
+    .union(Capabilities::PREVIEW_FILTER)
+    .union(Capabilities::DDL)
+    .union(Capabilities::DML);
 
 #[async_trait]
 impl Driver for ElasticsearchDriver {
@@ -75,17 +119,10 @@ impl Driver for ElasticsearchDriver {
         &self.metadata
     }
 
+    /// The most a session can declare; a session declares server-side cancel
+    /// only when its account can read the cluster's tasks.
     fn capabilities(&self) -> Capabilities {
-        Capabilities::SEARCH_DSL
-            | Capabilities::DOCUMENT
-            | Capabilities::SCHEMALESS
-            | Capabilities::INFERRED_SCHEMA
-            | Capabilities::TABLES
-            | Capabilities::INDEXES
-            | Capabilities::STREAMING
-            | Capabilities::SERVER_SIDE_CANCEL
-            | Capabilities::DDL
-            | Capabilities::DML
+        BASE | Capabilities::SERVER_SIDE_CANCEL
     }
 
     async fn connect(
@@ -94,70 +131,91 @@ impl Driver for ElasticsearchDriver {
         credentials: &Credentials,
         cancel: &CancelToken,
     ) -> Result<Box<dyn Session>> {
-        self.metadata.validate(config)?;
+        let spec = ConnectSpec::from_config(&self.metadata, config, credentials)?;
         if cancel.is_cancelled() {
-            return Err(oxyn_core::OxynError::Cancelled);
+            return Err(OxynError::Cancelled);
         }
-        let api = Api::from_config(config, credentials)?;
-        let root = api
-            .json("GET", "/", None, StatementIntent::Read, None)
-            .await?;
-        let version = root
-            .pointer("/version/number")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                oxyn_core::OxynError::Connection(
-                    "the server did not return a version number".to_owned(),
-                )
-            })?;
-        let distribution = root
-            .pointer("/version/distribution")
-            .and_then(serde_json::Value::as_str);
-        let product = match distribution {
-            Some("opensearch") => "OpenSearch",
-            _ if root
-                .get("tagline")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|tagline| tagline.contains("OpenSearch")) =>
-            {
-                "OpenSearch"
-            }
-            _ => "Elasticsearch",
+        let http = Arc::new(Http::new(spec)?);
+        let root = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(OxynError::Cancelled),
+            root = http.send(Call::read(Method::GET, "/")) => root?.value()?,
         };
-        if !supported_version(product, version) {
-            return Err(oxyn_core::OxynError::NotSupported {
-                capability: format!(
-                    "{product} {version}: this driver supports Elasticsearch 8.19 and 9.x, \
-                     or OpenSearch 2.10 and 3.x"
-                ),
-            });
-        }
-        let capabilities = self.capabilities() & !Capabilities::SERVER_SIDE_CANCEL;
+        let product = product(&root)?;
+        // Cancelling needs the task list: an account without `monitor` cannot
+        // read it, and its session does not claim a stop it cannot prove.
+        let can_list_tasks = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(OxynError::Cancelled),
+            tasks = tasks_of(&http, "") => tasks.is_some(),
+        };
+        let capabilities = if can_list_tasks {
+            BASE | Capabilities::SERVER_SIDE_CANCEL
+        } else {
+            BASE
+        };
+        let catalog = ElasticsearchCatalog::new(Arc::clone(&http), product, capabilities);
         Ok(Box::new(ElasticsearchSession::new(
-            api,
-            product.to_owned(),
-            version.to_owned(),
+            http,
+            catalog,
             capabilities,
         )))
     }
 }
 
-fn supported_version(product: &str, version: &str) -> bool {
-    let mut numbers = version.split('.').map(str::parse::<u16>);
-    let (Some(Ok(major)), Some(Ok(minor))) = (numbers.next(), numbers.next()) else {
+/// The product and version `GET /` reports, refused below the floor.
+fn product(root: &Value) -> Result<Product> {
+    let version = root
+        .pointer("/version/number")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            OxynError::Connection(
+                "the server at this URL is not an Elasticsearch or OpenSearch node: `GET /` \
+                 reports no version number"
+                    .to_owned(),
+            )
+        })?;
+    let name = match root
+        .pointer("/version/distribution")
+        .and_then(Value::as_str)
+    {
+        Some("opensearch") => "OpenSearch",
+        Some(other) => {
+            return Err(OxynError::NotSupported {
+                capability: format!(
+                    "the `{other}` distribution: this driver speaks Elasticsearch and OpenSearch"
+                ),
+            });
+        }
+        None => "Elasticsearch",
+    };
+    if !supported(name, version) {
+        return Err(OxynError::NotSupported {
+            capability: format!(
+                "{name} {version}: this driver supports Elasticsearch 8 and 9, and OpenSearch \
+                 2 and 3"
+            ),
+        });
+    }
+    Ok(Product {
+        name,
+        version: version.to_owned(),
+    })
+}
+
+fn supported(product: &str, version: &str) -> bool {
+    let Some(Ok(major)) = version.split('.').next().map(str::parse::<u16>) else {
         return false;
     };
     match product {
-        "Elasticsearch" => major > 8 || (major == 8 && minor >= 19),
-        "OpenSearch" => major > 2 || (major == 2 && minor >= 10),
+        "Elasticsearch" => (8..=9).contains(&major),
+        "OpenSearch" => (2..=3).contains(&major),
         _ => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use oxyn_driver::DriverRegistry;
 
     use super::*;
@@ -176,13 +234,32 @@ mod tests {
     }
 
     #[test]
-    fn support_floors_are_explicit_and_not_guessed_from_a_url() {
-        assert!(supported_version("Elasticsearch", "8.19.0"));
-        assert!(supported_version("Elasticsearch", "9.5.5"));
-        assert!(!supported_version("Elasticsearch", "8.18.0"));
-        assert!(supported_version("OpenSearch", "2.10.0"));
-        assert!(supported_version("OpenSearch", "3.0.0"));
-        assert!(!supported_version("OpenSearch", "2.9.0"));
-        assert!(!supported_version("OpenSearch", "version unknown"));
+    fn the_product_comes_from_the_server_not_the_url() {
+        let opensearch =
+            serde_json::json!({"version": {"distribution": "opensearch", "number": "3.0.0"}});
+        assert_eq!(product(&opensearch).expect("supported").name, "OpenSearch");
+        let elasticsearch =
+            serde_json::json!({"version": {"number": "9.1.0", "build_flavor": "default"}});
+        assert_eq!(
+            product(&elasticsearch).expect("supported").name,
+            "Elasticsearch"
+        );
+        assert!(product(&serde_json::json!({"name": "a web server"})).is_err());
+        assert!(
+            product(&serde_json::json!({"version": {"distribution": "other", "number": "1"}}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn support_floors_are_explicit() {
+        assert!(supported("Elasticsearch", "8.0.0"));
+        assert!(supported("Elasticsearch", "9.5.5"));
+        assert!(!supported("Elasticsearch", "7.17.0"));
+        assert!(!supported("Elasticsearch", "10.0.0"));
+        assert!(supported("OpenSearch", "2.0.0"));
+        assert!(supported("OpenSearch", "3.0.0"));
+        assert!(!supported("OpenSearch", "1.3.0"));
+        assert!(!supported("OpenSearch", "version unknown"));
     }
 }

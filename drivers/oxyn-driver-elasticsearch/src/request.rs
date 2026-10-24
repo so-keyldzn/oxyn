@@ -5,7 +5,7 @@ use serde_json::Value;
 /// One HTTP request, as the user wrote it.
 ///
 /// The console accepts exactly one request: `METHOD path`, followed by an
-/// optional JSON body. Keeping the grammar single-request makes the policy
+/// optional body. Keeping the grammar single-request makes the policy
 /// decision and the cancellation target unambiguous; the editor cuts a
 /// document holding several requests before it reaches the driver.
 #[derive(Debug, Clone, PartialEq)]
@@ -15,8 +15,13 @@ pub struct SearchRequest {
     /// The absolute API path, including its query component. A path written
     /// without its leading `/` (`GET _search`, as Kibana accepts) gets one.
     pub path: String,
-    /// The parsed JSON body, if the request has one.
+    /// The body, parsed, for classification. `None` for an NDJSON body.
     pub body: Option<Value>,
+    /// The body exactly as written: what is sent. Re-serializing the parsed
+    /// value would round numbers and reorder nothing useful.
+    pub text: Option<String>,
+    /// Whether the body is newline-delimited JSON (`_bulk`, `_msearch`).
+    pub ndjson: bool,
 }
 
 /// Parses the Search DSL console format without rewriting the body.
@@ -26,7 +31,6 @@ pub struct SearchRequest {
 /// another origin.
 ///
 /// # Errors
-///
 /// A message naming what is malformed, never quoting the request.
 pub fn parse_request(text: &str) -> Result<SearchRequest, String> {
     let text = text.trim_start();
@@ -61,18 +65,58 @@ pub fn parse_request(text: &str) -> Result<SearchRequest, String> {
     } else {
         format!("/{path}")
     };
-    let body = if body.is_empty() {
-        None
-    } else {
-        Some(serde_json::from_str(body).map_err(|error| {
-            format!(
-                "the request body is not valid JSON (line {}, column {})",
-                error.line(),
-                error.column()
-            )
-        })?)
-    };
-    Ok(SearchRequest { method, path, body })
+    let ndjson = takes_ndjson(&path);
+    if body.is_empty() {
+        return Ok(SearchRequest {
+            method,
+            path,
+            body: None,
+            text: None,
+            ndjson,
+        });
+    }
+    if ndjson {
+        for (number, line) in body.lines().enumerate() {
+            if !line.trim().is_empty() && serde_json::from_str::<Value>(line).is_err() {
+                return Err(format!(
+                    "line {} of the body is not one JSON document: `_bulk` and `_msearch` \
+                     take one document per line",
+                    number + 2
+                ));
+            }
+        }
+        // The server refuses a bulk body whose last line has no newline.
+        return Ok(SearchRequest {
+            method,
+            path,
+            body: None,
+            text: Some(format!("{body}\n")),
+            ndjson,
+        });
+    }
+    let parsed = serde_json::from_str(body).map_err(|error| {
+        format!(
+            "the request body is not valid JSON (line {}, column {})",
+            error.line() + 1,
+            error.column()
+        )
+    })?;
+    Ok(SearchRequest {
+        method,
+        path,
+        body: Some(parsed),
+        text: Some(body.to_owned()),
+        ndjson,
+    })
+}
+
+/// Whether an endpoint takes newline-delimited JSON.
+fn takes_ndjson(path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or_default();
+    path.ends_with("/_bulk")
+        || path.ends_with("/_msearch")
+        || path.ends_with("/_msearch/template")
+        || path == "/_bulk"
 }
 
 #[cfg(test)]
@@ -80,15 +124,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_one_request_without_rewriting_its_json() {
-        let request = parse_request("\n  POST /logs/_search\n{\"query\":{\"match_all\":{}}}")
-            .expect("valid request");
+    fn parses_one_request_without_rewriting_its_body() {
+        let body = "{\"query\":{\"term\":{\"n\":12345678901234567890.5}}}";
+        let request =
+            parse_request(&format!("\n  POST /logs/_search\n{body}")).expect("valid request");
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/logs/_search");
-        assert_eq!(
-            request.body,
-            Some(serde_json::json!({"query":{"match_all":{}}}))
-        );
+        assert_eq!(request.text.as_deref(), Some(body), "sent byte for byte");
+        assert!(request.body.is_some());
+        assert!(!request.ndjson);
     }
 
     #[test]
@@ -96,6 +140,24 @@ mod tests {
         let request = parse_request("get _cat/indices?v").expect("valid request");
         assert_eq!(request.method, "GET");
         assert_eq!(request.path, "/_cat/indices?v");
+    }
+
+    #[test]
+    fn a_bulk_body_is_one_document_per_line_ending_with_a_newline() {
+        let request = parse_request(
+            "POST /_bulk\n{\"index\":{\"_index\":\"logs\"}}\n{\"a\":1}\n{\"delete\":{\"_index\":\"logs\",\"_id\":\"2\"}}",
+        )
+        .expect("valid bulk");
+        assert!(request.ndjson);
+        assert!(
+            request
+                .text
+                .as_deref()
+                .is_some_and(|text| text.ends_with("}\n"))
+        );
+        let refused =
+            parse_request("POST /logs/_bulk\n{\"index\":{}}\n{\"a\":").expect_err("bad line");
+        assert!(refused.contains("line 3"), "{refused}");
     }
 
     #[test]
@@ -111,7 +173,7 @@ mod tests {
     #[test]
     fn a_malformed_body_is_located_without_being_quoted() {
         let error = parse_request("POST /_search\n{\"query\": secret").expect_err("invalid JSON");
-        assert!(error.contains("line 1"), "{error}");
+        assert!(error.contains("line 2"), "{error}");
         assert!(!error.contains("secret"), "{error}");
     }
 }
