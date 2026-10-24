@@ -68,7 +68,12 @@ async fn search_server() -> (u16, Received) {
                     "version": {"number": "9.1.0", "build_flavor": "default"},
                     "tagline": "You Know, for Search"
                 }),
-                ("GET", "/_cat/indices") => serde_json::json!([{"index": "orders"}]),
+                ("GET", "/_cat/indices" | "/_cat/indices/orders") => {
+                    serde_json::json!([{"index": "orders", "docs.count": "2", "store.size": "100"}])
+                }
+                ("GET", "/_cat/aliases") => serde_json::json!([]),
+                ("GET", "/_data_stream") => serde_json::json!({"data_streams": []}),
+                ("GET", "/_tasks") => serde_json::json!({"tasks": {}}),
                 ("GET", "/orders/_mapping") => serde_json::json!({"orders": {"mappings": {
                     "properties": {
                         "customer": {"type": "keyword"},

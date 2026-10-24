@@ -403,6 +403,23 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 24
+      elasticsearch:
+        # The tag of ADR-0062, checked on Docker Hub (RESEARCH-NOTES). A
+        # disposable single node: security off, so the suite runs over HTTP
+        # on a Local connection; a 512 MB heap.
+        image: elasticsearch:9.5.5
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          cluster.routing.allocation.disk.threshold_enabled: "false"
+          ES_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 36
 
     steps:
       - name: Check out the repository
@@ -511,6 +528,7 @@ jobs:
           OXYN_MYSQL_TEST_URL: mysql://root:oxyn@localhost:3306/t?sslmode=prefer
           OXYN_PG_PRODUCTION_TEST_URL: postgres://postgres:oxyn@localhost:5433/postgres?sslmode=verify-full
           OXYN_CLICKHOUSE_TEST_URL: http://oxyn:oxyn@127.0.0.1:8123
+          OXYN_ELASTICSEARCH_TEST_URL: http://127.0.0.1:9200
           # sqlx trusts this disposable CA while verify-full validates the leaf SAN.
           PGSSLROOTCERT: ${{ runner.temp }}/oxyn-postgres-tls/ca.crt
           # Only the selected server suites are built and run (ADR-0067).
