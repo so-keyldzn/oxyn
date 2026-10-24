@@ -1,4 +1,5 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="b846bdfa3487" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="72af9866c390" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="159588fdac2e" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -184,6 +185,10 @@ oxyn/
 │   ├── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
 │   ├── oxyn-driver-mysql/        # couvre aussi MariaDB (ADR-0050) ; dépend
 │                                 #   d'oxyn-query pour découper ce que MySQL ne prépare pas
+│   └── oxyn-driver-elasticsearch/ # couvre aussi OpenSearch (ADR-0062)
+│   │                             #   d'oxyn-query pour découper ce que MySQL ne prépare pas
+│   └── oxyn-driver-clickhouse/   # interface HTTP, RowBinary décodé en Arrow,
+│                                 #   aucune session serveur (ADR-0060)
 │   └── oxyn-driver-elasticsearch/ # couvre aussi OpenSearch (ADR-0062)
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
@@ -584,7 +589,9 @@ des phases 0 à 3 n'en a besoin. Voir [ADR-0007](adr/0007-driver-sidecar.md).
 * **Export** — CSV, JSON, Arrow IPC fournis par l'écosystème.
 * **Analytique locale** — DataFusion se branchera directement dessus : filtrer, trier et
   agréger *côté client*, sans relancer la requête.
-* **DuckDB / ClickHouse** — parlent déjà Arrow, chemin zéro-copie.
+* **DuckDB / ClickHouse** — parlent déjà Arrow, chemin zéro-copie. La sortie
+  Arrow de ClickHouse perd le fuseau d'un `DateTime`, le libellé d'un `Enum` et
+  les entiers larges : son pilote décode donc `RowBinary` ([ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md)).
 * **Frontière de processus** — Arrow IPC, cf. §4.4.
 
 **Débordement sur disque.** `ResultBuffer` conserve les batches en mémoire dans un budget

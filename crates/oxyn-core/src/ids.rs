@@ -217,6 +217,8 @@ impl DriverId {
     pub const SQLITE: &'static str = "sqlite";
     /// Elasticsearch driver (and OpenSearch).
     pub const ELASTICSEARCH: &'static str = "elasticsearch";
+    /// ClickHouse driver, over its HTTP interface.
+    pub const CLICKHOUSE: &'static str = "clickhouse";
 
     /// Builds a driver identifier after validation.
     ///
@@ -279,6 +281,12 @@ impl DriverId {
     #[must_use]
     pub fn elasticsearch() -> Self {
         Self::known(Self::ELASTICSEARCH)
+    }
+
+    /// ClickHouse driver identifier.
+    #[must_use]
+    pub fn clickhouse() -> Self {
+        Self::known(Self::CLICKHOUSE)
     }
 
     /// Borrowed view of the identifier.
@@ -411,6 +419,10 @@ mod tests {
         assert_eq!(
             DriverId::elasticsearch(),
             DriverId::new("elasticsearch").expect("valid")
+        );
+        assert_eq!(
+            DriverId::clickhouse(),
+            DriverId::new("clickhouse").expect("valid")
         );
     }
 
