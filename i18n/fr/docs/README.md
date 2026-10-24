@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="26d0a464a571" -->
+<!-- oxyn-translation source="docs/README.md" sha256="d9d3fa173fee" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -96,6 +96,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0058](adr/0058-updater-key-signs-in-a-job-that-builds-nothing.md) | La clé de mise à jour signe dans un job qui ne construit rien, avec un binaire publié de la CLI Tauri épinglé par somme de contrôle (précise 0051) | proposé |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | Une session classe les requêtes d'un langage non SQL : `Session::classify_intent`, consultée seulement hors SQL, prudente, `None` par défaut (précise 0003) | accepté |
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | Un agent déclare les langages de requête qu'il écrit (`languages`, `[sql]` par défaut) ; l'assistant s'ouvre sur tout langage qu'un agent écrit, prompts SQL inchangés (précise 0049, 0055) | accepté |
+| [0066](adr/0066-a-session-classifies-the-risk-of-non-sql-requests.md) | Une session dit le risque d'une requête non SQL qu'elle a classée comme écriture : `Session::classify_risk`, consultée seulement après un `classify_intent` mutant, ne peut que relever le risque, `None` par défaut (précise 0064) | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
