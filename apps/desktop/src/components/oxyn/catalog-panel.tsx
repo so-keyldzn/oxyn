@@ -2,7 +2,6 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
   ArrowReloadHorizontalIcon,
-  DatabaseIcon,
   FolderLibraryIcon,
   LockIcon,
   Logout03Icon,
@@ -10,6 +9,7 @@ import {
 
 import type { NameTransfer } from "@/components/oxyn/catalog-name-drag"
 import { CatalogTree } from "@/components/oxyn/catalog-tree"
+import { DriverLogo } from "@/components/oxyn/driver-logo"
 import type {
   CopyAs,
   ObjectOperations,
@@ -138,12 +138,9 @@ export function CatalogPanel({
           data-slot="catalog-connection"
           className="flex min-w-0 items-center gap-2 rounded-md p-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
         >
-          <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <HugeiconsIcon
-              icon={DatabaseIcon}
-              strokeWidth={2}
-              className="size-4"
-            />
+          {/* A neutral tile: a brand mark on the primary colour would clash. */}
+          <div className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40">
+            <DriverLogo driver={driver} className="size-4" />
           </div>
           <div className="grid min-w-0 flex-1 leading-tight group-data-[collapsible=icon]:hidden">
             <span

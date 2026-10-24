@@ -27,6 +27,20 @@ const claudePreset: AgentPresetDraft = {
   signIn: "claude auth login",
 }
 
+const codexPreset: AgentPresetDraft = {
+  id: "codex",
+  label: "Codex",
+  package: "@agentclientprotocol/codex-acp",
+  version: "1.12.0",
+  command: "npx",
+  args: ["-y", "@agentclientprotocol/codex-acp@1.12.0"],
+  env: [],
+  detected: false,
+  launcher: null,
+  agentProgram: null,
+  signIn: "codex login",
+}
+
 const meta = {
   title: "Oxyn/Settings/ProviderSettings",
   component: ProviderSettingsView,
@@ -34,7 +48,7 @@ const meta = {
     status: "ready",
     providers: [remoteProvider, localProvider, unresolvedProvider],
     agents: [externalAgent],
-    presets: [claudePreset],
+    presets: [claudePreset, codexPreset],
     presetStates: {},
     declaringPreset: null,
     working: null,
@@ -62,59 +76,109 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Loading: Story = {
-  args: { status: "loading", providers: [], agents: [] },
+/** A row's button is named after the provider, then its status. */
+function row(canvasElement: HTMLElement, title: string) {
+  return within(canvasElement).getByRole("button", {
+    name: new RegExp(`^${title}, `),
+  })
 }
 
-export const NothingDeclared: Story = {
-  args: { providers: [], agents: [] },
+async function openRow(canvasElement: HTMLElement, title: string) {
+  await userEvent.click(row(canvasElement, title))
+  await expect(
+    within(canvasElement).getByRole("heading", { level: 2, name: title })
+  ).toBeVisible()
+}
+
+export const Loading: Story = {
+  args: { status: "loading", providers: [], agents: [] },
   play: async ({ canvasElement }) => {
-    await expect(
-      within(canvasElement).getByText("No provider declared")
-    ).toBeVisible()
+    const canvas = within(canvasElement)
+    await expect(canvas.getByRole("status")).toHaveAccessibleName(
+      "Loading providers"
+    )
+    // Nothing to open before the declarations are read.
+    await expect(canvas.queryByRole("list")).toBeNull()
   },
 }
 
-export const Declared: Story = {
+/** Every status at once: connected, declared, checking, failed, not connected. */
+export const Ready: Story = {
   args: {
+    presetStates: { codex: { status: "detecting" } },
     models: {
-      [remoteProvider.id]: {
-        status: "ready",
-        models: [
-          {
-            id: "claude-sonnet-5",
-            displayName: "Claude Sonnet 5",
-            contextWindow: null,
-            cost: null,
-            reasoningEfforts: [],
-          },
-          {
-            id: "claude-opus-5",
-            displayName: "Claude Opus 5",
-            contextWindow: null,
-            cost: null,
-            reasoningEfforts: [],
-          },
-        ],
-      },
-      [unresolvedProvider.id]: {
+      [remoteProvider.id]: { status: "ready", models: draftModels },
+      [localProvider.id]: {
         status: "error",
-        message:
-          "error sending request for url (https://llm-gateway.internal/models)",
+        message: "error sending request for url (http://localhost:11434/v1)",
       },
     },
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
-    // Never rounded: unresolved says so.
     await expect(
-      canvas.getByText("Unresolved · measurement time unknown")
+      canvas.getByRole("heading", { name: "Connect your AI provider" })
     ).toBeVisible()
-    await expect(canvas.getAllByText("Key configured").length).toBeGreaterThan(
-      0
+    const list = canvas.getByRole("list", { name: "Providers" })
+    await expect(within(list).getAllByRole("listitem")).toHaveLength(7)
+    // The status is in the name, never in the colour alone.
+    await expect(row(canvasElement, "Claude Code")).toHaveAccessibleName(
+      "Claude Code, Declared"
     )
+    await expect(row(canvasElement, "Codex")).toHaveAccessibleName(
+      "Codex, Checking status…"
+    )
+    await expect(row(canvasElement, "Anthropic API")).toHaveAccessibleName(
+      "Anthropic API, Connected"
+    )
+    await expect(
+      row(canvasElement, "OpenAI-compatible endpoint")
+    ).toHaveAccessibleName("OpenAI-compatible endpoint, Connection failed")
+    await expect(row(canvasElement, "OpenAI API")).toHaveAccessibleName(
+      "OpenAI API, Not connected"
+    )
+    // The models named are the ones the provider listed.
+    await expect(canvas.getByText("Orion 2 · Lyra · Vega mini")).toBeVisible()
+    await expect(canvas.getByText("4 of 7 declared")).toBeVisible()
     // Opaque ids are data, never text.
     await expect(canvasElement.textContent).not.toContain(remoteProvider.id)
+  },
+}
+
+/** Opening the screen: detection runs, a listing is under way. */
+export const Checking: Story = {
+  args: {
+    agents: [],
+    presetStates: {
+      "claude-code": { status: "detecting" },
+      codex: { status: "detecting" },
+    },
+    models: { [remoteProvider.id]: { status: "loading" } },
+  },
+  play: async ({ canvasElement }) => {
+    await expect(row(canvasElement, "Claude Code")).toHaveAccessibleName(
+      "Claude Code, Checking status…"
+    )
+    await expect(row(canvasElement, "Anthropic API")).toHaveAccessibleName(
+      "Anthropic API, Checking status…"
+    )
+  },
+}
+
+export const NothingDeclared: Story = {
+  args: { providers: [], agents: [] },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText(/Nothing declared yet/)).toBeVisible()
+    await expect(canvas.getByText("0 of 6 declared")).toBeVisible()
+    // A family not offered any more only shows with a declaration.
+    await expect(
+      canvas.queryByRole("button", { name: /^Google Gemini API/ })
+    ).toBeNull()
+    // Each row says what it is, never a model Oxyn would recommend.
+    await expect(
+      canvas.getByText("Hosted API, with your own Anthropic key")
+    ).toBeVisible()
   },
 }
 
@@ -125,9 +189,77 @@ export const LoadFailed: Story = {
     agents: [],
     loadError: "reading the local state: database is locked",
   },
+  play: async ({ canvasElement }) => {
+    await expect(
+      within(canvasElement).getByText(
+        "reading the local state: database is locked"
+      )
+    ).toBeVisible()
+  },
 }
 
-export const Saving: Story = { args: { working: "saving" } }
+/** One provider opened: its declarations, their models, the form. */
+export const DrilledIntoAProvider: Story = {
+  args: {
+    models: {
+      [unresolvedProvider.id]: {
+        status: "error",
+        message:
+          "error sending request for url (https://llm-gateway.internal/models)",
+      },
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await openRow(canvasElement, "Google Gemini API")
+    // The way back has the focus, and gives it back to the row.
+    const back = canvas.getByRole("button", { name: "All providers" })
+    await waitFor(() => expect(back).toHaveFocus())
+    // Never rounded: unresolved says so.
+    await expect(
+      canvas.getByText("Unresolved · measurement time unknown")
+    ).toBeVisible()
+    await expect(canvas.getByText("Key configured")).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: "List models" })
+    ).toBeVisible()
+    await expect(
+      canvas.getByRole("form", { name: "Declare a provider" })
+    ).toBeVisible()
+    await userEvent.click(back)
+    await waitFor(() =>
+      expect(row(canvasElement, "Google Gemini API")).toHaveFocus()
+    )
+  },
+}
+
+/** Enter and Space open a row: it is a button, not a clickable div. */
+export const KeyboardOpensARow: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    row(canvasElement, "OpenAI API").focus()
+    await userEvent.keyboard("{Enter}")
+    await expect(
+      canvas.getByRole("heading", { level: 2, name: "OpenAI API" })
+    ).toBeVisible()
+    await userEvent.click(canvas.getByRole("button", { name: "All providers" }))
+    await waitFor(() => expect(row(canvasElement, "OpenAI API")).toHaveFocus())
+    await userEvent.keyboard(" ")
+    await expect(
+      canvas.getByRole("heading", { level: 2, name: "OpenAI API" })
+    ).toBeVisible()
+  },
+}
+
+export const Saving: Story = {
+  args: { working: "saving" },
+  play: async ({ canvasElement }) => {
+    await openRow(canvasElement, "Anthropic API")
+    await expect(
+      within(canvasElement).getByRole("button", { name: "Edit Work account" })
+    ).toBeDisabled()
+  },
+}
 
 export const SaveFailed: Story = {
   args: {
@@ -139,6 +271,7 @@ export const SaveFailed: Story = {
     },
   },
   play: async ({ canvasElement }) => {
+    await openRow(canvasElement, "Anthropic API")
     // Said in the form that sent it, with what failed.
     const form = within(
       within(canvasElement).getByRole("form", { name: "Declare a provider" })
@@ -162,9 +295,9 @@ export const RemovalFailed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     await expect(canvas.getByText("Agent not removed")).toBeVisible()
-    const form = within(
-      canvas.getByRole("form", { name: "Declare a provider" })
-    )
+    await openRow(canvasElement, "Custom agent")
+    await expect(canvas.getByText("Agent not removed")).toBeVisible()
+    const form = within(canvas.getByRole("form", { name: "Declare an agent" }))
     await expect(form.queryByText("Agent not removed")).toBeNull()
   },
 }
@@ -177,6 +310,7 @@ export const NothingIsClearedBeforeTheSaveSucceeds: Story = {
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     await userEvent.type(canvas.getByLabelText("Name"), "Work")
     await userEvent.type(
       canvas.getByLabelText("Endpoint"),
@@ -203,6 +337,7 @@ export const NothingIsClearedBeforeTheSaveSucceeds: Story = {
 export const EditLandsOnTheForm: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     await userEvent.click(
       canvas.getByRole("button", { name: "Edit Work account" })
     )
@@ -217,6 +352,9 @@ export const EditLandsOnTheForm: Story = {
 export const ReplacingAnAgent: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Claude Code")
+    // A preset is declared by its own button: no form until a replacement.
+    await expect(canvas.queryByRole("form")).toBeNull()
     await userEvent.click(
       canvas.getByRole("button", { name: `Replace… ${externalAgent.label}` })
     )
@@ -247,10 +385,23 @@ export const ReplacingAnAgent: Story = {
   },
 }
 
+/** By hand: a program, its arguments, its environment (ADR-0026). */
+export const DeclaringAnAgentByHand: Story = {
+  args: { providers: [], agents: [] },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await openRow(canvasElement, "Custom agent")
+    const form = within(canvas.getByRole("form", { name: "Declare an agent" }))
+    await expect(form.getByLabelText("Kind")).toHaveValue("agent")
+    await expect(form.getByLabelText("Program")).toBeVisible()
+  },
+}
+
 export const CredentialsInEndpointAreRefusedWhileTyping: Story = {
   args: { providers: [], agents: [] },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     await userEvent.type(
       canvas.getByLabelText("Endpoint"),
       "https://alice:hunter2@api.example.com"
@@ -270,6 +421,7 @@ export const TheKeyIsSentOnceAndForgotten: Story = {
   args: { providers: [], agents: [] },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     await userEvent.type(canvas.getByLabelText("Name"), "Work")
     await userEvent.type(
       canvas.getByLabelText("Endpoint"),
@@ -300,6 +452,7 @@ export const TheKeyIsSentOnceAndForgotten: Story = {
 export const RemovalNamesTheProvider: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     await userEvent.click(
       canvas.getByRole("button", { name: "Remove Work account" })
     )
@@ -314,6 +467,7 @@ export const RemovalNamesTheProvider: Story = {
   },
 }
 
+/** « Sign in with Claude » opens the agent, where declaring is confirmed. */
 export const AnAgentAlreadyInstalledIsProposed: Story = {
   args: {
     providers: [],
@@ -334,6 +488,11 @@ export const AnAgentAlreadyInstalledIsProposed: Story = {
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Sign in with Claude" })
+    )
+    // Nothing is declared by opening it.
+    await expect(args.onDeclarePreset).not.toHaveBeenCalled()
     await userEvent.click(
       canvas.getByRole("button", { name: "Declare Claude Code" })
     )
@@ -383,7 +542,9 @@ export const PickedModelSurvivesTheEdit: Story = {
     const canvas = within(canvasElement)
     const page = within(document.body)
     const model = () => page.getByRole("combobox", { name: "Default model" })
-    await userEvent.selectOptions(canvas.getByLabelText("Kind"), "openai")
+    await openRow(canvasElement, "OpenAI API")
+    // The provider's page starts the form on its family.
+    await expect(canvas.getByLabelText("Kind")).toHaveValue("openai")
     await userEvent.type(canvas.getByLabelText("Name"), "Gateway")
     await userEvent.type(
       canvas.getByLabelText("Endpoint"),
@@ -422,6 +583,7 @@ export const PickedModelSurvivesTheEdit: Story = {
 export const TypedModelIsSaved: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     await userEvent.click(
       canvas.getByRole("button", { name: "Edit Work account" })
     )
@@ -460,6 +622,7 @@ export const AnswerForThePreviousEndpointIsDropped: Story = {
   },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     const endpoint = canvas.getByLabelText("Endpoint")
     await userEvent.type(endpoint, "https://a.example.test/v1")
     await userEvent.click(
@@ -489,6 +652,7 @@ export const NewKeyListsAfresh: Story = {
   args: { providers: [], agents: [] },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
+    await openRow(canvasElement, "Anthropic API")
     await userEvent.type(
       canvas.getByLabelText("Endpoint"),
       "https://llm.example.test/v1"

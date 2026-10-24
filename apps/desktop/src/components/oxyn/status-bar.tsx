@@ -4,12 +4,12 @@ import {
   Alert02Icon,
   Cancel01Icon,
   CheckmarkCircle02Icon,
-  DatabaseIcon,
   InformationCircleIcon,
   LockIcon,
 } from "@hugeicons/core-free-icons"
 import { useThrottledValue } from "@tanstack/react-pacer"
 
+import { DriverLogo } from "@/components/oxyn/driver-logo"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import {
   isReadOnlySession,
@@ -180,12 +180,7 @@ export function StatusBar({
       className="@container flex h-8 shrink-0 items-center gap-3 border-t bg-card px-3 text-xs text-muted-foreground"
     >
       <span className="flex min-w-0 items-center gap-1.5 text-foreground">
-        <HugeiconsIcon
-          icon={DatabaseIcon}
-          strokeWidth={2}
-          className="size-3.5 shrink-0"
-          aria-hidden
-        />
+        <DriverLogo driver={driver} className="size-3.5 shrink-0" />
         <bdi className="truncate" title={connectionName}>
           {connectionName}
         </bdi>

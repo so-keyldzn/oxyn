@@ -49,6 +49,8 @@ export type FormTarget =
 
 export interface ProviderFormProps {
   target: FormTarget
+  /** The kind a new declaration starts on; an edit keeps its own. */
+  initialKind?: FormKind
   working: boolean
   /** A failed save of this form; other failures are shown by the screen. */
   failure: ProviderSettingsFailure | null
@@ -62,10 +64,10 @@ export interface ProviderFormProps {
   onListModels: ListDraftModels
 }
 
-type Kind = ProviderKind | "agent"
+export type FormKind = ProviderKind | "agent"
 
 interface FormValues {
-  kind: Kind
+  kind: FormKind
   label: string
   endpoint: string
   model: string
@@ -88,7 +90,7 @@ const EMPTY_FORM: FormValues = {
   env: "",
 }
 
-function initialValues(target: FormTarget): FormValues {
+function initialValues(target: FormTarget, kind: FormKind): FormValues {
   if (target?.kind === "provider") {
     const { provider } = target
     return {
@@ -111,13 +113,13 @@ function initialValues(target: FormTarget): FormValues {
       command: target.agent.command,
     }
   }
-  return EMPTY_FORM
+  return { ...EMPTY_FORM, kind }
 }
 
-function title(target: FormTarget) {
+function title(target: FormTarget, kind: FormKind) {
   if (target?.kind === "provider") return `Edit “${target.provider.label}”`
   if (target?.kind === "agent") return `Replace “${target.agent.label}”`
-  return "Declare a provider"
+  return kind === "agent" ? "Declare an agent" : "Declare a provider"
 }
 
 function secretByName(name: string) {
@@ -209,6 +211,7 @@ function ConnectionTestRow({
  */
 export function ProviderForm({
   target,
+  initialKind = "anthropic",
   working,
   failure,
   onSaveProvider,
@@ -231,7 +234,7 @@ export function ProviderForm({
   }, [target])
 
   const form = useForm({
-    defaultValues: initialValues(target),
+    defaultValues: initialValues(target, initialKind),
     onSubmit: async ({ value, formApi }) => {
       const saving =
         value.kind === "agent"
@@ -301,14 +304,14 @@ export function ProviderForm({
     <form
       ref={formRef}
       noValidate
-      aria-label={title(target)}
+      aria-label={title(target, initialKind)}
       className="flex scroll-mt-4 flex-col gap-4 rounded-lg border bg-card p-4"
       onSubmit={(event) => {
         event.preventDefault()
         void form.handleSubmit()
       }}
     >
-      <h3 className="text-sm font-medium">{title(target)}</h3>
+      <h3 className="text-sm font-medium">{title(target, initialKind)}</h3>
       {replacing ? <ReplacementNote agent={replacing} /> : null}
       <FieldGroup>
         <form.Field name="kind">
@@ -320,7 +323,7 @@ export function ProviderForm({
                 value={field.state.value}
                 disabled={target !== null}
                 onChange={(event) =>
-                  field.handleChange(event.target.value as Kind)
+                  field.handleChange(event.target.value as FormKind)
                 }
               >
                 {KINDS.filter(

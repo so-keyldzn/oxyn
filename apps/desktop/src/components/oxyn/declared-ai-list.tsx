@@ -1,14 +1,13 @@
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
-  CommandLineIcon,
   Delete02Icon,
   Key01Icon,
   PencilEdit02Icon,
   RefreshIcon,
   SecurityCheckIcon,
-  SparklesIcon,
 } from "@hugeicons/core-free-icons"
 
+import { ProviderLogo } from "@/components/oxyn/provider-logo"
 import {
   counted,
   kindLabel,
@@ -62,7 +61,7 @@ export function DeclaredProviderItem({
   return (
     <Item variant="outline" className="flex-wrap">
       <ItemMedia variant="icon">
-        <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} />
+        <ProviderLogo brand={provider.kind} />
       </ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle>
@@ -159,7 +158,7 @@ export function DeclaredAgentItem({
   return (
     <Item variant="outline" className="flex-wrap">
       <ItemMedia variant="icon">
-        <HugeiconsIcon icon={CommandLineIcon} strokeWidth={2} />
+        <ProviderLogo brand={agent.preset ?? "custom-agent"} fallback="agent" />
       </ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle className="flex-wrap">
