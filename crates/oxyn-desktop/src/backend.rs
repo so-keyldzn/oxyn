@@ -23,8 +23,8 @@ use oxyn_core::{
 };
 use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
-use oxyn_driver_elasticsearch::ElasticsearchDriver;
 use oxyn_driver_clickhouse::ClickhouseDriver;
+use oxyn_driver_elasticsearch::ElasticsearchDriver;
 use oxyn_driver_mysql::MysqlDriver;
 use oxyn_driver_postgres::PostgresDriver;
 use oxyn_driver_sqlite::SqliteDriver;
@@ -1042,6 +1042,7 @@ fn shipped_drivers() -> Result<DriverRegistry> {
     drivers
         .register(Arc::new(ElasticsearchDriver::new()))
         .context("registering the Elasticsearch driver")?;
+    drivers
         .register(Arc::new(ClickhouseDriver::new()))
         .context("registering the ClickHouse driver")?;
     Ok(drivers)
