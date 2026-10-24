@@ -68,7 +68,8 @@ pub const META_INFERRED: &str = "oxyn:inferred";
 pub const META_ENCODING: &str = "oxyn:encoding";
 /// The schema metadata key carrying how many documents the inference read.
 pub const META_SAMPLE_DOCUMENTS: &str = "oxyn:inferred_sample_documents";
-/// The schema metadata key carrying how many sampled fields got no column.
+/// The schema metadata key carrying how many sampled fields got no column:
+/// a count, or a lower bound ending in `+` ([`OMITTED_COUNTED`]).
 pub const META_OMITTED_FIELDS: &str = "oxyn:omitted_fields";
 
 /// Field columns beyond which a sampled field only lives in the canonical
@@ -197,6 +198,40 @@ pub enum DecodeError {
     },
 }
 
+/// Distinct sampled keys past the column cap that are counted, by their
+/// 64-bit hash; past them, the count is a lower bound declared with a
+/// trailing `+`. About a MiB of hashes at most, whatever the sample.
+pub const OMITTED_COUNTED: usize = 1 << 16;
+
+/// The sampled keys that got no column, counted without being kept.
+#[derive(Default)]
+struct Omitted {
+    seen: std::collections::HashSet<u64>,
+    saturated: bool,
+    hasher: std::hash::RandomState,
+}
+
+impl Omitted {
+    fn count(&mut self, key: &str) {
+        if self.seen.len() >= OMITTED_COUNTED {
+            self.saturated = true;
+            return;
+        }
+        self.seen
+            .insert(std::hash::BuildHasher::hash_one(&self.hasher, key));
+    }
+
+    /// The value of [`META_OMITTED_FIELDS`]: `12`, or `65536+` past the
+    /// count.
+    fn declared(&self) -> String {
+        if self.saturated {
+            format!("{}+", self.seen.len())
+        } else {
+            self.seen.len().to_string()
+        }
+    }
+}
+
 /// What the sample says about one field.
 #[derive(Debug, Clone)]
 struct Observed {
@@ -225,6 +260,7 @@ impl Plan {
     ) -> Result<Self, DecodeError> {
         let mut observed: Vec<Observed> = Vec::new();
         let mut positions: HashMap<String, usize> = HashMap::new();
+        let mut omitted = Omitted::default();
         let mut documents = 0_usize;
         for (ordinal, document) in sample.into_iter().enumerate() {
             documents = documents.saturating_add(1);
@@ -237,6 +273,13 @@ impl Plan {
                 let key = element.key().as_str();
                 let position = match positions.get(key) {
                     Some(&position) => position,
+                    // Past the cap a new key gets no column: it is counted,
+                    // never kept, so a sample of a million distinct keys
+                    // costs the cap, not a million strings.
+                    None if observed.len() >= MAX_FIELD_COLUMNS => {
+                        omitted.count(key);
+                        continue;
+                    }
                     None => {
                         let position = observed.len();
                         positions.insert(key.to_owned(), position);
@@ -275,11 +318,10 @@ impl Plan {
                 }
             }
         }
-        Ok(Self::from_observed(observed, documents))
+        Ok(Self::from_observed(observed, documents, &omitted))
     }
 
-    fn from_observed(observed: Vec<Observed>, sample: usize) -> Self {
-        let omitted = observed.len().saturating_sub(MAX_FIELD_COLUMNS);
+    fn from_observed(observed: Vec<Observed>, sample: usize, omitted: &Omitted) -> Self {
         let mut columns = Vec::with_capacity(observed.len().min(MAX_FIELD_COLUMNS));
         let mut index = HashMap::new();
         for field in observed.into_iter().take(MAX_FIELD_COLUMNS) {
@@ -319,7 +361,7 @@ impl Plan {
         );
         let schema = Schema::new(fields).with_metadata(HashMap::from([
             (META_SAMPLE_DOCUMENTS.to_owned(), sample.to_string()),
-            (META_OMITTED_FIELDS.to_owned(), omitted.to_string()),
+            (META_OMITTED_FIELDS.to_owned(), omitted.declared()),
         ]));
         Self {
             columns,

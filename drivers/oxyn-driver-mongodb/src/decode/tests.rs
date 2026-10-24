@@ -224,6 +224,39 @@ fn the_column_count_is_capped_and_the_rest_is_declared_omitted() {
 }
 
 #[test]
+fn a_sample_of_distinct_keys_past_the_cap_keeps_none_of_them() {
+    // A legal sample under 8 MiB whose documents each bring new keys: two
+    // hundred thousand distinct names, a thousand times the cap.
+    let documents: Vec<bson::Document> = (0..20)
+        .map(|batch| {
+            let mut wide = bson::Document::new();
+            for index in 0..10_000 {
+                wide.insert(format!("k{batch}_{index}"), 1_i32);
+            }
+            wide
+        })
+        .collect();
+    let documents = raw(&documents);
+    let mut omitted = Omitted::default();
+    let plan = Plan::infer(documents.iter().map(AsRef::as_ref)).expect("readable");
+    assert_eq!(plan.index.len(), MAX_FIELD_COLUMNS, "only the cap is kept");
+    assert_eq!(
+        plan.schema()
+            .metadata()
+            .get(META_OMITTED_FIELDS)
+            .map(String::as_str),
+        Some(format!("{OMITTED_COUNTED}+").as_str()),
+        "the count past the bound is a lower bound"
+    );
+    // The count itself stops growing at its bound.
+    for index in 0..OMITTED_COUNTED * 2 {
+        omitted.count(&format!("k{index}"));
+    }
+    assert_eq!(omitted.seen.len(), OMITTED_COUNTED);
+    assert_eq!(omitted.declared(), format!("{OMITTED_COUNTED}+"));
+}
+
+#[test]
 fn a_null_only_field_accepts_any_later_value() {
     let plan = plan(&raw(&[doc! { "x": Bson::Null }]));
     let later = raw(&[doc! { "x": [1_i32, "a"] }]);
