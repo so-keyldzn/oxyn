@@ -192,13 +192,7 @@ impl CaptureCursor {
             return Err(OxynError::Cancelled);
         }
         connection.send(argv).await.map_err(|error| {
-            during_execution(
-                &shared.driver,
-                error,
-                Some(StatementIntent::Read),
-                false,
-                false,
-            )
+            during_execution(&shared.driver, error, Some(StatementIntent::Read), false)
         })?;
         // Everything that can fail comes before the task: past it, only the
         // cursor's `close` ends the subscription.
@@ -357,7 +351,6 @@ impl Cursor for CaptureCursor {
                             error,
                             Some(StatementIntent::Read),
                             false,
-                            true,
                         );
                         return self.fail(error);
                     }

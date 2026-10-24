@@ -218,26 +218,16 @@ impl RedisCursor {
             return Err(OxynError::Cancelled);
         }
         if let Err(error) = connection.send(&plan.argv).await {
+            // A failed send may have delivered a prefix, or all of it: no
+            // I/O result proves otherwise, so it is classified as sent.
             lease.discard();
-            return Err(during_execution(
-                &driver,
-                error,
-                plan.intent,
-                plan.scripted,
-                false,
-            ));
+            return Err(during_execution(&driver, error, plan.intent, plan.scripted));
         }
         let head = match race(&token, deadline, connection.reply_head()).await {
             Raced::Done(Ok(head)) => head,
             Raced::Done(Err(error)) => {
                 lease.discard();
-                return Err(during_execution(
-                    &driver,
-                    error,
-                    plan.intent,
-                    plan.scripted,
-                    true,
-                ));
+                return Err(during_execution(&driver, error, plan.intent, plan.scripted));
             }
             Raced::Halted(halt) => {
                 return Err(stop_before_reply(&mut lease, &plan, &shared, halt).await);
@@ -251,7 +241,6 @@ impl RedisCursor {
                     RedisError::server(&text),
                     plan.intent,
                     plan.scripted,
-                    true,
                 ));
             }
             Head::BulkError(len) => {
@@ -267,12 +256,11 @@ impl RedisCursor {
                             RedisError::server(&text.bytes),
                             plan.intent,
                             plan.scripted,
-                            true,
                         )
                     }
                     Raced::Done(Err(error)) => {
                         lease.discard();
-                        during_execution(&driver, error.into(), plan.intent, plan.scripted, true)
+                        during_execution(&driver, error.into(), plan.intent, plan.scripted)
                     }
                     Raced::Halted(halt) => {
                         lease.discard();
@@ -309,7 +297,6 @@ impl RedisCursor {
                         error.into(),
                         plan.intent,
                         plan.scripted,
-                        true,
                     ));
                 }
                 Raced::Halted(halt) => {
@@ -597,7 +584,6 @@ impl Cursor for RedisCursor {
                         error,
                         self.plan.intent,
                         self.plan.scripted,
-                        true,
                     ));
                 }
                 Raced::Halted(halt) => {

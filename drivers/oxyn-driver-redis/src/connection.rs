@@ -485,6 +485,92 @@ mod tests {
         );
     }
 
+    /// A stream that takes `accepted` bytes, then fails every write: a socket
+    /// reset in the middle of a command.
+    struct CutAfter {
+        accepted: usize,
+        received: Arc<parking_lot::Mutex<Vec<u8>>>,
+    }
+
+    impl AsyncRead for CutAfter {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            _: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for CutAfter {
+        fn poll_write(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let mut received = self.received.lock();
+            let room = self.accepted.saturating_sub(received.len());
+            if room == 0 {
+                return std::task::Poll::Ready(Err(std::io::ErrorKind::ConnectionReset.into()));
+            }
+            let taken = room.min(buf.len());
+            received.extend_from_slice(buf.get(..taken).unwrap_or_default());
+            std::task::Poll::Ready(Ok(taken))
+        }
+
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// I-13: a write whose send failed after a prefix left is ambiguous,
+    /// never a retryable transient — the server holds part of it, and may
+    /// hold all of it.
+    #[tokio::test]
+    async fn a_write_cut_while_sending_is_ambiguous() {
+        let received = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let stream: Box<dyn Io> = Box::new(CutAfter {
+            accepted: 12,
+            received: Arc::clone(&received),
+        });
+        let mut connection = Connection {
+            reader: Reader::new(BufReader::new(stream)),
+            hello: Hello {
+                server: "redis".to_owned(),
+                version: "8.10.2".to_owned(),
+                id: 1,
+                mode: "standalone".to_owned(),
+                role: "master".to_owned(),
+                modules: Vec::new(),
+            },
+            database: 0,
+            unread: 0,
+        };
+        let argv = [b"SET".to_vec(), b"k".to_vec(), vec![b'v'; 64]];
+        let error = connection.send(&argv).await.expect_err("the stream is cut");
+        assert_eq!(received.lock().len(), 12, "a prefix reached the server");
+        let driver = crate::driver::driver_id();
+        let write = crate::error::during_execution(
+            &driver,
+            error,
+            Some(oxyn_core::StatementIntent::Write),
+            false,
+        );
+        assert!(matches!(write, OxynError::OutcomeUnknown(_)), "{write:?}");
+        assert!(!write.is_retryable());
+        assert!(!connection.in_step(), "the connection is not reused");
+    }
+
     #[test]
     fn a_hello_without_an_id_is_refused() {
         assert!(parse_hello(&Value::Map(vec![(bulk("server"), bulk("redis"))])).is_err());

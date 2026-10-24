@@ -115,21 +115,22 @@ pub fn class_of(prefix: &str, scripted: bool) -> ErrorClass {
 
 /// Turns a failure during an execution into the error the caller reads.
 ///
-/// `sent` says whether the command reached the connection: a failure before
-/// that applied nothing. After it, losing the connection is transient for a
-/// read and **ambiguous** for anything else — the server may have applied the
-/// write ([I-13](../../../CLAUDE.md#i-13)).
+/// Losing the connection is transient for a read and **ambiguous** for
+/// anything else — the server may have applied the write
+/// ([I-13](../../../CLAUDE.md#i-13)). That holds for a failure while
+/// *sending* too: `write_all` does not say how many bytes left before it
+/// failed, and a TLS stream accepts the plaintext before its socket write
+/// fails, so no I/O result proves that no byte of the command reached the
+/// server: a prefix may have reached it, or the whole command.
 #[must_use]
 pub fn during_execution(
     driver: &DriverId,
     error: RedisError,
     intent: Option<StatementIntent>,
     scripted: bool,
-    sent: bool,
 ) -> OxynError {
     let class = match &error {
         RedisError::Server { prefix, .. } => class_of(prefix, scripted),
-        RedisError::Wire(_) if !sent => ErrorClass::Transient,
         RedisError::Wire(_) | RedisError::UnexpectedReply { .. } => {
             if intent == Some(StatementIntent::Read) {
                 ErrorClass::Transient
@@ -245,7 +246,6 @@ mod tests {
             RedisError::Wire(WireError::Truncated),
             intent,
             false,
-            true,
         );
         assert!(matches!(error, OxynError::OutcomeUnknown(_)), "{error:?}");
         assert_eq!(error.class(), ErrorClass::Ambiguous);
@@ -253,23 +253,14 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_lost_during_a_read_or_before_sending_is_transient() {
+    fn a_connection_lost_during_a_read_is_transient() {
         let read = during_execution(
             &redis(),
             RedisError::Wire(WireError::Truncated),
             Some(StatementIntent::Read),
             false,
-            true,
         );
         assert_eq!(read.class(), ErrorClass::Transient);
-        let unsent = during_execution(
-            &redis(),
-            RedisError::Wire(WireError::Truncated),
-            None,
-            false,
-            false,
-        );
-        assert_eq!(unsent.class(), ErrorClass::Transient);
     }
 
     #[test]
