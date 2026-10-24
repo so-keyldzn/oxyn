@@ -1,5 +1,4 @@
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="42b538d33164" -->
-<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="6461db4a81c7" -->
+<!-- oxyn-translation source="docs/RESEARCH-NOTES.md" sha256="76b0112ed3f1" -->
 
 > Traduction française de [docs/RESEARCH-NOTES.md](../../../docs/RESEARCH-NOTES.md). **La version anglaise fait foi.**
 
@@ -3065,6 +3064,10 @@ Pour [ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md).
 | Elasticsearch documente que la pagination profonde `from`/`size` est limitée par `index.max_result_window` (10 000 par défaut), et recommande `search_after` ; un point dans le temps stabilise l'ordre de recherches répétées et fournit `_shard_doc` comme briseur d'égalité. | [Pagination Elasticsearch](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/paginate-search-results) | 2026-10-22 |
 | La compatibilité REST Elasticsearch ne couvre qu'un majeur : 9.x peut honorer requêtes et réponses 8.x avec `compatible-with=8`. La documentation Docker d'Elastic nomme **9.5.5** comme tag d'image exact courant. | [Compatibilité API Elasticsearch](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/compatibility), [Installation Docker](https://www.elastic.co/docs/deploy-manage/deploy/self-managed/install-elasticsearch-docker-basic) | 2026-10-22 |
 | OpenSearch expose `POST /_tasks/_cancel` et `POST /_tasks/{task_id}/_cancel` ; toute tâche n'est pas annulable, et la réponse porte `cancellable` et `cancelled`. Le tag officiel **3.0.0** existe pour amd64 et arm64. | [Annuler des tâches OpenSearch](https://docs.opensearch.org/latest/api-reference/tasks/cancel-tasks/), [Tag Docker OpenSearch 3.0.0](https://hub.docker.com/r/opensearchproject/opensearch/tags?name=3.0.0&ordering=last_updated&page=1) | 2026-10-22 |
+| Les tags les plus récents de Docker Hub sont `elasticsearch:9.5.5` (mis à jour le 2026-10-23), l'image que lance le job CI `serveurs`, et `opensearchproject/opensearch:3.9.0` (mis à jour le 2026-09-29), qui remplace 3.0.0 ci-dessus pour la vérification avant release. Les deux ont passé au vert les 11 tests d'intégration du pilote le 2026-10-24. | [Docker Hub elasticsearch](https://hub.docker.com/_/elasticsearch/tags), [Docker Hub opensearch](https://hub.docker.com/r/opensearchproject/opensearch/tags), `cargo nextest run -p oxyn-driver-elasticsearch --run-ignored all` | 2026-10-24 |
+| Un point dans le temps s'ouvre par `POST /<index>/_pit` et son identifiant se lit dans `id` sur Elasticsearch, par `POST /<index>/_search/point_in_time` et `pit_id` sur OpenSearch, qui n'a pas de route `_pit` ; les deux continuent avec `search_after` et `pit.id` dans le corps. | test d'intégration `a_point_in_time_stream_that_would_not_fit_stays_under_a_memory_bound` contre les deux images ci-dessus | 2026-10-24 |
+| Le pilote lit les hits par la fonctionnalité `raw_value` de `serde_json` (`RawValue`), si bien qu'un nombre garde son texte exact : un `unsigned_long` au-delà de 2^53 ne passe pas par `f64`. La fonctionnalité n'ajoute aucune dépendance. | [Fonctionnalités de serde_json](https://docs.rs/crate/serde_json/latest/features), `Cargo.lock` | 2026-10-24 |
+| Le registre shadcn `@svgl` (670 entrées) n'a aucune marque Elasticsearch, Elastic ou OpenSearch : la tuile de connexion porte l'icône générique de base de données. | [api.svgl.app](https://api.svgl.app), l'index que sert le registre | 2026-10-24 |
 ## Protocole ClickHouse et bibliothèques clientes — vérifié le 2026-10-23
 
 Pour l'[ADR-0060](adr/0060-clickhouse-driver-over-http-rowbinary.md). Le pilote

@@ -2273,10 +2273,13 @@ Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbere
 - `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch speaks the Elasticsearch protocol, it has no driver of its own
   ([ADR-0003](adr/0003-driver-capabilities.md)).
-- `oxyn-driver-elasticsearch` — REST/JSON connection, Search DSL policy
-  classification and mapping discovery are in progress (ADR-0062); PIT
-  pagination, server-proven cancellation, real-server suites and OpenSearch
-  verification remain before this driver can meet the exit gate.
+- `oxyn-driver-elasticsearch` (ADR-0062) — connection, policy classification
+  and risk, mapping catalog, typed and streamed results, server-proven stop and
+  the request under the cursor are in place; its real-server suite runs in CI
+  on Elasticsearch 9.5.5 and before a release on OpenSearch 3.9.0. Remaining:
+  endpoint and body completion, native index operations through the review
+  flow, a count before a by-query request, and cluster views (`_cat`, ILM/ISM,
+  snapshots, tasks).
 
 **Why here, before plugins.** This is where the capability model
 ([ADR-0003](adr/0003-driver-capabilities.md)) and `QueryLanguage` are put to

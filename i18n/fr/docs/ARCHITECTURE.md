@@ -1,5 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="72af9866c390" -->
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="159588fdac2e" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="9342d57a984e" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 
@@ -184,12 +183,10 @@ oxyn/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   ├── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
 │   ├── oxyn-driver-mysql/        # couvre aussi MariaDB (ADR-0050) ; dépend
-│                                 #   d'oxyn-query pour découper ce que MySQL ne prépare pas
-│   └── oxyn-driver-elasticsearch/ # couvre aussi OpenSearch (ADR-0062)
 │   │                             #   d'oxyn-query pour découper ce que MySQL ne prépare pas
-│   └── oxyn-driver-clickhouse/   # interface HTTP, RowBinary décodé en Arrow,
-│                                 #   aucune session serveur (ADR-0060)
-│   └── oxyn-driver-elasticsearch/ # couvre aussi OpenSearch (ADR-0062)
+│   ├── oxyn-driver-clickhouse/   # interface HTTP, RowBinary décodé en Arrow,
+│   │                             #   aucune session serveur (ADR-0060)
+│   └── oxyn-driver-elasticsearch/ # REST/JSON, couvre aussi OpenSearch (ADR-0062)
 ├── assets/
 │   └── brand/                    # symbole, iconset, Oxyn.icns
 └── docs/

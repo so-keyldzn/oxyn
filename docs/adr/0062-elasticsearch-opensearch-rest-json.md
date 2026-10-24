@@ -29,34 +29,62 @@ and discovers the product, distribution and version from `GET /`; OpenSearch
 is never inferred from the URL. Basic authentication, API keys and bearer
 tokens are passed from `Credentials`, never persisted in a URL or logged.
 
-The initial support floor is Elasticsearch 8.19 and 9.x, and OpenSearch 2.10
-and 3.x. Elasticsearch 9 is tested in CI with the exact 9.5.5 image; OpenSearch
-3.0.0 is exercised locally before release until the CI budget has an approved
-second server service. A server below the floor is refused after `GET /` rather
-than accepted on a guess.
+The supported majors are Elasticsearch 8 and 9 and OpenSearch 2 and 3, read
+from `version.number` and `version.distribution` of `GET /`. A server of another
+major, or a distribution the driver does not know, is refused at connection
+rather than accepted on a guess. Elasticsearch is tested in CI with the exact
+9.5.5 image; OpenSearch 3.9.0 is exercised against a real server before a
+release until the CI budget has an approved second server service. The
+Search DSL APIs the driver composes — `_search`, `_cat`, `_mapping`,
+`_data_stream`, `_tasks` — are present on every supported major.
 
-The catalog is flat: index, alias and data-stream discovery occupy the relation
-level, and an index mapping produces fields. `text` multi-fields, nested and
-object properties, runtime fields, `dense_vector`, `geo_point`, `date`,
+The catalog is flat: indices, aliases and data streams occupy the relation
+level. An index is an `Index`, a data stream a `Stream`, an alias a `View` with
+the comment `alias`; the backing indices of a data stream are shadows of it.
+An index mapping produces fields. `text` multi-fields, nested and object
+properties, runtime fields, `dense_vector`, `geo_point`, `date`,
 `scaled_float`, `unsigned_long` and unknown mapping types keep their server
-type in `Field::raw_type`; a mapping is a declaration, not a sample. Where an
-alias or pattern combines incompatible mappings, the field is marked unknown
-instead of silently choosing one type.
+type in `Field::raw_type`; a mapping is a declaration, not a sample, so the
+session does not advertise `INFERRED_SCHEMA`. Where an alias or pattern
+combines incompatible mappings, the field carries every type (`keyword | long`)
+and is logically unknown instead of silently choosing one. Volume is the sum of
+`docs.count` and `store.size` from `_cat/indices`. An object's definition is
+reconstructed as the request that recreates it: `PUT /<index>` with the
+server-assigned settings removed, the `_aliases` actions of an alias, the index
+template plus `PUT /_data_stream/<name>` of a data stream.
 
-The console accepts exactly one Kibana-style request: an upper-case HTTP method
-and an absolute API path on its first line, then an optional JSON body. It
-never follows an absolute URL supplied in the console. Arbitrary API responses
-are one `json` Arrow column; `_search` responses become document rows with
-`_index`, `_id`, `_score` and `_source` keys, each JSON value encoded losslessly
-as UTF-8 JSON. This preserves `unsigned_long` and arbitrary JSON numbers rather
-than converting them through `f64`; arrays, objects, IP values, base64 binary,
-dates, scaled floats and unknown values remain their JSON representation.
+The console runs the Kibana-style request under the cursor: an upper-case HTTP
+method and an API path on its first line, then an optional JSON body, or
+NDJSON for `_bulk` and `_msearch`. It never follows an absolute URL, a
+scheme-relative path or a fragment supplied in the console, and refuses bound
+values. Answers are decoded by shape. A search becomes one row per hit:
+`_index`, `_id`, `_score`, then the top-level `_source` keys, then every other
+hit key (`fields`, `highlight`, `sort`, `inner_hits`); a nested object or an
+array stays one cell, its JSON text, since flattening an array of objects would
+pair values the document does not pair. Hit cells are UTF-8 text: a JSON string
+unquoted, any other value its exact JSON text, which keeps `unsigned_long` and
+every number out of `f64`. Aggregations become one row per innermost bucket.
+ES|QL, `_sql` and OpenSearch SQL declare their columns, so their cells are typed
+(`boolean`, integers, `unsigned_long` as `UInt64`, floats, `date` with its
+offset as an instant); one value that does not conform turns its whole column
+into text, and the server type stays in the field metadata. A `_cat` answer in
+text is read as its table; any other object is one row.
 
-Every response page is read in chunks and capped at one MiB before decoding.
-Index preview opens a point in time, uses `search_after` with `_shard_doc`,
-and closes the point in time on completion or cancellation; it never uses deep
-`from`/`size` or scroll. A disabled `_source`, a field unseen in the mapping,
-or incompatible values is an explicit response error, not a dropped cell.
+Every answer is read in chunks and capped at 16 MiB before decoding; batches
+are cut at 4 MiB. A search that pages continues with the server's own protocol,
+never with deep `from`/`size`: `search_after` within the point in time the
+request opened (`/_pit` and `id` on Elasticsearch, `/_search/point_in_time`
+and `pit_id` on OpenSearch), `/_search/scroll` for a `?scroll=` request, the
+`cursor` of `_sql`. A scroll or SQL cursor the user leaves unread is released.
+A layout is fixed by the first page; a `_source` key a later page brings goes
+into an `_other` column rather than being dropped. A disabled `_source` leaves
+the metadata columns, which is what the server returned.
+
+The index preview sends one `_search` of at most 1,000 hits with the filter as
+written — a `query_string`, or a JSON clause when the text starts with `{` —
+and sorts only on mapping fields, refusing a `text` field and naming its
+`keyword` multi-field. A document has no unique key the driver can rely on, so
+a page beyond the first is refused (ADR-0028), not served by an offset.
 
 A request is classified by its **endpoint**, then its verb, because the verbs
 lie both ways: `POST /logs/_search` reads, `GET /_refresh` changes the index.
@@ -105,15 +133,26 @@ a dropped index and approximate for a closed one.
 
 The server has no session-wide read-only mode: Oxyn rejects a classified
 mutating request under a read-only bound and does not advertise
-`READ_ONLY_SESSION`.
+`READ_ONLY_SESSION`. Privileges are roles and API keys of the security API,
+not `GRANT`: `GRANT_REVOKE` is not advertised, and a call on `_security` is
+classified as a grant for the policy gate. `EXPLAIN` is SQL; a search's
+`profile` and `_explain` are requests the console sends, so `EXPLAIN` is not
+advertised either. `INDEXES` is not advertised: an index here is the relation
+itself, not a structure on a table. The SQL-composed catalog operations —
+drop, truncate, rename — are not offered on a session without `SQL`.
 
-Each in-flight request has an `X-Opaque-Id`. The driver finds that task through
-the Tasks API and cancels only a task the server calls cancellable; a cancelled
-read ends `Cancelled` only after task state proves the cancellation. A write
-stopped after it was sent is `OutcomeUnknown`: bulk and by-query APIs can have
-already applied part of their work. HTTP 429 and 503 are transient only for a
-read; a timeout, transport loss or 5xx while mutating is ambiguous. A 200 bulk
-response with item failures is an error, not success.
+Each in-flight request has an `X-Opaque-Id`. A stop lists the tasks carrying
+it (`GET /_tasks?group_by=parents`), cancels each through
+`POST /_tasks/<id>/_cancel`, then polls for 5 s until none is listed. A read
+ends `Cancelled` either way; the stop is only reported as proven when the list
+emptied. A write stopped after it was sent is `OutcomeUnknown`: bulk and
+by-query APIs can have already applied part of their work. The session
+advertises `SERVER_SIDE_CANCEL` only when the account could list tasks at
+connection. HTTP 408, 429, 502, 503 and 504 are transient only for a read; a
+timeout, transport loss or any of those while mutating is ambiguous, and an
+oversized answer to a write that succeeded is `OutcomeUnknown`. A 200 `_bulk`
+answer with item failures, or a by-query answer with `failures`, is an error
+naming how many items failed, not a success.
 
 ## Consequences
 
@@ -121,10 +160,13 @@ response with item failures is an error, not success.
   control of response-byte bounds, cancellation correlation and redaction.
 * **+** The console exposes native APIs without pretending that Search DSL is
   SQL, while the policy gate remains conservative for new routes.
-* **−** Document values are JSON text in the first slice; rich Arrow scalar
-  reconstruction and editor completion are deliberate follow-ups.
+* **−** Hit cells are text: a hit has no declared column type, and the mapping
+  may disagree with the document. Typing them from the mapping, and endpoint
+  and body completion, are follow-ups.
 * **−** One endpoint excludes sniffing, Elastic Cloud identifiers, custom CA
-  files and client certificates from the first slice.
+  files and client certificates, as for the other drivers.
+* **−** The preview has no next page: a document has no total order the
+  driver can rely on.
 * **−** A failed task lookup cannot prove cancellation; the driver must keep
   the request ambiguous rather than claim it stopped.
 
