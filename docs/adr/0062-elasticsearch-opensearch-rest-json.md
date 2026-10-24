@@ -149,7 +149,8 @@ classified as a grant for the policy gate. `EXPLAIN` is SQL; a search's
 `profile` and `_explain` are requests the console sends, so `EXPLAIN` is not
 advertised either. `INDEXES` is not advertised: an index here is the relation
 itself, not a structure on a table. The SQL-composed catalog operations —
-drop, truncate, rename — are not offered on a session without `SQL`. Every
+drop, truncate, rename — are greyed on a session without `SQL`, with the
+reason: they are run from a console in the session's language. Every
 session advertises `FULL_TEXT_SEARCH`, which is what both products are.
 `VECTOR_SEARCH` is advertised on Elasticsearch, whose floor searches
 `dense_vector` by approximate kNN, and on OpenSearch only when
@@ -168,6 +169,14 @@ loss and a refusal too large to read; an oversized answer to a write that
 succeeded is `OutcomeUnknown`. A 200 `_bulk`
 answer with item failures, or a by-query answer with `failures`, is an error
 naming how many items failed, not a success.
+
+A request's text is persisted — history, audit journal, tool calls, a saved
+console mentioned to an agent — after the shared redaction
+([ADR-0053](0053-redact-sql-passwords-before-persistence.md)) has read it in
+the search DSL's grammar: the JSON reading MongoDB's commands use, on the
+decoded body, with the keys both products take a credential under, and the
+`Authorization:` header, curl `-u` password and URL password of a request
+pasted from a shell. [SECURITY](../SECURITY.md#secrets) lists the keys.
 
 ## Consequences
 
