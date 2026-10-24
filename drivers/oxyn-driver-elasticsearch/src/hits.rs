@@ -12,6 +12,7 @@
 //! its first page, and a `_source` key a later page brings goes into the
 //! `_other` column, one JSON object per row.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -43,16 +44,23 @@ enum Column {
     Other,
 }
 
+/// The most `_source` keys that get a column of their own; the rest go into
+/// `_other`. Searching across indices whose mappings differ, or with
+/// `dynamic: false`, can bring thousands of distinct keys.
+const SOURCE_COLUMNS: usize = 1024;
+
 /// The columns of a page of hits, and how to fill them.
 #[derive(Debug, Clone)]
 pub(crate) struct HitLayout {
     columns: Vec<Column>,
+    /// The `_source` keys a column holds, for `_other` to skip.
+    held: HashSet<String>,
     pub(crate) schema: SchemaRef,
 }
 
 impl HitLayout {
     /// The layout of a page. `stream` adds the `_other` column a later page
-    /// may need.
+    /// may need; so do `_source` keys beyond [`SOURCE_COLUMNS`].
     pub(crate) fn of(documents: &[Hit], sources: &[Option<Hit>], stream: bool) -> Self {
         let mut hit_keys: IndexMap<&str, ()> = LEADING.iter().map(|key| (*key, ())).collect();
         for hit in documents {
@@ -72,7 +80,7 @@ impl HitLayout {
             .take(leading)
             .map(|key| ((*key).to_owned(), Column::Hit((*key).to_owned())))
             .collect();
-        for key in source_keys.keys() {
+        for key in source_keys.keys().take(SOURCE_COLUMNS) {
             // A `_source` key spelled like a hit key (`sort`, `fields`) keeps
             // its own column, named `_source.sort`.
             let name = if hit_keys.contains_key(key) {
@@ -85,12 +93,18 @@ impl HitLayout {
         for key in hit_keys.keys().skip(leading) {
             columns.push(((*key).to_owned(), Column::Hit((*key).to_owned())));
         }
-        if stream {
+        if stream || source_keys.len() > SOURCE_COLUMNS {
             columns.push((OTHER.to_owned(), Column::Other));
         }
         let schema = text_schema(columns.iter().map(|(name, _)| (name.as_str(), None)));
+        let held = source_keys
+            .keys()
+            .take(SOURCE_COLUMNS)
+            .map(|key| (*key).to_owned())
+            .collect();
         Self {
             columns: columns.into_iter().map(|(_, column)| column).collect(),
+            held,
             schema,
         }
     }
@@ -101,7 +115,7 @@ impl HitLayout {
         documents: &[Hit],
         sources: &[Option<Hit>],
     ) -> Result<Vec<RecordBatch>> {
-        let mut rows = TextRows::new(Arc::clone(&self.schema));
+        let mut rows = TextRows::new(Arc::clone(&self.schema))?;
         for (hit, source) in documents.iter().zip(sources) {
             rows.push(self.columns.iter().map(|column| {
                 match column {
@@ -122,12 +136,7 @@ impl HitLayout {
         let source = source?;
         let rest: IndexMap<&str, &RawValue> = source
             .iter()
-            .filter(|(key, _)| {
-                !self
-                    .columns
-                    .iter()
-                    .any(|column| matches!(column, Column::Source(held) if held == *key))
-            })
+            .filter(|(key, _)| !self.held.contains(key.as_str()))
             .map(|(key, value)| (key.as_str(), value.as_ref()))
             .collect();
         if rest.is_empty() {

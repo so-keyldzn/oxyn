@@ -169,7 +169,7 @@ fn array_rows(bytes: &[u8]) -> Result<Decoded> {
     let Some(objects) = objects else {
         // An array of scalars or of mixed shapes: one value per row.
         let schema = text_schema([("value", None)]);
-        let mut rows = TextRows::new(Arc::clone(&schema));
+        let mut rows = TextRows::new(Arc::clone(&schema))?;
         for item in &items {
             rows.push([cell_text(item)])?;
         }
@@ -182,7 +182,7 @@ fn array_rows(bytes: &[u8]) -> Result<Decoded> {
         }
     }
     let schema = text_schema(keys.keys().map(|key| (*key, None)));
-    let mut rows = TextRows::new(Arc::clone(&schema));
+    let mut rows = TextRows::new(Arc::clone(&schema))?;
     for object in &objects {
         rows.push(
             keys.keys()
@@ -194,7 +194,7 @@ fn array_rows(bytes: &[u8]) -> Result<Decoded> {
 
 fn object_row(object: &IndexMap<String, Box<RawValue>>) -> Result<Decoded> {
     let schema = text_schema(object.keys().map(|key| (key.as_str(), None)));
-    let mut rows = TextRows::new(Arc::clone(&schema));
+    let mut rows = TextRows::new(Arc::clone(&schema))?;
     rows.push(object.values().map(|value| cell_text(value)))?;
     Ok(simple(schema, rows.finish()?))
 }
@@ -222,14 +222,14 @@ fn lines(bytes: &[u8]) -> Result<Decoded> {
             .all(|line| line.split_whitespace().count() == header.len());
     if tabular {
         let schema = text_schema(header.iter().map(|name| (*name, None)));
-        let mut rows = TextRows::new(Arc::clone(&schema));
+        let mut rows = TextRows::new(Arc::clone(&schema))?;
         for line in lines.iter().skip(1) {
             rows.push(line.split_whitespace().map(|word| Some(word.to_owned())))?;
         }
         return Ok(simple(schema, rows.finish()?));
     }
     let schema = text_schema([("line", None)]);
-    let mut rows = TextRows::new(Arc::clone(&schema));
+    let mut rows = TextRows::new(Arc::clone(&schema))?;
     for line in lines {
         rows.push([Some(line.to_owned())])?;
     }

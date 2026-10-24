@@ -268,6 +268,29 @@ fn a_head_is_its_status() {
 }
 
 #[test]
+fn source_keys_beyond_the_column_bound_go_into_other_not_away() {
+    // One hit per distinct key: a sparse grid of 1,100 columns × 1,100 rows.
+    let hits: Vec<String> = (0..1100)
+        .map(|n| format!(r#"{{"_index":"logs","_id":"{n}","_source":{{"k{n}":{n}}}}}"#))
+        .collect();
+    let body = format!(r#"{{"hits":{{"hits":[{}]}}}}"#, hits.join(","));
+    let decoded = decode(&reply(&body), false, Stream::No).expect("decoded");
+    let names = names(&decoded);
+    assert_eq!(names.len(), 3 + 1024 + 1, "metadata, held keys, `_other`");
+    assert_eq!(names.last().map(String::as_str), Some("_other"));
+    let rows: usize = decoded.batches.iter().map(RecordBatch::num_rows).sum();
+    assert_eq!(rows, 1100);
+    let last = decoded.batches.last().expect("a batch");
+    let other = last
+        .column_by_name("_other")
+        .expect("`_other`")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("utf8");
+    assert_eq!(other.value(other.len() - 1), r#"{"k1099":1099}"#);
+}
+
+#[test]
 fn hostile_answers_are_errors_not_panics() {
     for body in [
         "{",

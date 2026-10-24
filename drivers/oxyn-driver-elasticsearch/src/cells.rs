@@ -21,6 +21,21 @@ use serde_json::value::RawValue;
 /// is cut into three batches, a page of ten thousand tiny ones into one.
 pub(crate) const BATCH_BYTES: usize = 4 << 20;
 
+/// The most a decoded answer may weigh, all its batches together: 64 MiB.
+///
+/// The answer is capped at 16 MiB on the wire, but its table can be larger:
+/// an aggregation repeats its outer keys on every inner row, and hits with
+/// distinct `_source` keys make a sparse grid of null cells.
+pub(crate) const DECODED_LIMIT: usize = 4 * crate::http::RESPONSE_BYTE_LIMIT;
+
+/// The most columns a table takes. Every column costs a builder before its
+/// first row; a server that answers with a hundred thousand distinct keys
+/// would allocate that many.
+pub(crate) const MAX_COLUMNS: usize = 4096;
+
+/// What a cell costs beyond its text: its `i32` offset and validity bit.
+const CELL_OVERHEAD: usize = 4;
+
 /// The field metadata key carrying the server's type of a column.
 pub(crate) const META_TYPE: &str = "elasticsearch.type";
 
@@ -45,43 +60,60 @@ pub(crate) fn text_field(name: &str, raw_type: Option<&str>) -> Field {
     }
 }
 
-/// Rows of text cells, cut into batches of at most [`BATCH_BYTES`].
+/// Rows of text cells, cut into batches of at most [`BATCH_BYTES`], and
+/// refused past [`DECODED_LIMIT`].
 pub(crate) struct TextRows {
     schema: SchemaRef,
     builders: Vec<StringBuilder>,
     bytes: usize,
+    total: usize,
     batches: Vec<RecordBatch>,
 }
 
 impl TextRows {
-    /// Rows for a schema whose every column is `Utf8`.
-    pub(crate) fn new(schema: SchemaRef) -> Self {
-        let builders = schema
-            .fields()
-            .iter()
-            .map(|_| StringBuilder::new())
+    /// Rows for a schema whose every column is `Utf8`; refused beyond
+    /// [`MAX_COLUMNS`].
+    pub(crate) fn new(schema: SchemaRef) -> Result<Self> {
+        let columns = schema.fields().len();
+        if columns > MAX_COLUMNS {
+            return Err(OxynError::Query(format!(
+                "the answer has {columns} distinct keys, more than the {MAX_COLUMNS} columns a \
+                 table takes: narrow it with `filter_path` or `_source`"
+            )));
+        }
+        let builders = (0..columns)
+            .map(|_| StringBuilder::with_capacity(0, 0))
             .collect();
-        Self {
+        Ok(Self {
             schema,
             builders,
             bytes: 0,
+            total: 0,
             batches: Vec::new(),
-        }
+        })
     }
 
     /// Appends one row; `cells` has one entry per column, in order.
     pub(crate) fn push(&mut self, cells: impl IntoIterator<Item = Option<String>>) -> Result<()> {
         let mut columns = 0;
+        let mut row = 0_usize;
         for (builder, cell) in self.builders.iter_mut().zip(cells) {
-            self.bytes = self
-                .bytes
-                .saturating_add(cell.as_ref().map_or(0, String::len));
+            row = row.saturating_add(cell.as_ref().map_or(0, String::len) + CELL_OVERHEAD);
             builder.append_option(cell);
             columns += 1;
         }
         if columns != self.builders.len() {
             return Err(OxynError::Internal(
                 "a row does not have one cell per column".to_owned(),
+            ));
+        }
+        self.bytes = self.bytes.saturating_add(row);
+        self.total = self.total.saturating_add(row);
+        if self.total > DECODED_LIMIT {
+            return Err(OxynError::Query(
+                "the answer decodes to more than the 64 MiB a page may take: lower `size`, \
+                 filter `_source` or `filter_path`, or split the aggregation"
+                    .to_owned(),
             ));
         }
         if self.bytes >= BATCH_BYTES {
@@ -163,7 +195,7 @@ mod tests {
     #[test]
     fn rows_are_cut_into_batches_bounded_in_bytes() {
         let schema = text_schema([("body", None)]);
-        let mut rows = TextRows::new(schema);
+        let mut rows = TextRows::new(schema).expect("one column");
         let cell = "x".repeat(1 << 20);
         for _ in 0..10 {
             rows.push([Some(cell.clone())]).expect("a row");
@@ -179,6 +211,27 @@ mod tests {
                 .expect("utf8");
             assert!(column.value_data().len() <= BATCH_BYTES);
         }
+    }
+
+    #[test]
+    fn null_cells_count_and_the_whole_table_is_bounded() {
+        // A sparse grid: every cell null, yet each costs its offset.
+        let names: Vec<String> = (0..1000).map(|n| format!("k{n}")).collect();
+        let schema = text_schema(names.iter().map(|name| (name.as_str(), None)));
+        let mut sparse = TextRows::new(schema).expect("within the column bound");
+        for _ in 0..2000 {
+            sparse.push((0..1000).map(|_| None)).expect("a row");
+        }
+        let batches = sparse.finish().expect("batches");
+        assert!(batches.len() > 1, "{} batches", batches.len());
+
+        let wide: Vec<String> = (0..=MAX_COLUMNS).map(|n| format!("k{n}")).collect();
+        assert!(TextRows::new(text_schema(wide.iter().map(|name| (name.as_str(), None)))).is_err());
+
+        let mut large = TextRows::new(text_schema([("body", None)])).expect("one column");
+        let cell = "x".repeat(1 << 20);
+        let refused = (0..=DECODED_LIMIT >> 20).any(|_| large.push([Some(cell.clone())]).is_err());
+        assert!(refused, "a table past the decoded bound is refused");
     }
 
     #[test]

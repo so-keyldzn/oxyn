@@ -12,8 +12,8 @@
 //!   `doc_count` and its metrics under its name, `errors.doc_count`;
 //! * anything the table cannot place — two bucket aggregations side by side,
 //!   whose rows do not pair, or `top_hits` — is the JSON text of a cell, never
-//!   dropped. Two sibling bucket aggregations give one row per aggregation,
-//!   with its JSON.
+//!   dropped, on the first row of its level only. Two sibling bucket
+//!   aggregations at the top give one row per aggregation, with its JSON.
 
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ pub(crate) fn flatten(
         }
     }
     let schema = text_schema(columns.keys().map(|name| (*name, None)));
-    let mut table = TextRows::new(Arc::clone(&schema));
+    let mut table = TextRows::new(Arc::clone(&schema))?;
     for row in &rows {
         table.push(columns.keys().map(|name| row.get(*name).and_then(text)))?;
     }
@@ -71,7 +71,7 @@ fn walk(prefix: &Row, aggs: &Map<String, Value>, rows: &mut Vec<Row>) {
             metric(&mut level, name, value);
         } else if Some(name.as_str()) != walked {
             // A second bucket aggregation of the same level does not pair
-            // with the first: its JSON stays on every row of this level.
+            // with the first: its JSON is a cell of this level.
             level.insert(name.clone(), value.clone());
         }
     }
@@ -83,8 +83,21 @@ fn walk(prefix: &Row, aggs: &Map<String, Value>, rows: &mut Vec<Row>) {
         rows.push(level);
         return;
     }
-    for (keyed, bucket) in buckets {
-        let mut row = level.clone();
+    // A key or a count repeats on every row below it, as a grid reads it. An
+    // object or an array — a sibling aggregation, `top_hits` — is shown on
+    // the first row only: repeated under each of a thousand inner buckets, a
+    // 16 MiB answer would decode to gigabytes.
+    let scalars: Row = level
+        .iter()
+        .filter(|(_, value)| !value.is_object() && !value.is_array())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    for (index, (keyed, bucket)) in buckets.into_iter().enumerate() {
+        let mut row = if index == 0 {
+            level.clone()
+        } else {
+            scalars.clone()
+        };
         let key = bucket
             .get("key_as_string")
             .or_else(|| bucket.get("key"))
@@ -306,6 +319,36 @@ mod tests {
                 .as_deref()
                 .is_some_and(|json| json.contains("\"y\""))
         );
+    }
+
+    #[test]
+    fn a_nested_sibling_is_shown_once_not_under_every_inner_bucket() {
+        let hosts: Vec<Value> = (0..100)
+            .map(|n| serde_json::json!({"key": format!("h{n}"), "doc_count": 1}))
+            .collect();
+        let paths = serde_json::json!({"buckets": [{"key": "/a", "doc_count": 1}]});
+        let (names, rows) = table(serde_json::json!({
+            "per_day": {"buckets": [
+                {"key": 1, "doc_count": 100, "by_host": {"buckets": hosts}, "by_path": paths}
+            ]}
+        }));
+        assert_eq!(rows.len(), 100);
+        let column = names
+            .iter()
+            .position(|name| name == "by_path")
+            .expect("the sibling's column");
+        assert!(
+            rows[0][column]
+                .as_deref()
+                .is_some_and(|json| json.contains("/a"))
+        );
+        assert!(rows.iter().skip(1).all(|row| row[column].is_none()));
+        // Keys and counts still repeat, as a grid reads them.
+        let day = names
+            .iter()
+            .position(|name| name == "per_day")
+            .expect("a key");
+        assert!(rows.iter().all(|row| row[day].as_deref() == Some("1")));
     }
 
     #[test]
