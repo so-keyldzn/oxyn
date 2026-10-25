@@ -69,6 +69,7 @@ pub mod format;
 pub mod mongo;
 pub mod redact;
 pub mod redis;
+mod search_dsl;
 pub mod split;
 
 pub use classify::{

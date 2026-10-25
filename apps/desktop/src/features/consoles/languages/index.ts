@@ -5,6 +5,8 @@ import { redisEditorMode } from "./redis/redis-mode"
 import type { CompletionCatalog } from "@/lib/ipc/completion"
 import type { QueryLanguageName } from "@/lib/query-language"
 
+import { searchDslEditorMode } from "./search-dsl/search-dsl-mode"
+
 /** What the editor lends a mode. */
 export interface EditorModeContext {
   /**
@@ -30,6 +32,7 @@ const EDITOR_MODES: Partial<
 > = {
   mongo: mongoMode,
   redis: redisEditorMode,
+  "search-dsl": searchDslEditorMode,
 }
 
 export function editorMode(
@@ -58,6 +61,9 @@ const CONSOLE_FILES: Partial<Record<QueryLanguageName, ConsoleFile>> = {
   redis: { extension: "redis", starter: "" },
   // A console holds Extended JSON commands; `ping` reads nothing.
   mongo: { extension: "json", starter: '{"ping": 1}' },
+  // A request line, then its body: the shape of an HTTP request file. The
+  // cluster's banner reads nothing an index holds.
+  "search-dsl": { extension: "http", starter: "GET /" },
 }
 
 const PLAIN_TEXT: ConsoleFile = { extension: "txt", starter: "" }

@@ -66,6 +66,17 @@ language — the query history, the audit entry built from the command — read
 it as MongoDB; those that do not read it with every grammar, MongoDB included
 ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
 
+An Elasticsearch or OpenSearch request is read by the same JSON reading, on
+its decoded body, with the keys those servers take a credential under:
+`password`, `password_hash`, `current_password`, `access_token`,
+`refresh_token`, `kerberos_ticket`, `service_account_token`, `client_secret`,
+`secret_key`, `secure_settings_password`, `api_key` when it is a string, an
+`Authorization` header in any case, and `hash` when it holds a bcrypt hash.
+A request pasted from a shell loses its `Authorization:` header credentials,
+curl's `-u user:password` password and a URL's password. The query history
+reads it as the search DSL, every other record with every grammar
+([ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md)).
+
 **Concrete failure:** a workspace file containing a production password,
 committed by the user to their team's repository, because the
 file looked like mere configuration.

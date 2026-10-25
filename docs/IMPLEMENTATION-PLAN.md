@@ -2279,6 +2279,13 @@ Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbere
 - `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
   OpenSearch speaks the Elasticsearch protocol, it has no driver of its own
   ([ADR-0003](adr/0003-driver-capabilities.md)).
+- `oxyn-driver-elasticsearch` (ADR-0062) — connection, policy classification
+  and risk, mapping catalog, typed and streamed results, server-proven stop and
+  the request under the cursor are in place; its real-server suite runs in CI
+  on Elasticsearch 9.5.5 and before a release on OpenSearch 3.9.0. Remaining:
+  endpoint and body completion, native index operations through the review
+  flow, a count before a by-query request, and cluster views (`_cat`, ILM/ISM,
+  snapshots, tasks).
 - `oxyn-driver-mongodb` — **stage 1 written**
   ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)):
   connection by fields with TLS and SCRAM, one database command per console

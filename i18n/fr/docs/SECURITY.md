@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/SECURITY.md" sha256="7d4bf8a364b1" -->
+<!-- oxyn-translation source="docs/SECURITY.md" sha256="4ce53eed5f84" -->
 
 > Traduction française de [docs/SECURITY.md](../../../docs/SECURITY.md). **La version anglaise fait foi.**
 
@@ -75,6 +75,18 @@ l'entrée du journal d'audit construite à partir de la commande — la lisent
 comme du MongoDB ; ceux qui ne le connaissent pas la lisent avec toutes les
 grammaires, MongoDB compris
 ([ADR-0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md)).
+
+Une requête Elasticsearch ou OpenSearch est lue par la même lecture JSON, sur
+son corps décodé, avec les clés sous lesquelles ces serveurs prennent un
+secret : `password`, `password_hash`, `current_password`, `access_token`,
+`refresh_token`, `kerberos_ticket`, `service_account_token`, `client_secret`,
+`secret_key`, `secure_settings_password`, `api_key` quand c'est une chaîne, un
+en-tête `Authorization` quelle que soit sa casse, et `hash` quand il porte un
+hachage bcrypt. Une requête collée depuis un shell perd les secrets de son
+en-tête `Authorization:`, le mot de passe du `-u user:password` de curl et
+celui d'une URL. L'historique des requêtes la lit comme du search DSL, tout
+autre enregistrement avec toutes les grammaires
+([ADR-0062](adr/0062-elasticsearch-opensearch-rest-json.md)).
 
 **Panne concrète :** un fichier de workspace contenant un mot de passe de
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/README.md" sha256="80c4461f1970" -->
+<!-- oxyn-translation source="docs/README.md" sha256="c07558c7ea88" -->
 
 > Traduction française de [docs/README.md](../../../docs/README.md). **La version anglaise fait foi.**
 
@@ -97,6 +97,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0059](adr/0059-duckdb-driver-on-duckdb-rs-bundled.md) | Le driver DuckDB embarque le moteur par `duckdb-rs`, reconstruit son Arrow 58 en Arrow 59 et ouvre chaque fichier avec l'accès externe coupé | proposé |
 | [0060](adr/0060-clickhouse-driver-over-http-rowbinary.md) | Le pilote ClickHouse parle l'interface HTTP, lit lui-même `RowBinaryWithNamesAndTypes` et ne garde aucune session serveur | proposé |
 | [0061](adr/0061-redis-driver-speaks-resp3-itself.md) | Le driver Redis parle RESP3 lui-même, prouve une lecture par sa propre liste et la table du serveur, et n'arrête que ce que Redis sait arrêter | proposé |
+| [0062](adr/0062-elasticsearch-opensearch-rest-json.md) | Elasticsearch et OpenSearch utilisent un pilote REST/JSON unique et borné | proposé |
 | [0063](adr/0063-mongodb-driver-database-commands-in-extended-json.md) | Driver MongoDB sur le client officiel `mongodb` : la console exécute une commande de base écrite en Extended JSON, pas de shell JavaScript ; documents vers Arrow par un échantillon déclaré et une colonne canonique sans perte ; nouvelles tentatives de la bibliothèque coupées, `killSessions` par exécution (précise 0003) | accepté |
 | [0064](adr/0064-a-session-classifies-non-sql-requests.md) | Une session classe les requêtes d'un langage non SQL : `Session::classify_intent`, consultée seulement hors SQL, prudente, `None` par défaut (précise 0003) | accepté |
 | [0065](adr/0065-agents-for-non-sql-query-languages.md) | Un agent déclare les langages de requête qu'il écrit (`languages`, `[sql]` par défaut) ; l'assistant s'ouvre sur tout langage qu'un agent écrit, prompts SQL inchangés (précise 0049, 0055) | accepté |

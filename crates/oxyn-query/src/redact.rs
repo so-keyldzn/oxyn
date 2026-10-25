@@ -39,15 +39,16 @@ enum SecretClause {
 /// lexical interpretations. This is not a general secret detector: credentials
 /// embedded in comments or dynamic SQL are outside the recognized grammar.
 ///
-/// A Redis command and a MongoDB command each have their own grammar, read on
-/// the decoded command ([`crate::redis::redact_secrets`],
-/// [`crate::mongo::redact_secrets`]).
+/// A Redis command, a MongoDB command and a search DSL request each have their
+/// own grammar, read on the decoded command ([`crate::redis::redact_secrets`],
+/// [`crate::mongo::redact_secrets`], the search DSL's own).
 #[must_use]
 pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> String {
     let dialect = match language {
         QueryLanguage::Sql(dialect) => dialect,
         QueryLanguage::RedisCommand => return crate::redis::redact_secrets(statement),
         QueryLanguage::MongoQuery => return crate::mongo::redact_secrets(statement),
+        QueryLanguage::SearchDsl => return crate::search_dsl::redact_secrets(statement),
         _ => return statement.to_owned(),
     };
     let mut replacements = Vec::new();
@@ -85,7 +86,7 @@ pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> Str
 
 /// Redacts a text whose language the sink does not know, with every grammar
 /// [`redact_password_literals`] reads: SQL in its ANSI union, then Redis, then
-/// MongoDB.
+/// MongoDB, then the search DSL.
 ///
 /// For the records that carry no language — a tool call and its rendering, an
 /// audit entry written back, a saved query mentioned to an agent. Forcing SQL
@@ -98,7 +99,8 @@ pub fn redact_password_literals(statement: &str, language: QueryLanguage) -> Str
 #[must_use]
 pub fn redact_any_language(text: &str) -> String {
     let sql = redact_password_literals(text, QueryLanguage::SQL);
-    crate::mongo::redact_secrets(&crate::redis::redact_secrets(&sql))
+    let mongo = crate::mongo::redact_secrets(&crate::redis::redact_secrets(&sql));
+    crate::search_dsl::redact_secrets(&mongo)
 }
 
 fn collect_literals(statement: &str, dialect: SqlDialect, replacements: &mut Vec<Range<usize>>) {
@@ -351,6 +353,9 @@ mod tests {
     #[case(r#"{"createUser":"app","pwd":"witness-secret"}"#)]
     #[case(r#"{"saslStart": 1, "mechanism": "PLAIN", "payload": "witness-secret"}"#)]
     #[case(r#"Executed: "{\"updateUser\": \"app\", \"pwd\": \"witness-secret\"}""#)]
+    #[case("PUT /_security/user/app/_password\n{\"password\": \"witness-secret\"}")]
+    #[case(r#"Executed: "POST /_reindex\n{\"source\": {\"remote\": {\"api_key\": \"witness-secret\"}}}""#)]
+    #[case("curl -H 'Authorization: ApiKey witness-secret' https://h:9200/_search")]
     fn a_text_of_unknown_language_is_redacted_by_every_grammar(#[case] text: &str) {
         let redacted = redact_any_language(text);
         assert!(!redacted.contains("witness-secret"), "{redacted}");
@@ -364,6 +369,16 @@ mod tests {
             r#"{"createUser":"app","pwd":"<redacted>","roles":[]}"#
         );
         // The same text read as SQL holds no password clause.
+        assert_eq!(redact_password_literals(text, QueryLanguage::SQL), text);
+    }
+
+    #[test]
+    fn a_search_dsl_request_is_redacted_by_its_own_grammar() {
+        let text = "POST /_security/user/app\n{\"password\":\"witness-secret\",\"roles\":[]}";
+        assert_eq!(
+            redact_password_literals(text, QueryLanguage::SearchDsl),
+            "POST /_security/user/app\n{\"password\":\"<redacted>\",\"roles\":[]}"
+        );
         assert_eq!(redact_password_literals(text, QueryLanguage::SQL), text);
     }
 
